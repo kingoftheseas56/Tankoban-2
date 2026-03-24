@@ -39,21 +39,8 @@ BookReader::BookReader(QWidget* parent)
 
 void BookReader::buildUI()
 {
-    // Floating close button — always present as backup escape hatch
-    m_closeBtn = new QPushButton(QChar(0x2190) + QString(" Back"), this);
-    m_closeBtn->setFixedSize(80, 32);
-    m_closeBtn->setCursor(Qt::PointingHandCursor);
-    m_closeBtn->setStyleSheet(
-        "QPushButton { color: rgba(255,255,255,0.85); background: rgba(8,8,8,0.75);"
-        "  border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;"
-        "  font-size: 11px; font-weight: 600; }"
-        "QPushButton:hover { background: rgba(8,8,8,0.92); border-color: rgba(255,255,255,0.30); }"
-    );
-    connect(m_closeBtn, &QPushButton::clicked, this, &BookReader::closeRequested);
-    m_closeBtn->raise();
-
 #ifdef HAS_WEBENGINE
-    // WebEngine is lazy-initialized in ensureWebEngine() on first openBook() call
+    // WebEngine is lazy-initialized in ensureWebEngine()
 #else
     // ── Fallback path (no WebEngine) ──
     m_textBrowser = new QTextBrowser(this);
@@ -124,15 +111,16 @@ void BookReader::ensureWebEngine()
     m_channel->registerObject("bridge", m_bridge);
 
     m_webView = new QWebEngineView(this);
+    // Override global transparent stylesheet — WebEngine needs an opaque background
+    m_webView->setStyleSheet("QWebEngineView { background: #000000; }");
+    m_webView->page()->setBackgroundColor(QColor(0, 0, 0));
     m_webView->page()->setWebChannel(m_channel);
 
     // Allow local file access for loading book files via file:// URLs
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
 
-    // Inject the bridge shim BEFORE any page JS runs.
-    // qwebchannel.js is loaded via <script> tag in ebook_reader.html,
-    // so QWebChannel class is available when this shim executes.
+    // Inject the bridge shim at DocumentReady (after qwebchannel.js loads from <script> tag).
     QWebEngineScript shimScript;
     shimScript.setName("BookBridgeShim");
     shimScript.setInjectionPoint(QWebEngineScript::DocumentReady);
@@ -146,7 +134,10 @@ void BookReader::ensureWebEngine()
         "  new QWebChannel(qt.webChannelTransport, function(channel) {"
         "    var b = channel.objects.bridge;"
         "    window.electronAPI = {"
-        "      files: { read: function(path) { return b.filesRead(path); } },"
+        "      files: { read: function(path) {"
+        "        var url = 'file:///' + path.replace(/\\\\/g, '/');"
+        "        return fetch(url).then(function(r) { return r.arrayBuffer(); });"
+        "      } },"
         "      booksProgress: {"
         "        getAll: function() { return Promise.resolve({}); },"
         "        get: function(id) { return b.booksProgressGet(id); },"
@@ -218,14 +209,12 @@ void BookReader::ensureWebEngine()
     m_webView->page()->scripts().insert(shimScript);
 
     // When page loads, wait for reader JS to be fully ready before opening book.
-    // The reader sets window.__ebookOpenBook when it's ready, so we poll for it.
     connect(m_webView, &QWebEngineView::loadFinished, this, [this](bool ok) {
         if (!ok) return;
         m_readerReady = true;
         if (!m_pendingBook.isEmpty()) {
             QString escaped = m_pendingBook;
             escaped.replace("\\", "\\\\").replace("'", "\\'");
-            // Poll until __ebookOpenBook exists (reader modules load async)
             QString js = QStringLiteral(
                 "(function poll() {"
                 "  if (typeof window.__ebookOpenBook === 'function') {"
@@ -242,10 +231,17 @@ void BookReader::ensureWebEngine()
 
     // Size the view to fill this widget
     m_webView->setGeometry(0, 0, width(), height());
+    m_webView->raise();
     m_webView->show();
+}
 
-    // Ensure close button stays on top of WebView
-    m_closeBtn->raise();
+void BookReader::warmUp()
+{
+    ensureWebEngine();
+    // Pre-load the reader HTML so Chromium subprocess starts now
+    if (!m_readerReady) {
+        m_webView->setUrl(QUrl::fromLocalFile(m_readerHtmlPath));
+    }
 }
 
 #endif
@@ -283,10 +279,6 @@ void BookReader::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
 
-    // Position floating close button top-left
-    if (m_closeBtn)
-        m_closeBtn->move(12, 12);
-
 #ifdef HAS_WEBENGINE
     if (m_webView)
         m_webView->setGeometry(0, 0, width(), height());
@@ -298,10 +290,6 @@ void BookReader::resizeEvent(QResizeEvent* event)
         m_textBrowser->setGeometry(0, 0, width(),
                                     height() - (m_toolbar && m_toolbar->isVisible() ? m_toolbar->height() : 0));
 #endif
-
-    // Keep close button on top
-    if (m_closeBtn)
-        m_closeBtn->raise();
 }
 
 #ifndef HAS_WEBENGINE

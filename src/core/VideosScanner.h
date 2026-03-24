@@ -11,6 +11,7 @@ struct ShowInfo {
     QString showPath;
     int episodeCount = 0;
     qint64 totalSizeBytes = 0;
+    qint64 newestMtimeMs = 0;
 };
 Q_DECLARE_METATYPE(ShowInfo)
 

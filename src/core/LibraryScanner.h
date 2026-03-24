@@ -11,6 +11,7 @@ struct SeriesInfo {
     QString seriesPath;
     QString coverThumbPath;
     int fileCount = 0;
+    qint64 newestMtimeMs = 0;
 };
 Q_DECLARE_METATYPE(SeriesInfo)
 

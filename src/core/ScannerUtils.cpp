@@ -83,11 +83,21 @@ QMap<QString, QStringList> groupByFirstLevelSubdir(
                 result[subdir] = files;
         }
 
-        // 2. Loose files directly in root
-        QDir rootDir(root);
-        const auto looseFiles = rootDir.entryInfoList(nameFilters, QDir::Files);
-        for (const auto& f : looseFiles)
-            result[root].append(f.absoluteFilePath());
+        // 2. Loose files directly in root — only if no subdirs had files
+        //    (matching groundwork: loose files are a fallback, not a duplicate)
+        if (!result.contains(root)) {
+            bool hasSubdirResults = false;
+            for (const auto& subdir : subdirs) {
+                if (result.contains(subdir)) { hasSubdirResults = true; break; }
+            }
+            if (!hasSubdirResults) {
+                // No subdirs had files — treat root itself as a group
+                QDir rootDir(root);
+                const auto looseFiles = rootDir.entryInfoList(nameFilters, QDir::Files);
+                for (const auto& f : looseFiles)
+                    result[root].append(f.absoluteFilePath());
+            }
+        }
     }
 
     return result;

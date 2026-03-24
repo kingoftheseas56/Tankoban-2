@@ -57,8 +57,8 @@ set(SOURCES
     src/core/indexers/EztvIndexer.cpp
     src/core/indexers/X1337xIndexer.cpp
     src/core/indexers/ExtTorrentsIndexer.cpp
-    src/ui/player/FfmpegDecoder.cpp
-    src/ui/player/AudioDecoder.cpp
+    src/ui/player/SidecarProcess.cpp
+    src/ui/player/ShmFrameReader.cpp
     src/ui/player/FrameCanvas.cpp
     src/ui/player/VideoPlayer.cpp
 )
@@ -100,9 +100,8 @@ set(HEADERS
     src/core/indexers/EztvIndexer.h
     src/core/indexers/X1337xIndexer.h
     src/core/indexers/ExtTorrentsIndexer.h
-    src/ui/player/SyncClock.h
-    src/ui/player/FfmpegDecoder.h
-    src/ui/player/AudioDecoder.h
+    src/ui/player/SidecarProcess.h
+    src/ui/player/ShmFrameReader.h
     src/ui/player/FrameCanvas.h
     src/ui/player/VideoPlayer.h
 )
@@ -118,12 +117,8 @@ qt_add_executable(Tankoban
     ${RESOURCES}
 )
 
-# ── FFmpeg ──────────────────────────────────────────────────────────────────
-set(FFMPEG_DIR "C:/tools/ffmpeg-master-latest-win64-gpl-shared")
-
 target_include_directories(Tankoban PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${FFMPEG_DIR}/include
 )
 
 target_link_libraries(Tankoban PRIVATE
@@ -131,11 +126,6 @@ target_link_libraries(Tankoban PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-    ${FFMPEG_DIR}/lib/avformat.lib
-    ${FFMPEG_DIR}/lib/avcodec.lib
-    ${FFMPEG_DIR}/lib/avutil.lib
-    ${FFMPEG_DIR}/lib/swscale.lib
-    ${FFMPEG_DIR}/lib/swresample.lib
 )
 
 # QZipReader for CBZ support

@@ -95,7 +95,7 @@ void VideosPage::buildUI()
     m_stack->addWidget(gridPage);
 
     // ── Show view (index 1) ──
-    m_showView = new ShowView();
+    m_showView = new ShowView(m_bridge);
     connect(m_showView, &ShowView::backRequested, this, &VideosPage::showGrid);
     connect(m_showView, &ShowView::episodeSelected, this, [this](const QString& filePath) {
         emit playVideo(filePath);

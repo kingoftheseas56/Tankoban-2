@@ -1,7 +1,6 @@
 #include "ui/player/VideoPlayer.h"
-#include "ui/player/SyncClock.h"
-#include "ui/player/FfmpegDecoder.h"
-#include "ui/player/AudioDecoder.h"
+#include "ui/player/SidecarProcess.h"
+#include "ui/player/ShmFrameReader.h"
 #include "ui/player/FrameCanvas.h"
 
 #include <QVBoxLayout>
@@ -9,9 +8,20 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QJsonObject>
 #include <QSvgRenderer>
 #include <QPainter>
 #include <QPixmap>
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+
+static void debugLog(const QString& msg) {
+    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+    f.open(QIODevice::Append | QIODevice::Text);
+    QTextStream s(&f);
+    s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
+}
 
 // ── Inline SVG icons ────────────────────────────────────────────────────────
 
@@ -47,9 +57,8 @@ VideoPlayer::VideoPlayer(QWidget* parent)
     m_pauseIcon = iconFromSvg(SVG_PAUSE);
     m_backIcon  = iconFromSvg(SVG_BACK);
 
-    m_clock   = new SyncClock();
-    m_decoder = new FfmpegDecoder(m_clock, this);
-    m_audio   = new AudioDecoder(m_clock, this);
+    m_sidecar = new SidecarProcess(this);
+    m_reader  = new ShmFrameReader();
 
     buildUI();
 
@@ -57,47 +66,124 @@ VideoPlayer::VideoPlayer(QWidget* parent)
     m_hideTimer.setInterval(3000);
     connect(&m_hideTimer, &QTimer::timeout, this, &VideoPlayer::hideControls);
 
-    connect(m_decoder, &FfmpegDecoder::frameReady,
-            m_canvas,  &FrameCanvas::setFrame);
-    connect(m_decoder, &FfmpegDecoder::positionChanged,
-            this, &VideoPlayer::onPositionChanged);
-    connect(m_decoder, &FfmpegDecoder::playbackFinished,
-            this, &VideoPlayer::onPlaybackFinished);
-    connect(m_decoder, &FfmpegDecoder::errorOccurred,
-            this, [this](const QString& msg) { m_timeLabel->setText(msg); });
+    // Sidecar events
+    connect(m_sidecar, &SidecarProcess::ready,        this, &VideoPlayer::onSidecarReady);
+    connect(m_sidecar, &SidecarProcess::firstFrame,   this, &VideoPlayer::onFirstFrame);
+    connect(m_sidecar, &SidecarProcess::timeUpdate,   this, &VideoPlayer::onTimeUpdate);
+    connect(m_sidecar, &SidecarProcess::stateChanged,  this, &VideoPlayer::onStateChanged);
+    connect(m_sidecar, &SidecarProcess::endOfFile,    this, &VideoPlayer::onEndOfFile);
+    connect(m_sidecar, &SidecarProcess::errorOccurred, this, &VideoPlayer::onError);
 }
 
 VideoPlayer::~VideoPlayer()
 {
-    m_audio->stop();
-    m_decoder->stop();
-    delete m_clock;
+    m_canvas->stopPolling();
+    m_reader->detach();
+    delete m_reader;
 }
 
 // ── Public ──────────────────────────────────────────────────────────────────
 
 void VideoPlayer::openFile(const QString& filePath)
 {
-    m_audio->stop();
-    m_decoder->stop();
+    debugLog("[VideoPlayer] openFile: " + filePath);
 
-    if (!m_decoder->openFile(filePath))
-        return;
+    // Stop any current playback
+    stopPlayback();
 
-    // Audio may fail (silent video) — that's OK
-    m_audio->openFile(filePath);
-
-    m_duration = m_decoder->durationMs();
-    m_seekBar->setRange(0, static_cast<int>(m_duration / 1000));
-    m_seekBar->setValue(0);
-    m_timeLabel->setText(formatTime(0) + " / " + formatTime(m_duration));
+    m_pendingFile = filePath;
+    m_pendingStartSec = 0.0;
     m_paused = false;
     updatePlayPauseIcon();
 
-    // Start audio first — it drives the clock
-    m_audio->play();
-    m_decoder->play();
+    if (m_sidecar->isRunning()) {
+        debugLog("[VideoPlayer] sidecar already running, sending open directly");
+        m_sidecar->sendOpen(filePath);
+    } else {
+        debugLog("[VideoPlayer] starting sidecar...");
+        m_sidecar->start();
+    }
+
     showControls();
+}
+
+void VideoPlayer::stopPlayback()
+{
+    m_canvas->stopPolling();
+    m_canvas->detachShm();
+    m_reader->detach();
+
+    if (m_sidecar->isRunning())
+        m_sidecar->sendStop();
+}
+
+// ── Sidecar event handlers ──────────────────────────────────────────────────
+
+void VideoPlayer::onSidecarReady()
+{
+    if (!m_pendingFile.isEmpty()) {
+        m_sidecar->sendOpen(m_pendingFile, m_pendingStartSec);
+    }
+}
+
+void VideoPlayer::onFirstFrame(const QJsonObject& payload)
+{
+    debugLog("[VideoPlayer] onFirstFrame: " + QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    QString shmName  = payload["shmName"].toString();
+    int slotCount    = payload["slotCount"].toInt(4);
+    int w            = payload["width"].toInt();
+    int h            = payload["height"].toInt();
+    int slotBytes    = payload["slotBytes"].toInt(w * h * 4);
+
+    if (shmName.isEmpty())
+        return;
+
+    // Attach to the sidecar's shared memory
+    if (!m_reader->attach(shmName, slotCount, slotBytes)) {
+        m_timeLabel->setText("SHM attach failed");
+        return;
+    }
+
+    m_canvas->attachShm(m_reader);
+    m_canvas->startPolling();
+}
+
+void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
+{
+    if (m_seeking) return;
+
+    m_durationMs = static_cast<qint64>(durationSec * 1000);
+    qint64 posMs = static_cast<qint64>(positionSec * 1000);
+
+    m_seekBar->blockSignals(true);
+    m_seekBar->setRange(0, static_cast<int>(durationSec));
+    m_seekBar->setValue(static_cast<int>(positionSec));
+    m_seekBar->blockSignals(false);
+
+    m_timeLabel->setText(formatTime(posMs) + " / " + formatTime(m_durationMs));
+}
+
+void VideoPlayer::onStateChanged(const QString& state)
+{
+    if (state == "paused") {
+        m_paused = true;
+        updatePlayPauseIcon();
+    } else if (state == "playing") {
+        m_paused = false;
+        updatePlayPauseIcon();
+    }
+}
+
+void VideoPlayer::onEndOfFile()
+{
+    m_paused = true;
+    updatePlayPauseIcon();
+    showControls();
+}
+
+void VideoPlayer::onError(const QString& message)
+{
+    m_timeLabel->setText(message);
 }
 
 // ── UI ──────────────────────────────────────────────────────────────────────
@@ -133,8 +219,7 @@ void VideoPlayer::buildUI()
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->setStyleSheet(btnStyle);
     connect(m_backBtn, &QPushButton::clicked, this, [this]() {
-        m_audio->stop();
-        m_decoder->stop();
+        stopPlayback();
         emit closeRequested();
     });
 
@@ -163,7 +248,7 @@ void VideoPlayer::buildUI()
     connect(m_seekBar, &QSlider::sliderPressed, this, [this]() { m_seeking = true; });
     connect(m_seekBar, &QSlider::sliderReleased, this, [this]() {
         m_seeking = false;
-        onSeek(m_seekBar->value());
+        m_sidecar->sendSeek(static_cast<double>(m_seekBar->value()));
     });
 
     m_timeLabel = new QLabel("0:00 / 0:00", m_controlBar);
@@ -182,43 +267,17 @@ void VideoPlayer::buildUI()
 
 void VideoPlayer::togglePause()
 {
-    m_paused = !m_paused;
-    m_clock->setPaused(m_paused);
-    m_decoder->togglePause();
-    m_audio->pause();
-    if (!m_paused) m_audio->play();
-    updatePlayPauseIcon();
+    if (m_paused)
+        m_sidecar->sendResume();
+    else
+        m_sidecar->sendPause();
+    // State will update via onStateChanged callback
     showControls();
 }
 
 void VideoPlayer::updatePlayPauseIcon()
 {
     m_playPauseBtn->setIcon(m_paused ? m_playIcon : m_pauseIcon);
-}
-
-void VideoPlayer::onPositionChanged(qint64 ptsMs)
-{
-    if (m_seeking) return;
-    int secs = static_cast<int>(ptsMs / 1000);
-    m_seekBar->blockSignals(true);
-    m_seekBar->setValue(secs);
-    m_seekBar->blockSignals(false);
-    m_timeLabel->setText(formatTime(ptsMs) + " / " + formatTime(m_duration));
-}
-
-void VideoPlayer::onSeek(int sliderValue)
-{
-    qint64 ms = static_cast<qint64>(sliderValue) * 1000;
-    m_audio->seek(ms);
-    m_decoder->seek(ms);
-}
-
-void VideoPlayer::onPlaybackFinished()
-{
-    m_paused = true;
-    m_audio->stop();
-    updatePlayPauseIcon();
-    showControls();
 }
 
 void VideoPlayer::showControls()
@@ -272,27 +331,20 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
 {
     switch (event->key()) {
     case Qt::Key_Escape:
-        m_audio->stop();
-        m_decoder->stop();
+        stopPlayback();
         emit closeRequested();
         break;
     case Qt::Key_Space:
         togglePause();
         break;
-    case Qt::Key_Left: {
-        qint64 ms = qMax(0LL, m_seekBar->value() * 1000LL - 10000);
-        m_audio->seek(ms);
-        m_decoder->seek(ms);
+    case Qt::Key_Left:
+        m_sidecar->sendSeek(qMax(0.0, m_seekBar->value() - 10.0));
         showControls();
         break;
-    }
-    case Qt::Key_Right: {
-        qint64 ms = m_seekBar->value() * 1000LL + 10000;
-        m_audio->seek(ms);
-        m_decoder->seek(ms);
+    case Qt::Key_Right:
+        m_sidecar->sendSeek(m_seekBar->value() + 10.0);
         showControls();
         break;
-    }
     default:
         QWidget::keyPressEvent(event);
     }

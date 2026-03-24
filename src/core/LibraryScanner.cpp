@@ -61,6 +61,14 @@ void LibraryScanner::scan(const QStringList& rootFolders)
         info.seriesPath = seriesPath;
         info.fileCount = files.size();
 
+        // Compute newest modification time
+        qint64 newest = 0;
+        for (const auto& f : files) {
+            qint64 mt = QFileInfo(f).lastModified().toMSecsSinceEpoch();
+            if (mt > newest) newest = mt;
+        }
+        info.newestMtimeMs = newest;
+
         // Check thumbnail cache
         QString hash = QString(QCryptographicHash::hash(
             seriesPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));

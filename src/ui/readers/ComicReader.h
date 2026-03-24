@@ -10,8 +10,10 @@
 #include <QThreadPool>
 #include <QVector>
 #include <QMap>
+#include <QSet>
 #include <QMenu>
 #include <QPropertyAnimation>
+#include <QVBoxLayout>
 
 #include "PageCache.h"
 
@@ -19,10 +21,11 @@ class CoreBridge;
 class SmoothScrollArea;
 
 enum class FitMode { FitPage, FitWidth, FitHeight };
+enum class ReaderMode { SinglePage, DoublePage, ScrollStrip };
 
 struct TwoPagePair {
     int rightIndex = -1;
-    int leftIndex = -1;       // -1 if single/spread/cover
+    int leftIndex = -1;
     bool isSpread = false;
     bool coverAlone = false;
     bool unpairedSingle = false;
@@ -72,8 +75,10 @@ private:
     void cycleFitMode();
     void showToast(const QString& text);
 
+    // Mode cycling
+    void cycleReaderMode();
+
     // Double page & pairing
-    void toggleDoublePageMode();
     bool resolveSpread(int index) const;
     bool isSpreadIndex(int index) const;
     int  pageAdvanceCount() const;
@@ -111,6 +116,14 @@ private:
     QString clickZone(const QPoint& pos) const;
     void flashClickZone(const QString& side);
 
+    // Scroll strip mode
+    void buildScrollStrip();
+    void clearScrollStrip();
+    void reflowScrollStrip();
+    int  computePageInView() const;
+    void refreshVisibleStripPages();
+    void onStripScrollChanged();
+
     // Go-to-page
     void showGoToDialog();
     void hideGoToDialog();
@@ -136,7 +149,7 @@ private:
     QString     m_seriesName;
 
     // Modes
-    bool        m_doublePageMode = false;
+    ReaderMode  m_readerMode = ReaderMode::SinglePage;
     FitMode     m_fitMode = FitMode::FitPage;
 
     // Canonical pairing
@@ -163,9 +176,16 @@ private:
     double m_pendingPanPx = 0.0;
     QTimer m_panDrainTimer;
 
-    // Portrait width (single-page)
+    // Portrait width
     int m_portraitWidthPct = 78;
     QPushButton* m_portraitBtn = nullptr;
+    QPushButton* m_modeBtn = nullptr;
+
+    // Scroll strip mode
+    QWidget*     m_stripContainer = nullptr;
+    QVBoxLayout* m_stripLayout = nullptr;
+    QVector<QLabel*> m_stripPages;
+    QSet<int>    m_stripLoadedIndexes;
 
     // Infrastructure
     PageCache    m_cache;

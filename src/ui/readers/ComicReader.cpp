@@ -20,6 +20,8 @@
 #include <cmath>
 
 static constexpr double SPREAD_RATIO = 1.08;
+#define m_isDoublePage (m_readerMode == ReaderMode::DoublePage)
+#define m_isScrollStrip (m_readerMode == ReaderMode::ScrollStrip)
 static constexpr double COUPLING_MIN_CONFIDENCE = 0.12;
 static constexpr int COUPLING_PROBE_MAX_PAGES = 8;
 static constexpr int COUPLING_MAX_SAMPLES = 4;
@@ -124,7 +126,13 @@ void ComicReader::buildUI()
 
     tbLayout->addStretch();
 
-    // Portrait width button (single-page mode only)
+    // Mode button
+    m_modeBtn = makeBtn("Single", 64);
+    m_modeBtn->setToolTip("Reading mode (M)");
+    connect(m_modeBtn, &QPushButton::clicked, this, &ComicReader::cycleReaderMode);
+    tbLayout->addWidget(m_modeBtn);
+
+    // Portrait width button
     m_portraitBtn = makeBtn(QString::number(m_portraitWidthPct) + "%", 48);
     m_portraitBtn->setToolTip("Page width");
     connect(m_portraitBtn, &QPushButton::clicked, this, &ComicReader::showPortraitWidthMenu);
@@ -178,7 +186,7 @@ void ComicReader::openBook(const QString& cbzPath,
     m_nextVolBtn->setVisible(!m_seriesCbzList.isEmpty() && volIdx < m_seriesCbzList.size() - 1);
 
     // Update toolbar visibility for mode
-    m_portraitBtn->setVisible(!m_doublePageMode);
+    m_portraitBtn->setVisible(!m_isDoublePage);
 
     int startPage = restoreSavedPage();
     showPage(startPage);
@@ -302,11 +310,28 @@ void ComicReader::onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int
     if (!m_couplingResolved && m_couplingMode == "auto")
         maybeRunAutoCoupling();
 
+    // Scroll strip: render the page into its label
+    if (m_isScrollStrip) {
+        if (pageIndex >= 0 && pageIndex < m_stripPages.size() && !m_stripLoadedIndexes.contains(pageIndex)) {
+            int viewW = m_scrollArea->viewport()->width();
+            double frac = m_portraitWidthPct / 100.0;
+            bool spread = resolveSpread(pageIndex);
+            int pageW = spread ? viewW : static_cast<int>(viewW * frac);
+            pageW = qMin(pageW, w);
+
+            QPixmap scaled = pixmap.scaledToWidth(pageW, Qt::SmoothTransformation);
+            m_stripPages[pageIndex]->setPixmap(scaled);
+            m_stripPages[pageIndex]->setFixedHeight(scaled.height());
+            m_stripLoadedIndexes.insert(pageIndex);
+        }
+        return;
+    }
+
     if (pageIndex == m_currentPage) {
         m_currentPixmap = pixmap;
         displayCurrentPage();
     }
-    if (m_doublePageMode && m_secondPixmap.isNull()) {
+    if (m_isDoublePage && m_secondPixmap.isNull()) {
         auto* pair = pairForPage(m_currentPage);
         if (pair && pair->leftIndex == pageIndex) {
             m_secondPixmap = pixmap;
@@ -317,7 +342,7 @@ void ComicReader::onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int
 
 int ComicReader::pageAdvanceCount() const
 {
-    if (!m_doublePageMode) return 1;
+    if (!m_isDoublePage) return 1;
     auto* pair = pairForPage(m_currentPage);
     if (!pair) return 1;
     if (pair->leftIndex >= 0) return 2; // paired
@@ -344,11 +369,23 @@ void ComicReader::showPage(int index)
     if (m_pageNames.isEmpty()) return;
     index = qBound(0, index, m_pageNames.size() - 1);
     m_currentPage = index;
+
+    // Scroll strip mode: scroll to the page widget
+    if (m_isScrollStrip && !m_stripPages.isEmpty()) {
+        if (index < m_stripPages.size()) {
+            m_scrollArea->ensureWidgetVisible(m_stripPages[index], 0, 0);
+        }
+        updatePageLabel();
+        refreshVisibleStripPages();
+        saveCurrentProgress();
+        return;
+    }
+
     m_secondPixmap = QPixmap();
     resetZoomPan();
 
     // Ensure pairing is built
-    if (m_canonicalUnits.isEmpty() && m_doublePageMode)
+    if (m_canonicalUnits.isEmpty() && m_isDoublePage)
         buildCanonicalPairingUnits();
 
     // Load current page
@@ -371,7 +408,7 @@ void ComicReader::showPage(int index)
     }
 
     // Load second page for double-page pairs
-    if (m_doublePageMode) {
+    if (m_isDoublePage) {
         auto* pair = pairForPage(index);
         if (pair && pair->leftIndex >= 0) {
             int secondIdx = pair->leftIndex;
@@ -412,11 +449,11 @@ void ComicReader::displayCurrentPage()
     if (availW <= 0 || availH <= 0) return;
 
     QPixmap composite = m_currentPixmap;
-    if (m_doublePageMode && !m_secondPixmap.isNull())
+    if (m_isDoublePage && !m_secondPixmap.isNull())
         composite = compositeDoublePages(m_currentPixmap, m_secondPixmap);
 
     // Single-page mode: scale to fill height, cap width by portrait %
-    if (!m_doublePageMode) {
+    if (!m_isDoublePage) {
         QPixmap scaled;
         switch (m_fitMode) {
         case FitMode::FitPage: {
@@ -479,7 +516,7 @@ void ComicReader::prefetchNeighbors()
 
 void ComicReader::nextPage()
 {
-    if (!m_doublePageMode) {
+    if (!m_isDoublePage) {
         if (m_currentPage + 1 < m_pageNames.size())
             showPage(m_currentPage + 1);
         return;
@@ -491,7 +528,7 @@ void ComicReader::nextPage()
 
 void ComicReader::prevPage()
 {
-    if (!m_doublePageMode) {
+    if (!m_isDoublePage) {
         if (m_currentPage > 0) showPage(m_currentPage - 1);
         return;
     }
@@ -503,7 +540,7 @@ void ComicReader::prevPage()
 void ComicReader::updatePageLabel()
 {
     if (m_pageNames.isEmpty()) { m_pageLabel->setText("No pages"); return; }
-    if (m_doublePageMode && !m_secondPixmap.isNull()) {
+    if (m_isDoublePage && !m_secondPixmap.isNull()) {
         auto* pair = pairForPage(m_currentPage);
         if (pair && pair->leftIndex >= 0) {
             m_pageLabel->setText(QString("Pages %1-%2 / %3")
@@ -573,25 +610,51 @@ void ComicReader::showToast(const QString& text)
     m_toastTimer.start();
 }
 
-// ── Double Page Mode ────────────────────────────────────────────────────────
+// ── Reader Mode Cycling ─────────────────────────────────────────────────────
 
-void ComicReader::toggleDoublePageMode()
+void ComicReader::cycleReaderMode()
 {
-    m_doublePageMode = !m_doublePageMode;
-    m_portraitBtn->setVisible(!m_doublePageMode);
-    if (m_doublePageMode)
+    // Save scroll position before switching
+    int page = (m_readerMode == ReaderMode::ScrollStrip) ? computePageInView() : m_currentPage;
+
+    switch (m_readerMode) {
+    case ReaderMode::SinglePage:
+        m_readerMode = ReaderMode::DoublePage;
+        clearScrollStrip();
+        m_imageLabel->show();
         buildCanonicalPairingUnits();
-    else
+        m_portraitBtn->setVisible(false);
+        m_modeBtn->setText("Double");
+        showToast("Double Page");
+        break;
+    case ReaderMode::DoublePage:
+        m_readerMode = ReaderMode::ScrollStrip;
         invalidatePairing();
-    showToast(m_doublePageMode ? "Double Page" : "Single Page");
-    showPage(m_currentPage);
+        m_imageLabel->hide();
+        m_portraitBtn->setVisible(true);
+        m_modeBtn->setText("Scroll");
+        buildScrollStrip();
+        showToast("Scroll Strip");
+        break;
+    case ReaderMode::ScrollStrip:
+        m_readerMode = ReaderMode::SinglePage;
+        clearScrollStrip();
+        m_imageLabel->show();
+        invalidatePairing();
+        m_portraitBtn->setVisible(true);
+        m_modeBtn->setText("Single");
+        showToast("Single Page");
+        break;
+    }
+
+    showPage(page);
 }
 
 // ── Coupling Nudge ──────────────────────────────────────────────────────────
 
 void ComicReader::toggleCouplingNudge()
 {
-    if (!m_doublePageMode) return;
+    if (!m_isDoublePage) return;
     m_couplingPhase = (m_couplingPhase == "normal") ? "shifted" : "normal";
     m_couplingMode = "manual";
     m_couplingConfidence = 1.0f;
@@ -697,7 +760,7 @@ void ComicReader::maybeRunAutoCoupling()
     m_couplingConfidence = static_cast<float>(confidence);
     m_couplingResolved = true;
 
-    if (m_doublePageMode) {
+    if (m_isDoublePage) {
         invalidatePairing();
         buildCanonicalPairingUnits();
         showPage(m_currentPage);
@@ -726,14 +789,14 @@ void ComicReader::showSpreadOverrideMenu(int pageIndex, const QPoint& globalPos)
     if (chosen == toggleAction) {
         m_spreadOverrides[pageIndex] = !currentlySpread;
         invalidatePairing();
-        if (m_doublePageMode) {
+        if (m_isDoublePage) {
             buildCanonicalPairingUnits();
             showPage(m_currentPage);
         }
     } else if (chosen == resetAction) {
         m_spreadOverrides.clear();
         invalidatePairing();
-        if (m_doublePageMode) {
+        if (m_isDoublePage) {
             buildCanonicalPairingUnits();
             showPage(m_currentPage);
         }
@@ -744,7 +807,7 @@ void ComicReader::showSpreadOverrideMenu(int pageIndex, const QPoint& globalPos)
 
 void ComicReader::toggleReadingDirection()
 {
-    if (!m_doublePageMode) return;
+    if (!m_isDoublePage) return;
     m_rtl = !m_rtl;
     showToast(m_rtl ? "Right to Left" : "Left to Right");
     displayCurrentPage();
@@ -778,7 +841,13 @@ void ComicReader::setPortraitWidthPct(int pct)
     if (pct == m_portraitWidthPct) return;
     m_portraitWidthPct = pct;
     m_portraitBtn->setText(QString::number(pct) + "%");
-    displayCurrentPage();
+    if (m_isScrollStrip) {
+        m_stripLoadedIndexes.clear(); // force re-render at new width
+        reflowScrollStrip();
+        refreshVisibleStripPages();
+    } else {
+        displayCurrentPage();
+    }
 }
 
 // ── Zoom & Pan ──────────────────────────────────────────────────────────────
@@ -791,7 +860,7 @@ void ComicReader::setZoom(int pct)
 
 void ComicReader::zoomBy(int delta)
 {
-    if (!m_doublePageMode) return;
+    if (!m_isDoublePage) return;
     setZoom(m_zoomPct + delta);
     showToast(QString("Zoom: %1%").arg(m_zoomPct));
 }
@@ -918,6 +987,189 @@ void ComicReader::nextVolume()
     if (idx >= 0 && idx < m_seriesCbzList.size() - 1) openVolumeByIndex(idx + 1);
 }
 
+// ── Scroll Strip Mode ────────────────────────────────────────────────────────
+
+void ComicReader::buildScrollStrip()
+{
+    clearScrollStrip();
+
+    m_stripContainer = new QWidget();
+    m_stripContainer->setStyleSheet("background: #000;");
+    m_stripLayout = new QVBoxLayout(m_stripContainer);
+    m_stripLayout->setContentsMargins(0, 0, 0, 0);
+    m_stripLayout->setSpacing(2);
+    m_stripLayout->setAlignment(Qt::AlignHCenter);
+
+    int total = m_pageNames.size();
+    m_stripPages.resize(total);
+
+    // Estimate page height — use a reasonable default
+    int viewW = qMax(1, m_scrollArea->viewport()->width());
+    double frac = m_portraitWidthPct / 100.0;
+    int defaultH = static_cast<int>(viewW * frac * 1.4); // ~1.4 aspect ratio estimate
+
+    for (int i = 0; i < total; ++i) {
+        auto* label = new QLabel();
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet("background: #111;");
+        label->setFixedHeight(defaultH);
+        m_stripLayout->addWidget(label);
+        m_stripPages[i] = label;
+    }
+
+    m_scrollArea->setWidget(m_stripContainer);
+    m_scrollArea->setWidgetResizable(true);
+
+    // Connect scroll to track visible page (debounced)
+    connect(m_scrollArea->verticalScrollBar(), &QScrollBar::valueChanged,
+            this, &ComicReader::onStripScrollChanged);
+
+    // Load initial visible pages after layout settles
+    QTimer::singleShot(100, this, &ComicReader::refreshVisibleStripPages);
+}
+
+void ComicReader::clearScrollStrip()
+{
+    if (m_stripContainer) {
+        // Disconnect scroll tracking
+        if (m_scrollArea->verticalScrollBar())
+            disconnect(m_scrollArea->verticalScrollBar(), &QScrollBar::valueChanged,
+                      this, &ComicReader::onStripScrollChanged);
+
+        m_scrollArea->setWidget(nullptr);
+        m_stripContainer->deleteLater();
+        m_stripContainer = nullptr;
+        m_stripLayout = nullptr;
+        m_stripPages.clear();
+        m_stripLoadedIndexes.clear();
+
+        // Restore single-image label
+        m_imageLabel = new QLabel();
+        m_imageLabel->setAlignment(Qt::AlignCenter);
+        m_imageLabel->setStyleSheet("background: transparent;");
+        m_scrollArea->setWidget(m_imageLabel);
+        m_scrollArea->setWidgetResizable(false);
+    }
+}
+
+void ComicReader::reflowScrollStrip()
+{
+    if (!m_isScrollStrip || m_stripPages.isEmpty()) return;
+
+    int viewW = m_scrollArea->viewport()->width();
+    if (viewW <= 0) return;
+    double frac = m_portraitWidthPct / 100.0;
+
+    for (int i = 0; i < m_stripPages.size(); ++i) {
+        if (i >= m_pageMeta.size() || !m_pageMeta[i].decoded) continue;
+
+        bool spread = resolveSpread(i);
+        int pageW = spread ? viewW : static_cast<int>(viewW * frac);
+        pageW = qMin(pageW, m_pageMeta[i].width); // no upscale
+
+        double ratio = static_cast<double>(m_pageMeta[i].height) / qMax(1, m_pageMeta[i].width);
+        int pageH = static_cast<int>(pageW * ratio);
+
+        m_stripPages[i]->setFixedHeight(pageH);
+
+        // Re-render if loaded
+        if (m_stripLoadedIndexes.contains(i) && m_cache.contains(i)) {
+            QPixmap pix = m_cache.get(i);
+            QPixmap scaled = pix.scaledToWidth(pageW, Qt::SmoothTransformation);
+            m_stripPages[i]->setPixmap(scaled);
+        }
+    }
+}
+
+int ComicReader::computePageInView() const
+{
+    if (m_stripPages.isEmpty()) return m_currentPage;
+
+    auto* vbar = m_scrollArea->verticalScrollBar();
+    int centerY = (vbar ? vbar->value() : 0) + m_scrollArea->viewport()->height() / 2;
+
+    int yCursor = 0;
+    for (int i = 0; i < m_stripPages.size(); ++i) {
+        int h = m_stripPages[i]->height();
+        if (centerY < yCursor + h)
+            return i;
+        yCursor += h;
+    }
+    return m_stripPages.size() - 1;
+}
+
+void ComicReader::refreshVisibleStripPages()
+{
+    if (!m_isScrollStrip || m_stripPages.isEmpty()) return;
+
+    auto* vbar = m_scrollArea->verticalScrollBar();
+    int viewTop = vbar ? vbar->value() : 0;
+    int viewH = qMax(1, m_scrollArea->viewport()->height());
+    int margin = viewH * 2; // prefetch 2 viewports above/below
+
+    int loadTop = qMax(0, viewTop - margin);
+    int loadBottom = viewTop + viewH + margin;
+
+    int viewW = qMax(1, m_scrollArea->viewport()->width());
+    double frac = m_portraitWidthPct / 100.0;
+
+    int yCursor = 0;
+    for (int i = 0; i < m_stripPages.size(); ++i) {
+        int h = m_stripPages[i]->height();
+        int y = yCursor;
+        yCursor += h;
+
+        bool inRange = (y + h >= loadTop && y <= loadBottom);
+
+        if (!inRange || m_stripLoadedIndexes.contains(i)) {
+            if (!inRange) continue;
+            continue;
+        }
+
+        // Try from cache first (fast path — no blocking)
+        if (m_cache.contains(i)) {
+            QPixmap pix = m_cache.get(i);
+            bool spread = resolveSpread(i);
+            int pageW = spread ? viewW : static_cast<int>(viewW * frac);
+            pageW = qMin(pageW, pix.width());
+
+            // Use fast transformation for scroll strip (smooth is too slow)
+            QPixmap scaled = pix.scaledToWidth(pageW, Qt::FastTransformation);
+            m_stripPages[i]->setPixmap(scaled);
+            m_stripPages[i]->setFixedHeight(scaled.height());
+            m_stripLoadedIndexes.insert(i);
+        } else {
+            // Request async decode — will arrive via onPageDecoded
+            requestDecode(i);
+        }
+    }
+}
+
+void ComicReader::onStripScrollChanged()
+{
+    if (!m_isScrollStrip) return;
+
+    int page = computePageInView();
+    if (page != m_currentPage) {
+        m_currentPage = page;
+        updatePageLabel();
+    }
+
+    // Debounce the expensive refresh — don't call on every scroll pixel
+    // Use a single-shot timer to batch rapid scroll events
+    static QTimer* debounce = nullptr;
+    if (!debounce) {
+        debounce = new QTimer(this);
+        debounce->setSingleShot(true);
+        debounce->setInterval(50);
+        connect(debounce, &QTimer::timeout, this, [this]() {
+            refreshVisibleStripPages();
+            saveCurrentProgress();
+        });
+    }
+    debounce->start();
+}
+
 // ── Toolbar ─────────────────────────────────────────────────────────────────
 
 void ComicReader::showToolbar()
@@ -949,14 +1201,14 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
         else { saveCurrentProgress(); emit closeRequested(); }
         break;
     case Qt::Key_F: cycleFitMode(); break;
-    case Qt::Key_M: toggleDoublePageMode(); break;
+    case Qt::Key_M: cycleReaderMode(); break;
     case Qt::Key_P: toggleCouplingNudge(); break;
     case Qt::Key_I: toggleReadingDirection(); break;
     case Qt::Key_Up:
-        if (m_doublePageMode && m_zoomPct > 100) { m_pendingPanPx -= 80; if (!m_panDrainTimer.isActive()) m_panDrainTimer.start(); }
+        if (m_isDoublePage && m_zoomPct > 100) { m_pendingPanPx -= 80; if (!m_panDrainTimer.isActive()) m_panDrainTimer.start(); }
         break;
     case Qt::Key_Down:
-        if (m_doublePageMode && m_zoomPct > 100) { m_pendingPanPx += 80; if (!m_panDrainTimer.isActive()) m_panDrainTimer.start(); }
+        if (m_isDoublePage && m_zoomPct > 100) { m_pendingPanPx += 80; if (!m_panDrainTimer.isActive()) m_panDrainTimer.start(); }
         break;
     default: QWidget::keyPressEvent(event);
     }
@@ -966,14 +1218,20 @@ void ComicReader::wheelEvent(QWheelEvent* event)
 {
     showToolbar();
 
+    // Scroll strip mode: let the scroll area handle everything
+    if (m_isScrollStrip) {
+        m_scrollArea->handleWheel(event);
+        return;
+    }
+
     // Ctrl+wheel: zoom in double-page mode
-    if (m_doublePageMode && event->modifiers() & Qt::ControlModifier) {
+    if (m_isDoublePage && event->modifiers() & Qt::ControlModifier) {
         zoomBy(event->angleDelta().y() > 0 ? 20 : -20);
         event->accept();
         return;
     }
 
-    // Fit-width scrolling
+    // Fit-width scrolling in single-page mode
     if (m_fitMode == FitMode::FitWidth && m_scrollArea) {
         auto* vbar = m_scrollArea->verticalScrollBar();
         if (vbar && vbar->maximum() > 0) {
@@ -991,7 +1249,7 @@ void ComicReader::wheelEvent(QWheelEvent* event)
 
 void ComicReader::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton && m_doublePageMode) {
+    if (event->button() == Qt::LeftButton && m_isDoublePage) {
         QString zone = clickZone(event->pos());
         if (zone == "left") {
             flashClickZone("left");
@@ -1012,7 +1270,7 @@ void ComicReader::mousePressEvent(QMouseEvent* event)
 
 void ComicReader::contextMenuEvent(QContextMenuEvent* event)
 {
-    if (m_doublePageMode) {
+    if (m_isDoublePage) {
         showSpreadOverrideMenu(m_currentPage, event->globalPos());
         return;
     }
@@ -1024,7 +1282,12 @@ void ComicReader::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
     m_scrollArea->setGeometry(0, 0, width(), height());
     m_toolbar->setGeometry(0, height() - m_toolbar->height(), width(), m_toolbar->height());
-    displayCurrentPage();
+    if (m_isScrollStrip) {
+        reflowScrollStrip();
+        refreshVisibleStripPages();
+    } else {
+        displayCurrentPage();
+    }
 }
 
 void ComicReader::mouseMoveEvent(QMouseEvent* event)

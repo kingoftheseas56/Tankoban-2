@@ -15,6 +15,7 @@ public:
     void clear();
     void addTile(TileCard* card);
     void filterTiles(const QString& query);
+    void sortTiles(const QString& sortKey);
     int visibleCount() const;
     int totalCount() const;
 

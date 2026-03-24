@@ -6,7 +6,9 @@
 #include "core/LibraryScanner.h"
 
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QMetaObject>
+#include <QSettings>
 
 ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -61,10 +63,51 @@ void ComicsPage::buildUI()
     auto* header = new QWidget(gridPage);
     auto* headerLayout = new QVBoxLayout(header);
     headerLayout->setContentsMargins(24, 20, 24, 12);
+    headerLayout->setSpacing(8);
+
+    // Title row: title left, sort combo right
+    auto* titleRow = new QHBoxLayout();
     auto* title = new QLabel("Comics", header);
     title->setObjectName("SectionTitle");
-    headerLayout->addWidget(title);
+    titleRow->addWidget(title);
+    titleRow->addStretch();
 
+    m_sortCombo = new QComboBox(header);
+    m_sortCombo->setObjectName("LibrarySortCombo");
+    m_sortCombo->setFixedWidth(150);
+    m_sortCombo->setFixedHeight(28);
+    m_sortCombo->addItem("Name A\u2192Z",       "name_asc");
+    m_sortCombo->addItem("Name Z\u2192A",       "name_desc");
+    m_sortCombo->addItem("Recently updated",     "updated_desc");
+    m_sortCombo->addItem("Least recent",         "updated_asc");
+    m_sortCombo->addItem("Most items",           "count_desc");
+    m_sortCombo->addItem("Fewest items",         "count_asc");
+    m_sortCombo->setStyleSheet(
+        "QComboBox#LibrarySortCombo {"
+        "  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        "  border-radius: 6px; color: #ccc; padding: 2px 8px; font-size: 12px; }"
+        "QComboBox#LibrarySortCombo:hover { border-color: rgba(255,255,255,0.2); }"
+        "QComboBox#LibrarySortCombo::drop-down { border: none; }"
+        "QComboBox#LibrarySortCombo QAbstractItemView {"
+        "  background: #1e1e1e; color: #ccc; selection-background-color: rgba(255,255,255,0.1);"
+        "  border: 1px solid rgba(255,255,255,0.12); }");
+    // Load saved sort preference
+    QString savedSort = QSettings("Tankoban", "Tankoban").value("library_sort_comics", "name_asc").toString();
+    for (int i = 0; i < m_sortCombo->count(); ++i) {
+        if (m_sortCombo->itemData(i).toString() == savedSort) {
+            m_sortCombo->setCurrentIndex(i);
+            break;
+        }
+    }
+    connect(m_sortCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        QString key = m_sortCombo->itemData(idx).toString();
+        QSettings("Tankoban", "Tankoban").setValue("library_sort_comics", key);
+        m_tileStrip->sortTiles(key);
+    });
+    titleRow->addWidget(m_sortCombo);
+    headerLayout->addLayout(titleRow);
+
+    // Search bar
     m_searchBar = new QLineEdit(header);
     m_searchBar->setPlaceholderText("Search series and volumes\u2026");
     m_searchBar->setClearButtonEnabled(true);
@@ -148,9 +191,11 @@ void ComicsPage::onSeriesFound(const SeriesInfo& series)
 
     auto* card = new TileCard(series.coverThumbPath, series.seriesName, subtitle);
 
-    // Store series data for click handling
+    // Store series data for click handling and sorting
     card->setProperty("seriesPath", series.seriesPath);
     card->setProperty("seriesName", series.seriesName);
+    card->setProperty("fileCount", series.fileCount);
+    card->setProperty("newestMtime", series.newestMtimeMs);
     connect(card, &TileCard::clicked, this, [this, card]() {
         onTileClicked(card->property("seriesPath").toString(),
                       card->property("seriesName").toString());
@@ -168,6 +213,9 @@ void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
         m_tileStrip->hide();
         m_statusLabel->setText("No comics found in your library folders");
         m_statusLabel->show();
+    } else {
+        // Apply current sort order
+        m_tileStrip->sortTiles(m_sortCombo->currentData().toString());
     }
 }
 

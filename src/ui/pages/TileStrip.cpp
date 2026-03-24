@@ -3,6 +3,7 @@
 
 #include <QResizeEvent>
 #include <QTimer>
+#include <QRegularExpression>
 #include <algorithm>
 
 TileStrip::TileStrip(QWidget* parent)
@@ -73,6 +74,73 @@ int TileStrip::visibleCount() const
 int TileStrip::totalCount() const
 {
     return m_tiles.size();
+}
+
+// Natural sort: split on digits, compare chunks (int for digits, lowercase string for text)
+static bool naturalLessThan(const QString& a, const QString& b)
+{
+    static QRegularExpression re(QStringLiteral("(\\d+)"));
+    int ia = 0, ib = 0;
+    while (ia < a.size() && ib < b.size()) {
+        auto ma = re.match(a, ia);
+        auto mb = re.match(b, ib);
+
+        // Text before next digit group
+        int endA = ma.hasMatch() ? ma.capturedStart() : a.size();
+        int endB = mb.hasMatch() ? mb.capturedStart() : b.size();
+
+        QString textA = a.mid(ia, endA - ia).toLower();
+        QString textB = b.mid(ib, endB - ib).toLower();
+        if (textA != textB)
+            return textA < textB;
+
+        // Digit groups
+        if (!ma.hasMatch() || !mb.hasMatch())
+            return ma.hasMatch() < mb.hasMatch(); // one has digits, other doesn't
+
+        qint64 numA = ma.captured(1).toLongLong();
+        qint64 numB = mb.captured(1).toLongLong();
+        if (numA != numB)
+            return numA < numB;
+
+        ia = ma.capturedEnd();
+        ib = mb.capturedEnd();
+    }
+    return a.size() < b.size();
+}
+
+void TileStrip::sortTiles(const QString& sortKey)
+{
+    if (m_tiles.isEmpty()) return;
+
+    QString base = sortKey.section('_', 0, 0);
+    bool desc = sortKey.endsWith("_desc");
+
+    std::sort(m_tiles.begin(), m_tiles.end(),
+              [&](TileCard* a, TileCard* b) {
+        bool less = false;
+        if (base == "name" || base == "title") {
+            QString ta = a->property("tileTitle").toString();
+            QString tb = b->property("tileTitle").toString();
+            less = naturalLessThan(ta, tb);
+        } else if (base == "updated") {
+            qint64 ma = a->property("newestMtime").toLongLong();
+            qint64 mb = b->property("newestMtime").toLongLong();
+            less = ma < mb;
+        } else if (base == "count") {
+            int ca = a->property("fileCount").toInt();
+            int cb = b->property("fileCount").toInt();
+            less = ca < cb;
+        } else {
+            // Default: name asc
+            less = naturalLessThan(
+                a->property("tileTitle").toString(),
+                b->property("tileTitle").toString());
+        }
+        return desc ? !less : less;
+    });
+
+    reflowTiles();
 }
 
 void TileStrip::resizeEvent(QResizeEvent* event)

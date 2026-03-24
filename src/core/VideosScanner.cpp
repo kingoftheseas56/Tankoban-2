@@ -42,9 +42,15 @@ void VideosScanner::scan(const QStringList& rootFolders)
         info.episodeCount = files.size();
 
         qint64 totalSize = 0;
-        for (const auto& f : files)
-            totalSize += QFileInfo(f).size();
+        qint64 newest = 0;
+        for (const auto& f : files) {
+            QFileInfo fi(f);
+            totalSize += fi.size();
+            qint64 mt = fi.lastModified().toMSecsSinceEpoch();
+            if (mt > newest) newest = mt;
+        }
         info.totalSizeBytes = totalSize;
+        info.newestMtimeMs = newest;
 
         allShows.append(info);
         emit showFound(info);

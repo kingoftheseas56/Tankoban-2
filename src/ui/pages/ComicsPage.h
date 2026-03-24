@@ -4,7 +4,9 @@
 #include <QThread>
 #include <QLabel>
 #include <QLineEdit>
+#include <QComboBox>
 #include <QTimer>
+#include <QSettings>
 #include <QStackedWidget>
 
 class CoreBridge;
@@ -40,6 +42,7 @@ private:
     TileStrip*       m_tileStrip = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLineEdit*       m_searchBar = nullptr;
+    QComboBox*       m_sortCombo = nullptr;
     QTimer*          m_searchTimer = nullptr;
     SeriesView*      m_seriesView = nullptr;
 

@@ -115,6 +115,13 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
         info.seriesPath = seriesPath;
         info.fileCount = files.size();
 
+        qint64 newest = 0;
+        for (const auto& f : files) {
+            qint64 mt = QFileInfo(f).lastModified().toMSecsSinceEpoch();
+            if (mt > newest) newest = mt;
+        }
+        info.newestMtimeMs = newest;
+
         // Thumbnail cache check
         QString hash = QString(QCryptographicHash::hash(
             seriesPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));

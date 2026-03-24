@@ -294,8 +294,12 @@ void MainWindow::activatePage(const QString &pageId)
             // Activate page on switch
             if (auto *comics = qobject_cast<ComicsPage*>(m_pageStack->widget(i)))
                 comics->activate();
-            if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
+            if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i))) {
                 books->activate();
+                // Pre-warm WebEngine so it's ready when user clicks a book
+                if (m_bookReader)
+                    m_bookReader->warmUp();
+            }
             if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
                 videos->activate();
             if (auto *sources = qobject_cast<SourcesPage*>(m_pageStack->widget(i)))
@@ -443,11 +447,11 @@ void MainWindow::closeComicReader()
 // ── Book reader ─────────────────────────────────────────────────────────────
 void MainWindow::openBookReader(const QString& filePath)
 {
-    m_bookReader->openBook(filePath);
     m_bookReader->setGeometry(centralWidget()->rect());
     m_bookReader->show();
     m_bookReader->raise();
     m_bookReader->setFocus();
+    m_bookReader->openBook(filePath);
 }
 
 void MainWindow::closeBookReader()

@@ -7,9 +7,8 @@
 #include <QTimer>
 #include <QIcon>
 
-class SyncClock;
-class FfmpegDecoder;
-class AudioDecoder;
+class SidecarProcess;
+class ShmFrameReader;
 class FrameCanvas;
 
 class VideoPlayer : public QWidget {
@@ -33,20 +32,29 @@ private:
     void buildUI();
     void togglePause();
     void updatePlayPauseIcon();
-    void onPositionChanged(qint64 ptsMs);
-    void onSeek(int sliderValue);
-    void onPlaybackFinished();
+    void stopPlayback();
     void showControls();
     void hideControls();
+
+    // Sidecar event handlers
+    void onSidecarReady();
+    void onFirstFrame(const QJsonObject& payload);
+    void onTimeUpdate(double positionSec, double durationSec);
+    void onStateChanged(const QString& state);
+    void onEndOfFile();
+    void onError(const QString& message);
 
     static QString formatTime(qint64 ms);
     static QIcon iconFromSvg(const QByteArray& svg, int size = 20);
 
     // Components
-    SyncClock*     m_clock   = nullptr;
-    FfmpegDecoder* m_decoder = nullptr;
-    AudioDecoder*  m_audio   = nullptr;
-    FrameCanvas*   m_canvas  = nullptr;
+    SidecarProcess* m_sidecar = nullptr;
+    ShmFrameReader* m_reader  = nullptr;
+    FrameCanvas*    m_canvas  = nullptr;
+
+    // Pending open (file path stored until sidecar is ready)
+    QString m_pendingFile;
+    double  m_pendingStartSec = 0.0;
 
     // Controls
     QWidget*     m_controlBar  = nullptr;
@@ -63,7 +71,7 @@ private:
     // State
     bool   m_paused   = false;
     bool   m_seeking  = false;
-    qint64 m_duration = 0;
+    qint64 m_durationMs = 0;
 
     // Auto-hide
     QTimer m_hideTimer;

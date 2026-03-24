@@ -19,6 +19,7 @@ public:
     explicit BookReader(QWidget* parent = nullptr);
 
     void openBook(const QString& filePath);
+    void warmUp();  // Pre-initialize WebEngine without opening a book
 
 signals:
     void closeRequested();
@@ -44,9 +45,6 @@ private:
 
     QString m_currentFile;
     QString m_readerHtmlPath;
-
-    // Floating close button (always available as backup)
-    QPushButton* m_closeBtn = nullptr;
 
 #ifdef HAS_WEBENGINE
     QWebEngineView* m_webView = nullptr;
