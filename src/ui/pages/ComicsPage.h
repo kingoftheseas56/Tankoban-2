@@ -21,7 +21,7 @@ public:
     void triggerScan();
 
 signals:
-    void openComic(const QString& cbzPath);
+    void openComic(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
 
 private slots:
     void onSeriesFound(const SeriesInfo& series);

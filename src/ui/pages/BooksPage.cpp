@@ -1,6 +1,7 @@
 #include "BooksPage.h"
 #include "TileStrip.h"
 #include "TileCard.h"
+#include "BookSeriesView.h"
 #include "core/CoreBridge.h"
 #include "core/BooksScanner.h"
 
@@ -52,8 +53,16 @@ void BooksPage::buildUI()
     outerLayout->setContentsMargins(0, 0, 0, 0);
     outerLayout->setSpacing(0);
 
+    m_stack = new QStackedWidget(this);
+
+    // ── Grid view (index 0) ──
+    auto* gridPage = new QWidget();
+    auto* gridLayout = new QVBoxLayout(gridPage);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(0);
+
     // Scrollable content area
-    auto* scroll = new QScrollArea(this);
+    auto* scroll = new QScrollArea(gridPage);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
     scroll->setStyleSheet("background: transparent;");
@@ -114,7 +123,17 @@ void BooksPage::buildUI()
 
     layout->addStretch(1);
     scroll->setWidget(content);
-    outerLayout->addWidget(scroll, 1);
+    gridLayout->addWidget(scroll, 1);
+
+    m_stack->addWidget(gridPage);
+
+    // ── Series view (index 1) ──
+    m_seriesView = new BookSeriesView();
+    connect(m_seriesView, &BookSeriesView::backRequested, this, &BooksPage::showGrid);
+    connect(m_seriesView, &BookSeriesView::bookSelected, this, &BooksPage::openBook);
+    m_stack->addWidget(m_seriesView);
+
+    outerLayout->addWidget(m_stack, 1);
 }
 
 void BooksPage::activate()
@@ -168,6 +187,15 @@ void BooksPage::onBookSeriesFound(const BookSeriesInfo& series)
                      + (series.fileCount == 1 ? " book" : " books");
 
     auto* card = new TileCard(series.coverThumbPath, series.seriesName, subtitle);
+
+    // Store series data for click handling
+    card->setProperty("seriesPath", series.seriesPath);
+    card->setProperty("seriesName", series.seriesName);
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        onTileClicked(card->property("seriesPath").toString(),
+                      card->property("seriesName").toString());
+    });
+
     m_bookStrip->addTile(card);
 }
 
@@ -210,4 +238,15 @@ void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
             m_audiobookStatus->show();
         }
     }
+}
+
+void BooksPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
+{
+    m_seriesView->showSeries(seriesPath, seriesName);
+    m_stack->setCurrentIndex(1);
+}
+
+void BooksPage::showGrid()
+{
+    m_stack->setCurrentIndex(0);
 }

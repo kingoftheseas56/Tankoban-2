@@ -6,6 +6,8 @@
 
 #include <QVBoxLayout>
 #include <QMetaObject>
+#include <QDir>
+#include <QCollator>
 
 VideosPage::VideosPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -111,6 +113,21 @@ void VideosPage::onShowFound(const ShowInfo& show)
         subtitle = QString::number(show.episodeCount) + " episodes · " + formatSize(show.totalSizeBytes);
 
     auto* card = new TileCard("", show.showName, subtitle);
+    QString showPath = show.showPath;
+    connect(card, &TileCard::clicked, this, [this, showPath]() {
+        // Find first video file in show folder
+        QDir dir(showPath);
+        QStringList exts = {"*.mp4","*.mkv","*.avi","*.webm","*.mov","*.wmv","*.flv","*.m4v","*.ts"};
+        auto files = dir.entryInfoList(exts, QDir::Files);
+        if (!files.isEmpty()) {
+            QCollator col;
+            col.setNumericMode(true);
+            std::sort(files.begin(), files.end(), [&](const QFileInfo& a, const QFileInfo& b) {
+                return col.compare(a.fileName(), b.fileName()) < 0;
+            });
+            emit playVideo(files.first().absoluteFilePath());
+        }
+    });
     m_tileStrip->addTile(card);
 }
 

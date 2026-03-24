@@ -38,7 +38,7 @@ if errorlevel 1 (
 
 :: ── Run ────────────────────────────────────────────────────────────────────
 echo [4/4] Launching Tankoban...
-set PATH=%QT_DIR%\bin;%PATH%
+set PATH=%QT_DIR%\bin;C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin;%PATH%
 "%BUILD_DIR%\Tankoban.exe"
 
 endlocal

@@ -1,0 +1,60 @@
+=== CLEAN CONFIGURE ===
+-- The CXX compiler identification is MSVC 19.44.35223.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Could NOT find WrapVulkanHeaders (missing: Vulkan_INCLUDE_DIR) 
+-- Configuring done (4.1s)
+-- Generating done (0.3s)
+-- Build files have been written to: C:/Users/Suprabha/Desktop/Tankoban 2/build
+=== CMAKE BUILD ===
+[1/34] Automatic MOC and UIC for target Tankoban
+[2/34] Automatic RCC for resources/resources.qrc
+[3/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\ArchiveReader.cpp.obj
+[4/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\JsonStore.cpp.obj
+[5/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\VideosScanner.cpp.obj
+[6/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\CoreBridge.cpp.obj
+[7/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\GlassBackground.cpp.obj
+[8/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\BooksScanner.cpp.obj
+[9/34] Building CXX object CMakeFiles\Tankoban.dir\src\core\LibraryScanner.cpp.obj
+[10/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\MainWindow.cpp.obj
+[11/34] Building CXX object CMakeFiles\Tankoban.dir\src\main.cpp.obj
+[12/34] Building CXX object CMakeFiles\Tankoban.dir\Tankoban_autogen\mocs_compilation.cpp.obj
+[13/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\SeriesView.cpp.obj
+[14/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\RootFoldersOverlay.cpp.obj
+[15/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\ComicsPage.cpp.obj
+[16/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\TileCard.cpp.obj
+[17/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\BooksPage.cpp.obj
+[18/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\BookSeriesView.cpp.obj
+[19/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\TileStrip.cpp.obj
+[20/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\VideosPage.cpp.obj
+[21/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\ComicReader.cpp.obj
+[22/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\PageCache.cpp.obj
+[23/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\SmoothScrollArea.cpp.obj
+[24/34] Building CXX object CMakeFiles\Tankoban.dir\Tankoban_autogen\3YJK5W5UP7\qrc_resources.cpp.obj
+[25/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\DecodeTask.cpp.obj
+[26/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\BookBridge.cpp.obj
+[27/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\readers\BookReader.cpp.obj
+[28/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\SourcesPage.cpp.obj
+[29/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\TankorentPage.cpp.obj
+[30/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\pages\TankoyomiPage.cpp.obj
+[31/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\player\FrameCanvas.cpp.obj
+[32/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\player\VideoPlayer.cpp.obj
+FAILED: [code=2] CMakeFiles/Tankoban.dir/src/ui/player/VideoPlayer.cpp.obj 
+C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP -DHAS_QT_ZIP=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -I"C:\Users\Suprabha\Desktop\Tankoban 2\build\Tankoban_autogen\include" -I"C:\Users\Suprabha\Desktop\Tankoban 2\src" -IC:\tools\ffmpeg-master-latest-win64-gpl-shared\include -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include\QtCore -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\mkspecs\win32-msvc -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include\QtGui -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include\QtWidgets -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include\QtCore\6.10.2 -external:IC:\tools\qt6sdk\6.10.2\msvc2022_64\include\QtCore\6.10.2\QtCore -external:W0 /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd -Zc:__cplusplus -permissive- -utf-8 /showIncludes /FoCMakeFiles\Tankoban.dir\src\ui\player\VideoPlayer.cpp.obj /FdCMakeFiles\Tankoban.dir\ /FS -c "C:\Users\Suprabha\Desktop\Tankoban 2\src\ui\player\VideoPlayer.cpp"
+C:\Users\Suprabha\Desktop\Tankoban 2\src\ui\player\VideoPlayer.cpp(10): fatal error C1083: Cannot open include file: 'QSvgRenderer': No such file or directory
+[33/34] Building CXX object CMakeFiles\Tankoban.dir\src\ui\player\FfmpegDecoder.cpp.obj
+ninja: build stopped: subcommand failed.
+=== DONE ===

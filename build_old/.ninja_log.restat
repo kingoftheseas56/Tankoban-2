@@ -1,0 +1,16 @@
+# ninja log v7
+49	7503	7960308979528766	Tankoban_autogen/timestamp	4f80e031a145c00f
+49	7503	7960308979528766	Tankoban_autogen/mocs_compilation.cpp	4f80e031a145c00f
+49	7503	7960308979528766	C:/Users/Suprabha/Desktop/Tankoban 2/build/Tankoban_autogen/timestamp	4f80e031a145c00f
+49	7503	7960308979528766	C:/Users/Suprabha/Desktop/Tankoban 2/build/Tankoban_autogen/mocs_compilation.cpp	4f80e031a145c00f
+7519	7659	7960308983798651	Tankoban_autogen/3YJK5W5UP7/qrc_resources.cpp	2a2f74e1e967657c
+7519	7659	7960308983798651	C:/Users/Suprabha/Desktop/Tankoban 2/build/Tankoban_autogen/3YJK5W5UP7/qrc_resources.cpp	2a2f74e1e967657c
+7683	21843	7960308984261102	CMakeFiles/Tankoban.dir/src/core/JsonStore.cpp.obj	d3d6c28ca4c1fba2
+7771	22778	7960308985146373	CMakeFiles/Tankoban.dir/src/ui/GlassBackground.cpp.obj	7108e07d16418b9f
+7732	23042	7960308984761155	CMakeFiles/Tankoban.dir/src/core/VideosScanner.cpp.obj	733a1d7652e08bc2
+7745	23601	7960308984881126	CMakeFiles/Tankoban.dir/src/core/ArchiveReader.cpp.obj	83c5a42a5035f7ae
+7695	24631	7960308984386795	CMakeFiles/Tankoban.dir/src/core/CoreBridge.cpp.obj	d77db4b5c9c71717
+7720	25803	7960308984630004	CMakeFiles/Tankoban.dir/src/core/BooksScanner.cpp.obj	7e8087f8d9b56034
+7671	28312	7960308984142285	CMakeFiles/Tankoban.dir/src/main.cpp.obj	32a53b3c76236ced
+7708	28478	7960308984515455	CMakeFiles/Tankoban.dir/src/core/LibraryScanner.cpp.obj	d03341cbc5f431fa
+7758	28501	7960308985021149	CMakeFiles/Tankoban.dir/src/ui/MainWindow.cpp.obj	92aabc9f45bed9ab

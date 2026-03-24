@@ -55,6 +55,7 @@ SeriesView::SeriesView(QWidget* parent)
 void SeriesView::showSeries(const QString& seriesPath, const QString& seriesName)
 {
     m_seriesPath = seriesPath;
+    m_seriesName = seriesName;
     m_titleLabel->setText(seriesName);
 
     // Clear existing rows
@@ -75,9 +76,14 @@ void SeriesView::showSeries(const QString& seriesPath, const QString& seriesName
         return collator.compare(a, b) < 0;
     });
 
-    for (const auto& filename : files) {
-        QString fullPath = dir.absoluteFilePath(filename);
-        QString displayName = QFileInfo(filename).completeBaseName();
+    // Build full path list for series context
+    m_cbzFiles.clear();
+    for (const auto& filename : files)
+        m_cbzFiles.append(dir.absoluteFilePath(filename));
+
+    for (int i = 0; i < files.size(); ++i) {
+        QString fullPath = m_cbzFiles[i];
+        QString displayName = QFileInfo(files[i]).completeBaseName();
 
         auto* row = new QPushButton(displayName);
         row->setObjectName("SidebarAction");
@@ -92,7 +98,7 @@ void SeriesView::showSeries(const QString& seriesPath, const QString& seriesName
         );
 
         connect(row, &QPushButton::clicked, this, [this, fullPath]() {
-            emit issueSelected(fullPath);
+            emit issueSelected(fullPath, m_cbzFiles, m_seriesName);
         });
 
         m_listLayout->addWidget(row);

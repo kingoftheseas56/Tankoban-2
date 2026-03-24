@@ -18,6 +18,9 @@ public:
     void activate();
     void triggerScan();
 
+signals:
+    void playVideo(const QString& filePath);
+
 private slots:
     void onShowFound(const ShowInfo& show);
     void onScanFinished(const QList<ShowInfo>& allShows);

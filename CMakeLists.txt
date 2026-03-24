@@ -15,7 +15,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 )
 
 # Optional components — added as they become needed
-find_package(Qt6 QUIET COMPONENTS WebEngineWidgets WebChannel Multimedia)
+find_package(Qt6 QUIET COMPONENTS WebEngineWidgets WebChannel Multimedia Svg)
 find_package(Qt6CorePrivate QUIET)
 
 # ── Sources ──────────────────────────────────────────────────────────────────
@@ -34,9 +34,21 @@ set(SOURCES
     src/ui/pages/BooksPage.cpp
     src/ui/pages/VideosPage.cpp
     src/ui/pages/SeriesView.cpp
+    src/ui/pages/BookSeriesView.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
     src/ui/readers/ComicReader.cpp
+    src/ui/readers/SmoothScrollArea.cpp
+    src/ui/readers/DecodeTask.cpp
+    src/ui/readers/PageCache.cpp
+    src/ui/readers/BookReader.cpp
+    src/ui/readers/BookBridge.cpp
+    src/ui/pages/SourcesPage.cpp
+    src/ui/pages/TankorentPage.cpp
+    src/ui/pages/TankoyomiPage.cpp
+    src/ui/player/FfmpegDecoder.cpp
+    src/ui/player/FrameCanvas.cpp
+    src/ui/player/VideoPlayer.cpp
 )
 
 set(HEADERS
@@ -53,9 +65,21 @@ set(HEADERS
     src/ui/pages/BooksPage.h
     src/ui/pages/VideosPage.h
     src/ui/pages/SeriesView.h
+    src/ui/pages/BookSeriesView.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
     src/ui/readers/ComicReader.h
+    src/ui/readers/SmoothScrollArea.h
+    src/ui/readers/DecodeTask.h
+    src/ui/readers/PageCache.h
+    src/ui/readers/BookReader.h
+    src/ui/readers/BookBridge.h
+    src/ui/pages/SourcesPage.h
+    src/ui/pages/TankorentPage.h
+    src/ui/pages/TankoyomiPage.h
+    src/ui/player/FfmpegDecoder.h
+    src/ui/player/FrameCanvas.h
+    src/ui/player/VideoPlayer.h
 )
 
 set(RESOURCES
@@ -69,14 +93,22 @@ qt_add_executable(Tankoban
     ${RESOURCES}
 )
 
+# ── FFmpeg ──────────────────────────────────────────────────────────────────
+set(FFMPEG_DIR "C:/tools/ffmpeg-master-latest-win64-gpl-shared")
+
 target_include_directories(Tankoban PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${FFMPEG_DIR}/include
 )
 
 target_link_libraries(Tankoban PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    ${FFMPEG_DIR}/lib/avformat.lib
+    ${FFMPEG_DIR}/lib/avcodec.lib
+    ${FFMPEG_DIR}/lib/avutil.lib
+    ${FFMPEG_DIR}/lib/swscale.lib
 )
 
 # QZipReader for CBZ support
@@ -95,9 +127,13 @@ if(TARGET Qt6::Multimedia)
     target_compile_definitions(Tankoban PRIVATE HAS_MULTIMEDIA=1)
 endif()
 
+if(TARGET Qt6::Svg)
+    target_link_libraries(Tankoban PRIVATE Qt6::Svg)
+endif()
+
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)
-    target_link_libraries(Tankoban PRIVATE dwmapi)
+    target_link_libraries(Tankoban PRIVATE dwmapi winmm)
     set_target_properties(Tankoban PROPERTIES
         WIN32_EXECUTABLE TRUE
     )

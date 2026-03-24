@@ -4,7 +4,10 @@
 #include "pages/ComicsPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
+#include "pages/SourcesPage.h"
 #include "readers/ComicReader.h"
+#include "readers/BookReader.h"
+#include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
 
 #include <QVBoxLayout>
@@ -78,9 +81,19 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     });
 
     // Comic reader overlay (hidden by default)
-    m_comicReader = new ComicReader(root);
+    m_comicReader = new ComicReader(m_bridge, root);
     m_comicReader->hide();
     connect(m_comicReader, &ComicReader::closeRequested, this, &MainWindow::closeComicReader);
+
+    // Book reader overlay (hidden by default)
+    m_bookReader = new BookReader(root);
+    m_bookReader->hide();
+    connect(m_bookReader, &BookReader::closeRequested, this, &MainWindow::closeBookReader);
+
+    // Video player overlay (hidden by default)
+    m_videoPlayer = new VideoPlayer(root);
+    m_videoPlayer->hide();
+    connect(m_videoPlayer, &VideoPlayer::closeRequested, this, &MainWindow::closeVideoPlayer);
 
     setCentralWidget(root);
     bindShortcuts();
@@ -89,6 +102,16 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // Connect comics page to reader
     if (auto *comics = m_pageStack->findChild<ComicsPage*>()) {
         connect(comics, &ComicsPage::openComic, this, &MainWindow::openComicReader);
+    }
+
+    // Connect books page to reader
+    if (auto *books = m_pageStack->findChild<BooksPage*>()) {
+        connect(books, &BooksPage::openBook, this, &MainWindow::openBookReader);
+    }
+
+    // Connect videos page to player
+    if (auto *videos = m_pageStack->findChild<VideosPage*>()) {
+        connect(videos, &VideosPage::playVideo, this, &MainWindow::openVideoPlayer);
     }
 
     activatePage(PAGE_COMICS);
@@ -106,6 +129,12 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     }
     if (m_comicReader && centralWidget()) {
         m_comicReader->setGeometry(centralWidget()->rect());
+    }
+    if (m_bookReader && centralWidget()) {
+        m_bookReader->setGeometry(centralWidget()->rect());
+    }
+    if (m_videoPlayer && centralWidget()) {
+        m_videoPlayer->setGeometry(centralWidget()->rect());
     }
 }
 
@@ -192,27 +221,21 @@ void MainWindow::buildPageStack()
     auto *videosPage = new VideosPage(m_bridge);
     m_pageStack->addWidget(videosPage);
 
-    // Placeholder pages for the rest
-    struct PageDef { const char *id; const char *title; const char *subtitle; };
-    const PageDef pages[] = {
-        { PAGE_STREAM,  "Stream", "Stream content will appear here."     },
-        { PAGE_SOURCES, "Sources", "Browse and search content sources."  },
-    };
-
-    for (const auto &def : pages) {
+    // Stream placeholder
+    {
         auto *page = new QWidget();
-        page->setObjectName(def.id);
+        page->setObjectName(PAGE_STREAM);
 
         auto *layout = new QVBoxLayout(page);
         layout->setAlignment(Qt::AlignCenter);
         layout->setSpacing(12);
 
-        auto *title = new QLabel(def.title);
+        auto *title = new QLabel("Stream");
         title->setObjectName("SectionTitle");
         title->setAlignment(Qt::AlignCenter);
         layout->addWidget(title);
 
-        auto *subtitle = new QLabel(def.subtitle);
+        auto *subtitle = new QLabel("Stream content will appear here.");
         subtitle->setObjectName("TileSubtitle");
         subtitle->setAlignment(Qt::AlignCenter);
         subtitle->setWordWrap(true);
@@ -220,6 +243,10 @@ void MainWindow::buildPageStack()
 
         m_pageStack->addWidget(page);
     }
+
+    // Sources page (real)
+    auto *sourcesPage = new SourcesPage(m_bridge);
+    m_pageStack->addWidget(sourcesPage);
 }
 
 // ── Keyboard shortcuts ──────────────────────────────────────────────────────
@@ -271,6 +298,8 @@ void MainWindow::activatePage(const QString &pageId)
                 books->activate();
             if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
                 videos->activate();
+            if (auto *sources = qobject_cast<SourcesPage*>(m_pageStack->widget(i)))
+                sources->activate();
             break;
         }
     }
@@ -395,9 +424,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
 }
 
 // ── Comic reader ────────────────────────────────────────────────────────────
-void MainWindow::openComicReader(const QString& cbzPath)
+void MainWindow::openComicReader(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName)
 {
-    m_comicReader->openBook(cbzPath);
+    m_comicReader->openBook(cbzPath, seriesCbzList, seriesName);
     m_comicReader->setGeometry(centralWidget()->rect());
     m_comicReader->show();
     m_comicReader->raise();
@@ -407,4 +436,34 @@ void MainWindow::openComicReader(const QString& cbzPath)
 void MainWindow::closeComicReader()
 {
     m_comicReader->hide();
+}
+
+// ── Book reader ─────────────────────────────────────────────────────────────
+void MainWindow::openBookReader(const QString& filePath)
+{
+    m_bookReader->openBook(filePath);
+    m_bookReader->setGeometry(centralWidget()->rect());
+    m_bookReader->show();
+    m_bookReader->raise();
+    m_bookReader->setFocus();
+}
+
+void MainWindow::closeBookReader()
+{
+    m_bookReader->hide();
+}
+
+// ── Video player ─────────────────────────────────────────────────────────────
+void MainWindow::openVideoPlayer(const QString& filePath)
+{
+    m_videoPlayer->openFile(filePath);
+    m_videoPlayer->setGeometry(centralWidget()->rect());
+    m_videoPlayer->show();
+    m_videoPlayer->raise();
+    m_videoPlayer->setFocus();
+}
+
+void MainWindow::closeVideoPlayer()
+{
+    m_videoPlayer->hide();
 }

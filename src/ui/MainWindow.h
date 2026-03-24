@@ -15,6 +15,8 @@ class GlassBackground;
 class CoreBridge;
 class RootFoldersOverlay;
 class ComicReader;
+class BookReader;
+class VideoPlayer;
 
 class MainWindow : public QMainWindow
 {
@@ -36,8 +38,16 @@ private:
     void hideRootFolders();
 
     // Comic reader
-    void openComicReader(const QString& cbzPath);
+    void openComicReader(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
     void closeComicReader();
+
+    // Book reader
+    void openBookReader(const QString& filePath);
+    void closeBookReader();
+
+    // Video player
+    void openVideoPlayer(const QString& filePath);
+    void closeVideoPlayer();
 
     // System tray
     void setupTrayIcon();
@@ -58,6 +68,12 @@ private:
 
     // Comic reader overlay
     ComicReader *m_comicReader = nullptr;
+
+    // Book reader overlay
+    BookReader *m_bookReader = nullptr;
+
+    // Video player overlay
+    VideoPlayer *m_videoPlayer = nullptr;
 
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;

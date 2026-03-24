@@ -1,0 +1,5 @@
+C:/Users/Suprabha/Desktop/Tankoban 2/build/CMakeFiles/Tankoban.dir
+C:/Users/Suprabha/Desktop/Tankoban 2/build/CMakeFiles/edit_cache.dir
+C:/Users/Suprabha/Desktop/Tankoban 2/build/CMakeFiles/rebuild_cache.dir
+C:/Users/Suprabha/Desktop/Tankoban 2/build/CMakeFiles/Tankoban_autogen_timestamp_deps.dir
+C:/Users/Suprabha/Desktop/Tankoban 2/build/CMakeFiles/Tankoban_autogen.dir

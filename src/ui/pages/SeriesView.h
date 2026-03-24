@@ -13,10 +13,12 @@ public:
 
 signals:
     void backRequested();
-    void issueSelected(const QString& cbzPath);
+    void issueSelected(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
 
 private:
     QLabel*      m_titleLabel = nullptr;
     QVBoxLayout* m_listLayout = nullptr;
     QString      m_seriesPath;
+    QString      m_seriesName;
+    QStringList  m_cbzFiles;
 };
