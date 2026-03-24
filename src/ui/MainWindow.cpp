@@ -2,6 +2,7 @@
 #include "GlassBackground.h"
 #include "RootFoldersOverlay.h"
 #include "pages/ComicsPage.h"
+#include "pages/BooksPage.h"
 #include "core/CoreBridge.h"
 
 #include <QVBoxLayout>
@@ -68,6 +69,8 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::foldersChanged, this, [this]() {
         if (auto *comics = m_pageStack->findChild<ComicsPage*>())
             comics->triggerScan();
+        if (auto *books = m_pageStack->findChild<BooksPage*>())
+            books->triggerScan();
     });
 
     setCentralWidget(root);
@@ -162,14 +165,16 @@ void MainWindow::buildPageStack()
 {
     m_pageStack = new QStackedWidget(this);
 
-    // Real Comics page
+    // Real pages
     auto *comicsPage = new ComicsPage(m_bridge);
     m_pageStack->addWidget(comicsPage);
+
+    auto *booksPage = new BooksPage(m_bridge);
+    m_pageStack->addWidget(booksPage);
 
     // Placeholder pages for the rest
     struct PageDef { const char *id; const char *title; const char *subtitle; };
     const PageDef pages[] = {
-        { PAGE_BOOKS,   "Books",  "Your book library will appear here."  },
         { PAGE_VIDEOS,  "Videos", "Your video library will appear here." },
         { PAGE_STREAM,  "Stream", "Stream content will appear here."     },
         { PAGE_SOURCES, "Sources", "Browse and search content sources."  },
@@ -240,9 +245,11 @@ void MainWindow::activatePage(const QString &pageId)
     for (int i = 0; i < m_pageStack->count(); ++i) {
         if (m_pageStack->widget(i)->objectName() == pageId) {
             m_pageStack->setCurrentIndex(i);
-            // Activate comics page on switch
+            // Activate page on switch
             if (auto *comics = qobject_cast<ComicsPage*>(m_pageStack->widget(i)))
                 comics->activate();
+            if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
+                books->activate();
             break;
         }
     }

@@ -32,4 +32,5 @@ private:
     QThread*         m_scanThread = nullptr;
     LibraryScanner*  m_scanner = nullptr;
     bool             m_hasScanned = false;
+    bool             m_scanning = false;
 };

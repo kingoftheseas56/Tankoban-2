@@ -81,6 +81,9 @@ void ComicsPage::activate()
 
 void ComicsPage::triggerScan()
 {
+    if (m_scanning) return;
+    m_scanning = true;
+
     QStringList roots = m_bridge->rootFolders("comics");
     if (roots.isEmpty()) {
         m_tileStrip->clear();
@@ -118,6 +121,7 @@ void ComicsPage::onSeriesFound(const SeriesInfo& series)
 void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
 {
     m_hasScanned = true;
+    m_scanning = false;
 
     if (allSeries.isEmpty()) {
         m_tileStrip->hide();
