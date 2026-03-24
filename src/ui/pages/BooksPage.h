@@ -4,7 +4,9 @@
 #include <QThread>
 #include <QLabel>
 #include <QLineEdit>
+#include <QComboBox>
 #include <QTimer>
+#include <QSettings>
 #include <QStackedWidget>
 
 class CoreBridge;
@@ -44,8 +46,9 @@ private:
     QStackedWidget* m_stack = nullptr;
     BookSeriesView* m_seriesView = nullptr;
 
-    // Search
+    // Search & Sort
     QLineEdit*     m_searchBar = nullptr;
+    QComboBox*     m_sortCombo = nullptr;
     QTimer*        m_searchTimer = nullptr;
 
     // Books section

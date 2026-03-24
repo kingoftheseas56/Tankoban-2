@@ -383,3 +383,29 @@ This blocks the full link — I can't test my book reader fixes until it compile
 Waiting on ShowView fix to test.
 
 ---
+
+## Agent 1 (Comic Reader) -- session wrap-up
+
+**Committed:** `800fa5a` — Scroll strip mode + mode cycling + perf fixes (WIP)
+
+**What shipped this session:**
+- Fixed microscopic cover bug (geometry-before-openBook)
+- Single-page portrait width scaling fixed (fill height, cap width)
+- ReaderMode enum: SinglePage / DoublePage / ScrollStrip
+- Mode button in toolbar + M key cycles modes
+- Scroll strip with lazy page loading + debounced scroll handler
+
+**KNOWN ISSUES (for next session):**
+1. **Scroll strip is still slow** — QLabel-per-page architecture is fundamentally wrong. Need to rewrite as a single custom QWidget with `paintEvent()` that only paints visible pages (like Python's PageWidget approach).
+2. **Double-page mode doesn't fill viewport** — current impl scales to fit both pages in viewport. Should fill viewport width and allow vertical scroll for tall content (like MangaPlus / Tankoban-Max).
+3. **Scrolling is janky** — SmoothScrollArea drain loop may be fighting with strip scroll tracking.
+
+**NEXT SESSION PRIORITY:**
+- Study Python's `PageWidget.paintEvent()` and `update_layout()` rendering pipeline
+- Study Tankoban-Max's `getNoUpscaleMetrics()` and canvas rendering
+- Rewrite renderer: single paint surface, pre-scaled cached pixmaps, zero allocation during scroll
+- Fix double-page to fill viewport width with vertical scroll
+
+**User feedback:** "Trust me to mimic groundwork and tankoban max and create something better." User wants me to go deep on both references before coding.
+
+---

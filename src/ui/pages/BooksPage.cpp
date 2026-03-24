@@ -6,8 +6,10 @@
 #include "core/BooksScanner.h"
 
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QScrollArea>
 #include <QMetaObject>
+#include <QSettings>
 
 BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -77,9 +79,47 @@ void BooksPage::buildUI()
     auto* bookHeader = new QWidget(content);
     auto* bookHeaderLayout = new QVBoxLayout(bookHeader);
     bookHeaderLayout->setContentsMargins(24, 20, 24, 12);
+    bookHeaderLayout->setSpacing(8);
+
+    auto* titleRow = new QHBoxLayout();
     auto* bookTitle = new QLabel("Books", bookHeader);
     bookTitle->setObjectName("SectionTitle");
-    bookHeaderLayout->addWidget(bookTitle);
+    titleRow->addWidget(bookTitle);
+    titleRow->addStretch();
+
+    m_sortCombo = new QComboBox(bookHeader);
+    m_sortCombo->setObjectName("LibrarySortCombo");
+    m_sortCombo->setFixedWidth(150);
+    m_sortCombo->setFixedHeight(28);
+    m_sortCombo->addItem("Name A\u2192Z",       "name_asc");
+    m_sortCombo->addItem("Name Z\u2192A",       "name_desc");
+    m_sortCombo->addItem("Recently updated",     "updated_desc");
+    m_sortCombo->addItem("Least recent",         "updated_asc");
+    m_sortCombo->addItem("Most items",           "count_desc");
+    m_sortCombo->addItem("Fewest items",         "count_asc");
+    m_sortCombo->setStyleSheet(
+        "QComboBox#LibrarySortCombo {"
+        "  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        "  border-radius: 6px; color: #ccc; padding: 2px 8px; font-size: 12px; }"
+        "QComboBox#LibrarySortCombo:hover { border-color: rgba(255,255,255,0.2); }"
+        "QComboBox#LibrarySortCombo::drop-down { border: none; }"
+        "QComboBox#LibrarySortCombo QAbstractItemView {"
+        "  background: #1e1e1e; color: #ccc; selection-background-color: rgba(255,255,255,0.1);"
+        "  border: 1px solid rgba(255,255,255,0.12); }");
+    QString savedSort = QSettings("Tankoban", "Tankoban").value("library_sort_books", "name_asc").toString();
+    for (int i = 0; i < m_sortCombo->count(); ++i) {
+        if (m_sortCombo->itemData(i).toString() == savedSort) {
+            m_sortCombo->setCurrentIndex(i);
+            break;
+        }
+    }
+    connect(m_sortCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        QString key = m_sortCombo->itemData(idx).toString();
+        QSettings("Tankoban", "Tankoban").setValue("library_sort_books", key);
+        m_bookStrip->sortTiles(key);
+    });
+    titleRow->addWidget(m_sortCombo);
+    bookHeaderLayout->addLayout(titleRow);
 
     m_searchBar = new QLineEdit(bookHeader);
     m_searchBar->setPlaceholderText("Search books and series\u2026");
@@ -206,9 +246,11 @@ void BooksPage::onBookSeriesFound(const BookSeriesInfo& series)
 
     auto* card = new TileCard(series.coverThumbPath, series.seriesName, subtitle);
 
-    // Store series data for click handling
+    // Store series data for click handling and sorting
     card->setProperty("seriesPath", series.seriesPath);
     card->setProperty("seriesName", series.seriesName);
+    card->setProperty("fileCount", series.fileCount);
+    card->setProperty("newestMtime", series.newestMtimeMs);
     connect(card, &TileCard::clicked, this, [this, card]() {
         onTileClicked(card->property("seriesPath").toString(),
                       card->property("seriesName").toString());
@@ -245,6 +287,8 @@ void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
         else
             m_bookStatus->setText("No books found in your library folders");
         m_bookStatus->show();
+    } else {
+        m_bookStrip->sortTiles(m_sortCombo->currentData().toString());
     }
 
     if (allAudiobooks.isEmpty()) {

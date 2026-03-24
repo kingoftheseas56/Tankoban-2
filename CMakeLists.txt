@@ -61,6 +61,7 @@ set(SOURCES
     src/ui/player/ShmFrameReader.cpp
     src/ui/player/FrameCanvas.cpp
     src/ui/player/VideoPlayer.cpp
+    src/core/torrent/TorrentEngine.cpp
 )
 
 set(HEADERS
@@ -104,6 +105,7 @@ set(HEADERS
     src/ui/player/ShmFrameReader.h
     src/ui/player/FrameCanvas.h
     src/ui/player/VideoPlayer.h
+    src/core/torrent/TorrentEngine.h
 )
 
 set(RESOURCES
@@ -145,6 +147,37 @@ if(TARGET Qt6::Multimedia)
 endif()
 
 target_link_libraries(Tankoban PRIVATE Qt6::Svg)
+
+# ── libtorrent-rasterbar (optional) ──────────────────────────────────────────
+set(LIBTORRENT_ROOT "C:/tools/libtorrent-2.0-msvc" CACHE PATH "libtorrent MSVC install")
+set(BOOST_ROOT "C:/tools/boost-1.84.0" CACHE PATH "Boost headers")
+set(OPENSSL_MSVC_ROOT "C:/tools/openssl-msvc" CACHE PATH "OpenSSL MSVC install")
+
+find_path(LIBTORRENT_INCLUDE_DIR libtorrent/session.hpp HINTS "${LIBTORRENT_ROOT}/include")
+find_library(LIBTORRENT_LIBRARY torrent-rasterbar HINTS "${LIBTORRENT_ROOT}/lib")
+find_path(BOOST_INCLUDE_DIR boost/version.hpp HINTS "${BOOST_ROOT}")
+
+if(LIBTORRENT_INCLUDE_DIR AND LIBTORRENT_LIBRARY AND BOOST_INCLUDE_DIR)
+    message(STATUS "libtorrent found: ${LIBTORRENT_LIBRARY}")
+    target_include_directories(Tankoban PRIVATE
+        "${LIBTORRENT_INCLUDE_DIR}"
+        "${BOOST_INCLUDE_DIR}"
+        "${OPENSSL_MSVC_ROOT}/include"
+    )
+    target_compile_definitions(Tankoban PRIVATE
+        HAS_LIBTORRENT=1
+        TORRENT_USE_OPENSSL
+        BOOST_ALL_NO_LIB
+    )
+    target_link_libraries(Tankoban PRIVATE
+        "${LIBTORRENT_LIBRARY}"
+        "${OPENSSL_MSVC_ROOT}/lib/libssl.lib"
+        "${OPENSSL_MSVC_ROOT}/lib/libcrypto.lib"
+        ws2_32 mswsock crypt32 iphlpapi bcrypt
+    )
+else()
+    message(STATUS "libtorrent NOT found — torrent engine disabled")
+endif()
 
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)
