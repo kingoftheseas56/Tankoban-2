@@ -3,6 +3,7 @@
 #include "RootFoldersOverlay.h"
 #include "pages/ComicsPage.h"
 #include "pages/BooksPage.h"
+#include "pages/VideosPage.h"
 #include "core/CoreBridge.h"
 
 #include <QVBoxLayout>
@@ -71,6 +72,8 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
             comics->triggerScan();
         if (auto *books = m_pageStack->findChild<BooksPage*>())
             books->triggerScan();
+        if (auto *videos = m_pageStack->findChild<VideosPage*>())
+            videos->triggerScan();
     });
 
     setCentralWidget(root);
@@ -172,10 +175,12 @@ void MainWindow::buildPageStack()
     auto *booksPage = new BooksPage(m_bridge);
     m_pageStack->addWidget(booksPage);
 
+    auto *videosPage = new VideosPage(m_bridge);
+    m_pageStack->addWidget(videosPage);
+
     // Placeholder pages for the rest
     struct PageDef { const char *id; const char *title; const char *subtitle; };
     const PageDef pages[] = {
-        { PAGE_VIDEOS,  "Videos", "Your video library will appear here." },
         { PAGE_STREAM,  "Stream", "Stream content will appear here."     },
         { PAGE_SOURCES, "Sources", "Browse and search content sources."  },
     };
@@ -250,6 +255,8 @@ void MainWindow::activatePage(const QString &pageId)
                 comics->activate();
             if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
                 books->activate();
+            if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
+                videos->activate();
             break;
         }
     }

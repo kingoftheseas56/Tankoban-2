@@ -25,11 +25,13 @@ set(SOURCES
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
     src/core/BooksScanner.cpp
+    src/core/VideosScanner.cpp
     src/ui/MainWindow.cpp
     src/ui/GlassBackground.cpp
     src/ui/RootFoldersOverlay.cpp
     src/ui/pages/ComicsPage.cpp
     src/ui/pages/BooksPage.cpp
+    src/ui/pages/VideosPage.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
 )
@@ -39,11 +41,13 @@ set(HEADERS
     src/core/CoreBridge.h
     src/core/LibraryScanner.h
     src/core/BooksScanner.h
+    src/core/VideosScanner.h
     src/ui/MainWindow.h
     src/ui/GlassBackground.h
     src/ui/RootFoldersOverlay.h
     src/ui/pages/ComicsPage.h
     src/ui/pages/BooksPage.h
+    src/ui/pages/VideosPage.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
 )
