@@ -3,6 +3,7 @@
 #include <QScrollArea>
 #include <QWidget>
 #include <QList>
+#include <QSet>
 
 class TileCard;
 
@@ -13,6 +14,9 @@ public:
 
     void clear();
     void addTile(TileCard* card);
+    void filterTiles(const QString& query);
+    int visibleCount() const;
+    int totalCount() const;
 
 signals:
     void tileClicked(const QString& seriesPath);
@@ -26,6 +30,8 @@ private:
 
     QWidget* m_container = nullptr;
     QList<TileCard*> m_tiles;
+    QSet<TileCard*> m_filteredOut;   // tiles hidden by search filter
+    QString m_filterQuery;
 
     static constexpr int TILE_SPACING_H = 16;
     static constexpr int TILE_SPACING_V = 20;

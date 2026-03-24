@@ -408,6 +408,9 @@ static void applyWindowsDarkTitleBar(QWidget *window)
 
 int main(int argc, char *argv[])
 {
+    // WebEngine needs no explicit init in Qt6 Widgets path —
+    // lazy-init in BookReader::ensureWebEngine() handles it
+
 #ifdef Q_OS_WIN
     SetProcessDPIAware();
 #endif

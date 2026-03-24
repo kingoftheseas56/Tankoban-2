@@ -1,0 +1,9 @@
+-rootPath
+C:/Users/Suprabha/Desktop/Tankoban 2
+-cmake-output
+-output-file
+C:/Users/Suprabha/Desktop/Tankoban 2/out/.qt/qml_imports/Tankoban_build.cmake
+-importPath
+C:/Users/Suprabha/Desktop/Tankoban 2/out
+-importPath
+C:/tools/qt6sdk/6.10.2/msvc2022_64/qml

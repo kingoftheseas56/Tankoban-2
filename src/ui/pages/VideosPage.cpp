@@ -1,13 +1,12 @@
 #include "VideosPage.h"
 #include "TileStrip.h"
 #include "TileCard.h"
+#include "ShowView.h"
 #include "core/CoreBridge.h"
 #include "core/VideosScanner.h"
 
 #include <QVBoxLayout>
 #include <QMetaObject>
-#include <QDir>
-#include <QCollator>
 
 VideosPage::VideosPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -45,27 +44,65 @@ VideosPage::~VideosPage()
 
 void VideosPage::buildUI()
 {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    auto* outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
 
-    auto* header = new QWidget(this);
+    m_stack = new QStackedWidget(this);
+
+    // ── Grid view (index 0) ──
+    auto* gridPage = new QWidget();
+    auto* gridLayout = new QVBoxLayout(gridPage);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(0);
+
+    auto* header = new QWidget(gridPage);
     auto* headerLayout = new QVBoxLayout(header);
     headerLayout->setContentsMargins(24, 20, 24, 12);
     auto* title = new QLabel("Videos", header);
     title->setObjectName("SectionTitle");
     headerLayout->addWidget(title);
-    layout->addWidget(header);
 
-    m_statusLabel = new QLabel("Add a videos folder to get started", this);
+    m_searchBar = new QLineEdit(header);
+    m_searchBar->setPlaceholderText("Search shows\u2026");
+    m_searchBar->setClearButtonEnabled(true);
+    m_searchBar->setObjectName("LibrarySearch");
+    m_searchBar->setFixedHeight(32);
+    m_searchBar->setStyleSheet(
+        "QLineEdit { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
+        "QLineEdit:focus { border: 1px solid rgba(255,255,255,0.3); }");
+    headerLayout->addWidget(m_searchBar);
+
+    m_searchTimer = new QTimer(this);
+    m_searchTimer->setSingleShot(true);
+    m_searchTimer->setInterval(250);
+    connect(m_searchBar, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
+    connect(m_searchTimer, &QTimer::timeout, this, &VideosPage::applySearch);
+
+    gridLayout->addWidget(header);
+
+    m_statusLabel = new QLabel("Add a videos folder to get started", gridPage);
     m_statusLabel->setObjectName("TileSubtitle");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
-    layout->addWidget(m_statusLabel);
+    gridLayout->addWidget(m_statusLabel);
 
-    m_tileStrip = new TileStrip(this);
+    m_tileStrip = new TileStrip(gridPage);
     m_tileStrip->hide();
-    layout->addWidget(m_tileStrip, 1);
+    gridLayout->addWidget(m_tileStrip, 1);
+
+    m_stack->addWidget(gridPage);
+
+    // ── Show view (index 1) ──
+    m_showView = new ShowView();
+    connect(m_showView, &ShowView::backRequested, this, &VideosPage::showGrid);
+    connect(m_showView, &ShowView::episodeSelected, this, [this](const QString& filePath) {
+        emit playVideo(filePath);
+    });
+    m_stack->addWidget(m_showView);
+
+    outerLayout->addWidget(m_stack, 1);
 }
 
 void VideosPage::activate()
@@ -110,23 +147,15 @@ void VideosPage::onShowFound(const ShowInfo& show)
     if (show.episodeCount == 1)
         subtitle = formatSize(show.totalSizeBytes);
     else
-        subtitle = QString::number(show.episodeCount) + " episodes · " + formatSize(show.totalSizeBytes);
+        subtitle = QString::number(show.episodeCount) + " episodes \u00B7 " + formatSize(show.totalSizeBytes);
 
     auto* card = new TileCard("", show.showName, subtitle);
-    QString showPath = show.showPath;
-    connect(card, &TileCard::clicked, this, [this, showPath]() {
-        // Find first video file in show folder
-        QDir dir(showPath);
-        QStringList exts = {"*.mp4","*.mkv","*.avi","*.webm","*.mov","*.wmv","*.flv","*.m4v","*.ts"};
-        auto files = dir.entryInfoList(exts, QDir::Files);
-        if (!files.isEmpty()) {
-            QCollator col;
-            col.setNumericMode(true);
-            std::sort(files.begin(), files.end(), [&](const QFileInfo& a, const QFileInfo& b) {
-                return col.compare(a.fileName(), b.fileName()) < 0;
-            });
-            emit playVideo(files.first().absoluteFilePath());
-        }
+    card->setProperty("seriesPath", show.showPath);
+    card->setProperty("seriesName", show.showName);
+
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        onTileClicked(card->property("seriesPath").toString(),
+                      card->property("seriesName").toString());
     });
     m_tileStrip->addTile(card);
 }
@@ -140,6 +169,32 @@ void VideosPage::onScanFinished(const QList<ShowInfo>& allShows)
         m_tileStrip->hide();
         m_statusLabel->setText("No videos found in your library folders");
         m_statusLabel->show();
+    }
+}
+
+void VideosPage::onTileClicked(const QString& showPath, const QString& showName)
+{
+    m_showView->showFolder(showPath, showName);
+    m_stack->setCurrentIndex(1);
+}
+
+void VideosPage::showGrid()
+{
+    m_stack->setCurrentIndex(0);
+}
+
+void VideosPage::applySearch()
+{
+    m_tileStrip->filterTiles(m_searchBar->text());
+
+    if (m_tileStrip->visibleCount() == 0 && !m_searchBar->text().trimmed().isEmpty()) {
+        m_statusLabel->setText(
+            QString("No results for \"%1\"").arg(m_searchBar->text().trimmed()));
+        m_statusLabel->show();
+        m_tileStrip->hide();
+    } else if (m_tileStrip->visibleCount() > 0) {
+        m_statusLabel->hide();
+        m_tileStrip->show();
     }
 }
 

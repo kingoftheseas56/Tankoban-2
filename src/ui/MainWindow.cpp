@@ -426,11 +426,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
 // ── Comic reader ────────────────────────────────────────────────────────────
 void MainWindow::openComicReader(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName)
 {
-    m_comicReader->openBook(cbzPath, seriesCbzList, seriesName);
+    // Set geometry and show BEFORE opening book so viewport has valid dimensions
     m_comicReader->setGeometry(centralWidget()->rect());
     m_comicReader->show();
     m_comicReader->raise();
     m_comicReader->setFocus();
+    // Open book after widget is visible and has real geometry
+    m_comicReader->openBook(cbzPath, seriesCbzList, seriesName);
 }
 
 void MainWindow::closeComicReader()

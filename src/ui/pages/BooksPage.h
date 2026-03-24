@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <QThread>
 #include <QLabel>
+#include <QLineEdit>
+#include <QTimer>
 #include <QStackedWidget>
 
 class CoreBridge;
@@ -31,6 +33,7 @@ private slots:
                         const QList<AudiobookInfo>& allAudiobooks);
     void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
+    void applySearch();
 
 private:
     void buildUI();
@@ -40,6 +43,10 @@ private:
     // Navigation
     QStackedWidget* m_stack = nullptr;
     BookSeriesView* m_seriesView = nullptr;
+
+    // Search
+    QLineEdit*     m_searchBar = nullptr;
+    QTimer*        m_searchTimer = nullptr;
 
     // Books section
     TileStrip*     m_bookStrip = nullptr;

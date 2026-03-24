@@ -7,7 +7,9 @@
 #include <QTimer>
 #include <QIcon>
 
+class SyncClock;
 class FfmpegDecoder;
+class AudioDecoder;
 class FrameCanvas;
 
 class VideoPlayer : public QWidget {
@@ -41,7 +43,9 @@ private:
     static QIcon iconFromSvg(const QByteArray& svg, int size = 20);
 
     // Components
+    SyncClock*     m_clock   = nullptr;
     FfmpegDecoder* m_decoder = nullptr;
+    AudioDecoder*  m_audio   = nullptr;
     FrameCanvas*   m_canvas  = nullptr;
 
     // Controls

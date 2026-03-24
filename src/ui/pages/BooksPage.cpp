@@ -80,6 +80,24 @@ void BooksPage::buildUI()
     auto* bookTitle = new QLabel("Books", bookHeader);
     bookTitle->setObjectName("SectionTitle");
     bookHeaderLayout->addWidget(bookTitle);
+
+    m_searchBar = new QLineEdit(bookHeader);
+    m_searchBar->setPlaceholderText("Search books and series\u2026");
+    m_searchBar->setClearButtonEnabled(true);
+    m_searchBar->setObjectName("LibrarySearch");
+    m_searchBar->setFixedHeight(32);
+    m_searchBar->setStyleSheet(
+        "QLineEdit { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
+        "QLineEdit:focus { border: 1px solid rgba(255,255,255,0.3); }");
+    bookHeaderLayout->addWidget(m_searchBar);
+
+    m_searchTimer = new QTimer(this);
+    m_searchTimer->setSingleShot(true);
+    m_searchTimer->setInterval(250);
+    connect(m_searchBar, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
+    connect(m_searchTimer, &QTimer::timeout, this, &BooksPage::applySearch);
+
     layout->addWidget(bookHeader);
 
     m_bookStatus = new QLabel("Add a books folder to get started", content);
@@ -249,4 +267,35 @@ void BooksPage::onTileClicked(const QString& seriesPath, const QString& seriesNa
 void BooksPage::showGrid()
 {
     m_stack->setCurrentIndex(0);
+}
+
+void BooksPage::applySearch()
+{
+    QString query = m_searchBar->text();
+    m_bookStrip->filterTiles(query);
+    m_audiobookStrip->filterTiles(query);
+
+    bool searchActive = !query.trimmed().isEmpty();
+
+    // Books section empty state
+    if (m_bookStrip->visibleCount() == 0 && searchActive) {
+        m_bookStatus->setText(
+            QString("No results for \"%1\"").arg(query.trimmed()));
+        m_bookStatus->show();
+        m_bookStrip->hide();
+    } else if (m_bookStrip->visibleCount() > 0) {
+        m_bookStatus->hide();
+        m_bookStrip->show();
+    }
+
+    // Audiobooks section empty state
+    if (m_audiobookStrip->totalCount() > 0) {
+        if (m_audiobookStrip->visibleCount() == 0 && searchActive) {
+            m_audiobookSection->hide();
+        } else if (m_audiobookStrip->visibleCount() > 0) {
+            m_audiobookSection->show();
+            m_audiobookStatus->hide();
+            m_audiobookStrip->show();
+        }
+    }
 }

@@ -15,6 +15,7 @@ TileCard::TileCard(const QString& thumbPath,
     setObjectName("TileCard");
     setFixedWidth(CARD_WIDTH);
     setCursor(Qt::PointingHandCursor);
+    setProperty("tileTitle", title);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

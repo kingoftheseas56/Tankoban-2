@@ -1,5 +1,5 @@
 <RCC>
     <qresource prefix="/">
-        <!-- App icon and assets will go here -->
+        <file>icons/folder.svg</file>
     </qresource>
 </RCC>

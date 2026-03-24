@@ -1,5 +1,7 @@
 #include "ui/player/VideoPlayer.h"
+#include "ui/player/SyncClock.h"
 #include "ui/player/FfmpegDecoder.h"
+#include "ui/player/AudioDecoder.h"
 #include "ui/player/FrameCanvas.h"
 
 #include <QVBoxLayout>
@@ -41,19 +43,20 @@ VideoPlayer::VideoPlayer(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet("background: #000000;");
 
-    // Pre-render SVG icons
     m_playIcon  = iconFromSvg(SVG_PLAY);
     m_pauseIcon = iconFromSvg(SVG_PAUSE);
     m_backIcon  = iconFromSvg(SVG_BACK);
 
-    m_decoder = new FfmpegDecoder(this);
+    m_clock   = new SyncClock();
+    m_decoder = new FfmpegDecoder(m_clock, this);
+    m_audio   = new AudioDecoder(m_clock, this);
+
     buildUI();
 
     m_hideTimer.setSingleShot(true);
     m_hideTimer.setInterval(3000);
     connect(&m_hideTimer, &QTimer::timeout, this, &VideoPlayer::hideControls);
 
-    // Decoder signals
     connect(m_decoder, &FfmpegDecoder::frameReady,
             m_canvas,  &FrameCanvas::setFrame);
     connect(m_decoder, &FfmpegDecoder::positionChanged,
@@ -61,24 +64,28 @@ VideoPlayer::VideoPlayer(QWidget* parent)
     connect(m_decoder, &FfmpegDecoder::playbackFinished,
             this, &VideoPlayer::onPlaybackFinished);
     connect(m_decoder, &FfmpegDecoder::errorOccurred,
-            this, [this](const QString& msg) {
-                m_timeLabel->setText(msg);
-            });
+            this, [this](const QString& msg) { m_timeLabel->setText(msg); });
 }
 
 VideoPlayer::~VideoPlayer()
 {
+    m_audio->stop();
     m_decoder->stop();
+    delete m_clock;
 }
 
 // ── Public ──────────────────────────────────────────────────────────────────
 
 void VideoPlayer::openFile(const QString& filePath)
 {
+    m_audio->stop();
     m_decoder->stop();
 
     if (!m_decoder->openFile(filePath))
         return;
+
+    // Audio may fail (silent video) — that's OK
+    m_audio->openFile(filePath);
 
     m_duration = m_decoder->durationMs();
     m_seekBar->setRange(0, static_cast<int>(m_duration / 1000));
@@ -87,6 +94,8 @@ void VideoPlayer::openFile(const QString& filePath)
     m_paused = false;
     updatePlayPauseIcon();
 
+    // Start audio first — it drives the clock
+    m_audio->play();
     m_decoder->play();
     showControls();
 }
@@ -97,7 +106,6 @@ void VideoPlayer::buildUI()
 {
     m_canvas = new FrameCanvas(this);
 
-    // Bottom control bar
     m_controlBar = new QWidget(this);
     m_controlBar->setObjectName("VideoControlBar");
     m_controlBar->setFixedHeight(52);
@@ -118,7 +126,6 @@ void VideoPlayer::buildUI()
         "  padding: 0; }"
         "QPushButton:hover { background: rgba(255,255,255,0.14); }";
 
-    // Back button
     m_backBtn = new QPushButton(m_controlBar);
     m_backBtn->setIcon(m_backIcon);
     m_backBtn->setIconSize(QSize(18, 18));
@@ -126,11 +133,11 @@ void VideoPlayer::buildUI()
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->setStyleSheet(btnStyle);
     connect(m_backBtn, &QPushButton::clicked, this, [this]() {
+        m_audio->stop();
         m_decoder->stop();
         emit closeRequested();
     });
 
-    // Play/Pause
     m_playPauseBtn = new QPushButton(m_controlBar);
     m_playPauseBtn->setIcon(m_pauseIcon);
     m_playPauseBtn->setIconSize(QSize(18, 18));
@@ -139,7 +146,6 @@ void VideoPlayer::buildUI()
     m_playPauseBtn->setStyleSheet(btnStyle);
     connect(m_playPauseBtn, &QPushButton::clicked, this, &VideoPlayer::togglePause);
 
-    // Seek bar
     m_seekBar = new QSlider(Qt::Horizontal, m_controlBar);
     m_seekBar->setRange(0, 1000);
     m_seekBar->setStyleSheet(
@@ -154,15 +160,12 @@ void VideoPlayer::buildUI()
         "  background: rgba(255,255,255,0.55); border-radius: 2px;"
         "}"
     );
-    connect(m_seekBar, &QSlider::sliderPressed, this, [this]() {
-        m_seeking = true;
-    });
+    connect(m_seekBar, &QSlider::sliderPressed, this, [this]() { m_seeking = true; });
     connect(m_seekBar, &QSlider::sliderReleased, this, [this]() {
         m_seeking = false;
         onSeek(m_seekBar->value());
     });
 
-    // Time label
     m_timeLabel = new QLabel("0:00 / 0:00", m_controlBar);
     m_timeLabel->setStyleSheet(
         "color: rgba(255,255,255,0.70); font-size: 11px; font-family: monospace;"
@@ -180,7 +183,10 @@ void VideoPlayer::buildUI()
 void VideoPlayer::togglePause()
 {
     m_paused = !m_paused;
+    m_clock->setPaused(m_paused);
     m_decoder->togglePause();
+    m_audio->pause();
+    if (!m_paused) m_audio->play();
     updatePlayPauseIcon();
     showControls();
 }
@@ -203,12 +209,14 @@ void VideoPlayer::onPositionChanged(qint64 ptsMs)
 void VideoPlayer::onSeek(int sliderValue)
 {
     qint64 ms = static_cast<qint64>(sliderValue) * 1000;
+    m_audio->seek(ms);
     m_decoder->seek(ms);
 }
 
 void VideoPlayer::onPlaybackFinished()
 {
     m_paused = true;
+    m_audio->stop();
     updatePlayPauseIcon();
     showControls();
 }
@@ -264,20 +272,27 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
 {
     switch (event->key()) {
     case Qt::Key_Escape:
+        m_audio->stop();
         m_decoder->stop();
         emit closeRequested();
         break;
     case Qt::Key_Space:
         togglePause();
         break;
-    case Qt::Key_Left:
-        m_decoder->seek(qMax(0LL, m_seekBar->value() * 1000LL - 10000));
+    case Qt::Key_Left: {
+        qint64 ms = qMax(0LL, m_seekBar->value() * 1000LL - 10000);
+        m_audio->seek(ms);
+        m_decoder->seek(ms);
         showControls();
         break;
-    case Qt::Key_Right:
-        m_decoder->seek(m_seekBar->value() * 1000LL + 10000);
+    }
+    case Qt::Key_Right: {
+        qint64 ms = m_seekBar->value() * 1000LL + 10000;
+        m_audio->seek(ms);
+        m_decoder->seek(ms);
         showControls();
         break;
+    }
     default:
         QWidget::keyPressEvent(event);
     }

@@ -27,17 +27,96 @@ BookReader::BookReader(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet("background: #000000;");
 
-    // Locate the reader HTML relative to the executable
+    // Locate the reader HTML — try next to exe first, then source tree
     QString appDir = QCoreApplication::applicationDirPath();
     m_readerHtmlPath = appDir + "/resources/book_reader/ebook_reader.html";
+    if (!QFileInfo::exists(m_readerHtmlPath)) {
+        m_readerHtmlPath = QDir(appDir).absoluteFilePath("../resources/book_reader/ebook_reader.html");
+    }
 
     buildUI();
 }
 
 void BookReader::buildUI()
 {
+    // Floating close button — always present as backup escape hatch
+    m_closeBtn = new QPushButton(QChar(0x2190) + QString(" Back"), this);
+    m_closeBtn->setFixedSize(80, 32);
+    m_closeBtn->setCursor(Qt::PointingHandCursor);
+    m_closeBtn->setStyleSheet(
+        "QPushButton { color: rgba(255,255,255,0.85); background: rgba(8,8,8,0.75);"
+        "  border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;"
+        "  font-size: 11px; font-weight: 600; }"
+        "QPushButton:hover { background: rgba(8,8,8,0.92); border-color: rgba(255,255,255,0.30); }"
+    );
+    connect(m_closeBtn, &QPushButton::clicked, this, &BookReader::closeRequested);
+    m_closeBtn->raise();
+
 #ifdef HAS_WEBENGINE
-    // ── WebEngine path ──
+    // WebEngine is lazy-initialized in ensureWebEngine() on first openBook() call
+#else
+    // ── Fallback path (no WebEngine) ──
+    m_textBrowser = new QTextBrowser(this);
+    m_textBrowser->setOpenLinks(false);
+    m_textBrowser->setStyleSheet(
+        "QTextBrowser { background: #101216; color: rgba(238,238,238,0.92);"
+        "  border: none; padding: 40px; font-size: 14px; }"
+    );
+
+    // Bottom toolbar
+    m_toolbar = new QWidget(this);
+    m_toolbar->setObjectName("BookReaderToolbar");
+    m_toolbar->setFixedHeight(48);
+    m_toolbar->setStyleSheet(
+        "QWidget#BookReaderToolbar {"
+        "  background: rgba(8, 8, 8, 0.82);"
+        "  border-top: 1px solid rgba(255, 255, 255, 0.10);"
+        "}"
+    );
+
+    auto* tbLayout = new QHBoxLayout(m_toolbar);
+    tbLayout->setContentsMargins(16, 0, 16, 0);
+    tbLayout->setSpacing(12);
+
+    m_backBtn = new QPushButton(QChar(0x2190) + QString(" Back"), m_toolbar);
+    m_backBtn->setFixedHeight(28);
+    m_backBtn->setCursor(Qt::PointingHandCursor);
+    m_backBtn->setStyleSheet(
+        "QPushButton { color: rgba(255,255,255,0.78); background: rgba(255,255,255,0.06);"
+        "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
+        "  padding: 4px 10px; font-size: 11px; min-width: 60px; max-width: 80px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.12); }"
+    );
+    connect(m_backBtn, &QPushButton::clicked, this, &BookReader::closeRequested);
+    tbLayout->addWidget(m_backBtn);
+
+    tbLayout->addStretch();
+
+    m_titleLabel = new QLabel("", m_toolbar);
+    m_titleLabel->setStyleSheet("color: rgba(255,255,255,0.78); font-size: 12px; background: transparent;");
+    m_titleLabel->setAlignment(Qt::AlignCenter);
+    tbLayout->addWidget(m_titleLabel);
+
+    tbLayout->addStretch();
+
+    auto* spacer = new QWidget(m_toolbar);
+    spacer->setFixedWidth(80);
+    spacer->setStyleSheet("background: transparent;");
+    tbLayout->addWidget(spacer);
+
+    m_hideTimer.setSingleShot(true);
+    m_hideTimer.setInterval(3000);
+    connect(&m_hideTimer, &QTimer::timeout, this, &BookReader::hideToolbar);
+#endif
+}
+
+#ifdef HAS_WEBENGINE
+
+void BookReader::ensureWebEngine()
+{
+    if (m_webEngineReady) return;
+    m_webEngineReady = true;
+
     m_bridge = new BookBridge(this);
     connect(m_bridge, &BookBridge::closeRequested, this, &BookReader::closeRequested);
 
@@ -52,16 +131,19 @@ void BookReader::buildUI()
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
 
     // Inject the bridge shim BEFORE any page JS runs.
-    // This creates window.electronAPI and window.__ebookNav from the QWebChannel bridge.
+    // qwebchannel.js is loaded via <script> tag in ebook_reader.html,
+    // so QWebChannel class is available when this shim executes.
     QWebEngineScript shimScript;
     shimScript.setName("BookBridgeShim");
-    shimScript.setInjectionPoint(QWebEngineScript::DocumentCreation);
+    shimScript.setInjectionPoint(QWebEngineScript::DocumentReady);
     shimScript.setWorldId(QWebEngineScript::MainWorld);
     shimScript.setSourceCode(QStringLiteral(
         "(function() {"
-        "  var qt_wc = typeof qt !== 'undefined' && qt.webChannelTransport;"
-        "  if (!qt_wc) { console.warn('[shim] No qt.webChannelTransport'); return; }"
-        "  new QWebChannel(qt_wc, function(channel) {"
+        "  if (typeof QWebChannel === 'undefined') {"
+        "    console.error('[shim] QWebChannel not available');"
+        "    return;"
+        "  }"
+        "  new QWebChannel(qt.webChannelTransport, function(channel) {"
         "    var b = channel.objects.bridge;"
         "    window.electronAPI = {"
         "      files: { read: function(path) { return b.filesRead(path); } },"
@@ -128,95 +210,69 @@ void BookReader::buildUI()
         "      requestClose: function() { b.requestClose(); }"
         "    };"
         "    console.log('[shim] electronAPI + __ebookNav ready');"
+        "    var evt = new Event('electronAPI:ready');"
+        "    window.dispatchEvent(evt);"
         "  });"
         "})();"
     ));
     m_webView->page()->scripts().insert(shimScript);
 
-    // Detect when the reader page finishes loading
+    // When page loads, wait for reader JS to be fully ready before opening book.
+    // The reader sets window.__ebookOpenBook when it's ready, so we poll for it.
     connect(m_webView, &QWebEngineView::loadFinished, this, [this](bool ok) {
         if (!ok) return;
         m_readerReady = true;
         if (!m_pendingBook.isEmpty()) {
             QString escaped = m_pendingBook;
             escaped.replace("\\", "\\\\").replace("'", "\\'");
-            m_webView->page()->runJavaScript(
-                QStringLiteral("window.__ebookOpenBook('%1')").arg(escaped));
+            // Poll until __ebookOpenBook exists (reader modules load async)
+            QString js = QStringLiteral(
+                "(function poll() {"
+                "  if (typeof window.__ebookOpenBook === 'function') {"
+                "    window.__ebookOpenBook('%1');"
+                "  } else {"
+                "    setTimeout(poll, 100);"
+                "  }"
+                "})();"
+            ).arg(escaped);
+            m_webView->page()->runJavaScript(js);
             m_pendingBook.clear();
         }
     });
 
-#else
-    // ── Fallback path (no WebEngine) ──
-    m_textBrowser = new QTextBrowser(this);
-    m_textBrowser->setOpenLinks(false);
-    m_textBrowser->setStyleSheet(
-        "QTextBrowser { background: #101216; color: rgba(238,238,238,0.92);"
-        "  border: none; padding: 40px; font-size: 14px; }"
-    );
+    // Size the view to fill this widget
+    m_webView->setGeometry(0, 0, width(), height());
+    m_webView->show();
 
-    // Bottom toolbar
-    m_toolbar = new QWidget(this);
-    m_toolbar->setObjectName("BookReaderToolbar");
-    m_toolbar->setFixedHeight(48);
-    m_toolbar->setStyleSheet(
-        "QWidget#BookReaderToolbar {"
-        "  background: rgba(8, 8, 8, 0.82);"
-        "  border-top: 1px solid rgba(255, 255, 255, 0.10);"
-        "}"
-    );
-
-    auto* tbLayout = new QHBoxLayout(m_toolbar);
-    tbLayout->setContentsMargins(16, 0, 16, 0);
-    tbLayout->setSpacing(12);
-
-    m_backBtn = new QPushButton(QChar(0x2190) + QString(" Back"), m_toolbar);
-    m_backBtn->setFixedHeight(28);
-    m_backBtn->setCursor(Qt::PointingHandCursor);
-    m_backBtn->setStyleSheet(
-        "QPushButton { color: rgba(255,255,255,0.78); background: rgba(255,255,255,0.06);"
-        "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
-        "  padding: 4px 10px; font-size: 11px; min-width: 60px; max-width: 80px; }"
-        "QPushButton:hover { background: rgba(255,255,255,0.12); }"
-    );
-    connect(m_backBtn, &QPushButton::clicked, this, &BookReader::closeRequested);
-    tbLayout->addWidget(m_backBtn);
-
-    tbLayout->addStretch();
-
-    m_titleLabel = new QLabel("", m_toolbar);
-    m_titleLabel->setStyleSheet("color: rgba(255,255,255,0.78); font-size: 12px; background: transparent;");
-    m_titleLabel->setAlignment(Qt::AlignCenter);
-    tbLayout->addWidget(m_titleLabel);
-
-    tbLayout->addStretch();
-
-    auto* spacer = new QWidget(m_toolbar);
-    spacer->setFixedWidth(80);
-    spacer->setStyleSheet("background: transparent;");
-    tbLayout->addWidget(spacer);
-
-    m_hideTimer.setSingleShot(true);
-    m_hideTimer.setInterval(3000);
-    connect(&m_hideTimer, &QTimer::timeout, this, &BookReader::hideToolbar);
-#endif
+    // Ensure close button stays on top of WebView
+    m_closeBtn->raise();
 }
+
+#endif
 
 void BookReader::openBook(const QString& filePath)
 {
     m_currentFile = filePath;
 
 #ifdef HAS_WEBENGINE
+    ensureWebEngine();
+
     if (!m_readerReady) {
-        // Page not loaded yet — queue the book and load the HTML
         m_pendingBook = filePath;
         m_webView->setUrl(QUrl::fromLocalFile(m_readerHtmlPath));
     } else {
-        // Page already loaded — just open the new book
         QString escaped = filePath;
         escaped.replace("\\", "\\\\").replace("'", "\\'");
-        m_webView->page()->runJavaScript(
-            QStringLiteral("window.__ebookOpenBook('%1')").arg(escaped));
+        QString js = QStringLiteral(
+            "(function poll() {"
+            "  if (typeof window.__ebookOpenBook === 'function') {"
+            "    window.__ebookOpenBook('%1');"
+            "  } else {"
+            "    setTimeout(poll, 100);"
+            "  }"
+            "})();"
+        ).arg(escaped);
+        m_webView->page()->runJavaScript(js);
     }
 #else
     loadFallback(filePath);
@@ -226,6 +282,10 @@ void BookReader::openBook(const QString& filePath)
 void BookReader::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+
+    // Position floating close button top-left
+    if (m_closeBtn)
+        m_closeBtn->move(12, 12);
 
 #ifdef HAS_WEBENGINE
     if (m_webView)
@@ -238,6 +298,10 @@ void BookReader::resizeEvent(QResizeEvent* event)
         m_textBrowser->setGeometry(0, 0, width(),
                                     height() - (m_toolbar && m_toolbar->isVisible() ? m_toolbar->height() : 0));
 #endif
+
+    // Keep close button on top
+    if (m_closeBtn)
+        m_closeBtn->raise();
 }
 
 #ifndef HAS_WEBENGINE

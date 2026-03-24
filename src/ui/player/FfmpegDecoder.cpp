@@ -1,4 +1,5 @@
 #include "ui/player/FfmpegDecoder.h"
+#include "ui/player/SyncClock.h"
 
 #include <QDebug>
 
@@ -7,8 +8,10 @@
 #pragma comment(lib, "winmm.lib")
 #endif
 
-FfmpegDecoder::FfmpegDecoder(QObject* parent)
-    : QThread(parent) {}
+FfmpegDecoder::FfmpegDecoder(SyncClock* clock, QObject* parent)
+    : QThread(parent)
+    , m_clock(clock)
+{}
 
 FfmpegDecoder::~FfmpegDecoder()
 {
@@ -32,8 +35,7 @@ bool FfmpegDecoder::openFile(const QString& filePath)
 
     ret = avformat_find_stream_info(m_fmtCtx, nullptr);
     if (ret < 0) {
-        emit errorOccurred(QStringLiteral("Cannot read stream info: %1")
-                               .arg(QString::fromStdString(ffmpegError(ret))));
+        emit errorOccurred(QStringLiteral("Cannot read stream info"));
         closeAll();
         return false;
     }
@@ -41,7 +43,7 @@ bool FfmpegDecoder::openFile(const QString& filePath)
     const AVCodec* codec = nullptr;
     m_videoStreamIdx = av_find_best_stream(m_fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
     if (m_videoStreamIdx < 0) {
-        emit errorOccurred(QStringLiteral("No video stream found in: %1").arg(filePath));
+        emit errorOccurred(QStringLiteral("No video stream found"));
         closeAll();
         return false;
     }
@@ -59,7 +61,6 @@ bool FfmpegDecoder::openFile(const QString& filePath)
         return false;
     }
 
-    // Pre-allocate double frame buffers
     m_frameBuffers[0] = QImage(m_codecCtx->width, m_codecCtx->height, QImage::Format_ARGB32);
     m_frameBuffers[1] = QImage(m_codecCtx->width, m_codecCtx->height, QImage::Format_ARGB32);
     m_writeIdx = 0;
@@ -73,25 +74,18 @@ bool FfmpegDecoder::openCodec()
 
     const AVCodec* codec = avcodec_find_decoder(vs->codecpar->codec_id);
     if (!codec) {
-        emit errorOccurred(QStringLiteral("Unsupported codec: %1")
-                               .arg(avcodec_get_name(vs->codecpar->codec_id)));
+        emit errorOccurred(QStringLiteral("Unsupported codec"));
         return false;
     }
 
     m_codecCtx = avcodec_alloc_context3(codec);
-    if (!m_codecCtx) {
-        emit errorOccurred(QStringLiteral("Cannot allocate codec context"));
-        return false;
-    }
-
     avcodec_parameters_to_context(m_codecCtx, vs->codecpar);
     m_codecCtx->thread_count = 0;
     m_codecCtx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
 
     int ret = avcodec_open2(m_codecCtx, codec, nullptr);
     if (ret < 0) {
-        emit errorOccurred(QStringLiteral("Cannot open codec: %1")
-                               .arg(QString::fromStdString(ffmpegError(ret))));
+        emit errorOccurred(QStringLiteral("Cannot open codec"));
         return false;
     }
 
@@ -141,16 +135,12 @@ void FfmpegDecoder::pause()
 
 void FfmpegDecoder::togglePause()
 {
-    if (m_paused.load())
-        play();
-    else
-        pause();
+    if (m_paused.load()) play(); else pause();
 }
 
 void FfmpegDecoder::stop()
 {
-    if (!isRunning())
-        return;
+    if (!isRunning()) return;
     m_stop.store(true);
     m_paused.store(false);
     m_pauseCond.wakeAll();
@@ -171,24 +161,22 @@ qint64 FfmpegDecoder::durationMs() const
     return m_durationMs;
 }
 
-// ── Decode loop ─────────────────────────────────────────────────────────────
+// ── Decode loop — syncs to audio clock ──────────────────────────────────────
 
 void FfmpegDecoder::run()
 {
     if (!m_fmtCtx || !m_codecCtx || !m_swsCtx) {
-        emit errorOccurred(QStringLiteral("Decoder not initialized — call openFile() first"));
+        emit errorOccurred(QStringLiteral("Decoder not initialized"));
         return;
     }
 
 #ifdef Q_OS_WIN
-    // Request 1ms timer resolution for smooth frame pacing
     timeBeginPeriod(1);
 #endif
 
     AVPacket* packet = av_packet_alloc();
     AVFrame*  frame  = av_frame_alloc();
     if (!packet || !frame) {
-        emit errorOccurred(QStringLiteral("Cannot allocate decode buffers"));
         av_packet_free(&packet);
         av_frame_free(&frame);
 #ifdef Q_OS_WIN
@@ -197,22 +185,18 @@ void FfmpegDecoder::run()
         return;
     }
 
-    const int w = m_codecCtx->width;
     const int h = m_codecCtx->height;
-    bool firstFrame = true;
+
+    // Wait for audio clock to start (up to 2 seconds)
+    for (int i = 0; i < 200 && !m_clock->hasStarted() && !m_stop.load(); ++i)
+        QThread::msleep(10);
 
     while (!m_stop.load()) {
         // ── Pause ──
         {
             QMutexLocker lock(&m_pauseMutex);
-            while (m_paused.load() && !m_stop.load()) {
-                m_pauseStartNs = nowNs();
+            while (m_paused.load() && !m_stop.load())
                 m_pauseCond.wait(&m_pauseMutex);
-                if (!m_stop.load() && !firstFrame) {
-                    qint64 pausedNs = nowNs() - m_pauseStartNs;
-                    m_clockBaseNs += pausedNs;
-                }
-            }
         }
         if (m_stop.load()) break;
 
@@ -220,7 +204,6 @@ void FfmpegDecoder::run()
         int64_t seekMs = m_seekTargetMs.exchange(-1);
         if (seekMs >= 0) {
             flushAndSeek(seekMs);
-            firstFrame = true;
             continue;
         }
 
@@ -229,9 +212,6 @@ void FfmpegDecoder::run()
         if (ret < 0) {
             if (ret == AVERROR_EOF)
                 emit playbackFinished();
-            else
-                emit errorOccurred(QStringLiteral("Read error: %1")
-                                       .arg(QString::fromStdString(ffmpegError(ret))));
             break;
         }
 
@@ -240,7 +220,6 @@ void FfmpegDecoder::run()
             continue;
         }
 
-        // ── Decode ──
         ret = avcodec_send_packet(m_codecCtx, packet);
         av_packet_unref(packet);
         if (ret < 0) continue;
@@ -248,47 +227,53 @@ void FfmpegDecoder::run()
         while (avcodec_receive_frame(m_codecCtx, frame) == 0) {
             if (m_stop.load()) break;
 
-            // PTS
-            qint64 ptsMs = 0;
+            // Frame PTS in microseconds
+            int64_t ptsUs = 0;
             if (frame->pts != AV_NOPTS_VALUE)
-                ptsMs = ptsToMs(frame->pts);
+                ptsUs = av_rescale_q(frame->pts, m_timeBase, {1, 1000000});
 
-            // ── Frame timing ──
-            if (firstFrame) {
-                m_firstPtsMs  = ptsMs;
-                m_clockBaseNs = nowNs();
-                firstFrame = false;
-            } else {
-                qint64 targetElapsedMs = ptsMs - m_firstPtsMs;
-                qint64 wallElapsedMs   = (nowNs() - m_clockBaseNs) / 1'000'000;
-                qint64 lateMs          = wallElapsedMs - targetElapsedMs;
+            qint64 ptsMs = ptsUs / 1000;
 
-                // Drop frame if we're more than 30ms behind — don't waste time
-                // converting and emitting frames that are already stale
-                if (lateMs > 30) {
+            // ── Sync to audio clock ──
+            // Wait until audio catches up to this frame's PTS
+            if (m_clock->hasStarted()) {
+                for (;;) {
+                    if (m_stop.load()) break;
+                    int64_t clockUs = m_clock->positionUs();
+                    int64_t aheadUs = ptsUs - clockUs;
+
+                    if (aheadUs <= 15000)  // within 15ms tolerance — show it
+                        break;
+
+                    if (aheadUs > 500000) {  // >500ms ahead — something's wrong, bail
+                        break;
+                    }
+
+                    // Sleep for half the remaining time
+                    int sleepMs = static_cast<int>(aheadUs / 2000);
+                    if (sleepMs < 1) sleepMs = 1;
+                    QThread::msleep(sleepMs);
+                }
+
+                // Drop frame if we're too late (>42ms behind audio)
+                int64_t clockUs = m_clock->positionUs();
+                if (ptsUs < clockUs - 42000) {
                     av_frame_unref(frame);
                     continue;
                 }
-
-                qint64 sleepMs = targetElapsedMs - wallElapsedMs;
-                if (sleepMs > 1)
-                    QThread::msleep(static_cast<unsigned long>(sleepMs));
             }
 
-            // Convert to BGRA into current write buffer
+            // ── Convert to BGRA ──
             QImage& buf = m_frameBuffers[m_writeIdx];
             uint8_t* dstData[1]  = { buf.bits() };
             int dstLinesize[1]   = { static_cast<int>(buf.bytesPerLine()) };
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, h,
                       dstData, dstLinesize);
 
-            // Emit this buffer, then flip to the other one
-            // Canvas receives a shallow copy — safe because we won't
-            // touch this buffer again until the next flip
             emit frameReady(buf, ptsMs);
             m_writeIdx ^= 1;
 
-            // Throttle position updates to ~4x per second
+            // Throttle position updates to ~4/sec
             if (m_lastPositionEmitMs < 0 || (ptsMs - m_lastPositionEmitMs) >= 250) {
                 emit positionChanged(ptsMs);
                 m_lastPositionEmitMs = ptsMs;

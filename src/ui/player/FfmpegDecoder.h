@@ -15,11 +15,13 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
+class SyncClock;
+
 class FfmpegDecoder : public QThread {
     Q_OBJECT
 
 public:
-    explicit FfmpegDecoder(QObject* parent = nullptr);
+    explicit FfmpegDecoder(SyncClock* clock, QObject* parent = nullptr);
     ~FfmpegDecoder() override;
 
     bool openFile(const QString& filePath);
@@ -48,15 +50,13 @@ private:
     qint64 ptsToMs(int64_t pts) const;
     int64_t msToTs(qint64 ms) const;
 
-    static qint64 nowNs() {
-        return std::chrono::steady_clock::now().time_since_epoch().count();
-    }
-
     static std::string ffmpegError(int errnum) {
         char buf[AV_ERROR_MAX_STRING_SIZE]{};
         av_strerror(errnum, buf, sizeof(buf));
         return buf;
     }
+
+    SyncClock* m_clock;
 
     // FFmpeg state
     AVFormatContext*  m_fmtCtx   = nullptr;
@@ -75,15 +75,10 @@ private:
     QMutex         m_pauseMutex;
     QWaitCondition m_pauseCond;
 
-    // Timing
-    qint64 m_clockBaseNs  = 0;
-    qint64 m_firstPtsMs   = 0;
-    qint64 m_pauseStartNs = 0;
-
-    // Double-buffered frames — decode into one while the other is being painted
+    // Double-buffered frames
     QImage m_frameBuffers[2];
     int    m_writeIdx = 0;
 
-    // Position throttle (don't emit every frame)
+    // Position throttle
     qint64 m_lastPositionEmitMs = -1;
 };

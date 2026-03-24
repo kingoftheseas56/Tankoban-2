@@ -160,9 +160,11 @@ static QString stripNoiseBracketChunks(const QString& text)
             if (normalized.isEmpty()) {
                 result += ' ';
             } else {
-                // Drop year-only brackets and noise brackets
+                // Drop year-only, pure-numeric IDs, and noise brackets
                 static const QRegularExpression yearOnly(QStringLiteral("^(?:19|20)\\d{2}$"));
+                static const QRegularExpression pureNumeric(QStringLiteral("^\\d+$"));
                 if (yearOnly.match(normalized).hasMatch() ||
+                    pureNumeric.match(normalized).hasMatch() ||
                     SHOW_TITLE_NOISE_RE.match(normalized).hasMatch()) {
                     result += ' ';
                 } else {

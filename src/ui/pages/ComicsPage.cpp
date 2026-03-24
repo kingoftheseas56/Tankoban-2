@@ -64,6 +64,24 @@ void ComicsPage::buildUI()
     auto* title = new QLabel("Comics", header);
     title->setObjectName("SectionTitle");
     headerLayout->addWidget(title);
+
+    m_searchBar = new QLineEdit(header);
+    m_searchBar->setPlaceholderText("Search series and volumes\u2026");
+    m_searchBar->setClearButtonEnabled(true);
+    m_searchBar->setObjectName("LibrarySearch");
+    m_searchBar->setFixedHeight(32);
+    m_searchBar->setStyleSheet(
+        "QLineEdit { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
+        "QLineEdit:focus { border: 1px solid rgba(255,255,255,0.3); }");
+    headerLayout->addWidget(m_searchBar);
+
+    m_searchTimer = new QTimer(this);
+    m_searchTimer->setSingleShot(true);
+    m_searchTimer->setInterval(250);
+    connect(m_searchBar, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
+    connect(m_searchTimer, &QTimer::timeout, this, &ComicsPage::applySearch);
+
     gridLayout->addWidget(header);
 
     m_statusLabel = new QLabel("Add a comics folder to get started", gridPage);
@@ -162,4 +180,19 @@ void ComicsPage::onTileClicked(const QString& seriesPath, const QString& seriesN
 void ComicsPage::showGrid()
 {
     m_stack->setCurrentIndex(0);
+}
+
+void ComicsPage::applySearch()
+{
+    m_tileStrip->filterTiles(m_searchBar->text());
+
+    if (m_tileStrip->visibleCount() == 0 && !m_searchBar->text().trimmed().isEmpty()) {
+        m_statusLabel->setText(
+            QString("No results for \"%1\"").arg(m_searchBar->text().trimmed()));
+        m_statusLabel->show();
+        m_tileStrip->hide();
+    } else if (m_tileStrip->visibleCount() > 0) {
+        m_statusLabel->hide();
+        m_tileStrip->show();
+    }
 }

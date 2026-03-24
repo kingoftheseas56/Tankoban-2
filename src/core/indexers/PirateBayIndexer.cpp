@@ -1,0 +1,96 @@
+#include "PirateBayIndexer.h"
+
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QUrl>
+#include <QUrlQuery>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+
+PirateBayIndexer::PirateBayIndexer(QNetworkAccessManager* nam, QObject* parent)
+    : TorrentIndexer(parent), m_nam(nam)
+{
+}
+
+void PirateBayIndexer::search(const QString& query, int limit, const QString& categoryId)
+{
+    Q_UNUSED(limit)
+    QUrl url("https://apibay.org/q.php");
+    QUrlQuery q;
+    q.addQueryItem("q", query);
+    if (!categoryId.trimmed().isEmpty())
+        q.addQueryItem("cat", categoryId.trimmed());
+    url.setQuery(q);
+
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
+    req.setRawHeader("Accept", "application/json,*/*");
+
+    auto *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        onReplyFinished(reply);
+    });
+}
+
+void PirateBayIndexer::onReplyFinished(QNetworkReply* reply)
+{
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        emit searchError(reply->errorString());
+        return;
+    }
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &err);
+    if (err.error != QJsonParseError::NoError) {
+        emit searchError("JSON parse error: " + err.errorString());
+        return;
+    }
+
+    QJsonArray arr = doc.array();
+    QList<TorrentResult> results;
+
+    for (const auto& val : arr) {
+        QJsonObject row = val.toObject();
+        QString name = row.value("name").toString().trimmed();
+        QString ih = row.value("info_hash").toString().trimmed().toLower();
+
+        if (name.isEmpty() || ih.isEmpty() || ih == "0")
+            continue;
+
+        TorrentResult r;
+        r.title      = name;
+        QStringList trackers = defaultTrackers();
+        trackers.prepend("udp://tracker.bittor.pw:1337/announce");
+        r.magnetUri  = buildMagnet(ih, name, trackers);
+        r.sizeBytes  = row.value("size").toVariant().toLongLong();
+        r.seeders    = row.value("seeders").toVariant().toInt();
+        r.leechers   = row.value("leechers").toVariant().toInt();
+        r.sourceName = "PirateBay";
+        r.sourceKey  = "piratebay";
+        r.categoryId = row.value("category").toVariant().toString();
+        r.category   = categoryLabel(r.categoryId);
+
+        if (!r.magnetUri.isEmpty())
+            results.append(r);
+    }
+
+    emit searchFinished(results);
+}
+
+QString PirateBayIndexer::categoryLabel(const QString& catId)
+{
+    if (catId.isEmpty()) return {};
+    QChar first = catId.at(0);
+    if (first == '1') return "Audio";
+    if (first == '2') return "Video";
+    if (first == '3') return "Applications";
+    if (first == '4') return "Games";
+    if (first == '5') return "Porn";
+    if (first == '6') return "Other";
+    return {};
+}

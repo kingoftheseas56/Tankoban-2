@@ -34,7 +34,9 @@ protected:
 private:
     void buildUI();
 
-#ifndef HAS_WEBENGINE
+#ifdef HAS_WEBENGINE
+    void ensureWebEngine();
+#else
     void showToolbar();
     void hideToolbar();
     void loadFallback(const QString& filePath);
@@ -43,10 +45,14 @@ private:
     QString m_currentFile;
     QString m_readerHtmlPath;
 
+    // Floating close button (always available as backup)
+    QPushButton* m_closeBtn = nullptr;
+
 #ifdef HAS_WEBENGINE
     QWebEngineView* m_webView = nullptr;
     BookBridge*     m_bridge  = nullptr;
     QWebChannel*    m_channel = nullptr;
+    bool            m_webEngineReady = false;
     bool            m_readerReady = false;
     QString         m_pendingBook;
 #else

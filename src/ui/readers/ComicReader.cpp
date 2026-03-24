@@ -415,17 +415,34 @@ void ComicReader::displayCurrentPage()
     if (m_doublePageMode && !m_secondPixmap.isNull())
         composite = compositeDoublePages(m_currentPixmap, m_secondPixmap);
 
-    // Portrait width adjustment (single-page mode)
-    if (!m_doublePageMode && m_fitMode == FitMode::FitPage) {
-        double frac = m_portraitWidthPct / 100.0;
-        int targetW = static_cast<int>(availW * frac);
-        int targetH = availH;
-        QPixmap scaled = composite.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    // Single-page mode: scale to fill height, cap width by portrait %
+    if (!m_doublePageMode) {
+        QPixmap scaled;
+        switch (m_fitMode) {
+        case FitMode::FitPage: {
+            // Scale to fit height first
+            scaled = composite.scaledToHeight(availH, Qt::SmoothTransformation);
+            // Cap width by portrait width preset
+            double frac = m_portraitWidthPct / 100.0;
+            int maxW = static_cast<int>(availW * frac);
+            if (scaled.width() > maxW)
+                scaled = composite.scaled(maxW, availH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            break;
+        }
+        case FitMode::FitWidth: {
+            double frac = m_portraitWidthPct / 100.0;
+            scaled = composite.scaledToWidth(static_cast<int>(availW * frac), Qt::SmoothTransformation);
+            break;
+        }
+        case FitMode::FitHeight:
+            scaled = composite.scaledToHeight(availH, Qt::SmoothTransformation);
+            break;
+        }
         m_imageLabel->setPixmap(scaled);
         m_imageLabel->resize(scaled.size());
     } else {
-        // Zoom handling for double-page mode
-        double zoom = m_doublePageMode ? m_zoomPct / 100.0 : 1.0;
+        // Double-page mode with zoom
+        double zoom = m_zoomPct / 100.0;
 
         QPixmap scaled;
         switch (m_fitMode) {

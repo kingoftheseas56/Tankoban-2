@@ -40,6 +40,7 @@ set(SOURCES
     src/ui/pages/BookSeriesView.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
+    src/ui/pages/ShowView.cpp
     src/ui/readers/ComicReader.cpp
     src/ui/readers/SmoothScrollArea.cpp
     src/ui/readers/DecodeTask.cpp
@@ -51,7 +52,13 @@ set(SOURCES
     src/ui/pages/TankoyomiPage.cpp
     src/core/indexers/TorrentsCsvIndexer.cpp
     src/core/indexers/NyaaIndexer.cpp
+    src/core/indexers/PirateBayIndexer.cpp
+    src/core/indexers/YtsIndexer.cpp
+    src/core/indexers/EztvIndexer.cpp
+    src/core/indexers/X1337xIndexer.cpp
+    src/core/indexers/ExtTorrentsIndexer.cpp
     src/ui/player/FfmpegDecoder.cpp
+    src/ui/player/AudioDecoder.cpp
     src/ui/player/FrameCanvas.cpp
     src/ui/player/VideoPlayer.cpp
 )
@@ -74,6 +81,7 @@ set(HEADERS
     src/ui/pages/BookSeriesView.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
+    src/ui/pages/ShowView.h
     src/ui/readers/ComicReader.h
     src/ui/readers/SmoothScrollArea.h
     src/ui/readers/DecodeTask.h
@@ -87,7 +95,14 @@ set(HEADERS
     src/core/TorrentIndexer.h
     src/core/indexers/TorrentsCsvIndexer.h
     src/core/indexers/NyaaIndexer.h
+    src/core/indexers/PirateBayIndexer.h
+    src/core/indexers/YtsIndexer.h
+    src/core/indexers/EztvIndexer.h
+    src/core/indexers/X1337xIndexer.h
+    src/core/indexers/ExtTorrentsIndexer.h
+    src/ui/player/SyncClock.h
     src/ui/player/FfmpegDecoder.h
+    src/ui/player/AudioDecoder.h
     src/ui/player/FrameCanvas.h
     src/ui/player/VideoPlayer.h
 )
@@ -120,6 +135,7 @@ target_link_libraries(Tankoban PRIVATE
     ${FFMPEG_DIR}/lib/avcodec.lib
     ${FFMPEG_DIR}/lib/avutil.lib
     ${FFMPEG_DIR}/lib/swscale.lib
+    ${FFMPEG_DIR}/lib/swresample.lib
 )
 
 # QZipReader for CBZ support

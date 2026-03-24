@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <QThread>
 #include <QLabel>
+#include <QLineEdit>
+#include <QTimer>
 #include <QStackedWidget>
 
 class CoreBridge;
@@ -28,6 +30,7 @@ private slots:
     void onScanFinished(const QList<SeriesInfo>& allSeries);
     void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
+    void applySearch();
 
 private:
     void buildUI();
@@ -36,6 +39,8 @@ private:
     QStackedWidget*  m_stack = nullptr;
     TileStrip*       m_tileStrip = nullptr;
     QLabel*          m_statusLabel = nullptr;
+    QLineEdit*       m_searchBar = nullptr;
+    QTimer*          m_searchTimer = nullptr;
     SeriesView*      m_seriesView = nullptr;
 
     QThread*         m_scanThread = nullptr;

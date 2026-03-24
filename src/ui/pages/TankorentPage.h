@@ -8,6 +8,7 @@
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <QMenu>
 
 #include "core/TorrentResult.h"
 
@@ -34,8 +35,15 @@ private:
     void cancelSearch();
     void onSearchFinished(const QList<TorrentResult>& results);
     void onSearchError(const QString& error);
-    void populateResults(const QList<TorrentResult>& results);
+    void renderResults();
     void populateSourceCombo();
+    void reloadCategoryOptions();
+    void showResultsContextMenu(const QPoint& pos);
+
+    // Quality tag + health helpers
+    static QString qualityTagSuffix(const QString& title);
+    static QString healthDot(int seeders);
+    static QColor healthColor(int seeders);
 
     CoreBridge* m_bridge;
     QNetworkAccessManager* m_nam = nullptr;
