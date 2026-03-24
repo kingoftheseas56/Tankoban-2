@@ -1,6 +1,7 @@
 #include "ComicsPage.h"
 #include "TileStrip.h"
 #include "TileCard.h"
+#include "SeriesView.h"
 #include "core/CoreBridge.h"
 #include "core/LibraryScanner.h"
 
@@ -49,28 +50,41 @@ void ComicsPage::buildUI()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Header
-    auto* header = new QWidget(this);
+    m_stack = new QStackedWidget(this);
+
+    // ── Grid view (index 0) ──
+    auto* gridPage = new QWidget();
+    auto* gridLayout = new QVBoxLayout(gridPage);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(0);
+
+    auto* header = new QWidget(gridPage);
     auto* headerLayout = new QVBoxLayout(header);
     headerLayout->setContentsMargins(24, 20, 24, 12);
-
     auto* title = new QLabel("Comics", header);
     title->setObjectName("SectionTitle");
     headerLayout->addWidget(title);
+    gridLayout->addWidget(header);
 
-    layout->addWidget(header);
-
-    // Status label (shown when empty or scanning)
-    m_statusLabel = new QLabel("Add a comics folder to get started", this);
+    m_statusLabel = new QLabel("Add a comics folder to get started", gridPage);
     m_statusLabel->setObjectName("TileSubtitle");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
-    layout->addWidget(m_statusLabel);
+    gridLayout->addWidget(m_statusLabel);
 
-    // Tile grid
-    m_tileStrip = new TileStrip(this);
+    m_tileStrip = new TileStrip(gridPage);
     m_tileStrip->hide();
-    layout->addWidget(m_tileStrip, 1);
+    gridLayout->addWidget(m_tileStrip, 1);
+
+    m_stack->addWidget(gridPage);
+
+    // ── Series view (index 1) ──
+    m_seriesView = new SeriesView();
+    connect(m_seriesView, &SeriesView::backRequested, this, &ComicsPage::showGrid);
+    connect(m_seriesView, &SeriesView::issueSelected, this, &ComicsPage::openComic);
+    m_stack->addWidget(m_seriesView);
+
+    layout->addWidget(m_stack, 1);
 }
 
 void ComicsPage::activate()
@@ -91,6 +105,7 @@ void ComicsPage::triggerScan()
         m_statusLabel->setText("Add a comics folder to get started");
         m_statusLabel->show();
         m_hasScanned = true;
+        m_scanning = false;
         return;
     }
 
@@ -105,7 +120,6 @@ void ComicsPage::triggerScan()
 
 void ComicsPage::onSeriesFound(const SeriesInfo& series)
 {
-    // Show tile strip on first result
     if (m_statusLabel->isVisible()) {
         m_statusLabel->hide();
         m_tileStrip->show();
@@ -115,6 +129,15 @@ void ComicsPage::onSeriesFound(const SeriesInfo& series)
                      + (series.fileCount == 1 ? " issue" : " issues");
 
     auto* card = new TileCard(series.coverThumbPath, series.seriesName, subtitle);
+
+    // Store series data for click handling
+    card->setProperty("seriesPath", series.seriesPath);
+    card->setProperty("seriesName", series.seriesName);
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        onTileClicked(card->property("seriesPath").toString(),
+                      card->property("seriesName").toString());
+    });
+
     m_tileStrip->addTile(card);
 }
 
@@ -128,4 +151,15 @@ void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
         m_statusLabel->setText("No comics found in your library folders");
         m_statusLabel->show();
     }
+}
+
+void ComicsPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
+{
+    m_seriesView->showSeries(seriesPath, seriesName);
+    m_stack->setCurrentIndex(1);
+}
+
+void ComicsPage::showGrid()
+{
+    m_stack->setCurrentIndex(0);
 }

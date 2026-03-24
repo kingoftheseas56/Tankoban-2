@@ -14,6 +14,7 @@
 class GlassBackground;
 class CoreBridge;
 class RootFoldersOverlay;
+class ComicReader;
 
 class MainWindow : public QMainWindow
 {
@@ -34,6 +35,10 @@ private:
     void showRootFolders();
     void hideRootFolders();
 
+    // Comic reader
+    void openComicReader(const QString& cbzPath);
+    void closeComicReader();
+
     // System tray
     void setupTrayIcon();
     void hideToTray();
@@ -50,6 +55,9 @@ private:
 
     // Root folders overlay
     RootFoldersOverlay *m_rootFoldersOverlay = nullptr;
+
+    // Comic reader overlay
+    ComicReader *m_comicReader = nullptr;
 
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;

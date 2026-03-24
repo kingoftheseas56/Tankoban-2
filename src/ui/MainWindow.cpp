@@ -4,6 +4,7 @@
 #include "pages/ComicsPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
+#include "readers/ComicReader.h"
 #include "core/CoreBridge.h"
 
 #include <QVBoxLayout>
@@ -76,9 +77,19 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
             videos->triggerScan();
     });
 
+    // Comic reader overlay (hidden by default)
+    m_comicReader = new ComicReader(root);
+    m_comicReader->hide();
+    connect(m_comicReader, &ComicReader::closeRequested, this, &MainWindow::closeComicReader);
+
     setCentralWidget(root);
     bindShortcuts();
     setupTrayIcon();
+
+    // Connect comics page to reader
+    if (auto *comics = m_pageStack->findChild<ComicsPage*>()) {
+        connect(comics, &ComicsPage::openComic, this, &MainWindow::openComicReader);
+    }
 
     activatePage(PAGE_COMICS);
 }
@@ -92,6 +103,9 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     }
     if (m_rootFoldersOverlay && centralWidget()) {
         m_rootFoldersOverlay->setGeometry(centralWidget()->rect());
+    }
+    if (m_comicReader && centralWidget()) {
+        m_comicReader->setGeometry(centralWidget()->rect());
     }
 }
 
@@ -378,4 +392,19 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
     QMainWindow::closeEvent(event);
     QApplication::quit();
+}
+
+// ── Comic reader ────────────────────────────────────────────────────────────
+void MainWindow::openComicReader(const QString& cbzPath)
+{
+    m_comicReader->openBook(cbzPath);
+    m_comicReader->setGeometry(centralWidget()->rect());
+    m_comicReader->show();
+    m_comicReader->raise();
+    m_comicReader->setFocus();
+}
+
+void MainWindow::closeComicReader()
+{
+    m_comicReader->hide();
 }
