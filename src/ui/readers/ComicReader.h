@@ -9,6 +9,9 @@
 #include <QTimer>
 #include <QThreadPool>
 #include <QVector>
+#include <QMap>
+#include <QMenu>
+#include <QPropertyAnimation>
 
 #include "PageCache.h"
 
@@ -16,6 +19,14 @@ class CoreBridge;
 class SmoothScrollArea;
 
 enum class FitMode { FitPage, FitWidth, FitHeight };
+
+struct TwoPagePair {
+    int rightIndex = -1;
+    int leftIndex = -1;       // -1 if single/spread/cover
+    bool isSpread = false;
+    bool coverAlone = false;
+    bool unpairedSingle = false;
+};
 
 class ComicReader : public QWidget {
     Q_OBJECT
@@ -34,6 +45,8 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
 
 private:
     void buildUI();
@@ -59,11 +72,44 @@ private:
     void cycleFitMode();
     void showToast(const QString& text);
 
-    // Double page
+    // Double page & pairing
     void toggleDoublePageMode();
+    bool resolveSpread(int index) const;
     bool isSpreadIndex(int index) const;
     int  pageAdvanceCount() const;
     QPixmap compositeDoublePages(const QPixmap& left, const QPixmap& right);
+    void buildCanonicalPairingUnits();
+    void invalidatePairing();
+    const TwoPagePair* pairForPage(int pageIndex) const;
+    int navigateToUnit(int unitIndex);
+
+    // Coupling
+    void toggleCouplingNudge();
+    void maybeRunAutoCoupling();
+    double edgeContinuityCost(const QPixmap& left, const QPixmap& right);
+    double scorePhase(bool shifted);
+    QVector<int> autoPhaseSampleIndexes(bool shifted);
+
+    // Spread override
+    void showSpreadOverrideMenu(int pageIndex, const QPoint& globalPos);
+
+    // Reading direction
+    void toggleReadingDirection();
+
+    // Portrait width
+    void showPortraitWidthMenu();
+    void setPortraitWidthPct(int pct);
+
+    // Zoom & pan
+    void setZoom(int pct);
+    void zoomBy(int delta);
+    void setPan(double panY);
+    void drainPan();
+    void resetZoomPan();
+
+    // Click zones
+    QString clickZone(const QPoint& pos) const;
+    void flashClickZone(const QString& side);
 
     // Go-to-page
     void showGoToDialog();
@@ -92,6 +138,34 @@ private:
     // Modes
     bool        m_doublePageMode = false;
     FitMode     m_fitMode = FitMode::FitPage;
+
+    // Canonical pairing
+    QVector<TwoPagePair> m_canonicalUnits;
+    QMap<int, int> m_unitByPage;
+
+    // Coupling
+    QString m_couplingMode  = "auto";
+    QString m_couplingPhase = "normal";
+    float   m_couplingConfidence = 0.0f;
+    bool    m_couplingResolved = false;
+    int     m_couplingProbeAttempts = 0;
+
+    // Spread overrides
+    QMap<int, bool> m_spreadOverrides;
+
+    // Reading direction
+    bool m_rtl = false;
+
+    // Zoom & pan (double-page)
+    int    m_zoomPct = 100;
+    double m_panX = 0.0, m_panY = 0.0;
+    double m_panXMax = 0.0, m_panYMax = 0.0;
+    double m_pendingPanPx = 0.0;
+    QTimer m_panDrainTimer;
+
+    // Portrait width (single-page)
+    int m_portraitWidthPct = 78;
+    QPushButton* m_portraitBtn = nullptr;
 
     // Infrastructure
     PageCache    m_cache;

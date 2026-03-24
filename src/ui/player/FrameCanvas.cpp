@@ -1,6 +1,7 @@
 #include "ui/player/FrameCanvas.h"
 
 #include <QPainter>
+#include <QResizeEvent>
 
 FrameCanvas::FrameCanvas(QWidget* parent)
     : QWidget(parent)
@@ -11,48 +12,64 @@ FrameCanvas::FrameCanvas(QWidget* parent)
 
 void FrameCanvas::setFrame(const QImage& frame, qint64 /*ptsMs*/)
 {
-    {
-        QMutexLocker lock(&m_frameMutex);
-        m_frame = frame;
-    }
+    m_frame = frame;
+    rebuildScaled();
     update();
+}
+
+void FrameCanvas::rebuildScaled()
+{
+    if (m_frame.isNull()) {
+        m_scaled = QPixmap();
+        return;
+    }
+
+    QRect r = targetRect(m_frame.size());
+
+    // Fast scale: Qt::FastTransformation uses nearest-neighbor, very cheap.
+    // At display resolution the difference from bilinear is invisible.
+    m_scaled = QPixmap::fromImage(m_frame).scaled(
+        r.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
 }
 
 void FrameCanvas::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::SmoothPixmapTransform);
     p.fillRect(rect(), Qt::black);
 
-    QImage frame;
-    {
-        QMutexLocker lock(&m_frameMutex);
-        frame = m_frame;
-    }
-
-    if (frame.isNull())
+    if (m_scaled.isNull())
         return;
 
-    p.drawImage(targetRect(), frame);
+    QRect r = targetRect(m_frame.size());
+    p.drawPixmap(r.topLeft(), m_scaled);
 }
 
-QRect FrameCanvas::targetRect() const
+void FrameCanvas::resizeEvent(QResizeEvent* event)
 {
-    if (m_frame.isNull())
+    QWidget::resizeEvent(event);
+    if (event->size() != m_lastWidgetSize) {
+        m_lastWidgetSize = event->size();
+        rebuildScaled();
+    }
+}
+
+QRect FrameCanvas::targetRect(const QSize& frameSize) const
+{
+    if (frameSize.isEmpty())
         return rect();
 
-    QSize frameSize = m_frame.size();
-    QSize widgetSize = size();
+    QSize scaled = frameSize;
+    scaled.scale(size(), Qt::KeepAspectRatio);
 
-    frameSize.scale(widgetSize, Qt::KeepAspectRatio);
+    int x = (width()  - scaled.width())  / 2;
+    int y = (height() - scaled.height()) / 2;
 
-    int x = (widgetSize.width()  - frameSize.width())  / 2;
-    int y = (widgetSize.height() - frameSize.height()) / 2;
-
-    return QRect(QPoint(x, y), frameSize);
+    return QRect(QPoint(x, y), scaled);
 }
 
 QRect FrameCanvas::frameRect() const
 {
-    return targetRect();
+    if (m_frame.isNull())
+        return rect();
+    return targetRect(m_frame.size());
 }

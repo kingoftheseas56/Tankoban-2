@@ -1,4 +1,5 @@
 #include "VideosScanner.h"
+#include "ScannerUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -18,16 +19,9 @@ VideosScanner::VideosScanner(QObject* parent)
 
 void VideosScanner::scan(const QStringList& rootFolders)
 {
-    QMap<QString, QStringList> showMap;
-
-    for (const auto& root : rootFolders) {
-        QDirIterator it(root, VIDEO_EXTS, QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString path = it.next();
-            QString parentDir = QFileInfo(path).absolutePath();
-            showMap[parentDir].append(path);
-        }
-    }
+    // Group video files by first-level subdirectory under each root
+    QMap<QString, QStringList> showMap =
+        ScannerUtils::groupByFirstLevelSubdir(rootFolders, VIDEO_EXTS);
 
     QCollator collator;
     collator.setNumericMode(true);
@@ -43,7 +37,7 @@ void VideosScanner::scan(const QStringList& rootFolders)
         });
 
         ShowInfo info;
-        info.showName = QDir(showPath).dirName();
+        info.showName = ScannerUtils::cleanMediaFolderTitle(QDir(showPath).dirName());
         info.showPath = showPath;
         info.episodeCount = files.size();
 

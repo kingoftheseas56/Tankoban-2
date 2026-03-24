@@ -59,8 +59,10 @@ bool FfmpegDecoder::openFile(const QString& filePath)
         return false;
     }
 
-    // Pre-allocate frame buffer
-    m_frameBuffer = QImage(m_codecCtx->width, m_codecCtx->height, QImage::Format_ARGB32);
+    // Pre-allocate double frame buffers
+    m_frameBuffers[0] = QImage(m_codecCtx->width, m_codecCtx->height, QImage::Format_ARGB32);
+    m_frameBuffers[1] = QImage(m_codecCtx->width, m_codecCtx->height, QImage::Format_ARGB32);
+    m_writeIdx = 0;
 
     return true;
 }
@@ -112,7 +114,8 @@ void FfmpegDecoder::closeAll()
     if (m_fmtCtx)   { avformat_close_input(&m_fmtCtx); }
     m_videoStreamIdx = -1;
     m_durationMs = 0;
-    m_frameBuffer = QImage();
+    m_frameBuffers[0] = QImage();
+    m_frameBuffers[1] = QImage();
 }
 
 // ── Playback control ────────────────────────────────────────────────────────
@@ -272,14 +275,18 @@ void FfmpegDecoder::run()
                     QThread::msleep(static_cast<unsigned long>(sleepMs));
             }
 
-            // Convert to BGRA into pre-allocated buffer
-            uint8_t* dstData[1]  = { m_frameBuffer.bits() };
-            int dstLinesize[1]   = { static_cast<int>(m_frameBuffer.bytesPerLine()) };
+            // Convert to BGRA into current write buffer
+            QImage& buf = m_frameBuffers[m_writeIdx];
+            uint8_t* dstData[1]  = { buf.bits() };
+            int dstLinesize[1]   = { static_cast<int>(buf.bytesPerLine()) };
             sws_scale(m_swsCtx, frame->data, frame->linesize, 0, h,
                       dstData, dstLinesize);
 
-            // Emit a copy (QImage implicit sharing = cheap ref bump)
-            emit frameReady(m_frameBuffer, ptsMs);
+            // Emit this buffer, then flip to the other one
+            // Canvas receives a shallow copy — safe because we won't
+            // touch this buffer again until the next flip
+            emit frameReady(buf, ptsMs);
+            m_writeIdx ^= 1;
 
             // Throttle position updates to ~4x per second
             if (m_lastPositionEmitMs < 0 || (ptsMs - m_lastPositionEmitMs) >= 250) {

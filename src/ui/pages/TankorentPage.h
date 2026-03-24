@@ -9,7 +9,11 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include "core/TorrentResult.h"
+
 class CoreBridge;
+class TorrentIndexer;
+class QNetworkAccessManager;
 
 class TankorentPage : public QWidget
 {
@@ -26,7 +30,20 @@ private:
     QTableWidget* createResultsTable();
     QTableWidget* createTransfersTable();
 
+    void startSearch();
+    void cancelSearch();
+    void onSearchFinished(const QList<TorrentResult>& results);
+    void onSearchError(const QString& error);
+    void populateResults(const QList<TorrentResult>& results);
+    void populateSourceCombo();
+
     CoreBridge* m_bridge;
+    QNetworkAccessManager* m_nam = nullptr;
+
+    // Active indexers during a search
+    QList<TorrentIndexer*> m_activeIndexers;
+    int m_pendingSearches = 0;
+    QList<TorrentResult> m_allResults;
 
     // Search controls
     QLineEdit*   m_queryEdit       = nullptr;

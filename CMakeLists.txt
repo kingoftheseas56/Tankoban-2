@@ -12,6 +12,8 @@ find_package(Qt6 REQUIRED COMPONENTS
     Core
     Gui
     Widgets
+    Svg
+    Network
 )
 
 # Optional components — added as they become needed
@@ -26,6 +28,7 @@ set(SOURCES
     src/core/LibraryScanner.cpp
     src/core/BooksScanner.cpp
     src/core/VideosScanner.cpp
+    src/core/ScannerUtils.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
     src/ui/GlassBackground.cpp
@@ -46,6 +49,8 @@ set(SOURCES
     src/ui/pages/SourcesPage.cpp
     src/ui/pages/TankorentPage.cpp
     src/ui/pages/TankoyomiPage.cpp
+    src/core/indexers/TorrentsCsvIndexer.cpp
+    src/core/indexers/NyaaIndexer.cpp
     src/ui/player/FfmpegDecoder.cpp
     src/ui/player/FrameCanvas.cpp
     src/ui/player/VideoPlayer.cpp
@@ -57,6 +62,7 @@ set(HEADERS
     src/core/LibraryScanner.h
     src/core/BooksScanner.h
     src/core/VideosScanner.h
+    src/core/ScannerUtils.h
     src/core/ArchiveReader.h
     src/ui/MainWindow.h
     src/ui/GlassBackground.h
@@ -77,6 +83,10 @@ set(HEADERS
     src/ui/pages/SourcesPage.h
     src/ui/pages/TankorentPage.h
     src/ui/pages/TankoyomiPage.h
+    src/core/TorrentResult.h
+    src/core/TorrentIndexer.h
+    src/core/indexers/TorrentsCsvIndexer.h
+    src/core/indexers/NyaaIndexer.h
     src/ui/player/FfmpegDecoder.h
     src/ui/player/FrameCanvas.h
     src/ui/player/VideoPlayer.h
@@ -105,6 +115,7 @@ target_link_libraries(Tankoban PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Network
     ${FFMPEG_DIR}/lib/avformat.lib
     ${FFMPEG_DIR}/lib/avcodec.lib
     ${FFMPEG_DIR}/lib/avutil.lib
@@ -127,9 +138,7 @@ if(TARGET Qt6::Multimedia)
     target_compile_definitions(Tankoban PRIVATE HAS_MULTIMEDIA=1)
 endif()
 
-if(TARGET Qt6::Svg)
-    target_link_libraries(Tankoban PRIVATE Qt6::Svg)
-endif()
+target_link_libraries(Tankoban PRIVATE Qt6::Svg)
 
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)

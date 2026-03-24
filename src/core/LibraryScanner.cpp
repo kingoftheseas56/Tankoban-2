@@ -1,4 +1,5 @@
 #include "LibraryScanner.h"
+#include "ScannerUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -37,17 +38,9 @@ LibraryScanner::LibraryScanner(const QString& thumbsDir, QObject* parent)
 
 void LibraryScanner::scan(const QStringList& rootFolders)
 {
-    // Discover all .cbz files and group by parent directory
-    QMap<QString, QStringList> seriesMap; // parentDir → list of cbz paths
-
-    for (const auto& root : rootFolders) {
-        QDirIterator it(root, {"*.cbz"}, QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString path = it.next();
-            QString parentDir = QFileInfo(path).absolutePath();
-            seriesMap[parentDir].append(path);
-        }
-    }
+    // Group .cbz files by first-level subdirectory under each root
+    QMap<QString, QStringList> seriesMap =
+        ScannerUtils::groupByFirstLevelSubdir(rootFolders, {"*.cbz"});
 
     // Natural sort the files within each series
     QCollator collator;
@@ -64,7 +57,7 @@ void LibraryScanner::scan(const QStringList& rootFolders)
         });
 
         SeriesInfo info;
-        info.seriesName = QDir(seriesPath).dirName();
+        info.seriesName = ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
         info.seriesPath = seriesPath;
         info.fileCount = files.size();
 

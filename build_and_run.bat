@@ -5,7 +5,7 @@ setlocal
 set QT_DIR=C:\tools\qt6sdk\6.10.2\msvc2022_64
 set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
 set "PROJECT_DIR=%~dp0."
-set "BUILD_DIR=%~dp0build"
+set "BUILD_DIR=%~dp0out"
 
 :: ── Set up MSVC environment ────────────────────────────────────────────────
 echo [1/4] Setting up MSVC environment...

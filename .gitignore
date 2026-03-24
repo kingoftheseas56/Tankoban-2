@@ -1,4 +1,7 @@
 build/
+build2/
+build_old2/
+out/
 .vs/
 .vscode/
 *.user

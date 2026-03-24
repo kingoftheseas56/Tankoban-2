@@ -1,4 +1,5 @@
 #include "BooksScanner.h"
+#include "ScannerUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -95,17 +96,9 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
     QCollator collator;
     collator.setNumericMode(true);
 
-    // ── Scan books ──
-    QMap<QString, QStringList> seriesMap;
-
-    for (const auto& root : bookRoots) {
-        QDirIterator it(root, BOOK_EXTS, QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString path = it.next();
-            QString parentDir = QFileInfo(path).absolutePath();
-            seriesMap[parentDir].append(path);
-        }
-    }
+    // ── Scan books ── group by first-level subdirectory under each root
+    QMap<QString, QStringList> seriesMap =
+        ScannerUtils::groupByFirstLevelSubdir(bookRoots, BOOK_EXTS);
 
     QList<BookSeriesInfo> allBooks;
 
@@ -118,7 +111,7 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
         });
 
         BookSeriesInfo info;
-        info.seriesName = QDir(seriesPath).dirName();
+        info.seriesName = ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
         info.seriesPath = seriesPath;
         info.fileCount = files.size();
 
@@ -173,7 +166,7 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
 
             if (trackCount > 0) {
                 AudiobookInfo ab;
-                ab.name = entry.fileName();
+                ab.name = ScannerUtils::cleanMediaFolderTitle(entry.fileName());
                 ab.path = entry.absoluteFilePath();
                 ab.trackCount = trackCount;
                 allAudiobooks.append(ab);

@@ -80,8 +80,9 @@ private:
     qint64 m_firstPtsMs   = 0;
     qint64 m_pauseStartNs = 0;
 
-    // Pre-allocated frame buffer (reused across frames)
-    QImage m_frameBuffer;
+    // Double-buffered frames — decode into one while the other is being painted
+    QImage m_frameBuffers[2];
+    int    m_writeIdx = 0;
 
     // Position throttle (don't emit every frame)
     qint64 m_lastPositionEmitMs = -1;
