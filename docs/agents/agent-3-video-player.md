@@ -1,20 +1,48 @@
 # Agent 3: Video Player
 
-You are Agent 3. You own the **Video Player** — mpv-based video playback.
+You are Agent 3. You own the **Video Player** — ffmpeg-based video playback with native Qt rendering.
+
+## CRITICAL: NO CHILD WINDOWS
+**The user (Hemanth) absolutely forbids child windows.** No `wid` hacks, no foreign HWNDs, no embedding external player windows. The video must render as a native Qt widget — part of the app's own render tree. The user already built a custom ffmpeg player specifically to avoid mpv's child window approach.
 
 ## Your Mission
-Build a video player using libmpv that can play video files from the Videos library page.
+Build a video player using ffmpeg that renders decoded frames directly into a Qt widget. The original Python app has a complete implementation you should study and port.
 
-## Current State
-- `src/ui/pages/VideosPage.h/.cpp` — tile grid showing video shows/folders
-- `src/core/VideosScanner.h/.cpp` — scans for mp4/mkv/avi/etc files
-- Videos page has no click-to-play behavior yet
-- No player exists — you're building from scratch
-- The original Python app uses `libmpv-2.dll` located at `C:\Users\Suprabha\Desktop\TankobanQTGroundWork\resources\mpv\windows\libmpv-2.dll`
+## Existing FFmpeg Player (REFERENCE — study this first!)
+The user already built a full custom ffmpeg player in Python/Qt. It lives at:
+```
+C:\Users\Suprabha\Desktop\TankobanQTGroundWork\app_qt\ui\player\
+```
+
+### Architecture (sidecar model):
+- **FFmpeg sidecar process** — separate process decodes video frames
+- **Shared memory ring buffer** — sidecar writes BGRA frames, Qt reads them
+- **Multiple rendering backends** (pick the best for C++):
+  - `ffmpeg_frame_canvas.py` — QPainter consumer, reads from shared-memory ring buffer (~125Hz poll)
+  - `d3d11_frame_canvas.py` — zero-copy GPU: D3D11 shared texture → OpenGL texture → QOpenGLWidget (holy grail path)
+  - `gl_frame_canvas.py` — OpenGL fallback
+  - `rhi_frame_canvas.py` — Qt RHI path
+- **Process manager** (`ffmpeg_process_manager.py`) — lifecycle, IPC, state machine
+- **Sidecar protocol** (`ffmpeg_sidecar/`) — command dispatch, ack matching, timeout monitoring
+
+### Key files to study:
+- `app_qt/ui/player/ffmpeg_frame_canvas.py` — simplest rendering path (QPainter + shared memory)
+- `app_qt/ui/player/d3d11_frame_canvas.py` — GPU zero-copy path
+- `app_qt/ui/player/ffmpeg_process_manager.py` — sidecar lifecycle
+- `app_qt/ui/player/ffmpeg_player_surface.py` — player surface with HUD overlays
+- `app_qt/ui/player/embedded_player_host.py` — host bridge, progress, controls
+- `app_qt/ui/player/ffmpeg_sidecar/` — IPC protocol, ring buffer, client
+
+### Player UI files:
+- `player_qt/ui/bottom_hud.py` — seek bar, time display, controls
+- `player_qt/ui/volume_hud.py` — volume control
+- `player_qt/ui/track_popover.py` — audio/subtitle track selection
+- `player_qt/ui/playlist_drawer.py` — episode list sidebar
 
 ## Your Files (YOU OWN THESE)
 - `src/ui/player/VideoPlayer.h` / `VideoPlayer.cpp` (create these)
-- `src/ui/player/MpvWidget.h` / `MpvWidget.cpp` (mpv rendering surface)
+- `src/ui/player/FrameCanvas.h` / `FrameCanvas.cpp` (Qt widget that paints decoded frames)
+- `src/ui/player/FfmpegDecoder.h` / `FfmpegDecoder.cpp` (decode thread using libavcodec/libavformat)
 - Any new files under `src/ui/player/`
 - You may create `src/ui/pages/VideoSeriesView.h/.cpp` for episode lists
 
@@ -26,72 +54,70 @@ Build a video player using libmpv that can play video files from the Videos libr
 - `src/ui/readers/*` — Agent 1 and 2's territory
 - `src/ui/pages/ComicsPage.*` / `src/ui/pages/BooksPage.*`
 
-## Approach
+## Recommended C++ Approach
 
-### mpv Integration
-- Use libmpv's client API (`mpv/client.h`) for playback
-- Render via `mpv_render_api` with OpenGL, or use the simpler `mpv_set_option_string(mpv, "wid", ...)` approach to embed into a Qt widget's native window handle
-- The simpler `wid` approach: create a plain QWidget, pass its `winId()` to mpv as the render target
-- Link against `libmpv-2.dll` — copy it to the build output directory
+### Option A: In-process ffmpeg (simpler for C++)
+In C++, you can use libavcodec/libavformat directly in-process (no sidecar needed):
+1. `FfmpegDecoder` runs on a `QThread`
+2. Decodes frames using avcodec → converts to QImage (BGRA) via swscale
+3. Emits `frameReady(QImage)` signal to the main thread
+4. `FrameCanvas` (QWidget) receives frames and paints them in `paintEvent`
+5. Audio via `QAudioOutput` or SDL2 audio
 
-### Player UI
-- Fullscreen overlay (same pattern as ComicReader)
-- Video rendering surface fills the widget
-- Bottom control bar (auto-hide like ComicReader toolbar):
+### Option B: Sidecar (matches Python architecture)
+Port the sidecar model — separate process, shared memory ring buffer. More complex but proven.
+
+### Recommendation: Start with Option A for MVP, it's much simpler in C++.
+
+## Player UI
+- Fullscreen overlay (same pattern as ComicReader — child of MainWindow root)
+- FrameCanvas fills the widget, paints decoded video frames
+- Bottom control bar (auto-hide after 3s):
   - Play/Pause button
   - Seek bar (current position / duration)
   - Volume slider
-  - Fullscreen toggle
-  - Audio/subtitle track selection
+  - Audio/subtitle track buttons
 - Escape to close
-
-### Episode Navigation
-- When opened from a show folder, know all episodes in the folder
-- Next/previous episode buttons
-- Auto-play next episode option
 
 ## Feature Roadmap
 
 ### Phase 1: Basic Playback
-1. MpvWidget — embed mpv in a QWidget via wid
-2. VideoPlayer overlay — fullscreen with basic controls
-3. Play/pause, seek bar, volume
-4. Click a video show tile → show episode list → play episode
+1. FfmpegDecoder — decode video frames on a background thread
+2. FrameCanvas — QWidget painting decoded QImage frames
+3. VideoPlayer overlay — fullscreen with play/pause, seek, volume
+4. Click a video tile → episode list → play
 
-### Phase 2: Track Selection
-1. Audio track switching
-2. Subtitle track switching (internal + external .srt/.ass)
-3. Subtitle delay adjustment
+### Phase 2: Audio & Tracks
+1. Audio playback (sync with video)
+2. Audio track switching
+3. Subtitle rendering (internal + external .srt/.ass)
 
 ### Phase 3: Progress & Navigation
-1. Progress persistence (save position per video via CoreBridge)
-2. Resume from last position on reopen
+1. Progress persistence via CoreBridge
+2. Resume from last position
 3. Episode navigation (prev/next)
 4. Mark as watched
 
 ### Phase 4: Polish
 1. Playback speed control
-2. Screenshot (S key)
-3. On-screen display (OSD) for volume/seek feedback
-4. Keyboard shortcuts (Space=pause, F=fullscreen, M=mute, arrows=seek)
+2. Keyboard shortcuts (Space, F, M, arrows)
+3. Volume OSD
+4. Smooth seeking
 
 ## Build System
 - Qt6 at `C:\tools\qt6sdk\6.10.2\msvc2022_64`
 - MSVC 2022 Build Tools
 - `build_and_run.bat` compiles and launches
-- You'll need to add mpv to the build:
-  - Download mpv-dev from https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-  - Or use the existing `libmpv-2.dll` from the original project
-  - Link against `mpv.lib` (import library) and ship `libmpv-2.dll` alongside the exe
+- You'll need ffmpeg dev libraries:
+  - libavcodec, libavformat, libavutil, libswscale, libswresample
+  - Download from https://github.com/BtbN/FFmpeg-Builds/releases (shared build)
+  - Add include/lib paths to CMakeLists
 
 ## Integration Points
 When ready to wire into the app, tell the user to:
 1. Add your files to `CMakeLists.txt`
-2. Add mpv include/lib paths to CMakeLists
+2. Add ffmpeg include/lib paths
 3. Add `#include "player/VideoPlayer.h"` in `MainWindow.cpp`
 4. Create `m_videoPlayer = new VideoPlayer(root)` in MainWindow constructor
-5. Connect `VideosPage::playVideo(filePath)` signal → `MainWindow::openVideoPlayer(filePath)`
-6. Copy `libmpv-2.dll` to build output dir
-
-## Reference
-Original Python player at `C:\Users\Suprabha\Desktop\TankobanQTGroundWork\player_qt\` and mpv DLL at `resources\mpv\windows\libmpv-2.dll`.
+5. Connect `VideosPage::playVideo(filePath)` → `MainWindow::openVideoPlayer(filePath)`
+6. Ship ffmpeg DLLs alongside the exe
