@@ -8,6 +8,11 @@
 #include <QtCore/private/qzipreader_p.h>
 #endif
 
+#ifdef HAS_LIBARCHIVE
+#include <archive.h>
+#include <archive_entry.h>
+#endif
+
 static bool isImageFile(const QString& name)
 {
     static const QStringList exts = {"jpg", "jpeg", "png", "webp", "gif", "bmp"};
@@ -18,8 +23,70 @@ static bool isImageFile(const QString& name)
     return false;
 }
 
+static bool isCbrPath(const QString& path)
+{
+    return path.endsWith(".cbr", Qt::CaseInsensitive)
+        || path.endsWith(".rar", Qt::CaseInsensitive);
+}
+
+#ifdef HAS_LIBARCHIVE
+static QStringList pageListViaLibarchive(const QString& path)
+{
+    QStringList pages;
+    struct archive* a = archive_read_new();
+    archive_read_support_format_rar(a);
+    archive_read_support_format_rar5(a);
+    if (archive_read_open_filename(a, path.toLocal8Bit().constData(), 65536) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return {};
+    }
+    struct archive_entry* entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        QString name = QString::fromUtf8(archive_entry_pathname(entry));
+        if (isImageFile(name)) pages.append(name);
+        archive_read_data_skip(a);
+    }
+    archive_read_free(a);
+    QCollator collator;
+    collator.setNumericMode(true);
+    std::sort(pages.begin(), pages.end(),
+        [&collator](const QString& a, const QString& b) { return collator.compare(a, b) < 0; });
+    return pages;
+}
+
+static QByteArray pageDataViaLibarchive(const QString& path, const QString& pageName)
+{
+    struct archive* a = archive_read_new();
+    archive_read_support_format_rar(a);
+    archive_read_support_format_rar5(a);
+    if (archive_read_open_filename(a, path.toLocal8Bit().constData(), 65536) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return {};
+    }
+    struct archive_entry* entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        if (QString::fromUtf8(archive_entry_pathname(entry)) == pageName) {
+            QByteArray data;
+            char buf[65536];
+            la_ssize_t n;
+            while ((n = archive_read_data(a, buf, sizeof(buf))) > 0)
+                data.append(buf, static_cast<int>(n));
+            archive_read_free(a);
+            return data;
+        }
+        archive_read_data_skip(a);
+    }
+    archive_read_free(a);
+    return {};
+}
+#endif // HAS_LIBARCHIVE
+
 QStringList ArchiveReader::pageList(const QString& cbzPath)
 {
+#ifdef HAS_LIBARCHIVE
+    if (isCbrPath(cbzPath))
+        return pageListViaLibarchive(cbzPath);
+#endif
 #ifdef HAS_QT_ZIP
     QZipReader zip(cbzPath);
     if (!zip.exists())
@@ -54,6 +121,10 @@ QStringList ArchiveReader::pageList(const QString& cbzPath)
 
 QByteArray ArchiveReader::pageData(const QString& cbzPath, const QString& pageName)
 {
+#ifdef HAS_LIBARCHIVE
+    if (isCbrPath(cbzPath))
+        return pageDataViaLibarchive(cbzPath, pageName);
+#endif
 #ifdef HAS_QT_ZIP
     QZipReader zip(cbzPath);
     if (!zip.exists())
