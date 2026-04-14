@@ -2,8 +2,20 @@ build/
 build2/
 build_old2/
 out/
+out2/
+out_test/
 .vs/
 .vscode/
 *.user
 CMakeSettings.json
 CMakeUserPresets.json
+
+# Large vendored assets — fetched/staged locally, not tracked
+third_party/
+models/
+
+# Agent scratch: build scripts, logs, debug dumps — convention is underscore prefix
+_*.bat
+_*.txt
+_*.log
+*.log
