@@ -1,9 +1,14 @@
 #include "ShowView.h"
 #include "core/ScannerUtils.h"
 #include "core/CoreBridge.h"
+#include "ui/ContextMenuHelper.h"
 
 #include <QPushButton>
+#include <QPixmap>
+#include <QPainter>
+#include <QPolygon>
 #include <QHeaderView>
+#include <QStyleFactory>
 #include <QDir>
 #include <QFileInfo>
 #include <QDateTime>
@@ -14,6 +19,8 @@
 #include <QColor>
 #include <QPalette>
 #include <QIcon>
+#include <QShortcut>
+#include <QMessageBox>
 #include <algorithm>
 
 static const QStringList VIDEO_EXTS = {
@@ -23,6 +30,62 @@ static const QStringList VIDEO_EXTS = {
 
 // Column indices
 enum Col { ColNum = 0, ColEpisode, ColSize, ColDuration, ColProgress, ColModified, ColCount };
+
+// ─── Progress Icon Delegate ─────────────────────────────────────────
+
+void ShowProgressIconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
+                                     const QModelIndex& index) const
+{
+    QStyledItemDelegate::paint(painter, option, index);
+
+    int state = index.data(Qt::UserRole).toInt(); // 0=none, 1=in-progress, 2=finished
+    if (state == 0) {
+        // No progress — draw "-"
+        painter->setPen(QColor(238, 238, 238, 140));
+        painter->drawText(option.rect, Qt::AlignCenter, "-");
+        return;
+    }
+
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    QRect cell = option.rect;
+
+    if (state == 2) {
+        // Finished: green circle #4CAF50 + white checkmark
+        int iconSize = 12;
+        QRect iconRect(cell.center().x() - iconSize / 2, cell.center().y() - iconSize / 2,
+                       iconSize, iconSize);
+        painter->setBrush(QColor("#4CAF50"));
+        painter->setPen(Qt::NoPen);
+        painter->drawEllipse(iconRect.adjusted(1, 1, -1, -1)); // 10x10
+        QFont checkFont;
+        checkFont.setPixelSize(9);
+        checkFont.setBold(true);
+        painter->setFont(checkFont);
+        painter->setPen(Qt::white);
+        painter->drawText(iconRect, Qt::AlignCenter, QString::fromUtf8("\u2713"));
+    } else if (state == 1) {
+        // In-progress: slate circle + percentage text
+        int iconSize = 12;
+        QRect iconRect(cell.left() + (cell.width() / 2) - iconSize - 2,
+                       cell.center().y() - iconSize / 2,
+                       iconSize, iconSize);
+        painter->setBrush(QColor("#94a3b8"));
+        painter->setPen(Qt::NoPen);
+        painter->drawEllipse(iconRect.adjusted(1, 1, -1, -1)); // 10x10
+
+        // Percentage text to the right of the icon
+        QFont pctFont;
+        pctFont.setPixelSize(11);
+        painter->setFont(pctFont);
+        painter->setPen(QColor(238, 238, 238, 200));
+        QString pctText = index.data(Qt::UserRole + 1).toString();
+        QRect textRect(iconRect.right() + 4, cell.top(), cell.right() - iconRect.right() - 4, cell.height());
+        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, pctText);
+    }
+
+    painter->restore();
+}
 
 // ─── Constructor ─────────────────────────────────────────────────────
 
@@ -51,8 +114,32 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
         "  border-radius: 8px; padding: 4px 12px; font-size: 12px; }"
         "QPushButton:hover { background: rgba(255,255,255,0.08);"
         "  border-color: rgba(255,255,255,0.14); color: rgba(255,255,255,0.9); }");
-    connect(backBtn, &QPushButton::clicked, this, &ShowView::backRequested);
+    connect(backBtn, &QPushButton::clicked, this, [this]() { navigateBack(); });
     topLayout->addWidget(backBtn);
+
+    // Forward button (28x28, disabled when no forward history)
+    m_forwardBtn = new QPushButton(QString::fromUtf8("\u2192"), topBar);
+    m_forwardBtn->setFixedSize(28, 28);
+    m_forwardBtn->setCursor(Qt::PointingHandCursor);
+    m_forwardBtn->setEnabled(false);
+    m_forwardBtn->setStyleSheet(
+        "QPushButton { color: rgba(255,255,255,0.72);"
+        "  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);"
+        "  border-radius: 8px; font-size: 14px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.08);"
+        "  border-color: rgba(255,255,255,0.14); color: rgba(255,255,255,0.9); }"
+        "QPushButton:disabled { color: rgba(255,255,255,0.2); background: transparent;"
+        "  border-color: rgba(255,255,255,0.04); }");
+    connect(m_forwardBtn, &QPushButton::clicked, this, [this]() { navigateForward(); });
+    topLayout->addWidget(m_forwardBtn);
+
+    // Keyboard shortcuts: Alt+Left (back), Alt+Right (forward), Backspace (back)
+    auto* backShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Left), this);
+    connect(backShortcut, &QShortcut::activated, this, [this]() { navigateBack(); });
+    auto* fwdShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Right), this);
+    connect(fwdShortcut, &QShortcut::activated, this, [this]() { navigateForward(); });
+    auto* bsShortcut = new QShortcut(QKeySequence(Qt::Key_Backspace), this);
+    connect(bsShortcut, &QShortcut::activated, this, [this]() { navigateBack(); });
 
     // Breadcrumb
     m_breadcrumbWidget = new QWidget(topBar);
@@ -111,9 +198,108 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
 
     layout->addWidget(topBar);
 
-    // ── Table ──
-    m_table = new QTableWidget(this);
+    // ── Continue watching bar (40px, groundwork spec) ──
+    m_continueBar = new QWidget(this);
+    m_continueBar->setFixedHeight(40);
+    auto* contBarLayout = new QHBoxLayout(m_continueBar);
+    contBarLayout->setContentsMargins(16, 4, 16, 4);
+    contBarLayout->setSpacing(10);
+
+    m_continueTitle = new QLabel("Continue watching", m_continueBar);
+    m_continueTitle->setObjectName("ContinueBarTitle");
+    m_continueTitle->setStyleSheet("#ContinueBarTitle { color: rgba(255,255,255,0.72); font-weight: bold; font-size: 13px; }");
+    contBarLayout->addWidget(m_continueTitle);
+
+    m_continueItemLabel = new QLabel(m_continueBar);
+    m_continueItemLabel->setObjectName("ContinueBarItem");
+    m_continueItemLabel->setMinimumWidth(60);
+    m_continueItemLabel->setStyleSheet("#ContinueBarItem { color: rgba(255,255,255,0.58); font-size: 12px; }");
+    contBarLayout->addWidget(m_continueItemLabel, 1);
+
+    m_continueProgress = new QProgressBar(m_continueBar);
+    m_continueProgress->setFixedSize(100, 6);
+    m_continueProgress->setTextVisible(false);
+    m_continueProgress->setRange(0, 100);
+    m_continueProgress->setStyleSheet(
+        "QProgressBar { background: rgba(255,255,255,0.08); border: none; border-radius: 3px; }"
+        "QProgressBar::chunk { background: #94a3b8; border-radius: 3px; }");
+    contBarLayout->addWidget(m_continueProgress);
+
+    m_continuePctLabel = new QLabel(m_continueBar);
+    m_continuePctLabel->setObjectName("Subtle");
+    m_continuePctLabel->setFixedWidth(36);
+    m_continuePctLabel->setAlignment(Qt::AlignCenter);
+    m_continuePctLabel->setStyleSheet("#Subtle { color: rgba(255,255,255,0.45); font-size: 11px; }");
+    contBarLayout->addWidget(m_continuePctLabel);
+
+    m_continueBtn = new QPushButton("Watch", m_continueBar);
+    m_continueBtn->setObjectName("ContinueBarBtn");
+    m_continueBtn->setFixedSize(60, 26);
+    m_continueBtn->setCursor(Qt::PointingHandCursor);
+    m_continueBtn->setStyleSheet(
+        "#ContinueBarBtn { color: #eee; background: rgba(255,255,255,0.07);"
+        "  border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
+        "  font-size: 12px; }"
+        "#ContinueBarBtn:hover { background: rgba(255,255,255,0.12); }");
+    connect(m_continueBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_continueFilePath.isEmpty())
+            emit episodeSelected(m_continueFilePath);
+    });
+    contBarLayout->addWidget(m_continueBtn);
+
+    // Right-click context menu on continue bar
+    m_continueBar->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_continueBar, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        if (m_continueFilePath.isEmpty()) return;
+        auto* menu = ContextMenuHelper::createMenu(this);
+        auto* watchAct = menu->addAction("Watch");
+        menu->addSeparator();
+        auto* resetAct = menu->addAction("Reset progress");
+        menu->addSeparator();
+        auto* revealAct = menu->addAction("Reveal in File Explorer");
+        auto* copyAct = menu->addAction("Copy path");
+
+        auto* chosen = menu->exec(m_continueBar->mapToGlobal(pos));
+        if (chosen == watchAct) {
+            emit episodeSelected(m_continueFilePath);
+        } else if (chosen == resetAct) {
+            if (!m_continueVideoId.isEmpty()) {
+                QJsonObject prog = m_bridge->progress("videos", m_continueVideoId);
+                prog.remove("positionSec");
+                prog.remove("finished");
+                m_bridge->saveProgress("videos", m_continueVideoId, prog);
+                buildContinueBar();
+            }
+        } else if (chosen == revealAct) {
+            ContextMenuHelper::revealInExplorer(m_continueFilePath);
+        } else if (chosen == copyAct) {
+            ContextMenuHelper::copyToClipboard(m_continueFilePath);
+        }
+        menu->deleteLater();
+    });
+
+    m_continueBar->hide();
+    layout->addWidget(m_continueBar);
+
+    // ── Content row: cover panel + table ──
+    auto* contentRow = new QWidget(this);
+    auto* contentLayout = new QHBoxLayout(contentRow);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
+
+    m_coverLabel = new QLabel(contentRow);
+    m_coverLabel->setFixedWidth(240);
+    m_coverLabel->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+    m_coverLabel->setStyleSheet("background: transparent; padding: 16px;");
+    m_coverLabel->setMinimumHeight(200);
+    m_coverLabel->hide();
+    contentLayout->addWidget(m_coverLabel);
+
+    // Table
+    m_table = new QTableWidget(contentRow);
     m_table->setObjectName("FolderDetailTable");
+    // Force Fusion style to override Windows 11 system accent selection colors
+    m_table->setStyle(QStyleFactory::create("Fusion"));
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -141,6 +327,9 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
     m_table->setColumnWidth(ColProgress, 92);
     m_table->setColumnWidth(ColModified, 132);
     hdr->setMinimumSectionSize(42);
+
+    // Progress icon delegate on PROGRESS column
+    m_table->setItemDelegateForColumn(ColProgress, new ShowProgressIconDelegate(m_table));
 
     // Selection palette
     QPalette pal = m_table->palette();
@@ -195,19 +384,180 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
         }
     });
 
-    layout->addWidget(m_table, 1);
+    // Context menu on table rows
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        int row = m_table->rowAt(pos.y());
+        if (row < 0) return;
+
+        auto* titleItem = m_table->item(row, ColEpisode);
+        if (!titleItem) return;
+
+        bool isFolder = titleItem->data(FolderRowRole).toBool();
+        QString filePath = titleItem->data(FilePathRole).toString();
+        QString relPath = titleItem->data(FolderRelRole).toString();
+
+        auto* menu = ContextMenuHelper::createMenu(this);
+
+        if (isFolder) {
+            // Folder row (not ".." row)
+            if (relPath.isEmpty() && !m_currentRel.isEmpty()) {
+                // ".." row — no menu
+                menu->deleteLater();
+                return;
+            }
+            QString folderAbsPath = m_showRootPath + "/" + relPath;
+            auto* openAct = menu->addAction("Open folder");
+            menu->addSeparator();
+            auto* revealAct = menu->addAction("Reveal in File Explorer");
+            auto* copyAct = menu->addAction("Copy path");
+
+            auto* chosen = menu->exec(m_table->viewport()->mapToGlobal(pos));
+            if (chosen == openAct) {
+                navigateTo(relPath);
+            } else if (chosen == revealAct) {
+                ContextMenuHelper::revealInExplorer(folderAbsPath);
+            } else if (chosen == copyAct) {
+                ContextMenuHelper::copyToClipboard(folderAbsPath);
+            }
+        } else {
+            // File row — full groundwork spec (Section 4F)
+            QFileInfo fi(filePath);
+            QString vid = videoId(fi.absoluteFilePath(), fi.size(), fi.lastModified().toMSecsSinceEpoch());
+            QJsonObject prog = m_bridge ? m_bridge->progress("videos", vid) : QJsonObject();
+            bool finished = prog.value("finished").toBool(false);
+            bool hasProgress = !prog.isEmpty() && (prog.contains("positionSec") || prog.contains("finished"));
+
+            auto* playAct = menu->addAction("Play");
+            auto* playBeginAct = menu->addAction("Play from beginning");
+            menu->addSeparator();
+            auto* revealAct = menu->addAction("Reveal in File Explorer");
+            revealAct->setEnabled(!filePath.isEmpty());
+            auto* copyAct = menu->addAction("Copy file path");
+            copyAct->setEnabled(!filePath.isEmpty());
+            menu->addSeparator();
+            auto* markAct = menu->addAction(finished ? "Mark as in progress" : "Mark as finished");
+            auto* resetAct = menu->addAction("Reset progress");
+            resetAct->setEnabled(hasProgress);
+            menu->addSeparator();
+            auto* removeAct = menu->addAction("Remove from library...");
+
+            auto* chosen = menu->exec(m_table->viewport()->mapToGlobal(pos));
+            if (chosen == playAct) {
+                emit episodeSelected(filePath);
+            } else if (chosen == playBeginAct) {
+                // Reset position then play
+                prog.remove("positionSec");
+                if (m_bridge) m_bridge->saveProgress("videos", vid, prog);
+                emit episodeSelected(filePath);
+            } else if (chosen == revealAct) {
+                ContextMenuHelper::revealInExplorer(filePath);
+            } else if (chosen == copyAct) {
+                ContextMenuHelper::copyToClipboard(filePath);
+            } else if (chosen == markAct) {
+                prog["finished"] = !finished;
+                if (m_bridge) m_bridge->saveProgress("videos", vid, prog);
+                // Refresh table to update progress icons
+                QString absPath = m_showRootPath;
+                if (!m_currentRel.isEmpty()) absPath += "/" + m_currentRel;
+                populateTable(absPath);
+                buildContinueBar();
+            } else if (chosen == resetAct) {
+                prog.remove("positionSec");
+                prog.remove("finished");
+                if (m_bridge) m_bridge->saveProgress("videos", vid, prog);
+                QString absPath = m_showRootPath;
+                if (!m_currentRel.isEmpty()) absPath += "/" + m_currentRel;
+                populateTable(absPath);
+                buildContinueBar();
+            } else if (chosen == removeAct) {
+                if (QMessageBox::question(this, "Remove from library",
+                        "Remove this episode from the library?\n" + filePath +
+                        "\nFiles will not be deleted from disk.",
+                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+                    // Reset progress for this file
+                    if (m_bridge && hasProgress) {
+                        prog.remove("positionSec");
+                        prog.remove("finished");
+                        m_bridge->saveProgress("videos", vid, prog);
+                    }
+                    QString absPath = m_showRootPath;
+                    if (!m_currentRel.isEmpty()) absPath += "/" + m_currentRel;
+                    populateTable(absPath);
+                    buildContinueBar();
+                }
+            }
+        }
+
+        menu->deleteLater();
+    });
+
+    contentLayout->addWidget(m_table, 1);
+    layout->addWidget(contentRow, 1);
 }
 
 // ─── Public API ──────────────────────────────────────────────────────
 
-void ShowView::showFolder(const QString& folderPath, const QString& showName)
+void ShowView::setFileDurations(const QMap<QString, double>& durations)
+{
+    m_fileDurations = durations;
+}
+
+void ShowView::showFolder(const QString& folderPath, const QString& showName,
+                          const QString& coverThumbPath, bool isLoose)
 {
     m_showRootPath = folderPath;
     m_showRootName = showName;
+    m_isLoose = isLoose;
     m_currentRel.clear();
     m_searchBar->clear();
 
+    // Reset navigation history
+    m_navHistory.clear();
+    m_navHistory.append(QString()); // root entry
+    m_navIndex = 0;
+    m_forwardBtn->setEnabled(false);
+
+    // Set cover thumbnail or placeholder
+    bool hasCover = false;
+    if (!coverThumbPath.isEmpty()) {
+        QPixmap pix(coverThumbPath);
+        if (!pix.isNull()) {
+            m_coverLabel->setPixmap(pix.scaled(208, 320,
+                Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            hasCover = true;
+        }
+    }
+    if (!hasCover) {
+        // Placeholder: dark box with play triangle + show name
+        QPixmap ph(208, 320);
+        ph.fill(QColor(30, 30, 30));
+        QPainter p(&ph);
+        // Play triangle icon (centered)
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(80, 80, 80));
+        QPolygon tri;
+        tri << QPoint(84, 120) << QPoint(84, 200) << QPoint(134, 160);
+        p.drawPolygon(tri);
+        // Border circle around play icon
+        p.setPen(QPen(QColor(80, 80, 80), 2));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPoint(104, 160), 50, 50);
+        // Show name below
+        p.setPen(QColor(160, 160, 160));
+        QFont font;
+        font.setPixelSize(14);
+        font.setBold(true);
+        p.setFont(font);
+        p.drawText(QRect(8, 240, 192, 60), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, showName);
+        p.end();
+        m_coverLabel->setPixmap(ph);
+    }
+    m_coverLabel->show();
+
     buildBreadcrumb();
+    buildContinueBar();
     populateTable(folderPath);
 }
 
@@ -215,13 +565,57 @@ void ShowView::showFolder(const QString& folderPath, const QString& showName)
 
 void ShowView::navigateTo(const QString& relPath)
 {
+    // Push to history: truncate any forward entries beyond current index
+    if (m_navIndex >= 0 && m_navIndex < m_navHistory.size() - 1)
+        m_navHistory = m_navHistory.mid(0, m_navIndex + 1);
+    m_navHistory.append(relPath);
+    m_navIndex = m_navHistory.size() - 1;
+
     m_currentRel = relPath;
     buildBreadcrumb();
+    buildContinueBar();
+    m_forwardBtn->setEnabled(m_navIndex < m_navHistory.size() - 1);
 
     QString absPath = m_showRootPath;
     if (!relPath.isEmpty())
         absPath += "/" + relPath;
     populateTable(absPath);
+}
+
+void ShowView::navigateBack()
+{
+    if (m_navIndex > 0) {
+        // Go back in history
+        m_navIndex--;
+        m_currentRel = m_navHistory.at(m_navIndex);
+        buildBreadcrumb();
+        buildContinueBar();
+        m_forwardBtn->setEnabled(m_navIndex < m_navHistory.size() - 1);
+
+        QString absPath = m_showRootPath;
+        if (!m_currentRel.isEmpty())
+            absPath += "/" + m_currentRel;
+        populateTable(absPath);
+    } else {
+        // At root — go back to grid
+        emit backRequested();
+    }
+}
+
+void ShowView::navigateForward()
+{
+    if (m_navIndex < m_navHistory.size() - 1) {
+        m_navIndex++;
+        m_currentRel = m_navHistory.at(m_navIndex);
+        buildBreadcrumb();
+        buildContinueBar();
+        m_forwardBtn->setEnabled(m_navIndex < m_navHistory.size() - 1);
+
+        QString absPath = m_showRootPath;
+        if (!m_currentRel.isEmpty())
+            absPath += "/" + m_currentRel;
+        populateTable(absPath);
+    }
 }
 
 // ─── Breadcrumb ──────────────────────────────────────────────────────
@@ -325,8 +719,10 @@ void ShowView::populateTable(const QString& folderPath)
         ++row;
     }
 
-    // ── Folder rows ──
-    QStringList subdirs = ScannerUtils::listImmediateSubdirs(folderPath);
+    // ── Folder rows (skipped for loose files — they have no subfolders) ──
+    QStringList subdirs;
+    if (!m_isLoose)
+        subdirs = ScannerUtils::listImmediateSubdirs(folderPath);
     std::sort(subdirs.begin(), subdirs.end(), [&collator](const QString& a, const QString& b) {
         return collator.compare(QDir(a).dirName(), QDir(b).dirName()) < 0;
     });
@@ -425,25 +821,27 @@ void ShowView::populateTable(const QString& folderPath)
         sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_table->setItem(row, ColSize, sizeItem);
 
-        // Duration (from progress data — only available for previously played videos)
-        double durSec = prog.value("durationSec").toDouble(0);
+        // Duration: prefer scan-time (ffprobe), fall back to saved progress
+        double durSec = m_fileDurations.value(fi.absoluteFilePath(), 0.0);
+        if (durSec <= 0.0)
+            durSec = prog.value("durationSec").toDouble(0);
         auto* durItem = new QTableWidgetItem(formatDuration(durSec));
         durItem->setTextAlignment(Qt::AlignCenter);
         m_table->setItem(row, ColDuration, durItem);
 
-        // Progress
+        // Progress — state for ProgressIconDelegate: 0=none, 1=in-progress, 2=finished
         bool finished = prog.value("finished").toBool(false);
         double posSec = prog.value("positionSec").toDouble(0);
         auto* progItem = new QTableWidgetItem();
         progItem->setTextAlignment(Qt::AlignCenter);
         if (finished) {
-            progItem->setText("Done");
-            progItem->setForeground(QColor("#4CAF50"));
+            progItem->setData(Qt::UserRole, 2);
         } else if (posSec > 0 && durSec > 0) {
             int pct = qBound(0, static_cast<int>(posSec / durSec * 100), 100);
-            progItem->setText(QString::number(pct) + "%");
+            progItem->setData(Qt::UserRole, 1);
+            progItem->setData(Qt::UserRole + 1, QString::number(pct) + "%");
         } else {
-            progItem->setText("-");
+            progItem->setData(Qt::UserRole, 0);
         }
         m_table->setItem(row, ColProgress, progItem);
 
@@ -463,6 +861,60 @@ QString ShowView::videoId(const QString& path, qint64 size, qint64 mtimeMs)
 {
     QString raw = path + "::" + QString::number(size) + "::" + QString::number(mtimeMs);
     return QString(QCryptographicHash::hash(raw.toUtf8(), QCryptographicHash::Sha1).toHex());
+}
+
+void ShowView::buildContinueBar()
+{
+    m_continueBar->hide();
+    m_continueFilePath.clear();
+    m_continueVideoId.clear();
+
+    if (!m_bridge) return;
+
+    QJsonObject allProg = m_bridge->allProgress("videos");
+    if (allProg.isEmpty()) return;
+
+    // Scope to current subfolder (not entire show root) — groundwork behavior:
+    // continue watching shows the last-viewed file FROM THIS FOLDER and its descendants
+    QString scopePath = m_showRootPath;
+    if (!m_currentRel.isEmpty())
+        scopePath = m_showRootPath + "/" + m_currentRel;
+    QStringList allFiles = ScannerUtils::walkFiles(scopePath, VIDEO_EXTS);
+    qint64 bestAt = -1;
+    QString bestPath, bestTitle, bestId;
+    double bestPosSec = 0, bestDurSec = 0;
+
+    for (const auto& f : allFiles) {
+        QFileInfo fi(f);
+        QString vid = videoId(fi.absoluteFilePath(), fi.size(), fi.lastModified().toMSecsSinceEpoch());
+        QJsonObject prog = allProg.value(vid).toObject();
+        if (prog.isEmpty()) continue;
+        if (prog.value("finished").toBool()) continue;
+        double posSec = prog.value("positionSec").toDouble(0);
+        if (posSec <= 0) continue;
+
+        qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();
+        if (updatedAt > bestAt) {
+            bestAt = updatedAt;
+            bestPath = fi.absoluteFilePath();
+            bestTitle = ScannerUtils::cleanMediaFolderTitle(fi.completeBaseName());
+            bestId = vid;
+            bestPosSec = posSec;
+            bestDurSec = prog.value("durationSec").toDouble(0);
+        }
+    }
+
+    if (bestPath.isEmpty()) return;
+
+    m_continueFilePath = bestPath;
+    m_continueVideoId = bestId;
+    m_continueItemLabel->setText(bestTitle);
+
+    int pct = (bestDurSec > 0) ? qBound(0, static_cast<int>(bestPosSec / bestDurSec * 100), 100) : 0;
+    m_continueProgress->setValue(pct);
+    m_continuePctLabel->setText(QString::number(pct) + "%");
+
+    m_continueBar->show();
 }
 
 QString ShowView::formatSize(qint64 bytes)

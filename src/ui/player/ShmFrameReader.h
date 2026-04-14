@@ -29,6 +29,11 @@ public:
     // Read the latest frame (newest valid frame in the ring).
     Frame readLatest();
 
+    // Read the best frame for the current audio clock position.
+    // Returns the newest frame whose PTS is at or before clockUs + toleranceUs.
+    // Returns an invalid frame if no suitable frame is available.
+    Frame readBestForClock(int64_t clockUs, int64_t toleranceUs = 8000);
+
     // Read the audio clock position from the SHM header.
     int64_t readClockUs() const;
 

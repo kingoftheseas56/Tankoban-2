@@ -133,6 +133,64 @@ ShmFrameReader::Frame ShmFrameReader::readLatest()
     return f;
 }
 
+ShmFrameReader::Frame ShmFrameReader::readBestForClock(int64_t clockUs, int64_t toleranceUs)
+{
+    Frame f;
+    if (!m_data) return f;
+
+    // Find the newest valid frame whose PTS is at or before clock + tolerance.
+    // This prevents showing frames "from the future" relative to audio.
+    uint64_t bestId = 0;
+    int bestSlot = -1;
+
+    for (int i = 0; i < m_slotCount; ++i) {
+        int metaOff = HEADER_SIZE + i * SLOT_META_SIZE;
+
+        uint32_t valid;
+        std::memcpy(&valid, m_data + metaOff + SM_VALID, 4);
+        if (valid != 1) continue;
+
+        uint64_t fid;
+        std::memcpy(&fid, m_data + metaOff + SM_FRAME_ID, 8);
+        if (fid <= m_lastFrameId) continue;  // already displayed
+
+        int64_t ptsUs;
+        std::memcpy(&ptsUs, m_data + metaOff + SM_PTS_US, 8);
+        if (ptsUs > clockUs + toleranceUs) continue;  // frame is from the future
+
+        if (fid > bestId) {
+            bestId = fid;
+            bestSlot = i;
+        }
+    }
+
+    if (bestSlot < 0)
+        return f;  // no suitable frame
+
+    int metaOff = HEADER_SIZE + bestSlot * SLOT_META_SIZE;
+    size_t dataOff = static_cast<size_t>(HEADER_SIZE)
+                   + static_cast<size_t>(m_slotCount) * SLOT_META_SIZE
+                   + static_cast<size_t>(bestSlot) * m_slotBytes;
+
+    std::memcpy(&f.frameId, m_data + metaOff + SM_FRAME_ID, 8);
+    std::memcpy(&f.ptsUs,   m_data + metaOff + SM_PTS_US, 8);
+    std::memcpy(&f.width,   m_data + metaOff + SM_WIDTH, 4);
+    std::memcpy(&f.height,  m_data + metaOff + SM_HEIGHT, 4);
+    std::memcpy(&f.stride,  m_data + metaOff + SM_STRIDE, 4);
+
+    // Verify valid flag again (torn write detection)
+    uint32_t validAfter;
+    std::memcpy(&validAfter, m_data + metaOff + SM_VALID, 4);
+    if (validAfter != 1)
+        return f;
+
+    f.pixels = m_data + dataOff;
+    f.valid  = true;
+    m_lastFrameId = f.frameId;
+
+    return f;
+}
+
 int64_t ShmFrameReader::readClockUs() const
 {
     if (!m_data) return 0;
