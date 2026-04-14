@@ -83,20 +83,15 @@ QMap<QString, QStringList> groupByFirstLevelSubdir(
                 result[subdir] = files;
         }
 
-        // 2. Loose files directly in root — only if no subdirs had files
-        //    (matching groundwork: loose files are a fallback, not a duplicate)
-        if (!result.contains(root)) {
-            bool hasSubdirResults = false;
-            for (const auto& subdir : subdirs) {
-                if (result.contains(subdir)) { hasSubdirResults = true; break; }
-            }
-            if (!hasSubdirResults) {
-                // No subdirs had files — treat root itself as a group
-                QDir rootDir(root);
-                const auto looseFiles = rootDir.entryInfoList(nameFilters, QDir::Files);
-                for (const auto& f : looseFiles)
-                    result[root].append(f.absoluteFilePath());
-            }
+        // 2. Loose files directly in root
+        //    Matching groundwork: loose files are grouped under a special key
+        //    "root_path::LOOSE" so scanners can identify and name them distinctly
+        QDir rootDir(root);
+        const auto looseFiles = rootDir.entryInfoList(nameFilters, QDir::Files);
+        if (!looseFiles.isEmpty()) {
+            QString looseKey = root + "::LOOSE";
+            for (const auto& f : looseFiles)
+                result[looseKey].append(f.absoluteFilePath());
         }
     }
 
@@ -208,6 +203,19 @@ QString cleanMediaFolderTitle(const QString& rawName)
 
     // Remove quality/release markers
     cleaned.replace(SHOW_TITLE_NOISE_RE, QStringLiteral(" "));
+
+    // Strip orphan "-N" / "+N" bare-number tokens left behind by season/noise
+    // removal (e.g., "The Sopranos -6 Season 1 1080p" → season/1080p strip leaves
+    // a stray "-6" that the re-append logic would otherwise preserve).
+    static const QRegularExpression strayNumToken(
+        QStringLiteral("(?:^|\\s)[\\-+]\\s*\\d{1,2}(?=\\s|$)"));
+    cleaned.replace(strayNumToken, QStringLiteral(" "));
+
+    // Strip orphan "+" separator tokens (not "-", which commonly divides title parts
+    // like "Star Wars - A New Hope").
+    static const QRegularExpression strayPlus(
+        QStringLiteral("(?:^|\\s)\\+(?=\\s|$)"));
+    cleaned.replace(strayPlus, QStringLiteral(" "));
 
     // Drop trailing release-group suffixes
     static const QRegularExpression trailingGroup(

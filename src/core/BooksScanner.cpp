@@ -21,8 +21,8 @@ const QStringList BooksScanner::AUDIO_EXTS = {
     "*.mp3", "*.m4a", "*.m4b", "*.aac", "*.flac", "*.ogg", "*.opus", "*.wav"
 };
 
-static constexpr int THUMB_W = 180;
-static constexpr int THUMB_H = 252;
+static constexpr int THUMB_W = 240;
+static constexpr int THUMB_H = 369;  // int(240 / 0.65) — matches groundwork aspect ratio
 
 static QByteArray extractEpubCover(const QString& epubPath)
 {
@@ -67,6 +67,33 @@ static QByteArray extractEpubCover(const QString& epubPath)
         }
     }
 
+    // Fall back to basename starting with "folder."
+    for (const auto& entry : entries) {
+        if (entry.isDir) continue;
+        QString lower = entry.filePath.toLower();
+        QString base = lower.mid(lower.lastIndexOf('/') + 1);
+        if (base.startsWith("folder.") &&
+            (lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
+             lower.endsWith(".png") || lower.endsWith(".webp"))) {
+            QByteArray data = zip.fileData(entry.filePath);
+            if (data.size() > 100)
+                return data;
+        }
+    }
+
+    // Fall back to any image with "front" in the path
+    for (const auto& entry : entries) {
+        if (entry.isDir) continue;
+        QString lower = entry.filePath.toLower();
+        if (lower.contains("front") &&
+            (lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
+             lower.endsWith(".png") || lower.endsWith(".webp"))) {
+            QByteArray data = zip.fileData(entry.filePath);
+            if (data.size() > 100)
+                return data;
+        }
+    }
+
     // Fall back to first image in the archive
     for (const auto& entry : entries) {
         if (entry.isDir) continue;
@@ -103,12 +130,17 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
     QList<BookSeriesInfo> allBooks;
 
     for (auto it = seriesMap.begin(); it != seriesMap.end(); ++it) {
-        const QString& seriesPath = it.key();
+        QString seriesPath = it.key();
         QStringList& files = it.value();
 
         std::sort(files.begin(), files.end(), [&collator](const QString& a, const QString& b) {
             return collator.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
         });
+
+        // Strip loose files marker
+        bool isLoose = seriesPath.endsWith("::LOOSE");
+        if (isLoose)
+            seriesPath = seriesPath.chopped(7);
 
         BookSeriesInfo info;
         info.seriesName = ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
