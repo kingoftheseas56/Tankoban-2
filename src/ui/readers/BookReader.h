@@ -13,16 +13,18 @@ class BookBridge;
 #include <QTextBrowser>
 #endif
 
+class CoreBridge;
+
 class BookReader : public QWidget {
     Q_OBJECT
 public:
-    explicit BookReader(QWidget* parent = nullptr);
+    explicit BookReader(CoreBridge* core, QWidget* parent = nullptr);
 
     void openBook(const QString& filePath);
-    void warmUp();  // Pre-initialize WebEngine without opening a book
 
 signals:
     void closeRequested();
+    void fullscreenRequested(bool enter);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -35,14 +37,13 @@ protected:
 private:
     void buildUI();
 
-#ifdef HAS_WEBENGINE
-    void ensureWebEngine();
-#else
+#ifndef HAS_WEBENGINE
     void showToolbar();
     void hideToolbar();
     void loadFallback(const QString& filePath);
 #endif
 
+    CoreBridge* m_core = nullptr;
     QString m_currentFile;
     QString m_readerHtmlPath;
 
@@ -50,7 +51,6 @@ private:
     QWebEngineView* m_webView = nullptr;
     BookBridge*     m_bridge  = nullptr;
     QWebChannel*    m_channel = nullptr;
-    bool            m_webEngineReady = false;
     bool            m_readerReady = false;
     QString         m_pendingBook;
 #else

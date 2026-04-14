@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 #include <QXmlStreamReader>
 #include <QRegularExpression>
+#include <QUrl>
 #include <QDebug>
 
 #ifdef HAS_QT_ZIP
@@ -326,6 +327,35 @@ QString EpubParser::chapterHtml(int index) const
     // Apply replacements
     for (auto it = replacements.constBegin(); it != replacements.constEnd(); ++it) {
         html.replace(it.key(), it.value());
+    }
+
+    // Strip XML namespaces — QTextBrowser doesn't understand them
+    static QRegularExpression nsRe(R"(\s+xmlns(?::\w+)?="[^"]*")");
+    html.replace(nsRe, QString());
+
+    // Strip XML declarations and DOCTYPE
+    static QRegularExpression xmlDeclRe(R"(<\?xml[^?]*\?>)");
+    html.replace(xmlDeclRe, QString());
+    static QRegularExpression doctypeRe(R"(<!DOCTYPE[^>]*>)", QRegularExpression::CaseInsensitiveOption);
+    html.replace(doctypeRe, QString());
+
+    // Strip <style> blocks — EPUB CSS fights our dark theme
+    static QRegularExpression styleRe(R"(<style[^>]*>[\s\S]*?</style>)", QRegularExpression::CaseInsensitiveOption);
+    html.replace(styleRe, QString());
+
+    // Strip <link rel="stylesheet"> tags
+    static QRegularExpression linkCssRe(R"(<link[^>]*rel=["']stylesheet["'][^>]*/?>)", QRegularExpression::CaseInsensitiveOption);
+    html.replace(linkCssRe, QString());
+
+    // Strip inline style attributes — they override our theme
+    static QRegularExpression inlineStyleRe(R"(\s+style="[^"]*")", QRegularExpression::CaseInsensitiveOption);
+    html.replace(inlineStyleRe, QString());
+
+    // Extract <body> content only — avoid nested <html> when we wrap it later
+    static QRegularExpression bodyRe(R"(<body[^>]*>([\s\S]*)</body>)", QRegularExpression::CaseInsensitiveOption);
+    auto bodyMatch = bodyRe.match(html);
+    if (bodyMatch.hasMatch()) {
+        html = bodyMatch.captured(1);
     }
 
     return html;

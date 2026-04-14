@@ -19,20 +19,18 @@
 #include <QTextStream>
 #endif
 
-BookReader::BookReader(QWidget* parent)
+BookReader::BookReader(CoreBridge* core, QWidget* parent)
     : QWidget(parent)
+    , m_core(core)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet("background: #000000;");
 
-    // Locate the reader HTML — try next to exe first, then source tree
+    // Locate the reader HTML relative to the executable
     QString appDir = QCoreApplication::applicationDirPath();
     m_readerHtmlPath = appDir + "/resources/book_reader/ebook_reader.html";
-    if (!QFileInfo::exists(m_readerHtmlPath)) {
-        m_readerHtmlPath = QDir(appDir).absoluteFilePath("../resources/book_reader/ebook_reader.html");
-    }
 
     buildUI();
 }
@@ -40,7 +38,117 @@ BookReader::BookReader(QWidget* parent)
 void BookReader::buildUI()
 {
 #ifdef HAS_WEBENGINE
-    // WebEngine is lazy-initialized in ensureWebEngine()
+    // ── WebEngine path ──
+    m_bridge = new BookBridge(m_core, this);
+    connect(m_bridge, &BookBridge::closeRequested, this, &BookReader::closeRequested);
+    connect(m_bridge, &BookBridge::fullscreenRequested, this, &BookReader::fullscreenRequested);
+
+    m_channel = new QWebChannel(this);
+    m_channel->registerObject("bridge", m_bridge);
+
+    m_webView = new QWebEngineView(this);
+    m_webView->page()->setWebChannel(m_channel);
+
+    // Allow local file access for loading book files via file:// URLs
+    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
+    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+
+    // Inject the bridge shim BEFORE any page JS runs.
+    // This creates window.electronAPI and window.__ebookNav from the QWebChannel bridge.
+    QWebEngineScript shimScript;
+    shimScript.setName("BookBridgeShim");
+    shimScript.setInjectionPoint(QWebEngineScript::DocumentCreation);
+    shimScript.setWorldId(QWebEngineScript::MainWorld);
+    shimScript.setSourceCode(QStringLiteral(
+        "(function() {"
+        "  var qt_wc = typeof qt !== 'undefined' && qt.webChannelTransport;"
+        "  if (!qt_wc) { console.warn('[shim] No qt.webChannelTransport'); return; }"
+        "  new QWebChannel(qt_wc, function(channel) {"
+        "    var b = channel.objects.bridge;"
+        "    window.electronAPI = {"
+        "      files: { read: function(path) { return b.filesRead(path); } },"
+        "      booksProgress: {"
+        "        getAll: function() { return Promise.resolve({}); },"
+        "        get: function(id) { return b.booksProgressGet(id); },"
+        "        save: function(id, d) { return b.booksProgressSave(id, d); },"
+        "        clear: function() { return Promise.resolve(); },"
+        "        clearAll: function() { return Promise.resolve(); }"
+        "      },"
+        "      booksSettings: {"
+        "        get: function(id) { return b.booksSettingsGet(id); },"
+        "        save: function(id, d) { return b.booksSettingsSave(id, d); },"
+        "        clear: function() { return Promise.resolve(); }"
+        "      },"
+        "      booksBookmarks: {"
+        "        get: function(id) { return b.booksBookmarksGet(id); },"
+        "        save: function(id, d) { return b.booksBookmarksSave(id, d); },"
+        "        delete: function(id, bmId) { return b.booksBookmarksDelete(id, bmId || ''); },"
+        "        clear: function(id) { return b.booksBookmarksClear(id); }"
+        "      },"
+        "      booksAnnotations: {"
+        "        get: function(id) { return b.booksAnnotationsGet(id); },"
+        "        save: function(id, d) { return b.booksAnnotationsSave(id, d); },"
+        "        delete: function(id, annId) { return b.booksAnnotationsDelete(id, annId || ''); },"
+        "        clear: function(id) { return b.booksAnnotationsClear(id); }"
+        "      },"
+        "      booksDisplayNames: {"
+        "        getAll: function() { return b.booksDisplayNamesGetAll(); },"
+        "        save: function(id, name) { return b.booksDisplayNamesSave(id, name); },"
+        "        delete: function(id) { return b.booksDisplayNamesDelete(id); },"
+        "        clear: function() { return Promise.resolve(); }"
+        "      },"
+        "      window: {"
+        "        isFullscreen: function() { return Promise.resolve(b.windowIsFullscreen()); },"
+        "        toggleFullscreen: function() { return b.windowToggleFullscreen(); },"
+        "        setFullscreen: function(v) { var on = v === true || v === 'true'; if (b.windowIsFullscreen() !== on) b.windowToggleFullscreen(); return Promise.resolve({ok:true}); },"
+        "        minimize: function() { return Promise.resolve({ok:false}); },"
+        "        close: function() { b.requestClose(); return Promise.resolve({ok:true}); }"
+        "      },"
+        "      clipboard: { copyText: function(t) { return Promise.resolve(); } },"
+        "      shell: {"
+        "        revealPath: function() { return Promise.resolve(); },"
+        "        openExternal: function() { return Promise.resolve(); }"
+        "      },"
+        "      booksTtsEdge: {"
+        "        probe: function(p) { return b.ttsProbe(); },"
+        "        getVoices: function(p) { return b.ttsGetVoices(); },"
+        "        synth: function(p) { return b.ttsSynth(p || {}); },"
+        "        synthStream: function() { return Promise.resolve({ok:false}); },"
+        "        cancelStream: function(id) { return b.ttsCancelStream(id || ''); },"
+        "        warmup: function(p) { return b.ttsWarmup(); },"
+        "        resetInstance: function() { return b.ttsResetInstance(); }"
+        "      },"
+        "      audiobooks: {"
+        "        getState: function() { return b.audiobooksGetState(); },"
+        "        getProgress: function(id) { return b.audiobooksGetProgress(id); },"
+        "        saveProgress: function(id, d) { return b.audiobooksSaveProgress(id, d); },"
+        "        getPairing: function(id) { return b.audiobooksGetPairing(id); },"
+        "        savePairing: function(id, d) { return b.audiobooksSavePairing(id, d); },"
+        "        deletePairing: function(id) { return b.audiobooksDeletePairing(id); }"
+        "      }"
+        "    };"
+        "    window.__ebookNav = {"
+        "      requestClose: function() { b.requestClose(); }"
+        "    };"
+        "    console.log('[shim] electronAPI + __ebookNav ready');"
+        "  });"
+        "})();"
+    ));
+    m_webView->page()->scripts().insert(shimScript);
+
+    // Detect when the reader page finishes loading
+    connect(m_webView, &QWebEngineView::loadFinished, this, [this](bool ok) {
+        if (!ok) return;
+        m_readerReady = true;
+        if (!m_pendingBook.isEmpty()) {
+            QString escaped = m_pendingBook;
+            escaped.replace("\\", "\\\\").replace("'", "\\'");
+            m_webView->page()->runJavaScript(
+                QStringLiteral("window.__ebookOpenBook('%1')").arg(escaped));
+            m_pendingBook.clear();
+        }
+    });
+
 #else
     // ── Fallback path (no WebEngine) ──
     m_textBrowser = new QTextBrowser(this);
@@ -97,178 +205,21 @@ void BookReader::buildUI()
 #endif
 }
 
-#ifdef HAS_WEBENGINE
-
-void BookReader::ensureWebEngine()
-{
-    if (m_webEngineReady) return;
-    m_webEngineReady = true;
-
-    m_bridge = new BookBridge(this);
-    connect(m_bridge, &BookBridge::closeRequested, this, &BookReader::closeRequested);
-
-    m_channel = new QWebChannel(this);
-    m_channel->registerObject("bridge", m_bridge);
-
-    m_webView = new QWebEngineView(this);
-    // Override global transparent stylesheet — WebEngine needs an opaque background
-    m_webView->setStyleSheet("QWebEngineView { background: #000000; }");
-    m_webView->page()->setBackgroundColor(QColor(0, 0, 0));
-    m_webView->page()->setWebChannel(m_channel);
-
-    // Allow local file access for loading book files via file:// URLs
-    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
-    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
-
-    // Inject the bridge shim at DocumentReady (after qwebchannel.js loads from <script> tag).
-    QWebEngineScript shimScript;
-    shimScript.setName("BookBridgeShim");
-    shimScript.setInjectionPoint(QWebEngineScript::DocumentReady);
-    shimScript.setWorldId(QWebEngineScript::MainWorld);
-    shimScript.setSourceCode(QStringLiteral(
-        "(function() {"
-        "  if (typeof QWebChannel === 'undefined') {"
-        "    console.error('[shim] QWebChannel not available');"
-        "    return;"
-        "  }"
-        "  new QWebChannel(qt.webChannelTransport, function(channel) {"
-        "    var b = channel.objects.bridge;"
-        "    window.electronAPI = {"
-        "      files: { read: function(path) {"
-        "        var url = 'file:///' + path.replace(/\\\\/g, '/');"
-        "        return fetch(url).then(function(r) { return r.arrayBuffer(); });"
-        "      } },"
-        "      booksProgress: {"
-        "        getAll: function() { return Promise.resolve({}); },"
-        "        get: function(id) { return b.booksProgressGet(id); },"
-        "        save: function(id, d) { return b.booksProgressSave(id, d); },"
-        "        clear: function() { return Promise.resolve(); },"
-        "        clearAll: function() { return Promise.resolve(); }"
-        "      },"
-        "      booksSettings: {"
-        "        get: function(id) { return b.booksSettingsGet(id); },"
-        "        save: function(id, d) { return b.booksSettingsSave(id, d); },"
-        "        clear: function() { return Promise.resolve(); }"
-        "      },"
-        "      booksBookmarks: {"
-        "        get: function() { return Promise.resolve(null); },"
-        "        save: function() { return Promise.resolve(); },"
-        "        delete: function() { return Promise.resolve(); },"
-        "        clear: function() { return Promise.resolve(); }"
-        "      },"
-        "      booksAnnotations: {"
-        "        get: function() { return Promise.resolve(null); },"
-        "        save: function() { return Promise.resolve(); },"
-        "        delete: function() { return Promise.resolve(); },"
-        "        clear: function() { return Promise.resolve(); }"
-        "      },"
-        "      booksDisplayNames: {"
-        "        getAll: function() { return Promise.resolve(null); },"
-        "        save: function() { return Promise.resolve(); },"
-        "        clear: function() { return Promise.resolve(); }"
-        "      },"
-        "      window: {"
-        "        isFullscreen: function() { return Promise.resolve(false); },"
-        "        toggleFullscreen: function() { return Promise.resolve({ok:false}); },"
-        "        setFullscreen: function() { return Promise.resolve({ok:false}); },"
-        "        minimize: function() { return Promise.resolve({ok:false}); },"
-        "        close: function() { b.requestClose(); return Promise.resolve({ok:true}); }"
-        "      },"
-        "      clipboard: { copyText: function(t) { return Promise.resolve(); } },"
-        "      shell: {"
-        "        revealPath: function() { return Promise.resolve(); },"
-        "        openExternal: function() { return Promise.resolve(); }"
-        "      },"
-        "      booksTtsEdge: {"
-        "        probe: function() { return Promise.resolve({ok:false}); },"
-        "        getVoices: function() { return Promise.resolve([]); },"
-        "        synth: function() { return Promise.resolve(null); },"
-        "        synthStream: function() { return Promise.resolve({ok:false}); },"
-        "        cancelStream: function() { return Promise.resolve({ok:true}); },"
-        "        warmup: function() { return Promise.resolve({ok:false}); },"
-        "        resetInstance: function() { return Promise.resolve({ok:true}); }"
-        "      },"
-        "      audiobooks: {"
-        "        getState: function() { return Promise.resolve({audiobooks:[]}); },"
-        "        getProgress: function() { return Promise.resolve(null); },"
-        "        saveProgress: function() { return Promise.resolve(); },"
-        "        getPairing: function() { return Promise.resolve(null); },"
-        "        savePairing: function() { return Promise.resolve(); },"
-        "        deletePairing: function() { return Promise.resolve(); }"
-        "      }"
-        "    };"
-        "    window.__ebookNav = {"
-        "      requestClose: function() { b.requestClose(); }"
-        "    };"
-        "    console.log('[shim] electronAPI + __ebookNav ready');"
-        "    var evt = new Event('electronAPI:ready');"
-        "    window.dispatchEvent(evt);"
-        "  });"
-        "})();"
-    ));
-    m_webView->page()->scripts().insert(shimScript);
-
-    // When page loads, wait for reader JS to be fully ready before opening book.
-    connect(m_webView, &QWebEngineView::loadFinished, this, [this](bool ok) {
-        if (!ok) return;
-        m_readerReady = true;
-        if (!m_pendingBook.isEmpty()) {
-            QString escaped = m_pendingBook;
-            escaped.replace("\\", "\\\\").replace("'", "\\'");
-            QString js = QStringLiteral(
-                "(function poll() {"
-                "  if (typeof window.__ebookOpenBook === 'function') {"
-                "    window.__ebookOpenBook('%1');"
-                "  } else {"
-                "    setTimeout(poll, 100);"
-                "  }"
-                "})();"
-            ).arg(escaped);
-            m_webView->page()->runJavaScript(js);
-            m_pendingBook.clear();
-        }
-    });
-
-    // Size the view to fill this widget
-    m_webView->setGeometry(0, 0, width(), height());
-    m_webView->raise();
-    m_webView->show();
-}
-
-void BookReader::warmUp()
-{
-    ensureWebEngine();
-    // Pre-load the reader HTML so Chromium subprocess starts now
-    if (!m_readerReady) {
-        m_webView->setUrl(QUrl::fromLocalFile(m_readerHtmlPath));
-    }
-}
-
-#endif
-
 void BookReader::openBook(const QString& filePath)
 {
     m_currentFile = filePath;
 
 #ifdef HAS_WEBENGINE
-    ensureWebEngine();
-
     if (!m_readerReady) {
+        // Page not loaded yet — queue the book and load the HTML
         m_pendingBook = filePath;
         m_webView->setUrl(QUrl::fromLocalFile(m_readerHtmlPath));
     } else {
+        // Page already loaded — just open the new book
         QString escaped = filePath;
         escaped.replace("\\", "\\\\").replace("'", "\\'");
-        QString js = QStringLiteral(
-            "(function poll() {"
-            "  if (typeof window.__ebookOpenBook === 'function') {"
-            "    window.__ebookOpenBook('%1');"
-            "  } else {"
-            "    setTimeout(poll, 100);"
-            "  }"
-            "})();"
-        ).arg(escaped);
-        m_webView->page()->runJavaScript(js);
+        m_webView->page()->runJavaScript(
+            QStringLiteral("window.__ebookOpenBook('%1')").arg(escaped));
     }
 #else
     loadFallback(filePath);
