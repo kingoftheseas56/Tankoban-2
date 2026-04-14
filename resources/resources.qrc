@@ -1,5 +1,15 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/folder.svg</file>
+        <file>icons/file.svg</file>
+        <file>icons/download.svg</file>
+        <file>icons/pause.svg</file>
+        <file>icons/seed.svg</file>
+        <file>icons/check.svg</file>
+        <file>icons/error.svg</file>
+        <file>icons/waiting.svg</file>
+        <file>icons/stalled.svg</file>
+        <file>shaders/video.vert.qsb</file>
+        <file>shaders/video.frag.qsb</file>
     </qresource>
 </RCC>

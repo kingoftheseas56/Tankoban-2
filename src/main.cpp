@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QScreen>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include "core/CoreBridge.h"
 #include "ui/MainWindow.h"
 
@@ -10,6 +12,62 @@
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 #endif
+
+// ── Single-instance IPC ─────────────────────────────────────────────────────
+
+static const char *INSTANCE_SERVER_NAME = "TankobanSingleInstance";
+
+/// Try to signal an existing instance to come to front.
+/// Returns true if a live instance acknowledged (caller should exit).
+static bool signalExistingInstance()
+{
+    QLocalSocket socket;
+    socket.connectToServer(INSTANCE_SERVER_NAME);
+    if (!socket.waitForConnected(500))
+        return false;
+
+    // Connected — send raise and wait for "ok" ack from the live instance
+    socket.write("raise");
+    socket.waitForBytesWritten(500);
+    if (socket.waitForReadyRead(1000)) {
+        QByteArray reply = socket.readAll();
+        socket.disconnectFromServer();
+        if (reply == "ok")
+            return true; // Live instance confirmed — exit
+    }
+    socket.disconnectFromServer();
+
+    // Connected but no ack — stale pipe from a crashed run.
+    // Remove it so we can take over.
+    QLocalServer::removeServer(INSTANCE_SERVER_NAME);
+    return false;
+}
+
+/// Create a local server that listens for "raise" messages from new instances.
+static QLocalServer *createInstanceServer(MainWindow *window)
+{
+    auto *server = new QLocalServer(window);
+    if (!server->listen(INSTANCE_SERVER_NAME)) {
+        // Stale pipe — remove and retry
+        QLocalServer::removeServer(INSTANCE_SERVER_NAME);
+        server->listen(INSTANCE_SERVER_NAME);
+    }
+
+    QObject::connect(server, &QLocalServer::newConnection, window, [server, window]() {
+        while (auto *conn = server->nextPendingConnection()) {
+            conn->waitForReadyRead(500);
+            // Raise the window and acknowledge
+            window->bringToFront();
+            conn->write("ok");
+            conn->waitForBytesWritten(500);
+            conn->deleteLater();
+        }
+    });
+
+    return server;
+}
+
+// ── Theme ───────────────────────────────────────────────────────────────────
 
 static void applyDarkPalette(QApplication &app)
 {
@@ -408,9 +466,6 @@ static void applyWindowsDarkTitleBar(QWidget *window)
 
 int main(int argc, char *argv[])
 {
-    // WebEngine needs no explicit init in Qt6 Widgets path —
-    // lazy-init in BookReader::ensureWebEngine() handles it
-
 #ifdef Q_OS_WIN
     SetProcessDPIAware();
 #endif
@@ -420,21 +475,41 @@ int main(int argc, char *argv[])
     app.setOrganizationName("Tankoban");
     app.setApplicationVersion("0.1.0");
 
+    // Debug breadcrumbs — writing to file since /subsystem:windows has no console
+    auto dbg = [](const char* msg) {
+        FILE* f = fopen("_boot_debug.txt", "a");
+        if (f) { fprintf(f, "%s\n", msg); fflush(f); fclose(f); }
+    };
+    dbg("1-app-created");
+
     applyDarkPalette(app);
     app.setStyleSheet(noirStylesheet());
     app.setQuitOnLastWindowClosed(false);
+    dbg("2-palette-and-style-set");
 
     // Data layer
     QString dataDir = CoreBridge::resolveDataDir();
+    dbg("3-datadir-resolved");
     CoreBridge bridge(dataDir);
+    dbg("4-corebridge-created");
 
     MainWindow window(&bridge);
+    dbg("5-mainwindow-created");
 
 #ifdef Q_OS_WIN
     applyWindowsDarkTitleBar(&window);
 #endif
+    dbg("6-darkbar-applied");
 
     window.showMaximized();
+    window.raise();
+    window.activateWindow();
+    dbg("7-window-shown");
+
+#ifdef Q_OS_WIN
+    // Force foreground on Windows — showMaximized alone isn't enough
+    SetForegroundWindow(reinterpret_cast<HWND>(window.winId()));
+#endif
 
     return app.exec();
 }

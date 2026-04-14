@@ -14,8 +14,8 @@
 class GlassBackground;
 class CoreBridge;
 class RootFoldersOverlay;
-class ComicReader;
 class BookReader;
+class ComicReader;
 class VideoPlayer;
 
 class MainWindow : public QMainWindow
@@ -24,6 +24,9 @@ class MainWindow : public QMainWindow
 
 public:
     explicit MainWindow(CoreBridge* bridge, QWidget *parent = nullptr);
+
+    /// Force window to front — used by single-instance signal
+    void bringToFront();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -80,6 +83,7 @@ private:
     QMenu           *m_trayMenu = nullptr;
     bool m_quitRequested = false;
     bool m_wasMaximizedBeforeHide = false;
+    bool m_wasMaximizedBeforeFullscreen = false;
 
     // Top bar
     QWidget       *m_topBar      = nullptr;

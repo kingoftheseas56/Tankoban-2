@@ -5,6 +5,8 @@
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
 #include "pages/SourcesPage.h"
+#include "pages/StreamPage.h"
+#include "core/torrent/TorrentClient.h"
 #include "readers/ComicReader.h"
 #include "readers/BookReader.h"
 #include "player/VideoPlayer.h"
@@ -16,6 +18,10 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QButtonGroup>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 // ── Page id constants ───────────────────────────────────────────────────────
 static constexpr const char *PAGE_COMICS  = "comics";
@@ -30,7 +36,6 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     , m_bridge(bridge)
 {
     setWindowTitle("Tankoban");
-
     // Set a sane default geometry centered on screen
     if (auto *screen = QApplication::primaryScreen()) {
         auto avail = screen->availableGeometry();
@@ -64,12 +69,14 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
 
     buildPageStack();
     contentLayout->addWidget(m_pageStack, 1);
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5a-pagestack-added\n");fflush(f);fclose(f);} }
 
     rootLayout->addWidget(content, 1);
 
     // Root folders overlay (hidden by default)
     m_rootFoldersOverlay = new RootFoldersOverlay(m_bridge, root);
     m_rootFoldersOverlay->hide();
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5b-rootfolders-overlay\n");fflush(f);fclose(f);} }
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::closeRequested, this, &MainWindow::hideRootFolders);
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::foldersChanged, this, [this]() {
         if (auto *comics = m_pageStack->findChild<ComicsPage*>())
@@ -81,23 +88,60 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     });
 
     // Comic reader overlay (hidden by default)
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5c-before-comicreader\n");fflush(f);fclose(f);} }
     m_comicReader = new ComicReader(m_bridge, root);
     m_comicReader->hide();
     connect(m_comicReader, &ComicReader::closeRequested, this, &MainWindow::closeComicReader);
+    connect(m_comicReader, &ComicReader::fullscreenRequested, this, [this](bool enter) {
+        if (enter) {
+            m_wasMaximizedBeforeFullscreen = isMaximized();
+            showFullScreen();
+        } else {
+            if (m_wasMaximizedBeforeFullscreen)
+                showMaximized();
+            else
+                showNormal();
+        }
+    });
 
     // Book reader overlay (hidden by default)
-    m_bookReader = new BookReader(root);
+    m_bookReader = new BookReader(m_bridge, root);
     m_bookReader->hide();
     connect(m_bookReader, &BookReader::closeRequested, this, &MainWindow::closeBookReader);
+    connect(m_bookReader, &BookReader::fullscreenRequested, this, [this](bool enter) {
+        if (enter) {
+            m_wasMaximizedBeforeFullscreen = isMaximized();
+            showFullScreen();
+        } else {
+            if (m_wasMaximizedBeforeFullscreen)
+                showMaximized();
+            else
+                showNormal();
+        }
+    });
 
     // Video player overlay (hidden by default)
-    m_videoPlayer = new VideoPlayer(root);
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5e-before-videoplayer\n");fflush(f);fclose(f);} }
+    m_videoPlayer = new VideoPlayer(m_bridge, root);
     m_videoPlayer->hide();
     connect(m_videoPlayer, &VideoPlayer::closeRequested, this, &MainWindow::closeVideoPlayer);
+    connect(m_videoPlayer, &VideoPlayer::fullscreenRequested, this, [this](bool enter) {
+        if (enter) {
+            m_wasMaximizedBeforeFullscreen = isMaximized();
+            showFullScreen();
+        } else {
+            if (m_wasMaximizedBeforeFullscreen)
+                showMaximized();
+            else
+                showNormal();
+        }
+    });
 
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5f-before-central\n");fflush(f);fclose(f);} }
     setCentralWidget(root);
     bindShortcuts();
     setupTrayIcon();
+    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5g-constructor-done\n");fflush(f);fclose(f);} }
 
     // Connect comics page to reader
     if (auto *comics = m_pageStack->findChild<ComicsPage*>()) {
@@ -112,6 +156,10 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // Connect videos page to player
     if (auto *videos = m_pageStack->findChild<VideosPage*>()) {
         connect(videos, &VideosPage::playVideo, this, &MainWindow::openVideoPlayer);
+        // Forward player progress to VideosPage for continue strip refresh
+        connect(m_videoPlayer, &VideoPlayer::progressUpdated, videos, [videos]() {
+            videos->refreshContinueOnly();
+        });
     }
 
     activatePage(PAGE_COMICS);
@@ -194,6 +242,19 @@ void MainWindow::buildTopBar()
     layout->addWidget(nav);
     layout->addStretch(1);
 
+    // Rescan button (↻)
+    auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), bar);
+    scanBtn->setObjectName("IconButton");
+    scanBtn->setFixedSize(28, 24);
+    scanBtn->setCursor(Qt::PointingHandCursor);
+    scanBtn->setToolTip("Rescan library (F5)");
+    connect(scanBtn, &QPushButton::clicked, this, [this]() {
+        if (auto *c = m_pageStack->findChild<ComicsPage*>()) c->triggerScan();
+        if (auto *b = m_pageStack->findChild<BooksPage*>())  b->triggerScan();
+        if (auto *v = m_pageStack->findChild<VideosPage*>()) v->triggerScan();
+    });
+    layout->addWidget(scanBtn, 0, Qt::AlignVCenter);
+
     // Add folder button (+)
     auto *addBtn = new QPushButton("+", bar);
     addBtn->setObjectName("IconButton");
@@ -209,44 +270,39 @@ void MainWindow::buildTopBar()
 // ── Page stack ──────────────────────────────────────────────────────────────
 void MainWindow::buildPageStack()
 {
-    m_pageStack = new QStackedWidget(this);
+    auto dbg = [](const char* msg) {
+        FILE* f = fopen("_boot_debug.txt", "a");
+        if (f) { fprintf(f, "%s\n", msg); fflush(f); fclose(f); }
+    };
 
-    // Real pages
+    m_pageStack = new QStackedWidget(this);
+    dbg("4a-pagestack-created");
+
     auto *comicsPage = new ComicsPage(m_bridge);
     m_pageStack->addWidget(comicsPage);
+    dbg("4b-comicspage-created");
 
     auto *booksPage = new BooksPage(m_bridge);
     m_pageStack->addWidget(booksPage);
+    dbg("4c-bookspage-created");
 
     auto *videosPage = new VideosPage(m_bridge);
     m_pageStack->addWidget(videosPage);
+    dbg("4d-videospage-created");
 
-    // Stream placeholder
-    {
-        auto *page = new QWidget();
-        page->setObjectName(PAGE_STREAM);
+    // TorrentClient (shared by StreamPage and SourcesPage)
+    auto *torrentClient = new TorrentClient(m_bridge, this);
+    dbg("4e-torrentclient-created");
 
-        auto *layout = new QVBoxLayout(page);
-        layout->setAlignment(Qt::AlignCenter);
-        layout->setSpacing(12);
+    // Stream page
+    auto *streamPage = new StreamPage(m_bridge, torrentClient->engine());
+    m_pageStack->addWidget(streamPage);
+    dbg("4f-streampage-created");
 
-        auto *title = new QLabel("Stream");
-        title->setObjectName("SectionTitle");
-        title->setAlignment(Qt::AlignCenter);
-        layout->addWidget(title);
-
-        auto *subtitle = new QLabel("Stream content will appear here.");
-        subtitle->setObjectName("TileSubtitle");
-        subtitle->setAlignment(Qt::AlignCenter);
-        subtitle->setWordWrap(true);
-        layout->addWidget(subtitle);
-
-        m_pageStack->addWidget(page);
-    }
-
-    // Sources page (real)
-    auto *sourcesPage = new SourcesPage(m_bridge);
+    auto *sourcesPage = new SourcesPage(m_bridge, torrentClient);
+    dbg("4g-sourcespage-created");
     m_pageStack->addWidget(sourcesPage);
+    dbg("4h-pagestack-complete");
 }
 
 // ── Keyboard shortcuts ──────────────────────────────────────────────────────
@@ -294,16 +350,14 @@ void MainWindow::activatePage(const QString &pageId)
             // Activate page on switch
             if (auto *comics = qobject_cast<ComicsPage*>(m_pageStack->widget(i)))
                 comics->activate();
-            if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i))) {
+            if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
                 books->activate();
-                // Pre-warm WebEngine so it's ready when user clicks a book
-                if (m_bookReader)
-                    m_bookReader->warmUp();
-            }
             if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
                 videos->activate();
             if (auto *sources = qobject_cast<SourcesPage*>(m_pageStack->widget(i)))
                 sources->activate();
+            if (auto *stream = qobject_cast<StreamPage*>(m_pageStack->widget(i)))
+                stream->activate();
             break;
         }
     }
@@ -386,12 +440,7 @@ void MainWindow::hideToTray()
 
 void MainWindow::restoreFromTray()
 {
-    if (m_wasMaximizedBeforeHide)
-        showMaximized();
-    else
-        showNormal();
-    raise();
-    activateWindow();
+    bringToFront();
 }
 
 void MainWindow::quitFromTray()
@@ -402,15 +451,9 @@ void MainWindow::quitFromTray()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // If tray is available and user didn't explicitly quit, hide to tray
-    bool trayAvailable = !m_quitRequested
-                      && m_trayIcon != nullptr
-                      && m_trayIcon->isVisible();
-    if (trayAvailable) {
-        event->ignore();
-        hideToTray();
-        return;
-    }
+    // Stop video playback immediately so sidecar audio dies before destructors run
+    if (m_videoPlayer)
+        m_videoPlayer->stopPlayback();
 
     // Dispose tray
     if (m_trayIcon) {
@@ -444,14 +487,14 @@ void MainWindow::closeComicReader()
     m_comicReader->hide();
 }
 
-// ── Book reader ─────────────────────────────────────────────────────────────
+// ── Book reader ──────────────────────────────────────────────────────────────
 void MainWindow::openBookReader(const QString& filePath)
 {
+    m_bookReader->openBook(filePath);
     m_bookReader->setGeometry(centralWidget()->rect());
     m_bookReader->show();
     m_bookReader->raise();
     m_bookReader->setFocus();
-    m_bookReader->openBook(filePath);
 }
 
 void MainWindow::closeBookReader()
@@ -471,5 +514,42 @@ void MainWindow::openVideoPlayer(const QString& filePath)
 
 void MainWindow::closeVideoPlayer()
 {
+    // Stop playback (kills audio)
+    m_videoPlayer->stopPlayback();
+
+    // Exit fullscreen if we're in it
+    if (isFullScreen()) {
+        if (m_wasMaximizedBeforeFullscreen)
+            showMaximized();
+        else
+            showNormal();
+    }
     m_videoPlayer->hide();
+
+    // Refresh continue strip after playback ends
+    if (auto *videos = m_pageStack->findChild<VideosPage*>())
+        videos->refreshContinueOnly();
+}
+
+// ── Bring to front (single-instance raise) ──────────────────────────────────
+void MainWindow::bringToFront()
+{
+    // Restore from tray/minimized state
+    if (isHidden()) {
+        if (m_wasMaximizedBeforeHide)
+            showMaximized();
+        else
+            showNormal();
+    } else if (isMinimized()) {
+        showMaximized();
+    }
+
+    raise();
+    activateWindow();
+
+#ifdef Q_OS_WIN
+    // Windows often blocks foreground window changes — force it
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    SetForegroundWindow(hwnd);
+#endif
 }
