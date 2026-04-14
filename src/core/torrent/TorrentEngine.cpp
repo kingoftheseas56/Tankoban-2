@@ -40,6 +40,7 @@ public slots:
             if (++progressTick >= 4) {
                 progressTick = 0;
                 emitProgressEvents();
+                m_engine->checkSeedingRules();
             }
         }
     }
@@ -197,7 +198,7 @@ void TorrentEngine::applySettings()
 
     sp.set_int(lt::settings_pack::request_timeout, 10);
     sp.set_int(lt::settings_pack::peer_timeout, 20);
-    sp.set_int(lt::settings_pack::upload_rate_limit, 1024 * 1024); // 1 MB/s upload cap
+    sp.set_int(lt::settings_pack::upload_rate_limit, 0); // unlimited — user controls via setGlobalSpeedLimits()
 
     // Announce to ALL trackers
     sp.set_bool(lt::settings_pack::announce_to_all_trackers, true);
@@ -373,8 +374,15 @@ QString TorrentEngine::addMagnet(const QString& magnetUri, const QString& savePa
 
     atp.save_path = savePath.toStdString();
     if (paused) {
-        atp.flags |= lt::torrent_flags::paused;
-        atp.flags &= ~lt::torrent_flags::auto_managed;
+        // Don't set paused flag — torrent needs to be active to resolve metadata
+        // (connect to peers, fetch torrent info via DHT/trackers).
+        // Instead, we keep it active but let the caller set file priorities to 0
+        // after metadata arrives to prevent downloading actual content.
+        atp.flags &= ~lt::torrent_flags::paused;
+        atp.flags |= lt::torrent_flags::auto_managed;
+
+        // Upload-only mode: allow peer connections for metadata but minimize traffic
+        atp.flags |= lt::torrent_flags::upload_mode;
     }
 
     auto handle = m_session.add_torrent(std::move(atp), ec);
@@ -391,6 +399,57 @@ QString TorrentEngine::addMagnet(const QString& magnetUri, const QString& savePa
     rec.name     = QString::fromStdString(handle.status().name);
     rec.savePath = savePath;
     rec.handle   = handle;
+    m_records.insert(hash, rec);
+
+    return hash;
+}
+
+QString TorrentEngine::addFromResume(const QString& resumePath,
+                                      const QString& savePath, bool paused)
+{
+    QFile file(resumePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "Cannot read resume file:" << resumePath;
+        return {};
+    }
+    QByteArray data = file.readAll();
+    file.close();
+    if (data.isEmpty()) return {};
+
+    lt::error_code ec;
+    lt::add_torrent_params atp = lt::read_resume_data(
+        lt::span<const char>(data.data(), static_cast<int>(data.size())), ec);
+    if (ec) {
+        qWarning() << "Failed to parse resume data:" << ec.message().c_str();
+        return {};
+    }
+
+    // Override save_path with the persisted value from TorrentClient's JSON
+    atp.save_path = savePath.toStdString();
+
+    if (paused) {
+        atp.flags |= lt::torrent_flags::paused;
+        atp.flags &= ~lt::torrent_flags::auto_managed;
+    } else {
+        atp.flags &= ~lt::torrent_flags::paused;
+        atp.flags |= lt::torrent_flags::auto_managed;
+    }
+
+    auto handle = m_session.add_torrent(std::move(atp), ec);
+    if (ec) {
+        qWarning() << "Failed to add torrent from resume:" << ec.message().c_str();
+        return {};
+    }
+
+    auto hash = hashToHex(handle);
+
+    QMutexLocker lock(&m_mutex);
+    TorrentRecord rec;
+    rec.infoHash      = hash;
+    rec.name          = QString::fromStdString(handle.status().name);
+    rec.savePath      = savePath;
+    rec.metadataReady = true;
+    rec.handle        = handle;
     m_records.insert(hash, rec);
 
     return hash;
@@ -422,11 +481,55 @@ void TorrentEngine::setSequentialDownload(const QString& infoHash, bool sequenti
         it->handle.unset_flags(lt::torrent_flags::sequential_download);
 }
 
+void TorrentEngine::flattenFiles(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return;
+
+    auto& fs = ti->files();
+    if (fs.num_files() <= 1) return;  // single file — nothing to flatten
+
+    // Multi-file torrents have paths like "TorrentName/file.ext"
+    // Strip the root folder prefix so files land directly in save_path
+    std::string root = ti->name() + "/";
+
+    for (lt::file_index_t i(0); i < lt::file_index_t(fs.num_files()); ++i) {
+        std::string path = fs.file_path(i);
+        if (path.size() > root.size() && path.substr(0, root.size()) == root) {
+            std::string flat = path.substr(root.size());
+            it->handle.rename_file(i, flat);
+        }
+    }
+}
+
+void TorrentEngine::startTorrent(const QString& infoHash, const QString& newSavePath)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+
+    // Clear upload_mode that was set during metadata resolution
+    it->handle.unset_flags(lt::torrent_flags::upload_mode);
+
+    // Move storage to the user's chosen destination
+    if (!newSavePath.isEmpty() && newSavePath != it->savePath) {
+        it->handle.move_storage(newSavePath.toStdString());
+        it->savePath = newSavePath;
+    }
+
+    it->handle.resume();
+}
+
 void TorrentEngine::resumeTorrent(const QString& infoHash)
 {
     QMutexLocker lock(&m_mutex);
     auto it = m_records.find(infoHash);
     if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.set_flags(lt::torrent_flags::auto_managed);
     it->handle.resume();
 }
 
@@ -458,6 +561,116 @@ void TorrentEngine::removeTorrent(const QString& infoHash, bool deleteFiles)
     QFile::remove(m_cacheDir + "/resume/" + infoHash + ".fastresume");
 }
 
+void TorrentEngine::forceStart(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.unset_flags(lt::torrent_flags::auto_managed);
+    it->handle.resume();
+}
+
+void TorrentEngine::forceRecheck(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.force_recheck();
+}
+
+void TorrentEngine::forceReannounce(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.force_reannounce(0, -1);
+}
+
+void TorrentEngine::queuePositionUp(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.queue_position_up();
+}
+
+void TorrentEngine::queuePositionDown(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.queue_position_down();
+}
+
+void TorrentEngine::setQueueLimits(int maxDownloads, int maxUploads, int maxActive)
+{
+    lt::settings_pack sp;
+    sp.set_int(lt::settings_pack::active_downloads, maxDownloads == 0 ? -1 : maxDownloads);
+    sp.set_int(lt::settings_pack::active_seeds,     maxUploads   == 0 ? -1 : maxUploads);
+    sp.set_int(lt::settings_pack::active_limit,     maxActive    == 0 ? -1 : maxActive);
+    m_session.apply_settings(sp);
+}
+
+void TorrentEngine::setSpeedLimits(const QString& infoHash, int dlLimitBps, int ulLimitBps)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.set_download_limit(dlLimitBps);
+    it->handle.set_upload_limit(ulLimitBps);
+}
+
+void TorrentEngine::setGlobalSpeedLimits(int dlLimitBps, int ulLimitBps)
+{
+    lt::settings_pack sp;
+    sp.set_int(lt::settings_pack::download_rate_limit, dlLimitBps);
+    sp.set_int(lt::settings_pack::upload_rate_limit, ulLimitBps);
+    m_session.apply_settings(sp);
+}
+
+void TorrentEngine::setSeedingRules(const QString& infoHash, float ratioLimit, int seedTimeLimitSecs)
+{
+    QMutexLocker lock(&m_mutex);
+    if (ratioLimit <= 0.f && seedTimeLimitSecs <= 0)
+        m_seedingRules.remove(infoHash);
+    else
+        m_seedingRules[infoHash] = {ratioLimit, seedTimeLimitSecs};
+}
+
+void TorrentEngine::setGlobalSeedingRules(float ratioLimit, int seedTimeLimitSecs)
+{
+    QMutexLocker lock(&m_mutex);
+    m_globalSeedRule = {ratioLimit, seedTimeLimitSecs};
+}
+
+void TorrentEngine::checkSeedingRules()
+{
+    QMutexLocker lock(&m_mutex);
+    for (auto& rec : m_records) {
+        if (!rec.handle.is_valid()) continue;
+        auto st = rec.handle.status();
+        if (st.state != lt::torrent_status::seeding) continue;
+        if (st.flags & lt::torrent_flags::paused) continue;
+
+        SeedingRule rule = m_seedingRules.value(rec.infoHash, m_globalSeedRule);
+        if (rule.ratioLimit <= 0.f && rule.seedTimeSecs <= 0) continue;
+
+        if (rule.ratioLimit > 0.f && st.total_done > 0) {
+            float ratio = static_cast<float>(st.total_upload) / static_cast<float>(st.total_done);
+            if (ratio >= rule.ratioLimit) {
+                qDebug() << "Seeding rule: pausing" << rec.infoHash << "ratio" << ratio;
+                rec.handle.pause();
+                continue;
+            }
+        }
+
+        if (rule.seedTimeSecs > 0 && st.seeding_duration.count() >= rule.seedTimeSecs) {
+            qDebug() << "Seeding rule: pausing" << rec.infoHash << "seed time" << st.seeding_duration.count() << "s";
+            rec.handle.pause();
+        }
+    }
+}
+
 QList<TorrentStatus> TorrentEngine::allStatuses() const
 {
     QList<TorrentStatus> result;
@@ -480,6 +693,11 @@ QList<TorrentStatus> TorrentEngine::allStatuses() const
             ts.numSeeds     = st.num_seeds;
             ts.totalDone    = st.total_done;
             ts.totalWanted  = st.total_wanted;
+            ts.forceStarted  = !(st.flags & lt::torrent_flags::auto_managed)
+                               && !(st.flags & lt::torrent_flags::paused);
+            ts.queuePosition = static_cast<int>(st.queue_position);
+            ts.dlLimit       = rec.handle.download_limit();
+            ts.ulLimit       = rec.handle.upload_limit();
         } else {
             ts.stateString = QStringLiteral("unknown");
         }
@@ -516,6 +734,43 @@ QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
     return files;
 }
 
+bool TorrentEngine::haveContiguousBytes(const QString& infoHash, int fileIndex,
+                                         qint64 fileOffset, qint64 length) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return false;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return false;
+
+    auto& fs = ti->files();
+    lt::file_index_t fi(fileIndex);
+    if (fileIndex < 0 || fileIndex >= fs.num_files()) return false;
+
+    // Use libtorrent's map_file() to get the piece range for this byte range
+    // map_file returns a peer_request with piece, start, length
+    lt::peer_request startReq = ti->map_file(fi, fileOffset, 1);
+    lt::peer_request endReq = ti->map_file(fi, fileOffset + length - 1, 1);
+
+    int firstPiece = static_cast<int>(startReq.piece);
+    int lastPiece = static_cast<int>(endReq.piece);
+
+    for (int p = firstPiece; p <= lastPiece; ++p) {
+        if (!it->handle.have_piece(lt::piece_index_t(p)))
+            return false;
+    }
+    return true;
+}
+
+void TorrentEngine::flushCache(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.flush_cache();
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -527,12 +782,27 @@ TorrentEngine::~TorrentEngine() {}
 void TorrentEngine::start() { qWarning("TorrentEngine: built without libtorrent"); }
 void TorrentEngine::stop() {}
 QString TorrentEngine::addMagnet(const QString&, const QString&, bool) { return {}; }
+QString TorrentEngine::addFromResume(const QString&, const QString&, bool) { return {}; }
+void TorrentEngine::startTorrent(const QString&, const QString&) {}
 void TorrentEngine::setFilePriorities(const QString&, const QVector<int>&) {}
 void TorrentEngine::setSequentialDownload(const QString&, bool) {}
+void TorrentEngine::flattenFiles(const QString&) {}
 void TorrentEngine::resumeTorrent(const QString&) {}
 void TorrentEngine::pauseTorrent(const QString&) {}
 void TorrentEngine::removeTorrent(const QString&, bool) {}
+void TorrentEngine::forceStart(const QString&) {}
+void TorrentEngine::forceRecheck(const QString&) {}
+void TorrentEngine::forceReannounce(const QString&) {}
+void TorrentEngine::queuePositionUp(const QString&) {}
+void TorrentEngine::queuePositionDown(const QString&) {}
+void TorrentEngine::setQueueLimits(int, int, int) {}
+void TorrentEngine::setSpeedLimits(const QString&, int, int) {}
+void TorrentEngine::setGlobalSpeedLimits(int, int) {}
+void TorrentEngine::setSeedingRules(const QString&, float, int) {}
+void TorrentEngine::setGlobalSeedingRules(float, int) {}
 QList<TorrentStatus> TorrentEngine::allStatuses() const { return {}; }
 QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
+bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }
+void TorrentEngine::flushCache(const QString&) {}
 
 #endif

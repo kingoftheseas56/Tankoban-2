@@ -9,7 +9,13 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include "core/manga/MangaResult.h"
+
 class CoreBridge;
+class MangaScraper;
+class MangaDownloader;
+class QNetworkAccessManager;
+class QTimer;
 
 class TankoyomiPage : public QWidget
 {
@@ -26,7 +32,19 @@ private:
     QTableWidget* createResultsTable();
     QTableWidget* createTransfersTable();
 
-    CoreBridge* m_bridge;
+    void startSearch();
+    void cancelSearch();
+    void renderResults();
+    void onResultDoubleClicked(int row);
+    void refreshTransfers();
+
+    CoreBridge*            m_bridge;
+    QNetworkAccessManager* m_nam        = nullptr;
+    MangaDownloader*       m_downloader = nullptr;
+    QList<MangaScraper*>   m_scrapers;
+    int                    m_pendingSearches = 0;
+    QList<MangaResult>     m_allResults;
+    QList<MangaResult>     m_displayedResults;  // deduped — matches table rows 1:1
 
     // Search controls
     QLineEdit*   m_queryEdit   = nullptr;
@@ -43,4 +61,5 @@ private:
     QTabWidget*   m_tabWidget      = nullptr;
     QTableWidget* m_resultsTable   = nullptr;
     QTableWidget* m_transfersTable = nullptr;
+    QTimer*       m_transferTimer  = nullptr;
 };

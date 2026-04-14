@@ -45,8 +45,8 @@ static QPushButton* createAppTile(const QString& title, const QString& subtitle,
 }
 
 // ── Constructor ─────────────────────────────────────────────────────────────
-SourcesPage::SourcesPage(CoreBridge* bridge, QWidget* parent)
-    : QWidget(parent), m_bridge(bridge)
+SourcesPage::SourcesPage(CoreBridge* bridge, TorrentClient* client, QWidget* parent)
+    : QWidget(parent), m_bridge(bridge), m_client(client)
 {
     setObjectName("sources");
     buildUI();
@@ -111,7 +111,7 @@ void SourcesPage::buildUI()
     m_stack->addWidget(launcher);
 
     // Index 1: Tankorent
-    m_tankorentPage = new TankorentPage(m_bridge);
+    m_tankorentPage = new TankorentPage(m_bridge, m_client);
     m_stack->addWidget(m_tankorentPage);
 
     // Index 2: Tankoyomi

@@ -7,6 +7,7 @@
 #include <QFrame>
 
 class CoreBridge;
+class TorrentClient;
 class TankorentPage;
 class TankoyomiPage;
 
@@ -15,7 +16,7 @@ class SourcesPage : public QWidget
     Q_OBJECT
 
 public:
-    explicit SourcesPage(CoreBridge* bridge, QWidget* parent = nullptr);
+    explicit SourcesPage(CoreBridge* bridge, TorrentClient* client, QWidget* parent = nullptr);
 
     void activate();
     void deactivate();
@@ -25,7 +26,8 @@ private:
     void navigateTo(int index);
     void navigateHome();
 
-    CoreBridge* m_bridge;
+    CoreBridge*    m_bridge;
+    TorrentClient* m_client = nullptr;
 
     // Back bar
     QFrame*      m_backBar   = nullptr;
