@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QListWidget>
+#include <QPointer>
 #include <QPushButton>
 #include <QSlider>
 #include <QTimer>
@@ -71,4 +72,6 @@ private:
     QLabel*      m_bgOpacityVal = nullptr;
     QTimer*      m_styleDebounce = nullptr;
     bool         m_clickFilterInstalled = false;
+    // Anchor tracked across toggle()/dismiss() — see FilterPopover note.
+    QPointer<QWidget> m_anchor;
 };

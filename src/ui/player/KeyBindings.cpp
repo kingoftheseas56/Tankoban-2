@@ -22,12 +22,29 @@ static const struct { const char* action; const char* label; int key; Qt::Keyboa
     {"toggle_fullscreen",  "Toggle fullscreen",    Qt::Key_F,            Qt::NoModifier},
     {"toggle_fullscreen2", "Toggle fullscreen",    Qt::Key_F11,          Qt::NoModifier},
     {"toggle_deinterlace", "Toggle deinterlace",   Qt::Key_D,            Qt::NoModifier},
+    // VIDEO_PLAYER_FIX Batch 3.1 — plain T is taken by open_subtitle_menu,
+    // so Always-on-top lands on Ctrl+T. Surfaced in the context menu too.
+    {"toggle_always_on_top", "Always on top",      Qt::Key_T,            Qt::ControlModifier},
+    // VIDEO_PLAYER_FIX Batch 3.2 — plain S is cycle_subtitle; Ctrl+S the
+    // usual Save shortcut, a good fit for "save a snapshot." Surfaced in
+    // the context menu too.
+    {"take_snapshot",        "Take snapshot",      Qt::Key_S,            Qt::ControlModifier},
+    // VIDEO_PLAYER_FIX Batch 3.3 — plain P is prev_episode; Ctrl+P was
+    // free. Toggles mini-mode Picture-in-Picture.
+    {"toggle_pip",           "Picture-in-Picture", Qt::Key_P,            Qt::ControlModifier},
+    // VIDEO_PLAYER_FIX Batch 4.1 — common convention for "Open URL"
+    // (QMPlay2 + IINA + VLC all use Ctrl+U).
+    {"open_url",             "Open URL...",        Qt::Key_U,            Qt::ControlModifier},
+    // VIDEO_PLAYER_FIX Batch 7.1 — plain I for the compact stats badge
+    // (mpv convention for its stats overlay).
+    {"toggle_stats",         "Show stats",         Qt::Key_I,            Qt::NoModifier},
 
     // Audio / Subs
     {"cycle_audio",        "Cycle audio track",    Qt::Key_A,            Qt::NoModifier},
     {"toggle_normalize",   "Toggle normalization", Qt::Key_A,            Qt::ShiftModifier},
     {"cycle_subtitle",     "Cycle subtitle track", Qt::Key_S,            Qt::NoModifier},
     {"toggle_subtitles",   "Toggle subtitles",     Qt::Key_S,            Qt::ShiftModifier},
+    {"open_subtitle_menu", "Open subtitles menu",  Qt::Key_T,            Qt::NoModifier},
     {"sub_delay_minus",    "Sub delay -100ms",     Qt::Key_Less,         Qt::NoModifier},
     {"sub_delay_plus",     "Sub delay +100ms",     Qt::Key_Greater,      Qt::NoModifier},
     {"sub_delay_reset",    "Reset sub delay",      Qt::Key_Z,            Qt::ControlModifier | Qt::ShiftModifier},
@@ -42,10 +59,18 @@ static const struct { const char* action; const char* label; int key; Qt::Keyboa
     // Navigation
     {"next_episode",       "Next episode",         Qt::Key_N,            Qt::NoModifier},
     {"prev_episode",       "Previous episode",     Qt::Key_P,            Qt::NoModifier},
+    // STREAM_UX_PARITY Batch 2.6 — stream-mode-only manual next episode.
+    // Fires VideoPlayer::streamNextEpisodeRequested signal; StreamPage
+    // consumes. Local playlist path ignores (no connection in Videos).
+    {"stream_next_episode", "Next episode (stream mode)", Qt::Key_N,      Qt::ShiftModifier},
     {"toggle_playlist",    "Toggle playlist",      Qt::Key_L,            Qt::NoModifier},
     {"show_shortcuts",     "Show shortcuts",        Qt::Key_Question,     Qt::NoModifier},
     {"back_to_library",    "Back to library",      Qt::Key_Escape,       Qt::NoModifier},
     {"back_fullscreen",    "Exit fullscreen/back",  Qt::Key_Backspace,    Qt::NoModifier},
+
+    // Diagnostics — Ctrl+Shift+V is unambiguous and not OS-captured
+    {"vsync_log_toggle",   "Toggle vsync timing log",
+        Qt::Key_V, Qt::ControlModifier | Qt::ShiftModifier},
 };
 
 static constexpr int NUM_DEFAULTS = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
@@ -127,6 +152,22 @@ QString KeyBindings::labelForAction(const QString& action)
             return DEFAULTS[i].label;
     }
     return action;
+}
+
+QKeySequence KeyBindings::defaultKeyForAction(const QString& action)
+{
+    for (int i = 0; i < NUM_DEFAULTS; ++i) {
+        if (action == DEFAULTS[i].action) {
+            const int combined = DEFAULTS[i].key | static_cast<int>(DEFAULTS[i].mods);
+            return QKeySequence(combined);
+        }
+    }
+    return {};
+}
+
+void KeyBindings::resetAction(const QString& action)
+{
+    setBinding(action, defaultKeyForAction(action));
 }
 
 void KeyBindings::rebuildReverseLookup()

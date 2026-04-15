@@ -5,6 +5,8 @@
 #include <QNetworkRequest>
 #include <QUrl>
 #include <QRegularExpression>
+#include <QDebug>
+#include <QSettings>
 
 static const QStringList EZTV_BASES = {
     "https://eztvx.to",
@@ -12,9 +14,30 @@ static const QStringList EZTV_BASES = {
     "https://eztv.tf",
 };
 
+// Default cookie used when the user hasn't supplied one via the Sources
+// panel. EZTV's site-provided sort/filter toggles live in cookies; without
+// them the default listing excludes many releases.
+static const char* kEztvDefaultCookie =
+    "sort_no=100; q_filter=all; q_filter_web=on; q_filter_reality=on; q_filter_x265=on; layout=def_wlinks";
+
 EztvIndexer::EztvIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
+}
+
+void EztvIndexer::setCredential(const QString& key, const QString& value)
+{
+    if (key != QLatin1String("cookie"))
+        return;
+    QSettings().setValue(QStringLiteral("tankorent/indexers/eztv/credentials/cookie"), value);
+}
+
+QString EztvIndexer::credential(const QString& key) const
+{
+    if (key != QLatin1String("cookie"))
+        return {};
+    return QSettings().value(QStringLiteral("tankorent/indexers/eztv/credentials/cookie")).toString();
 }
 
 QString EztvIndexer::normalizeSlug(const QString& query)
@@ -62,9 +85,14 @@ void EztvIndexer::tryNextMirror()
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "text/html,*/*");
     req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
-    req.setRawHeader("Cookie",
-        "sort_no=100; q_filter=all; q_filter_web=on; q_filter_reality=on; q_filter_x265=on; layout=def_wlinks");
 
+    QString userCookie = credential(QStringLiteral("cookie"));
+    const QByteArray cookie = userCookie.isEmpty()
+        ? QByteArray(kEztvDefaultCookie)
+        : userCookie.toUtf8();
+    req.setRawHeader("Cookie", cookie);
+
+    startRequestTimer();
     auto *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         onReplyFinished(reply);
@@ -76,7 +104,7 @@ void EztvIndexer::onReplyFinished(QNetworkReply* reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
-        // Try next mirror
+        markError(reply);
         ++m_mirrorIndex;
         tryNextMirror();
         return;
@@ -91,6 +119,7 @@ void EztvIndexer::onReplyFinished(QNetworkReply* reply)
         return;
     }
 
+    markSuccess();
     emit searchFinished(results);
 }
 
@@ -108,6 +137,7 @@ QList<TorrentResult> EztvIndexer::parseHtml(const QString& html, int limit)
     static const QRegularExpression titleAnchorRe("<a[^>]*>([^<]+)</a>");
     static const QRegularExpression tagStripRe("<[^>]+>");
     static const QRegularExpression nonDigitRe("[^\\d]");
+    static const QRegularExpression btihRe("btih:([a-fA-F0-9]{40})", QRegularExpression::CaseInsensitiveOption);
 
     auto rowIter = rowRe.globalMatch(html);
     while (rowIter.hasNext() && results.size() < limit) {
@@ -178,6 +208,13 @@ QList<TorrentResult> EztvIndexer::parseHtml(const QString& html, int limit)
         r.sourceKey  = "eztv";
         r.categoryId = "tv";
         r.category   = "TV";
+
+        auto ihMatch = btihRe.match(magnet);
+        if (ihMatch.hasMatch())
+            r.infoHash = canonicalizeInfoHash(ihMatch.captured(1));
+        if (r.infoHash.isEmpty())
+            qDebug() << "[EztvIndexer] infoHash missing for:" << title;
+
         results.append(r);
     }
 

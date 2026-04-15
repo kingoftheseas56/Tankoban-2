@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QScreen>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -8,6 +9,7 @@
 #ifdef Q_OS_WIN
 #include <dwmapi.h>
 #include <windows.h>
+#include <avrt.h>
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
@@ -474,6 +476,7 @@ int main(int argc, char *argv[])
     app.setApplicationName("Tankoban");
     app.setOrganizationName("Tankoban");
     app.setApplicationVersion("0.1.0");
+    app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
 
     // Debug breadcrumbs — writing to file since /subsystem:windows has no console
     auto dbg = [](const char* msg) {
@@ -509,7 +512,18 @@ int main(int argc, char *argv[])
 #ifdef Q_OS_WIN
     // Force foreground on Windows — showMaximized alone isn't enough
     SetForegroundWindow(reinterpret_cast<HWND>(window.winId()));
+
+    // MMCSS: tell Windows scheduler the GUI/render thread does timing-critical
+    // media work. The Qt GUI thread is also where QRhiWidget renders to vsync,
+    // so this directly reduces frame-presentation jitter under CPU load.
+    DWORD mmcss_idx = 0;
+    HANDLE mmcss_handle = AvSetMmThreadCharacteristicsW(L"Playback", &mmcss_idx);
 #endif
 
-    return app.exec();
+    int ret = app.exec();
+
+#ifdef Q_OS_WIN
+    if (mmcss_handle) AvRevertMmThreadCharacteristics(mmcss_handle);
+#endif
+    return ret;
 }

@@ -3,19 +3,37 @@
 #include <QString>
 #include <QList>
 #include <QUrl>
+#include <QDateTime>
 #include <QRegularExpression>
 
 struct TorrentResult {
-    QString title;
-    QString magnetUri;
-    qint64  sizeBytes  = 0;
-    int     seeders    = 0;
-    int     leechers   = 0;
-    QString sourceName;
-    QString sourceKey;
-    QString categoryId;
-    QString category;
+    QString   title;
+    QString   magnetUri;
+    qint64    sizeBytes  = 0;
+    int       seeders    = 0;
+    int       leechers   = 0;
+    QString   sourceName;
+    QString   sourceKey;
+    QString   categoryId;
+    QString   category;
+    QString   infoHash;      // canonical 40-char lowercase hex BTIH; empty if indexer couldn't extract
+    QDateTime publishDate;   // invalid if indexer couldn't extract
+    QString   detailsUrl;    // per-indexer details page; empty if none
 };
+
+// Normalize any raw info-hash string to 40-char lowercase hex. Returns empty
+// for non-hex or wrong-length input (callers treat as "unknown" and fall
+// back to magnet-regex extraction at dedup time).
+inline QString canonicalizeInfoHash(QString raw)
+{
+    raw = raw.trimmed().toLower();
+    if (raw.length() != 40)
+        return {};
+    static const QRegularExpression hexRe("^[a-f0-9]{40}$");
+    if (!hexRe.match(raw).hasMatch())
+        return {};
+    return raw;
+}
 
 Q_DECLARE_METATYPE(TorrentResult)
 Q_DECLARE_METATYPE(QList<TorrentResult>)

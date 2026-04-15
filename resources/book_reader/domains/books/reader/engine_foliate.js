@@ -534,92 +534,74 @@
       if (!state.view) return;
 
       if (state.format === 'epub' || state.format === 'mobi' || state.format === 'fb2') {
+        // BOOK_FIX 2.1: single canonical style-application path. Pre-2.1 this
+        // function ran FIVE overlapping layers against every setting change:
+        //   A. setStyles(buildEpubStyles) — stylesheet with body !important rules
+        //   B. applyReadiumCSSFlags — --USER__ CSS custom properties on :root
+        //   C. Direct doc.body.style.setProperty via renderer.getContents()
+        //   D. Direct doc.body.style.setProperty via renderer.element document
+        //   E. Paginator attributes (gap / max-inline-size / margin)
+        //   F. A delayed 120ms re-setStyles to compensate for QWebEngine layout
+        //      timing (expand() running before first setStyles CSS commit).
+        //
+        // C + D wrote the same body styles Layer A already covers with
+        // !important stylesheet rules — redundant three-way overlap that caused
+        // 2-3 reflows per setting change and body-style leakage across reopen.
+        // F was semantically correct but magic-number-based.
+        //
+        // Post-2.1: A + B + E only (each addresses a non-overlapping concern —
+        // A for body typography/layout, B for per-document CSS vars consumed
+        // by ReadiumCSS, E for paginator config foliate-js reads as element
+        // attributes, not CSS). F is replaced with requestAnimationFrame×2 so
+        // the re-apply runs exactly when layout has committed instead of on a
+        // magic 120ms timer.
         try {
-          const styles = buildEpubStyles(s);
-          state.view.renderer && state.view.renderer.setStyles && state.view.renderer.setStyles(styles);
-          // RCSS_INTEGRATION: apply ReadiumCSS flags to iframe :root style attribute
+          const renderer = state.view.renderer;
+          if (renderer && typeof renderer.setStyles === 'function') {
+            renderer.setStyles(buildEpubStyles(s));
+          }
+          // Layer B — ReadiumCSS flag vars cover theme / fontFamily / lineHeight
+          // / fontWeight / textAlign / letterSpacing / wordSpacing / paraSpacing
+          // / paraIndent / bodyHyphens / extended-theme colors.
           applyReadiumCSSFlags(s);
 
-          // PATCH7_FONTSIZE: force typography directly on each content document body.
-          // Some EPUBs and certain flow modes override stylesheet font-size; inline body styles win.
-          try {
-            const renderer = state.view && state.view.renderer;
-            const fontSize = clamp(Number(s.fontSize || 100), 75, 250);
-            const lineHeight = clamp(Number(s.lineHeight || 1.5), 1.0, 2.0);
-            const fontWeight = clamp(Number(s.fontWeight || 400), 100, 900);
-            if (renderer && typeof renderer.getContents === 'function') {
-              for (const c of renderer.getContents()) {
-                if (!c || !c.doc) continue;
-                const doc = c.doc;
-                if (doc && doc.body && doc.body.style) {
-                  doc.body.style.setProperty('font-size', fontSize + '%', 'important');
-                  doc.body.style.setProperty('line-height', String(lineHeight), 'important');
-                  doc.body.style.setProperty('font-weight', String(fontWeight), 'important');
-                  // FIX_EPUB_MARGIN_INLINE: keep margin slider effective even when publisher CSS fights injected styles
-                  const mf = clamp(Number((s.margin === 0) ? 0 : (s.margin || 1)), 0, 4);
-                  const pad = Math.round(mf * 24);
-                  const maxLineWidth = clamp(Number(s.maxLineWidth || 960), 400, 1600);
-                  doc.body.style.setProperty('max-width', maxLineWidth + 'px', 'important');
-                  doc.body.style.setProperty('box-sizing', 'border-box', 'important');
-                  doc.body.style.setProperty('margin', '0 auto', 'important');
-                  doc.body.style.setProperty('padding-left', pad + 'px', 'important');
-                  doc.body.style.setProperty('padding-right', pad + 'px', 'important');
-                }
-              }
+          // Layer E — paginator config. These are foliate-js element attributes
+          // (not CSS), so they can't live inside setStyles. Guard redundant
+          // writes: only re-set if the value changed since last applySettings.
+          if (renderer && typeof renderer.setAttribute === 'function') {
+            const margin  = clamp(Number((s.margin === 0) ? 0 : (s.margin || 1)), 0, 4);
+            const gapPct  = Math.max(2, Math.round(margin * 7));
+            const gapAttr = gapPct + '%';
+            if (renderer.getAttribute('gap') !== gapAttr) {
+              renderer.setAttribute('gap', gapAttr);
             }
-
-            // PATCH9_FONTSIZE: also apply directly to renderer.element document (some renderers don't expose getContents)
-            try {
-              const el = renderer && renderer.element;
-              const doc = el && (el.contentDocument || (el.contentWindow && el.contentWindow.document));
-              if (doc) {
-                if (doc.documentElement && doc.documentElement.style) {
-                  doc.documentElement.style.setProperty('font-size', fontSize + '%', 'important');
-                }
-                if (doc.body && doc.body.style) {
-                  doc.body.style.setProperty('font-size', fontSize + '%', 'important');
-                  doc.body.style.setProperty('line-height', String(lineHeight), 'important');
-                  doc.body.style.setProperty('font-weight', String(fontWeight), 'important');
-                  // FIX_EPUB_MARGIN_INLINE2
-                  const mf2 = clamp(Number((s.margin === 0) ? 0 : (s.margin || 1)), 0, 4);
-                  const pad2 = Math.round(mf2 * 24);
-                  const maxLineWidth2 = clamp(Number(s.maxLineWidth || 960), 400, 1600);
-                  doc.body.style.setProperty('max-width', maxLineWidth2 + 'px', 'important');
-                  doc.body.style.setProperty('box-sizing', 'border-box', 'important');
-                  doc.body.style.setProperty('margin', '0 auto', 'important');
-                  doc.body.style.setProperty('padding-left', pad2 + 'px', 'important');
-                  doc.body.style.setProperty('padding-right', pad2 + 'px', 'important');
-                }
-              }
-            } catch {}
-
-          } catch {}
-
-          // Map user margin to paginator gap + max-inline-size (paginator handles margins, not ReadiumCSS)
-          const margin = clamp(Number((s.margin === 0) ? 0 : (s.margin || 1)), 0, 4);
-          if (state.view.renderer && typeof state.view.renderer.setAttribute === 'function') {
-            // FIX-MARGIN-MINPAD: enforce 2% minimum gap so text never overlaps side UI
-            var gapPct = Math.max(2, Math.round(margin * 7));
-            state.view.renderer.setAttribute('gap', gapPct + '%');
-            // FIX-MARGIN-FULLWIDTH: remove the default 720px column cap so text can expand fully
-            state.view.renderer.setAttribute('max-inline-size', '9999px');
-            // FIX-MARGIN-VPAD: push content below toolbar (48px) and above footer (~60px)
-            state.view.renderer.setAttribute('margin', '64px');
+            if (renderer.getAttribute('max-inline-size') !== '9999px') {
+              renderer.setAttribute('max-inline-size', '9999px');
+            }
+            if (renderer.getAttribute('margin') !== '64px') {
+              renderer.setAttribute('margin', '64px');
+            }
           }
-
         } catch {}
 
-        // FIX_FONTSIZE_RELAYOUT: In QWebEngine, document.fonts.ready resolves
-        // immediately (no pending web fonts), so the expand() triggered by
-        // setStyles runs before the browser recalculates layout with new CSS.
-        // A delayed re-apply ensures expand() measures updated content metrics.
-        setTimeout(function () {
-          try {
-            if (state.view && state.view.renderer && typeof state.view.renderer.setStyles === 'function') {
-              state.view.renderer.setStyles(buildEpubStyles(s));
-            }
-          } catch (e) {}
-        }, 120);
+        // QWebEngine layout-commit fix (supersedes the old 120ms setTimeout).
+        // The first setStyles above triggers expand() inside foliate-js to
+        // recompute column widths, but QWebEngine's CSS layout commit is async
+        // — expand() measures against stale layout. Two animation frames later
+        // layout has committed; re-apply so the paginator measures correctly.
+        // Cheaper than setTimeout(..., 120) and semantically what we want.
+        try {
+          const raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
+          raf(function () {
+            raf(function () {
+              try {
+                if (state.view && state.view.renderer && typeof state.view.renderer.setStyles === 'function') {
+                  state.view.renderer.setStyles(buildEpubStyles(s));
+                }
+              } catch (e) {}
+            });
+          });
+        } catch {}
       }
 
       if (state.format === 'pdf') applyPdfZoomMode();
@@ -791,16 +773,20 @@
           }
           return;
         }
-        // Forward to parent document so global shortcuts (fullscreen, sidebar, etc.) work
+        // BOOK_FIX 3.1: route directly into the central dispatcher instead of
+        // dispatching a synthetic parent-document KeyboardEvent. The synthetic
+        // path loses the link between the parent's preventDefault and the
+        // iframe's native default (Space scrolling, arrow caret moves), so the
+        // user could see a page flip AND iframe scroll from the same keypress.
+        // Direct call: both paths (parent listener + this iframe listener)
+        // share one decision tree, and `handled`→preventDefault on the iframe
+        // event stops iframe native behavior cleanly.
         try {
-          var pd = window.document;
-          if (pd && pd !== doc) {
-            pd.dispatchEvent(new KeyboardEvent('keydown', {
-              key: ev.key, code: ev.code,
-              ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey,
-              altKey: ev.altKey, metaKey: ev.metaKey,
-              bubbles: true, cancelable: true
-            }));
+          const Kb = window.booksReaderKeyboard;
+          if (Kb && typeof Kb.handleKeyEvent === 'function') {
+            const handled = Kb.handleKeyEvent(ev);
+            if (handled && typeof ev.preventDefault === 'function') ev.preventDefault();
+            if (handled && typeof ev.stopPropagation === 'function') ev.stopPropagation();
           }
         } catch (_e) {}
       }, true);
@@ -935,11 +921,14 @@
 
       applySettings(o.settings || {});
 
-      // WAVE1: apply flow mode for EPUB — always paginated (scroll mode removed)
+      // Respect the user's saved flow mode (paginated or scrolled). The toggle
+      // button persists `settings.flowMode` per-book; honor it on reopen so
+      // scroll-mode readers don't snap back to paginated at chapter start.
       if (state.format === 'epub' || state.format === 'mobi' || state.format === 'fb2') {
         try {
           if (state.view.renderer && typeof state.view.renderer.setAttribute === 'function') {
-            state.view.renderer.setAttribute('flow', 'paginated');
+            var savedFlow = String((o.settings && o.settings.flowMode) || 'paginated');
+            state.view.renderer.setAttribute('flow', savedFlow === 'scrolled' ? 'scrolled' : 'paginated');
           }
         } catch {}
       }
@@ -952,6 +941,42 @@
       });
 
       const target = locatorToNavigationTarget(o.locator);
+
+      // BOOK_FIX 1.3: subscribe BEFORE init() so we don't miss a fast stabilized
+      // emission on small books. Foliate's renderer fires `stabilized` every
+      // time pagination settles — initial layout + any reflow after a setStyles
+      // change. applySettings (post-2.1) re-applies via requestAnimationFrame×2
+      // to work around QWebEngine's async CSS-layout-commit, which triggers a
+      // SECOND stabilized shortly after init. We must catch the last one, not
+      // the first, or the reader reveals during the RAF-deferred reflow and
+      // the user sees the shimmer the whole gate is meant to prevent.
+      //
+      // Debounce: on each stabilized, arm a 220ms timer; reset it on any new
+      // stabilized within the window. Fire the bridge once the bus goes quiet.
+      // 220ms is comfortably larger than the 2-RAF gap (~32ms at 60fps) so the
+      // second stabilized always lands inside the window.
+      let readyFired = false;
+      let settleTimer = null;
+      const fireReady = function () {
+        if (readyFired) return;
+        readyFired = true;
+        try {
+          if (window.__ebookNav && typeof window.__ebookNav.markReaderReady === 'function') {
+            window.__ebookNav.markReaderReady();
+          }
+        } catch (e) { /* swallow */ }
+      };
+      const onStabilized = function () {
+        if (readyFired) return;
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = setTimeout(fireReady, 220);
+      };
+      try {
+        if (state.view.renderer && typeof state.view.renderer.addEventListener === 'function') {
+          state.view.renderer.addEventListener('stabilized', onStabilized);
+        }
+      } catch {}
+
       await view.init({
         lastLocation: target,
         showTextStart: true,
@@ -965,12 +990,78 @@
       }
 
       if (state.format === 'pdf') applyPdfZoomMode();
+
+      // JS-side fallback — some renderer configurations (PDF, older foliate-js)
+      // never emit `stabilized`. The C++ 5s watchdog is the hard backstop, but
+      // 5s of black overlay is jarring; fire readiness 700ms after init()
+      // resolves if no stabilized has been observed at all. If stabilized is
+      // armed, the debounce wins and this no-op's.
+      try {
+        setTimeout(function () {
+          if (!readyFired && !settleTimer) fireReady();
+        }, 700);
+      } catch {}
+
+      // BOOK_FIX 2.2: expose a relayout hook the C++ resize-debounce (200ms
+      // after last resizeEvent) can call. Forces Foliate's paginator to
+      // recompute columns/margins against the current container size — the
+      // embedded ResizeObserver theoretically handles this, but QWebEngine's
+      // iframe→viewport propagation is lossy enough that explicit render()
+      // is more reliable. Flash protection: drop renderer opacity to 0 before
+      // render(), restore on the next stabilized (via a reused debounce).
+      window.__ebookRelayout = function () {
+        try {
+          if (!state.view || !state.view.renderer) return;
+          const r = state.view.renderer;
+
+          // Hide pre-reflow to mask intermediate columns.
+          try {
+            if (r.style) r.style.opacity = '0';
+            else if (typeof r.setAttribute === 'function') r.setAttribute('style', 'opacity:0');
+          } catch {}
+
+          // Listen for the next stabilized-quiet and restore visibility. One-
+          // shot; reinstalled on every relayout call. Uses the same 220ms
+          // settle window as the open-time gate for consistent UX.
+          let relayoutSettle = null;
+          let relayoutDone = false;
+          const finish = function () {
+            if (relayoutDone) return;
+            relayoutDone = true;
+            try { r.removeEventListener('stabilized', onRelayoutStable); } catch {}
+            try {
+              if (r.style) r.style.opacity = '';
+              else if (typeof r.removeAttribute === 'function') r.removeAttribute('style');
+            } catch {}
+          };
+          const onRelayoutStable = function () {
+            if (relayoutDone) return;
+            if (relayoutSettle) clearTimeout(relayoutSettle);
+            relayoutSettle = setTimeout(finish, 220);
+          };
+          try { r.addEventListener('stabilized', onRelayoutStable); } catch {}
+
+          // Backstop — if stabilized never fires post-render (some PDF paths),
+          // restore opacity after 800ms anyway.
+          setTimeout(finish, 800);
+
+          // Trigger the re-layout.
+          try {
+            if (typeof r.render === 'function') r.render();
+            else if (typeof r.size === 'function') r.size();
+          } catch {}
+        } catch {}
+      };
     }
 
     async function destroy() {
       if (state.view && state.onRelocate) {
         try { state.view.removeEventListener('relocate', state.onRelocate); } catch {}
       }
+
+      // BOOK_FIX 2.2: clear the relayout hook so a late C++ resize-debounce
+      // firing after destroy() doesn't call into a torn-down renderer.
+      try { if (window.__ebookRelayout) delete window.__ebookRelayout; } catch {}
 
       try { if (state.view && typeof state.view.close === 'function') state.view.close(); } catch {}
       try { if (state.bookObj && typeof state.bookObj.destroy === 'function') state.bookObj.destroy(); } catch {}
@@ -1325,7 +1416,13 @@
       return state.view.renderer.prevSection();
     }
 
-    // scrollContent removed — scroll mode no longer available
+    // BOOK_FIX 5.2: the old `scrollContent(delta)` helper was removed as an
+    // unused API, NOT because scrolled flow mode was dropped. Scrolled flow is
+    // still fully supported — user toggles via the flow button (toolbar) or
+    // settings.flowMode='scrolled'; foliate-js's paginator switches layout
+    // mode via renderer.setAttribute('flow', 'scrolled'). Native iframe scroll
+    // handles content motion; Foliate's `relocate` event fires on scroll and
+    // drives progress updates.
 
     return {
       open,
@@ -1355,7 +1452,6 @@
       onSectionBoundary,
       nextSection,
       prevSection,
-      // scrollContent removed — scroll mode no longer available
       // BUILD_HIST
       historyBack,
       historyForward,

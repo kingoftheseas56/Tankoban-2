@@ -92,6 +92,7 @@
     // Book progress
     booksProgress: {
       getAll: tw(function() { return ea.booksProgress && ea.booksProgress.getAll ? ea.booksProgress.getAll() : Promise.resolve({}); }, {}, 'booksProgress.getAll'),
+      keyFor: tw(function() { var a = arguments; return ea.booksProgress && ea.booksProgress.keyFor ? ea.booksProgress.keyFor.apply(ea.booksProgress, a) : Promise.resolve(''); }, '', 'booksProgress.keyFor'),
       get: tw(function() { var a = arguments; return ea.booksProgress && ea.booksProgress.get ? ea.booksProgress.get.apply(ea.booksProgress, a) : Promise.resolve(null); }, null, 'booksProgress.get'),
       save: tw(function() { var a = arguments; return ea.booksProgress && ea.booksProgress.save ? ea.booksProgress.save.apply(ea.booksProgress, a) : Promise.resolve(); }, undefined, 'booksProgress.save'),
       clear: tw(function() { var a = arguments; return ea.booksProgress && ea.booksProgress.clear ? ea.booksProgress.clear.apply(ea.booksProgress, a) : Promise.resolve(); }, undefined, 'booksProgress.clear'),

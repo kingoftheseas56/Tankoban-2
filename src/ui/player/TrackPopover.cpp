@@ -359,6 +359,7 @@ void TrackPopover::toggle(QWidget* anchor)
         dismiss();
         return;
     }
+    m_anchor = anchor;
     if (anchor)
         anchorAbove(anchor);
     show();
@@ -390,13 +391,17 @@ bool TrackPopover::subOutline() const
 // Event filter — click-outside dismiss
 // ---------------------------------------------------------------
 
-bool TrackPopover::eventFilter(QObject* obj, QEvent* event)
+bool TrackPopover::eventFilter(QObject* /*obj*/, QEvent* event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
-        QPoint local = mapFromGlobal(me->globalPosition().toPoint());
-        if (!rect().contains(local))
-            dismiss();
+        const QPoint gp = me->globalPosition().toPoint();
+        if (rect().contains(mapFromGlobal(gp)))
+            return false;
+        const bool onAnchor = m_anchor
+            && QRect(m_anchor->mapToGlobal(QPoint(0, 0)), m_anchor->size()).contains(gp);
+        dismiss();
+        return onAnchor;
     }
     return false;
 }
@@ -421,6 +426,7 @@ void TrackPopover::dismiss()
 {
     removeClickFilter();
     hide();
+    m_anchor.clear();
 }
 
 void TrackPopover::installClickFilter()

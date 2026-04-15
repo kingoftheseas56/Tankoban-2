@@ -23,6 +23,13 @@
 class CoreBridge;
 class SmoothScrollArea;
 class ScrollStripCanvas;
+class ThumbnailGenerator;
+class QComboBox;
+class QFrame;
+class QCheckBox;
+class QToolButton;
+class QScrollArea;
+class QGridLayout;
 
 // ── H1: ClickScrim ───────────────────────────────────────────────────────────
 class ClickScrim : public QWidget {
@@ -136,9 +143,11 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void buildUI();
+    void handleCursorActivity(const QPoint& posInReader);
     void showPage(int index);
     void nextPage();
     void prevPage();
@@ -157,6 +166,15 @@ private:
     // Volume navigator
     void showVolumeNavigator();
     void hideVolumeNavigator();
+
+    // P5-1: Settings panel
+    void showSettingsPanel();
+    void hideSettingsPanel();
+
+    // P6-2: Thumbnail grid panel
+    void showThumbsPanel();
+    void hideThumbsPanel();
+    void onThumbnailReady(int pageIndex, const QImage& thumb);
 
     // Async decode callback
     void onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int h, int volumeId);
@@ -308,6 +326,7 @@ private:
     int     m_displayCacheZoom = 0;
     int     m_displayCachePage = -1;
     bool    m_displayCacheHasPair = false;
+    int     m_displayCacheBrightness = 0;  // P2-1
 
     // In-flight decode tracking
     QSet<int> m_inflightDecodes;
@@ -317,12 +336,25 @@ private:
     int m_portraitWidthPct = 78;
     QPushButton* m_portraitBtn = nullptr;
     QPushButton* m_modeBtn = nullptr;
+    QPushButton* m_settingsBtn = nullptr;  // P5-4
 
     // J2: memory saver
     bool          m_memorySaver    = false;
 
     // H3: gutter shadow strength
     double        m_gutterShadow   = 0.35;
+
+    // P2-1: image filters — brightness delta -100..+100, 0 = off
+    int           m_filterBrightness = 0;
+
+    // P3-1: ScrollStrip side padding in px (each side), 0 = off
+    int           m_stripSidePadding = 0;
+
+    // P3-2: Auto-crop uniform borders on decoded pages
+    bool          m_cropBorders = false;
+
+    // P3-3: ScrollStrip — split wide pages into two stacked half-width portraits
+    bool          m_splitOnWide = false;
 
     // C4: image scaling quality
     Qt::TransformationMode m_scalingQuality = Qt::SmoothTransformation;
@@ -373,13 +405,52 @@ private:
     QPushButton* m_endNextBtn = nullptr;
 
     // Volume navigator
-    QWidget*     m_volOverlay = nullptr;
-    QLineEdit*   m_volSearch  = nullptr;
-    QListWidget* m_volList    = nullptr;
-    QLabel*      m_volTitle   = nullptr;
+    QWidget*     m_volOverlay     = nullptr;
+    QWidget*     m_volCard        = nullptr;
+    QLineEdit*   m_volSearch      = nullptr;
+    QListWidget* m_volList        = nullptr;
+    QLabel*      m_volTitle       = nullptr;
+    QLabel*      m_volEmptyLabel  = nullptr;
+    QPushButton* m_volBtn         = nullptr;
+
+    QWidget* buildVolumeRow(const QString& title,
+                            const QString& meta,
+                            const QString& pillText,
+                            bool isCurrent);
 
     // Keys overlay
     QWidget*     m_keysOverlay = nullptr;
+
+    // P5-1: Settings panel
+    QWidget*     m_settingsOverlay = nullptr;
+    QFrame*      m_settingsCard    = nullptr;
+    QComboBox*   m_settingsModeCombo     = nullptr;
+    QComboBox*   m_settingsPortraitCombo = nullptr;
+    QComboBox*   m_settingsFitCombo      = nullptr;
+    // P5-2: Image section
+    QComboBox*   m_settingsBrightnessCombo = nullptr;
+    QCheckBox*   m_settingsCropCheckbox    = nullptr;
+    QComboBox*   m_settingsQualityCombo    = nullptr;
+    QCheckBox*   m_settingsMemoryCheckbox  = nullptr;
+    // P5-3: Mode-specific sections
+    QWidget*     m_settingsDoublePageSection = nullptr;
+    QWidget*     m_settingsScrollStripSection = nullptr;
+    QCheckBox*   m_settingsRtlCheckbox       = nullptr;
+    QComboBox*   m_settingsGutterCombo       = nullptr;
+    QComboBox*   m_settingsSidePaddingCombo  = nullptr;
+    QCheckBox*   m_settingsSplitCheckbox     = nullptr;
+
+    // P6-2: Thumbnail grid panel
+    ThumbnailGenerator* m_thumbnailGen = nullptr;
+    QWidget*     m_thumbsOverlay = nullptr;
+    QFrame*      m_thumbsCard    = nullptr;
+    QLabel*      m_thumbsTitle   = nullptr;
+    QScrollArea* m_thumbsScroll  = nullptr;
+    QWidget*     m_thumbsContent = nullptr;
+    QGridLayout* m_thumbsGrid    = nullptr;
+    QVector<QToolButton*> m_thumbCells;
+    QToolButton* m_currentThumbCell = nullptr;
+    QString      m_thumbsBuiltForCbz;  // detect series swap to trigger grid rebuild
 
     // Toast
     QLabel*      m_toastLabel = nullptr;

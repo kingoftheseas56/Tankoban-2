@@ -82,9 +82,14 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         { "2.35:1",   "2.35:1"   },
         { "1.85:1",   "1.85:1"   },
     };
+    auto* aspectGroup = new QActionGroup(aspectMenu);
+    aspectGroup->setExclusive(true);
     for (const auto& asp : ASPECTS) {
         auto* act = aspectMenu->addAction(asp.label);
         QString val = asp.value;
+        act->setCheckable(true);
+        act->setChecked(data.currentAspect == val);
+        aspectGroup->addAction(act);
         QObject::connect(act, &QAction::triggered, parent, [callback, val]() {
             callback(SetAspectRatio, val);
         });
@@ -94,6 +99,82 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
     QObject::connect(fsAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleFullscreen, {});
     });
+
+    // VIDEO_PLAYER_FIX Batch 3.1 — Always on Top toggle. Checkable;
+    // keyboard shortcut Ctrl+T is surfaced in the label so users discover
+    // the binding via the menu (T alone is taken by open_subtitle_menu).
+    auto* aotAction = menu->addAction("Always on Top\tCtrl+T");
+    aotAction->setCheckable(true);
+    aotAction->setChecked(data.alwaysOnTop);
+    QObject::connect(aotAction, &QAction::triggered, parent, [callback]() {
+        callback(ToggleAlwaysOnTop, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 3.2 — Take Snapshot (current displayed frame
+    // to PNG under Pictures/Tankoban Snapshots/). Ctrl+S since plain S is
+    // taken by cycle_subtitle.
+    auto* snapAction = menu->addAction("Take Snapshot\tCtrl+S");
+    QObject::connect(snapAction, &QAction::triggered, parent, [callback]() {
+        callback(TakeSnapshot, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 3.3 — Picture-in-Picture (mini-mode: frameless
+    // + always-on-top 320x180 window). Label swaps to "Exit PiP" while
+    // active so the same entry can toggle it back off.
+    auto* pipAction = menu->addAction(data.inPip
+        ? "Exit Picture-in-Picture\tCtrl+P"
+        : "Picture-in-Picture\tCtrl+P");
+    QObject::connect(pipAction, &QAction::triggered, parent, [callback]() {
+        callback(TogglePip, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 4.1 — Open URL dialog (HTTP/HTTPS/RTSP/RTMP
+    // streams). Same Ctrl+U convention QMPlay2 + IINA + VLC use.
+    auto* urlAction = menu->addAction("Open URL...\tCtrl+U");
+    QObject::connect(urlAction, &QAction::triggered, parent, [callback]() {
+        callback(OpenUrl, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 4.2 — Recent submenu (last 20 opened paths +
+    // URLs, most-recent-first). Local paths greyed out when the file no
+    // longer exists; click prunes them. Clear Recent at the bottom.
+    auto* recentMenu = menu->addMenu("Recent");
+    recentMenu->setStyleSheet(MENU_SS);
+    if (data.recentFiles.isEmpty()) {
+        auto* empty = recentMenu->addAction("(No recent files)");
+        empty->setEnabled(false);
+    } else {
+        for (const QString& path : data.recentFiles) {
+            QString label;
+            bool reachable = true;
+            if (path.startsWith("http", Qt::CaseInsensitive)
+                || path.startsWith("rtsp", Qt::CaseInsensitive)
+                || path.startsWith("rtmp", Qt::CaseInsensitive)) {
+                // URL entry — take the tail after the last '/' if present,
+                // otherwise show the full URL. Reachability not probed
+                // (would require a network roundtrip per menu open).
+                const int slash = path.lastIndexOf('/');
+                label = (slash > 0 && slash < path.size() - 1)
+                    ? path.mid(slash + 1) : path;
+                if (label.isEmpty()) label = path;
+            } else {
+                label = QFileInfo(path).fileName();
+                if (label.isEmpty()) label = path;
+                reachable = QFileInfo(path).exists();
+            }
+            auto* act = recentMenu->addAction(label);
+            act->setToolTip(path);
+            act->setEnabled(reachable);
+            QObject::connect(act, &QAction::triggered, parent, [callback, path]() {
+                callback(OpenRecent, path);
+            });
+        }
+        recentMenu->addSeparator();
+        auto* clearAct = recentMenu->addAction("Clear Recent");
+        QObject::connect(clearAct, &QAction::triggered, parent, [callback]() {
+            callback(ClearRecent, {});
+        });
+    }
 
     menu->addSeparator();
 
@@ -129,15 +210,29 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
     {
         auto* subMenu = menu->addMenu("Subtitles");
         subMenu->setStyleSheet(MENU_SS);
+
+        // Batch 5.3 (Tankostream) — top entry opens the richer SubtitleMenu
+        // which includes addon-fetched external tracks + load-from-file.
+        // The per-track list below remains as a shortcut for embedded tracks.
+        auto* openMenuAct = subMenu->addAction("Open Subtitles menu...");
+        QObject::connect(openMenuAct, &QAction::triggered, parent, [callback]() {
+            callback(OpenSubtitleMenu, {});
+        });
+        subMenu->addSeparator();
+
         auto* subGroup = new QActionGroup(subMenu);
         subGroup->setExclusive(true);
 
         auto* offAct = subMenu->addAction("Off");
         offAct->setCheckable(true);
-        offAct->setChecked(data.currentSubId == 0 || !data.subsVisible);
+        offAct->setChecked(!data.subsVisible);
         subGroup->addAction(offAct);
+        // Distinct sentinel from any real track id. Previously we sent 0
+        // for Off, which collided with subtitle streams whose AVStream
+        // index happened to be 0 (subtitle-only containers, some remux
+        // layouts) — picking those tracks silently did Off.
         QObject::connect(offAct, &QAction::triggered, parent, [callback]() {
-            callback(SetSubtitleTrack, 0);
+            callback(SetSubtitleTrack, -1);
         });
 
         for (int i = 0; i < data.subtitleTracks.size(); ++i) {
@@ -193,6 +288,23 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
     auto* playlistAct = menu->addAction("Playlist");
     QObject::connect(playlistAct, &QAction::triggered, parent, [callback]() {
         callback(OpenPlaylist, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 6.1 — live keybinding editor. Label lists
+    // `?` because that's the `show_shortcuts` default — changes if user
+    // rebinds, but the label stays correct as a discoverability aid.
+    auto* keysAct = menu->addAction("Keyboard Shortcuts...\t?");
+    QObject::connect(keysAct, &QAction::triggered, parent, [callback]() {
+        callback(OpenKeybindings, {});
+    });
+
+    // VIDEO_PLAYER_FIX Batch 7.1 — stats badge toggle (checkable). Label
+    // hard-codes `I` for discoverability; rebinding doesn't update here.
+    auto* statsAct = menu->addAction("Show Stats\tI");
+    statsAct->setCheckable(true);
+    statsAct->setChecked(data.showStats);
+    QObject::connect(statsAct, &QAction::triggered, parent, [callback]() {
+        callback(ToggleStats, {});
     });
 
     auto* backAct = menu->addAction("Back to library");

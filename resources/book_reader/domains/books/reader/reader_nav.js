@@ -329,14 +329,15 @@
     state.engine.setPauseBoundary(false);
   }
 
-  var syncOnActivityTs = 0;
+  // BOOK_FIX 5.2: syncProgressOnActivity is intentionally a no-op. In scrolled
+  // flow mode, Foliate's paginator emits `relocate` as the user scrolls, and
+  // that event already drives the progress scrub sync via syncProgressUI.
+  // Calling it again on every mousemove/scroll activity was double-work —
+  // removed the redundancy here. In paginated mode there's nothing to sync
+  // between page turns. Kept as an exported no-op so existing callers don't
+  // break; future work can inline the call sites and delete this shim.
   function syncProgressOnActivity() {
-    return; // scroll mode removed — no-op
-    var now = Date.now();
-    if ((now - syncOnActivityTs) < 120) return;
-    syncOnActivityTs = now;
-    // FIX_AUDIT: keep scrub/progress responsive while user scrolls.
-    syncProgressUI().catch(function () {});
+    return;
   }
 
   // ── Goto dialog ──────────────────────────────────────────────

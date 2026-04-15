@@ -5,6 +5,8 @@
 #include <QString>
 #include <QJsonObject>
 
+#include "core/stream/addon/StreamInfo.h"
+
 class CoreBridge;
 class StreamEngine;
 class VideoPlayer;
@@ -17,10 +19,14 @@ public:
     explicit StreamPlayerController(CoreBridge* bridge, StreamEngine* engine,
                                     QObject* parent = nullptr);
 
+    // Phase 4.3 Stream-based entry point. Branches internally by source kind:
+    //   Magnet → existing polling flow.
+    //   Http/Url → immediate readyToPlay, no buffer polling.
+    //   YouTube → immediate streamFailed("unsupported").
     void startStream(const QString& imdbId, const QString& mediaType,
                      int season, int episode,
-                     const QString& magnetUri, int fileIndex,
-                     const QString& fileNameHint);
+                     const tankostream::addon::Stream& selectedStream);
+
     void stopStream();
 
     bool isActive() const { return m_active; }
@@ -50,20 +56,18 @@ private:
     QString m_mediaType;
     int     m_season  = 0;
     int     m_episode = 0;
-    QString m_magnetUri;
-    int     m_fileIndex = -1;
-    QString m_fileNameHint;
+    tankostream::addon::Stream m_selectedStream;
 
     // Polling state
     int  m_pollCount = 0;
     qint64 m_startTimeMs = 0;
-    qint64 m_lastMetadataChangeMs = 0;  // tracks metadata stall
+    qint64 m_lastMetadataChangeMs = 0;
 
     static constexpr int POLL_FAST_MS          = 300;
     static constexpr int POLL_SLOW_MS          = 1000;
-    static constexpr int POLL_SLOW_AFTER       = 100;       // switch to slow after ~30s
-    static constexpr int HARD_TIMEOUT_MS       = 120000;  // 2 minutes for initial buffering
-    static constexpr int METADATA_STALL_MS     = 60000;     // 60s metadata stall before warning
+    static constexpr int POLL_SLOW_AFTER       = 100;
+    static constexpr int HARD_TIMEOUT_MS       = 120000;
+    static constexpr int METADATA_STALL_MS     = 60000;
 
     QString m_lastErrorCode;
 };

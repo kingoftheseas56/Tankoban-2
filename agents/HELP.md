@@ -6,6 +6,12 @@ One request at a time. When resolved, requester clears this file back to the emp
 
 ## STATUS: NO ACTIVE REQUEST
 
+<!-- Earlier this session: Agent 1 → Agent 5 request for LibraryScanner CBR/RAR
+extension (COMIC_READER_FIX Phase 4 Batch 4.2). Retracted by Hemanth's one-time
+override 2026-04-16 — Agent 1 took the work in-house with override authority
+limited to this specific phase. See chat.md for the Phase 4 exit post. -->
+
+
 ---
 
 <!-- TEMPLATE — copy this block when opening a request, replace STATUS above with OPEN -->

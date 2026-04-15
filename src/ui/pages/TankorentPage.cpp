@@ -15,11 +15,18 @@
 #include "ui/dialogs/SpeedLimitDialog.h"
 #include "ui/dialogs/SeedingRulesDialog.h"
 #include "ui/dialogs/QueueLimitsDialog.h"
-#include "ui/dialogs/TorrentFilesDialog.h"
 #include "ui/dialogs/HistoryDialog.h"
+#include "ui/dialogs/AddFromUrlDialog.h"
+#include "ui/pages/IndexerStatusPanel.h"
+#include "ui/pages/tankorent/TorrentPropertiesWidget.h"
+#include "ui/widgets/Toast.h"
 
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QSettings>
+#include <QToolButton>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QPalette>
 #include <QStyleFactory>
 #include <QNetworkAccessManager>
@@ -32,58 +39,18 @@
 #include <QUrl>
 #include <QMessageBox>
 #include <QProgressBar>
+#include <QHash>
+#include <QSet>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QKeyEvent>
+#include <QKeySequence>
+#include <QTextEdit>
+#include <QFileInfo>
 #include <algorithm>
 
 #include "ui/ContextMenuHelper.h"
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Progress bar delegate — custom painting for the Progress column
-// ══════════════════════════════════════════════════════════════════════════════
-
-void ProgressBarDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
-                                const QModelIndex& index) const
-{
-    // Draw selection highlight first
-    if (option.state & QStyle::State_Selected)
-        painter->fillRect(option.rect, option.palette.highlight());
-
-    float progress = index.data(Qt::UserRole).toFloat();
-    QRect cell = option.rect.adjusted(6, 0, -6, 0);
-
-    // Track: 6px tall, centered vertically, rounded
-    int barH = 6, barR = 3;
-    int barY = cell.top() + (cell.height() - barH) / 2;
-    QRect track(cell.left(), barY, cell.width(), barH);
-
-    painter->setRenderHint(QPainter::Antialiasing, true);
-    painter->setPen(Qt::NoPen);
-
-    // Track background
-    painter->setBrush(QColor(0x33, 0x33, 0x33));
-    painter->drawRoundedRect(track, barR, barR);
-
-    // Fill
-    if (progress > 0.f) {
-        int fillW = qMax(barH, static_cast<int>(track.width() * qMin(progress, 1.f)));
-        QRect fill(track.left(), track.top(), fillW, barH);
-        painter->setBrush(QColor(0xcc, 0xcc, 0xcc));
-        painter->drawRoundedRect(fill, barR, barR);
-    }
-
-    // Percentage text centered
-    painter->setPen(QColor(0xee, 0xee, 0xee));
-    QFont f = option.font;
-    f.setPixelSize(10);
-    painter->setFont(f);
-    QString text = QString::number(progress * 100, 'f', 1) + "%";
-    painter->drawText(cell, Qt::AlignCenter, text);
-}
-
-QSize ProgressBarDelegate::sizeHint(const QStyleOptionViewItem& /*option*/,
-                                    const QModelIndex& /*index*/) const
-{
-    return QSize(110, 26);
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Per-site category options — faithfully ported from _SITE_CATEGORY_OPTIONS
@@ -234,13 +201,31 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     qRegisterMetaType<QList<TorrentResult>>();
 
     m_nam = new QNetworkAccessManager(this);
+    setAcceptDrops(true);
     buildUI();
     populateSourceCombo();
 
-    // Wire "+" button clicks and double-clicks on results table
-    connect(m_resultsTable, &QTableWidget::cellClicked, this, [this](int row, int col) {
-        if (col == 7) onAddTorrentClicked(row);  // "+" column
-    });
+    // A5/C: restore results sort state from QSettings. Validate the column
+    // against the post-Track-C sortable set (0 Title, 1 Category, 2 Size,
+    // 4 Seeders, 5 Leechers); fall back to default (Seeders desc, col 4) on
+    // missing, out-of-range, or stale-from-pre-C values (e.g. saved 6 was
+    // Leechers pre-C, now Link — invalid).
+    {
+        QSettings s;
+        const int   savedCol   = s.value("tankorent/sortCol",   m_resultsSortCol).toInt();
+        const int   savedOrder = s.value("tankorent/sortOrder", static_cast<int>(m_resultsSortOrder)).toInt();
+        const bool  validCol   = (savedCol == 0 || savedCol == 1 || savedCol == 2 ||
+                                  savedCol == 4 || savedCol == 5);
+        if (validCol) m_resultsSortCol = savedCol;
+        m_resultsSortOrder = (savedOrder == Qt::AscendingOrder)
+                                 ? Qt::AscendingOrder : Qt::DescendingOrder;
+        if (m_resultsTable && m_resultsTable->horizontalHeader())
+            m_resultsTable->horizontalHeader()->setSortIndicator(
+                m_resultsSortCol, m_resultsSortOrder);
+    }
+
+    // C1: row-level Link buttons handle their own clicks via cellWidget;
+    // double-click anywhere on the row still opens the AddTorrentDialog.
     connect(m_resultsTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int /*col*/) {
         onAddTorrentClicked(row);
     });
@@ -249,24 +234,22 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     connect(m_transfersTable, &QTableWidget::customContextMenuRequested,
             this, &TankorentPage::showTransfersContextMenu);
 
-    // Double-click or Info column click opens TorrentFilesDialog
-    auto openFilesFor = [this](int row) {
+    // Double-click or Info column click opens TorrentPropertiesWidget.
+    auto openPropertiesFor = [this](int row) {
         auto* item = m_transfersTable->item(row, 0);
         if (!item) return;
-        QString hash = item->data(Qt::UserRole).toString();
-        for (const auto& t : m_cachedActive) {
-            if (t.infoHash == hash) {
-                TorrentFilesDialog dlg(t.name, hash, m_client, this);
-                dlg.exec();
-                break;
-            }
-        }
+        const QString hash = item->data(Qt::UserRole).toString();
+        if (hash.isEmpty()) return;
+        auto* dlg = new TorrentPropertiesWidget(m_client, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->showTorrent(hash);
+        dlg->show();
     };
-    connect(m_transfersTable, &QTableWidget::cellDoubleClicked, this, [openFilesFor](int row, int) {
-        openFilesFor(row);
+    connect(m_transfersTable, &QTableWidget::cellDoubleClicked, this, [openPropertiesFor](int row, int) {
+        openPropertiesFor(row);
     });
-    connect(m_transfersTable, &QTableWidget::cellClicked, this, [openFilesFor](int row, int col) {
-        if (col == 11) openFilesFor(row);  // Info column
+    connect(m_transfersTable, &QTableWidget::cellClicked, this, [openPropertiesFor](int row, int col) {
+        if (col == 11) openPropertiesFor(row);  // Info column
     });
 
     // Auto-refresh transfers every 1 second
@@ -326,16 +309,28 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     m_categoryCombo->setEnabled(false);
     row->addWidget(m_categoryCombo, 1);
 
-    m_sortCombo = new QComboBox;
-    m_sortCombo->setFixedHeight(30);
-    m_sortCombo->setMinimumWidth(160);
-    m_sortCombo->addItem("Sort: Relevance", "relevance");
-    m_sortCombo->addItem("Sort: Seeders",   "seeders_desc");
-    m_sortCombo->addItem("Sort: Size",      "size_desc");
-    connect(m_sortCombo, &QComboBox::currentIndexChanged, this, [this]() {
+    // E1: client-side seeder filter. Applied in renderResults between dedup
+    // and the soft cap. Persisted to QSettings tankorent/filter.
+    m_filterCombo = new QComboBox;
+    m_filterCombo->setFixedHeight(30);
+    m_filterCombo->setMinimumWidth(140);
+    m_filterCombo->setToolTip("Filter results by seeder count");
+    m_filterCombo->addItem("All",            "all");
+    m_filterCombo->addItem("Hide dead",      "active");   // seeders >= 1
+    m_filterCombo->addItem("High seed only", "high");     // seeders >= 20
+    {
+        const QString saved = QSettings().value("tankorent/filter", "all").toString();
+        const int idx = m_filterCombo->findData(saved);
+        m_filterCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    connect(m_filterCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        QSettings().setValue("tankorent/filter", m_filterCombo->currentData().toString());
         if (!m_allResults.isEmpty()) renderResults();
     });
-    row->addWidget(m_sortCombo, 1);
+    row->addWidget(m_filterCombo, 1);
+
+    // A4: Sort combo removed — sort is now driven by clicking column headers
+    // (see onResultsHeaderClicked + compareResults). Default = Seeders desc (A3).
 
     m_searchBtn = new QPushButton("Search");
     m_searchBtn->setFixedHeight(30);
@@ -355,6 +350,18 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QPushButton::clicked, this, &TankorentPage::refreshTransfers);
     row->addWidget(m_refreshBtn);
+
+    m_sourcesBtn = new QPushButton("Sources");
+    m_sourcesBtn->setFixedHeight(30);
+    m_sourcesBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_sourcesBtn, &QPushButton::clicked, this, &TankorentPage::onSourcesClicked);
+    row->addWidget(m_sourcesBtn);
+
+    m_addUrlBtn = new QPushButton("Add URL");
+    m_addUrlBtn->setFixedHeight(30);
+    m_addUrlBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_addUrlBtn, &QPushButton::clicked, this, &TankorentPage::onAddFromUrlClicked);
+    row->addWidget(m_addUrlBtn);
 
     m_moreBtn = new QPushButton("More");
     m_moreBtn->setFixedHeight(30);
@@ -419,6 +426,20 @@ void TankorentPage::buildStatusRow(QVBoxLayout* parent)
 
 void TankorentPage::buildMainTabs(QVBoxLayout* parent)
 {
+    // D1/D2: result count line. Sits above the tab widget so it's visible from
+    // both Search Results and Transfers (cleaner than embedding inside the tab
+    // and then juggling visibility per tab). Hidden when no results.
+    m_resultsCountLabel = new QLabel;
+    m_resultsCountLabel->setStyleSheet("color: #a1a1aa; font-size: 11px; padding: 4px 0;");
+    m_resultsCountLabel->setOpenExternalLinks(false);
+    m_resultsCountLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    m_resultsCountLabel->hide();
+    connect(m_resultsCountLabel, &QLabel::linkActivated, this, [this](const QString&) {
+        m_showAll = true;
+        renderResults();
+    });
+    parent->addWidget(m_resultsCountLabel);
+
     m_tabWidget = new QTabWidget;
 
     m_resultsTable = createResultsTable();
@@ -432,7 +453,7 @@ void TankorentPage::buildMainTabs(QVBoxLayout* parent)
 
 QTableWidget* TankorentPage::createResultsTable()
 {
-    auto *table = new QTableWidget(0, 8);
+    auto *table = new QTableWidget(0, 7);
     table->setObjectName("SearchResultsTable");
     table->setMinimumHeight(280);
 
@@ -443,22 +464,70 @@ QTableWidget* TankorentPage::createResultsTable()
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(table, &QTableWidget::customContextMenuRequested, this, &TankorentPage::showResultsContextMenu);
 
-    QStringList headers = { "Title", "Category", "Source", "Size", "Files", "Seeders", "Leechers", "" };
+    // C2: Source column is gone — the source is now a "[name]" badge prefixed
+    // to the Title cell. C1: Action column ("+") replaced by a Link column
+    // hosting download + magnet QToolButtons.
+    QStringList headers = { "Title", "Category", "Size", "Files", "Seeders", "Leechers", "Link" };
     table->setHorizontalHeaderLabels(headers);
 
     auto *hdr = table->horizontalHeader();
     hdr->setMinimumSectionSize(60);
     hdr->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int i = 1; i < 8; ++i)
+    for (int i = 1; i < 7; ++i)
         hdr->setSectionResizeMode(i, QHeaderView::Interactive);
 
-    hdr->resizeSection(1, 130);
-    hdr->resizeSection(2, 210);
-    hdr->resizeSection(3, 110);
-    hdr->resizeSection(4, 90);
-    hdr->resizeSection(5, 90);
-    hdr->resizeSection(6, 90);
-    hdr->resizeSection(7, 60);
+    hdr->resizeSection(1, 130);   // Category
+    hdr->resizeSection(2, 110);   // Size
+    hdr->resizeSection(3, 90);    // Files
+    hdr->resizeSection(4, 90);    // Seeders
+    hdr->resizeSection(5, 90);    // Leechers
+    hdr->resizeSection(6, 80);    // Link (two icon buttons)
+
+    // A1: click-to-sort. Manual — we sort m_displayedResults ourselves so the
+    // model stays the source of truth. setSortingEnabled(true) would let Qt
+    // sort by display strings, which mis-sorts sizes ("1.3 GiB" < "520 MiB").
+    hdr->setSectionsClickable(true);
+    hdr->setSortIndicatorShown(true);
+    hdr->setSortIndicator(m_resultsSortCol, m_resultsSortOrder);
+    connect(hdr, &QHeaderView::sectionClicked,
+            this, &TankorentPage::onResultsHeaderClicked);
+
+    // F3: right-click the header → menu of checkable column-visibility entries.
+    // Always lists every column (incl. currently-hidden ones) so the user
+    // can recover from accidentally hiding the column they were aiming at.
+    // Persisted to QSettings tankorent/hiddenColumns as a CSV of indices.
+    {
+        const QStringList saved = QSettings()
+            .value("tankorent/hiddenColumns").toString()
+            .split(',', Qt::SkipEmptyParts);
+        for (const QString& s : saved) {
+            bool ok = false; const int c = s.toInt(&ok);
+            if (ok && c >= 0 && c < table->columnCount())
+                table->setColumnHidden(c, true);
+        }
+    }
+    hdr->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(hdr, &QHeaderView::customContextMenuRequested,
+            this, [this, table, headers](const QPoint& pos) {
+        QMenu menu(this);
+        menu.addAction("Visible columns")->setEnabled(false);
+        menu.addSeparator();
+        for (int c = 0; c < headers.size(); ++c) {
+            const QString label = headers[c].isEmpty()
+                ? QStringLiteral("(column %1)").arg(c) : headers[c];
+            QAction* act = menu.addAction(label);
+            act->setCheckable(true);
+            act->setChecked(!table->isColumnHidden(c));
+            connect(act, &QAction::toggled, this, [this, table, c](bool visible) {
+                table->setColumnHidden(c, !visible);
+                QStringList hiddenCsv;
+                for (int k = 0; k < table->columnCount(); ++k)
+                    if (table->isColumnHidden(k)) hiddenCsv << QString::number(k);
+                QSettings().setValue("tankorent/hiddenColumns", hiddenCsv.join(','));
+            });
+        }
+        menu.exec(table->horizontalHeader()->mapToGlobal(pos));
+    });
 
     table->setStyle(QStyleFactory::create("Fusion"));
     table->setShowGrid(false);
@@ -521,9 +590,6 @@ QTableWidget* TankorentPage::createTransfersTable()
     hdr->resizeSection(10, 60);   // Queue
     hdr->resizeSection(11, 40);   // Info
 
-    // Progress bar delegate for column 2
-    table->setItemDelegateForColumn(2, new ProgressBarDelegate(table));
-
     table->setStyle(QStyleFactory::create("Fusion"));
     table->setShowGrid(false);
     table->setAlternatingRowColors(true);
@@ -561,6 +627,7 @@ void TankorentPage::populateSourceCombo()
     m_sourceCombo->addItem("All Sources",     "all");
     m_sourceCombo->addItem("Nyaa",            "nyaa");
     m_sourceCombo->addItem("PirateBay",       "piratebay");
+    m_sourceCombo->addItem("1337x",           "1337x");
     m_sourceCombo->addItem("YTS",             "yts");
     m_sourceCombo->addItem("EZTV",            "eztv");
     m_sourceCombo->addItem("ExtraTorrents",   "exttorrents");
@@ -603,6 +670,63 @@ void TankorentPage::reloadCategoryOptions()
 // Search logic
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Single-purpose trackers (YTS = movies, EZTV = TV, Nyaa = anime/manga) ride
+// only with their matching media types; general-purpose trackers ride all.
+// 1337x appears in every set but is gated behind its own un-comment in the
+// instantiation block below — listing it here makes the flip a one-liner
+// once its Cloudflare path lands.
+static const QHash<QString, QSet<QString>> kMediaTypeIndexers = {
+    { "videos",     { "yts", "eztv", "piratebay", "1337x", "exttorrents" } },
+    { "books",      { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
+    { "audiobooks", { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
+    { "comics",     { "nyaa", "piratebay", "1337x" } },
+};
+
+int TankorentPage::dispatchIndexers(const QString& mediaType,
+                                    const QString& sourceFilter,
+                                    const QString& query,
+                                    int limit,
+                                    const QString& categoryId)
+{
+    const QSet<QString> allowed = kMediaTypeIndexers.value(mediaType);
+    const bool hasAllowlist = !allowed.isEmpty();
+
+    QSettings settings;
+    auto wanted = [&](const QString& id) -> bool {
+        if (hasAllowlist && !allowed.contains(id))
+            return false;
+        if (sourceFilter != "all" && sourceFilter != id)
+            return false;
+        return settings.value(
+            QStringLiteral("tankorent/indexers/%1/enabled").arg(id), true).toBool();
+    };
+
+    auto addIf = [&](const QString& id, TorrentIndexer* indexer) {
+        if (wanted(id))
+            m_activeIndexers.append(indexer);
+        else
+            delete indexer;
+    };
+
+    addIf("nyaa",         new NyaaIndexer(m_nam, this));
+    addIf("piratebay",    new PirateBayIndexer(m_nam, this));
+    addIf("1337x",        new X1337xIndexer(m_nam, this));
+    addIf("yts",          new YtsIndexer(m_nam, this));
+    addIf("eztv",         new EztvIndexer(m_nam, this));
+    addIf("exttorrents",  new ExtTorrentsIndexer(m_nam, this));
+    addIf("torrentscsv",  new TorrentsCsvIndexer(m_nam, this));
+
+    m_pendingSearches = m_activeIndexers.size();
+
+    for (auto* idx : m_activeIndexers) {
+        connect(idx, &TorrentIndexer::searchFinished, this, &TankorentPage::onSearchFinished);
+        connect(idx, &TorrentIndexer::searchError,    this, &TankorentPage::onSearchError);
+        idx->search(query, limit, categoryId);
+    }
+
+    return m_activeIndexers.size();
+}
+
 void TankorentPage::startSearch()
 {
     QString query = m_queryEdit->text().trimmed();
@@ -613,43 +737,26 @@ void TankorentPage::startSearch()
 
     m_allResults.clear();
     m_resultsTable->setRowCount(0);
+    m_showAll = false;                          // D2: re-arm soft cap on each search
+    if (m_resultsCountLabel) m_resultsCountLabel->hide();
     m_pendingSearches = 0;
 
-    QString sourceId = m_sourceCombo->currentData().toString();
+    QString mediaType  = m_searchTypeCombo->currentData().toString();
+    QString sourceId   = m_sourceCombo->currentData().toString();
     QString categoryId = m_categoryCombo->currentData().toString();
 
-    QList<TorrentIndexer*> indexers;
+    const int dispatched = dispatchIndexers(mediaType, sourceId, query, 80, categoryId);
 
-    auto addIf = [&](const QString& id, TorrentIndexer* indexer) {
-        if (sourceId == "all" || sourceId == id)
-            indexers.append(indexer);
-        else
-            delete indexer;
-    };
-
-    addIf("nyaa",         new NyaaIndexer(m_nam, this));
-    addIf("piratebay",    new PirateBayIndexer(m_nam, this));
-    // 1337x disabled — Cloudflare JS challenge
-    addIf("yts",          new YtsIndexer(m_nam, this));
-    addIf("eztv",         new EztvIndexer(m_nam, this));
-    addIf("exttorrents",  new ExtTorrentsIndexer(m_nam, this));
-    addIf("torrentscsv",  new TorrentsCsvIndexer(m_nam, this));
-
-    if (indexers.isEmpty())
+    if (dispatched == 0) {
+        m_searchStatus->setText(
+            QStringLiteral("No sources available for %1 search")
+                .arg(mediaType.isEmpty() ? QStringLiteral("this") : mediaType));
         return;
-
-    m_activeIndexers = indexers;
-    m_pendingSearches = indexers.size();
+    }
 
     m_searchBtn->setVisible(false);
     m_cancelBtn->setVisible(true);
     m_searchStatus->setText("Searching...");
-
-    for (auto *idx : indexers) {
-        connect(idx, &TorrentIndexer::searchFinished, this, &TankorentPage::onSearchFinished);
-        connect(idx, &TorrentIndexer::searchError, this, &TankorentPage::onSearchError);
-        idx->search(query, 80, categoryId);
-    }
 }
 
 void TankorentPage::cancelSearch()
@@ -713,76 +820,255 @@ void TankorentPage::onSearchError(const QString& error)
 
 void TankorentPage::renderResults()
 {
-    // Apply sort
+    // A1: apply sort via the column-driven comparator. Both initial render and
+    // the click-to-sort handler funnel through here. m_resultsSortCol /
+    // m_resultsSortOrder are mutated by onResultsHeaderClicked.
     auto sorted = m_allResults;
-    QString sortMode = m_sortCombo->currentData().toString();
-    if (sortMode == "seeders_desc") {
-        std::sort(sorted.begin(), sorted.end(),
-                  [](const TorrentResult& a, const TorrentResult& b) { return a.seeders > b.seeders; });
-    } else if (sortMode == "size_desc") {
-        std::sort(sorted.begin(), sorted.end(),
-                  [](const TorrentResult& a, const TorrentResult& b) { return a.sizeBytes > b.sizeBytes; });
-    }
+    const int   sortCol   = m_resultsSortCol;
+    const auto  sortOrder = m_resultsSortOrder;
+    std::stable_sort(sorted.begin(), sorted.end(),
+        [sortCol, sortOrder](const TorrentResult& a, const TorrentResult& b) {
+            return compareResults(sortCol, sortOrder, a, b);
+        });
 
-    // Dedup by infohash
+    // Three-tier dedup key: canonical infoHash (populated by the indexer at
+    // parse time) → btih-regex on magnet (catches v2 64-hex + base32 magnets
+    // that canonicalizeInfoHash intentionally rejects) → whole magnet string
+    // as last resort so even unparseable magnets still collapse duplicates
+    // against themselves.
     QSet<QString> seen;
     QList<TorrentResult> deduped;
     static const QRegularExpression btihRe(
         "btih:([a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?|[A-Z2-7]{32})",
         QRegularExpression::CaseInsensitiveOption);
     for (const auto& r : sorted) {
-        auto m = btihRe.match(r.magnetUri);
-        QString key = m.hasMatch() ? m.captured(1).toLower() : r.magnetUri.toLower();
+        QString key;
+        if (!r.infoHash.isEmpty()) {
+            key = r.infoHash;
+        } else {
+            auto m = btihRe.match(r.magnetUri);
+            key = m.hasMatch() ? m.captured(1).toLower() : r.magnetUri.toLower();
+        }
         if (seen.contains(key)) continue;
         seen.insert(key);
         deduped.append(r);
     }
 
+    // E1: client-side seeder filter. Applied between dedup and the soft cap so
+    // the count line and the cap both operate on the visible-relevant set —
+    // a "Hide dead" filter doesn't cap to "100 of 1000" if only 30 survive.
+    if (m_filterCombo) {
+        const QString filterKey = m_filterCombo->currentData().toString();
+        if (filterKey == QLatin1String("active")) {
+            QList<TorrentResult> kept;
+            kept.reserve(deduped.size());
+            for (const auto& r : deduped)
+                if (r.seeders >= 1) kept.append(r);
+            deduped = std::move(kept);
+        } else if (filterKey == QLatin1String("high")) {
+            QList<TorrentResult> kept;
+            kept.reserve(deduped.size());
+            for (const auto& r : deduped)
+                if (r.seeders >= 20) kept.append(r);
+            deduped = std::move(kept);
+        }
+    }
+
+    // D2: soft cap. Keep the full deduped count for the label; truncate the
+    // visible subset to the first kSoftCapRows when the user hasn't asked to
+    // see the rest. m_displayedResults must stay row-index-aligned with the
+    // table — clip both at the same point.
+    static constexpr int kSoftCapRows = 100;
+    const int totalDeduped = deduped.size();
+    if (!m_showAll && totalDeduped > kSoftCapRows)
+        deduped = deduped.mid(0, kSoftCapRows);
+
     m_displayedResults = deduped;  // row N in table == m_displayedResults[N] — single source of truth
+
+    // D1: result count line. Source count from m_allResults (pre-dedup) so we
+    // attribute correctly even if dedup collapsed cross-source duplicates.
+    if (m_resultsCountLabel) {
+        if (m_allResults.isEmpty()) {
+            m_resultsCountLabel->hide();
+        } else {
+            QSet<QString> sources;
+            for (const auto& r : m_allResults)
+                if (!r.sourceKey.isEmpty()) sources.insert(r.sourceKey);
+
+            const int srcCount = sources.size();
+            QString text;
+            if (!m_showAll && totalDeduped > kSoftCapRows) {
+                text = QStringLiteral(
+                    "Showing %1 of %2 results from %3 source%4 \u2014 "
+                    "<a href=\"show\" style=\"color:#60a5fa;text-decoration:none;\">Show all</a>")
+                    .arg(kSoftCapRows).arg(totalDeduped).arg(srcCount)
+                    .arg(srcCount == 1 ? "" : "s");
+            } else {
+                text = QStringLiteral("Showing %1 result%2 from %3 source%4")
+                    .arg(totalDeduped).arg(totalDeduped == 1 ? "" : "s")
+                    .arg(srcCount).arg(srcCount == 1 ? "" : "s");
+            }
+            m_resultsCountLabel->setText(text);
+            m_resultsCountLabel->show();
+        }
+    }
 
     m_resultsTable->setRowCount(deduped.size());
 
     for (int i = 0; i < deduped.size(); ++i) {
         const auto& r = deduped[i];
 
-        // Title with quality tags
-        QString tags = qualityTagSuffix(r.title);
-        QString displayTitle = tags.isEmpty() ? r.title : r.title + "  " + tags;
-        m_resultsTable->setItem(i, 0, new QTableWidgetItem(displayTitle));
+        // C2: Title with [source] badge prefix + quality tags suffix.
+        // C3: full title in the tooltip so elision can't hide information.
+        const QString tags    = qualityTagSuffix(r.title);
+        const QString badged  = r.sourceName.isEmpty()
+            ? r.title
+            : QStringLiteral("[%1]  %2").arg(r.sourceName, r.title);
+        const QString display = tags.isEmpty() ? badged : badged + "  " + tags;
+        auto *titleItem = new QTableWidgetItem(display);
+        titleItem->setToolTip(r.title);   // C3
+        m_resultsTable->setItem(i, 0, titleItem);
 
         // Category
         m_resultsTable->setItem(i, 1, new QTableWidgetItem(
             r.category.isEmpty() ? r.categoryId : r.category));
 
-        // Source
-        m_resultsTable->setItem(i, 2, new QTableWidgetItem(r.sourceName));
-
         // Size
-        m_resultsTable->setItem(i, 3, new QTableWidgetItem(humanSize(r.sizeBytes)));
+        m_resultsTable->setItem(i, 2, new QTableWidgetItem(humanSize(r.sizeBytes)));
 
         // Files
         auto *filesItem = new QTableWidgetItem("-");
         filesItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 4, filesItem);
+        m_resultsTable->setItem(i, 3, filesItem);
 
-        // Seeders with health dot (monochrome)
-        auto *seedItem = new QTableWidgetItem(healthDot(r.seeders) + " " + QString::number(r.seeders));
+        // Seeders — plain integer; row tint (B2) carries the trust signal.
+        auto *seedItem = new QTableWidgetItem(QString::number(r.seeders));
         seedItem->setTextAlignment(Qt::AlignCenter);
-        seedItem->setForeground(healthColor(r.seeders));
-        m_resultsTable->setItem(i, 5, seedItem);
+        m_resultsTable->setItem(i, 4, seedItem);
 
         // Leechers
         auto *leechItem = new QTableWidgetItem(QString::number(r.leechers));
         leechItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 6, leechItem);
+        m_resultsTable->setItem(i, 5, leechItem);
 
-        // Action button
-        auto *actionItem = new QTableWidgetItem("+");
-        actionItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 7, actionItem);
+        // C1: Link column with download + magnet QToolButtons.
+        // The download button funnels through onAddTorrentClicked (same path
+        // the old "+" Action column used). Magnet copies the URI to clipboard.
+        // Backing item is empty so row-tint stamping below still applies.
+        m_resultsTable->setItem(i, 6, new QTableWidgetItem(QString()));
+        auto *linkCell = new QWidget;
+        auto *linkLay  = new QHBoxLayout(linkCell);
+        linkLay->setContentsMargins(2, 0, 2, 0);
+        linkLay->setSpacing(4);
+        linkLay->setAlignment(Qt::AlignCenter);
+
+        auto *dlBtn = new QToolButton(linkCell);
+        dlBtn->setText(QStringLiteral("\u2193"));   // ↓
+        dlBtn->setToolTip("Add torrent");
+        dlBtn->setCursor(Qt::PointingHandCursor);
+        dlBtn->setAutoRaise(true);
+        connect(dlBtn, &QToolButton::clicked, this, [this, i]() {
+            onAddTorrentClicked(i);
+        });
+        linkLay->addWidget(dlBtn);
+
+        auto *magBtn = new QToolButton(linkCell);
+        magBtn->setText(QStringLiteral("M"));
+        magBtn->setToolTip("Copy magnet link");
+        magBtn->setCursor(Qt::PointingHandCursor);
+        magBtn->setAutoRaise(true);
+        const QString magnet = r.magnetUri;
+        connect(magBtn, &QToolButton::clicked, this, [magnet]() {
+            QGuiApplication::clipboard()->setText(magnet);
+        });
+        linkLay->addWidget(magBtn);
+
+        m_resultsTable->setCellWidget(i, 6, linkCell);
+
+        // B2 + F1: Nyaa-style row tint, alternating alpha by row parity so the
+        // table's striping survives under the tint (otherwise a band of all-
+        // healthy or all-poor rows reads as one solid block). Two brushes per
+        // tier: the lower-alpha for odd rows lines up visually with the
+        // table's regular alternating Base color.
+        static const QBrush kHealthyOdd (QColor(76, 175, 80, 26));   // ~0.10 alpha
+        static const QBrush kHealthyEven(QColor(76, 175, 80, 44));   // ~0.17 alpha
+        static const QBrush kPoorOdd    (QColor(239, 68, 68, 26));
+        static const QBrush kPoorEven   (QColor(239, 68, 68, 44));
+        const QString cls = trustClass(r);
+        if (cls != QLatin1String("normal")) {
+            const bool even = (i % 2 == 0);
+            const QBrush& tint = (cls == QLatin1String("healthy"))
+                                   ? (even ? kHealthyEven : kHealthyOdd)
+                                   : (even ? kPoorEven    : kPoorOdd);
+            for (int c = 0; c < 7; ++c) {
+                if (auto* cell = m_resultsTable->item(i, c))
+                    cell->setBackground(tint);
+            }
+        }
     }
 
     m_tabWidget->setCurrentIndex(0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// A1: click-to-sort comparator + header handler
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool TankorentPage::compareResults(int col, Qt::SortOrder order,
+                                    const TorrentResult& a, const TorrentResult& b)
+{
+    auto cmpThen = [order](bool less) {
+        return order == Qt::AscendingOrder ? less : !less;
+    };
+    // Post-Track-C layout: 0 Title, 1 Category, 2 Size, 3 Files,
+    // 4 Seeders, 5 Leechers, 6 Link.
+    switch (col) {
+    case 0: // Title
+        return cmpThen(a.title.compare(b.title, Qt::CaseInsensitive) < 0);
+    case 1: // Category
+        return cmpThen(a.category.compare(b.category, Qt::CaseInsensitive) < 0);
+    case 2: // Size
+        return cmpThen(a.sizeBytes < b.sizeBytes);
+    case 4: // Seeders
+        return cmpThen(a.seeders < b.seeders);
+    case 5: // Leechers
+        return cmpThen(a.leechers < b.leechers);
+    default:
+        // Cols 3 (Files) and 6 (Link) have no sortable backing field.
+        return false;   // stable_sort keeps original order
+    }
+}
+
+void TankorentPage::onResultsHeaderClicked(int col)
+{
+    // Non-sortable columns: ignore. Header indicator stays where it was.
+    // Post-Track-C: 3 Files, 6 Link.
+    if (col == 3 || col == 6) return;
+
+    if (col == m_resultsSortCol) {
+        // Same column: flip direction.
+        m_resultsSortOrder = (m_resultsSortOrder == Qt::AscendingOrder)
+                                 ? Qt::DescendingOrder : Qt::AscendingOrder;
+    } else {
+        // New column: pick the column-default direction. Numeric cols default
+        // descending (high seeders / large sizes first); strings ascending.
+        m_resultsSortCol = col;
+        const bool numeric = (col == 2 || col == 4 || col == 5);
+        m_resultsSortOrder = numeric ? Qt::DescendingOrder : Qt::AscendingOrder;
+    }
+
+    if (m_resultsTable && m_resultsTable->horizontalHeader())
+        m_resultsTable->horizontalHeader()->setSortIndicator(
+            m_resultsSortCol, m_resultsSortOrder);
+
+    // A5: persist for the next session.
+    {
+        QSettings s;
+        s.setValue("tankorent/sortCol",   m_resultsSortCol);
+        s.setValue("tankorent/sortOrder", static_cast<int>(m_resultsSortOrder));
+    }
+
+    renderResults();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -843,20 +1129,14 @@ QString TankorentPage::qualityTagSuffix(const QString& title)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Health indicators (ported from source_health())
+// B1: trust class for Nyaa-style row tint (replaces the per-cell health dot)
 // ══════════════════════════════════════════════════════════════════════════════
 
-QString TankorentPage::healthDot(int seeders)
+QString TankorentPage::trustClass(const TorrentResult& r)
 {
-    // Filled circle for healthy/weak, empty circle for dead
-    return seeders >= 1 ? QStringLiteral("\u25CF") : QStringLiteral("\u25CB");
-}
-
-QColor TankorentPage::healthColor(int seeders)
-{
-    if (seeders >= 10) return QColor(0xee, 0xee, 0xee);  // bright — healthy
-    if (seeders >= 1)  return QColor(0x88, 0x88, 0x88);  // mid gray — weak
-    return QColor(0x44, 0x44, 0x44);                       // dark gray — dead
+    if (r.seeders >= 50) return QStringLiteral("healthy");
+    if (r.seeders >= 5)  return QStringLiteral("normal");
+    return QStringLiteral("poor");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1230,9 +1510,18 @@ void TankorentPage::showTransfersContextMenu(const QPoint& pos)
     });
     openFolder->setEnabled(!firstInfo.savePath.isEmpty());
 
-    menu->addAction("View Files...", this, [this, firstHash, firstInfo]() {
-        TorrentFilesDialog dlg(firstInfo.name, firstHash, m_client, this);
-        dlg.exec();
+    menu->addAction("View Files...", this, [this, firstHash]() {
+        auto* dlg = new TorrentPropertiesWidget(m_client, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->showTorrent(firstHash, TorrentPropertiesWidget::TabFiles);
+        dlg->show();
+    });
+
+    menu->addAction("Properties...", this, [this, firstHash]() {
+        auto* dlg = new TorrentPropertiesWidget(m_client, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->showTorrent(firstHash);
+        dlg->show();
     });
 
     menu->addSeparator();
@@ -1264,4 +1553,172 @@ void TankorentPage::showTransfersContextMenu(const QPoint& pos)
 
     menu->exec(m_transfersTable->viewport()->mapToGlobal(pos));
     delete menu;
+}
+
+void TankorentPage::onSourcesClicked()
+{
+    IndexerStatusPanel dlg(m_nam, this);
+    dlg.exec();
+    // configurationChanged fires on enable/credential changes; no live handling
+    // needed — the next startSearch re-reads QSettings via dispatchIndexers.
+}
+
+QPair<int, int> TankorentPage::addMagnetBatch(const QStringList& magnets,
+                                              const QString& category,
+                                              bool startImmediately)
+{
+    const auto defaults = m_client->defaultPaths();
+    const QString destPath = defaults.value(category);
+
+    int added = 0;
+    int skipped = 0;
+    for (const QString& magnet : magnets) {
+        if (m_client->isDuplicate(magnet)) {
+            ++skipped;
+            continue;
+        }
+        const QString hash = m_client->resolveMetadata(magnet);
+        if (hash.isEmpty()) {
+            ++skipped;
+            continue;
+        }
+
+        AddTorrentConfig config;
+        config.category        = category;
+        config.destinationPath = destPath;
+        config.contentLayout   = QStringLiteral("original");
+        config.sequential      = false;
+        config.startPaused     = !startImmediately;
+        m_client->startDownload(hash, config);
+        ++added;
+    }
+    return { added, skipped };
+}
+
+void TankorentPage::onAddFromUrlClicked()
+{
+    AddFromUrlDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    const auto [added, skipped] = addMagnetBatch(
+        dlg.magnets(), dlg.category(), dlg.startImmediately());
+
+    if (added > 0) {
+        m_tabWidget->setCurrentIndex(1); // Transfers tab
+        m_searchStatus->setText(skipped > 0
+            ? QStringLiteral("Added %1, skipped %2").arg(added).arg(skipped)
+            : QStringLiteral("Added %1 torrent(s)").arg(added));
+    } else if (skipped > 0) {
+        m_searchStatus->setText(QStringLiteral("All %1 skipped (duplicates or invalid)").arg(skipped));
+    }
+}
+
+// ── Drag-drop ───────────────────────────────────────────────────────────────
+
+void TankorentPage::dragEnterEvent(QDragEnterEvent* event)
+{
+    const QMimeData* mime = event->mimeData();
+    if (!mime) return;
+
+    if (mime->hasUrls()) {
+        event->acceptProposedAction();
+        return;
+    }
+    if (mime->hasText()) {
+        const QString text = mime->text().trimmed();
+        if (text.startsWith(QLatin1String("magnet:"), Qt::CaseInsensitive))
+            event->acceptProposedAction();
+    }
+}
+
+void TankorentPage::dropEvent(QDropEvent* event)
+{
+    const QMimeData* mime = event->mimeData();
+    if (!mime) return;
+
+    QStringList magnets;
+    int torrentFileCount = 0;  // local .torrent files + .torrent URLs — unsupported
+
+    auto classify = [&](const QString& raw) {
+        const QString item = raw.trimmed();
+        if (item.isEmpty()) return;
+        if (item.startsWith(QLatin1String("magnet:"), Qt::CaseInsensitive)) {
+            magnets.append(item);
+            return;
+        }
+        // Local file URL or HTTP URL ending in .torrent — both need the
+        // add-torrent-file engine path (see Batch 5.1 scope note).
+        const QString lower = item.toLower();
+        if (lower.endsWith(QLatin1String(".torrent")) ||
+            QFileInfo(item).suffix().toLower() == QLatin1String("torrent")) {
+            ++torrentFileCount;
+        }
+    };
+
+    if (mime->hasUrls()) {
+        for (const QUrl& url : mime->urls()) {
+            if (url.scheme() == QLatin1String("magnet"))
+                magnets.append(url.toString());
+            else if (url.isLocalFile())
+                classify(url.toLocalFile());
+            else
+                classify(url.toString());
+        }
+    }
+    if (mime->hasText()) {
+        for (const QString& line : mime->text().split('\n', Qt::SkipEmptyParts))
+            classify(line);
+    }
+
+    magnets.removeDuplicates();
+
+    if (magnets.isEmpty()) {
+        if (torrentFileCount > 0) {
+            Toast::show(this, QStringLiteral(
+                ".torrent files aren't supported yet — use magnet links."));
+        } else {
+            Toast::show(this, QStringLiteral("No magnet links found in drop."));
+        }
+        event->acceptProposedAction();
+        return;
+    }
+
+    // Surface the magnets through AddFromUrlDialog so the user picks a
+    // category + start-immediately flag for the batch. Matches the TODO's
+    // "Multiple items → open AddFromUrlDialog pre-filled" contract.
+    AddFromUrlDialog dlg(this, magnets.join('\n'));
+    if (dlg.exec() == QDialog::Accepted) {
+        const auto [added, skipped] = addMagnetBatch(
+            dlg.magnets(), dlg.category(), dlg.startImmediately());
+
+        if (added > 0) {
+            m_tabWidget->setCurrentIndex(1);
+            QString msg = QStringLiteral("Added %1 torrent(s)").arg(added);
+            if (skipped > 0)
+                msg += QStringLiteral(", skipped %1").arg(skipped);
+            if (torrentFileCount > 0)
+                msg += QStringLiteral(" (%1 .torrent file%2 ignored)")
+                           .arg(torrentFileCount)
+                           .arg(torrentFileCount == 1 ? "" : "s");
+            Toast::show(this, msg);
+        }
+    }
+
+    event->acceptProposedAction();
+}
+
+void TankorentPage::keyPressEvent(QKeyEvent* event)
+{
+    if (event->matches(QKeySequence::Paste)) {
+        QWidget* focused = QApplication::focusWidget();
+        const bool inTextInput = qobject_cast<QLineEdit*>(focused)
+                              || qobject_cast<QTextEdit*>(focused);
+        if (!inTextInput) {
+            onAddFromUrlClicked();
+            event->accept();
+            return;
+        }
+    }
+    QWidget::keyPressEvent(event);
 }

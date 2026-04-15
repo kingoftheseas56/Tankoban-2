@@ -8,10 +8,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QDebug>
 
 YtsIndexer::YtsIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
 }
 
 void YtsIndexer::search(const QString& query, int limit, const QString& categoryId)
@@ -31,6 +33,7 @@ void YtsIndexer::search(const QString& query, int limit, const QString& category
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "application/json,*/*");
 
+    startRequestTimer();
     auto *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, limit]() {
         onReplyFinished(reply, limit);
@@ -42,6 +45,7 @@ void YtsIndexer::onReplyFinished(QNetworkReply* reply, int limit)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        markError(reply);
         emit searchError(reply->errorString());
         return;
     }
@@ -49,9 +53,12 @@ void YtsIndexer::onReplyFinished(QNetworkReply* reply, int limit)
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &err);
     if (err.error != QJsonParseError::NoError) {
+        markError(reply);
         emit searchError("JSON parse error: " + err.errorString());
         return;
     }
+
+    markSuccess();
 
     QJsonArray movies = doc.object().value("data").toObject().value("movies").toArray();
     QList<TorrentResult> results;
@@ -64,6 +71,9 @@ void YtsIndexer::onReplyFinished(QNetworkReply* reply, int limit)
         QString display = title;
         if (year > 0)
             display = QStringLiteral("%1 (%2)").arg(title).arg(year);
+
+        const qint64 uploadedSecs = movie.value("date_uploaded_unix").toVariant().toLongLong();
+        const QString movieUrl    = movie.value("url").toString();
 
         // Genre from movie
         QJsonArray genres = movie.value("genres").toArray();
@@ -99,6 +109,16 @@ void YtsIndexer::onReplyFinished(QNetworkReply* reply, int limit)
             r.sourceKey  = "yts";
             r.categoryId = quality.toLower();
             r.category   = genreStr;
+
+            r.infoHash = canonicalizeInfoHash(ih);
+            if (r.infoHash.isEmpty())
+                qDebug() << "[YtsIndexer] infoHash missing for:" << rowTitle;
+
+            if (uploadedSecs > 0)
+                r.publishDate = QDateTime::fromSecsSinceEpoch(uploadedSecs);
+
+            if (!movieUrl.isEmpty())
+                r.detailsUrl = movieUrl;
 
             if (!r.magnetUri.isEmpty())
                 results.append(r);

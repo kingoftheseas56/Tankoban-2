@@ -120,6 +120,11 @@ void CoreBridge::removeRootFolder(const QString& domain, const QString& path)
     emit rootFoldersChanged(domain);
 }
 
+void CoreBridge::notifyRootFoldersChanged(const QString& domain)
+{
+    emit rootFoldersChanged(domain);
+}
+
 // ── Shell prefs ──
 QJsonObject CoreBridge::prefs() const
 {

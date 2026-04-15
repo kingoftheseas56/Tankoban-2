@@ -5,16 +5,22 @@
 #include <QHeaderView>
 #include <QFileDialog>
 #include <QDateTime>
+#include <QFrame>
+#include <QPixmap>
+#include <QFileInfo>
 
 static const QString GOLD = QStringLiteral("#c7a76b");
+static constexpr int COVER_W = 240;
+static constexpr int COVER_H = 360;
+static constexpr int LEFT_PANEL_W = 260;
 
 AddMangaDialog::AddMangaDialog(const QString& seriesTitle, const QString& source,
                                const QString& defaultDest, QWidget* parent)
     : QDialog(parent), m_seriesTitle(seriesTitle), m_source(source)
 {
     setWindowTitle("Download \u2014 " + seriesTitle);
-    setMinimumSize(780, 500);
-    resize(1020, 680);
+    setMinimumSize(920, 560);      // C3: wider + taller to accommodate left panel
+    resize(1120, 700);
     buildUI();
 
     m_destEdit->setText(defaultDest);
@@ -28,20 +34,63 @@ void AddMangaDialog::buildUI()
     root->setContentsMargins(16, 12, 16, 12);
     root->setSpacing(10);
 
-    // Title
-    auto* titleLbl = new QLabel(m_seriesTitle);
-    titleLbl->setStyleSheet("font-size: 15px; font-weight: bold;");
-    titleLbl->setWordWrap(true);
-    root->addWidget(titleLbl);
+    // C3: body is now a two-column layout. Left = static metadata/cover panel,
+    // Right = existing chapter-picker UI. Previous top-of-dialog title/source
+    // labels are subsumed into the left panel — avoids duplication.
+    auto* body = new QHBoxLayout;
+    body->setSpacing(14);
 
-    auto* sourceLbl = new QLabel("Source: " + m_source);
-    sourceLbl->setStyleSheet("font-size: 11px; color: #888;");
-    root->addWidget(sourceLbl);
+    // ── Left panel (detail) ────────────────────────────────────────────────
+    auto* leftPanel = new QWidget;
+    leftPanel->setFixedWidth(LEFT_PANEL_W);
+    auto* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(8);
 
-    // Status
+    m_coverLabel = new QLabel;
+    m_coverLabel->setObjectName("AddMangaCover");
+    m_coverLabel->setFixedSize(COVER_W, COVER_H);
+    m_coverLabel->setAlignment(Qt::AlignCenter);
+    m_coverLabel->setStyleSheet(
+        "#AddMangaCover { background: rgba(255,255,255,0.05); "
+        "  border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; "
+        "  color: #666; font-size: 11px; }");
+    m_coverLabel->setText("No cover");
+    leftLayout->addWidget(m_coverLabel, 0, Qt::AlignHCenter);
+
+    m_titleLabel = new QLabel(m_seriesTitle);
+    m_titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #eee;");
+    m_titleLabel->setWordWrap(true);
+    leftLayout->addWidget(m_titleLabel);
+
+    m_authorLabel = new QLabel;
+    m_authorLabel->setStyleSheet("font-size: 11px; color: #bbb;");
+    m_authorLabel->setWordWrap(true);
+    m_authorLabel->hide();
+    leftLayout->addWidget(m_authorLabel);
+
+    m_sourceLabel = new QLabel("Source: " + mangaSourceDisplayName(m_source));
+    m_sourceLabel->setStyleSheet("font-size: 11px; color: #888;");
+    leftLayout->addWidget(m_sourceLabel);
+
+    m_mangaStatusLabel = new QLabel;
+    m_mangaStatusLabel->setStyleSheet("font-size: 11px; color: #888;");
+    m_mangaStatusLabel->hide();
+    leftLayout->addWidget(m_mangaStatusLabel);
+
+    leftLayout->addStretch();
+    body->addWidget(leftPanel);
+
+    // ── Right panel (chapter picker) ───────────────────────────────────────
+    auto* rightPanel = new QWidget;
+    auto* rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(10);
+
+    // Chapter count / error status
     m_statusLabel = new QLabel;
     m_statusLabel->setStyleSheet("font-size: 11px; color: #888;");
-    root->addWidget(m_statusLabel);
+    rightLayout->addWidget(m_statusLabel);
 
     // Controls row: Select All, Deselect All, Range
     auto* ctrlRow = new QHBoxLayout;
@@ -81,7 +130,7 @@ void AddMangaDialog::buildUI()
     connect(rangeBtn, &QPushButton::clicked, this, &AddMangaDialog::selectRange);
     ctrlRow->addWidget(rangeBtn);
 
-    root->addLayout(ctrlRow);
+    rightLayout->addLayout(ctrlRow);
 
     // Chapter table
     m_chapterTable = new QTableWidget(0, 3);
@@ -96,7 +145,7 @@ void AddMangaDialog::buildUI()
     hdr->resizeSection(2, 140);
     hdr->setMinimumSectionSize(50);
 
-    root->addWidget(m_chapterTable, 1);
+    rightLayout->addWidget(m_chapterTable, 1);
 
     // Destination row
     auto* destRow = new QHBoxLayout;
@@ -112,7 +161,7 @@ void AddMangaDialog::buildUI()
         if (!dir.isEmpty()) m_destEdit->setText(dir);
     });
     destRow->addWidget(browseBtn);
-    root->addLayout(destRow);
+    rightLayout->addLayout(destRow);
 
     // Format row
     auto* fmtRow = new QHBoxLayout;
@@ -122,7 +171,10 @@ void AddMangaDialog::buildUI()
     m_formatCombo->addItem("Image Folder", "folder");
     fmtRow->addWidget(m_formatCombo);
     fmtRow->addStretch();
-    root->addLayout(fmtRow);
+    rightLayout->addLayout(fmtRow);
+
+    body->addWidget(rightPanel, 1);
+    root->addLayout(body, 1);
 
     // Buttons
     auto* btnRow = new QHBoxLayout;
@@ -238,4 +290,39 @@ QString AddMangaDialog::destinationPath() const
 QString AddMangaDialog::format() const
 {
     return m_formatCombo->currentData().toString();
+}
+
+// ── C3: detail panel ────────────────────────────────────────────────────────
+void AddMangaDialog::setMangaMetadata(const MangaResult& result)
+{
+    if (!result.title.isEmpty())
+        m_titleLabel->setText(result.title);
+
+    if (!result.author.isEmpty()) {
+        m_authorLabel->setText("by " + result.author);
+        m_authorLabel->show();
+    } else {
+        m_authorLabel->hide();
+    }
+
+    if (!result.source.isEmpty())
+        m_sourceLabel->setText("Source: " + mangaSourceDisplayName(result.source));
+
+    if (!result.status.isEmpty()) {
+        m_mangaStatusLabel->setText("Status: " + result.status);
+        m_mangaStatusLabel->show();
+    } else {
+        m_mangaStatusLabel->hide();
+    }
+}
+
+void AddMangaDialog::setCoverPath(const QString& path)
+{
+    if (!m_coverLabel) return;
+    if (path.isEmpty() || !QFileInfo::exists(path)) return;   // keep placeholder
+    QPixmap px(path);
+    if (px.isNull()) return;
+    m_coverLabel->setPixmap(
+        px.scaled(COVER_W, COVER_H, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_coverLabel->setText(QString());   // clear placeholder
 }

@@ -1,23 +1,28 @@
 #include "StreamSearchWidget.h"
 
-#include "core/stream/CinemetaClient.h"
+#include "core/stream/MetaAggregator.h"
 #include "core/stream/StreamLibrary.h"
 #include "ui/pages/TileCard.h"
 #include "ui/pages/TileStrip.h"
 
 #include <QDir>
 #include <QFile>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
-StreamSearchWidget::StreamSearchWidget(CinemetaClient* cinemeta, StreamLibrary* library,
+using tankostream::addon::MetaItemPreview;
+using tankostream::stream::MetaAggregator;
+
+StreamSearchWidget::StreamSearchWidget(MetaAggregator* meta, StreamLibrary* library,
                                        QWidget* parent)
     : QWidget(parent)
-    , m_cinemeta(cinemeta)
+    , m_meta(meta)
     , m_library(library)
     , m_nam(new QNetworkAccessManager(this))
 {
@@ -27,19 +32,39 @@ StreamSearchWidget::StreamSearchWidget(CinemetaClient* cinemeta, StreamLibrary* 
 
     buildUI();
 
-    connect(m_cinemeta, &CinemetaClient::catalogResults,
-            this, &StreamSearchWidget::onCatalogResults);
-    connect(m_cinemeta, &CinemetaClient::catalogError,
-            this, &StreamSearchWidget::onCatalogError);
+    if (m_meta) {
+        connect(m_meta, &MetaAggregator::catalogResults,
+                this, &StreamSearchWidget::onCatalogResults);
+        connect(m_meta, &MetaAggregator::catalogError,
+                this, &StreamSearchWidget::onCatalogError);
+    }
+
+    // Phase 1 Batch 1.2 — the detail view now owns the Add/Remove library
+    // toggle. When the user toggles state there, StreamLibrary fires
+    // libraryChanged; walk our tiles and refresh the "In Library" badge so
+    // the user-visible state stays coherent on back-navigate to the search
+    // results.
+    if (m_library) {
+        connect(m_library, &StreamLibrary::libraryChanged,
+                this, &StreamSearchWidget::refreshAllBadges);
+    }
 }
 
 void StreamSearchWidget::search(const QString& query)
 {
     clearResults();
-    m_statusLabel->setText("Searching...");
-    m_statusLabel->show();
+    // Phase 4 Batch 4.1 — full-page "Searching..." label removed; the subtle
+    // spinner in StreamPage's search bar is the loading affordance (TODO
+    // explicitly calls out "not a full-page Searching state"). Status label
+    // still used for error + no-results messages.
+    m_statusLabel->hide();
     show();
-    m_cinemeta->searchCatalog(query);
+    if (m_meta) {
+        m_meta->searchCatalog(query);
+    } else {
+        m_statusLabel->setText("Meta aggregator unavailable");
+        m_statusLabel->show();
+    }
 }
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
@@ -50,7 +75,6 @@ void StreamSearchWidget::buildUI()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // Top row: back button + status
     auto* topRow = new QWidget(this);
     auto* topLayout = new QHBoxLayout(topRow);
     topLayout->setContentsMargins(16, 8, 16, 8);
@@ -77,7 +101,6 @@ void StreamSearchWidget::buildUI()
 
     root->addWidget(topRow);
 
-    // Scroll area with TileStrip grid
     m_scroll = new QScrollArea(this);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -98,11 +121,20 @@ void StreamSearchWidget::buildUI()
 void StreamSearchWidget::clearResults()
 {
     m_strip->clear();
+    m_tiles.clear();
+    m_previewsById.clear();
+}
+
+void StreamSearchWidget::refreshAllBadges()
+{
+    for (TileCard* card : m_tiles) {
+        if (card) updateInLibraryBadge(card);
+    }
 }
 
 // ─── Search results ──────────────────────────────────────────────────────────
 
-void StreamSearchWidget::onCatalogResults(const QList<CinemetaEntry>& results)
+void StreamSearchWidget::onCatalogResults(const QList<MetaItemPreview>& results)
 {
     clearResults();
 
@@ -114,7 +146,7 @@ void StreamSearchWidget::onCatalogResults(const QList<CinemetaEntry>& results)
 
     m_statusLabel->setText(QString::number(results.size()) + " results");
 
-    for (const auto& entry : results)
+    for (const MetaItemPreview& entry : results)
         addResultCard(entry);
 }
 
@@ -123,66 +155,54 @@ void StreamSearchWidget::onCatalogError(const QString& message)
     m_statusLabel->setText("Search failed: " + message);
 }
 
-void StreamSearchWidget::addResultCard(const CinemetaEntry& entry)
+void StreamSearchWidget::addResultCard(const MetaItemPreview& entry)
 {
-    // Check for cached poster
-    QString posterPath = m_posterCacheDir + "/" + entry.imdb + ".jpg";
-    QString thumbPath = QFile::exists(posterPath) ? posterPath : QString();
+    const QString posterPath = m_posterCacheDir + "/" + entry.id + ".jpg";
+    const QString thumbPath = QFile::exists(posterPath) ? posterPath : QString();
 
-    // Subtitle: year + type + rating
     QStringList sub;
-    if (!entry.year.isEmpty()) sub << entry.year;
-    if (!entry.type.isEmpty()) sub << (entry.type == "series" ? "Series" : "Movie");
-    if (!entry.imdbRating.isEmpty()) sub << entry.imdbRating;
+    if (!entry.releaseInfo.isEmpty()) sub << entry.releaseInfo;
+    if (!entry.type.isEmpty())        sub << (entry.type == "series" ? "Series" : "Movie");
+    if (!entry.imdbRating.isEmpty())  sub << entry.imdbRating;
     QString subtitle = sub.join(" \u00B7 ");
 
     auto* card = new TileCard(thumbPath, entry.name, subtitle);
 
-    card->setProperty("imdbId", entry.imdb);
+    const QString posterUrl = entry.poster.toString();
+    card->setProperty("imdbId", entry.id);
     card->setProperty("entryType", entry.type);
     card->setProperty("entryName", entry.name);
-    card->setProperty("entryYear", entry.year);
-    card->setProperty("entryPoster", entry.poster);
+    card->setProperty("entryYear", entry.releaseInfo);
+    card->setProperty("entryPoster", posterUrl);
     card->setProperty("entryDesc", entry.description);
     card->setProperty("entryRating", entry.imdbRating);
 
-    // "In Library" badge via status
     updateInLibraryBadge(card);
 
-    // Click → add/remove from library
+    // Phase 1 Batch 1.2 — click on a search result now opens the detail view
+    // via StreamPage::showDetail(preview). The Add/Remove library toggle
+    // moved into the detail view header. "In Library" badge remains as a
+    // visual cue and is refreshed externally via libraryChanged above.
     connect(card, &TileCard::clicked, this, [this, card]() {
-        QString imdbId = card->property("imdbId").toString();
+        const QString imdbId = card->property("imdbId").toString();
         if (imdbId.isEmpty()) return;
-
-        if (m_library->has(imdbId)) {
-            m_library->remove(imdbId);
-        } else {
-            StreamLibraryEntry libEntry;
-            libEntry.imdb        = card->property("imdbId").toString();
-            libEntry.type        = card->property("entryType").toString();
-            libEntry.name        = card->property("entryName").toString();
-            libEntry.year        = card->property("entryYear").toString();
-            libEntry.poster      = card->property("entryPoster").toString();
-            libEntry.description = card->property("entryDesc").toString();
-            libEntry.imdbRating  = card->property("entryRating").toString();
-            m_library->add(libEntry);
-        }
-        updateInLibraryBadge(card);
-        emit libraryChanged();
+        const auto it = m_previewsById.constFind(imdbId);
+        if (it == m_previewsById.constEnd()) return;
+        emit metaActivated(it.value());
     });
 
     m_strip->addTile(card);
+    m_tiles.push_back(card);
+    m_previewsById.insert(entry.id, entry);
 
-    // Download poster async if not cached
-    if (thumbPath.isEmpty() && !entry.poster.isEmpty())
-        downloadPoster(entry.imdb, entry.poster, card);
+    if (thumbPath.isEmpty() && !posterUrl.isEmpty())
+        downloadPoster(entry.id, posterUrl, card);
 }
 
 void StreamSearchWidget::updateInLibraryBadge(TileCard* card)
 {
     QString imdbId = card->property("imdbId").toString();
     if (m_library->has(imdbId)) {
-        // Show a green progress bar + "finished" status to indicate in-library
         card->setBadges(1.0, {}, "In Library", "finished");
     } else {
         card->setBadges(0.0, {}, {}, {});
@@ -200,8 +220,9 @@ void StreamSearchWidget::downloadPoster(const QString& imdbId, const QString& po
         QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
     req.setTransferTimeout(10000);
 
+    QPointer<TileCard> guard(card);
     auto* reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, imdbId, card]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, imdbId, guard]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError)
             return;
@@ -210,7 +231,6 @@ void StreamSearchWidget::downloadPoster(const QString& imdbId, const QString& po
         if (data.isEmpty())
             return;
 
-        // Save to cache
         QString path = m_posterCacheDir + "/" + imdbId + ".jpg";
         QFile file(path);
         if (file.open(QIODevice::WriteOnly)) {
@@ -218,7 +238,8 @@ void StreamSearchWidget::downloadPoster(const QString& imdbId, const QString& po
             file.close();
         }
 
-        // Update the TileCard's poster
-        card->setThumbPath(path);
+        if (guard) {
+            guard->setThumbPath(path);
+        }
     });
 }

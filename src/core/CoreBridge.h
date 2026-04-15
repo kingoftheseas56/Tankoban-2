@@ -20,6 +20,12 @@ public:
     void addRootFolder(const QString& domain, const QString& path);
     void removeRootFolder(const QString& domain, const QString& path);
 
+    // Emit rootFoldersChanged without mutating the root list — used by
+    // TorrentClient when a download completes into a tracked folder so
+    // library scanners re-run. The existing emissions in addRootFolder /
+    // removeRootFolder already cover the list-mutation case.
+    void notifyRootFoldersChanged(const QString& domain);
+
     // ── Shell prefs ──
     QJsonObject prefs() const;
     void savePrefs(const QJsonObject& patch);

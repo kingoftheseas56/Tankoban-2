@@ -6,6 +6,7 @@
 
 #include <QRegularExpression>
 #include <QDateTime>
+#include <QDir>
 #include <QDebug>
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -182,6 +183,26 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
         m_engine->startTorrent(infoHash, config.destinationPath);
 
     emit torrentAdded(infoHash);
+}
+
+float TorrentClient::downloadProgress(const QString& folderPath) const
+{
+    if (folderPath.isEmpty()) return 0.0f;
+    const QString normFolder = QDir(folderPath).absolutePath();
+
+    qint64 totalSize = 0;
+    double totalDone = 0.0;
+    for (const auto& info : listActive()) {
+        if (info.savePath.isEmpty() || info.totalWanted <= 0)
+            continue;
+        const QString normSave = QDir(info.savePath).absolutePath();
+        if (!normSave.startsWith(normFolder, Qt::CaseInsensitive))
+            continue;
+        totalSize += info.totalWanted;
+        totalDone += static_cast<double>(info.totalWanted) * info.progress;
+    }
+    if (totalSize <= 0) return 0.0f;
+    return static_cast<float>(totalDone / static_cast<double>(totalSize));
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -386,15 +407,33 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
         }
     }
 
-    // Update record state
+    // Update record state + capture category/savePath for the rescan notify.
+    QString category;
+    QString savePath;
     if (m_records.contains(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("completed");
         m_records[infoHash] = rec;
         saveRecords();
+        category = rec.value("category").toString();
+        savePath = rec.value("savePath").toString();
     }
 
     emit torrentCompleted(infoHash);
+
+    // Trigger a library rescan if the completed torrent saved into a tracked
+    // root for its category. Prefix-match savePath against each root
+    // (case-insensitive + path-normalized for Windows).
+    if (m_bridge && !category.isEmpty() && !savePath.isEmpty()) {
+        const QString normSave = QDir(savePath).absolutePath();
+        for (const QString& root : m_bridge->rootFolders(category)) {
+            const QString normRoot = QDir(root).absolutePath();
+            if (normSave.startsWith(normRoot, Qt::CaseInsensitive)) {
+                m_bridge->notifyRootFoldersChanged(category);
+                break;
+            }
+        }
+    }
 }
 
 void TorrentClient::onTorrentError(const QString& infoHash, const QString& message)

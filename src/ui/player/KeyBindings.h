@@ -36,6 +36,15 @@ public:
     // Human-readable label for an action.
     static QString labelForAction(const QString& action);
 
+    // VIDEO_PLAYER_FIX Batch 6.1 — the default (factory) binding for an
+    // action, independent of any user customization. Empty sequence when
+    // the action isn't in the DEFAULTS table.
+    static QKeySequence defaultKeyForAction(const QString& action);
+
+    // VIDEO_PLAYER_FIX Batch 6.1 — reset a single action to its default
+    // (targeted counterpart to resetDefaults). Saves to QSettings.
+    void resetAction(const QString& action);
+
 private:
     void populateDefaults();
 

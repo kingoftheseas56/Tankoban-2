@@ -137,6 +137,17 @@ QByteArray ArchiveReader::pageData(const QString& cbzPath, const QString& pageNa
 #endif
 }
 
+QImage ArchiveReader::firstImage(const QString& path)
+{
+    const QStringList pages = pageList(path);
+    if (pages.isEmpty()) return {};
+    const QByteArray bytes = pageData(path, pages.first());
+    if (bytes.isEmpty()) return {};
+    QImage img;
+    if (!img.loadFromData(bytes)) return {};
+    return img;
+}
+
 // ── Fast dimension parsing from image file headers ──────────────────────────
 
 static QSize parsePngDimensions(const QByteArray& data)

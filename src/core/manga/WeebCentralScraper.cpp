@@ -18,6 +18,9 @@ static QNetworkRequest makeRequest(const QUrl& url, bool isHtmx = false)
     req.setRawHeader("User-Agent", USER_AGENT.toUtf8());
     req.setRawHeader("Referer", BASE.toUtf8());
     req.setRawHeader("Accept", "text/html,*/*");
+    // Long-running series (One Piece, 1100+ chapters) exceed Qt's default
+    // 10MB decompressed safety cap. Disable the cap for manga scrape responses.
+    req.setDecompressedSafetyCheckThreshold(-1);
     if (isHtmx) {
         req.setRawHeader("HX-Request", "true");
         req.setRawHeader("HX-Target", "search-results");
@@ -53,21 +56,15 @@ QList<MangaResult> WeebCentralScraper::parseSearchHtml(const QString& html)
 {
     QList<MangaResult> results;
 
-    // Match <article> blocks that have both "flex" and "gap-4" CSS classes —
-    // these are the result cards. Mirrors Groundwork's _WeebCentralSearchParser
-    // which checks: tag == "article" AND "flex" in cls AND "gap-4" in cls.
-    static QRegularExpression articleRe(
-        R"re(<article\b([^>]*)>(.*?)</article>)re",
-        QRegularExpression::DotMatchesEverythingOption);
-
     // All <a> tags within a block
     static QRegularExpression anyLinkRe(
         R"re(<a\b([^>]*)>(.*?)</a>)re",
         QRegularExpression::DotMatchesEverythingOption);
 
-    // Series href: /series/{ULID}/{slug}
+    // Series href: /series/{ULID}/{slug} — accept either relative or absolute
+    // (WeebCentral started emitting absolute URLs circa 2026-04).
     static QRegularExpression hrefRe(
-        R"re(href="(/series/([^/"]+)/[^"]*)")re");
+        R"re(href="(?:https?://[^/"]+)?(/series/([^/"]+)/[^"]*)")re");
 
     // class="..." extractor (used on both article attrs and link attrs)
     static QRegularExpression classAttrRe(
@@ -82,19 +79,51 @@ QList<MangaResult> WeebCentralScraper::parseSearchHtml(const QString& html)
 
     static QRegularExpression stripTagsRe(R"re(<[^>]*>)re");
 
-    auto articleMatches = articleRe.globalMatch(html);
-    while (articleMatches.hasNext()) {
-        auto am = articleMatches.next();
-        QString articleAttrs = am.captured(1);
+    // Depth-aware walk over <article> tags. WeebCentral nests inner <article>
+    // tags (cover-lg + cover-mobile) inside each result card, so a non-greedy
+    // regex would truncate the block at the first inner </article>. Walk
+    // manually: at each <article, track depth until the matching close.
+    int pos = 0;
+    while (pos < html.length()) {
+        int articleStart = html.indexOf(QLatin1String("<article"), pos);
+        if (articleStart < 0) break;
 
-        // Filter: must have both "flex" and "gap-4" classes
+        int attrEnd = html.indexOf(QLatin1Char('>'), articleStart);
+        if (attrEnd < 0) break;
+
+        QString articleAttrs = html.mid(articleStart + 8, attrEnd - (articleStart + 8));
+
+        // Walk forward tracking depth to find the matching </article>.
+        int depth = 1;
+        int scan = attrEnd + 1;
+        int blockEnd = -1;
+        while (scan < html.length()) {
+            int nextOpen  = html.indexOf(QLatin1String("<article"),  scan);
+            int nextClose = html.indexOf(QLatin1String("</article>"), scan);
+            if (nextClose < 0) break;
+            if (nextOpen >= 0 && nextOpen < nextClose) {
+                ++depth;
+                scan = nextOpen + 8;
+            } else {
+                --depth;
+                if (depth == 0) { blockEnd = nextClose; break; }
+                scan = nextClose + 10;
+            }
+        }
+        if (blockEnd < 0) break;
+
+        int nextPos = blockEnd + 10;
+
+        // Filter: must have both "flex" and "gap-4" classes in the opening tag
         auto ac = classAttrRe.match(articleAttrs);
         QString articleCls = ac.hasMatch() ? ac.captured(1) : QString();
         if (!articleCls.contains(QLatin1String("flex")) ||
-            !articleCls.contains(QLatin1String("gap-4")))
+            !articleCls.contains(QLatin1String("gap-4"))) {
+            pos = nextPos;
             continue;
+        }
 
-        QString block = am.captured(2);
+        QString block = html.mid(attrEnd + 1, blockEnd - (attrEnd + 1));
 
         MangaResult r;
         r.source = "weebcentral";
@@ -157,6 +186,8 @@ QList<MangaResult> WeebCentralScraper::parseSearchHtml(const QString& html)
 
         if (!r.title.isEmpty() && !r.id.isEmpty())
             results.append(r);
+
+        pos = nextPos;
     }
 
     return results;
@@ -184,8 +215,10 @@ QList<ChapterInfo> WeebCentralScraper::parseChaptersHtml(const QString& html, co
     QList<ChapterInfo> chapters;
 
     // Pattern: <a href="/chapters/{ULID}">Chapter N</a>
+    // Accept either relative or absolute URL (WeebCentral started emitting
+    // absolute URLs circa 2026-04).
     static QRegularExpression chapterRe(
-        R"RE(<a\s+href="/chapters/([^"]+)"[^>]*>\s*(.*?)\s*</a>)RE",
+        R"RE(<a\s+href="(?:https?://[^/"]+)?/chapters/([^"]+)"[^>]*>\s*(.*?)\s*</a>)RE",
         QRegularExpression::DotMatchesEverythingOption);
 
     static QRegularExpression numRe(R"((\d+(?:\.\d+)?))", QRegularExpression::NoPatternOption);

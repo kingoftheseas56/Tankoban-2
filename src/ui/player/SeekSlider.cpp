@@ -1,6 +1,7 @@
 #include "ui/player/SeekSlider.h"
 
 #include <QMouseEvent>
+#include <QPainter>
 #include <QStyle>
 #include <QStyleOptionSlider>
 
@@ -51,6 +52,47 @@ SeekSlider::SeekSlider(Qt::Orientation o, QWidget* parent)
 void SeekSlider::setDurationSec(double dur)
 {
     m_durationSec = qMax(0.0, dur);
+}
+
+void SeekSlider::setChapterMarkers(const QList<qint64>& markersMs)
+{
+    m_chapterMarkersMs = markersMs;
+    update();
+}
+
+void SeekSlider::paintEvent(QPaintEvent* e)
+{
+    QSlider::paintEvent(e);
+
+    if (m_chapterMarkersMs.isEmpty() || m_durationSec <= 0.0)
+        return;
+
+    const QRect groove = grooveRect();
+    if (groove.width() <= 0)
+        return;
+
+    const double totalMs = m_durationSec * 1000.0;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    // Light gray tick, slightly taller than the 5px groove. Groundwork
+    // palette is warm-desaturated; picking a near-white tick keeps the
+    // markers visible on both the amber fill and the dark add-page
+    // without introducing a color accent.
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(230, 220, 200, 200));
+
+    const int tickW = 2;
+    const int tickExtendPx = 2;  // how far above/below the groove the tick pokes
+    const int y = groove.y() - tickExtendPx;
+    const int h = groove.height() + tickExtendPx * 2;
+
+    for (qint64 ms : m_chapterMarkersMs) {
+        if (ms <= 0 || ms >= static_cast<qint64>(totalMs))
+            continue;
+        const double frac = static_cast<double>(ms) / totalMs;
+        const int x = groove.x() + static_cast<int>(frac * groove.width()) - tickW / 2;
+        p.drawRect(x, y, tickW, h);
+    }
 }
 
 QRect SeekSlider::grooveRect() const

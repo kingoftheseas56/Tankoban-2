@@ -1,16 +1,95 @@
 #include "X1337xIndexer.h"
+#include "CloudflareCookieHarvester.h"
 
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
 #include <QRegularExpression>
+#include <QDebug>
+#include <QSettings>
+#include <QDateTime>
 
 static const QString X1337X_BASE = "https://1337x.to";
 
 X1337xIndexer::X1337xIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
+
+    // Harvester is a singleton parented to QCoreApplication; connections
+    // auto-disconnect when this indexer is destroyed. Both slots filter
+    // on indexerId so other subscribers (a future harvest target) don't
+    // false-trigger.
+    auto* harvester = CloudflareCookieHarvester::instance();
+    connect(harvester, &CloudflareCookieHarvester::cookieHarvested,
+            this, &X1337xIndexer::onCookieHarvested);
+    connect(harvester, &CloudflareCookieHarvester::harvestFailed,
+            this, &X1337xIndexer::onHarvestFailed);
+}
+
+void X1337xIndexer::setCredential(const QString& key, const QString& value)
+{
+    if (key != QLatin1String("cf_clearance"))
+        return;
+    QSettings s;
+    s.setValue(QStringLiteral("tankorent/indexers/1337x/cf_clearance"), value);
+    s.setValue(QStringLiteral("tankorent/indexers/1337x/cf_clearance_expires"),
+               QDateTime::currentDateTime().addDays(7));
+}
+
+QString X1337xIndexer::credential(const QString& key) const
+{
+    if (key != QLatin1String("cf_clearance"))
+        return {};
+    return CloudflareCookieHarvester::cachedClearance(QStringLiteral("1337x"));
+}
+
+bool X1337xIndexer::haveValidClearance() const
+{
+    const QString cf = CloudflareCookieHarvester::cachedClearance(QStringLiteral("1337x"));
+    if (cf.isEmpty())
+        return false;
+    const QDateTime expires = CloudflareCookieHarvester::clearanceExpires(QStringLiteral("1337x"));
+    if (!expires.isValid() || expires < QDateTime::currentDateTime())
+        return false;
+    return true;
+}
+
+void X1337xIndexer::invalidateClearance()
+{
+    QSettings s;
+    s.remove(QStringLiteral("tankorent/indexers/1337x/cf_clearance"));
+    s.remove(QStringLiteral("tankorent/indexers/1337x/cf_clearance_expires"));
+}
+
+void X1337xIndexer::kickOffHarvest()
+{
+    m_health = IndexerHealth::CloudflareBlocked;
+    savePersistedHealth();
+    CloudflareCookieHarvester::instance()->harvest(
+        QUrl(QStringLiteral("https://1337x.to")),
+        QStringLiteral("1337x"));
+}
+
+void X1337xIndexer::onCookieHarvested(const QString& indexerId,
+                                     const QString& /*cfClearance*/,
+                                     const QString& /*userAgent*/)
+{
+    if (indexerId != QLatin1String("1337x") || !m_pendingSearch)
+        return;
+    m_pendingSearch = false;
+    performSearch(m_pendingQuery, m_pendingLimit, m_pendingCategoryId);
+}
+
+void X1337xIndexer::onHarvestFailed(const QString& indexerId, const QString& reason)
+{
+    if (indexerId != QLatin1String("1337x") || !m_pendingSearch)
+        return;
+    m_pendingSearch = false;
+    m_lastError = QStringLiteral("Cloudflare challenge unsolved: %1").arg(reason);
+    savePersistedHealth();
+    emit searchError(m_lastError);
 }
 
 void X1337xIndexer::search(const QString& query, int limit, const QString& categoryId)
@@ -18,8 +97,26 @@ void X1337xIndexer::search(const QString& query, int limit, const QString& categ
     m_rows.clear();
     m_pendingDetails = 0;
     m_limit = qBound(1, limit, 200);
+    m_retryAttempted = false;
 
-    QString q = QString::fromUtf8(QUrl::toPercentEncoding(query));
+    // Always stash — used both by the harvest-then-search path and by the
+    // 503 retry-once path.
+    m_pendingQuery      = query;
+    m_pendingCategoryId = categoryId;
+    m_pendingLimit      = m_limit;
+
+    if (haveValidClearance()) {
+        performSearch(query, m_limit, categoryId);
+        return;
+    }
+
+    m_pendingSearch = true;
+    kickOffHarvest();
+}
+
+void X1337xIndexer::performSearch(const QString& query, int limit, const QString& categoryId)
+{
+    const QString q = QString::fromUtf8(QUrl::toPercentEncoding(query));
 
     QString url;
     if (!categoryId.trimmed().isEmpty())
@@ -29,13 +126,21 @@ void X1337xIndexer::search(const QString& query, int limit, const QString& categ
 
     QUrl reqUrl(url);
     QNetworkRequest req{reqUrl};
-    req.setHeader(QNetworkRequest::UserAgentHeader,
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
-    req.setRawHeader("Accept", "text/html,*/*");
 
+    const QString cf = CloudflareCookieHarvester::cachedClearance(QStringLiteral("1337x"));
+    const QString ua = CloudflareCookieHarvester::cachedUserAgent(QStringLiteral("1337x"));
+    const QByteArray userAgent = ua.isEmpty()
+        ? QByteArray("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)")
+        : ua.toUtf8();
+    req.setHeader(QNetworkRequest::UserAgentHeader, userAgent);
+    req.setRawHeader("Accept", "text/html,*/*");
+    if (!cf.isEmpty())
+        req.setRawHeader("Cookie", "cf_clearance=" + cf.toUtf8());
+
+    startRequestTimer();
     auto *reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        onListPageFetched(reply, m_limit);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, limit]() {
+        onListPageFetched(reply, limit);
     });
 }
 
@@ -43,7 +148,22 @@ void X1337xIndexer::onListPageFetched(QNetworkReply* reply, int limit)
 {
     reply->deleteLater();
 
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    // CF can invalidate the clearance cookie server-side before our TTL
+    // expires. The server responds with 503 (often with a fresh challenge
+    // page). Invalidate + re-harvest + retry exactly once per search.
+    if (httpStatus == 503 && !m_retryAttempted) {
+        m_retryAttempted = true;
+        invalidateClearance();
+        m_pendingLimit  = limit;
+        m_pendingSearch = true;
+        kickOffHarvest();
+        return;
+    }
+
     if (reply->error() != QNetworkReply::NoError) {
+        markError(reply);
         emit searchError(reply->errorString());
         return;
     }
@@ -56,6 +176,7 @@ void X1337xIndexer::onListPageFetched(QNetworkReply* reply, int limit)
         return;
     }
 
+    markSuccess();
     fetchDetailPages(m_rows, limit);
 }
 
@@ -186,6 +307,9 @@ void X1337xIndexer::onDetailFetched(QNetworkReply* reply, int index)
 
 void X1337xIndexer::checkComplete()
 {
+    static const QRegularExpression btihRe("btih:([a-fA-F0-9]{40})",
+        QRegularExpression::CaseInsensitiveOption);
+
     QList<TorrentResult> results;
     for (int i = 0; i < m_rows.size() && results.size() < m_limit; ++i) {
         const auto& lr = m_rows[i];
@@ -201,6 +325,16 @@ void X1337xIndexer::checkComplete()
         r.sourceName = "1337x";
         r.sourceKey  = "1337x";
         r.categoryId = lr.categoryId;
+
+        auto ihMatch = btihRe.match(lr.magnetUri);
+        if (ihMatch.hasMatch())
+            r.infoHash = canonicalizeInfoHash(ihMatch.captured(1));
+        if (r.infoHash.isEmpty())
+            qDebug() << "[X1337xIndexer] infoHash missing for:" << lr.title;
+
+        if (!lr.detailPath.isEmpty())
+            r.detailsUrl = X1337X_BASE + lr.detailPath;
+
         results.append(r);
     }
 

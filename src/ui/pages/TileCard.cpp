@@ -2,6 +2,8 @@
 
 #include <QVBoxLayout>
 #include <QMouseEvent>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QPainter>
 #include <QPainterPath>
 #include <QFontMetrics>
@@ -16,6 +18,7 @@ TileCard::TileCard(const QString& thumbPath,
     : QFrame(parent)
     , m_thumbPath(thumbPath)
     , m_title(title)
+    , m_subtitle(subtitle)
     , m_cardWidth(DEFAULT_WIDTH)
     , m_imageHeight(DEFAULT_IMAGE_HEIGHT)
 {
@@ -26,7 +29,7 @@ TileCard::TileCard(const QString& thumbPath,
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setSpacing(6);  // uniform 6px image↔title↔subtitle (original 129c9e7)
 
     m_imageWrap = new QFrame(this);
     m_imageWrap->setObjectName("TileImageWrap");
@@ -42,28 +45,22 @@ TileCard::TileCard(const QString& thumbPath,
     setCardSize(m_cardWidth, m_imageHeight);
 
     layout->addWidget(m_imageWrap);
-    layout->addSpacing(6);
 
-    m_titleLabel = new QLabel(title, this);
+    m_titleLabel = new QLabel(this);
     m_titleLabel->setObjectName("TileTitle");
     m_titleLabel->setFixedWidth(m_cardWidth);
     m_titleLabel->setWordWrap(false);
-    QFont titleFont = m_titleLabel->font();
-    titleFont.setPixelSize(12);
-    titleFont.setWeight(QFont::DemiBold);
-    m_titleLabel->setFont(titleFont);
-    QFontMetrics fm(titleFont);
-    m_titleLabel->setText(fm.elidedText(title, Qt::ElideRight, m_cardWidth - 4));
+    QFontMetrics titleFm(m_titleLabel->font());
+    m_titleLabel->setText(titleFm.elidedText(title, Qt::ElideRight, m_cardWidth - 4));
     layout->addWidget(m_titleLabel);
-    layout->addSpacing(1);
 
-    m_subtitleLabel = new QLabel(subtitle, this);
+    m_subtitleLabel = new QLabel(this);
     m_subtitleLabel->setObjectName("TileSubtitle");
     m_subtitleLabel->setFixedWidth(m_cardWidth);
-    QFont subFont = m_subtitleLabel->font();
-    subFont.setPixelSize(11);
-    m_subtitleLabel->setFont(subFont);
-    if (subtitle.isEmpty()) m_subtitleLabel->hide();
+    m_subtitleLabel->setWordWrap(false);
+    QFontMetrics subFm(m_subtitleLabel->font());
+    m_subtitleLabel->setText(subFm.elidedText(subtitle, Qt::ElideRight, m_cardWidth - 4));
+    m_subtitleLabel->setVisible(!subtitle.isEmpty());
     layout->addWidget(m_subtitleLabel);
 
     layout->addStretch();
@@ -104,8 +101,11 @@ void TileCard::setCardSize(int width, int imageHeight)
         QFontMetrics fm(m_titleLabel->font());
         m_titleLabel->setText(fm.elidedText(m_title, Qt::ElideRight, width - 4));
     }
-    if (m_subtitleLabel)
+    if (m_subtitleLabel) {
         m_subtitleLabel->setFixedWidth(width);
+        QFontMetrics fm(m_subtitleLabel->font());
+        m_subtitleLabel->setText(fm.elidedText(m_subtitle, Qt::ElideRight, width - 4));
+    }
 
     // ── render cover ────────────────────────────────────
     if (!m_thumbPath.isEmpty()) {
@@ -352,4 +352,64 @@ void TileCard::leaveEvent(QEvent* event)
     m_hovered = false;
     updateBorder();
     QFrame::leaveEvent(event);
+}
+
+/* ── inline rename ───────────────────────────────────────── */
+
+void TileCard::beginRename()
+{
+    if (m_renameEdit) return;
+    auto* layout = qobject_cast<QVBoxLayout*>(this->layout());
+    if (!layout || !m_titleLabel) return;
+
+    m_renameEdit = new QLineEdit(this);
+    m_renameEdit->setObjectName("TileRenameEdit");
+    m_renameEdit->setText(m_title);
+    m_renameEdit->setFixedWidth(m_cardWidth);
+    m_renameEdit->setFont(m_titleLabel->font());
+    m_renameEdit->setStyleSheet(
+        "#TileRenameEdit { background: rgba(255,255,255,0.10); "
+        "color: #f0f0f0; border: 1px solid rgba(255,255,255,0.30); "
+        "border-radius: 2px; padding: 1px 3px; }");
+
+    const int idx = layout->indexOf(m_titleLabel);
+    layout->insertWidget(idx, m_renameEdit);
+    m_titleLabel->hide();
+
+    m_renameEdit->installEventFilter(this);
+    connect(m_renameEdit, &QLineEdit::returnPressed, this, [this]() { endRename(true); });
+    connect(m_renameEdit, &QLineEdit::editingFinished, this, [this]() { endRename(true); });
+
+    m_renameEdit->setFocus();
+    m_renameEdit->selectAll();
+}
+
+void TileCard::endRename(bool accepted)
+{
+    if (!m_renameEdit) return;
+
+    const QString newName = m_renameEdit->text().trimmed();
+    QLineEdit* edit = m_renameEdit;
+    m_renameEdit = nullptr;           // prevent re-entry from editingFinished
+
+    edit->disconnect();
+    edit->hide();
+    edit->deleteLater();
+
+    if (m_titleLabel) m_titleLabel->show();
+
+    const bool commit = accepted && !newName.isEmpty() && newName != m_title;
+    emit renameCompleted(commit, newName);
+}
+
+bool TileCard::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == m_renameEdit && event->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if (ke->key() == Qt::Key_Escape) {
+            endRename(false);
+            return true;
+        }
+    }
+    return QFrame::eventFilter(obj, event);
 }

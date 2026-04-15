@@ -53,6 +53,13 @@ public:
     QList<TorrentInfo> listActive() const;
     QJsonArray         listHistory() const;
 
+    // Aggregate progress [0..1] across all active torrents whose save path
+    // is under `folderPath`. Weighted by torrent size so a big mostly-done
+    // download and a tiny just-started one aggregate sensibly. Returns 0.0
+    // when no matching active torrents. Case-insensitive prefix match on
+    // Windows-style paths.
+    float downloadProgress(const QString& folderPath) const;
+
     // Control
     void pauseTorrent(const QString& infoHash);
     void resumeTorrent(const QString& infoHash);

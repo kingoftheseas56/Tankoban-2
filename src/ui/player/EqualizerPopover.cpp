@@ -86,6 +86,28 @@ EqualizerPopover::EqualizerPopover(QWidget* parent)
     connect(resetBtn, &QPushButton::clicked, this, &EqualizerPopover::resetAll);
     lay->addWidget(resetBtn, 0, Qt::AlignCenter);
 
+    // Batch 4.3 — Dynamic Range Compression toggle.
+    // "Loud movie at low volume keeps dialogue audible" — sidecar-side
+    // feed-forward compressor (threshold -12 dB, ratio 3:1, attack 10 ms,
+    // release 100 ms) lights up when this is checked. Off by default.
+    // Styled in the existing grayscale aesthetic (per feedback_no_color_no_emoji).
+    m_drcCheck = new QCheckBox("Dynamic Range Compression");
+    m_drcCheck->setStyleSheet(
+        "QCheckBox { color: rgba(214,194,164,240); font-size: 10px; border: none; padding-top: 6px; }"
+        "QCheckBox::indicator { width: 12px; height: 12px; }"
+        "QCheckBox::indicator:unchecked {"
+        "  background: rgba(40,40,40,230);"
+        "  border: 1px solid rgba(255,255,255,0.2); border-radius: 2px;"
+        "}"
+        "QCheckBox::indicator:checked {"
+        "  background: rgba(214,194,164,240);"
+        "  border: 1px solid rgba(214,194,164,240); border-radius: 2px;"
+        "}"
+    );
+    m_drcCheck->setChecked(false);
+    connect(m_drcCheck, &QCheckBox::toggled, this, &EqualizerPopover::drcToggled);
+    lay->addWidget(m_drcCheck, 0, Qt::AlignCenter);
+
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(200);
     connect(&m_debounce, &QTimer::timeout, this, [this]() {
@@ -134,6 +156,7 @@ void EqualizerPopover::toggle(QWidget* anchor)
         dismiss();
         return;
     }
+    m_anchor = anchor;
     if (anchor) anchorAbove(anchor);
     show();
     raise();
@@ -161,14 +184,23 @@ void EqualizerPopover::dismiss()
         m_clickFilterInstalled = false;
     }
     hide();
+    m_anchor.clear();
 }
 
 bool EqualizerPopover::eventFilter(QObject*, QEvent* event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
-        if (!rect().contains(mapFromGlobal(me->globalPosition().toPoint())))
-            dismiss();
+        const QPoint gp = me->globalPosition().toPoint();
+        if (rect().contains(mapFromGlobal(gp)))
+            return false;
+        // Outside popover — if the press is on the anchor chip, swallow
+        // (return true) after dismiss so the chip's clicked() signal
+        // doesn't immediately re-toggle us open.
+        const bool onAnchor = m_anchor
+            && QRect(m_anchor->mapToGlobal(QPoint(0, 0)), m_anchor->size()).contains(gp);
+        dismiss();
+        return onAnchor;
     }
     return false;
 }

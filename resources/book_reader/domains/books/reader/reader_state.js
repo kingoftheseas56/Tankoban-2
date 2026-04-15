@@ -485,14 +485,36 @@
         locator.chapterReadState = Object.assign({}, state.chapterReadState || {}); // BUILD_CHAP_PERSIST
       }
 
+      // BOOK_FIX 1.1: derive flat agents/CONTRACTS.md fields from the locator so
+      // the library continue strip can read the same record the reader writes.
+      var loc = locator && typeof locator === 'object' ? locator : {};
+      var locInner = loc.location && typeof loc.location === 'object' ? loc.location : {};
+      var rawFrac = Number(loc.fraction);
+      var scrollFraction = Number.isFinite(rawFrac) ? Math.max(0, Math.min(1, rawFrac)) : 0;
+      var rawCurrent = Number(locInner.current);
+      var rawTotal = Number(locInner.total);
+      var chapter = Number.isFinite(rawCurrent) ? rawCurrent : 0;
+      var chapterCount = Number.isFinite(rawTotal) ? rawTotal : 0;
+      var finished = scrollFraction >= 0.97 ||
+        (chapterCount > 0 && chapter >= chapterCount - 1 && scrollFraction >= 0.999);
+      var normPath = String(state.book.path || '').replace(/\\/g, '/');
+      var bookmarksFlat = Array.isArray(state.bookmarks) ? state.bookmarks.slice() : [];
+
       var payload = {
+        chapter: chapter,
+        chapterCount: chapterCount,
+        scrollFraction: scrollFraction,
+        percent: scrollFraction * 100,
+        finished: !!finished,
+        path: normPath,
+        bookmarks: bookmarksFlat,
         locator: locator || null,
         format: state.book.format,
         mediaType: 'book',
         pageHint: pageHint || null,
         bookMeta: {
           title: state.book.title,
-          path: state.book.path,
+          path: normPath,
           format: state.book.format,
           mediaType: 'book',
           series: state.book.series || '',

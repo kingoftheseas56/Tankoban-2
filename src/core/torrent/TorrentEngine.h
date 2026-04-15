@@ -5,8 +5,12 @@
 #include <QJsonArray>
 #include <QMutex>
 #include <QHash>
+#include <QList>
+#include <QPair>
 #include <QString>
 #include <QVector>
+#include <QDateTime>
+#include <QStringList>
 
 #ifdef HAS_LIBTORRENT
 #include <libtorrent/session.hpp>
@@ -43,6 +47,53 @@ struct TorrentStatus {
     int     ulLimit       = 0;
 };
 
+// ── Per-tracker snapshot (Phase 6.3) ────────────────────────────────────────
+struct TrackerInfo {
+    QString   url;
+    int       tier = 0;
+    QString   status;       // "Working" / "Updating" / "Error" / "Not contacted"
+    QDateTime nextAnnounce; // invalid if not contacted
+    QDateTime minAnnounce;
+    int       peers      = 0;
+    int       seeds      = 0;
+    int       leeches    = 0;
+    int       downloaded = 0;
+    QString   message;
+};
+
+// ── Per-peer snapshot (Phase 6.4) ───────────────────────────────────────────
+struct PeerInfo {
+    QString address;
+    quint16 port       = 0;
+    QString client;
+    QString country;   // 2-letter code; "--" when GeoIP unresolved
+    QString flags;     // compact "I"/"E"/"uTP" flag string
+    QString connection;// "TCP" / "uTP"
+    float   progress   = 0.f;
+    qint64  downSpeed  = 0;
+    qint64  upSpeed    = 0;
+    qint64  downloaded = 0;
+    qint64  uploaded   = 0;
+    float   relevance  = 0.f;
+};
+
+// ── Combined metadata + live status for General tab (Phase 6.5) ─────────────
+struct TorrentDetails {
+    QString   name;
+    qint64    totalSize  = 0;
+    int       pieceCount = 0;
+    qint64    pieceSize  = 0;
+    QDateTime created;
+    QString   createdBy;
+    QString   comment;
+    QString   infoHash;
+    QString   savePath;
+    QString   currentTracker;
+    float     availability = 0.f;
+    float     shareRatio   = 0.f;
+    QDateTime nextReannounce;
+};
+
 // ── TorrentEngine ───────────────────────────────────────────────────────────
 class TorrentEngine : public QObject
 {
@@ -60,6 +111,7 @@ public:
     QString addMagnet(const QString& magnetUri, const QString& savePath, bool paused = true);
     QString addFromResume(const QString& resumePath, const QString& savePath, bool paused);
     void    setFilePriorities(const QString& infoHash, const QVector<int>& priorities);
+    void    renameFile(const QString& infoHash, int fileIndex, const QString& newName);
     void    setSequentialDownload(const QString& infoHash, bool sequential);
     void    flattenFiles(const QString& infoHash);
     void    startTorrent(const QString& infoHash, const QString& newSavePath);
@@ -77,6 +129,21 @@ public:
     void    setSeedingRules(const QString& infoHash, float ratioLimit, int seedTimeLimitSecs);
     void    setGlobalSeedingRules(float ratioLimit, int seedTimeLimitSecs);
 
+    // Tracker management (Phase 6.3)
+    QList<TrackerInfo> trackersFor(const QString& infoHash) const;
+    void    addTracker(const QString& infoHash, const QString& url, int tier);
+    void    removeTracker(const QString& infoHash, const QString& url);
+    void    editTrackerUrl(const QString& infoHash, const QString& oldUrl, const QString& newUrl);
+
+    // Peer management (Phase 6.4)
+    QList<PeerInfo> peersFor(const QString& infoHash) const;
+    void    banPeer(const QString& ipAddr);
+    void    addPeer(const QString& infoHash, const QString& ipPort);
+    QStringList bannedPeers() const;
+
+    // General tab convenience wrapper (Phase 6.5)
+    TorrentDetails torrentDetails(const QString& infoHash) const;
+
     // Query (thread-safe snapshot)
     QList<TorrentStatus> allStatuses() const;
     QJsonArray torrentFiles(const QString& infoHash) const;
@@ -89,6 +156,45 @@ public:
     // Flush libtorrent's disk write cache for a specific torrent so all
     // downloaded pieces are immediately readable from disk via QFile.
     void flushCache(const QString& infoHash);
+
+    // ── STREAM_PLAYBACK_FIX Phase 2 — streaming piece primitives ────────────
+    //
+    // These four helpers translate between file-byte space and piece-index
+    // space and let StreamEngine wrap libtorrent's streaming APIs. No
+    // streaming behavior change from adding them — callers wired in later
+    // batches (2.2 head deadline, 2.3 sliding window, 2.4 seek pre-gate,
+    // 3.2 buffering %).
+
+    // Wrap libtorrent's time-critical piece API. `deadlines` is a list of
+    // (pieceIndex, msFromNow) pairs — shorter ms = more urgent. Pieces with
+    // deadlines are requested from peers expected to deliver soonest, which
+    // is the libtorrent-recommended way to stream (sequential_download
+    // alone is documented as "sub-optimal for streaming"). Invalid piece
+    // indices are skipped silently. No-op on invalid infoHash.
+    void setPieceDeadlines(const QString& infoHash,
+                           const QList<QPair<int, int>>& deadlines);
+
+    // Clear all time-critical deadlines for this torrent. Used on seek /
+    // resume (rebuild a fresh set around the new playback window) and on
+    // playback stop (stop pre-fetching ahead of a non-existent frontier).
+    void clearPieceDeadlines(const QString& infoHash);
+
+    // Translate a file-byte range to a [firstPiece, lastPiece] inclusive
+    // piece-index range using libtorrent's ti->map_file(). Returns
+    // {-1,-1} on invalid input. Callers use this to compute head / seek /
+    // sliding-window piece ranges from file offsets.
+    QPair<int, int> pieceRangeForFileOffset(const QString& infoHash,
+                                            int fileIndex,
+                                            qint64 fileOffset,
+                                            qint64 length) const;
+
+    // Count contiguous have_piece()-true bytes starting at `fileOffset`
+    // within `fileIndex`. Walks pieces forward until the first missing
+    // piece is hit, then returns the byte count up to that boundary.
+    // Used by StreamEngine for gate-progress buffering % (Batch 3.2) and
+    // by the seek pre-gate (Batch 2.4).
+    qint64 contiguousBytesFromOffset(const QString& infoHash, int fileIndex,
+                                     qint64 fileOffset) const;
 
 signals:
     void metadataReady(const QString& infoHash, const QString& name,

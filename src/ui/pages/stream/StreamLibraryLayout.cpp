@@ -40,9 +40,15 @@ void StreamLibraryLayout::refresh()
 
 void StreamLibraryLayout::buildUI()
 {
+    // Stream library UX 2026-04-15 — align margins/spacing with video
+    // mode (VideosPage.cpp:110-111) so stream-mode tiles match the
+    // rendering of Videos-mode tiles. Pre-change values were
+    // (0,0,0,0) + spacing(8); video mode uses (20,0,20,20) + spacing(24).
+    // Shared TileStrip/TileCard density mappings already match across
+    // modes; only the outer container chrome differed.
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(8);
+    root->setContentsMargins(20, 0, 20, 20);
+    root->setSpacing(24);
 
     // Header row: SHOWS + sort + density
     auto* headerRow = new QWidget(this);
@@ -50,7 +56,10 @@ void StreamLibraryLayout::buildUI()
     headerLayout->setContentsMargins(0, 0, 0, 0);
     headerLayout->setSpacing(8);
 
-    m_sectionLabel = new QLabel("SHOWS", headerRow);
+    // Stream library UX rework 2026-04-15 — header label reflects that
+    // the grid contains BOTH in-progress (also in Continue Watching)
+    // AND user-added future-viewing titles, across shows and movies.
+    m_sectionLabel = new QLabel("SHOWS & MOVIES", headerRow);
     m_sectionLabel->setStyleSheet(
         "color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
     headerLayout->addWidget(m_sectionLabel);
@@ -59,7 +68,10 @@ void StreamLibraryLayout::buildUI()
     // Sort combo
     m_sortCombo = new QComboBox(headerRow);
     m_sortCombo->setObjectName("LibrarySortCombo");
-    m_sortCombo->setFixedWidth(170);
+    // Stream library UX 2026-04-15 — match Videos-mode sort combo width
+    // (VideosPage.cpp:188). Was 170px; pulling it in to 150 normalizes
+    // the header row across both modes.
+    m_sortCombo->setFixedWidth(150);
     m_sortCombo->setFixedHeight(28);
     m_sortCombo->addItem("Name A\u2192Z",       "name_asc");
     m_sortCombo->addItem("Name Z\u2192A",       "name_desc");
@@ -115,7 +127,9 @@ void StreamLibraryLayout::buildUI()
     root->addWidget(headerRow);
 
     // Empty state label
-    m_emptyLabel = new QLabel("No shows added yet", this);
+    m_emptyLabel = new QLabel(
+        "Your library is empty. Use Search or Catalog to add shows and movies.",
+        this);
     m_emptyLabel->setObjectName("LibraryEmptyLabel");
     m_emptyLabel->setAlignment(Qt::AlignCenter);
     m_emptyLabel->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
@@ -127,12 +141,17 @@ void StreamLibraryLayout::buildUI()
     m_strip->hide();
     root->addWidget(m_strip, 1);
 
-    // Wire tile signals
-    connect(m_strip, &TileStrip::tileDoubleClicked, this, [this](TileCard* card) {
+    // Wire tile signals. Single-click opens detail (Stream-mode UX); double-
+    // click also opens detail (preserves muscle memory). StreamPage::showDetail
+    // is idempotent against back-to-back calls so the paired emit on a double-
+    // click gesture doesn't reset state.
+    auto openDetail = [this](TileCard* card) {
         QString imdb = card->property("imdbId").toString();
         if (!imdb.isEmpty())
             emit showClicked(imdb);
-    });
+    };
+    connect(m_strip, &TileStrip::tileSingleClicked, this, openDetail);
+    connect(m_strip, &TileStrip::tileDoubleClicked, this, openDetail);
     connect(m_strip, &TileStrip::tileRightClicked, this, [this](TileCard* card, const QPoint& pos) {
         QString imdb = card->property("imdbId").toString();
         if (!imdb.isEmpty())
@@ -166,11 +185,24 @@ void StreamLibraryLayout::populateTiles()
         if (!QFile::exists(posterPath) && !entry.poster.isEmpty())
             downloadPoster(entry.imdb, entry.poster);
 
-        // Subtitle: year + type + rating
+        // Subtitle: year + type + rating. Matches StreamDetailView's chip
+        // row convention (year · Series|Movie · IMDb X.X). Rating gets an
+        // "IMDb" prefix so the bare number isn't ambiguous. Year's
+        // trailing en-dash for ongoing series (Stremio format "2023–") is
+        // normalized to "2023–present" so the dash doesn't read as a
+        // dangling separator next to the middle-dot.
         QStringList sub;
-        if (!entry.year.isEmpty()) sub << entry.year;
+        if (!entry.year.isEmpty()) {
+            QString y = entry.year;
+            if (y.endsWith(QChar(0x2013)) || y.endsWith(QChar('-'))) {
+                y.chop(1);
+                y += QStringLiteral("\u2013present");
+            }
+            sub << y;
+        }
         if (!entry.type.isEmpty()) sub << (entry.type == "series" ? "Series" : "Movie");
-        if (!entry.imdbRating.isEmpty()) sub << entry.imdbRating;
+        if (!entry.imdbRating.isEmpty())
+            sub << QStringLiteral("IMDb ") + entry.imdbRating;
         QString subtitle = sub.join(" \u00B7 ");
 
         auto* card = new TileCard(

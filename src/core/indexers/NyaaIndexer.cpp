@@ -6,6 +6,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QRegularExpression>
+#include <QDebug>
 
 static constexpr int NYAA_PAGE_SIZE = 75;
 static constexpr int NYAA_MAX_PAGES = 4;
@@ -13,6 +14,7 @@ static constexpr int NYAA_MAX_PAGES = 4;
 NyaaIndexer::NyaaIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
 }
 
 void NyaaIndexer::search(const QString& query, int limit, const QString& categoryId)
@@ -44,6 +46,7 @@ void NyaaIndexer::fetchPage(const QString& query, const QString& categoryId, int
     req.setRawHeader("Accept", "text/html,application/xhtml+xml,*/*");
     req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
 
+    startRequestTimer();
     auto *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [=]() {
         onPageFetched(reply, query, categoryId, page, limit);
@@ -56,12 +59,15 @@ void NyaaIndexer::onPageFetched(QNetworkReply* reply, const QString& query,
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        markError(reply);
         if (m_accumulated.isEmpty())
             emit searchError(reply->errorString());
         else
             emit searchFinished(m_accumulated);
         return;
     }
+
+    markSuccess();
 
     QString html = QString::fromUtf8(reply->readAll());
     auto pageResults = parseHtml(html);
@@ -114,10 +120,12 @@ QList<TorrentResult> NyaaIndexer::parseHtml(const QString& html)
 
     static const QRegularExpression tdRe("<td[^>]*>(.*?)</td>", QRegularExpression::DotMatchesEverythingOption);
     static const QRegularExpression magnetRe("href=\"(magnet:\\?[^\"]+)\"");
-    static const QRegularExpression titleLinkRe("<a[^>]*href=\"/view/\\d+\"[^>]*>([^<]+)</a>");
+    static const QRegularExpression titleLinkRe("<a[^>]*href=\"(/view/\\d+)\"[^>]*>([^<]+)</a>");
     static const QRegularExpression catLinkRe("c=([^\"&]+)");
     static const QRegularExpression tagStripRe("<[^>]+>");
     static const QRegularExpression dnRe("[?&]dn=([^&]+)");
+    static const QRegularExpression btihRe("btih:([a-fA-F0-9]{40})", QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression timestampRe("data-timestamp=\"(\\d+)\"");
 
     for (const auto& row : trParts) {
         // Extract all <td> contents
@@ -137,9 +145,12 @@ QList<TorrentResult> NyaaIndexer::parseHtml(const QString& html)
 
         // Column 2: Title (find /view/ link, not comments link)
         QString title;
+        QString detailPath;
         auto titleMatch = titleLinkRe.match(cells[1]);
-        if (titleMatch.hasMatch())
-            title = titleMatch.captured(1).trimmed();
+        if (titleMatch.hasMatch()) {
+            detailPath = titleMatch.captured(1);
+            title = titleMatch.captured(2).trimmed();
+        }
 
         // Column 3: Magnet link
         QString magnet;
@@ -186,6 +197,20 @@ QList<TorrentResult> NyaaIndexer::parseHtml(const QString& html)
         r.sourceName = "Nyaa";
         r.sourceKey  = "nyaa";
         r.categoryId = catId;
+
+        auto ihMatch = btihRe.match(magnet);
+        if (ihMatch.hasMatch())
+            r.infoHash = canonicalizeInfoHash(ihMatch.captured(1));
+        if (r.infoHash.isEmpty())
+            qDebug() << "[NyaaIndexer] infoHash missing for:" << title;
+
+        auto tsMatch = timestampRe.match(row);
+        if (tsMatch.hasMatch())
+            r.publishDate = QDateTime::fromSecsSinceEpoch(tsMatch.captured(1).toLongLong());
+
+        if (!detailPath.isEmpty())
+            r.detailsUrl = QStringLiteral("https://nyaa.si") + detailPath;
+
         results.append(r);
     }
 

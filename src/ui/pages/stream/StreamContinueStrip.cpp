@@ -1,23 +1,39 @@
 #include "StreamContinueStrip.h"
 
 #include "core/CoreBridge.h"
+#include "core/stream/MetaAggregator.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "ui/pages/TileCard.h"
 #include "ui/pages/TileStrip.h"
 
 #include <QFile>
+#include <QHash>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QVBoxLayout>
 #include <algorithm>
 
 StreamContinueStrip::StreamContinueStrip(CoreBridge* bridge, StreamLibrary* library,
+                                         tankostream::stream::MetaAggregator* meta,
                                          QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
     , m_library(library)
+    , m_meta(meta)
 {
     buildUI();
+
+    // Phase 2 Batch 2.2: the next-up pipeline. refresh() queues async
+    // fetches; the aggregator's seriesMetaReady emits back into us with the
+    // episode list, which we feed through StreamProgress::nextUnwatchedEpisode
+    // to pick the card target.
+    if (m_meta) {
+        connect(m_meta, &tankostream::stream::MetaAggregator::seriesMetaReady,
+                this, &StreamContinueStrip::onSeriesMetaReady);
+        connect(m_meta, &tankostream::stream::MetaAggregator::seriesMetaError,
+                this, &StreamContinueStrip::onSeriesMetaError);
+    }
 }
 
 void StreamContinueStrip::buildUI()
@@ -50,6 +66,15 @@ void StreamContinueStrip::buildUI()
 void StreamContinueStrip::refresh()
 {
     m_strip->clear();
+    m_pendingNextUps.clear();
+    m_nextPendingIdx = 0;
+    m_inFlightImdb.clear();
+
+    // Phase 2 Batch 2.2: next-unwatched-episode cache is refresh-scoped until
+    // a CoreBridge::progressUpdated signal exists. Clearing at the top of
+    // refresh ensures a user who just finished an episode and re-opens the
+    // Stream mode sees the strip re-computed against fresh allProgress.
+    StreamProgress::clearNextUnwatchedCache();
 
     QJsonObject allProgress = m_bridge->allProgress("stream");
     if (allProgress.isEmpty()) {
@@ -57,121 +82,264 @@ void StreamContinueStrip::refresh()
         return;
     }
 
-    // Collect in-progress episodes: positionSec > 10, not finished
-    // Group by IMDB ID, keep only the most recently updated per show
-    struct ContinueItem {
+    // Collect most-recent state per show. Unlike pre-2.2, we DON'T exclude
+    // finished episodes — those become the entry point for next-up lookup
+    // via m_meta->fetchSeriesMeta + StreamProgress::nextUnwatchedEpisode.
+    struct MostRecent {
         QString epKey;
-        QString imdbId;
-        int season = 0;
-        int episode = 0;
-        double positionSec = 0;
-        double durationSec = 0;
-        double percent = 0;
-        qint64 updatedAt = 0;
+        int     season       = 0;
+        int     episode      = 0;
+        double  positionSec  = 0;
+        double  durationSec  = 0;
+        double  percent      = 0;
+        bool    finished     = false;
+        qint64  updatedAt    = 0;
     };
-
-    QHash<QString, ContinueItem> bestPerShow;
+    QHash<QString, MostRecent> mostRecent;
 
     for (auto it = allProgress.begin(); it != allProgress.end(); ++it) {
-        QString key = it.key();
+        const QString key = it.key();
         if (!key.startsWith("stream:"))
             continue;
 
-        QJsonObject state = it->toObject();
-        double pos = state.value("positionSec").toDouble(0);
+        const QJsonObject state = it->toObject();
+        const double pos = state.value("positionSec").toDouble(0);
         if (pos < MIN_POSITION_SEC)
             continue;
-        if (StreamProgress::isFinished(state))
-            continue;
 
-        double dur = state.value("durationSec").toDouble(0);
-        double pct = StreamProgress::percent(state);
-        qint64 updated = state.value("updatedAt").toInteger(0);
+        const qint64 updated = state.value("updatedAt").toInteger(0);
 
-        // Parse key: "stream:tt1234567" or "stream:tt1234567:s1:e3"
-        QStringList parts = key.split(':');
+        const QStringList parts = key.split(':');
         QString imdbId;
         int season = 0, episode = 0;
-
         if (parts.size() >= 2)
             imdbId = parts[1];
         if (parts.size() >= 4) {
-            season = parts[2].mid(1).toInt();   // "s1" → 1
-            episode = parts[3].mid(1).toInt();  // "e3" → 3
+            season  = parts[2].mid(1).toInt();   // "s1" → 1
+            episode = parts[3].mid(1).toInt();   // "e3" → 3
         }
 
         if (imdbId.isEmpty() || !m_library->has(imdbId))
             continue;
 
-        // Keep the most recently updated episode per show
-        auto existing = bestPerShow.find(imdbId);
-        if (existing == bestPerShow.end() || updated > existing->updatedAt) {
-            ContinueItem item;
-            item.epKey = key;
-            item.imdbId = imdbId;
-            item.season = season;
-            item.episode = episode;
-            item.positionSec = pos;
-            item.durationSec = dur;
-            item.percent = pct;
-            item.updatedAt = updated;
-            bestPerShow[imdbId] = item;
+        const auto existing = mostRecent.find(imdbId);
+        if (existing == mostRecent.end() || updated > existing->updatedAt) {
+            MostRecent entry;
+            entry.epKey       = key;
+            entry.season      = season;
+            entry.episode     = episode;
+            entry.positionSec = pos;
+            entry.durationSec = state.value("durationSec").toDouble(0);
+            entry.percent     = StreamProgress::percent(state);
+            entry.finished    = StreamProgress::isFinished(state);
+            entry.updatedAt   = updated;
+            mostRecent[imdbId] = entry;
         }
     }
 
-    if (bestPerShow.isEmpty()) {
+    if (mostRecent.isEmpty()) {
         m_group->hide();
         return;
     }
 
-    // Sort by updatedAt descending, limit to MAX_ITEMS
-    QList<ContinueItem> items = bestPerShow.values();
-    std::sort(items.begin(), items.end(), [](const ContinueItem& a, const ContinueItem& b) {
-        return a.updatedAt > b.updatedAt;
-    });
-    if (items.size() > MAX_ITEMS)
-        items.resize(MAX_ITEMS);
+    // Split into in-progress vs finished. In-progress renders synchronously;
+    // finished goes through the async fetch queue to resolve next-unwatched.
+    struct InProgress {
+        QString imdbId;
+        int     season;
+        int     episode;
+        double  percent;
+        qint64  updatedAt;
+    };
+    QList<InProgress>    inProgress;
+    QList<PendingNextUp> needsFetch;
 
-    // Poster cache path
-    QString posterDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-                        + "/Tankoban/data/stream_posters";
-
-    for (const auto& item : items) {
-        StreamLibraryEntry entry = m_library->get(item.imdbId);
-
-        // Subtitle: S01E03 or "Movie"
-        QString subtitle;
-        if (item.season > 0 && item.episode > 0)
-            subtitle = QString("S%1E%2").arg(item.season, 2, 10, QChar('0'))
-                                         .arg(item.episode, 2, 10, QChar('0'));
-        else
-            subtitle = "Movie";
-
-        // Poster
-        QString posterPath = posterDir + "/" + item.imdbId + ".jpg";
-        if (!QFile::exists(posterPath))
-            posterPath.clear();
-
-        auto* card = new TileCard(posterPath, entry.name, subtitle);
-        card->setProperty("imdbId", item.imdbId);
-        card->setProperty("season", item.season);
-        card->setProperty("episode", item.episode);
-
-        int pctInt = static_cast<int>(item.percent);
-        card->setBadges(item.percent / 100.0, subtitle,
-                        QString::number(pctInt) + "%", "reading");
-
-        // Single-click to resume (continue strip behavior)
-        connect(card, &TileCard::clicked, this, [this, card]() {
-            QString imdb = card->property("imdbId").toString();
-            int s = card->property("season").toInt();
-            int e = card->property("episode").toInt();
-            if (!imdb.isEmpty())
-                emit playRequested(imdb, s, e);
-        });
-
-        m_strip->addTile(card);
+    for (auto it = mostRecent.constBegin(); it != mostRecent.constEnd(); ++it) {
+        const auto& e = it.value();
+        if (e.finished) {
+            PendingNextUp p;
+            p.imdbId      = it.key();
+            p.updatedAt   = e.updatedAt;
+            p.prevSeason  = e.season;
+            p.prevEpisode = e.episode;
+            needsFetch.append(p);
+        } else {
+            inProgress.append({it.key(), e.season, e.episode, e.percent, e.updatedAt});
+        }
     }
 
+    std::sort(inProgress.begin(), inProgress.end(),
+        [](const InProgress& a, const InProgress& b) {
+            return a.updatedAt > b.updatedAt;
+        });
+    std::sort(needsFetch.begin(), needsFetch.end(),
+        [](const PendingNextUp& a, const PendingNextUp& b) {
+            return a.updatedAt > b.updatedAt;
+        });
+
+    if (inProgress.isEmpty() && needsFetch.isEmpty()) {
+        m_group->hide();
+        return;
+    }
     m_group->show();
+
+    // Poster dir shared by in-progress + next-up render paths.
+    const QString posterDir = QStandardPaths::writableLocation(
+                                  QStandardPaths::GenericDataLocation)
+                              + "/Tankoban/data/stream_posters";
+
+    // Render in-progress cards immediately.
+    int rendered = 0;
+    for (const InProgress& item : inProgress) {
+        if (rendered >= MAX_ITEMS) break;
+        QString posterPath = posterDir + "/" + item.imdbId + ".jpg";
+        if (!QFile::exists(posterPath)) posterPath.clear();
+        renderInProgressCard(item.imdbId, item.season, item.episode,
+                             item.percent, posterPath);
+        ++rendered;
+    }
+
+    // Queue next-up fetches for the remaining slots.
+    if (m_meta) {
+        const int slotsRemaining = MAX_ITEMS - rendered;
+        if (slotsRemaining > 0 && !needsFetch.isEmpty()) {
+            m_pendingNextUps = needsFetch.mid(0, slotsRemaining);
+            processNextFetch();
+        }
+    }
+    // If m_meta is null, finished-most-recent series are effectively filtered
+    // out — matches pre-2.2 behavior for that degenerate ctor path.
+}
+
+void StreamContinueStrip::processNextFetch()
+{
+    if (!m_inFlightImdb.isEmpty()) return;
+    if (m_nextPendingIdx >= m_pendingNextUps.size()) return;
+
+    m_inFlightImdb = m_pendingNextUps[m_nextPendingIdx].imdbId;
+    // Serialized: MetaAggregator::fetchSeriesMeta has a single-slot pending
+    // imdb state (m_seriesPendingImdb) and concurrent calls clobber it,
+    // dropping seriesMetaReady emissions for all but one. Until that bug is
+    // fixed at the aggregator level, we fan out one at a time. Cache-hit
+    // path emits seriesMetaReady synchronously, so warm-cache refreshes
+    // chain through the queue within a single call stack.
+    m_meta->fetchSeriesMeta(m_inFlightImdb);
+}
+
+void StreamContinueStrip::onSeriesMetaReady(
+    const QString& imdbId,
+    const QMap<int, QList<tankostream::stream::StreamEpisode>>& seasons)
+{
+    if (imdbId != m_inFlightImdb) return;   // not our pending fetch
+
+    const int idx = m_nextPendingIdx;
+    ++m_nextPendingIdx;
+    m_inFlightImdb.clear();
+
+    // Flatten seasons → (season, episode) tuples in ascending order.
+    QList<QPair<int, int>> episodesInOrder;
+    for (auto it = seasons.constBegin(); it != seasons.constEnd(); ++it) {
+        for (const auto& ep : it.value()) {
+            episodesInOrder.append({it.key(), ep.episode});
+        }
+    }
+    std::sort(episodesInOrder.begin(), episodesInOrder.end());
+
+    // Re-read allProgress; the user may have finished another episode
+    // between refresh() start and this async callback landing.
+    const QJsonObject allProgress = m_bridge->allProgress("stream");
+    const QPair<int, int> next = StreamProgress::nextUnwatchedEpisode(
+        imdbId, episodesInOrder, allProgress);
+
+    // next.first > 0 → real (season, episode); {0, 0} → all watched, drop
+    // this series from the strip.
+    if (next.first > 0 && next.second > 0
+        && idx < m_pendingNextUps.size()) {
+        const QString posterDir = QStandardPaths::writableLocation(
+                                      QStandardPaths::GenericDataLocation)
+                                  + "/Tankoban/data/stream_posters";
+        QString posterPath = posterDir + "/" + imdbId + ".jpg";
+        if (!QFile::exists(posterPath)) posterPath.clear();
+        renderNextUpCard(imdbId, next.first, next.second, posterPath);
+    }
+
+    processNextFetch();
+}
+
+void StreamContinueStrip::onSeriesMetaError(const QString& imdbId,
+                                             const QString& /*message*/)
+{
+    if (imdbId != m_inFlightImdb) return;
+    ++m_nextPendingIdx;
+    m_inFlightImdb.clear();
+    // Silent skip — if meta fetch fails, that series simply doesn't get a
+    // next-up card this refresh. Cache stays empty for it, retry on next
+    // refresh.
+    processNextFetch();
+}
+
+void StreamContinueStrip::renderInProgressCard(const QString& imdbId,
+                                                int season, int episode,
+                                                double percent,
+                                                const QString& posterPath)
+{
+    const StreamLibraryEntry entry = m_library->get(imdbId);
+
+    QString subtitle;
+    if (season > 0 && episode > 0)
+        subtitle = QString("S%1E%2").arg(season, 2, 10, QChar('0'))
+                                     .arg(episode, 2, 10, QChar('0'));
+    else
+        subtitle = "Movie";
+
+    auto* card = new TileCard(posterPath, entry.name, subtitle);
+    card->setProperty("imdbId", imdbId);
+    card->setProperty("season", season);
+    card->setProperty("episode", episode);
+
+    const int pctInt = static_cast<int>(percent);
+    card->setBadges(percent / 100.0, subtitle,
+                    QString::number(pctInt) + "%", "reading");
+
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        const QString imdb = card->property("imdbId").toString();
+        const int s = card->property("season").toInt();
+        const int e = card->property("episode").toInt();
+        if (!imdb.isEmpty())
+            emit playRequested(imdb, s, e);
+    });
+
+    m_strip->addTile(card);
+}
+
+void StreamContinueStrip::renderNextUpCard(const QString& imdbId,
+                                            int season, int episode,
+                                            const QString& posterPath)
+{
+    const StreamLibraryEntry entry = m_library->get(imdbId);
+
+    const QString sxxexx = QString("S%1E%2")
+                              .arg(season, 2, 10, QChar('0'))
+                              .arg(episode, 2, 10, QChar('0'));
+    // "Next · S01E02" conveys the TODO's "Continue with Episode N" hint in
+    // a single subtitle line without needing a new TileCard badge slot.
+    const QString subtitle = "Next \u00B7 " + sxxexx;
+
+    auto* card = new TileCard(posterPath, entry.name, subtitle);
+    card->setProperty("imdbId", imdbId);
+    card->setProperty("season", season);
+    card->setProperty("episode", episode);
+    // 0% progress + no "reading" status differentiates this visually from
+    // the in-progress card shape (no progress bar fill, no "N%" pill).
+    card->setBadges(0.0, sxxexx, QString(), QString());
+
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        const QString imdb = card->property("imdbId").toString();
+        const int s = card->property("season").toInt();
+        const int e = card->property("episode").toInt();
+        if (!imdb.isEmpty())
+            emit playRequested(imdb, s, e);
+    });
+
+    m_strip->addTile(card);
 }

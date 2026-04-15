@@ -30,3 +30,14 @@ struct PageInfo {
     QString imageUrl;
 };
 Q_DECLARE_METATYPE(PageInfo)
+
+// Maps a raw scraper source key (e.g. "weebcentral") to its user-facing
+// display name (e.g. "WeebCentral"). Keeps UI strings consistent across
+// TankoyomiPage / MangaResultsGrid / AddMangaDialog without a per-site map.
+// Unknown keys fall through to the raw value so nothing vanishes.
+inline QString mangaSourceDisplayName(const QString& key)
+{
+    if (key == QLatin1String("weebcentral"))      return QStringLiteral("WeebCentral");
+    if (key == QLatin1String("readcomicsonline")) return QStringLiteral("ReadComicsOnline");
+    return key;
+}

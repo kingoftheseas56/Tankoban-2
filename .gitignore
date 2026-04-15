@@ -4,6 +4,12 @@ build_old2/
 out/
 out2/
 out_test/
+out_probe/
+
+# Sidecar build artifacts (post-migration 2026-04-15). Sources are tracked
+# under native_sidecar/; the build tree produced by build.ps1 is not.
+native_sidecar/build/
+resources/ffmpeg_sidecar/
 .vs/
 .vscode/
 *.user
@@ -18,4 +24,6 @@ models/
 _*.bat
 _*.txt
 _*.log
+_*.csv
+_*/
 *.log

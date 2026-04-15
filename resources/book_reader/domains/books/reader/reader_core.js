@@ -380,12 +380,19 @@
     if (!els.readerView) return;
     // FIX_HUD: don't show toolbar/footer while sidebar is open — it overlaps sidebar tabs
     if (visible && RS.state.sidebarOpen) return;
+    // BOOK_FIX 5.1: pinned HUD never hides. `visible===true` still applies —
+    // pin keeps the toolbar up, not nothing.
+    if (!visible && RS.state.hudPinned) return;
     els.readerView.classList.toggle('br-hud-hidden', !visible);
   }
 
   function scheduleHudAutoHide() {
     if (hudHideTimer) clearTimeout(hudHideTimer);
     if (!RS.state.open) return;
+    // BOOK_FIX 5.1: pinned HUD disables the inactivity timer — Calibre + Apple
+    // Books parity for "keep chrome visible while I'm doing something that
+    // needs it" (e.g. adjusting settings, scanning TOC).
+    if (RS.state.hudPinned) return;
     hudHideTimer = setTimeout(function () {
       if (!RS.state.open) return;
       if (shouldKeepHudVisible()) {
@@ -395,6 +402,22 @@
       // FIX_AUDIT: hide HUD automatically after 3 seconds of inactivity.
       setHudVisible(false);
     }, 3000);
+  }
+
+  // BOOK_FIX 5.1: pin/unpin toggle — called from reader_keyboard.js when the
+  // user presses Shift+T. Returns the new pinned state so the caller can show
+  // a toast. Setting pin-on keeps HUD up indefinitely; pin-off restarts the
+  // auto-hide timer so the HUD fades naturally after 3s.
+  function toggleHudPin() {
+    var state = RS.state;
+    state.hudPinned = !state.hudPinned;
+    if (state.hudPinned) {
+      setHudVisible(true);
+      if (hudHideTimer) { clearTimeout(hudHideTimer); hudHideTimer = null; }
+    } else {
+      scheduleHudAutoHide();
+    }
+    return !!state.hudPinned;
   }
 
   function onAnyUserActivity() {
@@ -627,6 +650,15 @@
     await RS.loadSettings();
     await close({ save: false, silent: true });
     resetTtsReturnUi(true);
+
+    // BOOK_FIX 1.1: resolve book.id to canonical SHA1[:20] of the absolute path
+    // so the reader and library share a single record key (matches BooksPage
+    // and BookSeriesView key shape). Keep the incoming id as a fallback if the
+    // bridge call fails — better to write somewhere than nowhere.
+    try {
+      var canonicalId = await Tanko.api.booksProgress.keyFor(book.path);
+      if (canonicalId && typeof canonicalId === 'string') book.id = canonicalId;
+    } catch (e) { /* swallow — keep incoming id */ }
 
     state.book = book;
     // Per-book view settings (font/theme/layout)
@@ -1023,5 +1055,8 @@
       var Toc = window.booksReaderToc;
       if (Toc && typeof Toc.renderToc === 'function') return Toc.renderToc();
     },
+    // BOOK_FIX 5.1: toolbar pin toggle — keyboard handler calls this on Shift+T.
+    toggleHudPin: toggleHudPin,
+    isHudPinned: function () { return !!RS.state.hudPinned; },
   };
 })();

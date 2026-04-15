@@ -23,6 +23,11 @@ struct ChapterDownload {
     int     failedImages   = 0;
     QString finalPath;
     QString error;
+
+    // R6: sort keys carried over from ChapterInfo so reorderChapters() can
+    // sort without re-fetching. Populated at startDownload time.
+    double  chapterNumber  = 0.0;
+    qint64  dateUpload     = 0;   // ms epoch
 };
 
 // ── Per-series download record ──────────────────────────────────────────────
@@ -63,12 +68,31 @@ public:
 
     // Control
     void cancelDownload(const QString& id);
+    void cancelAll();
     void removeDownload(const QString& id);
     void removeWithData(const QString& id);
+
+    // Global pause/resume — halts the queue without touching cancel state.
+    // In-flight image finishes normally; next-image check sees the flag and
+    // reverts the running chapter to "queued" so resume picks it up.
+    void pauseAll();
+    void resumeAll();
+    bool isPaused() const;
+
+    // Queue reordering (R5).
+    void moveSeriesToTop(const QString& id);
+    void moveSeriesToBottom(const QString& id);
+
+    // Per-series chapter sort (R6). Only reorders the `queued` block; leaves
+    // downloading / completed / error / cancelled chapters in place so an
+    // in-flight chapter is never displaced.
+    // orderKey: "chapter_number" or "date"
+    void reorderChapters(const QString& id, const QString& orderKey, bool ascending);
 
 signals:
     void downloadUpdated(const QString& id);
     void downloadCompleted(const QString& id);
+    void pausedChanged(bool paused);
 
 private:
     void processQueue();
@@ -85,11 +109,14 @@ private:
     QMap<QString, MangaScraper*> m_scrapers;
     mutable QMutex m_mutex;
     QMap<QString, MangaDownloadRecord> m_records;
+    QList<QString> m_recordOrder;    // R5: processing order for the queue
+                                     // (QMap is key-sorted, not insertion-ordered)
     QNetworkAccessManager* m_nam;
     int m_activeDownloads = 0;
+    bool m_paused = false;   // guarded by m_mutex
 
     static constexpr int MAX_CONCURRENT_CHAPTERS = 2;
-    static constexpr int MAX_IMAGE_RETRIES = 2;
+    static constexpr int MAX_IMAGE_RETRIES = 3;   // R1: match Mihon (2s/4s/8s backoff)
     static constexpr const char* RECORDS_FILE = "manga_downloads.json";
     static constexpr const char* HISTORY_FILE = "manga_history.json";
 };

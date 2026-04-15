@@ -6,14 +6,22 @@
 #include <QString>
 #include <QTimer>
 
+#include "addon/StreamInfo.h"
+
 class TorrentEngine;
 class StreamHttpServer;
 
+enum class StreamPlaybackMode {
+    LocalHttp, // torrent-backed (magnet) path served via local HTTP
+    DirectUrl, // addon-provided direct URL (http/https/url kinds)
+};
+
 struct StreamFileResult {
     bool ok = false;
-    QString url;                // http://127.0.0.1:{port}/stream/{hash}/{fileIndex}
-    QString infoHash;           // canonical 40-char hex hash from libtorrent
-    QString errorCode;          // METADATA_NOT_READY, FILE_NOT_READY, UNKNOWN_TORRENT, ENGINE_ERROR
+    StreamPlaybackMode playbackMode = StreamPlaybackMode::LocalHttp;
+    QString url;                // http://127.0.0.1:{port}/stream/{hash}/{fileIndex} OR direct URL
+    QString infoHash;           // canonical 40-char hex hash from libtorrent (magnet only)
+    QString errorCode;          // METADATA_NOT_READY, FILE_NOT_READY, UNKNOWN_TORRENT, ENGINE_ERROR, UNSUPPORTED_SOURCE
     QString errorMessage;
     bool readyToStart = false;
     bool queued = false;
@@ -43,10 +51,18 @@ public:
     void stop();
     int httpPort() const;
 
-    // Main streaming API — caller polls this until ok==true
+    // Main streaming API — caller polls this until ok==true.
+    // Magnet path: caller polls until ok==true and URL is a local HTTP URL.
+    // Direct/HTTP path: returns immediately with ok==true.
     StreamFileResult streamFile(const QString& magnetUri,
                                 int fileIndex = -1,
                                 const QString& fileNameHint = {});
+
+    // Phase 4.3 addon-aware overload: dispatches by source kind.
+    // Magnet → delegates to the magnet streamFile above.
+    // Url/Http → immediate DirectUrl result (skips torrent path).
+    // YouTube → UNSUPPORTED_SOURCE error.
+    StreamFileResult streamFile(const tankostream::addon::Stream& stream);
 
     // Stop and clean up a stream
     void stopStream(const QString& infoHash);
@@ -56,6 +72,38 @@ public:
 
     // Query torrent status for UI
     StreamTorrentStatus torrentStatus(const QString& infoHash) const;
+
+    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
+    // retargeting. Called from the StreamPage progressUpdated lambda,
+    // rate-limited by the caller (currently once per 2s). Looks up the
+    // stream's selected file size + index, converts positionSec to a
+    // byte offset, and asks TorrentEngine for deadlines across the next
+    // ~windowBytes of pieces. Cheap + idempotent: re-calling with the
+    // same position is a no-op on libtorrent's side (same piece, same
+    // deadline → update in place).
+    void updatePlaybackWindow(const QString& infoHash,
+                              double positionSec, double durationSec,
+                              qint64 windowBytes = 20LL * 1024 * 1024);
+
+    // Pair with updatePlaybackWindow. Called on player close / back to
+    // browse / source switch so libtorrent isn't pre-fetching ahead of a
+    // playback position that no longer exists. Safe to call on an unknown
+    // infoHash.
+    void clearPlaybackWindow(const QString& infoHash);
+
+    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 — seek/resume target pre-gate.
+    // Called by StreamPage before handing a resume offset to the player.
+    // Translates (positionSec / durationSec) to a byte offset, sets urgent
+    // (200ms→500ms) deadlines on the first `prefetchBytes` worth of pieces
+    // around that offset, and returns whether those pieces are already
+    // contiguous. If true, caller opens the player immediately; if false,
+    // caller shows a "Seeking..." overlay and retries (either via
+    // singleShot or by re-calling this function). Fires the deadline set
+    // on every call so the caller's retry cadence keeps libtorrent's
+    // urgency up to date without saturating it.
+    bool prepareSeekTarget(const QString& infoHash,
+                           double positionSec, double durationSec,
+                           qint64 prefetchBytes = 3LL * 1024 * 1024);
 
     // Clean up orphaned cache data from previous sessions
     void cleanupOrphans();

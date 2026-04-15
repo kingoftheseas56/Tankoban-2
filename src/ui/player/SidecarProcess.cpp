@@ -7,8 +7,15 @@
 #include <QDir>
 #include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QDateTime>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QTemporaryFile>
+#include <QPointer>
+#include <algorithm>
 
 static void debugLog(const QString& msg) {
     QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
@@ -17,16 +24,40 @@ static void debugLog(const QString& msg) {
     s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
 }
 
-// Path to the sidecar executable — shipped alongside the app
+// Path to the sidecar executable. Post-migration (2026-04-15) the sidecar
+// source lives at `{repoRoot}/native_sidecar/`; build.ps1 installs the
+// produced exe at `{repoRoot}/resources/ffmpeg_sidecar/ffmpeg_sidecar.exe`.
+// Production path is "next to Tankoban.exe" (build_and_run.bat copies the
+// installed exe into the build dir alongside the app). Dev fallbacks walk
+// up from the app exe to find either the in-repo install location or the
+// raw sidecar build output, so a one-off sidecar rebuild via native_sidecar/
+// build.ps1 is immediately picked up without re-running build_and_run.bat.
 static QString sidecarPath()
 {
-    // Check next to the app exe first
     QString appDir = QCoreApplication::applicationDirPath();
+
+    // Primary: next to the app exe (production layout).
     QString local = appDir + "/ffmpeg_sidecar.exe";
     if (QFile::exists(local))
         return local;
 
-    // Fallback to GroundWorks build
+    // Dev fallback 1: in-repo install dir. When running from `out/` inside
+    // the repo, `appDir/../resources/ffmpeg_sidecar/` is the build.ps1
+    // install target.
+    QString installed = appDir + "/../resources/ffmpeg_sidecar/ffmpeg_sidecar.exe";
+    if (QFile::exists(installed))
+        return installed;
+
+    // Dev fallback 2: raw sidecar build output. Useful during active
+    // sidecar development when the user hasn't run `build.ps1`'s install
+    // step yet — the exe lives directly in `native_sidecar/build/`.
+    QString raw = appDir + "/../native_sidecar/build/ffmpeg_sidecar.exe";
+    if (QFile::exists(raw))
+        return raw;
+
+    // Transitional fallback: pre-migration groundwork location. Remains
+    // for a session or two while dev machines get their first in-repo
+    // sidecar build; can be removed once everyone has rebuilt locally.
     QString gw = "C:/Users/Suprabha/Desktop/TankobanQTGroundWork/resources/ffmpeg_sidecar/ffmpeg_sidecar.exe";
     if (QFile::exists(gw))
         return gw;
@@ -38,6 +69,11 @@ SidecarProcess::SidecarProcess(QObject* parent)
     : QObject(parent)
     , m_sessionId(QUuid::createUuid().toString(QUuid::WithoutBraces))
 {
+    // Batch 5.2 — register SubtitleTrackInfo for queued signal emissions
+    // (e.g., subtitleTracksListed across threads). Idempotent per Qt.
+    qRegisterMetaType<SubtitleTrackInfo>("SubtitleTrackInfo");
+    qRegisterMetaType<QList<SubtitleTrackInfo>>("QList<SubtitleTrackInfo>");
+
     m_process = new QProcess(this);
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
 
@@ -66,6 +102,7 @@ void SidecarProcess::start()
     }
 
     debugLog("[Sidecar] starting: " + path);
+    m_intentionalShutdown = false;
     m_process->start(path, QStringList());
     if (!m_process->waitForStarted(5000)) {
         debugLog("[Sidecar] FAILED to start");
@@ -112,7 +149,17 @@ int SidecarProcess::sendOpen(const QString& filePath, double startSeconds)
 int SidecarProcess::sendPause()   { return sendCommand("pause"); }
 int SidecarProcess::sendResume()  { return sendCommand("resume"); }
 int SidecarProcess::sendStop()    { return sendCommand("stop"); }
-int SidecarProcess::sendShutdown(){ return sendCommand("shutdown"); }
+int SidecarProcess::sendShutdown(){
+    m_intentionalShutdown = true;
+    return sendCommand("shutdown");
+}
+
+int SidecarProcess::sendSetLoopFile(bool enabled)
+{
+    QJsonObject p;
+    p["enabled"] = enabled;
+    return sendCommand("set_loop_file", p);
+}
 
 int SidecarProcess::sendSeek(double positionSec)
 {
@@ -149,6 +196,29 @@ int SidecarProcess::sendSetRate(double rate)
     QJsonObject p;
     p["rate"] = rate;
     return sendCommand("set_rate", p);
+}
+
+int SidecarProcess::sendSetAudioSpeed(double speed)
+{
+    // Batch 4.1 — ±5% clamp. Outside this range the swr_set_compensation
+    // delta becomes large enough that pitch artifacts creep in;
+    // Kodi's ActiveAE caps at the same value.
+    if (speed < 0.95) speed = 0.95;
+    if (speed > 1.05) speed = 1.05;
+    QJsonObject p;
+    p["speed"] = speed;
+    return sendCommand("set_audio_speed", p);
+}
+
+int SidecarProcess::sendSetDrcEnabled(bool enabled)
+{
+    // Batch 4.3 — trivial wrapper. Sidecar applies the compressor in its
+    // audio-decode thread post-volume. Pre-Phase-4 sidecars ignore the
+    // command (NOT_IMPLEMENTED error, no break) — safe to ship ahead of
+    // sidecar rebuild.
+    QJsonObject p;
+    p["enabled"] = enabled;
+    return sendCommand("set_drc_enabled", p);
 }
 
 int SidecarProcess::sendSetTracks(const QString& audioId, const QString& subId)
@@ -235,6 +305,13 @@ int SidecarProcess::sendSetToneMapping(const QString& algorithm, bool peakDetect
     return sendCommand("set_tone_mapping", p);
 }
 
+int SidecarProcess::sendSetZeroCopyActive(bool active)
+{
+    QJsonObject p;
+    p["active"] = active;
+    return sendCommand("set_zero_copy_active", p);
+}
+
 int SidecarProcess::sendResize(int width, int height)
 {
     QJsonObject p;
@@ -284,15 +361,42 @@ void SidecarProcess::processLine(const QByteArray& line)
     } else if (name == "state_changed") {
         emit stateChanged(payload["state"].toString());
     } else if (name == "tracks_changed") {
+        // Batch 5.2 — update the subtitle cache BEFORE emitting so any
+        // listener using the cache on tracksChanged signal (or triggered
+        // from it) sees consistent state. Also emits subtitleTracksListed
+        // for menu consumers.
+        const QJsonArray subtitleArr = payload["subtitle"].toArray();
+        const QString activeSubId = payload["active_sub_id"].toString();
+        updateSubtitleCache(subtitleArr, activeSubId);
         emit tracksChanged(
             payload["audio"].toArray(),
-            payload["subtitle"].toArray(),
+            subtitleArr,
             payload["active_audio_id"].toString(),
-            payload["active_sub_id"].toString());
+            activeSubId);
     } else if (name == "eof") {
         emit endOfFile();
     } else if (name == "error") {
-        emit errorOccurred(payload["message"].toString());
+        // NOT_IMPLEMENTED is the sidecar's graceful-degradation signal for
+        // commands a pre-Phase-4 / pre-feature binary doesn't recognize
+        // (e.g., set_audio_speed, set_drc_enabled from an older sidecar).
+        // Swallow to debug log; do NOT surface as a user-facing toast —
+        // otherwise the audio-speed ticker at 500 ms cadence spams the
+        // HUD until the user runs build_qrhi.bat. Will disappear naturally
+        // on the next sidecar rebuild.
+        const QString code = payload["code"].toString();
+        const QString msg  = payload["message"].toString();
+        if (code == QStringLiteral("NOT_IMPLEMENTED")) {
+            debugLog("[Sidecar] NOT_IMPLEMENTED (stale sidecar, rebuild required): " + msg);
+        } else {
+            emit errorOccurred(msg);
+        }
+    } else if (name == "decode_error") {
+        // Batch 6.3 — sidecar recovered from a non-fatal avcodec error.
+        // Payload: {code, message, recoverable}. Forward to VideoPlayer
+        // for toast UI; playback is already continuing sidecar-side.
+        emit decodeError(payload["code"].toString(),
+                         payload["message"].toString(),
+                         payload["recoverable"].toBool(true));
     } else if (name == "subtitle_text") {
         emit subtitleText(payload["text"].toString());
     } else if (name == "sub_visibility_changed") {
@@ -303,6 +407,17 @@ void SidecarProcess::processLine(const QByteArray& line)
         emit filtersChanged(payload);
     } else if (name == "frame_stepped") {
         emit frameStepped(payload["positionSec"].toDouble());
+    } else if (name == "d3d11_texture") {
+        // Sidecar published its shared D3D11 texture for zero-copy display.
+        // Payload from native_sidecar/main.cpp:423-433:
+        //   {ntHandle: u64, width: u32, height: u32, format: "bgra8"}
+        // ntHandle is a HANDLE in the producer process; it's valid cross-process
+        // because the texture was created with D3D11_RESOURCE_MISC_SHARED_NTHANDLE.
+        quintptr handle = static_cast<quintptr>(payload["ntHandle"].toVariant().toULongLong());
+        int w = payload["width"].toInt();
+        int h = payload["height"].toInt();
+        if (handle != 0 && w > 0 && h > 0)
+            emit d3d11Texture(handle, w, h);
     } else if (name == "media_info") {
         emit mediaInfo(payload);
     } else if (name == "closed") {
@@ -318,6 +433,238 @@ void SidecarProcess::onProcessError(QProcess::ProcessError error)
 
 void SidecarProcess::onProcessFinished(int exitCode, QProcess::ExitStatus status)
 {
-    Q_UNUSED(exitCode);
-    Q_UNUSED(status);
+    const bool wasIntentional = m_intentionalShutdown;
+    m_intentionalShutdown = false;
+    debugLog(QString("[Sidecar] process finished: exit=%1 status=%2 intentional=%3")
+             .arg(exitCode).arg(status == QProcess::NormalExit ? "normal" : "crash")
+             .arg(wasIntentional ? "yes" : "no"));
+    if (!wasIntentional)
+        emit processCrashed(exitCode, status);
+}
+
+// ============================================================================
+// Batch 5.2 (Tankostream Phase 5) — subtitle protocol extensions
+// ============================================================================
+//
+// These are Qt-side wrappers that compose over the existing sidecar commands
+// (set_tracks, set_sub_delay, set_sub_style, load_external_sub). The sidecar's
+// subtitle_renderer.cpp already supports libass + PGS end-to-end, so no
+// sidecar-side protocol changes are required for 5.2 basic parity. If
+// Tankostream Phase 5 follow-on work wants true native per-command sidecar
+// endpoints (e.g., a single setSubtitleUrl that downloads sidecar-side), the
+// bridge APIs below stay stable and we just swap the internals — external
+// callers (Agent 4's Batch 5.3 subtitle menu) don't notice.
+
+namespace {
+bool isSubtitleExtension(const QString& path) {
+    const QString ext = QFileInfo(path).suffix().toLower();
+    return ext == QStringLiteral("srt")
+        || ext == QStringLiteral("vtt")
+        || ext == QStringLiteral("ass")
+        || ext == QStringLiteral("ssa")
+        || ext == QStringLiteral("sub");
+}
+
+QString bestTrackTitle(const QJsonObject& t) {
+    const QString title = t.value(QStringLiteral("title")).toString().trimmed();
+    if (!title.isEmpty()) return title;
+    const QString lang = t.value(QStringLiteral("lang")).toString().trimmed();
+    if (!lang.isEmpty()) return lang.toUpper();
+    return QStringLiteral("Subtitle");
+}
+} // namespace
+
+void SidecarProcess::updateSubtitleCache(const QJsonArray& subtitle,
+                                         const QString& activeSubId)
+{
+    m_subTracks.clear();
+    m_activeSubIndex = -1;
+
+    int nextIndex = 0;
+    for (const QJsonValue& v : subtitle) {
+        const QJsonObject t = v.toObject();
+        const QString id = t.value(QStringLiteral("id")).toString().trimmed();
+        if (id.isEmpty()) continue;
+
+        SubtitleTrackInfo row;
+        row.index    = nextIndex++;
+        row.sidecarId = id;
+        row.lang     = t.value(QStringLiteral("lang")).toString().trimmed();
+        row.title    = bestTrackTitle(t);
+        row.codec    = t.value(QStringLiteral("codec")).toString().trimmed();
+        // Sidecar naming convention: external tracks carry an "ext:" prefix
+        // in the id (per prototype reference; validate in smoke test).
+        row.external = id.startsWith(QStringLiteral("ext:"), Qt::CaseInsensitive);
+
+        if (id == activeSubId) m_activeSubIndex = row.index;
+        m_subTracks.push_back(row);
+    }
+
+    emit subtitleTracksListed(m_subTracks, m_activeSubIndex);
+}
+
+QList<SubtitleTrackInfo> SidecarProcess::listSubtitleTracks() const
+{
+    return m_subTracks;
+}
+
+int SidecarProcess::activeSubtitleIndex() const
+{
+    return m_activeSubIndex;
+}
+
+int SidecarProcess::sendSetSubtitleTrack(int index)
+{
+    if (index < 0) {
+        // VIDEO_PLAYER_FIX Batch 1.2 — Off is visibility-only. Previous code
+        // sent sendSetTracks("", "off") as the "sidecar convention for
+        // disabled subtitles," but the sidecar's handle_set_tracks at
+        // main.cpp:850 actually calls std::stoi(new_sub_id) without a
+        // try/catch, so "off" throws std::invalid_argument → std::terminate
+        // → sidecar dies. Honest Off semantics: flip renderer visibility,
+        // leave track selection unchanged. Picking a numeric track later
+        // restores visibility and lands set_tracks on a valid id.
+        const int seq = sendSetSubVisibility(false);
+        m_activeSubIndex = -1;
+        emit subtitleTrackApplied(-1);
+        return seq;
+    }
+
+    auto it = std::find_if(m_subTracks.cbegin(), m_subTracks.cend(),
+        [index](const SubtitleTrackInfo& t) { return t.index == index; });
+    if (it == m_subTracks.cend()) {
+        emit errorOccurred(QStringLiteral("Subtitle track index %1 not found in cache")
+                               .arg(index));
+        return 0;
+    }
+    // Ensure the renderer is visible BEFORE selecting the track. Phase 1
+    // Batch 1.2's Off path sets visibility=false; without this re-enable
+    // step, picking a real track via SubtitleMenu / TrackPopover after
+    // Off would land set_tracks correctly but the renderer would stay
+    // hidden — subs selected but not drawn. Idempotent on sidecar side.
+    sendSetSubVisibility(true);
+    const int seq = sendSetTracks(QString(), it->sidecarId);
+    m_activeSubIndex = index;
+    emit subtitleTrackApplied(index);
+    return seq;
+}
+
+int SidecarProcess::sendSetSubtitleUrl(const QUrl& url, int offsetPx, int delayMs)
+{
+    // Local file shortcut — no download needed.
+    if (url.isLocalFile()) {
+        const QString path = url.toLocalFile();
+        const int seq = sendLoadExternalSub(path);
+        sendSetSubDelay(delayMs);
+        m_subPixelOffsetY = offsetPx;
+        pushSubStyle();
+        emit subtitleUrlLoaded(url, path, true);
+        return seq;
+    }
+
+    if (!url.isValid() || url.scheme().isEmpty()) {
+        emit errorOccurred(QStringLiteral("Invalid subtitle URL"));
+        emit subtitleUrlLoaded(url, QString(), false);
+        return 0;
+    }
+    if (!isSubtitleExtension(url.path())) {
+        emit errorOccurred(QStringLiteral("Unsupported subtitle extension in URL: %1")
+                               .arg(url.toString()));
+        emit subtitleUrlLoaded(url, QString(), false);
+        return 0;
+    }
+
+    // Cache the style/delay context so the async callback can apply it.
+    const int pendingOffset = offsetPx;
+    const int pendingDelay = delayMs;
+
+    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+
+    QNetworkRequest req(url);
+    req.setTransferTimeout(15000);
+    QPointer<SidecarProcess> guard(this);
+    QNetworkReply* reply = m_nam->get(req);
+
+    connect(reply, &QNetworkReply::finished, this,
+        [this, guard, reply, url, pendingOffset, pendingDelay]() {
+            reply->deleteLater();
+            if (!guard) return;
+
+            if (reply->error() != QNetworkReply::NoError) {
+                emit errorOccurred(QStringLiteral("Subtitle download failed: %1")
+                                       .arg(reply->errorString()));
+                emit subtitleUrlLoaded(url, QString(), false);
+                return;
+            }
+
+            const QByteArray data = reply->readAll();
+            if (data.isEmpty()) {
+                emit errorOccurred(QStringLiteral("Subtitle download empty payload"));
+                emit subtitleUrlLoaded(url, QString(), false);
+                return;
+            }
+
+            // Preserve extension for sidecar codec detection.
+            const QString ext = QFileInfo(url.path()).suffix().toLower();
+            auto* tmp = new QTemporaryFile(
+                QDir::tempPath() + QStringLiteral("/tankoban_subtitle_XXXXXX.")
+                    + (ext.isEmpty() ? QStringLiteral("srt") : ext),
+                this);
+            tmp->setAutoRemove(true);
+            if (!tmp->open()) {
+                emit errorOccurred(QStringLiteral("Failed to stage subtitle temp file"));
+                emit subtitleUrlLoaded(url, QString(), false);
+                delete tmp;
+                return;
+            }
+            tmp->write(data);
+            tmp->flush();
+            const QString path = tmp->fileName();
+            tmp->close();
+            m_subTempFiles.append(tmp);
+
+            sendLoadExternalSub(path);
+            sendSetSubDelay(pendingDelay);
+            m_subPixelOffsetY = pendingOffset;
+            pushSubStyle();
+            emit subtitleUrlLoaded(url, path, true);
+        });
+
+    return 0;  // async; no single seq to return
+}
+
+int SidecarProcess::sendSetSubtitlePixelOffset(int pixelOffsetY)
+{
+    m_subPixelOffsetY = pixelOffsetY;
+    const int seq = pushSubStyle();
+    emit subtitleOffsetChanged(pixelOffsetY);
+    return seq;
+}
+
+int SidecarProcess::sendSetSubtitleSize(double scale)
+{
+    // Clamp to a sane UX range; prevents sub from being invisible or huge.
+    if (scale < 0.5) scale = 0.5;
+    if (scale > 3.0) scale = 3.0;
+    m_subSizeScale = scale;
+    const int seq = pushSubStyle();
+    emit subtitleSizeChanged(scale);
+    return seq;
+}
+
+int SidecarProcess::sendSetSubtitleDelayMs(int ms)
+{
+    return sendSetSubDelay(static_cast<double>(ms));
+}
+
+int SidecarProcess::pushSubStyle()
+{
+    // Sidecar expects font + margin + outline atomically. Compose from
+    // cached state so each individual setter (offset/size) only touches
+    // its own field.
+    const int fontSize = qBound(14,
+        static_cast<int>(kSubBaseFontSize * m_subSizeScale),
+        72);
+    const int margin = qBound(0, kSubBaseMargin + m_subPixelOffsetY, 200);
+    return sendSetSubStyle(fontSize, margin, m_subOutline);
 }

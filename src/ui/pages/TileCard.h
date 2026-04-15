@@ -4,6 +4,8 @@
 #include <QLabel>
 #include <QPixmap>
 
+class QLineEdit;
+
 class TileCard : public QFrame {
     Q_OBJECT
 public:
@@ -21,6 +23,10 @@ public:
     void setSelected(bool selected);
     void setFocused(bool focused);
 
+    // Inline title rename — shows a QLineEdit in place of the title label,
+    // Enter/focus-out commits, Escape cancels. Emits renameCompleted.
+    void beginRename();
+
     bool isSelected() const { return m_selected; }
     bool isFocused() const  { return m_focused; }
     int cardWidth() const   { return m_cardWidth; }
@@ -31,24 +37,29 @@ public:
 
 signals:
     void clicked();
+    void renameCompleted(bool accepted, const QString& newName);
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
     void applyBadges();
     void updateBorder();
+    void endRename(bool accepted);
     static QPixmap roundPixmap(const QPixmap& src, int radius);
 
     QFrame* m_imageWrap = nullptr;
     QLabel* m_imageLabel = nullptr;
     QLabel* m_titleLabel = nullptr;
     QLabel* m_subtitleLabel = nullptr;
+    QLineEdit* m_renameEdit = nullptr;
 
     QString m_thumbPath;
     QString m_title;
+    QString m_subtitle;
     QPixmap m_basePixmap;
 
     int m_cardWidth = DEFAULT_WIDTH;

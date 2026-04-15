@@ -16,6 +16,13 @@
 #include <libtorrent/write_resume_data.hpp>
 #include <libtorrent/session_params.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/announce_entry.hpp>
+#include <libtorrent/peer_info.hpp>
+#include <libtorrent/ip_filter.hpp>
+
+#include <QSettings>
+#include <QStringList>
+#include <QHostAddress>
 
 #include <chrono>
 #include <fstream>
@@ -189,12 +196,39 @@ void TorrentEngine::applySettings()
                | lt::alert_category::storage
                | lt::alert_category::error);
 
-    sp.set_int(lt::settings_pack::connections_limit, 200);
+    // STREAM_PLAYBACK_FIX Phase 3 Batch 3.3 — session settings tuned for
+    // streaming. Pre-3.3 values admitted "less aggressive than streaming"
+    // (original comment). Reference: Stremio streaming_server settings
+    // (stremio-core-development/src/types/streaming_server/settings.rs)
+    // + libtorrent streaming guidance at https://www.libtorrent.org/streaming.html.
+    //
+    // Rationale per setting:
+    //   connections_limit 200→400: stream head-fetch benefits from more
+    //       parallel peers — more candidates for set_piece_deadline() to
+    //       pick the fastest one. Stremio defaults to 200 but runs on
+    //       typically-headless server hardware; desktop Windows with
+    //       libtorrent 2.x handles 400 comfortably.
+    //   active_downloads 5→10, active_seeds 5→10, active_limit 10→20:
+    //       prevents the stream torrent from being queued behind prior
+    //       library-mode downloads when multiple torrents are active.
+    //       A streaming app should treat stream adds as priority.
+    //   max_queued_disk_bytes 1MB (default) → 32MB: absorbs piece-write
+    //       bursts during head-deadline fan-out without back-pressuring
+    //       the scheduler. Streaming workloads write bigger bursts.
+    //   request_queue_time 3 (default) → 10: how many seconds of
+    //       outstanding requests libtorrent maintains per peer. Streaming
+    //       benefits from deeper queues so a slow-to-respond peer
+    //       doesn't stall the reader frontier.
+    //   request_timeout 10 kept: aggressive dropout for unresponsive
+    //       peers is good for streaming head-fetch.
+    sp.set_int(lt::settings_pack::connections_limit, 400);
 
-    // Download mode: less aggressive than streaming
-    sp.set_int(lt::settings_pack::active_downloads, 5);
-    sp.set_int(lt::settings_pack::active_seeds, 5);
-    sp.set_int(lt::settings_pack::active_limit, 10);
+    sp.set_int(lt::settings_pack::active_downloads, 10);
+    sp.set_int(lt::settings_pack::active_seeds, 10);
+    sp.set_int(lt::settings_pack::active_limit, 20);
+
+    sp.set_int(lt::settings_pack::max_queued_disk_bytes, 32 * 1024 * 1024);
+    sp.set_int(lt::settings_pack::request_queue_time, 10);
 
     sp.set_int(lt::settings_pack::request_timeout, 10);
     sp.set_int(lt::settings_pack::peer_timeout, 20);
@@ -333,6 +367,20 @@ void TorrentEngine::start()
     ensureDirs();
     applySettings();
     loadDhtState();
+
+    // Re-apply persisted ban list (Phase 6.4) so banned peers stay blocked
+    // across app restart. `banPeer()` already writes to QSettings on each ban.
+    {
+        lt::ip_filter filter = m_session.get_ip_filter();
+        for (const QString& ipStr : QSettings().value(
+                QStringLiteral("tankorent/bannedPeers")).toStringList()) {
+            lt::error_code ec;
+            auto addr = lt::make_address(ipStr.toStdString(), ec);
+            if (ec) continue;
+            filter.add_rule(addr, addr, lt::ip_filter::blocked);
+        }
+        m_session.set_ip_filter(filter);
+    }
 
     m_alertWorker = new AlertWorker(this);
     m_alertWorker->moveToThread(&m_alertThread);
@@ -720,6 +768,7 @@ QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
 
     auto& fs = ti->files();
     auto fileProgress = it->handle.file_progress();
+    auto priorities   = it->handle.get_file_priorities();
 
     for (int i = 0; i < fs.num_files(); ++i) {
         QJsonObject f;
@@ -729,9 +778,255 @@ QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
         f["progress"] = (fs.file_size(i) > 0 && i < static_cast<int>(fileProgress.size()))
                         ? static_cast<double>(fileProgress[i]) / fs.file_size(i)
                         : 0.0;
+        f["priority"] = (i < static_cast<int>(priorities.size()))
+                        ? static_cast<int>(priorities[i])
+                        : 4;   // libtorrent default when out of range
         files.append(f);
     }
     return files;
+}
+
+void TorrentEngine::renameFile(const QString& infoHash, int fileIndex, const QString& newName)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    if (fileIndex < 0) return;
+    it->handle.rename_file(lt::file_index_t{fileIndex}, newName.toStdString());
+}
+
+// ── Tracker management (Phase 6.3) ─────────────────────────────────────────
+
+QList<TrackerInfo> TorrentEngine::trackersFor(const QString& infoHash) const
+{
+    QList<TrackerInfo> result;
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return result;
+
+    const auto trackers = it->handle.trackers();
+    const auto now = lt::clock_type::now();
+    for (const auto& ae : trackers) {
+        TrackerInfo ti;
+        ti.url  = QString::fromStdString(ae.url);
+        ti.tier = ae.tier;
+
+        // Aggregate across endpoints — take the first populated info_hash
+        // entry. libtorrent splits state per-endpoint + per-protocol-version;
+        // for UI display the first is close enough.
+        bool populated = false;
+        for (const auto& ep : ae.endpoints) {
+            for (const auto& ih : ep.info_hashes) {
+                if (ih.updating)           ti.status = QStringLiteral("Updating");
+                else if (ih.last_error)    ti.status = QStringLiteral("Error");
+                else if (ih.fails > 0)     ti.status = QStringLiteral("Error");
+                else if (ih.start_sent)    ti.status = QStringLiteral("Working");
+                else                       ti.status = QStringLiteral("Not contacted");
+
+                const auto secsNext = std::chrono::duration_cast<std::chrono::seconds>(
+                    ih.next_announce - now).count();
+                const auto secsMin = std::chrono::duration_cast<std::chrono::seconds>(
+                    ih.min_announce - now).count();
+                if (ih.next_announce.time_since_epoch().count() != 0)
+                    ti.nextAnnounce = QDateTime::currentDateTime().addSecs(secsNext);
+                if (ih.min_announce.time_since_epoch().count() != 0)
+                    ti.minAnnounce = QDateTime::currentDateTime().addSecs(secsMin);
+
+                ti.peers      = ih.scrape_incomplete;
+                ti.seeds      = ih.scrape_complete;
+                ti.leeches    = ih.scrape_incomplete;
+                ti.downloaded = ih.scrape_downloaded;
+                ti.message    = QString::fromStdString(ih.message);
+                if (ti.message.isEmpty() && ih.last_error)
+                    ti.message = QString::fromStdString(ih.last_error.message());
+                populated = true;
+                break;
+            }
+            if (populated) break;
+        }
+        if (!populated)
+            ti.status = QStringLiteral("Not contacted");
+
+        result.append(ti);
+    }
+    return result;
+}
+
+void TorrentEngine::addTracker(const QString& infoHash, const QString& url, int tier)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    lt::announce_entry ae(url.toStdString());
+    ae.tier = tier;
+    it->handle.add_tracker(ae);
+}
+
+void TorrentEngine::removeTracker(const QString& infoHash, const QString& url)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    auto current = it->handle.trackers();
+    std::vector<lt::announce_entry> kept;
+    kept.reserve(current.size());
+    const std::string target = url.toStdString();
+    for (auto& ae : current) {
+        if (ae.url != target) kept.push_back(std::move(ae));
+    }
+    it->handle.replace_trackers(kept);
+}
+
+void TorrentEngine::editTrackerUrl(const QString& infoHash,
+                                   const QString& oldUrl, const QString& newUrl)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    auto current = it->handle.trackers();
+    const std::string target = oldUrl.toStdString();
+    const std::string replacement = newUrl.toStdString();
+    for (auto& ae : current) {
+        if (ae.url == target) ae.url = replacement;
+    }
+    it->handle.replace_trackers(current);
+}
+
+// ── Peer management (Phase 6.4) ────────────────────────────────────────────
+
+QList<PeerInfo> TorrentEngine::peersFor(const QString& infoHash) const
+{
+    QList<PeerInfo> result;
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return result;
+
+    std::vector<lt::peer_info> peers;
+    it->handle.get_peer_info(peers);
+    for (const auto& p : peers) {
+        PeerInfo pi;
+        pi.address = QString::fromStdString(p.ip.address().to_string());
+        pi.port    = p.ip.port();
+        pi.client  = QString::fromStdString(p.client);
+        pi.country = QStringLiteral("--");  // GeoIP out of scope per identity ceiling
+
+        QStringList fl;
+        if (p.flags & lt::peer_info::remote_interested) fl << QStringLiteral("I");
+        if (p.flags & lt::peer_info::rc4_encrypted)     fl << QStringLiteral("E");
+        if (p.flags & lt::peer_info::utp_socket)        fl << QStringLiteral("uTP");
+        pi.flags = fl.join(' ');
+
+        pi.connection = (p.flags & lt::peer_info::utp_socket)
+            ? QStringLiteral("uTP") : QStringLiteral("TCP");
+        pi.progress   = p.progress;
+        pi.downSpeed  = p.down_speed;
+        pi.upSpeed    = p.up_speed;
+        pi.downloaded = p.total_download;
+        pi.uploaded   = p.total_upload;
+        pi.relevance  = p.progress;   // libtorrent 2.x dropped the dedicated relevance field
+        result.append(pi);
+    }
+    return result;
+}
+
+void TorrentEngine::banPeer(const QString& ipAddr)
+{
+    // Update the persisted list; apply to session filter.
+    {
+        QSettings s;
+        QStringList list = s.value(QStringLiteral("tankorent/bannedPeers")).toStringList();
+        if (!list.contains(ipAddr)) list.append(ipAddr);
+        s.setValue(QStringLiteral("tankorent/bannedPeers"), list);
+    }
+
+    QMutexLocker lock(&m_mutex);
+    lt::ip_filter filter = m_session.get_ip_filter();
+    lt::error_code ec;
+    auto addr = lt::make_address(ipAddr.toStdString(), ec);
+    if (ec) return;
+    filter.add_rule(addr, addr, lt::ip_filter::blocked);
+    m_session.set_ip_filter(filter);
+}
+
+void TorrentEngine::addPeer(const QString& infoHash, const QString& ipPort)
+{
+    const int sep = ipPort.lastIndexOf(':');
+    if (sep <= 0) return;
+    const QString host = ipPort.left(sep);
+    const quint16 port = ipPort.mid(sep + 1).toUShort();
+    if (port == 0) return;
+
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    lt::error_code ec;
+    auto addr = lt::make_address(host.toStdString(), ec);
+    if (ec) return;
+    it->handle.connect_peer({addr, port});
+}
+
+QStringList TorrentEngine::bannedPeers() const
+{
+    return QSettings().value(QStringLiteral("tankorent/bannedPeers")).toStringList();
+}
+
+// ── General tab convenience wrapper (Phase 6.5) ────────────────────────────
+
+TorrentDetails TorrentEngine::torrentDetails(const QString& infoHash) const
+{
+    TorrentDetails d;
+    d.infoHash = infoHash;
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return d;
+
+    auto st = it->handle.status();
+    d.savePath  = QString::fromStdString(st.save_path);
+    d.name      = QString::fromStdString(st.name);
+    d.totalSize = st.total_wanted;
+
+    const float uploaded   = static_cast<float>(st.all_time_upload);
+    const float downloaded = static_cast<float>(st.all_time_download);
+    d.shareRatio = (downloaded > 0.f) ? uploaded / downloaded : 0.f;
+
+    const auto nextSecs = std::chrono::duration_cast<std::chrono::seconds>(
+        st.next_announce).count();
+    if (nextSecs > 0)
+        d.nextReannounce = QDateTime::currentDateTime().addSecs(nextSecs);
+
+    auto ti = it->handle.torrent_file();
+    if (ti) {
+        d.pieceCount = ti->num_pieces();
+        d.pieceSize  = ti->piece_length();
+        d.createdBy  = QString::fromStdString(ti->creator());
+        d.comment    = QString::fromStdString(ti->comment());
+        const auto creationUnix = ti->creation_date();
+        if (creationUnix > 0)
+            d.created = QDateTime::fromSecsSinceEpoch(creationUnix);
+    }
+
+    const auto trackers = it->handle.trackers();
+    for (const auto& ae : trackers) {
+        for (const auto& ep : ae.endpoints) {
+            for (const auto& ih : ep.info_hashes) {
+                if (ih.start_sent) {
+                    d.currentTracker = QString::fromStdString(ae.url);
+                    break;
+                }
+            }
+            if (!d.currentTracker.isEmpty()) break;
+        }
+        if (!d.currentTracker.isEmpty()) break;
+    }
+    if (d.currentTracker.isEmpty() && !trackers.empty())
+        d.currentTracker = QString::fromStdString(trackers.front().url);
+
+    // Availability: average piece availability across the swarm, 0..N range
+    // where N is "copies of the file available." Use libtorrent's
+    // distributed_copies as a proxy.
+    d.availability = st.distributed_copies;
+
+    return d;
 }
 
 bool TorrentEngine::haveContiguousBytes(const QString& infoHash, int fileIndex,
@@ -771,6 +1066,132 @@ void TorrentEngine::flushCache(const QString& infoHash)
     it->handle.flush_cache();
 }
 
+// ── STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 — piece-deadline primitives ─────────
+
+void TorrentEngine::setPieceDeadlines(const QString& infoHash,
+                                       const QList<QPair<int, int>>& deadlines)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return;   // metadata not ready yet; caller should retry after
+
+    const int numPieces = ti->num_pieces();
+    for (const auto& [pieceIndex, msFromNow] : deadlines) {
+        if (pieceIndex < 0 || pieceIndex >= numPieces) continue;
+        // set_piece_deadline(piece, ms) — libtorrent tracks the urgency
+        // relative to other pieces; lower ms = more urgent. API accepts
+        // repeated calls for the same piece (updates the deadline).
+        it->handle.set_piece_deadline(lt::piece_index_t(pieceIndex), msFromNow);
+    }
+}
+
+void TorrentEngine::clearPieceDeadlines(const QString& infoHash)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.clear_piece_deadlines();
+}
+
+QPair<int, int> TorrentEngine::pieceRangeForFileOffset(const QString& infoHash,
+                                                        int fileIndex,
+                                                        qint64 fileOffset,
+                                                        qint64 length) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return {-1, -1};
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return {-1, -1};
+
+    auto& fs = ti->files();
+    lt::file_index_t fi(fileIndex);
+    if (fileIndex < 0 || fileIndex >= fs.num_files()) return {-1, -1};
+    if (fileOffset < 0 || length <= 0) return {-1, -1};
+
+    const qint64 fileSize = fs.file_size(fi);
+    if (fileOffset >= fileSize) return {-1, -1};
+    const qint64 effectiveLen = qMin(length, fileSize - fileOffset);
+
+    // Same shape as haveContiguousBytes at line 753 — map_file returns a
+    // peer_request {piece, start, length}; we take `piece` for first/last.
+    lt::peer_request startReq = ti->map_file(fi, fileOffset, 1);
+    lt::peer_request endReq   = ti->map_file(fi, fileOffset + effectiveLen - 1, 1);
+
+    return { static_cast<int>(startReq.piece),
+             static_cast<int>(endReq.piece) };
+}
+
+qint64 TorrentEngine::contiguousBytesFromOffset(const QString& infoHash,
+                                                 int fileIndex,
+                                                 qint64 fileOffset) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return 0;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return 0;
+
+    auto& fs = ti->files();
+    lt::file_index_t fi(fileIndex);
+    if (fileIndex < 0 || fileIndex >= fs.num_files()) return 0;
+
+    const qint64 fileSize = fs.file_size(fi);
+    if (fileOffset < 0 || fileOffset >= fileSize) return 0;
+
+    // Walk pieces forward from the starting piece. The starting piece may
+    // span before `fileOffset` if fileOffset isn't piece-aligned — we only
+    // count bytes AT OR AFTER fileOffset, bounded by file end.
+    lt::peer_request startReq = ti->map_file(fi, fileOffset, 1);
+    const int firstPiece = static_cast<int>(startReq.piece);
+    const int numPieces  = ti->num_pieces();
+    const int pieceLen   = ti->piece_length();
+
+    qint64 counted = 0;
+    for (int p = firstPiece; p < numPieces; ++p) {
+        if (!it->handle.have_piece(lt::piece_index_t(p))) break;
+
+        // First piece: count from fileOffset to piece end, clamped to file.
+        // Subsequent pieces: full piece length, clamped to file tail.
+        // Use map_file from the OPPOSITE direction — compute the torrent-
+        // absolute byte range this piece covers within the file, then the
+        // byte count contributed is min(pieceEnd, fileEnd) - max(pieceStart,
+        // fileOffset). For the vast majority of cases (piece fully inside
+        // file, no cross-file boundary), this simplifies to full piece.
+        const qint64 pieceStartAbs = static_cast<qint64>(p) * pieceLen;
+        const qint64 pieceEndAbs   = pieceStartAbs + pieceLen;   // exclusive
+
+        // Translate piece to this file's coordinates. ti->map_file gave us
+        // piece + in-piece offset for a file offset; reverse mapping here
+        // is done by asking: what file-byte range does this piece cover?
+        // Simpler: we know startReq.start (the in-piece byte offset of the
+        // requested file byte). So the first-piece contribution is:
+        //   pieceLen - startReq.start  (bytes from fileOffset to piece end)
+        // but clamped to fileSize - fileOffset.
+        qint64 contribution;
+        if (p == firstPiece) {
+            contribution = qint64(pieceLen) - qint64(startReq.start);
+        } else {
+            contribution = pieceLen;
+        }
+
+        // Clamp so we don't overcount past the file's end (last piece may
+        // span into the next file for multi-file torrents, or past EOF).
+        const qint64 maxRemaining = fileSize - (fileOffset + counted);
+        if (contribution > maxRemaining) contribution = maxRemaining;
+        if (contribution <= 0) break;
+
+        counted += contribution;
+        if (fileOffset + counted >= fileSize) break;
+    }
+    return counted;
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -785,6 +1206,16 @@ QString TorrentEngine::addMagnet(const QString&, const QString&, bool) { return 
 QString TorrentEngine::addFromResume(const QString&, const QString&, bool) { return {}; }
 void TorrentEngine::startTorrent(const QString&, const QString&) {}
 void TorrentEngine::setFilePriorities(const QString&, const QVector<int>&) {}
+void TorrentEngine::renameFile(const QString&, int, const QString&) {}
+QList<TrackerInfo> TorrentEngine::trackersFor(const QString&) const { return {}; }
+void TorrentEngine::addTracker(const QString&, const QString&, int) {}
+void TorrentEngine::removeTracker(const QString&, const QString&) {}
+void TorrentEngine::editTrackerUrl(const QString&, const QString&, const QString&) {}
+QList<PeerInfo> TorrentEngine::peersFor(const QString&) const { return {}; }
+void TorrentEngine::banPeer(const QString&) {}
+void TorrentEngine::addPeer(const QString&, const QString&) {}
+QStringList TorrentEngine::bannedPeers() const { return {}; }
+TorrentDetails TorrentEngine::torrentDetails(const QString&) const { return {}; }
 void TorrentEngine::setSequentialDownload(const QString&, bool) {}
 void TorrentEngine::flattenFiles(const QString&) {}
 void TorrentEngine::resumeTorrent(const QString&) {}
@@ -804,5 +1235,10 @@ QList<TorrentStatus> TorrentEngine::allStatuses() const { return {}; }
 QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
 bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }
 void TorrentEngine::flushCache(const QString&) {}
+// STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 stubs — match header decls.
+void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int>>&) {}
+void TorrentEngine::clearPieceDeadlines(const QString&) {}
+QPair<int, int> TorrentEngine::pieceRangeForFileOffset(const QString&, int, qint64, qint64) const { return {-1, -1}; }
+qint64 TorrentEngine::contiguousBytesFromOffset(const QString&, int, qint64) const { return 0; }
 
 #endif

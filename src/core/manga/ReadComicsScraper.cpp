@@ -21,6 +21,8 @@ static QNetworkRequest makeRequest(const QUrl& url)
     req.setRawHeader("User-Agent", USER_AGENT.toUtf8());
     req.setRawHeader("Referer", BASE.toUtf8());
     req.setRawHeader("Accept", "text/html,application/json,*/*");
+    // Long series chapter lists exceed Qt's default 10MB decompressed cap.
+    req.setDecompressedSafetyCheckThreshold(-1);
     return req;
 }
 
@@ -85,9 +87,10 @@ QList<ChapterInfo> ReadComicsScraper::parseChaptersHtml(const QString& html, con
     QList<ChapterInfo> chapters;
 
     // Pattern: <a href="/comic/{slug}/{issue}">Title #N</a>
-    // Can't use static here — pattern depends on slug
+    // Accept either relative or absolute URL (ReadComicsOnline started emitting
+    // absolute URLs circa 2026-04). Can't use static — pattern depends on slug.
     QRegularExpression chRe(
-        QStringLiteral(R"RE(<a\s+href="/comic/%1/(\d+)"[^>]*>\s*(.*?)\s*</a>)RE")
+        QStringLiteral(R"RE(<a\s+href="(?:https?://[^/"]+)?/comic/%1/(\d+)"[^>]*>\s*(.*?)\s*</a>)RE")
             .arg(QRegularExpression::escape(slug)),
         QRegularExpression::DotMatchesEverythingOption);
 

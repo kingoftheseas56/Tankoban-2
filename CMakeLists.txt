@@ -18,10 +18,13 @@ find_package(Qt6 REQUIRED COMPONENTS
     OpenGLWidgets
 )
 
-# Optional components — added as they become needed
-find_package(Qt6 QUIET COMPONENTS Multimedia Svg WebEngineWidgets WebChannel)
+# Optional components — added as they become needed.
+# One find_package per component: a single missing component would otherwise
+# short-circuit the whole COMPONENTS call under QUIET and suppress later targets.
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS Multimedia)
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS WebEngineWidgets)
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS WebChannel)
 find_package(Qt6CorePrivate QUIET)
-find_package(Qt6GuiPrivate QUIET)
 find_package(Qt6GuiPrivate QUIET)
 
 # ── Sources ──────────────────────────────────────────────────────────────────
@@ -33,6 +36,7 @@ set(SOURCES
     src/core/BooksScanner.cpp
     src/core/VideosScanner.cpp
     src/core/ScannerUtils.cpp
+    src/core/PosterFetcher.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
     src/ui/GlassBackground.cpp
@@ -40,9 +44,11 @@ set(SOURCES
     src/ui/ContextMenuHelper.cpp
     src/ui/widgets/FadingStackedWidget.cpp
     src/ui/widgets/LibraryListView.cpp
+    src/ui/widgets/Toast.cpp
     src/ui/pages/ComicsPage.cpp
     src/ui/pages/BooksPage.cpp
     src/ui/pages/VideosPage.cpp
+    src/ui/pages/PosterPickerPopover.cpp
     src/ui/pages/SeriesView.cpp
     src/ui/pages/BookSeriesView.cpp
     src/ui/pages/TileCard.cpp
@@ -55,10 +61,18 @@ set(SOURCES
     src/ui/readers/SmoothScrollArea.cpp
     src/ui/readers/DecodeTask.cpp
     src/ui/readers/PageCache.cpp
+    src/ui/readers/ThumbnailGenerator.cpp
     src/core/EpubParser.cpp
     src/ui/pages/SourcesPage.cpp
     src/ui/pages/TankorentPage.cpp
     src/ui/pages/TankoyomiPage.cpp
+    src/ui/pages/IndexerStatusPanel.cpp
+    src/ui/pages/tankorent/TorrentPropertiesWidget.cpp
+    src/ui/pages/tankorent/TorrentFilesTab.cpp
+    src/ui/pages/tankorent/TorrentTrackersTab.cpp
+    src/ui/pages/tankorent/TorrentPeersTab.cpp
+    src/ui/pages/tankorent/TorrentGeneralTab.cpp
+    src/core/TorrentIndexer.cpp
     src/core/indexers/TorrentsCsvIndexer.cpp
     src/core/indexers/NyaaIndexer.cpp
     src/core/indexers/PirateBayIndexer.cpp
@@ -66,6 +80,7 @@ set(SOURCES
     src/core/indexers/EztvIndexer.cpp
     src/core/indexers/X1337xIndexer.cpp
     src/core/indexers/ExtTorrentsIndexer.cpp
+    src/core/indexers/CloudflareCookieHarvester.cpp
     src/ui/player/SidecarProcess.cpp
     src/ui/player/ShmFrameReader.cpp
     src/ui/player/FrameCanvas.cpp
@@ -74,39 +89,57 @@ set(SOURCES
     src/ui/player/SeekSlider.cpp
     src/ui/player/KeyBindings.cpp
     src/ui/player/EqualizerPopover.cpp
+    src/ui/player/VsyncTimingLogger.cpp
     src/ui/player/CenterFlash.cpp
     src/ui/player/ToastHud.cpp
-    src/ui/player/ShortcutsOverlay.cpp
     src/ui/player/PlaylistDrawer.cpp
     src/ui/player/SubtitleOverlay.cpp
     src/ui/player/TrackPopover.cpp
     src/ui/player/FilterPopover.cpp
     src/ui/player/VideoContextMenu.cpp
+    src/ui/player/SubtitleMenu.cpp
+    src/ui/player/OpenUrlDialog.cpp
+    src/ui/player/KeybindingEditor.cpp
+    src/ui/player/StatsBadge.cpp
     src/core/torrent/TorrentEngine.cpp
     src/core/torrent/TorrentClient.cpp
     src/ui/dialogs/AddTorrentDialog.cpp
+    src/ui/dialogs/AddFromUrlDialog.cpp
     src/ui/dialogs/SpeedLimitDialog.cpp
     src/ui/dialogs/SeedingRulesDialog.cpp
     src/ui/dialogs/QueueLimitsDialog.cpp
-    src/ui/dialogs/TorrentFilesDialog.cpp
     src/ui/dialogs/HistoryDialog.cpp
     src/core/manga/WeebCentralScraper.cpp
     src/core/manga/ReadComicsScraper.cpp
     src/core/manga/MangaDownloader.cpp
     src/ui/dialogs/AddMangaDialog.cpp
-    src/core/tts/KokoroTtsEngine.cpp
-    src/core/stream/CinemetaClient.cpp
-    src/core/stream/TorrentioClient.cpp
+    src/ui/dialogs/MangaTransferDialog.cpp
+    src/ui/dialogs/AddAddonDialog.cpp
+    src/ui/pages/tankoyomi/MangaResultsGrid.cpp
+    src/core/stream/MetaAggregator.cpp
     src/core/stream/StreamHttpServer.cpp
     src/core/stream/StreamEngine.cpp
     src/core/stream/StreamLibrary.cpp
+    src/core/stream/addon/AddonTransport.cpp
+    src/core/stream/addon/AddonRegistry.cpp
+    src/core/stream/CatalogAggregator.cpp
+    src/core/stream/StreamAggregator.cpp
+    src/core/stream/SubtitlesAggregator.cpp
+    src/core/stream/CalendarEngine.cpp
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
-    src/ui/pages/stream/TorrentPickerDialog.cpp
+    src/ui/pages/stream/StreamSourceChoice.cpp
+    src/ui/pages/stream/StreamSourceCard.cpp
+    src/ui/pages/stream/StreamSourceList.cpp
     src/ui/pages/stream/StreamPlayerController.cpp
     src/ui/pages/stream/StreamContinueStrip.cpp
+    src/ui/pages/stream/AddonManagerScreen.cpp
+    src/ui/pages/stream/AddonDetailPanel.cpp
+    src/ui/pages/stream/StreamHomeBoard.cpp
+    src/ui/pages/stream/CatalogBrowseScreen.cpp
+    src/ui/pages/stream/CalendarScreen.cpp
 )
 
 set(HEADERS
@@ -116,6 +149,7 @@ set(HEADERS
     src/core/BooksScanner.h
     src/core/VideosScanner.h
     src/core/ScannerUtils.h
+    src/core/PosterFetcher.h
     src/core/ArchiveReader.h
     src/ui/MainWindow.h
     src/ui/GlassBackground.h
@@ -123,9 +157,11 @@ set(HEADERS
     src/ui/ContextMenuHelper.h
     src/ui/widgets/FadingStackedWidget.h
     src/ui/widgets/LibraryListView.h
+    src/ui/widgets/Toast.h
     src/ui/pages/ComicsPage.h
     src/ui/pages/BooksPage.h
     src/ui/pages/VideosPage.h
+    src/ui/pages/PosterPickerPopover.h
     src/ui/pages/SeriesView.h
     src/ui/pages/BookSeriesView.h
     src/ui/pages/TileCard.h
@@ -137,10 +173,17 @@ set(HEADERS
     src/ui/readers/SmoothScrollArea.h
     src/ui/readers/DecodeTask.h
     src/ui/readers/PageCache.h
+    src/ui/readers/ThumbnailGenerator.h
     src/core/EpubParser.h
     src/ui/pages/SourcesPage.h
     src/ui/pages/TankorentPage.h
     src/ui/pages/TankoyomiPage.h
+    src/ui/pages/IndexerStatusPanel.h
+    src/ui/pages/tankorent/TorrentPropertiesWidget.h
+    src/ui/pages/tankorent/TorrentFilesTab.h
+    src/ui/pages/tankorent/TorrentTrackersTab.h
+    src/ui/pages/tankorent/TorrentPeersTab.h
+    src/ui/pages/tankorent/TorrentGeneralTab.h
     src/core/TorrentResult.h
     src/core/TorrentIndexer.h
     src/core/indexers/TorrentsCsvIndexer.h
@@ -150,6 +193,7 @@ set(HEADERS
     src/core/indexers/EztvIndexer.h
     src/core/indexers/X1337xIndexer.h
     src/core/indexers/ExtTorrentsIndexer.h
+    src/core/indexers/CloudflareCookieHarvester.h
     src/ui/player/SidecarProcess.h
     src/ui/player/ShmFrameReader.h
     src/ui/player/FrameCanvas.h
@@ -157,19 +201,21 @@ set(HEADERS
     src/ui/player/VolumeHud.h
     src/ui/player/SeekSlider.h
     src/ui/player/CenterFlash.h
-    src/ui/player/ShortcutsOverlay.h
     src/ui/player/PlaylistDrawer.h
     src/ui/player/SubtitleOverlay.h
     src/ui/player/TrackPopover.h
     src/ui/player/FilterPopover.h
     src/ui/player/VideoContextMenu.h
+    src/ui/player/SubtitleMenu.h
+    src/ui/player/KeybindingEditor.h
+    src/ui/player/StatsBadge.h
     src/core/torrent/TorrentEngine.h
     src/core/torrent/TorrentClient.h
     src/ui/dialogs/AddTorrentDialog.h
+    src/ui/dialogs/AddFromUrlDialog.h
     src/ui/dialogs/SpeedLimitDialog.h
     src/ui/dialogs/SeedingRulesDialog.h
     src/ui/dialogs/QueueLimitsDialog.h
-    src/ui/dialogs/TorrentFilesDialog.h
     src/ui/dialogs/HistoryDialog.h
     src/core/manga/MangaResult.h
     src/core/manga/MangaScraper.h
@@ -177,20 +223,41 @@ set(HEADERS
     src/core/manga/ReadComicsScraper.h
     src/core/manga/MangaDownloader.h
     src/ui/dialogs/AddMangaDialog.h
-    src/core/tts/KokoroTtsEngine.h
-    src/core/stream/CinemetaClient.h
-    src/core/stream/TorrentioClient.h
+    src/ui/dialogs/MangaTransferDialog.h
+    src/ui/dialogs/AddAddonDialog.h
+    src/ui/pages/tankoyomi/MangaResultsGrid.h
+    src/core/stream/MetaAggregator.h
     src/core/stream/StreamHttpServer.h
     src/core/stream/StreamEngine.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
+    src/core/stream/addon/Manifest.h
+    src/core/stream/addon/Descriptor.h
+    src/core/stream/addon/ResourcePath.h
+    src/core/stream/addon/StreamSource.h
+    src/core/stream/addon/SubtitleInfo.h
+    src/core/stream/addon/StreamInfo.h
+    src/core/stream/addon/MetaItem.h
+    src/core/stream/addon/AddonTransport.h
+    src/core/stream/addon/AddonRegistry.h
+    src/core/stream/CatalogAggregator.h
+    src/core/stream/StreamAggregator.h
+    src/core/stream/SubtitlesAggregator.h
+    src/core/stream/CalendarEngine.h
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
-    src/ui/pages/stream/TorrentPickerDialog.h
+    src/ui/pages/stream/StreamSourceChoice.h
+    src/ui/pages/stream/StreamSourceCard.h
+    src/ui/pages/stream/StreamSourceList.h
     src/ui/pages/stream/StreamPlayerController.h
     src/ui/pages/stream/StreamContinueStrip.h
+    src/ui/pages/stream/AddonManagerScreen.h
+    src/ui/pages/stream/AddonDetailPanel.h
+    src/ui/pages/stream/StreamHomeBoard.h
+    src/ui/pages/stream/CatalogBrowseScreen.h
+    src/ui/pages/stream/CalendarScreen.h
 )
 
 set(RESOURCES
@@ -286,27 +353,10 @@ else()
     message(STATUS "libarchive NOT found — CBR/RAR support disabled")
 endif()
 
-# ── sherpa-onnx TTS (optional, for Kokoro TTS) ──────────────────────────────
-set(SHERPA_ONNX_DIR "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/sherpa-onnx-v1.12.21-win-x64-shared"
-    CACHE PATH "sherpa-onnx prebuilt shared library")
-
-find_path(SHERPA_ONNX_INCLUDE_DIR sherpa-onnx/c-api/c-api.h
-    HINTS "${SHERPA_ONNX_DIR}/include")
-find_library(SHERPA_ONNX_LIBRARY sherpa-onnx-c-api
-    HINTS "${SHERPA_ONNX_DIR}/lib")
-
-if(SHERPA_ONNX_INCLUDE_DIR AND SHERPA_ONNX_LIBRARY)
-    message(STATUS "sherpa-onnx found: ${SHERPA_ONNX_LIBRARY}")
-    target_include_directories(Tankoban PRIVATE "${SHERPA_ONNX_INCLUDE_DIR}")
-    target_compile_definitions(Tankoban PRIVATE HAS_SHERPA_ONNX=1)
-    target_link_libraries(Tankoban PRIVATE "${SHERPA_ONNX_LIBRARY}")
-else()
-    message(STATUS "sherpa-onnx NOT found — Kokoro TTS disabled")
-endif()
-
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)
-    target_link_libraries(Tankoban PRIVATE dwmapi winmm)
+    target_sources(Tankoban PRIVATE resources/tankoban.rc)
+    target_link_libraries(Tankoban PRIVATE dwmapi winmm d3d11 dxgi d3dcompiler avrt)
     set_target_properties(Tankoban PROPERTIES
         WIN32_EXECUTABLE TRUE
     )

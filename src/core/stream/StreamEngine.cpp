@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStandardPaths>
+#include <QUrl>
 
 static const QStringList VIDEO_EXTENSIONS = {
     "mp4", "mkv", "avi", "webm", "mov", "wmv", "flv", "m4v", "ts", "m2ts"
@@ -55,11 +56,59 @@ int StreamEngine::httpPort() const
 
 // ─── Main streaming API ──────────────────────────────────────────────────────
 
+StreamFileResult StreamEngine::streamFile(const tankostream::addon::Stream& stream)
+{
+    using tankostream::addon::StreamSource;
+
+    switch (stream.source.kind) {
+    case StreamSource::Kind::Magnet: {
+        const QString magnetUri = stream.source.toMagnetUri();
+        if (magnetUri.isEmpty()) {
+            StreamFileResult result;
+            result.playbackMode = StreamPlaybackMode::LocalHttp;
+            result.errorCode = QStringLiteral("ENGINE_ERROR");
+            result.errorMessage = QStringLiteral("Magnet stream missing infoHash");
+            return result;
+        }
+        const QString hint = !stream.source.fileNameHint.isEmpty()
+            ? stream.source.fileNameHint
+            : stream.behaviorHints.filename;
+        return streamFile(magnetUri, stream.source.fileIndex, hint);
+    }
+    case StreamSource::Kind::Http:
+    case StreamSource::Kind::Url: {
+        StreamFileResult result;
+        result.playbackMode = StreamPlaybackMode::DirectUrl;
+        if (!stream.source.url.isValid() || stream.source.url.scheme().isEmpty()) {
+            result.errorCode = QStringLiteral("ENGINE_ERROR");
+            result.errorMessage = QStringLiteral("Direct stream URL is invalid");
+            return result;
+        }
+        result.ok = true;
+        result.readyToStart = true;
+        result.url = stream.source.url.toString(QUrl::FullyEncoded);
+        return result;
+    }
+    case StreamSource::Kind::YouTube: {
+        StreamFileResult result;
+        result.playbackMode = StreamPlaybackMode::DirectUrl;
+        result.errorCode = QStringLiteral("UNSUPPORTED_SOURCE");
+        result.errorMessage = QStringLiteral("YouTube playback not yet supported");
+        return result;
+    }
+    }
+    StreamFileResult empty;
+    empty.errorCode = QStringLiteral("ENGINE_ERROR");
+    empty.errorMessage = QStringLiteral("Unknown stream source kind");
+    return empty;
+}
+
 StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
                                            int fileIndex,
                                            const QString& fileNameHint)
 {
     StreamFileResult result;
+    result.playbackMode = StreamPlaybackMode::LocalHttp;
 
     if (!m_torrentEngine || !m_torrentEngine->isRunning()) {
         result.errorCode = QStringLiteral("ENGINE_ERROR");
@@ -133,66 +182,97 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
         return result;
     }
 
-    // Check file progress via TorrentEngine
-    QJsonArray files = m_torrentEngine->torrentFiles(rec.infoHash);
-    qint64 downloaded = 0;
+    // STREAM_PLAYBACK_FIX Phase 3 Batch 3.2 — buffering % is gate progress.
+    //
+    // Pre-3.2: fileProgress = downloaded / totalSize (whole-file progress).
+    // On the old 2 MB gate this produced the misleading "Buffering 15%"
+    // symptom — the user saw 15% while real gate-progress was stuck at
+    // 80% or so (depending on piece-selection fairness).
+    //
+    // Post-3.2: fileProgress = contiguousHeadBytes / 5 MB (head-gate
+    // progress). Reaches 100% exactly when the head window is fully
+    // contiguous, which is when ffmpeg's probe can read without HTTP
+    // piece-waits. Downloaded-bytes field reflects contiguous head too
+    // so the "X MB" display in StreamPlayerController is meaningful.
+    //
+    // 5 MB target matches the sidecar's local-path probe size
+    // (native_sidecar/src/demuxer.cpp:15). If fileSize is smaller, we
+    // clamp so % still reaches 100 on micro files.
+    constexpr qint64 kGateBytes = 5LL * 1024 * 1024;
     qint64 totalSize = rec.selectedFileSize;
-
+    QJsonArray files = m_torrentEngine->torrentFiles(rec.infoHash);
     for (const auto& f : files) {
         QJsonObject fo = f.toObject();
         if (fo.value("index").toInt() == rec.selectedFileIndex) {
-            double prog = fo.value("progress").toDouble(0.0);
             totalSize = fo.value("size").toInteger(totalSize);
-            downloaded = static_cast<qint64>(prog * totalSize);
             break;
         }
     }
+    const qint64 gateSize = qMin(kGateBytes, qMax<qint64>(totalSize, 1));
+    const qint64 contiguousHead = m_torrentEngine->contiguousBytesFromOffset(
+        rec.infoHash, rec.selectedFileIndex, 0);
 
     result.selectedFileIndex = rec.selectedFileIndex;
     result.selectedFileName = rec.selectedFileName;
     result.fileSize = totalSize;
-    result.downloadedBytes = downloaded;
-    result.fileProgress = totalSize > 0 ? static_cast<double>(downloaded) / totalSize : 0.0;
+    result.downloadedBytes = qMin(contiguousHead, gateSize);
+    result.fileProgress = gateSize > 0
+        ? qMin(1.0, static_cast<double>(contiguousHead) / gateSize)
+        : 0.0;
 
-    // Ready when: the first 2MB of pieces for this file are confirmed downloaded.
-    // The HTTP server is piece-aware and blocks on each chunk, but ffmpeg's initial
-    // probe needs the first few MB available without delay to avoid timeout.
-    static constexpr qint64 MIN_HEADER_BYTES = 2 * 1024 * 1024;
-    qint64 checkLen = qMin(MIN_HEADER_BYTES, totalSize);
-    if (!m_torrentEngine->haveContiguousBytes(rec.infoHash, rec.selectedFileIndex, 0, checkLen)) {
-        int pct = totalSize > 0 ? static_cast<int>(100.0 * downloaded / totalSize) : 0;
+    // STREAM_PLAYBACK_FIX Phase 3 Batch 3.1 — startup gate RESTORED at
+    // 5 MB after probe regression.
+    //
+    // Initial 3.1 removed the gate entirely, relying on Phase 1 HTTP
+    // piece-wait + Phase 2 head deadline to gate playback at the HTTP
+    // layer. The theory was sound but empirically broke: ffmpeg's HTTP
+    // probe reads up to 20 MB (video_decoder.cpp:175) with a 30s
+    // rw_timeout. On cold-start, no pieces exist yet — the Batch 2.2
+    // head deadline prioritizes piece 0 but libtorrent still needs
+    // peer-handshake + request + response + piece-verify, typically
+    // 1-3s. During that window, every HTTP chunk read hits the 15s
+    // waitForPieces wall. Probe cumulative time exceeded rw_timeout
+    // before enough bytes arrived → "cannot open probe file".
+    //
+    // Fix: restore the gate at 5 MB (matches sidecar's local-path
+    // probesize at demuxer.cpp:15-21; within ffmpeg's probe budget
+    // when reading over HTTP). With the gate back:
+    //   - streamFile returns FILE_NOT_READY until 5 MB contiguous
+    //     head is available → buffering UX shows Batch 3.2 progress
+    //     toward the 5 MB target.
+    //   - Batch 2.2 head deadline pulls those 5 MB aggressively; this
+    //     typically resolves in 2-8s on well-seeded torrents.
+    //   - When ok=true fires, ffmpeg's probe reads land-in-cache for
+    //     the first 5 MB; subsequent probe reads (up to 20 MB) still
+    //     enter Batch 1.2's HTTP piece-wait but those bytes are close
+    //     behind the download frontier, so waits are short.
+    //
+    // Net vs pre-Phase-1: still far faster (no direct-file sparse-read
+    // bug, head deadlines instead of rarest-first, 5 MB gate instead
+    // of 2 MB with misleading whole-file %). Net vs 3.1-removed gate:
+    // slower click-to-play by ~1-5s but reliable probe.
+    //
+    // flushCache retained — HTTP serving still reads through libtorrent's
+    // disk layer, and the have_piece() → on-disk contract matters for
+    // any external reader that might later peek at the cache file.
+
+    // The gate: block until the probe window is contiguous. Status text
+    // inherits Batch 3.2's gate-progress % (computed above), so the user
+    // sees "Buffering N% (M MB)" with N climbing monotonically to 100.
+    if (contiguousHead < gateSize) {
         result.queued = true;
         result.errorCode = QStringLiteral("FILE_NOT_READY");
-        result.errorMessage = QString("Buffering... %1%").arg(pct);
+        result.errorMessage =
+            QString("Buffering... %1%")
+                .arg(static_cast<int>(result.fileProgress * 100.0));
         return result;
     }
 
-    // Ready to play! Return the direct file path instead of HTTP URL.
-    // The sidecar handles local files natively and this avoids all the HTTP
-    // server complexity (concurrent connections, piece-aware serving, etc.)
-    // Sequential download ensures data is available from the start.
-
-    // CRITICAL: flush libtorrent's write cache so the file on disk reflects
-    // all downloaded pieces. Without this, have_piece() may return true but
-    // the data is still in libtorrent's memory cache, and external readers
-    // (like the sidecar) see sparse zeros at those offsets.
     m_torrentEngine->flushCache(rec.infoHash);
-
-    QString filePath;
-    QJsonArray fileList = m_torrentEngine->torrentFiles(rec.infoHash);
-    for (const auto& f : fileList) {
-        QJsonObject fo = f.toObject();
-        if (fo.value("index").toInt() == rec.selectedFileIndex) {
-            filePath = rec.savePath + "/" + fo.value("name").toString();
-            break;
-        }
-    }
-    if (filePath.isEmpty())
-        filePath = rec.savePath + "/" + rec.selectedFileName;
 
     result.ok = true;
     result.readyToStart = true;
-    result.url = filePath;
+    result.url = buildStreamUrl(rec.infoHash, rec.selectedFileIndex);
     return result;
 }
 
@@ -206,6 +286,12 @@ void StreamEngine::stopStream(const QString& infoHash)
     StreamRecord rec = *it;
     m_streams.erase(it);
     lock.unlock();
+
+    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — clear any lingering piece
+    // deadlines (head from 2.2, sliding window from 2.3) so the torrent
+    // stops pre-fetching pieces for a playback session that no longer
+    // exists. Safe to call even when none were set.
+    m_torrentEngine->clearPieceDeadlines(infoHash);
 
     // Unregister from HTTP server
     if (rec.registered)
@@ -238,6 +324,148 @@ StreamTorrentStatus StreamEngine::torrentStatus(const QString& infoHash) const
         status.dlSpeed = it->dlSpeed;
     }
     return status;
+}
+
+// STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline retargeting.
+//
+// Called from StreamPage's progressUpdated lambda at ~1Hz during playback
+// (rate-limited to once per 2s on the caller side to avoid thrashing
+// libtorrent's deadline table). Converts the current playback position to
+// a byte offset, asks TorrentEngine for the piece range covering the next
+// `windowBytes`, and sets a gradient of deadlines across that range so
+// libtorrent's piece scheduler pulls the next 20 MB ahead of the reader.
+//
+// Deadlines are additive to the Batch 2.2 head deadlines — early-in-file
+// playback re-affirms the existing deadlines with updated (closer) ms
+// values. libtorrent treats repeated set_piece_deadline() on the same
+// piece as an update, not a conflict.
+//
+// On any out-of-band condition (unknown infoHash, zero file size, zero
+// duration, position past end-of-file), returns silently. The caller's
+// rate-limit guard means small flakes don't cascade into spam.
+
+void StreamEngine::updatePlaybackWindow(const QString& infoHash,
+                                         double positionSec,
+                                         double durationSec,
+                                         qint64 windowBytes)
+{
+    int    fileIndex = -1;
+    qint64 fileSize  = 0;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_streams.find(infoHash);
+        if (it == m_streams.end()) return;
+        if (!it->metadataReady) return;
+        fileIndex = it->selectedFileIndex;
+        fileSize  = it->selectedFileSize;
+    }
+
+    if (fileIndex < 0 || fileSize <= 0) return;
+    if (durationSec <= 0.0) return;
+    if (positionSec < 0.0) positionSec = 0.0;
+    if (windowBytes <= 0) return;
+
+    // Convert playback time to byte offset. This is a linear
+    // approximation — true byte position depends on codec bitrate
+    // distribution, but over a 20 MB window the error is well within
+    // one piece boundary for typical video bitrates (5-50 Mbps).
+    const double fraction = qMin(1.0, positionSec / durationSec);
+    const qint64 byteOffset = static_cast<qint64>(fraction * fileSize);
+    if (byteOffset >= fileSize) {
+        // Past end — clear any lingering deadlines so the next episode's
+        // head fetch (via onMetadataReady) isn't pre-empted by stale
+        // late-file deadlines.
+        m_torrentEngine->clearPieceDeadlines(infoHash);
+        return;
+    }
+
+    const qint64 effectiveWindow = qMin(windowBytes, fileSize - byteOffset);
+    const QPair<int, int> windowRange =
+        m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
+                                                  byteOffset, effectiveWindow);
+    if (windowRange.first < 0 || windowRange.second < windowRange.first) return;
+
+    // Gradient: 1000ms at the head of the window → 8000ms at the tail.
+    // More urgent than the Batch 2.2 5000ms tail because the reader is
+    // actively approaching these pieces; less aggressive than 500ms so
+    // the deadline table isn't saturated with every progress tick.
+    constexpr int kWindowFirstMs = 1000;
+    constexpr int kWindowLastMs  = 8000;
+    QList<QPair<int, int>> deadlines;
+    const int pieceCount = windowRange.second - windowRange.first + 1;
+    deadlines.reserve(pieceCount);
+    for (int i = 0; i < pieceCount; ++i) {
+        const int ms = (pieceCount <= 1)
+            ? kWindowFirstMs
+            : kWindowFirstMs + ((kWindowLastMs - kWindowFirstMs) * i)
+                               / (pieceCount - 1);
+        deadlines.append({ windowRange.first + i, ms });
+    }
+    m_torrentEngine->setPieceDeadlines(infoHash, deadlines);
+}
+
+void StreamEngine::clearPlaybackWindow(const QString& infoHash)
+{
+    // Cheap even on unknown infoHash — TorrentEngine::clearPieceDeadlines
+    // is a no-op if the handle isn't found.
+    m_torrentEngine->clearPieceDeadlines(infoHash);
+}
+
+bool StreamEngine::prepareSeekTarget(const QString& infoHash,
+                                      double positionSec,
+                                      double durationSec,
+                                      qint64 prefetchBytes)
+{
+    int    fileIndex = -1;
+    qint64 fileSize  = 0;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_streams.find(infoHash);
+        if (it == m_streams.end()) return false;
+        if (!it->metadataReady) return false;
+        fileIndex = it->selectedFileIndex;
+        fileSize  = it->selectedFileSize;
+    }
+    if (fileIndex < 0 || fileSize <= 0) return false;
+    if (durationSec <= 0.0 || positionSec < 0.0) return false;
+    if (prefetchBytes <= 0) return false;
+
+    // Linear position-to-byte mapping; acceptable for 3 MB target window.
+    const double fraction = qMin(1.0, positionSec / durationSec);
+    const qint64 byteOffset = static_cast<qint64>(fraction * fileSize);
+    if (byteOffset >= fileSize) return false;
+
+    const qint64 effective = qMin(prefetchBytes, fileSize - byteOffset);
+    const QPair<int, int> range =
+        m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
+                                                  byteOffset, effective);
+    if (range.first < 0 || range.second < range.first) return false;
+
+    // Urgent deadline gradient 200ms → 500ms. Tighter than the 1000ms→8000ms
+    // sliding window (Batch 2.3) because the user is explicitly blocked on
+    // these pieces landing — a "Seeking..." overlay is visible while we
+    // poll. Calling setPieceDeadlines on every retry is idempotent
+    // (updates in place), so a poll-and-retry cadence from StreamPage
+    // keeps urgency fresh without saturation.
+    constexpr int kSeekFirstMs = 200;
+    constexpr int kSeekLastMs  = 500;
+    QList<QPair<int, int>> deadlines;
+    const int pieceCount = range.second - range.first + 1;
+    deadlines.reserve(pieceCount);
+    for (int i = 0; i < pieceCount; ++i) {
+        const int ms = (pieceCount <= 1)
+            ? kSeekFirstMs
+            : kSeekFirstMs + ((kSeekLastMs - kSeekFirstMs) * i)
+                             / (pieceCount - 1);
+        deadlines.append({ range.first + i, ms });
+    }
+    m_torrentEngine->setPieceDeadlines(infoHash, deadlines);
+
+    // Is the target window already contiguous? If yes, caller launches
+    // immediately; if no, caller retries and we'll re-affirm the deadlines
+    // on the next call.
+    return m_torrentEngine->haveContiguousBytes(infoHash, fileIndex,
+                                                 byteOffset, effective);
 }
 
 void StreamEngine::cleanupOrphans()
@@ -305,6 +533,49 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
     // Set file priorities: max for selected file, skip everything else
     int totalFiles = files.size();
     applyStreamPriorities(infoHash, fileIdx, totalFiles);
+
+    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.2 — head deadline on stream start.
+    //
+    // libtorrent's own streaming guidance
+    // (https://www.libtorrent.org/streaming.html) calls sequential_download
+    // "sub-optimal for streaming" because rarest-first can still request an
+    // early piece from a slow peer while faster peers get later pieces.
+    // set_piece_deadline() tells libtorrent which pieces the player needs
+    // soonest; the scheduler then assigns them to the peers most likely to
+    // deliver in time. This is the primitive Peerflix / torrent-stream /
+    // Webtor all use; our missing deadlines are audit P0 #2.
+    //
+    // Strategy: cover the first 5 MB of the selected file with a linear
+    // deadline gradient from 500ms (piece 0) to 5000ms (piece N-1). 5 MB
+    // is the sidecar's local-path probe size
+    // (native_sidecar/src/demuxer.cpp:15), so by the time ffmpeg's probe
+    // starts reading, the head window should be sitting on the disk.
+    // sequential_download stays set as a tiebreaker for pieces outside
+    // this window — deadlines supersede but don't invalidate the flag.
+    //
+    // Batches 2.3 (sliding window on playback progress) + 2.4 (seek
+    // pre-gate) layer additional deadlines on top of this initial set.
+    {
+        constexpr qint64 kHeadBytes    = 5LL * 1024 * 1024;   // 5 MB
+        constexpr int    kHeadFirstMs  = 500;
+        constexpr int    kHeadLastMs   = 5000;
+        const QPair<int, int> headRange =
+            m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIdx,
+                                                      0, kHeadBytes);
+        if (headRange.first >= 0 && headRange.second >= headRange.first) {
+            QList<QPair<int, int>> deadlines;
+            const int pieceCount = headRange.second - headRange.first + 1;
+            deadlines.reserve(pieceCount);
+            for (int i = 0; i < pieceCount; ++i) {
+                const int ms = (pieceCount <= 1)
+                    ? kHeadFirstMs
+                    : kHeadFirstMs + ((kHeadLastMs - kHeadFirstMs) * i)
+                                     / (pieceCount - 1);
+                deadlines.append({ headRange.first + i, ms });
+            }
+            m_torrentEngine->setPieceDeadlines(infoHash, deadlines);
+        }
+    }
 
     // Compute the actual file path on disk
     // TorrentEngine saves to savePath, file is at savePath/fileName

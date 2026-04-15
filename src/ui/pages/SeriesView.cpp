@@ -22,7 +22,9 @@
 #include <QSettings>
 #include <algorithm>
 
-static const QStringList CBZ_EXTS = {"*.cbz"};
+// P4-3: COMIC_EXTS covers all reader-supported archive formats. Engine
+// (ArchiveReader) and library scanner both handle CBZ + CBR + RAR.
+static const QStringList COMIC_EXTS = {"*.cbz", "*.cbr", "*.rar"};
 
 enum Col { ColNum = 0, ColVolume, ColPages, ColSize, ColRead, ColModified, ColCount };
 
@@ -582,7 +584,7 @@ void SeriesView::showSeries(const QString& seriesPath, const QString& seriesName
     m_allCbzFiles.clear();
     QCollator collator;
     collator.setNumericMode(true);
-    QStringList allFiles = ScannerUtils::walkFiles(seriesPath, CBZ_EXTS);
+    QStringList allFiles = ScannerUtils::walkFiles(seriesPath, COMIC_EXTS);
     std::sort(allFiles.begin(), allFiles.end(), [&collator](const QString& a, const QString& b) {
         return collator.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
     });
@@ -753,7 +755,7 @@ void SeriesView::populateTable(const QString& folderPath)
     });
 
     for (const auto& subdir : subdirs) {
-        QStringList files = ScannerUtils::walkFiles(subdir, CBZ_EXTS);
+        QStringList files = ScannerUtils::walkFiles(subdir, COMIC_EXTS);
         if (files.isEmpty()) continue;
 
         QString dirName = QDir(subdir).dirName();
@@ -784,7 +786,7 @@ void SeriesView::populateTable(const QString& folderPath)
 
     // File rows
     QDir dir(folderPath);
-    auto fileInfos = dir.entryInfoList(CBZ_EXTS, QDir::Files);
+    auto fileInfos = dir.entryInfoList(COMIC_EXTS, QDir::Files);
 
     // Search filter
     if (!m_searchText.isEmpty()) {
@@ -898,7 +900,7 @@ void SeriesView::buildContinueBar()
     QString scopePath = m_seriesRootPath;
     if (!m_currentRel.isEmpty())
         scopePath = m_seriesRootPath + "/" + m_currentRel;
-    QStringList allFiles = ScannerUtils::walkFiles(scopePath, {"*.cbz"});
+    QStringList allFiles = ScannerUtils::walkFiles(scopePath, COMIC_EXTS);
     for (const auto& fullPath : allFiles) {
         QString key = QString(QCryptographicHash::hash(
             fullPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));

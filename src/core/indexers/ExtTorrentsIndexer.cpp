@@ -6,12 +6,14 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QRegularExpression>
+#include <QDebug>
 
 static const QString EXT_BASE = "https://extto.org";
 
 ExtTorrentsIndexer::ExtTorrentsIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
 }
 
 void ExtTorrentsIndexer::search(const QString& query, int limit, const QString& categoryId)
@@ -50,6 +52,7 @@ void ExtTorrentsIndexer::tryNextUrl()
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "text/html,*/*");
 
+    startRequestTimer();
     auto *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         onListPageFetched(reply);
@@ -61,6 +64,7 @@ void ExtTorrentsIndexer::onListPageFetched(QNetworkReply* reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        markError(reply);
         ++m_urlIndex;
         tryNextUrl();
         return;
@@ -80,6 +84,7 @@ void ExtTorrentsIndexer::onListPageFetched(QNetworkReply* reply)
         return;
     }
 
+    markSuccess();
     fetchDetailPages();
 }
 
@@ -228,6 +233,9 @@ void ExtTorrentsIndexer::onDetailFetched(QNetworkReply* reply, int index)
 
 void ExtTorrentsIndexer::checkComplete()
 {
+    static const QRegularExpression btihRe("btih:([a-fA-F0-9]{40})",
+        QRegularExpression::CaseInsensitiveOption);
+
     QList<TorrentResult> results;
     for (int i = 0; i < m_rows.size() && results.size() < m_limit; ++i) {
         const auto& lr = m_rows[i];
@@ -244,6 +252,22 @@ void ExtTorrentsIndexer::checkComplete()
         r.sourceKey  = "exttorrents";
         r.category   = lr.category;
         r.categoryId = lr.category.toLower().replace(' ', '_');
+
+        auto ihMatch = btihRe.match(lr.magnetUri);
+        if (ihMatch.hasMatch())
+            r.infoHash = canonicalizeInfoHash(ihMatch.captured(1));
+        if (r.infoHash.isEmpty())
+            qDebug() << "[ExtTorrentsIndexer] infoHash missing for:" << lr.title;
+
+        if (!lr.detailPath.isEmpty()) {
+            if (lr.detailPath.startsWith("http://") || lr.detailPath.startsWith("https://"))
+                r.detailsUrl = lr.detailPath;
+            else if (lr.detailPath.startsWith("//"))
+                r.detailsUrl = QStringLiteral("https:") + lr.detailPath;
+            else
+                r.detailsUrl = EXT_BASE + lr.detailPath;
+        }
+
         results.append(r);
     }
 

@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QMap>
 class QPushButton;
+class QNetworkAccessManager;
 class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
@@ -17,6 +18,7 @@ class TileStrip;
 class VideosScanner;
 class ShowView;
 struct ShowInfo;
+namespace tankostream { namespace stream { class MetaAggregator; } }
 
 class VideosPage : public QWidget {
     Q_OBJECT
@@ -27,6 +29,11 @@ public:
     void activate();
     void triggerScan();
     void refreshContinueOnly();
+
+    // Shared MetaAggregator handle owned by StreamPage. Set once at MainWindow
+    // wire-up; powers the "Fetch poster from internet" context-menu action on
+    // folder tiles. Null-safe — the action is disabled until this is set.
+    void setMetaAggregator(tankostream::stream::MetaAggregator* meta);
 
 signals:
     void playVideo(const QString& filePath);
@@ -46,6 +53,11 @@ private:
     void executePendingClick();
     bool eventFilter(QObject* obj, QEvent* event) override;
     static QString formatSize(qint64 bytes);
+    // SHA1(showPath)-keyed path to the cached poster jpg. Same formula used
+    // by Set/Paste/Remove/Fetch poster actions; exposed as a helper so non-
+    // buildUI code paths (ShowView hand-off) can resolve the same cache key
+    // without re-deriving the hash.
+    static QString posterPathFor(const QString& showPath);
 
     CoreBridge*             m_bridge = nullptr;
     FadingStackedWidget*    m_stack = nullptr;
@@ -83,4 +95,7 @@ private:
     // File path → show root (for continue strip dedup by show, not by subfolder)
     QMap<QString, QString> m_fileToShowRoot;
     QMap<QString, QString> m_showPathToName;
+
+    tankostream::stream::MetaAggregator* m_meta = nullptr;
+    QNetworkAccessManager* m_nam = nullptr;  // lazy-init on first poster fetch
 };

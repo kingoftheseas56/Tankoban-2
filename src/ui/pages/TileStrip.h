@@ -30,6 +30,10 @@ public:
 
 signals:
     void tileClicked(const QString& seriesPath);
+    // Fires on a single left-click on a tile (receiver gets the card).
+    // Distinct from `tileClicked(QString)` which is the legacy comics-mode
+    // seriesPath signal. Stream mode uses this for single-click-opens-detail.
+    void tileSingleClicked(TileCard* card);
     void tileDoubleClicked(TileCard* card);
     void tileRightClicked(TileCard* card, const QPoint& globalPos);
     void selectionChanged(const QList<TileCard*>& selected);

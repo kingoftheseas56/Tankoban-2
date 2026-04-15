@@ -12,6 +12,8 @@
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSettings>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 PlaylistDrawer::PlaylistDrawer(QWidget* parent)
@@ -59,6 +61,98 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
     div->setFixedHeight(1);
     div->setStyleSheet("background: rgba(255,255,255,20); border: none;");
     lay->addWidget(div);
+
+    // VIDEO_PLAYER_FIX Batch 5.1 — queue-mode toolbar. Four checkable
+    // buttons: Shuffle, Repeat All, Repeat One, Loop File. Unicode
+    // glyphs (not emojis) per feedback_no_color_no_emoji — stay gray.
+    const QString toolbarBtnStyle =
+        "QToolButton {"
+        "  color: rgba(255,255,255,140);"
+        "  background: transparent;"
+        "  border: 1px solid rgba(255,255,255,30);"
+        "  border-radius: 4px;"
+        "  font-size: 14px;"
+        "  font-weight: 700;"
+        "  padding: 2px;"
+        "}"
+        "QToolButton:hover { color: rgba(255,255,255,220); }"
+        "QToolButton:checked {"
+        "  color: rgba(245,245,245,245);"
+        "  background: rgba(255,255,255,22);"
+        "  border: 1px solid rgba(255,255,255,80);"
+        "}";
+
+    auto* toolbar = new QHBoxLayout();
+    toolbar->setSpacing(6);
+    toolbar->setContentsMargins(0, 0, 0, 0);
+
+    const QSettings s("Tankoban", "Tankoban");
+
+    auto makeBtn = [&](const QString& glyph, const QString& tip,
+                      const QString& key, QToolButton*& slot) {
+        slot = new QToolButton();
+        slot->setText(glyph);
+        slot->setCheckable(true);
+        slot->setFixedSize(28, 24);
+        slot->setCursor(Qt::PointingHandCursor);
+        slot->setFocusPolicy(Qt::NoFocus);
+        slot->setToolTip(tip);
+        slot->setStyleSheet(toolbarBtnStyle);
+        slot->setChecked(s.value(key, false).toBool());
+        toolbar->addWidget(slot);
+    };
+
+    makeBtn(QStringLiteral("\u21C4"), tr("Shuffle"),    "player/queueMode/shuffle",   m_btnShuffle);
+    makeBtn(QStringLiteral("\u221E"), tr("Repeat All"), "player/queueMode/repeatAll", m_btnRepeatAll);
+    makeBtn(QStringLiteral("1"),      tr("Repeat One"), "player/queueMode/repeatOne", m_btnRepeatOne);
+    makeBtn(QStringLiteral("\u27F2"), tr("Loop File"),  "player/queueMode/loopFile",  m_btnLoopFile);
+    toolbar->addStretch();
+
+    // VIDEO_PLAYER_FIX Batch 5.2 — Save / Load buttons (right-aligned after
+    // the stretch). Non-checkable: instantaneous action, not toggle state.
+    const QString actionBtnStyle =
+        "QToolButton {"
+        "  color: rgba(255,255,255,170);"
+        "  background: transparent;"
+        "  border: 1px solid rgba(255,255,255,30);"
+        "  border-radius: 4px;"
+        "  font-size: 11px;"
+        "  padding: 2px 6px;"
+        "}"
+        "QToolButton:hover {"
+        "  color: rgba(255,255,255,240);"
+        "  background: rgba(255,255,255,14);"
+        "}";
+    auto* saveBtn = new QToolButton();
+    saveBtn->setText(tr("Save"));
+    saveBtn->setToolTip(tr("Save queue as .m3u"));
+    saveBtn->setFixedHeight(24);
+    saveBtn->setCursor(Qt::PointingHandCursor);
+    saveBtn->setFocusPolicy(Qt::NoFocus);
+    saveBtn->setStyleSheet(actionBtnStyle);
+    toolbar->addWidget(saveBtn);
+
+    auto* loadBtn = new QToolButton();
+    loadBtn->setText(tr("Load"));
+    loadBtn->setToolTip(tr("Load queue from .m3u"));
+    loadBtn->setFixedHeight(24);
+    loadBtn->setCursor(Qt::PointingHandCursor);
+    loadBtn->setFocusPolicy(Qt::NoFocus);
+    loadBtn->setStyleSheet(actionBtnStyle);
+    toolbar->addWidget(loadBtn);
+
+    for (QToolButton* b : { m_btnShuffle, m_btnRepeatAll, m_btnRepeatOne }) {
+        connect(b, &QToolButton::toggled, this, [this](bool) { persistQueueMode(); });
+    }
+    // Loop File additionally emits a signal — VideoPlayer relays to sidecar.
+    connect(m_btnLoopFile, &QToolButton::toggled, this, [this](bool on) {
+        persistQueueMode();
+        emit loopFileChanged(on);
+    });
+    connect(saveBtn, &QToolButton::clicked, this, &PlaylistDrawer::saveRequested);
+    connect(loadBtn, &QToolButton::clicked, this, &PlaylistDrawer::loadRequested);
+
+    lay->addLayout(toolbar);
 
     // Episode list
     m_list = new QListWidget();
@@ -120,11 +214,27 @@ bool PlaylistDrawer::isAutoAdvance() const
     return m_autoAdvance && m_autoAdvance->isChecked();
 }
 
-void PlaylistDrawer::toggle()
+// VIDEO_PLAYER_FIX Batch 5.1 — queue mode accessors + persistence.
+bool PlaylistDrawer::shuffle()   const { return m_btnShuffle   && m_btnShuffle->isChecked(); }
+bool PlaylistDrawer::repeatAll() const { return m_btnRepeatAll && m_btnRepeatAll->isChecked(); }
+bool PlaylistDrawer::repeatOne() const { return m_btnRepeatOne && m_btnRepeatOne->isChecked(); }
+bool PlaylistDrawer::loopFile()  const { return m_btnLoopFile  && m_btnLoopFile->isChecked(); }
+
+void PlaylistDrawer::persistQueueMode() const
+{
+    QSettings s("Tankoban", "Tankoban");
+    if (m_btnShuffle)   s.setValue("player/queueMode/shuffle",   m_btnShuffle->isChecked());
+    if (m_btnRepeatAll) s.setValue("player/queueMode/repeatAll", m_btnRepeatAll->isChecked());
+    if (m_btnRepeatOne) s.setValue("player/queueMode/repeatOne", m_btnRepeatOne->isChecked());
+    if (m_btnLoopFile)  s.setValue("player/queueMode/loopFile",  m_btnLoopFile->isChecked());
+}
+
+void PlaylistDrawer::toggle(QWidget* anchor)
 {
     if (isVisible()) {
         dismiss();
     } else {
+        m_anchor = anchor;
         show();
         raise();
         installClickFilter();
@@ -135,6 +245,7 @@ void PlaylistDrawer::dismiss()
 {
     removeClickFilter();
     hide();
+    m_anchor.clear();
 }
 
 void PlaylistDrawer::enterEvent(QEnterEvent* event)
@@ -167,13 +278,17 @@ void PlaylistDrawer::removeClickFilter()
     m_clickFilterInstalled = false;
 }
 
-bool PlaylistDrawer::eventFilter(QObject* obj, QEvent* event)
+bool PlaylistDrawer::eventFilter(QObject* /*obj*/, QEvent* event)
 {
     if (event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
-        QPoint local = mapFromGlobal(me->globalPosition().toPoint());
-        if (!rect().contains(local))
-            dismiss();
+        const QPoint gp = me->globalPosition().toPoint();
+        if (rect().contains(mapFromGlobal(gp)))
+            return false;
+        const bool onAnchor = m_anchor
+            && QRect(m_anchor->mapToGlobal(QPoint(0, 0)), m_anchor->size()).contains(gp);
+        dismiss();
+        return onAnchor;
     }
     return false;
 }

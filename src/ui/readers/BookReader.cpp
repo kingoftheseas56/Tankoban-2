@@ -13,6 +13,27 @@
 #include <QWebEngineScript>
 #include <QWebEngineScriptCollection>
 #include <QWebEnginePage>
+#include <QFile>
+#include <QLoggingCategory>
+
+// Pipe WebEngine JS console messages to Qt logging so _crash_log.txt captures them.
+namespace {
+class LoggingWebEnginePage : public QWebEnginePage {
+public:
+    using QWebEnginePage::QWebEnginePage;
+protected:
+    void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level,
+                                  const QString& message,
+                                  int lineNumber,
+                                  const QString& sourceID) override {
+        const QString src = sourceID.section('/', -1);
+        const char* tag = level == ErrorMessageLevel ? "ERROR"
+                        : level == WarningMessageLevel ? "WARN" : "LOG";
+        qInfo().noquote() << QStringLiteral("[BookReader JS][%1] %2:%3 %4")
+            .arg(tag).arg(src).arg(lineNumber).arg(message);
+    }
+};
+}
 #else
 #include <QKeyEvent>
 #include <QFile>
@@ -42,16 +63,48 @@ void BookReader::buildUI()
     m_bridge = new BookBridge(m_core, this);
     connect(m_bridge, &BookBridge::closeRequested, this, &BookReader::closeRequested);
     connect(m_bridge, &BookBridge::fullscreenRequested, this, &BookReader::fullscreenRequested);
+    connect(m_bridge, &BookBridge::readerReady, this, &BookReader::hideLoadingOverlay);
 
     m_channel = new QWebChannel(this);
     m_channel->registerObject("bridge", m_bridge);
 
     m_webView = new QWebEngineView(this);
+    m_webView->setPage(new LoggingWebEnginePage(m_webView));
     m_webView->page()->setWebChannel(m_channel);
 
     // Allow local file access for loading book files via file:// URLs
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+
+    // The HTML loads from file://, so qrc:///qtwebchannel/qwebchannel.js is not
+    // reachable via <script src>. Inject Qt's built-in qwebchannel.js via the
+    // resource system so `new QWebChannel(...)` is defined when the shim runs.
+    {
+        const QStringList candidates{
+            QStringLiteral(":/qtwebchannel/qwebchannel.js"),
+            QStringLiteral(":/qt-project.org/qtwebchannel/qwebchannel.js"),
+            QStringLiteral(":/qt/qml/QtWebChannel/qwebchannel.js"),
+        };
+        bool loaded = false;
+        for (const QString& path : candidates) {
+            QFile qwcFile(path);
+            if (!qwcFile.open(QIODevice::ReadOnly)) continue;
+            const QByteArray src = qwcFile.readAll();
+            qInfo() << "[BookReader] Loaded qwebchannel.js from" << path << "size" << src.size();
+            QWebEngineScript qwcScript;
+            qwcScript.setName(QStringLiteral("QWebChannelApi"));
+            qwcScript.setInjectionPoint(QWebEngineScript::DocumentCreation);
+            qwcScript.setWorldId(QWebEngineScript::MainWorld);
+            qwcScript.setRunsOnSubFrames(false);
+            qwcScript.setSourceCode(QString::fromUtf8(src));
+            m_webView->page()->scripts().insert(qwcScript);
+            loaded = true;
+            break;
+        }
+        if (!loaded) {
+            qWarning() << "[BookReader] qwebchannel.js not found in any Qt resource path — bridge will fail";
+        }
+    }
 
     // Inject the bridge shim BEFORE any page JS runs.
     // This creates window.electronAPI and window.__ebookNav from the QWebChannel bridge.
@@ -61,22 +114,26 @@ void BookReader::buildUI()
     shimScript.setWorldId(QWebEngineScript::MainWorld);
     shimScript.setSourceCode(QStringLiteral(
         "(function() {"
+        "  try {"
+        "  console.log('[shim] start — QWebChannel defined:', typeof QWebChannel, 'qt:', typeof qt);"
         "  var qt_wc = typeof qt !== 'undefined' && qt.webChannelTransport;"
-        "  if (!qt_wc) { console.warn('[shim] No qt.webChannelTransport'); return; }"
+        "  if (!qt_wc) { console.error('[shim] No qt.webChannelTransport'); return; }"
+        "  if (typeof QWebChannel === 'undefined') { console.error('[shim] QWebChannel class undefined — qwebchannel.js did not load'); return; }"
         "  new QWebChannel(qt_wc, function(channel) {"
         "    var b = channel.objects.bridge;"
         "    window.electronAPI = {"
         "      files: { read: function(path) { return b.filesRead(path); } },"
         "      booksProgress: {"
         "        getAll: function() { return Promise.resolve({}); },"
+        "        keyFor: function(p) { return b.progressKey(p); },"
         "        get: function(id) { return b.booksProgressGet(id); },"
         "        save: function(id, d) { return b.booksProgressSave(id, d); },"
         "        clear: function() { return Promise.resolve(); },"
         "        clearAll: function() { return Promise.resolve(); }"
         "      },"
         "      booksSettings: {"
-        "        get: function(id) { return b.booksSettingsGet(id); },"
-        "        save: function(id, d) { return b.booksSettingsSave(id, d); },"
+        "        get: function() { return b.booksSettingsGet(); },"
+        "        save: function(d) { return b.booksSettingsSave(d); },"
         "        clear: function() { return Promise.resolve(); }"
         "      },"
         "      booksBookmarks: {"
@@ -110,13 +167,13 @@ void BookReader::buildUI()
         "        openExternal: function() { return Promise.resolve(); }"
         "      },"
         "      booksTtsEdge: {"
-        "        probe: function(p) { return b.ttsProbe(); },"
-        "        getVoices: function(p) { return b.ttsGetVoices(); },"
-        "        synth: function(p) { return b.ttsSynth(p || {}); },"
+        "        probe: function() { return Promise.resolve({ok:false, reason:'Kokoro TTS removed'}); },"
+        "        getVoices: function() { return Promise.resolve({ok:false, voices:[]}); },"
+        "        synth: function() { return Promise.resolve({ok:false}); },"
         "        synthStream: function() { return Promise.resolve({ok:false}); },"
-        "        cancelStream: function(id) { return b.ttsCancelStream(id || ''); },"
-        "        warmup: function(p) { return b.ttsWarmup(); },"
-        "        resetInstance: function() { return b.ttsResetInstance(); }"
+        "        cancelStream: function() { return Promise.resolve({ok:true}); },"
+        "        warmup: function() { return Promise.resolve({ok:false}); },"
+        "        resetInstance: function() { return Promise.resolve({ok:true}); }"
         "      },"
         "      audiobooks: {"
         "        getState: function() { return b.audiobooksGetState(); },"
@@ -128,10 +185,12 @@ void BookReader::buildUI()
         "      }"
         "    };"
         "    window.__ebookNav = {"
-        "      requestClose: function() { b.requestClose(); }"
+        "      requestClose: function() { b.requestClose(); },"
+        "      markReaderReady: function() { b.markReaderReady(); }"
         "    };"
         "    console.log('[shim] electronAPI + __ebookNav ready');"
         "  });"
+        "  } catch (e) { console.error('[shim] threw:', e && (e.stack || e.message || String(e))); }"
         "})();"
     ));
     m_webView->page()->scripts().insert(shimScript);
@@ -147,6 +206,52 @@ void BookReader::buildUI()
                 QStringLiteral("window.__ebookOpenBook('%1')").arg(escaped));
             m_pendingBook.clear();
         }
+    });
+
+    // Batch 1.3: pre-stabilized loading overlay. Sits atop the webview from
+    // openBook() until BookBridge::readerReady fires. Solid black + centered
+    // label — no spinner (keeps to the gray/black/white UI rule).
+    m_loadingOverlay = new QWidget(this);
+    m_loadingOverlay->setObjectName("BookReaderLoadingOverlay");
+    m_loadingOverlay->setAttribute(Qt::WA_StyledBackground, true);
+    m_loadingOverlay->setStyleSheet(
+        "QWidget#BookReaderLoadingOverlay { background: #000000; }"
+        "QLabel#BookReaderLoadingText { color: rgba(255,255,255,0.55);"
+        "  background: transparent; font-size: 13px; letter-spacing: 0.5px; }"
+    );
+    {
+        auto* overlayLayout = new QVBoxLayout(m_loadingOverlay);
+        overlayLayout->setContentsMargins(0, 0, 0, 0);
+        overlayLayout->addStretch();
+        auto* label = new QLabel(QStringLiteral("Loading..."), m_loadingOverlay);
+        label->setObjectName("BookReaderLoadingText");
+        label->setAlignment(Qt::AlignCenter);
+        overlayLayout->addWidget(label);
+        overlayLayout->addStretch();
+    }
+    m_loadingOverlay->hide();
+
+    m_readyWatchdog.setSingleShot(true);
+    m_readyWatchdog.setInterval(5000);
+    connect(&m_readyWatchdog, &QTimer::timeout, this, [this]() {
+        qWarning() << "[BookReader] readerReady not received within 5s — showing anyway";
+        hideLoadingOverlay();
+    });
+
+    // Batch 2.2: resize debounce — fires 200ms after the last resizeEvent, so
+    // a drag that spans N frames produces exactly one relayout, not N. Foliate's
+    // ResizeObserver inside the paginator also listens, but in practice the
+    // QWebEngine→iframe viewport propagation is lossy enough that pagination
+    // can end up with stale column widths. Forcing window.__ebookRelayout()
+    // triggers an explicit renderer.render() which reads the current container
+    // size and recomputes columns. JS-side gating hides the renderer until the
+    // next `stabilized` so the user never sees the intermediate reflow state.
+    m_resizeDebounce.setSingleShot(true);
+    m_resizeDebounce.setInterval(200);
+    connect(&m_resizeDebounce, &QTimer::timeout, this, [this]() {
+        if (!m_webView || !m_webView->page()) return;
+        m_webView->page()->runJavaScript(
+            QStringLiteral("if (typeof window.__ebookRelayout === 'function') window.__ebookRelayout();"));
     });
 
 #else
@@ -210,6 +315,11 @@ void BookReader::openBook(const QString& filePath)
     m_currentFile = filePath;
 
 #ifdef HAS_WEBENGINE
+    // Batch 1.3: cover the webview while Foliate boots + paginates the new
+    // book. Overlay stays up until BookBridge::readerReady fires (from the
+    // stabilized event in engine_foliate.js) or until the 5s watchdog trips.
+    showLoadingOverlay();
+
     if (!m_readerReady) {
         // Page not loaded yet — queue the book and load the HTML
         m_pendingBook = filePath;
@@ -226,6 +336,24 @@ void BookReader::openBook(const QString& filePath)
 #endif
 }
 
+#ifdef HAS_WEBENGINE
+void BookReader::showLoadingOverlay()
+{
+    if (!m_loadingOverlay) return;
+    m_loadingOverlay->setGeometry(0, 0, width(), height());
+    m_loadingOverlay->raise();
+    m_loadingOverlay->show();
+    m_readyWatchdog.start();
+}
+
+void BookReader::hideLoadingOverlay()
+{
+    m_readyWatchdog.stop();
+    if (!m_loadingOverlay) return;
+    m_loadingOverlay->hide();
+}
+#endif
+
 void BookReader::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
@@ -233,6 +361,13 @@ void BookReader::resizeEvent(QResizeEvent* event)
 #ifdef HAS_WEBENGINE
     if (m_webView)
         m_webView->setGeometry(0, 0, width(), height());
+    if (m_loadingOverlay && m_loadingOverlay->isVisible())
+        m_loadingOverlay->setGeometry(0, 0, width(), height());
+    // Batch 2.2: kick the debounce. Only fires 200ms after the last resize —
+    // drag-resize, fullscreen toggle, and splitter adjustments all funnel
+    // through this one code path, and all get exactly one relayout each.
+    if (m_readerReady)
+        m_resizeDebounce.start();
 #else
     if (m_toolbar)
         m_toolbar->setGeometry(0, height() - m_toolbar->height(),

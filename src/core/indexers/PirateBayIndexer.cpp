@@ -8,10 +8,12 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QDebug>
 
 PirateBayIndexer::PirateBayIndexer(QNetworkAccessManager* nam, QObject* parent)
     : TorrentIndexer(parent), m_nam(nam)
 {
+    loadPersistedHealth();
 }
 
 void PirateBayIndexer::search(const QString& query, int limit, const QString& categoryId)
@@ -29,6 +31,7 @@ void PirateBayIndexer::search(const QString& query, int limit, const QString& ca
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "application/json,*/*");
 
+    startRequestTimer();
     auto *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         onReplyFinished(reply);
@@ -40,6 +43,7 @@ void PirateBayIndexer::onReplyFinished(QNetworkReply* reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        markError(reply);
         emit searchError(reply->errorString());
         return;
     }
@@ -47,9 +51,12 @@ void PirateBayIndexer::onReplyFinished(QNetworkReply* reply)
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &err);
     if (err.error != QJsonParseError::NoError) {
+        markError(reply);
         emit searchError("JSON parse error: " + err.errorString());
         return;
     }
+
+    markSuccess();
 
     QJsonArray arr = doc.array();
     QList<TorrentResult> results;
@@ -74,6 +81,18 @@ void PirateBayIndexer::onReplyFinished(QNetworkReply* reply)
         r.sourceKey  = "piratebay";
         r.categoryId = row.value("category").toVariant().toString();
         r.category   = categoryLabel(r.categoryId);
+
+        r.infoHash = canonicalizeInfoHash(ih);
+        if (r.infoHash.isEmpty())
+            qDebug() << "[PirateBayIndexer] infoHash missing for:" << name;
+
+        const qint64 addedSecs = row.value("added").toVariant().toLongLong();
+        if (addedSecs > 0)
+            r.publishDate = QDateTime::fromSecsSinceEpoch(addedSecs);
+
+        const QString id = row.value("id").toVariant().toString();
+        if (!id.isEmpty())
+            r.detailsUrl = QStringLiteral("https://thepiratebay.org/description.php?id=%1").arg(id);
 
         if (!r.magnetUri.isEmpty())
             results.append(r);

@@ -2,6 +2,7 @@
 #include "ScrollStripCanvas.h"
 #include "SmoothScrollArea.h"
 #include "DecodeTask.h"
+#include "ThumbnailGenerator.h"
 #include "core/ArchiveReader.h"
 #include "core/CoreBridge.h"
 #include "ui/ContextMenuHelper.h"
@@ -12,6 +13,7 @@
 #include <QWheelEvent>
 #include <QResizeEvent>
 #include <QMouseEvent>
+#include <QCursor>
 #include <QContextMenuEvent>
 #include <QPainter>
 #include <QLinearGradient>
@@ -25,10 +27,19 @@
 #include <QRegularExpression>
 #include <QGraphicsOpacityEffect>
 #include <QColor>
+#include <QImage>
+#include <QComboBox>
+#include <QFrame>
+#include <QCheckBox>
+#include <QToolButton>
+#include <QScrollArea>
+#include <QGridLayout>
+#include <QStyle>
+#include <QFile>
 #include <cmath>
 
 static constexpr double SPREAD_RATIO = 1.08;
-static constexpr int TWO_PAGE_GUTTER_PX = 8;  // B3: physical gap between paired pages
+static constexpr int TWO_PAGE_GUTTER_PX = 0;  // B3: physical gap between paired pages
 #define m_isDoublePage (m_readerMode == ReaderMode::DoublePage)
 #define m_isScrollStrip (m_readerMode == ReaderMode::ScrollStrip)
 static constexpr double COUPLING_MIN_CONFIDENCE = 0.12;
@@ -36,6 +47,98 @@ static constexpr int COUPLING_PROBE_MAX_PAGES = 8;
 static constexpr int COUPLING_MAX_SAMPLES = 4;
 static constexpr int COUPLING_MAX_PROBE_ATTEMPTS = 6;
 static const int PORTRAIT_PRESETS[] = {50, 60, 70, 74, 78, 90, 100};
+static const int BRIGHTNESS_PRESETS[] = {-50, -25, 0, 25, 50};
+static const int SIDE_PADDING_PRESETS[] = {0, 40, 80, 120, 160};  // P3-1 (px each side)
+
+// ── Image filter helpers (P2-1) ──────────────────────────────────────────────
+namespace {
+// Brightness delta -100..+100, 0 = off (early-return, no allocation).
+// Preserves alpha + DPR.
+QPixmap applyBrightness(const QPixmap& src, int delta)
+{
+    if (delta == 0 || src.isNull()) return src;
+    QImage img = src.toImage().convertToFormat(QImage::Format_ARGB32);
+    const int shift = qRound(delta * 2.55);  // map ±100 → ±255
+    const int h = img.height();
+    const int w = img.width();
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const QRgb px = line[x];
+            const int r = qBound(0, qRed(px)   + shift, 255);
+            const int g = qBound(0, qGreen(px) + shift, 255);
+            const int b = qBound(0, qBlue(px)  + shift, 255);
+            line[x] = qRgba(r, g, b, qAlpha(px));
+        }
+    }
+    QPixmap out = QPixmap::fromImage(std::move(img));
+    out.setDevicePixelRatio(src.devicePixelRatioF());
+    return out;
+}
+
+// P3-2: Auto-detect uniform borders (scan artifacts — black, white, coloured
+// strips along page edges) and return a cropped QPixmap. Corner pixel seeds
+// the border colour; a row/col is considered "border" when ≥97% of pixels
+// match within tolerance. Crop is capped at 15% inset per side to guard
+// against false positives on uniformly-light/dark pages.
+QPixmap autoCropBorders(const QPixmap& src)
+{
+    if (src.isNull()) return src;
+    QImage img = src.toImage().convertToFormat(QImage::Format_ARGB32);
+    const int w = img.width();
+    const int h = img.height();
+    if (w < 20 || h < 20) return src;  // too small to bother
+
+    constexpr int TOL = 18;
+    constexpr double MATCH_THRESHOLD = 0.97;
+    const int maxInsetX = w * 15 / 100;
+    const int maxInsetY = h * 15 / 100;
+
+    auto rowMatches = [&](int y, QRgb ref) -> bool {
+        int matches = 0;
+        const QRgb* line = reinterpret_cast<const QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            if (qAbs(qRed(line[x])   - qRed(ref))   <= TOL &&
+                qAbs(qGreen(line[x]) - qGreen(ref)) <= TOL &&
+                qAbs(qBlue(line[x])  - qBlue(ref))  <= TOL) {
+                ++matches;
+            }
+        }
+        return matches >= qRound(w * MATCH_THRESHOLD);
+    };
+    auto colMatches = [&](int x, QRgb ref) -> bool {
+        int matches = 0;
+        for (int y = 0; y < h; ++y) {
+            const QRgb px = reinterpret_cast<const QRgb*>(img.scanLine(y))[x];
+            if (qAbs(qRed(px)   - qRed(ref))   <= TOL &&
+                qAbs(qGreen(px) - qGreen(ref)) <= TOL &&
+                qAbs(qBlue(px)  - qBlue(ref))  <= TOL) {
+                ++matches;
+            }
+        }
+        return matches >= qRound(h * MATCH_THRESHOLD);
+    };
+
+    // Scan from each edge using corner pixel as border-colour seed
+    int top = 0, bottom = h - 1, left = 0, right = w - 1;
+    const QRgb topRef    = reinterpret_cast<const QRgb*>(img.scanLine(0))[0];
+    const QRgb bottomRef = reinterpret_cast<const QRgb*>(img.scanLine(h - 1))[w - 1];
+    const QRgb leftRef   = reinterpret_cast<const QRgb*>(img.scanLine(0))[0];
+    const QRgb rightRef  = reinterpret_cast<const QRgb*>(img.scanLine(h - 1))[w - 1];
+    while (top < maxInsetY && rowMatches(top, topRef)) ++top;
+    while (bottom > h - 1 - maxInsetY && rowMatches(bottom, bottomRef)) --bottom;
+    while (left < maxInsetX && colMatches(left, leftRef)) ++left;
+    while (right > w - 1 - maxInsetX && colMatches(right, rightRef)) --right;
+
+    // No crop detected on any side — return original
+    if (top == 0 && bottom == h - 1 && left == 0 && right == w - 1) return src;
+
+    const QRect cropRect(left, top, right - left + 1, bottom - top + 1);
+    QPixmap out = src.copy(cropRect);
+    out.setDevicePixelRatio(src.devicePixelRatioF());
+    return out;
+}
+} // namespace
 
 // ── SideNavArrow ─────────────────────────────────────────────────────────────
 
@@ -286,6 +389,11 @@ ComicReader::ComicReader(CoreBridge* bridge, QWidget* parent)
 
     m_decodePool.setMaxThreadCount(2);
 
+    // P6-2: thumbnail pipeline (signal queued to main thread on completion)
+    m_thumbnailGen = new ThumbnailGenerator(this);
+    connect(m_thumbnailGen, &ThumbnailGenerator::thumbnailReady,
+            this, &ComicReader::onThumbnailReady);
+
     buildUI();
 
     // J2: restore global memory saver setting
@@ -356,11 +464,26 @@ void ComicReader::buildUI()
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_scrollArea->setAlignment(Qt::AlignCenter);
+    // Prevent QAbstractScrollArea from consuming Left/Right for horizontal scrolling.
+    // ComicReader owns all key handling; scroll area must never hold focus.
+    m_scrollArea->setFocusPolicy(Qt::NoFocus);
+    m_scrollArea->viewport()->setFocusPolicy(Qt::NoFocus);
 
     m_imageLabel = new QLabel();
     m_imageLabel->setAlignment(Qt::AlignCenter);
     m_imageLabel->setStyleSheet("background: transparent;");
     m_scrollArea->setWidget(m_imageLabel);
+
+    // Mouse tracking + event filter on content widgets — relays mouse-move events
+    // to ComicReader::handleCursorActivity so bottom-edge HUD reveal fires while
+    // the cursor is over the comic content. Without this, mouseMoveEvent on
+    // ComicReader would only fire when the cursor is over its bare margins.
+    m_scrollArea->setMouseTracking(true);
+    m_scrollArea->viewport()->setMouseTracking(true);
+    m_imageLabel->setMouseTracking(true);
+    m_scrollArea->installEventFilter(this);
+    m_scrollArea->viewport()->installEventFilter(this);
+    m_imageLabel->installEventFilter(this);
 
     // Toolbar
     m_toolbar = new QWidget(this);
@@ -443,6 +566,18 @@ void ComicReader::buildUI()
     m_portraitBtn->setToolTip("Page width");
     connect(m_portraitBtn, &QPushButton::clicked, this, &ComicReader::showPortraitWidthMenu);
     tbLayout->addWidget(m_portraitBtn);
+
+    // P5-4: Settings panel button — gear glyph (U+2699), text presentation
+    m_settingsBtn = makeBtn(QString(QChar(0x2699)), 32);
+    m_settingsBtn->setToolTip("Reader Settings (Ctrl+,)");
+    connect(m_settingsBtn, &QPushButton::clicked, this, &ComicReader::showSettingsPanel);
+    tbLayout->addWidget(m_settingsBtn);
+
+    m_volBtn = makeBtn(QString(QChar(0x2261)), 32);
+    m_volBtn->setToolTip("Volumes (O)");
+    m_volBtn->hide();
+    connect(m_volBtn, &QPushButton::clicked, this, &ComicReader::showVolumeNavigator);
+    tbLayout->addWidget(m_volBtn);
 
     m_nextVolBtn = makeBtn(QString(QChar(0x00BB)), 32);
     m_nextVolBtn->setToolTip("Next volume");
@@ -535,26 +670,25 @@ void ComicReader::buildUI()
     m_volOverlay = volScrim;
     m_volOverlay->hide();
 
-    auto* volCard = new QWidget(m_volOverlay);
-    volCard->setFixedWidth(360);
-    volCard->setMaximumHeight(static_cast<int>(height() * 0.6));
-    volCard->setStyleSheet(
+    m_volCard = new QWidget(m_volOverlay);
+    m_volCard->setFixedWidth(560);
+    m_volCard->setStyleSheet(
         "background: rgba(18, 18, 18, 0.95);"
         "border: 1px solid rgba(255, 255, 255, 0.10);"
         "border-radius: 12px;"
     );
 
-    auto* volLayout = new QVBoxLayout(volCard);
+    auto* volLayout = new QVBoxLayout(m_volCard);
     volLayout->setContentsMargins(20, 16, 20, 16);
     volLayout->setSpacing(8);
 
-    m_volTitle = new QLabel("Volumes", volCard);
+    m_volTitle = new QLabel("Volumes", m_volCard);
     m_volTitle->setStyleSheet("color: rgba(255,255,255,0.90); font-size: 14px; font-weight: bold; background: transparent; border: none;");
     m_volTitle->setAlignment(Qt::AlignCenter);
     volLayout->addWidget(m_volTitle);
 
-    m_volSearch = new QLineEdit(volCard);
-    m_volSearch->setPlaceholderText("Search volumes...");
+    m_volSearch = new QLineEdit(m_volCard);
+    m_volSearch->setPlaceholderText("Search volumes (try: vol 12)");
     m_volSearch->setStyleSheet(
         "QLineEdit { color: white; background: rgba(255,255,255,0.08);"
         "  border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;"
@@ -563,7 +697,7 @@ void ComicReader::buildUI()
     );
     volLayout->addWidget(m_volSearch);
 
-    m_volList = new QListWidget(volCard);
+    m_volList = new QListWidget(m_volCard);
     m_volList->setStyleSheet(
         "QListWidget { background: transparent; border: none; outline: none; }"
         "QListWidget::item { color: rgba(255,255,255,0.72); padding: 8px 10px;"
@@ -576,33 +710,54 @@ void ComicReader::buildUI()
     m_volList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     volLayout->addWidget(m_volList, 1);
 
+    m_volEmptyLabel = new QLabel("No matches.", m_volCard);
+    m_volEmptyLabel->setStyleSheet("color: rgba(255,255,255,0.45); font-size: 12px; background: transparent; border: none;");
+    m_volEmptyLabel->setAlignment(Qt::AlignCenter);
+    m_volEmptyLabel->hide();
+    volLayout->addWidget(m_volEmptyLabel, 1);
+
     // Search filtering — D9: jump to first match on type, restore to current volume on clear
     connect(m_volSearch, &QLineEdit::textChanged, this, [this](const QString& text) {
         int currentIdx = m_seriesCbzList.indexOf(m_cbzPath);
         QListWidgetItem* firstMatch = nullptr;
         // D4: Check if query is all digits for numeric search
         bool numericQuery = !text.isEmpty() && QRegularExpression("^\\d+$").match(text).hasMatch();
+        auto normKey = [](const QString& s) {
+            QString out;
+            for (QChar c : s) if (c.isLetterOrNumber()) out.append(c.toLower());
+            return out;
+        };
+        const QString qn = normKey(text);
+        int visibleCount = 0;
         for (int i = 0; i < m_volList->count(); ++i) {
             auto* item = m_volList->item(i);
             bool match = false;
+            const QString baseName = item->data(Qt::UserRole + 1).toString();
             if (text.isEmpty()) {
                 match = true;
             } else if (numericQuery) {
-                // D4: Numeric search — extract digit sequences from basename, match if any contains the query
-                QString baseName = item->data(Qt::UserRole + 1).toString();
                 QRegularExpression numRe("\\d+");
                 auto it = numRe.globalMatch(baseName);
                 while (it.hasNext()) {
                     if (it.next().captured() == text) { match = true; break; }
                 }
-                // Also try substring match on display text as fallback
-                if (!match) match = item->text().contains(text, Qt::CaseInsensitive);
+                if (!match) match = baseName.contains(text, Qt::CaseInsensitive);
             } else {
-                match = item->text().contains(text, Qt::CaseInsensitive);
+                match = baseName.contains(text, Qt::CaseInsensitive);
+            }
+            // Normalized fallback ("vol12" matches "Volume 12")
+            if (!match && !qn.isEmpty()) {
+                if (normKey(baseName).contains(qn)) match = true;
             }
             item->setHidden(!match);
-            if (match && !firstMatch) firstMatch = item;
+            if (match) {
+                ++visibleCount;
+                if (!firstMatch) firstMatch = item;
+            }
         }
+        const bool empty = !text.isEmpty() && visibleCount == 0;
+        m_volEmptyLabel->setVisible(empty);
+        m_volList->setVisible(!empty);
         if (text.isEmpty()) {
             for (int i = 0; i < m_volList->count(); ++i) {
                 auto* item = m_volList->item(i);
@@ -618,23 +773,25 @@ void ComicReader::buildUI()
         }
     });
 
-    // Double-click to open
+    // Double-click to open (re-selecting the current volume cancels)
     connect(m_volList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
         int idx = item->data(Qt::UserRole).toInt();
         hideVolumeNavigator();
+        if (m_seriesCbzList.value(idx) == m_cbzPath) return;
         openVolumeByIndex(idx);
     });
 
-    // Enter key in list
+    // Enter key in list (re-selecting the current volume cancels)
     connect(m_volList, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
         int idx = item->data(Qt::UserRole).toInt();
         hideVolumeNavigator();
+        if (m_seriesCbzList.value(idx) == m_cbzPath) return;
         openVolumeByIndex(idx);
     });
 
     auto* volOverlayLayout = new QVBoxLayout(m_volOverlay);
     volOverlayLayout->setAlignment(Qt::AlignCenter);
-    volOverlayLayout->addWidget(volCard, 0, Qt::AlignCenter);
+    volOverlayLayout->addWidget(m_volCard, 0, Qt::AlignCenter);
 
     // ── H2: Side nav arrows ───────────────────────────────────────────────────
     m_leftArrow  = new SideNavArrow(false, this);
@@ -691,8 +848,10 @@ void ComicReader::openBook(const QString& cbzPath,
     }
 
     int volIdx = m_seriesCbzList.indexOf(m_cbzPath);
+    const bool multiVolume = m_seriesCbzList.size() > 1;
     m_prevVolBtn->setVisible(!m_seriesCbzList.isEmpty() && volIdx > 0);
     m_nextVolBtn->setVisible(!m_seriesCbzList.isEmpty() && volIdx < m_seriesCbzList.size() - 1);
+    m_volBtn->setVisible(multiVolume);
 
     applySeriesSettings();  // D11: restore portrait width, mode, coupling phase — must precede button visibility
     m_hudPinned = (m_readerMode != ReaderMode::ScrollStrip); // A2: SinglePage/DoublePage = pinned HUD
@@ -722,6 +881,10 @@ void ComicReader::openBook(const QString& cbzPath,
     // D7: Resumed/Ready toast
     QTimer::singleShot(250, this, [this, hadProgress]() { showToast(hadProgress ? "Resumed" : "Ready"); });
     showToolbar();
+
+    // Belt-and-suspenders: ensure ComicReader holds focus after all child widgets
+    // have settled, so Left/Right keyboard arrows reach keyPressEvent.
+    setFocus();
 }
 
 // ── Canonical Pairing ───────────────────────────────────────────────────────
@@ -855,14 +1018,21 @@ void ComicReader::onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int
     // A1: Discard results from a previous volume (rapid open-another-volume case)
     if (volumeId != m_currentVolumeId) return;
     m_inflightDecodes.remove(pageIndex);
-    m_cache.insert(pageIndex, pixmap);
+
+    // P3-2: auto-crop borders before caching. Both paged + strip paths
+    // consume the cropped pixmap, so width/height metadata reflects what
+    // the user actually sees. Spread detection uses post-crop dims.
+    QPixmap finalPx = m_cropBorders ? autoCropBorders(pixmap) : pixmap;
+    int finalW = finalPx.width();
+    int finalH = finalPx.height();
+    m_cache.insert(pageIndex, finalPx);
 
     bool spreadChanged = false;
     if (pageIndex >= 0 && pageIndex < m_pageMeta.size()) {
         bool wasSpread = m_pageMeta[pageIndex].isSpread;
-        m_pageMeta[pageIndex].width = w;
-        m_pageMeta[pageIndex].height = h;
-        m_pageMeta[pageIndex].isSpread = (h > 0 && static_cast<double>(w) / h > SPREAD_RATIO);
+        m_pageMeta[pageIndex].width = finalW;
+        m_pageMeta[pageIndex].height = finalH;
+        m_pageMeta[pageIndex].isSpread = (finalH > 0 && static_cast<double>(finalW) / finalH > SPREAD_RATIO);
         m_pageMeta[pageIndex].decoded = true;
         spreadChanged = (m_pageMeta[pageIndex].isSpread != wasSpread);
     }
@@ -887,12 +1057,12 @@ void ComicReader::onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int
 
     // Scroll strip: feed to canvas
     if (m_isScrollStrip && m_stripCanvas) {
-        m_stripCanvas->onPageDecoded(pageIndex, pixmap, w, h);
+        m_stripCanvas->onPageDecoded(pageIndex, finalPx, finalW, finalH);
         return;
     }
 
     if (pageIndex == m_currentPage) {
-        m_currentPixmap = pixmap;
+        m_currentPixmap = finalPx;
         m_displayCachePage = -1; // invalidate cache — new pixmap data
         displayCurrentPage();
 
@@ -908,7 +1078,7 @@ void ComicReader::onPageDecoded(int pageIndex, const QPixmap& pixmap, int w, int
     if (m_isDoublePage && m_secondPixmap.isNull() && pageIndex != m_currentPage) {
         auto* pair = pairForPage(m_currentPage);
         if (pair && pair->leftIndex == pageIndex) {
-            m_secondPixmap = pixmap;
+            m_secondPixmap = finalPx;
             m_displayCachePage = -1; // invalidate cache — pair arrived
             displayCurrentPage();
         }
@@ -1056,7 +1226,8 @@ void ComicReader::displayCurrentPage()
         && m_displayCacheH == availH
         && m_displayCacheZoom == m_zoomPct
         && m_displayCachePage == m_currentPage
-        && m_displayCacheHasPair == hasPair) {
+        && m_displayCacheHasPair == hasPair
+        && m_displayCacheBrightness == m_filterBrightness) {
         if (m_isDoublePage && m_zoomPct > 100) applyPan(); // pan only active when zoomed
         return; // already rendered this exact state
     }
@@ -1087,12 +1258,24 @@ void ComicReader::displayCurrentPage()
             scaled = m_currentPixmap.scaledToWidth(static_cast<int>(availW * frac), m_scalingQuality);
             break;
         }
-        case FitMode::FitHeight:
+        case FitMode::FitHeight: {
             scaled = m_currentPixmap.scaledToHeight(availH, m_scalingQuality);
+            int maxW = qRound(availW * m_portraitWidthPct / 100.0);
+            if (scaled.width() > maxW)
+                scaled = m_currentPixmap.scaled(maxW, availH, Qt::KeepAspectRatio, m_scalingQuality);
             break;
         }
+        }
+        scaled = applyBrightness(scaled, m_filterBrightness);  // P2-1
         m_imageLabel->setPixmap(scaled);
         m_imageLabel->resize(scaled.size());
+        m_displayCacheW = availW;
+        m_displayCacheH = availH;
+        m_displayCacheZoom = m_zoomPct;
+        m_displayCachePage = m_currentPage;
+        m_displayCacheHasPair = hasPair;
+        m_displayCacheBrightness = m_filterBrightness;
+        m_displayCache = m_imageLabel->pixmap();
         return;
     }
 
@@ -1121,6 +1304,8 @@ void ComicReader::displayCurrentPage()
         p.setRenderHint(QPainter::SmoothPixmapTransform, m_scalingQuality == Qt::SmoothTransformation);
         int dx = (canvasW - drawW) / 2;  // logical coords — painter scales to physical
         p.drawPixmap(dx, 0, drawW, drawH, m_currentPixmap);
+        p.end();
+        canvas = applyBrightness(canvas, m_filterBrightness);  // P2-1
         m_imageLabel->setPixmap(canvas);
         m_imageLabel->resize(canvasW, drawH);
 
@@ -1142,6 +1327,8 @@ void ComicReader::displayCurrentPage()
         // B4: flush cover to spine line using gutter-aware leftW
         int dx = m_rtl ? (leftW + TWO_PAGE_GUTTER_PX) : (leftW - coverDrawW);
         p.drawPixmap(dx, 0, coverDrawW, drawH, m_currentPixmap);
+        p.end();
+        canvas = applyBrightness(canvas, m_filterBrightness);  // P2-1
         m_imageLabel->setPixmap(canvas);
         m_imageLabel->resize(canvasW2, drawH);
 
@@ -1191,8 +1378,11 @@ void ComicReader::displayCurrentPage()
         p.drawPixmap(dxR, dyR, prw, prh, pageR);
 
         // Gutter shadow at the center line (spans the gutter gap)
-        drawGutterShadow(p, leftW + TWO_PAGE_GUTTER_PX / 2, 0, contentH, m_gutterShadow);
+        if (TWO_PAGE_GUTTER_PX > 0)
+            drawGutterShadow(p, leftW + TWO_PAGE_GUTTER_PX / 2, 0, contentH, m_gutterShadow);
 
+        p.end();
+        canvas = applyBrightness(canvas, m_filterBrightness);  // P2-1
         m_imageLabel->setPixmap(canvas);
         m_imageLabel->resize(canvasW, contentH);
     }
@@ -1203,6 +1393,7 @@ void ComicReader::displayCurrentPage()
     m_displayCacheZoom = m_zoomPct;
     m_displayCachePage = m_currentPage;
     m_displayCacheHasPair = hasPair;
+    m_displayCacheBrightness = m_filterBrightness;
     m_displayCache = m_imageLabel->pixmap();
     if (m_isDoublePage && m_zoomPct > 100) applyPan();
 }
@@ -1391,6 +1582,7 @@ void ComicReader::cycleFitMode()
         {FitMode::FitPage, "Fit Page"}, {FitMode::FitWidth, "Fit Width"}, {FitMode::FitHeight, "Fit Height"},
     };
     showToast(names[m_fitMode]);
+    m_displayCachePage = -1;
     displayCurrentPage();
 }
 
@@ -1664,6 +1856,7 @@ void ComicReader::setPortraitWidthPct(int pct)
         reflowScrollStrip();
         refreshVisibleStripPages();
     } else {
+        m_displayCachePage = -1;
         displayCurrentPage();
     }
 }
@@ -1829,6 +2022,12 @@ void ComicReader::buildScrollStrip()
     m_stripCanvas->setViewportWidth(m_scrollArea->viewport()->width());
     m_stripCanvas->setPortraitWidthPct(m_portraitWidthPct);
     m_stripCanvas->setScalingQuality(m_scalingQuality);
+    m_stripCanvas->setFilterBrightness(m_filterBrightness);  // P2-1
+    m_stripCanvas->setSidePadding(m_stripSidePadding);       // P3-1
+    m_stripCanvas->setSplitOnWide(m_splitOnWide);            // P3-3
+    // Relay mouse-move events for bottom-edge HUD reveal (see buildUI comment).
+    m_stripCanvas->setMouseTracking(true);
+    m_stripCanvas->installEventFilter(this);
 
     // Feed any already-decoded pages
     for (int i = 0; i < m_pageNames.size(); ++i) {
@@ -2015,69 +2214,145 @@ void ComicReader::hideEndOverlay()
     if (m_endOverlay) m_endOverlay->hide();
 }
 
+QWidget* ComicReader::buildVolumeRow(const QString& title,
+                                      const QString& meta,
+                                      const QString& pillText,
+                                      bool isCurrent)
+{
+    auto* row = new QWidget();
+    row->setAttribute(Qt::WA_TranslucentBackground);
+    row->setStyleSheet("background: transparent;");
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(10, 6, 10, 6);
+    h->setSpacing(10);
+
+    auto* info = new QVBoxLayout();
+    info->setContentsMargins(0, 0, 0, 0);
+    info->setSpacing(2);
+
+    auto* titleLbl = new QLabel(title, row);
+    {
+        QFont f = titleLbl->font();
+        f.setPointSize(10);
+        f.setBold(isCurrent);
+        titleLbl->setFont(f);
+    }
+    titleLbl->setStyleSheet(QString("color: rgba(255,255,255,%1); background: transparent; border: none;")
+                                .arg(isCurrent ? "0.95" : "0.82"));
+    titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    info->addWidget(titleLbl);
+
+    if (!meta.isEmpty()) {
+        auto* metaLbl = new QLabel(meta, row);
+        metaLbl->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 11px; background: transparent; border: none;");
+        metaLbl->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        info->addWidget(metaLbl);
+    }
+
+    h->addLayout(info, 1);
+    h->addStretch(0);
+
+    if (!pillText.isEmpty()) {
+        auto* pill = new QLabel(pillText, row);
+        pill->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        pill->setAlignment(Qt::AlignCenter);
+        QString pillStyle;
+        if (isCurrent) {
+            pillStyle =
+                "background: rgba(255,255,255,0.16);"
+                "color: rgba(255,255,255,0.95);"
+                "border: 1px solid rgba(255,255,255,0.20);"
+                "border-radius: 10px;"
+                "padding: 2px 10px;"
+                "font-size: 11px;"
+                "font-weight: bold;";
+        } else {
+            pillStyle =
+                "background: rgba(255,255,255,0.06);"
+                "color: rgba(255,255,255,0.70);"
+                "border: 1px solid rgba(255,255,255,0.12);"
+                "border-radius: 10px;"
+                "padding: 2px 10px;"
+                "font-size: 11px;";
+        }
+        pill->setStyleSheet(pillStyle);
+        h->addWidget(pill, 0, Qt::AlignVCenter);
+    }
+
+    return row;
+}
+
 void ComicReader::showVolumeNavigator()
 {
     closeAllOverlays();
     if (!m_volOverlay || m_seriesCbzList.size() <= 1) return;
 
+    // P2: respect SeriesView's Volumes/Chapters naming toggle — re-read on every
+    // open so mid-session toggles in SeriesView take effect without restart
+    QSettings namingSettings;
+    const bool chaptersMode =
+        namingSettings.value("comics_naming_mode", "volumes").toString() == "chapters";
+    const QString unitPlural = chaptersMode ? "chapters" : "volumes";
+    m_volSearch->setPlaceholderText(chaptersMode
+        ? "Search chapters (try: ch 5)"
+        : "Search volumes (try: vol 12)");
+
     // D3: Title with count
-    QString title = m_seriesName.isEmpty() ? "Volumes" : m_seriesName;
-    m_volTitle->setText(title + QString::fromUtf8(" \xc2\xb7 ") + QString::number(m_seriesCbzList.size()) + " volumes");
+    QString title = m_seriesName.isEmpty()
+        ? (chaptersMode ? "Chapters" : "Volumes")
+        : m_seriesName;
+    m_volTitle->setText(title + QString::fromUtf8(" \xc2\xb7 ")
+                        + QString::number(m_seriesCbzList.size())
+                        + " " + unitPlural);
     m_volList->clear();
     m_volSearch->clear();
 
+    m_volEmptyLabel->hide();
+    m_volList->show();
+
     int currentIdx = m_seriesCbzList.indexOf(m_cbzPath);
-    qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
 
     for (int i = 0; i < m_seriesCbzList.size(); ++i) {
         QFileInfo fi(m_seriesCbzList[i]);
         QString baseName = fi.completeBaseName();
-        QString display = baseName;
 
-        // D1: Progress metadata
+        QString metaText;
+        QString pillText;
+
         if (m_bridge) {
             QString key = itemIdForPath(m_seriesCbzList[i]);
             QJsonObject prog = m_bridge->progress("comics", key);
             int pg = prog["page"].toInt(-1);
             int pgCount = prog["pageCount"].toInt(0);
             if (pg > 0 && pgCount > 0) {
-                display += QString("  \xe2\x80\x94  Continue \xc2\xb7 page %1 / %2").arg(pg + 1).arg(pgCount);
-            }
-            qint64 updatedAt = static_cast<qint64>(prog["updatedAt"].toDouble(0));
-            if (updatedAt > 0) {
-                qint64 diffMs = nowMs - updatedAt;
-                qint64 diffMin = diffMs / 60000;
-                qint64 diffHrs = diffMin / 60;
-                qint64 diffDays = diffHrs / 24;
-                QString ago;
-                if (diffMin < 1)       ago = "just now";
-                else if (diffMin < 60) ago = QString::number(diffMin) + " min ago";
-                else if (diffHrs < 24) ago = QString::number(diffHrs) + "h ago";
-                else                   ago = QString::number(diffDays) + "d ago";
-                display += "  " + ago;
+                metaText = QString::fromUtf8("Continue \xc2\xb7 %1 / %2").arg(pg + 1).arg(pgCount);
             }
         }
+        if (i == currentIdx) pillText = "Current";
 
-        // D2: Current volume marker
-        if (i == currentIdx)
-            display += QString::fromUtf8(" \xe2\x97\x80");
-
-        auto* item = new QListWidgetItem(display);
+        auto* item = new QListWidgetItem(m_volList);
         item->setData(Qt::UserRole, i);
-        item->setData(Qt::UserRole + 1, baseName); // store original name for search
+        item->setData(Qt::UserRole + 1, baseName);
+
+        QWidget* rowWidget = buildVolumeRow(baseName, metaText, pillText, i == currentIdx);
+        const int rowHeight = metaText.isEmpty() ? 40 : 56;
+        item->setSizeHint(QSize(0, rowHeight));
+        m_volList->setItemWidget(item, rowWidget);
+
         if (i == currentIdx) {
-            QFont f = item->font();
-            f.setBold(true);
-            item->setFont(f);
-        }
-        m_volList->addItem(item);
-        if (i == currentIdx)
             m_volList->setCurrentItem(item);
+        }
     }
 
     m_volOverlay->setGeometry(0, 0, width(), height());
+    if (m_volCard) {
+        m_volCard->setMaximumHeight(std::max(240, static_cast<int>(height() * 0.75)));
+    }
     m_volOverlay->show();
     m_volOverlay->raise();
+    if (currentIdx >= 0 && currentIdx < m_volList->count()) {
+        m_volList->scrollToItem(m_volList->item(currentIdx));
+    }
     m_volSearch->setFocus();
     setCursor(Qt::ArrowCursor);
 }
@@ -2086,6 +2361,603 @@ void ComicReader::hideVolumeNavigator()
 {
     if (m_volOverlay) m_volOverlay->hide();
     setFocus();
+}
+
+// ── Settings panel (P5-1) ───────────────────────────────────────────────────
+
+void ComicReader::showSettingsPanel()
+{
+    closeAllOverlays();
+
+    // Lazy build on first open — same pattern as toggleKeysOverlay
+    if (!m_settingsOverlay) {
+        auto* scrim = new ClickScrim(this);
+        scrim->setStyleSheet("background: rgba(0, 0, 0, 0.75);");
+        connect(scrim, &ClickScrim::clicked, this, &ComicReader::hideSettingsPanel);
+        m_settingsOverlay = scrim;
+        m_settingsOverlay->hide();  // defensive: child of a visible parent is implicitly shown until hide
+
+        m_settingsCard = new QFrame(m_settingsOverlay);
+        m_settingsCard->setObjectName("ReaderSettingsCard");
+        m_settingsCard->setFixedWidth(480);
+        m_settingsCard->setStyleSheet(
+            "#ReaderSettingsCard {"
+            "  background: rgba(18, 18, 18, 0.95);"
+            "  border: 1px solid rgba(255, 255, 255, 0.10);"
+            "  border-radius: 12px;"
+            "}"
+            "QLabel { background: transparent; border: none; }"
+        );
+
+        auto* cardLayout = new QVBoxLayout(m_settingsCard);
+        cardLayout->setContentsMargins(20, 16, 20, 16);
+        cardLayout->setSpacing(10);
+
+        auto* title = new QLabel("Reader Settings", m_settingsCard);
+        title->setStyleSheet("color: rgba(255,255,255,0.92); font-size: 14px; font-weight: bold;");
+        title->setAlignment(Qt::AlignCenter);
+        cardLayout->addWidget(title);
+
+        auto* displayHeader = new QLabel("DISPLAY", m_settingsCard);
+        displayHeader->setStyleSheet(
+            "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
+            "letter-spacing: 1px; padding-top: 6px;");
+        cardLayout->addWidget(displayHeader);
+
+        const QString comboStyle =
+            "QComboBox { color: white; background: rgba(255,255,255,0.08);"
+            "  border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;"
+            "  padding: 6px 10px; font-size: 12px; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+            "QComboBox QAbstractItemView { color: white;"
+            "  background: rgba(20,20,20,0.97);"
+            "  border: 1px solid rgba(255,255,255,0.15);"
+            "  selection-background-color: rgba(255,255,255,0.12); }";
+        const QString rowLabelStyle =
+            "color: rgba(255,255,255,0.75); font-size: 12px;";
+
+        auto makeRow = [&](const QString& label, QWidget* control) {
+            auto* rowW = new QWidget(m_settingsCard);
+            rowW->setStyleSheet("background: transparent; border: none;");
+            auto* hl = new QHBoxLayout(rowW);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(12);
+            auto* lbl = new QLabel(label, rowW);
+            lbl->setStyleSheet(rowLabelStyle);
+            lbl->setFixedWidth(140);
+            hl->addWidget(lbl);
+            hl->addWidget(control, 1);
+            cardLayout->addWidget(rowW);
+        };
+
+        // Reading Mode
+        m_settingsModeCombo = new QComboBox(m_settingsCard);
+        m_settingsModeCombo->setStyleSheet(comboStyle);
+        m_settingsModeCombo->addItem("Single Page", static_cast<int>(ReaderMode::SinglePage));
+        m_settingsModeCombo->addItem("Double Page", static_cast<int>(ReaderMode::DoublePage));
+        m_settingsModeCombo->addItem("Scroll Strip", static_cast<int>(ReaderMode::ScrollStrip));
+        connect(m_settingsModeCombo, &QComboBox::activated, this, [this](int idx) {
+            ReaderMode target = static_cast<ReaderMode>(m_settingsModeCombo->itemData(idx).toInt());
+            // 3-mode enum — reach target in at most 2 cycles
+            int safety = 0;
+            while (m_readerMode != target && safety++ < 4)
+                cycleReaderMode();
+            // P5-3: refresh mode-specific section visibility live
+            if (m_settingsDoublePageSection)
+                m_settingsDoublePageSection->setVisible(m_isDoublePage);
+            if (m_settingsScrollStripSection)
+                m_settingsScrollStripSection->setVisible(m_isScrollStrip);
+        });
+        makeRow("Reading Mode", m_settingsModeCombo);
+
+        // Portrait Width
+        m_settingsPortraitCombo = new QComboBox(m_settingsCard);
+        m_settingsPortraitCombo->setStyleSheet(comboStyle);
+        for (int pct : PORTRAIT_PRESETS)
+            m_settingsPortraitCombo->addItem(QString::number(pct) + "%", pct);
+        connect(m_settingsPortraitCombo, &QComboBox::activated, this, [this](int idx) {
+            setPortraitWidthPct(m_settingsPortraitCombo->itemData(idx).toInt());
+            saveSeriesSettings();
+        });
+        makeRow("Portrait Width", m_settingsPortraitCombo);
+
+        // Fit Mode
+        m_settingsFitCombo = new QComboBox(m_settingsCard);
+        m_settingsFitCombo->setStyleSheet(comboStyle);
+        m_settingsFitCombo->addItem("Fit Page",   static_cast<int>(FitMode::FitPage));
+        m_settingsFitCombo->addItem("Fit Width",  static_cast<int>(FitMode::FitWidth));
+        m_settingsFitCombo->addItem("Fit Height", static_cast<int>(FitMode::FitHeight));
+        connect(m_settingsFitCombo, &QComboBox::activated, this, [this](int idx) {
+            m_fitMode = static_cast<FitMode>(m_settingsFitCombo->itemData(idx).toInt());
+            m_displayCachePage = -1;
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+        makeRow("Fit Mode", m_settingsFitCombo);
+
+        // ── IMAGE section (P5-2) ──
+        auto* imageHeader = new QLabel("IMAGE", m_settingsCard);
+        imageHeader->setStyleSheet(
+            "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
+            "letter-spacing: 1px; padding-top: 6px;");
+        cardLayout->addWidget(imageHeader);
+
+        const QString checkStyle =
+            "QCheckBox { color: rgba(255,255,255,0.85); font-size: 12px;"
+            "  background: transparent; border: none; spacing: 8px; }"
+            "QCheckBox::indicator { width: 16px; height: 16px;"
+            "  border: 1px solid rgba(255,255,255,0.30); border-radius: 3px;"
+            "  background: rgba(255,255,255,0.05); }"
+            "QCheckBox::indicator:checked { background: rgba(255,255,255,0.65);"
+            "  border-color: rgba(255,255,255,0.65); }";
+
+        // Brightness — same presets as the right-click submenu
+        m_settingsBrightnessCombo = new QComboBox(m_settingsCard);
+        m_settingsBrightnessCombo->setStyleSheet(comboStyle);
+        for (int preset : BRIGHTNESS_PRESETS) {
+            QString label;
+            if (preset == 0)      label = "Off";
+            else if (preset > 0)  label = QString("+%1").arg(preset);
+            else                  label = QString::number(preset);
+            m_settingsBrightnessCombo->addItem(label, preset);
+        }
+        connect(m_settingsBrightnessCombo, &QComboBox::activated, this, [this](int idx) {
+            m_filterBrightness = m_settingsBrightnessCombo->itemData(idx).toInt();
+            m_displayCachePage = -1;
+            if (m_stripCanvas) {
+                m_stripCanvas->setFilterBrightness(m_filterBrightness);
+                if (m_isScrollStrip) refreshVisibleStripPages();
+            }
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+        makeRow("Brightness", m_settingsBrightnessCombo);
+
+        // Crop Borders — toggle requires full re-decode (same as right-click action)
+        m_settingsCropCheckbox = new QCheckBox(m_settingsCard);
+        m_settingsCropCheckbox->setStyleSheet(checkStyle);
+        connect(m_settingsCropCheckbox, &QCheckBox::toggled, this, [this](bool checked) {
+            if (checked == m_cropBorders) return;  // no-op (e.g. programmatic populate)
+            m_cropBorders = checked;
+            // Wipe everything so decoded pages re-enter through the new crop path
+            m_cache.clear();
+            m_currentPixmap = QPixmap();
+            m_secondPixmap = QPixmap();
+            m_displayCachePage = -1;
+            for (auto& meta : m_pageMeta) meta.decoded = false;
+            if (m_stripCanvas) m_stripCanvas->invalidateScaledCache();
+            if (m_isScrollStrip) {
+                refreshVisibleStripPages();
+            } else {
+                requestDecode(m_currentPage);
+                if (m_isDoublePage) {
+                    auto* pair = pairForPage(m_currentPage);
+                    if (pair && pair->leftIndex >= 0) requestDecode(pair->leftIndex);
+                }
+            }
+            saveSeriesSettings();
+            showToast(m_cropBorders ? "Crop Borders: On" : "Crop Borders: Off");
+        });
+        makeRow("Crop Borders", m_settingsCropCheckbox);
+
+        // Image Quality — Smooth (default) vs Fast
+        m_settingsQualityCombo = new QComboBox(m_settingsCard);
+        m_settingsQualityCombo->setStyleSheet(comboStyle);
+        m_settingsQualityCombo->addItem("Smooth", static_cast<int>(Qt::SmoothTransformation));
+        m_settingsQualityCombo->addItem("Fast",   static_cast<int>(Qt::FastTransformation));
+        connect(m_settingsQualityCombo, &QComboBox::activated, this, [this](int idx) {
+            m_scalingQuality = static_cast<Qt::TransformationMode>(
+                m_settingsQualityCombo->itemData(idx).toInt());
+            if (m_stripCanvas) {
+                m_stripCanvas->setScalingQuality(m_scalingQuality);
+                m_stripCanvas->invalidateScaledCache();
+            }
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+        makeRow("Image Quality", m_settingsQualityCombo);
+
+        // Memory Saver — flips PageCache budget
+        m_settingsMemoryCheckbox = new QCheckBox(m_settingsCard);
+        m_settingsMemoryCheckbox->setStyleSheet(checkStyle);
+        connect(m_settingsMemoryCheckbox, &QCheckBox::toggled, this, [this](bool checked) {
+            if (checked == m_memorySaver) return;
+            m_memorySaver = checked;
+            m_cache.setBudget(m_memorySaver ? 256LL * 1024 * 1024 : 512LL * 1024 * 1024);
+            QSettings s("Tankoban", "Tankoban");
+            s.setValue("memorySaver", m_memorySaver);
+            showToast(m_memorySaver ? "Memory Saver On" : "Memory Saver Off");
+        });
+        makeRow("Memory Saver", m_settingsMemoryCheckbox);
+
+        // ── DOUBLE PAGE section (P5-3) — visible only when m_isDoublePage ──
+        m_settingsDoublePageSection = new QWidget(m_settingsCard);
+        m_settingsDoublePageSection->setStyleSheet("background: transparent; border: none;");
+        auto* dpLayout = new QVBoxLayout(m_settingsDoublePageSection);
+        dpLayout->setContentsMargins(0, 0, 0, 0);
+        dpLayout->setSpacing(10);
+        auto* dpHeader = new QLabel("DOUBLE PAGE", m_settingsDoublePageSection);
+        dpHeader->setStyleSheet(
+            "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
+            "letter-spacing: 1px; padding-top: 6px; background: transparent; border: none;");
+        dpLayout->addWidget(dpHeader);
+
+        auto makeRowIn = [&](QWidget* parent, QVBoxLayout* layout,
+                             const QString& label, QWidget* control) {
+            auto* rowW = new QWidget(parent);
+            rowW->setStyleSheet("background: transparent; border: none;");
+            auto* hl = new QHBoxLayout(rowW);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(12);
+            auto* lbl = new QLabel(label, rowW);
+            lbl->setStyleSheet(rowLabelStyle);
+            lbl->setFixedWidth(140);
+            hl->addWidget(lbl);
+            hl->addWidget(control, 1);
+            layout->addWidget(rowW);
+        };
+
+        // Reading Direction (RTL toggle)
+        m_settingsRtlCheckbox = new QCheckBox(m_settingsDoublePageSection);
+        m_settingsRtlCheckbox->setStyleSheet(checkStyle);
+        connect(m_settingsRtlCheckbox, &QCheckBox::toggled, this, [this](bool checked) {
+            if (checked == m_rtl) return;
+            m_rtl = checked;
+            showToast(m_rtl ? "Right to Left" : "Left to Right");
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+        makeRowIn(m_settingsDoublePageSection, dpLayout, "Right-to-Left", m_settingsRtlCheckbox);
+
+        // Gutter Shadow combo
+        m_settingsGutterCombo = new QComboBox(m_settingsDoublePageSection);
+        m_settingsGutterCombo->setStyleSheet(comboStyle);
+        m_settingsGutterCombo->addItem("Off",    0.00);
+        m_settingsGutterCombo->addItem("Subtle", 0.22);
+        m_settingsGutterCombo->addItem("Medium", 0.35);
+        m_settingsGutterCombo->addItem("Strong", 0.55);
+        connect(m_settingsGutterCombo, &QComboBox::activated, this, [this](int idx) {
+            m_gutterShadow = m_settingsGutterCombo->itemData(idx).toDouble();
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+        makeRowIn(m_settingsDoublePageSection, dpLayout, "Gutter Shadow", m_settingsGutterCombo);
+        cardLayout->addWidget(m_settingsDoublePageSection);
+
+        // ── SCROLL STRIP section (P5-3) — visible only when m_isScrollStrip ──
+        m_settingsScrollStripSection = new QWidget(m_settingsCard);
+        m_settingsScrollStripSection->setStyleSheet("background: transparent; border: none;");
+        auto* ssLayout = new QVBoxLayout(m_settingsScrollStripSection);
+        ssLayout->setContentsMargins(0, 0, 0, 0);
+        ssLayout->setSpacing(10);
+        auto* ssHeader = new QLabel("SCROLL STRIP", m_settingsScrollStripSection);
+        ssHeader->setStyleSheet(
+            "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
+            "letter-spacing: 1px; padding-top: 6px; background: transparent; border: none;");
+        ssLayout->addWidget(ssHeader);
+
+        // Side Padding combo
+        m_settingsSidePaddingCombo = new QComboBox(m_settingsScrollStripSection);
+        m_settingsSidePaddingCombo->setStyleSheet(comboStyle);
+        for (int preset : SIDE_PADDING_PRESETS) {
+            QString label;
+            if (preset == 0)        label = "Off";
+            else if (preset <= 40)  label = QString("Small (%1px)").arg(preset);
+            else if (preset <= 80)  label = QString("Medium (%1px)").arg(preset);
+            else if (preset <= 120) label = QString("Large (%1px)").arg(preset);
+            else                    label = QString("X-Large (%1px)").arg(preset);
+            m_settingsSidePaddingCombo->addItem(label, preset);
+        }
+        connect(m_settingsSidePaddingCombo, &QComboBox::activated, this, [this](int idx) {
+            m_stripSidePadding = m_settingsSidePaddingCombo->itemData(idx).toInt();
+            if (m_stripCanvas) {
+                m_stripCanvas->setSidePadding(m_stripSidePadding);
+                refreshVisibleStripPages();
+            }
+            saveSeriesSettings();
+        });
+        makeRowIn(m_settingsScrollStripSection, ssLayout, "Side Padding", m_settingsSidePaddingCombo);
+
+        // Split Wide Pages checkbox
+        m_settingsSplitCheckbox = new QCheckBox(m_settingsScrollStripSection);
+        m_settingsSplitCheckbox->setStyleSheet(checkStyle);
+        connect(m_settingsSplitCheckbox, &QCheckBox::toggled, this, [this](bool checked) {
+            if (checked == m_splitOnWide) return;
+            m_splitOnWide = checked;
+            if (m_stripCanvas) {
+                m_stripCanvas->setSplitOnWide(m_splitOnWide);
+                refreshVisibleStripPages();
+            }
+            saveSeriesSettings();
+            showToast(m_splitOnWide ? "Split Wide Pages: On" : "Split Wide Pages: Off");
+        });
+        makeRowIn(m_settingsScrollStripSection, ssLayout, "Split Wide Pages", m_settingsSplitCheckbox);
+        cardLayout->addWidget(m_settingsScrollStripSection);
+
+        cardLayout->addSpacing(8);
+
+        const QString panelBtnStyle =
+            "QPushButton { color: rgba(255,255,255,0.78);"
+            "  background: rgba(255,255,255,0.06);"
+            "  border: 1px solid rgba(255,255,255,0.15);"
+            "  border-radius: 6px; padding: 8px 14px; font-size: 12px; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.10); }";
+
+        // P6-2: discoverability path — open the thumbnail grid from the panel
+        auto* thumbsBtn = new QPushButton("Show Page Thumbnails", m_settingsCard);
+        thumbsBtn->setStyleSheet(panelBtnStyle);
+        connect(thumbsBtn, &QPushButton::clicked, this, [this]() {
+            hideSettingsPanel();
+            showThumbsPanel();
+        });
+        cardLayout->addWidget(thumbsBtn);
+
+        auto* resetBtn = new QPushButton("Reset Series Settings", m_settingsCard);
+        resetBtn->setStyleSheet(panelBtnStyle);
+        connect(resetBtn, &QPushButton::clicked, this, [this]() {
+            resetSeriesSettings();
+            // Re-populate combos to reflect reset state without re-opening
+            if (m_settingsOverlay && m_settingsOverlay->isVisible())
+                showSettingsPanel();
+        });
+        cardLayout->addWidget(resetBtn);
+
+        auto* overlayLayout = new QVBoxLayout(m_settingsOverlay);
+        overlayLayout->setAlignment(Qt::AlignCenter);
+        overlayLayout->addWidget(m_settingsCard, 0, Qt::AlignCenter);
+    }
+
+    // Populate current state into combos — block signals so programmatic
+    // setCurrentIndex doesn't fire activated().
+    m_settingsModeCombo->blockSignals(true);
+    m_settingsPortraitCombo->blockSignals(true);
+    m_settingsFitCombo->blockSignals(true);
+    m_settingsBrightnessCombo->blockSignals(true);
+    m_settingsCropCheckbox->blockSignals(true);
+    m_settingsQualityCombo->blockSignals(true);
+    m_settingsMemoryCheckbox->blockSignals(true);
+    m_settingsRtlCheckbox->blockSignals(true);
+    m_settingsGutterCombo->blockSignals(true);
+    m_settingsSidePaddingCombo->blockSignals(true);
+    m_settingsSplitCheckbox->blockSignals(true);
+
+    m_settingsModeCombo->setCurrentIndex(
+        m_settingsModeCombo->findData(static_cast<int>(m_readerMode)));
+    int portraitIdx = m_settingsPortraitCombo->findData(m_portraitWidthPct);
+    if (portraitIdx >= 0) m_settingsPortraitCombo->setCurrentIndex(portraitIdx);
+    m_settingsFitCombo->setCurrentIndex(
+        m_settingsFitCombo->findData(static_cast<int>(m_fitMode)));
+    int brightIdx = m_settingsBrightnessCombo->findData(m_filterBrightness);
+    if (brightIdx >= 0) m_settingsBrightnessCombo->setCurrentIndex(brightIdx);
+    m_settingsCropCheckbox->setChecked(m_cropBorders);
+    m_settingsQualityCombo->setCurrentIndex(
+        m_settingsQualityCombo->findData(static_cast<int>(m_scalingQuality)));
+    m_settingsMemoryCheckbox->setChecked(m_memorySaver);
+
+    // P5-3: mode-specific controls + section visibility
+    m_settingsRtlCheckbox->setChecked(m_rtl);
+    int gutterIdx = -1;
+    for (int i = 0; i < m_settingsGutterCombo->count(); ++i) {
+        if (qAbs(m_settingsGutterCombo->itemData(i).toDouble() - m_gutterShadow) < 0.01) {
+            gutterIdx = i;
+            break;
+        }
+    }
+    if (gutterIdx >= 0) m_settingsGutterCombo->setCurrentIndex(gutterIdx);
+    int padIdx = m_settingsSidePaddingCombo->findData(m_stripSidePadding);
+    if (padIdx >= 0) m_settingsSidePaddingCombo->setCurrentIndex(padIdx);
+    m_settingsSplitCheckbox->setChecked(m_splitOnWide);
+    m_settingsDoublePageSection->setVisible(m_isDoublePage);
+    m_settingsScrollStripSection->setVisible(m_isScrollStrip);
+
+    m_settingsModeCombo->blockSignals(false);
+    m_settingsPortraitCombo->blockSignals(false);
+    m_settingsFitCombo->blockSignals(false);
+    m_settingsBrightnessCombo->blockSignals(false);
+    m_settingsCropCheckbox->blockSignals(false);
+    m_settingsQualityCombo->blockSignals(false);
+    m_settingsMemoryCheckbox->blockSignals(false);
+    m_settingsRtlCheckbox->blockSignals(false);
+    m_settingsGutterCombo->blockSignals(false);
+    m_settingsSidePaddingCombo->blockSignals(false);
+    m_settingsSplitCheckbox->blockSignals(false);
+
+    m_settingsOverlay->setGeometry(0, 0, width(), height());
+    // P5-4: cap card height so it never extends off-screen on small viewports.
+    // 85% of viewport keeps margin even when both mode-specific sections are
+    // hidden (smaller card) or when one is shown (larger). Qt clips overflow
+    // visually — if real overflow becomes common, follow-up batch wraps the
+    // card content in a QScrollArea.
+    if (m_settingsCard)
+        m_settingsCard->setMaximumHeight(static_cast<int>(height() * 0.85));
+    m_settingsOverlay->show();
+    m_settingsOverlay->raise();
+    // P5-4: focus lands on the first interactive control so keyboard users
+    // can tab through immediately — Reading Mode is always visible.
+    if (m_settingsModeCombo) m_settingsModeCombo->setFocus();
+}
+
+void ComicReader::hideSettingsPanel()
+{
+    if (m_settingsOverlay) m_settingsOverlay->hide();
+    setFocus();
+}
+
+// ── Thumbnail grid panel (P6-2) ─────────────────────────────────────────────
+
+void ComicReader::showThumbsPanel()
+{
+    if (m_pageNames.isEmpty() || m_cbzPath.isEmpty()) return;
+    closeAllOverlays();
+
+    // Lazy build on first open. Cells get rebuilt every time the underlying
+    // page set changes (different volume) — see "rebuild" check below.
+    // Page-count match alone isn't sufficient — two same-size volumes would
+    // share stale thumbnails. Compare cbzPath explicitly.
+    const bool needBuild = !m_thumbsOverlay
+                        || m_thumbCells.size() != m_pageNames.size()
+                        || m_thumbsBuiltForCbz != m_cbzPath;
+
+    if (needBuild) {
+        // First-time construction OR series swap (different page count).
+        if (!m_thumbsOverlay) {
+            auto* scrim = new ClickScrim(this);
+            scrim->setStyleSheet("background: rgba(0, 0, 0, 0.80);");
+            connect(scrim, &ClickScrim::clicked, this, &ComicReader::hideThumbsPanel);
+            m_thumbsOverlay = scrim;
+            m_thumbsOverlay->hide();  // defensive: child of a visible parent is implicitly shown until hide
+
+            m_thumbsCard = new QFrame(m_thumbsOverlay);
+            m_thumbsCard->setObjectName("ThumbsCard");
+            m_thumbsCard->setStyleSheet(
+                "#ThumbsCard {"
+                "  background: rgba(18, 18, 18, 0.96);"
+                "  border: 1px solid rgba(255, 255, 255, 0.10);"
+                "  border-radius: 12px;"
+                "}"
+                "QLabel { background: transparent; border: none; }");
+
+            auto* cardLayout = new QVBoxLayout(m_thumbsCard);
+            cardLayout->setContentsMargins(20, 16, 20, 16);
+            cardLayout->setSpacing(10);
+
+            m_thumbsTitle = new QLabel(m_thumbsCard);
+            m_thumbsTitle->setStyleSheet(
+                "color: rgba(255,255,255,0.92); font-size: 14px; font-weight: bold;");
+            m_thumbsTitle->setAlignment(Qt::AlignCenter);
+            cardLayout->addWidget(m_thumbsTitle);
+
+            m_thumbsScroll = new QScrollArea(m_thumbsCard);
+            m_thumbsScroll->setWidgetResizable(true);
+            m_thumbsScroll->setFrameShape(QFrame::NoFrame);
+            m_thumbsScroll->setStyleSheet(
+                "QScrollArea { background: transparent; border: none; }"
+                "QScrollArea > QWidget > QWidget { background: transparent; }");
+            cardLayout->addWidget(m_thumbsScroll, 1);
+
+            auto* overlayLayout = new QVBoxLayout(m_thumbsOverlay);
+            overlayLayout->setAlignment(Qt::AlignCenter);
+            overlayLayout->addWidget(m_thumbsCard, 0, Qt::AlignCenter);
+        } else {
+            // Series-swap case: tear down previous content widget + cells
+            if (m_thumbsContent) {
+                m_thumbsContent->deleteLater();
+                m_thumbsContent = nullptr;
+                m_thumbsGrid = nullptr;
+            }
+            m_thumbCells.clear();
+            m_currentThumbCell = nullptr;
+        }
+
+        // (Re)build content widget + grid + cells
+        m_thumbsContent = new QWidget();
+        m_thumbsContent->setStyleSheet("background: transparent;");
+        m_thumbsGrid = new QGridLayout(m_thumbsContent);
+        m_thumbsGrid->setContentsMargins(0, 0, 0, 0);
+        m_thumbsGrid->setSpacing(12);
+        m_thumbsScroll->setWidget(m_thumbsContent);
+
+        m_thumbCells.resize(m_pageNames.size());
+        const QString cellStyle =
+            "QToolButton { color: rgba(255,255,255,0.75); font-size: 11px;"
+            "  background: transparent; border: 1px solid transparent;"
+            "  border-radius: 6px; padding: 4px; }"
+            "QToolButton:hover { border: 1px solid rgba(255,255,255,0.25); }"
+            "QToolButton[currentpage=\"true\"] { border: 2px solid rgba(255,255,255,0.65); }";
+
+        // Card sizing — 85% viewport. Compute columns from card content width.
+        const int cardW = static_cast<int>(width() * 0.85);
+        const int cardH = static_cast<int>(height() * 0.85);
+        m_thumbsCard->setFixedSize(cardW, cardH);
+        const int cellW = ThumbnailGenerator::THUMB_W + 16;   // pad
+        const int gap   = 12;
+        const int contentW = cardW - 56;  // minus margins + scrollbar room
+        const int cols = qMax(1, (contentW + gap) / (cellW + gap));
+
+        for (int i = 0; i < m_pageNames.size(); ++i) {
+            auto* cell = new QToolButton(m_thumbsContent);
+            cell->setText(QString::number(i + 1));
+            cell->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            cell->setIconSize(QSize(ThumbnailGenerator::THUMB_W,
+                                    ThumbnailGenerator::THUMB_H));
+            cell->setFixedSize(ThumbnailGenerator::THUMB_W + 12,
+                               ThumbnailGenerator::THUMB_H + 32);
+            cell->setStyleSheet(cellStyle);
+            cell->setCursor(Qt::PointingHandCursor);
+            cell->setAutoRaise(true);
+            int pageIdx = i;
+            connect(cell, &QToolButton::clicked, this, [this, pageIdx]() {
+                hideThumbsPanel();
+                showPage(pageIdx);
+            });
+
+            // Try disk cache first; otherwise queue a decode + show placeholder
+            const QString cachePath = m_thumbnailGen->cachePathForPage(m_cbzPath, i);
+            if (QFile::exists(cachePath)) {
+                QPixmap pix(cachePath);
+                if (!pix.isNull()) cell->setIcon(QIcon(pix));
+            } else {
+                // Placeholder: solid dark rect at thumbnail size
+                QPixmap placeholder(ThumbnailGenerator::THUMB_W,
+                                    ThumbnailGenerator::THUMB_H);
+                placeholder.fill(QColor(0x18, 0x18, 0x18));
+                cell->setIcon(QIcon(placeholder));
+                m_thumbnailGen->requestThumbnail(m_cbzPath, i, m_pageNames[i]);
+            }
+
+            m_thumbCells[i] = cell;
+            m_thumbsGrid->addWidget(cell, i / cols, i % cols, Qt::AlignCenter);
+        }
+        m_thumbsBuiltForCbz = m_cbzPath;
+    } else {
+        // Re-show case: card sizing may have changed if viewport resized
+        const int cardW = static_cast<int>(width() * 0.85);
+        const int cardH = static_cast<int>(height() * 0.85);
+        m_thumbsCard->setFixedSize(cardW, cardH);
+    }
+
+    // Update title + current-page highlight
+    m_thumbsTitle->setText(QString("Page %1 / %2")
+                           .arg(m_currentPage + 1)
+                           .arg(m_pageNames.size()));
+    if (m_currentThumbCell) {
+        m_currentThumbCell->setProperty("currentpage", false);
+        m_currentThumbCell->style()->unpolish(m_currentThumbCell);
+        m_currentThumbCell->style()->polish(m_currentThumbCell);
+    }
+    if (m_currentPage >= 0 && m_currentPage < m_thumbCells.size()) {
+        m_currentThumbCell = m_thumbCells[m_currentPage];
+        m_currentThumbCell->setProperty("currentpage", true);
+        m_currentThumbCell->style()->unpolish(m_currentThumbCell);
+        m_currentThumbCell->style()->polish(m_currentThumbCell);
+    }
+
+    m_thumbsOverlay->setGeometry(0, 0, width(), height());
+    m_thumbsOverlay->show();
+    m_thumbsOverlay->raise();
+
+    // Auto-scroll to current cell after layout settles
+    if (m_currentThumbCell && m_thumbsScroll) {
+        QTimer::singleShot(0, this, [this]() {
+            if (m_currentThumbCell && m_thumbsScroll)
+                m_thumbsScroll->ensureWidgetVisible(m_currentThumbCell, 50, 80);
+        });
+    }
+}
+
+void ComicReader::hideThumbsPanel()
+{
+    if (m_thumbsOverlay) m_thumbsOverlay->hide();
+    setFocus();
+}
+
+void ComicReader::onThumbnailReady(int pageIndex, const QImage& thumb)
+{
+    if (pageIndex < 0 || pageIndex >= m_thumbCells.size()) return;
+    auto* cell = m_thumbCells[pageIndex];
+    if (!cell) return;
+    if (thumb.isNull()) return;  // keep placeholder; failure already logged
+    cell->setIcon(QIcon(QPixmap::fromImage(thumb)));
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -2103,6 +2975,30 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
         if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_K)
             toggleKeysOverlay();
         event->accept(); return;
+    }
+
+    // P5-4: Settings panel gate — escape closes; let other keys flow through
+    // to the focused control (tab navigation, combo arrows, checkbox space).
+    if (m_settingsOverlay && m_settingsOverlay->isVisible()) {
+        if (event->key() == Qt::Key_Escape) {
+            hideSettingsPanel();
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+        return;
+    }
+
+    // P6-2: Thumbnail grid gate — escape closes; T also closes (toggle); other
+    // keys flow through (scroll area handles arrow/page keys natively).
+    if (m_thumbsOverlay && m_thumbsOverlay->isVisible()) {
+        if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_T) {
+            hideThumbsPanel();
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+        return;
     }
 
     // Volume navigator keyboard routing
@@ -2156,6 +3052,11 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
         resetSeriesSettings(); return;
     }
 
+    // P5-1 — Ctrl+,: open consolidated settings panel
+    if (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_Comma) {
+        showSettingsPanel(); event->accept(); return;
+    }
+
     // D6 — Alt+Left/Right: previous/next volume
     if (event->modifiers() & Qt::AltModifier) {
         if (event->key() == Qt::Key_Left  && !isAnyOverlayOpen()) { prevVolume(); event->accept(); return; }
@@ -2204,6 +3105,7 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
     case Qt::Key_F: cycleFitMode(); break;
     case Qt::Key_M: cycleReaderMode(); break;
     case Qt::Key_O: showVolumeNavigator(); break;
+    case Qt::Key_T: showThumbsPanel(); break;                       // P6-2
     case Qt::Key_P: toggleCouplingNudge(); break;
     case Qt::Key_I: toggleReadingDirection(); break;
     case Qt::Key_Up:
@@ -2230,6 +3132,10 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
 
 void ComicReader::wheelEvent(QWheelEvent* event)
 {
+    // Swallow wheel when an overlay is open — prevents the volume list's
+    // edge-propagated wheel from paging the manga in the background.
+    if (isAnyOverlayOpen()) { event->accept(); return; }
+
     // Scroll strip mode: let the scroll area handle everything
     if (m_isScrollStrip) {
         m_scrollArea->handleWheel(event);
@@ -2341,6 +3247,15 @@ void ComicReader::contextMenuEvent(QContextMenuEvent* event)
 {
     QMenu* menu = ContextMenuHelper::createMenu(this);
 
+    // P5-1: top-level Settings... entry — opens consolidated panel
+    auto* settingsAct = menu->addAction("Settings...");
+    connect(settingsAct, &QAction::triggered, this, &ComicReader::showSettingsPanel);
+
+    // P6-2: top-level Page Thumbnails... entry — opens modal grid
+    auto* thumbsAct = menu->addAction("Page Thumbnails...");
+    connect(thumbsAct, &QAction::triggered, this, &ComicReader::showThumbsPanel);
+    menu->addSeparator();
+
     // C1: Double-page specific items (spread toggle, gutter shadow)
     if (m_isDoublePage) {
         bool isSpread = resolveSpread(m_currentPage);
@@ -2372,6 +3287,46 @@ void ComicReader::contextMenuEvent(QContextMenuEvent* event)
                 saveSeriesSettings();
             });
         }
+        menu->addSeparator();
+    }
+
+    // P3-1: ScrollStrip-specific — side padding (webtoon comfort bars)
+    if (m_isScrollStrip) {
+        QMenu* padMenu = menu->addMenu("Side Padding");
+        for (int preset : SIDE_PADDING_PRESETS) {
+            QString label;
+            if (preset == 0)        label = "Off";
+            else if (preset <= 40)  label = QString("Small (%1px)").arg(preset);
+            else if (preset <= 80)  label = QString("Medium (%1px)").arg(preset);
+            else if (preset <= 120) label = QString("Large (%1px)").arg(preset);
+            else                    label = QString("X-Large (%1px)").arg(preset);
+            if (preset == m_stripSidePadding) label += " *";
+            auto* act = padMenu->addAction(label);
+            int v = preset;
+            connect(act, &QAction::triggered, this, [this, v]() {
+                m_stripSidePadding = v;
+                if (m_stripCanvas) {
+                    m_stripCanvas->setSidePadding(m_stripSidePadding);
+                    refreshVisibleStripPages();
+                }
+                saveSeriesSettings();
+            });
+        }
+
+        // P3-3: Split wide pages — ScrollStrip-only toggle
+        auto* splitAct = menu->addAction(m_splitOnWide
+            ? "Split Wide Pages: On *"
+            : "Split Wide Pages: Off");
+        connect(splitAct, &QAction::triggered, this, [this]() {
+            m_splitOnWide = !m_splitOnWide;
+            if (m_stripCanvas) {
+                m_stripCanvas->setSplitOnWide(m_splitOnWide);
+                refreshVisibleStripPages();
+            }
+            saveSeriesSettings();
+            showToast(m_splitOnWide ? "Split Wide Pages: On" : "Split Wide Pages: Off");
+        });
+
         menu->addSeparator();
     }
 
@@ -2415,6 +3370,56 @@ void ComicReader::contextMenuEvent(QContextMenuEvent* event)
         saveSeriesSettings();
     });
 
+    // P2-1: Image Filters submenu (Batch 2.1 ships brightness only)
+    QMenu* filtersMenu = menu->addMenu("Image Filters");
+    QMenu* brightnessMenu = filtersMenu->addMenu("Brightness");
+    for (int preset : BRIGHTNESS_PRESETS) {
+        QString label;
+        if (preset == 0)      label = "Off";
+        else if (preset > 0)  label = QString("+%1").arg(preset);
+        else                  label = QString::number(preset);
+        if (preset == m_filterBrightness) label += " *";
+        auto* act = brightnessMenu->addAction(label);
+        int v = preset;
+        connect(act, &QAction::triggered, this, [this, v]() {
+            m_filterBrightness = v;
+            m_displayCachePage = -1;  // invalidate paged cache
+            if (m_stripCanvas) {
+                m_stripCanvas->setFilterBrightness(m_filterBrightness);
+                if (m_isScrollStrip) refreshVisibleStripPages();  // re-feed decoded pages through new filter
+            }
+            displayCurrentPage();
+            saveSeriesSettings();
+        });
+    }
+
+    // P3-2: Crop Borders toggle — all modes. Full re-decode on toggle
+    // because the crop happens at decode time (page meta + cache keyed on
+    // post-crop dims), so flipping requires pages to be re-crunched.
+    auto* cropAct = menu->addAction(m_cropBorders ? "Crop Borders: On *" : "Crop Borders: Off");
+    connect(cropAct, &QAction::triggered, this, [this]() {
+        m_cropBorders = !m_cropBorders;
+        // Wipe everything so decoded pages re-enter through the new crop path
+        m_cache.clear();
+        m_currentPixmap = QPixmap();
+        m_secondPixmap = QPixmap();
+        m_displayCachePage = -1;
+        for (auto& meta : m_pageMeta) meta.decoded = false;
+        if (m_stripCanvas) m_stripCanvas->invalidateScaledCache();
+
+        if (m_isScrollStrip) {
+            refreshVisibleStripPages();
+        } else {
+            requestDecode(m_currentPage);
+            if (m_isDoublePage) {
+                auto* pair = pairForPage(m_currentPage);
+                if (pair && pair->leftIndex >= 0) requestDecode(pair->leftIndex);
+            }
+        }
+        saveSeriesSettings();
+        showToast(m_cropBorders ? "Crop Borders: On" : "Crop Borders: Off");
+    });
+
     menu->addSeparator();
 
     // C1: Copy/Reveal — all modes
@@ -2445,6 +3450,10 @@ void ComicReader::resizeEvent(QResizeEvent* event)
         m_endOverlay->setGeometry(0, 0, width(), height());
     if (m_volOverlay && m_volOverlay->isVisible())
         m_volOverlay->setGeometry(0, 0, width(), height());
+    if (m_settingsOverlay && m_settingsOverlay->isVisible())
+        m_settingsOverlay->setGeometry(0, 0, width(), height());  // P5-1
+    if (m_thumbsOverlay && m_thumbsOverlay->isVisible())
+        m_thumbsOverlay->setGeometry(0, 0, width(), height());    // P6-2
     if (m_gotoScrim && m_gotoScrim->isVisible())
         m_gotoScrim->setGeometry(0, 0, width(), height());
     if (m_leftArrow)  m_leftArrow->setGeometry(0, 0, 60, height());
@@ -2463,10 +3472,8 @@ void ComicReader::resizeEvent(QResizeEvent* event)
     }
 }
 
-void ComicReader::mouseMoveEvent(QMouseEvent* event)
+void ComicReader::handleCursorActivity(const QPoint& posInReader)
 {
-    QWidget::mouseMoveEvent(event);
-
     // Show cursor on any movement
     setCursor(Qt::ArrowCursor);
 
@@ -2481,13 +3488,32 @@ void ComicReader::mouseMoveEvent(QMouseEvent* event)
 
     // Edge proximity: show HUD when mouse is within 60px of bottom edge
     // Only if HUD is hidden, not explicitly toggled off, and cooldown expired
-    int bottomDist = height() - event->pos().y();
+    int bottomDist = height() - posInReader.y();
     if (bottomDist <= 60 && !m_toolbar->isVisible() && !m_edgeCooldown) {
         m_edgeCooldown = true;
         m_hudExplicitlyHidden = false;  // edge hover overrides explicit hide
         showToolbar();
         QTimer::singleShot(600, this, [this]() { m_edgeCooldown = false; });
     }
+}
+
+bool ComicReader::eventFilter(QObject* watched, QEvent* event)
+{
+    // Relay mouse-move events from content child widgets (scroll area, viewport,
+    // image label, scroll strip canvas) so bottom-edge HUD reveal fires even when
+    // the cursor is over the comic content (where ComicReader::mouseMoveEvent
+    // would otherwise never fire).
+    if (event->type() == QEvent::MouseMove) {
+        handleCursorActivity(mapFromGlobal(QCursor::pos()));
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ComicReader::mouseMoveEvent(QMouseEvent* event)
+{
+    QWidget::mouseMoveEvent(event);
+
+    handleCursorActivity(event->pos());
 
     // I1: horizontal pan drag in double-page zoomed mode
     if (m_panDragging) {
@@ -2511,22 +3537,26 @@ void ComicReader::mouseMoveEvent(QMouseEvent* event)
 
 bool ComicReader::isAnyOverlayOpen() const
 {
-    if (m_endOverlay    && m_endOverlay->isVisible())    return true;
-    if (m_volOverlay    && m_volOverlay->isVisible())    return true;
-    if (m_gotoOverlay   && m_gotoOverlay->isVisible())   return true;
-    if (m_keysOverlay   && m_keysOverlay->isVisible())   return true;
-    if (m_verticalThumb && m_verticalThumb->isDragging()) return true;
+    if (m_endOverlay      && m_endOverlay->isVisible())      return true;
+    if (m_volOverlay      && m_volOverlay->isVisible())      return true;
+    if (m_gotoOverlay     && m_gotoOverlay->isVisible())     return true;
+    if (m_keysOverlay     && m_keysOverlay->isVisible())     return true;
+    if (m_settingsOverlay && m_settingsOverlay->isVisible()) return true;  // P5-4
+    if (m_thumbsOverlay   && m_thumbsOverlay->isVisible())   return true;  // P6-2
+    if (m_verticalThumb   && m_verticalThumb->isDragging())  return true;
     return false;
 }
 
 // F2: Close all overlays — ensures only one is ever visible at a time
 void ComicReader::closeAllOverlays()
 {
-    if (m_volOverlay  && m_volOverlay->isVisible())  m_volOverlay->hide();
-    if (m_gotoOverlay && m_gotoOverlay->isVisible()) m_gotoOverlay->hide();
-    if (m_gotoScrim   && m_gotoScrim->isVisible())   m_gotoScrim->hide();
-    if (m_keysOverlay && m_keysOverlay->isVisible())  m_keysOverlay->hide();
-    if (m_endOverlay  && m_endOverlay->isVisible())   m_endOverlay->hide();
+    if (m_volOverlay      && m_volOverlay->isVisible())      m_volOverlay->hide();
+    if (m_gotoOverlay     && m_gotoOverlay->isVisible())     m_gotoOverlay->hide();
+    if (m_gotoScrim       && m_gotoScrim->isVisible())       m_gotoScrim->hide();
+    if (m_keysOverlay     && m_keysOverlay->isVisible())     m_keysOverlay->hide();
+    if (m_endOverlay      && m_endOverlay->isVisible())      m_endOverlay->hide();
+    if (m_settingsOverlay && m_settingsOverlay->isVisible()) m_settingsOverlay->hide();  // P5-1
+    if (m_thumbsOverlay   && m_thumbsOverlay->isVisible())   m_thumbsOverlay->hide();    // P6-2
 }
 
 void ComicReader::toggleKeysOverlay()
@@ -2698,12 +3728,22 @@ void ComicReader::resetSeriesSettings()
     m_scalingQuality = Qt::SmoothTransformation;
     m_zoomPct = 100;
     m_panX = 0;
+    m_filterBrightness = 0;  // P2-1
+    m_stripSidePadding = 0;  // P3-1
+    m_cropBorders = false;   // P3-2
+    m_splitOnWide = false;   // P3-3
     // Rebuild UI state
     clearScrollStrip();
     m_imageLabel->show();
     invalidatePairing();
     m_portraitBtn->setVisible(true);
     m_modeBtn->setText("Single");
+    if (m_stripCanvas) {
+        m_stripCanvas->setFilterBrightness(0);
+        m_stripCanvas->setSidePadding(0);
+        m_stripCanvas->setSplitOnWide(false);
+    }
+    m_displayCachePage = -1;
     displayCurrentPage();
     showToast("Series settings reset");
 }
@@ -2717,6 +3757,14 @@ void ComicReader::saveSeriesSettings()
     s.setValue(k + "/couplingPhase",    m_couplingPhase);
     s.setValue(k + "/gutterShadow",     m_gutterShadow);
     s.setValue(k + "/scalingQuality",   m_scalingQuality == Qt::SmoothTransformation ? 0 : 1);
+    s.setValue(k + "/rtl",              m_rtl);
+    s.setValue(k + "/fitMode",          static_cast<int>(m_fitMode));
+    s.setValue(k + "/memorySaver",      m_memorySaver);
+    s.setValue(k + "/zoomPct",          m_zoomPct);
+    s.setValue(k + "/filter_brightness", m_filterBrightness);
+    s.setValue(k + "/strip_side_padding", m_stripSidePadding);
+    s.setValue(k + "/crop_borders",      m_cropBorders);
+    s.setValue(k + "/split_on_wide",     m_splitOnWide);
 
     // F1: Write last-saved as migration seed for new series
     QVariantMap last;
@@ -2725,6 +3773,14 @@ void ComicReader::saveSeriesSettings()
     last["couplingPhase"]    = m_couplingPhase;
     last["gutterShadow"]     = m_gutterShadow;
     last["scalingQuality"]   = m_scalingQuality == Qt::SmoothTransformation ? 0 : 1;
+    last["rtl"]              = m_rtl;
+    last["fitMode"]          = static_cast<int>(m_fitMode);
+    last["memorySaver"]      = m_memorySaver;
+    last["zoomPct"]          = m_zoomPct;
+    last["filter_brightness"] = m_filterBrightness;
+    last["strip_side_padding"] = m_stripSidePadding;
+    last["crop_borders"]      = m_cropBorders;
+    last["split_on_wide"]     = m_splitOnWide;
     s.setValue("last_saved_series_settings", last);
 }
 
@@ -2750,6 +3806,24 @@ void ComicReader::applySeriesSettings()
                 m_gutterShadow = last["gutterShadow"].toDouble();
             if (last.contains("scalingQuality"))
                 m_scalingQuality = last["scalingQuality"].toInt() == 1 ? Qt::FastTransformation : Qt::SmoothTransformation;
+            if (last.contains("rtl"))
+                m_rtl = last["rtl"].toBool();
+            if (last.contains("fitMode")) {
+                int fm = last["fitMode"].toInt();
+                if (fm >= 0 && fm <= 2) m_fitMode = static_cast<FitMode>(fm);
+            }
+            if (last.contains("memorySaver"))
+                m_memorySaver = last["memorySaver"].toBool();
+            if (last.contains("zoomPct"))
+                m_zoomPct = qBound(100, last["zoomPct"].toInt(), 260);
+            if (last.contains("filter_brightness"))
+                m_filterBrightness = qBound(-100, last["filter_brightness"].toInt(), 100);
+            if (last.contains("strip_side_padding"))
+                m_stripSidePadding = qBound(0, last["strip_side_padding"].toInt(), 400);
+            if (last.contains("crop_borders"))
+                m_cropBorders = last["crop_borders"].toBool();
+            if (last.contains("split_on_wide"))
+                m_splitOnWide = last["split_on_wide"].toBool();
         }
         return;
     }
@@ -2767,4 +3841,16 @@ void ComicReader::applySeriesSettings()
     m_gutterShadow = s.value(k + "/gutterShadow", m_gutterShadow).toDouble();
     int sq = s.value(k + "/scalingQuality", 0).toInt();
     m_scalingQuality = (sq == 1) ? Qt::FastTransformation : Qt::SmoothTransformation;
+
+    m_rtl = s.value(k + "/rtl", m_rtl).toBool();
+    int fm = s.value(k + "/fitMode", static_cast<int>(m_fitMode)).toInt();
+    if (fm >= 0 && fm <= 2) m_fitMode = static_cast<FitMode>(fm);
+    m_memorySaver = s.value(k + "/memorySaver", m_memorySaver).toBool();
+    m_zoomPct = qBound(100, s.value(k + "/zoomPct", m_zoomPct).toInt(), 260);
+    m_filterBrightness = qBound(-100,
+        s.value(k + "/filter_brightness", m_filterBrightness).toInt(), 100);
+    m_stripSidePadding = qBound(0,
+        s.value(k + "/strip_side_padding", m_stripSidePadding).toInt(), 400);
+    m_cropBorders = s.value(k + "/crop_borders", m_cropBorders).toBool();
+    m_splitOnWide = s.value(k + "/split_on_wide", m_splitOnWide).toBool();
 }

@@ -308,6 +308,12 @@ void TileStrip::mousePressEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton) {
         if (card) {
             selectTile(card, event->modifiers());
+            // Only emit single-click activation on an unmodified left-click —
+            // Ctrl/Shift/Alt are reserved for multi-select semantics and must
+            // not open detail views.
+            if (event->modifiers() == Qt::NoModifier) {
+                emit tileSingleClicked(card);
+            }
         } else {
             clearSelection();
         }

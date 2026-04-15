@@ -5,16 +5,22 @@
 #include "ui/player/FrameCanvas.h"
 #include "ui/player/VolumeHud.h"
 #include "ui/player/CenterFlash.h"
-#include "ui/player/ShortcutsOverlay.h"
+#include "ui/player/KeybindingEditor.h"
+#include "ui/player/StatsBadge.h"
 #include "ui/player/PlaylistDrawer.h"
 #include "ui/player/ToastHud.h"
 #include "ui/player/EqualizerPopover.h"
 #include "ui/player/FilterPopover.h"
 #include "ui/player/TrackPopover.h"
 #include "ui/player/SubtitleOverlay.h"
+#include "ui/player/SubtitleMenu.h"
+#include "ui/player/OpenUrlDialog.h"
+#include "ui/player/PlayerUtils.h"
 #include "ui/player/SeekSlider.h"
 #include "ui/player/VideoContextMenu.h"
 #include "core/CoreBridge.h"
+
+#include <cmath>   // std::abs — Batch 4.1 audio-speed ticker deadband
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -26,7 +32,16 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QPushButton>
+#include <QRandomGenerator>
+#include <QScreen>
+#include <QStandardPaths>
 #include <QCryptographicHash>
 #include <QMenu>
 #include <QContextMenuEvent>
@@ -135,6 +150,9 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     setMouseTracking(true);
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet("background: #000000;");
+    // VIDEO_PLAYER_FIX Batch 4.3 — opt into Qt's drag-drop machinery so
+    // dragEnterEvent / dropEvent fire on the player surface.
+    setAcceptDrops(true);
 
     m_playIcon     = iconFromSvg(SVG_PLAY);
     m_pauseIcon    = iconFromSvg(SVG_PAUSE);
@@ -168,6 +186,20 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
             m_sidecar->sendSeek(m_pendingSeekVal / 10000.0 * m_durationSec);
     });
 
+    // VIDEO_PLAYER_FIX Batch 3.1 — restore persisted always-on-top state.
+    // Just read the bool here; actual WindowStaysOnTopHint application
+    // defers to the first showEvent because window() isn't guaranteed to
+    // have a native handle yet, and setWindowFlag + show() during parent
+    // construction races the shell's own initial show sequence.
+    m_alwaysOnTop = QSettings("Tankoban", "Tankoban")
+        .value("player/alwaysOnTop", false).toBool();
+
+    // VIDEO_PLAYER_FIX Batch 7.1 — restore stats badge toggle. Applied
+    // lazily on the first firstFrame event (no source metadata before
+    // that, so showing the badge earlier would render empty).
+    m_showStats = QSettings("Tankoban", "Tankoban")
+        .value("player/showStats", false).toBool();
+
     // Sidecar events
     connect(m_sidecar, &SidecarProcess::ready,        this, &VideoPlayer::onSidecarReady);
     connect(m_sidecar, &SidecarProcess::firstFrame,   this, &VideoPlayer::onFirstFrame);
@@ -176,12 +208,43 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     connect(m_sidecar, &SidecarProcess::tracksChanged,  this, &VideoPlayer::onTracksChanged);
     connect(m_sidecar, &SidecarProcess::endOfFile,    this, &VideoPlayer::onEndOfFile);
     connect(m_sidecar, &SidecarProcess::errorOccurred, this, &VideoPlayer::onError);
+    connect(m_sidecar, &SidecarProcess::processCrashed, this, &VideoPlayer::onSidecarCrashed);
 
-    // Subtitle overlay signals (Batch H)
-    connect(m_sidecar, &SidecarProcess::subtitleText, this, [this](const QString& text) {
-        m_subOverlay->setText(text);
+    // Batch 6.3 — non-fatal decode errors get a throttled toast. Corrupted
+    // files can produce many per second; one toast every 3 s is enough to
+    // communicate "something's wrong, we're skipping past it" without
+    // spamming the UI. Throttle state lives in onDecodeError's static local.
+    connect(m_sidecar, &SidecarProcess::decodeError, this,
+            [this](const QString& code, const QString& message, bool recoverable) {
+        debugLog(QString("[VideoPlayer] decode_error code=%1 msg=%2 recoverable=%3")
+                 .arg(code, message).arg(recoverable ? "yes" : "no"));
+        if (!recoverable) return;  // fatal path comes through errorOccurred
+        static qint64 lastToastMs = 0;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastToastMs < 3000) return;
+        lastToastMs = now;
+        m_toastHud->showToast("Skipping corrupt frame…");
     });
+
+    // Batch 6.1 — single-shot restart timer drives backoff between respawns.
+    m_sidecarRestartTimer.setSingleShot(true);
+    connect(&m_sidecarRestartTimer, &QTimer::timeout, this, &VideoPlayer::restartSidecar);
+
+    // SubtitleOverlay QLabel is unused under the current native sidecar
+    // renderer (libass frame-blend at native_sidecar/src/subtitle_renderer.cpp
+    // render_blend composites subs into the video BGRA frame, not via a
+    // separate subtitle_text event). Dead subtitleText→setText connect
+    // removed 2026-04-15 post-Agent-7 audit. SubtitleOverlay class kept
+    // in place for a potential future text-fallback path.
     connect(m_sidecar, &SidecarProcess::subVisibilityChanged, this, [this](bool visible) {
+        // VIDEO_PLAYER_FIX Batch 1.2 — keep m_subsVisible coherent with
+        // sidecar renderer state. SubtitleMenu's Off path goes through
+        // SidecarProcess::sendSetSubtitleTrack(-1) → sendSetSubVisibility(false)
+        // which emits this signal; pre-fix, VideoPlayer's m_subsVisible
+        // stayed stale (still true) after a SubtitleMenu Off, so pressing T
+        // (toggleSubtitles) did the wrong flip. Now we mirror sidecar state
+        // on every signal, regardless of which code path drove the change.
+        m_subsVisible = visible;
         if (!visible)
             m_subOverlay->setText("");
     });
@@ -198,9 +261,16 @@ VideoPlayer::~VideoPlayer()
 // ── Public ──────────────────────────────────────────────────────────────────
 
 void VideoPlayer::openFile(const QString& filePath,
-                            const QStringList& playlist, int playlistIndex)
+                            const QStringList& playlist, int playlistIndex,
+                            double startPositionSec)
 {
     debugLog("[VideoPlayer] openFile: " + filePath);
+
+    // VIDEO_PLAYER_FIX Batch 4.2 — record user intent in the recents list
+    // before any side effects. Crash-recovery restart (SidecarProcess
+    // respawn after processCrashed) runs through `restartSidecar()` which
+    // does NOT call openFile, so recents aren't duplicated on recovery.
+    pushRecentFile(filePath);
 
     // Stop any current playback
     stopPlayback();
@@ -222,14 +292,37 @@ void VideoPlayer::openFile(const QString& filePath,
     }
     m_pendingFile = filePath;
     m_paused = false;
+    // Batch 6.1 — fresh user intent clears crash-retry state.
+    m_sidecarRetryCount = 0;
+    m_lastKnownPosSec   = 0.0;
+    m_sidecarRestartTimer.stop();
+    // Fresh file — re-apply preferences on the next tracks_changed.
+    m_tracksRestored = false;
+    // Reset aspect override: each new file starts with "Original" so the
+    // native source aspect applies. Otherwise a prior file's manual pick
+    // (e.g., forced 16:9) would persist and stretch / letterbox the new
+    // source wrong. User can still override via the Aspect Ratio submenu.
+    m_currentAspect = QStringLiteral("original");
+    if (m_canvas) m_canvas->setForcedAspectRatio(0.0);
     // Repopulate playlist drawer (reflects new current episode)
     if (m_playlistDrawer)
         m_playlistDrawer->populate(m_playlist, m_playlistIdx);
     updateEpisodeButtons();
 
-    // Check for saved progress — resume from last position
+    // Check for saved progress — resume from last position.
+    //
+    // Two entry paths:
+    //   1. Caller-supplied startPositionSec > 0 — Stream-mode feeds the resume
+    //      offset from the "stream" progress domain (Phase 1 Batch 1.3 of
+    //      STREAM_UX_PARITY). Honored regardless of PersistenceMode so the
+    //      None-mode stream-playback flow can still resume.
+    //   2. Otherwise the existing PersistenceMode::LibraryVideos gate runs:
+    //      Videos-mode reads from "videos" domain; None mode leaves the
+    //      pending seek at 0.0.
     m_pendingStartSec = 0.0;
-    if (m_bridge) {
+    if (startPositionSec > 0.0) {
+        m_pendingStartSec = startPositionSec;
+    } else if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
         QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
         double savedPos = prog.value("positionSec").toDouble(0);
         double savedDur = prog.value("durationSec").toDouble(0);
@@ -240,8 +333,13 @@ void VideoPlayer::openFile(const QString& filePath,
     updatePlayPauseIcon();
 
     if (m_sidecar->isRunning()) {
+        // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 side-carry — pass
+        // m_pendingStartSec on the warm-sidecar path too. Pre-fix, only
+        // the cold onSidecarReady path passed it, so warm-restart resumes
+        // landed at 0:00 instead of the saved offset (Agent 7 audit
+        // flagged at tankostream_playback_2026-04-15.md, hypothesis 5).
         debugLog("[VideoPlayer] sidecar already running, sending open directly");
-        m_sidecar->sendOpen(filePath);
+        m_sidecar->sendOpen(filePath, m_pendingStartSec);
     } else {
         debugLog("[VideoPlayer] starting sidecar...");
         m_sidecar->start();
@@ -252,8 +350,13 @@ void VideoPlayer::openFile(const QString& filePath,
 
 void VideoPlayer::stopPlayback()
 {
+    // Batch 6.1 — cancel any pending crash-recovery respawn. User-driven
+    // stop supersedes in-flight auto-restart.
+    m_sidecarRestartTimer.stop();
+
     m_canvas->stopPolling();
     m_canvas->detachShm();
+    m_canvas->detachD3D11Texture();  // release imported shared texture
     m_reader->detach();
 
     if (m_sidecar->isRunning()) {
@@ -261,12 +364,48 @@ void VideoPlayer::stopPlayback()
         // Give sidecar a moment to stop audio, then shut it down
         m_sidecar->sendShutdown();
     }
+
+    // Reset cached track lists so the next file's tracks_changed event
+    // populates a fresh authoritative list. Without this, merge-on-update
+    // (see onTracksChanged) would carry stale entries across file changes.
+    m_audioTracks = {};
+    m_subTracks   = {};
+
+    // Batch 5.3 — clear Tankostream external subs so the next stream/file
+    // doesn't inherit a stale addon track list in the SubtitleMenu.
+    if (m_subMenu) m_subMenu->setExternalTracks({}, {});
+}
+
+void VideoPlayer::setExternalSubtitleTracks(
+    const QList<tankostream::addon::SubtitleTrack>& tracks,
+    const QHash<QString, QString>& originByTrackKey)
+{
+    if (!m_subMenu) return;
+    m_subMenu->setExternalTracks(tracks, originByTrackKey);
+}
+
+void VideoPlayer::setPersistenceMode(PersistenceMode mode)
+{
+    // Small accessor with no side effects beyond the mode field.
+    // Callers (today: StreamPage for Tankostream Phase 5) set None
+    // before openFile and reset to LibraryVideos on close. Effect is
+    // picked up at the NEXT bridge read/write inside this class —
+    // flipping mode during active playback affects subsequent ticks,
+    // not retroactively.
+    m_persistenceMode = mode;
 }
 
 // ── Sidecar event handlers ──────────────────────────────────────────────────
 
 void VideoPlayer::onSidecarReady()
 {
+    // VIDEO_PLAYER_FIX Batch 5.1 — push persisted loop-file state to the
+    // freshly-ready sidecar before sending open, so the first file honors
+    // the toggle. Pre-5.1 sidecar binaries treat this as NOT_IMPLEMENTED;
+    // harmless (SidecarProcess swallows).
+    if (m_playlistDrawer && m_playlistDrawer->loopFile())
+        m_sidecar->sendSetLoopFile(true);
+
     // Per-device audio offset is now applied in the mediaInfo handler
     // (which fires after open() reports the active audio device).
     if (!m_pendingFile.isEmpty()) {
@@ -277,11 +416,33 @@ void VideoPlayer::onSidecarReady()
 void VideoPlayer::onFirstFrame(const QJsonObject& payload)
 {
     debugLog("[VideoPlayer] onFirstFrame: " + QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    // Batch 6.1 — first frame after a crash-recovery restart confirms the
+    // respawn succeeded; clear the retry counter so future crashes start
+    // a fresh 3-attempt budget.
+    m_sidecarRetryCount = 0;
     QString shmName  = payload["shmName"].toString();
     int slotCount    = payload["slotCount"].toInt(4);
     int w            = payload["width"].toInt();
     int h            = payload["height"].toInt();
     int slotBytes    = payload["slotBytes"].toInt(w * h * 4);
+
+    // VIDEO_PLAYER_FIX Batch 7.1 — stash source metadata for the stats
+    // badge. fps arrives from the sidecar probe (Batch 7.1 sidecar
+    // change); pre-7.1 sidecar binaries don't emit it so we default to
+    // 0.0 and the badge renders "— fps".
+    m_statsCodec  = payload.value("codec").toString();
+    m_statsWidth  = w;
+    m_statsHeight = h;
+    m_statsFps    = payload.value("fps").toDouble(0.0);
+    if (m_showStats && m_statsBadge) {
+        m_statsBadge->show();
+        m_statsBadge->raise();
+        const quint64 drops = m_canvas ? m_canvas->framesSkipped()
+                                       : static_cast<quint64>(-1);
+        m_statsBadge->setStats(m_statsCodec, m_statsWidth, m_statsHeight,
+                               m_statsFps, drops);
+        if (!m_statsTicker.isActive()) m_statsTicker.start();
+    }
 
     if (shmName.isEmpty())
         return;
@@ -299,6 +460,9 @@ void VideoPlayer::onFirstFrame(const QJsonObject& payload)
 void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
 {
     if (m_seeking) return;
+
+    // Batch 6.1 — stash last clean position for crash-recovery resume.
+    m_lastKnownPosSec = positionSec;
 
     m_durationSec = durationSec;
     m_seekBar->setDurationSec(durationSec);
@@ -329,8 +493,50 @@ void VideoPlayer::onStateChanged(const QString& state)
 
 void VideoPlayer::onEndOfFile()
 {
-    // Auto-advance to next episode if available and enabled
-    if (!m_playlist.isEmpty() && m_playlistIdx < m_playlist.size() - 1
+    // VIDEO_PLAYER_FIX Batch 5.1 — queue-mode precedence at EOF:
+    //   loopFile > repeatOne > (atEnd + repeatAll) > shuffle > auto-advance.
+    // loopFile normally short-circuits sidecar-side — we never see the
+    // `eof` event when the sidecar is doing the seek-to-0 itself — but
+    // pre-5.1 sidecar binaries don't support set_loop_file and will still
+    // emit eof, so handle it client-side for compatibility. Single seek.
+    if (m_playlistDrawer && m_playlistDrawer->loopFile()) {
+        m_sidecar->sendSeek(0.0);
+        return;
+    }
+    if (m_playlistDrawer && m_playlistDrawer->repeatOne()) {
+        m_sidecar->sendSeek(0.0);
+        return;
+    }
+
+    const bool havePlaylist = !m_playlist.isEmpty();
+    const bool atEnd = havePlaylist && (m_playlistIdx >= m_playlist.size() - 1);
+
+    if (havePlaylist && atEnd && m_playlistDrawer && m_playlistDrawer->repeatAll()
+        && m_playlist.size() > 1) {
+        // Wrap to the top of the queue.
+        m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
+        m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        openFile(m_playlist.at(0), m_playlist, 0);
+        return;
+    }
+
+    if (havePlaylist && m_playlistDrawer && m_playlistDrawer->shuffle()
+        && m_playlist.size() > 1) {
+        // Pick a random other index — bounded retry avoids the 1/N chance
+        // of repeatedly picking the current one on a tiny queue.
+        int next = m_playlistIdx;
+        for (int i = 0; i < 4 && next == m_playlistIdx; ++i)
+            next = QRandomGenerator::global()->bounded(m_playlist.size());
+        if (next == m_playlistIdx)
+            next = (m_playlistIdx + 1) % m_playlist.size();
+        m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
+        m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        openFile(m_playlist.at(next), m_playlist, next);
+        return;
+    }
+
+    // Default: existing auto-advance behavior.
+    if (havePlaylist && m_playlistIdx < m_playlist.size() - 1
         && m_playlistDrawer->isAutoAdvance()) {
         nextEpisode();
         return;
@@ -346,11 +552,110 @@ void VideoPlayer::onError(const QString& message)
     m_toastHud->showToast(message);
 }
 
+// ── Batch 6.1 — sidecar crash auto-restart ─────────────────────────────────
+//
+// Sidecar is an external process (ffmpeg_sidecar.exe) — a crash, OS kill,
+// or TDR-style GPU reset can take it down mid-playback. We respawn it
+// up to 3 times with 250/500/1000 ms backoff and reopen the current file
+// at the last known PTS. After 3 failures we give up and surface the
+// error so the user can intervene (restart Tankoban, check logs).
+
+void VideoPlayer::onSidecarCrashed(int exitCode, QProcess::ExitStatus status)
+{
+    debugLog(QString("[VideoPlayer] sidecar crashed: exit=%1 status=%2 retry=%3 file=%4")
+             .arg(exitCode).arg(status == QProcess::NormalExit ? "normal" : "crash")
+             .arg(m_sidecarRetryCount).arg(m_currentFile));
+
+    // Canvas and SHM reader are pointing at a dead producer — detach so
+    // the next first_frame event can re-attach to the fresh sidecar's SHM.
+    m_canvas->stopPolling();
+    m_canvas->detachShm();
+    m_canvas->detachD3D11Texture();
+    m_reader->detach();
+
+    // Nothing was playing (crash during idle) — no recovery possible or needed.
+    if (m_currentFile.isEmpty()) {
+        return;
+    }
+
+    if (m_sidecarRetryCount >= 3) {
+        m_toastHud->showToast("Player stopped — reconnection failed");
+        m_sidecarRetryCount = 0;
+        return;
+    }
+
+    // Exponential backoff: 250 ms, 500 ms, 1000 ms.
+    static constexpr int kBackoffMs[3] = { 250, 500, 1000 };
+    const int delay = kBackoffMs[m_sidecarRetryCount];
+    m_toastHud->showToast("Reconnecting player…");
+    m_sidecarRestartTimer.start(delay);
+}
+
+void VideoPlayer::restartSidecar()
+{
+    if (m_currentFile.isEmpty()) return;
+
+    ++m_sidecarRetryCount;
+    m_pendingFile     = m_currentFile;
+    m_pendingStartSec = m_lastKnownPosSec;
+    // Crash respawn re-opens from scratch; let the next tracks_changed
+    // re-apply preferences (user's mid-playback track is lost otherwise).
+    m_tracksRestored  = false;
+    debugLog(QString("[VideoPlayer] restarting sidecar attempt %1 at pos %2s")
+             .arg(m_sidecarRetryCount).arg(m_pendingStartSec, 0, 'f', 2));
+    m_sidecar->start();
+}
+
 // ── UI ──────────────────────────────────────────────────────────────────────
 
 void VideoPlayer::buildUI()
 {
     m_canvas = new FrameCanvas(this);
+
+    // Batch 1.2 — hand FrameCanvas a pointer to the master SyncClock so it
+    // can call reportFrameLatency() after each Present. Phase 4 reads the
+    // accumulated velocity to drive sidecar audio-speed adjustment.
+    m_canvas->setSyncClock(&m_syncClock);
+    m_syncClock.start();
+
+    // Batch 4.1 (Player Polish Phase 4) — wire the drift-correction loop.
+    // The SyncClock.reportFrameLatency path (shipped in Phase 1) feeds an
+    // EMA that derives a clock velocity in [0.995, 1.000]. Previously
+    // nobody consumed that velocity — today it becomes a live control
+    // signal: every 500ms, read the current velocity and if it has moved
+    // past the deadband (0.0005 = 0.05%) since last send, push it to the
+    // sidecar via sendSetAudioSpeed. Sidecar's SwrContext applies
+    // swr_set_compensation to pad/drop samples, closing the Kodi-DVDClock-
+    // style A/V feedback loop end-to-end.
+    m_audioSpeedTicker.setInterval(500);
+    m_audioSpeedTicker.setTimerType(Qt::CoarseTimer);
+    connect(&m_audioSpeedTicker, &QTimer::timeout, this, [this]() {
+        if (!m_sidecar || !m_sidecar->isRunning()) return;
+        const double speed = m_syncClock.getClockVelocity();
+        // Deadband to avoid spamming the sidecar with sub-audible changes.
+        // 0.0005 = 0.05% ≈ one imperceptible adjustment per tick threshold.
+        if (std::abs(speed - m_lastSentAudioSpeed) < 0.0005) return;
+        m_sidecar->sendSetAudioSpeed(speed);
+        m_lastSentAudioSpeed = speed;
+    });
+    m_audioSpeedTicker.start();
+
+    // FrameCanvas is a native D3D11 HWND (WA_PaintOnScreen) — mouse events
+    // don't bubble to VideoPlayer. Forward via signal carrying y position.
+    // Cursor unhide on any move; HUD reveal only when cursor enters the
+    // bottom-edge zone.
+    connect(m_canvas, &FrameCanvas::mouseActivityAt, this, [this](int y) {
+        // Always: unhide cursor + arm cursor auto-hide.
+        setCursor(Qt::ArrowCursor);
+        m_cursorTimer.start();
+        // HUD reveal only when cursor is within the bottom-edge zone. Zone
+        // is the control-bar height plus a small margin so the bar appears
+        // before the cursor reaches it.
+        constexpr int kBottomRevealZonePx = 120;
+        if (y >= m_canvas->height() - kBottomRevealZonePx) {
+            showControls();
+        }
+    });
 
     m_controlBar = new QWidget(this);
     m_controlBar->setObjectName("VideoControlBar");
@@ -453,9 +758,29 @@ void VideoPlayer::buildUI()
     connect(m_seekBar, &SeekSlider::hoverPositionChanged, this, [this](double fraction) {
         if (m_durationSec > 0) {
             double sec = fraction * m_durationSec;
-            m_timeBubble->setText(formatTime(static_cast<qint64>(sec * 1000)));
+            QString label = formatTime(static_cast<qint64>(sec * 1000));
             QRect sliderGeo = m_seekBar->geometry();
             QPoint barPos = m_controlBar->pos();
+            // VIDEO_PLAYER_FIX Batch 2.1 — if cursor is within 8 px of a
+            // chapter tick, prefix the tooltip with the chapter title
+            // ("Chapter Title · 12:34"). Tolerance scales to slider pixel
+            // width so short videos with tight ticks don't over-select.
+            if (!m_chapters.isEmpty() && sliderGeo.width() > 0) {
+                const double pixelTolFrac = 8.0 / sliderGeo.width();
+                for (const auto& cv : m_chapters) {
+                    const QJsonObject ch = cv.toObject();
+                    const double startSec = ch.value("start").toDouble();
+                    const double startFrac = startSec / m_durationSec;
+                    if (std::fabs(fraction - startFrac) <= pixelTolFrac) {
+                        QString title = ch.value("title").toString();
+                        if (title.isEmpty())
+                            title = QStringLiteral("Chapter");
+                        label = title + QStringLiteral(" · ") + label;
+                        break;
+                    }
+                }
+            }
+            m_timeBubble->setText(label);
             int handleX = sliderGeo.x() + barPos.x()
                 + static_cast<int>(fraction * sliderGeo.width());
             int bw = m_timeBubble->sizeHint().width();
@@ -640,9 +965,6 @@ void VideoPlayer::buildUI()
     // Center flash (play/pause/seek feedback)
     m_centerFlash = new CenterFlash(this);
 
-    // Shortcuts overlay (? key — full-screen modal card)
-    m_shortcutsOverlay = new ShortcutsOverlay(this);
-
     // Track popover (audio/subtitle track picker — opened by Tracks chip)
     m_trackPopover = new TrackPopover(this);
     // Restore saved subtitle style from global preferences
@@ -664,10 +986,20 @@ void VideoPlayer::buildUI()
     });
     connect(m_trackPopover, &TrackPopover::subtitleTrackSelected, this, [this](int id) {
         if (id == 0) {
-            m_sidecar->sendSetTracks("", "off");
-            m_toastHud->showToast("Subtitles off");
+            // VIDEO_PLAYER_FIX Batch 1.2 — unified Off path. Previous code
+            // sent sendSetTracks("", "off") which crashes the sidecar via
+            // std::stoi("off") at main.cpp:850. Route through setSubtitleOff
+            // for visibility-only semantics (no set_tracks payload).
+            setSubtitleOff();
         } else {
             QString idStr = QString::number(id);
+            // Re-enable visibility before the track change — Phase 1 Batch
+            // 1.2's Off path leaves visibility=false; without this, the
+            // new track lands correctly but renderer stays hidden.
+            if (!m_subsVisible) {
+                m_subsVisible = true;
+                m_sidecar->sendSetSubVisibility(true);
+            }
             m_sidecar->sendSetTracks("", idStr);
             // Save preferred subtitle language globally
             QString lang = langForTrackId(m_subTracks, idStr);
@@ -699,6 +1031,11 @@ void VideoPlayer::buildUI()
             s.setValue("video_sub_font_color", fontColor);
             s.setValue("video_sub_bg_opacity", bgOpacity);
         });
+    // Batch 5.3 — Tankostream subtitle menu (addon-fetched external subs
+    // + load-from-file). Anchored above m_trackChip like TrackPopover.
+    m_subMenu = new SubtitleMenu(this);
+    m_subMenu->setSidecar(m_sidecar);
+
     connect(m_trackPopover, &TrackPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) {
             m_hideTimer.stop();
@@ -720,9 +1057,33 @@ void VideoPlayer::buildUI()
             openFile(m_playlist[idx], m_playlist, idx);
         }
     });
+    // VIDEO_PLAYER_FIX Batch 5.1 — relay loop-file toggle to the sidecar.
+    // Sidecar short-circuits EOF to seek-to-0 when enabled. Pre-5.1
+    // sidecar binaries don't know `set_loop_file` and return
+    // NOT_IMPLEMENTED (swallowed to debug log by SidecarProcess). The
+    // persisted state applies on the NEXT openFile via onSidecarReady's
+    // implicit initial send below.
+    connect(m_playlistDrawer, &PlaylistDrawer::loopFileChanged, this,
+            [this](bool on) { m_sidecar->sendSetLoopFile(on); });
+    // VIDEO_PLAYER_FIX Batch 5.2 — save/load handoff. Drawer is UI-only;
+    // VideoPlayer owns m_playlist + the file dialogs + the format parse.
+    connect(m_playlistDrawer, &PlaylistDrawer::saveRequested, this, &VideoPlayer::saveQueue);
+    connect(m_playlistDrawer, &PlaylistDrawer::loadRequested, this, &VideoPlayer::loadQueue);
 
     // Toast HUD (transient messages — speed, mute, track changes, errors)
     m_toastHud = new ToastHud(this);
+
+    // VIDEO_PLAYER_FIX Batch 7.1 — stats badge (top-right overlay).
+    m_statsBadge = new StatsBadge(this);
+    m_statsBadge->hide();
+    m_statsTicker.setInterval(1000);  // 1 Hz — cheap + matches audit spec
+    connect(&m_statsTicker, &QTimer::timeout, this, [this]() {
+        if (!m_showStats || !m_statsBadge) return;
+        const quint64 drops = m_canvas ? m_canvas->framesSkipped()
+                                       : static_cast<quint64>(-1);
+        m_statsBadge->setStats(m_statsCodec, m_statsWidth, m_statsHeight,
+                               m_statsFps, drops);
+    });
 
     // Equalizer popover (10-band audio EQ — opened by EQ chip)
     m_eqPopover = new EqualizerPopover(this);
@@ -740,6 +1101,12 @@ void VideoPlayer::buildUI()
     connect(m_eqPopover, &EqualizerPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) { m_hideTimer.stop(); showControls(); }
         else if (!m_paused) m_hideTimer.start();
+    });
+    // Batch 4.3 — Dynamic Range Compression toggle forwarded to sidecar.
+    // Pre-Phase-4 sidecar binaries ignore the unknown command cleanly;
+    // main-app ships safely without coordinated sidecar rebuild.
+    connect(m_eqPopover, &EqualizerPopover::drcToggled, this, [this](bool enabled) {
+        if (m_sidecar) m_sidecar->sendSetDrcEnabled(enabled);
     });
 
     // Filter popover (video/audio filters — opened by Filters chip)
@@ -768,43 +1135,112 @@ void VideoPlayer::buildUI()
             m_hideTimer.start();
         }
     });
-    // HDR tone mapping: wire FilterPopover ↔ sidecar
+    // HDR tone mapping: wire FilterPopover → shader (Batch 3.4).
+    // Pre-3.4 path drove sidecar's ffmpeg tonemap filter via
+    // sendSetToneMapping; Phase 3 moves the tonemap into our HLSL shader
+    // so the same operator applies end-to-end (SDR, HDR10, HLG all share
+    // one linear-light pipeline). sendSetToneMapping is kept as a no-op
+    // stub for sidecar-protocol stability until Phase 3 exits; removing
+    // it mid-phase would break any still-in-flight sidecar that expects
+    // the command. The peakDetect toggle is no longer meaningful on the
+    // shader side (we don't dynamically re-measure source peak per
+    // frame); will be removed from FilterPopover in Batch 3.5 or at
+    // phase exit.
     connect(m_filterPopover, &FilterPopover::toneMappingChanged, this,
-        [this](const QString& algorithm, bool peakDetect) {
-            m_sidecar->sendSetToneMapping(algorithm, peakDetect);
+        [this](const QString& algorithm, bool /*peakDetect*/) {
+            // FilterPopover's dropdown items: "hable", "reinhard",
+            // "bt2390", "mobius", "clip", "linear". Only three have a
+            // shader-native implementation today; the others fall back
+            // to Off (equivalent to the old "linear" / "clip" pass-through).
+            int mode = 0; // Off — default + fallback for unmapped names
+            const QString a = algorithm.toLower();
+            if      (a == QStringLiteral("reinhard")) mode = 1;
+            else if (a == QStringLiteral("aces"))     mode = 2;   // future-proof (FilterPopover may add)
+            else if (a == QStringLiteral("hable"))    mode = 3;
+            if (m_canvas) m_canvas->setTonemapMode(mode);
         });
     // HDR detection + chapters from media_info event
     connect(m_sidecar, &SidecarProcess::mediaInfo, this, [this](const QJsonObject& info) {
         m_isHdr = info.value("hdr").toBool(false);
         m_filterPopover->setHdrMode(m_isHdr);
+
+        // Batch 3.1 (Player Polish Phase 3) — forward raw AVCOL_PRI_* +
+        // AVCOL_TRC_* values to FrameCanvas so its shader can pick the
+        // right gamut matrix / (eventually) transfer function. Sidecar's
+        // media_info payload carries these straight from the demuxer probe
+        // (demuxer.cpp:66-68). SDR sources normally report BT.709 / sRGB
+        // which select the identity / no-transform path in the shader.
+        const int colorPri = info.value("color_primaries").toInt(0);
+        const int colorTrc = info.value("color_trc").toInt(0);
+        if (m_canvas) {
+            m_canvas->setHdrColorInfo(colorPri, colorTrc);
+        }
+
         m_chapters = info.value("chapters").toArray();
         if (!m_chapters.isEmpty())
             debugLog("[VideoPlayer] chapters: " + QString::number(m_chapters.size()));
 
+        // VIDEO_PLAYER_FIX Batch 2.1 — push chapter start times (ms) to the
+        // seek slider so it can render tick marks. Empty array clears any
+        // previously-rendered ticks (fresh file with no chapter metadata).
+        QList<qint64> chapterMs;
+        chapterMs.reserve(m_chapters.size());
+        for (const auto& c : m_chapters) {
+            const double startSec = c.toObject().value("start").toDouble();
+            chapterMs.append(static_cast<qint64>(startSec * 1000.0));
+        }
+        m_seekBar->setChapterMarkers(chapterMs);
+
         // Per-device audio offset auto-recall.
         // Sidecar reports the current audio output device (PortAudio name + host API).
         // We compute a stable QSettings key per device and look up the user's
-        // calibrated offset. New Bluetooth devices get a 200ms default + a one-time
-        // toast so the user knows to fine-tune.
+        // calibrated offset. New Bluetooth devices get a 300ms default + a one-time
+        // toast so the user knows to fine-tune. The default is generous because
+        // AirPods on Windows (Bluetooth via Microsoft stack) typically has
+        // 280-350ms of hidden latency that PortAudio can't see.
+        constexpr int BT_DEFAULT_MS = 300;
+        // Migration: previous default was 200ms. If the stored value matches the
+        // old default exactly AND the device looks like Bluetooth AND the user
+        // hasn't manually set a "manual" flag, treat it as auto and bump.
+        constexpr int OLD_BT_DEFAULT_MS = 200;
+
         QString device  = info.value("audio_device").toString();
         QString hostApi = info.value("audio_host_api").toString();
         if (!device.isEmpty()) {
             m_audioDeviceKey = makeDeviceKey(device, hostApi);
+            QString manualKey = m_audioDeviceKey + "/manual";
             QSettings s("Tankoban", "Tankoban");
             QVariant stored = s.value(m_audioDeviceKey);
+            bool wasManual = s.value(manualKey, false).toBool();
             if (stored.isValid()) {
                 m_audioDelayMs = stored.toInt();
-                debugLog(QString("[VideoPlayer] audio device '%1' → recalled offset %2ms")
-                            .arg(device).arg(m_audioDelayMs));
+                // One-time migration of the old auto-default to the new one.
+                if (!wasManual && m_audioDelayMs == OLD_BT_DEFAULT_MS && looksLikeBluetooth(device)) {
+                    m_audioDelayMs = BT_DEFAULT_MS;
+                    s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
+                    if (m_toastHud) {
+                        m_toastHud->showToast(
+                            QString("Bluetooth offset bumped to %1ms (improved default).\n"
+                                    "Fine-tune with Ctrl+= / Ctrl+-.").arg(BT_DEFAULT_MS));
+                    }
+                    debugLog(QString("[VideoPlayer] migrated '%1' from 200ms → %2ms (auto-default bump)")
+                                .arg(device).arg(BT_DEFAULT_MS));
+                } else {
+                    debugLog(QString("[VideoPlayer] audio device '%1' → recalled offset %2ms (%3)")
+                                .arg(device).arg(m_audioDelayMs)
+                                .arg(wasManual ? "manual" : "auto"));
+                }
             } else if (looksLikeBluetooth(device)) {
-                m_audioDelayMs = 200;
-                s.setValue(m_audioDeviceKey, 200);
+                m_audioDelayMs = BT_DEFAULT_MS;
+                s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
+                // Not manual — leave manualKey unset
                 if (m_toastHud) {
                     m_toastHud->showToast(
-                        "Bluetooth audio detected — using 200ms offset.\n"
-                        "Use Ctrl+= / Ctrl+- to fine-tune.");
+                        QString("Bluetooth audio detected — using %1ms offset.\n"
+                                "Use Ctrl+= / Ctrl+- to fine-tune.").arg(BT_DEFAULT_MS));
                 }
-                debugLog(QString("[VideoPlayer] Bluetooth device '%1' → default 200ms").arg(device));
+                debugLog(QString("[VideoPlayer] Bluetooth device '%1' → default %2ms")
+                            .arg(device).arg(BT_DEFAULT_MS));
             } else {
                 m_audioDelayMs = 0;
                 debugLog(QString("[VideoPlayer] wired/unknown device '%1' → no offset").arg(device));
@@ -812,6 +1248,29 @@ void VideoPlayer::buildUI()
             m_sidecar->sendSetAudioDelay(m_audioDelayMs);
         }
     });
+    // D3D11 Holy Grail (Windows): when sidecar publishes its shared D3D11
+    // texture handle, hand it to FrameCanvas to import for zero-copy display.
+    // Eliminates GPU→CPU→GPU round trip per frame on HW-accelerated content.
+    connect(m_sidecar, &SidecarProcess::d3d11Texture, this,
+        [this](quintptr handle, int w, int h) {
+            debugLog(QString("[VideoPlayer] d3d11_texture handle=0x%1 %2x%3")
+                        .arg(handle, 0, 16).arg(w).arg(h));
+            m_canvas->attachD3D11Texture(handle, w, h);
+        });
+    // FrameCanvas tells us when zero-copy import succeeded/failed so we can
+    // tell the sidecar to short-circuit its CPU pipeline (saves ~15ms/frame).
+    connect(m_canvas, &FrameCanvas::zeroCopyActivated, this, [this](bool active) {
+        debugLog(QString("[VideoPlayer] zero-copy %1").arg(active ? "ACTIVE" : "INACTIVE"));
+        m_sidecar->sendSetZeroCopyActive(active);
+    });
+
+    // Batch 6.2 — FrameCanvas announces D3D device-lost recovery; surface
+    // a brief ToastHud so the user sees why the display stuttered.
+    connect(m_canvas, &FrameCanvas::deviceReconnecting, this, [this]() {
+        debugLog("[VideoPlayer] D3D device-lost — FrameCanvas recovering");
+        m_toastHud->showToast("Reconnecting display…");
+    });
+
     // Frame stepping feedback — update time display
     connect(m_sidecar, &SidecarProcess::frameStepped, this, [this](double posSec) {
         m_paused = true;
@@ -888,25 +1347,55 @@ void VideoPlayer::speedReset()
     m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
 }
 
+// Merge incoming track list into existing cache. Upsert by 'id': add new
+// tracks, update fields on existing ones, never remove. Defends against
+// the sidecar emitting a shortened tracks_changed payload after a
+// set_tracks command — without this, subsequent right-clicks would find an
+// empty Subtitles submenu (bake-in bug 2026-04-14, confirmed pre-existing
+// via Tankoban 2 Legacy reproduction). Reset semantics live in
+// stopPlayback so file changes still get fresh lists.
+static void mergeTrackList(QJsonArray& cache, const QJsonArray& incoming)
+{
+    for (const auto& v : incoming) {
+        const QJsonObject t = v.toObject();
+        const QString id = t["id"].toString();
+        if (id.isEmpty()) continue;
+
+        bool replaced = false;
+        for (int i = 0; i < cache.size(); ++i) {
+            if (cache[i].toObject()["id"].toString() == id) {
+                cache[i] = t;     // update existing fields
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cache.append(t);      // add new
+        }
+    }
+}
+
 void VideoPlayer::onTracksChanged(const QJsonArray& audio, const QJsonArray& subtitle,
                                    const QString& activeAudioId, const QString& activeSubId)
 {
-    m_audioTracks   = audio;
-    m_subTracks     = subtitle;
+    mergeTrackList(m_audioTracks, audio);
+    mergeTrackList(m_subTracks,   subtitle);
     m_activeAudioId = activeAudioId;
     m_activeSubId   = activeSubId;
 
     // Update track chip label with counts
     m_trackChip->setText("Tracks");
 
-    // Merge into a single array for TrackPopover (expects "type" field on each track)
+    // Build TrackPopover payload from the (post-merge) cached lists, NOT
+    // the incoming event arrays — those may be shorter than what we've
+    // already discovered. See mergeTrackList comment above.
     QJsonArray merged;
-    for (const auto& v : audio) {
+    for (const auto& v : m_audioTracks) {
         QJsonObject t = v.toObject();
         t["type"] = "audio";
         merged.append(t);
     }
-    for (const auto& v : subtitle) {
+    for (const auto& v : m_subTracks) {
         QJsonObject t = v.toObject();
         t["type"] = "subtitle";
         merged.append(t);
@@ -915,8 +1404,16 @@ void VideoPlayer::onTracksChanged(const QJsonArray& audio, const QJsonArray& sub
     int subId   = activeSubId.toInt();
     m_trackPopover->populate(merged, audioId, subId, m_subsVisible);
 
-    // Restore saved track preferences (carry-forward > per-file > global > default)
-    restoreTrackPreferences();
+    // Restore saved track preferences ONCE per file — only on the first
+    // tracks_changed after openFile. Re-running on subsequent events
+    // would override manual picks: user selects sub 3, sidecar echoes
+    // tracks_changed with active_sub_id=3, preference match resolves
+    // preferred-lang to a different id, set_tracks fires and yanks the
+    // user's choice back. Latched via m_tracksRestored (reset on openFile).
+    if (!m_tracksRestored) {
+        m_tracksRestored = true;
+        restoreTrackPreferences();
+    }
 }
 
 void VideoPlayer::cycleAudioTrack()
@@ -979,6 +1476,296 @@ void VideoPlayer::toggleSubtitles()
     m_toastHud->showToast(m_subsVisible ? "Subtitles on" : "Subtitles off");
 }
 
+void VideoPlayer::setSubtitleOff()
+{
+    // Canonical Off path. Idempotent on sidecar (sendSetSubVisibility is a
+    // cheap bool-set on handle_set_sub_visibility). Track selection stays
+    // at whatever was last picked — picking a numeric track via a later
+    // action will re-enable visibility and land set_tracks on the right id.
+    m_subsVisible = false;
+    m_sidecar->sendSetSubVisibility(false);
+    m_toastHud->showToast("Subtitles off");
+}
+
+void VideoPlayer::takeSnapshot()
+{
+    // VIDEO_PLAYER_FIX Batch 3.2 — covers both SHM and D3D11 zero-copy
+    // paths (staging-texture readback added to captureCurrentFrame).
+    QImage img = m_canvas->captureCurrentFrame();
+    if (img.isNull()) {
+        m_toastHud->showToast("Snapshot failed — no frame available");
+        return;
+    }
+
+    const QString picturesDir = QStandardPaths::writableLocation(
+        QStandardPaths::PicturesLocation);
+    const QString snapDir = picturesDir + QStringLiteral("/Tankoban Snapshots");
+    QDir().mkpath(snapDir);
+
+    // {baseName}_{HH-MM-SS}_{ptsSec}.png — baseName comes from the current
+    // file (or a generic "snapshot" fallback for stream URLs without a
+    // filename). PTS integer seconds keeps filenames short + sortable.
+    QString baseName;
+    if (!m_currentFile.isEmpty()) {
+        baseName = QFileInfo(m_currentFile).completeBaseName();
+    }
+    if (baseName.isEmpty())
+        baseName = QStringLiteral("snapshot");
+
+    const QString ts = QDateTime::currentDateTime().toString("HH-mm-ss");
+    const qint64  ptsSec = static_cast<qint64>(m_lastKnownPosSec);
+    const QString path = QString("%1/%2_%3_%4s.png")
+                             .arg(snapDir, baseName, ts, QString::number(ptsSec));
+
+    if (img.save(path, "PNG")) {
+        m_toastHud->showToast("Snapshot saved: " + QFileInfo(path).fileName());
+        debugLog("[VideoPlayer] snapshot saved: " + path);
+    } else {
+        m_toastHud->showToast("Snapshot save failed");
+    }
+}
+
+void VideoPlayer::showOpenUrlDialog()
+{
+    OpenUrlDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const QString url = dlg.url();
+    if (url.isEmpty()) return;
+    debugLog("[VideoPlayer] openUrl: " + url);
+    openFile(url);
+}
+
+void VideoPlayer::pushRecentFile(const QString& filePath)
+{
+    if (filePath.isEmpty()) return;
+    QSettings s("Tankoban", "Tankoban");
+    QStringList recent = s.value("player/recentFiles").toStringList();
+    recent.removeAll(filePath);
+    recent.prepend(filePath);
+    while (recent.size() > 20) recent.removeLast();
+    s.setValue("player/recentFiles", recent);
+}
+
+void VideoPlayer::appendToQueue(const QString& filePath)
+{
+    if (filePath.isEmpty()) return;
+    if (m_playlist.isEmpty()) {
+        // No existing playlist — seed it with the current file so the new
+        // file has something to append after. m_currentFile may be empty
+        // (pre-playback); guard separately.
+        if (!m_currentFile.isEmpty())
+            m_playlist.append(m_currentFile);
+    }
+    m_playlist.append(filePath);
+    if (m_playlistDrawer)
+        m_playlistDrawer->populate(m_playlist, m_playlistIdx);
+    updateEpisodeButtons();
+}
+
+void VideoPlayer::saveQueue()
+{
+    if (m_playlist.isEmpty() && m_currentFile.isEmpty()) {
+        m_toastHud->showToast("Queue is empty — nothing to save");
+        return;
+    }
+
+    const QString suggest = QStandardPaths::writableLocation(QStandardPaths::MusicLocation)
+                            + "/playlist.m3u";
+    const QString path = QFileDialog::getSaveFileName(this, tr("Save Queue"),
+        suggest, tr("M3U Playlists (*.m3u);;All Files (*)"));
+    if (path.isEmpty()) return;
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        m_toastHud->showToast("Save failed: " + f.errorString());
+        return;
+    }
+    QTextStream out(&f);
+    out.setEncoding(QStringConverter::Utf8);
+    // Standard .m3u / .m3u8 format. #EXTM3U header + #EXTINF per entry
+    // with -1 duration sentinel (we don't probe every file just to save)
+    // + the file's display name. Fully compatible with VLC, mpv, QMPlay2.
+    out << "#EXTM3U\n";
+    const QStringList entries = m_playlist.isEmpty() ? QStringList{m_currentFile} : m_playlist;
+    for (const QString& p : entries) {
+        QString title = QFileInfo(p).completeBaseName();
+        if (title.isEmpty()) title = p;
+        out << "#EXTINF:-1," << title << "\n" << p << "\n";
+    }
+    f.close();
+    m_toastHud->showToast("Saved " + QString::number(entries.size()) + " to "
+                          + QFileInfo(path).fileName());
+}
+
+void VideoPlayer::toggleStatsBadge()
+{
+    m_showStats = !m_showStats;
+    QSettings("Tankoban", "Tankoban").setValue("player/showStats", m_showStats);
+    if (!m_statsBadge) return;
+    if (m_showStats) {
+        // Populate immediately if we already have source metadata; on an
+        // empty-m_statsCodec case (toggle pre-firstFrame) the badge stays
+        // hidden until onFirstFrame arrives and calls setStats.
+        const quint64 drops = m_canvas ? m_canvas->framesSkipped()
+                                       : static_cast<quint64>(-1);
+        m_statsBadge->setStats(m_statsCodec, m_statsWidth, m_statsHeight,
+                               m_statsFps, drops);
+        if (!m_statsCodec.isEmpty()) {
+            m_statsBadge->show();
+            m_statsBadge->raise();
+        }
+        if (!m_statsTicker.isActive()) m_statsTicker.start();
+    } else {
+        m_statsBadge->hide();
+        m_statsTicker.stop();
+    }
+    m_toastHud->showToast(m_showStats ? "Stats: on" : "Stats: off");
+}
+
+void VideoPlayer::openKeybindingEditor()
+{
+    // Stack-allocated modal: the editor mutates m_keys in-place as the user
+    // accepts bindings (setBinding persists to QSettings per edit), so we
+    // don't need to wait for the dialog to close to apply changes.
+    KeybindingEditor dlg(m_keys, this);
+    dlg.exec();
+}
+
+void VideoPlayer::loadQueue()
+{
+    const QString start = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
+    const QString path = QFileDialog::getOpenFileName(this, tr("Load Queue"),
+        start, tr("M3U Playlists (*.m3u *.m3u8);;All Files (*)"));
+    if (path.isEmpty()) return;
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        m_toastHud->showToast("Load failed: " + f.errorString());
+        return;
+    }
+    QTextStream in(&f);
+    in.setEncoding(QStringConverter::Utf8);
+    QStringList parsed;
+    const QDir baseDir = QFileInfo(path).absoluteDir();
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#')) continue;
+        // Treat as path or URL. Relative paths are resolved against the
+        // .m3u file's directory — standard player behavior.
+        if (player_utils::looksLikeUrl(line)) {
+            parsed.append(line);
+        } else {
+            QFileInfo fi(line);
+            if (fi.isAbsolute()) parsed.append(fi.absoluteFilePath());
+            else                 parsed.append(baseDir.absoluteFilePath(line));
+        }
+    }
+    f.close();
+
+    if (parsed.isEmpty()) {
+        m_toastHud->showToast("No playable entries in " + QFileInfo(path).fileName());
+        return;
+    }
+
+    // Prompt Replace vs Append when a queue is already loaded.
+    bool append = false;
+    if (!m_playlist.isEmpty() || !m_currentFile.isEmpty()) {
+        QMessageBox box(this);
+        box.setWindowTitle(tr("Load Queue"));
+        box.setText(tr("Replace the current queue or append to it?"));
+        QPushButton* replaceBtn = box.addButton(tr("Replace"), QMessageBox::AcceptRole);
+        QPushButton* appendBtn  = box.addButton(tr("Append"),  QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() == appendBtn)   append = true;
+        else if (box.clickedButton() != replaceBtn) return;  // cancelled
+    }
+
+    if (append) {
+        for (const QString& p : parsed) appendToQueue(p);
+        m_toastHud->showToast(QString("Appended %1 to queue").arg(parsed.size()));
+    } else {
+        openFile(parsed.first(), parsed, 0);
+        m_toastHud->showToast(QString("Loaded %1-item queue").arg(parsed.size()));
+    }
+}
+
+void VideoPlayer::togglePictureInPicture()
+{
+    QWidget* top = window();
+    if (!top) return;
+
+    if (m_inPip) {
+        // Exit PiP — restore geometry + flags + HUD.
+        top->setWindowFlags(m_prePipFlags);
+        top->setGeometry(m_prePipGeometry);
+        if (m_prePipFullscreen) {
+            // User was fullscreen before PiP; re-enter fullscreen via the
+            // normal path so the existing fullscreen bookkeeping runs.
+            top->show();
+            if (!m_fullscreen) toggleFullscreen();
+        } else {
+            top->show();
+        }
+        m_inPip = false;
+        showControls();
+        m_toastHud->showToast("Exited Picture-in-Picture");
+        return;
+    }
+
+    // Enter PiP. Exit fullscreen first — PiP's always-on-top + framed
+    // geometry don't compose with Qt's fullscreen state.
+    m_prePipFullscreen = m_fullscreen;
+    if (m_fullscreen) toggleFullscreen();
+
+    m_prePipGeometry = top->geometry();
+    m_prePipFlags    = top->windowFlags();
+
+    // FramelessWindowHint strips the title bar + borders; WindowStaysOnTopHint
+    // pins above other apps. Keep existing flags (hint OR) so platform
+    // window attributes stay consistent.
+    top->setWindowFlags(top->windowFlags()
+                        | Qt::FramelessWindowHint
+                        | Qt::WindowStaysOnTopHint);
+
+    // 320x180 matches the TODO spec + is 16:9 so most content fits without
+    // distracting letterbox. Bottom-right of the screen the window is
+    // currently on (multi-monitor aware). 24 px margin from screen edges.
+    const int pipW = 320;
+    const int pipH = 180;
+    QScreen* screen = top->screen();
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    QRect avail = screen->availableGeometry();
+    const int x = avail.right()  - pipW - 24;
+    const int y = avail.bottom() - pipH - 24;
+    top->setGeometry(x, y, pipW, pipH);
+
+    top->show();  // Required to apply the new window flags at runtime.
+    hideControls();
+    m_inPip = true;
+    m_toastHud->showToast("Picture-in-Picture — Ctrl+P or Esc to exit");
+}
+
+void VideoPlayer::toggleAlwaysOnTop()
+{
+    // Target is the top-level window (MainWindow). VideoPlayer itself is
+    // a child widget; setting the flag on `this` has no effect on the
+    // shell window the user actually sees.
+    QWidget* top = window();
+    if (!top) return;
+
+    m_alwaysOnTop = !m_alwaysOnTop;
+    // Qt requires setWindowFlag + show() for runtime flag changes — the
+    // underlying platform window needs to be recreated. Remember focus
+    // state so the re-show doesn't steal or lose it in surprising ways.
+    const bool wasVisible = top->isVisible();
+    top->setWindowFlag(Qt::WindowStaysOnTopHint, m_alwaysOnTop);
+    if (wasVisible) top->show();
+
+    QSettings("Tankoban", "Tankoban").setValue("player/alwaysOnTop", m_alwaysOnTop);
+    m_toastHud->showToast(m_alwaysOnTop ? "Always on top: on" : "Always on top: off");
+}
+
 void VideoPlayer::prevEpisode()
 {
     if (m_playlist.isEmpty() || m_playlistIdx <= 0) return;
@@ -1000,7 +1787,10 @@ void VideoPlayer::nextEpisode()
 void VideoPlayer::togglePlaylistDrawer()
 {
     if (m_playlist.isEmpty()) return;
-    m_playlistDrawer->toggle();
+    // Pass the chip as anchor so a second click on it closes the drawer
+    // instead of triggering dismiss-then-reopen (PlaylistDrawer::eventFilter
+    // swallows presses on the tracked anchor).
+    m_playlistDrawer->toggle(m_playlistChip);
     if (m_playlistDrawer->isOpen()) {
         showControls();
         m_hideTimer.stop();
@@ -1009,12 +1799,17 @@ void VideoPlayer::togglePlaylistDrawer()
 
 void VideoPlayer::adjustVolume(int delta)
 {
-    m_volume = qBound(0, m_volume + delta, 100);
+    // Batch 4.2 — range extended from [0, 100] to [0, 200]. 100 stays
+    // the unity / pre-4.2 default; 101–200 is the amp zone (linear gain
+    // up to 2×, capped at +6 dB). Sidecar applies tanh soft-clip when
+    // gain > 1.0 so dialogue-heavy quiet sources stay audible without
+    // the harsh clipping you'd get from straight multiplication.
+    m_volume = qBound(0, m_volume + delta, 200);
     if (m_muted && delta > 0) {
         m_muted = false;
         m_sidecar->sendSetMute(false);
     }
-    m_sidecar->sendSetVolume(m_volume / 100.0);
+    m_sidecar->sendSetVolume(m_volume / 100.0);  // 150 → 1.5, etc.
     m_volumeHud->showVolume(m_volume, m_muted);
 }
 
@@ -1068,7 +1863,13 @@ void VideoPlayer::saveProgress(double positionSec, double durationSec)
     data["subtitleLang"] = langForTrackId(m_subTracks, m_activeSubId);
     data["subsVisible"]  = m_subsVisible;
     data["subDelayMs"]   = m_subDelayMs;
-    m_bridge->saveProgress("videos", m_currentVideoId, data);
+    // Gated on PersistenceMode::LibraryVideos. In None mode, StreamPage's
+    // progressUpdated listener writes into the "stream" domain instead —
+    // so we MUST still emit the signal below, just skip the "videos"
+    // write that would pollute the Videos-mode continue-watching store.
+    if (m_persistenceMode == PersistenceMode::LibraryVideos) {
+        m_bridge->saveProgress("videos", m_currentVideoId, data);
+    }
     emit progressUpdated(m_currentFile, positionSec, durationSec);
 }
 
@@ -1103,7 +1904,11 @@ void VideoPlayer::restoreTrackPreferences()
         targetSubLang = m_carrySubLang;
         m_carryAudioLang.clear();
         m_carrySubLang.clear();
-    } else if (m_bridge) {
+    } else if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
+        // Gated — Stream-mode playback doesn't persist or restore track
+        // preferences via the "videos" domain. Falls through to the
+        // sidecar-default track selection path after this branch when
+        // targetAudioLang / targetSubLang remain empty.
         QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
         targetAudioLang = prog.value("audioLang").toString();
         targetSubLang = prog.value("subtitleLang").toString();
@@ -1142,6 +1947,20 @@ void VideoPlayer::restoreTrackPreferences()
         m_sidecar->sendSetTracks(
             audioId.isEmpty() ? "" : audioId,
             subId.isEmpty() ? "" : subId);
+    }
+
+    // Player Polish Batch 5.1 fix (2026-04-15): unconditionally sync
+    // sidecar visibility with our m_subsVisible state on every file
+    // open. Pre-fix path only sent sendSetSubVisibility when a per-file
+    // preference existed (line ~1324 above) — fresh files (no prior
+    // viewing history) never got the command, leaving the sidecar's
+    // renderer state divergent from m_subsVisible. Symptom: subtitles
+    // inconsistently appear across videos (the user reports "subtitles
+    // appear for some videos, not others"). Fix: always send the
+    // current intent, on every file open. Idempotent — sidecar's
+    // handle_set_sub_visibility is cheap when state hasn't changed.
+    if (m_sidecar) {
+        m_sidecar->sendSetSubVisibility(m_subsVisible);
     }
 }
 
@@ -1191,9 +2010,6 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
     int barH = m_controlBar->sizeHint().height();
     m_controlBar->setGeometry(0, height() - barH, width(), barH);
 
-    // Shortcuts overlay covers full viewport
-    m_shortcutsOverlay->setGeometry(0, 0, width(), height());
-
     // Playlist drawer: right side, 12px from edge, 10px from top, above control bar
     int dw = 320;
     int dh = height() - 22 - barH;
@@ -1213,24 +2029,42 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
         m_toastHud->raise();
     }
 
-    // Z-order: FrameCanvas → controlBar → subOverlay (above HUD) → transient overlays → drawer → shortcuts
+    // VIDEO_PLAYER_FIX Batch 7.1 — stats badge: top-right, below toast
+    // so it doesn't collide when both are visible. Auto-sized via
+    // adjustSize() inside setStats; we only set position here.
+    if (m_statsBadge && m_statsBadge->isVisible()) {
+        const QSize sh = m_statsBadge->sizeHint();
+        m_statsBadge->setGeometry(width() - sh.width() - 12, 52, sh.width(), sh.height());
+        m_statsBadge->raise();
+    }
+
+    // Z-order: FrameCanvas → controlBar → subOverlay (above HUD) → transient overlays → drawer
     m_controlBar->raise();
     m_subOverlay->reposition();
     m_subOverlay->raise();
     m_volumeHud->raise();
     m_centerFlash->raise();
     if (m_playlistDrawer->isOpen())      m_playlistDrawer->raise();
-    if (m_shortcutsOverlay->isShowing()) m_shortcutsOverlay->raise();
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────
 
 void VideoPlayer::keyPressEvent(QKeyEvent* event)
 {
-    // Shortcuts overlay intercepts all keys — only ? and Esc close it
-    if (m_shortcutsOverlay->isShowing()) {
-        if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_Question)
-            m_shortcutsOverlay->toggle();
+    // Diagnostic: log every key press so we can see what arrives + what action it maps to.
+    {
+        QString actionName = m_keys ? m_keys->actionForKey(event->key(), event->modifiers()) : QString();
+        debugLog(QString("[VideoPlayer] keyPress key=0x%1 mods=0x%2 action='%3'")
+                    .arg(event->key(), 0, 16)
+                    .arg(static_cast<int>(event->modifiers()), 0, 16)
+                    .arg(actionName));
+    }
+
+    // VIDEO_PLAYER_FIX Batch 3.3 — in PiP, Escape exits PiP (preempts the
+    // normal back_to_library binding). Gives the user a consistent
+    // "tiny window feels like an overlay" exit without learning Ctrl+P.
+    if (m_inPip && event->key() == Qt::Key_Escape) {
+        togglePictureInPicture();
         event->accept();
         return;
     }
@@ -1256,9 +2090,16 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
 
     auto seekBy = [this](double delta) {
         double curSec = m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0;
+        // Clear FrameCanvas's sustained-lag accumulator BEFORE the seek —
+        // the wall-clock Present-interval gap across the seek would
+        // otherwise arm the 3-in-a-row skip-next-Present guard and
+        // produce a visible post-seek pause.
+        if (m_canvas) m_canvas->resetLagAccounting();
         m_sidecar->sendSeek(qMax(0.0, curSec + delta));
         m_centerFlash->flash(delta > 0 ? SVG_SEEK_FWD : SVG_SEEK_BACK);
-        showControls();
+        // No showControls() — the center flash arrow is sufficient feedback.
+        // Revealing the bottom HUD on every arrow-key seek is noisy and
+        // fights the auto-hide UX when the user is scrubbing through content.
     };
 
     auto adjustSubDelay = [this](int delta) {
@@ -1304,6 +2145,12 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     }
     else if (action == "cycle_subtitle")     cycleSubtitleTrack();
     else if (action == "toggle_subtitles")   toggleSubtitles();
+    else if (action == "toggle_always_on_top") toggleAlwaysOnTop();
+    else if (action == "take_snapshot")        takeSnapshot();
+    else if (action == "toggle_pip")           togglePictureInPicture();
+    else if (action == "open_url")             showOpenUrlDialog();
+    else if (action == "toggle_stats")         toggleStatsBadge();
+    else if (action == "open_subtitle_menu") m_subMenu->toggle(m_trackChip);
     else if (action == "sub_delay_minus")    adjustSubDelay(-100);
     else if (action == "sub_delay_plus")     adjustSubDelay(100);
     else if (action == "sub_delay_reset") {
@@ -1315,22 +2162,31 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     else if (action == "audio_delay_minus") {
         m_audioDelayMs -= 50;
         m_sidecar->sendSetAudioDelay(m_audioDelayMs);
-        if (!m_audioDeviceKey.isEmpty())
-            QSettings("Tankoban", "Tankoban").setValue(m_audioDeviceKey, m_audioDelayMs);
+        if (!m_audioDeviceKey.isEmpty()) {
+            QSettings s("Tankoban", "Tankoban");
+            s.setValue(m_audioDeviceKey, m_audioDelayMs);
+            s.setValue(m_audioDeviceKey + "/manual", true);  // user touched it
+        }
         m_toastHud->showToast(QString("Audio delay: %1ms").arg(m_audioDelayMs));
     }
     else if (action == "audio_delay_plus") {
         m_audioDelayMs += 50;
         m_sidecar->sendSetAudioDelay(m_audioDelayMs);
-        if (!m_audioDeviceKey.isEmpty())
-            QSettings("Tankoban", "Tankoban").setValue(m_audioDeviceKey, m_audioDelayMs);
+        if (!m_audioDeviceKey.isEmpty()) {
+            QSettings s("Tankoban", "Tankoban");
+            s.setValue(m_audioDeviceKey, m_audioDelayMs);
+            s.setValue(m_audioDeviceKey + "/manual", true);
+        }
         m_toastHud->showToast(QString("Audio delay: %1ms").arg(m_audioDelayMs));
     }
     else if (action == "audio_delay_reset") {
         m_audioDelayMs = 0;
         m_sidecar->sendSetAudioDelay(0);
-        if (!m_audioDeviceKey.isEmpty())
-            QSettings("Tankoban", "Tankoban").setValue(m_audioDeviceKey, 0);
+        if (!m_audioDeviceKey.isEmpty()) {
+            QSettings s("Tankoban", "Tankoban");
+            s.setValue(m_audioDeviceKey, 0);
+            s.setValue(m_audioDeviceKey + "/manual", true);
+        }
         m_toastHud->showToast("Audio delay reset");
     }
     else if (action == "chapter_next") {
@@ -1361,10 +2217,10 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     }
     else if (action == "next_episode")       nextEpisode();
     else if (action == "prev_episode")       prevEpisode();
+    else if (action == "stream_next_episode") emit streamNextEpisodeRequested();
     else if (action == "toggle_playlist")    togglePlaylistDrawer();
     else if (action == "show_shortcuts") {
-        m_shortcutsOverlay->toggle();
-        m_hideTimer.stop();
+        openKeybindingEditor();
     }
     else if (action == "back_to_library") {
         if (m_fullscreen) toggleFullscreen();
@@ -1374,17 +2230,71 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
         if (m_fullscreen) toggleFullscreen();
         emit closeRequested();
     }
+    else if (action == "vsync_log_toggle") {
+        // Phase 0 feasibility instrumentation. F12 starts logging, auto-dumps
+        // after 60 seconds. File path matches _player_debug.txt convention.
+        // Then: python tools/analyze_vsync.py _vsync_timing.csv
+        const QString dumpPath = QStringLiteral(
+            "C:/Users/Suprabha/Desktop/Tankoban 2/_vsync_timing.csv");
+        debugLog(QString("[VideoPlayer] vsync_log_toggle pressed (path: %1)").arg(dumpPath));
+
+        if (m_canvas->vsyncLoggingEnabled()) {
+            // Already running — early dump
+            m_canvas->setVsyncLogging(false, dumpPath);
+            int n = m_canvas->vsyncSampleCount();
+            m_toastHud->showToast(QString("Vsync log → _vsync_timing.csv (n=%1)").arg(n));
+            return;
+        }
+
+        m_canvas->setVsyncLogging(true, dumpPath);
+        m_toastHud->showToast("Vsync timing log: recording 60s...");
+
+        // Auto-dump after 60s — fire-and-forget single-shot timer.
+        QTimer::singleShot(60000, this, [this, dumpPath]() {
+            if (!m_canvas->vsyncLoggingEnabled()) return;  // already stopped manually
+            m_canvas->setVsyncLogging(false, dumpPath);
+            int n = m_canvas->vsyncSampleCount();
+            debugLog(QString("[VideoPlayer] vsync auto-dump n=%1").arg(n));
+            m_toastHud->showToast(QString("Vsync log → _vsync_timing.csv (n=%1)").arg(n));
+        });
+    }
 }
 
 void VideoPlayer::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
     setFocus(Qt::OtherFocusReason);
+
+    // VIDEO_PLAYER_FIX Batch 3.1 — apply persisted always-on-top once the
+    // top-level window exists + is visible. Guarded so we only apply on
+    // the first show (avoids repeated setWindowFlag+show cycles on
+    // in-app transitions like fullscreen toggle).
+    static bool applied = false;
+    if (!applied && m_alwaysOnTop) {
+        applied = true;
+        if (QWidget* top = window()) {
+            top->setWindowFlag(Qt::WindowStaysOnTopHint, true);
+            top->show();
+        }
+    } else if (!applied) {
+        applied = true;  // no-op flip still consumed
+    }
 }
 
 void VideoPlayer::mousePressEvent(QMouseEvent* event)
 {
     setFocus(Qt::MouseFocusReason);
+
+    // VIDEO_PLAYER_FIX Batch 3.3 — mini-PiP window drag. Frameless window
+    // has no OS-provided title bar drag, so we record the press origin
+    // and move the top-level on mouseMoveEvent. Drag starts on any left-
+    // button press while m_inPip.
+    if (m_inPip && event->button() == Qt::LeftButton) {
+        m_pipDragOrigin = event->globalPosition().toPoint()
+                          - window()->frameGeometry().topLeft();
+        event->accept();
+        return;
+    }
 
     // Close any open popover/drawer when clicking outside of them
     bool closedSomething = false;
@@ -1413,13 +2323,33 @@ void VideoPlayer::mousePressEvent(QMouseEvent* event)
 
 void VideoPlayer::mouseMoveEvent(QMouseEvent* event)
 {
+    // VIDEO_PLAYER_FIX Batch 3.3 — drive the PiP drag. Only on buttons-
+    // held; bare mouse moves fall through to the normal HUD-reveal path.
+    if (m_inPip && (event->buttons() & Qt::LeftButton)
+        && m_pipDragOrigin != QPoint(-1, -1)) {
+        window()->move(event->globalPosition().toPoint() - m_pipDragOrigin);
+        event->accept();
+        return;
+    }
+
     QWidget::mouseMoveEvent(event);
-    showControls();
+    // Unhide cursor + arm cursor auto-hide for any mouse motion. HUD
+    // reveal is gated to the bottom-edge zone (same zone the canvas-path
+    // mouseActivityAt lambda uses) so a wiggle in the middle of the
+    // frame doesn't flash the control bar.
+    setCursor(Qt::ArrowCursor);
+    m_cursorTimer.start();
+    constexpr int kBottomRevealZonePx = 120;
+    if (event->position().y() >= height() - kBottomRevealZonePx)
+        showControls();
 }
 
 void VideoPlayer::mouseDoubleClickEvent(QMouseEvent* event)
 {
     QWidget::mouseDoubleClickEvent(event);
+    // VIDEO_PLAYER_FIX Batch 3.3 — fullscreen + PiP don't compose; suppress
+    // the double-click-to-fullscreen gesture while in PiP.
+    if (m_inPip) return;
     toggleFullscreen();
 }
 
@@ -1428,6 +2358,103 @@ void VideoPlayer::wheelEvent(QWheelEvent* event)
     int delta = event->angleDelta().y() > 0 ? 5 : -5;
     adjustVolume(delta);
     event->accept();
+}
+
+// ── VIDEO_PLAYER_FIX Batch 4.3 — drag-drop open + enqueue ──────────────────
+
+void VideoPlayer::dragEnterEvent(QDragEnterEvent* event)
+{
+    const QMimeData* mime = event->mimeData();
+    if (!mime) return;
+    // Accept local + remote URL drops (Explorer / Finder / browsers all
+    // emit text/uri-list). Also accept plain text when it parses as a
+    // URL (browser address-bar drag).
+    if (mime->hasUrls()
+        || (mime->hasText() && player_utils::looksLikeUrl(mime->text()))) {
+        event->acceptProposedAction();
+    }
+}
+
+void VideoPlayer::dropEvent(QDropEvent* event)
+{
+    const QMimeData* mime = event->mimeData();
+    if (!mime) return;
+
+    // Classify: video files, subtitle files, URL text.
+    QStringList videos;
+    QStringList subs;
+    QStringList urls;  // remote (http/rtsp/rtmp); local file:// is treated
+                       // as a path and routed through the video/sub branches.
+
+    if (mime->hasUrls()) {
+        for (const QUrl& u : mime->urls()) {
+            if (u.isLocalFile()) {
+                const QString p = u.toLocalFile();
+                if (player_utils::isSubtitleFile(p)) subs.append(p);
+                else                                  videos.append(p);
+            } else if (player_utils::looksLikeUrl(u.toString())) {
+                urls.append(u.toString());
+            }
+        }
+    } else if (mime->hasText()) {
+        const QString t = mime->text().trimmed();
+        if (player_utils::looksLikeUrl(t))
+            urls.append(t);
+    }
+
+    const bool active = !m_currentFile.isEmpty();
+
+    // Subtitles take the fast path — if playback is active, load each one;
+    // otherwise toast and drop (subs need a video to attach to).
+    if (!subs.isEmpty()) {
+        if (!active) {
+            m_toastHud->showToast("Start a video first to load subtitles");
+        } else {
+            for (const QString& p : subs)
+                m_sidecar->sendSetSubtitleUrl(QUrl::fromLocalFile(p), 0, 0);
+            if (subs.size() == 1)
+                m_toastHud->showToast("Loaded subtitle: " + QFileInfo(subs.first()).fileName());
+            else
+                m_toastHud->showToast(QString("Loaded %1 subtitles").arg(subs.size()));
+        }
+    }
+
+    // Remote URLs: treat as Open-URL intent. Opens the first URL; any
+    // additional ones queue (mirrors the multi-video branch below).
+    if (!urls.isEmpty()) {
+        if (!active) {
+            openFile(urls.first());
+            for (int i = 1; i < urls.size(); ++i) appendToQueue(urls.at(i));
+            if (urls.size() > 1)
+                m_toastHud->showToast(QString("Queued %1 URLs").arg(urls.size() - 1));
+        } else {
+            for (const QString& u : urls) appendToQueue(u);
+            m_toastHud->showToast(urls.size() == 1
+                ? "Added to queue: " + urls.first()
+                : QString("Queued %1 URLs").arg(urls.size()));
+        }
+        event->acceptProposedAction();
+        return;
+    }
+
+    // Video files.
+    if (videos.isEmpty()) {
+        event->acceptProposedAction();
+        return;
+    }
+    if (!active) {
+        // Open the first; any extras build the initial playlist.
+        openFile(videos.first(), videos, 0);
+        if (videos.size() > 1)
+            m_toastHud->showToast(QString("Queued %1 files").arg(videos.size() - 1));
+    } else {
+        for (const QString& p : videos) appendToQueue(p);
+        m_toastHud->showToast(videos.size() == 1
+            ? "Added to queue: " + QFileInfo(videos.first()).fileName()
+            : QString("Queued %1 files").arg(videos.size()));
+    }
+
+    event->acceptProposedAction();
 }
 
 void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
@@ -1443,6 +2470,14 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
     data.subsVisible = m_subsVisible;
     data.deinterlace = m_filterPopover->deinterlace();
     data.normalize = m_filterPopover->normalize();
+    data.alwaysOnTop   = m_alwaysOnTop;
+    data.inPip         = m_inPip;
+    data.showStats     = m_showStats;
+    data.currentAspect = m_currentAspect;
+    // VIDEO_PLAYER_FIX Batch 4.2 — fresh QSettings read each menu open.
+    // Cheap (small list), avoids cache invalidation complexity.
+    data.recentFiles = QSettings("Tankoban", "Tankoban")
+                           .value("player/recentFiles").toStringList();
 
     auto* menu = VideoContextMenu::build(data, this,
         [this](VideoContextMenu::ActionType t, QVariant v) {
@@ -1463,16 +2498,81 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
             m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
             break;
         }
+        case VideoContextMenu::SetAspectRatio: {
+            // The Aspect Ratio submenu was a silent no-op pre-Phase-7
+            // (case was missing from this switch entirely). Now wired to
+            // FrameCanvas::setForcedAspectRatio. "original" → 0 (use natural
+            // frame aspect from m_frameW/m_frameH).
+            const QString val = v.toString();
+            double aspect = 0.0;
+            if      (val == "4:3")    aspect = 4.0 / 3.0;
+            else if (val == "16:9")   aspect = 16.0 / 9.0;
+            else if (val == "2.35:1") aspect = 2.35;
+            else if (val == "1.85:1") aspect = 1.85;
+            // else "original" or unknown → 0.0 (natural)
+            m_canvas->setForcedAspectRatio(aspect);
+            m_currentAspect = val;
+            m_toastHud->showToast(QString("Aspect: %1").arg(val));
+            break;
+        }
         case VideoContextMenu::ToggleFullscreen: toggleFullscreen(); break;
+        case VideoContextMenu::ToggleAlwaysOnTop: toggleAlwaysOnTop(); break;
+        case VideoContextMenu::TakeSnapshot:     takeSnapshot();      break;
+        case VideoContextMenu::TogglePip:        togglePictureInPicture(); break;
+        case VideoContextMenu::OpenUrl:          showOpenUrlDialog();     break;
+        case VideoContextMenu::OpenRecent: {
+            const QString path = v.toString();
+            if (path.isEmpty()) break;
+            // URLs always openable (no cheap existence probe); local
+            // files: check on disk, prune + toast if missing.
+            const bool isRemote = player_utils::looksLikeUrl(path)
+                && !path.startsWith("file://", Qt::CaseInsensitive);
+            if (isRemote || QFileInfo(path).exists()) {
+                openFile(path);
+            } else {
+                QSettings s("Tankoban", "Tankoban");
+                QStringList recent = s.value("player/recentFiles").toStringList();
+                recent.removeAll(path);
+                s.setValue("player/recentFiles", recent);
+                m_toastHud->showToast("File no longer exists — removed from recent list");
+            }
+            break;
+        }
+        case VideoContextMenu::OpenKeybindings: openKeybindingEditor(); break;
+        case VideoContextMenu::ToggleStats:     toggleStatsBadge();      break;
+        case VideoContextMenu::ClearRecent: {
+            QSettings("Tankoban", "Tankoban").remove("player/recentFiles");
+            m_toastHud->showToast("Recent list cleared");
+            break;
+        }
         case VideoContextMenu::SetAudioTrack:
             m_sidecar->sendSetTracks(QString::number(v.toInt()), "");
             m_toastHud->showToast("Audio: track " + QString::number(v.toInt()));
             break;
         case VideoContextMenu::SetSubtitleTrack:
-            if (v.toInt() == 0) {
-                m_sidecar->sendSetTracks("", "off");
-                m_toastHud->showToast("Subtitles off");
+            // Player Polish Batch 5.2 fix (2026-04-15): mirror the
+            // visibility-on-track-switch logic from cycleSubtitleTrack
+            // (around VideoPlayer.cpp:1162). Pre-fix path only sent
+            // sendSetTracks with the new sub id but never adjusted
+            // m_subsVisible / sendSetSubVisibility, so if the user had
+            // previously toggled subtitles off the new track would land
+            // hidden — appearing to the user as "context menu doesn't
+            // change subtitles." Now: picking a real track auto-enables
+            // visibility; picking "off" auto-disables it. Both paths
+            // keep m_subsVisible coherent with sidecar state.
+            if (v.toInt() == -1) {
+                // VIDEO_PLAYER_FIX Batch 1.2 — unified Off path via
+                // setSubtitleOff() helper. Sentinel is -1 (not 0) so a
+                // subtitle stream with AVStream index 0 is a real track,
+                // not Off. Never sends sendSetTracks("", "off") — that
+                // payload crashes the sidecar via std::stoi("off") at
+                // main.cpp:850 (no try/catch in command-dispatch loop).
+                setSubtitleOff();
             } else {
+                if (!m_subsVisible) {
+                    m_subsVisible = true;
+                    m_sidecar->sendSetSubVisibility(true);
+                }
                 m_sidecar->sendSetTracks("", QString::number(v.toInt()));
                 m_toastHud->showToast("Subtitle: track " + QString::number(v.toInt()));
             }
@@ -1484,6 +2584,9 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
                 m_sidecar->sendLoadExternalSub(p);
             break;
         }
+        case VideoContextMenu::OpenSubtitleMenu:
+            m_subMenu->toggle(m_trackChip);
+            break;
         case VideoContextMenu::ToggleDeinterlace:
             m_filterPopover->setDeinterlace(!m_filterPopover->deinterlace());
             m_sidecar->sendSetFilters(m_filterPopover->deinterlace(), 0, 100, 100,

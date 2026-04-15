@@ -26,6 +26,10 @@
 #include <QShortcut>
 #include <QMessageBox>
 
+// P4-3: COMIC_EXTS covers all reader-supported archive formats. Engine
+// (ArchiveReader) and library scanner both handle CBZ + CBR + RAR.
+static const QStringList COMIC_EXTS = {"*.cbz", "*.cbr", "*.rar"};
+
 ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
@@ -209,7 +213,7 @@ void ComicsPage::buildUI()
         if (chosen == continueAct) {
             // Open the comic file directly
             QDir dir(seriesPath);
-            QStringList files = dir.entryList({"*.cbz"}, QDir::Files);
+            QStringList files = dir.entryList(COMIC_EXTS, QDir::Files);
             QCollator col;
             col.setNumericMode(true);
             std::sort(files.begin(), files.end(), [&col](const QString& a, const QString& b) {
@@ -444,7 +448,7 @@ void ComicsPage::addSeriesTile(const SeriesInfo& series)
     // Build progress key map for continue strip (with per-file cover paths)
     QString thumbsDir = m_bridge->dataDir() + "/thumbs";
     QDir dir(series.seriesPath);
-    for (const auto& f : dir.entryList({"*.cbz"}, QDir::Files)) {
+    for (const auto& f : dir.entryList(COMIC_EXTS, QDir::Files)) {
         QString fullPath = dir.absoluteFilePath(f);
         QString progressKey = QString(QCryptographicHash::hash(
             fullPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
@@ -503,8 +507,9 @@ void ComicsPage::addSeriesTile(const SeriesInfo& series)
 
         double fraction = totalPages > 0 ? static_cast<double>(readPages) / totalPages : 0.0;
         QString status = allFinished ? "finished" : (anyInProgress ? "reading" : "");
-        QString countBadge = QString::number(series.fileCount);
-        card->setBadges(fraction, QString(), countBadge, status);
+        // Dropped countBadge — the "N issues" subtitle already conveys the count
+        // and the pill rendered as text "bleeding into" the thumbnail (2026-04-15 Hemanth).
+        card->setBadges(fraction, QString(), QString(), status);
         card->setIsNew(anyNew);
     }
 
@@ -690,7 +695,7 @@ void ComicsPage::refreshContinueStrip()
             QString seriesPath = card->property("seriesPath").toString();
             QString seriesName = card->property("seriesName").toString();
             QDir dir(seriesPath);
-            QStringList files = dir.entryList({"*.cbz"}, QDir::Files);
+            QStringList files = dir.entryList(COMIC_EXTS, QDir::Files);
             QCollator col;
             col.setNumericMode(true);
             std::sort(files.begin(), files.end(), [&col](const QString& a, const QString& b) {
@@ -728,7 +733,7 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
 
     // Check if all volumes in series are finished (for toggle label)
     QDir dir(seriesPath);
-    QStringList cbzFiles = dir.entryList({"*.cbz"}, QDir::Files);
+    QStringList cbzFiles = dir.entryList(COMIC_EXTS, QDir::Files);
     QJsonObject allProg = m_bridge->allProgress("comics");
     bool allFinished = !cbzFiles.isEmpty();
     for (const auto& f : cbzFiles) {
@@ -834,7 +839,7 @@ void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, cons
         for (auto* card : selected) {
             QString seriesPath = card->property("seriesPath").toString();
             QDir dir(seriesPath);
-            for (const auto& f : dir.entryList({"*.cbz"}, QDir::Files)) {
+            for (const auto& f : dir.entryList(COMIC_EXTS, QDir::Files)) {
                 QString id = QString(QCryptographicHash::hash(
                     dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
                 QJsonObject prog = m_bridge->progress("comics", id);

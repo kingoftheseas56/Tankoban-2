@@ -2,9 +2,11 @@
 
 #include <QFrame>
 #include <QLabel>
+#include <QPointer>
 #include <QSlider>
 #include <QTimer>
 #include <QPushButton>
+#include <QCheckBox>
 
 // 10-band audio equalizer popover.
 // Frequencies: 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz.
@@ -28,6 +30,11 @@ signals:
     void eqChanged(const QString& filterString);
     void hoverChanged(bool hovered);
 
+    // Batch 4.3 — Dynamic Range Compression toggle. VideoPlayer relays
+    // to SidecarProcess::sendSetDrcEnabled. Emitted on checkbox state
+    // change.
+    void drcToggled(bool enabled);
+
 protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -49,4 +56,9 @@ private:
     QLabel*  m_valLabels[BAND_COUNT] = {};
     QTimer   m_debounce;
     bool     m_clickFilterInstalled = false;
+    // Anchor tracked across toggle()/dismiss() — see FilterPopover note.
+    QPointer<QWidget> m_anchor;
+
+    // Batch 4.3 — Dynamic Range Compression toggle. Default unchecked.
+    QCheckBox* m_drcCheck = nullptr;
 };

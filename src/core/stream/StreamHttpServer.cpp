@@ -1,11 +1,18 @@
 #include "StreamHttpServer.h"
 #include "core/torrent/TorrentEngine.h"
 
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QTcpSocket>
 #include <QThread>
 #include <QtConcurrent/QtConcurrentRun>
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <windows.h>
+#endif
 
 // ─── Content-Type map ────────────────────────────────────────────────────────
 
@@ -85,14 +92,45 @@ static bool waitForPieces(TorrentEngine* engine, const QString& infoHash,
     return false;
 }
 
+// STREAM_PLAYBACK_FIX Batch 1.3 — RAII counter so shutdown drain sees
+// connection exit regardless of which loop branch we break from. Also
+// guarantees the socket closes cleanly (TCP FIN) even on early-return.
+namespace {
+struct ConnectionGuard {
+    StreamHttpServer* server;
+    QTcpSocket*       socket;
+    explicit ConnectionGuard(StreamHttpServer* s, QTcpSocket* sk)
+        : server(s), socket(sk) { if (server) server->connectionStarted(); }
+    ~ConnectionGuard() {
+        // Best-effort graceful close: disconnectFromHost queues a FIN, then
+        // waitForDisconnected bounds how long we wait for the peer to ack
+        // before the socket destructor force-closes on scope exit.
+        if (socket && socket->state() != QAbstractSocket::UnconnectedState) {
+            socket->disconnectFromHost();
+            if (socket->state() != QAbstractSocket::UnconnectedState) {
+                socket->waitForDisconnected(2000);
+            }
+        }
+        if (server) server->connectionEnded();
+    }
+};
+}  // namespace
+
 static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
 {
     QTcpSocket socket;
     if (!socket.setSocketDescriptor(socketDesc))
         return;
 
+    ConnectionGuard guard(server, &socket);
+
+    // Early exit if a shutdown arrived between pendingConnection accept and
+    // this thread being scheduled.
+    if (server && server->isShuttingDown()) {
+        return;
+    }
+
     if (!socket.waitForReadyRead(5000)) {
-        socket.close();
         return;
     }
 
@@ -110,9 +148,15 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
     }
 
     auto sendErr = [&](int code, const char* reason) {
+        // STREAM_PLAYBACK_FIX Batch 1.2 — include Content-Type + Connection
+        // on error responses. Some ffmpeg builds warn / retry unexpectedly
+        // on type-less 4xx/5xx bodies; explicit Connection: close lets the
+        // client tear down cleanly instead of sitting on a half-open socket.
         QByteArray r;
         r += "HTTP/1.1 " + QByteArray::number(code) + " " + reason + "\r\n";
-        r += "Content-Length: 0\r\n\r\n";
+        r += "Content-Type: text/plain\r\n";
+        r += "Content-Length: 0\r\n";
+        r += "Connection: close\r\n\r\n";
         socket.write(r);
         socket.waitForBytesWritten(3000);
         socket.close();
@@ -150,10 +194,14 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
             end = qMin(re, entry.size - 1);
             hasRange = true;
         } else {
+            // STREAM_PLAYBACK_FIX Batch 1.2 — 416 also gains Content-Type +
+            // Connection: close for consistency with sendErr.
             QByteArray r;
             r += "HTTP/1.1 416 Range Not Satisfiable\r\n";
             r += "Content-Range: bytes */" + QByteArray::number(entry.size) + "\r\n";
-            r += "Content-Length: 0\r\n\r\n";
+            r += "Content-Type: text/plain\r\n";
+            r += "Content-Length: 0\r\n";
+            r += "Connection: close\r\n\r\n";
             socket.write(r);
             socket.waitForBytesWritten(3000);
             socket.close();
@@ -200,24 +248,91 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
     qint64 remaining = length;
     qint64 offset = start;
 
+    // STREAM_PLAYBACK_FIX Batch 1.3 — idle-progress watchdog. The timer is
+    // reset on every successful chunk write. If we go 30s without progress
+    // (not bytes-on-wire, but piece availability + write completion), the
+    // connection is considered dead — break so the guard releases the
+    // socket instead of hanging the thread indefinitely.
+    QElapsedTimer idleTimer;
+    idleTimer.start();
+    constexpr qint64 kIdleTimeoutMs = 30000;
+
     while (remaining > 0) {
+        // Cooperative shutdown check. Set by StreamHttpServer::stop().
+        if (server && server->isShuttingDown()) {
+            qWarning() << "StreamHttpServer: shutdown requested, closing active connection";
+            break;
+        }
+
+        // Idle-progress watchdog.
+        if (idleTimer.elapsed() > kIdleTimeoutMs) {
+            qWarning().nospace()
+                << "StreamHttpServer: idle timeout ("
+                << kIdleTimeoutMs << "ms) — no progress, closing connection";
+            break;
+        }
+
+        // Client disconnected (user closed the player, sidecar gave up).
+        // Caught here before any further waitForPieces / file.read work.
+        if (socket.state() != QAbstractSocket::ConnectedState) {
+            break;
+        }
+
         qint64 toRead = qMin(static_cast<qint64>(CHUNK_SIZE), remaining);
 
-        // Wait for pieces if engine is available
-        if (engine)
-            waitForPieces(engine, entry.infoHash, entry.fileIndex, offset, toRead);
+        // STREAM_PLAYBACK_FIX Batch 1.2 — honor the waitForPieces return.
+        //
+        // Before: the timeout was silently ignored and the serve loop fell
+        // through to file.read(), returning sparse-zero bytes from the
+        // un-downloaded region. The decoder saw a zero-filled hole,
+        // interpreted it as corrupt stream, and resynced forward to the
+        // next keyframe — producing the user-visible "0:05 → 5:16" jumps.
+        //
+        // After: break the loop cleanly on timeout. The socket closes
+        // (Connection: close header is already set). The sidecar's
+        // av_read_frame sees AVERROR(EIO), which routes into the existing
+        // HTTP retry/stall-buffering path at
+        // native_sidecar/src/video_decoder.cpp:834-849 — user sees a
+        // buffering indicator and playback resumes when pieces catch up.
+        //
+        // qWarning fires on timeout so piece-starvation is observable in
+        // logs (previously silent failure).
+        if (engine) {
+            if (!waitForPieces(engine, entry.infoHash, entry.fileIndex,
+                               offset, toRead))
+            {
+                qWarning().nospace()
+                    << "StreamHttpServer: piece wait timed out for "
+                    << entry.infoHash << " file=" << entry.fileIndex
+                    << " offset=" << offset << " toRead=" << toRead
+                    << " — closing connection to trigger decoder retry";
+                break;
+            }
+        }
 
         QByteArray chunk = file.read(toRead);
-        if (chunk.isEmpty()) break;
+        if (chunk.isEmpty()) {
+            qWarning().nospace()
+                << "StreamHttpServer: read 0 bytes at offset=" << offset
+                << " toRead=" << toRead << " path=" << entry.path;
+            break;
+        }
 
-        if (socket.write(chunk) < 0) break;
-        if (!socket.waitForBytesWritten(10000)) break;
+        if (socket.write(chunk) < 0) {
+            qWarning() << "StreamHttpServer: socket.write failed — client gone";
+            break;
+        }
+        if (!socket.waitForBytesWritten(10000)) {
+            qWarning() << "StreamHttpServer: waitForBytesWritten timed out";
+            break;
+        }
 
         remaining -= chunk.size();
         offset += chunk.size();
+        idleTimer.restart();   // Batch 1.3 — successful progress resets the watchdog.
     }
 
-    socket.close();
+    // Batch 1.3 — ConnectionGuard handles socket close + FIN on scope exit.
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -237,6 +352,10 @@ bool StreamHttpServer::start()
 {
     if (m_server) return true;
 
+    // STREAM_PLAYBACK_FIX Batch 1.3 — clear any shutdown flag set by a
+    // prior stop() so this start() re-enables the serve loop.
+    m_shuttingDown.store(false);
+
     m_server = new QTcpServer(this);
     m_server->setMaxPendingConnections(30);
     if (!m_server->listen(QHostAddress::LocalHost, 0)) {
@@ -251,13 +370,46 @@ bool StreamHttpServer::start()
 
 void StreamHttpServer::stop()
 {
+    // STREAM_PLAYBACK_FIX Batch 1.3 — cooperative shutdown drain.
+    //
+    // Set the shutdown flag first so any in-flight handleConnection loops
+    // notice on their next iteration and break cleanly (freeing the socket
+    // and file descriptor). Then wait up to 2s for active connections to
+    // drain before tearing down the QTcpServer. Without this, shutdown on
+    // player-close could leave worker threads mid-serve — the file handle
+    // stayed open and restarting a stream immediately hit a locked-file
+    // error (audit P1 #2 regression class).
+    m_shuttingDown.store(true);
+
+    QElapsedTimer drainTimer;
+    drainTimer.start();
+    constexpr qint64 kDrainTimeoutMs = 2000;
+    while (m_activeConnections.load() > 0 && drainTimer.elapsed() < kDrainTimeoutMs) {
+        QThread::msleep(25);
+    }
+    if (m_activeConnections.load() > 0) {
+        qWarning().nospace()
+            << "StreamHttpServer::stop: drain timeout — "
+            << m_activeConnections.load() << " connection(s) still active after "
+            << kDrainTimeoutMs << "ms; proceeding with teardown";
+    }
+
     if (m_server) {
         m_server->close();
         delete m_server;
         m_server = nullptr;
     }
-    QMutexLocker lock(&m_mutex);
-    m_registry.clear();
+    {
+        QMutexLocker lock(&m_mutex);
+        m_registry.clear();
+    }
+
+    // Deliberately do NOT reset m_shuttingDown here — a worker thread stuck
+    // in waitForPieces (15s blocking sleep) could miss its loop-iteration
+    // shutdown check, unblock after drain timeout, then read a reset flag
+    // and keep serving on a torn-down server. start() below is the only
+    // place that flips the flag back to false, and that only happens on a
+    // fresh restart path.
 }
 
 int StreamHttpServer::port() const
@@ -303,17 +455,76 @@ QString StreamHttpServer::registryKey(const QString& infoHash, int fileIndex)
 void StreamHttpServer::onNewConnection()
 {
     while (auto* pending = m_server->nextPendingConnection()) {
-        qintptr desc = pending->socketDescriptor();
-        // Detach — we must NOT delete the QTcpSocket since that closes the descriptor.
-        // Instead, disconnect it from QTcpServer ownership and let it leak.
-        // The worker thread creates a NEW QTcpSocket from the descriptor.
-        pending->disconnect();       // disconnect all signals
-        pending->setParent(nullptr); // detach from server
-        // We can't safely delete pending here (closes the fd).
-        // Mark it for later cleanup — small leak per connection, acceptable for localhost.
+        const qintptr originalDesc = pending->socketDescriptor();
 
-        QtConcurrent::run([desc, this]() {
-            handleConnection(desc, this);
+        // STREAM_PLAYBACK_FIX — socket-handoff bugfix (audit P0 #2, trace at
+        // _player_debug.txt 2026-04-15 15:48/15:54 confirmed).
+        //
+        // Previous code detached the original QTcpSocket and let it leak so
+        // the descriptor wouldn't close, then wrapped the same fd with a
+        // second QTcpSocket in a worker thread. The orphan's internal
+        // socket notifier stayed armed in the main thread — kernel read
+        // readiness events landed on the orphan, bytes were buffered
+        // inside the orphan's inaccessible QIODevice buffer, and the
+        // worker's waitForReadyRead timed out with 0 bytes. ffmpeg on
+        // the other end read EOF before any response header arrived,
+        // producing "Cannot open file: probe failed".
+        //
+        // Fix: duplicate the socket with WSADuplicateSocketW. The worker
+        // gets an independent SOCKET handle; the original QTcpSocket is
+        // closed + deleted cleanly (which closes only its handle). No
+        // competing read notifiers. Windows-only — app is Windows-only;
+        // ws2_32 already linked in CMakeLists.txt.
+        qintptr workerDesc = -1;
+#ifdef _WIN32
+        WSAPROTOCOL_INFOW info{};
+        if (::WSADuplicateSocketW(
+                static_cast<SOCKET>(originalDesc),
+                ::GetCurrentProcessId(),
+                &info) == 0)
+        {
+            SOCKET dup = ::WSASocketW(info.iAddressFamily,
+                                      info.iSocketType,
+                                      info.iProtocol,
+                                      &info, 0,
+                                      WSA_FLAG_OVERLAPPED);
+            if (dup != INVALID_SOCKET) {
+                workerDesc = static_cast<qintptr>(dup);
+            } else {
+                qWarning().nospace()
+                    << "StreamHttpServer: WSASocketW failed after duplicate: "
+                    << int(::WSAGetLastError());
+            }
+        } else {
+            qWarning().nospace()
+                << "StreamHttpServer: WSADuplicateSocketW failed: "
+                << int(::WSAGetLastError());
+        }
+#endif
+
+        if (workerDesc == -1) {
+            // Fallback to the old (broken) behavior if duplicate fails.
+            // Shouldn't hit this path on any modern Windows stack; keeping
+            // it as a safety valve rather than dropping the connection.
+            qWarning() << "StreamHttpServer: falling back to legacy 2-socket handoff";
+            pending->disconnect();
+            pending->setParent(nullptr);
+            const qintptr desc = originalDesc;
+            QtConcurrent::run([desc, this]() {
+                handleConnection(desc, this);
+            });
+            continue;
+        }
+
+        // Happy path — worker owns a duplicated fd; close + delete the
+        // original cleanly. The original's close() closes its OWN handle,
+        // not the duplicate; worker stays unaffected.
+        pending->disconnect();
+        pending->close();
+        pending->deleteLater();
+
+        QtConcurrent::run([workerDesc, this]() {
+            handleConnection(workerDesc, this);
         });
     }
 }

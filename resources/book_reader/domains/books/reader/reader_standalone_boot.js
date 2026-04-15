@@ -44,10 +44,27 @@
       return;
     }
 
-    // Build book input (matches normalizeBookInput expectations)
+    // Build book input (matches normalizeBookInput expectations).
+    // BOOK_FIX 1.1: id must be the canonical SHA1[:20] of the normalized path so
+    // reader saves land in the same record the library reads. If the library
+    // already threaded a bookId through, prefer that; otherwise compute via the
+    // bridge. reader_core.js::open() re-resolves as a belt-and-suspenders pass.
     var fileName = filePath.replace(/\\/g, '/').split('/').pop() || 'book';
+    var resolvedId = bookId && String(bookId).trim();
+    if (!resolvedId) {
+      try {
+        var api = window.Tanko && window.Tanko.api && window.Tanko.api.booksProgress;
+        if (api && typeof api.keyFor === 'function') {
+          resolvedId = await api.keyFor(filePath);
+        }
+      } catch (e) { /* swallow — leaves resolvedId empty, handled below */ }
+    }
+    if (!resolvedId) {
+      console.error('[ebook-standalone] Could not resolve SHA1 key for: ' + filePath);
+      return;
+    }
     var bookInput = {
-      id: bookId || filePath,  // prefer library ID over file path
+      id: resolvedId,
       path: filePath,
       title: (displayTitle && displayTitle.trim()) ? displayTitle.trim() : fileName.replace(/\.\w+$/, ''),
       format: format,

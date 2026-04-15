@@ -20,6 +20,12 @@ public:
     void populateChapters(const QList<ChapterInfo>& chapters);
     void showError(const QString& message);
 
+    // C3: populate the detail panel (cover + author + source + status).
+    // Safe to call before populateChapters. setCoverPath can be called again
+    // later as the B1 cover cache resolves.
+    void setMangaMetadata(const MangaResult& result);
+    void setCoverPath(const QString& path);
+
     // Selected chapters + config
     QList<ChapterInfo> selectedChapters() const;
     QString destinationPath() const;
@@ -42,6 +48,13 @@ private:
     QSpinBox*     m_rangeFrom    = nullptr;
     QSpinBox*     m_rangeTo      = nullptr;
     QPushButton*  m_downloadBtn  = nullptr;
+
+    // C3: left detail-panel widgets
+    QLabel*       m_coverLabel   = nullptr;
+    QLabel*       m_titleLabel   = nullptr;
+    QLabel*       m_authorLabel  = nullptr;
+    QLabel*       m_sourceLabel  = nullptr;
+    QLabel*       m_mangaStatusLabel = nullptr;
 
     QList<ChapterInfo> m_chapters;
 };

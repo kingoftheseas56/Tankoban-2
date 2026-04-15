@@ -299,6 +299,11 @@ void MainWindow::buildPageStack()
     m_pageStack->addWidget(streamPage);
     dbg("4f-streampage-created");
 
+    // Share StreamPage's MetaAggregator with VideosPage for "Fetch poster
+    // from internet" context-menu action on folder tiles (Agent 5 Batch 1,
+    // per HELP.md 2026-04-15 handshake with Agent 4).
+    videosPage->setMetaAggregator(streamPage->metaAggregator());
+
     auto *sourcesPage = new SourcesPage(m_bridge, torrentClient);
     dbg("4g-sourcespage-created");
     m_pageStack->addWidget(sourcesPage);
@@ -477,14 +482,24 @@ void MainWindow::openComicReader(const QString& cbzPath, const QStringList& seri
     m_comicReader->setGeometry(centralWidget()->rect());
     m_comicReader->show();
     m_comicReader->raise();
-    m_comicReader->setFocus();
     // Open book after widget is visible and has real geometry
     m_comicReader->openBook(cbzPath, seriesCbzList, seriesName);
+    m_comicReader->setFocus();
 }
 
 void MainWindow::closeComicReader()
 {
+    // Hide reader FIRST so the library is already visible during the window-state
+    // restore — avoids a visible flash of the reader resizing from fullscreen to
+    // maximized before it disappears.
     m_comicReader->hide();
+    // Exit fullscreen if we're in it — library has no fullscreen mode of its own
+    if (isFullScreen()) {
+        if (m_wasMaximizedBeforeFullscreen)
+            showMaximized();
+        else
+            showNormal();
+    }
 }
 
 // ── Book reader ──────────────────────────────────────────────────────────────

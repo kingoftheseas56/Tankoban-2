@@ -1,5 +1,6 @@
 #include "LibraryScanner.h"
 #include "ScannerUtils.h"
+#include "ArchiveReader.h"  // P4-2: CBR/RAR cover + page-count via libarchive
 
 #include <QDir>
 #include <QDirIterator>
@@ -13,6 +14,14 @@
 #ifdef HAS_QT_ZIP
 #include <QtCore/private/qzipreader_p.h>
 #endif
+
+// P4-2: comic format dispatch — CBZ uses fast QZipReader path; CBR/RAR
+// route through ArchiveReader (which already wraps libarchive transparently).
+static bool isLibarchiveFormat(const QString& path)
+{
+    return path.endsWith(".cbr", Qt::CaseInsensitive)
+        || path.endsWith(".rar", Qt::CaseInsensitive);
+}
 
 static constexpr int THUMB_W = 240;
 static constexpr int THUMB_H = 369;  // int(240 / 0.65) — matches groundwork aspect ratio
@@ -38,9 +47,10 @@ LibraryScanner::LibraryScanner(const QString& thumbsDir, QObject* parent)
 
 void LibraryScanner::scan(const QStringList& rootFolders)
 {
-    // Group .cbz files by first-level subdirectory under each root
+    // P4-2: enumerate all comic formats — CBZ + CBR + RAR. Engine
+    // (ArchiveReader) handles all three; this scan path now matches.
     QMap<QString, QStringList> seriesMap =
-        ScannerUtils::groupByFirstLevelSubdir(rootFolders, {"*.cbz"});
+        ScannerUtils::groupByFirstLevelSubdir(rootFolders, {"*.cbz", "*.cbr", "*.rar"});
 
     // Natural sort the files within each series
     QCollator collator;
@@ -56,15 +66,13 @@ void LibraryScanner::scan(const QStringList& rootFolders)
             return collator.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
         });
 
-        // Detect loose files (key ends with "::LOOSE")
-        bool isLoose = seriesPath.endsWith("::LOOSE");
-        if (isLoose)
-            seriesPath = seriesPath.chopped(7);  // Remove "::LOOSE"
+        // Skip loose files in Comics — avoids a ghost tile named after the
+        // root folder for stray archives sitting directly at the root.
+        if (seriesPath.endsWith("::LOOSE"))
+            continue;
 
         SeriesInfo info;
-        info.seriesName = isLoose
-            ? ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName())
-            : ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
+        info.seriesName = ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
         info.seriesPath = seriesPath;
         info.fileCount = files.size();
 
@@ -130,6 +138,11 @@ void LibraryScanner::scan(const QStringList& rootFolders)
 
 int LibraryScanner::countPagesInCbz(const QString& cbzPath)
 {
+    // P4-2: CBR/RAR via libarchive (ArchiveReader::pageList already filters
+    // to image entries + sorts naturally — its size IS the page count).
+    if (isLibarchiveFormat(cbzPath))
+        return ArchiveReader::pageList(cbzPath).size();
+
 #ifdef HAS_QT_ZIP
     QZipReader zip(cbzPath);
     if (!zip.exists())
@@ -150,6 +163,25 @@ int LibraryScanner::countPagesInCbz(const QString& cbzPath)
 
 QByteArray LibraryScanner::extractCoverFromCbz(const QString& cbzPath)
 {
+    // P4-2: CBR/RAR via libarchive — pageList is already natural-sorted +
+    // filtered to image entries. Cover priority logic mirrors the CBZ path.
+    if (isLibarchiveFormat(cbzPath)) {
+        const QStringList pages = ArchiveReader::pageList(cbzPath);
+        if (pages.isEmpty()) return {};
+
+        // Cover priority — "cover.*" or "folder.*" basename wins
+        for (const auto& name : pages) {
+            QString basename = QFileInfo(name).fileName().toLower();
+            if (basename.startsWith("cover.") || basename.startsWith("folder.")) {
+                QByteArray data = ArchiveReader::pageData(cbzPath, name);
+                if (data.size() > 100) return data;
+            }
+        }
+        // Fallback to first sorted image
+        QByteArray data = ArchiveReader::pageData(cbzPath, pages.first());
+        return data.size() > 100 ? data : QByteArray{};
+    }
+
 #ifdef HAS_QT_ZIP
     QZipReader zip(cbzPath);
     if (!zip.exists())

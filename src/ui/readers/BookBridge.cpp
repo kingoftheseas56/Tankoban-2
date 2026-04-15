@@ -1,7 +1,6 @@
 #include "BookBridge.h"
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
-#include "core/tts/KokoroTtsEngine.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -48,6 +47,15 @@ QByteArray BookBridge::filesRead(const QString& filePath)
 
 // ── booksProgress ────────────────────────────────────────────────────────────
 
+QString BookBridge::progressKey(const QString& absPath) const
+{
+    QString norm = absPath;
+    norm.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return QString::fromLatin1(
+        QCryptographicHash::hash(norm.toUtf8(), QCryptographicHash::Sha1)
+            .toHex().left(20));
+}
+
 QJsonObject BookBridge::booksProgressGet(const QString& bookId)
 {
     if (!m_core) return {};
@@ -61,20 +69,43 @@ void BookBridge::booksProgressSave(const QString& bookId, const QJsonObject& dat
 }
 
 // ── booksSettings ────────────────────────────────────────────────────────────
+//
+// BOOK_FIX 1.2: global flat-settings contract.
+//
+// Pre-1.2 the bridge keyed settings by an in-JS id argument (`save(id, data)` /
+// `get(id)`). The JS calls zero/one-arg per the Tankoban-Max shape, so over
+// QWebChannel the `id` arg received the settings object stringified ("") and
+// the `data` arg arrived undefined — every save landed under key "" as an
+// empty object. books_settings.json degenerated into `{"":{}}`.
+//
+// The new contract persists a flat settings object at the root of
+// books_settings.json. `get()` wraps the disk contents as `{ "settings": ... }`
+// to match the Tankoban-Max JS unwrap at reader_state.js:359-360. `save(data)`
+// writes the passed object directly. A one-shot migration below discards the
+// broken `{"":{}}` record on first read (it carries no recoverable data).
 
-QJsonObject BookBridge::booksSettingsGet(const QString& bookId)
+QJsonObject BookBridge::booksSettingsGet()
 {
-    if (!m_core) return {};
-    QJsonObject all = m_core->store().read(SETTINGS_FILE);
-    return all.value(bookId).toObject();
+    if (!m_core) return {{"settings", QJsonObject{}}};
+
+    QJsonObject disk = m_core->store().read(SETTINGS_FILE);
+
+    // Migration: 1.2 replaces the per-book-keyed map with a flat root object.
+    // If the file still looks like a pre-1.2 map (only keys are "", "<sha1>",
+    // or other short hex), treat it as legacy and return empty. First save
+    // after 1.2 overwrites the file cleanly.
+    const bool legacyEmptyKey = disk.contains(QStringLiteral("")) && disk.size() == 1;
+    if (legacyEmptyKey) {
+        return {{"settings", QJsonObject{}}};
+    }
+
+    return {{"settings", disk}};
 }
 
-void BookBridge::booksSettingsSave(const QString& bookId, const QJsonObject& data)
+void BookBridge::booksSettingsSave(const QJsonObject& data)
 {
     if (!m_core) return;
-    QJsonObject all = m_core->store().read(SETTINGS_FILE);
-    all[bookId] = data;
-    m_core->store().write(SETTINGS_FILE, all);
+    m_core->store().write(SETTINGS_FILE, data);
 }
 
 // ── booksBookmarks ───────────────────────────────────────────────────────────
@@ -269,174 +300,6 @@ void BookBridge::booksDisplayNamesDelete(const QString& bookId)
     m_core->store().write(DISPLAY_NAMES_FILE, all);
 }
 
-// ── TTS (Kokoro) ─────────────────────────────────────────────────────────────
-
-static QByteArray pcmToWav(const QByteArray& pcmFloat32, int sampleRate)
-{
-    int dataSize = pcmFloat32.size();
-    QByteArray wav;
-    wav.reserve(44 + dataSize);
-
-    // RIFF header
-    wav.append("RIFF", 4);
-    quint32 fileSize = 36 + dataSize;
-    wav.append(reinterpret_cast<const char*>(&fileSize), 4);
-    wav.append("WAVE", 4);
-
-    // fmt chunk — IEEE float
-    wav.append("fmt ", 4);
-    quint32 fmtSize = 16;
-    wav.append(reinterpret_cast<const char*>(&fmtSize), 4);
-    quint16 format = 3; // IEEE float
-    wav.append(reinterpret_cast<const char*>(&format), 2);
-    quint16 channels = 1;
-    wav.append(reinterpret_cast<const char*>(&channels), 2);
-    quint32 sr = sampleRate;
-    wav.append(reinterpret_cast<const char*>(&sr), 4);
-    quint32 byteRate = sampleRate * 4;
-    wav.append(reinterpret_cast<const char*>(&byteRate), 4);
-    quint16 blockAlign = 4;
-    wav.append(reinterpret_cast<const char*>(&blockAlign), 2);
-    quint16 bitsPerSample = 32;
-    wav.append(reinterpret_cast<const char*>(&bitsPerSample), 2);
-
-    // data chunk
-    wav.append("data", 4);
-    quint32 ds = dataSize;
-    wav.append(reinterpret_cast<const char*>(&ds), 4);
-    wav.append(pcmFloat32);
-
-    return wav;
-}
-
-static QString ttsModelDir()
-{
-    return QCoreApplication::applicationDirPath()
-         + QStringLiteral("/models/kokoro/kokoro-int8-multi-lang-v1_1");
-}
-
-void BookBridge::ensureTts()
-{
-    if (m_tts) return;
-    QString dir = ttsModelDir();
-    if (!QDir(dir).exists()) return;
-    m_tts = new KokoroTtsEngine(dir, this);
-}
-
-QJsonObject BookBridge::ttsProbe()
-{
-    QString dir = ttsModelDir();
-    bool available = QDir(dir).exists() && QFileInfo(dir + "/model.int8.onnx").exists();
-    if (available) {
-        ensureTts();
-        available = m_tts && m_tts->isReady();
-    }
-    QJsonObject r;
-    r["ok"] = true;
-    r["available"] = available;
-    if (!available) r["reason"] = QStringLiteral("Kokoro model not found or failed to load");
-    return r;
-}
-
-QJsonObject BookBridge::ttsGetVoices()
-{
-    ensureTts();
-    if (!m_tts || !m_tts->isReady())
-        return {{"ok", false}, {"voices", QJsonArray()}, {"error", "TTS not available"}};
-
-    QJsonArray voices;
-    for (const auto& v : m_tts->englishVoices()) {
-        QJsonObject vo;
-        vo["name"]       = v.name;
-        vo["voiceURI"]   = v.id;
-        vo["lang"]       = v.lang;
-        vo["gender"]     = v.gender;
-        vo["friendlyName"] = v.name + " (" + v.gender + ", " + v.lang + ")";
-        voices.append(vo);
-    }
-    return {{"ok", true}, {"voices", voices}, {"cached", true}};
-}
-
-QJsonObject BookBridge::ttsSynth(const QJsonObject& params)
-{
-    ensureTts();
-    if (!m_tts || !m_tts->isReady())
-        return {{"ok", false}, {"error", "TTS not available"}};
-
-    QString text  = params.value("text").toString().trimmed();
-    QString voice = params.value("voice").toString();
-    double  rate  = params.value("rate").toDouble(1.0);
-
-    if (text.isEmpty())
-        return {{"ok", false}, {"error", "empty text"}};
-
-    // Map voice URI to speaker ID
-    int sid = 0;
-    if (!voice.isEmpty())
-        sid = m_tts->speakerIdForVoice(voice);
-    if (sid < 0) sid = 0;
-
-    float speed = qBound(0.5f, static_cast<float>(rate), 3.0f);
-
-    QByteArray pcm = m_tts->synthesize(text, sid, speed);
-    if (pcm.isEmpty())
-        return {{"ok", false}, {"error", "synthesis failed"}};
-
-    QByteArray wav = pcmToWav(pcm, m_tts->sampleRate());
-    QString b64 = QString::fromLatin1(wav.toBase64());
-
-    // Estimate word boundaries by distributing offsets linearly across audio duration
-    int sampleCount = pcm.size() / int(sizeof(float));
-    double durationMs = (double(sampleCount) / double(m_tts->sampleRate())) * 1000.0;
-
-    QJsonArray boundaries;
-    // Split on whitespace, track character positions
-    int pos = 0;
-    int wordCount = 0;
-    struct WordSpan { int charIndex; int charLen; QString word; };
-    QVector<WordSpan> words;
-
-    while (pos < text.size()) {
-        // Skip whitespace
-        while (pos < text.size() && text[pos].isSpace()) pos++;
-        if (pos >= text.size()) break;
-        // Find word end
-        int start = pos;
-        while (pos < text.size() && !text[pos].isSpace()) pos++;
-        words.append({start, pos - start, text.mid(start, pos - start)});
-    }
-
-    if (!words.isEmpty()) {
-        double msPerWord = durationMs / double(words.size());
-        for (int i = 0; i < words.size(); ++i) {
-            QJsonObject b;
-            b["offsetMs"] = msPerWord * i;
-            b["text"] = words[i].word;
-            boundaries.append(b);
-        }
-    }
-
-    return {{"ok", true}, {"audioBase64", b64}, {"boundaries", boundaries}};
-}
-
-QJsonObject BookBridge::ttsWarmup()
-{
-    ensureTts();
-    bool available = m_tts && m_tts->isReady();
-    int count = available ? m_tts->englishVoices().size() : 0;
-    return {{"ok", true}, {"available", available}, {"voicesCount", count}};
-}
-
-QJsonObject BookBridge::ttsCancelStream(const QString& /*streamId*/)
-{
-    return {{"ok", true}};
-}
-
-QJsonObject BookBridge::ttsResetInstance()
-{
-    return {{"ok", true}};
-}
-
 // ── audiobooks ───────────────────────────────────────────────────────────────
 
 static bool isAudioFile(const QString& fileName)
@@ -598,4 +461,11 @@ void BookBridge::setFullscreen(bool fs)
 void BookBridge::requestClose()
 {
     emit closeRequested();
+}
+
+// ── readiness (Batch 1.3) ────────────────────────────────────────────────────
+
+void BookBridge::markReaderReady()
+{
+    emit readerReady();
 }

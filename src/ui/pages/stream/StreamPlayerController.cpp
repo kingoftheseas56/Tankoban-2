@@ -6,6 +6,9 @@
 
 #include <QDateTime>
 
+using tankostream::addon::Stream;
+using tankostream::addon::StreamSource;
+
 StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamEngine* engine,
                                                QObject* parent)
     : QObject(parent)
@@ -18,8 +21,7 @@ StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamEngine*
 
 void StreamPlayerController::startStream(const QString& imdbId, const QString& mediaType,
                                           int season, int episode,
-                                          const QString& magnetUri, int fileIndex,
-                                          const QString& fileNameHint)
+                                          const Stream& selectedStream)
 {
     stopStream();
 
@@ -28,18 +30,35 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
     m_mediaType = mediaType;
     m_season = season;
     m_episode = episode;
-    m_magnetUri = magnetUri;
-    m_fileIndex = fileIndex;
-    m_fileNameHint = fileNameHint;
+    m_selectedStream = selectedStream;
     m_pollCount = 0;
     m_startTimeMs = QDateTime::currentMSecsSinceEpoch();
     m_lastMetadataChangeMs = m_startTimeMs;
     m_lastErrorCode.clear();
 
-    // First poll immediately
-    pollStreamStatus();
+    // Direct URL/HTTP: one-shot handoff, skip polling.
+    if (selectedStream.source.kind == StreamSource::Kind::Http
+        || selectedStream.source.kind == StreamSource::Kind::Url) {
+        const StreamFileResult oneShot = m_engine->streamFile(m_selectedStream);
+        if (oneShot.ok && oneShot.readyToStart) {
+            onStreamReady(oneShot.url);
+            return;
+        }
+        m_active = false;
+        emit streamFailed(oneShot.errorMessage.isEmpty()
+                              ? QStringLiteral("Failed to start direct stream")
+                              : oneShot.errorMessage);
+        return;
+    }
 
-    // Start polling timer
+    if (selectedStream.source.kind == StreamSource::Kind::YouTube) {
+        m_active = false;
+        emit streamFailed(QStringLiteral("YouTube playback not yet supported"));
+        return;
+    }
+
+    // Magnet path: kick the polling loop.
+    pollStreamStatus();
     m_pollTimer.start(POLL_FAST_MS);
 }
 
@@ -51,10 +70,13 @@ void StreamPlayerController::stopStream()
     m_pollTimer.stop();
     m_active = false;
 
-    if (!m_infoHash.isEmpty()) {
+    // Only magnet streams have an engine-side torrent to stop.
+    if (m_selectedStream.source.kind == StreamSource::Kind::Magnet && !m_infoHash.isEmpty()) {
         m_engine->stopStream(m_infoHash);
-        m_infoHash.clear();
     }
+
+    m_infoHash.clear();
+    m_selectedStream = {};
 
     emit streamStopped();
 }
@@ -64,35 +86,31 @@ void StreamPlayerController::pollStreamStatus()
     if (!m_active)
         return;
 
-    // Check hard timeout
+    // Polling is magnet-only; direct paths returned early from startStream.
     qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_startTimeMs;
     if (elapsed > HARD_TIMEOUT_MS) {
         m_pollTimer.stop();
         m_active = false;
-        emit streamFailed("Stream timed out after " + QString::number(HARD_TIMEOUT_MS / 1000) + "s");
+        emit streamFailed("Stream timed out after "
+                          + QString::number(HARD_TIMEOUT_MS / 1000) + "s");
         return;
     }
 
-    // Poll the engine
-    auto result = m_engine->streamFile(m_magnetUri, m_fileIndex, m_fileNameHint);
+    auto result = m_engine->streamFile(m_selectedStream);
 
-    // Track the canonical info hash from the engine result
     if (m_infoHash.isEmpty() && !result.infoHash.isEmpty())
         m_infoHash = result.infoHash;
 
     if (result.ok && result.readyToStart) {
-        // Stream is ready
         m_pollTimer.stop();
         onStreamReady(result.url);
         return;
     }
 
-    // Build status text for UI
     QString statusText;
     auto torrentStatus = m_engine->torrentStatus(m_infoHash);
 
     if (result.errorCode == "METADATA_NOT_READY") {
-        // Detect metadata stall
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (m_lastErrorCode != "METADATA_NOT_READY") {
             m_lastMetadataChangeMs = now;
@@ -100,12 +118,18 @@ void StreamPlayerController::pollStreamStatus()
             statusText = "Metadata stalled. Torrent may be dead.";
             emit bufferUpdate(statusText, 0.0);
             m_lastErrorCode = result.errorCode;
-            // Don't abort — let hard timeout handle it, but notify UI
             ++m_pollCount;
             return;
         }
         statusText = "Resolving metadata...";
     } else if (result.errorCode == "FILE_NOT_READY") {
+        // STREAM_PLAYBACK_FIX Phase 3 Batch 3.2 — fileProgress +
+        // downloadedBytes are gate progress (contiguous head / 5 MB target),
+        // not whole-file progress. So "Buffering 60% (3.0 MB)" now means
+        // "head window is 60% contiguous, 3.0 MB of head is on disk" —
+        // reaches 100% exactly when ffmpeg's probe can run without HTTP
+        // piece-waits. Previously this read as whole-file progress which
+        // misled users into seeing e.g. 15% while real readiness lagged.
         int pct = static_cast<int>(result.fileProgress * 100.0);
         double mbDownloaded = result.downloadedBytes / (1024.0 * 1024.0);
         double speedMBs = torrentStatus.dlSpeed / (1024.0 * 1024.0);
@@ -120,11 +144,11 @@ void StreamPlayerController::pollStreamStatus()
                 .arg(speedMBs, 0, 'f', 1);
         }
 
-        // Append elapsed time after 5s
         int elapsedSec = static_cast<int>(elapsed / 1000);
         if (elapsedSec >= 5)
             statusText += QString(" [%1s]").arg(elapsedSec);
-    } else if (result.errorCode == "ENGINE_ERROR") {
+    } else if (result.errorCode == "ENGINE_ERROR"
+               || result.errorCode == "UNSUPPORTED_SOURCE") {
         m_pollTimer.stop();
         m_active = false;
         emit streamFailed(result.errorMessage);
@@ -138,7 +162,6 @@ void StreamPlayerController::pollStreamStatus()
     double bufferPercent = result.fileProgress * 100.0;
     emit bufferUpdate(statusText, bufferPercent);
 
-    // Switch to slow polling after ~30s
     ++m_pollCount;
     if (m_pollCount == POLL_SLOW_AFTER && m_pollTimer.interval() != POLL_SLOW_MS)
         m_pollTimer.setInterval(POLL_SLOW_MS);

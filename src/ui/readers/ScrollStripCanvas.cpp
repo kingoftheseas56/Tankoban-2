@@ -2,8 +2,35 @@
 
 #include <QPainter>
 #include <QPaintEvent>
+#include <QImage>
 #include <cmath>
 #include <algorithm>
+
+namespace {
+// P2-1: Brightness filter — mirror of ComicReader.cpp's helper. Kept inline
+// here to avoid coupling the canvas to ComicReader internals. Math identical.
+QPixmap applyBrightness(const QPixmap& src, int delta)
+{
+    if (delta == 0 || src.isNull()) return src;
+    QImage img = src.toImage().convertToFormat(QImage::Format_ARGB32);
+    const int shift = qRound(delta * 2.55);
+    const int h = img.height();
+    const int w = img.width();
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const QRgb px = line[x];
+            const int r = qBound(0, qRed(px)   + shift, 255);
+            const int g = qBound(0, qGreen(px) + shift, 255);
+            const int b = qBound(0, qBlue(px)  + shift, 255);
+            line[x] = qRgba(r, g, b, qAlpha(px));
+        }
+    }
+    QPixmap out = QPixmap::fromImage(std::move(img));
+    out.setDevicePixelRatio(src.devicePixelRatioF());
+    return out;
+}
+} // namespace
 
 ScrollStripCanvas::ScrollStripCanvas(QWidget* parent)
     : QWidget(parent)
@@ -64,9 +91,30 @@ void ScrollStripCanvas::onPageDecoded(int pageIndex, const QPixmap& fullRes, int
     if (pw > 0) {
         double dpr = devicePixelRatioF();
         int physW = static_cast<int>(pw * dpr + 0.5);
-        QPixmap scaled = fullRes.scaledToWidth(physW, m_scalingQuality);
-        scaled.setDevicePixelRatio(dpr);
-        m_scaledCache[pageIndex] = scaled;
+
+        bool splitting = m_splitOnWide && m_slots[pageIndex].isSpread;
+        if (splitting) {
+            // P3-3: cut the wide page in half horizontally, scale each half
+            // independently, store left in the main scaled cache and right
+            // on the slot. paintEvent stacks them with SPLIT_GAP between.
+            int halfW = origW / 2;
+            QPixmap leftFull  = fullRes.copy(0, 0, halfW, origH);
+            QPixmap rightFull = fullRes.copy(halfW, 0, origW - halfW, origH);
+            QPixmap leftScaled  = leftFull.scaledToWidth(physW, m_scalingQuality);
+            QPixmap rightScaled = rightFull.scaledToWidth(physW, m_scalingQuality);
+            leftScaled.setDevicePixelRatio(dpr);
+            rightScaled.setDevicePixelRatio(dpr);
+            leftScaled  = applyBrightness(leftScaled,  m_filterBrightness);
+            rightScaled = applyBrightness(rightScaled, m_filterBrightness);
+            m_scaledCache[pageIndex] = leftScaled;
+            m_slots[pageIndex].rightHalf = rightScaled;
+        } else {
+            QPixmap scaled = fullRes.scaledToWidth(physW, m_scalingQuality);
+            scaled.setDevicePixelRatio(dpr);
+            scaled = applyBrightness(scaled, m_filterBrightness);  // P2-1
+            m_scaledCache[pageIndex] = scaled;
+            m_slots[pageIndex].rightHalf = QPixmap();  // ensure no stale right half
+        }
     }
 
     // Defer Y offset rebuild to paintEvent (batches multiple decodes)
@@ -77,9 +125,45 @@ void ScrollStripCanvas::onPageDecoded(int pageIndex, const QPixmap& fullRes, int
 void ScrollStripCanvas::invalidateScaledCache()
 {
     m_scaledCache.clear();
+    // P3-3: right halves live on the slots — wipe them too so a rebuild
+    // doesn't paint stale halves alongside fresh left pixmaps.
+    for (auto& slot : m_slots) slot.rightHalf = QPixmap();
     m_scaledCacheWidth = m_viewportWidth;
     rebuildYOffsets();
     update();
+}
+
+void ScrollStripCanvas::setFilterBrightness(int delta)
+{
+    delta = qBound(-100, delta, 100);
+    if (delta == m_filterBrightness) return;
+    m_filterBrightness = delta;
+    // Scaled pixmaps already have the old filter baked in — wipe and let
+    // paintEvent re-request decodes through the needDecode signal chain.
+    m_scaledCache.clear();
+    // P3-3: right halves carry baked-in filter too
+    for (auto& slot : m_slots) slot.rightHalf = QPixmap();
+    update();
+}
+
+void ScrollStripCanvas::setSidePadding(int px)
+{
+    px = qBound(0, px, 400);  // sanity cap — beyond this the page becomes unreadable
+    if (px == m_sidePadding) return;
+    m_sidePadding = px;
+    // Target page width changes → existing scaled cache is for the wrong
+    // width. invalidate + rebuild Y offsets to reflect new page heights.
+    invalidateScaledCache();
+}
+
+void ScrollStripCanvas::setSplitOnWide(bool enabled)
+{
+    if (enabled == m_splitOnWide) return;
+    m_splitOnWide = enabled;
+    // Wide pages need re-scaling at portrait fraction (split mode) vs full
+    // viewport (non-split). Wipe cache so onPageDecoded re-runs the right
+    // branch on next decode feed.
+    invalidateScaledCache();
 }
 
 void ScrollStripCanvas::evictScaledOutsideZone(int viewportH, double prefetchMult)
@@ -97,8 +181,12 @@ void ScrollStripCanvas::evictScaledOutsideZone(int viewportH, double prefetchMul
         if (pageBot < loadTop || pageY > loadBot)
             toRemove.append(idx);
     }
-    for (int idx : toRemove)
+    for (int idx : toRemove) {
         m_scaledCache.remove(idx);
+        // P3-3: evict the right half too — they live + die together
+        if (idx >= 0 && idx < m_slots.size())
+            m_slots[idx].rightHalf = QPixmap();
+    }
 }
 
 void ScrollStripCanvas::setScrollOffset(double offset)
@@ -175,6 +263,7 @@ void ScrollStripCanvas::paintEvent(QPaintEvent* event)
 
     int first = firstVisiblePage(viewTop);
 
+    constexpr int SPLIT_GAP_PAINT = 16;  // P3-3 — must match SPLIT_GAP in rebuildYOffsets
     for (int i = first; i < m_pageCount; ++i) {
         double pageY = m_slots[i].yOffset;
         double pageH = m_slots[i].height;
@@ -185,10 +274,21 @@ void ScrollStripCanvas::paintEvent(QPaintEvent* event)
         int drawY = static_cast<int>(pageY);
 
         auto it = m_scaledCache.find(i);
+        bool splitting = m_splitOnWide && m_slots[i].isSpread;
         if (it != m_scaledCache.end()) {
             int logW = qRound(it->width() / it->devicePixelRatioF());
             int drawX = (width() - logW) / 2;
             p.drawPixmap(drawX, drawY, *it);
+
+            if (splitting && !m_slots[i].rightHalf.isNull()) {
+                // P3-3: right half stacks below left half
+                int leftLogH = qRound(it->height() / it->devicePixelRatioF());
+                int rightLogW = qRound(m_slots[i].rightHalf.width()
+                                       / m_slots[i].rightHalf.devicePixelRatioF());
+                int rightDrawX = (width() - rightLogW) / 2;
+                int rightDrawY = drawY + leftLogH + SPLIT_GAP_PAINT;
+                p.drawPixmap(rightDrawX, rightDrawY, m_slots[i].rightHalf);
+            }
         } else {
             int pw = targetPageWidth(i);
             int drawX = (width() - pw) / 2;
@@ -219,14 +319,24 @@ int ScrollStripCanvas::firstVisiblePage(double viewTop) const
 
 void ScrollStripCanvas::rebuildYOffsets()
 {
+    constexpr double SPLIT_GAP = 16.0;  // P3-3 — vertical gap between stacked halves
     double y = 0.0;
     for (int i = 0; i < m_pageCount; ++i) {
         m_slots[i].yOffset = y;
 
         int pw = targetPageWidth(i);
+        bool splitting = m_splitOnWide && m_slots[i].isSpread;
         if (m_slots[i].decoded && m_slots[i].origW > 0) {
-            double ratio = static_cast<double>(m_slots[i].origH) / m_slots[i].origW;
-            m_slots[i].height = pw * ratio;
+            if (splitting) {
+                // Each half has aspect ratio (origH / (origW/2)) = 2*origH / origW.
+                // Slot height stacks: halfH + SPLIT_GAP + halfH.
+                double halfRatio = 2.0 * static_cast<double>(m_slots[i].origH) / m_slots[i].origW;
+                double halfH = pw * halfRatio;
+                m_slots[i].height = halfH + SPLIT_GAP + halfH;
+            } else {
+                double ratio = static_cast<double>(m_slots[i].origH) / m_slots[i].origW;
+                m_slots[i].height = pw * ratio;
+            }
         } else {
             m_slots[i].height = pw * DEFAULT_ASPECT;
         }
@@ -245,12 +355,22 @@ int ScrollStripCanvas::targetPageWidth(int pageIndex) const
 
     const auto& slot = m_slots[pageIndex];
     bool spread = slot.isSpread;
-    double frac = spread ? 1.0 : (m_portraitWidthPct / 100.0);
-    int target = static_cast<int>(m_viewportWidth * frac);
+    // P3-3: when split-on-wide is on, wide pages render as two stacked
+    // half-width portraits — each half wants the portrait fraction, not
+    // the full-viewport spread fraction.
+    bool splitting = m_splitOnWide && spread;
+    // P3-1: webtoon-style side padding reduces usable width before
+    // portrait-fraction scaling. Applies to both spreads and portraits so a
+    // fully-bled spread still respects user-set bars.
+    int usableWidth = qMax(1, m_viewportWidth - 2 * m_sidePadding);
+    double frac = (spread && !splitting) ? 1.0 : (m_portraitWidthPct / 100.0);
+    int target = static_cast<int>(usableWidth * frac);
 
-    // No-upscale: never scale beyond original dimensions
-    if (slot.decoded && slot.origW > 0)
-        target = qMin(target, slot.origW);
+    // No-upscale: never scale beyond original dimensions of the half-or-full.
+    if (slot.decoded && slot.origW > 0) {
+        int origLimit = splitting ? (slot.origW / 2) : slot.origW;
+        target = qMin(target, origLimit);
+    }
 
     return qMax(1, target);
 }

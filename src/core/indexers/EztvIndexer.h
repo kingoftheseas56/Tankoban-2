@@ -17,6 +17,16 @@ public:
     QString displayName() const override { return "EZTV"; }
     void search(const QString& query, int limit = 30, const QString& categoryId = {}) override;
 
+    IndexerHealth health() const override         { return m_health; }
+    QDateTime     lastSuccess() const override    { return m_lastSuccess; }
+    QString       lastError() const override      { return m_lastError; }
+    qint64        lastResponseMs() const override { return m_lastResponseMs; }
+
+    bool        requiresCredentials() const override { return true; }
+    QStringList credentialKeys() const override      { return { QStringLiteral("cookie") }; }
+    void        setCredential(const QString& key, const QString& value) override;
+    QString     credential(const QString& key) const override;
+
 private:
     void tryNextMirror();
     void onReplyFinished(QNetworkReply* reply);

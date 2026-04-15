@@ -62,7 +62,12 @@ VolumeHud::VolumeHud(QWidget* parent)
 
 void VolumeHud::showVolume(int percent, bool muted)
 {
-    m_percent = qBound(0, percent, 100);
+    // Batch 4.2 — accept up to 200%. The percentage text rendered on
+    // the right-hand side already shows the raw value (e.g. "150%"),
+    // so the amp zone is immediately discoverable in the existing UX
+    // with zero new layout work. Fill bar clamps visually below to
+    // prevent overflow past the bar rectangle.
+    m_percent = qBound(0, percent, 200);
     m_muted   = muted;
 
     // Position center-bottom of parent, above control bar
@@ -134,7 +139,10 @@ void VolumeHud::paintEvent(QPaintEvent*)
     int barY = 14;
     int barW = 86;
     int barH = 8;
-    int fillW = m_muted ? 0 : (barW * m_percent / 100);
+    // Batch 4.2 — clamp fill width to the bar rectangle. Values > 100%
+    // (amp zone) visually cap at full bar; the numeric "150%" / "200%"
+    // text to the right communicates the amp level.
+    int fillW = m_muted ? 0 : qMin(barW, barW * m_percent / 100);
 
     // Bar background
     p.setPen(Qt::NoPen);

@@ -7,6 +7,8 @@
 #include <QTcpServer>
 #include <QThreadPool>
 
+#include <atomic>
+
 class TorrentEngine;
 
 class StreamHttpServer : public QObject
@@ -36,6 +38,14 @@ public:
     FileEntry lookupFile(const QString& infoHash, int fileIndex) const;
     TorrentEngine* engine() const { return m_engine; }
 
+    // STREAM_PLAYBACK_FIX Batch 1.3 — graceful shutdown support. The worker
+    // threads (QtConcurrent::run → global QThreadPool) check these atomics
+    // each serve-loop iteration so `stop()` can request in-flight
+    // connections to drain instead of being abandoned on shutdown.
+    bool isShuttingDown() const { return m_shuttingDown.load(); }
+    void connectionStarted() { ++m_activeConnections; }
+    void connectionEnded()   { --m_activeConnections; }
+
 private slots:
     void onNewConnection();
 
@@ -46,4 +56,8 @@ private:
     QTcpServer* m_server = nullptr;
     mutable QMutex m_mutex;
     QHash<QString, FileEntry> m_registry;
+
+    // Batch 1.3 — see isShuttingDown / connectionStarted / connectionEnded.
+    std::atomic<bool> m_shuttingDown{false};
+    std::atomic<int>  m_activeConnections{0};
 };
