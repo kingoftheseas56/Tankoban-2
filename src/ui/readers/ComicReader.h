@@ -424,6 +424,7 @@ private:
     // P5-1: Settings panel
     QWidget*     m_settingsOverlay = nullptr;
     QFrame*      m_settingsCard    = nullptr;
+    QScrollArea* m_settingsScroll  = nullptr;
     QComboBox*   m_settingsModeCombo     = nullptr;
     QComboBox*   m_settingsPortraitCombo = nullptr;
     QComboBox*   m_settingsFitCombo      = nullptr;

@@ -2398,11 +2398,29 @@ void ComicReader::showSettingsPanel()
         title->setAlignment(Qt::AlignCenter);
         cardLayout->addWidget(title);
 
+        // Scroll area wraps the body so content that exceeds the 85%-viewport
+        // height cap (common in Double Page mode on <= 720p screens) scrolls
+        // instead of getting clipped behind the bottom buttons.
+        m_settingsScroll = new QScrollArea(m_settingsCard);
+        m_settingsScroll->setWidgetResizable(true);
+        m_settingsScroll->setFrameShape(QFrame::NoFrame);
+        m_settingsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_settingsScroll->setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }");
+        auto* contentW = new QWidget(m_settingsScroll);
+        contentW->setStyleSheet("background: transparent; border: none;");
+        auto* contentLayout = new QVBoxLayout(contentW);
+        contentLayout->setContentsMargins(0, 0, 0, 0);
+        contentLayout->setSpacing(10);
+        m_settingsScroll->setWidget(contentW);
+        cardLayout->addWidget(m_settingsScroll, 1);
+
         auto* displayHeader = new QLabel("DISPLAY", m_settingsCard);
         displayHeader->setStyleSheet(
             "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
             "letter-spacing: 1px; padding-top: 6px;");
-        cardLayout->addWidget(displayHeader);
+        contentLayout->addWidget(displayHeader);
 
         const QString comboStyle =
             "QComboBox { color: white; background: rgba(255,255,255,0.08);"
@@ -2417,7 +2435,7 @@ void ComicReader::showSettingsPanel()
             "color: rgba(255,255,255,0.75); font-size: 12px;";
 
         auto makeRow = [&](const QString& label, QWidget* control) {
-            auto* rowW = new QWidget(m_settingsCard);
+            auto* rowW = new QWidget(contentW);
             rowW->setStyleSheet("background: transparent; border: none;");
             auto* hl = new QHBoxLayout(rowW);
             hl->setContentsMargins(0, 0, 0, 0);
@@ -2426,8 +2444,15 @@ void ComicReader::showSettingsPanel()
             lbl->setStyleSheet(rowLabelStyle);
             lbl->setFixedWidth(140);
             hl->addWidget(lbl);
-            hl->addWidget(control, 1);
-            cardLayout->addWidget(rowW);
+            // Checkboxes right-align (settings-toggle pattern — indicator sits at
+            // row-end mirroring the combo dropdown arrow); combos stretch to fill.
+            if (qobject_cast<QCheckBox*>(control)) {
+                hl->addStretch(1);
+                hl->addWidget(control, 0);
+            } else {
+                hl->addWidget(control, 1);
+            }
+            contentLayout->addWidget(rowW);
         };
 
         // Reading Mode
@@ -2480,7 +2505,7 @@ void ComicReader::showSettingsPanel()
         imageHeader->setStyleSheet(
             "color: rgba(255,255,255,0.45); font-size: 10px; font-weight: bold;"
             "letter-spacing: 1px; padding-top: 6px;");
-        cardLayout->addWidget(imageHeader);
+        contentLayout->addWidget(imageHeader);
 
         const QString checkStyle =
             "QCheckBox { color: rgba(255,255,255,0.85); font-size: 12px;"
@@ -2593,7 +2618,13 @@ void ComicReader::showSettingsPanel()
             lbl->setStyleSheet(rowLabelStyle);
             lbl->setFixedWidth(140);
             hl->addWidget(lbl);
-            hl->addWidget(control, 1);
+            // Same checkbox-vs-combo alignment rule as makeRow above.
+            if (qobject_cast<QCheckBox*>(control)) {
+                hl->addStretch(1);
+                hl->addWidget(control, 0);
+            } else {
+                hl->addWidget(control, 1);
+            }
             layout->addWidget(rowW);
         };
 
@@ -2622,7 +2653,7 @@ void ComicReader::showSettingsPanel()
             saveSeriesSettings();
         });
         makeRowIn(m_settingsDoublePageSection, dpLayout, "Gutter Shadow", m_settingsGutterCombo);
-        cardLayout->addWidget(m_settingsDoublePageSection);
+        contentLayout->addWidget(m_settingsDoublePageSection);
 
         // ── SCROLL STRIP section (P5-3) — visible only when m_isScrollStrip ──
         m_settingsScrollStripSection = new QWidget(m_settingsCard);
@@ -2672,7 +2703,10 @@ void ComicReader::showSettingsPanel()
             showToast(m_splitOnWide ? "Split Wide Pages: On" : "Split Wide Pages: Off");
         });
         makeRowIn(m_settingsScrollStripSection, ssLayout, "Split Wide Pages", m_settingsSplitCheckbox);
-        cardLayout->addWidget(m_settingsScrollStripSection);
+        contentLayout->addWidget(m_settingsScrollStripSection);
+
+        // Push body to top; buttons below scroll area stay pinned to card bottom.
+        contentLayout->addStretch(1);
 
         cardLayout->addSpacing(8);
 
@@ -2763,11 +2797,9 @@ void ComicReader::showSettingsPanel()
     m_settingsSplitCheckbox->blockSignals(false);
 
     m_settingsOverlay->setGeometry(0, 0, width(), height());
-    // P5-4: cap card height so it never extends off-screen on small viewports.
-    // 85% of viewport keeps margin even when both mode-specific sections are
-    // hidden (smaller card) or when one is shown (larger). Qt clips overflow
-    // visually — if real overflow becomes common, follow-up batch wraps the
-    // card content in a QScrollArea.
+    // Cap card height at 85% of viewport. Body content lives in a QScrollArea
+    // (see lazy-build above), so any overflow past this cap scrolls rather
+    // than clipping the pinned title + bottom buttons.
     if (m_settingsCard)
         m_settingsCard->setMaximumHeight(static_cast<int>(height() * 0.85));
     m_settingsOverlay->show();
