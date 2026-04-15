@@ -9,7 +9,7 @@
         <file>icons/error.svg</file>
         <file>icons/waiting.svg</file>
         <file>icons/stalled.svg</file>
-        <file>shaders/video.vert.qsb</file>
-        <file>shaders/video.frag.qsb</file>
+        <file>icons/tankoban_app_icon.png</file>
+        <file>shaders/video_d3d11.hlsl</file>
     </qresource>
 </RCC>

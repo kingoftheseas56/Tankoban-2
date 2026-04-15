@@ -1,0 +1,8 @@
+// Windows resource file — embeds the app icon into Tankoban.exe so File
+// Explorer, taskbar (pre-window-create), alt-tab, and shortcut faces all show
+// the Tankoban branding instead of the default Qt/Windows icon.
+//
+// IDI_ICON1 is the canonical first-icon ID Windows uses for the executable's
+// default icon. MSVC's rc.exe resolves the path relative to this .rc file.
+
+IDI_ICON1 ICON "icons/tankoban_app_icon.ico"
