@@ -19257,3 +19257,46 @@ Diagnostic context: this is the instrumentation I shipped during the Agent 7 aud
 Continuing PLAYER_PERF_FIX Phase 1 Batch 1.1 smoke after this lands.
 
 ---
+
+## Agent 1 (Comic Reader) -- 2026-04-16 settings panel scroll-area polish
+
+Polish mode is active per Hemanth 2026-04-16 — COMIC_READER_FIX_TODO Phases 7-10 set aside, hand-picking polish on shipped surfaces instead. First pick: settings panel ergonomics.
+
+**What shipped:** Wrapped the settings card body in a `QScrollArea` so content that exceeds the 85%-viewport height cap (common in Double Page mode on <= 720p screens, where DISPLAY + IMAGE + DOUBLE PAGE sections + bottom buttons can push past the cap) now scrolls instead of getting clipped. Title stays pinned at card top, "Show Page Thumbnails" + "Reset Series Settings" stay pinned at card bottom — only the middle body (section headers + rows + mode-specific sections) scrolls.
+
+Replaces the "follow-up batch wraps the card content in a QScrollArea" TODO comment at the old `m_settingsCard->setMaximumHeight(...)` site (that comment is now removed).
+
+**Implementation notes:**
+- New member `m_settingsScroll` in [ComicReader.h:427](src/ui/readers/ComicReader.h#L427).
+- Lazy-build structure now: `cardLayout` → title → `m_settingsScroll` (stretch=1) → spacing → thumbsBtn → resetBtn.
+- Scroll area uses `setWidgetResizable(true)`, `QFrame::NoFrame`, `Qt::ScrollBarAlwaysOff` horizontal, transparent background (matches thumbs-panel scroll styling).
+- `contentLayout` inside `contentW` holds DISPLAY/IMAGE/DOUBLE PAGE/SCROLL STRIP. `addStretch(1)` at the bottom of contentLayout keeps body top-aligned when viewport is taller than content.
+- `makeRow` lambda's inner `addWidget` redirected from `cardLayout` to `contentLayout`; all section-header `addWidget` calls + both mode-specific section adds also redirected. `makeRowIn` untouched — already takes a `layout` parameter.
+
+**Files:** [src/ui/readers/ComicReader.h](src/ui/readers/ComicReader.h), [src/ui/readers/ComicReader.cpp](src/ui/readers/ComicReader.cpp). No CMakeLists, no shared files, no cross-agent touches.
+
+**Verify:** Open a comic in Double Page mode on a 720p-ish window → Ctrl+, (or gear button) → settings panel opens, title and bottom buttons both visible, body scrolls if the combined DISPLAY + IMAGE + DOUBLE PAGE sections exceed the 85% cap. Switch Reading Mode combo to Scroll Strip → SCROLL STRIP section appears, body re-layouts, scroll still works. Escape still closes. Reset button still re-populates combos without losing scroll.
+
+READY TO COMMIT — [Agent 1, settings panel polish]: wrap body sections in QScrollArea so small-viewport Double Page content doesn't clip bottom buttons. Title + buttons pinned, body scrolls. | files: src/ui/readers/ComicReader.h, src/ui/readers/ComicReader.cpp
+
+No Agent 6 review requested — polish micro-batch against Hemanth brief in-session, not a TODO phase. Standing by for smoke + next polish pick (remaining settings-panel ergonomics candidates from my last post: checkbox row stretch, side-by-side buttons, section dividers, first-focus/tab-order).
+
+---
+
+## Agent 1 (Comic Reader) -- 2026-04-16 settings panel checkbox row alignment polish
+
+Polish pick #2 — checkbox rows (Crop Borders, Memory Saver, Right-to-Left, Split Wide Pages) read lopsided against the combo rows because `hl->addWidget(control, 1)` stretched the checkbox widget across the full ~288px right-column, leaving the 16px indicator floating at left with a big empty gap to its right. Combo rows visually terminate at the dropdown arrow on the right; checkbox rows terminated at the indicator on the left — inconsistent row-end visual weight.
+
+**What shipped:** Both `makeRow` + `makeRowIn` lambdas now branch on control type via `qobject_cast<QCheckBox*>`. Combos keep the `addWidget(control, 1)` stretch (dropdown arrow anchors the right edge). Checkboxes switch to `addStretch(1); addWidget(control, 0)` — indicator right-aligns to the row end, mirroring the combo arrow's visual anchor. Settings-toggle pattern (label left, control right, empty in between) instead of (label left, control left, empty right).
+
+Result: every row in DISPLAY / IMAGE / DOUBLE PAGE / SCROLL STRIP sections now has visual weight at both left (label) and right (control), reading as a consistent settings grid.
+
+**Files:** [src/ui/readers/ComicReader.cpp](src/ui/readers/ComicReader.cpp) only. No header change, no CMakeLists, no cross-agent touches.
+
+**Verify:** Ctrl+, → compare Crop Borders row to Brightness row above it. Indicator now sits flush with the Brightness combo's right edge, not floating at its left edge. Same for Memory Saver. Switch to Double Page mode → Right-to-Left checkbox right-aligns. Switch to Scroll Strip mode → Split Wide Pages right-aligns. No stretch on combo rows changed.
+
+READY TO COMMIT — [Agent 1, settings panel polish]: right-align checkbox controls in settings-panel rows (makeRow + makeRowIn branch on QCheckBox cast). Combos keep stretch, checkboxes get trailing indicator. | files: src/ui/readers/ComicReader.cpp
+
+Standing by for smoke + next polish pick (remaining: side-by-side buttons, section dividers, first-focus/tab-order, plus categories 2-8 from my earlier slate).
+
+---
