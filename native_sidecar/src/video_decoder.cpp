@@ -4,6 +4,7 @@
 #include "gpu_renderer.h"
 #include "subtitle_renderer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -345,6 +346,23 @@ void VideoDecoder::decode_thread_func(
     bool first_frame_fired = false;
     int64_t frames_written = 0;
     int64_t frames_dropped = 0;
+
+    // [PERF] 1 Hz per-phase timing accumulator. Samples are kept for at most
+    // one second, then p50/p99 is emitted to stderr and the buffers clear.
+    // Zero-alloc per frame (emplace_back into reserved vectors). Kept simple
+    // — we're after order-of-magnitude answers, not microsecond fidelity.
+    std::vector<double> perf_blend_ms;     perf_blend_ms.reserve(120);
+    std::vector<double> perf_present_ms;   perf_present_ms.reserve(120);
+    std::vector<double> perf_total_ms;     perf_total_ms.reserve(120);
+    int64_t perf_drops_window = 0;
+    auto perf_window_start = std::chrono::steady_clock::now();
+
+    auto perf_percentile = [](std::vector<double>& v, double pct) -> double {
+        if (v.empty()) return 0.0;
+        size_t idx = static_cast<size_t>(pct * (v.size() - 1));
+        std::nth_element(v.begin(), v.begin() + idx, v.end());
+        return v[idx];
+    };
 
     // HTTP streaming stall detection
     bool buffering_emitted = false;
@@ -716,6 +734,10 @@ void VideoDecoder::decode_thread_func(
             if (stop_flag_.load()) { if (sw_frame) av_frame_free(&sw_frame); return false; }
         }
 
+        // [PERF] Phase timestamps — start AFTER the A/V sync wait so the
+        // measurement reflects real work, not clock-wait dwell.
+        const auto perf_t0 = std::chrono::steady_clock::now();
+
         // Blend libass subtitles onto the frame (on the render thread).
         // write_ptr may be const (from AVFrame), so we blend onto the
         // mutable source: either compact_buf or bgra_frame->data[0].
@@ -724,6 +746,7 @@ void VideoDecoder::decode_thread_func(
             uint8_t* blend_target = const_cast<uint8_t*>(write_ptr);
             sub_renderer_->render_blend(blend_target, fw, fh, fstride, pts_ms);
         }
+        const auto perf_t1 = std::chrono::steady_clock::now();
 
         // --- D3D11 Holy Grail: upload CPU frame to shared texture (SW path) ---
 #ifdef _WIN32
@@ -743,7 +766,48 @@ void VideoDecoder::decode_thread_func(
             fw, fh, fstride,
             pts_us);
 
+        const auto perf_t2 = std::chrono::steady_clock::now();
+
         ++frames_written;
+
+        // [PERF] Record this frame's timings and flush once per second.
+        {
+            const double blend_ms = std::chrono::duration<double, std::milli>(
+                perf_t1 - perf_t0).count();
+            const double present_ms = std::chrono::duration<double, std::milli>(
+                perf_t2 - perf_t1).count();
+            const double total_ms = std::chrono::duration<double, std::milli>(
+                perf_t2 - perf_t0).count();
+            perf_blend_ms.push_back(blend_ms);
+            perf_present_ms.push_back(present_ms);
+            perf_total_ms.push_back(total_ms);
+
+            const auto elapsed = std::chrono::duration<double>(
+                perf_t2 - perf_window_start).count();
+            if (elapsed >= 1.0 && !perf_blend_ms.empty()) {
+                const double blend_p50   = perf_percentile(perf_blend_ms, 0.50);
+                const double blend_p99   = perf_percentile(perf_blend_ms, 0.99);
+                const double present_p50 = perf_percentile(perf_present_ms, 0.50);
+                const double present_p99 = perf_percentile(perf_present_ms, 0.99);
+                const double total_p50   = perf_percentile(perf_total_ms, 0.50);
+                const double total_p99   = perf_percentile(perf_total_ms, 0.99);
+                std::fprintf(stderr,
+                    "[PERF] frames=%zu drops=%lld/s "
+                    "blend p50/p99=%.2f/%.2f ms "
+                    "present p50/p99=%.2f/%.2f ms "
+                    "total p50/p99=%.2f/%.2f ms\n",
+                    perf_total_ms.size(),
+                    static_cast<long long>(frames_dropped - perf_drops_window),
+                    blend_p50, blend_p99,
+                    present_p50, present_p99,
+                    total_p50, total_p99);
+                perf_blend_ms.clear();
+                perf_present_ms.clear();
+                perf_total_ms.clear();
+                perf_drops_window = frames_dropped;
+                perf_window_start = perf_t2;
+            }
+        }
 
         // Frame stepping: after writing one frame, re-pause and emit event
         if (step_pending_.load()) {
