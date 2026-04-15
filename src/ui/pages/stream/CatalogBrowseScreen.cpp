@@ -385,12 +385,13 @@ void CatalogBrowseScreen::appendTiles(const QList<MetaItemPreview>& items)
             continue;
         }
 
+        // Canonical Stream subtitle: year + IMDb rating (matches StreamLibraryLayout).
         QString subtitle = item.releaseInfo;
         if (!item.imdbRating.isEmpty()) {
             if (!subtitle.isEmpty()) {
                 subtitle += QStringLiteral(" \u00B7 ");
             }
-            subtitle += item.imdbRating;
+            subtitle += QStringLiteral("IMDb ") + item.imdbRating;
         }
 
         const QString cached = posterCachePath(item.id);

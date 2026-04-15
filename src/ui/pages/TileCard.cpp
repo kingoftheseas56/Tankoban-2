@@ -93,6 +93,11 @@ void TileCard::setCardSize(int width, int imageHeight)
     m_imageHeight = imageHeight;
 
     setFixedWidth(width);
+    // Reserve a fixed text zone below the cover (matches the continue-strip
+    // spec `setFixedHeight(imageH + 56)` in TileStrip.cpp). Without this the
+    // tile collapses to its sizeHint minimum and the title visually kisses
+    // the cover regardless of layout setSpacing(6).
+    setFixedHeight(imageHeight + 56);
     m_imageWrap->setFixedSize(width, imageHeight);
     m_imageLabel->setFixedSize(width, imageHeight);
 

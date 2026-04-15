@@ -40,14 +40,16 @@ void StreamLibraryLayout::refresh()
 
 void StreamLibraryLayout::buildUI()
 {
-    // Stream library UX 2026-04-15 — align margins/spacing with video
-    // mode (VideosPage.cpp:110-111) so stream-mode tiles match the
-    // rendering of Videos-mode tiles. Pre-change values were
-    // (0,0,0,0) + spacing(8); video mode uses (20,0,20,20) + spacing(24).
-    // Shared TileStrip/TileCard density mappings already match across
-    // modes; only the outer container chrome differed.
+    // 2026-04-15 — margins/spacing aligned with video mode (VideosPage.cpp:110-111).
+    // 2026-04-16 — margins zeroed: StreamLibraryLayout is mounted inside
+    // StreamPage's m_scrollLayout which ALREADY applies (20,0,20,20) margins +
+    // spacing(24) to its children. The earlier (20,0,20,20) here stacked on top
+    // of that, putting Shows & Movies tiles at 40px from the page edge while
+    // the Continue Watching strip above (StreamHomeBoard — margins 0,0,0,0)
+    // sat at 20px — breaking the vertical-column alignment Hemanth expects from
+    // the other three library modes.
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 0, 20, 20);
+    root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(24);
 
     // Header row: SHOWS + sort + density
@@ -185,12 +187,14 @@ void StreamLibraryLayout::populateTiles()
         if (!QFile::exists(posterPath) && !entry.poster.isEmpty())
             downloadPoster(entry.imdb, entry.poster);
 
-        // Subtitle: year + type + rating. Matches StreamDetailView's chip
-        // row convention (year · Series|Movie · IMDb X.X). Rating gets an
-        // "IMDb" prefix so the bare number isn't ambiguous. Year's
-        // trailing en-dash for ongoing series (Stremio format "2023–") is
-        // normalized to "2023–present" so the dash doesn't read as a
-        // dangling separator next to the middle-dot.
+        // Subtitle: year + IMDb rating (canonical Stream format across
+        // StreamLibraryLayout / StreamSearchWidget / CatalogBrowseScreen).
+        // Type (Series/Movie) dropped — cover art communicates it faster
+        // than text, and dropping it lets the subtitle fit at every density
+        // without eliding. Rating keeps its "IMDb" prefix so a bare number
+        // isn't ambiguous. Year's trailing en-dash for ongoing series
+        // (Stremio format "2023–") is normalized to "2023–present" so the
+        // dash doesn't read as a dangling separator next to the middle-dot.
         QStringList sub;
         if (!entry.year.isEmpty()) {
             QString y = entry.year;
@@ -200,7 +204,6 @@ void StreamLibraryLayout::populateTiles()
             }
             sub << y;
         }
-        if (!entry.type.isEmpty()) sub << (entry.type == "series" ? "Series" : "Movie");
         if (!entry.imdbRating.isEmpty())
             sub << QStringLiteral("IMDb ") + entry.imdbRating;
         QString subtitle = sub.join(" \u00B7 ");

@@ -160,10 +160,10 @@ void StreamSearchWidget::addResultCard(const MetaItemPreview& entry)
     const QString posterPath = m_posterCacheDir + "/" + entry.id + ".jpg";
     const QString thumbPath = QFile::exists(posterPath) ? posterPath : QString();
 
+    // Canonical Stream subtitle: year + IMDb rating (matches StreamLibraryLayout).
     QStringList sub;
     if (!entry.releaseInfo.isEmpty()) sub << entry.releaseInfo;
-    if (!entry.type.isEmpty())        sub << (entry.type == "series" ? "Series" : "Movie");
-    if (!entry.imdbRating.isEmpty())  sub << entry.imdbRating;
+    if (!entry.imdbRating.isEmpty())  sub << QStringLiteral("IMDb ") + entry.imdbRating;
     QString subtitle = sub.join(" \u00B7 ");
 
     auto* card = new TileCard(thumbPath, entry.name, subtitle);

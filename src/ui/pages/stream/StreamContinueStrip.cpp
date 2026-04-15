@@ -298,7 +298,9 @@ void StreamContinueStrip::renderInProgressCard(const QString& imdbId,
     card->setProperty("episode", episode);
 
     const int pctInt = static_cast<int>(percent);
-    card->setBadges(percent / 100.0, subtitle,
+    // pageBadge dropped — the episode code "SxxExx" was duplicated on the
+    // thumbnail and in the subtitle label beneath. Keep the subtitle.
+    card->setBadges(percent / 100.0, QString(),
                     QString::number(pctInt) + "%", "reading");
 
     connect(card, &TileCard::clicked, this, [this, card]() {
@@ -331,7 +333,8 @@ void StreamContinueStrip::renderNextUpCard(const QString& imdbId,
     card->setProperty("episode", episode);
     // 0% progress + no "reading" status differentiates this visually from
     // the in-progress card shape (no progress bar fill, no "N%" pill).
-    card->setBadges(0.0, sxxexx, QString(), QString());
+    // pageBadge dropped — "Next · SxxExx" already in the subtitle label.
+    card->setBadges(0.0, QString(), QString(), QString());
 
     connect(card, &TileCard::clicked, this, [this, card]() {
         const QString imdb = card->property("imdbId").toString();
