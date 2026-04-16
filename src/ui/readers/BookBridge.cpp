@@ -587,8 +587,11 @@ void BookBridge::onWorkerProbeFinished(bool ok, const QString& reason)
 {
     QJsonObject result;
     result.insert(QStringLiteral("ok"), ok);
+    // EDGE_TTS_FIX hotfix 2026-04-16: JS engine at tts_engine_edge.js:328
+    // checks `res.ok && res.available` — earlier wire shape `voiceListAvailable`
+    // didn't match the consumer, causing probe to look failed even on success.
     if (ok) {
-        result.insert(QStringLiteral("voiceListAvailable"), true);
+        result.insert(QStringLiteral("available"), true);
     }
     if (!reason.isEmpty()) {
         result.insert(QStringLiteral("reason"), reason);
