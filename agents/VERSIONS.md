@@ -8,6 +8,7 @@ This file is the only governance file every agent reads every session. It is int
 |------|----------------|-------------|-----------|--------------------|
 | `agents/GOVERNANCE.md` | gov-v2 | 2026-04-16 | Agent 0 | Slim reading order; add Rule 12 (STATUS touch), Rule 13 (CLAUDE.md dashboard), Maintenance section (chat rotation), Congress auto-close clause |
 | `agents/CONTRACTS.md` | contracts-v1 | 2026-04-16 | Agent 0 | Baseline (no semantic changes; version stamp introduced) |
+| `agents/CONTRACTS.md` | contracts-v2 | 2026-04-16 | Agent 0 | Build Verification Rule amended: sidecar build (`native_sidecar/build.ps1`, `build_qrhi.bat`) is now agent-runnable from bash; main app build stays honor-system (MSVC/Ninja/cl.exe unreliable from bash) |
 
 ## Bump Authority
 

@@ -1,5 +1,5 @@
 # Cross-Agent Contracts
-<!-- contracts-version: contracts-v1 -->
+<!-- contracts-version: contracts-v2 -->
 
 Append-only. Never delete entries — mark `[DEPRECATED]` if superseded. These are the interface specs that caused real build breaks when violated.
 
@@ -168,20 +168,35 @@ These files require coordination before editing. See GOVERNANCE.md for the annou
 
 ## Build Verification Rule
 
-**Agents must NOT attempt to run builds from bash to verify their work.**
+Two tiers — main app build is honor-system (agents do NOT run it from bash), sidecar build is agent-runnable (amended 2026-04-16 per Hemanth).
 
-The Windows MSVC build environment (vcvarsall.bat, Ninja, cl.exe) does not work reliably from the bash shell agents run in. Attempting to self-verify causes: zombie cl.exe/ninja.exe processes, 30+ minute hangs, false failures, and wasted session time.
+### Main app build — agents must NOT run from bash
 
-**The rule:**
+The Windows MSVC build environment (`vcvarsall.bat`, Ninja, `cl.exe`) does not work reliably from the bash shell agents run in. Attempting to self-verify causes: zombie `cl.exe`/`ninja.exe` processes, 30+ minute hangs, false failures, and wasted session time.
+
+**Rule for main app:**
 - Write your code changes
 - Post your completion summary in chat.md
-- Stop. Do not run cmake, ninja, build_and_run.bat, or any build command.
+- Stop. Do NOT run `cmake --build out`, `build_and_run.bat`, `build2.bat`, or any MSVC/Ninja command from bash.
+- Hemanth runs `build_and_run.bat` natively to verify.
 
-**Who builds:**
-- Hemanth runs `build_and_run.bat` natively to verify
-- Agent 3 is the build gate for congress component integration — they run the build after wiring each component
+### Sidecar build — agents MAY run themselves (amended 2026-04-16)
 
-If a build break is discovered, Hemanth or Agent 0 will route it back to the responsible agent. You do not need to verify it yourself.
+The sidecar build uses MinGW + CMake via `native_sidecar/build.ps1` (and `native_sidecar/build_qrhi.bat` for the Qt RHI variant). MinGW from bash is reliable — no vcvarsall/cl.exe dependency, no zombie-process failure class. Sidecar builds are on the critical path for Agent 3's PLAYER_LIFECYCLE + PLAYER_PERF work (stop_ack handshake, GPU overlay upload, etc.) and blocking on Hemanth-initiated rebuilds creates a wait gate that isn't worth the safety margin.
+
+**Rule for sidecar:**
+- Agents MAY invoke `powershell -File native_sidecar/build.ps1` or `native_sidecar/build_qrhi.bat` from bash to verify their own sidecar-touching batches.
+- Capture the last ~30 lines of output in the batch's chat.md ship post (or note "BUILD_EXIT=0" if clean).
+- On failure: do NOT retry blindly — read the error, diagnose, fix, single-rebuild to confirm. The rule is still "ship code, build once to verify, post summary." Not "build-break-rebuild-loop."
+- Agents may also use the `/build-verify sidecar` slash command if they prefer — it wraps the same invocation with tail-capture + taskkill hygiene.
+
+### Who builds what
+
+- **Hemanth**: main app + all smoke testing.
+- **Any agent**: sidecar, when their batch touched `native_sidecar/**`.
+- **No one from bash**: main app / Ninja / `cl.exe`. Honor-system.
+
+If a build break is discovered post-commit, Agent 0 routes it back to the responsible agent.
 
 ---
 
