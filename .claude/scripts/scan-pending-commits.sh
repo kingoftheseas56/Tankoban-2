@@ -16,7 +16,8 @@ SWEEP_SHA="$(git log --grep='chat.md sweep' -n 1 --format='%H' 2>/dev/null || tr
 
 if [ -z "$SWEEP_SHA" ]; then
     # No prior sweep — scan all of chat.md
-    grep -cE '^READY TO COMMIT —' agents/chat.md 2>/dev/null || echo 0
+    COUNT="$(grep -cE '^READY TO COMMIT —' agents/chat.md 2>/dev/null || true)"
+    echo "${COUNT:-0}"
     exit 0
 fi
 
@@ -25,11 +26,11 @@ SWEEP_BLOB="$(git rev-parse "${SWEEP_SHA}:agents/chat.md" 2>/dev/null || true)"
 
 if [ -z "$SWEEP_BLOB" ]; then
     # Sweep commit didn't touch chat.md — fallback to all
-    grep -cE '^READY TO COMMIT —' agents/chat.md 2>/dev/null || echo 0
+    COUNT="$(grep -cE '^READY TO COMMIT —' agents/chat.md 2>/dev/null || true)"
+    echo "${COUNT:-0}"
     exit 0
 fi
 
 # Diff blob -> current chat.md, count + (added) READY TO COMMIT lines
-git diff "$SWEEP_BLOB" -- agents/chat.md 2>/dev/null \
-    | grep -cE '^\+READY TO COMMIT —' \
-    || echo 0
+COUNT="$(git diff "$SWEEP_BLOB" -- agents/chat.md 2>/dev/null | grep -cE '^\+READY TO COMMIT —' || true)"
+echo "${COUNT:-0}"
