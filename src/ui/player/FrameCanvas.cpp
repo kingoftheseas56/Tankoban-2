@@ -4,6 +4,7 @@
 
 #include <QImage>
 #include <QMouseEvent>
+#include <algorithm>
 #include <cstring>
 
 #ifdef _WIN32
@@ -53,7 +54,10 @@ void FrameCanvas::showEvent(QShowEvent* event)
 
 #ifdef _WIN32
     if (m_device) {
-        if (!m_renderTimer.isActive()) {
+        // PLAYER_PERF_FIX Phase 1 Batch 1.3 — only restart the QTimer
+        // fallback if we don't have the waitable driving the loop. Waitable
+        // thread stays running across hide/show; no re-start needed.
+        if (!m_waitableHandle && !m_renderTimer.isActive()) {
             m_renderTimer.start();
         }
         return;
@@ -212,7 +216,16 @@ bool FrameCanvas::initializeD3D()
     desc.Scaling            = DXGI_SCALING_STRETCH;
     desc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode          = DXGI_ALPHA_MODE_IGNORE;
-    desc.Flags              = 0;
+    // PLAYER_PERF_FIX Phase 1 Batch 1.2 — DXGI 1.3 waitable swap chain.
+    // The flag itself is inert at creation time; Batch 1.3 calls
+    // IDXGISwapChain2::GetFrameLatencyWaitableObject() and replaces the
+    // QTimer(16) wake loop with WaitForSingleObject on the returned handle.
+    // Microsoft doc: https://learn.microsoft.com/en-us/windows/uwp/gaming/reduce-latency-with-dxgi-1-3-swap-chains
+    // Empirical justification: [PERF] log Batch 1.1 showed timer_interval
+    // p99 = 45-75 ms against a 16.67 ms vsync budget — Qt wall-clock
+    // timer jitter. Waitable swap chain replaces that with vsync-aligned
+    // wake-ups.
+    desc.Flags              = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
     // hwnd already acquired above for the MonitorFromWindow HDR probe.
     hr = dxgiFactory->CreateSwapChainForHwnd(
@@ -292,7 +305,16 @@ bool FrameCanvas::initializeD3D()
         qWarning("FrameCanvas: color buffer creation failed; continuing with textured-quad-without-color-processing fallback");
     }
 
-    m_renderTimer.start();
+    // PLAYER_PERF_FIX Phase 1 Batch 1.3 — try to acquire the DXGI waitable.
+    // If this succeeds, startWaitableLoop drives renderFrame from the
+    // DXGI frame-latency signal and m_renderTimer stays dormant. If it
+    // fails (older DXGI, driver quirk), fall back to m_renderTimer.start()
+    // for the QTimer(16) path (Batch 1.2 rollback).
+    startWaitableLoop();
+    if (!m_waitableHandle) {
+        qWarning("FrameCanvas: DXGI waitable unavailable, falling back to QTimer(16)");
+        m_renderTimer.start();
+    }
     return true;
 }
 #endif
@@ -362,6 +384,13 @@ bool isDeviceLost(HRESULT hr)
 
 void FrameCanvas::tearDownD3D()
 {
+    // PLAYER_PERF_FIX Phase 1 Batch 1.3 — stop the waitable loop BEFORE
+    // releasing the swap chain. stopWaitableLoop closes the handle, wakes
+    // the WAIT, joins the thread. Guarantees no dangling thread reads of
+    // m_waitableHandle or pending renderFrame queued invocations after
+    // m_swapChain goes away.
+    stopWaitableLoop();
+
     // Release in reverse creation order so dependent objects don't dangle
     // mid-teardown. Idempotent: safe to call on partially-initialized or
     // already-torn-down state (every pointer is null-checked).
@@ -385,6 +414,94 @@ void FrameCanvas::tearDownD3D()
     if (m_swapChain)   { m_swapChain->Release();   m_swapChain   = nullptr; }
     if (m_context)     { m_context->Release();     m_context     = nullptr; }
     if (m_device)      { m_device->Release();      m_device      = nullptr; }
+}
+
+// PLAYER_PERF_FIX Phase 1 Batch 1.3 — waitable-swap-chain cadence.
+// Replaces QTimer(16) wall-clock wake with DXGI's FRAME_LATENCY_WAITABLE
+// vsync signal. QueryInterface IDXGISwapChain2 for the frame-latency API,
+// pin the in-flight frame count to 1 (video-playback standard), grab the
+// waitable handle, and spawn a lightweight thread that just waits on it.
+// On each signal the thread posts a Qt::QueuedConnection invocation of
+// renderFrame() back to the main thread — preserving the single-threaded
+// D3D11-access topology we already have, only the tick driver changes.
+void FrameCanvas::startWaitableLoop()
+{
+    if (!m_swapChain) return;
+
+    IDXGISwapChain2* swapChain2 = nullptr;
+    HRESULT hr = m_swapChain->QueryInterface(__uuidof(IDXGISwapChain2),
+                                              reinterpret_cast<void**>(&swapChain2));
+    if (FAILED(hr) || !swapChain2) {
+        qWarning("FrameCanvas: IDXGISwapChain2 unavailable, hr=0x%08lx — waitable disabled",
+                 static_cast<unsigned long>(hr));
+        return;
+    }
+
+    // Video-playback standard: MaximumFrameLatency = 1. DXGI's default is 3,
+    // which introduces multi-frame queueing latency that is undesirable for
+    // a media player.
+    hr = swapChain2->SetMaximumFrameLatency(1);
+    if (FAILED(hr)) {
+        qWarning("FrameCanvas: SetMaximumFrameLatency(1) failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        // Non-fatal — we can still use the waitable at the default latency.
+    }
+
+    HANDLE raw = swapChain2->GetFrameLatencyWaitableObject();
+    swapChain2->Release();
+
+    if (!raw) {
+        qWarning("FrameCanvas: GetFrameLatencyWaitableObject returned null");
+        return;
+    }
+
+    m_waitableHandle = raw;
+    m_waitableStop.store(false);
+    m_waitableThread = std::thread(&FrameCanvas::waitableLoop, this);
+    qDebug("FrameCanvas: DXGI waitable render loop started");
+}
+
+void FrameCanvas::stopWaitableLoop()
+{
+    if (!m_waitableHandle && !m_waitableThread.joinable()) return;
+
+    m_waitableStop.store(true);
+
+    // Closing the handle wakes WaitForSingleObjectEx with WAIT_FAILED on
+    // older kernels or simply unblocks on a timeout (we use 100ms as the
+    // worst-case wait). Join is bounded by that 100ms in the worst case.
+    HANDLE h = static_cast<HANDLE>(m_waitableHandle);
+    m_waitableHandle = nullptr;
+    if (h) CloseHandle(h);
+
+    if (m_waitableThread.joinable()) {
+        m_waitableThread.join();
+    }
+}
+
+void FrameCanvas::waitableLoop()
+{
+    // Runs on a dedicated std::thread. The ONLY work done here is wait on
+    // the DXGI frame-latency handle and post a QueuedConnection call back
+    // to the Qt main thread for the actual renderFrame. D3D11 device +
+    // context are never touched from this thread.
+    while (!m_waitableStop.load(std::memory_order_relaxed)) {
+        HANDLE h = static_cast<HANDLE>(m_waitableHandle);
+        if (!h) break;
+        DWORD r = WaitForSingleObjectEx(h, 100, FALSE);
+        if (m_waitableStop.load(std::memory_order_relaxed)) break;
+        // On WAIT_OBJECT_0 (signaled) OR WAIT_TIMEOUT (keepalive), post a
+        // renderFrame invocation. Timeout path keeps the Qt event loop
+        // getting frames even if DXGI stops signaling (e.g. window hidden).
+        // Failed wait (handle closed) exits the loop.
+        if (r != WAIT_OBJECT_0 && r != WAIT_TIMEOUT) break;
+        // Use lambda-style invokeMethod — renderFrame is a private helper,
+        // not a Q_INVOKABLE slot, so the string-name overload can't see
+        // it. Qt's queued-connection metadata works fine with a lambda
+        // that captures the member-function call.
+        QMetaObject::invokeMethod(this, [this]() { renderFrame(); },
+                                   Qt::QueuedConnection);
+    }
 }
 
 void FrameCanvas::recoverFromDeviceLost()
@@ -477,6 +594,17 @@ void FrameCanvas::renderFrame()
         return;
     }
 
+    // PLAYER_PERF_FIX Batch 1.1 — capture time between consecutive
+    // renderFrame invocations. Measures actual wake cadence vs the
+    // QTimer(16) request, to prove whether Qt's wall-clock timer is
+    // introducing jitter (Agent 7 audit P0-2). Seed on the first call;
+    // push the interval on subsequent calls.
+    double perfIntervalMs = 0.0;
+    if (m_perfInvocationTimer.isValid()) {
+        perfIntervalMs = m_perfInvocationTimer.nsecsElapsed() / 1.0e6;
+    }
+    m_perfInvocationTimer.restart();
+
     // Batch 1.2 — lag-aware skip. When the prior tick saw sustained lag,
     // skip this tick's Present(): the previously-presented frame stays on
     // screen for one vsync while the render pipeline catches up, and we
@@ -521,11 +649,29 @@ void FrameCanvas::renderFrame()
     // failures; swapped to black at Phase 7 (post-cutover) for production
     // appearance now that the pipeline is verified end-to-end.
     const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    // PLAYER_PERF_FIX Batch 1.1 — time the clear + draw phase. Bracketed
+    // around Clear through drawTexturedQuad (the GPU submission work),
+    // separate from Present (which is where driver/vsync waits land).
+    QElapsedTimer perfDrawTimer;
+    perfDrawTimer.start();
+
     m_context->ClearRenderTargetView(m_rtv, black);
 
     drawTexturedQuad();
 
+    const double perfDrawMs = perfDrawTimer.nsecsElapsed() / 1.0e6;
+
+    // PLAYER_PERF_FIX Batch 1.1 — time Present separately. On fixed-QTimer
+    // + non-waitable swap chain (current state), Present(1, 0) is where
+    // Windows throttles to vsync — its p99 is the cadence-jitter signal.
+    QElapsedTimer perfPresentTimer;
+    perfPresentTimer.start();
+
     HRESULT hr = m_swapChain->Present(1, 0);
+
+    const double perfPresentMs = perfPresentTimer.nsecsElapsed() / 1.0e6;
+
     if (FAILED(hr)) {
         qWarning("FrameCanvas: Present failed, hr=0x%08lx", static_cast<unsigned long>(hr));
         // Batch 6.2 — DEVICE_REMOVED / _RESET → kick off recovery. All
@@ -590,6 +736,96 @@ void FrameCanvas::renderFrame()
             m_swapChain, frameLatencyMs, /*frameSkipped=*/false, ema, vel,
             m_lastChosenFrameId, m_lastFallbackUsed,
             m_lastProducerDrops, m_lastConsumerLateMs);
+    }
+
+    // PLAYER_PERF_FIX Batch 1.1 — always-on 1 Hz [PERF] diagnostic. Lives
+    // outside the opt-in m_vsyncLoggingOn gate so Hemanth captures
+    // cadence evidence without flipping flags. Skips the first
+    // invocation's interval (perfIntervalMs==0 — seed sample).
+    if (perfIntervalMs > 0.0) {
+        m_perfTimerIntervalMs.push_back(perfIntervalMs);
+    }
+    m_perfDrawMs.push_back(perfDrawMs);
+    m_perfPresentMs.push_back(perfPresentMs);
+
+    if (!m_perfWindowTimer.isValid()) {
+        m_perfWindowTimer.start();
+        m_perfSkippedPresentsBase = m_framesSkippedTotal;
+        m_perfDxgiBaseValid = false;
+    }
+
+    if (m_perfWindowTimer.elapsed() >= 1000 && !m_perfPresentMs.empty()) {
+        auto pct = [](std::vector<double>& v, double p) -> double {
+            if (v.empty()) return 0.0;
+            size_t idx = static_cast<size_t>(p * (v.size() - 1));
+            std::nth_element(v.begin(), v.begin() + idx, v.end());
+            return v[idx];
+        };
+        const double tiP50 = pct(m_perfTimerIntervalMs, 0.50);
+        const double tiP99 = pct(m_perfTimerIntervalMs, 0.99);
+        const double drP50 = pct(m_perfDrawMs, 0.50);
+        const double drP99 = pct(m_perfDrawMs, 0.99);
+        const double prP50 = pct(m_perfPresentMs, 0.50);
+        const double prP99 = pct(m_perfPresentMs, 0.99);
+        const quint64 skippedDelta = m_framesSkippedTotal - m_perfSkippedPresentsBase;
+
+        // DXGI frame statistics — delta since last flush. Tells us
+        // presents_queued (PresentCount - PresentRefreshCount == backlog)
+        // and vsync cadence (SyncQPCTime delta / PresentRefreshCount delta).
+        // May fail on some Windows configurations; log zeros in that case.
+        unsigned int dxgiPresentsQueued = 0;
+        double dxgiVsyncIntervalUs = 0.0;
+        long long dxgiSyncQpc = 0;
+#ifdef _WIN32
+        DXGI_FRAME_STATISTICS stats = {};
+        if (m_swapChain && SUCCEEDED(m_swapChain->GetFrameStatistics(&stats))) {
+            dxgiSyncQpc = stats.SyncQPCTime.QuadPart;
+            if (m_perfDxgiBaseValid
+                && stats.PresentRefreshCount > m_perfDxgiPresentRefreshBase) {
+                const unsigned int refreshDelta =
+                    stats.PresentRefreshCount - m_perfDxgiPresentRefreshBase;
+                const long long qpcDelta = dxgiSyncQpc - m_perfDxgiSyncQpcBase;
+                LARGE_INTEGER qpcFreq;
+                if (QueryPerformanceFrequency(&qpcFreq) && qpcFreq.QuadPart > 0
+                    && refreshDelta > 0) {
+                    dxgiVsyncIntervalUs =
+                        (static_cast<double>(qpcDelta) * 1.0e6 /
+                         static_cast<double>(qpcFreq.QuadPart)) /
+                        static_cast<double>(refreshDelta);
+                }
+                dxgiPresentsQueued =
+                    (stats.PresentCount > stats.PresentRefreshCount)
+                        ? (stats.PresentCount - stats.PresentRefreshCount)
+                        : 0;
+            }
+            m_perfDxgiPresentCountBase   = stats.PresentCount;
+            m_perfDxgiPresentRefreshBase = stats.PresentRefreshCount;
+            m_perfDxgiSyncQpcBase        = dxgiSyncQpc;
+            m_perfDxgiBaseValid          = true;
+        }
+#endif
+
+        // Write directly to _player_debug.txt (qDebug doesn't land there —
+        // same pattern the aspect diagnostic at line 789 uses).
+        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
+            QTextStream s(&dbg);
+            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+              << QString::asprintf(
+                  " [PERF] frames=%zu timer_interval p50/p99=%.2f/%.2f ms "
+                  "draw p50/p99=%.2f/%.2f ms present p50/p99=%.2f/%.2f ms "
+                  "skipped=%llu [DXGI] queued=%u vsync_us=%.1f\n",
+                  m_perfPresentMs.size(),
+                  tiP50, tiP99, drP50, drP99, prP50, prP99,
+                  static_cast<unsigned long long>(skippedDelta),
+                  dxgiPresentsQueued, dxgiVsyncIntervalUs);
+        }
+
+        m_perfTimerIntervalMs.clear();
+        m_perfDrawMs.clear();
+        m_perfPresentMs.clear();
+        m_perfSkippedPresentsBase = m_framesSkippedTotal;
+        m_perfWindowTimer.restart();
     }
 }
 

@@ -3,6 +3,9 @@
 #include <QWidget>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <atomic>
+#include <thread>
+#include <vector>
 
 #include "VsyncTimingLogger.h"
 
@@ -261,6 +264,24 @@ private:
     QElapsedTimer             m_intervalTimer;
     double                    m_expectedFrameMs = 16.6667;
 
+    // PLAYER_PERF_FIX Phase 1 Batch 1.3 — DXGI waitable-driven cadence.
+    // Replaces QTimer(16)'s wall-clock wake with DXGI's own vsync-aligned
+    // signal. The waitable is allocated by CreateSwapChainForHwnd when
+    // DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT is set (Batch 1.2)
+    // and returned by IDXGISwapChain2::GetFrameLatencyWaitableObject().
+    // m_waitableThread loops WaitForSingleObjectEx(m_waitable, 100ms) and
+    // posts a Qt::QueuedConnection renderFrame call to the main thread on
+    // each signal. Main-thread renderFrame topology is preserved — only
+    // the driver of the loop changes. On shutdown, m_waitableStop is set,
+    // CloseHandle on the waitable wakes the WAIT immediately, join.
+    // Stored as void* so this header compiles without windows.h.
+    void*                     m_waitableHandle = nullptr;
+    std::thread               m_waitableThread;
+    std::atomic<bool>         m_waitableStop{false};
+    void startWaitableLoop();
+    void stopWaitableLoop();
+    void waitableLoop();
+
     // Batch 1.2 — SyncClock feedback + lag-aware skip-ahead (OBS video_sleep
     // pattern adapted). When m_frameLatencyMs > m_lagThresholdMs for
     // m_lagSustainTicks consecutive ticks, we skip the next Present() — old
@@ -273,6 +294,28 @@ private:
     quint64                   m_framesSkippedTotal = 0;
     static constexpr double   kLagThresholdMs      = 25.0;  // one vsync over 60Hz nominal
     static constexpr int      kLagSustainTicks     = 3;     // three-in-a-row → skip
+
+    // PLAYER_PERF_FIX Phase 1 Batch 1.1 — 1 Hz [PERF] diagnostic log.
+    // Captures per-frame timer_interval_ms (actual wake cadence vs
+    // requested 16ms), draw_ms (clear + textured-quad draw), and
+    // present_ms (time inside IDXGISwapChain::Present). Flushed once per
+    // second as p50/p99 with skipped_presents delta + DXGI frame-stats
+    // deltas. Lives here so Phase 1 Batches 1.2/1.3 can measure pre/post
+    // cadence impact empirically. Mirrors the sidecar [PERF] log shape so
+    // tooling unifies.
+    std::vector<double> m_perfTimerIntervalMs;
+    std::vector<double> m_perfDrawMs;
+    std::vector<double> m_perfPresentMs;
+    QElapsedTimer       m_perfInvocationTimer;    // between renderFrame calls
+    QElapsedTimer       m_perfWindowTimer;        // 1 Hz flush gate
+    quint64             m_perfSkippedPresentsBase = 0;
+    // DXGI GetFrameStatistics is monotonic-counter based; we log deltas
+    // per window. Base captured when a window starts, compared at flush.
+    // Store as primitive types so this header compiles without windows.h.
+    unsigned int        m_perfDxgiPresentCountBase   = 0;
+    unsigned int        m_perfDxgiPresentRefreshBase = 0;
+    long long           m_perfDxgiSyncQpcBase        = 0;
+    bool                m_perfDxgiBaseValid          = false;
 
     // Batch 2.1 — clock-aware frame selection telemetry. consumeShmFrame
     // prefers ShmFrameReader::readBestForClock (clock-aware, OBS
