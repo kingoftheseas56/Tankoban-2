@@ -1,6 +1,9 @@
 # Cross-Agent Contracts
+<!-- contracts-version: contracts-v1 -->
 
 Append-only. Never delete entries — mark `[DEPRECATED]` if superseded. These are the interface specs that caused real build breaks when violated.
+
+Read this file when `agents/VERSIONS.md` shows your `Contracts seen` pin in your STATUS block is behind the live version. Bump your pin in the same edit as your re-read.
 
 ---
 

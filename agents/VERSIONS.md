@@ -1,0 +1,20 @@
+# Governance Versions
+
+Per-file version stamps for the **stable** governance documents. Each agent maintains a pin in their `STATUS.md` block (`Governance seen: gov-vN | Contracts seen: contracts-vN`); if the live version here differs from your pin, re-read that file and bump your pin in the same edit.
+
+This file is the only governance file every agent reads every session. It is intentionally tiny — under 30 lines — so the read is free.
+
+| File | Current version | Last bumped | Bumped by | One-line changelog |
+|------|----------------|-------------|-----------|--------------------|
+| `agents/GOVERNANCE.md` | gov-v2 | 2026-04-16 | Agent 0 | Slim reading order; add Rule 12 (STATUS touch), Rule 13 (CLAUDE.md dashboard), Maintenance section (chat rotation), Congress auto-close clause |
+| `agents/CONTRACTS.md` | contracts-v1 | 2026-04-16 | Agent 0 | Baseline (no semantic changes; version stamp introduced) |
+
+## Bump Authority
+
+- **GOVERNANCE.md** bumps require Hemanth's ratification. Agent 0 proposes, Hemanth signs off, then Agent 0 bumps the version + writes the changelog row in the same commit.
+- **CONTRACTS.md** bumps belong to whichever agent owns the contract being edited. They bump in the same commit as the contract change. Cross-agent contracts get a heads-up in chat.md before the bump.
+- Typo / formatting / non-semantic edits do NOT bump the version. Use judgment: would another agent need to re-read to understand the change? If yes, bump.
+
+## Changelog Format
+
+One row per bump. Append the new row as the most recent line in the table above. Older versions are inferable from `git log` on the corresponding file.

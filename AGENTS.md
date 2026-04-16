@@ -54,7 +54,7 @@ Read these in order every session before writing a prototype:
 2. `agents/STATUS.md` — what every other agent is currently doing. Do not contradict their in-flight work.
 3. `agents/CONTRACTS.md` — cross-agent interface specs. Your prototypes must respect these contracts.
 4. `agents/REVIEW.md` — open objective-compliance reviews. Useful context.
-5. `agents/chat.md` — last ~30-50 entries. Find the `REQUEST PROTOTYPE` line addressed to you.
+5. `agents/chat.md` — last ~30-50 entries of the **live** file. Live chat.md is steady-state ~1500-2500 lines after rotation; deeper history is in `agents/chat_archive/` (you do NOT need to read archives — REQUEST PROTOTYPE / REQUEST AUDIT lines are always recent and live by the rotation rule).
 6. The currently-active TODO file for the subsystem you're prototyping. Examples: `STREAM_PARITY_TODO.md`, `NATIVE_D3D11_TODO.md`. These are normative — your prototype matches the batch spec, not your own ideas.
 7. Any reference path cited in the request line (e.g. a Stremio source path, Mihon path, groundwork path, a reference app's repo). If referenced, read it.
 8. The current `src/` files relevant to the task. Your output must build on what exists today, not on what you wish existed.

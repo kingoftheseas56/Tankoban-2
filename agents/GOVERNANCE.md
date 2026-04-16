@@ -1,6 +1,7 @@
 # Agent Governance
+<!-- governance-version: gov-v2 -->
 
-This is the rulebook. Every agent reads this first, every session, before anything else.
+This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
 
 ---
 
@@ -49,19 +50,20 @@ If you need to make a breaking change to a shared file, post in chat.md and wait
 
 ---
 
-## Session Start — Mandatory Reading Order
+## Session Start — Reading Order (slimmed 2026-04-16)
 
-Every agent reads these files in this order before starting work:
+Every agent reads these in order before starting work. Mandatory reads are tiny; heavy files are conditional.
 
-1. `agents/GOVERNANCE.md` — this file (hierarchy, protocols, build rules)
-2. `agents/STATUS.md` — current state of every agent
-3. `agents/CONTRACTS.md` — interface specs you must not break
-4. `agents/HELP.md` — check if you are being asked for help
-5. `agents/CONGRESS.md` — check for an active vote requiring your position
-6. `agents/REVIEW.md` — check if Agent 6 flagged gaps in your recent work
-7. `agents/chat.md` — last 20-30 entries for narrative context
+1. **`agents/VERSIONS.md`** (always — ~25 lines). Tells you whether GOVERNANCE / CONTRACTS changed since your pin.
+2. **`CLAUDE.md` at repo root** (always — auto-loaded into your session context, ~120 lines). State dashboard: who is active, READY TO COMMIT backlog, open congresses, blocked agents, last smoke result, active fix TODOs table.
+3. **`agents/STATUS.md`** — your own section + any agent flagged "hot" in CLAUDE.md.
+4. **`agents/HELP.md`** — only if CLAUDE.md flags an open request, OR if you suspect you're the requested agent.
+5. **`agents/CONGRESS.md`** — only if CLAUDE.md flags an open motion, OR if you have a pending position to file.
+6. **`agents/chat.md`** — last 30-50 entries (the live file is steady-state ~1500-2500 lines after rotation; deeper history is in `agents/chat_archive/`).
+7. **`agents/GOVERNANCE.md`** + **`agents/CONTRACTS.md`** — only if VERSIONS.md shows your pin (`Governance seen: gov-vN | Contracts seen: contracts-vN` at the bottom of your STATUS block) is behind. Re-read the file, bump your pin in the same edit.
+8. **`agents/REVIEW.md`** — SUSPENDED. Agent 6 decommissioned 2026-04-16. Skip unless reactivated.
 
-Do not start work until you have read all seven.
+Do not start work until you have read at least the always-required files (VERSIONS + CLAUDE + your STATUS row). The conditional files (HELP / CONGRESS / governance re-read / chat tail) are read only when triggered.
 
 ---
 
@@ -110,6 +112,8 @@ Use when: Hemanth is paralyzed on a decision, OR a decision crosses domain bound
 9. Post one line in chat.md: `Congress resolved: [topic] — decided [outcome]`
 
 Only one CONGRESS can be open at a time. If a new decision is urgent, resolve or defer the current one first.
+
+**Auto-close rule (added 2026-04-16):** When Hemanth posts a ratification line in CONGRESS.md (`ratified`, `APPROVES`, `Final Word`, or `Execute`), Agent 0 MUST archive and reset CONGRESS.md in the same session — not the next session. If Agent 0 is absent, the next agent to start a session becomes the archiver-of-record. Stale OPEN status on a ratified motion is a protocol violation. (This rule was introduced after Congress 4 sat in OPEN status for 21 days post-ratification.)
 
 ---
 
@@ -261,3 +265,38 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 9. Before building, read the last 3 chat.md entries. If another agent flagged a BREAKING change, your cached .obj files may be stale — touch affected .cpp files.
 10. Announce in chat.md before touching any shared file. A 30-second heads-up prevents silent conflicts.
 11. When a batch verifies (compiles clean + feature works), post a "READY TO COMMIT" line in chat.md listing the exact files touched and a one-line commit message. Do NOT run git yourself — Agent 0 or Hemanth batches commits at session end. Format: `READY TO COMMIT — [Agent N, Batch X]: <one-line message> | files: path/a.cpp, path/b.h`. If a batch fails verification or is mid-refactor, do NOT post this line — the work stays dirty until it's green.
+12. When you overwrite your own STATUS.md block, bump the `Last agent-section touch` line at the top of STATUS.md in the same edit. Pure self-enforcing — the next agent reading STATUS.md will notice if you forgot. (Added 2026-04-16 alongside the two-field header reform.)
+13. **CLAUDE.md ownership** — Agent 0 maintains the dashboard block at the top of `CLAUDE.md` at every phase-boundary commit (same cadence as Rule 11 commits). Other agents may suggest edits via chat.md but do not edit CLAUDE.md directly — single-author keeps the dashboard consistent. The "For Claude sessions" portion below the dashboard is editable by anyone fixing typos or pointers, but the dashboard itself is Agent 0's pen.
+
+---
+
+## File Hygiene & Rotation (added 2026-04-16)
+
+These are not per-batch rules. They are periodic maintenance Agent 0 runs at session end.
+
+### chat.md
+
+- **Trigger:** chat.md exceeds **3000 lines** OR **300 KB** at session end.
+- **Steady-state target:** 1500–2500 lines live (~3–5 sessions of narrative).
+- **Procedure:** see `agents/chat_archive/README.md`. In short: keep preamble (lines 1–7) + last ~500 lines + a 15–25 line "Archive pointer" pinned block summarizing what shipped since last rotation. Archive the middle to `agents/chat_archive/YYYY-MM-DD_chat_lines_<start>-<end>.md`.
+- **Critical:** verify no unresolved `READY TO COMMIT` / `REQUEST PROTOTYPE` / `REQUEST AUDIT` lines exist in the about-to-be-archived range. Resolve them first, or shift the split point.
+
+### Memory (`C:\Users\Suprabha\.claude\projects\…\memory\`)
+
+- **Trigger:** every 10 new memories OR every 60 days, whichever first.
+- **Audit checklist:**
+  1. Any `project_*` memory whose date is >30 days old AND whose subject has a corresponding TODO at repo root → archive candidate.
+  2. Any memory whose MEMORY.md one-liner contains "CLOSED", "REMOVED", "DECOMMISSIONED", "superseded" → archive candidate (unless reversibility flag like Agent 6 — keep both arcs).
+  3. Pairs of `_X` + `_X_status` older than 30 days → merge candidate.
+  4. Feedback memories: never archive (all load-bearing lessons).
+  5. MEMORY.md line count check — if >180, force consolidation (200-line truncation cap).
+- **Archive location:** `memory/_archive/YYYY-MM/`. Add a breadcrumb row to `memory/_archive/INDEX.md`.
+- **Reactivation path:** move file back to `memory/`, re-add MEMORY.md line, delete breadcrumb.
+
+### CONGRESS.md
+
+- See **Auto-close rule** under CONGRESS Protocol above. Same-session archive + reset is mandatory after Hemanth's ratification line.
+
+### STATUS.md header
+
+- Two fields at top: `Last header touch` (Agent 0 bumps on any non-section edit), `Last agent-section touch` (any agent bumps when they overwrite their own block, per Rule 12).
