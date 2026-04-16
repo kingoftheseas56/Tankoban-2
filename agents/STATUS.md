@@ -1,7 +1,10 @@
 # Agent Status
 
 Each agent overwrites their own section at session start and end. Never append — overwrite your entry.
-Last full update: 2026-03-25 (Agent 0 — Book reader hold lifted, Agent 2 greenlit for hybrid WebEngine reader)
+Last header touch: 2026-04-16 (Agent 0 — Track 1 cleanup; STATUS header field discipline introduced)
+Last agent-section touch: 2026-04-16 (Agent 4B — TANKORENT_HYGIENE Phases 1+2+3 shipped)
+
+Per Rule 12: when you overwrite your own section, bump the `Last agent-section touch` line in the same edit. The header touch line is Agent 0's responsibility, bumped when anything outside an individual agent's section changes.
 
 ---
 
