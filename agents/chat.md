@@ -765,3 +765,390 @@ This shouldn't block your Phase 2 readiness — Agent 4's Batch 2.6 is genuinely
 
 ---
 
+
+## Agent 4 (Stream mode) -- 2026-04-16 Wake-up — oriented, STREAM_LIFECYCLE Phase 1 queued
+
+Hemanth woke me. Did the slim reading-order pass: VERSIONS.md (pinned gov-v2 / contracts-v1), CLAUDE.md dashboard, my STATUS section, STREAM_LIFECYCLE_FIX_TODO.md Phase 1 in full, STREAM_UX_PARITY_TODO.md current cursor, Agent 3's closure post at chat.md:683-732. All consistent.
+
+### Where I am
+
+**STREAM_UX_PARITY Phase 2** — Batches 2.1 through 2.5 shipped and swept. 2.5 is the end-of-playback next-episode overlay (95%/60s near-end branch + StreamAggregator pre-fetch + 10s countdown + Play Now/Cancel + onSourceActivated reset). Last signal I have on 2.5 is pending Hemanth smoke — not retracted, not confirmed green. If smoke is clean, 2.5 closes cleanly.
+
+**Batch 2.6 (Shift+N player shortcut)** is deliberately on hold and will stay that way until STREAM_LIFECYCLE Phase 4.1 lands. Reason per audit P2-3 + STREAM_LIFECYCLE_FIX_TODO Phase 4.1: the Shift+N guard today early-returns on `!m_pendingPlay.valid`, but `onSourceActivated` at StreamPage.cpp:1545 clears that flag before playback starts — so during actual playback, the shortcut is a silent no-op. Phase 4.1 reshapes the guard to session-identity (`m_session.isValid()` + `m_session.pending.mediaType == "series"` + `m_playerController->isActive()`). Shipping 2.6 before 4.1 would ship a broken shortcut. Holding.
+
+### Queue per CLAUDE.md dashboard + TODO sequence
+
+Dashboard says "Agent 4 STREAM_LIFECYCLE Phase 1 next-up (sequencing per Agent 3's TODO read: Player 1 -> Stream 1 -> Stream 2 + Player 2 parallel)." Agent 3 Player 1 CLOSED + smoked 2026-04-16 (commit `4f8e955`, 7 drops across 197 opens, zero false positives, zero render-pipeline regression). Architecturally I'm unblocked whenever Hemanth greenlights — Agent 3 explicitly noted at chat.md:677 that Stream 1 can move independently of Player 1's sweep status.
+
+Plan for Phase 1 Batch 1.1 (foundation only, no consumer migration):
+- Nested `PlaybackSession` struct in StreamPage.h: `generation` (quint64, 0 reserved), `epKey`, `pending` (current PendingPlay), `nextPrefetch` (optional NextEpisodePrefetch), `nearEndCrossed`, `nextShortcutPending`, `lastDeadlineUpdateMs`, `seekRetry` (shared_ptr<SeekRetryState>), plus `isValid()` inline.
+- Members: `PlaybackSession m_session` + `quint64 m_nextGeneration = 1`.
+- Accessors: `currentGeneration()`, `isCurrentGeneration(gen)`.
+- Boundaries: `beginSession(epKey, pending)` returns generation (for async closures to capture) + clears prior state via `resetSession` first; `resetSession(reason)` stops next-episode countdown, disconnects prefetch aggregator signals, clears `m_session`, qInfo-logs the reason.
+- Zero consumer migration in 1.1. Existing `_currentEpKey` dynamic property + `m_pendingPlay` + `m_nextPrefetch` + `m_nearEndCrossed` + `m_nextShortcutPending` + `m_lastDeadlineUpdateMs` + `m_seekRetryState` all stay side-by-side — proves the API compiles and smoke-launches before anything depends on it.
+
+Batch 1.2 (mechanical migration of the three core fields `_currentEpKey`/`m_pendingPlay`/`m_lastDeadlineUpdateMs`, cross-cuts StreamPage.cpp) is an isolate-commit candidate per TODO. Batch 1.3 closes the other 4 session fields + converts seek-retry to the new generation check (first consumer of the new pattern).
+
+### What I'm not doing yet
+
+Not opening src/ changes. Mirroring Agent 3's discipline at chat.md:725 — no racing a dirty tree. Standing by for Hemanth greenlight. STATUS section bumped (Rule 12), governance pin `gov-v2 | contracts-v1` landed, header touch line untouched (Agent 0's).
+
+**Standing by for Hemanth greenlight on STREAM_LIFECYCLE_FIX Phase 1 Batch 1.1.**
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 1 Batch 1.1 — PlaybackSession foundation shipped
+
+Hemanth greenlit Phase 1 Batch 1.1. Foundation-only per TODO: struct + counter + 4 API methods, zero consumer migration. Existing `_currentEpKey` dynamic property / `m_pendingPlay` / `m_nextPrefetch` / `m_nearEndCrossed` / `m_nextShortcutPending` / `m_lastDeadlineUpdateMs` / `m_seekRetryState` all stay in place — Batches 1.2 + 1.3 migrate consumers.
+
+### What shipped
+
+**StreamPage.h:**
+- `#include <memory>` for `std::shared_ptr`.
+- Nested placeholder `struct SeekRetryState {};` — empty shell, complete type so `std::shared_ptr<SeekRetryState>` in PlaybackSession has a valid destructor at StreamPage destruction. Batch 1.3 fleshes out (iteration counter + QTimer handle + captured generation).
+- Nested `struct PlaybackSession` with 8 fields per TODO spec:
+  - `quint64 generation = 0` (0 reserved for "no session")
+  - `QString epKey` (Batch 1.2 target — replaces `_currentEpKey` property)
+  - `PendingPlay pending` (1.2 target)
+  - `std::optional<NextEpisodePrefetch> nextPrefetch` (1.3)
+  - `bool nearEndCrossed = false` (1.3)
+  - `bool nextShortcutPending = false` (1.3)
+  - `qint64 lastDeadlineUpdateMs = 0` (1.2)
+  - `std::shared_ptr<SeekRetryState> seekRetry` (1.3)
+  - `bool isValid() const` — inline, `generation != 0 && !epKey.isEmpty()`
+- Members: `PlaybackSession m_session` + `quint64 m_nextGeneration = 1`.
+- API decls: `currentGeneration()`, `isCurrentGeneration(gen)`, `beginSession(epKey, pending)`, `resetSession(reason)`.
+- Position: struct + members + API all grouped at bottom of class after `m_nextEpisodeCountdownSec` — keeps `PendingPlay` + `NextEpisodePrefetch` visible when PlaybackSession is parsed (avoids forward-lookup reliance).
+
+**StreamPage.cpp:**
+- `#include <QDebug>` for `qInfo()` in `resetSession` log.
+- `currentGeneration()` — returns `m_session.generation`.
+- `isCurrentGeneration(gen)` — `gen != 0 && gen == m_session.generation` (rejects both zero and mismatch in one expression).
+- `beginSession(epKey, pending)` — calls `resetSession("beginSession")` first, then `m_session.generation = m_nextGeneration++`, stamps epKey + pending, returns generation.
+- `resetSession(reason)` — pure state teardown boundary: stops `m_nextEpisodeCountdownTimer`, disconnects `MetaAggregator::seriesMetaReady` + `StreamAggregator::streamsReady` receivers on `this`, assigns `m_session = PlaybackSession{}`, `qInfo` logs `[session] reset: reason=<reason>`. Zero UI navigation / zero signal emission / zero player touches per TODO's "boundary, not hook" scope decision.
+- Placement: grouped immediately after `resetNextEpisodePrefetch()` (session-management siblings).
+
+### Files touched
+
+- `src/ui/pages/StreamPage.h` — 2 hunks (include block + struct/member/API block at bottom).
+- `src/ui/pages/StreamPage.cpp` — 2 hunks (QDebug include + 4 method impls after resetNextEpisodePrefetch).
+
+### Build verify
+
+`_agent4_build.bat` (vcvarsall x64 + `cmake --build out -- -j 1`). 5 steps: MOC/UIC regen, mocs_compilation recompile, MainWindow.cpp recompile (includes StreamPage.h), StreamPage.cpp recompile, relink Tankoban.exe. **EXIT=0.** No new warnings — only pre-existing C4834 at SidecarProcess.cpp:23 (Agent 3's `debugLog` f.open, unchanged by this batch). MainWindow recompile expected (StreamPage.h is a class-member include site).
+
+### Smoke
+
+Foundation-only: the 4 new methods aren't called from any consumer in 1.1. The only new runtime surface is default-constructing `PlaybackSession m_session` + `m_nextGeneration = 1` at StreamPage ctor time. I ran a 6-second launch-and-kill cycle of `out/Tankoban.exe` — no ctor-time crash, no error output, clean taskkill. Good enough for "unit-like smoke (can call...without crash)" per TODO success criterion since none of the new API methods are called in this batch — the real behavioral smoke arrives at Batch 1.2 when `_currentEpKey` + `m_pendingPlay` + `m_lastDeadlineUpdateMs` migrate to route through `m_session` and existing call sites start exercising the accessors.
+
+### What this closes
+
+TODO Phase 1 Batch 1.1 success criterion: "PlaybackSession struct defined + API methods implemented + unit-like smoke (can call beginSession / resetSession / isCurrentGeneration without crash). No behavior change — old state members still drive the flow."
+
+- Struct defined. ✓
+- API implemented. ✓
+- No behavior change. ✓ (no consumers migrated — zero runtime path change from pre-1.1 state)
+
+### Isolate-commit designation
+
+Per TODO's Rule 11 section, isolate-commit candidates are Batch 1.2 (mechanical cross-cut migration) + Batch 5.2 (HTTP worker cancellation threading). **Batch 1.1 is NOT an isolate-commit candidate** — foundation-only with no behavior change. Agent 0 can roll it into the next phase-boundary sweep cadence. That said, Batch 1.2 is the isolate-commit behind this, so there may be value in keeping 1.1 landed and visible in git before 1.2 starts, so any 1.2-phase issue doesn't intermix with struct-layout questions at revert time. Agent 0's call on sweep cadence.
+
+### Next
+
+On sweep landing + Hemanth's greenlight, open Batch 1.2 (migrate `_currentEpKey` dynamic property + `m_pendingPlay` + `m_lastDeadlineUpdateMs` to route through `m_session`). Mechanical grep-assisted migration. Cross-cuts StreamPage.cpp; isolate-commit per TODO. Phase 1 completes at Batch 1.3 (remaining 4 session fields + seek-retry generation-check first consumer).
+
+Not racing the dirty tree — standing by after posting this.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 1 Batch 1.1]: introduce PlaybackSession foundation — nested struct with 8 session-scoped fields + monotonic generation counter + boundary API (currentGeneration/isCurrentGeneration/beginSession/resetSession); SeekRetryState placeholder shell for 1.3; no consumer migration, existing state members unchanged; QDebug include + memory include added | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp
+
+Cross-agent note to Agent 3: no overlap. Your Phase 2 (sidecar open/stop fence) is architecturally independent of this batch. Per TODO landing sequence we're now at "Stream 1 shipping → Stream 2 + Player 2 in parallel" pair still to come.
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 1 Batch 1.2 — `_currentEpKey` + m_pendingPlay + m_lastDeadlineUpdateMs migrated
+
+Hemanth greenlit Batch 1.2. Mechanical grep-assisted migration of three core session fields to route through `m_session`. Cross-cuts StreamPage.cpp as expected.
+
+### What shipped
+
+Grep-assisted sweep against `_currentEpKey|m_pendingPlay|m_lastDeadlineUpdateMs` in StreamPage.cpp — migrated every hit. Post-migration grep returns only two intentional hits, both inside the Batch 1.1+1.2 banner comment at line 1499-1500 documenting the migration.
+
+**Field-level substitution rules applied:**
+- `m_pendingPlay.X = Y` → `m_session.pending.X = Y`
+- `m_pendingPlay.X` (read) → `m_session.pending.X`
+- `m_pendingPlay = PendingPlay{...}` → `m_session.pending = PendingPlay{...}`
+- `const PendingPlay ctx = m_pendingPlay` → `const PendingPlay ctx = m_session.pending`
+- `setProperty("_currentEpKey", V)` → `m_session.epKey = V`
+- `setProperty("_currentEpKey", QString())` → `m_session.epKey.clear()`
+- `property("_currentEpKey").toString()` → `m_session.epKey`
+- `m_lastDeadlineUpdateMs` → `m_session.lastDeadlineUpdateMs`
+
+**Call sites migrated (13 total across 10 distinct regions):**
+1. trailer-direct paste-handler lambda (connect wiring in buildUI) — 7 pending-field writes + epKey stamp + 4 reads in startStream args.
+2. magnet paste-handler block in handlePasteAction — same shape.
+3. showBrowse's invalidate-any-in-flight-play guard — `.valid = false`.
+4. onPlayRequested whole-struct assignment.
+5. onNextEpisodePlayNow next-episode pending population — 6 field writes.
+6. onStreamNextEpisodeShortcut three-guard early-return reads.
+7. onStreamNextEpisodeShortcut startNextEpisodePrefetch args — 3 reads.
+8. onSourceActivated late-click guard + `const PendingPlay ctx = m_pendingPlay` copy + invalidate.
+9. onSourceActivated epKey stamp post-context-capture.
+10. onReadyToPlay progressUpdated lambda — epKey read + m_lastDeadlineUpdateMs read + write.
+11. onReadyToPlay closeRequested lambda — epKey clear.
+12. onReadyToPlay resume-read block — epKey read for m_bridge->progress("stream", ...).
+13. onStreamFailed + onStreamStopped — 2 x epKey clears.
+
+**Deleted from StreamPage.h:**
+- Line 272: `PendingPlay m_pendingPlay;` — replaced with a migration-pointer comment.
+- Lines 305-310: STREAM_PLAYBACK_FIX 2.3 rationale block + `qint64 m_lastDeadlineUpdateMs = 0;` — replaced with migration-pointer comment. 2s-gate rationale survives at the consumer site in onReadyToPlay's progressUpdated lambda where the gate actually fires.
+- PendingPlay struct definition stays (consumed by `m_session.pending` + local `ctx` copies in onSourceActivated).
+
+**Updated in StreamPage.h:**
+- PlaybackSession field comments for `epKey` / `pending` / `lastDeadlineUpdateMs` switched from "Batch 1.2 migrates" to "Batch 1.2 migrated (was ...)" — clarity for future readers that these three are now canonical.
+
+**Updated in StreamPage.cpp:**
+- Banner comment above the Batch 1.1 API impls updated from "Batch 1.1 — Foundation only" to "Batch 1.1 + 1.2 — Foundation + first migration pass" + explicit enumeration of what 1.2 closed vs what 1.3 still migrates.
+- Inline comments on the trailer/magnet paste blocks + onNextEpisodePlayNow next-episode population block updated from `m_pendingPlay` to `m_session.pending`.
+
+**NOT migrated (intentional — Batch 1.3 territory):**
+- `m_nextPrefetch` / `m_nearEndCrossed` / `m_nextShortcutPending` access. All 15+ call sites stay untouched — Batch 1.3 closes them.
+- `m_seekRetryState`. All 10+ call sites stay untouched — Batch 1.3 converts to generation-check pattern (first consumer of the new API).
+- `beginSession` / `resetSession` remain uncalled — Batch 1.3 (or later) wires them into canonical session-start sites once seek-retry generation-check lands.
+
+### Semantic equivalence audit
+
+Migration is pure field relocation — no behavioral deltas:
+- QObject dynamic property `_currentEpKey` (QString) vs direct member `m_session.epKey` (QString). No external observer reads the property via `property("_currentEpKey")` — grep across repo src/ returned zero matches outside StreamPage.{h,cpp} after migration. Equivalent storage + equivalent access pattern.
+- `m_pendingPlay` (PendingPlay) vs `m_session.pending` (PendingPlay). Same struct type, same layout, same fields. Whole-struct assignment + field-wise assignment both preserved.
+- `m_lastDeadlineUpdateMs` (qint64) vs `m_session.lastDeadlineUpdateMs` (qint64). Single-call-site field (progressUpdated lambda read + write). Trivial substitution.
+- `m_session.generation` stays 0 throughout 1.2 — no consumer calls beginSession / currentGeneration() / isCurrentGeneration() / isValid() yet. Field exists, is default-initialized, goes unread. No behavior change.
+
+### Files touched (1.2 only, on top of 1.1)
+
+- `src/ui/pages/StreamPage.h` — drop m_pendingPlay + m_lastDeadlineUpdateMs declarations (replaced with migration-pointer comments); PlaybackSession field comments switched past-tense for the 3 migrated fields.
+- `src/ui/pages/StreamPage.cpp` — 13-region mechanical migration + banner comment update.
+
+### Build verify
+
+_agent4_build.bat. 5 steps, same shape as 1.1 (MOC/UIC, mocs_compilation, MainWindow recompile, StreamPage.cpp recompile, relink). **EXIT=0.** No new warnings. The C4834 SidecarProcess.cpp:23 warning stays pre-existing.
+
+Combined diffstat (1.1 + 1.2 foundation + migration): src/ui/pages/StreamPage.cpp | 152 insertions, src/ui/pages/StreamPage.h | 59 insertions / 58 deletions total — 153 insertions / 58 deletions across 2 files.
+
+### Smoke
+
+Launch-and-kill (8s this time vs 6s for 1.1 — slightly longer to let all connects settle). No ctor-time crash. No assertion fires. Clean taskkill exit.
+
+Behavioral smoke is Hemanth's domain — the TODO's Batch 1.2 success criterion is "Smoke: launch stream, play 30s, close, re-launch different stream. No crash, no visual regression." That requires real playback which needs your hands. What to exercise:
+1. **Fresh open a stream (any addon / any title), play >= 30s, close normally.** Progress should save (check stream continue strip updates). No visual regression in buffering / play / close.
+2. **Re-launch a different stream** (different title OR different source of the same title). No stale-session artifacts — e.g., the new session's epKey + pending + deadline-ms should all be fresh.
+3. **Source switch mid-play** (open stream A, then pick a different source card from detail). This STILL exhibits the P0-1 flash-to-browse bug — Phase 2 fixes that — but 1.2 shouldn't make it any worse than pre-migration baseline.
+4. **Close without crossing 95%** — no next-episode overlay (negative test, should match pre-migration).
+5. **Shift+N during playback (series)** — still silent no-op per audit P2-3; Phase 4.1 fixes. 1.2 shouldn't change this behavior.
+6. **Stream failure → 3s timer → showBrowse** — same behavior pre- and post-migration.
+
+Any regression across those six → retract READY TO COMMIT, I investigate the unmigrated-site-or-semantic-delta before re-posting.
+
+### Isolate-commit designation
+
+Per TODO Rule 11 section, Batch 1.2 is explicitly an isolate-commit candidate: "cross-cuts StreamPage.cpp; isolate so any missed call site surfaces in isolation before Phase 2's behavioral changes pile on." Agent 0: commit this line separately from Batch 1.1's line — two distinct commits, both landing before Batch 1.3 or any Phase 2 work.
+
+### Next
+
+Phase 1 closes at Batch 1.3: migrates the remaining 4 session fields (m_nextPrefetch / m_nearEndCrossed / m_nextShortcutPending / m_seekRetryState) + converts seek-retry's identity-token pattern (currently raw QObject* address comparison) to generation-check (first real consumer of currentGeneration() / isCurrentGeneration()). Fleshes out the placeholder SeekRetryState struct. Ends Phase 1.
+
+Not racing the dirty tree — standing by after posting this.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 1 Batch 1.2 (isolate)]: migrate `_currentEpKey` dynamic property + m_pendingPlay + m_lastDeadlineUpdateMs to route through m_session; 13 call sites across StreamPage.cpp (trailer/magnet paste handlers, showBrowse invalidate, onPlayRequested, onNextEpisodePlayNow, onStreamNextEpisodeShortcut guards + prefetch args, onSourceActivated ctx-copy + late-click guard + epKey stamp, onReadyToPlay progressUpdated + closeRequested + resume-read, onStreamFailed, onStreamStopped); drop corresponding declarations from StreamPage.h + replace with migration-pointer comments | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 Retroactive credit — Agent 7 prototype for Batch 1.1 + 1.2
+
+Per Hemanth's feedback 2026-04-16 ("credit the prototype source in your chat.md posts when you use it, even if as-is. Helps the drift-check post you'll write later be honest."), saved as `memory/feedback_credit_prototype_source.md`. My Batch 1.1 + 1.2 ship posts didn't credit `agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp` and should have. Correcting the record here.
+
+### Honest accounting
+
+**Direct consultation: no.** I did NOT open the prototype file before implementing Batch 1.1 or 1.2. I worked from STREAM_LIFECYCLE_FIX_TODO.md directly.
+
+**Credit cascade: yes.** The TODO's Phase 1 Batch 1.1 spec (the exact `PlaybackSession` field list, `isValid()` inline, `beginSession`/`resetSession` boundary shape, `m_nextGeneration = 1` sentinel) was authored with the prototype as input. Agent 7's prototype predates the TODO and shaped it. So my implementation landed very close to the prototype's shape via the TODO-spec transcription chain, not independent derivation.
+
+**Shape comparison (shipped 1.1 vs agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp):**
+
+Identical or functionally equivalent:
+- PlaybackSession struct — 8 fields, same order, same default values, same types, same `isValid()` inline. Exact match.
+- `currentGeneration()` + `isCurrentGeneration(gen)` — exact match.
+- `resetSession(reason)` body — same 4 steps (stop countdown timer, disconnect `MetaAggregator::seriesMetaReady` + `StreamAggregator::streamsReady` receivers on `this`, `m_session = PlaybackSession{}`, qInfo log). Functionally equivalent.
+- `m_session` + `m_nextGeneration = 1` member decls — exact match.
+
+Deltas (prototype is richer; I shipped leaner):
+1. **beginSession signature:** prototype has `beginSession(epKey, pending, reason = {})` with optional reason arg. I shipped `beginSession(epKey, pending)` — no reason arg. Prototype's reason arg routes into resetSession's log as `"beginSession:<reason>"` for finer-grained traceability.
+2. **beginSession wrap guard:** prototype has defensive `if (m_nextGeneration == 0) m_nextGeneration = 1;` before the generation stamp. Mine does not. quint64 never wraps in practical lifetime so the guard is theoretical — but cheap and prototype-correct.
+3. **beginSession begin-log:** prototype qInfo-logs `"[stream-session] begin: gen=<n> epKey=<k>"` at session stamp. Mine has no begin log (only reset log).
+4. **Log prefix:** prototype uses `"[stream-session]"`; mine uses `"[session]"`. Trivial aesthetic difference.
+5. **SeekRetryState struct shape:** prototype defines `struct SeekRetryState { quint64 generation = 0; int attempts = 0; };` — shell pre-fleshed for Batch 1.3. I defined `struct SeekRetryState {};` empty. Placeholder-vs-pre-fleshed is the only material difference for 1.3's migration surface.
+6. **Log format fallback:** prototype handles empty-reason with `"unspecified"` fallback. Mine does not (all current callers pass non-empty reason via beginSession, so no runtime difference).
+
+### What I'm doing about the deltas
+
+**1.1 + 1.2 already shipped.** Not re-churning — deltas 1-4 and 6 are purely logging / defensive polish and have zero behavioral impact. Re-opening shipped batches for logging improvements adds commit noise without closing a real gap.
+
+**Batch 1.3 will adopt prototype shape explicitly:**
+- Delta 5 (SeekRetryState fields): Batch 1.3's job is to flesh `SeekRetryState` anyway. I'll adopt the prototype's `{quint64 generation; int attempts;}` exactly as the starting shape + add the QTimer handle per the current m_seekRetryState capture.
+- Delta 1-4 + 6 can land in 1.3 alongside the migration work as a "prototype-shape polish" sub-hunk. Keeps drift-check narrative clean — "1.1+1.2 shipped functionally-equivalent shape; 1.3 closed the logging + SeekRetryState fields delta to match prototype exactly."
+
+**Alternatively** (if you'd rather the drift-check be airtight), I can ship a tiny 1.1-polish hunk now that adopts the 5 deltas against `agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp`. Your call. Lean toward rolling into 1.3 — less commit churn, same eventual shape.
+
+### Going forward
+
+Per the new `feedback_credit_prototype_source.md` memory, every batch ship post from me (and any other agent consuming prototypes) now includes the credit statement: did I read the prototype, how close did the shape land, what deltas remain. Matches the pattern Agent 3 used at chat.md:635 for PLAYER_LIFECYCLE 1.1 ("Agent 7's prototype at ... was a clean template; I adapted it to match the in-file style...").
+
+The TODO transcription chain still counts as a credit-worthy link — I won't omit credit on grounds of "I worked from the TODO, not the prototype" when the TODO was prototype-informed.
+
+Thanks for flagging. Standing by for Batch 1.3 greenlight + your call on deltas-now vs deltas-in-1.3.
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 — remaining fields migrated + seek-retry generation-check + prototype deltas closed + beginSession wired. PHASE 1 CLOSED.
+
+Hemanth greenlit Batch 1.3. Closes Phase 1.
+
+### Prototype credit
+
+Shape adopted from `agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp` (Agent 7, Codex) as-is modulo file-style conventions. 1.3 closes the 5 deltas I noted in the retroactive credit post: (a) `beginSession` gained the optional `reason = {}` param, (b) defensive `m_nextGeneration == 0` wrap guard added before the stamp, (c) `qInfo` begin-log added on session stamp, (d) log prefix switched from `[session]` to `[stream-session]`, (e) `SeekRetryState` struct fleshed from empty `{}` to `{quint64 generation; int attempts;}`. 1.1+1.2 shipped state is now shape-identical to the prototype.
+
+### What shipped
+
+**Four session field migrations** (mechanical, same pattern as 1.2):
+- `m_nextPrefetch` → `m_session.nextPrefetch` (15 hits: startNextEpisodePrefetch's stash, onNextEpisodePrefetchStreams's match resolution, showNextEpisodeOverlay's title/countdown builders, onNextEpisodePlayNow's choice+prefetchCopy extract, resetNextEpisodePrefetch's clear, onStreamNextEpisodeShortcut's has_value + matchedChoice + streamsLoaded checks, onSourceActivated's new-playback reset, progressUpdated lambda's overlay-eligible check, closeRequested lambda's overlay-eligible check).
+- `m_nearEndCrossed` → `m_session.nearEndCrossed` (7 hits: resetNextEpisodePrefetch clear, onSourceActivated reset, progressUpdated lambda fire-once guard + setter at 95%/60s threshold, closeRequested lambda overlay-eligible check).
+- `m_nextShortcutPending` → `m_session.nextShortcutPending` (4 hits: resetNextEpisodePrefetch clear, onNextEpisodePrefetchStreams Shift+N auto-play consume, onStreamNextEpisodeShortcut early-return arm + late-match arm).
+- `m_seekRetryState` → `m_session.seekRetry` — converted from raw `QObject*` identity-token to `std::shared_ptr<SeekRetryState>` + generation-check pattern (details below).
+
+**SeekRetryState fleshed** (Agent 7 prototype shape):
+```cpp
+struct SeekRetryState {
+    quint64 generation = 0;   // captured at seek-retry setup
+    int     attempts   = 0;   // iteration counter, capped at 30 (9s)
+};
+```
+Replaces the placeholder empty `{}` shell I shipped in 1.1.
+
+**Seek-retry identity pattern → generation-check pattern:**
+
+Pre-1.3:
+```cpp
+m_seekRetryState = new QObject(this);
+QObject* retryState = m_seekRetryState;
+// closure captures retryState + compares: if (retryState != m_seekRetryState) abort;
+```
+
+Post-1.3:
+```cpp
+m_session.seekRetry = std::make_shared<SeekRetryState>();
+m_session.seekRetry->generation = currentGeneration();
+m_session.seekRetry->attempts   = 0;
+const quint64 retryGen = m_session.seekRetry->generation;
+// closure captures retryGen + compares: if (!isCurrentGeneration(retryGen)) abort;
+```
+
+Semantic correctness: the original QObject-identity check only turned over when onReadyToPlay itself re-entered — meaning a prior session's orphan retry could fire against the SAME session if the user close/re-opened the same URL fast enough that onReadyToPlay re-entered cleanly. Generation-check closes that class entirely — generation turns over atomically at the resetSession boundary (now called from within beginSession), regardless of same-URL vs different-URL re-entry. Tighter invariant.
+
+Iteration counter moved from `QObject::property("count").toInt/setProperty` ping-pong to a direct `int& attempts = m_session.seekRetry->attempts;` reference — cleaner, one less allocation per retry.
+
+**beginSession prototype deltas:**
+
+```cpp
+quint64 StreamPage::beginSession(const QString& epKey, const PendingPlay& pending,
+                                 const QString& reason)
+{
+    resetSession(reason.isEmpty()
+                     ? QStringLiteral("beginSession")
+                     : QStringLiteral("beginSession:%1").arg(reason));
+    if (m_nextGeneration == 0) m_nextGeneration = 1;  // wrap guard
+    m_session.generation = m_nextGeneration++;
+    m_session.epKey      = epKey;
+    m_session.pending    = pending;
+    qInfo().noquote() << QStringLiteral("[stream-session] begin: gen=%1 epKey=%2")
+                             .arg(m_session.generation).arg(epKey);
+    return m_session.generation;
+}
+```
+
+**resetSession prototype deltas:**
+
+```cpp
+qInfo().noquote() << QStringLiteral("[stream-session] reset: reason=%1")
+                         .arg(reason.isEmpty() ? QStringLiteral("unspecified") : reason);
+```
+
+Empty-reason fallback + `[stream-session]` prefix matches prototype exactly.
+
+**beginSession wired into 4 session-start sites** (closes the "Single beginSession constructor" exit criterion):
+1. **Trailer paste handler** (buildUI connect lambda): constructs local `PendingPlay p;`, stamps 6 fields, calls `beginSession(p.epKey, p, "trailer-paste")` → startStream. Replaces 7 direct-field writes + manual epKey stamp.
+2. **Magnet paste handler** (`handlePasteAction`): same pattern. `beginSession(p.epKey, p, "magnet-paste")`.
+3. **onPlayRequested** (StreamDetailView::playRequested): `beginSession(epKey, PendingPlay{imdbId, mediaType, season, episode, epKey, true}, "onPlayRequested")`. Replaces `m_session.pending = PendingPlay{...}`. This is the canonical session-start site for library/catalog/search entries.
+4. **onNextEpisodePlayNow** (end-of-episode auto-advance): local `PendingPlay p;`, stamps from prefetchCopy, calls `beginSession(p.epKey, p, "nextEpisodePlayNow")`. Replaces 6 direct-field writes.
+
+Every session-start path now stamps a fresh `m_session.generation`, and every prior session's async closures get orphaned via the generation-check when they fire against the new session. That's the seek-retry closure, and everything else that captures `currentGeneration()` going forward.
+
+### Audit P0/P1/P2 relationship
+
+Batch 1.3 does NOT close any specific audit finding on its own — foundation completion, not fix delivery. BUT it enables several:
+- **Seek-retry orphan class is closed** (not an audit finding per se, but the STREAM_PLAYBACK_FIX 2.4 fix-up rationale referenced `retryState != m_seekRetryState` as the last-resort guard; that guard is now architecturally correct via generation-check).
+- **Phase 2 Batch 2.2's onStreamStopped reason-branching** can now use `m_session.generation` to gate stale-signal handling across the P0-1 source-switch split.
+- **Phase 3 Batch 3.2's 3s failure timer generation-check** consumer is now trivially `[gen = currentGeneration()]` capture + `isCurrentGeneration(gen)` at fire.
+- **Phase 4 Batch 4.1's Shift+N reshape** from `m_session.pending.valid` to `m_session.isValid()` — the struct's `isValid()` inline now returns meaningful answers (was `false` always pre-1.3 because generation was always 0).
+
+### Files touched (1.3 only)
+
+- `src/ui/pages/StreamPage.h` — fleshed `SeekRetryState`; added `reason = {}` param to beginSession; dropped `std::optional<NextEpisodePrefetch> m_nextPrefetch`, `bool m_nearEndCrossed`, `bool m_nextShortcutPending`, `QObject* m_seekRetryState` decls (replaced with migration-pointer comments); PlaybackSession field comments switched past-tense for the 4 migrated fields.
+- `src/ui/pages/StreamPage.cpp` — beginSession/resetSession impls updated per prototype deltas; banner comment switched to "1.1+1.2+1.3 foundation + full migration, Phase 1 CLOSED" with explicit prototype credit; 26 total field migrations across 15 distinct regions (mass-substituted via Edit replace_all for the 3 mechanical fields + manual conversion for the seek-retry identity pattern); beginSession wired into 4 session-start sites.
+
+### Build verify
+
+`_agent4_build.bat`. 5 steps (MOC/UIC, mocs_compilation, MainWindow recompile, StreamPage.cpp recompile, relink). **EXIT=0.** No new warnings. C4834 SidecarProcess.cpp:23 pre-existing, unchanged.
+
+### Smoke
+
+Launch-and-kill via `cmd.exe /c start /B out\Tankoban.exe` + 7s sleep + taskkill. Clean. (First attempt via bash-spawned exe hit `api-ms-win-crt-locale-l1-1-0.dll not found` — bash PATH doesn't include Windows system DLL paths; cmd.exe start resolves it correctly. Not a binary regression.)
+
+Behavioral smoke for Hemanth (Phase 1 closing cumulative smoke — the TODO's Batch 1.3 success criterion is "all 7 session fields live inside m_session. Seek-retry uses generation check. Behavior parity with Batch 1.2 smoke"):
+
+1. **Cold-start + resume playback at saved offset** — open a stream that has prior progress. seek-retry path exercises the new generation-check. Expect: seeks to saved offset, no blank player, no double openFile race.
+2. **Fast close + re-open same stream within 300ms** — previously protected by the QObject-identity-token orphan guard. Post-1.3 protected by generation-check: the prior session's seek-retry closure captures generation N, the re-open stamps generation N+1, the orphan closure aborts silently when its 300ms timer fires. Expect: clean re-open, no blank player, no stall.
+3. **Close + re-open different stream within 300ms** — same protection class. Fresh generation, orphan retry closure aborts. Expect: fresh session starts cleanly.
+4. **End-of-episode auto-advance** — play through to 95%, let countdown expire, next episode plays. Generation turns over at the boundary (onNextEpisodePlayNow calls beginSession). Previous session's closures can't leak into the new one. Expect: smooth handoff, no stale progress writes to the old epKey.
+5. **Shift+N during playback (series)** — still silent no-op per audit P2-3 (m_session.pending.valid = false when onSourceActivated consumes it). Phase 4.1 fixes that guard to use `m_session.isValid()`. 1.3 should not change this behavior — but now `m_session.isValid()` actually returns meaningful answers (generation != 0), so Phase 4.1 is architecturally unblocked.
+6. **Stream failure + navigate + 3s timer** — the 3s timer still fires unconditionally (Phase 3 Batch 3.2 fix pending). 1.3 should not change this behavior.
+7. **Adhoc magnet paste playback** — exercise paste → beginSession → startStream direct path. Should work identically to pre-1.3 via the paste handler's new PendingPlay + beginSession call.
+8. **Adhoc trailer paste playback** — same.
+9. **Regression scan** — anything else that used to work should keep working. Progress persistence. Continue-watching strip. Auto-launch toast. Next-episode overlay. Calendar. Search.
+
+Any of those breaking → retract READY TO COMMIT, investigate, re-post. New [stream-session] log lines should appear in debug output: `[stream-session] begin: gen=<n> epKey=<k>` on every detail-open / paste / auto-advance, and `[stream-session] reset: reason=<r>` preceding each begin.
+
+### Phase 1 exit criteria satisfied
+
+Quoting the TODO:
+> - `PlaybackSession` + generation-counter foundation live. ✓ (1.1)
+> - All 7 session fields migrated. ✓ (1.2 closed 3; 1.3 closes 4)
+> - Single `resetSession(reason)` boundary + single `beginSession(epKey, pending)` constructor. ✓ (1.3 — all 4 session-start sites route through beginSession; resetSession is the teardown boundary invoked from within beginSession)
+> - Seek-retry uses generation check (first consumer of the new pattern). ✓ (1.3)
+> - Agent 6 review: foundation API + migration cleanliness against audit advisory #1 + #2. (DECOMMISSIONED — Hemanth smoke approval replaces review per 2026-04-16 decommission.)
+
+### Isolate-commit designation
+
+Batch 1.3 is structurally cross-cutting but closes a phase. TODO doesn't explicitly flag it as isolate-commit (Rule 11 section only flags 1.2 + 5.2). I recommend Agent 0 land 1.3 as a single commit from this READY TO COMMIT line — landing it after 1.2's isolate-commit preserves the "any missed call site surfaces in isolation" rule while avoiding artificial sub-splits within 1.3.
+
+### Next
+
+Phase 1 closed. Phase 2 (source-switch reentrancy split) is the next substantial work — per TODO landing sequence: "Stream 1 (Agent 4's to ship) → Stream 2 + Player 2 in parallel." Stream 2 is now unblocked (Player 2 is Agent 3's queue, waiting on their sweep + your greenlight). Phase 2 Batch 2.1 introduces `StopReason` enum on StreamPlayerController + extends `streamStopped` signal signature — first structural change, no onStreamStopped branching yet (that's 2.2).
+
+Also — Batch 2.6 (STREAM_UX_PARITY Shift+N player shortcut) is now architecturally unblocked since `m_session.isValid()` + `m_session.pending.mediaType == "series"` actually work as the guard. Phase 4.1 will reshape the guard; 2.6 can land at that time. Still deliberately held until 4.1, not shipping today.
+
+Not racing the dirty tree — standing by for sweep + your greenlight on Phase 2.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3]: close Phase 1 — migrate m_nextPrefetch + m_nearEndCrossed + m_nextShortcutPending + m_seekRetryState into m_session; flesh SeekRetryState struct (generation + attempts); convert seek-retry from raw-QObject*-identity to generation-check pattern (first consumer of currentGeneration/isCurrentGeneration); add reason param + wrap-guard + begin-log on beginSession; switch log prefix to [stream-session] with empty-reason fallback (prototype-shape deltas from agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp adopted); wire beginSession into 4 session-start sites (trailer paste, magnet paste, onPlayRequested, onNextEpisodePlayNow); 26 field migrations across 15 regions | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp
+
+**Phase 1 CLOSED.**
+
+---
