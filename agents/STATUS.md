@@ -2,7 +2,7 @@
 
 Each agent overwrites their own section at session start and end. Never append — overwrite your entry.
 Last header touch: 2026-04-16 (Agent 0 — Track 1 cleanup; STATUS header field discipline introduced)
-Last agent-section touch: 2026-04-16 (Agent 4 — STREAM_LIFECYCLE_FIX_TODO CLOSED end-to-end this session. Phase 3 (3.1+3.2+3.3 P1 cleanup) + Phase 4 (4.1+4.2 P2 cleanup) + Phase 5 (5.1+5.2 P1-3 HTTP worker cancellation) all shipped. STREAM_UX_PARITY Batch 2.6 closed as byproduct of 4.1 unblock (code was already in git). 7 READY TO COMMIT lines on the wire. All audit P0/P1/P2 findings closed. Standing by for Hemanth build + smoke.)
+Last agent-section touch: 2026-04-16 (Agent 3 — validation pass complete on Agent 7's video_player_comprehensive_2026-04-16 audit. 5 high-priority hypotheses CONFIRMED via code reads: HDR label/shader mapping P1, buffering/opening event dispatch P0 double-fault, tracks_changed coupled to first_frame P0, teardownUi HUD reset incomplete P1, subtitle overlay geometry P0 two-part. Report + fix-phase preview in chat.md. Handed off to Agent 0 for TODO authoring.)
 
 Per Rule 12: when you overwrite your own section, bump the `Last agent-section touch` line in the same edit. The header touch line is Agent 0's responsibility, bumped when anything outside an individual agent's section changes.
 
@@ -39,11 +39,12 @@ Last session: 2026-04-15
 ---
 
 ## Agent 3 (Video Player)
-Status: ACTIVE — PLAYER_LIFECYCLE_FIX Phase 3 (Batches 3.1 + 3.2) SHIPPED as an atomic phase-boundary batch. Phase 1 + Phase 2.1 already committed (0daabb6) + sidecar rebuilt this session. Phase 3 is VideoPlayer-only — no sidecar rebuild, main-app build is Hemanth's per contracts-v2. Pending Hemanth build + smoke; on green, PLAYER_LIFECYCLE_FIX closes entirely.
-Current task: None — standing by for build + smoke on Phase 3.
-Active files (Phase 3): src/ui/player/VideoPlayer.h (stopPlayback default-arg `bool isIntentional = true` + `bool m_openPending = false` member); src/ui/player/VideoPlayer.cpp (stopPlayback identity-clear block on intentional; openFile sets m_openPending=true after pending-file bookkeeping; restartSidecar sets m_openPending=true before start(); onSidecarReady gates sendOpen on m_openPending && !m_pendingFile.isEmpty() and clears the token on consume). Cumulative (P1 + P2.1 committed, P3 dirty): src/ui/player/SidecarProcess.{h,cpp}, src/ui/player/VideoPlayer.{h,cpp}, native_sidecar/src/main.cpp.
+Status: ACTIVE — validation pass complete on Agent 7's video_player_comprehensive_2026-04-16 audit. All 4 symptoms + 5 high-priority hypotheses CONFIRMED via code reads (report posted to chat.md). No src/ changes in this pass; findings feed Agent 0's fix TODO authoring. PLAYER_LIFECYCLE_FIX Phase 1 + 2.1 + 3 all SHIPPED (Phase 1 + 2.1 committed at 0daabb6; Phase 3 live in the running binary).
+Current task: None — standing by for Agent 0 to author the audit-follow-up TODO from the 5 findings.
+Active files: None dirty.
 Blockers: None on my side.
-Next: (1) Hemanth builds main app + smokes Phase 3 matrix (Escape-close-no-reopen; rapid Escape→reopen no double-open; crash recovery still resumes at last pos; onSidecarReady post-close debug log shows `skip open (openPending=false pendingFile=empty)` instead of a re-open). (2) On green, PLAYER_LIFECYCLE_FIX CLOSES — all three phases shipped (sessionId filter + open/stop fence + stop identity + onSidecarReady gate). (3) No further PLAYER_LIFECYCLE work queued; I return to IDLE or pick up whatever else is on my plate.
+Validation findings (chat.md): V1 HDR label/shader mapping CONFIRMED P1 (6 labels, 3 mapped, aces dead code). V2 buffering/opening event dispatch CONFIRMED P0 double-fault (sidecar on_video_event lambda drops buffering; Qt onStateChanged drops opening/idle). V3 tracks_changed coupled to first_frame CONFIRMED P0 (probe payload sits until decode completes). V4 teardownUi HUD reset incomplete CONFIRMED P1 (labels + chips + seekbar + stats never reset on switch). V5 subtitle overlay geometry CONFIRMED P0 two-part (ass_set_storage_size(0,0) wrong; overlay drawn in video viewport only — cinemascope subs physically can't occupy letterbox bars). Existing AVSYNC_DIAG/TIMING/[PERF] stderr instrumentation covers most timing-gap requests — no new diagnostic code shipped.
+Next: On Agent 0's TODO drop, execute phased per Rule 6 + Rule 11. Phase split preview in chat.md — Phase 1 decouple metadata-from-first-frame; Phase 2 loading UX; Phase 3 HUD reset; Phase 4 subtitle geometry (4a trivial storage_size fix, 4b architectural canvas-sized overlay + protocol extension); Phase 5 HDR dropdown; Phase 6 polish. Phase 4b is the biggest single item — may be its own TODO.
 Last session: 2026-04-16
 Governance seen: gov-v2 | Contracts seen: contracts-v2
 

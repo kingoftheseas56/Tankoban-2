@@ -2135,3 +2135,123 @@ Agent 7 (Codex), when Hemanth starts your next session, read `AGENTS.md` at repo
 ---
 
 Agent 7 audit written — agents/audits/video_player_comprehensive_2026-04-16.md. For Agent 3 (Video Player domain master). Reference only.
+
+---
+
+## Agent 3 (Video Player) -- 2026-04-16 Validation pass on Agent 7's comprehensive video-player audit
+
+Hemanth greenlit a validation pass before Agent 0 authors the fix TODO. 5 code-read validations + 1 evidence-sufficiency decision. No `src/` changes shipped in this pass; findings feed the TODO.
+
+### Validation 1 — HDR label/shader mapping (Symptom 4, audit P1): **CONFIRMED**
+
+- [FilterPopover.cpp:112](src/ui/player/FilterPopover.cpp#L112) exposes 6 algorithms: `{hable, reinhard, bt2390, mobius, clip, linear}`.
+- [VideoPlayer.cpp:1255-1258](src/ui/player/VideoPlayer.cpp#L1255-L1258) maps only 3 to shader modes: `reinhard→1, aces→2, hable→3`. `aces` is dead code — FilterPopover never emits it.
+- `bt2390`, `mobius`, `clip`, `linear` all silently fall to mode 0 (Off). User-visible lie: picking `bt2390` does nothing.
+- Comment at line 1245 states "will be removed from FilterPopover in Batch 3.5 or at phase exit" — someone knew, deferred, didn't clean up.
+- **Fix direction:** either shrink the dropdown to `{Off, hable, reinhard}` (+ `aces` if reviving) OR expand shader modes to cover the remaining 3. Audit is effectively asking for parity: present what works, hide what doesn't.
+
+### Validation 2 — "buffering"/"opening" event coverage (Symptom 1, audit P0): **CONFIRMED (double fault)**
+
+Two independent mechanisms for progress signalling exist, **both broken:**
+
+**2a. Sidecar-side "buffering" dropped at sidecar→host boundary.**
+- [video_decoder.cpp:983-987](native_sidecar/src/video_decoder.cpp#L983) emits `on_event_("buffering", "")` on every HTTP-stall (the 30s retry loop).
+- [main.cpp:341-518](native_sidecar/src/main.cpp#L341) `on_video_event` lambda dispatches: `first_frame`, `eof`, `error`, `decode_error`, `d3d11_texture`, `overlay_shm`, `frame_stepped`, `subtitle_text`. **No case for `buffering`.** Silently dropped — never reaches `write_event`, never reaches Qt.
+- Symmetric for `"playing"` clear-state event at [video_decoder.cpp:1006](native_sidecar/src/video_decoder.cpp#L1006) — dropped the same way.
+
+**2b. `state_changed{opening}` dropped at Qt-side dispatch.**
+- [main.cpp:656](native_sidecar/src/main.cpp#L656) emits `state_changed` with `state="opening"` on every sendOpen. This DOES reach Qt (verified via grep + the event goes through normal `write_event` path).
+- [VideoPlayer.cpp:576-585](src/ui/player/VideoPlayer.cpp#L576) `onStateChanged` only handles `"paused"` and `"playing"`. `"opening"` and `"idle"` silently no-op.
+- User has no visible cue during the opening window.
+
+**Fix direction:** (1) add `buffering` case to `on_video_event` that writes `write_event("buffering", sid, -1, {})`. (2) add SidecarProcess `buffering` handler that emits a signal. (3) handle `opening`/`idle` in `onStateChanged`. (4) ship a "Loading..." / "Buffering..." HUD indicator bound to both events.
+
+### Validation 3 — tracks_changed emission timing (Symptom 2, audit P0): **CONFIRMED**
+
+- [main.cpp:402](native_sidecar/src/main.cpp#L402) emits `tracks_changed` inside the `if (event == "first_frame")` block.
+- [main.cpp:418](native_sidecar/src/main.cpp#L418) same for `media_info`. [main.cpp:432](native_sidecar/src/main.cpp#L432) same for `state_changed{playing}`.
+- Sidecar has full `tracks_payload` populated during probe at [main.cpp:309](native_sidecar/src/main.cpp#L309) — captured into the lambda at :341 long before the first frame decodes. But it sits on the payload until decode succeeds.
+- On slow opens (HEVC 10-bit init, network probe, large file metadata parse) the HUD gets nothing for the full gap even though the sidecar has it.
+
+**Fix direction:** emit `tracks_changed` + `media_info` immediately after `probe_file` returns successfully in `open_worker`. Keep the first_frame emission as a backstop for cases where tracks need post-decode annotation (unlikely — the probe payload has everything). Agent 7's IINA reference shows the split clearly: `.loaded` state after `MPV_EVENT_FILE_LOADED` gets tracks + duration; `.playing` waits for `MPV_EVENT_VIDEO_RECONFIG`.
+
+### Validation 4 — teardownUi HUD reset completeness (Symptom 2, audit P1): **CONFIRMED**
+
+[teardownUi:391-418](src/ui/player/VideoPlayer.cpp#L391) clears data arrays + canvas/reader but does NOT reset user-visible labels:
+- **Reset:** canvas stop/detach, reader detach, `m_audioTracks` + `m_subTracks` data, external subs.
+- **NOT reset:** `m_timeLabel`, `m_durLabel`, `m_seekBar` (value + duration), `m_trackChip` text, `m_eqChip` text, `m_filterChip` text, `m_statsBadge` values, `m_durationSec` member, open popover contents.
+
+Until first `time_update` + `tracks_changed` from the new session, HUD shows previous file's data. Interacts with Validation 3: if tracks_changed is delayed until first_frame, the stale window compounds.
+
+**Fix direction:** teardownUi adds a "reset HUD to loading state" block — `—:—` time labels, `0` seekbar, generic chip labels, hide stats badge, repopulate-empty on Tracks popover. Compose with Validation 2's new Loading indicator.
+
+### Validation 5 — subtitle overlay geometry + ASS storage_size (Symptom 3, audit P0): **CONFIRMED (two-part)**
+
+**5a. `ass_set_storage_size(renderer_, 0, 0)`** at [subtitle_renderer.cpp:197-204](native_sidecar/src/subtitle_renderer.cpp#L197):
+```cpp
+void SubtitleRenderer::set_frame_size(int width, int height) {
+    // ...
+    ass_set_frame_size(renderer_, width, height);
+    ass_set_storage_size(renderer_, 0, 0);   // <-- wrong
+}
+```
+libass requires storage_size = unscaled source video dimensions for correct aspect/blur/transforms/VSFilter-compatible behavior. Reference comparisons:
+- mpv [sd_ass.c:767-771](C:/Users/Suprabha/Downloads/Video%20player%20reference/mpv-master/mpv-master/sub/sd_ass.c#L767): sets both from video params.
+- VLC [libass.c:431-438](C:/Users/Suprabha/Downloads/Video%20player%20reference/secondary%20reference/vlc-master/vlc-master/modules/codec/libass.c#L431): sets frame from destination, storage from source.
+Passing `0, 0` explicitly disables storage-aware rendering. Trivial fix.
+
+**5b. Overlay drawn only in video viewport.** At [FrameCanvas.cpp:976-982](src/ui/player/FrameCanvas.cpp#L976):
+```cpp
+pollOverlayShm();
+if (m_overlayCurrentlyVisible && m_overlaySrv && m_overlayPs && m_overlayBlend) {
+    m_context->OMSetBlendState(m_overlayBlend, blendFactor, 0xFFFFFFFF);
+    m_context->PSSetShader(m_overlayPs, nullptr, 0);
+    m_context->PSSetShaderResources(0, 1, &m_overlaySrv);
+    m_context->Draw(4, 0);   // <-- same viewport as the video quad drawn above
+}
+```
+No `SetViewport` call between video and overlay draws. Overlay SHM is video-sized ([overlay_shm.h:12-19](native_sidecar/src/overlay_shm.h#L12)), texture is video-sized ([FrameCanvas.cpp:1589-1645](src/ui/player/FrameCanvas.cpp#L1589)). Entire pipeline is geometrically locked to the video rectangle — for cinemascope content in a 16:9 window, subtitles can only land inside the active video rectangle, never in the letterbox bars.
+
+**Fix direction (architectural):** overlay plane needs to be canvas-sized, not video-sized. Sidecar renders subs with libass using the CANVAS viewport (via `ass_set_frame_size` at canvas-dimension + margins), publishes a canvas-sized BGRA overlay. Main-app draws overlay quad at full canvas viewport (not video viewport). This is a non-trivial change — sidecar needs canvas-dimension knowledge which it doesn't currently have, requiring a protocol extension (e.g., `set_canvas_size` command from main-app to sidecar on window resize). Mirror of mpv OSD's `mp_osd_res` model.
+
+### Timing instrumentation decision: DEFER
+
+Agent 7's validation gaps #1-#5 ask for per-phase open-to-first-frame timing. I considered shipping diagnostic `debugLog` lines but found the sidecar **already has extensive `AVSYNC_DIAG` + `TIMING` + `[PERF]` stderr output** covering most phases:
+
+| Phase | Existing diagnostic |
+|---|---|
+| openFile UI call | `[VideoPlayer] openFile: <path>` in _player_debug.txt |
+| sidecar sendOpen | `SEND: {"name":"open",...}` in _player_debug.txt |
+| probe_file start | `TIMING open start sid=... target=...` at [main.cpp:271](native_sidecar/src/main.cpp#L271) |
+| open_audio_start | `AVSYNC_DIAG open_audio_start +<ms>` at [main.cpp:571](native_sidecar/src/main.cpp#L571) |
+| audio avformat_open_input | `AVSYNC_DIAG audio_open_input_done +<ms>` at [audio_decoder.cpp:198](native_sidecar/src/audio_decoder.cpp#L198) |
+| audio PA open/start | `AVSYNC_DIAG audio_pa_open_done/audio_pa_start_done +<ms>` |
+| open_video_start | `AVSYNC_DIAG open_video_start +<ms>` at [main.cpp:614](native_sidecar/src/main.cpp#L614) |
+| first video frame | `TIMING first video frame fid=...` at [main.cpp:428](native_sidecar/src/main.cpp#L428) |
+
+Gaps in existing instrumentation (minor): `find_stream_info` duration on video side isn't explicitly stamped; first `d3d11_texture` / `overlay_shm` emission doesn't have an elapsed-ms stamp; first FrameCanvas render after attach isn't timestamped on main-app side. These would be nice-to-haves but not blocking — the big phases are already covered.
+
+**Request to Hemanth:** reproduce the 30s blank-screen scenario **once** (likely on a stream mode URL or a network-mounted file). Capture both `sidecar_debug_live.log` + `_player_debug.txt`. Paste the relevant timestamp range (from `openFile` to `first_frame`) in chat.md. I'll walk the phases and tell you whether the stall is network I/O, `avformat_find_stream_info`, decoder init, or A/V sync wait. That sharpens the fix prioritization within Symptom 1.
+
+If the 30s scenario is hard to reproduce on demand, skip this — the code-read findings (buffering event dropped + state_changed{opening} dropped + tracks_changed coupled to first_frame) are already strong enough to author the TODO.
+
+### For Agent 0 — TODO-authoring handoff
+
+All 4 symptoms validated. Suggested phase split (Agent 0's call; this is my preview):
+
+- **Phase 1 (P0 foundation):** decouple `tracks_changed` + `media_info` + `state_changed` from first_frame emission. Ship immediate-after-probe. This closes the HUD-staleness P0 and is the prerequisite for a Loading indicator that shows metadata mid-open.
+- **Phase 2 (P0 loading UX):** wire the two dropped event channels — sidecar `buffering` dispatch + Qt `onStateChanged("opening"/"idle")`. Ship a "Loading — <filename>" / "Buffering…" HUD indicator. Compose with Phase 1's early metadata: by first_frame, the HUD already knows duration + tracks, just waits for video.
+- **Phase 3 (P1 HUD reset):** teardownUi resets time/duration/seekbar/chips/stats to a clean "loading" state. Compose with Phase 2 (loading indicator replaces the cleared state).
+- **Phase 4 (P0 subtitle geometry):** split into 4a `ass_set_storage_size` fix (trivial, isolate-commit), 4b overlay-plane architectural change (canvas-sized overlay + protocol extension for set_canvas_size). 4b is substantial — possibly its own TODO given the protocol-extension cost.
+- **Phase 5 (P1 HDR mapping):** either shrink dropdown to working set OR add shader modes. User-facing decision for Hemanth.
+- **Phase 6 (P2 polish):** Tracks/EQ/Filters chip state indicators, popover dismiss consistency, Tracks metadata richness (default/forced/external/channel/sample-rate), EQ presets. Lower priority, ship after P0/P1 close.
+
+Cross-ownership: Phase 2 + 4b touch `native_sidecar/src/` — sidecar rebuild required, I run it myself per contracts-v2. Phase 4b's protocol extension needs chat.md heads-up since both sides move.
+
+### Agent 7 credit
+
+Audit design + hypotheses by Agent 7 (Codex) in `agents/audits/video_player_comprehensive_2026-04-16.md`. My validation added concrete file:line citations + ownership of fix direction suggestions. All 5 hypotheses Agent 3-assigned were correctly identified; no false positives in the audit's high-priority findings.
+
+Standing by for Agent 0's TODO authoring.
+
+---
