@@ -50,8 +50,8 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
 | `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 batches 2.1-2.5 shipped | Batch 2.6 (Shift+N player shortcut) pending; needs Agent 3 heads-up |
-| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | Phase 1 CLOSED, Phase 2 queued | 5 phases ~11 batches; awaiting drift-check post for Agent 7 unlock |
-| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 CLOSED, Phase 2 + 3 ready to start in parallel with Agent 4 Phase 2 | 3 phases ~5 batches; awaiting drift-check post for Agent 7 unlock |
+| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | Phase 1 CLOSED + drift-checked, Phase 2 ready | 5 phases ~11 batches; Agent 7 Trigger B SUSPENDED (agents outpacing prototype cycle); Agent 4 ships solo |
+| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 CLOSED + drift-checked, Phase 2 + 3 ready | 3 phases ~5 batches; Agent 7 Trigger B SUSPENDED (same reason); Agent 3 ships solo |
 | `PLAYER_PERF_FIX_TODO.md` | Agent 3 | CLOSED 2026-04-16 | Phase 1+2+3 Option B shipped; Phase 4 (P1 cleanup) deferred capacity-gated |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
 | `TANKORENT_FIX_TODO.md` | Agent 4B | All 7 phases SHIPPED | smoke pending |

@@ -1152,3 +1152,224 @@ READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3]: close Pha
 **Phase 1 CLOSED.**
 
 ---
+
+## Agent 4 (Stream mode) -- 2026-04-16 Phase 1 drift-check
+
+Per Hemanth's standing practice + the new `feedback_credit_prototype_source.md` memory. Phase 1 is now behind me (1.1 + 1.2 + 1.3 all shipped, READY TO COMMIT x3 on the wire). Honest accounting of what shipped vs what was planned.
+
+### Scope per TODO vs scope shipped
+
+TODO Phase 1 scope (3 batches, ~foundational): PlaybackSession struct + generation counter + boundary API (1.1), migrate 3 scattered fields (`_currentEpKey` / `m_pendingPlay` / `m_lastDeadlineUpdateMs`) isolate-commit (1.2), migrate 4 remaining fields + seek-retry generation-check (1.3).
+
+Shipped scope matches TODO at the batch-boundary level — 3 batches, same split, same file surface (`src/ui/pages/StreamPage.{h,cpp}` only). No Rule-7 trips (no cross-agent file touches).
+
+### Drift items
+
+1. **Batch 1.1 shipped leaner than prototype.** I did not read `agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp` before implementing 1.1. Worked from TODO spec. Output landed ~95% same shape but with 5 deltas vs prototype: missing `reason` param on `beginSession`, missing `m_nextGeneration == 0` wrap-guard, missing begin-log, log prefix `[session]` instead of `[stream-session]`, and an empty placeholder `SeekRetryState {}` instead of the prototype's `{quint64 generation; int attempts;}` shell. Batch 1.3 closed all 5 deltas as part of fleshing `SeekRetryState` — 1.1+1.2+1.3 shipped state is now shape-identical to the prototype. Net: prototype credit should have landed at 1.1; didn't; corrected retroactively after your feedback.
+
+2. **Prototype-credit discipline failure at 1.1 + 1.2 ship posts.** Did not credit Agent 7's prototype even though my output matched it closely via TODO-transcription cascade. Flagged by you 2026-04-16. Saved `memory/feedback_credit_prototype_source.md` with the cascade-credit rule. Retroactive credit posted at chat.md after flag. 1.3 ship post credited the prototype explicitly + documented the 5 deltas closing. Going forward every batch post includes the credit cascade statement.
+
+3. **Batch 1.3 expanded scope beyond literal TODO text.** TODO 1.3 bullets say: migrate 4 fields + update resetNextEpisodePrefetch + convert seek-retry to generation-check. I additionally (a) adopted 5 prototype deltas from 1.1 (justified by credit-discipline + minor), and (b) wired `beginSession` into 4 session-start sites (trailer paste, magnet paste, `onPlayRequested`, `onNextEpisodePlayNow`). Item (b) was NOT in 1.3's literal bullet list but WAS implicitly required by Phase 1 exit criterion #3 ("Single `beginSession(epKey, pending)` constructor") AND by criterion #4 ("Seek-retry uses generation check") — the seek-retry closure captures `currentGeneration()`, which must be non-zero for the check to function, which only happens when some consumer calls `beginSession`. So 1.3 had to wire at least one session-start site; I wired all 4 for consistency. Net: scope expansion was exit-criterion-mandatory not discretionary.
+
+4. **Defensive-redundant state clears left in `onSourceActivated` (line 1599-1600).** Specifically `m_session.nearEndCrossed = false; m_session.nextPrefetch.reset();` at new-playback setup. These are now redundant post-1.3 because `beginSession` (called from `onPlayRequested`) already resets them via `resetSession`. I kept them as defensive-idempotent rather than removing — removing saves 2 lines; keeping costs nothing at runtime + documents the invariant at the consumer site. Minor drift; Phase 2+ can decide.
+
+5. **Behavioral smoke uncertainty.** All three ship posts note that behavioral smoke (open stream, play 30s, close, re-launch different) is your domain — I only did build + launch-and-kill per batch. If anything regressed under real playback, my posts can't catch it. `feedback_evidence_before_analysis` stays operative — if you smoke and see anything unusual, `[stream-session]` log lines in debug output will show the session-boundary timing.
+
+6. **One launch-smoke anomaly.** 1.3's first launch-and-kill attempt via bash-spawned `./out/Tankoban.exe &` hit `api-ms-win-crt-locale-l1-1-0.dll not found`. Re-ran via `cmd.exe /c start /B out\Tankoban.exe` — clean. Bash PATH doesn't include Windows system DLL paths. Documented inline in the 1.3 ship post. Not a binary regression.
+
+### What did NOT drift
+
+- **Commit cadence.** Three READY TO COMMIT lines per Rule 11, one per batch. 1.2 tagged `(isolate)` per TODO.
+- **File surface.** Only `src/ui/pages/StreamPage.{h,cpp}` touched. No Rule-7 cross-agent surprise.
+- **Contract surface.** No new public API surface outside the class (all new methods private; no CMakeLists.txt touches; no new files). No `contracts-v1` bump warranted.
+- **Smoke gap honesty.** Every ship post clearly said "behavioral smoke is Hemanth's; my side is build + launch-and-kill." No false green.
+- **No Phase 2 work leaked backward into Phase 1.** I did NOT touch `StreamPlayerController.{h,cpp}` or change the `streamStopped` signal signature — that's 2.1's job.
+
+### What drift-check informs for Phase 2+
+
+- **Prototype-credit discipline is live.** Before touching Batch 2.1 I read `agents/prototypes/stream_lifecycle/Batch2.1_StopReason_signal_signature.cpp` in full. Any shape delta will land in the 2.1 ship post as explicit enumeration.
+- **`isValid()` now returns meaningful answers.** Post-1.3, `m_session.isValid()` goes true during active sessions and false during teardown. Any Phase 2+ batch can use it without a "always false pre-wiring" asterisk.
+- **Generation-check pattern is the canonical orphan guard.** Phase 2 Batch 2.2's `onStreamStopped(reason)` branching + Phase 3 Batch 3.2's 3s failure timer generation-check + Phase 4 Batch 4.1's Shift+N reshape are all trivial consumers of the new API. Foundation earned its keep.
+
+Opening Batch 2.1 next. Standing by if there's anything in the drift-check you want me to tighten before proceeding.
+
+---
+
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_LIFECYCLE_FIX drift-check + Phase 2 opening
+
+Hemanth issued drift-check + Phase 2 greenlight in one summon. Picking up Agent 4's prototype-credit discipline (`feedback_credit_prototype_source.md` 2026-04-16) proactively, not retroactively.
+
+### Drift-check — Phase 1
+
+**Phase 1 shipped — prototype drift: close match. Phase N+1 prototypes stay valid** (none exist yet for PLAYER_LIFECYCLE — this is a forward-unlock, not an archive trigger).
+
+Prototype source: `agents/prototypes/player_lifecycle/Batch1.1_SidecarProcess_sessionId_filter.cpp` (Agent 7, 2026-04-16). I read it in full before implementing and the shipped code in `src/ui/player/SidecarProcess.cpp` is substantially Agent 7's design — I adopted his process-global allowlist, his empty-sessionId-tolerance rationale, his drop-and-return flow, and his explicit "leave the existing dispatch as-is" instruction.
+
+Delta enumeration (5 items, all cosmetic, none material):
+
+1. **Allowlist organization.** Prototype: free function `isProcessGlobalEvent(name)` with a static-local `QSet`. Mine: function-static `QSet` inline inside `processLine`. Same run-once init via C++11 static-local. Zero codegen difference. Cosmetic placement.
+2. **String literal style.** Prototype: `QStringLiteral("ready")` + `obj.value("key")` throughout. Mine: bare `"ready"` in QSet init + `obj["sessionId"]` to match the existing dispatch block below. File is self-consistent internally either way; I chose file-consistency over prototype-consistency.
+3. **Missing-sessionId tolerance comment.** Prototype explains the legacy-sidecar rationale in a block comment above the check. Mine inlines a shorter version inside the comment block for the whole filter. Same rule, same reasoning surfaced — just condensed.
+4. **`debugLog` spelling.** Prototype calls `debugLog(QStringLiteral("[Sidecar] drop stale event: %1 eventSid=%2 currentSid=%3").arg(name, eventSessionId, m_sessionId))`. Mine calls `debugLog(QString("[Sidecar] drop stale event: %1 eventSid=%2 currentSid=%3").arg(name, eventSid, m_sessionId))` — `QString` not `QStringLiteral` (the format string is synthesized per call via `.arg()` anyway, so `QStringLiteral` gains nothing). Variable name `eventSid` vs `eventSessionId` — shorter to match `m_sessionId`'s naming cadence.
+5. **Dispatch body unchanged.** Prototype's note said "leave the rest of the existing dispatch exactly as it is." I did. No post-filter rewrites. Prototype's own `QStringLiteral`-everywhere dispatch example was not adopted.
+
+None of these are semantic. Future prototypes for this file can plan against either style.
+
+### Credit cascade (per feedback_credit_prototype_source.md)
+
+Batch 1.1's design originates with Agent 7's prototype. Batch 1.1's shipped code is a close adaptation. I didn't credit Agent 7 explicitly in the smoke-passed post — that was a credit-discipline miss, caught when Hemanth flagged Agent 4 for the same pattern today. Recording it here + going forward every Phase 2+ ship post includes the cascade statement.
+
+### Phase 2 opening — Shape 2 (same-process stop/open protocol)
+
+Per TODO's recommendation + Hemanth's greenlight. Shape 1 (wait-for-closed) stays fallback only.
+
+**Problem today.** `VideoPlayer::openFile:263` calls `stopPlayback():351`, which at line 362-365 does `sendStop() + sendShutdown()` with zero wait. Then back in openFile at line 335, `m_sidecar->isRunning()` is checked — since shutdown is async, still returns true — and `m_sidecar->sendOpen(...)` fires at line 342. Command ordering at the sidecar is race-dependent: shutdown-first → process dies → open lost to dying stdin → blank player. Open-first → new session starts → shutdown tears it down. Same class as the just-closed double-open race, at a different layer.
+
+**Shape 2 fix.** Split UI teardown from process teardown. UI runs unconditionally (canvas stop, shm detach, reader detach, tracks clear). Process teardown branches:
+- **File-switch (sidecar running):** `sendStopWithCallback([=]{ sendOpen(...); })`. Sidecar acks the stop, tears down its decoder, emits a new `stop_ack` event; Qt-side callback fires only once the sidecar is actually idle; the same-process `sendOpen` then starts a fresh session without a process respawn.
+- **Cold start (sidecar not running):** `start()` + existing `onSidecarReady` path handles the open.
+- **User close (Escape / back):** existing `stopPlayback` path — `sendStop + sendShutdown` — unchanged. Full teardown.
+
+**Timeout fallback.** If `stop_ack` doesn't arrive within 2s (sidecar hang / mid-shutdown race / pre-rebuild binary), fall back to `sendShutdown` + wait-for-`finished` + restart. Spec'd in TODO.
+
+**Phase 1's filter is the enabler.** During the stop→open transition, the old session's in-flight events (`time_update`, `first_frame`, `tracks_changed`) reach Qt carrying the OLD sessionId. Phase 1 drops them by sessionId mismatch. Without Phase 1, Shape 2 would be racy at a different layer.
+
+**Files to touch (atomic batch 2.1):**
+- `native_sidecar/src/main.cpp` — `handle_stop` appends `write_event("stop_ack", cmd.sessionId, cmd.seq, {})` after the `state_changed{idle}` emission. ~2 lines.
+- `src/ui/player/SidecarProcess.h` — add `sendStopWithCallback(std::function<void()>)` declaration + `PendingStop` struct + `m_pendingStop` optional.
+- `src/ui/player/SidecarProcess.cpp` — implement `sendStopWithCallback`; `processLine` gains `"stop_ack"` branch that consumes the callback if seq matches.
+- `src/ui/player/VideoPlayer.h` — split private `teardownUi()` helper out of `stopPlayback`.
+- `src/ui/player/VideoPlayer.cpp` — rewrite `openFile` file-switch path to use the fence; add 2s timeout fallback via `QTimer::singleShot`.
+
+**Build gate:** Qt-side changes ship independently; sidecar-side `stop_ack` emission requires `native_sidecar/build_qrhi.bat` (Hemanth's run). Until the sidecar rebuild, Qt times out every file-switch stop and falls back to shutdown — **functional, not broken, just slower on file-switch** (~matches pre-fix behavior). Post-rebuild smoke should feel faster + race-free.
+
+**Smoke matrix (post-both-builds):**
+1. **File-switch A→B (primary):** no blank player, no sidecar pid churn (process stays alive across the switch), playback starts on B cleanly. `_player_debug.txt` shows `SEND stop` → `RECV stop_ack` → `SEND open` per switch. Phase 1 filter continues dropping any tail events from A that arrive after B's open fires.
+2. **Rapid 5x A/B switch within 2s:** no crashes, no stuck-buffering, each switch resolved via the fence. Drop count should scale linearly with switch count.
+3. **Escape during playback:** full user-close path unchanged. Sidecar exits cleanly, no fence overhead.
+4. **Sidecar crash recovery:** unchanged (uses `restartSidecar` which never goes through `openFile`).
+5. **Pre-sidecar-rebuild smoke (Qt changes only):** every file-switch waits 2s then falls back to shutdown + restart. Slow but functional. Confirms timeout path correctness.
+
+**Non-goals for this batch:** no changes to crash-recovery path, no `m_currentFile` / `m_pendingFile` identity cleanup (Phase 3 territory), no change to `onSidecarReady` re-open gating (Phase 3 Batch 3.2), no refactor of `processLine` dispatch structure beyond adding the new event.
+
+Starting implementation now. Will post READY TO COMMIT when Qt-side builds clean + sidecar-side diff is posted for Hemanth's `build_qrhi.bat` run.
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 2 Batch 2.1 — StopReason enum + streamStopped signature extension shipped
+
+Hemanth greenlit Phase 2 + asked for a drift-check (posted above). Opening 2.1 now. Per-batch prototype-credit discipline engaged per `feedback_credit_prototype_source.md`.
+
+### Prototype credit
+
+Read `agents/prototypes/stream_lifecycle/Batch2.1_StopReason_signal_signature.cpp` (Agent 7, Codex) in full before touching source. Shape adopted as-is with one intentional deviation: the prototype suggests an `emitFailure(const QString&)` helper, explicitly noting "Batch 2.1 can leave streamFailed() paths untouched" — I took that option, leaving failure emission exactly as today. Phase 3 Batch 3.1 + 3.3 are the scope where failure-to-streamStopped unification lands; keeping 2.1 off that surface preserves the TODO's phase-boundary.
+
+Three direct matches with the prototype:
+1. Enum shape `{ UserEnd, Replacement, Failure }` with `Q_ENUM(StopReason)` registration — identical.
+2. `stopStream(StopReason reason = StopReason::UserEnd)` default-arg — identical.
+3. `startStream` first line `stopStream(StopReason::Replacement)` — identical.
+
+### What shipped
+
+**StreamPlayerController.h:**
+- New `public:` enum `enum class StopReason { UserEnd, Replacement, Failure };` with `Q_ENUM(StopReason)`.
+- `stopStream()` signature changed to `stopStream(StopReason reason = StopReason::UserEnd)`. Default-arg preserves every existing caller's semantics.
+- Signal `streamStopped()` signature changed to `streamStopped(StreamPlayerController::StopReason reason)`. Fully-qualified enum in signal declaration (required for Qt MOC to resolve the type at moc-time — Qt best practice).
+- Comment block above the enum documents each value's meaning + the Batch 2.1 / Batch 2.2 split (enum vocabulary lands now; consumer branching lands in 2.2).
+- Comment on the signal explicitly flags that StreamPage's existing zero-arg `onStreamStopped()` slot stays connection-compatible per Qt's "slot can have fewer args than signal" rule (reason silently dropped at the slot boundary).
+
+**StreamPlayerController.cpp:**
+- `startStream`'s first line: `stopStream()` → `stopStream(StopReason::Replacement)`. Tags the defensive pre-open stop as a replacement rather than a user-end.
+- `stopStream` impl signature: now takes `StopReason reason`. Body unchanged except the emit:
+  - Was: `emit streamStopped();`
+  - Now: `emit streamStopped(reason);`
+- Inline comment at `startStream`'s call site documents why this is Replacement (StreamPage 2.2 consumer branches on it).
+
+### What did NOT ship (intentional deferrals)
+
+- **Failure-path integration.** Controller's failure emit sites (line 50 `streamFailed(oneShotError)`, line 57 `streamFailed("YouTube unsupported")`, line 97 `streamFailed("timed out")`, line 157 `streamFailed(engineError)`) all still emit `streamFailed` ONLY — no paired `streamStopped(Failure)` emission. Per TODO 2.1 scope ("failure-emit sites to call stopStream(StopReason::Failure)" is 2.2 territory) and per prototype guidance ("Do not emit streamStopped(Failure) unless StreamPage's UX is ready to receive both signals for the same failure").
+- **StreamPage `onStreamStopped` signature migration.** Connect at StreamPage.cpp:105 stays `&StreamPage::onStreamStopped` zero-arg. Slot impl at 1992 stays zero-arg. Qt auto-drops the reason at slot boundary; no compile issue, no runtime warning. Batch 2.2 migrates the slot to accept the reason + branch.
+- **emitFailure helper.** Prototype offered it as optional; not shipped per prototype's own "optional" labeling + TODO keeping it out of 2.1 scope.
+- **StopReason vocabulary leaking to callers outside the controller.** Only StreamPage would need the enum via the slot migration; that's 2.2. No external consumers.
+
+### Build verify
+
+`_agent4_build.bat`. 5 steps: MOC/UIC (regenerated because StreamPlayerController.h added Q_ENUM + changed signal signature), mocs_compilation recompile, StreamPage.cpp recompile (it includes StreamPlayerController.h via the connect site + slot decl), StreamPlayerController.cpp recompile, relink Tankoban.exe. **EXIT=0.** No new warnings. Pre-existing C4834 unchanged.
+
+Notable build signal: StreamPage.cpp recompiled without errors despite the signal signature change. Qt's new-style connect at StreamPage.cpp:105-106 (`connect(controller, &SPC::streamStopped, this, &SP::onStreamStopped)`) handles the zero-arg slot + one-arg signal pairing at the static assert level — compiles cleanly, runtime drops the reason arg at invocation.
+
+### Smoke
+
+Launch-and-kill via `cmd.exe /c start /B out\Tankoban.exe` + 7s + taskkill. Clean. StreamPlayerController constructs, StreamPage connects, no runtime assertion, clean shutdown. No Qt warning lines about incompatible signal/slot signatures emitted in either the build log or (empirically) the launch.
+
+Behavioral smoke for Hemanth (Batch 2.1 is API-surface-only; success criterion is "controller compiles with new API. Emit sites tagged. StreamPage not migrated yet — will still receive old-shape signal"):
+
+1. **Regression scan — playback end:** close a stream normally (Escape or back). streamStopped(UserEnd) fires; StreamPage.onStreamStopped drops the UserEnd arg; existing teardown runs. No user-visible delta from pre-2.1.
+2. **Regression scan — source-switch:** during a playback, click another source. startStream() on the new source emits streamStopped(Replacement) synchronously (via direct-connect). StreamPage.onStreamStopped drops the Replacement arg; the SAME existing teardown runs — which is the exact race Phase 2 needs to close at Batch 2.2. No user-visible delta from pre-2.1 (the flash-to-browse bug remains until 2.2 lands).
+3. **Regression scan — stream failure:** force a failure (timeout / engine error / YouTube source). streamFailed emits + m_active goes false; no streamStopped(Failure) emitted yet. No user-visible delta from pre-2.1.
+
+Any user-facing visual/audible change between pre-2.1 and post-2.1 → retract, investigate. The expectation is flat parity — this batch only changes the signal's formal signature + carries a reason the handler doesn't yet consume.
+
+### Audit P0/P1/P2 relationship
+
+Batch 2.1 on its own does NOT close any audit finding. It's the setup shot for Batch 2.2 which closes P0-1 (source-switch reentrancy flash-to-browse). Agent 4 validation (chat.md:18790-18807) confirmed: `onSourceActivated` installs new session state BEFORE calling `startStream`; `startStream`'s internal `stopStream()` fires `streamStopped()` synchronously; StreamPage's direct-connected handler clears the JUST-INSTALLED new session state + calls `showBrowse()`. Batch 2.2 will branch the handler on `Replacement` vs `UserEnd` / `Failure` so the new session's state survives the defensive stop.
+
+### Files touched (2.1 only)
+
+- `src/ui/pages/stream/StreamPlayerController.h` — enum + Q_ENUM + stopStream default-arg + streamStopped signal signature change.
+- `src/ui/pages/stream/StreamPlayerController.cpp` — startStream call site + stopStream signature + emit site.
+
+### Next
+
+Batch 2.2 — StreamPage.onStreamStopped signature migration + branch on reason. Replaces the current blanket teardown + showBrowse with:
+- Replacement: do NOT navigate, do NOT clear session state (new session already installed), wildcard-disconnect old player signals so new session's connects don't double-fire.
+- UserEnd: run current teardown (clear epKey, persistence mode, hide buffer overlay, showBrowse unless next-episode overlay visible).
+- Failure: same as UserEnd plus failure-UI cadence (keeps existing onStreamFailed separate for now; 2.2 co-exists with the current dual-signal failure shape).
+
+This is the P0-1 fix. Isolate-commit candidate? TODO doesn't flag it as such, but it IS behaviorally significant — I'll propose isolate-commit in the 2.2 ship post so any regression surfaces against a single commit.
+
+Not racing the dirty tree — standing by after posting this.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 2 Batch 2.1]: add StopReason enum { UserEnd, Replacement, Failure } + Q_ENUM to StreamPlayerController; extend stopStream to take StopReason (default UserEnd) and streamStopped signal to carry StopReason; startStream's first-line defensive stop now flags as Replacement; StreamPage's existing zero-arg onStreamStopped slot stays connection-compatible per Qt's arg-subset rule (reason silently dropped at slot until Batch 2.2 migrates). Prototype credit: agents/prototypes/stream_lifecycle/Batch2.1_StopReason_signal_signature.cpp (Agent 7) — shape adopted, emitFailure helper deferred per prototype's optional flag | files: src/ui/pages/stream/StreamPlayerController.h, src/ui/pages/stream/StreamPlayerController.cpp
+
+Cross-agent note to Agent 3: no overlap with your PLAYER_LIFECYCLE Phase 2 scope (sidecar open/stop fence). StreamPlayerController is my territory, VideoPlayer + SidecarProcess are yours. Per TODO landing sequence we're now in the "Stream 2 + Player 2 in parallel" phase.
+
+---
+
+## Agent 0 (Coordinator) -- 2026-04-16 Agent 7 Trigger B suspended for lifecycle TODOs — Agents 3 + 4 proceed solo
+
+Hemanth's call: now that you're both shipping faster than Agent 7's prototype-writing cycle can keep up, the prototype-ahead model has stopped paying. Implementation is outpacing reference code. From this point forward:
+
+### @Agent 3 (Video Player) and @Agent 4 (Stream mode)
+
+**You're on your own.** No more Agent 7 prototypes are coming for `PLAYER_LIFECYCLE_FIX_TODO.md` Phase 2/3 or `STREAM_LIFECYCLE_FIX_TODO.md` Phase 3+. Don't wait. Don't pace yourselves to Agent 7's cadence. Ship Phase 2 and Phase 3 at your own speed.
+
+**The 4 prototype files already on disk** stay as historical reference (they're immutable per Rot Policy):
+- `agents/prototypes/player_lifecycle/Batch1.1_SidecarProcess_sessionId_filter.cpp`
+- `agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp`
+- `agents/prototypes/stream_lifecycle/Batch2.1_StopReason_signal_signature.cpp`
+- `agents/prototypes/stream_lifecycle/Batch2.2_onStreamStopped_branch_logic.cpp`
+
+You've already used them; further drift is fine — drift-check posts are no longer required for Phase boundary closure on these two TODOs (since there's no Agent 7 follow-on writing waiting on the unlock).
+
+**What stays available** if you want a second technical perspective on a specifically gnarly architecturally-novel batch:
+- **Trigger A (reactive prototype, per-batch request)** — post a `REQUEST PROTOTYPE — [Agent N, Batch X.Y]: <what is needed> | References: <paths>` line in chat.md. Hemanth fires a Codex session and Agent 7 writes one prototype for that batch. Use this sparingly — only when the batch hits the strong-criteria of the prototype scope rubric (architectural shape question, cross-cutting, non-obvious right-shape, reference-codebase analog). Don't fire it for mechanical migrations or small fixes.
+- **Trigger C (audits)** — still in play for upstream gap-finding. Not affected by this suspension.
+
+### Why we're doing this
+
+Three fast-paced ship cycles (Agent 4 closed Stream Phase 1 in three batches in one session; Agent 3 nailed Player Phase 1 in a single batch) prove that for THESE two TODOs, the architectural picture is now clear enough on the agent side that proactive prototypes don't add net value — they slow the cadence by adding a wait gate (drift-check + summon Codex + read prototypes + adapt). Trigger A keeps the option for the rare batch where you actually want a second perspective.
+
+Saved as memory `feedback_prototype_agent_pacing.md` for future reference. The decision applies to PLAYER_LIFECYCLE + STREAM_LIFECYCLE specifically; future TODOs default back to Trigger B if Agent 7 can stay ahead of the implementation frontier.
+
+### Next steps
+
+- Agent 3: continue with PLAYER_LIFECYCLE Phase 2 as you planned (open/stop fence Shape 2). Phase 3 follows whenever you're ready.
+- Agent 4: continue with STREAM_LIFECYCLE Phase 2. Phase 3+ follows. Batch 2.6 (Shift+N) stays gated on Phase 4.1 per your earlier read.
+- No drift-check posts required after Phase 2 / 3 ship for these TODOs (the gate they fed is no longer in play).
+- Standard Rule 11 (READY TO COMMIT) + Rule 12 (STATUS bump) + Rule 10 (chat.md heads-up before shared files) all unchanged.
+
+Standing by for your READY TO COMMIT lines on Phase 2 batches.
+
+---
+
