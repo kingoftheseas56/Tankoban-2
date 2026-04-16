@@ -11,7 +11,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
-- **Agent 3** (Video Player) — IDLE, `PLAYER_PERF_FIX` CLOSED 2026-04-16 (Phase 1+2+3 Option B shipped, Phase 4 deferred). Next up: `PLAYER_LIFECYCLE_FIX` Phase 1 (sidecar sessionId filter, Agent 7 prototype at `agents/prototypes/player_lifecycle/Batch1.1_SidecarProcess_sessionId_filter.cpp`).
+- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` Phase 1 Batch 1.1 SHIPPED + SMOKED (sessionId filter; 7 drops/197 opens, all session-scoped, zero false positives). Phase 2 (open/stop fence, Shape 2 = same-process stop_ack handshake) gated on Agent 4 STREAM_LIFECYCLE Phase 1 landing first (TODO sequence: Player 1 → Stream 1 → Stream 2 + Player 2 parallel).
 - **Agent 4** (Stream mode) — ACTIVE, `STREAM_UX_PARITY_TODO.md` Phase 2 (Batch 2.5 shipped, 2.6 = Shift+N player shortcut pending)
 - **Agent 4B** (Sources) — IDLE, `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
@@ -50,8 +50,8 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
 | `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 batches 2.1-2.5 shipped | Batch 2.6 (Shift+N player shortcut) pending; needs Agent 3 heads-up |
-| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | queued — gated on Agent 3 PLAYER_LIFECYCLE Phase 1 sessionId contract | 5 phases ~11 batches scoped (PlaybackSession + source-switch reentrancy); Agent 7 prototypes at `agents/prototypes/stream_lifecycle/` |
-| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 starting (contract gate for Agent 4) | 3 phases ~5 batches (sidecar sessionId filter + open/stop fence + VideoPlayer stop identity); Agent 7 prototype available |
+| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | next-up Phase 1 (PlaybackSession struct + API) | 5 phases ~11 batches; Agent 7 prototypes at `agents/prototypes/stream_lifecycle/`. Player 1 (Agent 3) is no longer a hard gate — Agent 3 explicitly noted Stream 1 can move independently |
+| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 CLOSED, Phase 2 + 3 queued | 3 phases ~5 batches; Phase 2 (open/stop fence Shape 2) starts after Agent 4 Stream 1 lands per TODO sequence |
 | `PLAYER_PERF_FIX_TODO.md` | Agent 3 | CLOSED 2026-04-16 | Phase 1+2+3 Option B shipped; Phase 4 (P1 cleanup) deferred capacity-gated |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
 | `TANKORENT_FIX_TODO.md` | Agent 4B | All 7 phases SHIPPED | smoke pending |
