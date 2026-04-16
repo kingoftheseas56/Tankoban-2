@@ -6,6 +6,9 @@
 #include <QString>
 #include <QTimer>
 
+#include <atomic>
+#include <memory>
+
 #include "addon/StreamInfo.h"
 
 class TorrentEngine;
@@ -105,6 +108,17 @@ public:
                            double positionSec, double durationSec,
                            qint64 prefetchBytes = 3LL * 1024 * 1024);
 
+    // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — per-stream cancellation token.
+    // Returned shared_ptr is the same one stored in the StreamRecord's
+    // `cancelled` field. `stopStream` sets it to true BEFORE erasing the
+    // record, so workers already holding the shared_ptr (captured at
+    // handleConnection time) observe cancellation even after the record
+    // is gone from m_streams. Lock-free check via `token->load()` in the
+    // waitForPieces poll loop. Returns an empty shared_ptr if the infoHash
+    // isn't registered — StreamHttpServer's handleConnection treats that
+    // as "no cancellation token, fall through to pre-5.1 behavior."
+    std::shared_ptr<std::atomic<bool>> cancellationToken(const QString& infoHash) const;
+
     // Clean up orphaned cache data from previous sessions
     void cleanupOrphans();
 
@@ -136,6 +150,17 @@ private:
         bool registered = false;        // registered with HTTP server
         int peers = 0;
         int dlSpeed = 0;
+
+        // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — per-stream cancellation
+        // token. Initialized to false at record creation (default-ctor ran
+        // on the default-constructed StreamRecord that Qt's QHash operator[]
+        // insert path creates is DOES-NOT-INIT; explicit init in the create
+        // site guarantees a valid shared_ptr before any worker can grab
+        // it). stopStream sets the atomic to true BEFORE erasing; the
+        // shared_ptr lifetime extends past erase because workers that
+        // captured the token in handleConnection retain their reference.
+        std::shared_ptr<std::atomic<bool>> cancelled =
+            std::make_shared<std::atomic<bool>>(false);
     };
 
     int autoSelectVideoFile(const QJsonArray& files, const QString& hint) const;

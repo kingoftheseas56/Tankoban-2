@@ -10,6 +10,7 @@
 #include <atomic>
 
 class TorrentEngine;
+class StreamEngine;
 
 class StreamHttpServer : public QObject
 {
@@ -38,6 +39,15 @@ public:
     FileEntry lookupFile(const QString& infoHash, int fileIndex) const;
     TorrentEngine* engine() const { return m_engine; }
 
+    // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — optional StreamEngine pointer
+    // for handleConnection to query per-stream cancellation tokens.
+    // StreamEngine sets this on itself after its own construction (it owns
+    // the server). Stays nullptr if the server is used outside StreamEngine
+    // context — handleConnection tolerates nullptr (token lookup returns
+    // empty, worker falls through to pre-5.2 behavior).
+    void setStreamEngine(StreamEngine* eng) { m_streamEngine = eng; }
+    StreamEngine* streamEngine() const { return m_streamEngine; }
+
     // STREAM_PLAYBACK_FIX Batch 1.3 — graceful shutdown support. The worker
     // threads (QtConcurrent::run → global QThreadPool) check these atomics
     // each serve-loop iteration so `stop()` can request in-flight
@@ -53,6 +63,7 @@ private:
     static QString registryKey(const QString& infoHash, int fileIndex);
 
     TorrentEngine* m_engine;
+    StreamEngine* m_streamEngine = nullptr;  // Batch 5.2 — optional; see setStreamEngine.
     QTcpServer* m_server = nullptr;
     mutable QMutex m_mutex;
     QHash<QString, FileEntry> m_registry;

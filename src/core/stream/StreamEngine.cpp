@@ -24,6 +24,13 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
 {
     QDir().mkpath(m_cacheDir);
 
+    // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — wire StreamEngine back-pointer
+    // so handleConnection can call cancellationToken(infoHash). Done after
+    // construction (not as a ctor arg) to keep StreamHttpServer's constructor
+    // signature stable — historical callers that instantiate StreamHttpServer
+    // directly (tests, etc.) don't need to thread StreamEngine through.
+    m_httpServer->setStreamEngine(this);
+
     // Connect to TorrentEngine signals — we filter by our own m_streams set
     connect(m_torrentEngine, &TorrentEngine::metadataReady,
             this, &StreamEngine::onMetadataReady);
@@ -283,6 +290,20 @@ void StreamEngine::stopStream(const QString& infoHash)
     if (it == m_streams.end())
         return;
 
+    // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — cancel BEFORE erase so any
+    // HTTP worker currently inside waitForPieces (holding the shared_ptr
+    // via handleConnection capture) observes cancellation on its next poll
+    // iteration. Ordering matters: if we erase first, workers would still
+    // see `cancelled==false` when they check, then our subsequent
+    // removeTorrent(deleteFiles=true) could invalidate libtorrent state
+    // that haveContiguousBytes reads. Setting cancelled first + letting
+    // workers short-circuit closes that race at the cost of one atomic
+    // store per stopStream call. The cancelled shared_ptr lives past
+    // the erase via the worker's own reference count.
+    if (it->cancelled) {
+        it->cancelled->store(true);
+    }
+
     StreamRecord rec = *it;
     m_streams.erase(it);
     lock.unlock();
@@ -300,6 +321,14 @@ void StreamEngine::stopStream(const QString& infoHash)
     // Remove torrent and delete downloaded data
     // (deleteFiles=true tells libtorrent to remove the downloaded content)
     m_torrentEngine->removeTorrent(rec.infoHash, true);
+}
+
+std::shared_ptr<std::atomic<bool>> StreamEngine::cancellationToken(const QString& infoHash) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_streams.find(infoHash);
+    if (it == m_streams.end()) return {};
+    return it->cancelled;
 }
 
 void StreamEngine::stopAll()

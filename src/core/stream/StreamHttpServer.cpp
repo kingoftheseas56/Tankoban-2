@@ -1,4 +1,5 @@
 #include "StreamHttpServer.h"
+#include "StreamEngine.h"
 #include "core/torrent/TorrentEngine.h"
 
 #include <QDebug>
@@ -79,11 +80,25 @@ static constexpr int PIECE_WAIT_TIMEOUT_MS = 15000;
 // ─── Serve a connection (runs on a thread pool thread) ───────────────────────
 
 static bool waitForPieces(TorrentEngine* engine, const QString& infoHash,
-                           int fileIndex, qint64 fileOffset, qint64 length)
+                           int fileIndex, qint64 fileOffset, qint64 length,
+                           const std::shared_ptr<std::atomic<bool>>& cancelled)
 {
     if (!engine) return false;
     int elapsed = 0;
     while (elapsed < PIECE_WAIT_TIMEOUT_MS) {
+        // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — per-stream cancellation
+        // check. StreamEngine::stopStream sets the atomic BEFORE erasing the
+        // record + removing the torrent. Checking here, before the engine
+        // call, short-circuits the path where haveContiguousBytes would run
+        // against an invalidated libtorrent state (engine::removeTorrent
+        // deleteFiles=true). Workers exit cleanly with a piece-wait timeout
+        // semantic (return false) — the same signal the 15s timeout produces,
+        // so the existing ConnectionGuard + caller's break-loop path closes
+        // the socket without code changes downstream. Tolerates nullptr
+        // cancelled shared_ptr (falls through to pre-5.2 behavior).
+        if (cancelled && cancelled->load(std::memory_order_acquire))
+            return false;
+
         if (engine->haveContiguousBytes(infoHash, fileIndex, fileOffset, length))
             return true;
         QThread::msleep(PIECE_WAIT_POLL_MS);
@@ -178,6 +193,17 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
 
     auto entry = server->lookupFile(infoHash, fileIndex);
     if (entry.path.isEmpty()) { sendErr(404, "Not Found"); return; }
+
+    // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — grab the per-stream
+    // cancellation token alongside the FileEntry. Captured in a local so
+    // the shared_ptr stays alive for the duration of this worker (and
+    // every waitForPieces call within the serve loop below). If
+    // StreamEngine isn't wired (standalone server), token is empty and
+    // waitForPieces falls through to pre-5.2 behavior.
+    std::shared_ptr<std::atomic<bool>> cancelled;
+    if (auto* se = server->streamEngine()) {
+        cancelled = se->cancellationToken(infoHash);
+    }
 
     QString contentType = contentTypeForPath(entry.path);
 
@@ -299,13 +325,21 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
         // logs (previously silent failure).
         if (engine) {
             if (!waitForPieces(engine, entry.infoHash, entry.fileIndex,
-                               offset, toRead))
+                               offset, toRead, cancelled))
             {
+                // Batch 5.2 — distinguish cancellation from timeout in the log
+                // so close-while-buffering stress shows up as a different
+                // signal vs weak-swarm starvation. Both return false from
+                // waitForPieces; cancelled->load() tells us which.
+                const bool wasCancelled =
+                    cancelled && cancelled->load(std::memory_order_acquire);
                 qWarning().nospace()
-                    << "StreamHttpServer: piece wait timed out for "
-                    << entry.infoHash << " file=" << entry.fileIndex
+                    << "StreamHttpServer: piece wait "
+                    << (wasCancelled ? "cancelled" : "timed out")
+                    << " for " << entry.infoHash << " file=" << entry.fileIndex
                     << " offset=" << offset << " toRead=" << toRead
-                    << " — closing connection to trigger decoder retry";
+                    << " — closing connection"
+                    << (wasCancelled ? " (stopStream)" : " to trigger decoder retry");
                 break;
             }
         }
