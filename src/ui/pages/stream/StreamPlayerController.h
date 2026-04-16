@@ -74,9 +74,31 @@ signals:
 
 private slots:
     void pollStreamStatus();
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.3 — receives StreamEngine's
+    // streamError(hash, msg) signal. Gated on hash match against m_infoHash
+    // so errors from stale/other streams don't clobber the active session.
+    // On match: stopStream(StopReason::Failure) → emit streamFailed — same
+    // shape as the poll-timeout + engine-error failure paths (Batch 2.2
+    // unification). Pre-3.3: streamError signal existed but was unconnected;
+    // error records sat in StreamEngine::m_streams until the 120s hard
+    // timeout fired or the user explicitly stopped. Now controller reacts
+    // within one Qt event loop iteration.
+    void onEngineStreamError(const QString& infoHash, const QString& message);
 
 private:
     void onStreamReady(const QString& url);
+
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.1 — explicit session-state reset
+    // helper. Collects every per-session field that needs to cleanly unwind:
+    // m_infoHash (audit P1-1 — stale hash leaking into next seek pre-gate),
+    // m_selectedStream (release the Stream copy), m_pollCount (reset to 0
+    // so the POLL_FAST_MS → POLL_SLOW_MS transition at POLL_SLOW_AFTER fires
+    // correctly on the next session), m_lastErrorCode (drop the per-session
+    // error-code memory so metadata-stall debouncing starts fresh). Called
+    // once per stopStream() invocation — reason-agnostic, covers UserEnd /
+    // Replacement / Failure uniformly (post-Batch-2.2 all failure sites
+    // route through stopStream(Failure) so the helper cascades there too).
+    void clearSessionState();
 
     CoreBridge*   m_bridge;
     StreamEngine* m_engine;

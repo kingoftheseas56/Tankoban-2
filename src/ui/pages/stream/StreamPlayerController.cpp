@@ -17,6 +17,17 @@ StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamEngine*
 {
     m_pollTimer.setSingleShot(false);
     connect(&m_pollTimer, &QTimer::timeout, this, &StreamPlayerController::pollStreamStatus);
+
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.3 — wire engine-side error signal
+    // into the controller. One-time connect here (controller lives for the
+    // app session; no per-startStream re-wire needed). Emit sites in
+    // StreamEngine: StreamEngine.cpp:517 (no-video torrent) + :620 (generic
+    // engine error). Pre-3.3 both were dangling — zero connections found in
+    // repo. The 120s HARD_TIMEOUT was the only way out.
+    if (m_engine) {
+        connect(m_engine, &StreamEngine::streamError, this,
+                &StreamPlayerController::onEngineStreamError);
+    }
 }
 
 void StreamPlayerController::startStream(const QString& imdbId, const QString& mediaType,
@@ -81,15 +92,47 @@ void StreamPlayerController::stopStream(StopReason reason)
     m_pollTimer.stop();
     m_active = false;
 
-    // Only magnet streams have an engine-side torrent to stop.
+    // Only magnet streams have an engine-side torrent to stop. Read m_infoHash
+    // + m_selectedStream BEFORE clearSessionState clears them.
     if (m_selectedStream.source.kind == StreamSource::Kind::Magnet && !m_infoHash.isEmpty()) {
         m_engine->stopStream(m_infoHash);
     }
 
-    m_infoHash.clear();
-    m_selectedStream = {};
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.1 — route the per-session clears
+    // through the named helper so Batch 3.3's StreamEngine::streamError slot
+    // + any future failure-flow consumer can call the same shape without
+    // duplicating the field list.
+    clearSessionState();
 
     emit streamStopped(reason);
+}
+
+void StreamPlayerController::clearSessionState()
+{
+    m_infoHash.clear();
+    m_selectedStream = {};
+    m_pollCount = 0;
+    m_lastErrorCode.clear();
+}
+
+void StreamPlayerController::onEngineStreamError(const QString& infoHash,
+                                                 const QString& message)
+{
+    // Hash-gate: StreamEngine may emit streamError for streams this controller
+    // doesn't own (multi-stream engine lifetime is plausible). Drop silently
+    // on mismatch — the responsible controller (if any) will hear its own.
+    // Empty m_infoHash is also a mismatch (direct HTTP/URL or YouTube streams
+    // never populate m_infoHash; their failure paths are inline in startStream).
+    if (infoHash.isEmpty() || m_infoHash != infoHash) return;
+    if (!m_active) return;  // stopStream already ran — avoid double-emit.
+
+    // Same failure-dispatch shape as the poll-timeout + unsupported-source paths
+    // in pollStreamStatus: route state-clear through stopStream(Failure) so
+    // streamStopped(Failure) fires + m_infoHash clears + engine-side torrent
+    // stop fires (if magnet), then emit streamFailed for StreamPage.onStreamFailed
+    // to drive the 3s display window.
+    stopStream(StopReason::Failure);
+    emit streamFailed(message);
 }
 
 void StreamPlayerController::pollStreamStatus()

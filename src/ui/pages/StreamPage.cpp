@@ -1571,11 +1571,25 @@ void StreamPage::resetSession(const QString& reason)
 
 void StreamPage::onStreamNextEpisodeShortcut()
 {
-    // Only meaningful during an active series playback. Movies, empty
-    // pendingPlay, or non-series mediaType → silent no-op per TODO.
-    if (!m_session.pending.valid) return;
+    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.1 — audit P2-3 close. Pre-4.1 guard
+    // used `m_session.pending.valid` which onSourceActivated clears before
+    // playback starts (pending is consumed as the session installs) — making
+    // Shift+N a silent no-op during actual playback. Correct identity signals:
+    //   (a) m_session.isValid() — active session (generation != 0 AND
+    //       epKey non-empty). Holds true from beginSession through
+    //       resetSession/next beginSession, spans the entire playback.
+    //   (b) pending.mediaType == "series" — filter out movies / trailers /
+    //       adhoc URLs where "next episode" has no meaning.
+    //   (c) m_playerController->isActive() — sanity check; even if m_session
+    //       reports valid, the player may be between states (buffering, seek
+    //       retry). isActive gates us to "playback path committed."
+    // Unblocks STREAM_UX_PARITY Batch 2.6 (Shift+N player shortcut) — previously
+    // would land on this silent-no-op guard. Post-4.1, Shift+N fires the
+    // next-episode flow as intended.
+    if (!m_session.isValid()) return;
     if (m_session.pending.mediaType != QStringLiteral("series")) return;
-    if (m_session.pending.imdbId.isEmpty()) return;
+    if (!m_playerController || !m_playerController->isActive()) return;
+    if (m_session.pending.imdbId.isEmpty()) return;  // defensive; isValid implies epKey non-empty but imdbId is a separate field
 
     // Already resolved (user crossed 95% earlier in this playback). Skip
     // the countdown and play immediately.
@@ -1620,11 +1634,19 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     const PendingPlay ctx = m_session.pending;
     m_session.pending.valid = false;
 
-    // Phase 2 Batch 2.5 — new playback starts. Reset near-end + prefetch
-    // state so THIS episode's 95% crossing fires its own prefetch cycle,
-    // independent of any prior binge from the previous episode.
-    m_session.nearEndCrossed = false;
-    m_session.nextPrefetch.reset();
+    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.2 — audit P2-2 close. Pre-4.2 code
+    // reset only m_session.nearEndCrossed + m_session.nextPrefetch inline,
+    // skipping m_session.nextShortcutPending + the MetaAggregator/StreamAggregator
+    // disconnect logic. resetNextEpisodePrefetch() is the canonical cleanup
+    // that Phase 1 Batch 1.3 migrated to route through m_session — using it
+    // here ensures all three prefetch-related session fields clear uniformly
+    // AND in-flight aggregator connections from the prior episode's prefetch
+    // get dropped (preventing a stale streamsReady lambda from landing against
+    // the NEW episode's prefetch slot with the old episode's stream list).
+    // Note: resetSession() would be over-broad — it also clears m_session.epKey
+    // and pending, which onSourceActivated is about to re-install via ctx. The
+    // narrower resetNextEpisodePrefetch is the right choice.
+    resetNextEpisodePrefetch();
 
     // Save choice for re-use — extended payload with addon + source-kind fields.
     // Same persistence shape the dialog used to write so loadChoice in
@@ -1983,9 +2005,31 @@ void StreamPage::onStreamFailed(const QString& message)
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
     }
     m_bufferLabel->setText("Stream failed: " + message);
-    QTimer::singleShot(3000, this, [this]() {
-        if (!m_playerController->isActive())
-            showBrowse();
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.2 — generation-check + user-navigation
+    // guard on the 3s auto-navigate timer. Audit P1-2 scenario: failure at T,
+    // user nav to AddonManager at T+0.5s, T+3s fires, isActive() still false,
+    // showBrowse() yanks user back off AddonManager. Triple-gate the fire:
+    //   (a) isCurrentGeneration — aborts if a new session started after
+    //       failure (user clicked a different tile, Shift+N, etc.). First
+    //       real consumer of the Batch 1.3 generation-check pattern in the
+    //       failure path specifically.
+    //   (b) still-on-player-layer — mainStack index 2 is the only layer
+    //       where the failure label is visible. If user navigated to
+    //       detail(1) / browse(0) / addon(3) / other(4+) the failure
+    //       countdown is no longer user-visible and we must not yank them.
+    //       NOTE: TODO text at line 243 had `!= 0 /*not browse*/` which
+    //       would invert intent (return for every non-browse layer, including
+    //       the player layer we want to navigate FROM). Taking `!= 2` as the
+    //       correct check per my read of the user-facing UX.
+    //   (c) !isActive — preserved from pre-3.2 for belt-and-suspenders. If
+    //       (a) and (b) both pass but a new playback is somehow active,
+    //       showBrowse would interrupt it. Unlikely post-(a) but cheap.
+    const quint64 gen = currentGeneration();
+    QTimer::singleShot(3000, this, [this, gen]() {
+        if (!isCurrentGeneration(gen)) return;
+        constexpr int kPlayerLayerIndex = 2;
+        if (m_mainStack->currentIndex() != kPlayerLayerIndex) return;
+        if (!m_playerController->isActive()) showBrowse();
     });
 }
 
