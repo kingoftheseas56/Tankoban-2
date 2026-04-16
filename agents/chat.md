@@ -530,3 +530,56 @@ Need Hemanth's call on which architecture to pursue for 3.B-take-2:
 Standing by on Hemanth's call (A vs B vs "take a break from Phase 3"). Phase 2 shipped work remains committed — no urgency.
 
 ---
+
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_PERF_FIX Phase 3 Batch 3.B Option B shipped — SHM-routed subtitle overlay
+
+End-to-end GPU overlay wiring landed via the SHM-routing architecture per Hemanth's call. Avoids the cross-process D3D11 shared-texture sync issue that bit the reverted 3.B.
+
+### Architecture
+
+Sidecar renders libass/PGS subtitle bitmaps via existing `render_to_bitmaps` + `blend_into_frame` (3.A infrastructure) into a frame-sized BGRA buffer, then writes to a **named SHM region dedicated to the overlay** (separate from the video ring buffer). Each write is an atomic counter bump after the bytes are settled — "publish last" protocol. Main-app's `OverlayShmReader` polls the counter; when it advances, it `UpdateSubresource`s the BGRA bytes into its own **locally-owned D3D11 texture** (plain `CreateTexture2D` on `m_device`, not shared). `drawTexturedQuad` composites the overlay as a second alpha-blended quad after the video quad.
+
+**Why this works where 3.B-via-shared-texture failed:** no cross-process GPU resource sharing anywhere. SHM carries bytes. Main-app owns all draw-side resources on its own device. The "two processes touching the same D3D11 resource without keyed mutex" failure class is simply not present.
+
+### Sidecar files
+
+- **New:** [native_sidecar/src/overlay_shm.h](native_sidecar/src/overlay_shm.h) + [native_sidecar/src/overlay_shm.cpp](native_sidecar/src/overlay_shm.cpp) — minimal `OverlayShm` class. Layout: u64 counter + u32 width + u32 height + u32 valid + reserved + BGRA payload. Writer bumps counter with `memory_order_release` after bytes settle; single-writer semantics (decode thread).
+- **Modified:** [native_sidecar/src/video_decoder.cpp](native_sidecar/src/video_decoder.cpp) — instantiate `OverlayShm` at decode-session open (alongside `D3D11Presenter`). On fast path with subs active: `render_to_bitmaps` → `blend_into_frame` into thread_local frame-sized BGRA → `overlay_shm->write(bgra)`. When subs NOT active: `overlay_shm->write_empty()` bumps counter without payload. `sub_blend_needed` guard updated — no longer blocks fast_path when overlay_shm is ready. Emit `overlay_shm` JSON event at first_frame with name + dims.
+- **Modified:** [native_sidecar/src/main.cpp](native_sidecar/src/main.cpp) — added `overlay_shm` event parser ("name:width:height" → JSON {name, width, height}).
+- **Modified:** [native_sidecar/CMakeLists.txt](native_sidecar/CMakeLists.txt) — `overlay_shm.cpp` added to ffmpeg_sidecar sources.
+
+### Main-app files
+
+- **New:** [src/ui/player/OverlayShmReader.h](src/ui/player/OverlayShmReader.h) + [src/ui/player/OverlayShmReader.cpp](src/ui/player/OverlayShmReader.cpp) — opens the named SHM with `OpenFileMappingW` + `MapViewOfFile` (same pattern as `ShmFrameReader`). `read()` returns counter + valid + BGRA pointer without copying. Uses `std::atomic<uint64_t>` with `memory_order_acquire` on the counter for proper sync vs sidecar's release.
+- **Modified:** [src/ui/player/SidecarProcess.h](src/ui/player/SidecarProcess.h) + [.cpp](src/ui/player/SidecarProcess.cpp) — `overlayShm(name, w, h)` signal + event handler.
+- **Modified:** [src/ui/player/VideoPlayer.cpp](src/ui/player/VideoPlayer.cpp) — connect signal → `FrameCanvas::attachOverlayShm`.
+- **Modified:** [src/ui/player/FrameCanvas.h](src/ui/player/FrameCanvas.h) + [.cpp](src/ui/player/FrameCanvas.cpp) — new members: `m_overlayTex` (local, `DEFAULT` usage BGRA, bind `SHADER_RESOURCE` only — no shared flags), `m_overlaySrv`, `m_overlayPs`, `m_overlayPsBlob`, `m_overlayBlend` (src-over alpha), `m_overlayTexW/H`, `m_overlayLastCounter`, `m_overlayCurrentlyVisible`, `m_overlayReader`. New methods: `attachOverlayShm` (creates local texture + SRV on announced dims), `detachOverlayShm`, `pollOverlayShm` (reads counter, uploads if changed). `createShaders` compiles `ps_overlay` entry. `createStateObjects` builds overlay blend state. `drawTexturedQuad` polls overlay SHM + issues second `Draw(4, 0)` with overlay blend + PS + SRV bound when visible. `tearDownD3D` releases overlay GPU resources so device-lost recovery re-imports cleanly.
+- **Modified:** [resources/shaders/video_d3d11.hlsl](resources/shaders/video_d3d11.hlsl) — `ps_overlay` entry samples BGRA and returns as-is (no color transforms on subtitle pixels).
+- **Modified:** [CMakeLists.txt](CMakeLists.txt) — `OverlayShmReader.cpp` added to Tankoban sources.
+
+### Expected performance profile
+
+- **HEVC 10-bit + subtitles:** previously slow CPU path (~20ms/frame producer cost). Now fast path + SHM overlay (~1-2ms sidecar-side to memset+blend+write, ~1-2ms main-app-side to UpdateSubresource). Net big improvement.
+- **Non-subtitle content:** zero change. Overlay write returns early when `!sub_blend_needed`, main-app skips overlay draw via `!m_overlayCurrentlyVisible`.
+- **No cross-process GPU sync stalls.** Intra-device resource access only on main-app side; SHM provides CPU-side byte transport with a well-defined atomic publish protocol.
+
+### Build
+
+- Sidecar: `native_sidecar/build.ps1` clean. `ffmpeg_sidecar.exe` at `resources/ffmpeg_sidecar/` (Apr 16 11:02).
+- Main-app: `cmake --build out --parallel --target Tankoban` clean. `Tankoban.exe` at `out/` (Apr 16 11:08). Only pre-existing C4834 warnings unchanged.
+
+### Smoke matrix
+
+1. **HEVC 10-bit + ASS subtitles** (primary target). Expect visible subs + measurably smoother producer path vs Phase 2 slow-path baseline.
+2. **HEVC 10-bit + PGS Bluray subs.** Same.
+3. **HEVC 10-bit no subs.** Should match post-revert baseline (overlay never drawn, zero overhead).
+4. **1080p 16:9 standard no subs.** Regression check.
+5. **SW-decoded AVI with subs.** Slow path unchanged — legacy CPU blend still bakes subs in.
+
+Critical check vs the reverted 3.B: main-app `[PERF]` `draw_p99` should stay in the 0.1–3.7ms range on subtitle-active content. No 80-130ms spike pattern like we saw before. If that regression reappears, Option B has a different failure mode and I investigate before claiming success.
+
+READY TO COMMIT — [Agent 3, PLAYER_PERF_FIX Phase 3 Batch 3.B Option B (atomic)]: wire GPU subtitle overlay end-to-end via SHM-routed architecture — sidecar writes BGRA to overlay SHM, main-app uploads to locally-owned D3D11 texture, draws alpha-blended overlay quad after video; sub_blend_needed retired, HEVC 10-bit + subs stays on zero-copy fast path; no cross-process GPU shared textures | files: native_sidecar/src/overlay_shm.h+cpp, native_sidecar/src/video_decoder.cpp, native_sidecar/src/main.cpp, native_sidecar/CMakeLists.txt, src/ui/player/OverlayShmReader.h+cpp, src/ui/player/SidecarProcess.{h,cpp}, src/ui/player/VideoPlayer.cpp, src/ui/player/FrameCanvas.{h,cpp}, resources/shaders/video_d3d11.hlsl, CMakeLists.txt
+
+Standing by for smoke. If clean, PLAYER_PERF_FIX closes here per Hemanth's "put a lid on it." If anything's off in `[PERF]` or visuals, I investigate before declaring done.
+
+---
