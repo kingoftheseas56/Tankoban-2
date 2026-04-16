@@ -189,6 +189,19 @@ float3 srgb_to_linear(float3 c)
     return lerp(low, high, sel);
 }
 
+// PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay pixel shader.
+// Samples the BGRA overlay texture (uploaded each frame from the sidecar's
+// overlay SHM) and outputs the texel as-is. The alpha-blend render state
+// (SRC_ALPHA / INV_SRC_ALPHA) does the src-over composite onto the
+// previously-drawn video quad.
+//
+// No color transforms here — brightness / contrast / gamma are tuned for
+// source video; applying them to libass-authored subtitle colors would
+// distort them.
+float4 ps_overlay(PsIn input) : SV_TARGET {
+    return g_tex.Sample(g_smp, input.uv);
+}
+
 float4 ps_main(PsIn input) : SV_TARGET {
     float3 rgb = g_tex.Sample(g_smp, input.uv).rgb;
 

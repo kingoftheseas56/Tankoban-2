@@ -83,6 +83,7 @@ set(SOURCES
     src/core/indexers/CloudflareCookieHarvester.cpp
     src/ui/player/SidecarProcess.cpp
     src/ui/player/ShmFrameReader.cpp
+    src/ui/player/OverlayShmReader.cpp
     src/ui/player/FrameCanvas.cpp
     src/ui/player/VideoPlayer.cpp
     src/ui/player/VolumeHud.cpp

@@ -10,6 +10,7 @@
 #include "VsyncTimingLogger.h"
 
 class ShmFrameReader;
+class OverlayShmReader;
 class SyncClock;
 
 #ifdef _WIN32
@@ -77,6 +78,17 @@ public:
     // falls back to SHM.
     void attachD3D11Texture(quintptr ntHandle, int width, int height);
     void detachD3D11Texture();
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
+    // Sidecar writes libass/PGS BGRA overlay bytes into the named SHM
+    // region; we open it and upload per-frame (when the atomic frame
+    // counter advances) into a LOCALLY-owned D3D11 overlay texture.
+    // drawTexturedQuad composites the overlay as a second alpha-blended
+    // quad after the video quad. Strictly intra-device — no cross-process
+    // GPU resource sharing, no keyed-mutex sync pitfalls (the architectural
+    // problem that forced the reverted cross-process-shared-texture 3.B).
+    void attachOverlayShm(const QString& shmName, int width, int height);
+    void detachOverlayShm();
 
     // VIDEO_PLAYER_FIX Batch 3.2 — snapshot current displayed frame as a
     // QImage at source resolution. Handles both paths: D3D11 zero-copy
@@ -180,6 +192,7 @@ private:
     void uploadColorParams();
     bool consumeShmFrame();        // returns true if m_videoSrv updated this tick
     bool processPendingImport();   // returns true if m_importedSrv updated this tick
+    bool pollOverlayShm();         // returns true if m_overlayTex got a fresh upload this tick
     void drawTexturedQuad();
 
     ID3D11Device*           m_device    = nullptr;
@@ -231,6 +244,23 @@ private:
     // implemented without #ifdef in the cpp.
     ID3D11Texture2D*          m_importedD3DTex = nullptr;
     ID3D11ShaderResourceView* m_importedSrv    = nullptr;
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay render resources.
+    // m_overlayTex is LOCAL (created with CreateTexture2D on m_device, not
+    // a shared-handle import). m_overlayPs is the ps_overlay entry in
+    // video_d3d11.hlsl — no color transforms on subtitle pixels.
+    // m_overlayBlend is alpha-blend state (SRC_ALPHA / INV_SRC_ALPHA).
+    // m_overlayCurrentlyVisible tracks the sidecar's valid flag from the
+    // last counter bump — suppresses the draw pass on no-subs frames.
+    ID3D11Texture2D*          m_overlayTex               = nullptr;
+    ID3D11ShaderResourceView* m_overlaySrv               = nullptr;
+    ID3D11PixelShader*        m_overlayPs                = nullptr;
+    ID3D10Blob*               m_overlayPsBlob            = nullptr;
+    ID3D11BlendState*         m_overlayBlend             = nullptr;
+    int                       m_overlayTexW              = 0;
+    int                       m_overlayTexH              = 0;
+    uint64_t                  m_overlayLastCounter       = 0;
+    bool                      m_overlayCurrentlyVisible  = false;
 
     QTimer                  m_renderTimer;
 
@@ -362,6 +392,10 @@ private:
     // pointer + flag are platform-agnostic).
     ShmFrameReader*           m_reader       = nullptr;
     bool                      m_polling      = false;
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM reader.
+    // Owned here; created on attachOverlayShm, destroyed on detach/ destructor.
+    OverlayShmReader*         m_overlayReader = nullptr;
 
     // Phase 7 bake-in fix — aspect ratio override. 0.0 = use natural aspect
     // from m_frameW/m_frameH; > 0 = force this w/h ratio. Read by the

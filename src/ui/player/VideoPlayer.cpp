@@ -1257,6 +1257,17 @@ void VideoPlayer::buildUI()
                         .arg(handle, 0, 16).arg(w).arg(h));
             m_canvas->attachD3D11Texture(handle, w, h);
         });
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
+    // Sidecar writes libass/PGS BGRA into the named SHM each frame;
+    // FrameCanvas opens it and uploads per-frame into its own locally-
+    // owned D3D11 overlay texture, drawn as an alpha-blended quad after
+    // the video quad. No cross-process GPU resource sharing.
+    connect(m_sidecar, &SidecarProcess::overlayShm, this,
+        [this](const QString& name, int w, int h) {
+            debugLog(QString("[VideoPlayer] overlay_shm name=%1 %2x%3")
+                        .arg(name).arg(w).arg(h));
+            m_canvas->attachOverlayShm(name, w, h);
+        });
     // FrameCanvas tells us when zero-copy import succeeded/failed so we can
     // tell the sidecar to short-circuit its CPU pipeline (saves ~15ms/frame).
     connect(m_canvas, &FrameCanvas::zeroCopyActivated, this, [this](bool active) {

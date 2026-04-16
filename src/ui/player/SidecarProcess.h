@@ -133,6 +133,14 @@ signals:
     // FrameCanvas opens this in its own D3D11 device for zero-copy display
     // (eliminating the GPU→CPU→GPU round trip we have via SHM).
     void d3d11Texture(quintptr ntHandle, int width, int height);
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM ready.
+    // Sidecar writes rendered subtitle BGRA into this named SHM each frame;
+    // FrameCanvas opens it and uploads per-frame to a locally-owned D3D11
+    // overlay texture. Decoupled from the video texture so there's no
+    // cross-process GPU sync — main-app owns all the draw-side resources.
+    void overlayShm(const QString& shmName, int width, int height);
+
     void processClosed();
 
     // Batch 6.1 (Player Polish Phase 6) — fires when QProcess::finished

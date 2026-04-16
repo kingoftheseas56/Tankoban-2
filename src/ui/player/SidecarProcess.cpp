@@ -418,6 +418,16 @@ void SidecarProcess::processLine(const QByteArray& line)
         int h = payload["height"].toInt();
         if (handle != 0 && w > 0 && h > 0)
             emit d3d11Texture(handle, w, h);
+    } else if (name == "overlay_shm") {
+        // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
+        // Payload: {name: str, width: u32, height: u32}. FrameCanvas opens
+        // the named SHM and uploads BGRA into its own locally-owned D3D11
+        // overlay texture each time the overlay frame counter advances.
+        QString shmName = payload["name"].toString();
+        int w = payload["width"].toInt();
+        int h = payload["height"].toInt();
+        if (!shmName.isEmpty() && w > 0 && h > 0)
+            emit overlayShm(shmName, w, h);
     } else if (name == "media_info") {
         emit mediaInfo(payload);
     } else if (name == "closed") {

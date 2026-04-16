@@ -1,5 +1,6 @@
 #include "FrameCanvas.h"
 #include "ShmFrameReader.h"
+#include "OverlayShmReader.h"
 #include "SyncClock.h"
 
 #include <QImage>
@@ -46,6 +47,12 @@ FrameCanvas::~FrameCanvas()
     m_renderTimer.stop();
     tearDownD3D();
 #endif
+    // Delete the overlay reader after tearDownD3D so it outlives any
+    // in-flight uploads. Cleaned up in ~OverlayShmReader.
+    if (m_overlayReader) {
+        delete m_overlayReader;
+        m_overlayReader = nullptr;
+    }
 }
 
 void FrameCanvas::showEvent(QShowEvent* event)
@@ -396,6 +403,16 @@ void FrameCanvas::tearDownD3D()
     // already-torn-down state (every pointer is null-checked).
     if (m_importedSrv)    { m_importedSrv->Release();    m_importedSrv    = nullptr; }
     if (m_importedD3DTex) { m_importedD3DTex->Release(); m_importedD3DTex = nullptr; }
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay GPU resources.
+    // m_overlayReader / m_overlayTexW/H stay so attachOverlayShm can
+    // reattach cleanly after device-lost recovery.
+    if (m_overlaySrv)     { m_overlaySrv->Release();     m_overlaySrv     = nullptr; }
+    if (m_overlayTex)     { m_overlayTex->Release();     m_overlayTex     = nullptr; }
+    if (m_overlayPs)      { m_overlayPs->Release();      m_overlayPs      = nullptr; }
+    if (m_overlayPsBlob)  { m_overlayPsBlob->Release();  m_overlayPsBlob  = nullptr; }
+    if (m_overlayBlend)   { m_overlayBlend->Release();   m_overlayBlend   = nullptr; }
+    m_overlayLastCounter = 0;
+    m_overlayCurrentlyVisible = false;
     if (m_videoSrv)       { m_videoSrv->Release();       m_videoSrv       = nullptr; }
     if (m_videoTexture)   { m_videoTexture->Release();   m_videoTexture   = nullptr; }
     m_videoTexW = 0;
@@ -948,6 +965,21 @@ void FrameCanvas::drawTexturedQuad()
     }
 
     m_context->Draw(4, 0);
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay draw pass.
+    // After the video quad, poll the overlay SHM for fresh bytes (if the
+    // atomic counter advanced), upload to the local overlay texture, and
+    // draw an alpha-blended quad at the same viewport. Subtitles render
+    // on top of the video without knocking HEVC 10-bit off zero-copy.
+    // No cross-process GPU sync — both the overlay BGRA read (from SHM)
+    // and the texture live on main-app's own D3D11 device.
+    pollOverlayShm();
+    if (m_overlayCurrentlyVisible && m_overlaySrv && m_overlayPs && m_overlayBlend) {
+        m_context->OMSetBlendState(m_overlayBlend, blendFactor, 0xFFFFFFFF);
+        m_context->PSSetShader(m_overlayPs, nullptr, 0);
+        m_context->PSSetShaderResources(0, 1, &m_overlaySrv);
+        m_context->Draw(4, 0);
+    }
 }
 
 bool FrameCanvas::createShaders()
@@ -1001,6 +1033,8 @@ bool FrameCanvas::createShaders()
 
     if (!compileStage("vs_main", "vs_5_0", &m_vsBlob)) return false;
     if (!compileStage("ps_main", "ps_5_0", &m_psBlob)) return false;
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay pixel shader.
+    if (!compileStage("ps_overlay", "ps_5_0", &m_overlayPsBlob)) return false;
 
     HRESULT hr = m_device->CreateVertexShader(
         m_vsBlob->GetBufferPointer(),
@@ -1022,9 +1056,21 @@ bool FrameCanvas::createShaders()
         return false;
     }
 
-    qDebug("FrameCanvas: shaders compiled (vs %lld bytes, ps %lld bytes)",
+    hr = m_device->CreatePixelShader(
+        m_overlayPsBlob->GetBufferPointer(),
+        m_overlayPsBlob->GetBufferSize(),
+        nullptr,
+        &m_overlayPs);
+    if (FAILED(hr)) {
+        qWarning("FrameCanvas: CreatePixelShader (overlay) failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        return false;
+    }
+
+    qDebug("FrameCanvas: shaders compiled (vs %lld bytes, ps %lld bytes, ps_overlay %lld bytes)",
            static_cast<long long>(m_vsBlob->GetBufferSize()),
-           static_cast<long long>(m_psBlob->GetBufferSize()));
+           static_cast<long long>(m_psBlob->GetBufferSize()),
+           static_cast<long long>(m_overlayPsBlob->GetBufferSize()));
     return true;
 }
 
@@ -1132,7 +1178,30 @@ bool FrameCanvas::createStateObjects()
         return false;
     }
 
-    qDebug("FrameCanvas: state objects created (sampler + rasterizer + blend)");
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay alpha-blend state.
+    // Src-over: RGB_out = src.rgb * src.a + dst.rgb * (1 - src.a). Used by
+    // the overlay draw pass after the video quad. Alpha-channel of the
+    // back buffer is preserved (we don't composite alpha onto the display).
+    D3D11_BLEND_DESC overlayBlendDesc = {};
+    overlayBlendDesc.AlphaToCoverageEnable  = FALSE;
+    overlayBlendDesc.IndependentBlendEnable = FALSE;
+    overlayBlendDesc.RenderTarget[0].BlendEnable           = TRUE;
+    overlayBlendDesc.RenderTarget[0].SrcBlend              = D3D11_BLEND_SRC_ALPHA;
+    overlayBlendDesc.RenderTarget[0].DestBlend             = D3D11_BLEND_INV_SRC_ALPHA;
+    overlayBlendDesc.RenderTarget[0].BlendOp               = D3D11_BLEND_OP_ADD;
+    overlayBlendDesc.RenderTarget[0].SrcBlendAlpha         = D3D11_BLEND_ONE;
+    overlayBlendDesc.RenderTarget[0].DestBlendAlpha        = D3D11_BLEND_ZERO;
+    overlayBlendDesc.RenderTarget[0].BlendOpAlpha          = D3D11_BLEND_OP_ADD;
+    overlayBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+    hr = m_device->CreateBlendState(&overlayBlendDesc, &m_overlayBlend);
+    if (FAILED(hr)) {
+        qWarning("FrameCanvas: CreateBlendState (overlay) failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        return false;
+    }
+
+    qDebug("FrameCanvas: state objects created (sampler + rasterizer + blend + overlay blend)");
     return true;
 }
 
@@ -1511,6 +1580,117 @@ void FrameCanvas::detachD3D11Texture()
     if (wasActive) {
         emit zeroCopyActivated(false);   // sidecar should re-engage CPU pipeline
     }
+}
+
+// PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM attach/detach.
+// Opens the named SHM created by the sidecar, (re)creates the locally-
+// owned overlay D3D11 texture at the announced dims. Called from
+// VideoPlayer's SidecarProcess::overlayShm signal handler.
+void FrameCanvas::attachOverlayShm(const QString& shmName, int width, int height)
+{
+    detachOverlayShm();
+    if (shmName.isEmpty() || width <= 0 || height <= 0) return;
+
+    m_overlayReader = new OverlayShmReader();
+    if (!m_overlayReader->attach(shmName, width, height)) {
+        qWarning("FrameCanvas: overlay SHM attach failed (%s %dx%d)",
+                 shmName.toUtf8().constData(), width, height);
+        delete m_overlayReader;
+        m_overlayReader = nullptr;
+        return;
+    }
+
+#ifdef _WIN32
+    if (!m_device) {
+        qWarning("FrameCanvas: overlay SHM opened but device not ready — deferred until next renderFrame");
+        return;
+    }
+
+    // LOCAL (non-shared) texture. DYNAMIC usage so UpdateSubresource is
+    // the fast CPU→GPU upload path. Format BGRA matches sidecar payload.
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width              = static_cast<UINT>(width);
+    td.Height             = static_cast<UINT>(height);
+    td.MipLevels          = 1;
+    td.ArraySize          = 1;
+    td.Format             = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count   = 1;
+    td.Usage              = D3D11_USAGE_DEFAULT;
+    td.BindFlags          = D3D11_BIND_SHADER_RESOURCE;
+    td.CPUAccessFlags     = 0;
+    td.MiscFlags          = 0;
+
+    HRESULT hr = m_device->CreateTexture2D(&td, nullptr, &m_overlayTex);
+    if (FAILED(hr)) {
+        qWarning("FrameCanvas: overlay CreateTexture2D failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        detachOverlayShm();
+        return;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
+    sd.Format                    = td.Format;
+    sd.ViewDimension             = D3D11_SRV_DIMENSION_TEXTURE2D;
+    sd.Texture2D.MostDetailedMip = 0;
+    sd.Texture2D.MipLevels       = 1;
+
+    hr = m_device->CreateShaderResourceView(m_overlayTex, &sd, &m_overlaySrv);
+    if (FAILED(hr)) {
+        qWarning("FrameCanvas: overlay CreateShaderResourceView failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        detachOverlayShm();
+        return;
+    }
+
+    m_overlayTexW = width;
+    m_overlayTexH = height;
+    m_overlayLastCounter = 0;
+    m_overlayCurrentlyVisible = false;
+    qDebug("FrameCanvas: overlay SHM attached %dx%d", width, height);
+#endif
+}
+
+void FrameCanvas::detachOverlayShm()
+{
+#ifdef _WIN32
+    if (m_overlaySrv) { m_overlaySrv->Release(); m_overlaySrv = nullptr; }
+    if (m_overlayTex) { m_overlayTex->Release(); m_overlayTex = nullptr; }
+#endif
+    if (m_overlayReader) {
+        m_overlayReader->detach();
+        delete m_overlayReader;
+        m_overlayReader = nullptr;
+    }
+    m_overlayTexW = 0;
+    m_overlayTexH = 0;
+    m_overlayLastCounter = 0;
+    m_overlayCurrentlyVisible = false;
+}
+
+// Poll overlay SHM for a fresh frame. Returns true if the texture got a
+// fresh upload this tick; caller uses m_overlayCurrentlyVisible to decide
+// whether to issue the overlay draw call.
+bool FrameCanvas::pollOverlayShm()
+{
+#ifdef _WIN32
+    if (!m_overlayReader || !m_overlayTex || !m_context) return false;
+
+    OverlayShmReader::Frame f = m_overlayReader->read();
+    if (f.counter == m_overlayLastCounter) return false;  // no change
+
+    m_overlayLastCounter      = f.counter;
+    m_overlayCurrentlyVisible = f.valid;
+
+    if (!f.valid || !f.bgra) return false;
+
+    // Upload the BGRA bytes into the locally-owned overlay texture. All
+    // intra-device — no cross-process GPU sync issues.
+    const UINT rowPitch = static_cast<UINT>(f.width) * 4;
+    m_context->UpdateSubresource(m_overlayTex, 0, nullptr, f.bgra, rowPitch, 0);
+    return true;
+#else
+    return false;
+#endif
 }
 
 // Phase 6 — vsync logging public API. Lives outside _WIN32 so non-Win builds

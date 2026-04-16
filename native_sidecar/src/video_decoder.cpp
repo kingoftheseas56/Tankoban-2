@@ -1,5 +1,6 @@
 #include "video_decoder.h"
 #include "d3d11_presenter.h"
+#include "overlay_shm.h"
 #include "filter_graph.h"
 #include "gpu_renderer.h"
 #include "subtitle_renderer.h"
@@ -302,6 +303,28 @@ void VideoDecoder::decode_thread_func(
             }
         }
     }
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
+    // Replaces the reverted cross-process D3D11 shared-texture attempt
+    // (which stalled main-app draws due to no-keyed-mutex sync). SHM
+    // carries the CPU-rendered overlay BGRA bytes; main-app uploads them
+    // into a locally-owned D3D11 texture — no cross-process GPU resource
+    // sharing, no sync pitfalls. Only allocated when d3d_presenter is
+    // ready (zero-copy path available); otherwise subtitles still come
+    // baked into the slow-path SHM BGRA frame.
+    OverlayShm* overlay_shm = nullptr;
+    if (d3d_presenter && d3d_presenter->ready()) {
+        int probe_w = video_stream->codecpar->width;
+        int probe_h = video_stream->codecpar->height;
+        if (probe_w > 0 && probe_h > 0) {
+            overlay_shm = new OverlayShm();
+            if (!overlay_shm->create(probe_w, probe_h)) {
+                std::fprintf(stderr, "VideoDecoder: overlay SHM create failed, subtitle fast path disabled\n");
+                delete overlay_shm;
+                overlay_shm = nullptr;
+            }
+        }
+    }
 #endif
 
     ret = avcodec_open2(codec_ctx, codec, nullptr);
@@ -440,13 +463,27 @@ void VideoDecoder::decode_thread_func(
 
         // ── Zero-copy short-circuit ──────────────────────────────────────
         // When Qt is consuming via the imported D3D11 shared texture AND we
-        // did the GPU→GPU copy AND no subtitle blending is needed, skip the
-        // entire CPU pipeline (hwframe_transfer + sws_scale + SHM write).
-        // The shared texture already has the new frame; consumer's next vsync
-        // will render it. Producer per-frame cost drops from ~20ms to ~1ms.
+        // did the GPU→GPU copy, skip the CPU pipeline (hwframe_transfer +
+        // sws_scale + SHM write). The shared texture already has the new
+        // frame; consumer's next vsync renders it. Producer per-frame cost
+        // drops from ~20ms to ~1ms.
+        //
+        // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — sub_blend_needed no
+        // longer blocks fast_path when overlay_shm is ready. Subtitle
+        // bitmaps render into overlay SHM; main-app uploads to its local
+        // D3D11 texture and draws an alpha-blended overlay quad after the
+        // video quad. HEVC 10-bit + subs stays on zero-copy fast path
+        // without cross-process GPU sync (the 3.B D3D11-shared-texture
+        // approach was reverted because it stalled main-app draws).
         bool sub_blend_needed = sub_renderer_ && sub_renderer_->visible()
                                 && active_sub_stream_.load() >= 0;
-        bool fast_path = zero_copy_active_.load() && d3d_gpu_copied && !sub_blend_needed;
+        bool fast_path = zero_copy_active_.load() && d3d_gpu_copied
+#ifdef _WIN32
+                         && (!sub_blend_needed || overlay_shm)
+#else
+                         && !sub_blend_needed
+#endif
+                         ;
 
         if (fast_path) {
             // Wait for audio clock to start (same as full path)
@@ -489,6 +526,43 @@ void VideoDecoder::decode_thread_func(
             if (clock_ && clock_->started())
                 ring_writer_->write_clock_us(clock_->position_us());
 
+            // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay write.
+            // When subs are active, render bitmaps into a frame-sized BGRA
+            // buffer and push to overlay_shm. Main-app uploads to its
+            // local D3D11 texture and composites as a separate draw.
+#ifdef _WIN32
+            if (overlay_shm && overlay_shm->ready()) {
+                if (sub_blend_needed && sub_renderer_) {
+                    // thread_local reuse — steady-state subtitle playback
+                    // does zero heap allocation after warmup. Cleared each
+                    // frame so stale libass pixels from the prior frame
+                    // don't bleed through.
+                    static thread_local std::vector<uint8_t> overlay_frame;
+                    const size_t ov_bytes =
+                        static_cast<size_t>(overlay_shm->width()) *
+                        overlay_shm->height() * 4;
+                    if (overlay_frame.size() != ov_bytes) {
+                        overlay_frame.assign(ov_bytes, 0);
+                    } else {
+                        std::memset(overlay_frame.data(), 0, ov_bytes);
+                    }
+
+                    static thread_local std::vector<SubtitleRenderer::SubOverlayBitmap> tiles;
+                    sub_renderer_->render_to_bitmaps(pts_us / 1000, tiles);
+                    SubtitleRenderer::blend_into_frame(
+                        tiles, overlay_frame.data(),
+                        overlay_shm->width(), overlay_shm->height(),
+                        overlay_shm->width() * 4);
+
+                    overlay_shm->write(overlay_frame.data());
+                } else {
+                    // Subs not active this frame — signal consumer to
+                    // clear its cached overlay upload.
+                    overlay_shm->write_empty();
+                }
+            }
+#endif
+
             ++frames_written;
 
             // Frame stepping: re-pause after one frame
@@ -515,6 +589,15 @@ void VideoDecoder::decode_thread_func(
                                   (unsigned long long)(uintptr_t)d3d_presenter->nt_handle(),
                                   d3d_presenter->width(), d3d_presenter->height());
                     on_event_("d3d11_texture", std::string(d3d_info));
+                }
+                // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — emit overlay
+                // SHM name + dims for main-app to open and upload from.
+                if (overlay_shm && overlay_shm->ready()) {
+                    char ov_info[256];
+                    std::snprintf(ov_info, sizeof(ov_info), "%s:%d:%d",
+                                  overlay_shm->name().c_str(),
+                                  overlay_shm->width(), overlay_shm->height());
+                    on_event_("overlay_shm", std::string(ov_info));
                 }
 #endif
             }
@@ -840,6 +923,17 @@ void VideoDecoder::decode_thread_func(
                 std::fprintf(stderr, "HOLY_GRAIL: emitting d3d11_texture event: %s\n", d3d_info);
                 on_event_("d3d11_texture", std::string(d3d_info));
             }
+            // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay handle
+            // emission on the slow-path first_frame site too, so main-app
+            // has the overlay SHM name if fast path activates later.
+            if (overlay_shm && overlay_shm->ready()) {
+                char ov_info[256];
+                std::snprintf(ov_info, sizeof(ov_info), "%s:%d:%d",
+                              overlay_shm->name().c_str(),
+                              overlay_shm->width(), overlay_shm->height());
+                std::fprintf(stderr, "HOLY_GRAIL: emitting overlay_shm event: %s\n", ov_info);
+                on_event_("overlay_shm", std::string(ov_info));
+            }
 #endif
             std::fprintf(stderr, "VideoDecoder: first frame %dx%d pts=%lldus fid=%lld\n",
                          fw, fh,
@@ -980,6 +1074,11 @@ void VideoDecoder::decode_thread_func(
         d3d_presenter->destroy();
         delete d3d_presenter;
         d3d_presenter = nullptr;
+    }
+    if (overlay_shm) {
+        overlay_shm->destroy();
+        delete overlay_shm;
+        overlay_shm = nullptr;
     }
 #endif
     avformat_close_input(&fmt_ctx);

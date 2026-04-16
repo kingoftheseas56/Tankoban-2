@@ -477,6 +477,27 @@ static void open_worker(Command cmd) {
                              detail.substr(c2 + 1).c_str());
             }
 
+        } else if (event == "overlay_shm") {
+            // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM
+            // name + dims. detail format: "<shm_name>:<width>:<height>".
+            // Shm name contains no colons (generate_shm_name produces
+            // "tankoban_frame_<pid>_<n>" — underscores only), so splitting
+            // on the last two colons is unambiguous.
+            size_t c2 = detail.rfind(':');
+            size_t c1 = (c2 == std::string::npos) ? std::string::npos
+                                                   : detail.rfind(':', c2 - 1);
+            if (c1 != std::string::npos && c2 != std::string::npos) {
+                nlohmann::json p;
+                p["name"]   = detail.substr(0, c1);
+                p["width"]  = std::stoul(detail.substr(c1 + 1, c2 - c1 - 1));
+                p["height"] = std::stoul(detail.substr(c2 + 1));
+                write_event("overlay_shm", sid, -1, p);
+                std::fprintf(stderr, "HOLY_GRAIL: overlay_shm event emitted name=%s %sx%s\n",
+                             detail.substr(0, c1).c_str(),
+                             detail.substr(c1 + 1, c2 - c1 - 1).c_str(),
+                             detail.substr(c2 + 1).c_str());
+            }
+
         } else if (event == "frame_stepped") {
             // detail = "pts_sec" as string
             double pts = std::stod(detail);
