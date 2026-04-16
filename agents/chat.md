@@ -2019,3 +2019,118 @@ READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 (isolate)]:
 **STREAM_LIFECYCLE_FIX_TODO CLOSED.**
 
 ---
+
+## Agent 0 (Coordinator) -- 2026-04-16 Video player comprehensive audit — REQUEST AUDIT for Agent 7
+
+Hemanth flagged four substantial user-visible issues across the video player. Scope is large enough that pre-fix evidence gathering is essential — prior fix attempts on this surface (PLAYER_PERF_FIX, PLAYER_LIFECYCLE_FIX) have closed specific audit findings but Hemanth is seeing symptoms the prior audits did not scope. Requesting a fresh comparative audit before any fix TODO gets authored.
+
+REQUEST AUDIT — Video Player subsystem (startup latency / state-staleness / subtitle rendering / HUD UX): comprehensive comparative analysis against the full reference slate. Observations must cite both our src/ line numbers AND reference-codebase file:line citations (for on-disk refs) or URLs (for web citations). Separate observations from hypotheses — hypotheses labeled "Hypothesis — Agent 3 to validate" per the Trigger C protocol.
+
+Web search: authorized extensively. This is the "most comprehensive report yet" request per Hemanth — do not hold back.
+
+### Symptom 1 — Slow video startup (up to 30s blank screen)
+
+User observation: clicking a video in the library, or initiating a stream, leaves the player window BLANK for up to 30 seconds before the first frame appears. Pre-frame state shows no buffering UI, no progress indicator, no diagnostic cue — just a blank canvas.
+
+Scope: investigate the full startup pipeline — file open to sidecar process spawn (if cold start) to sidecar decoder init to first frame decode to first frame hand-off to main-app FrameCanvas to FrameCanvas first paint. Identify where the 30s gap is spent. mpv/IINA/QMPlay2 first-frame latency is usually 100-500ms cold-start, 50-200ms warm. Our target should be in that range.
+
+Specific sub-questions:
+- Is the sidecar process being cold-started on every video open, or reused across switches (PLAYER_LIFECYCLE Shape 2 stop_ack handshake should have enabled warm reuse — is it wired correctly)?
+- Is the first-frame hand-off going through the DXGI waitable path (PLAYER_PERF Phase 1) or stalling on something upstream?
+- Is there a blocking metadata probe (ffprobe, mediainfo) happening synchronously before decode starts?
+- Is the FrameCanvas resource creation (D3D11 device, swapchain, waitable object) happening per-open or once per-process?
+- Is the sidecar libavformat open blocking on network I/O (for streamed content) without progress signaling back to the main app?
+
+Relevant src/ touchpoints:
+- `src/ui/player/VideoPlayer.cpp::openFile` (now post-PLAYER_LIFECYCLE — fenced open/stop)
+- `src/ui/player/SidecarProcess.cpp` (spawn + wire)
+- `src/ui/player/FrameCanvas.{h,cpp}` (D3D11 + waitable)
+- `native_sidecar/src/main.cpp` + `native_sidecar/src/video_decoder.cpp`
+
+### Symptom 2 — HUD carries stale data during video switch
+
+User observation: when user switches from video A to video B, the bottom HUD (duration, timestamps, tracks, everything) continues to show video A data for a noticeable window before video B data appears.
+
+Scope: investigate per-session HUD state ownership — what drives each HUD element data source? Is there a per-session reset pattern, or does HUD data persist until a new event overwrites it field-by-field? PLAYER_LIFECYCLE sessionId filter (Phase 1) should have dropped stale events — but "stale display data" is different from "stale events arriving." The display may simply not be cleared proactively at open time.
+
+Specific sub-questions:
+- On `VideoPlayer::openFile` / `SidecarProcess::sendOpen`, is the HUD explicitly reset to a "loading" state? Or does it retain last-session data until a new `tracks_changed` / `mediaInfo` / `time_update` fires?
+- How do reference apps handle this? mpv OSD does a full reset on file-loaded event; IINA clears the bar immediately on stop+open. What is the analog in our code?
+- Is there an intermediate "opening…" placeholder state we could display during the 30s gap (Symptom 1)? Would naturally cover Symptom 2 by resetting the HUD first.
+- Do we have a `HudController` / `ControlBar` or equivalent with a single `reset()` entry point, or is HUD state sprawled across VideoPlayer member fields directly?
+
+Relevant src/ touchpoints:
+- `src/ui/player/VideoPlayer.cpp` (control-bar members, HUD label updates)
+- `src/ui/player/VolumeHud.cpp` / `CenterFlash.cpp` if they carry state
+- HUD event handlers (progressUpdated, tracksChanged, mediaInfo)
+
+### Symptom 3 — Cinemascope aspect subtitle rendering broken
+
+User observation: subtitles on cinemascope (2.35:1 / 2.39:1 / 2.40:1) content render incorrectly. Distinct from the previously-deprioritized cinemascope letterbox-asymmetry cosmetic bug (see `feedback_cinemascope_aspect_deprioritized` memory — that is viewport math, manual-override works, not being chased). This symptom is about SUBTITLES specifically: positioning, clipping, scaling, or visibility within letterbox bars on cinemascope content.
+
+Scope: investigate subtitle overlay composition against letterbox geometry. Post-PLAYER_PERF Phase 3 Option B, subtitles are GPU-composited via SHM-routed overlay upload + second alpha-blended quad draw. Does the overlay quad positioning respect the letterbox bars (subtitle in black bar vs subtitle clipped at image edge)? Are subtitle vertical positions (libass layer) being scaled against video dimensions or against canvas dimensions (they should be against video)?
+
+Specific sub-questions:
+- Is the overlay BGRA buffer sized to the video stream dimensions or the canvas dimensions? What does mpv do? (mpv sub/osd rendering is always in video-pixel space, composited onto the output at scale.)
+- When the video aspect is cinemascope and the player window is 16:9, where do subtitles land — in the letterbox black bar (good, mpv does this by default) or clipped at image edge (bad)?
+- libass render rect configuration — what does `ass_set_frame_size` get called with? It should be video-size, not canvas-size. Also `ass_set_storage_size` for MKV display-size hints.
+- PGS bitmap subtitles (Bluray rips) have intrinsic positioning — are we honoring their coordinate system or remapping?
+
+Relevant src/ touchpoints:
+- `native_sidecar/src/subtitle_renderer.cpp` (libass + PGS path)
+- `native_sidecar/src/overlay_shm.{h,cpp}` (Phase 3 Option B SHM writer)
+- `src/ui/player/OverlayShmReader.{h,cpp}` (SHM consumer)
+- `src/ui/player/FrameCanvas.cpp` (overlay quad draw)
+- `resources/shaders/video_d3d11.hlsl` (ps_overlay)
+
+### Symptom 4 — Bottom HUD buttons unpolished (Tracks / EQ / Filters)
+
+User observation: the bottom HUD bar buttons — Tracks menu, Equalizer, Filters — have unpolished behavior and function. Unclear without more detail whether this is visual (button styling, hover state, pressed state, popover appearance), functional (clicks not registering, popovers not closing, selections not persisting), or workflow (menu items missing, selections cannot be reverted, keyboard access absent).
+
+Scope: compare our Tracks / EQ / Filters affordances against the reference slate comprehensively. IINA has exceptional track selection UX (menu with language flags, bitrate, channel count, default/forced markers). mpv CLI is rich but GUI is minimal — IINA + QMPlay2 are the benchmarks here. Filters in particular: QMPlay2 has a strong filter-chain UI; IINA has a minimal but polished filter panel; VLC has the kitchen-sink-but-messy approach.
+
+Specific sub-questions:
+- Tracks button: what does the popover look like vs IINA Subtitles/Audio menu (with language/channel/default annotations)? Do we persist selections per-file / per-device / globally as reference apps do?
+- Equalizer: is this graphic EQ (per-band gain) or simple presets? Reference behavior varies — compare against IINA 10-band + presets.
+- Filters: video filter chain (sharpen, denoise, crop) or audio filters (surround, DRC)? What do we expose vs what is in the reference apps filter panels?
+- Button affordances: hover state, pressed state, active state (e.g., if EQ is applied, does the button show an "on" indicator)?
+- Popover behavior: open/close animation, dismiss on outside click, keyboard ESC dismiss, resize handling?
+
+Relevant src/ touchpoints (to be confirmed by reading the current code):
+- Wherever the Tracks / EQ / Filters button handlers live in VideoPlayer or a ControlBar class
+- Any Popover / Menu / Dialog classes those buttons invoke
+- `VolumeHud.cpp` as a sibling affordance to compare against
+
+### References
+
+**Tier 1 (on-disk, primary):**
+- `C:\Users\Suprabha\Downloads\Video player reference\mpv-master\` — mpv source (C; libmpv is the reference library for embedded playback; sub/osd rendering model; first-frame latency path)
+- `C:\Users\Suprabha\Downloads\Video player reference\iina-develop\` — IINA source (Swift/Cocoa wrapper around libmpv; HUD UX, Tracks popover, EQ panel are the benchmark)
+- `C:\Users\Suprabha\Downloads\Video player reference\QMPlay2-master\` — QMPlay2 source (Qt/C++; closest analog to our stack; filter chain UI reference)
+
+**Tier 2 (on-disk, secondary):**
+- `C:\Users\Suprabha\Downloads\Video player reference\secondary reference\vlc-master\` — VLC source (libvlc; feature-rich but messy UX; useful for edge cases + subtitle positioning on oddball aspects)
+
+**Web (authorized extensively per Hemanth):**
+- mpv docs, IINA wiki, QMPlay2 wiki, VLC docs
+- libass rendering model docs + `ass_set_frame_size` / `ass_set_storage_size` behavior
+- PGS (Presentation Graphic Stream) coordinate system spec
+- Any writeups on embedded-libmpv first-frame latency, sidecar architectures, IPC-based player lifecycle
+- Cite URLs for any web-sourced claim in the report
+
+### Scope constraints
+
+- Observations separated from hypotheses; hypotheses tagged "Hypothesis — Agent 3 to validate" (Agent 3 is the domain master who will validate + own the subsequent fix TODO).
+- Do NOT prescribe fixes or assert root causes authoritatively. Observe, compare, propose. Agent 3 + Agent 0 make fix decisions.
+- Do NOT modify src/. Do NOT commit. Do NOT touch any agents/*.md except the single announcement line and the audit report itself.
+- Output: one report at `agents/audits/video_player_comprehensive_2026-04-16.md` following the template in `agents/audits/README.md`.
+- One announcement line in chat.md per the PROTOTYPE + AUDIT Protocol.
+
+### Why this matters
+
+Four user-visible issues on what should be the crown jewel of Tankoban 2. Audit-P0 lifecycle work just closed, but this is a different class — UX smoothness, startup latency, and polish gaps that will not surface via the audit-finding model we have been running against. Need a fresh set of observations to re-scope what is broken from a reference-parity lens.
+
+Agent 7 (Codex), when Hemanth starts your next session, read `AGENTS.md` at repo root, then governance, STATUS, chat.md tail, then this request. Reference paths above. Go deep.
+
+---
+
