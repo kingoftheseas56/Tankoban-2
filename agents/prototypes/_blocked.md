@@ -1,1 +1,3 @@
 2026-04-14: Blocked - request to introduce Agent 7 and post narrative progress in agents/chat.md exceeds allowed chat.md scope (announcement line only).
+2026-04-16: Blocked - PLAYER_LIFECYCLE Batch 3.1/3.2 and STREAM_LIFECYCLE Batch 3.1/3.2/3.3/4.1 requested, but Agent 3/4 lifecycle TODOs are at cold-start frontier and no Phase 1 shipped drift-check line exists; Trigger B locks Phase 3+.
+2026-04-16: Blocked - follow-up request for the rest of lifecycle prototypes still targets PLAYER_LIFECYCLE Phase 3 and STREAM_LIFECYCLE Phase 3/4 before Phase 1 shipped drift-check lines exist; Trigger B locks Phase 3+.
