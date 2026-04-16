@@ -15,6 +15,7 @@
 #include <QNetworkRequest>
 #include <QTemporaryFile>
 #include <QPointer>
+#include <QSet>
 #include <algorithm>
 
 static void debugLog(const QString& msg) {
@@ -348,6 +349,33 @@ void SidecarProcess::processLine(const QByteArray& line)
         return;
 
     QString name = obj["name"].toString();
+
+    // PLAYER_LIFECYCLE_FIX Phase 1 Batch 1.1 — sessionId filter.
+    // sendOpen() regenerates m_sessionId per open; sendCommand() stamps it
+    // on every outgoing command. The native sidecar mirrors that sid on
+    // events (per audit agents/audits/tankostream_session_lifecycle_2026-04-15.md:112).
+    // Drop session-scoped events whose sessionId doesn't match the current
+    // open — otherwise stale time_update / first_frame / tracks_changed
+    // from a prior session rewrites new-session state on the Qt side.
+    // Process-global events (no session context) pass through. Missing
+    // sessionId is tolerated so legacy sidecar binaries keep working until
+    // the next rebuild.
+    static const QSet<QString> kProcessGlobalEvents = {
+        QStringLiteral("ready"),
+        QStringLiteral("closed"),
+        QStringLiteral("shutdown_ack"),
+        QStringLiteral("version"),
+        QStringLiteral("process_error"),
+    };
+    if (!kProcessGlobalEvents.contains(name)) {
+        const QString eventSid = obj["sessionId"].toString();
+        if (!eventSid.isEmpty() && eventSid != m_sessionId) {
+            debugLog(QString("[Sidecar] drop stale event: %1 eventSid=%2 currentSid=%3")
+                         .arg(name, eventSid, m_sessionId));
+            return;
+        }
+    }
+
     QJsonObject payload = obj["payload"].toObject();
     debugLog("[Sidecar] RECV: " + name);
 
