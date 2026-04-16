@@ -7,6 +7,7 @@ This file is the only governance file every agent reads every session. It is int
 | File | Current version | Last bumped | Bumped by | One-line changelog |
 |------|----------------|-------------|-----------|--------------------|
 | `agents/GOVERNANCE.md` | gov-v2 | 2026-04-16 | Agent 0 | Slim reading order; add Rule 12 (STATUS touch), Rule 13 (CLAUDE.md dashboard), Maintenance section (chat rotation), Congress auto-close clause |
+| `agents/GOVERNANCE.md` | gov-v3 | 2026-04-16 | Agent 0 | Add Rule 14 (decision authority — agents pick technical options, Hemanth picks product/UX) + Rule 15 (self-service execution — agents read logs/rebuild sidecar/grep themselves; Hemanth's role is UI smoke + visual confirmation only) |
 | `agents/CONTRACTS.md` | contracts-v1 | 2026-04-16 | Agent 0 | Baseline (no semantic changes; version stamp introduced) |
 | `agents/CONTRACTS.md` | contracts-v2 | 2026-04-16 | Agent 0 | Build Verification Rule amended: sidecar build (`native_sidecar/build.ps1`, `build_qrhi.bat`) is now agent-runnable from bash; main app build stays honor-system (MSVC/Ninja/cl.exe unreliable from bash) |
 
