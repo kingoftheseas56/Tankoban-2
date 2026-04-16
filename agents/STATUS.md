@@ -2,7 +2,7 @@
 
 Each agent overwrites their own section at session start and end. Never append — overwrite your entry.
 Last header touch: 2026-04-16 (Agent 0 — Track 1 cleanup; STATUS header field discipline introduced)
-Last agent-section touch: 2026-04-16 (Agent 2 — EDGE_TTS_FIX_TODO end-to-end shipped in single session: Phases 1+2+3+5 CLOSED across 11 batches. Phase 5 today: 5.1 edgeDirect deletion + isInitDone export + 5.2 ttsSupported() rewrite + 5.3 failure-reason surface in voice picker + api_gateway.js comment refresh. Phase 4 streaming conditionally deferred per Rule 14. SIX READY TO COMMIT lines on the wire awaiting Agent 0 sweep + Hemanth full-TODO smoke.)
+Last agent-section touch: 2026-04-16 (Agent 4 — Stream mode comparative-audit programme alignment with Hemanth: 6-slice taxonomy locked, sequence A→D→3a→C→3b→3c ratified bottom-up, three discipline points (slice-boundary lock, prior-slice-as-substrate assumption, cross-slice findings appendix) set for all six audits, Stremio Reference folder inventoried (6 repos: stremio-core/web/video/service/docker + perpetus stream-server) with per-slice reference target mapping. Handoff message in chat.md asks Agent 0 to author Slice A (Streaming Server / Engine) audit prompt for Agent 7 next.)
 
 Per Rule 12: when you overwrite your own section, bump the `Last agent-section touch` line in the same edit. The header touch line is Agent 0's responsibility, bumped when anything outside an individual agent's section changes.
 
@@ -57,18 +57,16 @@ Governance seen: gov-v2 | Contracts seen: contracts-v2
 ---
 
 ## Agent 4 (Stream mode)
-Status: ACTIVE — **regression investigation**. STREAM_LIFECYCLE_FIX_TODO shipped end-to-end this session (10 batches, Phase 1+2 prior + Phase 3+4+5 today, all audit P0/P1/P2 closed on Stream side), BUT Hemanth's smoke is surfacing 3 consecutive playback regressions: (1) blank 4-5 minute start before first frame, (2) stuck image with advancing clock, (3) eventual play with significant A/V desync. Single-root hypothesis: HTTP byte delivery is being interrupted mid-serve. Most plausible culprit on my side: Batch 3.3 wired `TorrentEngine::torrentError → StreamEngine::streamError → StreamPlayerController::onEngineStreamError → stopStream(Failure) → cancellation token flips`. Pre-3.3 that signal was unconnected; post-3.3 any transient libtorrent error tears the stream down.
-Active HELP request: posted to Agent 3 in chat.md (this session's tail). Offered Hemanth a 1-line surgical revert test — comment out the ctor `connect(m_engine, &StreamEngine::streamError, this, &StreamPlayerController::onEngineStreamError)` in `StreamPlayerController.cpp`. Two outcomes: revert fixes → my 3.3 is the cause, I redesign with transient-vs-fatal filter; revert doesn't fix → Agent 3's domain (m_openPending gate from PLAYER_LIFECYCLE 3, SHM overlay from PLAYER_PERF 3.B, on_video_event restructure from PLAYER_UX 1, Shape 2 fence timing from PLAYER_LIFECYCLE 2.1).
-Evidence standing: requested `_player_debug.txt` + `sidecar_debug_live.log` from failing runs. Not shipping new code until logs land per `feedback_evidence_before_analysis`.
+Status: ACTIVE — **stream mode comparative-audit programme alignment with Hemanth, awaiting Agent 0 to author Slice A audit prompt**. STREAM_LIFECYCLE_FIX_TODO previously CLOSED end-to-end (Phase 1+2 prior + Phase 3+4+5 in last session, all audit P0/P1/P2 closed; lifecycle commits at `139c0bb` + `b488079`). The regression investigation tracked in my prior STATUS section was downstream of cinemascope + lifecycle work that has since landed and is no longer in active diagnosis. STATUS reset to current posture.
+Current task: Programme coordination, no code. Today this session: with Hemanth, inventoried the new `C:\Users\Suprabha\Downloads\Stremio Reference\` folder (now 6 repos — stremio-core, stremio-web, stremio-video, stremio-service, stremio-docker, perpetus stream-server), assessed Agent 7 audit readiness, locked a sliced-audit programme replacing the prior all-encompassing audit pattern. Final 6-slice taxonomy + bottom-up sequence (A→D→3a→C→3b→3c) ratified. Three discipline points set for Agent 7 across all six audits: (1) slice boundaries lock at audit start, no mid-audit re-slicing, (2) each audit assumes prior-slice findings will land before this slice's execution → cite assumption explicitly, (3) every audit ends with cross-slice findings appendix. Handoff to Agent 0 posted in chat.md tail with full reference-target mapping per slice + Slice A audit prompt scaffolding (scope + primary/secondary references + 9 specific comparison axes + STREAM_LIFECYCLE_FIX overlap-check requirement + soft-gap note re: missing Torrentio response trace).
+Active files: None — coordination + STATUS + chat.md only.
+Blockers: None. Standing by for Agent 0 to author + dispatch the Slice A audit prompt to Agent 7.
+Open debt (carried, unblocked but held intentionally): STREAM_UX_PARITY Batch 2.6 (Shift+N) — Slice D audit will likely touch player keybinding surface; cleaner to land 2.6 post-Slice-D rather than additively now. Recommended Agent 0 hold.
+Ship discipline: Zero READY TO COMMIT lines from me on the wire. No code work until Slice A audit lands and I can validation-pass it per `project_audit_fix_flow`.
 Scope note: Stream mode only (Agent 4B owns Sources).
-Current task: Standing by for either (a) Hemanth's revert-test result, or (b) log content. Neither unblocks without Hemanth's next input.
-Active files (dirty, pre-sweep): `src/ui/pages/stream/StreamPlayerController.{h,cpp}` (Phase 3 clearSessionState + onEngineStreamError slot + ctor connect — the 3.3 ctor connect is the revert target). `src/ui/pages/StreamPage.cpp` (3.2 timer triple-gate + 4.1 Shift+N guard + 4.2 resetNextEpisodePrefetch routing). `src/core/stream/StreamEngine.{h,cpp}` + `src/core/stream/StreamHttpServer.{h,cpp}` (Phase 5 cancellation token + waitForPieces threading).
-Blockers: Evidence gap. Can't fix what I can't see.
-Ship discipline: 7 READY TO COMMIT lines still on the wire. Agent 0 should HOLD the sweep until the regression investigation resolves — if the fix is a revert-or-redesign on one of my batches, the sweep would need retraction. Better to not commit broken code.
-Open debt (carried): unchanged from prior STATUS.
-Next: Read logs when Hemanth shares. Redesign 3.3 with transient-error filter OR help Agent 3 narrow their suspects per the HELP request. No new STREAM work until this closes.
+Next: (1) Slice A audit lands → I read it + ship validation pass per `feedback_instrumentation_during_validation` (diagnostic-only, no fixes), possibly empirical re-rank of P0s. (2) Agent 0 authors STREAM_ENGINE_FIX_TODO from my validated audit. (3) Phased execution per Rule 6 + Rule 11. Then Slice D, then 3a, etc.
 Last session: 2026-04-16
-Governance seen: gov-v2 | Contracts seen: contracts-v2
+Governance seen: gov-v3 | Contracts seen: contracts-v2
 
 ---
 
