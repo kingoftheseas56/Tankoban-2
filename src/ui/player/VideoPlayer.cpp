@@ -301,6 +301,13 @@ void VideoPlayer::openFile(const QString& filePath,
     m_sidecarRetryCount = 0;
     m_lastKnownPosSec   = 0.0;
     m_sidecarRestartTimer.stop();
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — arm the pending-open
+    // token. Consumed by onSidecarReady on the cold-start branch and
+    // on the timeout-fallback branch (resetAndRestart → ready event).
+    // Warm/fence branch sends `open` directly from its stop_ack callback
+    // and doesn't touch the token; leaving it armed across a warm switch
+    // is harmless — any intervening crash-recovery would re-consume it.
+    m_openPending = true;
     // Fresh file — re-apply preferences on the next tracks_changed.
     m_tracksRestored = false;
     // Reset aspect override: each new file starts with "Original" so the
@@ -410,9 +417,14 @@ void VideoPlayer::teardownUi()
     if (m_subMenu) m_subMenu->setExternalTracks({}, {});
 }
 
-void VideoPlayer::stopPlayback()
+void VideoPlayer::stopPlayback(bool isIntentional)
 {
-    // User-close path — full teardown: UI + sidecar process.
+    // User-close path (isIntentional=true, default) — full teardown:
+    // UI + sidecar process + identity state. Crash-recovery-style stops
+    // (isIntentional=false) would preserve m_currentFile/m_pendingFile/
+    // m_lastKnownPosSec for the respawn to resume from; the current
+    // restartSidecar flow doesn't call stopPlayback, so this branch is
+    // future-proofing rather than a current call site.
     teardownUi();
 
     if (m_sidecar->isRunning()) {
@@ -425,6 +437,22 @@ void VideoPlayer::stopPlayback()
         // the race because the process is going away — any in-flight
         // events from the torn-down session are moot.
         m_sidecar->sendShutdown();
+    }
+
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 + 3.2 — intentional stop
+    // clears identity state AND the one-shot pending-open token so a
+    // late onSidecarReady event in the user-close race window cannot
+    // re-open the just-closed file. Crash-recovery paths don't call
+    // this (they drive restartSidecar directly), so preserving those
+    // fields with isIntentional=false is reserved for future callers.
+    if (isIntentional) {
+        m_currentFile.clear();
+        m_pendingFile.clear();
+        m_pendingStartSec = 0.0;
+        m_playlist.clear();
+        m_playlistIdx = 0;
+        m_lastKnownPosSec = 0.0;
+        m_openPending = false;
     }
 }
 
@@ -458,10 +486,23 @@ void VideoPlayer::onSidecarReady()
     if (m_playlistDrawer && m_playlistDrawer->loopFile())
         m_sidecar->sendSetLoopFile(true);
 
-    // Per-device audio offset is now applied in the mediaInfo handler
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
+    // one-shot pending-open token, not just on a non-empty m_pendingFile.
+    // Without this, a spurious `ready` event arriving after a user-close
+    // would re-open the file the user just closed (audit P1-5). Post-
+    // 3.1 stopPlayback(true) clears m_pendingFile too, so the empty-
+    // check remains a secondary defense but the token is the primary
+    // gate.
+    //
+    // Per-device audio offset is applied in the mediaInfo handler
     // (which fires after open() reports the active audio device).
-    if (!m_pendingFile.isEmpty()) {
+    if (m_openPending && !m_pendingFile.isEmpty()) {
+        m_openPending = false;
         m_sidecar->sendOpen(m_pendingFile, m_pendingStartSec);
+    } else {
+        debugLog(QString("[VideoPlayer] onSidecarReady: skip open (openPending=%1 pendingFile=%2)")
+                     .arg(m_openPending ? "true" : "false")
+                     .arg(m_pendingFile.isEmpty() ? "empty" : "set"));
     }
 }
 
@@ -653,6 +694,11 @@ void VideoPlayer::restartSidecar()
     // Crash respawn re-opens from scratch; let the next tracks_changed
     // re-apply preferences (user's mid-playback track is lost otherwise).
     m_tracksRestored  = false;
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — arm the pending-open
+    // token so onSidecarReady dispatches the resume-open when the
+    // respawned sidecar emits `ready`. Without this, post-3.2
+    // onSidecarReady's gate would block crash recovery.
+    m_openPending = true;
     debugLog(QString("[VideoPlayer] restarting sidecar attempt %1 at pos %2s")
              .arg(m_sidecarRetryCount).arg(m_pendingStartSec, 0, 'f', 2));
     m_sidecar->start();

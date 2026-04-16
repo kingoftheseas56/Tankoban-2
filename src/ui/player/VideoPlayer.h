@@ -50,7 +50,15 @@ public:
                   const QStringList& playlist = {},
                   int playlistIndex = 0,
                   double startPositionSec = 0.0);
-    void stopPlayback();
+
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 — isIntentional distinguishes
+    // user-driven stops (Escape, close, APPCOMMAND_MEDIA_STOP — default)
+    // from crash-recovery paths that need `m_currentFile` / `m_pendingFile`
+    // / `m_lastKnownPosSec` preserved for resume. Intentional=true clears
+    // all identity state so a post-stop `onSidecarReady` event cannot re-
+    // open the just-closed file (audit P1-5). Default preserves existing
+    // call-site semantics — all present callers are user-close paths.
+    void stopPlayback(bool isIntentional = true);
 
     // Persistence mode — gates the three "videos"-domain bridge reads/writes
     // inside VideoPlayer (resume position read, progress write, track-
@@ -272,6 +280,17 @@ private:
     int         m_playlistIdx = 0;
     QString     m_pendingFile;
     double      m_pendingStartSec = 0.0;
+
+    // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — one-shot pending-open token.
+    // Set true when openFile or restartSidecar queues a pending open that
+    // will be dispatched by onSidecarReady (cold-start path, crash-recovery
+    // respawn, timeout-fallback reset). Consumed (cleared) inside
+    // onSidecarReady before the sendOpen call. Defensively cleared on
+    // intentional stopPlayback. Guards against a spurious onSidecarReady
+    // event re-opening a just-closed file in the race window between
+    // user-close and sidecar tear-down (audit P1-5 companion to the
+    // identity-state clear in 3.1).
+    bool m_openPending = false;
 
     // Controls
     QWidget*     m_controlBar      = nullptr;
