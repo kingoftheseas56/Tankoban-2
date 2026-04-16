@@ -25,6 +25,7 @@
 #include "ui/dialogs/AddAddonDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
+#include <QDebug>
 #include <QFrame>
 #include <QEvent>
 #include <QFocusEvent>
@@ -141,7 +142,7 @@ void StreamPage::buildUI()
             this, &StreamPage::onSourceActivated);
     // Phase 3 Batch 3.5 (deferred ship) — direct-URL trailer playback.
     // Routes through the same ad-hoc-stream pattern as Batch 4.3's URL
-    // paste handler: synthesize a httpSource Stream, set m_pendingPlay
+    // paste handler: synthesize a httpSource Stream, set m_session.pending
     // with an "adhoc-trailer:" imdbId prefix (namespaced so progress
     // persistence doesn't collide with real library entries), dispatch
     // through StreamPlayerController.
@@ -153,24 +154,22 @@ void StreamPage::buildUI()
                 stream.source = tankostream::addon::StreamSource::httpSource(trailerUrl);
                 stream.name   = QStringLiteral("Trailer");
 
-                m_pendingPlay.imdbId    = QStringLiteral("adhoc-trailer:")
-                                              + trailerUrl.toString().left(40);
-                m_pendingPlay.mediaType = QStringLiteral("movie");
-                m_pendingPlay.season    = 0;
-                m_pendingPlay.episode   = 0;
-                m_pendingPlay.epKey     = QStringLiteral("stream:") + m_pendingPlay.imdbId;
-                m_pendingPlay.valid     = true;
-                setProperty("_currentEpKey", m_pendingPlay.epKey);
+                PendingPlay p;
+                p.imdbId    = QStringLiteral("adhoc-trailer:")
+                                  + trailerUrl.toString().left(40);
+                p.mediaType = QStringLiteral("movie");
+                p.season    = 0;
+                p.episode   = 0;
+                p.epKey     = QStringLiteral("stream:") + p.imdbId;
+                p.valid     = true;
+                beginSession(p.epKey, p, QStringLiteral("trailer-paste"));
 
                 m_mainStack->setCurrentIndex(2);
                 m_bufferLabel->setText(tr("Loading trailer..."));
                 m_bufferOverlay->show();
 
-                m_playerController->startStream(m_pendingPlay.imdbId,
-                                                m_pendingPlay.mediaType,
-                                                m_pendingPlay.season,
-                                                m_pendingPlay.episode,
-                                                stream);
+                m_playerController->startStream(p.imdbId, p.mediaType,
+                                                p.season, p.episode, stream);
             });
     // Phase 2 Batch 2.4 — Pick-different button in the toast; aborts the
     // auto-launch timer and leaves the picker open so the user can pick a
@@ -756,26 +755,24 @@ void StreamPage::handlePasteAction(PasteKind kind, const QString& input)
                 stream.source = tankostream::addon::StreamSource::httpSource(QUrl(s));
             }
 
-            // Set m_pendingPlay so the existing onSourceActivated /
+            // Set m_session.pending so the existing onSourceActivated /
             // onReadyToPlay pipeline has the context it needs for progress
             // persistence + player wiring.
-            m_pendingPlay.imdbId    = QStringLiteral("adhoc:") + s.left(40);
-            m_pendingPlay.mediaType = QStringLiteral("movie");
-            m_pendingPlay.season    = 0;
-            m_pendingPlay.episode   = 0;
-            m_pendingPlay.epKey     = QStringLiteral("stream:") + m_pendingPlay.imdbId;
-            m_pendingPlay.valid     = true;
-            setProperty("_currentEpKey", m_pendingPlay.epKey);
+            PendingPlay p;
+            p.imdbId    = QStringLiteral("adhoc:") + s.left(40);
+            p.mediaType = QStringLiteral("movie");
+            p.season    = 0;
+            p.episode   = 0;
+            p.epKey     = QStringLiteral("stream:") + p.imdbId;
+            p.valid     = true;
+            beginSession(p.epKey, p, QStringLiteral("magnet-paste"));
 
             m_mainStack->setCurrentIndex(2);
             m_bufferLabel->setText(tr("Connecting..."));
             m_bufferOverlay->show();
 
-            m_playerController->startStream(m_pendingPlay.imdbId,
-                                            m_pendingPlay.mediaType,
-                                            m_pendingPlay.season,
-                                            m_pendingPlay.episode,
-                                            stream);
+            m_playerController->startStream(p.imdbId, p.mediaType,
+                                            p.season, p.episode, stream);
 
             if (m_searchInput) m_searchInput->clear();
             return;
@@ -975,14 +972,11 @@ void StreamPage::showBrowse()
     hideSearchHistoryDropdown();
     // 2026-04-15 — cancel any pending seek-pre-gate retry. User navigated
     // away; no more launchPlayer should fire.
-    if (m_seekRetryState) {
-        m_seekRetryState->deleteLater();
-        m_seekRetryState = nullptr;
-    }
+    m_session.seekRetry.reset();
     // Invalidate any in-flight play context so a late streamsReady arrival
     // followed by an accidental card-click can't dispatch playback for the
     // title the user just backed away from.
-    m_pendingPlay.valid = false;
+    m_session.pending.valid = false;
     cancelAutoLaunch();
     // Phase 2 Batch 2.5 — if a next-episode overlay was pending, clear it;
     // user explicitly navigated away.
@@ -1093,8 +1087,14 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
     // Stash this play context for onSourceActivated to consume when the
     // user clicks a card. Replaces what the dialog used to keep alive
     // between exec() and accept(). 'valid' guards against late streamsReady
-    // arrivals after the user backed out of the detail view.
-    m_pendingPlay = PendingPlay{imdbId, mediaType, season, episode, epKey, true};
+    // arrivals after the user backed out of the detail view. Phase 1 Batch
+    // 1.3 — beginSession stamps the new generation + clears prior session
+    // state (stopping the countdown timer + disconnecting aggregators) in
+    // one boundary, so a detail re-entry mid-prefetch doesn't leak stale
+    // async closures into the new session.
+    beginSession(epKey,
+                 PendingPlay{imdbId, mediaType, season, episode, epKey, true},
+                 QStringLiteral("onPlayRequested"));
 
     // Check if we have a saved choice for this episode — if so, build the
     // picker-key shape so the StreamSourceList can highlight the matching
@@ -1300,7 +1300,7 @@ void StreamPage::startNextEpisodePrefetch(const QString& imdbId,
             prefetch.season   = next.first;
             prefetch.episode  = next.second;
             prefetch.epKey    = StreamProgress::episodeKey(imdbId, next.first, next.second);
-            m_nextPrefetch    = prefetch;
+            m_session.nextPrefetch    = prefetch;
 
             // Reuse m_streamAggregator — the current episode's streamsReady
             // has already fired (we're at 95%), so nothing in-flight. Its
@@ -1332,7 +1332,7 @@ void StreamPage::onNextEpisodePrefetchStreams(
     const QList<tankostream::addon::Stream>& streams,
     const QHash<QString, QString>& addonsById)
 {
-    if (!m_nextPrefetch.has_value()) return;
+    if (!m_session.nextPrefetch.has_value()) return;
 
     const auto choices = tankostream::stream::buildPickerChoices(streams, addonsById);
     if (choices.isEmpty()) return;
@@ -1340,7 +1340,7 @@ void StreamPage::onNextEpisodePrefetchStreams(
     // Match priority: per-episode saved choice > per-series bingeGroup.
     // We only fire auto-play for the next episode when one of these matches;
     // the overlay won't show otherwise.
-    const QJsonObject epChoice = StreamChoices::loadChoice(m_nextPrefetch->epKey);
+    const QJsonObject epChoice = StreamChoices::loadChoice(m_session.nextPrefetch->epKey);
     QString epChoiceKey;
     if (!epChoice.isEmpty()) {
         const QString sourceKind = epChoice.value("sourceKind").toString();
@@ -1353,7 +1353,7 @@ void StreamPage::onNextEpisodePrefetchStreams(
                     + hashOrUrl + QLatin1Char('|') + QString::number(fileIndex);
     }
 
-    const QJsonObject seriesChoice = StreamChoices::loadSeriesChoice(m_nextPrefetch->imdbId);
+    const QJsonObject seriesChoice = StreamChoices::loadSeriesChoice(m_session.nextPrefetch->imdbId);
     const QString seriesBingeGroup = seriesChoice.value("bingeGroup").toString();
 
     for (const auto& c : choices) {
@@ -1362,19 +1362,19 @@ void StreamPage::onNextEpisodePrefetchStreams(
         const bool seriesMatch = !seriesBingeGroup.isEmpty()
                               && c.stream.behaviorHints.bingeGroup == seriesBingeGroup;
         if (epMatch || seriesMatch) {
-            m_nextPrefetch->matchedChoice = c;
+            m_session.nextPrefetch->matchedChoice = c;
             break;
         }
     }
-    m_nextPrefetch->streamsLoaded = true;
+    m_session.nextPrefetch->streamsLoaded = true;
 
     // Phase 2 Batch 2.6 — Shift+N path: if the user fired the shortcut
     // while prefetch was still resolving, auto-play the moment a match
     // lands (no overlay, no countdown). No match → silent no-op per
     // TODO "No-op if no next episode".
-    if (m_nextShortcutPending) {
-        m_nextShortcutPending = false;
-        if (m_nextPrefetch->matchedChoice.has_value()) {
+    if (m_session.nextShortcutPending) {
+        m_session.nextShortcutPending = false;
+        if (m_session.nextPrefetch->matchedChoice.has_value()) {
             onNextEpisodePlayNow();
         }
     }
@@ -1382,19 +1382,19 @@ void StreamPage::onNextEpisodePrefetchStreams(
 
 void StreamPage::showNextEpisodeOverlay()
 {
-    if (!m_nextEpisodeOverlay || !m_nextPrefetch.has_value()) return;
+    if (!m_nextEpisodeOverlay || !m_session.nextPrefetch.has_value()) return;
 
     const QString seriesName = m_library
-        ? m_library->get(m_nextPrefetch->imdbId).name
+        ? m_library->get(m_session.nextPrefetch->imdbId).name
         : QString();
     const QString label = seriesName.isEmpty()
         ? QStringLiteral("S%1E%2")
-              .arg(m_nextPrefetch->season, 2, 10, QChar('0'))
-              .arg(m_nextPrefetch->episode, 2, 10, QChar('0'))
+              .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
+              .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'))
         : seriesName + QStringLiteral(" \u00B7 ")
               + QStringLiteral("S%1E%2")
-                    .arg(m_nextPrefetch->season, 2, 10, QChar('0'))
-                    .arg(m_nextPrefetch->episode, 2, 10, QChar('0'));
+                    .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
+                    .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'));
 
     if (m_nextEpisodeTitleLabel) {
         m_nextEpisodeTitleLabel->setText(tr("Up next: ") + label);
@@ -1434,26 +1434,31 @@ void StreamPage::onNextEpisodeCountdownTick()
 
 void StreamPage::onNextEpisodePlayNow()
 {
-    if (!m_nextPrefetch.has_value() || !m_nextPrefetch->matchedChoice.has_value()) {
+    if (!m_session.nextPrefetch.has_value() || !m_session.nextPrefetch->matchedChoice.has_value()) {
         // Defensive: no prefetch available. Treat as cancel.
         onNextEpisodeCancel();
         return;
     }
 
-    const auto choice = *m_nextPrefetch->matchedChoice;
-    const auto prefetchCopy = *m_nextPrefetch;
+    const auto choice = *m_session.nextPrefetch->matchedChoice;
+    const auto prefetchCopy = *m_session.nextPrefetch;
 
     hideNextEpisodeOverlay();
 
-    // Populate m_pendingPlay so onSourceActivated knows which episode this
-    // is — same shape onPlayRequested would have produced, minus the
+    // Populate m_session.pending so onSourceActivated knows which episode
+    // this is — same shape onPlayRequested would have produced, minus the
     // streams fan-out round-trip (we already have the matched choice).
-    m_pendingPlay.imdbId    = prefetchCopy.imdbId;
-    m_pendingPlay.mediaType = QStringLiteral("series");
-    m_pendingPlay.season    = prefetchCopy.season;
-    m_pendingPlay.episode   = prefetchCopy.episode;
-    m_pendingPlay.epKey     = prefetchCopy.epKey;
-    m_pendingPlay.valid     = true;
+    // Batch 1.3 — route through beginSession so the new episode's session
+    // gets a fresh generation + prior session's async closures are aborted
+    // at the boundary instead of firing against the new epKey.
+    PendingPlay p;
+    p.imdbId    = prefetchCopy.imdbId;
+    p.mediaType = QStringLiteral("series");
+    p.season    = prefetchCopy.season;
+    p.episode   = prefetchCopy.episode;
+    p.epKey     = prefetchCopy.epKey;
+    p.valid     = true;
+    beginSession(p.epKey, p, QStringLiteral("nextEpisodePlayNow"));
 
     // Reset prefetch + near-end so the next episode's playback can re-
     // prefetch when it approaches its own end.
@@ -1475,9 +1480,9 @@ void StreamPage::onNextEpisodeCancel()
 void StreamPage::resetNextEpisodePrefetch()
 {
     if (m_nextEpisodeCountdownTimer) m_nextEpisodeCountdownTimer->stop();
-    m_nextPrefetch.reset();
-    m_nearEndCrossed = false;
-    m_nextShortcutPending = false;
+    m_session.nextPrefetch.reset();
+    m_session.nearEndCrossed = false;
+    m_session.nextShortcutPending = false;
     // Drop any in-flight prefetch connections from MetaAggregator /
     // StreamAggregator — we reset them on each prefetch start anyway, but
     // safer to clear when fully canceling so stale lambdas don't accumulate.
@@ -1493,18 +1498,89 @@ void StreamPage::resetNextEpisodePrefetch()
     }
 }
 
+// STREAM_LIFECYCLE_FIX Phase 1 Batches 1.1 + 1.2 + 1.3 — PlaybackSession
+// foundation + full migration. 1.1 introduced the struct + generation
+// counter + beginSession/resetSession API. 1.2 migrated `_currentEpKey` +
+// m_pendingPlay + m_lastDeadlineUpdateMs. 1.3 migrated m_session.nextPrefetch +
+// m_session.nearEndCrossed + m_session.nextShortcutPending + m_seekRetryState (raw QObject*
+// identity-token pattern replaced with generation-check — first real
+// consumer of currentGeneration()/isCurrentGeneration()). 1.3 also fleshed
+// SeekRetryState, added reason param + wrap-guard + begin-log on
+// beginSession, and wired beginSession into the 4 session-start sites
+// (trailer paste, magnet paste, onPlayRequested, onNextEpisodePlayNow).
+// Phase 1 CLOSED at 1.3. Prototype credit:
+// agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp
+// (Agent 7, Codex) — shape adopted as-is modulo file-style conventions.
+
+quint64 StreamPage::currentGeneration() const
+{
+    return m_session.generation;
+}
+
+bool StreamPage::isCurrentGeneration(quint64 gen) const
+{
+    return gen != 0 && gen == m_session.generation;
+}
+
+quint64 StreamPage::beginSession(const QString& epKey, const PendingPlay& pending,
+                                 const QString& reason)
+{
+    resetSession(reason.isEmpty()
+                     ? QStringLiteral("beginSession")
+                     : QStringLiteral("beginSession:%1").arg(reason));
+
+    // Defensive wrap guard (prototype shape). quint64 doesn't wrap in
+    // practical lifetime, but if m_nextGeneration ever landed at 0 we'd
+    // stamp m_session.generation = 0 which is the "no-session" sentinel —
+    // breaking isValid() / isCurrentGeneration() contract silently.
+    if (m_nextGeneration == 0) m_nextGeneration = 1;
+
+    m_session.generation = m_nextGeneration++;
+    m_session.epKey      = epKey;
+    m_session.pending    = pending;
+
+    qInfo().noquote() << QStringLiteral("[stream-session] begin: gen=%1 epKey=%2")
+                             .arg(m_session.generation).arg(epKey);
+
+    return m_session.generation;
+}
+
+void StreamPage::resetSession(const QString& reason)
+{
+    // Same teardown shape as resetNextEpisodePrefetch (countdown timer stop +
+    // prefetch aggregator disconnect) plus a full state clear. Kept as a pure
+    // boundary: no showBrowse(), no signal emits, no player touches — callers
+    // decide what UI follows. Matches audit advisory #1's "single boundary"
+    // shape so every scattered inline reset can funnel here.
+    if (m_nextEpisodeCountdownTimer) m_nextEpisodeCountdownTimer->stop();
+    if (m_metaAggregator) {
+        disconnect(m_metaAggregator,
+                   &tankostream::stream::MetaAggregator::seriesMetaReady,
+                   this, nullptr);
+    }
+    if (m_streamAggregator) {
+        disconnect(m_streamAggregator,
+                   &tankostream::stream::StreamAggregator::streamsReady,
+                   this, nullptr);
+    }
+    m_session = PlaybackSession{};
+    qInfo().noquote() << QStringLiteral("[stream-session] reset: reason=%1")
+                             .arg(reason.isEmpty() ? QStringLiteral("unspecified")
+                                                    : reason);
+}
+
 void StreamPage::onStreamNextEpisodeShortcut()
 {
     // Only meaningful during an active series playback. Movies, empty
     // pendingPlay, or non-series mediaType → silent no-op per TODO.
-    if (!m_pendingPlay.valid) return;
-    if (m_pendingPlay.mediaType != QStringLiteral("series")) return;
-    if (m_pendingPlay.imdbId.isEmpty()) return;
+    if (!m_session.pending.valid) return;
+    if (m_session.pending.mediaType != QStringLiteral("series")) return;
+    if (m_session.pending.imdbId.isEmpty()) return;
 
     // Already resolved (user crossed 95% earlier in this playback). Skip
     // the countdown and play immediately.
-    if (m_nextPrefetch.has_value()
-        && m_nextPrefetch->matchedChoice.has_value())
+    if (m_session.nextPrefetch.has_value()
+        && m_session.nextPrefetch->matchedChoice.has_value())
     {
         onNextEpisodePlayNow();
         return;
@@ -1512,8 +1588,8 @@ void StreamPage::onStreamNextEpisodeShortcut()
 
     // Prefetch already in flight from near-end trigger — mark shortcut
     // pending so onNextEpisodePrefetchStreams auto-plays once match lands.
-    if (m_nextPrefetch.has_value() && !m_nextPrefetch->streamsLoaded) {
-        m_nextShortcutPending = true;
+    if (m_session.nextPrefetch.has_value() && !m_session.nextPrefetch->streamsLoaded) {
+        m_session.nextShortcutPending = true;
         return;
     }
 
@@ -1522,15 +1598,15 @@ void StreamPage::onStreamNextEpisodeShortcut()
     // the series-meta → next-unwatched resolve path from Batch 2.5;
     // if the series has no next unwatched episode, matchedChoice never
     // lands and the shortcut falls through to no-op silently.
-    m_nextShortcutPending = true;
-    startNextEpisodePrefetch(m_pendingPlay.imdbId,
-                             m_pendingPlay.season,
-                             m_pendingPlay.episode);
+    m_session.nextShortcutPending = true;
+    startNextEpisodePrefetch(m_session.pending.imdbId,
+                             m_session.pending.season,
+                             m_session.pending.episode);
 }
 
 void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice& choice)
 {
-    if (!m_pendingPlay.valid) return;   // late click after the user backed out
+    if (!m_session.pending.valid) return;   // late click after the user backed out
 
     // Phase 2 Batch 2.4 — if the user clicked a source card manually during
     // the auto-launch window, cancel the pending timer + hide the toast.
@@ -1541,14 +1617,14 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
         cancelAutoLaunch();
     }
 
-    const PendingPlay ctx = m_pendingPlay;
-    m_pendingPlay.valid = false;
+    const PendingPlay ctx = m_session.pending;
+    m_session.pending.valid = false;
 
     // Phase 2 Batch 2.5 — new playback starts. Reset near-end + prefetch
     // state so THIS episode's 95% crossing fires its own prefetch cycle,
     // independent of any prior binge from the previous episode.
-    m_nearEndCrossed = false;
-    m_nextPrefetch.reset();
+    m_session.nearEndCrossed = false;
+    m_session.nextPrefetch.reset();
 
     // Save choice for re-use — extended payload with addon + source-kind fields.
     // Same persistence shape the dialog used to write so loadChoice in
@@ -1584,7 +1660,7 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
         StreamChoices::saveSeriesChoice(ctx.imdbId, saved);
     }
 
-    setProperty("_currentEpKey", ctx.epKey);
+    m_session.epKey = ctx.epKey;
 
     m_mainStack->setCurrentIndex(2);
     m_bufferLabel->setText("Connecting...");
@@ -1640,7 +1716,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Use the controller's stored state instead
     connect(player, &VideoPlayer::progressUpdated, this,
         [this](const QString& /*path*/, double posSec, double durSec) {
-            QString epKey = property("_currentEpKey").toString();
+            QString epKey = m_session.epKey;
             if (epKey.isEmpty()) return;
             // Only save once real playback has started — ignore probe/initial 0-value updates
             if (posSec < 5.0 || durSec <= 0.0) return;
@@ -1655,8 +1731,8 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             // StreamEngine handles the byte-offset math + piece lookup; we
             // just gate + forward.
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-            if (nowMs - m_lastDeadlineUpdateMs >= 2000) {
-                m_lastDeadlineUpdateMs = nowMs;
+            if (nowMs - m_session.lastDeadlineUpdateMs >= 2000) {
+                m_session.lastDeadlineUpdateMs = nowMs;
                 const QString infoHash = m_playerController
                     ? m_playerController->currentInfoHash()
                     : QString();
@@ -1667,13 +1743,13 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
             // Phase 2 Batch 2.5 — near-end detection: at 95% OR within 60s
             // of duration, kick off pre-fetch of the next unwatched episode.
-            // `m_nearEndCrossed` guards the fire-once semantic; reset in
+            // `m_session.nearEndCrossed` guards the fire-once semantic; reset in
             // onSourceActivated when a new playback starts.
-            if (!m_nearEndCrossed && durSec > 0) {
+            if (!m_session.nearEndCrossed && durSec > 0) {
                 const double pct       = posSec / durSec;
                 const double remaining = durSec - posSec;
                 if (pct >= 0.95 || remaining <= 60.0) {
-                    m_nearEndCrossed = true;
+                    m_session.nearEndCrossed = true;
                     // Parse epKey to extract (imdbId, season, episode). Format:
                     //   "stream:ttXXXXXXX:s{n}:e{m}"   (series)
                     //   "stream:ttXXXXXXX"              (movie — no next)
@@ -1704,7 +1780,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             Qt::UniqueConnection);
 
     connect(player, &VideoPlayer::closeRequested, this, [this, player]() {
-        setProperty("_currentEpKey", QString());
+        m_session.epKey.clear();
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
@@ -1714,9 +1790,9 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
         // onStreamStopped, which calls showBrowse unless the overlay is
         // already visible. Reversing the order would race-condition the
         // overlay off-screen on the browse layer.
-        const bool overlayEligible = m_nearEndCrossed
-                                      && m_nextPrefetch.has_value()
-                                      && m_nextPrefetch->matchedChoice.has_value();
+        const bool overlayEligible = m_session.nearEndCrossed
+                                      && m_session.nextPrefetch.has_value()
+                                      && m_session.nextPrefetch->matchedChoice.has_value();
         if (overlayEligible) {
             player->hide();
             showNextEpisodeOverlay();
@@ -1741,7 +1817,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // finished).
     double streamResumeSec = 0.0;
     double streamSavedDur  = 0.0;
-    const QString epKey = property("_currentEpKey").toString();
+    const QString epKey = m_session.epKey;
     if (!epKey.isEmpty() && m_bridge) {
         const QJsonObject prog = m_bridge->progress("stream", epKey);
         const double savedPos = prog.value("positionSec").toDouble(0.0);
@@ -1774,11 +1850,11 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // at the top of onReadyToPlay. Every path below either launches the
     // player synchronously (and the orphan retry must not fire after) or
     // sets up a fresh retry state. One-shot invalidation here covers all
-    // exit paths without scattering the cancel call.
-    if (m_seekRetryState) {
-        m_seekRetryState->deleteLater();
-        m_seekRetryState = nullptr;
-    }
+    // exit paths without scattering the cancel call. (Batch 1.3: the
+    // generation-check in the retry closure below would also abort any
+    // orphan from a prior session, but clearing here is still valuable for
+    // same-session re-entries like an immediate re-open of the same URL.)
+    m_session.seekRetry.reset();
 
     auto launchPlayer = [this, player, httpUrl, streamResumeSec, mainWin]() {
         player->openFile(httpUrl, {}, 0, streamResumeSec);
@@ -1825,55 +1901,61 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             : QStringLiteral("Seeking to %1:%2...")
                   .arg(mm).arg(ss, 2, 10, QChar('0')));
 
-    // 2026-04-15 fix-up — cancel any outstanding retry state from a prior
-    // onReadyToPlay session before starting a new one. The prior
-    // QObject's pending QTimer::singleShot fires a retry lambda that
-    // captures the OLD retryState pointer via the shared_ptr closure;
-    // by setting m_seekRetryState to a new object here, that closure's
-    // `retryState != m_seekRetryState` check aborts it. Without this
-    // guard an orphan retry could fire a SECOND launchPlayer 300ms after
-    // the new session's synchronous launch, causing double openFile →
-    // stop+shutdown race → sidecar dies mid-boot → blank player.
-    if (m_seekRetryState) {
-        m_seekRetryState->deleteLater();
-    }
-    m_seekRetryState = new QObject(this);
-    QObject* retryState = m_seekRetryState;
-    retryState->setProperty("count", 0);
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 — seek-retry orphan guard now
+    // uses PlaybackSession generation instead of raw-QObject* identity.
+    // Pre-1.3: a prior onReadyToPlay session created `new QObject(this)`,
+    // stored the address in m_seekRetryState, and the retry closure
+    // compared its captured pointer against m_seekRetryState at fire time
+    // to detect replacement. Post-1.3: m_session.seekRetry is a
+    // std::shared_ptr<SeekRetryState> carrying the captured generation +
+    // attempt counter. The retry closure captures currentGeneration() at
+    // setup; `isCurrentGeneration(retryGen)` aborts silently on any
+    // session turnover. Closes the same class as the original fix
+    // (orphan retries post close/re-open → double openFile → sidecar
+    // boot race) via a more honest identity model — generation turns over
+    // atomically at resetSession boundary regardless of same-URL vs
+    // different-URL re-entry, whereas the raw pointer only turned over
+    // when onReadyToPlay itself was re-entered.
+    m_session.seekRetry.reset();  // cancel any prior (defensive; top-of-function also clears)
+    m_session.seekRetry = std::make_shared<SeekRetryState>();
+    m_session.seekRetry->generation = currentGeneration();
+    m_session.seekRetry->attempts   = 0;
+    const quint64 retryGen = m_session.seekRetry->generation;
 
     auto scheduleRetry = std::make_shared<std::function<void()>>();
     *scheduleRetry = [this, infoHash, streamResumeSec, streamSavedDur,
-                      launchPlayer, retryState, scheduleRetry]() {
-        // Generation check: if a newer onReadyToPlay replaced our state,
-        // abort silently — the new session owns launching.
-        if (retryState != m_seekRetryState) {
-            return;
-        }
+                      launchPlayer, retryGen, scheduleRetry]() {
+        // Generation check: if a newer session took over (user closed +
+        // re-opened, or source-switched mid-buffer), abort silently. New
+        // session owns launching. When retryGen == 0 (seek-retry armed
+        // without an active session — theoretically impossible once
+        // beginSession is wired into every session-start site, but defensive
+        // against a path that armed seek-retry without beginSession), the
+        // isCurrentGeneration check returns false and we abort.
+        if (!isCurrentGeneration(retryGen)) return;
+        if (!m_session.seekRetry) return;  // already cancelled
 
         // User navigated away / swapped sources / stream was cancelled.
         // Abort the retry loop silently; new play context owns the UI.
         if (!m_playerController
             || m_playerController->currentInfoHash() != infoHash)
         {
-            retryState->deleteLater();
-            m_seekRetryState = nullptr;
+            m_session.seekRetry.reset();
             return;
         }
 
-        const int count = retryState->property("count").toInt();
-        if (count >= 30) {
+        int& attempts = m_session.seekRetry->attempts;
+        if (attempts >= 30) {
             // 9s cap — launch anyway; Batch 1.2 HTTP retry handles rest.
-            retryState->deleteLater();
-            m_seekRetryState = nullptr;
+            m_session.seekRetry.reset();
             launchPlayer();
             return;
         }
-        retryState->setProperty("count", count + 1);
+        ++attempts;
         if (m_streamEngine->prepareSeekTarget(infoHash, streamResumeSec,
                                                streamSavedDur))
         {
-            retryState->deleteLater();
-            m_seekRetryState = nullptr;
+            m_session.seekRetry.reset();
             launchPlayer();
             return;
         }
@@ -1884,15 +1966,12 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
 void StreamPage::onStreamFailed(const QString& message)
 {
-    setProperty("_currentEpKey", QString());
+    m_session.epKey.clear();
     cancelAutoLaunch();   // Phase 2 Batch 2.4 — clear any pending resume UI.
     hideNextEpisodeOverlay();   // Phase 2 Batch 2.5 — clear next-ep state.
     resetNextEpisodePrefetch();
     // 2026-04-15 — cancel any pending seek-pre-gate retry on failure.
-    if (m_seekRetryState) {
-        m_seekRetryState->deleteLater();
-        m_seekRetryState = nullptr;
-    }
+    m_session.seekRetry.reset();
     // Disconnect any lingering progress connection + reset persistence mode
     // defensively — if setPersistenceMode(None) fired in onReadyToPlay but
     // playback never started cleanly, the next Videos-mode open would
@@ -1912,7 +1991,7 @@ void StreamPage::onStreamFailed(const QString& message)
 
 void StreamPage::onStreamStopped()
 {
-    setProperty("_currentEpKey", QString());
+    m_session.epKey.clear();
     // Disconnect any lingering progress connection + reset persistence mode
     // so Videos-mode reclaims its own progress path.
     if (auto* player = window() ? window()->findChild<VideoPlayer*>() : nullptr) {

@@ -9,6 +9,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <memory>
 #include <optional>
 
 #include "core/stream/addon/MetaItem.h"
@@ -268,7 +269,8 @@ private:
         QString epKey;
         bool    valid   = false;
     };
-    PendingPlay m_pendingPlay;
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.2 — m_pendingPlay folded into
+    // PlaybackSession (see m_session.pending near end of class).
 
     // Phase 2 Batch 2.4 — auto-launch timer + buffered choice. The timer
     // fires 2s after StreamPage arms it (enough for the user to notice the
@@ -279,11 +281,11 @@ private:
 
     // Phase 2 Batch 2.5 — next-episode pre-fetch + end-of-playback overlay.
     // Pre-fetch is kicked off once the current episode crosses 95%. Result
-    // lands in m_nextPrefetch.matchedChoice when streams + bingeGroup resolve.
-    // On closeRequested (after near-end was crossed AND a matched choice is
-    // available), the overlay is shown on the player layer with a 10s
-    // countdown → auto-opens the next episode via the same onSourceActivated
-    // entry point user-click uses. Cancel returns to browse.
+    // lands in m_session.nextPrefetch->matchedChoice when streams + bingeGroup
+    // resolve. On closeRequested (after near-end was crossed AND a matched
+    // choice is available), the overlay is shown on the player layer with a
+    // 10s countdown → auto-opens the next episode via the same
+    // onSourceActivated entry point user-click uses. Cancel returns to browse.
     struct NextEpisodePrefetch {
         QString imdbId;
         int     season  = 0;
@@ -292,33 +294,30 @@ private:
         std::optional<tankostream::stream::StreamPickerChoice> matchedChoice;
         bool    streamsLoaded     = false;
     };
-    std::optional<NextEpisodePrefetch> m_nextPrefetch;
-    bool    m_nearEndCrossed = false;
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 — m_nextPrefetch + m_nearEndCrossed
+    // + m_nextShortcutPending folded into PlaybackSession (see
+    // m_session.nextPrefetch / .nearEndCrossed / .nextShortcutPending).
 
-    // Phase 2 Batch 2.6 — set by onStreamNextEpisodeShortcut when the
-    // prefetch isn't ready at key-press time. onNextEpisodePrefetchStreams
-    // checks this flag after resolving matchedChoice and auto-plays
-    // (skipping the overlay + countdown) if set. Cleared on fire or on
-    // any prefetch reset path.
-    bool    m_nextShortcutPending = false;
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.2 — m_lastDeadlineUpdateMs folded
+    // into PlaybackSession (see m_session.lastDeadlineUpdateMs). The
+    // 2s-gate rationale (rate-limit libtorrent deadline retargeting vs
+    // ~1Hz progress ticks) lives at the consumer site in
+    // StreamPage::onReadyToPlay's progressUpdated lambda.
 
-    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
-    // retargeting rate-limiter. progressUpdated fires ~1Hz; without a
-    // gate we'd thrash libtorrent's deadline table. 2s matches
-    // Stremio-class cadence — reader-frontier rarely moves more than
-    // a few MB per 2s at typical bitrates, keeping piece churn bounded.
-    qint64  m_lastDeadlineUpdateMs = 0;
-
-    // STREAM_PLAYBACK_FIX Batch 2.4 fix-up 2026-04-15 — the seek pre-gate
-    // retry state (QObject parented to StreamPage, holds an iteration
-    // counter and a pending QTimer::singleShot). If a prior onReadyToPlay
-    // session scheduled a retry and the user closed / re-opened the same
-    // stream before the 300ms timer fired, the orphan retry would fire a
-    // SECOND launchPlayer for the same URL — racing the fresh openFile's
-    // sidecar boot with a stop+shutdown+open and killing playback.
-    // Storing the state as a member lets onReadyToPlay cancel any
-    // outstanding retry before starting a new one. Single-instance.
-    QObject* m_seekRetryState = nullptr;
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 — m_seekRetryState folded into
+    // PlaybackSession (see m_session.seekRetry, type
+    // std::shared_ptr<SeekRetryState>). The raw-QObject*-identity-token
+    // pattern (`retryState != m_seekRetryState` orphan check) was replaced
+    // with a generation-check pattern (closure captures currentGeneration()
+    // at creation, checks isCurrentGeneration(gen) at fire time). The
+    // captured-generation model is the first real consumer of the new API.
+    // Original rationale (STREAM_PLAYBACK_FIX Batch 2.4 fix-up 2026-04-15):
+    // prior to this state-member, orphan QTimer::singleShot retries could
+    // fire a SECOND launchPlayer for the same URL across a user
+    // close/re-open, racing the fresh openFile's sidecar boot and killing
+    // playback. The generation-check closes that class entirely — a retry
+    // scheduled under generation N is inert under any generation != N,
+    // regardless of same-URL or different-URL session.
 
     QFrame*      m_nextEpisodeOverlay        = nullptr;
     QLabel*      m_nextEpisodeTitleLabel     = nullptr;
@@ -327,4 +326,55 @@ private:
     QPushButton* m_nextEpisodeCancelBtn      = nullptr;
     QTimer*      m_nextEpisodeCountdownTimer = nullptr;
     int          m_nextEpisodeCountdownSec   = 10;
+
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.1 — PlaybackSession foundation.
+    // Consolidates the 7 session-scoped fields scattered inline today so every
+    // async closure / timer / signal callback can check session identity via a
+    // single monotonic generation counter. Batch 1.1 introduces the type +
+    // boundary API only; Batches 1.2 + 1.3 migrate consumers. Existing state
+    // members above stay in place during the migration window.
+    //
+    // SeekRetryState — Batch 1.3 fleshed. Carries the captured generation
+    // and iteration counter for the onReadyToPlay seek-retry closure.
+    // Shape adopted from Agent 7's prototype at
+    // agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp.
+    // Replaces the raw-QObject*-identity-token pattern that existed pre-1.3
+    // (where `retryState != m_seekRetryState` was the orphan check).
+    struct SeekRetryState {
+        quint64 generation = 0;   // generation captured at seek-retry setup
+        int     attempts   = 0;   // iteration counter, capped at 30 (9s)
+    };
+
+    struct PlaybackSession {
+        quint64 generation = 0;            // 0 reserved: "no active session"
+        QString epKey;                      // Batch 1.2 migrated (was `_currentEpKey` dynamic property)
+        PendingPlay pending;                // Batch 1.2 migrated (was m_pendingPlay)
+        std::optional<NextEpisodePrefetch> nextPrefetch;  // Batch 1.3 migrated (was m_nextPrefetch)
+        bool nearEndCrossed = false;        // Batch 1.3 migrated (was m_nearEndCrossed)
+        bool nextShortcutPending = false;   // Batch 1.3 migrated (was m_nextShortcutPending)
+        qint64 lastDeadlineUpdateMs = 0;    // Batch 1.2 migrated (was m_lastDeadlineUpdateMs)
+        std::shared_ptr<SeekRetryState> seekRetry;  // Batch 1.3 migrated (was raw QObject* m_seekRetryState)
+
+        bool isValid() const { return generation != 0 && !epKey.isEmpty(); }
+    };
+
+    PlaybackSession m_session;
+    quint64 m_nextGeneration = 1;  // Monotonic; never wraps in practical lifetime. 0 reserved.
+
+    // Accessors — async closures capture currentGeneration() at creation and
+    // check isCurrentGeneration(gen) at fire time to reject stale callbacks.
+    quint64 currentGeneration() const;
+    bool    isCurrentGeneration(quint64 gen) const;
+
+    // Boundaries — single points of session start / teardown. resetSession is
+    // pure state teardown: no navigation, no signal emission, no player
+    // touches. Callers decide what UI follows. beginSession clears prior
+    // state via resetSession first, then stamps the new generation and
+    // returns it for the caller to capture in async closures. The optional
+    // `reason` arg on beginSession routes into the reset log as
+    // `beginSession:<reason>` for finer-grained traceability — adopted from
+    // Agent 7's prototype shape.
+    quint64 beginSession(const QString& epKey, const PendingPlay& pending,
+                         const QString& reason = {});
+    void    resetSession(const QString& reason);
 };
