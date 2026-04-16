@@ -5,11 +5,13 @@ add_executable(sidecar_tests
     test_subtitle_renderer.cpp
     test_hwaccel.cpp
     test_filter_graph.cpp
+    test_overlay_renderer.cpp
     ../src/protocol.cpp
     ../src/ring_buffer.cpp
     ../src/encoding_detect.cpp
     ../src/subtitle_renderer.cpp
     ../src/filter_graph.cpp
+    ../src/overlay_renderer.cpp
 )
 
 target_include_directories(sidecar_tests PRIVATE

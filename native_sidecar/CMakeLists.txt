@@ -117,6 +117,7 @@ add_executable(ffmpeg_sidecar
     src/subtitle_renderer.cpp
     src/filter_graph.cpp
     src/d3d11_presenter.cpp
+    src/overlay_renderer.cpp
 )
 
 if(HAS_LIBPLACEBO)
