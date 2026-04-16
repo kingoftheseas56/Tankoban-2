@@ -96,6 +96,16 @@ signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
     void progressUpdated(const QString& path, double positionSec, double durationSec);
+
+    // PLAYER_UX_FIX Phase 1.2 — sidecar lifecycle plumbing. Fired when the
+    // sidecar reports `state_changed{opening}` (right after handle_open
+    // ack'd the open command; probe + decoder setup in flight) and
+    // `state_changed{idle}` (decoder torn down via eof / stop / open
+    // failure). Phase 2.3 will connect these to a Loading HUD widget; for
+    // Phase 1 they fire with debug logs only so the timing can be
+    // verified empirically in _player_debug.txt.
+    void playerOpeningStarted(const QString& filename);
+    void playerIdle();
     // STREAM_UX_PARITY Batch 2.6 — emitted when the Shift+N
     // `stream_next_episode` binding fires. Stream mode (StreamPage)
     // connects to this; local-playlist playback ignores it. VideoPlayer
@@ -130,6 +140,21 @@ private:
     // both openFile (file-switch path) and stopPlayback (user-close
     // path); the process-teardown step is what differs between them.
     void teardownUi();
+
+    // PLAYER_UX_FIX Phase 6.4 — cross-chip popover exclusion helper.
+    // Hides whichever of m_filterPopover / m_eqPopover / m_trackPopover /
+    // m_playlistDrawer is currently open, EXCEPT the one passed as
+    // `keep` (may be nullptr to dismiss all). Called from each chip
+    // click handler before toggling that chip's own popover, and from
+    // keyPressEvent's ESC handler with keep=nullptr. Also syncs the
+    // corresponding chip's :checked state to false when a popover is
+    // force-hidden here.
+    void dismissOtherPopovers(class QWidget* keep);
+
+    // Phase 6.1 — called from openFile (enable=true) and teardownUi
+    // intentional-stop (enable=false) to reflect file-open state on the
+    // chip :disabled pseudo-state.
+    void setChipsEnabled(bool enable);
 
     void togglePause();
     void toggleFullscreen();
@@ -264,6 +289,12 @@ private:
     SyncClock       m_syncClock;
     VolumeHud*        m_volumeHud        = nullptr;
     CenterFlash*      m_centerFlash      = nullptr;
+    // PLAYER_UX_FIX Phase 2.3 — centered overlay for "Loading — filename"
+    // (during sidecar opening window) and "Buffering…" (during stream
+    // HTTP stall). Bound to playerOpeningStarted / playerIdle (Phase 1.2)
+    // and SidecarProcess::bufferingStarted / bufferingEnded (Phase 2.2),
+    // plus firstFrame as the primary dismiss trigger.
+    class LoadingOverlay* m_loadingOverlay = nullptr;
     PlaylistDrawer*   m_playlistDrawer   = nullptr;
     StatsBadge*       m_statsBadge       = nullptr;
     ToastHud*         m_toastHud         = nullptr;

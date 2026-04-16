@@ -92,6 +92,7 @@ set(SOURCES
     src/ui/player/EqualizerPopover.cpp
     src/ui/player/VsyncTimingLogger.cpp
     src/ui/player/CenterFlash.cpp
+    src/ui/player/LoadingOverlay.cpp
     src/ui/player/ToastHud.cpp
     src/ui/player/PlaylistDrawer.cpp
     src/ui/player/SubtitleOverlay.cpp

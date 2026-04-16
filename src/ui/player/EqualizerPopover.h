@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QComboBox>
 
 // 10-band audio equalizer popover.
 // Frequencies: 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz.
@@ -46,6 +47,18 @@ private:
     void resetAll();
     void anchorAbove(QWidget* anchor);
 
+    // PLAYER_UX_FIX Phase 6.3 — preset + custom-profile management.
+    // Eight built-in presets (Flat / Rock / Pop / Jazz / Classical /
+    // Bass Boost / Treble Boost / Vocal Boost) plus any user-saved
+    // custom profiles persisted under QSettings "eq/profiles".
+    // populatePresetCombo rebuilds the combo on init + after saves.
+    // applyPreset pushes a named preset's band gains into the sliders
+    // (triggers eqChanged via the debounce). saveCurrentAsPreset
+    // prompts for a name and persists the current slider state.
+    void populatePresetCombo();
+    void applyPreset(const QString& name);
+    void saveCurrentAsPreset();
+
     static constexpr int BAND_COUNT = 10;
     static constexpr int BAND_FREQS[BAND_COUNT] = {31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
     static constexpr const char* BAND_LABELS[BAND_COUNT] = {
@@ -61,4 +74,12 @@ private:
 
     // Batch 4.3 — Dynamic Range Compression toggle. Default unchecked.
     QCheckBox* m_drcCheck = nullptr;
+
+    // PLAYER_UX_FIX Phase 6.3 — preset combo + save button.
+    QComboBox*   m_presetCombo = nullptr;
+    QPushButton* m_saveBtn     = nullptr;
+    // When applying a preset programmatically, suppress the slider's
+    // onSliderChanged → debounce → eqChanged chain per-band; emit once
+    // at the end of applyPreset to avoid 10x filter-chain rebuild.
+    bool m_applyingPreset = false;
 };

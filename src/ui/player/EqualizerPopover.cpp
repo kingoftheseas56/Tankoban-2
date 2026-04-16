@@ -2,10 +2,33 @@
 
 #include <QApplication>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QMouseEvent>
+#include <QSettings>
 #include <QVBoxLayout>
 
 constexpr int EqualizerPopover::BAND_FREQS[];
+
+// PLAYER_UX_FIX Phase 6.3 — built-in preset gains (dB per band, 10 bands
+// at 31/62/125/250/500/1k/2k/4k/8k/16k Hz). Matches industry-standard
+// graphic-EQ starting points; users tweak from these or save customs.
+namespace {
+struct EqPreset {
+    const char* name;
+    int gains[10];
+};
+constexpr EqPreset BUILTIN_PRESETS[] = {
+    { "Flat",          {  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 } },
+    { "Rock",          { +5, +3, -2, -5, -3, -2, +2, +5, +6, +6 } },
+    { "Pop",           { -1, +1, +3, +4, +4, +2,  0, -1, -1, -1 } },
+    { "Jazz",          { +3, +2, +1, +2, -2, -2,  0, +1, +2, +3 } },
+    { "Classical",     { +3, +2, +1,  0,  0,  0, -2, -2, -2, -3 } },
+    { "Bass Boost",    { +8, +7, +5, +3, +1,  0,  0,  0,  0,  0 } },
+    { "Treble Boost",  {  0,  0,  0,  0, +1, +2, +3, +5, +6, +7 } },
+    { "Vocal Boost",   { -3, -2, -1, +2, +4, +5, +4, +2, -1, -2 } },
+};
+constexpr int BUILTIN_COUNT = sizeof(BUILTIN_PRESETS) / sizeof(BUILTIN_PRESETS[0]);
+}  // namespace
 
 EqualizerPopover::EqualizerPopover(QWidget* parent)
     : QFrame(parent)
@@ -30,6 +53,44 @@ EqualizerPopover::EqualizerPopover(QWidget* parent)
         "color: rgba(214,194,164,240); font-size: 10px; font-weight: 700; border: none;"
     );
     lay->addWidget(header);
+
+    // PLAYER_UX_FIX Phase 6.3 — preset combo + save button.
+    // Row sits above the band sliders; matches QMPlay2 + IINA's EQ
+    // profile-picker pattern. Custom profiles persist under QSettings
+    // "eq/profiles/<name>" and append to this combo's model after the
+    // built-ins. The "Save as…" button prompts for a name and stores
+    // the current slider state.
+    auto* presetRow = new QHBoxLayout();
+    presetRow->setSpacing(6);
+
+    m_presetCombo = new QComboBox();
+    m_presetCombo->setStyleSheet(
+        "QComboBox { background: rgba(40,40,40,230); color: rgba(220,220,220,240);"
+        "  border: 1px solid rgba(255,255,255,30); border-radius: 4px;"
+        "  padding: 3px 8px; font-size: 10px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background: rgb(30,30,30);"
+        "  color: rgba(220,220,220,240); selection-background-color: rgba(214,194,164,80); }"
+    );
+    populatePresetCombo();
+    // activated (user picked) vs currentIndexChanged (any change) — we
+    // want to react only to user picks, not programmatic refreshes.
+    connect(m_presetCombo, QOverload<int>::of(&QComboBox::activated), this,
+            [this](int) { applyPreset(m_presetCombo->currentText()); });
+    presetRow->addWidget(m_presetCombo, 1);
+
+    m_saveBtn = new QPushButton("Save as\u2026");   // "…" U+2026
+    m_saveBtn->setStyleSheet(
+        "QPushButton { background: rgba(40,40,40,230); color: #ccc;"
+        "  border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;"
+        "  padding: 3px 10px; font-size: 10px; }"
+        "QPushButton:hover { background: rgba(60,60,60,230); }"
+    );
+    connect(m_saveBtn, &QPushButton::clicked, this,
+            &EqualizerPopover::saveCurrentAsPreset);
+    presetRow->addWidget(m_saveBtn);
+
+    lay->addLayout(presetRow);
 
     // Band sliders (vertical, side by side)
     auto* bandsRow = new QHBoxLayout();
@@ -121,7 +182,125 @@ void EqualizerPopover::onSliderChanged()
 {
     for (int i = 0; i < BAND_COUNT; ++i)
         m_valLabels[i]->setText(QString::number(m_sliders[i]->value()));
-    m_debounce.start();
+    // Phase 6.3 — suppress per-band debounce restart during programmatic
+    // preset application; applyPreset emits eqChanged once after all 10
+    // bands settle to avoid 10x filter-chain rebuild on the sidecar.
+    if (!m_applyingPreset) {
+        m_debounce.start();
+    }
+}
+
+void EqualizerPopover::populatePresetCombo()
+{
+    // PLAYER_UX_FIX Phase 6.3 — rebuild the combo's model with built-ins
+    // followed by user-saved profiles. Called once on construction and
+    // again after saveCurrentAsPreset persists a new one.
+    const QString prior = m_presetCombo
+        ? m_presetCombo->currentText()
+        : QString();
+    m_presetCombo->blockSignals(true);
+    m_presetCombo->clear();
+
+    // Built-ins first — "Flat" is the synthetic default when all bands
+    // are zero. A separator between built-ins and user profiles helps
+    // readability but isn't strictly required.
+    for (const auto& p : BUILTIN_PRESETS) {
+        m_presetCombo->addItem(QString::fromLatin1(p.name));
+    }
+
+    // Load user profiles from QSettings "eq/profiles" (QVariantMap of
+    // <name> → QString gains "g0,g1,...,g9"). Append to combo.
+    QSettings s("Tankoban", "Tankoban");
+    s.beginGroup("eq/profiles");
+    const QStringList userNames = s.childKeys();
+    s.endGroup();
+    if (!userNames.isEmpty()) {
+        m_presetCombo->insertSeparator(m_presetCombo->count());
+        for (const QString& name : userNames) {
+            m_presetCombo->addItem(name);
+        }
+    }
+
+    // Preserve prior selection if still present.
+    if (!prior.isEmpty()) {
+        const int idx = m_presetCombo->findText(prior);
+        if (idx >= 0) m_presetCombo->setCurrentIndex(idx);
+    }
+    m_presetCombo->blockSignals(false);
+}
+
+void EqualizerPopover::applyPreset(const QString& name)
+{
+    if (name.isEmpty()) return;
+
+    // Resolve: built-in? user profile?
+    int gains[BAND_COUNT] = {};
+    bool resolved = false;
+
+    for (const auto& p : BUILTIN_PRESETS) {
+        if (name == QString::fromLatin1(p.name)) {
+            for (int i = 0; i < BAND_COUNT; ++i) gains[i] = p.gains[i];
+            resolved = true;
+            break;
+        }
+    }
+
+    if (!resolved) {
+        QSettings s("Tankoban", "Tankoban");
+        const QString key = QStringLiteral("eq/profiles/") + name;
+        if (s.contains(key)) {
+            const QStringList parts = s.value(key).toString().split(',');
+            if (parts.size() == BAND_COUNT) {
+                for (int i = 0; i < BAND_COUNT; ++i) {
+                    gains[i] = qBound(-12, parts[i].toInt(), 12);
+                }
+                resolved = true;
+            }
+        }
+    }
+
+    if (!resolved) return;
+
+    // Apply all 10 bands with the apply-preset guard active so each
+    // per-band onSliderChanged skips the debounce. Emit eqChanged once
+    // at the end so the sidecar rebuilds its audio filter exactly once.
+    m_applyingPreset = true;
+    for (int i = 0; i < BAND_COUNT; ++i) {
+        m_sliders[i]->setValue(gains[i]);
+    }
+    m_applyingPreset = false;
+    emit eqChanged(filterString());
+}
+
+void EqualizerPopover::saveCurrentAsPreset()
+{
+    // Prompt for name; blank or cancelled → no-op. Names that collide
+    // with a built-in are rejected (prevents overriding "Flat" etc.).
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, QStringLiteral("Save EQ Profile"),
+        QStringLiteral("Profile name:"),
+        QLineEdit::Normal, QString(), &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+
+    for (const auto& p : BUILTIN_PRESETS) {
+        if (name == QString::fromLatin1(p.name)) return;   // reserved
+    }
+
+    // Serialize gains as a simple comma-separated int list — simpler
+    // than QVariantList for QSettings round-trip on Windows.
+    QStringList parts;
+    for (int i = 0; i < BAND_COUNT; ++i) {
+        parts.append(QString::number(m_sliders[i]->value()));
+    }
+
+    QSettings s("Tankoban", "Tankoban");
+    s.setValue(QStringLiteral("eq/profiles/") + name, parts.join(','));
+
+    // Refresh combo + select the just-saved profile.
+    populatePresetCombo();
+    const int idx = m_presetCombo->findText(name);
+    if (idx >= 0) m_presetCombo->setCurrentIndex(idx);
 }
 
 void EqualizerPopover::resetAll()

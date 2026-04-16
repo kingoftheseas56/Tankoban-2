@@ -5,6 +5,7 @@
 #include "ui/player/FrameCanvas.h"
 #include "ui/player/VolumeHud.h"
 #include "ui/player/CenterFlash.h"
+#include "ui/player/LoadingOverlay.h"
 #include "ui/player/KeybindingEditor.h"
 #include "ui/player/StatsBadge.h"
 #include "ui/player/PlaylistDrawer.h"
@@ -42,6 +43,7 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QStyle>   // Phase 6.1 — style()->polish() for dynamic [active="true"] property
 #include <QCryptographicHash>
 #include <QMenu>
 #include <QContextMenuEvent>
@@ -308,6 +310,10 @@ void VideoPlayer::openFile(const QString& filePath,
     // and doesn't touch the token; leaving it armed across a warm switch
     // is harmless — any intervening crash-recovery would re-consume it.
     m_openPending = true;
+    // PLAYER_UX_FIX Phase 6.1 — a file is now in flight; re-enable chips
+    // (teardownUi's intentional-stop block disabled them on the prior
+    // close). Chip :disabled pseudo-state clears on the next repaint.
+    setChipsEnabled(true);
     // Fresh file — re-apply preferences on the next tracks_changed.
     m_tracksRestored = false;
     // Reset aspect override: each new file starts with "Original" so the
@@ -388,6 +394,43 @@ void VideoPlayer::openFile(const QString& filePath,
     showControls();
 }
 
+void VideoPlayer::dismissOtherPopovers(QWidget* keep)
+{
+    // PLAYER_UX_FIX Phase 6.4 — centralized popover dismiss logic.
+    // Called from each chip's click handler before toggling (so only one
+    // popover is ever visible) and from keyPressEvent ESC with
+    // keep=nullptr to dismiss whichever is open. Chip :checked state
+    // synced to false here so the chip's visual open-state clears when
+    // its popover is force-hidden.
+    if (m_filterPopover && m_filterPopover != keep && m_filterPopover->isOpen()) {
+        m_filterPopover->hide();
+        if (m_filtersChip) m_filtersChip->setChecked(false);
+    }
+    if (m_eqPopover && m_eqPopover != keep && m_eqPopover->isOpen()) {
+        m_eqPopover->hide();
+        if (m_eqChip) m_eqChip->setChecked(false);
+    }
+    if (m_trackPopover && m_trackPopover != keep && m_trackPopover->isOpen()) {
+        m_trackPopover->hide();
+        if (m_trackChip) m_trackChip->setChecked(false);
+    }
+    if (m_playlistDrawer && m_playlistDrawer != keep && m_playlistDrawer->isOpen()) {
+        m_playlistDrawer->hide();
+        if (m_playlistChip) m_playlistChip->setChecked(false);
+    }
+}
+
+void VideoPlayer::setChipsEnabled(bool enable)
+{
+    // Phase 6.1 — toggles the :disabled pseudo-state on all four chips.
+    // Playlist chip also gets disabled when no file is open, matching the
+    // "nothing to interact with" invariant (playlist is empty anyway).
+    if (m_filtersChip) m_filtersChip->setEnabled(enable);
+    if (m_eqChip)      m_eqChip->setEnabled(enable);
+    if (m_trackChip)   m_trackChip->setEnabled(enable);
+    if (m_playlistChip) m_playlistChip->setEnabled(enable);
+}
+
 void VideoPlayer::teardownUi()
 {
     // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown split out of
@@ -415,6 +458,41 @@ void VideoPlayer::teardownUi()
     // Batch 5.3 — clear Tankostream external subs so the next stream/file
     // doesn't inherit a stale addon track list in the SubtitleMenu.
     if (m_subMenu) m_subMenu->setExternalTracks({}, {});
+
+    // PLAYER_UX_FIX Phase 3 Batch 3.1 — reset user-visible HUD surfaces
+    // to a clean "loading" state on video switch / user close. Without
+    // this, time labels / seekbar / chip text would show the previous
+    // file's data until the new session's first time_update +
+    // tracks_changed arrived (which after Phase 1.1 is pre-first-frame
+    // but still ~1s+ on slow opens). Phase 2.3's LoadingOverlay visually
+    // occupies this cleaned state; the pill + reset-to-clean HUD compose
+    // as the unified "opening" visual.
+    //
+    // Scope note: EQ + Filter state is process-wide (persists across
+    // files), not per-file — resetting the chip TEXT to generic labels
+    // here briefly mis-represents active state until the next filter-
+    // state emit re-populates. Following TODO spec literally; Hemanth
+    // flag if this is a regression (trivial revert: drop the two lines).
+    m_durationSec = 0.0;
+    if (m_timeLabel)   m_timeLabel->setText(QStringLiteral("\u2014:\u2014"));
+    if (m_durLabel)    m_durLabel->setText(QStringLiteral("\u2014:\u2014"));
+    if (m_seekBar) {
+        m_seekBar->blockSignals(true);
+        m_seekBar->setValue(0);
+        m_seekBar->setDurationSec(0.0);
+        m_seekBar->blockSignals(false);
+    }
+    if (m_trackChip)   m_trackChip->setText(QStringLiteral("Tracks"));
+    if (m_eqChip)      m_eqChip->setText(QStringLiteral("EQ"));
+    if (m_filtersChip) m_filtersChip->setText(QStringLiteral("Filters"));
+    if (m_statsBadge)  m_statsBadge->hide();
+    // Dismiss any open chip popovers so their next open shows fresh
+    // content. TrackPopover reads from m_audioTracks/m_subTracks which
+    // were cleared above; EqualizerPopover / FilterPopover keep their
+    // process-wide state, just hide the window.
+    if (m_trackPopover  && m_trackPopover->isOpen())  m_trackPopover->hide();
+    if (m_eqPopover     && m_eqPopover->isOpen())     m_eqPopover->hide();
+    if (m_filterPopover && m_filterPopover->isOpen()) m_filterPopover->hide();
 }
 
 void VideoPlayer::stopPlayback(bool isIntentional)
@@ -453,6 +531,12 @@ void VideoPlayer::stopPlayback(bool isIntentional)
         m_playlistIdx = 0;
         m_lastKnownPosSec = 0.0;
         m_openPending = false;
+        // PLAYER_UX_FIX Phase 6.1 — disable chips on intentional close
+        // so the :disabled pseudo-state kicks in. Re-enabled by openFile
+        // on the next play start. Crash-recovery path leaves chips
+        // enabled (isIntentional=false) because playback resumes on its
+        // own — no user-action-required "nothing open" state.
+        setChipsEnabled(false);
     }
 }
 
@@ -581,6 +665,20 @@ void VideoPlayer::onStateChanged(const QString& state)
     } else if (state == "playing") {
         m_paused = false;
         updatePlayPauseIcon();
+    } else if (state == "opening") {
+        // PLAYER_UX_FIX Phase 1.2 — sidecar ack'd the open command, probe
+        // + decoder setup in flight. Metadata (tracks_changed + media_info)
+        // arrives post-probe courtesy of Phase 1.1; first_frame follows.
+        // No UI binding yet — Phase 2.3 will connect playerOpeningStarted
+        // to the Loading HUD widget.
+        debugLog("[VideoPlayer] state=opening file=" + m_pendingFile);
+        emit playerOpeningStarted(m_pendingFile);
+    } else if (state == "idle") {
+        // PLAYER_UX_FIX Phase 1.2 — sidecar torn down decode (eof, stop,
+        // or probe/open failure). Phase 2.3's Loading HUD dismisses on
+        // this edge.
+        debugLog("[VideoPlayer] state=idle");
+        emit playerIdle();
     }
 }
 
@@ -774,7 +872,14 @@ void VideoPlayer::buildUI()
         "QPushButton:hover { background: rgba(255,255,255,0.08); border-radius: 6px; }"
         "QPushButton:pressed { background: rgba(255,255,255,0.04); }";
 
-    // Chip button style (3-stop gradient)
+    // Chip button style (3-stop gradient).
+    // PLAYER_UX_FIX Phase 6.1 adds three additional visual states beyond
+    // the prior normal+hover pair: :checked (popover open), dynamic
+    // property [active="true"] (the chip's feature is on — e.g. EQ preset
+    // applied, filters configured), and :disabled (no file open). All
+    // monochrome per feedback_no_color_no_emoji — the "active" indicator
+    // is an off-white left-border strip that composes with the :checked
+    // pressed-gradient.
     auto chipStyle =
         "QPushButton {"
         "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
@@ -788,7 +893,31 @@ void VideoPlayer::buildUI()
         "}"
         "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
         "  stop:0 rgba(80,80,80,0.95), stop:0.5 rgba(56,56,56,0.98),"
-        "  stop:1 rgba(36,36,36,0.98)); }";
+        "  stop:1 rgba(36,36,36,0.98)); }"
+        // Open state (popover showing): darker pressed-look gradient +
+        // brighter border. Driven by setChecked(true) whenever the chip's
+        // companion popover goes visible.
+        "QPushButton:checked {"
+        "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        "    stop:0 rgba(30,30,30,0.98), stop:0.5 rgba(20,20,20,0.98),"
+        "    stop:1 rgba(12,12,12,0.98));"
+        "  border: 1px solid rgba(255,255,255,0.38);"
+        "}"
+        // Active state (EQ preset applied, filters configured, subtitle
+        // track chosen). Dynamic property [active="true"] is toggled at
+        // each chip's state-update call site; style()->polish() must be
+        // called after setProperty to re-apply the CSS.
+        "QPushButton[active=\"true\"] {"
+        "  border-left: 3px solid rgba(245,245,245,0.75);"
+        "  padding-left: 8px;"  // compensate padding so text doesn't shift
+        "}"
+        // Disabled state (no file open). Applied via setEnabled(false)
+        // from openFile enable / teardownUi intentional-stop disable.
+        "QPushButton:disabled {"
+        "  background: rgba(30,30,30,0.60);"
+        "  color: rgba(245,245,245,0.35);"
+        "  border: 1px solid rgba(255,255,255,0.08);"
+        "}";
 
     // ── Row 1: Seek row ──────────────────────────────────────────────
     auto* seekRow = new QHBoxLayout();
@@ -1007,34 +1136,57 @@ void VideoPlayer::buildUI()
     m_filtersChip->setCursor(Qt::PointingHandCursor);
     m_filtersChip->setFocusPolicy(Qt::NoFocus);
     m_filtersChip->setStyleSheet(chipStyle);
+    m_filtersChip->setCheckable(true);  // Phase 6.1 — :checked for open state
     connect(m_filtersChip, &QPushButton::clicked, this, [this]() {
+        // Phase 6.4 — cross-chip exclusion: close any other open popover
+        // before toggling our own, so only one popover is ever visible.
+        dismissOtherPopovers(m_filterPopover);
         m_filterPopover->toggle(m_filtersChip);
+        m_filtersChip->setChecked(m_filterPopover->isOpen());
     });
 
     m_eqChip = new QPushButton("EQ", m_controlBar);
     m_eqChip->setCursor(Qt::PointingHandCursor);
     m_eqChip->setFocusPolicy(Qt::NoFocus);
     m_eqChip->setStyleSheet(chipStyle);
+    m_eqChip->setCheckable(true);
     connect(m_eqChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_eqPopover);
         m_eqPopover->toggle(m_eqChip);
+        m_eqChip->setChecked(m_eqPopover->isOpen());
     });
 
     m_trackChip = new QPushButton("Tracks", m_controlBar);
     m_trackChip->setCursor(Qt::PointingHandCursor);
     m_trackChip->setFocusPolicy(Qt::NoFocus);
     m_trackChip->setStyleSheet(chipStyle);
+    m_trackChip->setCheckable(true);
     connect(m_trackChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_trackPopover);
         m_trackPopover->setStyle(m_trackPopover->subFontSize(),
                                  m_trackPopover->subMargin(),
                                  m_trackPopover->subOutline());
         m_trackPopover->toggle(m_trackChip);
+        m_trackChip->setChecked(m_trackPopover->isOpen());
     });
 
     m_playlistChip = new QPushButton("List", m_controlBar);
     m_playlistChip->setCursor(Qt::PointingHandCursor);
     m_playlistChip->setFocusPolicy(Qt::NoFocus);
     m_playlistChip->setStyleSheet(chipStyle);
-    connect(m_playlistChip, &QPushButton::clicked, this, &VideoPlayer::togglePlaylistDrawer);
+    m_playlistChip->setCheckable(true);
+    connect(m_playlistChip, &QPushButton::clicked, this, [this]() {
+        // Playlist drawer is its own widget class (not a chip popover);
+        // route through togglePlaylistDrawer which handles its specific
+        // lifecycle. Checked-state sync happens post-toggle.
+        if (m_playlistDrawer && m_playlistDrawer->isOpen()) {
+            dismissOtherPopovers(nullptr);  // harmless — drawer closes below
+        } else {
+            dismissOtherPopovers(nullptr);  // close any chip popovers
+        }
+        togglePlaylistDrawer();
+        m_playlistChip->setChecked(m_playlistDrawer && m_playlistDrawer->isOpen());
+    });
 
     ctrlRow->addWidget(m_backBtn);
     ctrlRow->addSpacing(8);
@@ -1062,6 +1214,26 @@ void VideoPlayer::buildUI()
 
     // Center flash (play/pause/seek feedback)
     m_centerFlash = new CenterFlash(this);
+
+    // PLAYER_UX_FIX Phase 2.3 — Loading / Buffering overlay. Centered
+    // over the canvas, bound to Phase 1.2 + 2.2 signals; dismisses on
+    // first_frame or explicit playerIdle / bufferingEnded. Mouse-
+    // transparent so controls below stay usable.
+    m_loadingOverlay = new LoadingOverlay(this);
+    connect(this, &VideoPlayer::playerOpeningStarted,
+            m_loadingOverlay, &LoadingOverlay::showLoading);
+    connect(this, &VideoPlayer::playerIdle,
+            m_loadingOverlay, &LoadingOverlay::dismiss);
+    connect(m_sidecar, &SidecarProcess::bufferingStarted,
+            m_loadingOverlay, &LoadingOverlay::showBuffering);
+    connect(m_sidecar, &SidecarProcess::bufferingEnded,
+            m_loadingOverlay, &LoadingOverlay::dismiss);
+    // firstFrame is the primary dismiss trigger — by the time the first
+    // video frame renders, the Loading window is semantically closed.
+    // Qt permits a slot with fewer args than the signal, so firstFrame's
+    // QJsonObject payload is discarded by dismiss().
+    connect(m_sidecar, &SidecarProcess::firstFrame,
+            m_loadingOverlay, &LoadingOverlay::dismiss);
 
     // Track popover (audio/subtitle track picker — opened by Tracks chip)
     m_trackPopover = new TrackPopover(this);
@@ -1194,7 +1366,13 @@ void VideoPlayer::buildUI()
             audioParts << eqFilter;
         m_sidecar->sendRawFilters(m_filterPopover->buildVideoFilter(),
                                   audioParts.join(","));
-        m_eqChip->setText(m_eqPopover->isActive() ? "EQ (on)" : "EQ");
+        // Phase 6.1 — sync chip text + dynamic active-property for the
+        // stylesheet's [active="true"] selector (left-border indicator).
+        const bool eqActive = m_eqPopover->isActive();
+        m_eqChip->setText(eqActive ? "EQ (on)" : "EQ");
+        m_eqChip->setProperty("active", eqActive);
+        m_eqChip->style()->unpolish(m_eqChip);
+        m_eqChip->style()->polish(m_eqChip);
     });
     connect(m_eqPopover, &EqualizerPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) { m_hideTimer.stop(); showControls(); }
@@ -1224,6 +1402,11 @@ void VideoPlayer::buildUI()
             m_sidecar->sendSetFilters(deinterlace, 0, 100, 100, normalize, interpolate, diFilter);
             int count = m_filterPopover->activeFilterCount();
             m_filtersChip->setText(count > 0 ? QString("Filters (%1)").arg(count) : "Filters");
+            // Phase 6.1 — sync active-property for the left-border
+            // indicator via the [active="true"] stylesheet selector.
+            m_filtersChip->setProperty("active", count > 0);
+            m_filtersChip->style()->unpolish(m_filtersChip);
+            m_filtersChip->style()->polish(m_filtersChip);
         });
     connect(m_filterPopover, &FilterPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) {
@@ -1246,15 +1429,18 @@ void VideoPlayer::buildUI()
     // phase exit.
     connect(m_filterPopover, &FilterPopover::toneMappingChanged, this,
         [this](const QString& algorithm, bool /*peakDetect*/) {
-            // FilterPopover's dropdown items: "hable", "reinhard",
-            // "bt2390", "mobius", "clip", "linear". Only three have a
-            // shader-native implementation today; the others fall back
-            // to Off (equivalent to the old "linear" / "clip" pass-through).
-            int mode = 0; // Off — default + fallback for unmapped names
+            // PLAYER_UX_FIX Phase 5.1 (Path A). FilterPopover's dropdown
+            // is now {"hable", "reinhard"} — the two algorithms with
+            // actual shader implementations. Previously six entries
+            // landed here, four of which silently fell to mode 0 (Off).
+            // Dead `aces` branch dropped alongside the popover shrink —
+            // FilterPopover never emitted it. The Off fallback remains
+            // as a defensive default for any out-of-list string (e.g.
+            // legacy saved settings from a pre-5.1 build).
+            int mode = 0; // Off / defensive fallback
             const QString a = algorithm.toLower();
-            if      (a == QStringLiteral("reinhard")) mode = 1;
-            else if (a == QStringLiteral("aces"))     mode = 2;   // future-proof (FilterPopover may add)
-            else if (a == QStringLiteral("hable"))    mode = 3;
+            if      (a == QStringLiteral("hable"))    mode = 3;
+            else if (a == QStringLiteral("reinhard")) mode = 1;
             if (m_canvas) m_canvas->setTonemapMode(mode);
         });
     // HDR detection + chapters from media_info event
@@ -2169,6 +2355,23 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
                     .arg(actionName));
     }
 
+    // PLAYER_UX_FIX Phase 6.4 — ESC dismisses any open chip popover
+    // before falling through to the back-to-library / PiP-exit bindings.
+    // Only intercept ESC when something is actually open, so the key
+    // retains its normal binding behavior when no popover is showing.
+    if (event->key() == Qt::Key_Escape) {
+        const bool anyOpen =
+            (m_filterPopover  && m_filterPopover->isOpen()) ||
+            (m_eqPopover      && m_eqPopover->isOpen()) ||
+            (m_trackPopover   && m_trackPopover->isOpen()) ||
+            (m_playlistDrawer && m_playlistDrawer->isOpen());
+        if (anyOpen) {
+            dismissOtherPopovers(nullptr);
+            event->accept();
+            return;
+        }
+    }
+
     // VIDEO_PLAYER_FIX Batch 3.3 — in PiP, Escape exits PiP (preempts the
     // normal back_to_library binding). Gives the user a consistent
     // "tiny window feels like an overlay" exit without learning Ctrl+P.
@@ -2405,24 +2608,38 @@ void VideoPlayer::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    // Close any open popover/drawer when clicking outside of them
+    // Close any open popover/drawer when clicking outside of them.
+    // PLAYER_UX_FIX Phase 6.4 — unified dismiss: adds EQ to the list
+    // (previously only dismissed via EqualizerPopover's internal event
+    // filter), and syncs the corresponding chip's :checked state to
+    // false so the visual open-state clears too.
     bool closedSomething = false;
     if (m_filterPopover && m_filterPopover->isOpen() &&
         !m_filterPopover->geometry().contains(event->pos()) &&
         !m_filtersChip->geometry().contains(event->pos())) {
         m_filterPopover->hide();
+        if (m_filtersChip) m_filtersChip->setChecked(false);
+        closedSomething = true;
+    }
+    if (m_eqPopover && m_eqPopover->isOpen() &&
+        !m_eqPopover->geometry().contains(event->pos()) &&
+        !m_eqChip->geometry().contains(event->pos())) {
+        m_eqPopover->hide();
+        if (m_eqChip) m_eqChip->setChecked(false);
         closedSomething = true;
     }
     if (m_trackPopover && m_trackPopover->isOpen() &&
         !m_trackPopover->geometry().contains(event->pos()) &&
         !m_trackChip->geometry().contains(event->pos())) {
         m_trackPopover->hide();
+        if (m_trackChip) m_trackChip->setChecked(false);
         closedSomething = true;
     }
     if (m_playlistDrawer && m_playlistDrawer->isOpen() &&
         !m_playlistDrawer->geometry().contains(event->pos()) &&
         !m_playlistChip->geometry().contains(event->pos())) {
         m_playlistDrawer->hide();
+        if (m_playlistChip) m_playlistChip->setChecked(false);
         closedSomething = true;
     }
 

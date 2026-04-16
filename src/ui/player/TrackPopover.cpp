@@ -1,7 +1,10 @@
 #include "TrackPopover.h"
 
+#include <cmath>   // Phase 6.2 — std::floor for sample-rate kHz rendering
 #include <QApplication>
+#include <QFont>   // Phase 6.2 — bold the selected-track list item
 #include <QJsonObject>
+#include <QLocale> // Phase 6.2 — ISO639 language-code expansion
 #include <QMouseEvent>
 
 static const int MAX_VISIBLE_ROWS = 4;
@@ -273,6 +276,39 @@ TrackPopover::TrackPopover(QWidget* parent)
 // Public API
 // ---------------------------------------------------------------
 
+// PLAYER_UX_FIX Phase 6.2 — IINA-parity helpers.
+// Language-code expansion: converts 2/3-letter ISO 639 codes ("en" /
+// "eng" / "jpn") to the human-readable language name ("English" /
+// "Japanese"). Qt's QLocale accepts ISO codes directly. If the code is
+// unknown or empty, we fall back to the raw uppercase code (pre-6.2
+// behavior).
+static QString expandLangCode(const QString& code)
+{
+    if (code.isEmpty()) return QString();
+    const QLocale loc(code);
+    const QString name = QLocale::languageToString(loc.language());
+    // QLocale returns "C" when the code isn't recognized — don't display
+    // that; fall back to the raw code uppercased.
+    if (name.isEmpty() || name == QStringLiteral("C")) {
+        return code.toUpper();
+    }
+    return name;
+}
+
+// Channel-count renderer: FFmpeg integer → Dolby-style label.
+// 1 → "Mono", 2 → "Stereo", 6 → "5.1", 8 → "7.1", other → "Nch".
+static QString describeChannels(int channels)
+{
+    switch (channels) {
+        case 0:  return QString();   // unknown — pre-6.2 sidecar payload
+        case 1:  return QStringLiteral("Mono");
+        case 2:  return QStringLiteral("Stereo");
+        case 6:  return QStringLiteral("5.1");
+        case 8:  return QStringLiteral("7.1");
+        default: return QStringLiteral("%1ch").arg(channels);
+    }
+}
+
 void TrackPopover::populate(const QJsonArray& tracks, int currentAudioId,
                             int currentSubId, bool subVisible)
 {
@@ -286,30 +322,67 @@ void TrackPopover::populate(const QJsonArray& tracks, int currentAudioId,
         QString lang     = track.value("lang").toString();
         QString title    = track.value("title").toString();
         QString codec    = track.value("codec").toString();
+        // Phase 6.2 fields — tolerated-missing for legacy sidecar payloads.
+        const bool isDefault = track.value("default").toBool(false);
+        const bool isForced  = track.value("forced").toBool(false);
+        const int  channels  = track.value("channels").toInt(0);
+        const int  sampleRate = track.value("sample_rate").toInt(0);
 
-        QStringList labelParts;
+        // Build IINA-style inline label:
+        //   primary = title || expanded-language || "Track N"
+        //   secondary bits (dot-separated): channels, kHz, codec, Default, Forced
+        const QString langHuman = expandLangCode(lang);
+        QString primary;
         if (!title.isEmpty())
-            labelParts.append(title);
-        else if (!lang.isEmpty())
-            labelParts.append(lang.toUpper());
+            primary = title;
+        else if (!langHuman.isEmpty())
+            primary = langHuman;
         else
-            labelParts.append(QStringLiteral("Track %1").arg(tid));
-        if (!codec.isEmpty())
-            labelParts.append(QStringLiteral("(%1)").arg(codec));
+            primary = QStringLiteral("Track %1").arg(tid);
 
-        QString label = labelParts.join(' ');
+        QStringList rightBits;
+        if (ttype == "audio") {
+            const QString chLabel = describeChannels(channels);
+            if (!chLabel.isEmpty()) rightBits.append(chLabel);
+            if (sampleRate > 0) {
+                // Render as kHz with one decimal only when non-integer
+                // (common rates 44100/48000/96000 display as 44.1/48/96).
+                const double khz = sampleRate / 1000.0;
+                rightBits.append(std::floor(khz) == khz
+                    ? QStringLiteral("%1kHz").arg(static_cast<int>(khz))
+                    : QStringLiteral("%1kHz").arg(khz, 0, 'f', 1));
+            }
+        }
+        if (!codec.isEmpty()) rightBits.append(codec);
+        if (isDefault) rightBits.append(QStringLiteral("Default"));
+        if (isForced)  rightBits.append(QStringLiteral("Forced"));
+
+        QString label = rightBits.isEmpty()
+            ? primary
+            : primary + QStringLiteral("   \u00b7 ") + rightBits.join(QStringLiteral(" \u00b7 "));
 
         if (ttype == "audio") {
             auto* item = new QListWidgetItem(label);
             item->setData(Qt::UserRole, tid);
-            if (tid == currentAudioId)
+            if (tid == currentAudioId) {
                 item->setSelected(true);
+                // Phase 6.2 — bold the selected track for stronger
+                // "this is the active one" affordance. QListWidget's
+                // selection highlight is subtle in the Noir palette.
+                QFont f = item->font();
+                f.setBold(true);
+                item->setFont(f);
+            }
             m_audioList->addItem(item);
         } else if (ttype == "subtitle") {
             auto* item = new QListWidgetItem(label);
             item->setData(Qt::UserRole, tid);
-            if (tid == currentSubId && subVisible)
+            if (tid == currentSubId && subVisible) {
                 item->setSelected(true);
+                QFont f = item->font();
+                f.setBold(true);
+                item->setFont(f);
+            }
             m_subList->addItem(item);
         }
     }

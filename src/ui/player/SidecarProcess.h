@@ -169,6 +169,16 @@ signals:
     // cross-process GPU sync — main-app owns all the draw-side resources.
     void overlayShm(const QString& shmName, int width, int height);
 
+    // PLAYER_UX_FIX Phase 2.2 — sidecar-observed HTTP-stall state on
+    // stream URL playback. `bufferingStarted` fires when
+    // av_read_frame hits EAGAIN/ETIMEDOUT/EIO; `bufferingEnded` fires
+    // when a subsequent read succeeds (stall cleared). Distinct from
+    // the one-shot state_changed{playing} emitted at first_frame —
+    // these can fire repeatedly across a session. Phase 2.3's
+    // LoadingOverlay consumes both to toggle a "Buffering…" indicator.
+    void bufferingStarted();
+    void bufferingEnded();
+
     void processClosed();
 
     // Batch 6.1 (Player Polish Phase 6) — fires when QProcess::finished

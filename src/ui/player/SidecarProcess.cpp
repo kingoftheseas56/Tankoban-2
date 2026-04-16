@@ -527,6 +527,22 @@ void SidecarProcess::processLine(const QByteArray& line)
             debugLog(QString("[Sidecar] stop_ack seq mismatch or no pending: ackSeq=%1 pending=%2")
                          .arg(ackSeq).arg(m_pendingStopSeq));
         }
+    } else if (name == "buffering") {
+        // PLAYER_UX_FIX Phase 2.2 — sidecar signalled an HTTP-stall
+        // (av_read_frame hit EAGAIN/ETIMEDOUT/EIO on a stream URL; see
+        // native_sidecar/src/video_decoder.cpp:984 + main.cpp "buffering"
+        // case). Phase 1's sessionId filter already passed this through
+        // session-matched. Consumers (VideoPlayer / Phase 2.3 LoadingOverlay)
+        // listen on bufferingStarted to show a "Buffering…" indicator;
+        // the matching `playing` event below dismisses it.
+        emit bufferingStarted();
+    } else if (name == "playing") {
+        // PLAYER_UX_FIX Phase 2.2 — companion to "buffering": fires when
+        // a stalled read clears and decode resumes (video_decoder.cpp:1006
+        // + main.cpp "playing" case). Distinct from state_changed{playing}
+        // (one-shot at first frame); this can fire repeatedly if a stream
+        // stalls and recovers multiple times during a session.
+        emit bufferingEnded();
     }
 }
 

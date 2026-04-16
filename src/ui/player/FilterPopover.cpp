@@ -109,7 +109,19 @@ FilterPopover::FilterPopover(QWidget* parent)
     algoLbl->setFixedWidth(62);
     algoRow->addWidget(algoLbl);
     m_toneMapAlgo = new QComboBox();
-    m_toneMapAlgo->addItems({"hable", "reinhard", "bt2390", "mobius", "clip", "linear"});
+    // PLAYER_UX_FIX Phase 5.1 (Path A — honest dropdown). Was:
+    //   {"hable", "reinhard", "bt2390", "mobius", "clip", "linear"}
+    // Shrunk to the two algorithms actually implemented in the HDR
+    // shader pipeline (video_d3d11.hlsl + VideoPlayer tone-map handler).
+    // `bt2390`/`mobius`/`clip`/`linear` silently fell to mode 0 (Off);
+    // users had no way to know the picker was doing nothing. If tone-
+    // mapping expansion is ever worth the shader work (bt2390 is the
+    // real HDR10→SDR industry standard), spin it up as its own TODO
+    // (HDR_TONEMAP_EXPAND or similar). Until then: honest UI > false
+    // capability claim. `aces` in VideoPlayer's handler was dead code —
+    // this popover never emitted it — and was removed alongside this
+    // shrink.
+    m_toneMapAlgo->addItems({"hable", "reinhard"});
     m_toneMapAlgo->setCurrentText("hable");
     m_toneMapAlgo->setStyleSheet(
         "QComboBox { background: rgba(255,255,255,18); color: rgba(255,255,255,220);"
