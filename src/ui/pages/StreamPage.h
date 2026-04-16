@@ -13,6 +13,7 @@
 #include <optional>
 
 #include "core/stream/addon/MetaItem.h"
+#include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/pages/stream/StreamSourceChoice.h"
 
 class CoreBridge;
@@ -22,7 +23,6 @@ class StreamLibrary;
 class StreamLibraryLayout;
 class StreamSearchWidget;
 class StreamDetailView;
-class StreamPlayerController;
 class StreamContinueStrip;
 class AddonManagerScreen;
 
@@ -151,7 +151,14 @@ private:
     void onBufferUpdate(const QString& statusText, double percent);
     void onReadyToPlay(const QString& httpUrl);
     void onStreamFailed(const QString& message);
-    void onStreamStopped();
+    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 — signature extended to carry
+    // the controller's StopReason. Replacement branch skips teardown +
+    // navigation (closes audit P0-1 source-switch reentrancy flash-to-browse).
+    // UserEnd branch runs the prior end-of-session teardown. Failure branch
+    // is observability-only — early-returns because onStreamFailed still
+    // drives the full failure UX; running teardown here too would hide the
+    // "Stream failed: msg" buffer-overlay text before its 3s display window.
+    void onStreamStopped(StreamPlayerController::StopReason reason);
 
     CoreBridge*      m_bridge;
     TorrentEngine*   m_torrentEngine;

@@ -1989,12 +1989,50 @@ void StreamPage::onStreamFailed(const QString& message)
     });
 }
 
-void StreamPage::onStreamStopped()
+void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
 {
+    using StopReason = StreamPlayerController::StopReason;
+    auto* player = window() ? window()->findChild<VideoPlayer*>() : nullptr;
+
+    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 — source-switch reentrancy split.
+    // Replacement = startStream()'s first-line defensive stop, fired because
+    // a NEW session is about to begin. Audit P0-1 root cause: pre-2.2 this
+    // handler ran the full UserEnd teardown (clear epKey + hide buffer +
+    // showBrowse) synchronously inside startStream, which cleared the
+    // JUST-INSTALLED new session state and navigated the user to browse a
+    // fraction of a second before the new session's readyToPlay fired.
+    // Result: flash-to-browse + progress writes dropped for the new session.
+    //
+    // Post-2.2: Replacement skips all teardown + navigation. Only disconnects
+    // the OLD player signal receivers on `this`; the new session's
+    // onReadyToPlay reconnects fresh per-session handlers. m_session is left
+    // alone — beginSession at the new session's entry already clobbered it.
+    if (reason == StopReason::Replacement) {
+        if (player) {
+            disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
+            disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
+            disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
+        }
+        return;
+    }
+
+    // Failure arrives in parallel with streamFailed(msg) when Batch 2.2 wires
+    // stopStream(StopReason::Failure) at controller failure sites. onStreamFailed
+    // drives the full failure UX — sets "Stream failed: msg" on the buffer
+    // overlay label, starts a 3s timer, then navigates to browse. Running the
+    // UserEnd teardown below would hide the buffer overlay (and therefore the
+    // failure label) before onStreamFailed can fire, collapsing the 3s error
+    // display window. Early-return here; onStreamFailed owns the UX.
+    // Observability side effect: the [stream-session] log in stopStream already
+    // captured the failure boundary — this signal is the hook for future
+    // Phase 3 failure-flow consolidation.
+    if (reason == StopReason::Failure) {
+        return;
+    }
+
+    // UserEnd — normal end-of-session teardown.
     m_session.epKey.clear();
-    // Disconnect any lingering progress connection + reset persistence mode
-    // so Videos-mode reclaims its own progress path.
-    if (auto* player = window() ? window()->findChild<VideoPlayer*>() : nullptr) {
+    if (player) {
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);

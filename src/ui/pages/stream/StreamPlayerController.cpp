@@ -23,7 +23,10 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
                                           int season, int episode,
                                           const Stream& selectedStream)
 {
-    stopStream();
+    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.1 — flag this defensive stop as
+    // Replacement so StreamPage's handler can (once Batch 2.2 lands) skip
+    // session-teardown UX that the incoming session will re-use.
+    stopStream(StopReason::Replacement);
 
     m_active = true;
     m_imdbId = imdbId;
@@ -44,7 +47,15 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
             onStreamReady(oneShot.url);
             return;
         }
-        m_active = false;
+        // Batch 2.2 — stopStream(Failure) clears m_infoHash + m_selectedStream
+        // + m_active and emits streamStopped(Failure). onStreamFailed below
+        // then drives the user-facing failure UX. Emit order matters: the
+        // stopStream call is gated on m_active == true, which is still true
+        // here (set in startStream's entry block), so stopStream's body
+        // actually executes. Pre-2.2 these paths just set m_active = false
+        // inline + emitted streamFailed, leaving m_infoHash / m_selectedStream
+        // stale for a subsequent retry (audit P1-1 class).
+        stopStream(StopReason::Failure);
         emit streamFailed(oneShot.errorMessage.isEmpty()
                               ? QStringLiteral("Failed to start direct stream")
                               : oneShot.errorMessage);
@@ -52,7 +63,7 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
     }
 
     if (selectedStream.source.kind == StreamSource::Kind::YouTube) {
-        m_active = false;
+        stopStream(StopReason::Failure);
         emit streamFailed(QStringLiteral("YouTube playback not yet supported"));
         return;
     }
@@ -62,7 +73,7 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
     m_pollTimer.start(POLL_FAST_MS);
 }
 
-void StreamPlayerController::stopStream()
+void StreamPlayerController::stopStream(StopReason reason)
 {
     if (!m_active)
         return;
@@ -78,7 +89,7 @@ void StreamPlayerController::stopStream()
     m_infoHash.clear();
     m_selectedStream = {};
 
-    emit streamStopped();
+    emit streamStopped(reason);
 }
 
 void StreamPlayerController::pollStreamStatus()
@@ -89,8 +100,10 @@ void StreamPlayerController::pollStreamStatus()
     // Polling is magnet-only; direct paths returned early from startStream.
     qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_startTimeMs;
     if (elapsed > HARD_TIMEOUT_MS) {
-        m_pollTimer.stop();
-        m_active = false;
+        // Batch 2.2 — route timeout through stopStream(Failure) so StreamEngine
+        // gets the torrent-stop call + m_infoHash clears. Pre-2.2 set
+        // m_active = false inline, leaving the torrent running in engine.
+        stopStream(StopReason::Failure);
         emit streamFailed("Stream timed out after "
                           + QString::number(HARD_TIMEOUT_MS / 1000) + "s");
         return;
@@ -149,8 +162,10 @@ void StreamPlayerController::pollStreamStatus()
             statusText += QString(" [%1s]").arg(elapsedSec);
     } else if (result.errorCode == "ENGINE_ERROR"
                || result.errorCode == "UNSUPPORTED_SOURCE") {
-        m_pollTimer.stop();
-        m_active = false;
+        // Batch 2.2 — engine error / unsupported source: route through
+        // stopStream(Failure) for consistent cleanup (torrent stop + hash
+        // clear + streamStopped(Failure) observability signal).
+        stopStream(StopReason::Failure);
         emit streamFailed(result.errorMessage);
         return;
     } else {
