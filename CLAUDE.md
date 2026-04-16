@@ -11,8 +11,8 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
-- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` Phase 1 Batch 1.1 SHIPPED + SMOKED (sessionId filter; 7 drops/197 opens, all session-scoped, zero false positives). Phase 2 (open/stop fence, Shape 2 = same-process stop_ack handshake) gated on Agent 4 STREAM_LIFECYCLE Phase 1 landing first (TODO sequence: Player 1 → Stream 1 → Stream 2 + Player 2 parallel).
-- **Agent 4** (Stream mode) — IDLE, `STREAM_LIFECYCLE_FIX` Phase 1 CLOSED (Batches 1.1+1.2+1.3 squashed at `14baae1` — PlaybackSession foundation + full consumer migration). Awaiting drift-check post + Hemanth greenlight on Phase 2. STREAM_UX_PARITY Batch 2.6 deferred until STREAM_LIFECYCLE Phase 4.1 (Shift+N guard reshape).
+- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` Phase 1 + Phase 2 Batch 2.1 SHIPPED (Shape 2 open/stop fence with stop_ack + 2s timeout + resetAndRestart fallback at `0daabb6`). Awaiting sidecar rebuild from Hemanth for real-fence smoke. Phase 3 (VideoPlayer stop identity) queued.
+- **Agent 4** (Stream mode) — IDLE, `STREAM_LIFECYCLE_FIX` Phase 1 + Phase 2 Batches 2.1+2.2 SHIPPED (StopReason signal evolution + source-switch reentrancy split at `2c02012`; closes audit P0-1 flash-to-browse + side-effect P1-1 stale m_infoHash). Awaiting Hemanth behavioral smoke on source-switch. Phase 2 still has batches remaining (bingeGroup memory, etc.); Phase 3+ queued. STREAM_UX_PARITY Batch 2.6 still gated on STREAM_LIFECYCLE Phase 4.1.
 - **Agent 4B** (Sources) — IDLE, `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired)
@@ -50,8 +50,8 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
 | `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 batches 2.1-2.5 shipped | Batch 2.6 (Shift+N player shortcut) pending; needs Agent 3 heads-up |
-| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | Phase 1 CLOSED + drift-checked, Phase 2 ready | 5 phases ~11 batches; Agent 7 Trigger B SUSPENDED (agents outpacing prototype cycle); Agent 4 ships solo |
-| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 CLOSED + drift-checked, Phase 2 + 3 ready | 3 phases ~5 batches; Agent 7 Trigger B SUSPENDED (same reason); Agent 3 ships solo |
+| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | Phase 1 + Phase 2 Batches 2.1+2.2 SHIPPED (audit P0-1 closed); Phase 2 remainder + 3+ queued | 5 phases ~11 batches; ships solo (Trigger B suspended) |
+| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 + Phase 2 Batch 2.1 SHIPPED (Shape 2 fence); Phase 2 remainder + Phase 3 queued | 3 phases ~5 batches; ships solo (Trigger B suspended) |
 | `PLAYER_PERF_FIX_TODO.md` | Agent 3 | CLOSED 2026-04-16 | Phase 1+2+3 Option B shipped; Phase 4 (P1 cleanup) deferred capacity-gated |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
 | `TANKORENT_FIX_TODO.md` | Agent 4B | All 7 phases SHIPPED | smoke pending |
