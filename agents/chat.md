@@ -40,6 +40,10 @@ READY TO COMMIT — [Agent 7 (exception), Player Cinemascope Batch 4]: Split vid
 
 Agent 7 (exception) final summary — cinemascope subtitle geometry + aspect viewport fix landed in working tree. Sidecar build: BUILD_EXIT=0 via native_sidecar/build.ps1 (configured, built sidecar_tests + ffmpeg_sidecar, installed resources/ffmpeg_sidecar/ffmpeg_sidecar.exe). Main app build not run per contracts-v2. Smoke matrix for Hemanth: 2.35/2.39 ASS bottom placement in black bar; 2.35/2.39 PGS screen-plane positions; mid-playback resize; 16:9 no-change; anamorphic storage-size regression check; manual aspect override; rapid-switch + HEVC 10-bit + first-frame latency. Standing by for Hemanth smoke + Agent 3 review.
 
+READY TO COMMIT — [Agent 7 (exception), Player Cinemascope Batch 4 follow-up]: Route slow/SW subtitle path through the canvas-sized overlay plane so non-16:9 subtitles are not clipped into the video frame | files: native_sidecar/src/video_decoder.cpp, src/ui/player/FrameCanvas.cpp | sidecar BUILD_EXIT=0; main-app rebuild pending Hemanth after MSVC std::max macro fix
+
+READY TO COMMIT — [Agent 7 (exception), Player Cinemascope Batch 4 follow-up 2]: Include canvas dimensions in open payload so cinemascope sessions initialize subtitle geometry before decode starts | files: src/ui/player/SidecarProcess.h, src/ui/player/SidecarProcess.cpp, native_sidecar/src/main.cpp | sidecar BUILD_EXIT=0 after stopping locked Tankoban.exe/ffmpeg_sidecar.exe; main-app rebuild required
+
 - **Sopranos S06E09 (1920x1080 HEVC, padded-pool 1920x1088):** sidecar `[PERF]` shows **~0.3ms p50 / ~0.5ms p99 regression on `present_slice`** — from ~0.8/1.7 to ~1.1/2.2 on p50/p99. drops=0/s, frames=24-25/sec steady. Total p99 peak ~3.25ms on the 41ms 24fps budget = **92% headroom retained**. Main-app `[PERF]` clean: timer_interval pinned to vsync, draw_p99 spikes are content-dependent variance (visible pre-rebuild too, not a rebuild artefact).
 - **The Boys S03E06 (1920x804 cinemascope):** smoothness held subjectively. Aspect-ratio symptom (asymmetric letterbox — top bar huge, bottom bar tiny in fullscreen) **still present** — confirming Phase 2 did NOT incidentally fix the viewport math, and confirming that bug is display-side geometry (FrameCanvas letterbox calc), not decode/copy pipeline.
 
@@ -3092,4 +3096,5 @@ Hemanth flagged that Agent 0 had been (a) presenting coder-level choices to him 
 @all agents — these rules apply universally going forward, not just to Agent 0. Build/log/grep work is yours to do; Hemanth's bandwidth is for what only Hemanth can do.
 
 ---
-
+READY TO COMMIT � [Agent 7 (exception), Player Cinemascope Follow-up 3]: route ASS overlay rendering through subtitle render thread and add libass pixel-aspect geometry | files: native_sidecar/src/subtitle_renderer.cpp, native_sidecar/src/subtitle_renderer.h, native_sidecar/src/video_decoder.cpp
+Agent 7 audit written � agents/audits/edge_tts_2026-04-16.md. For Agent 2 (Book Reader domain master). Reference only.
