@@ -94,8 +94,18 @@ static const char* DEFAULT_ASS_HEADER =
     "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding\r\n"
+    // Bold=1 + Outline=2 for PotPlayer-like appearance — bolder weight
+    // makes letters visible against bright/busy scenes without the
+    // "swallow the image" feel of a thicker outline. MarginV=40 (not 20
+    // libass-default) because aspect-override modes vertically stretch
+    // the overlay — e.g., 1920x804 cinemascope forced 16:9 fullscreen
+    // stretches 1.34x, dropping sub bottom from ~7% to ~5% of screen.
+    // Bump guarantees sub stays clear of the screen edge across every
+    // aspect mode without being noticeably high in the natural letterbox
+    // case. Affects srt/subrip/mov_text/text only; ASS/SSA tracks keep
+    // their file's own Default style.
     "Style: Default,Arial,20,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,"
-    "0,0,0,0,100,100,0,0,1,2,1,2,10,10,20,1\r\n"
+    "1,0,0,0,100,100,0,0,1,2,1,2,10,10,40,1\r\n"
     "\r\n"
     "[Events]\r\n"
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n";
