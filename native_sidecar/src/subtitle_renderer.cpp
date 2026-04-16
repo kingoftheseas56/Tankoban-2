@@ -487,6 +487,143 @@ void SubtitleRenderer::set_style_override(int font_size, int margin_v, bool outl
                  offset, margin_v);
 }
 
+// ---------------------------------------------------------------------------
+// PLAYER_PERF_FIX Phase 3 Batch 3.A — two-stage overlay pipeline (dead code
+// until 3.B atomic cutover wires render_to_bitmaps + blend_into_frame in).
+// ---------------------------------------------------------------------------
+//
+// render_thread_func + render_blend are intentionally NOT refactored to use
+// these functions. Keeping the legacy path's single-pass blend preserves
+// Phase 2 baseline perf; the 3.A→3.B transition happens atomically in one
+// future batch so there's no intermediate regression window.
+
+void SubtitleRenderer::render_to_bitmaps(int64_t pts_ms,
+                                          std::vector<SubOverlayBitmap>& out) {
+    // Acquires mutex_ since it reads libass state (ass_render_frame)
+    // and pgs_rects_, both shared with process_packet on the decode
+    // thread. Independent of render_thread_func's render_mutex_ /
+    // render_cv_ pipeline — callers invoke this inline.
+    std::lock_guard<std::mutex> lock(mutex_);
+    out.clear();
+
+    if (!visible_.load(std::memory_order_relaxed)) return;
+
+    if (is_pgs_ && !pgs_rects_.empty()) {
+        // PGS path — pgs_rects_ are already pre-converted to BGRA by
+        // process_packet. Copy into the overlay vector shape.
+        out.reserve(pgs_rects_.size());
+        for (const auto& rect : pgs_rects_) {
+            SubOverlayBitmap b;
+            b.x = rect.x;
+            b.y = rect.y;
+            b.w = rect.w;
+            b.h = rect.h;
+            b.bgra = rect.bgra;
+            out.push_back(std::move(b));
+        }
+        return;
+    }
+
+    if (!renderer_ || !track_) return;
+
+    int64_t render_time = pts_ms + delay_ms_.load(std::memory_order_relaxed);
+    if (render_time < 0) render_time = 0;
+
+    int changed = 0;
+    ASS_Image* images = ass_render_frame(renderer_, track_,
+                                          static_cast<long long>(render_time),
+                                          &changed);
+    if (!images) return;
+
+    // Convert each ASS_Image (alpha-only bitmap + 32-bit color) into a
+    // premultiplied-color BGRA tile. Matches the exact math that
+    // blend_image_list uses — per-pixel alpha =
+    // (src_alpha * (255 - color.a) + 127) / 255, RGB = color's R/G/B
+    // channels (stored as BGRA in output).
+    for (ASS_Image* img = images; img; img = img->next) {
+        if (img->w == 0 || img->h == 0) continue;
+
+        uint8_t r      = (img->color >> 24) & 0xFF;
+        uint8_t g      = (img->color >> 16) & 0xFF;
+        uint8_t b_col  = (img->color >>  8) & 0xFF;
+        uint8_t a_base = 255 - (img->color & 0xFF);
+        if (a_base == 0) continue;
+
+        SubOverlayBitmap tile;
+        tile.x = img->dst_x;
+        tile.y = img->dst_y;
+        tile.w = img->w;
+        tile.h = img->h;
+        tile.bgra.resize(static_cast<size_t>(tile.w) * tile.h * 4);
+
+        const uint8_t* src = img->bitmap;
+        uint8_t* dst = tile.bgra.data();
+        for (int yy = 0; yy < tile.h; ++yy) {
+            const uint8_t* src_row = src + yy * img->stride;
+            uint8_t* dst_row = dst + yy * tile.w * 4;
+            for (int xx = 0; xx < tile.w; ++xx) {
+                uint8_t alpha = static_cast<uint8_t>(
+                    (static_cast<uint16_t>(src_row[xx]) * a_base + 127) / 255);
+                uint8_t* p = dst_row + xx * 4;
+                p[0] = b_col;
+                p[1] = g;
+                p[2] = r;
+                p[3] = alpha;
+            }
+        }
+
+        out.push_back(std::move(tile));
+    }
+}
+
+void SubtitleRenderer::blend_into_frame(const std::vector<SubOverlayBitmap>& bitmaps,
+                                         uint8_t* frame,
+                                         int frame_w, int frame_h, int stride) {
+    // Standard src-over alpha blend over the caller's BGRA frame. Clamps
+    // each bitmap to frame bounds so negative dst coords or oversized
+    // tiles cannot write past the frame. Pixel-identical output to the
+    // legacy blend_image_list + blend_pgs_rects paths.
+    for (const auto& tile : bitmaps) {
+        if (tile.bgra.empty() || tile.w <= 0 || tile.h <= 0) continue;
+
+        int src_x0 = 0, src_y0 = 0;
+        int dst_x = tile.x, dst_y = tile.y;
+        int blit_w = tile.w, blit_h = tile.h;
+
+        if (dst_x < 0) { src_x0 = -dst_x; blit_w += dst_x; dst_x = 0; }
+        if (dst_y < 0) { src_y0 = -dst_y; blit_h += dst_y; dst_y = 0; }
+        if (dst_x + blit_w > frame_w) blit_w = frame_w - dst_x;
+        if (dst_y + blit_h > frame_h) blit_h = frame_h - dst_y;
+        if (blit_w <= 0 || blit_h <= 0) continue;
+
+        for (int yy = 0; yy < blit_h; ++yy) {
+            uint8_t* dst_row = frame + (dst_y + yy) * stride + dst_x * 4;
+            const uint8_t* src_row = tile.bgra.data()
+                + (static_cast<size_t>(src_y0 + yy) * tile.w + src_x0) * 4;
+
+            for (int xx = 0; xx < blit_w; ++xx) {
+                const uint8_t* src = src_row + xx * 4;
+                uint8_t alpha = src[3];
+                if (alpha == 0) continue;
+
+                uint8_t* dst = dst_row + xx * 4;
+                if (alpha == 255) {
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    dst[3] = 255;
+                } else {
+                    uint8_t inv = 255 - alpha;
+                    dst[0] = static_cast<uint8_t>((src[0] * alpha + dst[0] * inv + 127) / 255);
+                    dst[1] = static_cast<uint8_t>((src[1] * alpha + dst[1] * inv + 127) / 255);
+                    dst[2] = static_cast<uint8_t>((src[2] * alpha + dst[2] * inv + 127) / 255);
+                    dst[3] = 255;
+                }
+            }
+        }
+    }
+}
+
 void SubtitleRenderer::blend_image_list(ASS_Image* img, uint8_t* frame,
                                         int stride, int frame_h) {
     for (; img; img = img->next) {

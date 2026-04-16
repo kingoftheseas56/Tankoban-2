@@ -15,6 +15,25 @@ struct AVCodecContext;
 
 class SubtitleRenderer {
 public:
+    // PLAYER_PERF_FIX Phase 3 Batch 3.A — overlay bitmap shape.
+    // Infrastructure added as dead code (no caller in the hot path) so the
+    // upcoming atomic cutover batch (3.B = former 3.3+3.4) only needs to
+    // wire existing pieces. Matches the 3.2 dead-code-prep pattern for
+    // D3D11OverlayTexture.
+    //
+    // Output of the libass/PGS render stage. BGRA, combined-alpha-per-
+    // pixel (color premultiplied against libass's inverse-alpha). Consumed
+    // either by blend_into_frame (CPU fallback when sidecar uploads to SHM
+    // BGRA) or by the atomic-cutover GPU path that uploads to a
+    // D3D11OverlayTexture. Same shape, same caller contract.
+    struct SubOverlayBitmap {
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+        std::vector<uint8_t> bgra;  // w*h*4 bytes, BGRA with combined alpha
+    };
+
     SubtitleRenderer();
     ~SubtitleRenderer();
 
@@ -40,6 +59,39 @@ public:
     // Blocks until blending is complete.
     void render_blend(uint8_t* frame, int width, int height,
                       int stride, int64_t pts_ms);
+
+    // PLAYER_PERF_FIX Phase 3 Batch 3.A — two-stage overlay pipeline
+    // (dead code until 3.B atomic cutover wires it in).
+    //
+    // render_to_bitmaps: produces BGRA overlay tiles from libass or PGS
+    // state at the given pts. Acquires mutex_ internally (libass state is
+    // shared with process_packet on the decode thread). `out` is cleared
+    // before filling; caller should reuse the vector across frames to
+    // avoid reallocation. For libass: converts each ASS_Image's alpha-
+    // only bitmap + 32-bit color to premultiplied BGRA. For PGS: copies
+    // pgs_rects_ (already BGRA) into the overlay vector.
+    //
+    // Can be called from any thread. Thread-safe via mutex_. Does NOT go
+    // through the render_thread_func path — it runs inline. Cost is
+    // dominated by the libass ass_render_frame call + per-pixel BGRA
+    // conversion; same order of magnitude as the legacy render_blend
+    // libass call.
+    void render_to_bitmaps(int64_t pts_ms, std::vector<SubOverlayBitmap>& out);
+
+    // blend_into_frame: CPU alpha-blends a list of overlay bitmaps onto
+    // a BGRA frame. Stateless — no libass / PGS state touched, no mutex
+    // required. Handles clamping so out-of-bounds bitmap coordinates do
+    // not write past the frame. Mirrors the legacy blend_image_list +
+    // blend_pgs_rects blending math exactly (premultiplied color + src-
+    // over alpha); pixel-identical output.
+    //
+    // Used by 3.B atomic cutover as the CPU fallback when the fast-path
+    // D3D11VA → D3D11OverlayTexture GPU upload path is unavailable (e.g.,
+    // software-decoded AVIs where the main-app receives an SHM BGRA
+    // frame and needs subs baked in).
+    static void blend_into_frame(const std::vector<SubOverlayBitmap>& bitmaps,
+                                  uint8_t* frame,
+                                  int frame_w, int frame_h, int stride);
 
     // Legacy: same as render_blend (kept for compatibility).
     void render_onto_frame(uint8_t* frame, int width, int height,
