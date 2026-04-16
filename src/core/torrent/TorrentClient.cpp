@@ -7,6 +7,9 @@
 #include <QRegularExpression>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
+#include <QHash>
+#include <QStringList>
 #include <QDebug>
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -48,6 +51,32 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     }
     if (anyChanged)
         saveRecords();
+
+    // Sweep orphan .fastresume files — any file in the resume directory whose
+    // hash is not in m_records. These accumulate when a draft torrent (one in
+    // AddTorrentDialog's metadata-resolution window) leaks a resume file that
+    // TorrentEngine::removeTorrent never got to clean up (typical cause: app
+    // crash / force-kill while the dialog was open). Phase 2 Batch 2.1 stops
+    // new leaks at the source by skipping save_resume_data for drafts, but
+    // existing leftover orphans need this retroactive sweep. Runs once per
+    // boot after re-adds complete — cheap (tens of files at most), quiet.
+    const QString resumeDir = m_bridge->dataDir()
+        + QStringLiteral("/torrent_cache/resume");
+    QDir rd(resumeDir);
+    const auto orphanCandidates = rd.entryInfoList(
+        {QStringLiteral("*.fastresume")},
+        QDir::Files | QDir::NoDotAndDotDot);
+    for (const QFileInfo& fi : orphanCandidates) {
+        const QString hash = fi.completeBaseName();
+        if (m_records.contains(hash)) continue;
+        qDebug() << "TorrentClient: removing orphan resume file:" << fi.fileName();
+        QFile::remove(fi.absoluteFilePath());
+    }
+
+    // One-shot history retro-compact — collapses duplicate entries per
+    // infoHash (bloat accumulated before Phase 1 Batch 1.1's re-fire guard
+    // landed). Idempotent after first pass.
+    compactHistory();
 }
 
 TorrentClient::~TorrentClient()
@@ -68,6 +97,51 @@ void TorrentClient::saveRecords()
     QJsonObject data;
     data["active"] = m_records;
     m_bridge->store().write(RECORDS_FILE, data);
+}
+
+// Collapse duplicate completion entries per infoHash to a single row (the
+// earliest completedAt). Keeps the history semantically a "first-completion
+// log" rather than a per-boot alert log. Idempotent — a run against an
+// already-compacted file writes nothing. Called once at boot, after records
+// + orphan sweep are settled.
+//
+// Pre-Phase 1 Batch 1.1, onTorrentFinished had no re-fire guard, so every
+// app startup appended a duplicate entry for every already-completed
+// torrent. Hemanth's file hit 135 entries for a single EMBER Vinland Saga
+// completion. This one-shot tidies that debt.
+void TorrentClient::compactHistory()
+{
+    auto data = m_bridge->store().read(HISTORY_FILE);
+    auto arr = data.value("entries").toArray();
+    if (arr.size() < 2) return;
+
+    QHash<QString, QJsonObject> earliest;
+    QStringList order;   // preserves first-seen hash order = chronological
+    for (const auto& v : arr) {
+        const QJsonObject e = v.toObject();
+        const QString h = e.value("infoHash").toString();
+        if (h.isEmpty()) continue;
+        const qint64 t = e.value("completedAt").toVariant().toLongLong();
+        auto it = earliest.find(h);
+        if (it == earliest.end()) {
+            earliest.insert(h, e);
+            order << h;
+        } else if (t < it.value().value("completedAt").toVariant().toLongLong()) {
+            *it = e;
+        }
+    }
+
+    if (earliest.size() == arr.size()) return;   // already compact
+
+    QJsonArray compacted;
+    for (const QString& h : order)
+        compacted.append(earliest.value(h));
+
+    QJsonObject out;
+    out["entries"] = compacted;
+    m_bridge->store().write(HISTORY_FILE, out);
+    qDebug() << "TorrentClient: compacted history from" << arr.size()
+             << "to" << compacted.size() << "entries";
 }
 
 void TorrentClient::appendHistory(const TorrentInfo& info)
@@ -396,6 +470,17 @@ void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name
 
 void TorrentClient::onTorrentFinished(const QString& infoHash)
 {
+    // libtorrent fires torrent_finished_alert every time a resumed already-
+    // completed torrent re-enters the finished state (resume → recheck →
+    // finished). Without this guard every app startup would append a dup
+    // history entry, rewrite records.json, and re-trigger a library rescan.
+    // Only first-time completions should fire side-effects.
+    if (m_records.contains(infoHash) &&
+        m_records[infoHash].toObject().value("state").toString()
+            == QLatin1String("completed")) {
+        return;
+    }
+
     qDebug() << "Torrent completed:" << infoHash;
 
     // Build info for history

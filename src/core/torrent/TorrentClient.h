@@ -106,6 +106,7 @@ private:
     void loadRecords();
     void saveRecords();
     void appendHistory(const TorrentInfo& info);
+    void compactHistory();
     QString extractInfoHash(const QString& magnetUri) const;
 
     CoreBridge*    m_bridge;

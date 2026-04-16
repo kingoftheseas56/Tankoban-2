@@ -145,9 +145,16 @@ private:
         if (elapsed < RESUME_SAVE_INTERVAL_S) return;
         m_lastResumeSave = now;
 
+        // Drafts in metadata-resolution (savePath = resolve_tmp) aren't in
+        // TorrentClient's records.json yet — if the user cancels or the app
+        // crashes before startDownload(), the .fastresume lingers with no
+        // owner. Skipping save_resume_data for drafts closes the leak source.
+        const QString resolveTmp = m_engine->m_cacheDir + QStringLiteral("/resolve_tmp");
+
         QMutexLocker lock(&m_engine->m_mutex);
         for (auto& rec : m_engine->m_records) {
             if (!rec.handle.is_valid()) continue;
+            if (rec.savePath == resolveTmp) continue;
             try {
                 rec.handle.save_resume_data(lt::torrent_handle::save_info_dict);
             } catch (...) {}
@@ -295,10 +302,15 @@ void TorrentEngine::saveDhtState()
 
 void TorrentEngine::saveAllResumeData()
 {
+    // Skip drafts (savePath = resolve_tmp) — see triggerPeriodicResumeSaves.
+    const std::string resolveTmp =
+        (m_cacheDir + QStringLiteral("/resolve_tmp")).toStdString();
+
     auto torrents = m_session.get_torrents();
     int count = 0;
     for (auto& h : torrents) {
         if (!h.is_valid()) continue;
+        if (h.status().save_path == resolveTmp) continue;
         try {
             h.save_resume_data(lt::torrent_handle::save_info_dict);
             ++count;
