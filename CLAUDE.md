@@ -6,19 +6,19 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 ## 30-Second State Dashboard
 
-**As of:** 2026-04-16 (Agent 0 — Track 3 of workflow optimization, dashboard introduced)
+**As of:** 2026-04-16 (Agent 0 — workflow optimization Tracks 1+2+3+4 all SHIPPED; Agent 3 Option B PERF 3.B SHM-routed swept)
 
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
-- **Agent 3** (Video Player) — ACTIVE, `PLAYER_PERF_FIX` Phase 3 (3.2 + 3.A landed, 3.B reverted before commit — needs re-investigation)
+- **Agent 3** (Video Player) — IDLE, `PLAYER_PERF_FIX` Phase 3 Option B SHIPPED + committed (SHM-routed overlay, no cross-process GPU sharing). Awaiting Hemanth smoke.
 - **Agent 4** (Stream mode) — ACTIVE, `STREAM_UX_PARITY_TODO.md` Phase 2 (Batch 2.5 shipped, 2.6 = Shift+N player shortcut pending)
 - **Agent 4B** (Sources) — IDLE, `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired)
 - **Agent 7** (Codex prototypes + audits) — IDLE, last delivery `agents/prototypes/{player_lifecycle,stream_lifecycle}/` 2026-04-16
 
-**READY TO COMMIT backlog:** 0 lines (all swept this session — last sweep commit `0313c68`)
+**READY TO COMMIT backlog:** 0 lines (last sweep commit `df73419`)
 
 **Open congresses:** none (Congress 4 archived to `agents/congress_archive/2026-04-16_library-ux-1-1-parity.md` this session)
 
@@ -26,7 +26,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 **Blocked:** none
 
-**Last successful smoke:** PLAYER_PERF_FIX Phase 2 (D3D11_BOX) green on Sopranos S06E09 + The Boys S03E06 — 2026-04-16. Phase 3.B reverted post-smoke (cross-process D3D11 shared-texture sync issue — see `project_player_perf` memory).
+**Last successful smoke:** PLAYER_PERF_FIX Phase 2 (D3D11_BOX) green on Sopranos S06E09 + The Boys S03E06 — 2026-04-16. Phase 3 Option B (SHM-routed overlay) SHIPPED 2026-04-16, awaiting smoke.
 
 **Live governance versions:** `gov-v2` / `contracts-v1` (see `agents/VERSIONS.md`)
 
@@ -52,7 +52,7 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 batches 2.1-2.5 shipped | Batch 2.6 (Shift+N player shortcut) pending; needs Agent 3 heads-up |
 | `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | not yet started | 5 phases ~11 batches scoped (PlaybackSession + source-switch reentrancy) |
 | `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | not yet started | 3 phases ~5 batches (sidecar sessionId filter + open/stop fence + VideoPlayer stop identity) |
-| `PLAYER_PERF_FIX_TODO.md` | Agent 3 | Phases 1+2 CLOSED; 3.2+3.A landed; 3.B reverted | retry-strategy call pending Hemanth (keyed mutex vs SHM-routed) |
+| `PLAYER_PERF_FIX_TODO.md` | Agent 3 | Phases 1+2 CLOSED; 3.2+3.A+3.B Option B (SHM-routed) SHIPPED | awaiting Hemanth smoke |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
 | `TANKORENT_FIX_TODO.md` | Agent 4B | All 7 phases SHIPPED | smoke pending |
 | `TANKORENT_HYGIENE_FIX` | Agent 4B | Phases 1+2+3 SHIPPED + committed | done; data-dir self-healing on next boot |
@@ -78,6 +78,7 @@ Archived memories: `memory/_archive/INDEX.md`. Quarterly audit per File Hygiene 
 - **STATUS.md header fields introduced** 2026-04-16: `Last header touch` + `Last agent-section touch` two-field discipline (Rule 12).
 - **Memory consolidation** 2026-04-16: 7 archive moves + 1 merge → 45 active entries, MEMORY.md ~46 lines.
 - **Governance bumped** 2026-04-16: gov-v1 → gov-v2 (slim reading order + Rules 12, 13 + Maintenance section + Congress auto-close).
+- **Automation surface live** 2026-04-16 (Track 4): `.claude/commands/{commit-sweep,brief,rotate-chat,build-verify}.md` slash commands; `.claude/scripts/{scan-pending-commits,session-brief,congress-check}.sh`; `.claude/agents/commit-sweeper.md` sub-agent; `.claude/settings.json` with SessionStart + UserPromptSubmit hooks.
 
 ---
 
