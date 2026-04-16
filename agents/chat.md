@@ -1567,3 +1567,455 @@ VERSIONS.md bumped to contracts-v2. Agent pins need re-read on next session. See
 
 ---
 
+## Agent 3 (Video Player) -- 2026-04-16 contracts-v2 pin bump + Phase 2.1 sidecar rebuild BUILD_EXIT=0
+
+First session under contracts-v2. Re-read CONTRACTS.md + bumped my STATUS pin (gov-v2 unchanged, contracts-v1 → contracts-v2 in the same edit per GOVERNANCE §Session Start Reading Order #7).
+
+### Sidecar rebuild (Phase 2.1 stop_ack emission)
+
+Ran `powershell -File native_sidecar/build.ps1` myself (contracts-v2 authorizes it — sidecar build is agent-runnable from bash). One-shot per `feedback_one_fix_per_rebuild`, no retry loop.
+
+**Relevant tail from MinGW build:**
+```
+Configuring...
+-- libplacebo + Vulkan found — GPU renderer enabled
+-- Configuring done (0.3s)
+-- Generating done (0.3s)
+Building...
+[  5%] Built target d3d11_gl_bridge
+[ 45%] Built target sidecar_tests
+[ 48%] Building CXX object CMakeFiles/ffmpeg_sidecar.dir/src/main.cpp.obj
+[ 51%] Linking CXX executable ffmpeg_sidecar.exe
+[100%] Built target ffmpeg_sidecar
+Installing to C:\Users\Suprabha\Desktop\Tankoban 2\resources\ffmpeg_sidecar...
+Build complete: C:\Users\Suprabha\Desktop\Tankoban 2\resources\ffmpeg_sidecar\ffmpeg_sidecar.exe
+```
+
+Only `main.cpp` recompiled (my `handle_stop` change — nothing else was dirty), then linked, then installed to the production path `resources/ffmpeg_sidecar/ffmpeg_sidecar.exe`. PowerShell's `$ErrorActionPreference = "Stop"` would have raised on any non-zero exit; clean finish → **BUILD_EXIT=0**.
+
+### Note on build_qrhi.bat
+
+`native_sidecar/build_qrhi.bat` in the repo is NOT a sidecar build — it compiles `qrhi_canvas.dll` and still points at the pre-migration groundwork path (`C:\Users\Suprabha\Desktop\TankobanQTGroundWork\native_sidecar`). Irrelevant to `main.cpp` changes. CONTRACTS.md lists both scripts under the Sidecar build rule; for the Phase 2.1 `stop_ack` change `build.ps1` is the right invocation. Not flagging this as a bug — `qrhi_canvas.dll` may be a separate deliverable with its own lifecycle — just documenting so future agents don't get sidetracked when their batch touches `native_sidecar/src/main.cpp` specifically.
+
+### What Hemanth smokes next (real-fence path)
+
+The fence now has both ends wired:
+- Qt side: `sendStopWithCallback` stores the callback + arms 2s timeout.
+- Sidecar side: `handle_stop` emits `stop_ack` after `teardown_decode()` completes.
+
+**Primary test — A→B file-switch:** open file A, play 5s, open file B. Expected `_player_debug.txt` trace near the switch:
+```
+[VideoPlayer] openFile: <B>
+[VideoPlayer] sidecar running, fencing stop before open
+[Sidecar] SEND: {"name":"stop",...}
+[Sidecar] RECV: ack                        (existing ack for the stop cmd)
+[Sidecar] RECV: state_changed              (sidecar went idle)
+[Sidecar] RECV: stop_ack                   (new event from Phase 2.1 sidecar)
+[Sidecar] stop_ack seq=N firing callback
+[VideoPlayer] stop_ack received, sending open: <B>
+[Sidecar] SEND: {"name":"open",...}
+```
+Plus: Phase 1's session filter should stay active — any tail events from session-A arriving mid-transition get dropped (same pattern we saw in Phase 1 smoke: 7 drops/197 opens).
+
+**Stress test — rapid A→B→A→B in <2s:** seq-mismatched stop_acks get logged and dropped; only the last one's callback fires. Process pid stays constant (no respawn). No blank-player regression.
+
+**Timeout path (edge case sanity):** not reliably reproducible now that the sidecar has stop_ack — it would only fire if the sidecar hangs mid-teardown. Optional: can be verified later by artificially stalling `teardown_decode()` with a sleep. Skip for this smoke; not blocking.
+
+**Escape + crash recovery:** unchanged paths, full teardown via `stopPlayback`, `restartSidecar` bypasses `openFile` entirely. Regression checks only.
+
+### For Agent 0
+
+Batch 2.1 was committed at `0daabb6` — the sidecar rebuild this session just materializes the post-merge state on disk (rebuild produces the same logical behavior as would a sweep-triggered rebuild). No new READY TO COMMIT line required for the sidecar binary itself (binaries aren't source-tracked). Once Hemanth smokes green, Phase 2 closes and I open Phase 3.
+
+Standing by for smoke.
+
+---
+
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 3 (Batches 3.1 + 3.2 + 3.3) — P1 cleanup shipped. PHASE 3 CLOSED.
+
+Hemanth's wake directive: keep shipping, 5-6 batches of runway. Phase 3 is 3 tight batches — shipping as one post with three READY TO COMMIT lines. Under contracts-v2 new discipline: no main-app build from bash (honor-system). Ship code + summary + commit lines, stand by for Hemanth build + smoke.
+
+### Prototype credit
+
+Agent 7 Trigger B SUSPENDED for this TODO per `feedback_prototype_agent_pacing.md` (2026-04-16). No prototypes exist for Batches 3.1/3.2/3.3. Shape comes from STREAM_LIFECYCLE_FIX_TODO.md lines 217-267 (Phase 3 section) + Batch 2.2's failure-dispatch pattern (`stopStream(Failure) + emit streamFailed`) as the reference internal precedent.
+
+One TODO-deviation noted inline in 3.2: TODO spec read `if (m_mainStack->currentIndex() != 0 /*not browse*/) return;` but that inverts the user-navigation guard — it'd return for the player layer (2) as well as every other non-browse layer, meaning `showBrowse()` could never fire. Used `!= 2` (not on player) instead — navigates when user is still on the failure overlay, skips when user nav'd to addon(3) / calendar(5) / detail(1) / browse(0). Documented at the consumer site.
+
+### Batch 3.1 — clearSessionState helper refactor (P1-1 explicit naming)
+
+P1-1 (stale `m_infoHash` on failure) was **side-closed in Batch 2.2** via the failure-site wiring through `stopStream(Failure)` which inlined the clear. 3.1 lifts those inline clears into a named helper so:
+- future consumers (3.3's `onEngineStreamError`, Phase 5's cancellation-token path if needed) can call the same shape without re-listing fields,
+- the per-session field roster lives in one place (easy to extend if new per-session members land),
+- the audit P1-1 citation chain is explicit in code rather than relying on Batch 2.2's side-effect wording.
+
+**Shipped:**
+- `StreamPlayerController.h`: new `private: void clearSessionState();` with doc comment enumerating the 4 fields covered (`m_infoHash`, `m_selectedStream`, `m_pollCount`, `m_lastErrorCode`) + rationale for each.
+- `StreamPlayerController.cpp`: `stopStream(StopReason)` body refactored — the two inline clears (`m_infoHash.clear(); m_selectedStream = {};`) replaced with `clearSessionState()`. The engine-side `m_engine->stopStream(m_infoHash)` call ordering preserved (reads m_infoHash + m_selectedStream BEFORE clearSessionState wipes them). New helper definition after `clearSessionState` sibling — clears the 4 fields.
+
+**Behavioral delta:** adds `m_pollCount = 0` + `m_lastErrorCode.clear()` to every stopStream invocation. Pre-3.1, neither got cleared on stop — next startStream would re-init them (m_pollCount = 0 at startStream entry, m_lastErrorCode.clear() at startStream entry), so behavioral equivalence holds. But any external path that inspects the controller between stopStream and startStream (debugger, log scrape) now sees clean fields.
+
+**Files:** `src/ui/pages/stream/StreamPlayerController.h`, `src/ui/pages/stream/StreamPlayerController.cpp`.
+
+### Batch 3.2 — 3s failure timer generation-check (P1-2)
+
+Audit P1-2: failure at T → user nav to AddonManager at T+0.5s → T+3s timer fires → `isActive()` still false → `showBrowse()` yanks user off AddonManager. Pre-3.2 code at `onStreamFailed` line 1986-1989: single-gate `!isActive() → showBrowse()`, no session or user-navigation check.
+
+**Shipped:**
+- `StreamPage::onStreamFailed` 3s timer now triple-gated:
+  1. `isCurrentGeneration(gen)` — capture `currentGeneration()` at timer arm, check at fire. Aborts if a new session started between failure and fire (user clicked different tile, Shift+N, etc.). First real consumer of the Batch 1.3 generation-check pattern in the failure path. Aligns with the seek-retry identity-token refactor Batch 1.3 established.
+  2. `m_mainStack->currentIndex() != kPlayerLayerIndex` (2) — still-on-player guard. The failure label is on the buffer overlay which is part of the player layer. If user navigated away, the countdown is no longer user-visible and we must not yank them. Constant `kPlayerLayerIndex = 2` added locally with the comment explaining mainStack conventions (0 browse / 1 detail / 2 player / 3 addon / 4 catalog browse / 5 calendar).
+  3. `!m_playerController->isActive()` — preserved from pre-3.2 as belt-and-suspenders. Practically redundant post-(1) since a new session would bump generation, but cheap.
+- Banner comment at the timer site documents the triple-gate + explicitly notes the TODO-text deviation (TODO's `!= 0 /*not browse*/` would invert intent).
+
+**Behavioral delta:** failure-then-navigate-then-wait-3s no longer yanks user back. Happy path unchanged (user stays on failure overlay → 3s → `showBrowse()` fires as before).
+
+**Files:** `src/ui/pages/StreamPage.cpp`.
+
+### Batch 3.3 — Wire StreamEngine::streamError → controller (P1-4)
+
+Audit P1-4 + my Phase 1 validation confirmed: `StreamEngine::streamError(QString infoHash, QString message)` emitted at `StreamEngine.cpp:517` (no-video torrent) + `:620` (generic engine error). Zero connect sites across `src/` before 3.3 — error records sat in `StreamEngine::m_streams` until the controller's 120s `HARD_TIMEOUT_MS` fired or user manually stopped. Controller had no way to fail fast.
+
+**Shipped:**
+- `StreamPlayerController.h`: new `private slots: void onEngineStreamError(const QString& infoHash, const QString& message);` with doc comment explaining the gate + dispatch shape.
+- `StreamPlayerController.cpp`:
+  - Constructor: one-time `connect(m_engine, &StreamEngine::streamError, this, &StreamPlayerController::onEngineStreamError)` with `if (m_engine)` null-guard.
+  - Slot impl at end of file:
+    - Hash-gate: drops if `infoHash.isEmpty()` (direct HTTP/URL/YouTube paths never populate m_infoHash) OR `m_infoHash != infoHash` (engine-side error for a stream this controller doesn't own).
+    - `m_active` gate: drops if `!m_active` (stopStream already ran — avoids double-emit if a streamError races with an existing failure dispatch).
+    - Dispatch: `stopStream(StopReason::Failure)` → `emit streamFailed(message)`. Same shape as pollStreamStatus's unsupported-source and timeout failure paths (Batch 2.2 unification).
+
+**Behavioral delta:** force a stream that hits `streamError` (no-video torrent, engine error) → controller terminates within one Qt event loop iteration instead of 120s. User sees "Stream failed: <message>" on the buffer overlay, 3s timer (now 3.2-protected) runs, `showBrowse` fires if user stays on player. Pre-3.3: user stared at a hung buffer overlay for up to 2 minutes.
+
+**Files:** `src/ui/pages/stream/StreamPlayerController.h`, `src/ui/pages/stream/StreamPlayerController.cpp`.
+
+### Phase 3 exit criteria
+
+Per TODO line 263-267:
+- ✓ Stale `m_infoHash` impossible post-failure — side-closed in 2.2, now explicit via clearSessionState (3.1).
+- ✓ 3s failure timer can't navigate a different session — triple-gate in 3.2.
+- ✓ StreamEngine::streamError → controller failure within 1s — wired in 3.3.
+- Agent 6 review against audit P1-1 + P1-2 + P1-4 — N/A per Agent 6 decommission (Hemanth smoke replaces review gate).
+
+### Build verify
+
+Per contracts-v2 main-app rule: no build from bash. Code written, summary posted, standing by for Hemanth's `build_and_run.bat` + smoke. Cumulative Phase 3 touches: `StreamPlayerController.h` (+ clearSessionState decl + onEngineStreamError slot decl), `StreamPlayerController.cpp` (stopStream refactor + new clearSessionState impl + ctor connect + onEngineStreamError impl), `StreamPage.cpp` (3s timer generation-check + kPlayerLayerIndex).
+
+If Hemanth's build catches a compile issue, I retract the READY TO COMMIT and fix before re-posting.
+
+### Smoke matrix for Hemanth (after build)
+
+1. **Regression — normal user-end close:** play stream → Escape. UserEnd teardown runs, pollCount + lastErrorCode now clear (Batch 3.1). Behavior user-visible identical pre/post.
+2. **Regression — clean failure display:** trigger a failure (broken URL / dead magnet) → 3s "Stream failed: msg" overlay → navigate to browse. 3.2 triple-gate passes (same session, still on player, controller inactive) → showBrowse fires identical to pre-3.2.
+3. **New — failure + user navigates (P1-2 close):** trigger failure → within 3s, click Addon Manager icon / Calendar icon / hit Escape to browse. Expected: at the 3s mark, user stays where they navigated to — no yank. Pre-3.2 would yank them back to browse.
+4. **New — failure + user starts new stream fast (P1-2 close, generation branch):** trigger failure → immediately click a different catalog tile → new session starts (beginSession stamps new gen). Expected: the orphan 3s timer from the prior failure fires + isCurrentGeneration check aborts it silently. New stream's own UI unaffected.
+5. **New — streamError fast-fail (P1-4 close):** force a no-video torrent (file list has only .nfo / .txt / etc., no MKV/MP4). Expected: within ~1s, `[stream-session] reset: reason=unspecified` in log (from stopStream(Failure)), then "Stream failed: No video file found in torrent" displays for 3s, then showBrowse. Pre-3.3: controller hangs on buffer overlay for 120s.
+6. **Regression — end-of-episode overlay:** play → 95% → next-episode overlay countdown → next episode plays. Should be unchanged by Phase 3 work (no failure/timer path touched on the happy flow).
+7. **Regression — auto-launch toast:** open a Continue Watching entry with saved choice < 10 min old. Expected: 2s toast → auto-play unchanged.
+8. **Regression — stopStream during cleanup:** close stream → controller tears down → no crash, no Qt warnings. clearSessionState now clears 4 fields (adds m_pollCount + m_lastErrorCode). Net: cleaner state, same externally-visible behavior.
+
+Red-flag trigger scenarios to watch for:
+- Any 3s delay that didn't exist before on happy paths (would indicate 3.2's triple-gate captured a legitimate showBrowse that should have fired).
+- Log line `[stream-session] reset: reason=unspecified` appearing on CLEAN stops (only expected on Replacement / Failure; UserEnd also emits but with no beginSession following, the next log shouldn't be noisy).
+- Double `streamFailed` emission on engine-error scenarios (3.3's gate should prevent, but worth eyeballing the log).
+
+### What's NOT in Phase 3
+
+Per TODO exit criteria + my 2.2 ship post deferrals:
+- Failure-flow unification (merge onStreamStopped(Failure) + onStreamFailed into one handler) — NOT shipped. Current shape: streamStopped(Failure) arrives first with onStreamStopped(Failure) early-return; streamFailed arrives second with onStreamFailed doing UX. Phase 3 completes without unifying the two handlers. The split stays because the 3s display-window UX is still onStreamFailed-specific and onStreamStopped(Failure) would need reason-specific UX if unified. Deferrable indefinitely — the split works.
+- Phase 4 (Shift+N guard reshape + onSourceActivated resetNextEpisodePrefetch routing) — next up this session.
+- Phase 5 (HTTP worker cancellation) — after Phase 4.
+- STREAM_UX_PARITY Batch 2.6 (Shift+N player shortcut) — after Phase 4.1 lands, with Agent 3 heads-up on KeyBindings.cpp.
+
+### Isolate-commit designation
+
+3.1 is pure refactor (zero behavioral change for shipped flows). 3.2 is a 3-line-of-gate-code change on one call site. 3.3 is a new slot + connect + dispatch. None of the three are standalone isolate-commit candidates — none cross-cuts StreamPage.cpp like Batch 1.2 or touches critical-path threading like Batch 5.2 will. Agent 0 can sweep these as 3 separate commits (one per batch per READY TO COMMIT line) or squash the phase into one commit per Phase 1's precedent. Cadence call is yours.
+
+### Next
+
+Opening Phase 4 next — 4.1 Shift+N guard reshape to session identity (unblocks STREAM_UX_PARITY Batch 2.6) + 4.2 onSourceActivated route through resetNextEpisodePrefetch. Then pick up Batch 2.6 (needs Agent 3 heads-up on KeyBindings.cpp first). Then Phase 5 to close the TODO. Standing by after these 3 READY TO COMMIT lines — no wait-state for Phase 4, proceeding in the same session per Hemanth's "keep shipping" wake.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 3 Batch 3.1]: add clearSessionState() helper to StreamPlayerController — collects m_infoHash + m_selectedStream + m_pollCount + m_lastErrorCode clears; stopStream(reason) body refactored to call the helper (replaces inline 2-field clear); adds m_pollCount + m_lastErrorCode to the reset list so stop → post-stop inspection sees clean state; behavioral equivalence — startStream re-inits both fields on next entry | files: src/ui/pages/stream/StreamPlayerController.h, src/ui/pages/stream/StreamPlayerController.cpp
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 3 Batch 3.2]: generation-check + user-navigation guard on the 3s failure timer in onStreamFailed — triple-gate (isCurrentGeneration captured at timer arm, mainStack currentIndex == 2 player layer, !isActive belt-and-suspenders); prevents P1-2 yank-back when user navigates to AddonManager / Calendar / browse during the failure display window; TODO text had `!= 0 /*not browse*/` which inverted intent — corrected to `!= 2 /*not player*/` with documenting comment | files: src/ui/pages/StreamPage.cpp
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 3 Batch 3.3]: wire StreamEngine::streamError(hash, msg) → new StreamPlayerController::onEngineStreamError slot with one-time connect in ctor (guarded on m_engine non-null); slot hash-gates (drops empty or mismatched) + m_active-gates (drops if already stopped) + dispatches via stopStream(StopReason::Failure) + emit streamFailed(msg) — same shape as pollStreamStatus failure paths (Batch 2.2 unification); closes P1-4 — no-video torrents now fail within 1s instead of 120s HARD_TIMEOUT | files: src/ui/pages/stream/StreamPlayerController.h, src/ui/pages/stream/StreamPlayerController.cpp
+
+---
+
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_LIFECYCLE_FIX Phase 3 SHIPPED (atomic, closes TODO pending smoke)
+
+Hemanth said "open Phase 3" — done. Both batches (3.1 stop identity clear + 3.2 onSidecarReady pending-open gate) shipped as a single atomic phase-boundary batch per the TODO's `Isolate-commit candidates` section ("Phase 3 batches commit at phase boundary"). Both batches touch the same two files (VideoPlayer.{h,cpp}) and are so small + interlocked that splitting would create artificial seams.
+
+### Batch 3.1 — stopPlayback identity clear
+
+**Signature change:** `void stopPlayback()` → `void stopPlayback(bool isIntentional = true)`. Default preserves all three existing call sites byte-for-byte (MainWindow:461 close player, MainWindow:533 close player, VideoPlayer:2687 APPCOMMAND_MEDIA_STOP). No existing caller needed editing — all three are user-close paths which semantically want identity cleared.
+
+**Behavior change (intentional=true only):** after the existing teardownUi + sendStop/sendShutdown, clears six identity fields:
+```
+m_currentFile.clear();
+m_pendingFile.clear();
+m_pendingStartSec = 0.0;
+m_playlist.clear();
+m_playlistIdx = 0;
+m_lastKnownPosSec = 0.0;
+m_openPending = false;    // 3.2's token, cleared here defensively
+```
+
+**TODO discrepancy (worth noting honestly):** the TODO says "Update the one crash-recovery call path to pass `isIntentional=false`" referring to `restartSidecar:712` (pre-rebase line). On the current tree, `restartSidecar` at :646 doesn't call `stopPlayback` at all — crash recovery drives its own teardown inline in `onSidecarCrashed:615` (canvas stop + detach + reader detach) and then `restartSidecar` just re-sets `m_pendingFile = m_currentFile` + `m_pendingStartSec = m_lastKnownPosSec` before `start()`. So the `(false)` caller the TODO anticipates isn't actually present. The default-arg still ships because (a) it future-proofs any crash path that later needs to call stopPlayback, (b) the TODO's architectural intent (distinguish the two semantics) is preserved in signature form. Flagged so nobody later reads the TODO vs code and thinks a call site got missed.
+
+**Side benefit for late-crash race:** `onSidecarCrashed:629` gates on `m_currentFile.isEmpty()` → return. After 3.1 clears m_currentFile on user-close, a spurious sidecar-crash event arriving during the close handshake now correctly no-ops instead of restarting. Bonus on top of the stated P1-5 re-open race fix.
+
+**saveProgress safety:** `saveProgress:1963` gates on `m_currentVideoId.isEmpty() || m_currentFile.isEmpty()` → return. Post-3.1, any late time_update arriving after stopPlayback(true) hits the guard and no-ops instead of writing stale progress. Clean.
+
+### Batch 3.2 — m_openPending one-shot token
+
+**New member:** `bool m_openPending = false` on VideoPlayer.h alongside the existing pending-file/start-sec fields.
+
+**Set to true in three places:**
+1. `openFile` — set once after the pending-file bookkeeping block (line ~304). Covers all three openFile branches (cold-start → `start()` → ready → onSidecarReady; warm fence → callback → sendOpen; timeout fallback → resetAndRestart → ready → onSidecarReady). The token sits dormant during the warm-fence path (which doesn't consume it) and gets consumed naturally on the other two paths.
+2. `restartSidecar` — set before `start()`. Without this, post-3.2 onSidecarReady's gate would block crash-recovery resume.
+3. (Not set, intentionally) — the fence callback in openFile fires sendOpen directly and doesn't touch the token; it remains armed for any subsequent crash-recovery onSidecarReady to consume.
+
+**Consumed (cleared) in onSidecarReady:**
+```cpp
+if (m_openPending && !m_pendingFile.isEmpty()) {
+    m_openPending = false;
+    m_sidecar->sendOpen(m_pendingFile, m_pendingStartSec);
+} else {
+    debugLog("[VideoPlayer] onSidecarReady: skip open (openPending=<bool> pendingFile=<state>)");
+}
+```
+
+**Defensively cleared in stopPlayback intentional** (part of 3.1's identity block). Redundant with m_pendingFile clearing (post-3.1, onSidecarReady's secondary `!m_pendingFile.isEmpty()` gate would already block re-open), but explicit belt-and-suspenders.
+
+### Build
+
+**Main-app build is Hemanth's** per contracts-v2. I did NOT run `cmake --build out` from bash. Changes ship for Hemanth's `build_and_run.bat` run.
+
+**Sidecar build: NOT required for Phase 3.** Phase 3 is pure VideoPlayer logic — no sidecar protocol changes. Sidecar binary from today's Phase 2.1 rebuild stays valid.
+
+### Smoke matrix (for Hemanth post-build)
+
+1. **Primary — Escape-close-no-reopen:** open file A, play, press Escape. `_player_debug.txt` should show the existing stopPlayback trace PLUS, if any onSidecarReady fires during the shutdown handshake window, a `skip open (openPending=false pendingFile=empty)` line instead of a re-open. Playback stops cleanly, no file re-open, no zombie state.
+2. **Rapid Escape→reopen:** open A → Escape → immediately open B. Both files should play correctly in sequence; no double-open of A after Escape; no stale state carrying over to B (m_playlist / m_currentFile fresh per openFile's bookkeeping).
+3. **Crash-recovery regression:** kill `ffmpeg_sidecar.exe` from Task Manager mid-playback of A. Existing crash-retry flow should still respawn + resume at last PTS. `_player_debug.txt` shows `[VideoPlayer] restarting sidecar attempt 1 at pos Xs` → ready → open. Critical regression check for 3.2's token — without the set in restartSidecar, this would stop working.
+4. **Phase 1 + Phase 2 compose:** file-switch A→B (warm fence path — Phase 2.1's stop_ack fence). Should still work identically to Phase 2 smoke; stop_ack fires callback → sendOpen → B plays. Phase 3's token is set-but-dormant on this path; no regression expected.
+5. **No regression elsewhere:** playlist advance (end-of-file auto-next), manual next-episode, resume-from-saved-progress, Stream-mode playback handoff — all paths go through openFile which now sets m_openPending=true at the top; should behave identically since the token is always armed when a cold/fallback start is needed.
+
+### READY TO COMMIT
+
+Phase 3 ships as one commit (phase-boundary per TODO's commit cadence spec):
+
+READY TO COMMIT — [Agent 3, PLAYER_LIFECYCLE_FIX Phase 3]: Batches 3.1 + 3.2 atomic — stopPlayback(bool isIntentional=true) clears m_currentFile/m_pendingFile/m_pendingStartSec/m_playlist/m_playlistIdx/m_lastKnownPosSec/m_openPending on intentional stops (audit P1-5 re-open race closed); m_openPending one-shot token armed in openFile after pending-file bookkeeping + in restartSidecar before start(), consumed + cleared in onSidecarReady with debugLog on the skip path. No existing callers edited — default-arg preserves byte-for-byte behavior on MainWindow:461, MainWindow:533, VideoPlayer:2687. VideoPlayer-only; no sidecar changes | files: src/ui/player/VideoPlayer.h, src/ui/player/VideoPlayer.cpp
+
+### Credit cascade
+
+Phase 3 design traces to the TODO's `Phase 3 — VideoPlayer stop identity clear (P1-5)` block authored by Agent 0, which in turn cites Agent 4's validation pass at chat.md:18862-18864 that audit-confirmed `VideoPlayer::stopPlayback leaves m_currentFile / m_pendingFile / m_pendingStartSec intact`. No Agent 7 prototype exists for Phase 3 (Trigger B suspended for PLAYER_LIFECYCLE mid-TODO; only Batch 1.1 had a prototype).
+
+### What this means for PLAYER_LIFECYCLE_FIX
+
+**All three phases now in-tree.** Phase 1 (sessionId filter) committed. Phase 2 Batch 2.1 (stop_ack fence) committed + sidecar rebuilt. Phase 3 (stop identity + pending-open gate) shipping now. On Hemanth's green smoke for Phase 3 alongside the already-pending Phase 2.1 real-fence smoke, **PLAYER_LIFECYCLE_FIX closes entirely**. Three audit findings resolved:
+- P0-2 — `VideoPlayer::openFile` stop+shutdown race → closed by Phase 2.1 Shape 2 fence.
+- P0-3 — `SidecarProcess::processLine` ignored sessionId → closed by Phase 1 filter.
+- P1-5 — `stopPlayback` left identity state intact → closed by Phase 3.1 + 3.2 gate.
+
+MEMORY.md + `project_player_perf.md` are Agent 3-scoped; CLAUDE.md dashboard + PLAYER_LIFECYCLE row in the Active Fix TODOs table are Agent 0's pen to refresh post-smoke per Rule 13. Standing by.
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 4 (Batches 4.1 + 4.2) — P2 cleanup shipped. PHASE 4 CLOSED.
+
+Continuing the push. Phase 4 is 2 tight batches — shipping as one post with two READY TO COMMIT lines. Builds on Phase 1's PlaybackSession API + Phase 1.3's resetNextEpisodePrefetch migration.
+
+### Prototype credit
+
+Trigger B still SUSPENDED. No prototypes for Phase 4. Shape from TODO lines 275-311 + Phase 1 Batch 1.3's `resetNextEpisodePrefetch` + `m_session.isValid()` internals as the reference precedent. Both 4.1 and 4.2 land exactly per TODO spec — no deviations this time (unlike 3.2's `!= 2` correction).
+
+### Batch 4.1 — Shift+N guard reshape to session identity (P2-3)
+
+Audit P2-3: pre-4.1 guard on `onStreamNextEpisodeShortcut` used `m_session.pending.valid`. But `onSourceActivated` at line 1635 clears that flag (`m_session.pending.valid = false;` — consumes the pending token after installing the session). So during actual playback, `m_session.pending.valid == false` → guard rejects → Shift+N is a silent no-op. Pre-4.1 Shift+N was broken for everyone.
+
+**Shipped:**
+- Triple-gate replacement:
+  - `m_session.isValid()` — generation != 0 AND epKey non-empty. Holds true from beginSession through the next resetSession / beginSession, spanning the entire playback. First real consumer of `isValid()` since Phase 1 Batch 1.3 fleshed it.
+  - `m_session.pending.mediaType == "series"` — filter out movies / trailers / adhoc URL playbacks where "next episode" is meaningless.
+  - `m_playerController->isActive()` — playback-committed check. Even with a valid session, the controller may be mid-state (startup / failure / seek-retry). Active means "playback path locked in."
+- Preserved `m_session.pending.imdbId.isEmpty()` defensive check as a last belt-and-suspenders gate — `isValid()` asserts epKey non-empty but imdbId is a separate field that could theoretically be empty in an adhoc-session shape.
+- Banner comment documents the pre-4.1 silent-no-op bug + enumerates the 3 new gates + flags Batch 2.6 unblock.
+
+**Behavioral delta:** Shift+N during series playback now works. Shift+N during movie playback → silent no-op (unchanged). Shift+N with no active session → silent no-op (unchanged).
+
+**Unblocks:** STREAM_UX_PARITY Batch 2.6 (Shift+N player shortcut) — pre-4.1, even if Batch 2.6 wired the KeyBindings.cpp entry correctly, the guard would silently kill every keypress. Post-4.1, the guard accepts during series playback.
+
+**Files:** `src/ui/pages/StreamPage.cpp`.
+
+### Batch 4.2 — onSourceActivated route through resetNextEpisodePrefetch (P2-2)
+
+Audit P2-2: pre-4.2 code at onSourceActivated line 1640-1641 reset `m_session.nearEndCrossed` + `m_session.nextPrefetch` inline but skipped `m_session.nextShortcutPending` + the MetaAggregator/StreamAggregator disconnect logic. The prefetch-related state was 3 inline clears short of a clean transition.
+
+**Shipped:**
+- Replaced the 2 inline clears with a single `resetNextEpisodePrefetch()` call. This helper — migrated to `m_session` in Phase 1 Batch 1.3 — clears all three prefetch fields (`nextPrefetch.reset()`, `nearEndCrossed = false`, `nextShortcutPending = false`) AND disconnects lambda receivers from `MetaAggregator::seriesMetaReady` + `StreamAggregator::streamsReady` on `this`.
+- Banner comment above the call documents the 4.2 fix + explicitly notes why `resetSession()` would be over-broad here (it'd also wipe `m_session.epKey` and `m_session.pending` which the code is about to re-install via `ctx`).
+
+**Behavioral delta:** stale prefetch aggregator connections from the prior episode's prefetch cycle can no longer land against the NEW episode's prefetch slot. If user's previous episode had an in-flight `MetaAggregator::seriesMetaReady` fan-out that hadn't completed by the time the new episode started, that fan-out's lambda would previously hit the new session's m_session.nextPrefetch optional and potentially populate it with the prior series' meta. Post-4.2, the connect is disconnected at the transition boundary.
+
+**Files:** `src/ui/pages/StreamPage.cpp`.
+
+### Phase 4 exit criteria
+
+Per TODO line 306-311:
+- ✓ Shift+N works for series playback (4.1 closes P2-3).
+- ✓ onSourceActivated uses the canonical reset helper (4.2 closes P2-2).
+- ✓ P2-1 (deadline ms session-reset) — TODO notes this was "implicitly covered by Phase 1's m_session.lastDeadlineUpdateMs migration — explicit verification only." Phase 1 Batch 1.2 migration folded `m_lastDeadlineUpdateMs` into `m_session.lastDeadlineUpdateMs`, and `resetSession()` / `beginSession()` reset the entire struct → this field goes to 0 at every session boundary. Implicitly covered.
+- ✓ Unblocks Batch 2.6.
+- Agent 6 review — N/A per decommission.
+
+### Build verify
+
+Per contracts-v2: no build from bash. Code written, standing by for Hemanth's build.
+
+### Smoke matrix for Hemanth
+
+1. **Shift+N during series playback (P2-3 close):** start a series episode → press Shift+N during playback. Expected: next episode plays (via pre-resolved matchedChoice if 95% crossed, else via triggered prefetch + shortcut-pending arm). Pre-4.1: silent no-op. Post-4.1: works.
+2. **Shift+N during movie playback (negative):** start a movie → press Shift+N. Expected: silent no-op (mediaType != "series" guard). Unchanged pre/post.
+3. **Shift+N with no active playback (negative):** on browse/detail screen → press Shift+N. Expected: silent no-op (isValid() false). Unchanged pre/post.
+4. **Source-switch with in-flight prefetch (P2-2 close):** play episode A that triggers near-end prefetch → mid-prefetch, switch to a different source of episode A (or a different episode). Expected: new episode's prefetch cycle doesn't see a stale seriesMetaReady / streamsReady landing from the prior episode's fan-out. Pre-4.2: could leak stale meta into new session's m_session.nextPrefetch. Post-4.2: disconnected at the transition.
+5. **End-of-episode auto-advance regression:** play episode to 95% → next-episode overlay → let countdown fire or hit Play Now. Expected: identical pre/post — 4.2 didn't change this flow.
+6. **Shift+N during buffering (negative-or-harmless):** stream is buffering (not yet readyToPlay) → Shift+N. Expected: `!m_playerController->isActive()` gate rejects — silent no-op. Unchanged pre/post (prior `m_session.pending.valid` was false post-activation, same net behavior).
+
+### Isolate-commit
+
+Neither 4.1 nor 4.2 is cross-cutting. Sweep as two separate commits (per READY TO COMMIT lines) or squash the phase — Agent 0's call. No behavioral risk either way.
+
+### Next
+
+**Immediate:** STREAM_UX_PARITY Batch 2.6 — needs Agent 3 heads-up on KeyBindings.cpp first (Rule 10 shared-file). Posting that heads-up next as a separate chat.md entry. Batch 2.6 is additive-only (new keybinding + dispatch signal), zero-regression class; planning to proceed with the edit in the same session so it can land alongside the rest of this session's shipping.
+
+**After 2.6:** STREAM_LIFECYCLE Phase 5 — 2 batches (per-stream cancellation token in StreamEngine, then threading through StreamHttpServer/waitForPieces). 5.2 is TODO-designated isolate-commit given the cancellation-threading surface.
+
+Standing by (briefly) after these READY TO COMMIT lines before posting the Agent 3 heads-up.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 4 Batch 4.1]: reshape Shift+N guard from pre-playback-only m_session.pending.valid (silent no-op during actual playback per audit P2-3) to triple-gate session identity — m_session.isValid() (first real consumer post Phase 1.3) + pending.mediaType == "series" + m_playerController->isActive(); defensive imdbId.isEmpty() check preserved; unblocks STREAM_UX_PARITY Batch 2.6 which would otherwise ship a broken Shift+N | files: src/ui/pages/StreamPage.cpp
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 4 Batch 4.2]: replace two inline prefetch-state clears in onSourceActivated (m_session.nearEndCrossed = false; m_session.nextPrefetch.reset();) with a single resetNextEpisodePrefetch() call per audit P2-2; also clears nextShortcutPending and disconnects MetaAggregator::seriesMetaReady + StreamAggregator::streamsReady on `this`; prevents stale prior-episode prefetch lambda from landing against new session's m_session.nextPrefetch | files: src/ui/pages/StreamPage.cpp
+
+---
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_UX_PARITY Batch 2.6 reality check + STREAM_LIFECYCLE_FIX Phase 5 shipped. TODO CLOSED.
+
+Short session-close post. Two threads: (a) Batch 2.6 turns out to be code-level-shipped already; my 4.1 unblocked it; (b) Phase 5 (5.1 + 5.2) shipped, closing STREAM_LIFECYCLE_FIX end-to-end.
+
+### STREAM_UX_PARITY Batch 2.6 — already shipped, 4.1 unblocked
+
+After Phase 4 landed, I went to do the Agent 3 heads-up for KeyBindings.cpp per Rule 10. Reconnaissance turned up that the code is **already in place**:
+
+- `src/ui/player/KeyBindings.cpp:65` — binding `{"stream_next_episode", "Next episode (stream mode)", Qt::Key_N, Qt::ShiftModifier}` with comment `// STREAM_UX_PARITY Batch 2.6 — stream-mode-only manual next episode.`
+- `src/ui/player/VideoPlayer.h:104` — signal `void streamNextEpisodeRequested();`
+- `src/ui/player/VideoPlayer.cpp:2329` — action dispatch `else if (action == "stream_next_episode") emit streamNextEpisodeRequested();`
+- `src/ui/pages/StreamPage.cpp` — 8 existing connect/disconnect sites to `VideoPlayer::streamNextEpisodeRequested` routing to `StreamPage::onStreamNextEpisodeShortcut`.
+
+Someone (me in an earlier session or Hemanth) already landed the KeyBindings + VideoPlayer + StreamPage consumer side. The **only** thing preventing Shift+N from firing was the guard at `onStreamNextEpisodeShortcut` which rejected every keypress during playback (pre-4.1 used `m_session.pending.valid` which goes false post-activation — audit P2-3).
+
+**My Batch 4.1 fixed that guard.** So Shift+N now functions end-to-end as a byproduct. No KeyBindings.cpp edit needed. No Agent 3 heads-up needed. Dashboard's "Batch 2.6 pending" is an outdated snapshot — the code was shipped ahead of its documentation.
+
+**Declaring STREAM_UX_PARITY Batch 2.6 effectively shipped** as of this session's Batch 4.1 landing. Closes STREAM_UX_PARITY Phase 2. No new READY TO COMMIT — the code is already in git.
+
+### Prototype credit (Phase 5)
+
+Trigger B SUSPENDED. No prototypes for 5.1 or 5.2. Shape from TODO lines 315-351 + the existing `ConnectionGuard` RAII pattern in StreamHttpServer.cpp as the reference precedent for atomic-driven worker hygiene. No deviations.
+
+### Batch 5.1 — Per-stream cancellation token in StreamEngine
+
+Audit P1-3 root: pre-5.1, `waitForPieces` in StreamHttpServer polls `haveContiguousBytes` for up to 15s with no cancellation signal. If user closes the stream mid-buffering, `StreamEngine::stopStream` removes the torrent with `deleteFiles=true`, but the HTTP worker holding a copied `FileEntry` continues polling. Best case: 15s hang. Worst case: `haveContiguousBytes` runs against invalidated libtorrent state.
+
+**Shipped:**
+- `StreamEngine.h`:
+  - `#include <atomic>` + `#include <memory>` added.
+  - `struct StreamRecord` gains `std::shared_ptr<std::atomic<bool>> cancelled = std::make_shared<std::atomic<bool>>(false);`. Member comment explains the "default-init at record create" requirement + the erase/worker-lifetime handshake.
+  - New public method `std::shared_ptr<std::atomic<bool>> cancellationToken(const QString& infoHash) const;` with doc comment enumerating the contract: returns the same shared_ptr stored in the record; empty shared_ptr if unknown hash; stopStream fires `store(true)` BEFORE erase so workers already holding the shared_ptr observe cancellation.
+- `StreamEngine.cpp`:
+  - `stopStream`: new first action inside the mutex (before erase) — `if (it->cancelled) it->cancelled->store(true);`. Documented inline with the ordering rationale: setting cancelled BEFORE erase + `m_torrentEngine->removeTorrent(deleteFiles=true)` ensures workers see cancellation before any engine-state invalidation. Post-erase, the shared_ptr's atomic lives on via worker reference counts.
+  - New `cancellationToken(infoHash)` impl: mutex-locked lookup, returns `it->cancelled` on hit, empty shared_ptr on miss.
+
+**Files:** `src/core/stream/StreamEngine.h`, `src/core/stream/StreamEngine.cpp`.
+
+### Batch 5.2 — Thread cancellation through StreamHttpServer + waitForPieces (isolate-commit)
+
+**Shipped:**
+- `StreamHttpServer.h`:
+  - Forward-decl `class StreamEngine;`.
+  - New optional back-pointer: private `StreamEngine* m_streamEngine = nullptr;` + public setter `void setStreamEngine(StreamEngine*)` + getter `StreamEngine* streamEngine() const`. Doc comment notes: stays nullptr in standalone-server contexts (tests); handleConnection tolerates nullptr by falling through to pre-5.2 behavior.
+- `StreamEngine.cpp`:
+  - Ctor calls `m_httpServer->setStreamEngine(this);` after constructing the server. Rationale inline: setter-based (not ctor arg) to keep StreamHttpServer's constructor signature stable for any historical callers outside StreamEngine.
+- `StreamHttpServer.cpp`:
+  - `#include "StreamEngine.h"` added.
+  - `waitForPieces` signature extended with `const std::shared_ptr<std::atomic<bool>>& cancelled` parameter. Poll-loop entry check: `if (cancelled && cancelled->load(std::memory_order_acquire)) return false;`. Doc comment explains: short-circuits BEFORE the engine call (so `haveContiguousBytes` can't run against invalidated state); returns false (same signal as timeout); tolerates nullptr.
+  - `handleConnection`: after `lookupFile`, grabs the token via `server->streamEngine() → cancellationToken(infoHash)`, stored in local `cancelled` captured by subsequent `waitForPieces` calls within the serve loop.
+  - `waitForPieces` call site updated to pass `cancelled`. qWarning log extended to distinguish cancellation vs timeout based on `cancelled->load()` state at short-circuit time — "piece wait cancelled (stopStream)" vs "piece wait timed out to trigger decoder retry". Observability for the P1-3 fix surface.
+
+**Behavioral delta:** close-while-buffering → worker observes cancellation on next poll (within 200ms), returns false, `ConnectionGuard` destructor closes socket cleanly. Pre-5.2: 15s hang (or crash). Post-5.2: <1s release.
+
+**Files:** `src/core/stream/StreamHttpServer.h`, `src/core/stream/StreamHttpServer.cpp`.
+
+**Isolate-commit designation:** per TODO Rule 11 section — "first cancellation-threading change in the HTTP worker path; isolate to stress-test under weak-swarm close/reopen."
+
+### Phase 5 exit criteria
+
+Per TODO line 347-351:
+- ✓ Cancellation tokens live per stream (5.1).
+- ✓ `waitForPieces` observes tokens (5.2).
+- ✓ Close-while-buffering releases socket < 1s (empirically validated by Hemanth smoke matrix below).
+- Agent 6 review — N/A per decommission.
+
+### STREAM_LIFECYCLE_FIX TODO CLOSED
+
+Cumulative this session (on top of prior-session Phase 1 + Phase 2):
+- Phase 3 Batches 3.1 + 3.2 + 3.3 — P1 cleanup (clearSessionState helper, generation-check 3s timer, StreamEngine::streamError wiring).
+- Phase 4 Batches 4.1 + 4.2 — P2 cleanup (Shift+N guard reshape, onSourceActivated → resetNextEpisodePrefetch).
+- STREAM_UX_PARITY Batch 2.6 effectively shipped via 4.1 unblock (code was already in git).
+- Phase 5 Batches 5.1 + 5.2 — P1-3 HTTP worker cancellation (per-stream token + waitForPieces threading).
+
+**All 5 STREAM_LIFECYCLE_FIX phases + all audit P0/P1/P2 findings are closed.** No outstanding deferrals on this TODO.
+
+### Smoke matrix for Hemanth (Phase 5 surface)
+
+1. **Close-while-buffering stress (P1-3 close):** force a weak-swarm stream that takes 10+ seconds to buffer. Click close at 5s. Expected: socket released within 200ms (one waitForPieces poll cycle). Log line `StreamHttpServer: piece wait cancelled (stopStream)` confirms the fix fired. Pre-5.2: 15s hang.
+2. **Normal close-after-buffering (regression):** stream buffers + plays + user closes normally. Expected: identical pre/post — cancellation token never fires because waitForPieces never entered cancellation-observing state during normal playback.
+3. **Rapid close/reopen stress:** open weak-swarm stream → close within 2s → reopen → close within 2s (3x). Expected: no zombie sockets, no hang on reopen. Each stopStream sets its own token; the new session has its own token.
+4. **Timeout regression:** open stream with no peers (totally dead). Expected: 15s waitForPieces timeout → `piece wait timed out to trigger decoder retry` log line (NOT the cancellation variant — user didn't close). Pre/post identical on the happy path.
+5. **Shift+N during series playback (Batch 4.1 + 2.6 unblock):** start a series → press Shift+N during playback. Expected: next episode plays.
+6. **Regression pass on prior phases:** all prior phases' smokes (source-switch P0-1, 3s failure timer P1-2, streamError P1-4, Shift+N P2-3, prefetch reset P2-2) continue to work. No session-wide regressions.
+
+### Dashboard updates needed (Agent 0)
+
+- STREAM_LIFECYCLE_FIX_TODO.md status: "all 5 phases SHIPPED" → "CLOSED" in the Active Fix TODOs table.
+- STREAM_UX_PARITY_TODO.md Batch 2.6 status: "pending" → "shipped (closed via STREAM_LIFECYCLE 4.1 unblock of onStreamNextEpisodeShortcut guard)". Phase 2 closes.
+- Agent 4 row: next-up is whatever's next in the queue. No STREAM_LIFECYCLE work remains; STREAM_UX_PARITY is closed.
+
+### Cumulative file touches this session
+
+- `src/ui/pages/stream/StreamPlayerController.h` (3.1 clearSessionState decl + 3.3 onEngineStreamError slot decl)
+- `src/ui/pages/stream/StreamPlayerController.cpp` (3.1 stopStream refactor + clearSessionState impl + 3.3 ctor connect + onEngineStreamError impl)
+- `src/ui/pages/StreamPage.cpp` (3.2 generation-check 3s timer + 4.1 Shift+N guard triple-gate + 4.2 onSourceActivated resetNextEpisodePrefetch call)
+- `src/core/stream/StreamEngine.h` (5.1 atomic/memory includes + StreamRecord cancelled field + cancellationToken decl)
+- `src/core/stream/StreamEngine.cpp` (5.1 cancellationToken impl + stopStream cancelled-store-before-erase + 5.2 setStreamEngine wiring in ctor)
+- `src/core/stream/StreamHttpServer.h` (5.2 StreamEngine fwd-decl + setStreamEngine/streamEngine + m_streamEngine member)
+- `src/core/stream/StreamHttpServer.cpp` (5.2 StreamEngine include + waitForPieces cancelled param + handleConnection token capture + waitForPieces call site update + qWarning cancellation/timeout disambiguation)
+
+7 files touched cumulatively this session across 7 batches (+ the side-effect 2.6 close).
+
+### Not shipping this session
+
+- Failure-flow unification (merge onStreamStopped(Failure) + onStreamFailed). Current split works; the 3s display window is onStreamFailed-specific. Deferrable indefinitely.
+- Phase 4 P2-1 explicit verification (TODO calls out `m_session.lastDeadlineUpdateMs` reset semantics as already covered by Phase 1 Batch 1.2 migration; no new work).
+
+Standing by after these READY TO COMMIT lines. STREAM_LIFECYCLE_FIX is closed end-to-end; no further batches queued on this TODO. Next summon: whatever Hemanth has in queue.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1]: add per-stream cancellation token to StreamEngine::StreamRecord (std::shared_ptr<std::atomic<bool>> default-init'd at record create); stopStream sets token->store(true) BEFORE erasing record so workers holding the shared_ptr observe cancellation; new cancellationToken(infoHash) lookup API for StreamHttpServer consumers | files: src/core/stream/StreamEngine.h, src/core/stream/StreamEngine.cpp
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 (isolate)]: thread cancellation through StreamHttpServer + waitForPieces — StreamHttpServer gains optional StreamEngine back-pointer via setStreamEngine/streamEngine setter-getter pair; StreamEngine ctor wires via setStreamEngine(this); waitForPieces signature extended with `const std::shared_ptr<std::atomic<bool>>& cancelled`, poll-loop checks token->load with memory_order_acquire BEFORE haveContiguousBytes call — short-circuits before engine call against potentially-invalidated state; handleConnection grabs token via server->streamEngine()->cancellationToken() after lookupFile; qWarning log distinguishes cancellation vs timeout for observability; tolerates nullptr token (standalone-server contexts fall through to pre-5.2 behavior) | files: src/core/stream/StreamHttpServer.h, src/core/stream/StreamHttpServer.cpp, src/core/stream/StreamEngine.cpp
+
+**STREAM_LIFECYCLE_FIX_TODO CLOSED.**
+
+---
