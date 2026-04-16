@@ -2,6 +2,8 @@
 #include "encoding_detect.h"
 
 #include <ass/ass.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -39,6 +41,46 @@ static FILE* sub_log() {
     return f;
 }
 #define SUB_LOG(...) do { FILE* _f = sub_log(); if (_f) { std::fprintf(_f, __VA_ARGS__); std::fflush(_f); } } while(0)
+
+namespace {
+struct FitRect {
+    int x = 0;
+    int y = 0;
+    int w = 1;
+    int h = 1;
+};
+
+FitRect fit_aspect_rect(int canvas_w, int canvas_h, double video_aspect) {
+    canvas_w = std::max(1, canvas_w);
+    canvas_h = std::max(1, canvas_h);
+    if (video_aspect <= 0.0) {
+        video_aspect = static_cast<double>(canvas_w) / static_cast<double>(canvas_h);
+    }
+
+    FitRect r;
+    const double canvas_aspect = static_cast<double>(canvas_w) / static_cast<double>(canvas_h);
+    if (video_aspect > canvas_aspect) {
+        r.w = canvas_w;
+        r.h = std::clamp(static_cast<int>(std::lround(canvas_w / video_aspect)), 1, canvas_h);
+        int spare = canvas_h - r.h;
+        if ((spare & 1) != 0 && r.h > 1) {
+            --r.h;
+            spare = canvas_h - r.h;
+        }
+        r.y = spare / 2;
+    } else {
+        r.h = canvas_h;
+        r.w = std::clamp(static_cast<int>(std::lround(canvas_h * video_aspect)), 1, canvas_w);
+        int spare = canvas_w - r.w;
+        if ((spare & 1) != 0 && r.w > 1) {
+            --r.w;
+            spare = canvas_w - r.w;
+        }
+        r.x = spare / 2;
+    }
+    return r;
+}
+}
 
 // Default ASS header for SRT/text subtitles
 static const char* DEFAULT_ASS_HEADER =
@@ -195,11 +237,33 @@ void SubtitleRenderer::render_thread_func() {
 // ---------------------------------------------------------------------------
 
 void SubtitleRenderer::set_frame_size(int width, int height) {
+    configure_geometry(width, height, width, height);
+}
+
+void SubtitleRenderer::configure_geometry(int video_w, int video_h,
+                                          int canvas_w, int canvas_h) {
     std::lock_guard<std::mutex> lock(mutex_);
-    frame_w_ = width;
-    frame_h_ = height;
+    if (video_w <= 0 || video_h <= 0) return;
+    if (canvas_w <= 0 || canvas_h <= 0) {
+        canvas_w = video_w;
+        canvas_h = video_h;
+    }
+
+    video_w_ = video_w;
+    video_h_ = video_h;
+    frame_w_ = canvas_w;
+    frame_h_ = canvas_h;
+
+    const FitRect rect = fit_aspect_rect(
+        canvas_w, canvas_h,
+        static_cast<double>(video_w) / static_cast<double>(video_h));
+    video_rect_x_ = rect.x;
+    video_rect_y_ = rect.y;
+    video_rect_w_ = rect.w;
+    video_rect_h_ = rect.h;
+
     if (renderer_) {
-        ass_set_frame_size(renderer_, width, height);
+        ass_set_frame_size(renderer_, canvas_w, canvas_h);
         // PLAYER_UX_FIX Phase 4.1 — storage_size must be the UNSCALED
         // source video dimensions for correct aspect / blur / transforms
         // / VSFilter-compatible behavior per libass docs. Prior code
@@ -211,8 +275,29 @@ void SubtitleRenderer::set_frame_size(int width, int height) {
         // frame_size (canvas dims) from storage_size (video dims); the
         // call site will move to use a separately-stored video-stream
         // size. mpv reference: sd_ass.c:767-771. VLC: libass.c:431-438.
-        ass_set_storage_size(renderer_, width, height);
+        ass_set_storage_size(renderer_, video_w, video_h);
+        ass_set_margins(renderer_,
+                        video_rect_y_,
+                        std::max(0, canvas_h - video_rect_y_ - video_rect_h_),
+                        video_rect_x_,
+                        std::max(0, canvas_w - video_rect_x_ - video_rect_w_));
+        ass_set_use_margins(renderer_, 1);
+        const double src_aspect =
+            static_cast<double>(video_w) / static_cast<double>(video_h);
+        const double dst_aspect =
+            static_cast<double>(video_rect_w_) / static_cast<double>(video_rect_h_);
+        const double pixel_aspect = dst_aspect / src_aspect;
+        if (std::isfinite(pixel_aspect) && pixel_aspect > 0.0) {
+            ass_set_pixel_aspect(renderer_, pixel_aspect);
+        }
     }
+    SUB_LOG("configure_geometry: video=%dx%d canvas=%dx%d rect=%d,%d %dx%d margins=%d,%d,%d,%d\n",
+            video_w_, video_h_, frame_w_, frame_h_,
+            video_rect_x_, video_rect_y_, video_rect_w_, video_rect_h_,
+            video_rect_y_,
+            std::max(0, frame_h_ - video_rect_y_ - video_rect_h_),
+            video_rect_x_,
+            std::max(0, frame_w_ - video_rect_x_ - video_rect_w_));
 }
 
 void SubtitleRenderer::load_embedded_track(const std::string& codec_name,
@@ -259,7 +344,10 @@ void SubtitleRenderer::load_embedded_track(const std::string& codec_name,
                 std::memcpy(pgs_ctx_->extradata, extradata.data(), extradata.size());
                 pgs_ctx_->extradata_size = static_cast<int>(extradata.size());
             }
-            if (frame_w_ > 0 && frame_h_ > 0) {
+            if (video_w_ > 0 && video_h_ > 0) {
+                pgs_ctx_->width  = video_w_;
+                pgs_ctx_->height = video_h_;
+            } else if (frame_w_ > 0 && frame_h_ > 0) {
                 pgs_ctx_->width  = frame_w_;
                 pgs_ctx_->height = frame_h_;
             }
@@ -377,7 +465,15 @@ void SubtitleRenderer::process_packet(const uint8_t* data, int size,
         while (!ass_text.empty() && (ass_text.back() == ' ' || ass_text.back() == '\t'))
             ass_text.pop_back();
 
-        std::string chunk = "0,0,Default,,0,0,0,," + ass_text;
+        // ReadOrder must be unique per packet. libass dedupes events by
+        // ReadOrder, so a hardcoded 0 made every packet after the first a
+        // silent drop — the track ended with exactly one event (the first),
+        // and ass_render_frame returned images=no at every other timestamp.
+        // Using start_ms as ReadOrder is stable across seek re-delivery
+        // (same packet → same ms → libass dedupes correctly) and gives
+        // every distinct line a distinct slot.
+        std::string chunk = std::to_string(static_cast<int>(start_ms))
+                          + ",0,Default,,0,0,0,," + ass_text;
         ass_process_chunk(track_, chunk.data(), static_cast<int>(chunk.size()),
                           start_ms, duration_ms);
     } else {
@@ -428,6 +524,11 @@ bool SubtitleRenderer::load_external_file(const std::string& path) {
 
     is_text_sub_ = false;
     return true;
+}
+
+bool SubtitleRenderer::bitmap_subtitles_active() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return is_pgs_;
 }
 
 void SubtitleRenderer::render_blend(uint8_t* frame, int width, int height,
@@ -524,13 +625,7 @@ void SubtitleRenderer::render_to_bitmaps(int64_t pts_ms,
         // process_packet. Copy into the overlay vector shape.
         out.reserve(pgs_rects_.size());
         for (const auto& rect : pgs_rects_) {
-            SubOverlayBitmap b;
-            b.x = rect.x;
-            b.y = rect.y;
-            b.w = rect.w;
-            b.h = rect.h;
-            b.bgra = rect.bgra;
-            out.push_back(std::move(b));
+            out.push_back(map_pgs_rect_to_canvas(rect));
         }
         return;
     }
@@ -585,6 +680,50 @@ void SubtitleRenderer::render_to_bitmaps(int64_t pts_ms,
 
         out.push_back(std::move(tile));
     }
+}
+
+SubtitleRenderer::SubOverlayBitmap
+SubtitleRenderer::map_pgs_rect_to_canvas(const PgsRect& rect) const {
+    SubOverlayBitmap b;
+    if (rect.w <= 0 || rect.h <= 0 || rect.bgra.empty()) return b;
+
+    const int src_w = video_w_ > 0 ? video_w_ : frame_w_;
+    const int src_h = video_h_ > 0 ? video_h_ : frame_h_;
+    const int dst_rect_w = video_rect_w_ > 0 ? video_rect_w_ : frame_w_;
+    const int dst_rect_h = video_rect_h_ > 0 ? video_rect_h_ : frame_h_;
+    const double sx = (src_w > 0) ? static_cast<double>(dst_rect_w) / src_w : 1.0;
+    const double sy = (src_h > 0) ? static_cast<double>(dst_rect_h) / src_h : 1.0;
+
+    b.x = video_rect_x_ + static_cast<int>(std::lround(rect.x * sx));
+    b.y = video_rect_y_ + static_cast<int>(std::lround(rect.y * sy));
+    b.w = std::max(1, static_cast<int>(std::lround(rect.w * sx)));
+    b.h = std::max(1, static_cast<int>(std::lround(rect.h * sy)));
+
+    if (b.w == rect.w && b.h == rect.h) {
+        b.bgra = rect.bgra;
+        return b;
+    }
+
+    b.bgra.resize(static_cast<size_t>(b.w) * b.h * 4);
+    for (int y = 0; y < b.h; ++y) {
+        const int src_y = std::clamp(
+            static_cast<int>((static_cast<int64_t>(y) * rect.h) / b.h),
+            0, rect.h - 1);
+        for (int x = 0; x < b.w; ++x) {
+            const int src_x = std::clamp(
+                static_cast<int>((static_cast<int64_t>(x) * rect.w) / b.w),
+                0, rect.w - 1);
+            const uint8_t* src = rect.bgra.data()
+                + (static_cast<size_t>(src_y) * rect.w + src_x) * 4;
+            uint8_t* dst = b.bgra.data()
+                + (static_cast<size_t>(y) * b.w + x) * 4;
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+            dst[3] = src[3];
+        }
+    }
+    return b;
 }
 
 void SubtitleRenderer::blend_into_frame(const std::vector<SubOverlayBitmap>& bitmaps,

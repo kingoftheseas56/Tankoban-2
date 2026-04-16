@@ -377,6 +377,7 @@ void VideoPlayer::openFile(const QString& filePath,
         m_sidecar->sendStopWithCallback(
             [this, file, start]() {
                 debugLog("[VideoPlayer] stop_ack received, sending open: " + file);
+                sendCanvasSizeToSidecar();
                 m_sidecar->sendOpen(file, start);
             },
             [this]() {
@@ -561,6 +562,16 @@ void VideoPlayer::setPersistenceMode(PersistenceMode mode)
 
 // ── Sidecar event handlers ──────────────────────────────────────────────────
 
+void VideoPlayer::sendCanvasSizeToSidecar()
+{
+    if (!m_sidecar || !m_canvas || !m_sidecar->isRunning()) return;
+    const QSize px = m_canvas->canvasPixelSize();
+    if (px.width() <= 0 || px.height() <= 0) return;
+    debugLog(QString("[VideoPlayer] set_canvas_size %1x%2")
+                 .arg(px.width()).arg(px.height()));
+    m_sidecar->sendSetCanvasSize(px.width(), px.height());
+}
+
 void VideoPlayer::onSidecarReady()
 {
     // VIDEO_PLAYER_FIX Batch 5.1 — push persisted loop-file state to the
@@ -582,6 +593,7 @@ void VideoPlayer::onSidecarReady()
     // (which fires after open() reports the active audio device).
     if (m_openPending && !m_pendingFile.isEmpty()) {
         m_openPending = false;
+        sendCanvasSizeToSidecar();
         m_sidecar->sendOpen(m_pendingFile, m_pendingStartSec);
     } else {
         debugLog(QString("[VideoPlayer] onSidecarReady: skip open (openPending=%1 pendingFile=%2)")
@@ -852,6 +864,10 @@ void VideoPlayer::buildUI()
             showControls();
         }
     });
+    connect(m_canvas, &FrameCanvas::canvasPixelSizeSettled, this,
+        [this](int, int) {
+            sendCanvasSizeToSidecar();
+        });
 
     m_controlBar = new QWidget(this);
     m_controlBar->setObjectName("VideoControlBar");

@@ -262,6 +262,7 @@ private:
 
     void saveProgress(double positionSec, double durationSec);
     void restoreTrackPreferences();
+    void sendCanvasSizeToSidecar();
 
     // VIDEO_PLAYER_FIX Batch 4.2 — persist a just-opened path/URL to the
     // recents QSettings list. Dedupes; prepends; caps at 20.

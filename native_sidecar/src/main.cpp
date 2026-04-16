@@ -111,6 +111,10 @@ static std::string          g_active_audio_id;
 static std::string          g_active_sub_id;
 static SubtitleRenderer*    g_sub_renderer = nullptr;
 static std::vector<Track>   g_probe_subs;
+static int                  g_video_storage_w = 0;
+static int                  g_video_storage_h = 0;
+static std::atomic<int>     g_canvas_w{0};
+static std::atomic<int>     g_canvas_h{0};
 static FilterGraph*         g_video_filter = nullptr;
 static FilterGraph*         g_audio_filter = nullptr;
 static GpuRenderer*         g_gpu_renderer = nullptr;
@@ -225,6 +229,8 @@ static void teardown_decode() {
         g_active_audio_id.clear();
         g_active_sub_id.clear();
         g_probe_subs.clear();
+        g_video_storage_w = 0;
+        g_video_storage_h = 0;
 
         if (g_sub_renderer) {
             delete g_sub_renderer;
@@ -259,6 +265,8 @@ static void open_worker(Command cmd) {
     // Extract payload
     std::string path = cmd.payload.value("path", "");
     double start_sec = cmd.payload.value("startSeconds", 0.0);
+    int open_canvas_w = cmd.payload.value("canvasWidth", 0);
+    int open_canvas_h = cmd.payload.value("canvasHeight", 0);
 
     if (path.empty()) {
         write_error("OPEN_FAILED", "No path in open payload", sid);
@@ -284,6 +292,14 @@ static void open_worker(Command cmd) {
 
     int width  = probe->width;
     int height = probe->height;
+    // Option A rollback (canvas-plane neutralized). Subtitle overlay stays
+    // at video dimensions; main app draws the overlay at the video rect on
+    // screen, so sub positioning is traditional and aspect-agnostic. Canvas
+    // payload is accepted for protocol compatibility but ignored.
+    (void)open_canvas_w;
+    (void)open_canvas_h;
+    g_canvas_w.store(0, std::memory_order_release);
+    g_canvas_h.store(0, std::memory_order_release);
     int stride = width * 4;  // BGRA
     int slot_bytes = stride * height;
     g_probe_duration = probe->duration_sec;
@@ -567,7 +583,11 @@ static void open_worker(Command cmd) {
 
     // --- Subtitle renderer ---
     SubtitleRenderer* sub_ren = new SubtitleRenderer();
-    sub_ren->set_frame_size(width, height);
+    // Option A rollback — canvas == video. Phase 4.1 shape: libass frame_size
+    // and storage_size both track the source video. fit_aspect_rect returns
+    // the full-video rect, margins all zero, pixel_aspect == 1.0. Subs render
+    // inside the video area at traditional libass default position.
+    sub_ren->configure_geometry(width, height, width, height);
     if (!probe->subs.empty()) {
         sub_ren->load_embedded_track(probe->subs[0].codec_name, probe->subs[0].extradata);
     }
@@ -594,6 +614,8 @@ static void open_worker(Command cmd) {
     }
 
     VideoDecoder* vdec = new VideoDecoder(ring, on_video_event, &g_clock, slot_bytes, sub_ren, vfilt, gpu_ren);
+    // Option A rollback — do not override overlay canvas. Decoder will size
+    // the overlay SHM to probe video dimensions.
 
     // --- 4. Start audio first (audio anchors clock before video) ---
     AudioDecoder* adec = nullptr;
@@ -641,6 +663,8 @@ static void open_worker(Command cmd) {
             g_active_sub_id = probe->subs[0].id;
         }
         g_sub_renderer    = sub_ren;
+        g_video_storage_w = width;
+        g_video_storage_h = height;
         g_video_filter    = vfilt;
         g_audio_filter    = afilt;
         g_gpu_renderer    = gpu_ren;
@@ -1080,6 +1104,17 @@ static void handle_set_zero_copy_active(const Command& cmd) {
 // Positive ms = delay audio (video waits longer); negative = pull audio earlier.
 // ---------------------------------------------------------------------------
 
+static void handle_set_canvas_size(const Command& cmd) {
+    // Option A rollback — no-op. Qt-side still sends set_canvas_size on
+    // widget resize / HUD toggle / fullscreen; we acknowledge to keep the
+    // protocol clean but do not mutate subtitle geometry or overlay SHM
+    // size. Canvas-plane caused 1080p video squeeze + sub-position drift +
+    // SHM thrash on every HUD toggle. Video-sized overlay is always correct;
+    // main app positions the overlay quad at the video rect on screen.
+    write_ack(cmd.seq, cmd.sessionId);
+    (void)cmd;
+}
+
 static void handle_set_audio_delay(const Command& cmd) {
     write_ack(cmd.seq, cmd.sessionId);
     int delay_ms = cmd.payload.value("delay_ms", 0);
@@ -1316,6 +1351,9 @@ int main(int argc, char* argv[]) {
 
         } else if (name == "set_zero_copy_active") {
             handle_set_zero_copy_active(*cmd);
+
+        } else if (name == "set_canvas_size") {
+            handle_set_canvas_size(*cmd);
 
         } else if (name == "set_audio_delay") {
             handle_set_audio_delay(*cmd);

@@ -43,6 +43,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 #include "shm_helpers.h"
@@ -59,6 +60,11 @@ public:
     // Tear down the mapping. Idempotent.
     void destroy();
 
+    // Resize by publishing a new named mapping. The writer stops touching
+    // the old mapping before this returns; main-app detaches its old reader
+    // before attaching the new overlay_shm event payload.
+    bool resize(int width, int height);
+
     // Write `bgra` into the payload + bump frame_counter. `bgra` must point
     // to exactly width * height * 4 bytes. Thread-safe for a SINGLE writer
     // (the decode thread) — multiple writers would race on the counter.
@@ -69,15 +75,16 @@ public:
     // the reader clears its cached overlay upload.
     void write_empty();
 
-    const std::string& name() const { return region_.name; }
-    int  width()  const { return width_; }
-    int  height() const { return height_; }
-    bool ready()  const { return region_.ptr != nullptr; }
+    std::string name() const;
+    int  width()  const;
+    int  height() const;
+    bool ready()  const;
 
 private:
     ShmRegion region_;
     int       width_  = 0;
     int       height_ = 0;
+    mutable std::mutex mutex_;
 };
 
 // Header + payload offsets (shared with main-app's reader).

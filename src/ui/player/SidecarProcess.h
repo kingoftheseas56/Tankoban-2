@@ -59,6 +59,7 @@ public:
     int sendRawFilters(const QString& videoFilter, const QString& audioFilter);
     int sendSetToneMapping(const QString& algorithm, bool peakDetect);
     int sendSetZeroCopyActive(bool active);
+    int sendSetCanvasSize(int width, int height);
     int sendResize(int width, int height);
     int sendShutdown();
 
@@ -257,4 +258,7 @@ private:
     QList<QTemporaryFile*> m_subTempFiles;   // keep downloaded subs alive
     static constexpr int    kSubBaseFontSize = 24;
     static constexpr int    kSubBaseMargin   = 40;
+
+    int m_canvasWidth = 0;
+    int m_canvasHeight = 0;
 };

@@ -124,6 +124,24 @@ void VideoDecoder::seek(double position_sec) {
     seek_pending_.store(true);
 }
 
+void VideoDecoder::set_overlay_canvas_size(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    overlay_canvas_w_.store(width, std::memory_order_release);
+    overlay_canvas_h_.store(height, std::memory_order_release);
+
+    std::lock_guard<std::mutex> lock(overlay_mutex_);
+    if (!overlay_shm_) return;
+    const bool changed = overlay_shm_->width() != width || overlay_shm_->height() != height;
+    if (!overlay_shm_->resize(width, height)) return;
+    if (changed && overlay_shm_->ready()) {
+        char ov_info[256];
+        const std::string name = overlay_shm_->name();
+        std::snprintf(ov_info, sizeof(ov_info), "%s:%d:%d",
+                      name.c_str(), overlay_shm_->width(), overlay_shm_->height());
+        on_event_("overlay_shm", std::string(ov_info));
+    }
+}
+
 void VideoDecoder::step_forward() {
     // Unpause briefly to decode one frame, then re-pause.
     // The decode loop checks step_pending_ and processes exactly one frame.
@@ -312,16 +330,23 @@ void VideoDecoder::decode_thread_func(
     // sharing, no sync pitfalls. Only allocated when d3d_presenter is
     // ready (zero-copy path available); otherwise subtitles still come
     // baked into the slow-path SHM BGRA frame.
-    OverlayShm* overlay_shm = nullptr;
+    {
+        std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+        overlay_shm_.reset();
+    }
     if (d3d_presenter && d3d_presenter->ready()) {
         int probe_w = video_stream->codecpar->width;
         int probe_h = video_stream->codecpar->height;
-        if (probe_w > 0 && probe_h > 0) {
-            overlay_shm = new OverlayShm();
-            if (!overlay_shm->create(probe_w, probe_h)) {
+        const int canvas_w = overlay_canvas_w_.load(std::memory_order_acquire);
+        const int canvas_h = overlay_canvas_h_.load(std::memory_order_acquire);
+        const int overlay_w = canvas_w > 0 ? canvas_w : probe_w;
+        const int overlay_h = canvas_h > 0 ? canvas_h : probe_h;
+        if (overlay_w > 0 && overlay_h > 0) {
+            std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+            overlay_shm_ = std::make_unique<OverlayShm>();
+            if (!overlay_shm_->create(overlay_w, overlay_h)) {
                 std::fprintf(stderr, "VideoDecoder: overlay SHM create failed, subtitle fast path disabled\n");
-                delete overlay_shm;
-                overlay_shm = nullptr;
+                overlay_shm_.reset();
             }
         }
     }
@@ -390,6 +415,46 @@ void VideoDecoder::decode_thread_func(
     // HTTP streaming stall detection
     bool buffering_emitted = false;
     int stall_count = 0;
+
+#ifdef _WIN32
+    auto overlay_shm_snapshot = [this]() -> OverlayShm* {
+        std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+        return overlay_shm_.get();
+    };
+
+    auto write_overlay_frame = [&](bool sub_blend_needed, int64_t pts_ms) -> bool {
+        OverlayShm* shm = overlay_shm_snapshot();
+        if (!shm || !shm->ready()) return false;
+
+        const int ov_w = shm->width();
+        const int ov_h = shm->height();
+        if (ov_w <= 0 || ov_h <= 0) return false;
+
+        if (sub_blend_needed && sub_renderer_) {
+            static thread_local std::vector<uint8_t> overlay_frame;
+            const size_t ov_bytes = static_cast<size_t>(ov_w) * ov_h * 4;
+            if (overlay_frame.size() != ov_bytes) {
+                overlay_frame.assign(ov_bytes, 0);
+            } else {
+                std::memset(overlay_frame.data(), 0, ov_bytes);
+            }
+
+            if (sub_renderer_->bitmap_subtitles_active()) {
+                static thread_local std::vector<SubtitleRenderer::SubOverlayBitmap> tiles;
+                sub_renderer_->render_to_bitmaps(pts_ms, tiles);
+                SubtitleRenderer::blend_into_frame(
+                    tiles, overlay_frame.data(), ov_w, ov_h, ov_w * 4);
+            } else {
+                sub_renderer_->render_blend(
+                    overlay_frame.data(), ov_w, ov_h, ov_w * 4, pts_ms);
+            }
+            shm->write(overlay_frame.data());
+        } else {
+            shm->write_empty();
+        }
+        return true;
+    };
+#endif
 
     // --- Frame processing helper (shared by normal loop and EOF drain) ---
     // Uses actual decoded frame dimensions (not codec_ctx) to match Python sidecar.
@@ -477,9 +542,15 @@ void VideoDecoder::decode_thread_func(
         // approach was reverted because it stalled main-app draws).
         bool sub_blend_needed = sub_renderer_ && sub_renderer_->visible()
                                 && active_sub_stream_.load() >= 0;
+        bool overlay_ready = false;
+#ifdef _WIN32
+        if (OverlayShm* shm = overlay_shm_snapshot()) {
+            overlay_ready = shm->ready();
+        }
+#endif
         bool fast_path = zero_copy_active_.load() && d3d_gpu_copied
 #ifdef _WIN32
-                         && (!sub_blend_needed || overlay_shm)
+                         && (!sub_blend_needed || overlay_ready)
 #else
                          && !sub_blend_needed
 #endif
@@ -531,36 +602,7 @@ void VideoDecoder::decode_thread_func(
             // buffer and push to overlay_shm. Main-app uploads to its
             // local D3D11 texture and composites as a separate draw.
 #ifdef _WIN32
-            if (overlay_shm && overlay_shm->ready()) {
-                if (sub_blend_needed && sub_renderer_) {
-                    // thread_local reuse — steady-state subtitle playback
-                    // does zero heap allocation after warmup. Cleared each
-                    // frame so stale libass pixels from the prior frame
-                    // don't bleed through.
-                    static thread_local std::vector<uint8_t> overlay_frame;
-                    const size_t ov_bytes =
-                        static_cast<size_t>(overlay_shm->width()) *
-                        overlay_shm->height() * 4;
-                    if (overlay_frame.size() != ov_bytes) {
-                        overlay_frame.assign(ov_bytes, 0);
-                    } else {
-                        std::memset(overlay_frame.data(), 0, ov_bytes);
-                    }
-
-                    static thread_local std::vector<SubtitleRenderer::SubOverlayBitmap> tiles;
-                    sub_renderer_->render_to_bitmaps(pts_us / 1000, tiles);
-                    SubtitleRenderer::blend_into_frame(
-                        tiles, overlay_frame.data(),
-                        overlay_shm->width(), overlay_shm->height(),
-                        overlay_shm->width() * 4);
-
-                    overlay_shm->write(overlay_frame.data());
-                } else {
-                    // Subs not active this frame — signal consumer to
-                    // clear its cached overlay upload.
-                    overlay_shm->write_empty();
-                }
-            }
+            write_overlay_frame(sub_blend_needed, pts_us / 1000);
 #endif
 
             ++frames_written;
@@ -592,12 +634,16 @@ void VideoDecoder::decode_thread_func(
                 }
                 // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — emit overlay
                 // SHM name + dims for main-app to open and upload from.
-                if (overlay_shm && overlay_shm->ready()) {
+                {
+                    std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+                if (overlay_shm_ && overlay_shm_->ready()) {
                     char ov_info[256];
+                    const std::string name = overlay_shm_->name();
                     std::snprintf(ov_info, sizeof(ov_info), "%s:%d:%d",
-                                  overlay_shm->name().c_str(),
-                                  overlay_shm->width(), overlay_shm->height());
+                                  name.c_str(),
+                                  overlay_shm_->width(), overlay_shm_->height());
                     on_event_("overlay_shm", std::string(ov_info));
+                }
                 }
 #endif
             }
@@ -821,10 +867,16 @@ void VideoDecoder::decode_thread_func(
         // measurement reflects real work, not clock-wait dwell.
         const auto perf_t0 = std::chrono::steady_clock::now();
 
-        // Blend libass subtitles onto the frame (on the render thread).
-        // write_ptr may be const (from AVFrame), so we blend onto the
-        // mutable source: either compact_buf or bgra_frame->data[0].
-        if (sub_renderer_) {
+        // Prefer the canvas-sized overlay plane whenever it exists. Baking
+        // canvas-coordinate subtitles into a 1920x806 video frame clips the
+        // black-bar subtitles before the main app can composite them.
+        bool wrote_overlay_subs = false;
+#ifdef _WIN32
+        const bool slow_sub_blend_needed = sub_renderer_ && sub_renderer_->visible()
+                                           && active_sub_stream_.load() >= 0;
+        wrote_overlay_subs = write_overlay_frame(slow_sub_blend_needed, pts_us / 1000);
+#endif
+        if (sub_renderer_ && !wrote_overlay_subs) {
             int64_t pts_ms = pts_us / 1000;
             uint8_t* blend_target = const_cast<uint8_t*>(write_ptr);
             sub_renderer_->render_blend(blend_target, fw, fh, fstride, pts_ms);
@@ -926,13 +978,17 @@ void VideoDecoder::decode_thread_func(
             // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay handle
             // emission on the slow-path first_frame site too, so main-app
             // has the overlay SHM name if fast path activates later.
-            if (overlay_shm && overlay_shm->ready()) {
+            {
+                std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+            if (overlay_shm_ && overlay_shm_->ready()) {
                 char ov_info[256];
+                const std::string name = overlay_shm_->name();
                 std::snprintf(ov_info, sizeof(ov_info), "%s:%d:%d",
-                              overlay_shm->name().c_str(),
-                              overlay_shm->width(), overlay_shm->height());
+                              name.c_str(),
+                              overlay_shm_->width(), overlay_shm_->height());
                 std::fprintf(stderr, "HOLY_GRAIL: emitting overlay_shm event: %s\n", ov_info);
                 on_event_("overlay_shm", std::string(ov_info));
+            }
             }
 #endif
             std::fprintf(stderr, "VideoDecoder: first frame %dx%d pts=%lldus fid=%lld\n",
@@ -1075,10 +1131,12 @@ void VideoDecoder::decode_thread_func(
         delete d3d_presenter;
         d3d_presenter = nullptr;
     }
-    if (overlay_shm) {
-        overlay_shm->destroy();
-        delete overlay_shm;
-        overlay_shm = nullptr;
+    {
+        std::lock_guard<std::mutex> overlay_lock(overlay_mutex_);
+        if (overlay_shm_) {
+            overlay_shm_->destroy();
+            overlay_shm_.reset();
+        }
     }
 #endif
     avformat_close_input(&fmt_ctx);

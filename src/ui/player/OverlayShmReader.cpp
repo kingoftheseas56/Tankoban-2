@@ -89,10 +89,18 @@ OverlayShmReader::Frame OverlayShmReader::read()
     f.counter = counter->load(std::memory_order_acquire);
 
     uint32_t valid = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::memcpy(&width, m_data + HDR_WIDTH, 4);
+    std::memcpy(&height, m_data + HDR_HEIGHT, 4);
     std::memcpy(&valid, m_data + HDR_VALID, 4);
     f.valid  = (valid != 0);
-    f.width  = m_width;
-    f.height = m_height;
+    f.width  = static_cast<int>(width);
+    f.height = static_cast<int>(height);
+    if (f.width <= 0 || f.height <= 0) {
+        f.width = m_width;
+        f.height = m_height;
+    }
     f.bgra   = m_data + HDR_SIZE;
     return f;
 }

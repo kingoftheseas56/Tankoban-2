@@ -38,6 +38,7 @@ public:
     ~SubtitleRenderer();
 
     void set_frame_size(int width, int height);
+    void configure_geometry(int video_w, int video_h, int canvas_w, int canvas_h);
 
     // Load embedded subtitle track from codec extradata.
     // codec_name: "ass", "subrip", etc.  extradata: ASS header for ASS/SSA.
@@ -99,6 +100,7 @@ public:
 
     void set_visible(bool visible);
     bool visible() const { return visible_.load(std::memory_order_relaxed); }
+    bool bitmap_subtitles_active();
 
     void set_delay_ms(int64_t delay_ms);
 
@@ -118,6 +120,7 @@ private:
     };
     void blend_pgs_rects(uint8_t* frame, int stride, int frame_w, int frame_h);
     void cleanup_pgs();
+    SubOverlayBitmap map_pgs_rect_to_canvas(const PgsRect& rect) const;
 
     // --- libass state (protected by mutex_) ---
     std::mutex          mutex_;
@@ -133,6 +136,12 @@ private:
     std::atomic<int>    margin_lift_px_{0};  // pixels to shift subs up (HUD visible)
     int                 frame_w_ = 0;
     int                 frame_h_ = 0;
+    int                 video_w_ = 0;
+    int                 video_h_ = 0;
+    int                 video_rect_x_ = 0;
+    int                 video_rect_y_ = 0;
+    int                 video_rect_w_ = 0;
+    int                 video_rect_h_ = 0;
 
     // --- Render thread (calls ass_render_frame) ---
     std::thread              render_thread_;

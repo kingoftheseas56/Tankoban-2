@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QMouseEvent>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #ifdef _WIN32
@@ -39,6 +40,14 @@ FrameCanvas::FrameCanvas(QWidget* parent)
     m_renderTimer.setInterval(16);
     connect(&m_renderTimer, &QTimer::timeout, this, &FrameCanvas::renderFrame);
 #endif
+    m_canvasSizeDebounce.setSingleShot(true);
+    m_canvasSizeDebounce.setInterval(75);
+    connect(&m_canvasSizeDebounce, &QTimer::timeout, this, [this]() {
+        const QSize px = canvasPixelSize();
+        if (px == m_lastCanvasPixelSize) return;
+        m_lastCanvasPixelSize = px;
+        emit canvasPixelSizeSettled(px.width(), px.height());
+    });
 }
 
 FrameCanvas::~FrameCanvas()
@@ -329,6 +338,7 @@ bool FrameCanvas::initializeD3D()
 void FrameCanvas::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    m_canvasSizeDebounce.start();
 
 #ifdef _WIN32
     if (!m_swapChain) {
@@ -386,6 +396,47 @@ bool isDeviceLost(HRESULT hr)
 {
     return hr == DXGI_ERROR_DEVICE_REMOVED
         || hr == DXGI_ERROR_DEVICE_RESET;
+}
+
+struct AspectFitRect {
+    int x = 0;
+    int y = 0;
+    int w = 1;
+    int h = 1;
+};
+
+AspectFitRect fitAspectRect(int canvasW, int canvasH, double frameAspect)
+{
+    canvasW = qMax(1, canvasW);
+    canvasH = qMax(1, canvasH);
+    if (frameAspect <= 0.0) {
+        frameAspect = static_cast<double>(canvasW) / static_cast<double>(canvasH);
+    }
+
+    AspectFitRect r;
+    const double canvasAspect = static_cast<double>(canvasW) / static_cast<double>(canvasH);
+    if (frameAspect > canvasAspect) {
+        r.w = canvasW;
+        r.h = std::clamp(static_cast<int>(std::lround(canvasW / frameAspect)), 1, canvasH);
+        int spare = canvasH - r.h;
+        if ((spare & 1) != 0 && r.h > 1) {
+            --r.h;
+            spare = canvasH - r.h;
+        }
+        r.x = 0;
+        r.y = spare / 2;
+    } else {
+        r.h = canvasH;
+        r.w = std::clamp(static_cast<int>(std::lround(canvasH * frameAspect)), 1, canvasW);
+        int spare = canvasW - r.w;
+        if ((spare & 1) != 0 && r.w > 1) {
+            --r.w;
+            spare = canvasW - r.w;
+        }
+        r.x = spare / 2;
+        r.y = 0;
+    }
+    return r;
 }
 }
 
@@ -882,35 +933,21 @@ void FrameCanvas::drawTexturedQuad()
     // Viewport is in render-target pixels (= physical), so scale by DPR to
     // match the physical-pixel swap chain.
     const qreal dpr = devicePixelRatioF();
-    const float widgetW = static_cast<float>(qMax(1, qRound(width()  * dpr)));
-    const float widgetH = static_cast<float>(qMax(1, qRound(height() * dpr)));
-    const float widgetAspect = widgetW / widgetH;
-    const float frameAspect  = (m_forcedAspect > 0.0)
-        ? static_cast<float>(m_forcedAspect)
+    const int canvasW = qMax(1, qRound(width()  * dpr));
+    const int canvasH = qMax(1, qRound(height() * dpr));
+    const double widgetAspect = static_cast<double>(canvasW) / static_cast<double>(canvasH);
+    const double frameAspect  = (m_forcedAspect > 0.0)
+        ? m_forcedAspect
         : ((m_frameW > 0 && m_frameH > 0)
-            ? static_cast<float>(m_frameW) / static_cast<float>(m_frameH)
+            ? static_cast<double>(m_frameW) / static_cast<double>(m_frameH)
             : widgetAspect);
-
-    float vpX, vpY, vpW, vpH;
-    if (frameAspect > widgetAspect) {
-        // Frame wider than widget — fit width, bars top/bottom.
-        vpW = widgetW;
-        vpH = widgetW / frameAspect;
-        vpX = 0.0f;
-        vpY = (widgetH - vpH) * 0.5f;
-    } else {
-        // Frame taller than widget — fit height, bars left/right.
-        vpH = widgetH;
-        vpW = widgetH * frameAspect;
-        vpX = (widgetW - vpW) * 0.5f;
-        vpY = 0.0f;
-    }
+    const AspectFitRect videoRect = fitAspectRect(canvasW, canvasH, frameAspect);
 
     D3D11_VIEWPORT vp = {};
-    vp.TopLeftX = vpX;
-    vp.TopLeftY = vpY;
-    vp.Width    = vpW;
-    vp.Height   = vpH;
+    vp.TopLeftX = static_cast<float>(videoRect.x);
+    vp.TopLeftY = static_cast<float>(videoRect.y);
+    vp.Width    = static_cast<float>(videoRect.w);
+    vp.Height   = static_cast<float>(videoRect.h);
     vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
     m_context->RSSetViewports(1, &vp);
@@ -919,8 +956,8 @@ void FrameCanvas::drawTexturedQuad()
     // Widget-dim changes catch fullscreen transitions where the frame stays
     // the same but the viewport target grows/shrinks. Writes directly to
     // _player_debug.txt (not via qDebug, which doesn't land in that file).
-    const int widgetWPx = static_cast<int>(widgetW);
-    const int widgetHPx = static_cast<int>(widgetH);
+    const int widgetWPx = canvasW;
+    const int widgetHPx = canvasH;
     if (m_frameW != m_aspectLoggedForFrameW || m_frameH != m_aspectLoggedForFrameH
         || widgetWPx != m_aspectLoggedForWidgetW || widgetHPx != m_aspectLoggedForWidgetH) {
         m_aspectLoggedForFrameW  = m_frameW;
@@ -932,11 +969,12 @@ void FrameCanvas::drawTexturedQuad()
             QTextStream s(&dbg);
             s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
               << " [FrameCanvas aspect] source=" << m_frameW << "x" << m_frameH
-              << " widget=" << widgetW << "x" << widgetH
+              << " widget=" << canvasW << "x" << canvasH
               << " dpr=" << QString::number(dpr, 'f', 2)
               << " frameAspect=" << QString::number(frameAspect, 'f', 4)
               << " widgetAspect=" << QString::number(widgetAspect, 'f', 4)
-              << " vp={" << vpX << "," << vpY << "," << vpW << "," << vpH << "}"
+              << " vp={" << videoRect.x << "," << videoRect.y << ","
+              << videoRect.w << "," << videoRect.h << "}"
               << " forced=" << QString::number(m_forcedAspect, 'f', 4) << "\n";
         }
     }
@@ -975,6 +1013,14 @@ void FrameCanvas::drawTexturedQuad()
     // and the texture live on main-app's own D3D11 device.
     pollOverlayShm();
     if (m_overlayCurrentlyVisible && m_overlaySrv && m_overlayPs && m_overlayBlend) {
+        D3D11_VIEWPORT overlayVp = {};
+        overlayVp.TopLeftX = 0.0f;
+        overlayVp.TopLeftY = 0.0f;
+        overlayVp.Width    = static_cast<float>(canvasW);
+        overlayVp.Height   = static_cast<float>(canvasH);
+        overlayVp.MinDepth = 0.0f;
+        overlayVp.MaxDepth = 1.0f;
+        m_context->RSSetViewports(1, &overlayVp);
         m_context->OMSetBlendState(m_overlayBlend, blendFactor, 0xFFFFFFFF);
         m_context->PSSetShader(m_overlayPs, nullptr, 0);
         m_context->PSSetShaderResources(0, 1, &m_overlaySrv);
@@ -1682,6 +1728,12 @@ bool FrameCanvas::pollOverlayShm()
     m_overlayCurrentlyVisible = f.valid;
 
     if (!f.valid || !f.bgra) return false;
+    if (f.width != m_overlayTexW || f.height != m_overlayTexH) {
+        qWarning("FrameCanvas: overlay frame dims %dx%d do not match texture %dx%d; waiting for reattach",
+                 f.width, f.height, m_overlayTexW, m_overlayTexH);
+        m_overlayCurrentlyVisible = false;
+        return false;
+    }
 
     // Upload the BGRA bytes into the locally-owned overlay texture. All
     // intra-device — no cross-process GPU sync issues.
@@ -1710,6 +1762,13 @@ void FrameCanvas::setVsyncLogging(bool enabled, const QString& dumpPath)
 void FrameCanvas::setForcedAspectRatio(double aspect)
 {
     m_forcedAspect = aspect;
+}
+
+QSize FrameCanvas::canvasPixelSize() const
+{
+    const qreal dpr = devicePixelRatioF();
+    return QSize(qMax(1, qRound(width() * dpr)),
+                 qMax(1, qRound(height() * dpr)));
 }
 
 void FrameCanvas::setSyncClock(SyncClock* clock)

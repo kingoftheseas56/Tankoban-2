@@ -145,6 +145,10 @@ int SidecarProcess::sendOpen(const QString& filePath, double startSeconds)
     payload["path"] = filePath.startsWith("http", Qt::CaseInsensitive)
         ? filePath : QDir::toNativeSeparators(filePath);
     payload["startSeconds"] = startSeconds;
+    if (m_canvasWidth > 0 && m_canvasHeight > 0) {
+        payload["canvasWidth"] = m_canvasWidth;
+        payload["canvasHeight"] = m_canvasHeight;
+    }
     return sendCommand("open", payload);
 }
 
@@ -354,6 +358,16 @@ int SidecarProcess::sendSetZeroCopyActive(bool active)
     QJsonObject p;
     p["active"] = active;
     return sendCommand("set_zero_copy_active", p);
+}
+
+int SidecarProcess::sendSetCanvasSize(int width, int height)
+{
+    m_canvasWidth = width;
+    m_canvasHeight = height;
+    QJsonObject p;
+    p["width"] = width;
+    p["height"] = height;
+    return sendCommand("set_canvas_size", p);
 }
 
 int SidecarProcess::sendResize(int width, int height)

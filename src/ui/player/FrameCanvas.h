@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QSize>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -133,6 +134,7 @@ public:
     // Aspect Ratio submenu — that menu existed pre-Phase-7 but its handler
     // in VideoPlayer was a no-op, so the option silently did nothing.
     void setForcedAspectRatio(double aspect);
+    QSize canvasPixelSize() const;
 
     // Batch 1.2 — SyncClock feedback hook. VideoPlayer owns a SyncClock and
     // hands a pointer in at construction. FrameCanvas reports per-frame
@@ -163,6 +165,7 @@ signals:
     // bottom-edge zone (matches Hemanth's UX preference vs the reference's
     // any-move-shows-HUD behavior).
     void mouseActivityAt(int y);
+    void canvasPixelSizeSettled(int width, int height);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -396,6 +399,8 @@ private:
     // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM reader.
     // Owned here; created on attachOverlayShm, destroyed on detach/ destructor.
     OverlayShmReader*         m_overlayReader = nullptr;
+    QTimer                    m_canvasSizeDebounce;
+    QSize                     m_lastCanvasPixelSize;
 
     // Phase 7 bake-in fix — aspect ratio override. 0.0 = use natural aspect
     // from m_frameW/m_frameH; > 0 = force this w/h ratio. Read by the

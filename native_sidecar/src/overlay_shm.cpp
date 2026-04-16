@@ -11,8 +11,17 @@ OverlayShm::~OverlayShm() {
 }
 
 bool OverlayShm::create(int width, int height) {
+    return resize(width, height);
+}
+
+bool OverlayShm::resize(int width, int height) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (width <= 0 || height <= 0) return false;
-    if (region_.ptr) return true;  // already created
+    if (region_.ptr && width_ == width && height_ == height) return true;
+
+    cleanup_shm(region_);
+    width_ = 0;
+    height_ = 0;
 
     const size_t payload_bytes = static_cast<size_t>(width) * height * 4;
     const size_t total_bytes   = OVERLAY_HDR_SIZE + payload_bytes;
@@ -40,12 +49,14 @@ bool OverlayShm::create(int width, int height) {
 }
 
 void OverlayShm::destroy() {
+    std::lock_guard<std::mutex> lock(mutex_);
     cleanup_shm(region_);
     width_  = 0;
     height_ = 0;
 }
 
 void OverlayShm::write(const uint8_t* bgra) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!region_.ptr || !bgra) return;
 
     auto* buf = static_cast<uint8_t*>(region_.ptr);
@@ -75,6 +86,7 @@ void OverlayShm::write(const uint8_t* bgra) {
 }
 
 void OverlayShm::write_empty() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!region_.ptr) return;
 
     auto* buf = static_cast<uint8_t*>(region_.ptr);
@@ -83,4 +95,24 @@ void OverlayShm::write_empty() {
 
     auto* counter = reinterpret_cast<std::atomic<uint64_t>*>(buf + OVERLAY_HDR_COUNTER);
     counter->fetch_add(1, std::memory_order_release);
+}
+
+std::string OverlayShm::name() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return region_.name;
+}
+
+int OverlayShm::width() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return width_;
+}
+
+int OverlayShm::height() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return height_;
+}
+
+bool OverlayShm::ready() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return region_.ptr != nullptr;
 }

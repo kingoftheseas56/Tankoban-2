@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -12,6 +13,7 @@
 
 class FilterGraph;
 class GpuRenderer;
+class OverlayShm;
 class SubtitleRenderer;
 
 extern "C" {
@@ -68,6 +70,10 @@ public:
     // SHM write. Producer per-frame cost drops from ~20ms to ~1ms.
     void set_zero_copy_active(bool v) { zero_copy_active_.store(v); }
 
+    // Canvas-sized subtitle overlay plane. Safe to call from the protocol
+    // thread while decode writes overlay frames.
+    void set_overlay_canvas_size(int width, int height);
+
     // Frame stepping: decode and display exactly one frame, then re-pause.
     void step_forward();
     void step_backward(double current_pos_sec);
@@ -92,6 +98,10 @@ private:
     std::atomic<bool>   running_{false};
     std::atomic<bool>   paused_{false};
     std::atomic<bool>   zero_copy_active_{false};
+    std::atomic<int>    overlay_canvas_w_{0};
+    std::atomic<int>    overlay_canvas_h_{0};
+    std::unique_ptr<OverlayShm> overlay_shm_;
+    mutable std::mutex  overlay_mutex_;
 
     // Seek request (pending)
     std::mutex          seek_mutex_;
