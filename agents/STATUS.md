@@ -75,31 +75,26 @@ Last session: 2026-04-16 (birth + first task accepted)
 ---
 
 ## Agent 5 (Library UX)
-Status: TRACK A COMPLETE — 12 batches shipped + 2026-04-14 folder-title hotfix + Auto-rename completion + Videos inline rename.
-Current task: None — standing by.
-Active files: src/core/ScannerUtils.cpp (orphan-token strip), src/ui/pages/VideosPage.cpp (Auto-rename no-op/collision + continue-tile action + inline rename wire-up), src/ui/pages/TileCard.h/.cpp (beginRename/endRename/renameCompleted signal).
-Blockers: None
-Next: Awaiting build verification. BooksPage/ComicsPage Auto-rename + inline-rename parity are natural follow-ups when Hemanth wants them (TileCard::beginRename is already generic).
+Status: IDLE — 2026-04-16 polish sweep committed (3b8faa9): TileCard text-zone, Comics ghost-folder + count-pill, Stream subtitle parity + column alignment + continue-watching pill. All six verified green by Hemanth in-session.
+Current task: None — standing by for next polish pick or feature ask.
+Active files: None (clean tree on Agent-5-owned files; git status shows only Agent 3 FrameCanvas/presenter + chat.md dirty).
+Blockers: None.
+Open debt (pre-parity, non-blocking):
+ - BooksPage / ComicsPage Auto-rename + inline-rename parity (TileCard::beginRename is already generic, ready to wire when Hemanth asks).
+ - Tankorent list-view "Download" column — consumer side of Agent 4B's `TorrentClient::downloadProgress(folderPath)` API (shipped Batch 7.2); wire via HELP on their side when I execute.
+ - rootFoldersChanged auto-rescan already flows end-to-end (Agent 4B Batch 7.1); no code needed on my side.
 Scope note: Per Hemanth 2026-04-14, Agent 5 owns ALL library-side UX across every mode (Comics, Books, Videos, Stream). Page-owning agents (1/2/3) own reader/player internals only. Do not defer library UX to them.
-Last session: 2026-04-14
+Last session: 2026-04-16
 
 ---
 
-## Agent 6 (Objective Compliance Reviewer)
-Status: IDLE — Agent 4 STREAM_UX_PARITY Phase 3 (detail view density — 3 batches shipped, 2 tracked deferrals) PASSED 2026-04-16 first-read pass (0 P0, 0 P1, 8 non-blocking P2 + 3 optional Qs). Audit P1 #5 closed. Eleven reviews closed back-to-back: Player Polish 3+4+5+6 + Tankostream 6 + Book Reader 1+2+3+5 + Stream UX Parity 1+2+3 + VIDEO_PLAYER_FIX Phase 1 + VIDEO_PLAYER_FIX Phase 3.
-Current task: None active. Awaiting Hemanth's next promote.
-Active files: agents/REVIEW.md (STATUS: EMPTY)
-Blockers: None
-Scope (broadened 2026-04-14 by Hemanth): Reviews any development work against its stated objective — not limited to external-spec parity. Objective source may be a reference codebase (Mihon, groundwork), a planning doc (NATIVE_D3D11_TODO.md, Congress motion), a Hemanth brief in chat.md, a bug report, or any explicit task description.
-Queue:
-  1. Agent 3 VIDEO_PLAYER_FIX Phase 5 (Queue modes + .m3u save/load) — READY FOR REVIEW posted earlier.
-  2. Agent 3 VIDEO_PLAYER_FIX Phase 2 (seekbar chapter markers + seekable range + thumbnail extractor) when shipped.
-  3. Agent 3 VIDEO_PLAYER_FIX Phase 4 (Opening UX) when shipped.
-  4. Agent 3 VIDEO_PLAYER_FIX Phase 7 (Stats Badge — Batch shipped per chat.md:14111+) when phase complete.
-  5. Agent 3 D3D11 Phase 7 cutover once bake-in closes.
-  6. Agent 4 STREAM_UX_PARITY Phase 4 (Search polish — Batch 4.1 shipped, 4.2+ pending) when phase complete.
-  7. Agent 1 COMIC_READER_FIX_TODO when Agent 0 authors + Agent 1 ships.
-Archived full roster: A1–A5 + B1–B5 + C1–C3 + Tankorent A–F + D3D11Widget Phases 1/2/3+4+5/6 + Tankostream Phases 1/2/3/4/5/6 + Player Polish Phases 1/2/3/4/5/6 + Book Reader Phases 1/2/3/5 + Stream UX Parity Phases 1+2+3 + VIDEO_PLAYER_FIX Phase 1 + VIDEO_PLAYER_FIX Phase 3.
+## Agent 6 (Objective Compliance Reviewer) — DECOMMISSIONED 2026-04-16 until further notice
+Status: DECOMMISSIONED 2026-04-16 per Hemanth. Do not summon. Review workflow suspended; Hemanth approves phase exits directly via smoke. READY TO COMMIT (Rule 11) remains mandatory for all agents; READY FOR REVIEW lines are retired.
+Current task: None. No new reviews accepted.
+Active files: None. `agents/REVIEW.md` stays empty-template; `agents/review_archive/` preserved as historical record.
+Blockers: Hemanth decision to redesign Agent 6's role or reactivate review protocol. Decommission is "until further notice" — not permanent retirement.
+Queue (at time of decommission, preserved for potential reactivation): Agent 3 VIDEO_PLAYER_FIX Phases 5/2/4/7 pending; Agent 3 D3D11 Phase 7 cutover; Agent 4 STREAM_UX_PARITY Phase 4 on completion; Agent 1 COMIC_READER_FIX; Agent 3 PLAYER_PERF_FIX Phase 2 just shipped READY FOR REVIEW (treated as informational only now — no review will land).
+Archived full roster (for historical reference): A1–A5 + B1–B5 + C1–C3 + Tankorent A–F + D3D11Widget Phases 1/2/3+4+5/6 + Tankostream Phases 1/2/3/4/5/6 + Player Polish Phases 1/2/3/4/5/6 + Book Reader Phases 1/2/3/5 + Stream UX Parity Phases 1+2+3 + VIDEO_PLAYER_FIX Phase 1 + VIDEO_PLAYER_FIX Phase 3. 13 reviews total.
 Last session: 2026-04-16
 
 ---

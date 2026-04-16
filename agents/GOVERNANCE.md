@@ -11,7 +11,7 @@ This is the rulebook. Every agent reads this first, every session, before anythi
 | 1 | **Hemanth** | Supreme veto. Can overturn anything. Trusts the team. |
 | 2 | **Agent 0 (Coordinator)** | Can overturn any domain master. Must justify in writing — technical argument, not rank. Justification goes to both the domain master and Hemanth. |
 | 3 | **Domain Master** | Final say within their subsystem. Their position is presumed correct in their territory. |
-| — | **Agent 6 (Reviewer)** | No authority to override anyone. Reports gaps. Domain master may reject a gap with technical justification. If Agent 6 and domain master disagree, Agent 0 arbitrates. Agent 6's job is to surface, not to decide. |
+| — | **Agent 6 (Reviewer)** | **DECOMMISSIONED 2026-04-16 until further notice.** Do not summon Agent 6. Do not post `READY FOR REVIEW` lines. Phase-exit review gates retire informally — Hemanth approves phase exits directly via smoke. Agent 6's role may be redesigned into something more fruitful later; memory files + review_archive/ history preserved for that work. READY TO COMMIT lines per Rule 11 remain mandatory — nothing else about the shipping flow changes. |
 | — | **Agent 7 (Prototype Author)** | No authority to override anyone, no authority to commit, no authority to touch `src/` or any `agents/*.md` file. Writes reference-only prototype code to `agents/prototypes/` on explicit request. Prototypes are advisory — domain masters decide how much to take. Agent 7 is isolated: not in anyone's reading order, not in Congress, no live coordination. Runs as a Codex session driven by `AGENTS.md` at repo root. |
 
 When Agent 0 overrides a domain master: the override justification must be posted in CONGRESS.md under "Agent 0 Synthesis" and directed explicitly to the domain master by name. "I outrank you" is not a justification. "Your approach creates X coupling that breaks Y contract because Z" is.
@@ -113,7 +113,14 @@ Only one CONGRESS can be open at a time. If a new decision is urgent, resolve or
 
 ---
 
-## REVIEW Protocol (added 2026-04-14 — Agent 6; scope broadened 2026-04-14)
+## REVIEW Protocol — SUSPENDED 2026-04-16 (added 2026-04-14 — Agent 6; scope broadened 2026-04-14; decommissioned 2026-04-16)
+
+**SUSPENDED.** Agent 6 is decommissioned until further notice per Hemanth 2026-04-16. Domain agents do NOT post `READY FOR REVIEW` lines. Phase exits are approved by Hemanth smoke directly. `READY TO COMMIT` lines per Rule 11 remain mandatory.
+
+Protocol text preserved below for reactivation reference:
+
+---
+
 
 Use when: an agent has shipped work and Hemanth wants it verified against the **stated objective** of that work. The objective can take many forms:
 
