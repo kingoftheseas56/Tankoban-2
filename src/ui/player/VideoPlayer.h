@@ -115,6 +115,14 @@ protected:
 
 private:
     void buildUI();
+
+    // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown. Detaches canvas/
+    // reader + clears cached track lists + stops restart-retry timer.
+    // Does NOT touch the sidecar process. Called unconditionally from
+    // both openFile (file-switch path) and stopPlayback (user-close
+    // path); the process-teardown step is what differs between them.
+    void teardownUi();
+
     void togglePause();
     void toggleFullscreen();
     void toggleMute();

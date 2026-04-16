@@ -272,8 +272,13 @@ void VideoPlayer::openFile(const QString& filePath,
     // does NOT call openFile, so recents aren't duplicated on recovery.
     pushRecentFile(filePath);
 
-    // Stop any current playback
-    stopPlayback();
+    // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown. The sidecar
+    // process-teardown happens below via either sendStopWithCallback
+    // (file-switch fence, same-process) or start() (cold start); we
+    // do NOT call the full stopPlayback() here because that path
+    // issues sendStop+sendShutdown back-to-back with no fence — the
+    // very race Agent 7 audit P0-2 flagged.
+    teardownUi();
 
     m_currentFile = filePath;
     m_currentVideoId = videoIdForFile(filePath);
@@ -333,13 +338,41 @@ void VideoPlayer::openFile(const QString& filePath,
     updatePlayPauseIcon();
 
     if (m_sidecar->isRunning()) {
-        // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 side-carry — pass
-        // m_pendingStartSec on the warm-sidecar path too. Pre-fix, only
-        // the cold onSidecarReady path passed it, so warm-restart resumes
-        // landed at 0:00 instead of the saved offset (Agent 7 audit
-        // flagged at tankostream_playback_2026-04-15.md, hypothesis 5).
-        debugLog("[VideoPlayer] sidecar already running, sending open directly");
-        m_sidecar->sendOpen(filePath, m_pendingStartSec);
+        // PLAYER_LIFECYCLE_FIX Phase 2 Shape 2 — same-process stop/open
+        // fence. Pre-fix, the running-sidecar branch was `sendOpen(...)`
+        // with `stopPlayback()` above that had already fired `sendStop +
+        // sendShutdown` back-to-back. The `open` raced against the
+        // shutting-down sidecar process (Agent 7 audit P0-2). Now the
+        // UI-only `teardownUi()` runs above (no process teardown), and
+        // here the fence issues `sendStop` + waits for the sidecar's
+        // `stop_ack` event (emitted after its `teardown_decode()` fully
+        // completes) before firing `sendOpen`. The sidecar process
+        // stays alive across the file switch (no respawn cost), Phase 1's
+        // sessionId filter drops any old-session tail events arriving
+        // mid-transition, and if `stop_ack` never arrives within 2s
+        // (pre-Phase-2 sidecar binary / sidecar hang), the onTimeout
+        // path forces a full sidecar reset + relies on `onSidecarReady`
+        // to fire `sendOpen(m_pendingFile, m_pendingStartSec)` when the
+        // fresh process is up.
+        //
+        // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 side-carry preserved —
+        // m_pendingStartSec rides through both the warm (callback) and
+        // cold (onSidecarReady) paths.
+        debugLog("[VideoPlayer] sidecar running, fencing stop before open");
+        const QString file = filePath;
+        const double start = m_pendingStartSec;
+        m_sidecar->sendStopWithCallback(
+            [this, file, start]() {
+                debugLog("[VideoPlayer] stop_ack received, sending open: " + file);
+                m_sidecar->sendOpen(file, start);
+            },
+            [this]() {
+                debugLog("[VideoPlayer] stop_ack timeout — resetting sidecar; onSidecarReady will reopen m_pendingFile");
+                m_sidecar->resetAndRestart();
+                // onSidecarReady will fire sendOpen(m_pendingFile,
+                // m_pendingStartSec) once the fresh sidecar is up.
+            }
+        );
     } else {
         debugLog("[VideoPlayer] starting sidecar...");
         m_sidecar->start();
@@ -348,22 +381,23 @@ void VideoPlayer::openFile(const QString& filePath,
     showControls();
 }
 
-void VideoPlayer::stopPlayback()
+void VideoPlayer::teardownUi()
 {
+    // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown split out of
+    // stopPlayback. Both the user-close path (stopPlayback) and the
+    // file-switch path (openFile at the top) run this unconditionally.
+    // The process-teardown portion — sendStop + sendShutdown, or the
+    // new sendStopWithCallback fence — is handled by each caller per
+    // its own lifecycle needs.
+
     // Batch 6.1 — cancel any pending crash-recovery respawn. User-driven
-    // stop supersedes in-flight auto-restart.
+    // stop / new-file-open supersedes in-flight auto-restart.
     m_sidecarRestartTimer.stop();
 
     m_canvas->stopPolling();
     m_canvas->detachShm();
     m_canvas->detachD3D11Texture();  // release imported shared texture
     m_reader->detach();
-
-    if (m_sidecar->isRunning()) {
-        m_sidecar->sendStop();
-        // Give sidecar a moment to stop audio, then shut it down
-        m_sidecar->sendShutdown();
-    }
 
     // Reset cached track lists so the next file's tracks_changed event
     // populates a fresh authoritative list. Without this, merge-on-update
@@ -374,6 +408,24 @@ void VideoPlayer::stopPlayback()
     // Batch 5.3 — clear Tankostream external subs so the next stream/file
     // doesn't inherit a stale addon track list in the SubtitleMenu.
     if (m_subMenu) m_subMenu->setExternalTracks({}, {});
+}
+
+void VideoPlayer::stopPlayback()
+{
+    // User-close path — full teardown: UI + sidecar process.
+    teardownUi();
+
+    if (m_sidecar->isRunning()) {
+        m_sidecar->sendStop();
+        // Give sidecar a moment to stop audio, then shut it down.
+        // Note: this stop+shutdown sequence is NOT race-safe for file-
+        // switch (Agent 7 audit P0-2). For file-switch, openFile uses
+        // the new sendStopWithCallback fence instead, which waits for
+        // stop_ack before the follow-on sendOpen. User-close tolerates
+        // the race because the process is going away — any in-flight
+        // events from the torn-down session are moot.
+        m_sidecar->sendShutdown();
+    }
 }
 
 void VideoPlayer::setExternalSubtitleTracks(

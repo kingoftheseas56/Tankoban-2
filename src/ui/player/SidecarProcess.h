@@ -8,6 +8,7 @@
 #include <QString>
 #include <QUrl>
 #include <atomic>
+#include <functional>
 
 class QNetworkAccessManager;
 class QTemporaryFile;
@@ -60,6 +61,33 @@ public:
     int sendSetZeroCopyActive(bool active);
     int sendResize(int width, int height);
     int sendShutdown();
+
+    // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence.
+    // Sends `stop` and stores onComplete to fire when the sidecar emits
+    // its matching `stop_ack` (emitted after teardown_decode completes,
+    // so the callback runs only once the sidecar is idle and ready for
+    // the next sendOpen). Returns the stop's seq. A subsequent call
+    // replaces the pending callback (last-click-wins semantics) — the
+    // prior stop_ack will still correlate by seq but its callback is
+    // gone; safe because the sidecar is just going idle, not starting a
+    // new session. If stop_ack doesn't arrive within timeoutMs, onTimeout
+    // fires instead and the pending callback is cleared. Intended to be
+    // called from VideoPlayer::openFile when the sidecar is already
+    // running; cold-start path (sidecar not running) still uses start()
+    // + onSidecarReady. The user-close path (stopPlayback → sendStop +
+    // sendShutdown) is unchanged.
+    int sendStopWithCallback(std::function<void()> onComplete,
+                             std::function<void()> onTimeout = nullptr,
+                             int timeoutMs = 2000);
+
+    // Edge-case fallback used by VideoPlayer when sendStopWithCallback
+    // times out (sidecar hang or pre-Phase-2 binary without stop_ack).
+    // Kills any running process synchronously (blocks up to 2s on
+    // waitForFinished), then starts a fresh sidecar. After this returns,
+    // the caller relies on onSidecarReady to dispatch the pending open.
+    // Synchronous / GUI-blocking by design — only fires on the edge-case
+    // failure path; a brief GUI stall is better than a stuck file-switch.
+    void resetAndRestart();
 
     // VIDEO_PLAYER_FIX Batch 5.1 — loop the currently-open file. On enable,
     // sidecar's video decoder treats AVERROR_EOF as a seek-to-0 instead of
@@ -193,6 +221,18 @@ private:
     // onProcessFinished to decide whether a finished event is a normal
     // shutdown or a crash that should trigger auto-restart.
     bool m_intentionalShutdown = false;
+
+    // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence state.
+    // m_pendingStopSeq == -1 means no stop awaiting ack. Any other value
+    // is the seq of the in-flight stop; stop_ack with matching seqAck
+    // fires m_pendingStopCallback. If QTimer::singleShot(timeoutMs) fires
+    // first (no stop_ack arrived), m_pendingStopTimeoutCallback fires
+    // and the pending-stop state clears. Exactly one of the two callbacks
+    // fires per pending stop; both are moved out before invocation so
+    // re-entry through a nested callback is safe.
+    int m_pendingStopSeq = -1;
+    std::function<void()> m_pendingStopCallback;
+    std::function<void()> m_pendingStopTimeoutCallback;
 
     // Batch 5.2 state — cached subtitle tracks (mirrors last tracks_changed
     // subtitle array) + composed style (sidecar's set_sub_style is atomic

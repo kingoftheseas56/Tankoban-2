@@ -668,6 +668,16 @@ static void handle_stop(const Command& cmd) {
     teardown_decode();
     g_state.set_state(State::IDLE);
     write_event("state_changed", cmd.sessionId, -1, {{"state", "idle"}});
+    // PLAYER_LIFECYCLE_FIX Phase 2 — emit stop_ack AFTER full teardown so
+    // Qt's openFile fence (SidecarProcess::sendStopWithCallback) can fire
+    // a fresh sendOpen on the same process without racing a still-running
+    // decoder. seqAck = stop seq for correlation; Qt matches against its
+    // m_pendingStopSeq and fires the stored callback. Session-scoped
+    // (sessionId populated) so Phase 1's Qt-side event filter passes it
+    // through cleanly (current session at stop-time matches at stop_ack-
+    // receive-time because Qt regenerates m_sessionId only on the next
+    // sendOpen, which fires from within the stop_ack callback).
+    write_event("stop_ack", cmd.sessionId, cmd.seq, {});
 }
 
 // ---------------------------------------------------------------------------

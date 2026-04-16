@@ -16,6 +16,7 @@
 #include <QTemporaryFile>
 #include <QPointer>
 #include <QSet>
+#include <QTimer>
 #include <algorithm>
 
 static void debugLog(const QString& msg) {
@@ -153,6 +154,48 @@ int SidecarProcess::sendStop()    { return sendCommand("stop"); }
 int SidecarProcess::sendShutdown(){
     m_intentionalShutdown = true;
     return sendCommand("shutdown");
+}
+
+int SidecarProcess::sendStopWithCallback(std::function<void()> onComplete,
+                                          std::function<void()> onTimeout,
+                                          int timeoutMs)
+{
+    // Last-click-wins: overwriting a still-pending callback is fine, the
+    // prior stop_ack's seq mismatches the new m_pendingStopSeq and gets
+    // silently dropped.
+    m_pendingStopCallback = std::move(onComplete);
+    m_pendingStopTimeoutCallback = std::move(onTimeout);
+    const int seq = sendCommand("stop");
+    m_pendingStopSeq = seq;
+
+    QPointer<SidecarProcess> guard(this);
+    QTimer::singleShot(timeoutMs, this, [guard, seq]() {
+        if (!guard) return;
+        if (guard->m_pendingStopSeq != seq) return;  // already acked or replaced
+        debugLog(QString("[Sidecar] stop_ack timeout seq=%1 (falling back)").arg(seq));
+        auto cb = std::move(guard->m_pendingStopTimeoutCallback);
+        guard->m_pendingStopSeq = -1;
+        guard->m_pendingStopCallback = {};
+        guard->m_pendingStopTimeoutCallback = {};
+        if (cb) cb();
+    });
+    return seq;
+}
+
+void SidecarProcess::resetAndRestart()
+{
+    if (m_process->state() != QProcess::NotRunning) {
+        debugLog("[Sidecar] resetAndRestart: killing hung process");
+        m_intentionalShutdown = true;
+        m_process->kill();
+        m_process->waitForFinished(2000);
+    }
+    // Clear any stale pending-stop state — the process that would have
+    // sent stop_ack is gone.
+    m_pendingStopSeq = -1;
+    m_pendingStopCallback = {};
+    m_pendingStopTimeoutCallback = {};
+    start();
 }
 
 int SidecarProcess::sendSetLoopFile(bool enabled)
@@ -460,6 +503,30 @@ void SidecarProcess::processLine(const QByteArray& line)
         emit mediaInfo(payload);
     } else if (name == "closed") {
         emit processClosed();
+    } else if (name == "stop_ack") {
+        // PLAYER_LIFECYCLE_FIX Phase 2 — sidecar confirmed stop teardown
+        // is complete. Fire the pending callback (if seq matches) so the
+        // waiting openFile fence can emit its sendOpen now. Mismatched
+        // seq = the stop_ack belongs to a superseded sendStopWithCallback
+        // (rapid file-switch); ignore silently. Missing seqAck = legacy
+        // sidecar that didn't carry the field; accept on latest-pending
+        // semantics so pre-rebuild binaries don't hang forever when the
+        // sidecar is updated for stop_ack but the seq field is somehow
+        // zero'd (defensive).
+        const int ackSeq = obj.contains("seqAck") ? obj["seqAck"].toInt(-1) : -1;
+        if (m_pendingStopSeq >= 0 &&
+            (ackSeq < 0 || ackSeq == m_pendingStopSeq)) {
+            debugLog(QString("[Sidecar] stop_ack seq=%1 firing callback")
+                         .arg(m_pendingStopSeq));
+            auto cb = std::move(m_pendingStopCallback);
+            m_pendingStopSeq = -1;
+            m_pendingStopCallback = {};
+            m_pendingStopTimeoutCallback = {};
+            if (cb) cb();
+        } else {
+            debugLog(QString("[Sidecar] stop_ack seq mismatch or no pending: ackSeq=%1 pending=%2")
+                         .arg(ackSeq).arg(m_pendingStopSeq));
+        }
     }
 }
 
