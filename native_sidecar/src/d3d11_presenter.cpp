@@ -80,6 +80,26 @@ bool D3D11Presenter::present(ID3D11Texture2D* src_texture) {
 bool D3D11Presenter::present_slice(ID3D11Texture2D* src_texture, int array_index) {
     if (!context_ || !external_tex_ || !src_texture) return false;
 
+    // PLAYER_PERF_FIX Phase 2 Batch 2.1 — explicit D3D11_BOX source rect.
+    // D3D11VA decoders allocate into 16-pixel-aligned surfaces, so a
+    // 1920x804 cinemascope stream decodes into a 1920x816 (or similar)
+    // texture slice while our shared texture is the content-sized
+    // 1920x804. Microsoft's CopySubresourceRegion docs state explicitly
+    // that dst/src mismatched dimensions with a null source box is
+    // undefined behavior; it only "works" today by driver tolerance and
+    // can manifest as intermittent driver-side pipeline stalls invisible
+    // from the sidecar's [PERF] log. Pattern mirrors mpv's
+    // hwdec_d3d11va.c:220-226 (src_box.right = dst_params.w,
+    // src_box.bottom = dst_params.h).
+    // MSDN: https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion
+    D3D11_BOX src_box = {};
+    src_box.left   = 0;
+    src_box.top    = 0;
+    src_box.front  = 0;
+    src_box.right  = static_cast<UINT>(width_);
+    src_box.bottom = static_cast<UINT>(height_);
+    src_box.back   = 1;
+
     // Copy single slice from D3D11VA texture array to our shared texture.
     // No keyed mutex — sync is via Flush + wglDXLock/Unlock on the consumer.
     context_->CopySubresourceRegion(
@@ -87,7 +107,7 @@ bool D3D11Presenter::present_slice(ID3D11Texture2D* src_texture, int array_index
         0, 0, 0, 0,
         src_texture,
         D3D11CalcSubresource(0, array_index, 1),
-        nullptr);
+        &src_box);
 
     context_->Flush();
     return true;
