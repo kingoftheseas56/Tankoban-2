@@ -11,8 +11,8 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
-- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` Phase 1 + Phase 2 Batch 2.1 SHIPPED (Shape 2 open/stop fence with stop_ack + 2s timeout + resetAndRestart fallback at `0daabb6`). Awaiting sidecar rebuild from Hemanth for real-fence smoke. Phase 3 (VideoPlayer stop identity) queued.
-- **Agent 4** (Stream mode) — IDLE, `STREAM_LIFECYCLE_FIX` Phase 1 + Phase 2 Batches 2.1+2.2 SHIPPED (StopReason signal evolution + source-switch reentrancy split at `2c02012`; closes audit P0-1 flash-to-browse + side-effect P1-1 stale m_infoHash). Awaiting Hemanth behavioral smoke on source-switch. Phase 2 still has batches remaining (bingeGroup memory, etc.); Phase 3+ queued. STREAM_UX_PARITY Batch 2.6 still gated on STREAM_LIFECYCLE Phase 4.1.
+- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` **CLOSED** 2026-04-16 (Phase 1 sessionId filter + Phase 2 Shape 2 fence + Phase 3 atomic stop identity at `d3ffa23`). All 3 phases / ~5 batches shipped. Awaiting behavioral smoke.
+- **Agent 4** (Stream mode) — IDLE, `STREAM_LIFECYCLE_FIX` **CLOSED** 2026-04-16 (Phase 1 PlaybackSession + Phase 2 source-switch split + Phase 3 failure unify + Phase 4 Shift+N reshape + prefetch hygiene + Phase 5 cancellation token at `139c0bb` + `b488079`). All 5 phases shipped. Audit findings closed: P0-1, P1-1, P1-2, P1-4, P1-5, P2-2, P2-3. **STREAM_UX_PARITY Batch 2.6 (Shift+N) is now unblocked** — pick up next session if desired.
 - **Agent 4B** (Sources) — IDLE, `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired)
@@ -49,9 +49,9 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `BOOK_READER_FIX_TODO.md` | Agent 2 | 1+2+3+5 SHIPPED | awaiting Hemanth smoke; Phase 4 explicitly deferred |
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
-| `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 batches 2.1-2.5 shipped | Batch 2.6 (Shift+N player shortcut) pending; needs Agent 3 heads-up |
-| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | Phase 1 + Phase 2 Batches 2.1+2.2 SHIPPED (audit P0-1 closed); Phase 2 remainder + 3+ queued | 5 phases ~11 batches; ships solo (Trigger B suspended) |
-| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | Phase 1 + Phase 2 Batch 2.1 SHIPPED (Shape 2 fence); Phase 2 remainder + Phase 3 queued | 3 phases ~5 batches; ships solo (Trigger B suspended) |
+| `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | **CLOSED 2026-04-16** | All 5 phases shipped (~9 batches); audit findings P0-1/P1-1/P1-2/P1-4/P2-2/P2-3 closed; awaiting behavioral smoke |
+| `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | **CLOSED 2026-04-16** | All 3 phases shipped (~4 batches); audit P1-5 re-open race closed; awaiting behavioral smoke |
+| `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 Batch 2.6 **now unblocked** (STREAM_LIFECYCLE Phase 4.1 reshape landed) | quick side-quest: additive Shift+N handler in KeyBindings.cpp (needs Agent 3 heads-up per Rule 10) |
 | `PLAYER_PERF_FIX_TODO.md` | Agent 3 | CLOSED 2026-04-16 | Phase 1+2+3 Option B shipped; Phase 4 (P1 cleanup) deferred capacity-gated |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
 | `TANKORENT_FIX_TODO.md` | Agent 4B | All 7 phases SHIPPED | smoke pending |
@@ -79,6 +79,9 @@ Archived memories: `memory/_archive/INDEX.md`. Quarterly audit per File Hygiene 
 - **Memory consolidation** 2026-04-16: 7 archive moves + 1 merge → 45 active entries, MEMORY.md ~46 lines.
 - **Governance bumped** 2026-04-16: gov-v1 → gov-v2 (slim reading order + Rules 12, 13 + Maintenance section + Congress auto-close).
 - **Automation surface live** 2026-04-16 (Track 4): `.claude/commands/{commit-sweep,brief,rotate-chat,build-verify}.md` slash commands; `.claude/scripts/{scan-pending-commits,session-brief,congress-check}.sh`; `.claude/agents/commit-sweeper.md` sub-agent; `.claude/settings.json` with SessionStart + UserPromptSubmit hooks.
+- **Contracts bumped to contracts-v2** 2026-04-16: sidecar build unlocked for agents (`native_sidecar/build.ps1` + `build_qrhi.bat` now agent-runnable from bash); main app build stays honor-system.
+- **Lifecycle TODOs both CLOSED** 2026-04-16: PLAYER_LIFECYCLE (Agent 3, 3 phases ~4 batches) + STREAM_LIFECYCLE (Agent 4, 5 phases ~9 batches); 7 audit findings closed (P0-1, P1-1, P1-2, P1-4, P1-5, P2-2, P2-3).
+- **chat.md at 2021 lines** — approaching rotation trigger (3000 lines / 300 KB). Next Agent 0 session consider `/rotate-chat`.
 
 ---
 
