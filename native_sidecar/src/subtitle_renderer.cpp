@@ -200,7 +200,18 @@ void SubtitleRenderer::set_frame_size(int width, int height) {
     frame_h_ = height;
     if (renderer_) {
         ass_set_frame_size(renderer_, width, height);
-        ass_set_storage_size(renderer_, 0, 0);
+        // PLAYER_UX_FIX Phase 4.1 — storage_size must be the UNSCALED
+        // source video dimensions for correct aspect / blur / transforms
+        // / VSFilter-compatible behavior per libass docs. Prior code
+        // passed (0, 0) which disables storage-aware rendering —
+        // anamorphic sources rendered with wrong aspect, rotated/blurred
+        // ASS styles misaligned. In today's setup frame_size == video
+        // size == canvas size for the overlay, so `width, height` here
+        // is the correct video-stream storage. Phase 4.2 will decouple
+        // frame_size (canvas dims) from storage_size (video dims); the
+        // call site will move to use a separately-stored video-stream
+        // size. mpv reference: sd_ass.c:767-771. VLC: libass.c:431-438.
+        ass_set_storage_size(renderer_, width, height);
     }
 }
 

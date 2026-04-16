@@ -16,6 +16,16 @@ struct Track {
     std::string title;
     std::string codec_name;              // e.g. "ass", "subrip", "dvd_subtitle"
     std::vector<uint8_t> extradata;      // codec private data (ASS header for ASS/SSA)
+
+    // PLAYER_UX_FIX Phase 6.2 — IINA-parity metadata for Tracks popover.
+    // Sourced from AVStream::disposition flags + AVCodecParameters on
+    // audio streams. Optional fields default to neutral (false / 0)
+    // so TrackPopover tolerates legacy sidecar binaries that predate
+    // Phase 6.2 — just renders without the badge / channel hint.
+    bool default_flag = false;           // AV_DISPOSITION_DEFAULT
+    bool forced_flag  = false;           // AV_DISPOSITION_FORCED
+    int  channels     = 0;               // audio only; 0 = not applicable
+    int  sample_rate  = 0;               // audio only, Hz; 0 = not applicable
 };
 
 struct Chapter {

@@ -316,12 +316,26 @@ static void open_worker(Command cmd) {
         std::string active_audio;
         std::string active_sub;
 
+        // PLAYER_UX_FIX Phase 6.2 — IINA-parity payload enrichment.
+        // Adds default/forced flags (both tracks), channels/sample rate
+        // (audio only). TrackPopover consumes via QJsonObject::value()
+        // which returns default-constructed defaults for missing keys —
+        // so pre-Phase-6.2 Qt builds receiving a new sidecar payload
+        // just ignore the extra fields harmlessly.
         for (const auto& t : probe->audio) {
-            audio_arr.push_back({{"id", t.id}, {"lang", t.lang}, {"title", t.title}});
+            audio_arr.push_back({
+                {"id", t.id}, {"lang", t.lang}, {"title", t.title},
+                {"default", t.default_flag}, {"forced", t.forced_flag},
+                {"channels", t.channels}, {"sample_rate", t.sample_rate}
+            });
             if (active_audio.empty()) active_audio = t.id;
         }
         for (const auto& t : probe->subs) {
-            sub_arr.push_back({{"id", t.id}, {"lang", t.lang}, {"title", t.title}, {"codec", t.codec_name}});
+            sub_arr.push_back({
+                {"id", t.id}, {"lang", t.lang}, {"title", t.title},
+                {"codec", t.codec_name},
+                {"default", t.default_flag}, {"forced", t.forced_flag}
+            });
             if (active_sub.empty()) active_sub = t.id;
         }
         tracks_payload["audio"]           = audio_arr;
@@ -330,19 +344,40 @@ static void open_worker(Command cmd) {
         tracks_payload["active_sub_id"]   = active_sub;
     }
 
-    // Video decoder on_event callback
-    bool probe_hdr = probe->hdr;
-    int probe_color_pri = probe->color_primaries;
-    int probe_color_trc = probe->color_trc;
-    int probe_max_cll = probe->max_cll;
-    int probe_max_fall = probe->max_fall;
-    auto probe_chapters = probe->chapters;
+    // --- 3a. PLAYER_UX_FIX Phase 1.1 — emit tracks + media info pre-first-frame.
+    // The probe-derived payloads are fully known at this point; hoisting the
+    // emission out of the on_video_event first-frame block unblocks the Qt
+    // HUD on slow-open paths (HEVC 10-bit init, large files, network URLs)
+    // where first_frame may not arrive for seconds. Matches IINA's .loaded-
+    // state lifecycle: tracks + duration deliver at MPV_EVENT_FILE_LOADED;
+    // .playing waits for MPV_EVENT_VIDEO_RECONFIG. Ordering vs the earlier
+    // state_changed{opening} emitted from handle_open is naturally preserved
+    // by the stdin-thread → worker-thread happens-before: opening always
+    // reaches stdout before these worker-thread writes.
+    write_event("tracks_changed", sid, -1, tracks_payload);
 
+    nlohmann::json mi;
+    mi["hdr"]             = probe->hdr;
+    mi["color_primaries"] = probe->color_primaries;
+    mi["color_trc"]       = probe->color_trc;
+    mi["max_cll"]         = probe->max_cll;
+    mi["max_fall"]        = probe->max_fall;
+    nlohmann::json ch_arr = nlohmann::json::array();
+    for (const auto& ch : probe->chapters) {
+        ch_arr.push_back({{"start", ch.start_sec}, {"end", ch.end_sec}, {"title", ch.title}});
+    }
+    mi["chapters"]       = ch_arr;
+    mi["audio_device"]   = g_audio_device_name;
+    mi["audio_host_api"] = g_audio_host_api_name;
+    write_event("media_info", sid, -1, mi);
+
+    // Video decoder on_event callback. Phase 1.1 capture list trimmed —
+    // tracks_payload and probe_* locals are no longer needed in the lambda
+    // since their emissions now fire above. The lambda's remaining captures
+    // are the shm/dimension metadata needed to synthesize the first_frame
+    // event payload.
     auto on_video_event = [sid, shm_name, width, height, stride, slot_bytes,
-                     codec_name, tracks_payload,
-                     probe_hdr, probe_color_pri, probe_color_trc,
-                     probe_max_cll, probe_max_fall,
-                     probe_chapters](const std::string& event, const std::string& detail) {
+                     codec_name](const std::string& event, const std::string& detail) {
         if (event == "first_frame") {
             // Parse "fw:fh:codec:pts_us:fid" from decoder callback
             int actual_w = width, actual_h = height;
@@ -391,31 +426,13 @@ static void open_worker(Command cmd) {
             p["pixelFormat"] = "bgra8";
             write_event("first_frame", sid, -1, p);
 
-            // Phase 5 REVIEW P1 fix (2026-04-15, Agent 6): the prior
-            // `tracks_payload["sub_visibility"] = !probe->subs.empty()`
-            // emission was decorative — Qt's tracks_changed handler at
-            // SidecarProcess.cpp:332-344 never read the field, and the
-            // value ("has subs?") did not reflect renderer state anyway.
-            // Load-bearing fix is the unconditional sendSetSubVisibility
-            // in VideoPlayer::restoreTrackPreferences; no sidecar→Qt
-            // visibility feedback is required. Field dropped.
-            write_event("tracks_changed", sid, -1, tracks_payload);
-
-            // Emit media_info with colorspace/HDR metadata
-            nlohmann::json mi;
-            mi["hdr"] = probe_hdr;
-            mi["color_primaries"] = probe_color_pri;
-            mi["color_trc"] = probe_color_trc;
-            mi["max_cll"] = probe_max_cll;
-            mi["max_fall"] = probe_max_fall;
-            nlohmann::json ch_arr = nlohmann::json::array();
-            for (const auto& ch : probe_chapters) {
-                ch_arr.push_back({{"start", ch.start_sec}, {"end", ch.end_sec}, {"title", ch.title}});
-            }
-            mi["chapters"] = ch_arr;
-            mi["audio_device"]   = g_audio_device_name;
-            mi["audio_host_api"] = g_audio_host_api_name;
-            write_event("media_info", sid, -1, mi);
+            // PLAYER_UX_FIX Phase 1.1 (2026-04-16): tracks_changed +
+            // media_info are now emitted earlier, immediately after
+            // probe_file returns in open_worker (pre-first-frame). This
+            // block previously contained those two emissions; hoisting
+            // them unblocks the HUD on slow-open paths so the user sees
+            // duration + tracks + HDR metadata before the first decoded
+            // frame appears. See main.cpp section "3a" above.
 
             // Emit hwaccel status
             {
@@ -444,6 +461,26 @@ static void open_worker(Command cmd) {
             write_error(code, msg, sid);
             g_state.set_state(State::IDLE);
             write_event("state_changed", sid, -1, {{"state", "idle"}});
+
+        } else if (event == "buffering") {
+            // PLAYER_UX_FIX Phase 2.1 — HTTP-stall retry path emits this
+            // from video_decoder.cpp:984 when av_read_frame hits EAGAIN /
+            // ETIMEDOUT / EIO for a stream URL. Previously dropped at this
+            // dispatch boundary (no case) → never reached Qt → user saw
+            // a black canvas for up to 30 seconds with no feedback before
+            // the decoder finally gave up. Empty payload; presence of the
+            // event is the signal. Session-scoped so Phase 1's Qt-side
+            // sessionId filter treats it correctly.
+            write_event("buffering", sid, -1, {});
+
+        } else if (event == "playing") {
+            // PLAYER_UX_FIX Phase 2.1 — companion to "buffering": fires
+            // from video_decoder.cpp:1006 when a stalled read clears.
+            // Empty payload; Qt uses presence as the "stall resolved,
+            // dismiss buffering indicator" signal. Distinct from
+            // state_changed{playing} which is emitted once at first_frame
+            // — this fires on EVERY stall-clear transition.
+            write_event("playing", sid, -1, {});
 
         } else if (event == "decode_error") {
             // Batch 6.3 (Player Polish Phase 6) — non-fatal avcodec error

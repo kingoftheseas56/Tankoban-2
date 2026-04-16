@@ -162,8 +162,20 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
         t.id    = std::to_string(s->index);
         t.lang  = dict_get(s->metadata, "language");
         t.title = dict_get(s->metadata, "title");
+        // PLAYER_UX_FIX Phase 6.2 — IINA-parity disposition flags.
+        // Default/forced come straight from FFmpeg's demuxer parse of
+        // the container's stream disposition bits.
+        t.default_flag = (s->disposition & AV_DISPOSITION_DEFAULT) != 0;
+        t.forced_flag  = (s->disposition & AV_DISPOSITION_FORCED)  != 0;
 
         if (s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            // Phase 6.2 — audio-specific richness for the "5.1 · 48kHz"
+            // inline hint in TrackPopover. ch_layout.nb_channels is the
+            // modern FFmpeg API (post-AVChannelLayout migration); older
+            // builds fall back to the deprecated `channels` field which
+            // this branch doesn't compile against.
+            t.channels    = s->codecpar->ch_layout.nb_channels;
+            t.sample_rate = s->codecpar->sample_rate;
             result.audio.push_back(std::move(t));
         } else if (s->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
             const AVCodecDescriptor* sdesc = avcodec_descriptor_get(s->codecpar->codec_id);
