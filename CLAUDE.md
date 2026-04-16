@@ -11,7 +11,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
-- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` **CLOSED** 2026-04-16 (Phase 1 sessionId filter + Phase 2 Shape 2 fence + Phase 3 atomic stop identity at `d3ffa23`). All 3 phases / ~5 batches shipped. Awaiting behavioral smoke.
+- **Agent 3** (Video Player) — IDLE, `PLAYER_LIFECYCLE_FIX` CLOSED 2026-04-16. **Next up: `PLAYER_UX_FIX_TODO.md`** (6 phases / ~14 batches, authored 2026-04-16 at `77aea89` against Agent 7 audit + Agent 3 validation). Hemanth decision open on Phase 5 HDR Path A vs B before that phase starts.
 - **Agent 4** (Stream mode) — IDLE, `STREAM_LIFECYCLE_FIX` **CLOSED** 2026-04-16 (Phase 1 PlaybackSession + Phase 2 source-switch split + Phase 3 failure unify + Phase 4 Shift+N reshape + prefetch hygiene + Phase 5 cancellation token at `139c0bb` + `b488079`). All 5 phases shipped. Audit findings closed: P0-1, P1-1, P1-2, P1-4, P1-5, P2-2, P2-3. **STREAM_UX_PARITY Batch 2.6 (Shift+N) is now unblocked** — pick up next session if desired.
 - **Agent 4B** (Sources) — IDLE, `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
@@ -51,6 +51,7 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
 | `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | **CLOSED 2026-04-16** | All 5 phases shipped (~9 batches); audit findings P0-1/P1-1/P1-2/P1-4/P2-2/P2-3 closed; awaiting behavioral smoke |
 | `PLAYER_LIFECYCLE_FIX_TODO.md` | Agent 3 | **CLOSED 2026-04-16** | All 3 phases shipped (~4 batches); audit P1-5 re-open race closed; awaiting behavioral smoke |
+| `PLAYER_UX_FIX_TODO.md` | Agent 3 | **AUTHORED 2026-04-16** | 6 phases / ~14 batches: Phase 1 metadata decoupling (P0), Phase 2 Loading+Buffering UX (P0), Phase 3 teardownUi HUD reset (P1), Phase 4 subtitle geometry (P0 split 4.1 trivial + 4.2 architectural), Phase 5 HDR dropdown (P1, Path A/B decision pending), Phase 6 Tracks/EQ/Filters polish (P2 IINA-identity); based on Agent 7 audit `video_player_comprehensive_2026-04-16.md` + Agent 3 validation |
 | `STREAM_UX_PARITY_TODO.md` | Agent 4 | Phase 2 Batch 2.6 **now unblocked** (STREAM_LIFECYCLE Phase 4.1 reshape landed) | quick side-quest: additive Shift+N handler in KeyBindings.cpp (needs Agent 3 heads-up per Rule 10) |
 | `PLAYER_PERF_FIX_TODO.md` | Agent 3 | CLOSED 2026-04-16 | Phase 1+2+3 Option B shipped; Phase 4 (P1 cleanup) deferred capacity-gated |
 | `PLAYER_POLISH_TODO.md` | Agent 3 | Phases 1+2+3+4 PASSED | Phase 5 (subtitles) awaiting Hemanth greenlight |
