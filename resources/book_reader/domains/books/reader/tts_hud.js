@@ -241,8 +241,22 @@
     var enVoices = voices.filter(function (v) { return /^en[-_]/i.test(v.lang || ''); });
     sel.innerHTML = '';
     if (!enVoices.length) {
+      // EDGE_TTS_FIX Phase 5.3: distinguish "engine OK but no voices match
+      // the en-* filter" (defensive — the Qt static table guarantees ≥23
+      // English voices, so this branch is normally unreachable) from "engine
+      // failed to probe" (Listen click will never produce audio; surface the
+      // structured failure-reason taxonomy from EdgeTtsClient instead of the
+      // misleading "No English voices" string).
       var opt = document.createElement('option');
-      opt.value = ''; opt.textContent = 'No English voices'; opt.disabled = true;
+      opt.value = ''; opt.disabled = true;
+      var available = (typeof tts.isAvailable === 'function') ? tts.isAvailable() : true;
+      if (!available) {
+        var diag = (typeof tts.getLastDiag === 'function') ? tts.getLastDiag() : null;
+        var reason = (diag && (diag.detail || diag.code)) || 'engine_unavailable';
+        opt.textContent = 'Edge TTS unavailable: ' + reason;
+      } else {
+        opt.textContent = 'No English voices';
+      }
       sel.appendChild(opt); return;
     }
     var groups = {};

@@ -4,8 +4,11 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QByteArray>
 
 class CoreBridge;
+class EdgeTtsWorker;
+class QThread;
 
 // QWebChannel bridge object exposed to JS as "bridge".
 // A JS shim maps this to window.electronAPI + window.__ebookNav.
@@ -14,6 +17,7 @@ class BookBridge : public QObject {
     Q_OBJECT
 public:
     explicit BookBridge(CoreBridge* core, QObject* parent = nullptr);
+    ~BookBridge() override;
 
     // ── files ──
     Q_INVOKABLE QByteArray filesRead(const QString& filePath);
@@ -77,12 +81,61 @@ public:
 
     void setFullscreen(bool fs);
 
+    // ── Edge TTS (EDGE_TTS_FIX Phase 1.3) ──
+    // Async-style bridge over a worker QThread. JS shim issues an `*Start`
+    // call with a JS-generated request ID + payload; bridge dispatches to
+    // worker; worker emits result; bridge re-emits the matching `*Finished`
+    // signal carrying the same request ID. JS shim wraps both ends in a
+    // Promise via a request-id → resolver map.
+    Q_INVOKABLE void booksTtsEdgeProbeStart(quint64 reqId, const QString& voice);
+    Q_INVOKABLE void booksTtsEdgeGetVoicesStart(quint64 reqId);
+    Q_INVOKABLE void booksTtsEdgeSynthStart(quint64 reqId, const QString& text,
+                                            const QString& voice, double rate, double pitch);
+    Q_INVOKABLE void booksTtsEdgeSynthStreamStart(quint64 reqId, const QString& text,
+                                                  const QString& voice, double rate, double pitch);
+    Q_INVOKABLE void booksTtsEdgeCancelStream(quint64 streamId);
+    Q_INVOKABLE void booksTtsEdgeWarmupStart(quint64 reqId);
+    Q_INVOKABLE void booksTtsEdgeResetStart(quint64 reqId);
+
 signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
     void readerReady();
 
+    // Edge TTS completion signals (carry the JS-generated reqId for promise correlation).
+    void booksTtsEdgeProbeFinished(quint64 reqId, const QJsonObject& result);
+    void booksTtsEdgeVoicesReady(quint64 reqId, const QJsonObject& result);
+    void booksTtsEdgeSynthFinished(quint64 reqId, const QJsonObject& result);
+    void booksTtsEdgeSynthStreamFinished(quint64 reqId, const QJsonObject& result);
+    void booksTtsEdgeWarmupFinished(quint64 reqId, const QJsonObject& result);
+    void booksTtsEdgeResetFinished(quint64 reqId, const QJsonObject& result);
+
+private slots:
+    // Worker-thread signal handlers; re-package + re-emit with the original
+    // JS request ID stored in m_pending* members.
+    void onWorkerProbeFinished(bool ok, const QString& reason);
+    void onWorkerVoicesReady(const QJsonArray& voices);
+    void onWorkerSynthFinished(quint64 requestId, bool ok, const QByteArray& mp3,
+                               const QJsonArray& boundaries, const QString& reason);
+    void onWorkerStreamError(quint64 streamId, const QString& reason);
+    void onWorkerStreamEnded(quint64 streamId);
+    void onWorkerWarmupFinished(bool ok, const QString& reason);
+    void onWorkerResetFinished();
+
 private:
     CoreBridge* m_core = nullptr;
     bool m_fullscreen = false;
+
+    // Edge TTS worker thread + correlation state. Worker is a QObject moved to
+    // m_ttsThread; communicates with this bridge via Qt::QueuedConnection
+    // signals. Pending IDs are single-slot per operation type (probe / voices /
+    // warmup / reset are issued one-at-a-time by the JS engine; queued slot
+    // dispatch on the worker thread serializes them naturally). Synth/stream
+    // pass through the requestId/streamId so multiple concurrent ops correlate.
+    QThread* m_ttsThread = nullptr;
+    EdgeTtsWorker* m_ttsWorker = nullptr;
+    quint64 m_pendingProbeReqId = 0;
+    quint64 m_pendingVoicesReqId = 0;
+    quint64 m_pendingWarmupReqId = 0;
+    quint64 m_pendingResetReqId = 0;
 };

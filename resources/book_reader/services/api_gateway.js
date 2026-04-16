@@ -135,7 +135,9 @@
       openExternal: safe(function() { var a = arguments; return ea.shell && ea.shell.openExternal ? ea.shell.openExternal.apply(ea.shell, a) : undefined; }, undefined),
     },
 
-    // TTS Edge (wired to Python edge-tts backend)
+    // TTS Edge (wired to Qt-side EdgeTtsClient via QWebChannel BookBridge,
+    // EDGE_TTS_FIX Phase 1.3+). Direct WebSocket to Microsoft Edge Read
+    // Aloud — see src/core/tts/EdgeTtsClient.{h,cpp}.
     booksTtsEdge: {
       probe: tw(function() { var a = arguments; return ea.booksTtsEdge && ea.booksTtsEdge.probe ? ea.booksTtsEdge.probe.apply(ea.booksTtsEdge, a) : Promise.resolve({ ok: false }); }, { ok: false }, 'booksTtsEdge.probe'),
       getVoices: tw(function() { var a = arguments; return ea.booksTtsEdge && ea.booksTtsEdge.getVoices ? ea.booksTtsEdge.getVoices.apply(ea.booksTtsEdge, a) : Promise.resolve([]); }, [], 'booksTtsEdge.getVoices', 45000),

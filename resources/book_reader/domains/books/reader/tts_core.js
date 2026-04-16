@@ -1170,18 +1170,11 @@
       state.engine = null;
       state.engineId = '';
 
-      // FIX-TTS05: Edge-only — no webspeech fallback
-      // EDGE_DIRECT: prefer renderer direct WebSocket transport when available
-      if (factories.edgeDirect) {
-        try {
-          var directInst = factories.edgeDirect.create();
-          if (directInst) {
-            state.allEngines.edgeDirect = directInst;
-            state.engineUsable.edgeDirect = false;
-          }
-        } catch {}
-      }
-
+      // EDGE_TTS_FIX Phase 5.1: removed dead `edgeDirect` factory branch.
+      // It was a speculative entry point for renderer-direct WSS (audit
+      // Option C), structurally rejected because QtWebEngine blocks local
+      // content remote URLs + browser WebSockets cannot set Edge headers.
+      // Sole supported engine is `edge` (Qt-side WSS via booksTtsEdge bridge).
       if (factories.edge) {
         try {
           var inst = factories.edge.create();
@@ -1192,18 +1185,11 @@
         } catch {}
       }
 
-      _reportProgress(15, 'Probing engines...');
+      _reportProgress(50, 'Probing engine...');
       await _yieldForPaint();
 
       // FIX-LISTEN-STAB3: bail out if destroyed during engine creation
       if (state._destroyed) return;
-
-      if (state.allEngines.edgeDirect) {
-        state.engineUsable.edgeDirect = !!(await probeEngine('edgeDirect', state.allEngines.edgeDirect));
-        // OPT2: voices already loaded inside probe() on success — no need to call again
-      }
-      _reportProgress(50, 'Probing fallback engine...');
-      await _yieldForPaint();
 
       if (state.allEngines.edge) {
         state.engineUsable.edge = !!(await probeEngine('edge', state.allEngines.edge));
@@ -1216,15 +1202,12 @@
       // FIX-LISTEN-STAB3: bail out if destroyed during probe/voice loading
       if (state._destroyed) return;
 
-      // Select direct renderer Edge engine first, then IPC Edge fallback
-      if (state.allEngines.edgeDirect && isEngineUsable('edgeDirect')) {
-        switchEngine('edgeDirect');
-      } else if (state.allEngines.edge && isEngineUsable('edge')) {
+      if (state.allEngines.edge && isEngineUsable('edge')) {
         switchEngine('edge');
       }
 
-      // FIX-TTS05: pre-warm IPC Edge TTS WebSocket for faster first playback (direct renderer engine does its own socket work)
-      if (state.engineId !== 'edgeDirect' && state.engineUsable.edge) {
+      // FIX-TTS05: pre-warm Edge TTS WebSocket for faster first playback
+      if (state.engineUsable.edge) {
         try {
           var ttsApi = window.Tanko && window.Tanko.api && window.Tanko.api.booksTtsEdge;
           if (ttsApi && typeof ttsApi.warmup === 'function') {
@@ -1930,7 +1913,7 @@ function _queueThrottledRateVoiceChange(kind) {
   function getVoices() {
     var all = [];
     var seen = Object.create(null);
-    var order = ['edgeDirect', 'edge'];
+    var order = ['edge'];
     for (var i = 0; i < order.length; i++) {
       var engineId = order[i];
       var eng = state.allEngines[engineId];
@@ -2292,6 +2275,10 @@ function _queueThrottledRateVoiceChange(kind) {
     getSnippet: function () { return snippetInfo(); },
     getRate: function () { return state.rate; },
     isAvailable: function () { return !!(state.engine && isEngineUsable(state.engineId)); },
+    // EDGE_TTS_FIX Phase 5.2: separates "init has completed" from "engine is
+    // usable". reader_state.js ttsSupported() needs both: pre-init it falls
+    // back to factory presence; post-init it trusts isAvailable().
+    isInitDone: function () { return !!state.initDone; },
     getEngineId: function () { return state.engineId; },
     getAvailableEngines: function () { return Object.keys(state.allEngines).filter(isEngineUsable); },
     getEngineUsableMap: function () { return { ...state.engineUsable }; },

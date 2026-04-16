@@ -249,9 +249,20 @@
   }
 
   function ttsSupported() {
-    var engines = window.booksTTSEngines || {};
-    if (engines.edge) return true;
-    return typeof window.SpeechSynthesisUtterance === 'function' && !!window.speechSynthesis;
+    // EDGE_TTS_FIX Phase 5.2: factory registration alone ≠ working bridge —
+    // the JS engine factory may be present while the Qt bridge backing it
+    // returns failures. After init has run, trust booksTTS.isAvailable()
+    // (true only when probe succeeded). Before init, fall back to factory
+    // presence so the Listen UI renders and the user can trigger init in
+    // the first place. Web Speech fallback intentionally removed (Edge-only
+    // per tts_core.js:1173 standing direction + project_tts_kokoro memory).
+    if (window.booksTTS &&
+        typeof window.booksTTS.isInitDone === 'function' &&
+        window.booksTTS.isInitDone()) {
+      return !!(typeof window.booksTTS.isAvailable === 'function' &&
+                window.booksTTS.isAvailable());
+    }
+    return !!(window.booksTTSEngines && window.booksTTSEngines.edge);
   }
 
   function normalizeBookInput(book) {

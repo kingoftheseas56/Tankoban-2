@@ -24,6 +24,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 find_package(Qt6 QUIET OPTIONAL_COMPONENTS Multimedia)
 find_package(Qt6 QUIET OPTIONAL_COMPONENTS WebEngineWidgets)
 find_package(Qt6 QUIET OPTIONAL_COMPONENTS WebChannel)
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS WebSockets)
 find_package(Qt6CorePrivate QUIET)
 find_package(Qt6GuiPrivate QUIET)
 
@@ -57,6 +58,8 @@ set(SOURCES
     src/ui/readers/ComicReader.cpp
     src/ui/readers/BookReader.cpp
     src/ui/readers/BookBridge.cpp
+    src/core/tts/EdgeTtsClient.cpp
+    src/core/tts/EdgeTtsWorker.cpp
     src/ui/readers/ScrollStripCanvas.cpp
     src/ui/readers/SmoothScrollArea.cpp
     src/ui/readers/DecodeTask.cpp
@@ -172,6 +175,8 @@ set(HEADERS
     src/ui/readers/ComicReader.h
     src/ui/readers/BookReader.h
     src/ui/readers/BookBridge.h
+    src/core/tts/EdgeTtsClient.h
+    src/core/tts/EdgeTtsWorker.h
     src/ui/readers/SmoothScrollArea.h
     src/ui/readers/DecodeTask.h
     src/ui/readers/PageCache.h
@@ -300,6 +305,12 @@ endif()
 if(TARGET Qt6::WebEngineWidgets)
     target_link_libraries(Tankoban PRIVATE Qt6::WebEngineWidgets Qt6::WebChannel)
     target_compile_definitions(Tankoban PRIVATE HAS_WEBENGINE=1)
+endif()
+
+# WebSockets for Edge TTS direct WSS client (EDGE_TTS_FIX Phase 1+)
+if(TARGET Qt6::WebSockets)
+    target_link_libraries(Tankoban PRIVATE Qt6::WebSockets)
+    target_compile_definitions(Tankoban PRIVATE HAS_WEBSOCKETS=1)
 endif()
 
 if(TARGET Qt6::Multimedia)
