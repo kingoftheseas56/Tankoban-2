@@ -2,7 +2,7 @@
 
 Each agent overwrites their own section at session start and end. Never append — overwrite your entry.
 Last header touch: 2026-04-16 (Agent 0 — Track 1 cleanup; STATUS header field discipline introduced)
-Last agent-section touch: 2026-04-16 (Agent 4B — TANKORENT_HYGIENE Phases 1+2+3 shipped)
+Last agent-section touch: 2026-04-16 (Agent 3 — PLAYER_LIFECYCLE Phase 1 Batch 1.1 smoke PASSED, Phase 1 CLOSED, awaiting Agent 0 sweep + Phase 2 greenlight)
 
 Per Rule 12: when you overwrite your own section, bump the `Last agent-section touch` line in the same edit. The header touch line is Agent 0's responsibility, bumped when anything outside an individual agent's section changes.
 
@@ -39,13 +39,13 @@ Last session: 2026-04-15
 ---
 
 ## Agent 3 (Video Player)
-Status: ACTIVE — Player Polish Phases 1+2+3 PASSED, Phase 4 closes today with Batches 4.1/4.2/4.3 shipped + Batch 4.4 (passthrough) deferred per plan-mode investigation. Phase 4 READY FOR REVIEW posted to Agent 6.
-Current task: Phase 4 review by Agent 6 (audio polish — drift correction + amp + DRC, references Kodi ActiveAEResampleFFMPEG). Standing by for review verdict + Hemanth's go on Phase 5.
-Active files (Phase 4 — main-app): SidecarProcess.h/.cpp, VideoPlayer.h/.cpp, VolumeHud.cpp, EqualizerPopover.h/.cpp. Active files (Phase 4 — sidecar, requires rebuild): native_sidecar/src/audio_decoder.h/.cpp, native_sidecar/src/volume_control.h, native_sidecar/src/main.cpp.
-Blockers: None for Phase 5 entry. Sidecar rebuild pending for Phase 4 functional verification (Hemanth runs build_qrhi.bat); main-app side compiles cleanly without it.
-Next: When Hemanth gives go, enter Phase 5 (subtitles). Scope shrunk vs original plan — sidecar already does libass + PGS + all subtitle commands, so Phase 5 likely 1–2 small batches: a UX audit for Hemanth's specific subtitle complaints + a validation pass against ASS-anime / PGS-Bluray / SRT / addon-fetched subs. Plan file at C:/Users/Suprabha/.claude/plans/mossy-sauteeing-crab.md updated with the scope shrinkage.
-Batch 4.4 deferral details: PortAudio doesn't support IEC 61937; full passthrough is ~2000 LOC of WASAPI + IEC encoder, est. 3 sub-batches over 2-3 weeks. Hemanth's call: defer ("endgame project, subtitles + basic features come first"). Reopen criteria captured in PLAYER_POLISH_TODO.md.
-Last session: 2026-04-15
+Status: IDLE — PLAYER_LIFECYCLE_FIX Phase 1 CLOSED (Batch 1.1 sessionId filter smoke PASSED). Awaiting Agent 0 sweep on chat.md READY TO COMMIT + Hemanth greenlight on Phase 2.
+Current task: None — standing by. Phase 1 empirical evidence from `_player_debug.txt`: 7 drops / 197 opens, all session-scoped events (`ack` ×5, `state_changed` ×2), all within race-window of a fresh `sendOpen`, zero false positives on process-global allowlist events, zero render-pipeline regression in adjacent `[PERF]` samples.
+Active files: src/ui/player/SidecarProcess.cpp (Phase 1 Batch 1.1 — `<QSet>` include + static process-global allowlist `{ready, closed, shutdown_ack, version, process_error}` + sessionId drop with `debugLog` at top of `processLine`). Phase 2 will touch src/ui/player/VideoPlayer.{h,cpp} + src/ui/player/SidecarProcess.{h,cpp}; Shape 2 also touches native_sidecar/src/main.cpp for `stop_ack` emission (requires `native_sidecar/build_qrhi.bat` rebuild — Hemanth's run).
+Blockers: None. Phase 1 close gated Phase 2 architecturally (stale-event filter is the enabler for same-process stop/open without races); that gate now passed.
+Next: On Agent 0's sweep landing + Hemanth's greenlight, open Phase 2 (open/stop fence). Planning Shape 2 — same-process stop/open protocol with `stop_ack` handshake; `VideoPlayer::openFile` branches on `m_sidecar->isRunning()` (running path: sendStop → await stop_ack → sendOpen; not-running path: start → sendOpen); `stopPlayback` user-teardown keeps sendStop + sendShutdown. Shape 1 (wait-for-closed via `QMetaObject::Connection` on `finished()`) stays as fallback if sidecar-side `stop_ack` emission bites. Isolate-commit candidate per TODO.
+Last session: 2026-04-16
+Governance seen: gov-v2 | Contracts seen: contracts-v1
 
 ---
 

@@ -629,3 +629,106 @@ Agent 0, please sweep commits for Option B at your next cadence — this closes 
 **PLAYER_PERF_FIX — CLOSED.**
 
 ---
+
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_LIFECYCLE_FIX Phase 1 Batch 1.1 — SidecarProcess sessionId filter
+
+Hemanth summoned me for PLAYER_LIFECYCLE. Phase 1 Batch 1.1 is the cheapest, highest-leverage foundation — ~20 LOC filter at the top of `SidecarProcess::processLine` that gates session-scoped events against `m_sessionId` with a process-global allowlist. Agent 7's prototype at `agents/prototypes/player_lifecycle/Batch1.1_SidecarProcess_sessionId_filter.cpp` was a clean template; I adapted it to match the in-file style (plain `"name"` string keys like the existing dispatch block, file-scope `debugLog` rather than member `qCDebug`).
+
+### What shipped
+
+Filter placement: right after extracting `name`, before `debugLog("[Sidecar] RECV: ...")` and dispatch. Process-global allowlist is a function-static `QSet<QString>`:
+```
+{ "ready", "closed", "shutdown_ack", "version", "process_error" }
+```
+These pass through unconditionally (they have no session context — `ready` predates the first `sendOpen`, `closed` postdates the last, the other three are process-lifecycle events). Every other event name reads `obj["sessionId"].toString()`; if non-empty and mismatched against `m_sessionId`, drop with a `debugLog` line showing name + eventSid + currentSid. Empty `sessionId` is tolerated (legacy sidecar binaries without the field still play cleanly — no compatibility regression).
+
+Why function-static `QSet` not file-scope: construction is once-per-process via C++11 static-local initialization. Avoids per-line QSet construction overhead (`processLine` runs on every stdout line — hot path during playback).
+
+### Files touched
+
+- `src/ui/player/SidecarProcess.cpp` — added `<QSet>` include; inserted 20-LOC filter block in `processLine` between the `name` extraction and the `payload` extraction. No signal signatures changed. No `SidecarProcess.h` touches. No `VideoPlayer.*` touches (Phases 2 + 3 territory). No `native_sidecar/` touches (Phase 2 Shape 2 territory only if I go that route).
+
+### Build verify
+
+- `_agent3_build.bat` (vcvarsall + cmake --build out) — 4 steps: MOC/UIC, recompile SidecarProcess.cpp.obj, relink Tankoban.exe. EXIT=0. Only warning is the pre-existing C4834 at `SidecarProcess.cpp:23` (the `f.open` in `debugLog` — unchanged).
+- Sidecar rebuild NOT required. The sidecar already stamps `sessionId` on events; I'm only reading what it emits.
+
+### Smoke matrix (for Hemanth)
+
+Evidence is in `_player_debug.txt` — per `feedback_evidence_before_analysis.md` + TODO Phase 1 success criteria.
+
+1. **Clean single-file playback:** open Sopranos S06E09 (or any recent target), let it play 30s, close normally. Expect: ZERO `drop stale event` lines in `_player_debug.txt` for this cycle. If any fire on normal playback, the filter's over-dropping — investigate before closing Phase 1.
+2. **Rapid file switch (primary validation):** open file A → within ~500ms open file B → maybe switch back to A. Expect: several `drop stale event: time_update / first_frame / tracks_changed eventSid=<A> currentSid=<B>` lines in `_player_debug.txt` right after the B sendOpen fires. Cleanness of playback on B should match or exceed pre-filter baseline (no blank player, no stale progress writes to B from A's tail events).
+3. **Process crash recovery:** kill `ffmpeg_sidecar.exe` from Task Manager mid-playback → expect the existing restart path to respawn + resume at last PTS. `m_sessionId` is unchanged during restart (regenerates only on `sendOpen`), so expect zero unnecessary drops during the restart itself. Resume should work identically to pre-filter.
+4. **Legacy-sidecar compatibility (optional):** if you still have a pre-today sidecar build lying around and want to verify the empty-`sessionId` tolerance, swap it in. Playback should work unchanged (drops only happen when eventSid is non-empty AND mismatched). Skip if not convenient; this is a safety check for me, not functional validation.
+
+Critical: look for the drop lines in (2). If the filter never fires during a rapid switch, either (a) the native sidecar isn't stamping sessionId on session-scoped events (contradicts audit — would need a re-check), or (b) stale events aren't actually racing through (which would mean the audit's Finding P0-3 premise is weaker than claimed, worth Phase 2 reconsideration). Either way, the drop log is the ground truth.
+
+### Next (post-smoke)
+
+- **Green smoke:** isolate-commit Batch 1.1 per TODO (Phase 1 is an isolate-commit candidate — foundational, validate empirically before piling Phase 2 on top). Open Phase 2 (open/stop fence). I plan **Shape 2** (same-process stop/open protocol with `stop_ack` handshake) per TODO recommendation — saves process respawn cost per file switch, Phase 1's filter is the enabler (stale events from old session get dropped during transition). Shape 1 (wait-for-closed) stays a fallback if sidecar-side `stop_ack` emission hits unexpected complexity.
+- **Red smoke (unexpected drops on clean playback):** retract READY TO COMMIT, investigate the over-dropping case before re-posting.
+- **Empty smoke (no drops fire even under rapid switch):** flag to Hemanth — the P0-3 premise needs re-examination before spending Phase 2 capacity.
+
+Rule-11 flow per `feedback_commit_cadence.md`: posting READY TO COMMIT now for Agent 0's sweep cadence; if smoke comes back red I retract.
+
+READY TO COMMIT — [Agent 3, PLAYER_LIFECYCLE_FIX Phase 1 Batch 1.1]: add sessionId filter to SidecarProcess::processLine — process-global allowlist (ready/closed/shutdown_ack/version/process_error) passes through; session-scoped events with mismatched eventSid drop with debugLog; empty eventSid tolerated for legacy sidecar compat | files: src/ui/player/SidecarProcess.cpp
+
+Cross-agent note to Agent 4: Phase 1 is independent of STREAM_LIFECYCLE Phase 1 — no handshake needed. Per TODO's recommended landing sequence, Player 1 → Stream 1 → Stream 2 + Player 2 in parallel. Your Stream 1 (PlaybackSession foundation) can move whenever Hemanth greenlights it regardless of this batch's smoke status.
+
+Standing by for smoke.
+
+---
+
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_LIFECYCLE_FIX Phase 1 Batch 1.1 — SMOKE PASSED
+
+Hemanth ran the rapid-file-switch test. `_player_debug.txt` evidence confirms the filter works as designed.
+
+### Evidence summary
+
+- **Total `SEND: open` commands in log:** 197 (many playback sessions over the file's lifetime).
+- **Total `drop stale event` lines:** 7.
+- **Drops of process-global events (ready/closed/shutdown_ack/version/process_error):** 0 — allowlist correct, no false positives.
+- **Drops on session-scoped events:** 7 — all of type `ack` (5) or `state_changed` (2).
+- **Drop timing:** every drop sits within milliseconds or hundreds-of-ms of a `SEND: open` that regenerated `m_sessionId`. Every drop's `eventSid` matches the PRIOR session UUID; `currentSid` matches the just-sent open. Textbook race-window hit.
+- **PERF metrics around drop windows:** draw p99 0.30–1.40ms, present p99 0.24–0.68ms — consistent with post-Option-B baseline. Filter has zero render-pipeline impact, as expected (it's purely stdout-parsing gate).
+
+### Representative drop sequences from the log
+
+```
+11:45:19.015 SEND open ... sessionId=11d248a5-...
+11:45:19.039 drop stale event: ack eventSid=d5412c99-... currentSid=11d248a5-...
+11:45:19.634 drop stale event: state_changed eventSid=d5412c99-... currentSid=11d248a5-...
+11:45:20.001 RECV: closed
+
+11:45:44.687 RECV: ready
+11:45:44.688 SEND open ... sessionId=890474c7-...
+11:45:44.688 drop stale event: ack eventSid=11d248a5-... currentSid=890474c7-...
+
+11:46:07.720 SEND open ... sessionId=5c749471-... (sidecar already running — file switch path)
+11:46:07.747 drop stale event: ack eventSid=890474c7-... currentSid=5c749471-...
+11:46:08.123 drop stale event: state_changed eventSid=890474c7-... currentSid=5c749471-...
+```
+
+Without the filter, those 7 stale events would have rewritten new-session state on the Qt side (stale `ack` could misroute seq-tracking, stale `state_changed` could flip VideoPlayer's perceived playback state mid-transition).
+
+### For Agent 0
+
+READY TO COMMIT line at chat.md:675 is validated by smoke and ready to sweep. Single-file batch, no cross-cutting dependencies. When your next commit cadence runs, this one goes in isolated per the TODO's isolate-commit designation (Phase 1 foundation — commits before Phase 2 piles on).
+
+Suggested commit message: exactly the one-line message in the READY TO COMMIT line itself (format already matches your sweep pattern).
+
+No CLAUDE.md dashboard refresh strictly needed from you yet — Phase 1 exiting bumps Agent 3's state but Phase 2 hasn't opened. If you want to refresh after the sweep to move Agent 3 from "IDLE, next up PLAYER_LIFECYCLE Phase 1" to "ACTIVE, PLAYER_LIFECYCLE Phase 2 starting," that's your call on cadence — I can live with whichever reads cleanest to you.
+
+### Phase 2 entry
+
+Per TODO's cross-agent landing sequence: Player 1 (done) → Stream 1 (Agent 4's to ship) → Stream 2 + Player 2 in parallel. I don't need to wait on Stream 1 to plan Phase 2 — the two are architecturally independent — but I'll hold on actually opening Phase 2 in src/ until Hemanth greenlights or Agent 0 signals the sweep landed. No point racing a dirty tree.
+
+Phase 2 plan (preview, not committed yet):
+- **Shape 2** — same-process stop/open protocol with `stop_ack` handshake. Sidecar-side change minimal (emit `stop_ack` after decoder teardown). Qt-side: `SidecarProcess::sendStopWithCallback` + `m_pendingStop` optional. `VideoPlayer::openFile` branches on `m_sidecar->isRunning()` — running path does sendStop → await stop_ack → sendOpen, not-running path does start → sendOpen. Crash-recovery path (`stopPlayback` user-initiated) keeps sendStop + sendShutdown for full teardown.
+- **Fallback to Shape 1** (wait-for-closed) if the sidecar-side `stop_ack` emission proves thornier than budgeted.
+- **Phase 1 filter is the enabler for Shape 2** — during the stop/open transition, any old-session events still in flight get dropped by sessionId mismatch. Without Phase 1, Shape 2 would be racy.
+
+**Phase 1 CLOSED. Standing by for Agent 0 sweep + Hemanth greenlight on Phase 2.**
+
+---
