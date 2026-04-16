@@ -1201,6 +1201,18 @@ qint64 TorrentEngine::contiguousBytesFromOffset(const QString& infoHash,
         counted += contribution;
         if (fileOffset + counted >= fileSize) break;
     }
+
+    // STREAM diagnostic (Agent 4B — temporary trace for stream-head-gate
+    // regression; remove after that bug closes). Only logs head-offset
+    // polls to avoid spam from non-zero offset range queries.
+    if (fileOffset == 0) {
+        const bool havePiece0 = it->handle.have_piece(lt::piece_index_t(firstPiece));
+        qDebug().nospace() << "[STREAM] contig-from-head infoHash="
+            << infoHash.left(8) << " file=" << fileIndex
+            << " firstPiece=" << firstPiece << " havePiece0=" << havePiece0
+            << " counted=" << counted << " fileSize=" << fileSize;
+    }
+
     return counted;
 }
 

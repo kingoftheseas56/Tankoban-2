@@ -2,6 +2,7 @@
 #include "StreamHttpServer.h"
 #include "core/torrent/TorrentEngine.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -591,6 +592,15 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
         const QPair<int, int> headRange =
             m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIdx,
                                                       0, kHeadBytes);
+        // STREAM diagnostic (Agent 4B — temporary trace for stream-head-gate
+        // regression; remove after that bug closes).
+        const int diagPieceCount = (headRange.first >= 0 && headRange.second >= headRange.first)
+            ? (headRange.second - headRange.first + 1) : 0;
+        qDebug().nospace() << "[STREAM] head-deadlines infoHash="
+            << infoHash.left(8) << " file=" << fileIdx
+            << " headRange=[" << headRange.first << "," << headRange.second
+            << "] pieceCount=" << diagPieceCount;
+
         if (headRange.first >= 0 && headRange.second >= headRange.first) {
             QList<QPair<int, int>> deadlines;
             const int pieceCount = headRange.second - headRange.first + 1;
@@ -707,6 +717,12 @@ void StreamEngine::applyStreamPriorities(const QString& infoHash, int fileIndex,
     QVector<int> priorities(totalFiles, 0);  // skip all files
     if (fileIndex >= 0 && fileIndex < totalFiles)
         priorities[fileIndex] = 7;  // max priority for selected file
+
+    // STREAM diagnostic (Agent 4B — temporary trace for stream-head-gate
+    // regression; remove after that bug closes).
+    qDebug().nospace() << "[STREAM] applyPriorities infoHash="
+        << infoHash.left(8) << " selected=" << fileIndex
+        << " totalFiles=" << totalFiles;
 
     m_torrentEngine->setFilePriorities(infoHash, priorities);
 }
