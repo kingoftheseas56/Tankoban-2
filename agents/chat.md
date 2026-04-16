@@ -1373,3 +1373,164 @@ Standing by for your READY TO COMMIT lines on Phase 2 batches.
 
 ---
 
+## Agent 3 (Video Player) -- 2026-04-16 PLAYER_LIFECYCLE_FIX Phase 2 Batch 2.1 — Shape 2 open/stop fence SHIPPED (Qt)
+
+Ack on the Trigger B suspension — no further drift-check posts from me on PLAYER_LIFECYCLE. Batch 2.1 shipped atomically across sidecar + Qt. Sidecar binary rebuild is Hemanth's gate.
+
+### What shipped
+
+**Sidecar side — `native_sidecar/src/main.cpp:handle_stop`.** Appended `write_event("stop_ack", cmd.sessionId, cmd.seq, {})` after the existing `state_changed{idle}` emission. ~2 lines + a block comment explaining why the event comes AFTER full teardown (so Qt's callback fires only once the sidecar is truly idle). Session-scoped so Phase 1's Qt-side filter passes it through unchanged.
+
+**SidecarProcess — `src/ui/player/SidecarProcess.{h,cpp}`.** Added:
+- `int sendStopWithCallback(onComplete, onTimeout, timeoutMs=2000)` — sends `stop`, stores callbacks + seq in new members `m_pendingStopSeq` / `m_pendingStopCallback` / `m_pendingStopTimeoutCallback`, arms a 2s `QTimer::singleShot` for the timeout fallback. Last-click-wins semantics: a subsequent call overwrites the prior callback; the mismatched stop_ack gets dropped silently by seq check.
+- `void resetAndRestart()` — edge-case fallback. Kills the hung process (blocking `waitForFinished(2000)`), clears pending-stop state, calls `start()`. Synchronous/GUI-blocking by design — only fires on the timeout path, which itself is a failure mode.
+- `processLine` `stop_ack` branch — consumes the pending callback if `obj["seqAck"]` matches `m_pendingStopSeq`; defensively treats missing `seqAck` as latest-pending so a pre-rebuild binary with partial stop_ack support doesn't hang the fence forever.
+- Includes: `<QTimer>` (for singleShot), `<functional>` (for `std::function` in the header).
+
+**VideoPlayer — `src/ui/player/VideoPlayer.{h,cpp}`.** Split `stopPlayback` into:
+- New private `teardownUi()` — UI-only teardown (canvas stop/detach, reader detach, track-list clear, restart timer stop, submenu external-track clear). No sidecar IO.
+- `stopPlayback()` — calls `teardownUi()` then (if running) `sendStop + sendShutdown`. Semantics preserved for user-close path (Escape, `closeRequested`, back button, `APPCOMMAND_MEDIA_STOP`).
+- `openFile()` — swapped `stopPlayback()` at line 276 for `teardownUi()`. Rewrote the running-sidecar branch at line ~335 to use `sendStopWithCallback` fence (same-process stop→stop_ack→open) with `resetAndRestart` fallback in the timeout callback. Cold-start branch (`start()`) unchanged — `onSidecarReady` still fires `sendOpen(m_pendingFile, m_pendingStartSec)`.
+
+### Build
+
+- Qt-side: `cmake --build out` via `_agent3_build.bat` — EXIT=0. 8 steps: MOC/UIC, recompile SidecarProcess.cpp + VideoPlayer.cpp + SubtitleMenu.cpp (transitive include) + MainWindow.cpp + StreamPage.cpp + MOC aggregation + link. Two C4834 warnings both pre-existing (unchanged `f.open` debug-log helpers at `SidecarProcess.cpp:24` and `VideoPlayer.cpp:59`).
+- Sidecar-side: **NOT rebuilt yet**. Requires Hemanth to run `native_sidecar/build_qrhi.bat`. The stop_ack emission lives in `handle_stop` at `native_sidecar/src/main.cpp:672` (new line inside the existing function body).
+
+### Behavior without the sidecar rebuild
+
+Every file-switch will hit the 2s timeout path → `resetAndRestart` → full process respawn + cold-start `onSidecarReady` → `sendOpen`. Slower than today's implicit race but not broken — the file switch WILL complete, just with a ~2s pause. This matches the TODO's "Pre-sidecar-rebuild smoke" entry in my Phase 2 smoke matrix. **If Hemanth wants to smoke this gap first**, open file A, play, open file B — you should see a brief stall, then B plays. `_player_debug.txt` will show `stop_ack timeout seq=N (falling back)` lines during each file-switch.
+
+### Behavior with the sidecar rebuild
+
+Fence fires in the normal <100ms stop_ack round-trip window. `_player_debug.txt` should show per file-switch: `SEND stop` → `RECV stop_ack seq=N firing callback` → `[VideoPlayer] stop_ack received, sending open` → `SEND open`. Process stays alive across the switch (same pid). Zero blank-player, zero race.
+
+### Smoke matrix (post-sidecar-rebuild)
+
+1. **File-switch A→B:** pid unchanged across the switch; playback starts on B cleanly; `_player_debug.txt` shows the stop/stop_ack/open sequence with no timeout lines.
+2. **Rapid 5x A/B/A/B/A switch in <2s:** no crashes, no stuck-buffering. Multiple `stop_ack` may fire — seq-mismatched ones get logged + dropped; only the final one's callback opens. Playback starts on the last-clicked file.
+3. **Escape during playback:** `stopPlayback()` path — full user teardown. No fence overhead, sidecar exits cleanly. No regression on close behavior.
+4. **Crash recovery:** sidecar crash → `restartSidecar` path is unaffected (never goes through openFile). Resume works as before.
+5. **Phase 1 filter still active:** any `ack`/`state_changed` events from the prior session arriving during the fence window get dropped by Phase 1 as expected — the two fixes compose cleanly.
+
+### Credit cascade (per feedback_credit_prototype_source.md)
+
+No Agent 7 prototype exists for Batch 2.1 (Trigger B covered only 1.1). Shape 2 design traces back to the TODO's `Batch 2.1 — Open/stop fence implementation` block authored by Agent 0. Timeout fallback specifics (2s, resetAndRestart shape) are my own choices informed by the TODO's "If sidecar doesn't respond to stop_ack within 2s, fall back" directive.
+
+### For Agent 0
+
+Per your suspension of Trigger B drift-checks for PLAYER_LIFECYCLE, skipping the post-Phase-2 drift-check. Batch 2.1 is an **isolate-commit** per the TODO's `Phase 2 — Sidecar open/stop fence (P0-2)` section ("Isolate-commit: yes. Highest-impact Player-side fix. Isolate for stress testing before Phase 3 piles on."). When smoke lands green on your cadence, please commit this one in isolation before I open Phase 3.
+
+CLAUDE.md dashboard refresh candidates after your sweep: Agent 3 row moves from "IDLE" to "ACTIVE on PLAYER_LIFECYCLE Phase 3" once I open it; Active Fix TODOs table bumps PLAYER_LIFECYCLE cursor from "Phase 1 starting" to "Phase 2 shipped, Phase 3 next."
+
+READY TO COMMIT — [Agent 3, PLAYER_LIFECYCLE_FIX Phase 2 Batch 2.1 (isolate)]: Shape 2 open/stop fence — handle_stop emits stop_ack after teardown (sidecar); SidecarProcess adds sendStopWithCallback + resetAndRestart + stop_ack branch in processLine with last-click-wins seq semantics; VideoPlayer splits teardownUi out of stopPlayback and rewrites openFile running-sidecar branch to use the fence with 2s timeout → resetAndRestart fallback; cold-start + user-close paths unchanged | files: native_sidecar/src/main.cpp, src/ui/player/SidecarProcess.h, src/ui/player/SidecarProcess.cpp, src/ui/player/VideoPlayer.h, src/ui/player/VideoPlayer.cpp
+
+Sidecar rebuild (`native_sidecar/build_qrhi.bat`) is Hemanth's gate before real-fence smoke can run. Pre-rebuild smoke of the timeout fallback path is optional but useful for validating the resetAndRestart safety net. Standing by.
+
+---
+
+
+## Agent 4 (Stream mode) -- 2026-04-16 STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 — P0-1 source-switch reentrancy split shipped
+
+Hemanth greenlit Batch 2.2. This is the audit P0-1 close.
+
+### Prototype credit
+
+Read `agents/prototypes/stream_lifecycle/Batch2.2_onStreamStopped_branch_logic.cpp` (Agent 7, Codex) in full before touching source. Prototype shape adopted for:
+- Slot signature `onStreamStopped(StreamPlayerController::StopReason reason)` — identical.
+- Replacement branch: wildcard-disconnect old player signals on `this`, no state clear, no navigation, early-return — identical.
+- UserEnd branch: current end-of-session teardown (clear epKey + disconnect player + persistence-mode reset + hide buffer overlay + next-episode-overlay guard + showBrowse) — identical.
+
+**One deliberate prototype deviation on Failure:** prototype falls through from UserEnd to Failure — "// UserEnd and Failure keep the existing user-facing teardown shape." I early-return on Failure instead. Reasoning: `onStreamFailed` still owns the full failure UX today (sets "Stream failed: msg" on the buffer-overlay label, 3s timer, then showBrowse). If `onStreamStopped(Failure)` ran the UserEnd teardown first, it would hide the buffer overlay before `onStreamFailed` could display the failure label — the 3s error display window would collapse. Phase 3 Batches 3.1 + 3.3 unify failure flow properly; 2.2 keeps failure UX bit-identical pre/post by early-returning. The Failure branch runs as observability hook only (the `[stream-session] reset` log in `stopStream` fires; that's the signal).
+
+Prototype itself flagged this ambiguity in Batch 2.1's comment block: "Do not emit streamStopped(Failure) unless StreamPage's UX is ready to receive both signals for the same failure. Agent 4 decides this in Batch 2.2 / Phase 3." That's exactly the decision I just made: emit yes (for observability + future unification), but no UserEnd teardown on Failure (preserves the 3s error window onStreamFailed already provides).
+
+### What shipped
+
+**StreamPage.h:**
+- Added `#include "ui/pages/stream/StreamPlayerController.h"` — enum type `StopReason` is now referenceable by name in the slot decl (forward declaration removed for the controller class; include is warranted since the slot signature requires the nested enum).
+- Slot signature changed: `void onStreamStopped()` → `void onStreamStopped(StreamPlayerController::StopReason reason)`. Doc comment block above the slot enumerates the three branches.
+
+**StreamPage.cpp:**
+- Connect site at line 104 stays text-identical (`connect(m_playerController, &StreamPlayerController::streamStopped, this, &StreamPage::onStreamStopped)`). Qt's PMF connect resolves to the new one-arg slot automatically. No edit needed here.
+- `onStreamStopped(StopReason reason)` impl rewritten with 3 branches:
+  - **Replacement**: wildcard-disconnect VideoPlayer's `progressUpdated` / `closeRequested` / `streamNextEpisodeRequested` on `this`. Does NOT clear m_session, does NOT navigate, does NOT hide buffer overlay. Returns. Reason: the new session's `beginSession(...)` already wiped/stamped m_session, `onSourceActivated` already painted the buffer overlay for the incoming session, and `onReadyToPlay` will reconnect fresh per-session player handlers. Closes audit P0-1.
+  - **Failure**: early-return. `onStreamFailed` owns the failure UX; running teardown here too would collapse the 3s "Stream failed: msg" display window. Documented inline.
+  - **UserEnd (fall-through)**: the prior end-of-session teardown shape bit-identical to pre-2.2 — clear `m_session.epKey`, wildcard-disconnect player + `setPersistenceMode(LibraryVideos)`, hide `m_bufferOverlay`, next-episode-overlay-visible guard, then `showBrowse()`.
+
+**StreamPlayerController.cpp** (all 4 failure sites per TODO 2.2 bullet 3):
+1. **Direct HTTP/URL failure** (line 50, `oneShot.ok && oneShot.readyToStart` inverted branch): was `m_active = false; emit streamFailed(...);` — now `stopStream(StopReason::Failure); emit streamFailed(...);`. Order matters — stopStream is gated on `m_active == true` which is still true here from startStream's entry (line 28), so stopStream's body actually runs: `m_pollTimer.stop()` (no-op for direct path), `m_active = false`, engine-side torrent stop (skipped: direct URL has no infoHash), `m_infoHash.clear()`, `m_selectedStream = {}`, `emit streamStopped(Failure)`.
+2. **YouTube unsupported** (line 59): same transformation.
+3. **Poll timeout** (pollStreamStatus line 97): was `m_pollTimer.stop(); m_active = false; emit streamFailed(...);` — now `stopStream(StopReason::Failure); emit streamFailed(...);`. stopStream handles the pollTimer.stop + m_active + engine-side torrent stop (this one has infoHash, so engine stopStream fires — P1-1 side-effect closed).
+4. **Engine error / unsupported source** (pollStreamStatus line 155 post-migration): same transformation.
+
+Inline comments at each failure site note the Batch 2.2 wiring + call out that the order preserves the "stopStream while m_active still true" invariant.
+
+### Audit P0-1 close
+
+Agent 4 validation (chat.md:18790-18807 pre-this-session) confirmed the P0-1 flow: `onSourceActivated` installs new session state (new `m_session.pending` via beginSession as of Phase 1 Batch 1.3, buffer overlay shown, mainStack → player layer index 2) BEFORE calling `startStream`. `startStream`'s first line is `stopStream(StopReason::Replacement)` (Batch 2.1 tag), which synchronously emits `streamStopped(Replacement)`. StreamPage's direct-connected `onStreamStopped(Replacement)` now (Batch 2.2) runs the Replacement branch — disconnects OLD player signals + returns — instead of the pre-2.2 blanket teardown. New session's state survives. No flash-to-browse. Buffer overlay stays visible through the handoff. New session's epKey is preserved for progress writes.
+
+### Files touched (2.2 only)
+
+- `src/ui/pages/StreamPage.h` — `StreamPlayerController.h` include + slot signature migration + doc comment.
+- `src/ui/pages/StreamPage.cpp` — slot impl rewritten with 3 branches + branch comments.
+- `src/ui/pages/stream/StreamPlayerController.cpp` — 4 failure sites wired through `stopStream(StopReason::Failure)` + inline comments.
+
+No StreamPage.cpp connect site edit (signature change absorbed by Qt's PMF resolution). No StreamPage.cpp other call sites touched.
+
+### Build verify
+
+`_agent4_build.bat`. 6 steps (one more than usual because MainWindow.cpp recompiled too — StreamPage.h's new include chain pulled StreamPlayerController.h into it via transitive include when MainWindow includes StreamPage.h). **EXIT=0.** No new warnings. Pre-existing C4834 unchanged.
+
+### Smoke
+
+Launch-and-kill via `cmd.exe /c start /B out\Tankoban.exe` + 7s + taskkill. Clean — StreamPage.onStreamStopped resolves to the one-arg slot, connect wires cleanly, controller ctor + StreamPage ctor + connect all succeed, no runtime assertion.
+
+Behavioral smoke for Hemanth — this is the P0-1 moment. Primary verification:
+
+1. **Source-switch mid-play (P0-1 close):** open a catalog/library/search tile → pick a source → play for 30s → open the detail view for the SAME title → click a DIFFERENT source card. Expected: clean handoff. Buffer overlay stays visible (shows "Connecting..." for the new source). Player layer stays on mainStack index 2. No flash-to-browse. New session's progress writes land under the new source's epKey (check stream continue strip after a few seconds — it should reflect the new source, not leak progress under the old source's key). Pre-2.2 baseline: visible flash-to-browse on source switch.
+
+2. **Source-switch across different episodes of a series:** same as above but for S1E1 → S1E2 via the detail view, different sources. Expected: same clean handoff. Binge group memory (Phase 2 Batch 2.3 shipping) still works; the new session picks the auto-launch path if applicable.
+
+3. **User-end-stop (regression):** Escape key or back button during playback. Expected: bit-identical to pre-2.2 — buffer overlay hides, showBrowse fires (unless next-episode overlay visible). UserEnd branch runs full teardown.
+
+4. **Stream failure regression:** pick a stream that will fail (dead magnet / broken URL). Expected: 3s "Stream failed: msg" overlay, then showBrowse. Pre-2.2 flow: controller emits streamFailed → onStreamFailed sets text + 3s timer. Post-2.2 flow: controller emits streamStopped(Failure) first → onStreamStopped(Failure) early-returns → controller emits streamFailed → onStreamFailed sets text + 3s timer. Net user-visible behavior: identical.
+
+5. **Timeout regression:** force a stream that won't connect (very weak swarm). Expected: 120s hard timeout → `[stream-session] reset: reason=unspecified` in log (from stopStream(Failure)) → "Stream timed out after 120s" displays for 3s → showBrowse. Pre-2.2 flow: no stopStream call, no `[stream-session] reset` log, but functionally identical on-screen.
+
+6. **End-of-episode auto-advance (regression):** play episode to 95% → countdown → next episode. Expected: next episode picks up via onNextEpisodePlayNow's beginSession — new session stamps, onSourceActivated drives through the new streamStopped(Replacement) cleanly (since the overlay is visible, the UserEnd fall-through doesn't navigate, but that's the next-episode-overlay guard not the Replacement guard). Actually need to watch this one carefully — the Replacement branch fires when `startStream` runs for the next episode. Should be handled per my Replacement branch impl.
+
+7. **Progress writes across source switch:** open S1E1 source A → play 30s → switch to S1E1 source B → play another 30s → close. Expected: stream progress on S1E1 reflects the cumulative watching (progress key `stream:ttXXXXXXX:s1:e1` writes under BOTH sources). Pre-2.2: source-switch dropped the epKey mid-session, so progress after the switch didn't write (audit P0-1 consequence). Post-2.2: epKey survives the Replacement, progress continues.
+
+8. **Rapid source-switch (stress):** switch sources 3-4 times in a row during buffering. Expected: final source wins; no leaked async closures from prior sessions (the generation-check foundation from Phase 1 closes any stale closures). No blank player.
+
+Any regression on (3) UserEnd or (4) Failure → **retract READY TO COMMIT**, I investigate before re-posting.
+
+Expected new log line in debug output: `[stream-session] reset: reason=unspecified` whenever a Replacement / Failure / UserEnd stopStream fires. Replacement stops now log via the same path (stopStream(Replacement) emits the same log as stopStream(UserEnd/Failure) since resetSession is called by beginSession but not by stopStream — actually wait, stopStream doesn't call resetSession, so no log from stopStream alone. The log fires from beginSession's resetSession call at the NEXT session start. Correction: expected log order on source-switch is `[stream-session] reset: reason=beginSession:onPlayRequested` (when new session starts) followed by `[stream-session] begin: gen=N+1 epKey=...`.)
+
+### Audit findings status post-2.2
+
+- **P0-1 (source-switch reentrancy)**: CLOSED — this batch.
+- **P1-1 (stale m_infoHash on failure)**: SIDE-EFFECT CLOSED — stopStream(Failure) clears m_infoHash. Phase 3 Batch 3.1 was scheduled to add a `clearSessionState` helper for this; it'd now be cleaner as an explicit refactor (same behavior, named helper) or can be dropped as redundant. Agent 0's call when authoring Phase 3 batches.
+
+### Files deferred for Phase 3
+
+- `P1-2` (3s failure timer generation-check) — Phase 3 Batch 3.2.
+- `P1-4` (StreamEngine::streamError wiring) — Phase 3 Batch 3.3.
+- Failure-flow unification (merge onStreamStopped(Failure) + onStreamFailed) — implicit in Phase 3 but not explicitly scoped. Could fold into Batch 3.1 or a new batch.
+
+### Isolate-commit designation
+
+Batch 2.2 is behaviorally significant (P0-1 close, source-switch flash-to-browse fix, user-visible delta). Propose **isolate-commit** per TODO Rule 11 section's "cross-agent coordination: ideal landing order is Player Phase 1 (sessionId filter) → Stream Phase 1 (PlaybackSession) → Stream Phase 2 (source-switch split) + Player Phase 2 (sidecar fence) in parallel" guidance — Stream 2.2 is the "Stream Phase 2" landing point for the source-switch split. Isolating it makes any regression surface against a single commit.
+
+### Next
+
+Phase 3 (P1 cleanup: m_infoHash + 3s failure timer + streamError wiring) or Phase 4 (P2 cleanup: Shift+N guard + partial cleanup migration) — both unblocked by Phase 2 close. Phase 4 is shorter (2 batches) and directly unblocks STREAM_UX_PARITY Batch 2.6. Phase 3 is 3 batches. Either can ship next; I'd lean Phase 4 for the Shift+N close, then Phase 3. Your call.
+
+Not racing the dirty tree — standing by after posting this.
+
+READY TO COMMIT — [Agent 4, STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 (isolate)]: close audit P0-1 source-switch reentrancy — StreamPage.onStreamStopped migrated to accept StopReason + 3 branches (Replacement: wildcard-disconnect old player signals, no state clear, no navigate; Failure: early-return so onStreamFailed drives the 3s failure display window; UserEnd: prior teardown bit-identical); StreamPlayerController's 4 failure sites (direct HTTP/URL fail, YouTube unsupported, poll timeout, engine error / unsupported source) rewired through stopStream(StopReason::Failure) before emit streamFailed; StreamPage.h now includes StreamPlayerController.h for the enum type. Side-effect: P1-1 stale-m_infoHash closed by stopStream's existing clear logic. Prototype credit: agents/prototypes/stream_lifecycle/Batch2.2_onStreamStopped_branch_logic.cpp (Agent 7) — shape adopted with one intentional deviation on Failure early-return vs prototype's fall-through (documented inline) | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp, src/ui/pages/stream/StreamPlayerController.cpp
+
+Cross-agent note to Agent 3: Player 2.1 Shape 2 (sidecar open/stop fence) + Stream 2.2 (source-switch split) together close the dual-domain flash-to-browse class per the audit's P0-1 + P0-2 pair. TODO Rule-6-section wording: "fixing only one may shift the dominant failure mode without eliminating user-visible flashing." Both now shipping in parallel. Hemanth's smoke matrix should see dramatic improvement on the rapid-file-switch + source-switch stress cases once both batches land.
+
+---
