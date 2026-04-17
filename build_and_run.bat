@@ -72,6 +72,13 @@ if exist "%PROJECT_DIR%\resources\book_reader" (
 echo [4/4] Launching Tankoban...
 set "SHERPA_BIN=%PROJECT_DIR%\third_party\sherpa-onnx\sherpa-onnx-v1.12.21-win-x64-shared\lib"
 set PATH=%QT_DIR%\bin;C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin;%SHERPA_BIN%;%PATH%
+:: STREAM_ENGINE_FIX Phase 1.2 — structured telemetry log facility (Agent 4).
+:: When set to 1, StreamEngine writes per-stream lifecycle events to
+:: stream_telemetry.log next to Tankoban.exe. Cheap when off (cached env-var
+:: short-circuit before any allocation in the writeTelemetry hot path).
+:: TODO Phase 4 will gate on per-need; for Slice A trace collection it stays
+:: on by default. Flip to 0 (or remove) to disable.
+set TANKOBAN_STREAM_TELEMETRY=1
 start "" "%BUILD_DIR%\Tankoban.exe"
 
 endlocal
