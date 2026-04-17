@@ -95,6 +95,34 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         });
     }
 
+    // Crop submenu — zooms the video to eliminate baked letterbox /
+    // pillarbox strips. Orthogonal to Aspect Ratio: aspect decides how
+    // the video rect fits inside the viewport; crop decides what portion
+    // of the video's pixels to actually show (cutting the encoder-baked
+    // black bars off the edges).
+    auto* cropMenu = menu->addMenu("Crop");
+    cropMenu->setStyleSheet(MENU_SS);
+    static const struct { const char* label; const char* value; } CROPS[] = {
+        { "None",   "none"   },
+        { "16:9",   "16:9"   },
+        { "1.85:1", "1.85:1" },
+        { "2.35:1", "2.35:1" },
+        { "2.39:1", "2.39:1" },
+        { "4:3",    "4:3"    },
+    };
+    auto* cropGroup = new QActionGroup(cropMenu);
+    cropGroup->setExclusive(true);
+    for (const auto& cr : CROPS) {
+        auto* act = cropMenu->addAction(cr.label);
+        QString val = cr.value;
+        act->setCheckable(true);
+        act->setChecked(data.currentCrop == val);
+        cropGroup->addAction(act);
+        QObject::connect(act, &QAction::triggered, parent, [callback, val]() {
+            callback(SetCrop, val);
+        });
+    }
+
     auto* fsAction = menu->addAction("Fullscreen");
     QObject::connect(fsAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleFullscreen, {});

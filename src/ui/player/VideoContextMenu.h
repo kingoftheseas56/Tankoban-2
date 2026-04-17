@@ -35,6 +35,12 @@ struct VideoContextData {
     // "2.35:1"/"1.85:1"). Drives the check mark on the Aspect Ratio
     // submenu. "original" matches m_forcedAspect == 0.0.
     QString currentAspect = QStringLiteral("original");
+    // Current crop target string ("none"/"16:9"/"2.35:1"/"2.39:1"/
+    // "1.85:1"/"4:3"). Drives the check mark on the Crop submenu.
+    // "none" matches m_cropAspect == 0.0 (no crop). Crop zooms the video
+    // to eliminate baked letterbox / pillarbox strips — orthogonal to
+    // Aspect Ratio override which changes viewport fit shape.
+    QString currentCrop = QStringLiteral("none");
 };
 
 class VideoContextMenu {
@@ -44,6 +50,7 @@ public:
         ToggleMute,
         SetSpeed,           // data = double speed
         SetAspectRatio,     // data = QString "original"/"4:3"/"16:9"/"2.35:1"/"1.85:1"
+        SetCrop,            // data = QString "none"/"16:9"/"2.35:1"/"2.39:1"/"1.85:1"/"4:3"
         ToggleFullscreen,
         ToggleAlwaysOnTop,  // VIDEO_PLAYER_FIX Batch 3.1
         TakeSnapshot,       // VIDEO_PLAYER_FIX Batch 3.2
