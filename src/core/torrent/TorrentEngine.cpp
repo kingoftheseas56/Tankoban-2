@@ -243,15 +243,19 @@ void TorrentEngine::applySettings()
 
     // STREAM diagnostic (Agent 4B — Mode A alert trace for cold-session
     // 0%-buffering repro per Agent 4 test session at chat.md:2787-2865).
-    // Gated by TANKOBAN_ALERT_TRACE=1 env var so the alert_category::progress
-    // expansion (and its block/piece alert volume) only hits when diagnosing.
+    // Gated by TANKOBAN_ALERT_TRACE=1 env var so the piece/block alert volume
+    // only hits when diagnosing. libtorrent 2.0 splits what used to be a
+    // single "progress" category into piece_progress (enables
+    // piece_finished_alert) + block_progress (enables block_finished_alert) —
+    // we need both for the trace handlers at lines 153/158.
     // Remove when Mode A root cause confirmed OR Phase 2.3 substrate ships
     // (which unconditionally expands the mask per the Axis 2 HELP ACK).
     int alertMask = lt::alert_category::status
                   | lt::alert_category::storage
                   | lt::alert_category::error;
     if (qEnvironmentVariableIsSet("TANKOBAN_ALERT_TRACE")) {
-        alertMask |= lt::alert_category::progress;
+        alertMask |= lt::alert_category::piece_progress
+                   | lt::alert_category::block_progress;
     }
     sp.set_int(lt::settings_pack::alert_mask, alertMask);
 
