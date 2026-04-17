@@ -79,6 +79,12 @@ set PATH=%QT_DIR%\bin;C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin;%SHERPA
 :: TODO Phase 4 will gate on per-need; for Slice A trace collection it stays
 :: on by default. Flip to 0 (or remove) to disable.
 set TANKOBAN_STREAM_TELEMETRY=1
+:: Mode A/B alert-trace diagnostic (Agent 4B) — when set to 1, TorrentEngine
+:: captures libtorrent piece_finished + block_finished alerts with wall-clock
+:: ms to alert_trace.log. Disambiguates the "deadlines not being honored"
+:: hypothesis for cold-session 0%-buffering + mid-file-seek-hang classes.
+:: Delete or flip to 0 after diagnosis concludes.
+set TANKOBAN_ALERT_TRACE=1
 start "" "%BUILD_DIR%\Tankoban.exe"
 
 endlocal

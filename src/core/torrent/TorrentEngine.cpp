@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QDebug>
 #include <QTimer>
+#include <QDateTime>
 
 #include <libtorrent/alert_types.hpp>
 #include <libtorrent/bencode.hpp>
@@ -38,6 +39,14 @@ public slots:
     void run()
     {
         m_running = true;
+        m_traceActive = qEnvironmentVariableIsSet("TANKOBAN_ALERT_TRACE");
+        if (m_traceActive) {
+            m_traceFile.open("alert_trace.log", std::ios::binary | std::ios::trunc);
+            if (m_traceFile.is_open()) {
+                m_traceFile << "# Mode A alert trace — hash,type,pieceIdx,blockIdx,wallClockMs\n";
+                m_traceFile.flush();
+            }
+        }
         int progressTick = 0;
         while (m_running) {
             auto* alert = m_engine->m_session.wait_for_alert(std::chrono::milliseconds(250));
@@ -59,6 +68,25 @@ private:
     bool m_running = false;
     std::chrono::steady_clock::time_point m_lastResumeSave{std::chrono::steady_clock::now()};
     static constexpr int RESUME_SAVE_INTERVAL_S = 30;
+
+    // STREAM diagnostic (Agent 4B — Mode A alert trace; see alert_mask setup
+    // comment for scope + removal condition).
+    bool m_traceActive = false;
+    std::ofstream m_traceFile;
+
+    void writeAlertTrace(const char* type, const QString& hash,
+                         int pieceIdx, int blockIdx)
+    {
+        if (!m_traceFile.is_open()) return;
+        auto nowMs = QDateTime::currentMSecsSinceEpoch();
+        m_traceFile << hash.left(10).toStdString()
+                    << ',' << type
+                    << ',' << pieceIdx
+                    << ',' << blockIdx
+                    << ',' << nowMs
+                    << '\n';
+        m_traceFile.flush();
+    }
 
     void drainAlerts()
     {
@@ -118,6 +146,21 @@ private:
             }
             else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
                 qWarning() << "Resume data save failed:" << a->message().c_str();
+            }
+            // STREAM diagnostic (Agent 4B — Mode A alert trace; removed when
+            // Mode A closes or Phase 2.3 substrate ships).
+            else if (m_traceActive) {
+                if (auto* pfa = lt::alert_cast<lt::piece_finished_alert>(a)) {
+                    writeAlertTrace("piece_finished",
+                                    TorrentEngine::hashToHex(pfa->handle),
+                                    static_cast<int>(pfa->piece_index), -1);
+                }
+                else if (auto* bfa = lt::alert_cast<lt::block_finished_alert>(a)) {
+                    writeAlertTrace("block_finished",
+                                    TorrentEngine::hashToHex(bfa->handle),
+                                    static_cast<int>(bfa->piece_index),
+                                    static_cast<int>(bfa->block_index));
+                }
             }
         }
     }
@@ -198,10 +241,19 @@ void TorrentEngine::applySettings()
     sp.set_bool(lt::settings_pack::enable_natpmp, true);
     sp.set_bool(lt::settings_pack::enable_upnp, true);
 
-    sp.set_int(lt::settings_pack::alert_mask,
-               lt::alert_category::status
-               | lt::alert_category::storage
-               | lt::alert_category::error);
+    // STREAM diagnostic (Agent 4B — Mode A alert trace for cold-session
+    // 0%-buffering repro per Agent 4 test session at chat.md:2787-2865).
+    // Gated by TANKOBAN_ALERT_TRACE=1 env var so the alert_category::progress
+    // expansion (and its block/piece alert volume) only hits when diagnosing.
+    // Remove when Mode A root cause confirmed OR Phase 2.3 substrate ships
+    // (which unconditionally expands the mask per the Axis 2 HELP ACK).
+    int alertMask = lt::alert_category::status
+                  | lt::alert_category::storage
+                  | lt::alert_category::error;
+    if (qEnvironmentVariableIsSet("TANKOBAN_ALERT_TRACE")) {
+        alertMask |= lt::alert_category::progress;
+    }
+    sp.set_int(lt::settings_pack::alert_mask, alertMask);
 
     // STREAM_PLAYBACK_FIX Phase 3 Batch 3.3 — session settings tuned for
     // streaming. Pre-3.3 values admitted "less aggressive than streaming"
