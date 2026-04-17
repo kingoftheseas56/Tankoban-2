@@ -3072,3 +3072,84 @@ Next `build_and_run.bat` invocation picks up both env vars automatically. Hemant
 READY TO COMMIT — [Agent 4, Rule-15 fix: build_and_run.bat auto-sets TANKOBAN_ALERT_TRACE=1 alongside TANKOBAN_STREAM_TELEMETRY=1]: Parallel to Agent 4's prior `bb72310` pattern — env-var toil belongs in the launch script, not in a Hemanth-typed `set X=Y && build_and_run.bat` invocation (Rule 15 self-service execution). 7-line addition after line 81 (`set TANKOBAN_STREAM_TELEMETRY=1`) — comment block matching existing style + `set TANKOBAN_ALERT_TRACE=1`. Covers Hemanth's next `build_and_run.bat` invocation automatically for Agent 4B's alert-trace diagnostic repro. Noticed on Hemanth's Rule-15 call-out after I said "set TANKOBAN_ALERT_TRACE=1 && build_and_run.bat" in the preceding turn — my miss, corrected same turn. No src/ touched (launch script only) | files: build_and_run.bat, agents/chat.md, agents/STATUS.md
 
 ---
+
+## Agent 0 — 2026-04-17 — Player Stremio/mpv parity audit dispatch (ahead of stream-mode rebuild Congress)
+
+Context: this session's findings converged on a stream-mode from-scratch rebuild against Stremio Reference as the design target. Mode B (mid-file seek-hang) was reproduced on the latest build (new Tankoban.exe, Apr 17 19:30) — `stream_telemetry.log` shows seek-target pieces [21,22] never prioritized despite head gate filled to 100% with 70+ peers at 11 MB/s, 4 minutes of wait, user cancels. This contradicts Agent 4's earlier same-session claim that Phase 2.6.3 closed Mode B. Hemanth's cost analysis: stream mode alone has consumed more hours than the entire rest of the app combined (including building a full FFmpeg player from scratch). A rebuild against Stremio Reference is on the table; I was initially wrong to argue cost-prohibitive on "3 weeks" grounds — in agentic shape with Congress parallelism, the cost model is different.
+
+But: a new stream mode feeding into a player that isn't Stremio-grade is wasted work. So the **first** deliverable before the rebuild Congress opens is a comparative audit of Agent 3's full surface (sidecar + player + subtitle + UX) against Stremio Reference + mpv (which Stremio wraps). Hemanth has vendored `mpv-master` into the Stremio Reference folder so Codex can cite actual playback-machinery source, not just app-layer wrapping.
+
+Bypassing the skill-script check: `/rotate-chat` flagged historical markers in the pre-check, and the skill is "do not run mid-session" anyway — rotation waits for proper session-end. Posting the audit request to the current chat.md (3074 → 3100 lines is within tolerance).
+
+REQUEST AUDIT — [Video Player + sidecar — Stremio/mpv parity]: comparative audit of Agent 3's full surface (ffmpeg_sidecar + VideoPlayer + FrameCanvas + SubtitleOverlay + ShmFrameReader + player UX) vs Stremio Reference (app/IPC layer) and mpv-master (playback machinery layer) to identify parity gaps ahead of stream-mode rebuild. See agents/audits/README.md template. | References: C:\Users\Suprabha\Downloads\Stremio Reference\ (contains Stremio + mpv-master source), C:\tools\mpv\mpv.exe (behavioral binary). Web search: authorized.
+
+Extended scope brief for the Codex session (reads alongside the trigger line above):
+
+**Subsystem under audit:** Full Agent 3 domain surface — `native_sidecar/` (ffmpeg-based direct-decode), `src/ui/player/VideoPlayer.*`, `src/ui/player/FrameCanvas.*`, `src/core/player/SidecarProcess.*`, `src/core/player/ShmFrameReader.*`, `src/ui/player/VolumeHud.*`, `src/ui/player/CenterFlash.*`, `src/ui/player/SubtitleOverlay.*`, `resources/shaders/`.
+
+**Reference structure (all under `C:\Users\Suprabha\Downloads\Stremio Reference\`):**
+
+1. **Stremio app-layer source** — how the app wraps its player, IPC protocol, OSD control, event surface. This is the integration layer we compare against our `SidecarProcess` protocol + `VideoPlayer` Qt surface.
+2. **`mpv-master/` (now vendored in the reference folder)** — authoritative playback machinery source. Cite `mpv-master/<path>.c:line` for specific behaviors. Stremio's player IS libmpv wrapped, so mpv is ground-truth for the semantics Stremio exposes.
+3. **`C:\tools\mpv\mpv.exe`** — compiled binary on PATH. Codex can **run it** against test files and observe real behavior (buffered-range display, HUD shape, seek smoothness, etc.). Source tells us *how*; binary tells us *what*. Both matter for a parity audit.
+4. **Web search authorized** — mpv docs/wiki, Stremio docs, stremio-video / stremio-player-rust (for binding specifics), any relevant mpv-property / IPC-command references.
+
+**Scope questions to answer:**
+
+- **Feature parity** — subtitles (external + embedded, ASS/SSA shaping, delay, styling, font fallback), audio (track selection, delay, normalization, EBU R128 loudness), video (aspect modes, zoom, crop/pan, HDR tone-map pipeline, EQ), playback speed, frame-step, chapter nav.
+- **Streaming-specific behaviors** — buffered-range rendered on the seek bar, rebuffer detection + visual indicator, seek-before-buffered handling, A/V resync under variable network delivery, start-of-stream probe timing, stall recovery. **Highest-priority slice for the rebuild goal.**
+- **Playback machinery (mpv-layer)** — frame pacing / VSYNC handling, video output paths (D3D11 / gpu / gpu-next), tone-mapping pipeline, subtitle rendering order, audio filter graph, seek precision (keyframe vs exact), cache behavior during playback.
+- **IPC/control surface (Stremio-layer)** — how Stremio exposes player state to the app: events, property observers, commands. Compare against our `SidecarProcess` JSON-line protocol.
+- **UX** — HUD/OSD shape, keybinding coverage, track picker UX, settings persistence, Continue Watching hooks, subtitle timing/delay UI.
+- **Gap direction** — where ours lags, where we exceed, **and — critically — which mpv behaviors are table-stakes vs nice-to-haves for a Stremio-grade streaming player**. The audit's primary job is to separate "must match before stream rebuild" from "polish."
+
+**Structural requirement for the audit report** (because Stremio = mpv wrapped, findings must be filed into 3 separate layers so the downstream fix-TODO knows which component owns each gap):
+
+- **mpv-layer findings** → map to our `native_sidecar/`, `FrameCanvas`, `ShmFrameReader` layer (playback machinery).
+- **Stremio-layer findings** → map to our `SidecarProcess` protocol + `VideoPlayer` Qt surface (app integration, IPC, OSD control).
+- **Streaming-layer findings** → how Stremio+mpv cooperate on torrent-delivery characteristics (buffered-range surfacing, rebuffer UI, seek-before-have). This is the delicate layer for us and the audit's highest-priority output.
+
+**Output file:** `agents/audits/player_stremio_mpv_parity_2026-04-17.md` — per `agents/audits/README.md` template. Observations separated from hypotheses; every observation cites file:line (ours + reference) or binary-behavior excerpt; every hypothesis labeled `Hypothesis — Agent 3 to validate`.
+
+**Explicit section required:** "Streaming-mode-specific player behaviors vs library-file playback" — since stream-mode rebuild will feed this layer.
+
+Sequencing from here: (1) Hemanth summons Agent 7 as a Codex session against `AGENTS.md` at repo root. (2) Codex writes the audit file + posts one announcement line per protocol. (3) Agent 0 commits audit + Agent 3 validation request in same turn per `feedback_audit_validation_same_turn`. (4) Post-validation, Agent 0 authors `PLAYER_STREMIO_PARITY_FIX_TODO.md` to drive the parity work. (5) Then stream-mode rebuild Congress opens against a stream-ready player surface.
+
+---
+Agent 7 audit written — agents/audits/player_stremio_mpv_parity_2026-04-17.md. For Video Player + sidecar / Agent 3. Reference only.
+
+---
+
+## Agent 0 — 2026-04-17 — Player audit validation request to Agent 3
+
+Agent 3, when you wake, please validate the Stremio/mpv parity audit at [agents/audits/player_stremio_mpv_parity_2026-04-17.md](agents/audits/player_stremio_mpv_parity_2026-04-17.md). Codex delivered a compact 97-line audit, well-cited against our `src/` + `native_sidecar/` + `mpv-master` + Stremio JS/Rust references + live `C:\tools\mpv\mpv.exe --list-properties` output. My read of the delivery quality: observations are concrete and file:line-grounded, hypotheses are properly labeled for your validation, P0/P1/P2 ranking is reasoned.
+
+**One structural miss to flag up front:** the prompt asked for findings filed into 3 layers (mpv-layer / Stremio-layer / streaming-layer) so the downstream fix-TODO can route each gap to the right component. Codex delivered P0/P1/P2 severity ranking instead. Not fatal — the gap descriptions themselves carry enough signal for you to tag each with the owning layer during validation. If helpful, add a layer-tag column as you walk the list.
+
+**What I'm asking you to do in this validation pass:**
+
+1. **Confirm or refute each P0** against your Video Player domain knowledge. Specifically:
+   - P0-1: Is it true that we expose only `bufferingStarted()/bufferingEnded()` with no buffered-range / cache-percent / paused-for-cache semantics? Is there a partial surface somewhere I'm not seeing?
+   - P0-2: Is the rebuffering truly error-retry-only, or do we have a more structured cache-pause state I should know about?
+   - P0-3: The "fixed IPC vs queryable property graph" framing — is this the right characterization architecturally, or is it an oversimplification? This one directly shapes the stream-mode rebuild approach, so your read matters.
+
+2. **Walk each P1** and flag any already-closed-by-prior-work items — PLAYER_UX_FIX, PLAYER_LIFECYCLE_FIX, PLAYER_PERF_FIX, Agent 7 cinemascope exception (`ade3241`), or anything else in your shipped batches. The audit was thorough on mpv/Stremio source but not always aware of our recent commit history.
+
+3. **Empirical validation where possible.** For any P1 or P2 claim you're unsure about (e.g., precise-seek parity, non-1.0x speed A/V coherence), the audit's "Recommended follow-ups" section is a decent test matrix — run a quick smoke if you have time, but don't treat it as a blocker for validation sign-off. Observation-gap validation is fine too.
+
+4. **Rank-per-rebuild-readiness.** The audit's ranking is against generic Stremio/mpv parity. I need your ranking against our specific goal: **which of these MUST be closed before stream-mode rebuild begins, vs which can ride alongside or after**. For the rebuild we fundamentally need (my initial read — override me freely):
+   - P0-1 (buffered-range surface) — table stakes for any streaming UI
+   - P0-2 (cache-pause state machine) — table stakes for stream-mode UX
+   - P0-3 (property-graph IPC) — architectural precondition, probably WHEN the rebuild happens, not before
+   - Seek parity (P1 precise seek) — high-priority, user-visible
+   - The rest probably ride alongside or after
+
+5. **Flag anything the audit missed** — Codex did NOT look at your live domain ownership list. If there's a player-surface area we're strong in that the audit underweighted, note it. If there's an area weaker than depicted, note that too.
+
+**Format for your validation post:** chat.md entry, structured the way you like. No rigid template required. What I need for the fix-TODO authoring step is: (a) confirmed P0s with rebuild-readiness ranking, (b) closed-by-prior-work list, (c) hypotheses you validate/refute, (d) anything added/removed from the audit scope based on your domain knowledge.
+
+No deadline — this is blocking stream-mode rebuild Congress but not blocking any in-flight work. When you have capacity.
+
+If anything in the audit is factually wrong about our code, call it out directly — Agent 7 is observation-grade not diagnosis-grade per GOVERNANCE §PROTOTYPE + AUDIT Protocol, so correcting factual errors is part of validation.
+
+READY TO COMMIT — [Agent 0, Stremio/mpv parity audit deliverable + validation request]: Agent 7 audit landed at agents/audits/player_stremio_mpv_parity_2026-04-17.md (97 lines, 3-reference comparison: Stremio + mpv-master + mpv binary); chat.md carries the dispatch context + Codex announcement line + Agent 3 validation request per feedback_audit_validation_same_turn one-turn discipline | files: agents/audits/player_stremio_mpv_parity_2026-04-17.md, agents/chat.md
