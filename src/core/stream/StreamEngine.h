@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QHash>
 #include <QMutex>
@@ -10,6 +11,55 @@
 #include <memory>
 
 #include "addon/StreamInfo.h"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice A architectural non-goals (STREAM_ENGINE_FIX Phase 4.2 — codified
+// 2026-04-17 per agents/audits/stream_a_engine_2026-04-16.md validation).
+//
+// Deliberate scope boundaries for Stream-A substrate; downstream slice audits
+// (D / 3a / C / 3b / 3c) must not re-flag any item below as a gap.
+//
+//   - No HLS / adaptive transcoding routes. Native sidecar demuxes anything
+//     ffmpeg supports; the HTML-video constraint driving Stremio's HLS
+//     layer doesn't apply to a Qt desktop player.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 6
+//          (corroborated by stream_d_player_2026-04-17.md D-15 +
+//           Cross-Slice Appendix)
+//
+//   - No subtitle VTT proxy routes. Sidecar decodes ASS / SSA / PGS / text
+//     via libass + SubtitleRenderer directly.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 5
+//
+//   - No /create endpoint. fileIdx is pre-resolved in onMetadataReady via
+//     autoSelectVideoFile + largest-video heuristic + behaviorHints.filename;
+//     functionally equivalent to Stremio's /create for single-tenant native.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 10
+//
+//   - No archive / YouTube / NZB substrate. YouTube returns
+//     UNSUPPORTED_SOURCE; archives surface via Sources (Agent 4B's domain),
+//     not Stream-A.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 11
+//
+//   - No bare-hash /{infoHash}/{fileIdx} routes. Single-tenant in-process
+//     sidecar consumer; the only route shape is /stream/{hash}/{file}.
+//     Stremio's React-shell consumer assumptions don't apply.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 2 H1
+//
+//   - No multi-range HTTP byte serving. Single-range parser is RFC 9110
+//     compliant + decoder-contract sufficient.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 2
+//
+//   - No backend abstraction / dual-backend support (librqbit swap path).
+//     Memory storage / piece waiters / tracker policy evolve WITHIN
+//     TorrentEngine without an abstraction layer.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 8
+//
+//   - No memory-first storage model. QFile-from-disk is durable across
+//     restarts, simpler, larger-than-RAM possible, lower memory pressure
+//     on long sessions. Strategic choice, not a defect.
+//     See: agents/audits/stream_a_engine_2026-04-16.md Axis 11 H2
+//
+// ─────────────────────────────────────────────────────────────────────────────
 
 class TorrentEngine;
 class StreamHttpServer;
@@ -38,6 +88,36 @@ struct StreamFileResult {
 struct StreamTorrentStatus {
     int peers = 0;
     int dlSpeed = 0;            // bytes/sec
+};
+
+// STREAM_ENGINE_FIX Phase 1.1 — substrate observability snapshot.
+//
+// Returned by StreamEngine::statsSnapshot() for any active stream. Consumers:
+// (a) Phase 1.2 structured telemetry log facility, (b) future Slice D player
+// UI buffering state surface, (c) future Slice 3a progress-tracking cadence,
+// (d) Agent 4 agent-side Rule-15 log reads.
+//
+// All time fields are milliseconds-since-engine-start (monotonic via the
+// engine's own QElapsedTimer; -1 sentinel = event not yet observed). Byte
+// fields are zero-default; piece-range fields are -1 sentinel.
+//
+// Construction is cheap — pure projection of StreamRecord state + 1-2 calls
+// into TorrentEngine for piece coverage data. Safe to call at telemetry
+// cadence (5-15s) without engine load impact.
+struct StreamEngineStats {
+    QString infoHash;
+    int     activeFileIndex            = -1;
+    qint64  metadataReadyMs            = -1;
+    qint64  firstPieceArrivalMs        = -1;
+    qint64  gateProgressBytes          = 0;
+    qint64  gateSizeBytes              = 0;
+    double  gateProgressPct            = 0.0;
+    int     prioritizedPieceRangeFirst = -1;
+    int     prioritizedPieceRangeLast  = -1;
+    int     peers                      = 0;
+    qint64  dlSpeedBps                 = 0;
+    bool    cancelled                  = false;
+    int     trackerSourceCount         = 0;
 };
 
 class StreamEngine : public QObject
@@ -75,6 +155,11 @@ public:
 
     // Query torrent status for UI
     StreamTorrentStatus torrentStatus(const QString& infoHash) const;
+
+    // STREAM_ENGINE_FIX Phase 1.1 — substrate observability snapshot.
+    // Pure read; safe to call from any thread (locks m_mutex internally).
+    // Returns sentinel-defaulted struct for unknown infoHash.
+    StreamEngineStats statsSnapshot(const QString& infoHash) const;
 
     // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
     // retargeting. Called from the StreamPage progressUpdated lambda,
@@ -136,6 +221,14 @@ private slots:
                            int dlSpeed, int ulSpeed, int peers, int seeds);
     void onTorrentError(const QString& infoHash, const QString& message);
 
+    // STREAM_ENGINE_FIX Phase 1.2 — periodic telemetry emit. Fires every 5s
+    // when telemetry is enabled; walks active streams, emits a snapshot per
+    // stream. No-op when telemetry disabled (env var unset). The 5s cadence
+    // covers both gate-open and serving phases without phase-distinguishing
+    // logic — log volume bounded at one record per stream per 5s, well
+    // under "busy-log" thresholds for typical 1-3 active streams.
+    void emitTelemetrySnapshots();
+
 private:
     struct StreamRecord {
         QString infoHash;
@@ -161,7 +254,26 @@ private:
         // captured the token in handleConnection retain their reference.
         std::shared_ptr<std::atomic<bool>> cancelled =
             std::make_shared<std::atomic<bool>>(false);
+
+        // STREAM_ENGINE_FIX Phase 1.1 — observability fields. All
+        // milliseconds-since-engine-start (m_clock.elapsed()); -1 = not yet
+        // observed. metadataReadyMs is set in onMetadataReady;
+        // firstPieceArrivalMs is set inline in streamFile's gate-progress
+        // block when contiguousHead transitions from 0 to >0 (sub-second
+        // slop bounded by streamFile poll cadence — refined to alert-driven
+        // in Phase 2.3 if cross-domain HELP lands). trackerSourceCount is
+        // a pre-augmentation count from magnet URI parse at record creation
+        // (Phase 3.2 will re-store post-augmentation count on injection).
+        qint64 metadataReadyMs       = -1;
+        qint64 firstPieceArrivalMs   = -1;
+        int    trackerSourceCount    = 0;
     };
+
+    // STREAM_ENGINE_FIX Phase 1.1 — gate target. Hoisted from streamFile so
+    // statsSnapshot reports the same gate the streaming path enforces.
+    // Phase 2.1 may tune this value informed by Phase 1 telemetry; tuning
+    // happens here, single source of truth.
+    static constexpr qint64 kGateBytes = 5LL * 1024 * 1024;
 
     int autoSelectVideoFile(const QJsonArray& files, const QString& hint) const;
     QString buildStreamUrl(const QString& infoHash, int fileIndex) const;
@@ -173,6 +285,18 @@ private:
     StreamHttpServer* m_httpServer;
     QString m_cacheDir;
     QTimer* m_cleanupTimer = nullptr;
+
+    // STREAM_ENGINE_FIX Phase 1.2 — periodic telemetry timer. Started in
+    // ctor at 5000ms interval; fires emitTelemetrySnapshots(). When the
+    // env-var gate is off the slot short-circuits cheaply.
+    QTimer* m_telemetryTimer = nullptr;
+
+    // STREAM_ENGINE_FIX Phase 1.1 — monotonic clock started in ctor; supplies
+    // ms-since-engine-start timestamps for StreamRecord observability fields
+    // (metadataReadyMs / firstPieceArrivalMs). Monotonic to survive
+    // wall-clock jumps (NTP / DST); engine-relative because absolute epoch
+    // is irrelevant for telemetry deltas.
+    QElapsedTimer m_clock;
 
     mutable QMutex m_mutex;
     QHash<QString, StreamRecord> m_streams;

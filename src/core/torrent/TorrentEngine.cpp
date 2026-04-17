@@ -1216,6 +1216,42 @@ qint64 TorrentEngine::contiguousBytesFromOffset(const QString& infoHash,
     return counted;
 }
 
+// STREAM_ENGINE_FIX Phase 2.6.1 — per-piece have state. Diagnostic-only;
+// const + lock-protected. Returns false on unknown infoHash, invalid handle,
+// out-of-range pieceIdx, or any libtorrent error path. Same have_piece()
+// semantics as the loop in contiguousBytesFromOffset above (line 1169) —
+// piece is "have" only after fully downloaded + written to disk.
+bool TorrentEngine::havePiece(const QString& infoHash, int pieceIdx) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return false;
+    auto ti = it->handle.torrent_file();
+    if (!ti) return false;
+    if (pieceIdx < 0 || pieceIdx >= ti->num_pieces()) return false;
+    return it->handle.have_piece(lt::piece_index_t(pieceIdx));
+}
+
+// STREAM_ENGINE_FIX Phase 2.6.3 — per-piece priority boost. Wraps
+// libtorrent's set_piece_priority(piece, prio). Used by prepareSeekTarget to
+// set priority 7 (max) on seek pieces in addition to the existing
+// set_piece_deadline call — combining priority + deadline gives seek pieces
+// unambiguous scheduler win. Silent no-op on unknown infoHash / invalid
+// pieceIdx / out-of-range priority (libtorrent expects 0..7). Same
+// lock-protected pattern as setFilePriorities.
+void TorrentEngine::setPiecePriority(const QString& infoHash, int pieceIdx, int priority)
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    auto ti = it->handle.torrent_file();
+    if (!ti) return;
+    if (pieceIdx < 0 || pieceIdx >= ti->num_pieces()) return;
+    if (priority < 0 || priority > 7) return;
+    it->handle.piece_priority(lt::piece_index_t(pieceIdx),
+                              static_cast<lt::download_priority_t>(priority));
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -1258,6 +1294,8 @@ void TorrentEngine::setGlobalSeedingRules(float, int) {}
 QList<TorrentStatus> TorrentEngine::allStatuses() const { return {}; }
 QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
 bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }
+bool TorrentEngine::havePiece(const QString&, int) const { return false; }
+void TorrentEngine::setPiecePriority(const QString&, int, int) {}
 void TorrentEngine::flushCache(const QString&) {}
 // STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 stubs — match header decls.
 void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int>>&) {}

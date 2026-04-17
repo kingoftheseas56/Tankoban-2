@@ -153,6 +153,27 @@ public:
     bool haveContiguousBytes(const QString& infoHash, int fileIndex,
                              qint64 fileOffset, qint64 length) const;
 
+    // STREAM_ENGINE_FIX Phase 2.6.1 — per-piece have state. Diagnostic-tier
+    // exposure of libtorrent's have_piece() so StreamEngine's seek_target
+    // telemetry can report per-piece availability of the seek window. Returns
+    // false on unknown infoHash, invalid pieceIdx, or library not built. No
+    // behavior change. Agent 4B's pre-offered HELP for Slice A Axis 1
+    // (contiguousBytesFromOffset semantics, pieceRangeForFileOffset boundary
+    // cases) covers this addition — same const-read shape, same semantic class.
+    bool havePiece(const QString& infoHash, int pieceIdx) const;
+
+    // STREAM_ENGINE_FIX Phase 2.6.3 — per-piece priority boost. Exposes
+    // libtorrent's set_piece_priority() so prepareSeekTarget can boost seek
+    // pieces to priority 7 (max) IN ADDITION to setting a tight deadline.
+    // Phase 2.6.1 telemetry proved deadlines alone aren't enough to override
+    // libtorrent's general piece selection when many peers are serving
+    // varied pieces in parallel; the deadline is one factor, not a hard
+    // override. Combining priority + deadline gives seek pieces
+    // unambiguous scheduler win. No-op on unknown infoHash, invalid
+    // pieceIdx, or library not built. Same Axis 1 territory as havePiece +
+    // existing setFilePriorities — Agent 4B pre-offered HELP covers it.
+    void setPiecePriority(const QString& infoHash, int pieceIdx, int priority);
+
     // Flush libtorrent's disk write cache for a specific torrent so all
     // downloaded pieces are immediately readable from disk via QFile.
     void flushCache(const QString& infoHash);
