@@ -108,6 +108,37 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
         return std::nullopt;
     }
 
+    // SAR / DAR diagnostic — 2026-04-16. VLC + mpv both report display dim
+    // 1920x804 for the Payback HEVC file while our sidecar uses codecpar
+    // dims directly. This logs every source of aspect info FFmpeg
+    // exposes so we can decide whether to switch source width/height to
+    // av_guess_sample_aspect_ratio-derived dims, or leave coded dims
+    // alone. Remove after the stuck-top-bar bug closes.
+    {
+        const AVRational cp_sar  = vs->codecpar->sample_aspect_ratio;
+        const AVRational st_sar  = vs->sample_aspect_ratio;
+        const AVRational guess   = av_guess_sample_aspect_ratio(fmt_ctx, vs, nullptr);
+        int disp_w = result.width;
+        int disp_h = result.height;
+        if (guess.num > 0 && guess.den > 0 && guess.num != guess.den) {
+            if (guess.num > guess.den) {
+                disp_w = static_cast<int>(
+                    static_cast<int64_t>(result.width) * guess.num / guess.den);
+            } else {
+                disp_h = static_cast<int>(
+                    static_cast<int64_t>(result.height) * guess.den / guess.num);
+            }
+        }
+        std::fprintf(stderr,
+            "[ASPECT DIAG] coded=%dx%d codecpar_SAR=%d:%d stream_SAR=%d:%d "
+            "guess_SAR=%d:%d sar_derived_display=%dx%d\n",
+            result.width, result.height,
+            cp_sar.num,  cp_sar.den,
+            st_sar.num,  st_sar.den,
+            guess.num,   guess.den,
+            disp_w,      disp_h);
+    }
+
     const AVCodecDescriptor* desc = avcodec_descriptor_get(vs->codecpar->codec_id);
     result.codec = desc ? desc->name : "unknown";
 
