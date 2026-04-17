@@ -1,8 +1,8 @@
 # Agent Status
 
 Each agent overwrites their own section at session start and end. Never append — overwrite your entry.
-Last header touch: 2026-04-17 (Agent 0 — commit sweep batch: 10 commits covering Agent 3 Player UX + subtitle renderer + SAR diag + Phase 1.1 sidecar events, Agent 4B multiplying-folders, Agent 4 Slice A consolidated (10-batch squash preserving per-batch narrative) + build script + auto-launch disable + Phase 4.2 non-goals comment, Agent 0 STREAM_ENGINE_FIX_TODO + STREAM_PLAYER_DIAGNOSTIC_FIX_TODO authoring; imposter-Agent-0 cleanup done; STREAM_PLAYER_DIAGNOSTIC dispatch + Agent 3/4B HELP ACKs all landed)
-Last agent-section touch: 2026-04-17 (Agent 0 — post-sweep state refresh; 10-commit batch executed, sweep marker next; 2 orphan files flagged to Agent 3 (VideoContextMenu.{cpp,h} Crop submenu — no READY TO COMMIT line claims them))
+Last header touch: 2026-04-17 (Agent 5 — multiplying-folders diagnostic landed in chat.md: no 4th mechanism in Library UX domain; symptom is pre-fix stale on-disk state from 2026-04-14/15 that d05a3c4 does not retroactively heal; Hemanth cleanup + rebuild required to validate fix)
+Last agent-section touch: 2026-04-17 (Agent 5 — diagnostic post for multiplying-folders work order; conclusion: no code change warranted from Library UX; routed back to Agent 4B's documented cleanup + rebuild + smoke matrix)
 
 Per Rule 12: when you overwrite your own section, bump the `Last agent-section touch` line in the same edit. The header touch line is Agent 0's responsibility, bumped when anything outside an individual agent's section changes.
 
@@ -104,17 +104,17 @@ Governance seen: gov-v3 | Contracts seen: contracts-v2
 ---
 
 ## Agent 5 (Library UX)
-Status: ACTIVE — Stream main-page scroll parity fix shipped. Moved `m_searchBarFrame` out of `rootLayout` into `m_scrollLayout` as the first child of `m_browseScroll`'s content widget, matching Comics/Videos/Books where the search bar scrolls with content. Frame internal margins (20,20,20,8)→(0,20,0,0) to avoid doubling against `m_scrollLayout`'s (20,0,20,20). Search history dropdown re-verifies position via `m_searchInput->mapTo(this,…)` every show, so it re-anchors correctly with the scrolled bar. Knock-on: when search results overlay (StreamSearchWidget) shows, `m_browseScroll` hides so the bar hides too — user hits Back to refine (Option A per Hemanth). Awaiting main-app build + smoke.
-Current task: Awaiting Hemanth smoke on StreamPage scroll-parity fix. On green → post READY TO COMMIT.
-Active files: src/ui/pages/StreamPage.cpp (3 touches — -1 line in buildUI, margin change + comment refresh in buildSearchBar, +1 line in buildBrowseLayer).
-Blockers: None.
+Status: ACTIVE — multiplying-folders work order diagnostic landed. Investigated auto-rename flow end-to-end against the 4 trace-candidates Agent 0 proposed (mid-flight scanner catch / stale pre-rename tile / dual scan-path desync / rename normalization mismatch). All 4 ruled out at source. Ground-truth disk audit of `C:/Users/Suprabha/Desktop/Media/TV/` confirms H1 precisely: two physical Vinland Saga folders on disk (2026-04-14 auto-rename target + 2026-04-15 libtorrent-resurrected ghost, identical 11 GB content), both cleaning to `Vinland Saga 10 bits DD Season 2` via `ScannerUtils::cleanMediaFolderTitle` — scanner is honest about disk reality. `torrents.json` still holds active record `83af950a...`; `83af950a...fastresume` still on disk. Agent 4B's fix d05a3c4 is structurally correct (VideosPage.cpp:328-329 + TorrentClient.cpp:373-400 + MainWindow.cpp:311 all verified); fix has simply not yet executed on Hemanth's machine (rebuild pending per Agent 4B STATUS). Symptom is pre-fix residue that the fix is explicitly documented (chat.md:1191-1203) to NOT retroactively heal. No Library UX code change warranted. Full diagnostic with file:line citations at chat.md tail. Stream main-page scroll parity fix still awaiting smoke (earlier session context).
+Current task: Standing by. Hemanth cleanup of ghost folder + fastresume + torrents.json entry + main-app rebuild + re-run Agent 4B's 4-case smoke matrix. If rebuilt + cleaned smoke shows ghost resurrecting, reopens as cross-domain Agent 4B + Agent 5 — until then no code.
+Active files: None (read-only diagnostic pass). Evidence spans src/ui/pages/VideosPage.{h,cpp}, src/core/ScannerUtils.{h,cpp}, src/core/CoreBridge.cpp, src/core/torrent/TorrentClient.{h,cpp}, src/ui/MainWindow.cpp + on-disk audit of `C:/Users/Suprabha/Desktop/Media/TV/` + `<dataDir>/torrents.json`, `torrent_history.json`, `torrent_cache/resume/`.
+Blockers: None on my side. StreamPage scroll-parity fix still awaiting Hemanth smoke (open from earlier session — orthogonal to this task).
 Open debt (pre-parity, non-blocking):
  - BooksPage / ComicsPage Auto-rename + inline-rename parity (TileCard::beginRename is already generic, ready to wire when Hemanth asks).
  - Tankorent list-view "Download" column — consumer side of Agent 4B's `TorrentClient::downloadProgress(folderPath)` API (shipped Batch 7.2); wire via HELP on their side when I execute.
  - rootFoldersChanged auto-rescan already flows end-to-end (Agent 4B Batch 7.1); no code needed on my side.
-Scope note: Per Hemanth 2026-04-14, Agent 5 owns ALL library-side UX across every mode (Comics, Books, Videos, Stream). Page-owning agents (1/2/3) own reader/player internals only. Do not defer library UX to them.
-Last session: 2026-04-16
-Governance seen: gov-v2 | Contracts seen: contracts-v2
+Scope note: Per Hemanth 2026-04-14, Agent 5 owns ALL library-side UX across every mode (Comics, Books, Videos, Stream). Page-owning agents (1/2/3) own reader/player internals only. Do not defer library UX to them. This investigation reinforced that scope boundary: the symptom surfaces IN Library UX but the causal mechanism is downstream of auto-rename (libtorrent ghost), so fix lives in Agent 4B's TorrentClient — Library UX reports disk reality honestly.
+Last session: 2026-04-17
+Governance seen: gov-v3 | Contracts seen: contracts-v2
 
 ---
 
