@@ -44,8 +44,34 @@ private:
 }
 #endif
 
-// Match Python _FRAME_DROP_BEHIND_US = 42000
-static constexpr int64_t FRAME_DROP_BEHIND_US = 42000;
+// Fallback drop threshold used only when the stream's frame rate can't
+// be determined (degenerate demuxer output). Matches the previous static
+// value (42 ms ≈ 1 frame at 24 fps). Normal playback uses the adaptive
+// threshold computed from avg_frame_rate / r_frame_rate — see
+// compute_drop_threshold_us.
+static constexpr int64_t FRAME_DROP_BEHIND_US_FALLBACK = 42000;
+
+// Adaptive late-frame drop threshold. The old static 42 ms was fine for
+// 24 fps (≈1 frame late) but over-permissive at 60 fps (2.5 frames late)
+// and 120 fps (5 frames late) — those users see visible stutter long
+// before we drop. Formula: 1.5 × frame_duration, floored at 25 ms so
+// extreme high-fps content still gets a reasonable decode budget.
+// At 24 fps → 62 ms; 30 fps → 50 ms; 60 fps → 25 ms; 120 fps → 25 ms
+// (floor); 12 fps → 125 ms. 24 fps is slightly relaxed vs the old 42 ms
+// to give decoder extra catch-up room on seek resume, where late frames
+// are expected and flooding the log with drops is unhelpful.
+static int64_t compute_drop_threshold_us(const AVStream* stream) {
+    if (!stream) return FRAME_DROP_BEHIND_US_FALLBACK;
+    AVRational r = stream->avg_frame_rate;
+    if (r.den == 0 || r.num == 0) r = stream->r_frame_rate;
+    if (r.den == 0 || r.num == 0) return FRAME_DROP_BEHIND_US_FALLBACK;
+    const double fps = av_q2d(r);
+    if (fps <= 0.0) return FRAME_DROP_BEHIND_US_FALLBACK;
+    const double frame_us = 1e6 / fps;
+    int64_t threshold = static_cast<int64_t>(frame_us * 1.5);
+    if (threshold < 25000) threshold = 25000;
+    return threshold;
+}
 
 // Hardware pixel format negotiated during hw accel init (AV_PIX_FMT_NONE = disabled)
 static thread_local enum AVPixelFormat tl_hw_pix_fmt = AV_PIX_FMT_NONE;
@@ -233,6 +259,18 @@ void VideoDecoder::decode_thread_func(
 
     AVStream* video_stream = fmt_ctx->streams[video_stream_index];
 
+    // Frame-rate-adaptive late-drop threshold (replaces the old fixed
+    // 42 ms constant). Captured once here so the inner decode loop just
+    // reads the local instead of recomputing / branching each frame.
+    const int64_t frame_drop_behind_us = compute_drop_threshold_us(video_stream);
+    std::fprintf(stderr, "VideoDecoder: adaptive drop threshold = %lld us "
+                         "(avg_fps=%.3f r_fps=%.3f)\n",
+                 static_cast<long long>(frame_drop_behind_us),
+                 video_stream->avg_frame_rate.den
+                     ? av_q2d(video_stream->avg_frame_rate) : 0.0,
+                 video_stream->r_frame_rate.den
+                     ? av_q2d(video_stream->r_frame_rate) : 0.0);
+
     // --- Open codec ---
     const AVCodec* codec = avcodec_find_decoder(video_stream->codecpar->codec_id);
     if (!codec) {
@@ -368,6 +406,13 @@ void VideoDecoder::decode_thread_func(
                  codec->name, codec_ctx->width, codec_ctx->height,
                  av_get_pix_fmt_name(codec_ctx->pix_fmt));
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — decoder_open_done event.
+    // Fires after avcodec_open2 succeeds; the decoder is fully initialized
+    // and about to seek (if start_seconds > 0.01) then enter the read loop.
+    // Main-side on_video_event lambda computes t_ms_from_open from its
+    // captured open_start_time anchor.
+    on_event_("decoder_open_done", "");
+
     // --- Initial seek ---
     if (start_seconds > 0.01) {
         int64_t ts = static_cast<int64_t>(start_seconds * AV_TIME_BASE);
@@ -415,6 +460,15 @@ void VideoDecoder::decode_thread_func(
     // HTTP streaming stall detection
     bool buffering_emitted = false;
     int stall_count = 0;
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — first-milestone gate flags.
+    // These latch true on the first successful av_read_frame and the first
+    // successful avcodec_receive_frame respectively, so the event fires
+    // exactly once per decode session. Event routing is through on_event_
+    // to main.cpp's on_video_event lambda, which adds t_ms_from_open +
+    // session scoping + writes the final JSON event to stdout.
+    bool first_packet_read_fired = false;
+    bool first_decoder_receive_fired = false;
 
 #ifdef _WIN32
     auto overlay_shm_snapshot = [this]() -> OverlayShm* {
@@ -488,9 +542,11 @@ void VideoDecoder::decode_thread_func(
 
         // Late-frame drop: skip expensive color conversion for frames
         // already behind the A/V clock (decode overshot budget).
+        // Threshold is frame-rate-adaptive (see compute_drop_threshold_us):
+        // 24 fps → 62 ms, 60 fps → 25 ms, 120 fps → 25 ms (floor).
         if (first_frame_fired && clock_ && clock_->started()) {
             int64_t behind_us = clock_->position_us() - pts_us;
-            if (behind_us > FRAME_DROP_BEHIND_US) {
+            if (behind_us > frame_drop_behind_us) {
                 ++frames_dropped;
                 if (frames_dropped <= 5 || frames_dropped % 30 == 0) {
                     std::fprintf(stderr,
@@ -1065,6 +1121,20 @@ void VideoDecoder::decode_thread_func(
             std::fprintf(stderr, "VideoDecoder: HTTP stall resolved, resuming playback\n");
         }
 
+        // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — first_packet_read event.
+        // Signals that demuxer + I/O (network or disk) are flowing. Fires
+        // once per decode session on the very first successful av_read_frame
+        // return (any stream — video / audio / subtitle). Detail format:
+        // "<stream_index>:<pkt_size>" — main-side lambda parses into payload
+        // fields and adds t_ms_from_open.
+        if (!first_packet_read_fired) {
+            first_packet_read_fired = true;
+            char info[64];
+            std::snprintf(info, sizeof(info), "%d:%d",
+                          pkt->stream_index, pkt->size);
+            on_event_("first_packet_read", std::string(info));
+        }
+
         // Intercept subtitle packets — feed to libass via SubtitleRenderer
         if (pkt->stream_index != video_stream_index) {
             int active_sub = active_sub_stream_.load();
@@ -1105,6 +1175,26 @@ void VideoDecoder::decode_thread_func(
                 std::fprintf(stderr, "VideoDecoder: avcodec_receive_frame error: %s\n", errbuf);
                 on_event_("decode_error", std::string("DECODE_SKIP_FRAME:") + errbuf);
                 break;
+            }
+
+            // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — first_decoder_receive
+            // event. Honest "decoder is actually making forward progress"
+            // signal — distinguished from first_packet_read which only
+            // confirms demuxer / I/O motion. On slow-open paths this can
+            // lag first_packet_read by seconds (decoder back-pressure,
+            // keyframe wait, internal libavcodec buffering). Detail format:
+            // "<pts_us>" — main-side lambda converts to pts_ms. Fires once.
+            if (!first_decoder_receive_fired) {
+                first_decoder_receive_fired = true;
+                int64_t pts_us = 0;
+                if (frame->pts != AV_NOPTS_VALUE) {
+                    AVRational tb = video_stream->time_base;
+                    pts_us = av_rescale_q(frame->pts, tb, {1, 1000000});
+                }
+                char info[64];
+                std::snprintf(info, sizeof(info), "%lld",
+                              static_cast<long long>(pts_us));
+                on_event_("first_decoder_receive", std::string(info));
             }
 
             process_frame(frame);

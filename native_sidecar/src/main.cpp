@@ -262,6 +262,18 @@ static void teardown_decode() {
 static void open_worker(Command cmd) {
     const std::string sid = cmd.sessionId;
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — wall-clock anchor for Phase 1
+    // diagnostic events (probe_start/done, decoder_open_start/done,
+    // first_packet_read, first_decoder_receive, first_frame additive delta).
+    // Anchored at open_worker entry to capture the full user-visible open
+    // interval. Independent of the t0_open at the audio-init site below,
+    // which measures audio-startup latency from mid-open_worker.
+    const auto open_start_time = std::chrono::steady_clock::now();
+    auto t_ms_from_open = [&open_start_time]() -> int64_t {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - open_start_time).count();
+    };
+
     // Extract payload
     std::string path = cmd.payload.value("path", "");
     double start_sec = cmd.payload.value("startSeconds", 0.0);
@@ -276,8 +288,18 @@ static void open_worker(Command cmd) {
     }
 
     // --- 1. Probe ---
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — probe_start event. Fires
+    // immediately before probe_file() to anchor the probe-window measurement.
+    write_event("probe_start", sid, -1, {
+        {"t_ms_from_open", t_ms_from_open()}
+    });
+
     std::fprintf(stderr, "TIMING open start sid=%s target=%.3fs\n", sid.c_str(), start_sec);
+    const auto probe_call_start = std::chrono::steady_clock::now();
     auto probe = probe_file(path);
+    const int64_t analyze_duration_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - probe_call_start).count();
     if (!probe.has_value()) {
         write_error("OPEN_FAILED", "Cannot open file: probe failed", sid);
         g_state.set_state(State::IDLE);
@@ -289,6 +311,18 @@ static void open_worker(Command cmd) {
         std::fprintf(stderr, "Open cancelled after probe\n");
         return;
     }
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — probe_done event. Fires after
+    // probe_file returns successfully and the cancellation check passes.
+    // analyze_duration_ms measures time spent in probe_file (inclusive of
+    // avformat_open_input + avformat_find_stream_info). stream_count is the
+    // total track count (1 video + N audio + M subtitle).
+    write_event("probe_done", sid, -1, {
+        {"t_ms_from_open", t_ms_from_open()},
+        {"analyze_duration_ms", analyze_duration_ms},
+        {"stream_count", static_cast<int>(1 + probe->audio.size() + probe->subs.size())},
+        {"duration_ms", static_cast<int64_t>(probe->duration_sec * 1000.0)}
+    });
 
     int width  = probe->width;
     int height = probe->height;
@@ -391,9 +425,20 @@ static void open_worker(Command cmd) {
     // tracks_payload and probe_* locals are no longer needed in the lambda
     // since their emissions now fire above. The lambda's remaining captures
     // are the shm/dimension metadata needed to synthesize the first_frame
-    // event payload.
+    // event payload. STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 adds
+    // open_start_time by value so in-lambda Phase 1 events
+    // (decoder_open_done / first_packet_read / first_decoder_receive / the
+    // additive wall_clock_delta_from_open_ms field on first_frame) compute
+    // their t_ms_from_open locally via steady_clock::now() - open_start_time.
+    // open_start_time is std::chrono::steady_clock::time_point, trivially
+    // copyable; captured by value so the lambda stays valid if open_worker
+    // returns before the decoder thread fires first_frame.
     auto on_video_event = [sid, shm_name, width, height, stride, slot_bytes,
-                     codec_name](const std::string& event, const std::string& detail) {
+                     codec_name, open_start_time](const std::string& event, const std::string& detail) {
+        auto lambda_t_ms_from_open = [&open_start_time]() -> int64_t {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - open_start_time).count();
+        };
         if (event == "first_frame") {
             // Parse "fw:fh:codec:pts_us:fid" from decoder callback
             int actual_w = width, actual_h = height;
@@ -440,6 +485,11 @@ static void open_worker(Command cmd) {
             p["slotCount"]   = DECODE_RING_SLOT_COUNT;
             p["slotBytes"]   = slot_bytes;
             p["pixelFormat"] = "bgra8";
+            // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — additive
+            // wall_clock_delta_from_open_ms for end-to-end Phase-1
+            // timing correlation. Backward-compatible: Qt consumers
+            // that don't read this field ignore it.
+            p["wall_clock_delta_from_open_ms"] = lambda_t_ms_from_open();
             write_event("first_frame", sid, -1, p);
 
             // PLAYER_UX_FIX Phase 1.1 (2026-04-16): tracks_changed +
@@ -477,6 +527,54 @@ static void open_worker(Command cmd) {
             write_error(code, msg, sid);
             g_state.set_state(State::IDLE);
             write_event("state_changed", sid, -1, {{"state", "idle"}});
+
+        } else if (event == "decoder_open_done") {
+            // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — VideoDecoder fires
+            // this immediately after avcodec_open2 succeeds on the decoder
+            // thread. Marks decoder-init completion; the next packet-read
+            // is imminent. Empty detail; t_ms_from_open computed locally
+            // from the captured open_start_time anchor.
+            write_event("decoder_open_done", sid, -1, {
+                {"t_ms_from_open", lambda_t_ms_from_open()}
+            });
+
+        } else if (event == "first_packet_read") {
+            // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — VideoDecoder fires
+            // on the first successful av_read_frame in its decode loop.
+            // Signals demuxer / network / disk I/O is flowing. Detail
+            // format: "<stream_index>:<pkt_size>" (both optional; safe to
+            // treat as empty). Useful for ranking probe-stall vs
+            // post-probe-read-stall when the open takes longer than
+            // expected.
+            nlohmann::json p;
+            p["t_ms_from_open"] = lambda_t_ms_from_open();
+            size_t colon = detail.find(':');
+            if (colon != std::string::npos) {
+                p["stream_index"] = std::atoi(detail.substr(0, colon).c_str());
+                p["packet_size"]  = std::atoi(detail.substr(colon + 1).c_str());
+            }
+            write_event("first_packet_read", sid, -1, p);
+
+        } else if (event == "first_decoder_receive") {
+            // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — VideoDecoder fires
+            // on the first successful avcodec_receive_frame. This is the
+            // honest "decoder is actually making forward progress" signal
+            // vs first_packet_read (which only confirms network/disk I/O).
+            // Rule-14 design pick #3 (Agent 3, chat.md HELP ACK): use
+            // first_decoder_receive — not first_packet_read — to drive
+            // Phase 2.1 setStage(DecodingFirstFrame) in the LoadingOverlay,
+            // because packet-read success before receive-frame success can
+            // stall indefinitely on decoder back-pressure or blocking
+            // inside libavcodec. Detail format: "<pts_us>" (zero/empty if
+            // no PTS — some keyframes). decode_latency_ms is not computed
+            // yet; Phase 2 can add if empirically useful.
+            nlohmann::json p;
+            p["t_ms_from_open"] = lambda_t_ms_from_open();
+            if (!detail.empty()) {
+                int64_t pts_us = std::atoll(detail.c_str());
+                p["pts_ms"] = pts_us / 1000;
+            }
+            write_event("first_decoder_receive", sid, -1, p);
 
         } else if (event == "buffering") {
             // PLAYER_UX_FIX Phase 2.1 — HTTP-stall retry path emits this
@@ -676,6 +774,18 @@ static void open_worker(Command cmd) {
     std::vector<int> sub_indices;
     for (const auto& t : probe->subs)
         sub_indices.push_back(std::stoi(t.id));
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — decoder_open_start event.
+    // Fires immediately before spawning the decoder worker thread. Inside
+    // VideoDecoder::decode_thread_func, avformat_open_input +
+    // avformat_find_stream_info run a second time (the demuxer re-probes
+    // the URL for the decoder's own AVFormatContext — D-12 two-probes
+    // scenario). decoder_open_done will fire from inside that worker
+    // thread after avcodec_open2 succeeds.
+    write_event("decoder_open_start", sid, -1, {
+        {"t_ms_from_open", t_ms_from_open()}
+    });
+
     vdec->start(path, start_sec, probe->video_stream_index, sub_indices);
 
     // Set default active subtitle stream + preload packets.
