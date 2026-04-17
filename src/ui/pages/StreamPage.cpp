@@ -125,7 +125,6 @@ void StreamPage::buildUI()
     rootLayout->setSpacing(0);
 
     buildSearchBar();
-    rootLayout->addWidget(m_searchBarFrame);
 
     m_mainStack = new QStackedWidget(this);
 
@@ -357,14 +356,11 @@ void StreamPage::buildSearchBar()
     m_searchBarFrame = new QFrame(this);
     m_searchBarFrame->setObjectName("streamSearchBar");
 
-    // Stream mode visual parity with video mode 2026-04-15 — horizontal
-    // margins bumped 16→20 to match VideosPage's gridLayout left/right
-    // (20,0,20,20). Top margin 8→20 to give the search bar the same
-    // "breathing room from the page top" that video mode gets via its
-    // addSpacing(12) + searchLayout(0,12,0,0) stack. Result: search bar
-    // left/right aligns with tile grid edges.
+    // Margins are 0 left/right because the search bar now lives inside
+    // m_scrollLayout (20,0,20,20), which already provides the page-edge
+    // inset. Top=20 preserves the original breathing room from the page top.
     auto* layout = new QHBoxLayout(m_searchBarFrame);
-    layout->setContentsMargins(20, 20, 20, 8);
+    layout->setContentsMargins(0, 20, 0, 0);
     layout->setSpacing(8);
 
     m_searchInput = new QLineEdit(m_searchBarFrame);
@@ -469,6 +465,8 @@ void StreamPage::buildBrowseLayer()
     m_scrollLayout = new QVBoxLayout(m_scrollHome);
     m_scrollLayout->setContentsMargins(20, 0, 20, 20);
     m_scrollLayout->setSpacing(24);
+
+    m_scrollLayout->addWidget(m_searchBarFrame);
 
     // Home board: continue-watching strip + N catalog rows (Phase 3 Batch 3.2).
     // Phase 2 Batch 2.2 — m_metaAggregator plumbed through so the
@@ -1188,10 +1186,23 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
                 m_detailView->setStreamSources(choices, highlightKey);
             }
 
-            // Phase 2 Batch 2.4 — if we resolved a match AND the timestamp
-            // gate passed, arm the auto-launch timer + show the toast. User
-            // has 2s to click "Pick different" before playback fires.
-            if (matchedChoice && autoLaunchEligible && m_detailView) {
+            // Phase 2 Batch 2.4 — auto-launch DISABLED 2026-04-16 per
+            // Hemanth UX call (Phase 1 telemetry session, post One Piece
+            // pack regression). The 2-second countdown was too aggressive —
+            // entering Sources view would fire playback before the user
+            // could meaningfully pick a different source. Manual source
+            // selection (user clicks a card) still works via the existing
+            // setStreamSources path above. The 10-minute eligibility gate +
+            // m_autoLaunchTimer infrastructure are preserved in case future
+            // UX iteration wants a longer countdown variant; one-line
+            // re-enable point is the `if (false &&` guard below — flip to
+            // restore (with a kAutoLaunchCountdownMs bump in the timer
+            // setInterval at the top of buildUI before re-enabling).
+            //
+            // Suppressed variables keep clean shape for the re-enable diff:
+            (void)matchedChoice;
+            (void)autoLaunchEligible;
+            if (false && matchedChoice && autoLaunchEligible && m_detailView) {
                 m_autoLaunchChoice = *matchedChoice;
                 m_detailView->showAutoLaunchToast(
                     tr("Resuming with last-used source..."));
