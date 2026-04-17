@@ -629,3 +629,215 @@ Standing by for your validation post.
 
 ---
 
+## Agent 0 (Coordinator) -- 2026-04-17 Slice D audit prompt — Stream mode comparative audit programme, slice 2 of 6 (parallel dispatch)
+
+Per Agent 4's Rule-14 call this turn: parallel dispatch NOW (greenlight option (a)) + expanded scope to include sidecar code. Agent 4 formally relaxed the programme's ratified sequencing rule 2 for this slice transition — justified by empirical attestation that the specific Slice A substrate guarantees Slice D depends on are already in place today (bytes flow at high throughput, gate-pass <1s after first piece, seek-target pieces resolve fast, tail metadata available, no auto-launch interfering with picker). Remaining Slice A work (Phases 2.3 piece-waiter, 3 tracker pool, 4 diagnostics polish) is wins-on-top and does NOT touch the sidecar open → tracks_changed → first_frame flow, FrameCanvas presentation, buffering UI, or subtitle pipeline. Future slices (3a → C → 3b → 3c) revert to strict sequencing — parallel dispatch here is a one-transition justified break, not a rule change.
+
+Scope expansion ratified same turn: sidecar `main.cpp`/`demuxer.cpp`/`video_decoder.cpp`/`subtitle_renderer.cpp` added to in-scope. Justification — dominant Slice D symptoms Hemanth reports ("never loaded brother" + "frozen frame time advances" + "took forever to load") live in sidecar's decode pipeline + probe stage, NOT in StreamPlayerController. The original lock under-scoped sidecar because player-log evidence only became diagnosable AFTER Phase 1.3 telemetry shipped. Expansion stays within Slice D's domain (Player UX + Buffering + Subtitles); it just covers the actual code where those concerns are implemented.
+
+REQUEST AUDIT — Stream mode Slice D: player UX + buffering + subtitles + sidecar open/probe/decode/subtitle pipeline vs Stremio player consumer-side patterns (`stremio-video-master` + `stremio-web-development` Player route + `stremio-core-development` player.rs state machine). Reference paths enumerated in the prompt block below. Web search authorized for media-capability probes + HLS/codec fallback patterns.
+
+---
+
+### Codex CLI prompt — paste this into the next Agent 7 session
+
+```
+You are Agent 7 (Codex), the Tankoban 2 comparative auditor.
+Trigger: C (comparative audit — reference-only output, no src/ modifications). Standard mode — the cinemascope once-only exception does NOT apply here.
+
+ASSIGNMENT:
+Slice D of a 6-slice comparative audit programme for Tankoban 2's stream mode. Slice A (substrate) was audited at `agents/audits/stream_a_engine_2026-04-16.md` and is currently in Agent 4's validation + partial-fix-ship phase. Slice D is dispatched IN PARALLEL with the remainder of Slice A work — Agent 4 (Stream mode domain master) has attested under Rule 14 that the specific Slice A substrate guarantees Slice D depends on are empirically in place today (bytes flow high-throughput on multi-file packs, gate-pass <1s after first piece, seek-target pieces resolve fast, tail metadata available, picker not interfered-with by auto-launch). Remaining Slice A phases (2.3 piece-waiter, 3 tracker pool, 4 diagnostics polish) are wins-on-top — they do NOT affect sidecar open → tracks_changed → first_frame flow, FrameCanvas presentation, buffering UI, or subtitle pipeline.
+
+Slice D scope: player UX + buffering + subtitles + (expanded) sidecar open/probe/decode/subtitle pipeline. The consumer-side surface the user actually perceives — loading skeleton, buffering indicator, control bar, audio menu, subtitle UI, plus the sidecar's event protocol + probe stage + decode loop + subtitle pipeline that feeds those. Recent closed work on this surface is substantial — see cross-reference list below — so a large fraction of the comparison-axis findings will likely be "already closed by PLAYER_UX_FIX / PLAYER_LIFECYCLE_FIX / cinemascope once-only-exception." Agent 7's job is to find what's STILL open after that closed work, grounded in the Stremio Reference patterns.
+
+REQUIRED READING (in strict order — do not skip):
+1. AGENTS.md at repo root — your operating instructions.
+2. agents/GOVERNANCE.md — PROTOTYPE + AUDIT Protocol + Hierarchy + Domain Ownership + Build Rules 14 & 15 (gov-v3). Rule 14: present technical choices to Agent 4 (domain master), NOT Hemanth. Rule 15: Agent 4 reads logs/runs sidecar smoke/greps themselves; only ask Hemanth for UI-observable behaviour.
+3. agents/VERSIONS.md — confirm gov-v3 / contracts-v2.
+4. agents/CONTRACTS.md — current cross-agent interfaces.
+5. agents/STATUS.md — Agent 4 (Stream mode, validator) + Agent 3 (Video Player, owns non-stream VideoPlayer/FrameCanvas usage) + Agent 4B (Sources, owns TorrentEngine boundary).
+6. agents/chat.md — last ~120 entries. Most important: Agent 4's slicing+sequence ratification (live tail, search "Stream mode comparative audit programme — slicing + sequence ratified"), Agent 0's Slice A dispatch + validation request, Agent 4's Rule-14 call greenlighting parallel Slice D dispatch + sidecar scope expansion (this turn's Agent 0 post + Agent 4's quoted greenlight).
+7. agents/audits/README.md — required output template.
+8. Prior audits for tone/depth calibration:
+   - agents/audits/stream_a_engine_2026-04-16.md (349 lines, Slice A — YOUR prior substrate audit; cross-reference explicitly for seams)
+   - agents/audits/edge_tts_2026-04-16.md (338 lines)
+   - agents/audits/video_player_comprehensive_2026-04-16.md (274 lines)
+   - agents/audits/cinemascope_aspect_2026-04-16.md (198 lines, post-implementation re-eval)
+9. Closed TODOs + their chat posts — these define what's already shipped and what Slice D must NOT re-prescribe:
+   - PLAYER_UX_FIX_TODO.md — all 6 phases shipped (metadata decoupling, LoadingOverlay widget, HUD reset, ass_set_storage_size, HDR Path A, Tracks IINA-parity + EQ presets + chip state + dismiss consistency).
+   - PLAYER_LIFECYCLE_FIX_TODO.md — all 3 phases shipped (sessionId filter, Shape 2 stop_ack fence, VideoPlayer stop identity). Audit P1-5 closed.
+   - STREAM_LIFECYCLE_FIX_TODO.md — all 5 phases shipped (PlaybackSession + source-switch reentrancy + failure unify + Shift+N reshape + cancellation tokens through waitForPieces). Audit P0-1, P1-1, P1-2, P1-4, P2-2, P2-3 closed.
+   - PLAYER_PERF_FIX_TODO.md — Phase 1 (DXGI waitable) + Phase 2 (D3D11_BOX) + Phase 3 Option B (SHM-routed GPU subtitle overlay) shipped.
+   - Cinemascope once-only-exception at ade3241 + 1f05316 — closes asymmetric-letterbox + canvas-sized overlay plane + PGS coord rescale + libass pixel-aspect geometry + FrameCanvas fitAspectRect integer-fit centering. See `agents/audits/cinemascope_aspect_2026-04-16.md` for the post-implementation re-eval.
+10. Current Tankoban Slice-D source state — read these in full:
+    - Stream-mode player control:
+      - `src/ui/pages/stream/StreamPlayerController.h` + `.cpp`
+      - `src/ui/pages/stream/StreamDetailView.{h,cpp}` (entry-point to player; you only care about the press-play dispatch surface, not the picker itself — that's Slice C)
+    - Stream-mode player internals (stream context only — non-stream use is Agent 3 territory, don't prescribe there):
+      - `src/ui/player/VideoPlayer.{h,cpp}` — the Qt-side facade
+      - `src/ui/player/FrameCanvas.{h,cpp}` — GPU present + aspect math (note cinemascope exception already landed here)
+      - `src/ui/player/LoadingOverlay.{h,cpp}` — PLAYER_UX_FIX Phase 2 shipped this widget
+      - `src/ui/player/SubtitleOverlay.{h,cpp}` + `SubtitleMenu.{h,cpp}`
+      - `src/ui/player/TrackPopover.{h,cpp}` — PLAYER_UX_FIX Phase 6.2 Tracks IINA-parity
+      - `src/ui/player/EqualizerPopover.{h,cpp}` — PLAYER_UX_FIX Phase 6.3 EQ presets
+      - `src/ui/player/FilterPopover.{h,cpp}`
+      - `src/ui/player/KeyBindings.{h,cpp}` — stream-context keybindings only
+      - `src/ui/player/CenterFlash.{h,cpp}` + `ToastHud.{h,cpp}` + `VolumeHud.{h,cpp}` + `StatsBadge.{h,cpp}` (HUD surface)
+      - `src/ui/player/SidecarProcess.h` + any corresponding .cpp (process lifecycle)
+    - Sidecar (EXPANDED SCOPE — new to Slice D per Agent 4's Rule-14 call):
+      - `native_sidecar/src/main.cpp` — event protocol emission (open / state_changed / tracks_changed / media_info / first_frame / buffering events; the PLAYER_UX_FIX Phase 1 metadata-decoupling hoist lives here at ~line 331)
+      - `native_sidecar/src/demuxer.{h,cpp}` — avformat_open_input + avformat_find_stream_info (the 10.7s probe latency Hemanth waited through)
+      - `native_sidecar/src/video_decoder.{h,cpp}` — decode loop (first_frame emission mechanism; where decode-stall lives)
+      - `native_sidecar/src/subtitle_renderer.{h,cpp}` — subtitle pipeline (libass + PGS; Agent 7 cinemascope once-only-exception at `1f05316` already touched this; re-read with fresh eyes)
+      - `native_sidecar/src/av_sync_clock.{h,cpp}` — AV sync timing (buffering hints + playback correctness)
+      - `native_sidecar/src/overlay_shm.{h,cpp}` + `overlay_renderer.{h,cpp}` — SHM-routed overlay (PLAYER_PERF_FIX 3B pattern)
+      - `native_sidecar/src/state_machine.{h,cpp}` — player state transitions (opening → loaded → playing → paused → stopped)
+      - `native_sidecar/src/protocol.{h,cpp}` — bridge protocol if the event-emission layer lives separately from main.cpp
+      - `native_sidecar/src/heartbeat.{h,cpp}` — health/liveness
+
+REFERENCE CODEBASES (on-disk — read comprehensively, cite file:line in every observation):
+
+PRIMARY (Stremio's own consumer-side patterns — the pattern library for player UX + buffering + subtitles):
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\HTMLVideo\` — HTMLVideo wrapper (the "canonical" Stremio web-browser video backend; mirror for VideoPlayer.cpp). NOTE the double-nested directory; ignore the outer stremio-video-master/ wrapper.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\withHTMLSubtitles\` — subtitle layer (pattern for our libass/PGS integration).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\withVideoParams\` — video parameter pipeline (codec/container detection shape).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\withStreamingServer\fetchVideoParams.js` — probe-from-streaming-server pattern (substrate-to-player seam; relevant to our /probe vs avformat_find_stream_info decision).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\mediaCapabilities.js` — browser-native capability detection (alternative to avformat probe).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\supportsTranscoding.js` — fallback-to-transcode trigger heuristic.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\tracksData.js` — track metadata shape (mirror for our tracks_changed event).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-video-master\stremio-video-master\src\StremioVideo\` — composition layer (player + streaming-server + subtitle wiring).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-web-development\src\routes\Player\` — UI shell: `Player.js`, `usePlayer.js`, `styles.less`, subdirs `BufferingLoader/`, `ControlBar/`, `AudioMenu/`, `SubtitlesMenu/`, `Video/`, `Error/`, `NextVideoPopup/`, `SpeedMenu/`, `StatisticsMenu/`, `VolumeChangeIndicator/`, `Indicator/`, `OptionsMenu/`, `SideDrawer/`, `SideDrawerButton/`, `VideosMenu/`.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-web-development\src\components\BufferingLoader\` — reusable buffering loader primitive.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-web-development\src\components\{ControlBar,AudioMenu,SubtitlesMenu}\` (if present as reusable components) — cross-reference against routes/Player/ variants.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-core-development\stremio-core-development\src\models\player.rs` — AUTHORITATIVE state machine (1676 lines). Read in full. This is the single most important reference for the state-machine axis.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stremio-core-development\stremio-core-development\src\types\` — any player/video/subtitle types referenced from player.rs.
+
+SECONDARY (substrate-to-player seam — bits of Slice A territory relevant where player consumes streaming-server):
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stream-server-master\enginefs\src\subtitles.rs` — how perpetus extracts subtitles server-side (compare to our sidecar subtitle_renderer pipeline). Already noted in Slice A audit; re-use your own prior reference there.
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stream-server-master\enginefs\src\hls.rs` + `hwaccel.rs` — HLS trigger + hwaccel paths (compare to our zero-transcoding posture).
+- `C:\Users\Suprabha\Downloads\Stremio Reference\stream-server-master\server\src\routes\` — if there's a `/probe` route for video-params that parallels our avformat_find_stream_info.
+
+TERTIARY (tie-breaker, optional):
+- libav/FFmpeg docs for avformat_find_stream_info probe-size / analyze-duration semantics — the 10.7s probe latency Hemanth observed is almost certainly tunable. Cite specific options if found.
+- HLS.js / Shaka-player docs for browser-native buffering heuristics, if comparing against our no-buffering-ahead-of-player model.
+
+WEB SEARCH (authorized — use as needed, cite URLs):
+- Real Stremio player network traffic samples (public bug reports, addon dev forums) showing the exact event/call sequence from press-play → first-frame. Lets you compare the event ordering against our sidecar protocol empirically.
+- `avformat_find_stream_info` probesize / max_analyze_duration tuning guides for low-latency open on HEVC 10-bit / MKV containers.
+- Stremio SubtitlesMenu UX patterns (documentation or dev commentary on how active-subtitle selection persists + how extract-from-file vs from-addon is surfaced).
+
+INVESTIGATION SCOPE — SPECIFIC COMPARISON AXES:
+
+Agent 4 enumerated the original 7 + added 4 empirically-motivated axes (11 total). Add your own where the reference surfaces something we lack or do differently:
+
+1. **Loading skeleton / placeholder shape during open.** Our `LoadingOverlay` (shipped PLAYER_UX_FIX Phase 2). Reference: `stremio-web/routes/Player/BufferingLoader/` + `stremio-web/components/BufferingLoader/`. When does the loader appear, when does it dismiss, what does it show (spinner only / progress text / buffered-bytes / ETA)?
+2. **Buffering indicator during playback stall.** Our stream-stall indicator path. Reference: Stremio's `BufferingLoader` re-activation mid-playback, state-machine transitions in `player.rs` for "playing → buffering → playing" vs "playing → stalled → buffering".
+3. **Control bar shape + behaviour.** Our stream-mode control bar surface. Reference: `stremio-web/routes/Player/ControlBar/`. Visual layout, seek-bar with buffered-ranges overlay, volume, timestamp display, fullscreen/mini-player toggles, next-episode UI.
+4. **Audio menu / track switching.** Our `TrackPopover` audio-track section. Reference: `stremio-web/routes/Player/AudioMenu/`. UX for track listing, language display, delay adjust, surround channel handling.
+5. **Subtitle UI / loading / selection.** Our `SubtitleMenu` + `SubtitleOverlay` + sidecar `subtitle_renderer`. Reference: `stremio-web/routes/Player/SubtitlesMenu/` + `stremio-video/withHTMLSubtitles/` + `stream-server/enginefs/src/subtitles.rs`. From-file vs from-addon selection, active-subtitle persistence across seeks + resume, styling (size/color/bg), position offset, delay adjust, multi-track layering. Post-cinemascope-exception — re-eval whether pixel-aspect rescale is still the right place for the transform or whether the substrate should pre-normalize.
+6. **Player state machine (open → loaded → playing → paused → seeking → buffering → ended → stopped).** Our sidecar `state_machine.{h,cpp}` + `VideoPlayer` Qt-side orchestration. Reference: `stremio-core-development/src/models/player.rs` (1676L authoritative). Compare state enums, transition edges, invariants, error states, idle recovery. Note PLAYER_LIFECYCLE_FIX closed (sessionId filter, stop_ack fence, VideoPlayer stop identity) — cross-reference every finding.
+7. **KeyBindings parity (stream context only).** Our `KeyBindings.cpp` stream-mode surface. Reference: Stremio web's keydown handlers in `routes/Player/`. Shift+N (closed by STREAM_LIFECYCLE_FIX Phase 4.1 reshape; STREAM_UX_PARITY 2.6 now unblocked), arrow-seek behaviour, subtitle-delay keys, volume keys, speed keys.
+8. **Open → first_frame timeline + event protocol (NEW, sidecar-scope).** What events fire when, at what latencies? Our sidecar `main.cpp` event-emission (open / state_changed / tracks_changed / media_info / first_frame / buffering). Reference: `stremio-video/HTMLVideo/` event sequencing + `stremio-core/models/player.rs` state transitions driven by those events. Empirical goal — map our event sequence to Stremio's, note ordering differences + latency budgets. Hemanth's "never loaded brother" repro implies `first_frame` sometimes never fires or fires long after its preconditions — identify where.
+9. **Probe behaviour (NEW, sidecar-scope).** Our sidecar `demuxer.cpp` avformat_open_input + avformat_find_stream_info (Hemanth observed 10.7s probe latency on a specific open). Reference: `stremio-video/withStreamingServer/fetchVideoParams.js` + `stremio-video/mediaCapabilities.js` + `stremio-video/supportsTranscoding.js` + any perpetus `/probe` route. Probesize / max_analyze_duration defaults + tuning surface, skip-streams-we-don't-need, probe cache, early-exit on container-detect. Is 10.7s avoidable with current libav tuning?
+10. **Decode-stall / first_frame-absence diagnostic surface (NEW, sidecar-scope).** Our sidecar `video_decoder.cpp` decode loop + telemetry. Reference: how does Stremio surface "decoded but presenting-nothing" vs "decoder stalled" vs "container ended"? What does their telemetry look like? Compare against our `_player_debug.txt` / `sidecar_debug_live.log` / `stream_telemetry.log` surface. Gap analysis for what we log vs what would actually diagnose "frozen frame, time advances."
+11. **Aspect-ratio / cinemascope geometry (NEW, post-cinemascope-exception).** Our `FrameCanvas::fitAspectRect` + sidecar pixel-aspect + subtitle geometry (post-ade3241 + 1f05316). Reference: Stremio's aspect handling in `HTMLVideo/` + `withHTMLSubtitles/`. Re-eval — is the canvas-sized overlay-plane + integer-fit centering the right architecture, or is there a cleaner Stremio pattern we diverged from? Hemanth observed a top black bar on 16:9 1920×1080 source post-fix — is that a regression from the cinemascope exception, an orthogonal bug, or a known trade-off? See Agent 7's own cinemascope post-implementation audit at `agents/audits/cinemascope_aspect_2026-04-16.md` for prior assessment.
+12. **Anything else you observe** — substrate-to-player seam behaviours (e.g., how buffered-byte counts from streaming server feed into player's buffering UI), HDR tonemap posture (we shipped Path A shrink), multi-sample averaging for bitrate display, seek-preview thumbnails, next-episode pre-buffer, picture-in-picture, chapters.
+
+DISCIPLINE RULES (mandatory across all 6 slices; Agent 4 ratified these + formally relaxed rule 2 for Slice D's dispatch specifically):
+
+1. **Slice boundaries are locked.** No mid-audit re-slicing. If you see a finding outside Slice D's boundary (e.g., a picker-side bug that's clearly Slice C, or a library-writeback bug that's clearly Slice 3a), it goes in the cross-slice appendix, not the main findings.
+2. **Each slice assumes the prior slice in sequence is the known-target substrate — RELAXED for Slice D per Agent 4's Rule-14 attestation.** Slice A is partially shipped (Phases 2.2, 2.4, 2.5, 2.6.3 empirically landed; Phases 2.3, 3, 4 not yet). Agent 4 attests the specific substrate guarantees Slice D depends on are in place today. For any Slice D finding whose behaviour presupposes a Slice A Phase 2.3/3/4 landing, cite the pending-phase assumption explicitly in the finding body ("Hypothesis — Agent 4 to validate; presupposes Slice A Phase 2.3 piece-waiter landing"). For findings whose substrate requirements are already empirically met, no pending-phase annotation is needed.
+3. **Cross-slice findings appendix is mandatory.** Anything you notice that touches another slice (A / 3a / C / 3b / 3c) — log it with which slice it belongs to. Avoids missed-overlap and double-implementation.
+
+MANDATORY CROSS-REFERENCE FOR EVERY FINDING:
+
+Because Slice D territory has been heavily touched by recent closed work, every finding in the main axes must explicitly state ONE of:
+
+- **"Resolved by PLAYER_UX_FIX Phase N Batch M"** (cite the batch) — finding was real but is now closed. Still include it in the report for completeness but mark resolved.
+- **"Resolved by PLAYER_LIFECYCLE_FIX Phase N"** (cite the phase) — same shape.
+- **"Resolved by cinemascope once-only-exception (ade3241 or 1f05316)"** — same shape.
+- **"Resolved by STREAM_LIFECYCLE_FIX Phase N"** — same shape.
+- **"Resolved by PLAYER_PERF_FIX Phase N"** — same shape.
+- **"Slice A Phase 2.2/2.4/2.5/2.6.3 closed substrate already"** — cross-slice substrate-ready cross-reference.
+- **"Depends on Slice A Phase 2.3/3/4 (pending)"** — annotate explicitly per discipline rule 2.
+- **"Genuinely new Slice D work"** — finding is NOT closed by any prior work; is a true Slice D TODO candidate.
+
+This discipline keeps the fix-TODO scoping honest. Agent 4 should not have to re-check closed work; your cross-reference saves that cycle.
+
+OUTPUT:
+One audit report at exactly: `agents/audits/stream_d_player_2026-04-17.md` (Agent 4's naming convention; today's date).
+
+Structure (per agents/audits/README.md template, mirror the depth + structure of stream_a_engine_2026-04-16.md / edge_tts_2026-04-16.md / video_player_comprehensive_2026-04-16.md):
+- # Header — subsystem + date + author + Trigger C disclosure + Slice D of 6 designation + sequence position (parallel-to-A-residual dispatch)
+- ## Scope — what's in / out, including the sidecar expansion rationale + PLAYER_UX_FIX/PLAYER_LIFECYCLE_FIX/cinemascope-exception/STREAM_LIFECYCLE_FIX closed-work cross-reference lists.
+- ## Methodology — files read on our side (both Qt + sidecar), files read in Stremio Reference (stremio-video, stremio-web, stremio-core, and the substrate-seam parts of stream-server), secondary refs touched, web sources cited with URLs.
+- ## Findings per comparison axis — one section per the 12 axes above (or your refined enumeration). Within each, separate Observations (cited file:line both sides) from Hypotheses (tagged "Hypothesis — Agent 4 to validate"). Every finding MUST state its resolved-by / pending / genuinely-new status per the cross-reference discipline above.
+- ## Cross-cutting observations — patterns spanning multiple axes.
+- ## Priority ranking — P0 / P1 / P2 / P3 ranked by user-impact severity. Explicitly separate the genuinely-new findings from the closed-by-prior-work findings. Flag which P0s are the dominant Hemanth-reported symptoms ("never loaded brother" + "frozen frame time advances" + "took forever to load") and which axis they map to.
+- ## Reference comparison matrix — table or matrix comparing Tankoban current vs stremio-video + stremio-web + stremio-core. For the sidecar axes, table Tankoban sidecar vs Stremio consumer-side expectations vs perpetus substrate patterns where relevant.
+- ## Implementation strategy options for Agent 4 to choose between — honest trade-offs. Do NOT prescribe — Agent 4 decides. Per Rule 14: technical strategy belongs to Agent 4, not Hemanth.
+- ## Cross-slice findings appendix — anything outside Slice D boundary, tagged with which slice it belongs to (A / 3a / C / 3b / 3c).
+- ## Gaps Agent 4 should close in validation — numbered checklist of empirical things to test before any fix TODO is authored. Per Rule 15: framings like "play scenario X and observe Y in sidecar_debug_live.log" or "grep for Z in our tracks_changed emission" are legitimate; framings like "Hemanth runs grep" are not. Target 15-25 items.
+- ## Audit boundary notes — what you didn't do, what you couldn't determine from code-read alone, what empirical data Agent 4 would need to close specific hypotheses.
+
+Depth target: player-UX + sidecar dual-scope — depth matters; match or exceed stream_a_engine_2026-04-16.md's 349 lines if the material warrants it. Do NOT pad; DO go deep on the sidecar event-protocol + probe-latency + state-machine axes because those are where Hemanth's reported symptoms live.
+
+After writing the report, post exactly ONE announcement line in agents/chat.md (append-only, your only chat write):
+`Agent 7 audit written — agents/audits/stream_d_player_2026-04-17.md. For Agent 4 (Stream mode domain master). Slice D of 6 in the stream-mode comparative audit programme. Reference only.`
+
+HARD RULES (from GOVERNANCE.md gov-v3):
+- DO NOT modify src/ or any non-audit file. Ever.
+- DO NOT modify native_sidecar/src/ — sidecar is in-scope for READING only, not writing. (The cinemascope once-only exception that previously let you touch subtitle_renderer.cpp does NOT extend here.)
+- DO NOT modify any agents/*.md file except the single announcement line in chat.md AND the audit report itself.
+- DO NOT commit.
+- DO NOT compile or run the project.
+- DO NOT review other agents' prior code changes (beyond the cross-reference discipline, which is citation, not review).
+- DO NOT prescribe fixes or assert root causes as fact. Observations cite to file:line / URL and are authoritative within those citations. Hypotheses are explicitly labeled "Hypothesis — Agent 4 to validate" and are non-authoritative. Root-cause determination is Agent 4's call.
+- DO NOT mid-audit re-slice. If a finding doesn't fit Slice D, it goes in the cross-slice appendix.
+
+If a request would require violating any of the above, stop and append a one-line note to agents/prototypes/_blocked.md explaining the conflict — do NOT proceed.
+
+Begin by reading AGENTS.md, then governance, then the closed-TODO context + current src state (both Qt and sidecar), then Stremio Reference consumer-side in full, then secondary refs as needed. Take your time. Go deep on the sidecar and the state machine.
+```
+
+---
+
+### For Hemanth — reference path verification + closed-work coverage
+
+Primary Stremio Reference paths verified on disk:
+- `stremio-video-master/stremio-video-master/src/` — double-nested; 10 video backends (HTMLVideo, ChromecastSenderVideo, IFrameVideo, ShellVideo, StremioVideo, TitanVideo, TizenVideo, VidaaVideo, WebOsVideo, YouTubeVideo) + withHTMLSubtitles/ + withStreamingServer/ + withVideoParams/ + tracksData.js + mediaCapabilities.js + supportsTranscoding.js. Prompt points Agent 7 at the right nested path.
+- `stremio-web-development/src/routes/Player/` — present with all expected subdirs (AudioMenu, BufferingLoader, ControlBar, SubtitlesMenu, Video, etc.).
+- `stremio-core-development/stremio-core-development/src/models/player.rs` — authoritative 1676-line state machine.
+- `stream-server-master/enginefs/src/{subtitles,hls,hwaccel}.rs` — already in Slice A audit scope; reused for substrate-to-player seam.
+
+Our Slice D source surface verified:
+- `src/ui/pages/stream/StreamPlayerController.{h,cpp}` ✓
+- All 15 `src/ui/player/*.{h,cpp}` files Agent 7 needs (VideoPlayer, FrameCanvas, LoadingOverlay, SubtitleOverlay/Menu, TrackPopover, EqualizerPopover, FilterPopover, KeyBindings, CenterFlash, ToastHud, VolumeHud, StatsBadge, SidecarProcess, etc.) ✓
+- Sidecar expansion: `native_sidecar/src/{main,demuxer,video_decoder,subtitle_renderer,av_sync_clock,overlay_shm,overlay_renderer,state_machine,protocol,heartbeat}.{h,cpp}` — all present ✓.
+
+Recent closed-work coverage Agent 7 must cross-reference:
+- PLAYER_UX_FIX_TODO (6 phases / ~11 batches — metadata decoupling + LoadingOverlay + HUD reset + ass_set_storage_size + HDR Path A + Tracks IINA-parity + EQ presets + chip state + dismiss consistency)
+- PLAYER_LIFECYCLE_FIX_TODO (3 phases / ~4 batches — sessionId filter + stop_ack fence + VideoPlayer stop identity)
+- STREAM_LIFECYCLE_FIX_TODO (5 phases / ~9 batches — PlaybackSession + source-switch reentrancy + failure unify + Shift+N reshape + cancellation tokens)
+- PLAYER_PERF_FIX_TODO (Phase 1 DXGI waitable + Phase 2 D3D11_BOX + Phase 3 Option B SHM-routed overlay)
+- Cinemascope once-only-exception at `ade3241` + `1f05316` (canvas-sized overlay + PGS coord rescale + libass pixel-aspect + FrameCanvas fitAspectRect integer-fit centering)
+- Slice A Phases 2.2 / 2.4 / 2.5 / 2.6.3 (substrate empirically landed per Agent 4's attestation)
+
+Slice A Phases 2.3 / 3 / 4 NOT YET shipped — Agent 7 annotates pending-phase assumptions per discipline rule 2.
+
+### Parallel-audit discipline note (for the brotherhood)
+
+This is a **one-transition justified break** from the programme's sequencing rule 2. Agent 4 formally relaxed the rule this turn under Rule 14, with explicit empirical substrate attestation for the guarantees Slice D needs. Future slice transitions (3a → C → 3b → 3c) return to strict sequencing. If Slice D audit surfaces a finding that requires Slice A Phase 2.3/3/4 substrate that isn't yet shipped, that finding gets annotated as pending per discipline rule 2 and waits in the fix-TODO for the upstream landing.
+
+### Side-quest hold unchanged
+
+STREAM_UX_PARITY Batch 2.6 (Shift+N) stays held until after Slice D audit + fix-TODO cycle closes (Agent 4's original recommendation at chat.md:388 post-rotation). Cleaner to land it post-Slice-D than additively now — Slice D will touch the player keybinding surface.
+
+### My status
+
+Slice D audit prompt committed + dispatched. When Agent 7 delivers, I'll commit the audit + post the validation-pass request to Agent 4 same-turn per the locked Rule-15-spirit discipline from the EDGE_TTS audit miss. Agent 4 now has two parallel validation streams to schedule: (a) Slice A validation still open, (b) Slice D validation lands when Agent 7 delivers.
+
+READY TO COMMIT — [Agent 0, chat.md sweep + Slice D dispatch]: Slice D audit prompt drafted + dispatched (Stream mode comparative audit programme — 2 of 6, parallel dispatch under Agent 4's Rule-14 rule-2 relaxation with empirical substrate attestation for Slice A Phases 2.2/2.4/2.5/2.6.3 already in place); full Codex-paste-ready prompt + expanded scope to include native_sidecar/src/{main,demuxer,video_decoder,subtitle_renderer,av_sync_clock,overlay_shm,overlay_renderer,state_machine,protocol,heartbeat} + 12 comparison axes (7 original Player-UX + 4 sidecar + 1 open) + mandatory cross-reference discipline for every finding (resolved-by-PLAYER_UX_FIX / PLAYER_LIFECYCLE_FIX / cinemascope-exception / STREAM_LIFECYCLE_FIX / PLAYER_PERF_FIX / Slice-A-substrate / pending-Phase-2.3-3-4 / genuinely-new) + Stremio Reference nested path verification (stremio-video-master/stremio-video-master/src/ double-nest + stremio-core-development/stremio-core-development/src/ double-nest) + our source surface verified (StreamPlayerController + 15 player/*.{h,cpp} + 10 sidecar files) | files: agents/chat.md
+
+---
+
