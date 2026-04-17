@@ -134,7 +134,24 @@ public:
     // Aspect Ratio submenu — that menu existed pre-Phase-7 but its handler
     // in VideoPlayer was a no-op, so the option silently did nothing.
     void setForcedAspectRatio(double aspect);
+    // Crop-to-aspect. Zooms the video uniformly so the portion of the
+    // source matching the given aspect ratio fills the fitted videoRect;
+    // overflow past the render-target bounds gets clipped by D3D11.
+    // Use case: 1920x1080 containers with baked cinemascope (2.35 / 2.39)
+    // letterbox pixels — cropping to the content aspect discards the
+    // baked bars. 0.0 means no crop (default). Subtitle overlay is NOT
+    // zoomed; subs stay at natural size anchored to the un-cropped rect.
+    void setCropAspect(double aspect);
     QSize canvasPixelSize() const;
+
+    // Lift the subtitle overlay upward by N physical pixels. Used by
+    // VideoPlayer to push subtitles above the HUD control bar when it's
+    // visible, and drop them back to natural position when the HUD hides.
+    // Acts on the overlay viewport only — video quad unaffected. No-op on
+    // subtitles the sidecar draws into letterbox bars (lift > visible bar
+    // is clamped out visually since the overlay texture has no content
+    // above the subtitle baseline).
+    void setSubtitleLift(int physicalPx);
 
     // Batch 1.2 — SyncClock feedback hook. VideoPlayer owns a SyncClock and
     // hands a pointer in at construction. FrameCanvas reports per-frame
@@ -279,6 +296,7 @@ private:
     int                     m_aspectLoggedForFrameH  = 0;
     int                     m_aspectLoggedForWidgetW = 0;
     int                     m_aspectLoggedForWidgetH = 0;
+    double                  m_aspectLoggedForForced  = -1.0;  // -1 = never logged
 #endif
 
     // Phase 6 — vsync timing instrumentation. Lives outside _WIN32 so the
@@ -406,6 +424,12 @@ private:
     // from m_frameW/m_frameH; > 0 = force this w/h ratio. Read by the
     // viewport math in drawTexturedQuad.
     double                    m_forcedAspect = 0.0;
+    // Crop target aspect (see setCropAspect). 0.0 = no crop.
+    double                    m_cropAspect   = 0.0;
+    // Subtitle overlay vertical lift in physical pixels. Updated by
+    // VideoPlayer::showControls/hideControls to clear the HUD control
+    // bar when it's visible. Read by drawTexturedQuad's overlay pass.
+    int                       m_subtitleLiftPx = 0;
 
     // ColorParams (32 bytes, std140-aligned) — matches the cbuffer layout
     // in resources/shaders/video_d3d11.hlsl. Lives outside the _WIN32 guard

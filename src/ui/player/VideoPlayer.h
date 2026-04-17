@@ -263,6 +263,27 @@ private:
     void saveProgress(double positionSec, double durationSec);
     void restoreTrackPreferences();
     void sendCanvasSizeToSidecar();
+    // Update m_titleLabel text with an ellipsis-elided version of
+    // m_fullTitle fit to the label's current width. Called on openFile
+    // (title change) and on resizeEvent (width change).
+    void updateTitleElision();
+
+    // Scan m_currentFile's parent folder for a sibling subtitle file
+    // (same basename, common sub extension — priority ass > srt > ssa >
+    // vtt > sub). If found, sendLoadExternalSub to the sidecar. Called
+    // from onTracksChanged when the tracks_changed event reports zero
+    // embedded sub streams AND auto-load hasn't already fired for this
+    // open. Gated on QSettings("video_sub_auto_load", default true).
+    void tryAutoLoadSiblingSubtitle();
+
+    // Per-show preference persistence. "shows" CoreBridge domain, keyed
+    // by m_currentShowId (parent folder path). Read-modify-write so a
+    // single field mutation doesn't clobber unrelated fields in the
+    // record. Gated on PersistenceMode::LibraryVideos. Called on user-
+    // explicit action sites (aspect menu, track popover, visibility
+    // toggle) — never from progress-tick saveProgress.
+    void saveShowPrefs();
+    QJsonObject loadShowPrefs() const;
 
     // VIDEO_PLAYER_FIX Batch 4.2 — persist a just-opened path/URL to the
     // recents QSettings list. Dedupes; prepends; caps at 20.
@@ -270,6 +291,9 @@ private:
     static QString langForTrackId(const QJsonArray& tracks, const QString& id);
     static QString findTrackByLang(const QJsonArray& tracks, const QString& lang);
     static QString videoIdForFile(const QString& filePath);
+    static QString showIdForFile(const QString& filePath);
+    static double  aspectStringToDouble(const QString& token);
+    static double  cropStringToDouble(const QString& token);
     static QString formatTime(qint64 ms);
     static QIcon iconFromSvg(const QByteArray& svg, int size = 20);
 
@@ -308,6 +332,12 @@ private:
     // Current/pending file
     QString     m_currentFile;
     QString     m_currentVideoId;
+    // Parent-folder-path key (normalized, lowercased on Windows) used to
+    // look up / write the per-show preference record in the "shows"
+    // CoreBridge domain. Treats every folder as one "show" — per-season
+    // TV layouts get independent prefs per season (intended). Reorg or
+    // drive-letter remap invalidates the key; accepted trade-off.
+    QString     m_currentShowId;
     QStringList m_playlist;
     int         m_playlistIdx = 0;
     QString     m_pendingFile;
@@ -337,6 +367,12 @@ private:
     QPushButton* m_prevEpisodeBtn  = nullptr;
     QPushButton* m_playPauseBtn    = nullptr;
     QPushButton* m_nextEpisodeBtn  = nullptr;
+    // Video title — subtle, left-aligned in the space between the play
+    // controls and the chip row. Elides with ellipsis when too long for
+    // the available width. Source: QFileInfo(m_currentFile).completeBaseName()
+    // set on each openFile; cleared on teardownUi.
+    QLabel*      m_titleLabel      = nullptr;
+    QString      m_fullTitle;
     QPushButton* m_speedChip       = nullptr;
     QPushButton* m_filtersChip     = nullptr;
     QPushButton* m_eqChip          = nullptr;
@@ -377,6 +413,11 @@ private:
     // user's ad-hoc override on a prior file doesn't persist. Drives
     // the context-menu Aspect Ratio submenu check mark.
     QString m_currentAspect = QStringLiteral("original");
+    // Current crop-target token ("none"/"16:9"/"2.35:1"/"2.39:1"/"1.85:1"/
+    // "4:3"). Zooms the video to eliminate baked letterbox strips — see
+    // FrameCanvas::setCropAspect. Persists per-show / per-file alongside
+    // aspectOverride.
+    QString m_currentCrop = QStringLiteral("none");
 
     // VIDEO_PLAYER_FIX Batch 7.1 — stats badge state. Source metadata
     // stashed from sidecar firstFrame event; drops polled from
@@ -411,6 +452,11 @@ private:
     // match overrides back to the preferred-language track. Reset on
     // openFile so each new file re-applies preferences once.
     bool       m_tracksRestored = false;
+    // One-shot flag for external-sub auto-load: once we've scanned the
+    // parent folder and (maybe) loaded a sibling sub for the current
+    // file, don't re-fire on subsequent tracks_changed events. Reset in
+    // openFile like m_tracksRestored.
+    bool       m_autoSubAttempted = false;
     QJsonArray m_chapters;  // [{start, end, title}, ...]
     QString    m_activeAudioId;
     QString    m_activeSubId;
@@ -418,6 +464,8 @@ private:
     // Playlist carry-forward (track language preferences across episodes)
     QString m_carryAudioLang;
     QString m_carrySubLang;
+    QString m_carryAspect;
+    QString m_carryCrop;
 
     // Auto-hide
     QTimer m_hideTimer;

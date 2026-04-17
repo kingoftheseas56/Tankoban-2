@@ -943,11 +943,31 @@ void FrameCanvas::drawTexturedQuad()
             : widgetAspect);
     const AspectFitRect videoRect = fitAspectRect(canvasW, canvasH, frameAspect);
 
+    // Crop zoom: when the user picks "Crop → 2.35:1" (etc.) on content
+    // that has encoder-baked letterbox/pillarbox pixels, enlarge the
+    // video viewport uniformly so only the crop-target aspect content
+    // fills the original videoRect — the baked bars get pushed past
+    // the render-target bounds and D3D11 clips them.
+    //
+    // Zoom factor = ratio of the wider aspect to the narrower. That's
+    // the scale at which the source's content-aspect area fills the
+    // video rect's matching dimension. Uniform X+Y zoom preserves the
+    // content's own aspect (no vertical stretch / pixel squish); the
+    // trade-off is some edge content on the opposite axis gets cropped.
+    double cropZoom = 1.0;
+    if (m_cropAspect > 0.0 && frameAspect > 0.0 && m_cropAspect != frameAspect) {
+        cropZoom = (m_cropAspect > frameAspect)
+            ? m_cropAspect / frameAspect
+            : frameAspect / m_cropAspect;
+    }
+    const int croppedW = static_cast<int>(std::lround(videoRect.w * cropZoom));
+    const int croppedH = static_cast<int>(std::lround(videoRect.h * cropZoom));
+
     D3D11_VIEWPORT vp = {};
-    vp.TopLeftX = static_cast<float>(videoRect.x);
-    vp.TopLeftY = static_cast<float>(videoRect.y);
-    vp.Width    = static_cast<float>(videoRect.w);
-    vp.Height   = static_cast<float>(videoRect.h);
+    vp.TopLeftX = static_cast<float>(videoRect.x - (croppedW - videoRect.w) / 2);
+    vp.TopLeftY = static_cast<float>(videoRect.y - (croppedH - videoRect.h) / 2);
+    vp.Width    = static_cast<float>(croppedW);
+    vp.Height   = static_cast<float>(croppedH);
     vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
     m_context->RSSetViewports(1, &vp);
@@ -958,12 +978,21 @@ void FrameCanvas::drawTexturedQuad()
     // _player_debug.txt (not via qDebug, which doesn't land in that file).
     const int widgetWPx = canvasW;
     const int widgetHPx = canvasH;
+    // Fire-predicate includes m_forcedAspect so aspect-override menu
+    // changes land in the log. Closes Observation G3 from Agent 7's
+    // cinemascope audit (2026-04-16): the prior predicate keyed only on
+    // frame/widget dims, leaving the override path totally unlogged
+    // (221 lines captured, zero with non-zero forced=). Without this,
+    // diagnosing "forced 16:9 leaves a stuck top bar" has no empirical
+    // record of what videoRect the forced path produced.
     if (m_frameW != m_aspectLoggedForFrameW || m_frameH != m_aspectLoggedForFrameH
-        || widgetWPx != m_aspectLoggedForWidgetW || widgetHPx != m_aspectLoggedForWidgetH) {
+        || widgetWPx != m_aspectLoggedForWidgetW || widgetHPx != m_aspectLoggedForWidgetH
+        || m_forcedAspect != m_aspectLoggedForForced) {
         m_aspectLoggedForFrameW  = m_frameW;
         m_aspectLoggedForFrameH  = m_frameH;
         m_aspectLoggedForWidgetW = widgetWPx;
         m_aspectLoggedForWidgetH = widgetHPx;
+        m_aspectLoggedForForced  = m_forcedAspect;
         QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
         if (dbg.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream s(&dbg);
@@ -1013,11 +1042,26 @@ void FrameCanvas::drawTexturedQuad()
     // and the texture live on main-app's own D3D11 device.
     pollOverlayShm();
     if (m_overlayCurrentlyVisible && m_overlaySrv && m_overlayPs && m_overlayBlend) {
+        // Overlay SHM is sized to the source video (see sidecar Option A
+        // rollback). Draw it at the same letterboxed videoRect as the
+        // video quad so sub coordinates map 1:1 onto the video on screen.
+        // Previously the overlay used the full canvas viewport while the
+        // video used videoRect — for any content whose aspect didn't
+        // match the widget (cinemascope, pillarboxed 1080p in a wide
+        // window, etc.) the overlay stretched vertically past the video,
+        // dropping subtitles into the letterbox bars / clipping at
+        // screen edge.
+        //
+        // m_subtitleLiftPx shifts the whole overlay viewport upward so
+        // subtitles clear the HUD when it's visible. The overlay texture
+        // is transparent above the sub baseline, so shifting doesn't
+        // change what's visible at the top — only moves the sub content
+        // upward by the specified number of physical pixels.
         D3D11_VIEWPORT overlayVp = {};
-        overlayVp.TopLeftX = 0.0f;
-        overlayVp.TopLeftY = 0.0f;
-        overlayVp.Width    = static_cast<float>(canvasW);
-        overlayVp.Height   = static_cast<float>(canvasH);
+        overlayVp.TopLeftX = static_cast<float>(videoRect.x);
+        overlayVp.TopLeftY = static_cast<float>(videoRect.y - m_subtitleLiftPx);
+        overlayVp.Width    = static_cast<float>(videoRect.w);
+        overlayVp.Height   = static_cast<float>(videoRect.h);
         overlayVp.MinDepth = 0.0f;
         overlayVp.MaxDepth = 1.0f;
         m_context->RSSetViewports(1, &overlayVp);
@@ -1762,6 +1806,18 @@ void FrameCanvas::setVsyncLogging(bool enabled, const QString& dumpPath)
 void FrameCanvas::setForcedAspectRatio(double aspect)
 {
     m_forcedAspect = aspect;
+}
+
+void FrameCanvas::setCropAspect(double aspect)
+{
+    if (aspect < 0.0) aspect = 0.0;
+    m_cropAspect = aspect;
+}
+
+void FrameCanvas::setSubtitleLift(int physicalPx)
+{
+    if (physicalPx < 0) physicalPx = 0;
+    m_subtitleLiftPx = physicalPx;
 }
 
 QSize FrameCanvas::canvasPixelSize() const

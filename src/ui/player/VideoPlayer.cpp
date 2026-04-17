@@ -284,6 +284,12 @@ void VideoPlayer::openFile(const QString& filePath,
 
     m_currentFile = filePath;
     m_currentVideoId = videoIdForFile(filePath);
+    m_currentShowId = showIdForFile(filePath);
+    // Title for the bottom HUD label — use completeBaseName (strips the
+    // file extension). For URL sources (Stream mode), QFileInfo still
+    // pulls a reasonable basename from the last path segment.
+    m_fullTitle = QFileInfo(filePath).completeBaseName();
+    updateTitleElision();
     m_playlist = playlist;
     m_playlistIdx = playlistIndex;
 
@@ -316,12 +322,57 @@ void VideoPlayer::openFile(const QString& filePath,
     setChipsEnabled(true);
     // Fresh file — re-apply preferences on the next tracks_changed.
     m_tracksRestored = false;
-    // Reset aspect override: each new file starts with "Original" so the
-    // native source aspect applies. Otherwise a prior file's manual pick
-    // (e.g., forced 16:9) would persist and stretch / letterbox the new
-    // source wrong. User can still override via the Aspect Ratio submenu.
-    m_currentAspect = QStringLiteral("original");
-    if (m_canvas) m_canvas->setForcedAspectRatio(0.0);
+    // Fresh file — re-arm the external-sub auto-load one-shot.
+    m_autoSubAttempted = false;
+
+    // Aspect restore priority chain:
+    //   1. In-session carry (playlist advance within one session)
+    //   2. Per-file record ("videos" domain, aspectOverride field).
+    //      Uses contains() not emptiness — "original" is a valid
+    //      explicit user choice, not the absence of one.
+    //   3. Per-show record ("shows" domain, aspectOverride field).
+    //   4. "original" default (native source aspect).
+    // Gated on LibraryVideos; Stream mode falls straight through to
+    // "original" without touching persistence layers.
+    QString aspectToken = QStringLiteral("original");
+    if (!m_carryAspect.isEmpty()) {
+        aspectToken = m_carryAspect;
+        m_carryAspect.clear();
+    } else if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
+        QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
+        if (prog.contains("aspectOverride")) {
+            aspectToken = prog.value("aspectOverride").toString(QStringLiteral("original"));
+        } else {
+            QJsonObject showPrefs = loadShowPrefs();
+            if (showPrefs.contains("aspectOverride")) {
+                aspectToken = showPrefs.value("aspectOverride").toString(QStringLiteral("original"));
+            }
+        }
+    }
+    m_currentAspect = aspectToken;
+    if (m_canvas) m_canvas->setForcedAspectRatio(aspectStringToDouble(aspectToken));
+
+    // Crop restore priority chain — mirrors aspect chain. "none" is the
+    // default; using prog.contains() lets an explicit "none" override
+    // a per-show crop when the user wants to disable crop per-file.
+    QString cropToken = QStringLiteral("none");
+    if (!m_carryCrop.isEmpty()) {
+        cropToken = m_carryCrop;
+        m_carryCrop.clear();
+    } else if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
+        QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
+        if (prog.contains("cropOverride")) {
+            cropToken = prog.value("cropOverride").toString(QStringLiteral("none"));
+        } else {
+            QJsonObject showPrefs = loadShowPrefs();
+            if (showPrefs.contains("cropOverride")) {
+                cropToken = showPrefs.value("cropOverride").toString(QStringLiteral("none"));
+            }
+        }
+    }
+    m_currentCrop = cropToken;
+    if (m_canvas) m_canvas->setCropAspect(cropStringToDouble(cropToken));
+
     // Repopulate playlist drawer (reflects new current episode)
     if (m_playlistDrawer)
         m_playlistDrawer->populate(m_playlist, m_playlistIdx);
@@ -477,6 +528,8 @@ void VideoPlayer::teardownUi()
     m_durationSec = 0.0;
     if (m_timeLabel)   m_timeLabel->setText(QStringLiteral("\u2014:\u2014"));
     if (m_durLabel)    m_durLabel->setText(QStringLiteral("\u2014:\u2014"));
+    if (m_titleLabel) m_titleLabel->setText(QString());
+    m_fullTitle.clear();
     if (m_seekBar) {
         m_seekBar->blockSignals(true);
         m_seekBar->setValue(0);
@@ -570,6 +623,72 @@ void VideoPlayer::sendCanvasSizeToSidecar()
     debugLog(QString("[VideoPlayer] set_canvas_size %1x%2")
                  .arg(px.width()).arg(px.height()));
     m_sidecar->sendSetCanvasSize(px.width(), px.height());
+}
+
+void VideoPlayer::tryAutoLoadSiblingSubtitle()
+{
+    // Guard 1: user pref. Default on, settable via QSettings elsewhere.
+    if (!QSettings("Tankoban", "Tankoban")
+            .value("video_sub_auto_load", true).toBool())
+        return;
+
+    // Guard 2: file has embedded subs — respect those over external.
+    // External-sub loading replaces the active track; auto-loading when
+    // embedded subs exist would silently swap the user's default pick.
+    if (!m_subTracks.isEmpty()) return;
+
+    // Guard 3: real filesystem path (not a stream URL). QFileInfo on a
+    // URL produces garbage; the sidecar's load_external_sub expects a
+    // local path it can fopen.
+    if (m_currentFile.isEmpty()) return;
+    if (m_currentFile.startsWith("http://", Qt::CaseInsensitive) ||
+        m_currentFile.startsWith("https://", Qt::CaseInsensitive) ||
+        m_currentFile.startsWith("magnet:", Qt::CaseInsensitive))
+        return;
+
+    QFileInfo videoInfo(m_currentFile);
+    if (!videoInfo.exists()) return;
+    const QDir parent = videoInfo.absoluteDir();
+    const QString base = videoInfo.completeBaseName();
+    if (base.isEmpty()) return;
+
+    // Preference order matches what most players use. ASS first because
+    // it carries style info the user author wanted; SRT is most common;
+    // SSA is the older ASS predecessor; WEBVTT is streaming-native;
+    // SUB is the VobSub-style fallback.
+    static const char* kExts[] = { "ass", "srt", "ssa", "vtt", "sub" };
+    for (const char* ext : kExts) {
+        // Try exact-basename match first: video.mkv -> video.srt
+        const QString candidate = parent.filePath(base + "." + ext);
+        if (QFileInfo::exists(candidate)) {
+            if (m_sidecar) m_sidecar->sendLoadExternalSub(candidate);
+            debugLog(QString("[VideoPlayer] auto-loaded sibling sub: %1")
+                         .arg(QFileInfo(candidate).fileName()));
+            if (m_toastHud)
+                m_toastHud->showToast("Loaded subtitle: " +
+                                      QFileInfo(candidate).fileName());
+            return;  // single best match — don't stack-load multiple
+        }
+    }
+}
+
+void VideoPlayer::updateTitleElision()
+{
+    if (!m_titleLabel) return;
+    if (m_fullTitle.isEmpty()) {
+        m_titleLabel->setText(QString());
+        return;
+    }
+    // Account for the CSS padding (12px left + 12px right) before asking
+    // QFontMetrics where to cut the string.
+    const int pad = 24;
+    const int avail = qMax(0, m_titleLabel->width() - pad);
+    if (avail <= 0) {
+        m_titleLabel->setText(QString());
+        return;
+    }
+    const QFontMetrics fm(m_titleLabel->font());
+    m_titleLabel->setText(fm.elidedText(m_fullTitle, Qt::ElideRight, avail));
 }
 
 void VideoPlayer::onSidecarReady()
@@ -719,6 +838,8 @@ void VideoPlayer::onEndOfFile()
         // Wrap to the top of the queue.
         m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
         m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        m_carryAspect    = m_currentAspect;
+        m_carryCrop      = m_currentCrop;
         openFile(m_playlist.at(0), m_playlist, 0);
         return;
     }
@@ -734,6 +855,8 @@ void VideoPlayer::onEndOfFile()
             next = (m_playlistIdx + 1) % m_playlist.size();
         m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
         m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        m_carryAspect    = m_currentAspect;
+        m_carryCrop      = m_currentCrop;
         openFile(m_playlist.at(next), m_playlist, next);
         return;
     }
@@ -1204,13 +1327,36 @@ void VideoPlayer::buildUI()
         m_playlistChip->setChecked(m_playlistDrawer && m_playlistDrawer->isOpen());
     });
 
+    // Video title label — sits between the play controls and the chip
+    // row in the empty space to the right of play/pause. Dim white,
+    // small font, left-aligned with a margin so it doesn't crowd the
+    // next-episode button. Elision (ellipsis on overflow) is re-applied
+    // on resize via updateTitleElision(). Mouse events pass through so
+    // clicking the label doesn't interfere with context-menu / drag.
+    m_titleLabel = new QLabel(m_controlBar);
+    m_titleLabel->setObjectName("VideoTitle");
+    m_titleLabel->setStyleSheet(
+        "QLabel#VideoTitle {"
+        "  color: rgba(255,255,255,0.55);"
+        "  font-size: 11px;"
+        "  font-weight: 500;"
+        "  padding-left: 12px;"
+        "  padding-right: 12px;"
+        "}"
+    );
+    m_titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_titleLabel->setTextFormat(Qt::PlainText);
+    m_titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_titleLabel->setMinimumWidth(0);
+    m_titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+
     ctrlRow->addWidget(m_backBtn);
     ctrlRow->addSpacing(8);
     ctrlRow->addWidget(m_prevEpisodeBtn);
     ctrlRow->addWidget(m_playPauseBtn);
     ctrlRow->addWidget(m_nextEpisodeBtn);
     ctrlRow->addSpacing(8);
-    ctrlRow->addStretch(1);
+    ctrlRow->addWidget(m_titleLabel, 1);  // stretch factor 1 — eats leftover space
     ctrlRow->addWidget(m_speedChip);
     ctrlRow->addSpacing(4);
     ctrlRow->addWidget(m_filtersChip);
@@ -1268,6 +1414,12 @@ void VideoPlayer::buildUI()
         QString lang = langForTrackId(m_audioTracks, idStr);
         if (!lang.isEmpty())
             QSettings("Tankoban", "Tankoban").setValue("video_preferred_audio_lang", lang);
+        // User-explicit pick — update the active id locally so per-show
+        // prefs save the fresh language (langForTrackId reads m_activeAudioId),
+        // then write. Sidecar's trackChanged echo will redundantly set the
+        // same value later; harmless.
+        m_activeAudioId = idStr;
+        saveShowPrefs();
         m_toastHud->showToast("Audio: track " + idStr);
     });
     connect(m_trackPopover, &TrackPopover::subtitleTrackSelected, this, [this](int id) {
@@ -1291,6 +1443,8 @@ void VideoPlayer::buildUI()
             QString lang = langForTrackId(m_subTracks, idStr);
             if (!lang.isEmpty())
                 QSettings("Tankoban", "Tankoban").setValue("video_preferred_sub_lang", lang);
+            m_activeSubId = idStr;
+            saveShowPrefs();
             m_toastHud->showToast("Subtitle: track " + idStr);
         }
     });
@@ -1340,6 +1494,8 @@ void VideoPlayer::buildUI()
         if (idx >= 0 && idx < m_playlist.size()) {
             m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
             m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+            m_carryAspect = m_currentAspect;
+            m_carryCrop = m_currentCrop;
             openFile(m_playlist[idx], m_playlist, idx);
         }
     });
@@ -1725,6 +1881,17 @@ void VideoPlayer::onTracksChanged(const QJsonArray& audio, const QJsonArray& sub
         m_tracksRestored = true;
         restoreTrackPreferences();
     }
+
+    // External-sub auto-load. Runs once per file after tracks_changed
+    // so m_subTracks reflects the authoritative embedded-track list. If
+    // the file has zero embedded subs AND a sibling file with a matching
+    // basename exists, load it. Gated on m_autoSubAttempted (one-shot)
+    // + QSettings toggle. Stream-mode files (HTTP URLs) are skipped
+    // inside the helper.
+    if (!m_autoSubAttempted) {
+        m_autoSubAttempted = true;
+        tryAutoLoadSiblingSubtitle();
+    }
 }
 
 void VideoPlayer::cycleAudioTrack()
@@ -1746,6 +1913,8 @@ void VideoPlayer::cycleAudioTrack()
     QJsonObject track = m_audioTracks[idx].toObject();
     QString newId = track["id"].toString();
     m_sidecar->sendSetTracks(newId, "");
+    m_activeAudioId = newId;
+    saveShowPrefs();
     QString lang = track["lang"].toString();
     if (lang.isEmpty()) lang = track["title"].toString();
     if (lang.isEmpty()) lang = QString::number(idx + 1);
@@ -1774,6 +1943,8 @@ void VideoPlayer::cycleSubtitleTrack()
         m_subsVisible = true;
         m_sidecar->sendSetSubVisibility(true);
     }
+    m_activeSubId = newId;
+    saveShowPrefs();
     QString lang = track["lang"].toString();
     if (lang.isEmpty()) lang = track["title"].toString();
     if (lang.isEmpty()) lang = QString::number(idx + 1);
@@ -1784,6 +1955,7 @@ void VideoPlayer::toggleSubtitles()
 {
     m_subsVisible = !m_subsVisible;
     m_sidecar->sendSetSubVisibility(m_subsVisible);
+    saveShowPrefs();
     m_toastHud->showToast(m_subsVisible ? "Subtitles on" : "Subtitles off");
 }
 
@@ -1795,6 +1967,7 @@ void VideoPlayer::setSubtitleOff()
     // action will re-enable visibility and land set_tracks on the right id.
     m_subsVisible = false;
     m_sidecar->sendSetSubVisibility(false);
+    saveShowPrefs();
     m_toastHud->showToast("Subtitles off");
 }
 
@@ -2083,6 +2256,8 @@ void VideoPlayer::prevEpisode()
     // Carry forward current track language preferences
     m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
     m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+    m_carryAspect = m_currentAspect;
+    m_carryCrop = m_currentCrop;
     openFile(m_playlist[m_playlistIdx - 1], m_playlist, m_playlistIdx - 1);
 }
 
@@ -2092,6 +2267,8 @@ void VideoPlayer::nextEpisode()
     // Carry forward current track language preferences
     m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
     m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+    m_carryAspect = m_currentAspect;
+    m_carryCrop = m_currentCrop;
     openFile(m_playlist[m_playlistIdx + 1], m_playlist, m_playlistIdx + 1);
 }
 
@@ -2145,6 +2322,19 @@ void VideoPlayer::showControls()
 {
     m_controlBar->show();
     m_subOverlay->setControlsVisible(true);
+    // The control bar was possibly hidden when the title label received
+    // its intended width; re-elide now that layout is guaranteed to have
+    // assigned the label its geometry.
+    updateTitleElision();
+    // Lift subtitle overlay above the HUD so the control bar doesn't
+    // occlude subs. Physical pixels — multiply by dpr so the lift is
+    // consistent on HiDPI displays where the swap chain is in physical
+    // pixels but sizeHint() returns logical.
+    if (m_canvas) {
+        const qreal dpr = devicePixelRatioF();
+        const int liftPx = qRound(m_controlBar->sizeHint().height() * dpr);
+        m_canvas->setSubtitleLift(liftPx);
+    }
     setCursor(Qt::ArrowCursor);
     m_cursorTimer.start();
     // Don't restart auto-hide timer while playlist drawer is open
@@ -2158,6 +2348,8 @@ void VideoPlayer::hideControls()
     if (m_seeking) return;
     m_controlBar->hide();
     m_subOverlay->setControlsVisible(false);
+    // HUD gone — drop subtitles back to their natural position.
+    if (m_canvas) m_canvas->setSubtitleLift(0);
 }
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)
@@ -2172,8 +2364,19 @@ void VideoPlayer::saveProgress(double positionSec, double durationSec)
     // Track & subtitle state persistence
     data["audioLang"]    = langForTrackId(m_audioTracks, m_activeAudioId);
     data["subtitleLang"] = langForTrackId(m_subTracks, m_activeSubId);
+    // Track ids alongside language so restore can distinguish same-lang
+    // tracks (e.g., English-forced stream 2 vs English-full stream 3).
+    // Restore tries id-first with lang validation, falls back to lang
+    // when the id is missing or its lang has changed.
+    data["audioTrackId"]    = m_activeAudioId;
+    data["subtitleTrackId"] = m_activeSubId;
     data["subsVisible"]  = m_subsVisible;
     data["subDelayMs"]   = m_subDelayMs;
+    // Aspect override token — stored even when "original" so the restore
+    // path can distinguish "user explicitly picked original" from "never
+    // set" via QJsonObject::contains().
+    data["aspectOverride"] = m_currentAspect;
+    data["cropOverride"]   = m_currentCrop;
     // Gated on PersistenceMode::LibraryVideos. In None mode, StreamPage's
     // progressUpdated listener writes into the "stream" domain instead —
     // so we MUST still emit the signal below, just skip the "videos"
@@ -2207,8 +2410,12 @@ QString VideoPlayer::findTrackByLang(const QJsonArray& tracks, const QString& la
 
 void VideoPlayer::restoreTrackPreferences()
 {
-    // Priority: carry-forward > per-file > global > sidecar default
+    // Priority: carry-forward > per-file > per-show > global > sidecar default
+    // Each layer contributes (id, lang) pairs. First non-empty wins per layer.
+    // Final resolution: try id (validated against lang), fall back to lang.
     QString targetAudioLang, targetSubLang;
+    QString targetAudioId,   targetSubId;
+    bool perFileVisibilityApplied = false;
 
     if (!m_carryAudioLang.isEmpty()) {
         targetAudioLang = m_carryAudioLang;
@@ -2223,6 +2430,8 @@ void VideoPlayer::restoreTrackPreferences()
         QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
         targetAudioLang = prog.value("audioLang").toString();
         targetSubLang = prog.value("subtitleLang").toString();
+        targetAudioId = prog.value("audioTrackId").toString();
+        targetSubId = prog.value("subtitleTrackId").toString();
 
         // Restore per-file subtitle visibility and delay
         if (prog.contains("subsVisible")) {
@@ -2231,6 +2440,7 @@ void VideoPlayer::restoreTrackPreferences()
                 m_subsVisible = vis;
                 m_sidecar->sendSetSubVisibility(vis);
             }
+            perFileVisibilityApplied = true;
         }
         if (prog.contains("subDelayMs")) {
             int delay = prog.value("subDelayMs").toInt(0);
@@ -2242,6 +2452,28 @@ void VideoPlayer::restoreTrackPreferences()
         }
     }
 
+    // Per-show layer — folder-scoped prefs inherit across episodes of the
+    // same show. Only fills in fields the per-file record didn't already
+    // set, so a user's explicit per-episode choice still wins.
+    if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
+        QJsonObject showPrefs = loadShowPrefs();
+        if (targetAudioLang.isEmpty())
+            targetAudioLang = showPrefs.value("audioLang").toString();
+        if (targetSubLang.isEmpty())
+            targetSubLang = showPrefs.value("subtitleLang").toString();
+        if (targetAudioId.isEmpty())
+            targetAudioId = showPrefs.value("audioTrackId").toString();
+        if (targetSubId.isEmpty())
+            targetSubId = showPrefs.value("subtitleTrackId").toString();
+        if (!perFileVisibilityApplied && showPrefs.contains("subsVisible")) {
+            bool vis = showPrefs.value("subsVisible").toBool(true);
+            if (vis != m_subsVisible) {
+                m_subsVisible = vis;
+                m_sidecar->sendSetSubVisibility(vis);
+            }
+        }
+    }
+
     // Fall back to global preferred languages
     QSettings settings("Tankoban", "Tankoban");
     if (targetAudioLang.isEmpty())
@@ -2249,9 +2481,30 @@ void VideoPlayer::restoreTrackPreferences()
     if (targetSubLang.isEmpty())
         targetSubLang = settings.value("video_preferred_sub_lang").toString();
 
-    // Match by language in available tracks
-    QString audioId = findTrackByLang(m_audioTracks, targetAudioLang);
-    QString subId = findTrackByLang(m_subTracks, targetSubLang);
+    // Resolution lambda: prefer id match (validated by lang agreement)
+    // over bare lang match. Required so a same-lang-but-different-track
+    // saved pick (English-forced stream 2 vs English-full stream 3)
+    // restores to the exact track rather than the first "eng" track.
+    auto resolveTrack = [](const QJsonArray& tracks, const QString& id,
+                           const QString& lang) -> QString {
+        if (!id.isEmpty()) {
+            for (const auto& v : tracks) {
+                QJsonObject t = v.toObject();
+                if (t["id"].toString() == id) {
+                    const QString trackLang = t["lang"].toString();
+                    // Accept id if stored lang agrees (or either side is
+                    // untagged — robust to partial metadata).
+                    if (lang.isEmpty() || trackLang.isEmpty() || trackLang == lang)
+                        return id;
+                    break;  // id exists but lang drifted — fall back to lang
+                }
+            }
+        }
+        return findTrackByLang(tracks, lang);
+    };
+
+    QString audioId = resolveTrack(m_audioTracks, targetAudioId, targetAudioLang);
+    QString subId   = resolveTrack(m_subTracks,   targetSubId,   targetSubLang);
 
     if ((!audioId.isEmpty() && audioId != m_activeAudioId) ||
         (!subId.isEmpty() && subId != m_activeSubId)) {
@@ -2290,6 +2543,70 @@ QString VideoPlayer::videoIdForFile(const QString& filePath)
     return hash.toHex();
 }
 
+QString VideoPlayer::showIdForFile(const QString& filePath)
+{
+    if (filePath.isEmpty()) return {};
+    QString parent = QFileInfo(filePath).absolutePath();
+    parent = QDir::cleanPath(QDir::fromNativeSeparators(parent));
+#ifdef Q_OS_WIN
+    parent = parent.toLower();
+#endif
+    return parent;
+}
+
+double VideoPlayer::aspectStringToDouble(const QString& token)
+{
+    if (token == QLatin1String("4:3"))    return 4.0 / 3.0;
+    if (token == QLatin1String("16:9"))   return 16.0 / 9.0;
+    if (token == QLatin1String("2.35:1")) return 2.35;
+    if (token == QLatin1String("1.85:1")) return 1.85;
+    return 0.0;  // "original" or unknown -> let native aspect apply
+}
+
+double VideoPlayer::cropStringToDouble(const QString& token)
+{
+    if (token == QLatin1String("4:3"))    return 4.0 / 3.0;
+    if (token == QLatin1String("16:9"))   return 16.0 / 9.0;
+    if (token == QLatin1String("1.85:1")) return 1.85;
+    if (token == QLatin1String("2.35:1")) return 2.35;
+    if (token == QLatin1String("2.39:1")) return 2.39;
+    return 0.0;  // "none" or unknown -> no crop
+}
+
+QJsonObject VideoPlayer::loadShowPrefs() const
+{
+    if (!m_bridge || m_currentShowId.isEmpty()) return {};
+    if (m_persistenceMode != PersistenceMode::LibraryVideos) return {};
+    return m_bridge->progress("shows", m_currentShowId);
+}
+
+void VideoPlayer::saveShowPrefs()
+{
+    if (!m_bridge || m_currentShowId.isEmpty()) return;
+    if (m_persistenceMode != PersistenceMode::LibraryVideos) return;
+
+    // Read-modify-write: fetching the existing record first guarantees
+    // that a single-field mutation (e.g., user just changed aspect) can't
+    // wipe unrelated fields (audioLang/subtitleLang/subsVisible) that
+    // the user set in a prior action. CoreBridge::saveProgress stamps
+    // updatedAt automatically.
+    QJsonObject data = m_bridge->progress("shows", m_currentShowId);
+    data["aspectOverride"] = m_currentAspect;
+    data["cropOverride"]   = m_currentCrop;
+    const QString audioLang = langForTrackId(m_audioTracks, m_activeAudioId);
+    if (!audioLang.isEmpty()) data["audioLang"] = audioLang;
+    const QString subLang = langForTrackId(m_subTracks, m_activeSubId);
+    if (!subLang.isEmpty()) data["subtitleLang"] = subLang;
+    // Track ids alongside language so restore can pick the exact track
+    // the user chose (e.g., the full English sub vs. a forced/signs-only
+    // English track — both tagged "eng"). ID-first match with lang
+    // validation on restore, with lang-only as fallback.
+    if (!m_activeAudioId.isEmpty()) data["audioTrackId"]    = m_activeAudioId;
+    if (!m_activeSubId.isEmpty())   data["subtitleTrackId"] = m_activeSubId;
+    data["subsVisible"] = m_subsVisible;
+    m_bridge->saveProgress("shows", m_currentShowId, data);
+}
+
 QString VideoPlayer::formatTime(qint64 ms)
 {
     int totalSecs = static_cast<int>(ms / 1000);
@@ -2320,6 +2637,9 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
 
     int barH = m_controlBar->sizeHint().height();
     m_controlBar->setGeometry(0, height() - barH, width(), barH);
+    // Re-elide the title once the control bar's layout has applied the
+    // new width (title label gets its leftover-space share on layout pass).
+    updateTitleElision();
 
     // Playlist drawer: right side, 12px from edge, 10px from top, above control bar
     int dw = 320;
@@ -2816,6 +3136,7 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
     data.inPip         = m_inPip;
     data.showStats     = m_showStats;
     data.currentAspect = m_currentAspect;
+    data.currentCrop   = m_currentCrop;
     // VIDEO_PLAYER_FIX Batch 4.2 — fresh QSettings read each menu open.
     // Cheap (small list), avoids cache invalidation complexity.
     data.recentFiles = QSettings("Tankoban", "Tankoban")
@@ -2844,17 +3165,30 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
             // The Aspect Ratio submenu was a silent no-op pre-Phase-7
             // (case was missing from this switch entirely). Now wired to
             // FrameCanvas::setForcedAspectRatio. "original" → 0 (use natural
-            // frame aspect from m_frameW/m_frameH).
+            // frame aspect from m_frameW/m_frameH). Mapping lives in
+            // aspectStringToDouble so the openFile restore path stays in
+            // sync with the menu's write path.
             const QString val = v.toString();
-            double aspect = 0.0;
-            if      (val == "4:3")    aspect = 4.0 / 3.0;
-            else if (val == "16:9")   aspect = 16.0 / 9.0;
-            else if (val == "2.35:1") aspect = 2.35;
-            else if (val == "1.85:1") aspect = 1.85;
-            // else "original" or unknown → 0.0 (natural)
-            m_canvas->setForcedAspectRatio(aspect);
+            m_canvas->setForcedAspectRatio(aspectStringToDouble(val));
             m_currentAspect = val;
+            // Write to the per-show record so sibling episodes in the same
+            // folder inherit the user's aspect choice on next open.
+            saveShowPrefs();
             m_toastHud->showToast(QString("Aspect: %1").arg(val));
+            break;
+        }
+        case VideoContextMenu::SetCrop: {
+            // Crop-to-aspect: zoom the video viewport uniformly so baked
+            // letterbox / pillarbox strips get clipped by the render
+            // target. Orthogonal to Aspect Ratio — user might run
+            // Aspect=Original + Crop=2.35:1 on a 1920x1080 container with
+            // baked 2.35 content. Mapping mirrors aspectStringToDouble's
+            // convention; "none" → 0.0 = no crop.
+            const QString val = v.toString();
+            m_canvas->setCropAspect(cropStringToDouble(val));
+            m_currentCrop = val;
+            saveShowPrefs();
+            m_toastHud->showToast(QString("Crop: %1").arg(val));
             break;
         }
         case VideoContextMenu::ToggleFullscreen: toggleFullscreen(); break;

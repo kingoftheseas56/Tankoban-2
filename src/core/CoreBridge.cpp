@@ -26,6 +26,7 @@ static const QMap<QString, QString> PROGRESS_FILES = {
     {"books",  "books_progress.json"},
     {"videos", "video_progress.json"},
     {"stream", "stream_progress.json"},
+    {"shows",  "show_prefs.json"},
 };
 
 // ── Resolve data directory ──
