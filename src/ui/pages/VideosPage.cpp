@@ -8,6 +8,7 @@
 #include "core/PosterFetcher.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/MetaItem.h"
+#include "core/torrent/TorrentClient.h"
 #include "PosterPickerPopover.h"
 #include "ui/ContextMenuHelper.h"
 #include "ui/widgets/FadingStackedWidget.h"
@@ -318,6 +319,14 @@ void VideosPage::buildUI()
         }
         const QString oldPoster = posterPath(oldPath);
         const bool hadPoster = QFile::exists(oldPoster);
+
+        // Release any active libtorrent record pointing at oldPath BEFORE
+        // QFile::rename so libtorrent doesn't resurrect the original folder
+        // on its next periodic resume-data save (every 30s) or on next boot
+        // — that resurrection is what produced the "multiplying folders"
+        // symptom (Hemanth's Vinland Saga case 2026-04-16).
+        if (m_torrentClient)
+            m_torrentClient->releaseFolder(oldPath);
 
         if (!QFile::rename(oldPath, newPath))
             return false;

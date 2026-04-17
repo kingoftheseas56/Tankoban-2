@@ -15,6 +15,7 @@ class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
 class TileStrip;
+class TorrentClient;
 class VideosScanner;
 class ShowView;
 struct ShowInfo;
@@ -34,6 +35,15 @@ public:
     // wire-up; powers the "Fetch poster from internet" context-menu action on
     // folder tiles. Null-safe — the action is disabled until this is set.
     void setMetaAggregator(tankostream::stream::MetaAggregator* meta);
+
+    // Shared TorrentClient handle owned by MainWindow. Set once at wire-up;
+    // used by the (auto-)rename path in renameShowFolder to release any active
+    // libtorrent record pointing at the folder being renamed BEFORE the
+    // QFile::rename happens. Without this, libtorrent silently re-creates the
+    // original folder + re-downloads on next periodic resume-data save or
+    // boot, producing the "multiplying folders" symptom. Null-safe — when
+    // unset (e.g., test harness), the rename proceeds without the release.
+    void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
 
 signals:
     void playVideo(const QString& filePath);
@@ -98,4 +108,5 @@ private:
 
     tankostream::stream::MetaAggregator* m_meta = nullptr;
     QNetworkAccessManager* m_nam = nullptr;  // lazy-init on first poster fetch
+    TorrentClient*         m_torrentClient = nullptr;
 };

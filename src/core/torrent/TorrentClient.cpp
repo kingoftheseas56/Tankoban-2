@@ -370,6 +370,35 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
     emit torrentRemoved(infoHash);
 }
 
+bool TorrentClient::releaseFolder(const QString& folderPath)
+{
+    if (folderPath.isEmpty()) return false;
+    const QString target = QDir(folderPath).absolutePath();
+
+    QString matchedHash;
+    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+        const QJsonObject rec = it.value().toObject();
+        const QString savePath = rec.value("savePath").toString();
+        const QString name     = rec.value("name").toString();
+        if (savePath.isEmpty() || name.isEmpty())
+            continue;
+        const QString folder =
+            QDir(savePath + QLatin1Char('/') + name).absolutePath();
+        if (folder.compare(target, Qt::CaseInsensitive) == 0) {
+            matchedHash = it.key();
+            break;
+        }
+    }
+
+    if (matchedHash.isEmpty()) return false;
+
+    qDebug() << "TorrentClient: releasing torrent" << matchedHash
+             << "from folder rename of" << target
+             << "(files preserved; libtorrent record + .fastresume dropped)";
+    deleteTorrent(matchedHash, /*deleteFiles=*/false);
+    return true;
+}
+
 // ── Force operations ─────────────────────────────────────────────────────────
 void TorrentClient::forceStart(const QString& infoHash)
 {

@@ -87,6 +87,16 @@ public:
     // Dedup check
     bool isDuplicate(const QString& magnetUri) const;
 
+    // Release any active torrent record whose on-disk root folder matches the
+    // given absolute path, leaving files in place. Used by the videos library
+    // when a user-driven rename takes ownership of a download folder — the
+    // rename would otherwise orphan libtorrent's view of save_path/name,
+    // causing libtorrent to re-create the original folder + re-download (or
+    // re-seed into a phantom shell) on next periodic resume-data save or boot.
+    // Returns true if a record was released. Match is case-insensitive on the
+    // canonicalized full folder path (savePath + "/" + name).
+    bool releaseFolder(const QString& folderPath);
+
     // Default paths per category from CoreBridge
     QMap<QString, QString> defaultPaths() const;
 

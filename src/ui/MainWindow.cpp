@@ -304,6 +304,12 @@ void MainWindow::buildPageStack()
     // per HELP.md 2026-04-15 handshake with Agent 4).
     videosPage->setMetaAggregator(streamPage->metaAggregator());
 
+    // Share TorrentClient with VideosPage so the (auto-)rename path can
+    // release any active libtorrent record before the folder is moved on
+    // disk — without this libtorrent silently re-creates the original
+    // folder + re-downloads, producing the "multiplying folders" symptom.
+    videosPage->setTorrentClient(torrentClient);
+
     auto *sourcesPage = new SourcesPage(m_bridge, torrentClient);
     dbg("4g-sourcespage-created");
     m_pageStack->addWidget(sourcesPage);
