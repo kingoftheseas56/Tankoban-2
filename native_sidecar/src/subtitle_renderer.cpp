@@ -82,7 +82,11 @@ FitRect fit_aspect_rect(int canvas_w, int canvas_h, double video_aspect) {
 }
 }
 
-// Default ASS header for SRT/text subtitles
+// Default ASS header for SRT/text subtitles (outline enabled — PotPlayer-
+// style Bold=1 + Outline=2, MarginV=40 for aspect-override headroom). The
+// outline-disabled variant is the same string with Outline=0 — used when
+// user toggles outline off via the sub-style override. Affects srt/subrip/
+// mov_text/text only; ASS/SSA tracks keep their file's own Default style.
 static const char* DEFAULT_ASS_HEADER =
     "[Script Info]\r\n"
     "ScriptType: v4.00+\r\n"
@@ -94,18 +98,28 @@ static const char* DEFAULT_ASS_HEADER =
     "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding\r\n"
-    // Bold=1 + Outline=2 for PotPlayer-like appearance — bolder weight
-    // makes letters visible against bright/busy scenes without the
-    // "swallow the image" feel of a thicker outline. MarginV=40 (not 20
-    // libass-default) because aspect-override modes vertically stretch
-    // the overlay — e.g., 1920x804 cinemascope forced 16:9 fullscreen
-    // stretches 1.34x, dropping sub bottom from ~7% to ~5% of screen.
-    // Bump guarantees sub stays clear of the screen edge across every
-    // aspect mode without being noticeably high in the natural letterbox
-    // case. Affects srt/subrip/mov_text/text only; ASS/SSA tracks keep
-    // their file's own Default style.
     "Style: Default,Arial,20,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,"
     "1,0,0,0,100,100,0,0,1,2,1,2,10,10,40,1\r\n"
+    "\r\n"
+    "[Events]\r\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n";
+
+// Outline-off variant — Outline=0 instead of 2. Applied at text-sub track
+// load when the user has turned outline off via the sub-style override.
+// Only the Outline field differs; all other fields match DEFAULT_ASS_HEADER.
+static const char* DEFAULT_ASS_HEADER_OUTLINE_OFF =
+    "[Script Info]\r\n"
+    "ScriptType: v4.00+\r\n"
+    "PlayResX: 384\r\n"
+    "PlayResY: 288\r\n"
+    "\r\n"
+    "[V4+ Styles]\r\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+    "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+    "Alignment, MarginL, MarginR, MarginV, Encoding\r\n"
+    "Style: Default,Arial,20,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,"
+    "1,0,0,0,100,100,0,0,1,0,1,2,10,10,40,1\r\n"
     "\r\n"
     "[Events]\r\n"
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n";
@@ -203,8 +217,13 @@ void SubtitleRenderer::render_thread_func() {
             std::lock_guard<std::mutex> ass_lock(mutex_);
             if (visible_.load(std::memory_order_relaxed)) {
                 if (is_pgs_ && !pgs_rects_.empty()) {
-                    // PGS bitmap path — alpha-blend pre-converted BGRA rects
-                    blend_pgs_rects(frame, stride, width, height);
+                    // PGS bitmap path — alpha-blend active rects only.
+                    // pts_ms filter drops events outside the current
+                    // playback window (prevents preload-time racing).
+                    const int64_t render_time_pgs =
+                        pts_ms + delay_ms_.load(std::memory_order_relaxed);
+                    blend_pgs_rects(frame, stride, width, height,
+                                    render_time_pgs < 0 ? 0 : render_time_pgs);
                 } else if (renderer_ && track_) {
                     // libass text path
                     int64_t render_time = pts_ms + delay_ms_.load(std::memory_order_relaxed);
@@ -300,6 +319,9 @@ void SubtitleRenderer::configure_geometry(int video_w, int video_h,
         if (std::isfinite(pixel_aspect) && pixel_aspect > 0.0) {
             ass_set_pixel_aspect(renderer_, pixel_aspect);
         }
+        // Re-assert the user's font-scale override after any other
+        // renderer state was (re)configured above. Safe to call repeatedly.
+        ass_set_font_scale(renderer_, font_scale_.load(std::memory_order_relaxed));
     }
     SUB_LOG("configure_geometry: video=%dx%d canvas=%dx%d rect=%d,%d %dx%d margins=%d,%d,%d,%d\n",
             video_w_, video_h_, frame_w_, frame_h_,
@@ -334,7 +356,14 @@ void SubtitleRenderer::load_embedded_track(const std::string& codec_name,
                codec_name == "mov_text" || codec_name == "text") {
         track_ = ass_new_track(library_);
         if (track_) {
-            std::string header(DEFAULT_ASS_HEADER);
+            // Pick the header variant that matches the current outline
+            // override. User toggles outline via set_style_override; the
+            // flag's value at track-load time is what ships for that track.
+            const bool outline_on = outline_enabled_.load(std::memory_order_relaxed);
+            const char* header_src = outline_on
+                ? DEFAULT_ASS_HEADER
+                : DEFAULT_ASS_HEADER_OUTLINE_OFF;
+            std::string header(header_src);
             ass_process_codec_private(track_, header.data(),
                                       static_cast<int>(header.size()));
             is_text_sub_ = true;
@@ -401,7 +430,26 @@ void SubtitleRenderer::process_packet(const uint8_t* data, int size,
         av_packet_free(&pkt);
 
         if (ret >= 0 && got_sub) {
-            pgs_rects_.clear();
+            // Dedupe: if we already have events starting at this pts
+            // (e.g., preload re-fed the same packet after a seek), skip.
+            // Prevents duplicate blending of the same subtitle.
+            bool already_seen = false;
+            for (const auto& rect : pgs_rects_) {
+                if (rect.start_ms == start_ms) { already_seen = true; break; }
+            }
+            if (already_seen) {
+                avsubtitle_free(&sub);
+                return;
+            }
+
+            // Close any open events — any packet (hide or new show) ends
+            // the currently-visible subtitle. New "show" packets will
+            // push fresh rects below; "hide" packets (num_rects==0)
+            // simply close and return.
+            for (auto& rect : pgs_rects_) {
+                if (rect.end_ms == INT64_MAX) rect.end_ms = start_ms;
+            }
+
             for (unsigned i = 0; i < sub.num_rects; ++i) {
                 AVSubtitleRect* r = sub.rects[i];
                 if (r->type != SUBTITLE_BITMAP || r->w <= 0 || r->h <= 0)
@@ -413,6 +461,8 @@ void SubtitleRenderer::process_packet(const uint8_t* data, int size,
                 pr.y = r->y;
                 pr.w = r->w;
                 pr.h = r->h;
+                pr.start_ms = start_ms;
+                pr.end_ms   = INT64_MAX;  // closed by next packet
                 pr.bgra.resize(static_cast<size_t>(pr.w) * pr.h * 4);
 
                 const uint32_t* palette = reinterpret_cast<const uint32_t*>(r->data[1]);
@@ -437,8 +487,9 @@ void SubtitleRenderer::process_packet(const uint8_t* data, int size,
                 }
                 pgs_rects_.push_back(std::move(pr));
             }
-            SUB_LOG("PGS: decoded %u rects at %lldms\n",
-                    sub.num_rects, static_cast<long long>(start_ms));
+            SUB_LOG("PGS: decoded %u rects at %lldms (track size=%zu)\n",
+                    sub.num_rects, static_cast<long long>(start_ms),
+                    pgs_rects_.size());
             avsubtitle_free(&sub);
         }
         return;
@@ -595,18 +646,42 @@ void SubtitleRenderer::clear_track() {
 }
 
 void SubtitleRenderer::set_style_override(int font_size, int margin_v, bool outline) {
-    // Do NOT call any ass_set_selective_style_override* APIs here —
-    // changing renderer config mid-playback corrupts libass internal
-    // state and causes the silent-stop rendering bug.
+    // Do NOT call any ass_set_selective_style_override_* APIs here —
+    // those caused a silent-stop rendering regression previously.
+    // ass_set_font_scale is a different API (renderer-global multiplier,
+    // not per-style mutation) and is safe to call mid-playback.
     //
-    // Instead, we store the margin offset and apply it during blending
-    // by shifting ASS_Image Y coordinates upward.
-    int default_margin = 40;
-    int offset = (margin_v > default_margin) ? (margin_v - default_margin) : 0;
+    // Margin: stored as a Y-shift in pixels, applied by FrameCanvas at
+    // the overlay-quad draw stage (see src/ui/player/FrameCanvas.cpp
+    // m_subtitleLiftPx). Here it maps onto margin_lift_px_ for any
+    // legacy consumer; the Qt-side lift is the primary mechanism now.
+    const int default_margin = 40;
+    const int offset = (margin_v > default_margin) ? (margin_v - default_margin) : 0;
     margin_lift_px_.store(offset, std::memory_order_relaxed);
 
-    std::fprintf(stderr, "SubtitleRenderer: margin lift=%dpx (margin_v=%d)\n",
-                 offset, margin_v);
+    // Font scale: normalize user's UI size against the DEFAULT_ASS_HEADER
+    // baseline. Clamp to [0.5, 3.0] so a crazy slider value doesn't push
+    // glyphs off-screen or render them sub-pixel.
+    if (font_size <= 0) font_size = kBaselineFontSize;
+    double scale = static_cast<double>(font_size) / kBaselineFontSize;
+    if (scale < 0.5) scale = 0.5;
+    if (scale > 3.0) scale = 3.0;
+    font_scale_.store(scale, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (renderer_) ass_set_font_scale(renderer_, scale);
+    }
+
+    // Outline toggle — affects srt/subrip/mov_text/text only. ASS/SSA
+    // tracks carry their own Default style from the file and ignore this.
+    // Takes effect on next text-subtitle track load (load_embedded_track
+    // rebuilds the injected ASS header with the current flag).
+    outline_enabled_.store(outline, std::memory_order_relaxed);
+
+    std::fprintf(stderr,
+        "SubtitleRenderer: style override applied — font_size=%d scale=%.2f "
+        "margin_v=%d lift=%dpx outline=%s\n",
+        font_size, scale, margin_v, offset, outline ? "on" : "off");
 }
 
 // ---------------------------------------------------------------------------
@@ -632,9 +707,16 @@ void SubtitleRenderer::render_to_bitmaps(int64_t pts_ms,
 
     if (is_pgs_ && !pgs_rects_.empty()) {
         // PGS path — pgs_rects_ are already pre-converted to BGRA by
-        // process_packet. Copy into the overlay vector shape.
+        // process_packet. Filter by pts so accumulated events outside
+        // the current playback window are skipped (same time-aware
+        // semantics as blend_pgs_rects).
+        const int64_t render_time =
+            pts_ms + delay_ms_.load(std::memory_order_relaxed);
+        const int64_t t = render_time < 0 ? 0 : render_time;
         out.reserve(pgs_rects_.size());
         for (const auto& rect : pgs_rects_) {
+            if (t < rect.start_ms) continue;
+            if (rect.end_ms != INT64_MAX && t >= rect.end_ms) continue;
             out.push_back(map_pgs_rect_to_canvas(rect));
         }
         return;
@@ -824,10 +906,15 @@ void SubtitleRenderer::blend_image_list(ASS_Image* img, uint8_t* frame,
 // ---------------------------------------------------------------------------
 
 void SubtitleRenderer::blend_pgs_rects(uint8_t* frame, int stride,
-                                        int frame_w, int frame_h) {
-    // Called from the render thread under mutex_.
+                                        int frame_w, int frame_h,
+                                        int64_t pts_ms) {
+    // Called from the render thread under mutex_. Filters by pts so
+    // accumulated events (preload can queue hundreds at file open) only
+    // blend when the current playback time is inside their window.
     for (const auto& rect : pgs_rects_) {
         if (rect.bgra.empty()) continue;
+        if (pts_ms < rect.start_ms) continue;
+        if (rect.end_ms != INT64_MAX && pts_ms >= rect.end_ms) continue;
 
         // Clamp rect to frame bounds
         int src_x0 = 0, src_y0 = 0;

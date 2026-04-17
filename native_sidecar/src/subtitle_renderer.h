@@ -114,11 +114,22 @@ private:
     void render_thread_func();
 
     // --- PGS bitmap subtitle support ---
+    // start_ms/end_ms make PGS rects time-aware so bulk preload doesn't
+    // flash every subtitle in rapid succession on a mid-file resume.
+    // Semantics: a packet with N>0 rects pushes N new PgsRects (all
+    // sharing the same start_ms, end_ms = INT64_MAX). Any subsequent
+    // packet — whether a 0-rect "hide" or a new "show" — closes any
+    // still-open rects (end_ms == INT64_MAX) by setting their end_ms
+    // to the new packet's start_ms. Dedup on start_ms prevents preload
+    // re-feed (after seek) from double-adding the same event.
     struct PgsRect {
         int x, y, w, h;
         std::vector<uint8_t> bgra;  // pre-converted BGRA pixels (w*h*4 bytes)
+        int64_t start_ms = 0;
+        int64_t end_ms   = INT64_MAX;
     };
-    void blend_pgs_rects(uint8_t* frame, int stride, int frame_w, int frame_h);
+    void blend_pgs_rects(uint8_t* frame, int stride, int frame_w, int frame_h,
+                         int64_t pts_ms);
     void cleanup_pgs();
     SubOverlayBitmap map_pgs_rect_to_canvas(const PgsRect& rect) const;
 
@@ -134,6 +145,19 @@ private:
     std::atomic<bool>   visible_{true};
     std::atomic<int64_t> delay_ms_{0};
     std::atomic<int>    margin_lift_px_{0};  // pixels to shift subs up (HUD visible)
+    // User subtitle-style overrides. font_scale_ is applied via libass's
+    // renderer-level ass_set_font_scale — safe mid-playback unlike the
+    // ass_set_selective_style_override_* APIs which caused a silent-stop
+    // regression previously. The TrackPopover's "font size" slider
+    // normalizes against the DEFAULT_ASS_HEADER baseline (Fontsize=20 →
+    // scale=1.0), so a UI value of 30 yields scale=1.5.
+    // For text subs (srt/mov_text), outline_enabled_ flips the Outline
+    // field of the injected Default style at track-load time (0 = hairline,
+    // 2 = current bolder style). ASS/SSA tracks carry their own Default
+    // style from the file; the outline toggle is a no-op there.
+    std::atomic<double> font_scale_{1.0};
+    std::atomic<bool>   outline_enabled_{true};
+    static constexpr int kBaselineFontSize = 20;  // matches DEFAULT_ASS_HEADER
     int                 frame_w_ = 0;
     int                 frame_h_ = 0;
     int                 video_w_ = 0;
