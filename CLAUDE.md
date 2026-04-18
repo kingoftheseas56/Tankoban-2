@@ -6,7 +6,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 ## 30-Second State Dashboard
 
-**As of:** 2026-04-18 (Agent 0 — CONGRESS 5 OPEN for STREAM_ENGINE_REBUILD. HELP.md active: Agent 0 → Agent 4B for `pieceFinished` signal + API freeze. PLAYER_STREMIO_PARITY Phase 1 + STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2+2.1+2.2 shipped 2026-04-17 at `c510a3c` + substrate at `973ff32`.)
+**As of:** 2026-04-18 (Agent 0 — **CONGRESS 5 RATIFIED** + archived + 5 amendments applied to STREAM_ENGINE_REBUILD_TODO. R5 falsified, R11 reframed post-verification — Stremio is libtorrent-rasterbar-based, enginefs fully accessible. **CONGRESS 6 queued** for next session: multi-agent audit of Stremio Reference gates rebuild P2/P3/P4. HELP.md still OPEN — Agent 0 → Agent 4B for `pieceFinished` signal + `peersWithPiece` (now hard-required per Amendment 1) + 12-method API freeze.)
 
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)

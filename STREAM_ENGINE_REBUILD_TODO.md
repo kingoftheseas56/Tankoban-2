@@ -88,7 +88,7 @@ Create 4 new file pairs (empty-class shells that compile, stubbed methods return
 
 ### Batch 1.2 — StreamEngine facade rewrite (preserves 17-method public API)
 
-Rewrite `StreamEngine.{h,cpp}` as facade. Current 1269-LOC body gets inlined temporarily (preserved verbatim behavior) into the new facade's `d_ptr` or private-impl block. All 17 public methods + 2 signals + 4 structs + 1 enum frozen per approved plan.
+Rewrite `StreamEngine.{h,cpp}` as facade. Current 1269-LOC body gets inlined temporarily (preserved verbatim behavior) into the new facade's `d_ptr` or private-impl block. All 17 public methods + 2 signals + **3** structs (StreamFileResult, StreamTorrentStatus, StreamEngineStats; `StreamRecord` is private-impl) + 1 enum frozen per Congress 5 Amendment 2.
 
 Current internal helpers that move to private-impl temporarily (deleted in P6):
 - `applyStreamPriorities` (current private method)
@@ -170,13 +170,13 @@ Replaces `updatePlaybackWindow` + `prepareSeekTarget` internals (public signatur
 - On `Sequential`: maintain urgency window (15-60 pieces based on bitrate + EMA download speed)
 - EMA download speed: alpha=0.2 on `torrentProgress` signal's `download_rate`
 
-### Batch 3.3 — Per-peer have-piece telemetry (requires Agent 4B's optional `peersWithPiece`)
+### Batch 3.3 — Per-peer have-piece telemetry (REQUIRED — hard P3 exit gate per Congress 5 Amendment 1)
 
 New `seek_target_peer_have` field in `seek_target` telemetry event. Logs peers-with-piece count BEFORE priority-7 re-assertion fires. Distinguishes scheduler-starvation (priority 7 can win) from swarm-availability-starvation (no amount of priority wins — falls to stall-recovery + user-visible messaging).
 
-If Agent 4B's `peersWithPiece` not available: fall back to heuristic estimation from `peer_info` snapshot (less accurate but non-blocking).
+**`peersWithPiece` is REQUIRED, not optional.** Congress 5 ratified 2026-04-18 adopted Agent 4B + Agent 4 consensus: the heuristic fallback from `peer_info.progress` measures aggregate swarm completeness, not per-piece availability, leaving R3 un-falsified by construction. Agent 4B ships `peersWithPiece(hash, pieceIdx) const` as part of P3 parallel with Agent 4's prioritizer work. If libtorrent 2.0 API makes it expensive on Agent 4B's side during implementation, Agent 0 reconvenes a scoped HELP — does NOT auto-fall-back.
 
-**Files:** `src/core/stream/StreamSeekClassifier.{h,cpp}`, `src/core/stream/StreamPrioritizer.{h,cpp}`, `src/core/stream/StreamSession.{h,cpp}`, `src/core/torrent/TorrentEngine.{h,cpp}` (optional, Agent 4B)
+**Files:** `src/core/stream/StreamSeekClassifier.{h,cpp}`, `src/core/stream/StreamPrioritizer.{h,cpp}`, `src/core/stream/StreamSession.{h,cpp}`, `src/core/torrent/TorrentEngine.{h,cpp}` (REQUIRED, Agent 4B ships `peersWithPiece`)
 
 **Exit criteria:**
 - Scrub to 60%-mark on 90%-complete healthy torrent: playback resumes < 3s
@@ -210,7 +210,7 @@ New sidecar telemetry event: `probe_tier_passed { tier: 1|2|3, elapsed_ms, probe
 **Files:** `native_sidecar/src/video_decoder.cpp`, `native_sidecar/src/demuxer.cpp`, `src/core/stream/StreamEngine.h` (gate constant only)
 
 **Exit criteria:**
-- Cold-start 1000-seed torrent: first frame visible < 6s p50
+- Cold-start 1000-seed torrent: first frame visible < 6s p50 **(requires P2 landed — Congress 5 Amendment 3; P4 code can commit before P2 but acceptance-smoke waits on StreamPieceWaiter::await replacing the 15s poll-floor)**
 - `probe_tier_passed` event shows Tier 1 success on fast swarms (majority case)
 - Tier 2/3 escalation verified on slow swarm (manually throttled)
 - Tag `stream-rebuild/phase-4-probe-escalation`
@@ -265,7 +265,8 @@ Remove:
 ### Batch 6.2 — Soak gate (4 hours)
 
 Before P6 commit lands:
-- Overnight wall-clock playback of Sopranos S06E09 (or known-good reference)
+- Overnight wall-clock playback of **multi-file TV pack** (Sopranos S06E09 → E10 → E11 natural rollover, NOT single-file — per Congress 5 Amendment 5 to exercise `stopStream(Replacement)` → `startStream(...)` lifecycle 2-3 times naturally)
+- Soak runs with `TANKOBAN_STREAM_TELEMETRY=1`; post-soak grep for anomalies: `stall_detected` without matching `stall_recovered`, `seek_target` with `peer_have=0`, `gateProgressBytes` monotonicity violations, unexpected `streamError` emits on paths T0 completed cleanly
 - No crashes, no new `streamError`, no telemetry anomalies
 - All 6 MVP criteria pass
 - All 12 runtime scenario matrix cells pass
@@ -291,11 +292,30 @@ Before P6 commit lands:
 ## Scope decisions locked in
 
 - **File split** — 5 files (facade + Session + Prioritizer + PieceWaiter + SeekClassifier) vs current monolith. Rationale: current 1269-LOC has priority/gate/FSM/telemetry all interleaved; Stremio's equivalent is separated. Per-hash `StreamSession` corresponds to Stremio's `StreamGuard` Drop semantics — session destructor = natural `on_stream_end` hook.
-- **Public API frozen.** 17 methods + 2 signals + 4 structs + 1 enum on StreamEngine; 5 methods + 5 signals + StopReason enum on StreamPlayerController. Any attempt to change a signature during the rebuild window requires Agent 4 → Congress pushback, not unilateral change.
+- **Public API frozen** (Congress 5 Amendment 2 corrections). StreamEngine = 17 methods + 2 signals + **3** structs (StreamFileResult, StreamTorrentStatus, StreamEngineStats — `StreamRecord` is private-impl) + 1 enum. StreamPlayerController = ctor + **5** methods (incl. `pollBufferedRangesOnce` shipped at `c510a3c`) + 5 signals + StopReason enum. Any attempt to change a signature during the rebuild window requires Agent 4 → Congress pushback, not unilateral change.
 - **Probe escalation tiers fixed at 512KB/750ms → 2MB/2s → 5MB/5s.** `rw_timeout` escalates 5s → 15s → 30s. Tier 1 faster than current best-case (which stalls); Tier 3 slower than nothing (current 30s single-shot IS the problem).
 - **Seek-type escalation capped at 3 retries.** After that, falls to stall-recovery (P5 watchdog). Prevents infinite priority-7 storm on genuinely unavailable pieces.
 - **Per-peer `have_piece` telemetry is a Risk R3 falsification gate.** Must land in P3 (or with fallback heuristic) before declaring Mode B fixed.
-- **4-hour soak is the P6 gate.** Wall-clock playback, no fast-forward. Per Risk R7 (hours-of-playback latent bugs invisible to 2-min smoke).
+- **4-hour soak is the P6 gate.** Wall-clock playback, no fast-forward. Per Risk R7 (hours-of-playback latent bugs invisible to 2-min smoke). Multi-file TV pack + TELEMETRY=1 + post-soak anomaly grep per Congress 5 Amendment 5.
+
+## Post-Congress-5-ratification corrections (2026-04-18)
+
+- **R5 (piece prioritization inaccessibility in enginefs) — FALSIFIED.** Post-synthesis verification confirmed `stream-server-master/enginefs/src/backend/priorities.rs` + `piece_waiter.rs` + `backend/libtorrent/{handle,stream,constants,helpers}.rs` all present in the reference folder. Phase 1 explore flagged this as "possibly inaccessible" without verifying. R5 removed from active risk register. Integration pass no longer needs fallback plan for unreachable prioritizer source.
+- **R1 + R11 (Stremio = WebTorrent / libtorrent-vs-WebTorrent mismatch) — REFRAMED.** Post-synthesis verification of `stream-server-master/Cargo.toml` + `enginefs/Cargo.toml` confirmed: Stremio streaming-server depends on **`libtorrent-sys` (FFI bindings to libtorrent-rasterbar via cxx)** as its default feature, with `librqbit` as optional alternative. Stremio IS libtorrent-based — same library family as our C++ libtorrent 2.0 stack. The "re-derive libtorrent calls from first principles" R1 mitigation collapses into direct port of Stremio's libtorrent-sys wrappings to our C++ calls. R11 removed; R1 downgraded from High to Medium (differences in wrapping layer semantics between Rust cxx and our direct C++ calls remain, but the library itself is identical).
+- **R12 (atomic Session migration at P3) — ADDED** (Composite 12) per Agent 4's Congress 5 position. Half-state corrupts under concurrent source-switch. Mitigation: migration lands in one P3 commit; no interleaving with P2 piece-waiter work; shared-file heads-up in chat.md at each `TorrentEngine.{h,cpp}` touch window across P2/P3.
+- **R13 (plan-text amendment required) — ADDED** (Composite 10) per Agent 4's Congress 5 position. Mitigation: this TODO commit is the amendment trigger.
+
+## External references worth open during implementation (supplementary)
+
+Beyond the Stremio Reference folder (sufficient on its own), these external docs aid P2-P4 implementation:
+
+- [libtorrent streaming.html](http://libtorrent.org/streaming.html) — canonical API reference for `set_piece_deadline` + `request_time_critical_pieces` algorithm
+- [libtorrent streaming.rst on GitHub](https://github.com/arvidn/libtorrent/blob/master/docs/streaming.rst) — same doc, source of truth
+- [libtorrent issue #84 — set_piece_deadline not honored](https://github.com/arvidn/libtorrent/issues/84) — documented cases of Mode-B-like behavior + maintainer resolutions
+- [libtorrent discussion #6272 — set_piece_deadline vs sequential_download](https://github.com/arvidn/libtorrent/discussions/6272) — semantic distinctions P3 needs
+- [peerflix source](https://github.com/mafintosh/peerflix) — Node.js streaming reference for HTTP-Range sanity-check
+
+**Strategic insight from libtorrent docs (P3 design note for Agent 4):** `request_time_critical_pieces()` runs every 1s and has built-in timeout-and-retry: "if any time-critical piece takes more than the average piece download time plus a half average deviation, the piece is considered to have timed out, allowing double-request of blocks." This only works if the piece has a LIVE deadline when the next pass runs. Phase 2.6.3 set deadline ONCE — if it expired, libtorrent dropped the piece from time-critical tracking. **Alternative to P3's 500ms tick re-assertion:** call `set_piece_deadline` with a **longer** deadline (10-30s) so libtorrent's own retry runs several cycles naturally. Agent 4's call in P3 design — evaluate both.
 
 ---
 
