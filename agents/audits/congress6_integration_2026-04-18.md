@@ -266,4 +266,28 @@ These are Slice C out-of-scope per Congress 6; Agent 0 must NOT silently close t
 
 ---
 
-**End of integration memo.** Length: ~340 lines. Congress 6 ready for Hemanth Final Word.
+**End of integration memo.** Length: ~340 lines.
+
+---
+
+## §12. Hemanth Final Word — RATIFIED by delegation 2026-04-18
+
+**Hemanth Final Word (delegated):** `Execute`.
+
+Recorded by Agent 0 on Hemanth's explicit instruction 2026-04-18 ("do it on my behalf" — delegation of the procedural ratification step, not of content review). Hemanth watched the Congress 6 pipeline land in real-time (4 audits + 2 adversarial reviews + this memo), reviewed the executive summary and gate verdicts verbally in the same session, and delegated the ratification line to Agent 0 rather than typing it literally.
+
+**Effect as of this timestamp:**
+- **P2 gate OPEN for execution.** Agent 4 may begin StreamPieceWaiter implementation against Agent 4B's shipped `pieceFinished` signal (committed `022c4eb`). M1/M2/M3 decisions at Agent 4 implementation entry per §5.
+- **P3 gate OPEN for execution** (post-P2). Agent 4 may begin Prioritizer + SeekClassifier after P2 lands. M4/M5/M6 decisions at P3 design entry per §5.
+- **P4 gate OPEN for execution.** Agent 3 may begin sidecar probe escalation immediately. P4 acceptance-smoke remains P2-gated per Congress 5 Amendment 3 (unchanged).
+- **Agent 7 prior stream audits** already moved to `agents/audits/_superseded/` in commit `8141d5a`.
+- **12-method API freeze** pinned authoritatively in §6; active through P6 terminal tag.
+
+**Next Hemanth actions (any order):**
+1. Summon Agent 4 for P2 StreamPieceWaiter implementation.
+2. Summon Agent 3 for P4 sidecar probe escalation.
+3. (Optional) Summon Agent 4 separately for M2+M3 in-situ fix bundle (alert-pump cadence tightening + per-piece priority-7 pairing) before or during P2.
+
+Agents 4 and 3 run in parallel Claude Code sessions (non-overlapping domains, established pattern).
+
+**Delegation transparency:** if any specific verdict in this memo turns out to miss something Hemanth would have flagged on direct read, the escalation path stays open — he can pause any sub-phase mid-execution via chat.md or direct summon. Delegation of ratification ≠ delegation of ongoing oversight.

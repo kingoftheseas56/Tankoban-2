@@ -528,3 +528,21 @@ Review file at [agents/audits/congress6_assistant2_adversarial_CD_2026-04-18.md]
 **Rigor:** observation-grade, no fix prescription, no Tankoban compile/run, no coordination with Assistant 1, no access to chat.md history beyond motion archive per summon brief. Zero `src/` or `native_sidecar/` code touched.
 
 READY TO COMMIT — [Assistant 2, Congress 6 Slice C + D adversarial review SHIPPED]: agents/audits/congress6_assistant2_adversarial_CD_2026-04-18.md (273 lines, 8-section shape per motion §Adversarial review scope). Spot-checked 20 Stremio Reference citations across `player.rs`, `runtime/msg/event.rs`, `runtime.rs`, `HTMLVideo.js`, `serialize_player.rs`, `library_item.rs`, `continue_watching_preview.rs`, `deep_links/mod.rs`, `stream.rs`, `addon_transport/` — 19/20 accurate, 1 pseudo-code simplification (appendix's `is_binge_match` shown as `eq()` but actual Stremio code match-arm returns `false` for `(None, None)` — low-severity nuance). **§7 COLLAPSE HONESTY VERDICT: HONEST.** Evidence: verbatim 3-predicate gate quote + exact 6-count deep_link emit sites + directory-correction of ctx/library.rs → update_library.rs (I verified no `library.rs` file exists at `stremio-core/src/models/ctx/`, only `update_library.rs` + 9 other `update_*.rs` files). Appendix length ~207 lines exceeds motion's "1-paragraph" literal but is NOT padded — Q1-D surfaces 4 divergences deserving proper treatment. NO redraft demand. **§8 Phase-gate votes: P2 OPEN / P3 OPEN / P4 OPEN (Slice C explicit endorsement of parity-PLUS 6-stage LoadingOverlay) / P5 OPEN (sidecar-side-only stall detection constraint).** 2 integration-memo items for Agent 0: prior-art P0-1 disposition + prior-art P1-1/P1-2/P1-3 carry-forward. Zero src/ or native_sidecar/ code touched | files: agents/audits/congress6_assistant2_adversarial_CD_2026-04-18.md, agents/chat.md
+
+
+---
+
+## Agent 0 — 2026-04-18 — Congress 6 RATIFIED by Hemanth delegation
+
+Hemanth Final Word = `Execute`, delegated to Agent 0 on explicit instruction "do it on my behalf" 2026-04-18. Recorded in [agents/audits/congress6_integration_2026-04-18.md §12](agents/audits/congress6_integration_2026-04-18.md). Delegation covers the procedural ratification step, not ongoing oversight — Hemanth retains escalation path via chat.md or direct summon if a specific verdict turns out to miss something on direct read.
+
+**Effect as of ratification:**
+- P2 gate OPEN for execution — Agent 4 may begin StreamPieceWaiter implementation against Agent 4B's shipped `pieceFinished` signal (`022c4eb`). M1 (contiguousBytesFromOffset lock posture) + M2 (alert-pump cadence tightening scope) + M3 (per-piece priority-7 pairing bundling) decisions at Agent 4 implementation entry per integration memo §5.
+- P3 gate OPEN for execution (post-P2) — Agent 4 may begin Prioritizer + SeekClassifier after P2 lands. M4 (MAX_STARTUP_PIECES=2 re-verification) + M5 (first-piece-target 0ms-vs-10ms clarification) + M6 (UserScrub tail-deadline-loss empirical repro or hypothesis-relabel) at P3 design entry.
+- P4 gate OPEN for execution — Agent 3 may begin sidecar probe escalation immediately. P4 acceptance-smoke stays P2-gated per Congress 5 Amendment 3 (unchanged).
+- Agent 4 + Agent 3 run in parallel Claude Code sessions (non-overlapping domains, established pattern).
+- 12-method API freeze authoritative through P6 terminal tag `stream-rebuild/phase-6-demolition`.
+
+CLAUDE.md dashboard refreshed to reflect RATIFIED state + GATES OPEN FOR EXECUTION. Congress 6 cycle formally closes here.
+
+READY TO COMMIT — [Agent 0, Congress 6 RATIFIED by Hemanth delegation]: Integration memo §12 appended with delegated Final Word (`Execute`); CLAUDE.md dashboard updated (Congress 6 RATIFIED, P2/P3/P4 gates OPEN FOR EXECUTION, Blocked: none). Agent 4 P2 + Agent 3 P4 may execute on next summon; Agent 4 P3 follows P2 landing | files: agents/audits/congress6_integration_2026-04-18.md, CLAUDE.md, agents/chat.md

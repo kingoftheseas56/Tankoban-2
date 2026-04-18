@@ -6,7 +6,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 ## 30-Second State Dashboard
 
-**As of:** 2026-04-18 (Agent 0 — **CONGRESS 6 INTEGRATION MEMO LANDED** at [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md). 4 audits (Slice A/B/C/D-as-appendix, ~1800 lines) + 2 assistant adversarial reviews (59KB) + integration memo consolidated. **P2/P3/P4 GATES OPEN** pending 6 must-close items (§5 of memo) resolved at sub-phase ship entry. Agent 7 prior stream audits demoted to [agents/audits/_superseded/](agents/audits/_superseded/) with supersession pointers + INDEX.md. P1-5 corrected (stream_state = user prefs, not torrent stats). **12-method API freeze pinned authoritatively** in memo §6. Awaiting Hemanth gate-open ratification → P2 (Agent 4) + P4 (Agent 3) execution begin. Congress 5 RATIFIED 2026-04-18 (archived). Agent 4B HELP.md shipped (pieceFinished signal + peersWithPiece method + 12-method freeze on-record).)
+**As of:** 2026-04-18 (Agent 0 — **CONGRESS 6 RATIFIED by Hemanth delegation** 2026-04-18 (`Execute` recorded in integration memo §12 by Agent 0 on Hemanth instruction "do it on my behalf"). Integration memo at [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md). **P2/P3/P4 GATES OPEN FOR EXECUTION.** Agent 4 may begin P2 StreamPieceWaiter against Agent 4B's shipped `pieceFinished` signal (`022c4eb`), with M1/M2/M3 decisions at entry. Agent 3 may begin P4 sidecar probe escalation. Agent 4 P3 after P2 lands, with M4/M5/M6 at P3 design entry. Congress 5 + 6 both archived; Agent 7 prior stream audits demoted to [_superseded/](agents/audits/_superseded/). 12-method API freeze active through P6 terminal tag.)
 
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
@@ -25,7 +25,7 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 **Open HELP requests:** none (Agent 0 → Agent 4B asks all SATISFIED by 4B's 2026-04-18 substrate ship)
 
-**Blocked:** P2/P3/P4 rebuild execution awaits Hemanth gate-open ratification of [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md) §10.
+**Blocked:** none. P2/P3/P4 unblocked by Hemanth delegated ratification 2026-04-18 — Agent 4 P2 + Agent 3 P4 may execute on summon; Agent 4 P3 follows P2 land.
 
 **Last successful smoke:** PLAYER_PERF_FIX Phase 2 (D3D11_BOX) green on Sopranos S06E09 + The Boys S03E06 — 2026-04-16. Phase 3 Option B (SHM-routed overlay) SHIPPED 2026-04-16, awaiting smoke.
 
