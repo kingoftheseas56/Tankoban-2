@@ -1,3 +1,17 @@
+> **SUPERSEDED 2026-04-18 by Congress 6 Slice C + Slice D appendix.** This file moved to `agents/audits/_superseded/` per Congress 6 motion §Integration pass scope §6. Load-bearing findings carried forward + corrected in:
+> - [../congress6_player_sidecar_2026-04-18.md](../congress6_player_sidecar_2026-04-18.md) — Slice C (Player state machine + Sidecar lifecycle events + IPC surface) + Slice D appendix (Library UX consumer).
+> - [../congress6_integration_2026-04-18.md](../congress6_integration_2026-04-18.md) — Agent 0 integration memo.
+>
+> **P1-5 CORRECTED:** this prior audit conflated `stream_state` (user preferences — subtitle_track/delay/size/offset/playback_speed/player_type/audio_delay per `streams_item.rs:29-95`) with `streaming_server` model state (torrent stats). These are separate concerns in stremio-core. Congress 6 Slice C §Q2 carries the correction.
+>
+> **P0-1 (buffered/seekable state):** partial-ship status at `c510a3c` carried forward; mpv-style cache-buffering-state / paused-for-cache disposition awaits Agent 0 integration-memo follow-up decision.
+>
+> **P1-1 / P1-2 / P1-3 (precise seek / HDR / playback speed):** NOT in Slice C audit scope — these are **carry-forward to PLAYER_STREMIO_PARITY_FIX_TODO Phase 2+**, not silently closed.
+>
+> This file is kept for historical reference only. **Do not cite as authority.** R21 snapshot preserved; findings pre-Congress-6 remain empirically sound modulo the P1-5 conflation correction above.
+
+---
+
 # Audit — Video Player + sidecar Stremio/mpv parity — 2026-04-17
 
 By Agent 7 (Codex). For Video Player + sidecar / Agent 3.

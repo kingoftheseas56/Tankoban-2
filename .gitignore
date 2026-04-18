@@ -27,3 +27,10 @@ _*.log
 _*.csv
 _*/
 *.log
+
+# Exception: audit supersession directory is intentionally tracked (historical reference)
+!agents/audits/_superseded/
+!agents/audits/_superseded/**
+
+# Congress-check hook local session markers — regenerated each run, not for git
+.claude/.congress-warned-*

@@ -1,3 +1,12 @@
+> **SUPERSEDED 2026-04-18 by Congress 6 Slice A + Slice B audits.** This file moved to `agents/audits/_superseded/` per Congress 6 motion §Integration pass scope §6. Load-bearing findings carried forward + extended in:
+> - [../congress6_stream_primary_2026-04-18.md](../congress6_stream_primary_2026-04-18.md) — Slice A (Stream Primary; routes + lifecycle + probe HTTP surface + 6 orphan routes). Reframes P0: gate size (5MB) is SYMPTOM, poll-sleep primitive is CAUSE. Extends Axes 1 + 3 + 7.
+> - [../congress6_sources_torrent_2026-04-18.md](../congress6_sources_torrent_2026-04-18.md) — Slice B (Sources/Torrent substrate + enginefs piece primitives including priorities.rs + piece_waiter.rs + piece_cache.rs + engine.rs + backend/libtorrent/*.rs + bindings/libtorrent-sys/). Extends Axes 1 + 3 + 7 with algorithm-level detail (calculate_priorities, piece_waiter registry, deadline re-assert cadence).
+> - [../congress6_integration_2026-04-18.md](../congress6_integration_2026-04-18.md) — Agent 0 integration memo consolidating findings + per-phase gate verdicts.
+>
+> This file is kept for historical reference only. **Do not cite as authority.** R21 snapshot preserved; findings pre-Congress-6 are still empirically sound but the Congress 6 audits contain the current-authoritative readings.
+
+---
+
 # Tankoban 2 Stream-A Engine Substrate Comparative Audit - 2026-04-16
 
 Author: Agent 7 (Codex)  

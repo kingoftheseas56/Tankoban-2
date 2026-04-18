@@ -8,11 +8,10 @@ When Hemanth posts a ratification line (`ratified`, `APPROVES`, `Final Word`, or
 
 ## STATUS: NO ACTIVE MOTION
 
-<!-- Previously: CONGRESS 5 (Stream Engine Rebuild motion) — RATIFIED 2026-04-18 by Hemanth;
-archived to agents/congress_archive/2026-04-18_stream_engine_rebuild.md. Five amendments
-landed (peersWithPiece hard-gated, contract corrections, P4 gated-on-P2, R12+R13 added,
-P6 soak refinements). CONGRESS 6 (multi-agent audit of Stremio Reference) queued for
-next session per Agent 0 addendum plan at C:\Users\Suprabha\.claude\plans\i-want-you-to-cosmic-newell.md. -->
+<!-- Previously: CONGRESS 6 (Stremio Reference multi-agent audit motion) — RATIFIED same-session 2026-04-18 by
+Hemanth via collapsed-position direct ratification (summon-chain framing). Archived to
+agents/congress_archive/2026-04-18_congress6_stremio_audit.md. Next: Agent 4 Slice A audit session
+(addendum step 4 — first of back-to-back A+B). P1 rebuild scaffold ships in parallel (not audit-gated). -->
 
 ---
 
