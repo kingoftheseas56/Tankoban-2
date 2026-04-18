@@ -147,15 +147,26 @@ private:
             else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
                 qWarning() << "Resume data save failed:" << a->message().c_str();
             }
-            // STREAM diagnostic (Agent 4B — Mode A alert trace; removed when
-            // Mode A closes or Phase 2.3 substrate ships).
+            // STREAM_ENGINE_REBUILD P2 — pieceFinished signal surface. The
+            // piece_progress alert category is enabled unconditionally below
+            // (applySettings alert_mask); each piece_finished_alert becomes
+            // one Qt signal emit on the alert worker thread, delivered via
+            // QueuedConnection to StreamPieceWaiter (P2 consumer lives on
+            // main/GUI thread). Zero existing Qt consumers bind to this
+            // signal; purely additive. Mode A diagnostic trace reuses the
+            // same alert, still env-var gated.
+            else if (auto* pfa = lt::alert_cast<lt::piece_finished_alert>(a)) {
+                auto hash = TorrentEngine::hashToHex(pfa->handle);
+                const int pieceIdx = static_cast<int>(pfa->piece_index);
+                emit m_engine->pieceFinished(hash, pieceIdx);
+                if (m_traceActive)
+                    writeAlertTrace("piece_finished", hash, pieceIdx, -1);
+            }
+            // STREAM diagnostic (Agent 4B — Mode A block-level alert trace;
+            // stays env-var gated because block_progress alert volume is
+            // per-16KB-block vs piece_progress at per-piece).
             else if (m_traceActive) {
-                if (auto* pfa = lt::alert_cast<lt::piece_finished_alert>(a)) {
-                    writeAlertTrace("piece_finished",
-                                    TorrentEngine::hashToHex(pfa->handle),
-                                    static_cast<int>(pfa->piece_index), -1);
-                }
-                else if (auto* bfa = lt::alert_cast<lt::block_finished_alert>(a)) {
+                if (auto* bfa = lt::alert_cast<lt::block_finished_alert>(a)) {
                     writeAlertTrace("block_finished",
                                     TorrentEngine::hashToHex(bfa->handle),
                                     static_cast<int>(bfa->piece_index),
@@ -241,21 +252,19 @@ void TorrentEngine::applySettings()
     sp.set_bool(lt::settings_pack::enable_natpmp, true);
     sp.set_bool(lt::settings_pack::enable_upnp, true);
 
-    // STREAM diagnostic (Agent 4B — Mode A alert trace for cold-session
-    // 0%-buffering repro per Agent 4 test session at chat.md:2787-2865).
-    // Gated by TANKOBAN_ALERT_TRACE=1 env var so the piece/block alert volume
-    // only hits when diagnosing. libtorrent 2.0 splits what used to be a
-    // single "progress" category into piece_progress (enables
-    // piece_finished_alert) + block_progress (enables block_finished_alert) —
-    // we need both for the trace handlers at lines 153/158.
-    // Remove when Mode A root cause confirmed OR Phase 2.3 substrate ships
-    // (which unconditionally expands the mask per the Axis 2 HELP ACK).
+    // STREAM_ENGINE_REBUILD P2 — piece_progress is unconditional now:
+    // pieceFinished signal (drainAlerts branch above) is a hard P2
+    // dependency for StreamPieceWaiter. Alert volume is per-piece
+    // (typically ~2-4K total over a 4GB stream), negligible next to
+    // libtorrent's baseline alert stream. block_progress stays env-var
+    // gated — block_finished_alert volume is per-16KB-block and only
+    // Mode A diagnosis needs it.
     int alertMask = lt::alert_category::status
                   | lt::alert_category::storage
-                  | lt::alert_category::error;
+                  | lt::alert_category::error
+                  | lt::alert_category::piece_progress;
     if (qEnvironmentVariableIsSet("TANKOBAN_ALERT_TRACE")) {
-        alertMask |= lt::alert_category::piece_progress
-                   | lt::alert_category::block_progress;
+        alertMask |= lt::alert_category::block_progress;
     }
     sp.set_int(lt::settings_pack::alert_mask, alertMask);
 
@@ -1393,6 +1402,37 @@ void TorrentEngine::setPiecePriority(const QString& infoHash, int pieceIdx, int 
                               static_cast<lt::download_priority_t>(priority));
 }
 
+// STREAM_ENGINE_REBUILD P3 — per-piece peer availability.
+// Walks handle.get_peer_info() counting peers whose bitfield has pieceIdx
+// set. Mirrors peersFor() at line 965 (same lock + snapshot shape). The
+// piece_index_t construction is explicit because typed_bitfield<piece_index_t>
+// shadows the base bitfield::operator[](int) with operator[](piece_index_t).
+// Fresh-handshake peers (bitfield empty, BITFIELD/HAVE not yet received)
+// are skipped — "unknown" not "no" — so R3 remains falsifiable as described
+// at STREAM_ENGINE_REBUILD_TODO.md:174.
+int TorrentEngine::peersWithPiece(const QString& infoHash, int pieceIdx) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return -1;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return -1;
+    if (pieceIdx < 0 || pieceIdx >= ti->num_pieces()) return -1;
+
+    std::vector<lt::peer_info> peers;
+    it->handle.get_peer_info(peers);
+
+    const lt::piece_index_t pidx(pieceIdx);
+    int count = 0;
+    for (const auto& p : peers) {
+        if (p.pieces.size() == 0) continue;             // unknown — not counted
+        if (pieceIdx >= p.pieces.size()) continue;      // defensive; should not happen once bitfield is sized
+        if (p.pieces[pidx]) ++count;
+    }
+    return count;
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -1437,6 +1477,7 @@ QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
 bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }
 bool TorrentEngine::havePiece(const QString&, int) const { return false; }
 void TorrentEngine::setPiecePriority(const QString&, int, int) {}
+int TorrentEngine::peersWithPiece(const QString&, int) const { return -1; }
 void TorrentEngine::flushCache(const QString&) {}
 // STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 stubs — match header decls.
 void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int>>&) {}

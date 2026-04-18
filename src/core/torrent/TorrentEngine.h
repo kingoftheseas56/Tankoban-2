@@ -141,6 +141,23 @@ public:
     void    addPeer(const QString& infoHash, const QString& ipPort);
     QStringList bannedPeers() const;
 
+    // STREAM_ENGINE_REBUILD P3 — per-piece peer availability. Counts peers
+    // whose bitfield has `pieceIdx` set. Iterates lt::peer_info::pieces
+    // (typed_bitfield<piece_index_t>) from get_peer_info() under m_mutex;
+    // O(num_peers), ≤1ms in practice. Fresh-handshake peers (empty bitfield
+    // — BITFIELD/HAVE not yet received) are counted as "unknown" and
+    // skipped, not counted as "no" — correct semantic for R3 falsification
+    // (scheduler-starvation vs. swarm-availability-starvation). Returns -1
+    // on unknown infoHash / invalid pieceIdx / metadata-not-ready / no-
+    // libtorrent build. Consumed by StreamPrioritizer + SeekClassifier in
+    // P3 to distinguish "priority-7 storm will fix it" from "no peers have
+    // this piece — any priority is futile" during seek-hang triage.
+    // Congress 5 Amendment 1 lifted this from optional-telemetry to hard
+    // P3 exit gate — plan's fallback via peer_info.progress conflates
+    // aggregate swarm completeness with per-piece availability and cannot
+    // disambiguate those two states.
+    int peersWithPiece(const QString& infoHash, int pieceIdx) const;
+
     // General tab convenience wrapper (Phase 6.5)
     TorrentDetails torrentDetails(const QString& infoHash) const;
 
@@ -251,6 +268,16 @@ signals:
                          int dlSpeed, int ulSpeed, int peers, int seeds);
     void torrentFinished(const QString& infoHash);
     void torrentError(const QString& infoHash, const QString& message);
+
+    // STREAM_ENGINE_REBUILD P2 — emitted once per libtorrent
+    // piece_finished_alert from the AlertWorker thread. Consumers must
+    // connect with Qt::QueuedConnection (AutoConnection default from
+    // main-thread QObject receivers resolves to this) so StreamPieceWaiter
+    // map mutation stays on the consumer thread, not the alert worker.
+    // Replaces the 15 s poll floor in StreamHttpServer — consumer binds a
+    // QWaitCondition to this signal for sub-second wake on piece arrival.
+    // No existing code paths produce or bind this signal; purely additive.
+    void pieceFinished(const QString& infoHash, int pieceIndex);
 
 private:
 #ifdef HAS_LIBTORRENT
