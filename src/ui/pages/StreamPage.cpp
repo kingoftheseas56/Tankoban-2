@@ -1772,6 +1772,18 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 if (!infoHash.isEmpty() && m_streamEngine) {
                     m_streamEngine->updatePlaybackWindow(infoHash, posSec, durSec);
                 }
+                // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — playback-phase
+                // buffered-range emit. Same 2s cadence as updatePlaybackWindow
+                // (both driven off the progressUpdated tick, rate-gated by
+                // m_session.lastDeadlineUpdateMs). StreamPlayerController's
+                // own pollStreamStatus timer has stopped post-readyToStart,
+                // so this is the sole refresh source during playback — keeps
+                // SeekSlider's buffered overlay current as pieces arrive
+                // mid-stream. Equality-dedup inside pollBufferedRangesOnce
+                // short-circuits when no new pieces have completed.
+                if (m_playerController) {
+                    m_playerController->pollBufferedRangesOnce();
+                }
             }
 
             // Phase 2 Batch 2.5 — near-end detection: at 95% OR within 60s
@@ -1816,6 +1828,17 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
         m_session.epKey.clear();
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — disable buffered-range
+        // overlay + drop the per-session signal connection before persistence
+        // mode flips back. Ordering: setStreamMode(false) first defangs any
+        // emit-in-flight from a final StreamPlayerController poll tick
+        // before disconnect runs; disconnect removes the wire; persistence
+        // flip is unchanged. VideoPlayer::teardownUi also clears the
+        // SeekSlider overlay directly on next open (belt + suspenders
+        // against visible-stale-paint).
+        player->setStreamMode(false);
+        disconnect(m_playerController, &StreamPlayerController::bufferedRangesChanged,
+                   player, &VideoPlayer::onBufferedRangesChanged);
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
 
         // Phase 2 Batch 2.5 — overlay must be shown BEFORE stopStream. The
@@ -1840,6 +1863,20 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // saveProgress("stream", epKey, state) lambda above. Fixes the stream →
     // videos continue-watching leak routed by Agent 0 at chat.md:9661.
     player->setPersistenceMode(VideoPlayer::PersistenceMode::None);
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — enable buffered-range
+    // overlay rendering for this stream session. Pairs with setStreamMode
+    // (false) in the closeRequested handler below, mirroring the
+    // setPersistenceMode bookend discipline. Per-session connect + emit
+    // flow: StreamPlayerController::bufferedRangesChanged → VideoPlayer::
+    // onBufferedRangesChanged → SeekSlider::setBufferedRanges paint.
+    // UniqueConnection defends against re-wire if a prior session's
+    // connection wasn't disconnected (belt-and-suspenders — closeRequested
+    // below clears via disconnect, but stream-failure paths are varied).
+    player->setStreamMode(true);
+    connect(m_playerController, &StreamPlayerController::bufferedRangesChanged,
+            player, &VideoPlayer::onBufferedRangesChanged,
+            Qt::UniqueConnection);
 
     // Phase 1 Batch 1.3 (STREAM_UX_PARITY) — read the stream-domain saved
     // progress for this episode/movie and pass it to openFile so playback
@@ -2013,6 +2050,12 @@ void StreamPage::onStreamFailed(const QString& message)
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — mirror the close
+        // path's stream-mode teardown here on failure so a later library
+        // open doesn't inherit stale setStreamMode(true) state.
+        player->setStreamMode(false);
+        disconnect(m_playerController, &StreamPlayerController::bufferedRangesChanged,
+                   player, &VideoPlayer::onBufferedRangesChanged);
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
     }
     m_bufferLabel->setText("Stream failed: " + message);
@@ -2091,6 +2134,13 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — mirror stream-mode
+        // teardown here for the UserEnd path that arrives via direct
+        // stopStream(UserEnd) rather than through the closeRequested
+        // lambda (e.g. esc-key-to-stop scenarios post-STREAM_LIFECYCLE_FIX).
+        player->setStreamMode(false);
+        disconnect(m_playerController, &StreamPlayerController::bufferedRangesChanged,
+                   player, &VideoPlayer::onBufferedRangesChanged);
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
     }
     m_bufferOverlay->hide();

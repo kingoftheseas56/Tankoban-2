@@ -1,6 +1,7 @@
 #pragma once
 #include <QSlider>
 #include <QList>
+#include <QPair>
 
 class SeekSlider : public QSlider {
     Q_OBJECT
@@ -14,6 +15,18 @@ public:
     // ticks. Duration for position mapping uses m_durationSec; call
     // setDurationSec BEFORE setChapterMarkers to get correct placement.
     void setChapterMarkers(const QList<qint64>& markersMs);
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.4 — buffered-range overlay
+    // for torrent-backed stream playback. Caller passes file-local
+    // {startByte, endByte} pairs (endByte exclusive) of fully-downloaded
+    // pieces + the total file byte size for fraction mapping. Semi-
+    // transparent warm-amber fill renders between the groove base and
+    // chapter ticks (groove → buffered fills → chapter ticks → handle
+    // paint order). Empty list OR totalBytes <= 0 hides the overlay
+    // (library-file mode sends empty to suppress). Paint is integer-pixel-
+    // exact (no AA), matches existing chapter-tick style.
+    void setBufferedRanges(const QList<QPair<qint64, qint64>>& ranges,
+                           qint64 totalBytes);
 
     static constexpr int RANGE = 10000;
 
@@ -34,4 +47,10 @@ private:
 
     double         m_durationSec      = 0.0;
     QList<qint64>  m_chapterMarkersMs;
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.4 — buffered-range storage.
+    // Written by setBufferedRanges; read by paintEvent. Cleared on teardown
+    // via setBufferedRanges({}, 0) at VideoPlayer::teardownUi.
+    QList<QPair<qint64, qint64>> m_bufferedRanges;
+    qint64                       m_bufferedTotalBytes = 0;
 };

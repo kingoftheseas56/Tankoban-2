@@ -22,14 +22,54 @@ class LoadingOverlay : public QWidget {
 public:
     explicit LoadingOverlay(QWidget* parent = nullptr);
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — classified open-pipeline
+    // stages. Replaces the binary Loading/Buffering model so the user
+    // sees which sub-step of the open is active during the 10-70s
+    // window that used to be a silent "Loading — <filename>" pill.
+    // Driven by SidecarProcess classified events (Phase 1.2):
+    //   Opening            → state_changed{opening}, sendOpen ack'd
+    //   Probing            → probe_start (probe_file in flight)
+    //   OpeningDecoder     → decoder_open_start (avcodec_open2 in flight)
+    //   DecodingFirstFrame → first_decoder_receive (first frame decoded,
+    //                        presentation imminent; Rule-14 pick — NOT
+    //                        first_packet_read, which only signals
+    //                        demuxer/IO motion and can stall on decoder
+    //                        back-pressure)
+    //   Buffering          → buffering (PLAYER_UX_FIX Phase 2.2 HTTP
+    //                        stall on stream URLs, post-first-frame
+    //                        recovery path)
+    //   TakingLonger       → Phase 2.2 30s watchdog fires from VideoPlayer
+    //                        when firstFrame hasn't arrived; non-terminal
+    //                        (user can still close; further progress
+    //                        events still resolve the stage cleanly)
+    enum class Stage {
+        Opening,
+        Probing,
+        OpeningDecoder,
+        DecodingFirstFrame,
+        Buffering,
+        TakingLonger,
+    };
+
+    // Set the current stage + optionally update filename. Empty filename
+    // keeps the current value (useful for mid-pipeline transitions where
+    // the filename was already set by the initial Opening stage). Calling
+    // with a new filename at any time refreshes the text. Idempotent-ish:
+    // same-stage + same-filename calls update text in place without
+    // re-fade.
+    void setStage(Stage stage, const QString& filename = {});
+
+    // Backward-compat shortcuts preserved for existing call sites that
+    // predate Phase 2.1. Both forward to setStage internally. New code
+    // should prefer setStage directly.
     // Connect to VideoPlayer::playerOpeningStarted(QString). Fades in
-    // with "Loading — <basename>" text centered over the parent. Safe
-    // to call while Buffering is showing — transitions back to Loading.
+    // with "Opening source — <basename>" text. Shortcut for
+    // setStage(Stage::Opening, filename).
     void showLoading(const QString& filename);
 
-    // Connect to SidecarProcess::bufferingStarted(). Shows "Buffering…"
-    // text. If already visible in Loading mode, mutates in place (no
-    // re-fade). If hidden, fades in.
+    // Connect to SidecarProcess::bufferingStarted(). Shortcut for
+    // setStage(Stage::Buffering). Preserves existing Phase 2.2 wiring
+    // semantics; can mutate in place without re-fade if visible.
     void showBuffering();
 
     // Connect to any of: SidecarProcess::firstFrame, bufferingEnded,
@@ -44,14 +84,14 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    enum class Mode { Hidden, Loading, Buffering };
-
     void fadeIn();
     void fadeOut();
     void repositionCentered();
+    QString textForStage() const;
 
-    Mode                 m_mode = Mode::Hidden;
+    Stage                m_stage    = Stage::Opening;  // Unused until first show*/setStage.
+    bool                 m_visible  = false;           // Drives paint guard + fadeIn-vs-mutate-in-place.
     QString              m_filename;
-    qreal                m_opacity = 0.0;
+    qreal                m_opacity  = 0.0;
     QPropertyAnimation*  m_fadeAnim = nullptr;
 };

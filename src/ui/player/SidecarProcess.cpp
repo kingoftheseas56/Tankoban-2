@@ -558,6 +558,33 @@ void SidecarProcess::processLine(const QByteArray& line)
         // stalls and recovers multiple times during a session.
         emit bufferingEnded();
     }
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — classified open-pipeline
+    // event parsing. Sidecar Phase 1.1 emits these 6 session-scoped events
+    // as open_worker progresses (main.cpp probe_start/probe_done + main.cpp
+    // decoder_open_start + video_decoder.cpp decoder_open_done/
+    // first_packet_read/first_decoder_receive). Session-id filter above
+    // already dropped stale-session variants; we just dispatch to the
+    // typed signal. Payload fields (t_ms_from_open, analyze_duration_ms,
+    // stream_count, pts_ms, packet_size, stream_index) are discarded at
+    // the signal boundary — the generic `[Sidecar] RECV: <name>` log line
+    // at :437 preserves them for agent-side diagnostic reads, and
+    // consumers (LoadingOverlay::setStage transitions) don't need the
+    // per-event scalars. If Batch 1.3 StreamPlayerController consumer
+    // (Agent 4's surface) needs the data later, extend each signal
+    // signature additively at that point.
+    else if (name == "probe_start") {
+        emit probeStarted();
+    } else if (name == "probe_done") {
+        emit probeDone();
+    } else if (name == "decoder_open_start") {
+        emit decoderOpenStarted();
+    } else if (name == "decoder_open_done") {
+        emit decoderOpenDone();
+    } else if (name == "first_packet_read") {
+        emit firstPacketRead();
+    } else if (name == "first_decoder_receive") {
+        emit firstDecoderReceive();
+    }
 }
 
 void SidecarProcess::onProcessError(QProcess::ProcessError error)

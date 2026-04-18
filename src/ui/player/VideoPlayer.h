@@ -84,6 +84,36 @@ public:
     void setPersistenceMode(PersistenceMode mode);
     PersistenceMode persistenceMode() const { return m_persistenceMode; }
 
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — stream-mode flag that
+    // gates the SeekSlider buffered-range overlay paint (Batch 1.4). True
+    // for torrent-backed stream playback; false for library-file playback
+    // (local files have no buffer state — painting a "buffered" layer over
+    // a fully-on-disk file would be meaningless noise). Separate from
+    // PersistenceMode because the two flags serve orthogonal concerns:
+    // PersistenceMode gates library-progress save/read, setStreamMode
+    // gates buffered-range rendering. Coupling them via a single enum
+    // would pollute PersistenceMode's 8+ check-sites
+    // (VideoPlayer.cpp:341/:362/:394/:2384/:2425/:2458/:2579) with
+    // rendering concerns they shouldn't know about.
+    // StreamPage calls setStreamMode(true) before openFile for stream
+    // playback + setStreamMode(false) on close / file-switch, mirroring
+    // its existing setPersistenceMode bookend discipline.
+    void setStreamMode(bool on);
+    bool streamMode() const { return m_streamMode; }
+
+public slots:
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — slot consumed by
+    // StreamPlayerController::bufferedRangesChanged signal. Forwards the
+    // ranges to the SeekSlider overlay when m_streamMode is active;
+    // defensive guard drops calls in library mode so a stale connection
+    // doesn't paint over a library file. infoHash parameter unused by
+    // VideoPlayer directly (we don't care which torrent) but preserved
+    // for diagnostic traceability — agent-side log readers can correlate
+    // renders with hash across multi-stream scenarios.
+    void onBufferedRangesChanged(const QString& infoHash,
+                                 const QList<QPair<qint64, qint64>>& ranges,
+                                 qint64 fileSize);
+
     // Batch 5.3 (Tankostream Phase 5) — StreamPage pushes addon-fetched
     // subtitle tracks here after SubtitlesAggregator finishes for the
     // currently-playing stream. Forwarded to the SubtitleMenu. Passing
@@ -112,6 +142,22 @@ signals:
     // stays agnostic of stream-specific logic; receiver decides whether
     // a next episode exists and plays it.
     void streamNextEpisodeRequested();
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — re-emission of SidecarProcess
+    // classified open-pipeline events for downstream consumers outside
+    // the player domain (Batch 1.3: StreamPlayerController cross-correlates
+    // probe/decoder timings with StreamEngineStats for stream-mode-specific
+    // diagnostic log lines — Agent 4's surface, future consumer). Internal
+    // LoadingOverlay stage transitions (Phase 2.1) also trigger off these
+    // same sidecar-level signals via lambda connects in setupUi, so this
+    // signal layer is pure pass-through for external consumers — adding
+    // it now keeps the external contract stable when Batch 1.3 lands.
+    void probeStarted();
+    void probeDone();
+    void decoderOpenStarted();
+    void decoderOpenDone();
+    void firstPacketRead();
+    void firstDecoderReceive();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -391,6 +437,10 @@ private:
 
     // State
     PersistenceMode m_persistenceMode = PersistenceMode::LibraryVideos;
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — gates buffered-range
+    // overlay rendering in SeekSlider. False default = library mode (no
+    // overlay). StreamPage toggles via setStreamMode around openFile.
+    bool   m_streamMode = false;
     bool   m_isHdr      = false;
     bool   m_paused     = false;
     bool   m_seeking    = false;
@@ -491,4 +541,19 @@ private:
     double m_lastKnownPosSec   = 0.0;
     int    m_sidecarRetryCount = 0;
     QTimer m_sidecarRestartTimer;
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — 30-second first-frame
+    // watchdog. Starts on openFile entry, fires if no `firstFrame` event
+    // arrives within 30s, flips LoadingOverlay to Stage::TakingLonger
+    // ("Taking longer than expected — close to retry"). Cancelled on
+    // firstFrame (normal path) or teardownUi (file-switch / close).
+    // Duration chosen to match the sidecar's existing STREAM_TIMEOUT
+    // ("no data for 30 seconds" at video_decoder.cpp:1087) for internal
+    // consistency — if the sidecar itself gives up at 30s, user-facing
+    // UX should flip to the close-to-retry state at the same threshold.
+    // Identity is handled by explicit stop() at the three lifecycle
+    // sites (openFile re-arm, firstFrame dismiss, teardownUi teardown);
+    // Qt's single-thread GUI event loop serializes those handlers so
+    // no generation-race exists.
+    QTimer m_firstFrameWatchdog;
 };

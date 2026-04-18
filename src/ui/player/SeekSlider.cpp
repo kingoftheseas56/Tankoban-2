@@ -60,9 +60,65 @@ void SeekSlider::setChapterMarkers(const QList<qint64>& markersMs)
     update();
 }
 
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.4 — buffered-range overlay
+// setter. Stores the ranges + total file size, triggers repaint. Empty
+// list + zero totalBytes hides the overlay (library-file mode path).
+// Dedup is caller-side (StreamPlayerController's pollBufferedRangesOnce);
+// we accept whatever arrives and update unconditionally — a no-op repaint
+// from same-data is cheap at 1-2 Hz cadence, not worth guarding locally.
+void SeekSlider::setBufferedRanges(const QList<QPair<qint64, qint64>>& ranges,
+                                   qint64 totalBytes)
+{
+    m_bufferedRanges     = ranges;
+    m_bufferedTotalBytes = totalBytes;
+    update();
+}
+
 void SeekSlider::paintEvent(QPaintEvent* e)
 {
     QSlider::paintEvent(e);
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.4 — buffered-range overlay.
+    // Paints BEFORE chapter ticks so ticks overlay on top of buffered
+    // fills (piece boundaries don't occlude chapter boundaries). Paint
+    // order: groove (QSlider default) → buffered fills (here) → chapter
+    // ticks (below) → handle (QSlider default, last). Short-circuits when
+    // no buffered data (library-file mode: setBufferedRanges({}, 0) was
+    // called, OR stream hasn't received its first emit yet).
+    if (!m_bufferedRanges.isEmpty() && m_bufferedTotalBytes > 0) {
+        const QRect buffGroove = grooveRect();
+        if (buffGroove.width() > 0) {
+            QPainter bp(this);
+            bp.setRenderHint(QPainter::Antialiasing, false);
+            bp.setPen(Qt::NoPen);
+            // Warm-amber semi-transparent — lighter than sub-page amber
+            // fill (styled groundwork palette), warmer than add-page dark.
+            // Visible on dark add-page (past-end-of-played zone); subtle
+            // on amber sub-page (played zone; played bytes are by
+            // definition buffered — overlap is semantically redundant
+            // but visually harmonizes). Rule 14 technical default;
+            // flip at smoke per Hemanth preference.
+            bp.setBrush(QColor(180, 160, 120, 120));
+            const int fillY = buffGroove.y() + 1;
+            const int fillH = buffGroove.height() - 2;
+            if (fillH > 0) {
+                for (const auto& range : m_bufferedRanges) {
+                    // Range is {startByte, endByte} file-local, endByte exclusive.
+                    // Clamp to total-file bounds defensively (Batch 1.1 already
+                    // clamps but belt-and-suspenders against future API drift).
+                    const qint64 startByte = qBound<qint64>(0, range.first,  m_bufferedTotalBytes);
+                    const qint64 endByte   = qBound<qint64>(0, range.second, m_bufferedTotalBytes);
+                    if (endByte <= startByte) continue;
+                    const double fracStart = static_cast<double>(startByte) / m_bufferedTotalBytes;
+                    const double fracEnd   = static_cast<double>(endByte)   / m_bufferedTotalBytes;
+                    const int xStart = buffGroove.x() + static_cast<int>(fracStart * buffGroove.width());
+                    const int xEnd   = buffGroove.x() + static_cast<int>(fracEnd   * buffGroove.width());
+                    const int fillW  = qMax(1, xEnd - xStart);  // min 1px so tiny ranges stay visible
+                    bp.drawRect(xStart, fillY, fillW, fillH);
+                }
+            }
+        }
+    }
 
     if (m_chapterMarkersMs.isEmpty() || m_durationSec <= 0.0)
         return;

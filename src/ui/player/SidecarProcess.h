@@ -180,6 +180,33 @@ signals:
     void bufferingStarted();
     void bufferingEnded();
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — classified open-pipeline
+    // progress events. Sidecar Phase 1.1 emits 6 session-scoped events
+    // between `state_changed{opening}` and `first_frame` (previously a
+    // silent 10-70s window on slow opens). Qt consumers drive the
+    // LoadingOverlay's setStage (Phase 2.1) for classified user-facing
+    // text + can cross-correlate with StreamEngineStats for diagnostic
+    // cohesion (Batch 1.3, Agent 4's surface — future consumer).
+    // All 6 signals are session-filtered at the parser layer via the
+    // PLAYER_LIFECYCLE_FIX pattern; stale-session events dropped before
+    // emit. Payload data is discarded at the signal boundary (minimal
+    // signatures) because the current consumers (LoadingOverlay stage
+    // transitions) don't need the per-event scalars; stderr log + sidecar
+    // payload JSON retain the t_ms_from_open / analyze_duration_ms /
+    // stream_count / pts_ms / etc. for agent-side diagnostics via the
+    // generic `[Sidecar] RECV: <name>` log line at SidecarProcess.cpp:437.
+    // Rule-14 design pick: first_decoder_receive — NOT first_packet_read
+    // — drives the DecodingFirstFrame stage transition in Phase 2.1
+    // (packet-read success before receive-frame success can stall on
+    // decoder back-pressure; receive is the honest "making progress"
+    // signal).
+    void probeStarted();
+    void probeDone();
+    void decoderOpenStarted();
+    void decoderOpenDone();
+    void firstPacketRead();
+    void firstDecoderReceive();
+
     void processClosed();
 
     // Batch 6.1 (Player Polish Phase 6) — fires when QProcess::finished

@@ -4,6 +4,8 @@
 #include <QTimer>
 #include <QString>
 #include <QJsonObject>
+#include <QList>
+#include <QPair>
 
 #include "core/stream/addon/StreamInfo.h"
 
@@ -61,10 +63,34 @@ public:
     bool isActive() const { return m_active; }
     QString currentInfoHash() const { return m_infoHash; }
 
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — on-demand buffered-range
+    // snapshot + emit. Called from pollStreamStatus each startup tick AND
+    // from StreamPage's progressUpdated lambda during playback (at the same
+    // site as updatePlaybackWindow's 2s-rate-limited deadline retarget, so
+    // buffered-range updates at ~2 Hz during playback without adding a new
+    // timer). Kept as a public method so StreamPage's playback lifecycle
+    // drives the call — avoids mutating StreamPlayerController's own
+    // lifecycle (onStreamReady/stopStream) which Agent 4 flagged as
+    // lifecycle-critical post-STREAM_LIFECYCLE_FIX (Rule 10 chat.md:3354).
+    // No-op if m_infoHash is empty (pre-metadata) or the current stream
+    // is non-magnet (HTTP/URL direct-play). Equality-deduped against the
+    // last emitted ranges+fileSize so same-state polls don't repaint.
+    void pollBufferedRangesOnce();
+
 signals:
     void bufferUpdate(const QString& statusText, double percent);
     void readyToPlay(const QString& httpUrl);
     void streamFailed(const QString& message);
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — buffered-range snapshot
+    // for SeekSlider overlay paint. Ranges are file-local {startByte,
+    // endByte} pairs (endByte exclusive), sorted, non-overlapping. fileSize
+    // ridealong saves consumer from a second StreamEngine lookup. Emitted
+    // only when snapshot differs from last emit (equality-deduped).
+    // Consumer: VideoPlayer::onBufferedRangesChanged (Batch 1.3) → forwards
+    // to SeekSlider::setBufferedRanges (Batch 1.4) when m_streamMode true.
+    void bufferedRangesChanged(const QString& infoHash,
+                               const QList<QPair<qint64, qint64>>& ranges,
+                               qint64 fileSize);
     // Signal signature extended 2026-04-16 (Batch 2.1). StreamPage's existing
     // connect to `&StreamPage::onStreamStopped` (zero-arg slot) stays
     // connection-compatible per Qt's "slot can have fewer args than signal"
@@ -126,4 +152,23 @@ private:
     static constexpr int METADATA_STALL_MS     = 60000;
 
     QString m_lastErrorCode;
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — equality-dedup state for
+    // bufferedRangesChanged emit. Skips re-emit when the snapshot matches
+    // the last emitted value, so steady-state polls don't trigger SeekSlider
+    // repaints when no new pieces have completed. Reset by clearSessionState
+    // alongside m_infoHash etc. so a new session starts with a clean dedup
+    // slate (first emit always fires).
+    QList<QPair<qint64, qint64>> m_lastBufferedRanges;
+    qint64                       m_lastBufferedFileSize = 0;
+
+    // Session-scoped cache of the current stream's file-total byte size,
+    // refreshed on every pollStreamStatus tick from streamFile()'s result.
+    // Preserved after pollStreamStatus stops (readyToStart) so during-
+    // playback pollBufferedRangesOnce calls from StreamPage's
+    // progressUpdated lambda have a ready value without a redundant
+    // streamFile() invocation (streamFile has streaming-server side
+    // effects beyond simple metadata lookup; pollBufferedRangesOnce
+    // only needs the byte-size scalar).
+    qint64 m_currentFileSize = 0;
 };

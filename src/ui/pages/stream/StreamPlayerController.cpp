@@ -113,6 +113,15 @@ void StreamPlayerController::clearSessionState()
     m_selectedStream = {};
     m_pollCount = 0;
     m_lastErrorCode.clear();
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — reset buffered-range
+    // dedup state + file-size cache so the next session's first emit
+    // always fires (forces SeekSlider to paint from a clean slate instead
+    // of inheriting the previous session's last snapshot as a false
+    // "unchanged" match), and the fileSize cache doesn't leak across
+    // sessions.
+    m_lastBufferedRanges.clear();
+    m_lastBufferedFileSize = 0;
+    m_currentFileSize      = 0;
 }
 
 void StreamPlayerController::onEngineStreamError(const QString& infoHash,
@@ -156,6 +165,14 @@ void StreamPlayerController::pollStreamStatus()
 
     if (m_infoHash.isEmpty() && !result.infoHash.isEmpty())
         m_infoHash = result.infoHash;
+
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — refresh file-size cache
+    // on every poll while we're still in startup phase. Value stabilizes
+    // once metadata lands + stays valid through playback (file byte-size
+    // is immutable post-metadata-ready). pollBufferedRangesOnce reads
+    // this cache in place of a fresh streamFile() call.
+    if (result.fileSize > 0)
+        m_currentFileSize = result.fileSize;
 
     if (result.ok && result.readyToStart) {
         m_pollTimer.stop();
@@ -220,9 +237,45 @@ void StreamPlayerController::pollStreamStatus()
     double bufferPercent = result.fileProgress * 100.0;
     emit bufferUpdate(statusText, bufferPercent);
 
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — startup-phase buffered-
+    // range emit. Same call shape as the playback-phase call from
+    // StreamPage's progressUpdated lambda, so the SeekSlider receives
+    // consistent updates across both lifecycle phases via a single signal.
+    pollBufferedRangesOnce();
+
     ++m_pollCount;
     if (m_pollCount == POLL_SLOW_AFTER && m_pollTimer.interval() != POLL_SLOW_MS)
         m_pollTimer.setInterval(POLL_SLOW_MS);
+}
+
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — on-demand buffered-range
+// snapshot + emit. Called from two sites:
+//   1. pollStreamStatus (startup phase, until readyToStart stops the timer)
+//   2. StreamPage's progressUpdated lambda (playback phase — 2s-rate-
+//      limited at the same site as updatePlaybackWindow). StreamPage owns
+//      the playback lifecycle hook so this method stays pull-driven
+//      rather than timer-pushed, avoiding a lifecycle change in
+//      StreamPlayerController that Agent 4 flagged as a sensitive site
+//      post-STREAM_LIFECYCLE_FIX (Rule 10 chat.md:3354).
+// Reads m_currentFileSize (cached from pollStreamStatus's streamFile
+// result). Equality-deduped against m_lastBufferedRanges +
+// m_lastBufferedFileSize so steady-state polls don't trigger SeekSlider
+// repaints.
+void StreamPlayerController::pollBufferedRangesOnce()
+{
+    if (!m_active) return;
+    if (m_infoHash.isEmpty()) return;  // Pre-metadata or non-magnet stream.
+    if (!m_engine) return;
+    if (m_currentFileSize <= 0) return;  // Metadata not ready yet; next poll.
+
+    QList<QPair<qint64, qint64>> ranges = m_engine->contiguousHaveRanges(m_infoHash);
+
+    if (ranges == m_lastBufferedRanges && m_currentFileSize == m_lastBufferedFileSize)
+        return;  // Unchanged — skip emit.
+
+    m_lastBufferedRanges   = ranges;
+    m_lastBufferedFileSize = m_currentFileSize;
+    emit bufferedRangesChanged(m_infoHash, ranges, m_currentFileSize);
 }
 
 void StreamPlayerController::onStreamReady(const QString& url)

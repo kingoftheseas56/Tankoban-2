@@ -232,6 +232,22 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_sidecarRestartTimer.setSingleShot(true);
     connect(&m_sidecarRestartTimer, &QTimer::timeout, this, &VideoPlayer::restartSidecar);
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — 30s first-frame watchdog.
+    // Single-shot; armed on openFile entry, cancelled on firstFrame or
+    // teardownUi. Fires setStage(TakingLonger) when first-frame doesn't
+    // arrive within 30s (duration chosen to match the sidecar's existing
+    // STREAM_TIMEOUT "no data for 30 seconds" at video_decoder.cpp:1087
+    // so UX aligns with the sidecar's own give-up threshold). Explicit
+    // stop() at all three sites (openFile re-arm, firstFrame dismiss,
+    // teardownUi teardown) — Qt single-thread event loop serializes
+    // those handlers so no generation-check race exists.
+    m_firstFrameWatchdog.setSingleShot(true);
+    connect(&m_firstFrameWatchdog, &QTimer::timeout, this, [this]() {
+        if (m_loadingOverlay) {
+            m_loadingOverlay->setStage(LoadingOverlay::Stage::TakingLonger);
+        }
+    });
+
     // SubtitleOverlay QLabel is unused under the current native sidecar
     // renderer (libass frame-blend at native_sidecar/src/subtitle_renderer.cpp
     // render_blend composites subs into the video BGRA frame, not via a
@@ -305,6 +321,13 @@ void VideoPlayer::openFile(const QString& filePath,
     }
     m_pendingFile = filePath;
     m_paused = false;
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — arm 30s first-frame watchdog.
+    // Single-shot; teardownUi above already stop()ped any prior-session
+    // armed timer, but start() is idempotent w.r.t. reset so safe either
+    // way. firstFrame connection (setupUi) stops it on normal open.
+    m_firstFrameWatchdog.start(30 * 1000);
+
     // Batch 6.1 — fresh user intent clears crash-retry state.
     m_sidecarRetryCount = 0;
     m_lastKnownPosSec   = 0.0;
@@ -496,6 +519,14 @@ void VideoPlayer::teardownUi()
     // stop / new-file-open supersedes in-flight auto-restart.
     m_sidecarRestartTimer.stop();
 
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — cancel any armed first-
+    // frame watchdog. Covers both user-close (stopPlayback → teardownUi)
+    // and file-switch (openFile → teardownUi pre-new-open). openFile
+    // re-arms the timer post-teardownUi so file-switch cases transition
+    // cleanly; this stop() call prevents a close-mid-open from leaving
+    // the timer running to fire over a dismissed overlay.
+    m_firstFrameWatchdog.stop();
+
     m_canvas->stopPolling();
     m_canvas->detachShm();
     m_canvas->detachD3D11Texture();  // release imported shared texture
@@ -534,6 +565,12 @@ void VideoPlayer::teardownUi()
         m_seekBar->blockSignals(true);
         m_seekBar->setValue(0);
         m_seekBar->setDurationSec(0.0);
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — clear buffered-range
+        // overlay on teardown so stale ranges from the previous session
+        // don't paint over the next open (stream → library switch or a
+        // fresh stream open). Empty-list + zero-fileSize hits the paint
+        // guard in setBufferedRanges and the overlay short-circuits.
+        m_seekBar->setBufferedRanges({}, 0);
         m_seekBar->blockSignals(false);
     }
     if (m_trackChip)   m_trackChip->setText(QStringLiteral("Tracks"));
@@ -611,6 +648,35 @@ void VideoPlayer::setPersistenceMode(PersistenceMode mode)
     // flipping mode during active playback affects subsequent ticks,
     // not retroactively.
     m_persistenceMode = mode;
+}
+
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — stream-mode toggle. Sibling
+// of setPersistenceMode; caller (StreamPage) pairs setStreamMode(true) with
+// its existing setPersistenceMode(None) before openFile for stream playback,
+// and setStreamMode(false) + setPersistenceMode(LibraryVideos) on close /
+// file-switch. When false, the next bufferedRangesChanged signal that
+// arrives is short-circuited in onBufferedRangesChanged. When true, ranges
+// forward to the SeekSlider overlay. No effect on currently-painted state;
+// teardownUi handles the clear separately on close so stale ranges don't
+// bleed into the next file.
+void VideoPlayer::setStreamMode(bool on)
+{
+    m_streamMode = on;
+}
+
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — buffered-range snapshot
+// slot. Wired by StreamPage from StreamPlayerController::bufferedRangesChanged
+// around stream-session lifecycle. Defensive stream-mode guard prevents a
+// stale connection from painting over a library-file session. infoHash
+// unused directly but preserved for log correlation across multi-stream
+// scenarios. Forwards to SeekSlider::setBufferedRanges (Batch 1.4).
+void VideoPlayer::onBufferedRangesChanged(const QString& /*infoHash*/,
+                                          const QList<QPair<qint64, qint64>>& ranges,
+                                          qint64 fileSize)
+{
+    if (!m_streamMode) return;
+    if (!m_seekBar)   return;
+    m_seekBar->setBufferedRanges(ranges, fileSize);
 }
 
 // ── Sidecar event handlers ──────────────────────────────────────────────────
@@ -1381,6 +1447,28 @@ void VideoPlayer::buildUI()
     // over the canvas, bound to Phase 1.2 + 2.2 signals; dismisses on
     // first_frame or explicit playerIdle / bufferingEnded. Mouse-
     // transparent so controls below stay usable.
+    //
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — upgraded to classified
+    // stage transitions via LoadingOverlay::setStage. Sub-stage wiring
+    // connects SidecarProcess Phase 1.2 events (probe_start / probe_done
+    // / decoder_open_start / decoder_open_done / first_packet_read /
+    // first_decoder_receive) into stage transitions. Rule-14 picks:
+    //   - probeStarted → Probing (probe_done doesn't transition; we
+    //     stay in Probing until decoder_open_start, which happens
+    //     right after probe succeeds anyway)
+    //   - decoderOpenStarted → OpeningDecoder (decoder_open_done
+    //     doesn't transition; we stay in OpeningDecoder until
+    //     first_decoder_receive, which is the honest "making progress"
+    //     signal)
+    //   - firstPacketRead is connected for future diagnostics but does
+    //     NOT drive a stage transition — packet-read success before
+    //     receive-frame success can stall indefinitely on decoder back-
+    //     pressure (libavcodec internal buffering); the DecodingFirstFrame
+    //     stage waits for the more honest first_decoder_receive.
+    //   - firstDecoderReceive → DecodingFirstFrame
+    // Each lambda also re-emits the matching VideoPlayer-level signal
+    // so Batch 1.3 (Agent 4's StreamPlayerController consumer, future)
+    // has a stable pass-through contract.
     m_loadingOverlay = new LoadingOverlay(this);
     connect(this, &VideoPlayer::playerOpeningStarted,
             m_loadingOverlay, &LoadingOverlay::showLoading);
@@ -1396,6 +1484,49 @@ void VideoPlayer::buildUI()
     // QJsonObject payload is discarded by dismiss().
     connect(m_sidecar, &SidecarProcess::firstFrame,
             m_loadingOverlay, &LoadingOverlay::dismiss);
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — cancel the 30s watchdog on
+    // normal first-frame arrival. Without this, a fast open (sub-30s)
+    // would leave the timer running until timeout, which would then try
+    // to flip a dismissed overlay back to TakingLonger — harmless but
+    // confusing in logs. Explicit stop() is clean.
+    connect(m_sidecar, &SidecarProcess::firstFrame, this, [this]() {
+        m_firstFrameWatchdog.stop();
+    });
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — sub-stage wiring + Batch 1.3
+    // re-emit pass-through. One lambda per sidecar signal; each drives a
+    // stage transition (or not, per Rule-14 picks above) + re-emits on
+    // VideoPlayer. Lambdas capture `this` — safe because SidecarProcess
+    // is owned by VideoPlayer (parent), so connection lifetime is bounded.
+    connect(m_sidecar, &SidecarProcess::probeStarted, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::Probing);
+        emit probeStarted();
+    });
+    connect(m_sidecar, &SidecarProcess::probeDone, this, [this]() {
+        // No stage transition — stay in Probing. Next transition fires
+        // on decoder_open_start (typically right after probe success).
+        emit probeDone();
+    });
+    connect(m_sidecar, &SidecarProcess::decoderOpenStarted, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::OpeningDecoder);
+        emit decoderOpenStarted();
+    });
+    connect(m_sidecar, &SidecarProcess::decoderOpenDone, this, [this]() {
+        // No stage transition — stay in OpeningDecoder. Next transition
+        // fires on first_decoder_receive (honest forward-progress signal).
+        emit decoderOpenDone();
+    });
+    connect(m_sidecar, &SidecarProcess::firstPacketRead, this, [this]() {
+        // No stage transition — Rule-14 pick: packet-read success before
+        // receive-frame success can stall on decoder back-pressure;
+        // DecodingFirstFrame waits for first_decoder_receive instead.
+        // Re-emit preserved for Batch 1.3 diagnostic correlation.
+        emit firstPacketRead();
+    });
+    connect(m_sidecar, &SidecarProcess::firstDecoderReceive, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::DecodingFirstFrame);
+        emit firstDecoderReceive();
+    });
 
     // Track popover (audio/subtitle track picker — opened by Tracks chip)
     m_trackPopover = new TrackPopover(this);
