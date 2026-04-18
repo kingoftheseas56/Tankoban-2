@@ -779,3 +779,36 @@ Codex audit item #4 (main-app verification gap) parked from 2026-04-18 discussio
 Stage 2 (GoogleTest harness for `StreamPieceWaiter` null-engine path coverage + `src/tests/` directory) lands in follow-up commit.
 
 READY TO COMMIT — [Agent 0, main-app verification Stage 1 — build_check.bat]: New build_check.bat at repo root (~40 lines). Wraps `cmake --build out/ --target Tankoban` with exit-code taxonomy (0/2/3/propagated), stdout status line (`BUILD OK` / `BUILD FAILED exit=<n>`), 30-line cl.exe tail on failure via PowerShell Get-Content, full log at `out/_build_check.log`. Agent-safe from bash shells on Windows. Does NOT auto-configure, does NOT launch exe, does NOT replace Hemanth smoke (GUI/swarm/GPU still need `build_and_run.bat`). Plan at C:\Users\Suprabha\.claude\plans\plan-for-stages-1-2-purrfect-pillow.md approved by Hemanth 2026-04-18; landing in parallel with Agent 4 P3. Stage 2 (GoogleTest harness) follows | files: build_check.bat, agents/chat.md
+
+
+---
+
+## Agent 0 — 2026-04-18 — Main-app verification gap Stage 2: GoogleTest harness + first test shipped
+
+Stage 2 lands per plan at `C:\Users\Suprabha\.claude\plans\plan-for-stages-1-2-purrfect-pillow.md` §"Stage 2".
+
+**What shipped:**
+- [src/tests/CMakeLists.txt](src/tests/CMakeLists.txt) — mirrors [native_sidecar/tests/CMakeLists.txt](native_sidecar/tests/CMakeLists.txt) pattern: monolithic test exe `tankoban_tests` bundling `StreamPieceWaiter.cpp` + test file directly (no library link). `qt_add_executable` for AUTOMOC + Q_OBJECT support. Links only `Qt6::Core` (no Widgets/Network/OpenGL/WebEngine). `set_tests_properties ENVIRONMENT "TANKOBAN_STREAM_TELEMETRY=0;STREAM_PIECE_WAITER_POLL=1"` to suppress telemetry writes.
+- [src/tests/test_stream_piece_waiter.cpp](src/tests/test_stream_piece_waiter.cpp) — 4 gtest TESTs covering Option A (null-engine short-circuit + timeout + destructor + cancellation-flag-respected-through-short-circuit regression sentinel). Custom `main()` bootstraps `QCoreApplication` before `InitGoogleTest` (required because `StreamPieceWaiter` ctor calls `QCoreApplication::applicationDirPath()` for telemetry path cache).
+- [src/tests/README.md](src/tests/README.md) — copy-pattern guide for future test additions + explicit non-features (no FetchContent / no gmock / no Qt::Test / no widgets / no libtorrent).
+- Top-level [CMakeLists.txt](CMakeLists.txt) EOF append — gtest `find_path`/`find_library` conditional block mirroring [native_sidecar/CMakeLists.txt:207-218](native_sidecar/CMakeLists.txt). Configure stays green on machines without gtest.
+
+**Option A scope justification:** covers null-engine short-circuit path + timeout + destructor + cancellation — proves harness wires up + compiles + runs headless without pulling libtorrent headers into the test target. Notification-path coverage (`onPieceFinished` → `wakeAll` fast path) deferred to Stage 3 when another testable primitive lands (likely P3 Prioritizer from Agent 4) — two call sites justifies the refactor choice (Option B bundle TorrentEngine.cpp vs Option C extract PieceSignalSource interface) better than one.
+
+**Running tests:**
+```bash
+cd out
+ctest --output-on-failure -R tankoban_tests
+```
+
+**Reconfiguring first time after this ship:** `cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release <existing flags>` → expect `-- GoogleTest found — building tankoban_tests` in configure output. Build: `cmake --build out --target tankoban_tests`. Run: `ctest -R tankoban_tests`.
+
+**What ctest does NOT replace:** GUI paint, real libtorrent swarm, GPU/D3D11, sidecar IPC, end-to-end playback. Those stay Hemanth smoke territory.
+
+**For Agent 4:** P3 Prioritizer / SeekClassifier can ship WITHOUT tests; Stage 3 follow-up adds Prioritizer + StreamPieceWaiter notification tests in a separate commit. No expectation that P3 ships with test coverage.
+
+**Rollback shape:** Stage 2 is revertible by reverting the EOF block in top-level CMakeLists.txt. The Tankoban target is untouched — the test block is purely additive. Without the block, `src/tests/` is orphan (ignored by CMake). Zero collateral.
+
+**Stages 3+4 (deferred, out of scope):** Stage 3 — notification-path coverage (Option B or C). Stage 4 — `QT_QPA_PLATFORM=offscreen` widget-level tests. Revisit when justified by concrete test sites.
+
+READY TO COMMIT — [Agent 0, main-app verification Stage 2 — GoogleTest harness + StreamPieceWaiter first test]: New src/tests/{CMakeLists.txt, test_stream_piece_waiter.cpp, README.md} + top-level CMakeLists.txt EOF gtest block append (mirrors native_sidecar/CMakeLists.txt:207-218 pattern). `qt_add_executable(tankoban_tests)` with Qt6::Core + GTEST_LIBRARY + GTEST_MAIN_LIBRARY. 4 TESTs covering StreamPieceWaiter Option A: null-engine short-circuit + non-positive-timeout + dtor-with-no-waiters + cancel-flag-respected-through-short-circuit regression sentinel. Custom main() bootstraps QCoreApplication. ENVIRONMENT property suppresses stream_telemetry.log writes during ctest. Configure green on machines without gtest (conditional guard). Stages 3+4 deferred. Agent 4 P3 can ship without tests; Stage 3 adds notification-path tests retroactively when next testable primitive lands | files: src/tests/CMakeLists.txt, src/tests/test_stream_piece_waiter.cpp, src/tests/README.md, CMakeLists.txt, agents/chat.md

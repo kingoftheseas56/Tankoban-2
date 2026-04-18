@@ -402,3 +402,19 @@ target_precompile_headers(Tankoban PRIVATE
     <algorithm>
     <functional>
 )
+
+# ── C++ unit tests (optional — only if GoogleTest found) ────────────────────
+# Mirror of native_sidecar/CMakeLists.txt:207-218 pattern. Configure stays
+# green on machines without GoogleTest; tests build/run only when present.
+set(GTEST_ROOT "C:/tools/googletest" CACHE PATH "GoogleTest install prefix")
+find_path(GTEST_INCLUDE_DIR gtest/gtest.h HINTS "${GTEST_ROOT}/include")
+find_library(GTEST_LIBRARY gtest HINTS "${GTEST_ROOT}/lib")
+find_library(GTEST_MAIN_LIBRARY gtest_main HINTS "${GTEST_ROOT}/lib")
+
+if(GTEST_INCLUDE_DIR AND GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
+    message(STATUS "GoogleTest found — building tankoban_tests")
+    enable_testing()
+    add_subdirectory(src/tests)
+else()
+    message(STATUS "GoogleTest not found — skipping C++ unit tests")
+endif()
