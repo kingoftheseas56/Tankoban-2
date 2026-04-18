@@ -1272,6 +1272,91 @@ qint64 TorrentEngine::contiguousBytesFromOffset(const QString& infoHash,
     return counted;
 }
 
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.1 — per-file contiguous-have
+// byte-range projection. Feeds StreamEngine::contiguousHaveRanges, which
+// feeds the SeekSlider gray-bar paint path (closes audit P0-1 buffered-range
+// surface). Pure read; merges adjacent have-pieces into single spans so the
+// caller repaints ~O(N_spans) rather than O(N_pieces). Semantics match the
+// have_piece() walk in contiguousBytesFromOffset above (fully downloaded +
+// written to disk). Agent 4B pre-offered Axis 1 HELP covers this addition.
+QList<QPair<qint64, qint64>> TorrentEngine::fileByteRangesOfHavePieces(
+    const QString& infoHash, int fileIndex) const
+{
+    QList<QPair<qint64, qint64>> result;
+
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return result;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return result;
+
+    auto& fs = ti->files();
+    lt::file_index_t fi(fileIndex);
+    if (fileIndex < 0 || fileIndex >= fs.num_files()) return result;
+
+    const qint64 fileSize = fs.file_size(fi);
+    if (fileSize <= 0) return result;
+
+    const qint64 fileAbsStart = fs.file_offset(fi);
+    const qint64 fileAbsEnd   = fileAbsStart + fileSize;
+
+    const int pieceLen = ti->piece_length();
+    if (pieceLen <= 0) return result;
+
+    // Resolve the file's piece range via the same map_file idiom used by
+    // pieceRangeForFileOffset. fileSize > 0 guarantees the 1-byte lookups
+    // land inside the file's byte space.
+    lt::peer_request startReq = ti->map_file(fi, 0, 1);
+    lt::peer_request endReq   = ti->map_file(fi, fileSize - 1, 1);
+    const int firstPiece = static_cast<int>(startReq.piece);
+    const int lastPiece  = static_cast<int>(endReq.piece);
+    if (firstPiece < 0 || lastPiece < firstPiece) return result;
+
+    qint64 runStart = -1;
+    qint64 runEnd   = -1;
+    const auto flushRun = [&]() {
+        if (runStart >= 0 && runEnd > runStart) {
+            result.append({ runStart, runEnd });
+        }
+        runStart = runEnd = -1;
+    };
+
+    for (int p = firstPiece; p <= lastPiece; ++p) {
+        if (!it->handle.have_piece(lt::piece_index_t(p))) {
+            flushRun();
+            continue;
+        }
+
+        // Torrent-absolute byte range of this piece, intersected with the
+        // file's byte space. piece_size() handles short last-piece +
+        // cross-file boundary cases that pieceLen alone would miscompute.
+        const qint64 pieceAbsStart = static_cast<qint64>(p) * pieceLen;
+        const qint64 pieceAbsEnd   = pieceAbsStart
+            + static_cast<qint64>(ti->piece_size(lt::piece_index_t(p)));
+        const qint64 isectAbsStart = qMax(pieceAbsStart, fileAbsStart);
+        const qint64 isectAbsEnd   = qMin(pieceAbsEnd, fileAbsEnd);
+        if (isectAbsEnd <= isectAbsStart) continue;
+
+        const qint64 localStart = isectAbsStart - fileAbsStart;
+        const qint64 localEnd   = isectAbsEnd   - fileAbsStart;
+
+        if (runStart < 0) {
+            runStart = localStart;
+            runEnd   = localEnd;
+        } else if (localStart == runEnd) {
+            runEnd = localEnd;
+        } else {
+            flushRun();
+            runStart = localStart;
+            runEnd   = localEnd;
+        }
+    }
+    flushRun();
+
+    return result;
+}
+
 // STREAM_ENGINE_FIX Phase 2.6.1 — per-piece have state. Diagnostic-only;
 // const + lock-protected. Returns false on unknown infoHash, invalid handle,
 // out-of-range pieceIdx, or any libtorrent error path. Same have_piece()
@@ -1358,5 +1443,48 @@ void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int
 void TorrentEngine::clearPieceDeadlines(const QString&) {}
 QPair<int, int> TorrentEngine::pieceRangeForFileOffset(const QString&, int, qint64, qint64) const { return {-1, -1}; }
 qint64 TorrentEngine::contiguousBytesFromOffset(const QString&, int, qint64) const { return 0; }
+QList<QPair<qint64, qint64>> TorrentEngine::fileByteRangesOfHavePieces(const QString&, int) const { return {}; }
 
 #endif
+
+// ── STREAM_ENGINE_FIX Phase 3.1 — default tracker pool (Agent 4B) ──────────
+//
+// Library-path-independent (no libtorrent call) so the accessor is defined
+// once outside the HAS_LIBTORRENT branches. 25 publicly-known reliable UDP
+// trackers curated as of 2026-04-18 — superset of the existing
+// kFallbackTrackers list in StreamAggregator.cpp:32 so consumer migration
+// preserves back-compat. Zero runtime mutation; static local + const
+// reference return. Callers must not assume ordering beyond "most
+// broadly-shared first" — Agent 4 Phase 3.2 append-injection can slice
+// arbitrarily.
+const QStringList& TorrentEngine::defaultTrackerPool()
+{
+    static const QStringList pool = {
+        QStringLiteral("udp://tracker.opentrackr.org:1337/announce"),
+        QStringLiteral("udp://tracker.openbittorrent.com:6969/announce"),
+        QStringLiteral("udp://open.stealth.si:80/announce"),
+        QStringLiteral("udp://tracker.torrent.eu.org:451/announce"),
+        QStringLiteral("udp://open.demonii.com:1337/announce"),
+        QStringLiteral("udp://exodus.desync.com:6969/announce"),
+        QStringLiteral("udp://explodie.org:6969/announce"),
+        QStringLiteral("udp://tracker.dler.org:6969/announce"),
+        QStringLiteral("udp://open.tracker.cl:1337/announce"),
+        QStringLiteral("udp://tracker.cyberia.is:6969/announce"),
+        QStringLiteral("udp://tracker.moeking.me:6969/announce"),
+        QStringLiteral("udp://tracker.tiny-vps.com:6969/announce"),
+        QStringLiteral("udp://tracker.theoks.net:6969/announce"),
+        QStringLiteral("udp://tracker.birkenwald.de:6969/announce"),
+        QStringLiteral("udp://tracker.altrosky.nl:6969/announce"),
+        QStringLiteral("udp://tracker.auctor.tv:6969/announce"),
+        QStringLiteral("udp://tracker.internetwarriors.net:1337/announce"),
+        QStringLiteral("udp://tracker-udp.gbitt.info:80/announce"),
+        QStringLiteral("udp://tracker.uw0.xyz:6969/announce"),
+        QStringLiteral("udp://tracker.bittor.pw:1337/announce"),
+        QStringLiteral("udp://ipv4.tracker.harry.lu:80/announce"),
+        QStringLiteral("udp://retracker.lanta-net.ru:2710/announce"),
+        QStringLiteral("udp://bt1.archive.org:6969/announce"),
+        QStringLiteral("udp://bt2.archive.org:6969/announce"),
+        QStringLiteral("udp://p4p.arenabg.com:1337/announce"),
+    };
+    return pool;
+}

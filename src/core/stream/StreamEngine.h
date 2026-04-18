@@ -161,6 +161,23 @@ public:
     // Returns sentinel-defaulted struct for unknown infoHash.
     StreamEngineStats statsSnapshot(const QString& infoHash) const;
 
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.1 — buffered-range
+    // observability for the active stream's selected file. Returns sorted
+    // non-overlapping {startByte, endByte} ranges (file-local, endByte
+    // exclusive) of fully-downloaded pieces within the selected file.
+    // Thin wrapper over TorrentEngine::fileByteRangesOfHavePieces that
+    // resolves the selected file index under m_mutex. Returns empty list
+    // for unknown infoHash, not-yet-metadata-ready streams, or invalid
+    // selection. Safe to poll at the 1 Hz cadence SeekSlider will consume
+    // it at; cost is O(N_pieces) under m_mutex + TorrentEngine::m_mutex.
+    //
+    // Consumer: StreamPlayerController::pollStreamStatus (Batch 1.2) emits
+    // the snapshot via bufferedRangesChanged signal directly to VideoPlayer
+    // per Agent 3's Rule-14 reshape of TODO §Batch-1.2 (skips sidecar
+    // round-trip — sidecar has no use for this data, direct main-app flow
+    // matches existing bufferUpdate pattern).
+    QList<QPair<qint64, qint64>> contiguousHaveRanges(const QString& infoHash) const;
+
     // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
     // retargeting. Called from the StreamPage progressUpdated lambda,
     // rate-limited by the caller (currently once per 2s). Looks up the

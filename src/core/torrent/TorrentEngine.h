@@ -217,6 +217,33 @@ public:
     qint64 contiguousBytesFromOffset(const QString& infoHash, int fileIndex,
                                      qint64 fileOffset) const;
 
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.1 — per-file contiguous-have
+    // byte-range projection. Walks the file's piece range, collects every
+    // have_piece()-true piece, translates each to its file-local byte range
+    // (clamped to file boundaries and piece_size() for the final piece),
+    // then merges adjacent ranges into a single span. Returns sorted non-
+    // overlapping {startByte, endByte} pairs in file-local coordinates
+    // ([0, fileSize) range, endByte is exclusive). Pure read — locks
+    // m_mutex, no behavior change. Stub returns empty list on no-libtorrent
+    // build. Agent 4B's pre-offered Axis 1 HELP (chat.md:555-561) covers
+    // this addition — same const-read shape as havePiece +
+    // contiguousBytesFromOffset; flagged here for 4B visibility.
+    QList<QPair<qint64, qint64>> fileByteRangesOfHavePieces(
+        const QString& infoHash, int fileIndex) const;
+
+    // STREAM_ENGINE_FIX Phase 3.1 — default tracker pool for magnet
+    // augmentation below the <5 add-on-tracker threshold (Axis 7). Compile-
+    // time-constant list of 25 publicly-known reliable UDP trackers; no
+    // network fetch, no runtime mutation, zero surface for external
+    // pollution. Agent 4B (Sources) curates the roster; Agent 4 Phase 3.2
+    // consumes from StreamEngine magnet construction. Library-path-
+    // independent — no libtorrent call, same list in stub build path.
+    // Note: pre-existing kFallbackTrackers in StreamAggregator.cpp:32 (12-
+    // tracker zero-trackers-only fallback) is a subset of this pool;
+    // Agent 4 Phase 3.2 can migrate that consumer to this canonical pool
+    // during threshold-change work if desired.
+    static const QStringList& defaultTrackerPool();
+
 signals:
     void metadataReady(const QString& infoHash, const QString& name,
                        qint64 totalSize, const QJsonArray& files);

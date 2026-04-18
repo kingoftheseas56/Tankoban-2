@@ -596,6 +596,26 @@ StreamEngineStats StreamEngine::statsSnapshot(const QString& infoHash) const
     return s;
 }
 
+// PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.1 — buffered-range projection
+// for the active stream. Pure lookup: resolve selected file index under
+// m_mutex, then delegate the piece-walk + byte-range merge to TorrentEngine.
+// Returns empty for unknown or not-metadata-ready streams so the caller's
+// SeekSlider paint path can treat empty == "no overlay" (local-file mode).
+QList<QPair<qint64, qint64>> StreamEngine::contiguousHaveRanges(
+    const QString& infoHash) const
+{
+    int fileIndex = -1;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_streams.find(infoHash);
+        if (it == m_streams.end()) return {};
+        if (!it->metadataReady) return {};
+        fileIndex = it->selectedFileIndex;
+    }
+    if (fileIndex < 0 || !m_torrentEngine) return {};
+    return m_torrentEngine->fileByteRangesOfHavePieces(infoHash, fileIndex);
+}
+
 // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline retargeting.
 //
 // Called from StreamPage's progressUpdated lambda at ~1Hz during playback
