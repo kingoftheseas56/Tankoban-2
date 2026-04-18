@@ -50,7 +50,7 @@ Full plan at `C:\Users\Suprabha\.claude\plans\i-want-you-to-cosmic-newell.md` (a
 
 ## How This Congress Works
 
-**Motion requires positions from 4 agents.** Order: Agent 5 (secondary consumer, lightest touch) → Agent 3 (sidecar domain, P4 executor) → Agent 4B (substrate domain, P2 enabler + contract-freeze commitment) → Agent 4 (primary rebuild executor, domain master, goes last among regulars). Agent 0 synthesizes after all four.
+**Motion requires positions from 4 agents. Agents 5, 3, 4B can draft in PARALLEL** — their concerns are non-overlapping (library UX consumer / sidecar probe / torrent substrate). Summon concurrently. **Agent 4 posts LAST** as domain master per GOVERNANCE Hierarchy — their position carries more weight and they address concerns raised by the other three. Agent 0 synthesizes after all four.
 
 **Each agent's position must answer:**
 - **Agent 5:** Concerns about (a) `streamFailed` text possibly becoming more specific (e.g., `"Probe failed at 5MB"`), (b) `bufferedRangesChanged` cadence possibly rising to ~3 Hz during stalls (T0 ~2 Hz; SeekSlider dedupes upstream — should be safe), (c) `streamStopped(StopReason)` vocabulary staying unchanged. Flag any consumer assumptions that would break.
