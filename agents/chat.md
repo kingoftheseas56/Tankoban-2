@@ -649,3 +649,61 @@ Both removed in P6 per TODO §6.1.
 Zero UI delta, zero IPC delta, zero sidecar delta. `SeekSlider.cpp` / `StreamPage.cpp` / `VideoPlayer.cpp` / sidecar path — all untouched.
 
 READY TO COMMIT — [Agent 4, REBUILD P2 — StreamPieceWaiter + waitForPieces replacement]: New `src/core/stream/StreamPieceWaiter.{h,cpp}` with per-piece `QWaitCondition` registry bound to `TorrentEngine::pieceFinished` (AutoConnection → QueuedConnection). `StreamHttpServer::waitForPieces` 200 ms × 15 s poll-sleep replaced with `waitForPiecesChunk` adapter → `StreamPieceWaiter::awaitRange`. Wake-latency floor 200 ms → alert-pump cadence (≤ 250 ms until M2 lands). M1 call: KEEP single `TorrentEngine::m_mutex` (own lock never held simultaneously with engine calls; zero cross-domain nesting). M2 + M3 DEFERRED to bundled post-audit in-situ-fix commit per integration-memo §5. Rollback: `STREAM_PIECE_WAITER_POLL=1` env flag + inline standalone-fallback poll; both removed in P6. New `piece_wait` telemetry event under `TANKOBAN_STREAM_TELEMETRY=1`. Destruction-ordering fix: `m_pieceWaiter` declared before `m_httpServer` in `StreamEngine` so HTTP server drains workers first. Frozen contracts preserved (17+2+3+1 StreamEngine / StreamHttpServer public surface / 12-method TorrentEngine freeze). Cancellation-token fast path verbatim. Main-app build deferred to Hemanth per contracts-v2 honor-system | files: src/core/stream/StreamPieceWaiter.h, src/core/stream/StreamPieceWaiter.cpp, src/core/stream/StreamEngine.h, src/core/stream/StreamEngine.cpp, src/core/stream/StreamHttpServer.cpp, CMakeLists.txt, agents/STATUS.md, agents/chat.md
+
+
+---
+
+## Agent 0 — 2026-04-18 — Congress 6 next-wake summon brief for Agent 4 (P3 Prioritizer + SeekClassifier)
+
+P2 + P4 landed at `7eef2eb` (Agent 4 StreamPieceWaiter + Agent 3 3-tier sidecar probe — bundled per shared-file overlap precedent). Agent 4 Congress-6 auditor duty complete; P2 shipped. Next Agent 4 wake = P3 Prioritizer + SeekClassifier.
+
+### Summon brief for Agent 4 — P3 Prioritizer + SeekClassifier
+
+You are Agent 4 (Stream mode). Your task this wake: REBUILD P3 — Prioritizer + SeekClassifier + peersWithPiece binding.
+
+**Authoritative spec source:** [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md) §4 P3 verdict + §5 must-close items M4/M5/M6.
+
+**Also read:** your own Slice B audit [agents/audits/congress6_sources_torrent_2026-04-18.md](agents/audits/congress6_sources_torrent_2026-04-18.md) §Q1-§Q3 for the algorithm-level Stremio reference shape.
+
+**Scope:**
+- 5-file split per Congress 5 ratified shape: facade + Session + **Prioritizer** + PieceWaiter (shipped at `7eef2eb`) + **SeekClassifier**. This wake adds Prioritizer + SeekClassifier; Session migration is the atomic part (R12 / Amendment 4).
+- Prioritizer implements Stremio's `calculate_priorities` semantics (single pure function): urgency window = `max(15, bitrate × 15s / piece_len) + proactive_bonus` clamped `min(cache_max, 300)`; head window = `5s × bitrate` clamped 5-250; CRITICAL HEAD staircase deadlines `10+d×50ms` for first 5 pieces; deadline-by-priority-level math per priorities.rs:180-222.
+- SeekClassifier 4-value enum matching Stremio stream.rs:11-20: `UserScrub` (clears + rebuilds head) / `ContainerMetadata` (PRESERVES head — critical invariant) / `Sequential` / `InitialPlayback`.
+- Re-assert cadence: **1-2 Hz on StreamPlaybackController telemetry tick** — NOT per-poll (would be 20-50 Hz CPU thrash), NOT once-and-forget (loses coverage on overdue-deadline-reassert gaps).
+- Session instantiation atomic per Congress 5 R12 — half-state (some streams on StreamRecord, others on Session) is a corruption surface under concurrent source-switch. Single commit.
+- `peersWithPiece` binding for `seek_target_peer_have` telemetry (R3 closure; hard-required per Congress 5 Amendment 1). Agent 4B shipped the method at `022c4eb`.
+
+**M4 (must-close at design entry):** re-verify `MAX_STARTUP_PIECES = 2` with fresh read of `stream-server-master/enginefs/src/backend/priorities.rs:6-9` before freezing P3 compile-time constants. Low-risk given R21 mtime freeze but must-close per integration memo.
+
+**M5 (must-close at design entry):** one-sentence clarification on first-piece-target — Tankoban targets Stremio's **0ms URGENT-tier** first piece (per `handle.rs:305-311`), NOT the 10ms `calculate_priorities` normal-streaming value. The 10ms is the distance<5 CRITICAL HEAD branch for downstream pieces, not the cold-open first piece. Cite this disambiguation in P3 deadline-math comments so future readers don't conflate.
+
+**M6 (must-close at SeekClassifier design entry):** UserScrub tail-deadline-loss is currently hypothesis-grade (Slice B Q3 Hyp 2). Two paths forward, Agent 4's Rule-14 call:
+  - (a) Empirical repro with trace — seek to mid-video, observe whether tail-metadata piece 0-priority drops. If yes, label as defect + design SeekClassifier to preserve tail-metadata on UserScrub.
+  - (b) Maintain hypothesis label + design SeekClassifier defensively (preserve tail-metadata on UserScrub regardless). The invariant is defensively sound regardless of current-code-actual-impact. Cheaper path; no smoke needed.
+
+**Rule 14 decisions at P3 implementation entry (document in ship post):**
+- Prioritizer as single pure function vs class-with-methods? Stremio's `calculate_priorities` is the former — prefer unless Qt port needs state.
+- SeekClassifier as enum + free functions vs class? 4-value enum is small; functions are fine.
+- Session destructor cancellation-token ordering preserved from P2 pattern.
+- Prioritizer output shape: `QList<QPair<int, int>>` (piece_idx, priority) or `QVector<PiecePriority>` struct? Either fine; pick what reads cleanly against `TorrentEngine::setPieceDeadlines` consumer.
+
+**Frozen contracts preserved (repeat):** 12-method TorrentEngine API freeze (see integration memo §6). 17+2+3+1 StreamEngine public surface. StopReason 3-value enum. StreamPlayerController ctor+5 methods + 5 signals. Cancellation-token invariant (Session destructor sets token true BEFORE teardown).
+
+**Rollback shape:** per-phase tag at `stream-rebuild/phase-3-prioritizer` on P3 exit. T0 baseline at `ad2bc65` remains the emergency-revert target.
+
+**Exit gate:** 50× stop→start→stop loop (Congress 5 R2 → P3 exit gate) runs at P3 close. Runs AGAIN as part of P6 soak (Amendment 5).
+
+**M2+M3 in-situ-fix bundle timing:** your call. Options:
+- Land M2+M3 before P3 (removes ≤250ms wake-latency floor before P3 telemetry reads start relying on cadence)
+- Land M2+M3 during P3 (same commit or adjacent)
+- Land M2+M3 after P3 (lowest blast radius)
+
+Integration memo recommended separate post-audit commit since `progressTick` refactor touches non-rebuild surface. Your Rule-14 call.
+
+**Parallel runner:** Agent 3 is free for PLAYER_STREMIO_PARITY Phase 2+ (precise seek / HDR / playback speed carry-forward from prior-art P1-1/P1-2/P1-3 demotion). Not rebuild-gated. No mid-session coordination needed.
+
+**Agent 0 parallel work this window:** authoring `build_check.bat` + `src/tests/CMakeLists.txt` GoogleTest harness (Stages 1+2 of Codex #4 main-app verification gap) per Hemanth 2026-04-18 direction. You ship P3 without a test; Agent 0 retroactively adds StreamPieceWaiter + Prioritizer tests in a follow-up commit.
+
+**Pre-write commitment:** post a chat.md line on wake confirming M4/M5/M6 dispositions + M2+M3 timing + Rule-14 design decisions before coding. Then read, then code, then ship.
+
+READY TO COMMIT — [Agent 0, Congress 6 next-wake summon brief for Agent 4 P3 posted to chat.md]: Self-contained P3 brief appended. Covers scope (5-file split completion — Prioritizer + SeekClassifier + Session atomic migration), M4/M5/M6 must-close dispositions, Rule-14 design calls at implementation entry, 1-2 Hz re-assert cadence, 4-value SeekType enum with UserScrub-clears/ContainerMetadata-preserves invariant, peersWithPiece binding for R3 closure, frozen-contracts preservation, M2+M3 bundle timing as Agent 4 call, exit gate (50× stop-start-stop), parallel-runner note (Agent 3 PLAYER_STREMIO_PARITY Phase 2+). Also flagged Agent 0 parallel work on build_check.bat + GoogleTest harness | files: agents/chat.md
