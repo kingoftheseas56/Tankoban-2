@@ -29,6 +29,9 @@ inline QString episodeKey(const QString& imdbId, int season, int episode)
 
 // ── Watch state payload ──────────────────────────────────────────────────
 // {
+//   "schema_version": int   (STREAM_ENGINE_REBUILD P0 hardening — additive-only
+//                            versioning so future rebuild phases can evolve the
+//                            payload without losing Continue Watching entries)
 //   "positionSec":  double,
 //   "durationSec":  double,
 //   "finished":     bool,
@@ -39,6 +42,7 @@ inline QString episodeKey(const QString& imdbId, int season, int episode)
 inline QJsonObject makeWatchState(double positionSec, double durationSec, bool finished)
 {
     QJsonObject obj;
+    obj["schema_version"] = 1;
     obj["positionSec"]  = positionSec;
     obj["durationSec"]  = durationSec;
     obj["finished"]     = finished;
