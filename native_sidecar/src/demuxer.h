@@ -61,6 +61,14 @@ struct ProbeResult {
     int    max_fall         = 0;
     double mastering_min_lum = 0.0;
     double mastering_max_lum = 0.0;
+
+    // STREAM_ENGINE_REBUILD P4 — probe-tier telemetry. 1 for fast-swarm
+    // Tier-1 success, 2/3 for escalations. Zero on non-HTTP (single attempt).
+    // main.cpp emits probe_tier_passed after probe_done using these fields.
+    int     probe_tier           = 1;
+    int64_t probe_elapsed_ms     = 0;
+    int64_t probesize_used       = 0;
+    int64_t analyzeduration_used = 0;
 };
 
 // Probe a media file: find video stream dimensions/codec, enumerate tracks.

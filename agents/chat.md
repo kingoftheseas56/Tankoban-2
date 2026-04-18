@@ -546,3 +546,106 @@ Hemanth Final Word = `Execute`, delegated to Agent 0 on explicit instruction "do
 CLAUDE.md dashboard refreshed to reflect RATIFIED state + GATES OPEN FOR EXECUTION. Congress 6 cycle formally closes here.
 
 READY TO COMMIT — [Agent 0, Congress 6 RATIFIED by Hemanth delegation]: Integration memo §12 appended with delegated Final Word (`Execute`); CLAUDE.md dashboard updated (Congress 6 RATIFIED, P2/P3/P4 gates OPEN FOR EXECUTION, Blocked: none). Agent 4 P2 + Agent 3 P4 may execute on next summon; Agent 4 P3 follows P2 landing | files: agents/audits/congress6_integration_2026-04-18.md, CLAUDE.md, agents/chat.md
+
+
+---
+
+## Agent 3 — 2026-04-18 — STREAM_ENGINE_REBUILD P4 sidecar probe escalation SHIPPED
+
+Post-ratification summon fulfilled. Three-tier HTTP probe escalation landed at both probe and decoder open sites; `probe_tier_passed` telemetry event wired; engine gate dropped 5MB → 1MB per TODO §4.2. Sidecar rebuilt green via `native_sidecar/build.ps1` — per contracts-v2 + Rule 15, sidecar is agent-runnable, main-app stays honor-system → Hemanth smoke via `build_and_run.bat`.
+
+**P4.1 three-tier probe (both sites, TODO §4.1 names `video_decoder.cpp:221` + `demuxer.cpp:65`):**
+- **Tier 1** — probesize=512 KB / analyzeduration=750 ms / rw_timeout=5 s (fast-swarm majority pass-through)
+- **Tier 2** — probesize=2 MB / analyzeduration=2 s / rw_timeout=15 s (slow-swarm escalation)
+- **Tier 3** — probesize=5 MB / analyzeduration=5 s / rw_timeout=30 s (last resort; on-failure surfaces `OPEN_FAILED:tier3_exhausted:<ffmpeg-err>`)
+- Non-HTTP paths single-attempt with 5 MB probesize (kernel FS has no slow-piece analog).
+- HTTP opt set preserved verbatim per tier: `reconnect=1`, `reconnect_streamed=1`, `reconnect_delay_max=10`, `timeout=60000000` (connect stays 60 s — microseconds to localhost sidecar server, no tier-variance warranted). Only `probesize` / `analyzeduration` / `rw_timeout` escalate.
+- Per-tier: `fmt_ctx->probesize` + `fmt_ctx->max_analyze_duration` mirrored onto AVFormatContext after successful `avformat_open_input` (pre-P4 HTTP-path behavior retained — some demuxers read fields directly).
+
+**P4.1 telemetry:**
+- New event `probe_tier_passed { tier: 1|2|3, elapsed_ms, probesize, analyzeduration_us, t_ms_from_open }` emitted in `main.cpp::open_worker` immediately after existing `probe_done` event. `ProbeResult` extended in `native_sidecar/src/demuxer.h` with 4 new fields (`probe_tier`, `probe_elapsed_ms`, `probesize_used`, `analyzeduration_used`); `demuxer.cpp::probe_file` populates them from the chosen-tier struct.
+- Decoder-site escalation logs to stderr only (no separate `decoder_tier_passed` event — TODO scope specifies singular `probe_tier_passed`; avoiding scope creep).
+
+**P4.2 gate reduction:**
+- `StreamEngine::kGateBytes` at `src/core/stream/StreamEngine.h:297` dropped `5LL * 1024 * 1024 → 1LL * 1024 * 1024`. Rationale preserved in comment: gate at ~2× Tier-1 probe budget (512 KB) gives probe room to escalate to Tier 2 (2 MB) without gate artificially withholding pieces. Static per open-design-Q2 default; dynamic-escalation option deferred unless Tier-2 empirical starvation observed.
+
+**Rule-14 design calls this session (no Hemanth menuing):**
+- **Handler organization (Q4):** loop-with-tier-parameter in one function rather than three attempt-function variants. Simpler, shares AVFormatContext nullable-reset between tiers, consistent stderr log format.
+- **Gate static-vs-dynamic (Q2):** default static 1 MB. Dynamic reconsidered only if post-smoke Tier-2 probes show starvation.
+- **Decoder telemetry emission:** single `probe_tier_passed` event only (TODO specifies one; adding decoder-site variant = scope creep).
+- **Connect timeout tier-invariance:** 60 s flat across tiers — connect latency to localhost sidecar is microseconds.
+
+**Slice C audit endorsement preserved:** 6-stage LoadingOverlay parity-PLUS semantics (per `agents/audits/congress6_player_sidecar_2026-04-18.md:211-219`) untouched this wake. P4 only touches probe-tier internals + one engine gate constant, no LoadingOverlay vocabulary change. Probe event pipeline now 7 events: `probeStarted/probeDone → probe_tier_passed → decoderOpenStarted → decoderOpenDone → firstPacketRead → firstDecoderReceive → firstFrame`.
+
+**Build verification:** `native_sidecar/build.ps1` ran green. Built target `ffmpeg_sidecar.exe` installed to `resources/ffmpeg_sidecar/`. One compile-fix iteration mid-session: outer-scope `int ret` removed by the open-block refactor, re-declared at the first post-open use site (`avcodec_open2`) — subsequent `ret` uses at av_read_frame / avcodec_send_packet / avcodec_receive_frame continue to see it via normal C++ scoping. No Qt/main-app build attempted per contracts-v2 honor-system for MSVC/Ninja.
+
+**Acceptance-smoke gating (Congress 5 Amendment 3, unchanged):** P4 code commit lands independent of P2 StreamPieceWaiter, but the `< 6 s p50 first-frame cold-start on 1000-seed` criterion waits on P2 replacing the 15 s StreamHttpServer poll-floor. What IS observable post-P4 alone: Tier 1 success rate on `stream_telemetry.log | grep probe_tier_passed` for cold-start opens against healthy swarms. Tier 2/3 escalation verifiable via manual bandwidth throttle.
+
+**Files touched this wake (4):**
+- `native_sidecar/src/demuxer.h` (+10 lines — ProbeResult tier fields)
+- `native_sidecar/src/demuxer.cpp` (~90 lines rewritten — probe_file 3-tier loop replacing single-shot)
+- `native_sidecar/src/video_decoder.cpp` (~100 lines rewritten — decode_thread_func open-block 3-tier loop + `int ret` declaration fix)
+- `native_sidecar/src/main.cpp` (+14 lines — probe_tier_passed event emit post-probe_done)
+- `src/core/stream/StreamEngine.h` (kGateBytes comment + value edit; same line count)
+
+Zero Qt/main-app behavioral delta beyond the engine gate constant (gate controls how many bytes must accumulate pre-URL-ready-signal; 1 MB aligns with Tier 1 probe budget + Tier 2 headroom). Playback path / sidecar IPC contract / LoadingOverlay vocabulary all unchanged.
+
+READY TO COMMIT — [Agent 3, REBUILD P4 — sidecar probe escalation]: Three-tier HTTP probe (512KB/750ms/5s → 2MB/2s/15s → 5MB/5s/30s) at both `demuxer.cpp::probe_file` and `video_decoder.cpp::decode_thread_func` avformat_open_input chains. New `probe_tier_passed` telemetry event emitted post-`probe_done` in main.cpp. `ProbeResult` extended with 4 tier-telemetry fields (`probe_tier`/`probe_elapsed_ms`/`probesize_used`/`analyzeduration_used`). `StreamEngine::kGateBytes` dropped 5MB → 1MB per TODO §4.2. Sidecar build green via `native_sidecar/build.ps1`. Tier 3 failure surfaces `OPEN_FAILED:tier3_exhausted:<ffmpeg-err>` to consumer. Rule-14 calls: loop-with-tier-parameter handler organization, static 1MB gate default, single telemetry event (probe-site only, no decoder variant), 60s connect-timeout flat across tiers. Acceptance-smoke `< 6s p50 first-frame` stays P2-gated per Congress 5 Amendment 3; Tier 1 pass rate observable post-P4 alone via `stream_telemetry.log | grep probe_tier_passed`. Zero Qt/main-app behavioral delta beyond gate constant; LoadingOverlay + 6-stage vocabulary untouched | files: native_sidecar/src/demuxer.h, native_sidecar/src/demuxer.cpp, native_sidecar/src/video_decoder.cpp, native_sidecar/src/main.cpp, src/core/stream/StreamEngine.h, agents/STATUS.md, agents/chat.md
+
+
+---
+
+## Agent 4 — 2026-04-18 — STREAM_ENGINE_REBUILD P2 SHIPPED (StreamPieceWaiter + waitForPieces replacement)
+
+Post-ratification summon fulfilled — P2 gate opened on integration-memo §12 Hemanth delegated `Execute`; Agent 4B's `pieceFinished` signal and `peersWithPiece` method already live in master from `022c4eb`. New `StreamPieceWaiter` class (`src/core/stream/StreamPieceWaiter.{h,cpp}`) binds a `QHash<QPair<QString,int>, QList<Waiter*>>` wait-registry to the signal; `StreamHttpServer::waitForPieces` 200 ms × 15 s poll-sleep is gone, replaced by a thin `waitForPiecesChunk` adapter that dispatches to `StreamPieceWaiter::awaitRange`. Wake-latency floor drops from the 200 ms poll cadence to ≤ 250 ms alert-pump cadence — M2 (wait_for_alert 250→5-25 ms) will take it the rest of the way in a separate bundled commit per integration-memo §5.
+
+**Design shape (matches integration-memo §3.2 + Slice B Q2 spec):**
+- Registry keyed by `(infoHash, pieceIdx)` → `QList<Waiter*>`. Multiple workers on the same piece all wake atomically.
+- Signal connection is AutoConnection from AlertWorker `QThread` to main-thread waiter receiver → resolves to `QueuedConnection`, so `onPieceFinished` runs on the main thread and cannot race against worker threads blocked in `waitForPiece`.
+- `awaitRange` loop: cancellation-token probe → `haveContiguousBytes` (success return) → `pieceRangeForFileOffset` + `havePiece` scan for the first missing piece → `QWaitCondition::wait(&m_mutex, min(remaining, 1000))` on that piece → repeat. The 1 s wait cap re-checks the cancellation token on a predictable cadence even if `pieceFinished` never fires for that piece (defensive against shutdown races).
+- `StreamPieceWaiter` is owned by `StreamEngine` (ctor creates it; accessor exposes it to `StreamHttpServer::handleConnection` alongside the existing `cancellationToken`). `StreamHttpServer`'s public surface gains no new methods.
+
+**M1 decision (integration-memo §5 — Agent 4 Rule-14 call): KEEP single `TorrentEngine::m_mutex`.** Rationale: `StreamPieceWaiter` acquires its own lock ONLY while registering / deregistering / waking Waiters — never simultaneously with any TorrentEngine method call. The three TorrentEngine reads per `awaitRange` iteration (`haveContiguousBytes` / `pieceRangeForFileOffset` / `havePiece`) all happen outside the local-mutex scope. Zero cross-domain nesting, no lock ordering hazard, no demonstrated contention to motivate a read-write split or per-stream partition. The `QReadWriteLock` and per-stream-mutex options from integration-memo §5 remain on the post-P6 polish shelf if contention ever surfaces on a real workload.
+
+**M2 + M3 DEFERRED** to a bundled post-audit in-situ-fix commit per integration-memo §5 disposition:
+- **M2** = `wait_for_alert(250ms)` → `wait_for_alert(5-25ms)` at [TorrentEngine.cpp:52](src/core/torrent/TorrentEngine.cpp#L52) + `progressTick` gate wall-clock conversion (~15 lines, touches progressTick's non-rebuild downstream dependents — `emitProgressEvents`, `checkSeedingRules`, seeding-ratio / share-limit math that assumes 1 s ticks). Warrants Rule-10 heads-up for Agent 4B on `TorrentEngine.{h,cpp}` touch and its own commit bisectability.
+- **M3** = per-piece priority-7 pairing in `onMetadataReady` head-deadlines loop at `StreamEngine.cpp:1016-1028` (~2 lines trivial). Bundles cleanly with M2 because both live in the priorities territory.
+- P2 StreamPieceWaiter wiring has zero dependency on either, so P2 can ship and smoke first; M2+M3 bundle follows.
+
+**Rollback safety (two independent tiers):**
+1. `STREAM_PIECE_WAITER_POLL=1` at process start forces `awaitRange` to 200 ms polling (same cadence as the pre-rebuild loop). Cached at ctor so mid-run env flips don't split behavior.
+2. `waitForPiecesChunk` falls through to an inline 200 ms poll if no `StreamEngine` is wired (historical standalone `StreamHttpServer` callers — tests, etc.).
+Both removed in P6 per TODO §6.1.
+
+**Telemetry:** new `piece_wait { hash, piece, elapsedMs, ok, cancelled, mode }` event gated on `TANKOBAN_STREAM_TELEMETRY=1`. Writer is local to `StreamPieceWaiter.cpp` so it short-circuits on the cached env flag without crossing TU boundaries to `StreamEngine.cpp`'s writer. Per-wait record: `mode=async|poll`, elapsed wall-clock, success/cancelled flags, first-waited-piece. Post-smoke: `stream_telemetry.log | grep event=piece_wait` shows the new wait profile; expectation on healthy swarm is typical elapsedMs ≪ 500 ms vs T0's 15 s ceiling.
+
+**Destruction-ordering fix (caught during implementation):** `m_pieceWaiter` declared BEFORE `m_httpServer` in `StreamEngine` (reversed from first-pass init order). Qt destroys children reverse-creation-order, so `~StreamHttpServer` (which drains workers with the existing 2 s budget) now runs BEFORE `~StreamPieceWaiter`. Prevents use-after-free from any worker wedging past the drain still holding a waiter pointer. The waiter dtor also wakes all in-flight Waiters as belt-and-braces.
+
+**Frozen contracts preserved** (Congress 5 Amendment 2 + integration-memo §6 12-method API freeze):
+- `StreamEngine` 17 public methods + 2 signals + 3 structs + 1 enum — untouched. `pieceWaiter()` accessor is additive.
+- `StreamHttpServer` public surface — untouched. One additive local in `handleConnection` + one include.
+- Cancellation-token fast path (STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2) preserved verbatim: checked at top of every `awaitRange` loop iteration AND inside the standalone-fallback 200 ms poll.
+- TorrentEngine surface untouched — we consume the additive `pieceFinished` signal and the pre-existing frozen methods (`haveContiguousBytes`, `pieceRangeForFileOffset`, `havePiece`).
+
+**Rule-14 calls this session (no Hemanth menuing):**
+- M1 lock posture — single `m_mutex`, per rationale above.
+- M2 + M3 commit boundary — bundle into one post-audit in-situ-fix commit, not in-P2.
+- Scaffold shape — `StreamPieceWaiter.{h,cpp}` only this commit; P1's other 3 scaffold files (`StreamSession`, `StreamPrioritizer`, `StreamSeekClassifier`) land with P3 when their logic lands, rather than as empty shells this wake. Cleaner commit bisectability + no dead stubs in master between P2 and P3.
+- Standalone `StreamHttpServer` fallback path — inline the 200 ms poll inside `waitForPiecesChunk` rather than keep a separate `waitForPieces` helper. Dead code stays visible at the one call site; deleted cleanly in P6.
+- Telemetry writer — duplicate the StreamEngine.cpp helper locally instead of exposing a cross-TU writer. Keeps the `piece_wait` event isolated to the file that generates it and avoids any static-init ordering concerns with `QCoreApplication::applicationDirPath`.
+
+**Build verification:** per contracts-v2 the main-app build (MSVC/Ninja) is Hemanth-side honor-system from bash — I did not attempt `build_and_run.bat`. Sidecar not touched this wake. Code compiles in the abstract (new TU follows the same include/MOC patterns as `StreamHttpServer`/`StreamEngine`; `Q_OBJECT` + CMake wiring parallel those files). Rule 6 compile check deferred to Hemanth's main-app build run.
+
+**Exit criterion (Hemanth smoke gate):** cold-start 1000-seed first byte < 2 s after `metadata_ready` (T0 showed the 15 s polling floor). Observable via `stream_telemetry.log | grep event=piece_wait` with `TANKOBAN_STREAM_TELEMETRY=1` — `elapsedMs` on the first few waits is the direct measure.
+
+**Files touched this wake (5):**
+- `src/core/stream/StreamPieceWaiter.h` (new, ~90 lines)
+- `src/core/stream/StreamPieceWaiter.cpp` (new, ~200 lines)
+- `src/core/stream/StreamEngine.h` (forward decl + `pieceWaiter()` accessor + member reorder + declaration-order comment)
+- `src/core/stream/StreamEngine.cpp` (ctor init list — waiter before server; new `#include "StreamPieceWaiter.h"`)
+- `src/core/stream/StreamHttpServer.cpp` (static `waitForPieces` replaced with `waitForPiecesChunk` adapter + dispatch + include + 2 comment refreshes that referenced the dead helper)
+- `CMakeLists.txt` (+1 cpp, +1 h)
+
+Zero UI delta, zero IPC delta, zero sidecar delta. `SeekSlider.cpp` / `StreamPage.cpp` / `VideoPlayer.cpp` / sidecar path — all untouched.
+
+READY TO COMMIT — [Agent 4, REBUILD P2 — StreamPieceWaiter + waitForPieces replacement]: New `src/core/stream/StreamPieceWaiter.{h,cpp}` with per-piece `QWaitCondition` registry bound to `TorrentEngine::pieceFinished` (AutoConnection → QueuedConnection). `StreamHttpServer::waitForPieces` 200 ms × 15 s poll-sleep replaced with `waitForPiecesChunk` adapter → `StreamPieceWaiter::awaitRange`. Wake-latency floor 200 ms → alert-pump cadence (≤ 250 ms until M2 lands). M1 call: KEEP single `TorrentEngine::m_mutex` (own lock never held simultaneously with engine calls; zero cross-domain nesting). M2 + M3 DEFERRED to bundled post-audit in-situ-fix commit per integration-memo §5. Rollback: `STREAM_PIECE_WAITER_POLL=1` env flag + inline standalone-fallback poll; both removed in P6. New `piece_wait` telemetry event under `TANKOBAN_STREAM_TELEMETRY=1`. Destruction-ordering fix: `m_pieceWaiter` declared before `m_httpServer` in `StreamEngine` so HTTP server drains workers first. Frozen contracts preserved (17+2+3+1 StreamEngine / StreamHttpServer public surface / 12-method TorrentEngine freeze). Cancellation-token fast path verbatim. Main-app build deferred to Hemanth per contracts-v2 honor-system | files: src/core/stream/StreamPieceWaiter.h, src/core/stream/StreamPieceWaiter.cpp, src/core/stream/StreamEngine.h, src/core/stream/StreamEngine.cpp, src/core/stream/StreamHttpServer.cpp, CMakeLists.txt, agents/STATUS.md, agents/chat.md

@@ -63,6 +63,7 @@
 
 class TorrentEngine;
 class StreamHttpServer;
+class StreamPieceWaiter;
 
 enum class StreamPlaybackMode {
     LocalHttp, // torrent-backed (magnet) path served via local HTTP
@@ -221,6 +222,13 @@ public:
     // as "no cancellation token, fall through to pre-5.1 behavior."
     std::shared_ptr<std::atomic<bool>> cancellationToken(const QString& infoHash) const;
 
+    // STREAM_ENGINE_REBUILD P2 — shared piece-wait primitive. Lives on
+    // StreamEngine so every HTTP worker thread consults the same
+    // (hash, pieceIdx) → Waiter* registry and receives the same
+    // TorrentEngine::pieceFinished signal fan-out. Lifetime ties to
+    // StreamEngine (parent=this); always non-null post-ctor.
+    StreamPieceWaiter* pieceWaiter() const { return m_pieceWaiter; }
+
     // Clean up orphaned cache data from previous sessions
     void cleanupOrphans();
 
@@ -288,9 +296,12 @@ private:
 
     // STREAM_ENGINE_FIX Phase 1.1 — gate target. Hoisted from streamFile so
     // statsSnapshot reports the same gate the streaming path enforces.
-    // Phase 2.1 may tune this value informed by Phase 1 telemetry; tuning
-    // happens here, single source of truth.
-    static constexpr qint64 kGateBytes = 5LL * 1024 * 1024;
+    // STREAM_ENGINE_REBUILD P4.2 — dropped 5MB → 1MB to align with sidecar
+    // Tier-1 probe (512KB probesize / 750ms analyzeduration); gate at 2x
+    // probe budget gives probe room to escalate to Tier 2 (2MB) if needed
+    // without the gate artificially withholding pieces the probe wants.
+    // Single source of truth.
+    static constexpr qint64 kGateBytes = 1LL * 1024 * 1024;
 
     int autoSelectVideoFile(const QJsonArray& files, const QString& hint) const;
     QString buildStreamUrl(const QString& infoHash, int fileIndex) const;
@@ -299,6 +310,13 @@ private:
     static bool isVideoExtension(const QString& path);
 
     TorrentEngine* m_torrentEngine;
+    // STREAM_ENGINE_REBUILD P2 — declaration order matters: the piece-waiter
+    // is created FIRST (Qt child index 0 on `this`) so it is destroyed LAST.
+    // The HTTP server is created second, and its dtor drains in-flight
+    // worker threads (which may still hold StreamPieceWaiter pointers) with
+    // a 2 s timeout. Destroying the waiter first would risk use-after-free
+    // from a wedged worker that outlives the drain budget.
+    StreamPieceWaiter* m_pieceWaiter;
     StreamHttpServer* m_httpServer;
     QString m_cacheDir;
     QTimer* m_cleanupTimer = nullptr;

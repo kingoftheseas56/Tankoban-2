@@ -324,6 +324,20 @@ static void open_worker(Command cmd) {
         {"duration_ms", static_cast<int64_t>(probe->duration_sec * 1000.0)}
     });
 
+    // STREAM_ENGINE_REBUILD P4 — probe_tier_passed event. Reports which
+    // of the three HTTP probe tiers (512KB/2MB/5MB) succeeded plus the
+    // budgets used, so stream_telemetry.log grep can separate fast-swarm
+    // Tier-1 passes from slow-swarm Tier-2/3 escalations. Non-HTTP paths
+    // emit tier=1 with a 5MB probesize and zero analyzeduration (single
+    // attempt, no escalation).
+    write_event("probe_tier_passed", sid, -1, {
+        {"t_ms_from_open", t_ms_from_open()},
+        {"tier", probe->probe_tier},
+        {"elapsed_ms", probe->probe_elapsed_ms},
+        {"probesize", probe->probesize_used},
+        {"analyzeduration_us", probe->analyzeduration_used}
+    });
+
     int width  = probe->width;
     int height = probe->height;
     // Option A rollback (canvas-plane neutralized). Subtitle overlay stays

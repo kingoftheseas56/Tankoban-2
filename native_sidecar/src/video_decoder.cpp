@@ -205,50 +205,116 @@ void VideoDecoder::decode_thread_func(
                  path.c_str(), start_seconds, video_stream_index);
 
     // --- Open container ---
+    //
+    // STREAM_ENGINE_REBUILD P4 — three-tier HTTP probe escalation. Same
+    // tier budgets as demuxer.cpp::probe_file so a failed probe tier 1
+    // doesn't leave the decoder-side open stuck on the same short budget.
+    // Non-HTTP paths skip escalation (single 5MB attempt).
     AVFormatContext* fmt_ctx = nullptr;
-    AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "probesize", "5000000", 0);
-
-    // HTTP streaming: reconnect on stalls, generous timeout for torrent sidecar
     bool is_http = path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0;
+
+    struct OpenTier {
+        int     tier;
+        int64_t probesize;
+        int64_t analyzeduration_us;
+        int64_t rw_timeout_us;
+    };
+    OpenTier tiers[3];
+    int tier_count = 0;
     if (is_http) {
-        av_dict_set(&opts, "reconnect", "1", 0);
-        av_dict_set(&opts, "reconnect_streamed", "1", 0);
-        av_dict_set(&opts, "reconnect_delay_max", "10", 0);
-        av_dict_set(&opts, "timeout", "60000000", 0);
-        av_dict_set(&opts, "rw_timeout", "30000000", 0);
-        // Larger probe for HTTP: torrent data arrives slowly, need patience
-        av_dict_set(&opts, "probesize", "20000000", 0);      // 20MB
-        av_dict_set(&opts, "analyzeduration", "10000000", 0); // 10 seconds
-        std::fprintf(stderr, "VideoDecoder: HTTP streaming mode enabled\n");
+        tiers[0] = {1,   512 * 1024,      750 * 1000,       5 * 1000 * 1000};
+        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   15 * 1000 * 1000};
+        tiers[2] = {3, 5 * 1024 * 1024, 5 * 1000 * 1000,   30 * 1000 * 1000};
+        tier_count = 3;
+    } else {
+        tiers[0] = {1, 5 * 1000 * 1000, 0, 0};
+        tier_count = 1;
     }
 
-    int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
-    av_dict_free(&opts);
+    std::string last_err = "open failed";
+    int chosen_tier = 0;
+    int64_t chosen_probesize = 0;
+    int64_t chosen_analyzedur = 0;
 
-    if (ret < 0) {
-        char errbuf[256];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        std::fprintf(stderr, "VideoDecoder: avformat_open_input failed: %s\n", errbuf);
-        on_event_("error", std::string("OPEN_FAILED:") + errbuf);
+    for (int i = 0; i < tier_count; ++i) {
+        const OpenTier& t = tiers[i];
+
+        AVDictionary* opts = nullptr;
+        char num[32];
+        std::snprintf(num, sizeof(num), "%lld", (long long)t.probesize);
+        av_dict_set(&opts, "probesize", num, 0);
+
+        if (is_http) {
+            av_dict_set(&opts, "reconnect", "1", 0);
+            av_dict_set(&opts, "reconnect_streamed", "1", 0);
+            av_dict_set(&opts, "reconnect_delay_max", "10", 0);
+            av_dict_set(&opts, "timeout", "60000000", 0);
+            std::snprintf(num, sizeof(num), "%lld", (long long)t.rw_timeout_us);
+            av_dict_set(&opts, "rw_timeout", num, 0);
+            std::snprintf(num, sizeof(num), "%lld", (long long)t.analyzeduration_us);
+            av_dict_set(&opts, "analyzeduration", num, 0);
+        }
+
+        std::fprintf(stderr,
+            "VideoDecoder: Tier %d attempt (probesize=%lld analyzedur=%lldus "
+            "rw_timeout=%lldus)\n",
+            t.tier, (long long)t.probesize, (long long)t.analyzeduration_us,
+            (long long)t.rw_timeout_us);
+
+        int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
+        av_dict_free(&opts);
+
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            std::fprintf(stderr,
+                "VideoDecoder: Tier %d avformat_open_input failed: %s\n",
+                t.tier, errbuf);
+            last_err = std::string("open:") + errbuf;
+            if (fmt_ctx) { avformat_close_input(&fmt_ctx); fmt_ctx = nullptr; }
+            continue;
+        }
+
+        if (is_http) {
+            fmt_ctx->probesize = t.probesize;
+            fmt_ctx->max_analyze_duration = t.analyzeduration_us;
+        }
+
+        ret = avformat_find_stream_info(fmt_ctx, nullptr);
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            std::fprintf(stderr,
+                "VideoDecoder: Tier %d find_stream_info failed: %s\n",
+                t.tier, errbuf);
+            last_err = std::string("find_stream_info:") + errbuf;
+            avformat_close_input(&fmt_ctx);
+            fmt_ctx = nullptr;
+            continue;
+        }
+
+        chosen_tier = t.tier;
+        chosen_probesize = t.probesize;
+        chosen_analyzedur = t.analyzeduration_us;
+        std::fprintf(stderr, "VideoDecoder: Tier %d passed\n", t.tier);
+        break;
+    }
+
+    if (!fmt_ctx) {
+        std::fprintf(stderr,
+            "VideoDecoder: all %d tier(s) exhausted (last: %s)\n",
+            tier_count, last_err.c_str());
+        char msg[320];
+        std::snprintf(msg, sizeof(msg), "OPEN_FAILED:tier%d_exhausted:%s",
+                      tier_count, last_err.c_str());
+        on_event_("error", msg);
         running_.store(false);
         return;
     }
 
-    // For HTTP streams, set format context limits directly too
-    // (opts only apply if the demuxer reads them, which not all do)
-    if (is_http) {
-        fmt_ctx->probesize = 20000000;
-        fmt_ctx->max_analyze_duration = 10000000;
-    }
-
-    ret = avformat_find_stream_info(fmt_ctx, nullptr);
-    if (ret < 0) {
-        avformat_close_input(&fmt_ctx);
-        on_event_("error", "OPEN_FAILED:find_stream_info failed");
-        running_.store(false);
-        return;
-    }
+    (void)chosen_tier;
+    (void)chosen_probesize;
+    (void)chosen_analyzedur;
 
     if (video_stream_index < 0 || video_stream_index >= static_cast<int>(fmt_ctx->nb_streams)) {
         avformat_close_input(&fmt_ctx);
@@ -390,7 +456,7 @@ void VideoDecoder::decode_thread_func(
     }
 #endif
 
-    ret = avcodec_open2(codec_ctx, codec, nullptr);
+    int ret = avcodec_open2(codec_ctx, codec, nullptr);
     if (ret < 0) {
         char errbuf[256];
         av_strerror(ret, errbuf, sizeof(errbuf));

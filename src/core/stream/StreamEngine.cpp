@@ -1,5 +1,6 @@
 #include "StreamEngine.h"
 #include "StreamHttpServer.h"
+#include "StreamPieceWaiter.h"
 #include "core/torrent/TorrentEngine.h"
 
 #include <QCoreApplication>
@@ -105,6 +106,8 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
                            QObject* parent)
     : QObject(parent)
     , m_torrentEngine(engine)
+    // Waiter before server — see declaration-order comment in StreamEngine.h.
+    , m_pieceWaiter(new StreamPieceWaiter(engine, this))
     , m_httpServer(new StreamHttpServer(engine, this))
     , m_cacheDir(cacheDir)
 {

@@ -1,6 +1,7 @@
 #include "demuxer.h"
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -30,63 +31,123 @@ static std::string dict_get(AVDictionary* d, const char* key) {
     return e && e->value ? std::string(e->value) : std::string();
 }
 
+// STREAM_ENGINE_REBUILD P4 — three-tier HTTP probe escalation. Replaces
+// the single-shot 20MB / 10s analyzeduration / 30s rw_timeout that was the
+// second Mode-A cold-start latency floor (first floor = StreamHttpServer
+// poll-sleep, addressed by P2). Tier budgets per STREAM_ENGINE_REBUILD_TODO
+// §4.1 — fast-swarm cases clear Tier 1 in under a second; Tier 3 is the
+// last resort before surfacing OPEN_FAILED.
+//
+// Non-HTTP paths (file://, local FS) stay single-attempt with the pre-P4
+// 5MB probesize — kernel FS has no "slow piece" equivalent to escalate for.
 std::optional<ProbeResult> probe_file(const std::string& path) {
-    AVFormatContext* fmt_ctx = nullptr;
-
-    AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "probesize", "5000000", 0);
-
-    // STREAM_PLAYBACK_FIX hotfix — HTTP options on the probe path.
-    //
-    // probe_file is the sidecar's open-gatekeeper (main.cpp:272). If it
-    // fails, the full VideoDecoder HTTP retry/reconnect logic at
-    // video_decoder.cpp:166-180 never runs — the sidecar emits
-    // OPEN_FAILED and Qt shows "Cannot open file: probe failed".
-    //
-    // Pre-fix: probe_file had zero HTTP options. Default ffmpeg HTTP
-    // behavior — no reconnect, short implicit read timeouts — made
-    // probes over our torrent-backed HTTP server flaky. Any transient
-    // waitForPieces stall during probe-read killed the probe before
-    // VideoDecoder could be started.
-    //
-    // Post-fix: mirror VideoDecoder's HTTP options (larger probesize,
-    // reconnect enabled, 30s rw_timeout). Probe and decoder now share
-    // identical HTTP robustness. Non-HTTP paths (plain file://, local
-    // paths) skip the block — default behavior is fine for kernel FS.
-    // Audit P2 — case-insensitive (uppercase "HTTP://" is legal per RFC 3986).
     const bool is_http = starts_with_ci(path, "http://")
                       || starts_with_ci(path, "https://");
+
+    struct TierSpec {
+        int     tier;
+        int64_t probesize;         // bytes
+        int64_t analyzeduration_us;// microseconds; 0 = leave at ffmpeg default
+        int64_t rw_timeout_us;     // microseconds; 0 = leave at ffmpeg default
+    };
+
+    TierSpec tiers[3];
+    int tier_count = 0;
     if (is_http) {
-        av_dict_set(&opts, "reconnect", "1", 0);
-        av_dict_set(&opts, "reconnect_streamed", "1", 0);
-        av_dict_set(&opts, "reconnect_delay_max", "10", 0);
-        av_dict_set(&opts, "timeout", "60000000", 0);      // 60s connect
-        av_dict_set(&opts, "rw_timeout", "30000000", 0);   // 30s per read
-        av_dict_set(&opts, "probesize", "20000000", 0);    // 20 MB probe
-        av_dict_set(&opts, "analyzeduration", "10000000", 0); // 10s analyze
-        std::fprintf(stderr, "probe_file: HTTP mode enabled for %s\n", path.c_str());
+        tiers[0] = {1,   512 * 1024,      750 * 1000,       5 * 1000 * 1000};
+        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   15 * 1000 * 1000};
+        tiers[2] = {3, 5 * 1024 * 1024, 5 * 1000 * 1000,   30 * 1000 * 1000};
+        tier_count = 3;
+    } else {
+        tiers[0] = {1, 5 * 1000 * 1000, 0, 0};
+        tier_count = 1;
     }
 
-    int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
-    av_dict_free(&opts);
+    AVFormatContext* fmt_ctx = nullptr;
+    TierSpec chosen{};
+    const auto probe_t0 = std::chrono::steady_clock::now();
+    std::string last_err = "probe failed";
 
-    if (ret < 0) {
-        char errbuf[256];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        std::fprintf(stderr, "avformat_open_input failed: %s (%s)\n", errbuf, path.c_str());
+    for (int i = 0; i < tier_count; ++i) {
+        const TierSpec& t = tiers[i];
+
+        AVDictionary* opts = nullptr;
+        char num[32];
+        std::snprintf(num, sizeof(num), "%lld", (long long)t.probesize);
+        av_dict_set(&opts, "probesize", num, 0);
+
+        if (is_http) {
+            av_dict_set(&opts, "reconnect", "1", 0);
+            av_dict_set(&opts, "reconnect_streamed", "1", 0);
+            av_dict_set(&opts, "reconnect_delay_max", "10", 0);
+            av_dict_set(&opts, "timeout", "60000000", 0);  // 60s connect (unchanged)
+            std::snprintf(num, sizeof(num), "%lld", (long long)t.rw_timeout_us);
+            av_dict_set(&opts, "rw_timeout", num, 0);
+            std::snprintf(num, sizeof(num), "%lld", (long long)t.analyzeduration_us);
+            av_dict_set(&opts, "analyzeduration", num, 0);
+        }
+
+        std::fprintf(stderr,
+            "probe_file: Tier %d attempt (probesize=%lld analyzedur=%lldus "
+            "rw_timeout=%lldus) %s\n",
+            t.tier, (long long)t.probesize, (long long)t.analyzeduration_us,
+            (long long)t.rw_timeout_us, path.c_str());
+
+        int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
+        av_dict_free(&opts);
+
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            std::fprintf(stderr,
+                "probe_file: Tier %d avformat_open_input failed: %s\n",
+                t.tier, errbuf);
+            last_err = std::string("open:") + errbuf;
+            if (fmt_ctx) { avformat_close_input(&fmt_ctx); fmt_ctx = nullptr; }
+            continue;
+        }
+
+        // Mirror AVDictionary probesize/analyzeduration onto fmt_ctx —
+        // some demuxers read fields directly rather than via opts (retained
+        // from pre-P4 HTTP path).
+        if (is_http) {
+            fmt_ctx->probesize = t.probesize;
+            fmt_ctx->max_analyze_duration = t.analyzeduration_us;
+        }
+
+        ret = avformat_find_stream_info(fmt_ctx, nullptr);
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            std::fprintf(stderr,
+                "probe_file: Tier %d avformat_find_stream_info failed: %s\n",
+                t.tier, errbuf);
+            last_err = std::string("find_stream_info:") + errbuf;
+            avformat_close_input(&fmt_ctx);
+            fmt_ctx = nullptr;
+            continue;
+        }
+
+        chosen = t;
+        std::fprintf(stderr, "probe_file: Tier %d passed\n", t.tier);
+        break;
+    }
+
+    if (!fmt_ctx) {
+        std::fprintf(stderr,
+            "probe_file: all %d tier(s) exhausted for %s (last: %s)\n",
+            tier_count, path.c_str(), last_err.c_str());
         return std::nullopt;
     }
 
-    ret = avformat_find_stream_info(fmt_ctx, nullptr);
-    if (ret < 0) {
-        char errbuf[256];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        std::fprintf(stderr, "avformat_find_stream_info failed: %s\n", errbuf);
-        avformat_close_input(&fmt_ctx);
-        return std::nullopt;
-    }
+    const int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - probe_t0).count();
 
     ProbeResult result;
+    result.probe_tier           = chosen.tier;
+    result.probe_elapsed_ms     = elapsed_ms;
+    result.probesize_used       = chosen.probesize;
+    result.analyzeduration_used = chosen.analyzeduration_us;
 
     // Find best video stream
     int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);

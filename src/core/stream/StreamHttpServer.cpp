@@ -1,5 +1,6 @@
 #include "StreamHttpServer.h"
 #include "StreamEngine.h"
+#include "StreamPieceWaiter.h"
 #include "core/torrent/TorrentEngine.h"
 
 #include <QDebug>
@@ -74,35 +75,44 @@ static QPair<qint64, qint64> parseRange(const QString& header, qint64 fileSize)
 }
 
 static constexpr int CHUNK_SIZE = 256 * 1024;
-static constexpr int PIECE_WAIT_POLL_MS = 200;
 static constexpr int PIECE_WAIT_TIMEOUT_MS = 15000;
 
-// ─── Serve a connection (runs on a thread pool thread) ───────────────────────
-
-static bool waitForPieces(TorrentEngine* engine, const QString& infoHash,
-                           int fileIndex, qint64 fileOffset, qint64 length,
-                           const std::shared_ptr<std::atomic<bool>>& cancelled)
+// STREAM_ENGINE_REBUILD P2 — per-chunk piece wait. Thin adapter over
+// StreamPieceWaiter so the call site keeps the same shape as the pre-rebuild
+// static waitForPieces (same 15 s timeout, same cancellation-token fast path,
+// same bool return). The async-wake path lives in StreamPieceWaiter;
+// STREAM_PIECE_WAITER_POLL=1 flips the waiter back to the old 200 ms poll
+// cadence for P2 rollback safety (env flag + fallback code path removed in
+// P6 per STREAM_ENGINE_REBUILD_TODO.md §6.1). If no StreamEngine is wired
+// (historical standalone callers), falls through to an inline 200 ms poll —
+// matches pre-rebuild behavior for that edge case without dragging the dead
+// waitForPieces helper along.
+static bool waitForPiecesChunk(StreamPieceWaiter* waiter, TorrentEngine* engine,
+                                const QString& infoHash, int fileIndex,
+                                qint64 fileOffset, qint64 length,
+                                const std::shared_ptr<std::atomic<bool>>& cancelled)
 {
     if (!engine) return false;
+
+    if (waiter) {
+        return waiter->awaitRange(infoHash, fileIndex, fileOffset, length,
+                                  PIECE_WAIT_TIMEOUT_MS, cancelled);
+    }
+
+    // No StreamEngine wired (tests, standalone server). Fall back to the
+    // pre-rebuild 200 ms poll loop, preserved here inline rather than as a
+    // separate function so the dead code path stays visible at the call
+    // site. Same cancellation-token semantics as STREAM_LIFECYCLE_FIX Phase
+    // 5 Batch 5.2.
+    constexpr int kLegacyPollMs = 200;
     int elapsed = 0;
     while (elapsed < PIECE_WAIT_TIMEOUT_MS) {
-        // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — per-stream cancellation
-        // check. StreamEngine::stopStream sets the atomic BEFORE erasing the
-        // record + removing the torrent. Checking here, before the engine
-        // call, short-circuits the path where haveContiguousBytes would run
-        // against an invalidated libtorrent state (engine::removeTorrent
-        // deleteFiles=true). Workers exit cleanly with a piece-wait timeout
-        // semantic (return false) — the same signal the 15s timeout produces,
-        // so the existing ConnectionGuard + caller's break-loop path closes
-        // the socket without code changes downstream. Tolerates nullptr
-        // cancelled shared_ptr (falls through to pre-5.2 behavior).
         if (cancelled && cancelled->load(std::memory_order_acquire))
             return false;
-
         if (engine->haveContiguousBytes(infoHash, fileIndex, fileOffset, length))
             return true;
-        QThread::msleep(PIECE_WAIT_POLL_MS);
-        elapsed += PIECE_WAIT_POLL_MS;
+        QThread::msleep(kLegacyPollMs);
+        elapsed += kLegacyPollMs;
     }
     return false;
 }
@@ -197,12 +207,19 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
     // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.2 — grab the per-stream
     // cancellation token alongside the FileEntry. Captured in a local so
     // the shared_ptr stays alive for the duration of this worker (and
-    // every waitForPieces call within the serve loop below). If
+    // every waitForPiecesChunk call within the serve loop below). If
     // StreamEngine isn't wired (standalone server), token is empty and
-    // waitForPieces falls through to pre-5.2 behavior.
+    // waitForPiecesChunk falls through to pre-5.2 behavior.
+    //
+    // STREAM_ENGINE_REBUILD P2 — same idea for the shared StreamPieceWaiter.
+    // Non-null in the StreamEngine-wired path (the engine creates the
+    // waiter in its ctor); nullptr for standalone callers, in which case
+    // waitForPiecesChunk falls through to the inline 200 ms poll.
     std::shared_ptr<std::atomic<bool>> cancelled;
+    StreamPieceWaiter* pieceWaiter = nullptr;
     if (auto* se = server->streamEngine()) {
         cancelled = se->cancellationToken(infoHash);
+        pieceWaiter = se->pieceWaiter();
     }
 
     QString contentType = contentTypeForPath(entry.path);
@@ -306,7 +323,7 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
 
         qint64 toRead = qMin(static_cast<qint64>(CHUNK_SIZE), remaining);
 
-        // STREAM_PLAYBACK_FIX Batch 1.2 — honor the waitForPieces return.
+        // STREAM_PLAYBACK_FIX Batch 1.2 — honor the piece-wait return.
         //
         // Before: the timeout was silently ignored and the serve loop fell
         // through to file.read(), returning sparse-zero bytes from the
@@ -323,14 +340,19 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
         //
         // qWarning fires on timeout so piece-starvation is observable in
         // logs (previously silent failure).
+        //
+        // STREAM_ENGINE_REBUILD P2 — waitForPiecesChunk dispatches through
+        // StreamPieceWaiter's notification-driven wake (default) or falls
+        // back to 200 ms polling under STREAM_PIECE_WAITER_POLL=1. Same
+        // bool return / same timeout budget / same cancellation semantics.
         if (engine) {
-            if (!waitForPieces(engine, entry.infoHash, entry.fileIndex,
-                               offset, toRead, cancelled))
+            if (!waitForPiecesChunk(pieceWaiter, engine, entry.infoHash,
+                                    entry.fileIndex, offset, toRead, cancelled))
             {
                 // Batch 5.2 — distinguish cancellation from timeout in the log
                 // so close-while-buffering stress shows up as a different
                 // signal vs weak-swarm starvation. Both return false from
-                // waitForPieces; cancelled->load() tells us which.
+                // waitForPiecesChunk; cancelled->load() tells us which.
                 const bool wasCancelled =
                     cancelled && cancelled->load(std::memory_order_acquire);
                 qWarning().nospace()
@@ -439,7 +461,8 @@ void StreamHttpServer::stop()
     }
 
     // Deliberately do NOT reset m_shuttingDown here — a worker thread stuck
-    // in waitForPieces (15s blocking sleep) could miss its loop-iteration
+    // in waitForPiecesChunk (up to 15 s waiting on a QWaitCondition, or the
+    // same budget in poll-fallback mode) could miss its loop-iteration
     // shutdown check, unblock after drain timeout, then read a reset flag
     // and keep serving on a torn-down server. start() below is the only
     // place that flips the flag back to false, and that only happens on a
