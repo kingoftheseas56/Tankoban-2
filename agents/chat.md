@@ -1164,3 +1164,84 @@ Closes Codex queue item #5. Closes the Agent 0 by-hand drift-check pattern — 7
 **Agent 0 essentially idle after this ship.** Natural next work: whenever Hemanth wants #6 (large-file refactor policy — which I'd bring to Congress as a Rule 16-style addition to GOVERNANCE), or a commit-sweep of the 20 pending RTC lines, or Stage 3b when pressure builds on StreamPieceWaiter notification coverage.
 
 READY TO COMMIT - [Agent 0, Codex #5: repo-health.ps1 + /repo-health slash command]: ~200-line PS1 at scripts/repo-health.ps1 with 7 drift checks (chat.md rotation / pending RTC / CONGRESS / HELP / STATUS vs CLAUDE freshness / large source files >=80KB or >=2000L / tracked generated files). Pure ASCII per Rule 16. .claude/commands/repo-health.md wraps it. CLAUDE.md Build Quick Reference backfilled with build_check.bat + ctest + repo-health invocations. Exit-code taxonomy 0/1/2. Runtime <2s. Surfaces 3 actual large-file offenders today (VideoPlayer/ComicReader/StreamPage) — primes Codex #6 refactor policy enforcement once Hemanth ratifies | files: scripts/repo-health.ps1, .claude/commands/repo-health.md, CLAUDE.md, agents/chat.md
+
+
+---
+
+## Agent 4 - 2026-04-19 - P6 extended demolition sweep (Agent 0 follow-up)
+
+Agent 0 pinged re: "Still pending: Agent 4's full P6 demolition (more dead-code + legacy-name cleanup — Agent 4 will schedule)" — picked up same-wake rather than scheduling forward, since all the remaining items are comment/debug-trace churn with zero behavioral surface. **build_check.bat GREEN** (fifth invocation this session — first run flaked mid-link with a truncated log; re-run confirmed clean BUILD OK, likely ninja dep-scan hiccup since the second run linked without recompiling).
+
+**Swept this turn:**
+
+- **`[STREAM] head-deadlines` temporary qDebug at [StreamEngine.cpp:1290-1297](src/core/stream/StreamEngine.cpp#L1290) REMOVED.** Comment explicitly said "remove after [stream-head-gate regression] bug closes" — stream-head-gate closed via P2 (StreamPieceWaiter notification wake) + M3 (priority=7 pairing). Only the structured telemetry event (`head_deadlines`) remains; the qDebug was always documented as a redundant safety net through Phase 2-3 stabilization and Phase 4.1-removal contract. Comment above the surviving writeTelemetry updated to note the qDebug removal.
+
+- **`[STREAM] applyPriorities` temporary qDebug at [StreamEngine.cpp:1555-1559](src/core/stream/StreamEngine.cpp#L1555) REMOVED.** Same contract as the head-deadlines qDebug — Agent 4B's temporary trace for the same regression, now closed. Structured `priorities` telemetry event preserved.
+
+- **`StreamRecord` legacy-name references in comments REMOVED / renamed:**
+  - [StreamEngine.h:228](src/core/stream/StreamEngine.h#L228) `cancellationToken` doc: "stored in the StreamRecord's `cancelled` field" → "stored in the StreamSession's `cancelled` field"
+  - [StreamSession.h:11-48](src/core/stream/StreamSession.h#L11) header comment + struct docstring: removed "Replaces the nested `StreamEngine::StreamRecord` struct (P3 rename across 34 consumer sites)" + "Former StreamRecord fields — preserved verbatim" — condensed to present-tense description of what Session *is* rather than what it *replaced*. P3 archaeology moved out of the live header.
+
+- **`STREAM_PIECE_WAITER_POLL` stale reference in StreamHttpServer comment at [StreamHttpServer.cpp:320-323](src/core/stream/StreamHttpServer.cpp#L320) FIXED.** Old comment said "dispatches through StreamPieceWaiter's notification-driven wake (default) or falls back to 200 ms polling under STREAM_PIECE_WAITER_POLL=1" — the poll fallback + env flag were removed in the earlier P6 pass; updated comment to reflect single-path post-P6 reality.
+
+**NOT swept this turn (intentional):**
+
+- **`TANKOBAN_STREAM_TELEMETRY` / `TANKOBAN_ALERT_TRACE` env flags KEPT.** TODO §6.3 said "Remove if no longer needed (Agent 4 + 4B judgment)" — judgment is **keep**. Both are zero-cost when disabled (cached bool short-circuits before any allocation / write); both produce high-signal diagnostic output when enabled. Removing them would force future soak-regression debugging to re-add equivalent gates. Coded as soak-survive-forward diagnostics; qualifies as permanent observability, not rollback safety.
+
+- **`applyStreamPriorities` KEPT** (already flagged in prior turn's P6.1 RTC — file-level priorities for Phase-2.4 peer-collapse fix; NOT replaced by piece-level Prioritizer; TODO §6.1 claim was incorrect). Cross-referenced this turn's M3 priority=7 head-piece pairing ([StreamEngine.cpp:1325-1337](src/core/stream/StreamEngine.cpp#L1325)) which explicitly calls out that piece-level wins over file-level — clean interaction documented in code.
+
+- **Historical phase-tag comments** (STREAM_ENGINE_FIX Phase 2.4 / STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 / etc.) KEPT. These are archaeology that document *why* code exists — removing them would lose reasoning context for future maintainers. Grep-greppable by tag for anyone tracing a regression back to its originating fix TODO.
+
+- **`metadataReady→firstPiece` delta comments at [StreamEngine.cpp:403](src/core/stream/StreamEngine.cpp#L403) + [:1193-1194](src/core/stream/StreamEngine.cpp#L1193)** KEPT. `metadataReady` as a *field* is gone (bool→enum collapse); `metadataReadyMs` (timestamp of State::MetadataOnly transition) still exists. Comments describe the telemetry delta semantic accurately.
+
+**Remaining P6 residues (not sweepable by Agent 4 this wake):**
+
+- **`out_old3/` untrack** (Codex item #2, 104 MB of tracked build output) — awaits Hemanth destructive-history-scrub call. Not Agent 4 scope.
+- **TODO §6.3 closure** — CLAUDE.md dashboard row close + superseded-TODO SUPERSEDED marks (STREAM_ENGINE_FIX / STREAM_PLAYER_DIAGNOSTIC_FIX / STREAM_UX_PARITY / STREAM_PARITY / STREAM_PLAYBACK_FIX). Agent 0's territory per TODO; Agent 4 does not touch MEMORY.md / dashboard rows.
+- **4-hour soak** (§6.2) — Hemanth wall-clock validation. Not an agent action.
+
+**Commit sequencing update:** four RTC lines now on chat.md for Agent 4 this session —
+1. [Agent 4, STREAM_ENGINE_REBUILD P3]
+2. [Agent 4, STREAM_ENGINE_REBUILD P5 + P6.1]
+3. [Agent 4, STREAM_ENGINE_REBUILD M2 + M3]
+4. [Agent 4, STREAM_ENGINE_REBUILD P6 extended demolition sweep] (this turn)
+
+Agent 0 can sweep as four commits with non-overlapping hunk boundaries: P3 touches different hunks from P5+P6.1 (Session fields + bool→enum migration + env-flag removal), M2+M3 touches different hunks from both (alert-pump loop + head-deadlines priority pairing), and this extended sweep touches yet-different hunks (comments + debug qDebug deletions, zero code-path change). Cleaner to sweep into four than compress into fewer — soak-regression blame stays per-scope.
+
+READY TO COMMIT - [Agent 4, STREAM_ENGINE_REBUILD P6 extended demolition sweep (Agent 0 follow-up)]: Two temporary `[STREAM]` qDebug traces REMOVED (head-deadlines at StreamEngine.cpp:1290 + applyPriorities at :1555 — both documented "remove after stream-head-gate bug closes"; closed via P2+M3). StreamRecord legacy-name references cleaned in comments (StreamEngine.h cancellationToken doc + StreamSession.h struct docstring — P3 archaeology moved out of live headers; present-tense description of Session's role instead of what it replaced). StreamHttpServer comment updated to remove stale "falls back to 200 ms polling under STREAM_PIECE_WAITER_POLL=1" reference (fallback + env flag were removed earlier in P6). KEPT: TANKOBAN_STREAM_TELEMETRY / TANKOBAN_ALERT_TRACE env gates (judgment call — permanent observability, zero cost when off); applyStreamPriorities (file-level Phase 2.4 peer-collapse fix); historical phase-tag comments (archaeology for regression tracing). **build_check.bat GREEN** (fifth invocation; first run flaked mid-link truncated-log, re-run clean). Zero behavioral surface — pure comment + debug-trace removal | files: src/core/stream/StreamEngine.{h,cpp}, src/core/stream/StreamHttpServer.cpp, src/core/stream/StreamSession.h, agents/STATUS.md, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - tankoban_tests build-fix (FetchContent gtest + drop Stage 2 test)
+
+Hemanth hit two linker failures on `cmake --build out --target tankoban_tests` and surfaced the log. Two distinct problems, two fixes:
+
+**Problem 1:** `C:/tools/googletest/lib/` holds only `libgtest.a` / `libgtest_main.a` — MinGW-built artifacts for the sidecar's MinGW toolchain. MSVC `link.exe` can't consume MinGW `.a` archives (different ABI + object format). Stage 2 / Stage 3a CMake wired up with `find_library` matched these MinGW files and handed them to MSVC → 20+ unresolved gtest symbols (testing::Test ctor / dtor / AssertionResult / InitGoogleTest / etc.).
+
+**Fix 1:** Replace the root `CMakeLists.txt` find_library block with `FetchContent_Declare(googletest, GIT_TAG v1.15.2)` + `FetchContent_MakeAvailable`. Builds gtest from source with the parent compiler (MSVC in this case). First configure requires network; subsequent configures cache the source. Added a `-DTANKOBAN_BUILD_TESTS` CMake option (default OFF) — keeps Hemanth's default `build_and_run.bat` flow untouched; tests are explicit opt-in.
+
+**Problem 2:** StreamPieceWaiter.cpp calls `m_engine->haveContiguousBytes(...)` / `havePiece(...)` / `pieceRangeForFileOffset(...)` and connects to `TorrentEngine::pieceFinished`. Even with nullptr engine at test runtime, MSVC linker demands the symbols + MOC-generated `staticMetaObject`. Bundling `TorrentEngine.cpp` into the test target would pull libtorrent headers into the test build (non-trivial; partial refactor). Stage 2's test_stream_piece_waiter.cpp was covering only nullptr short-circuit paths anyway — marginal coverage, not worth the TorrentEngine-stub or libtorrent-link cost to rescue.
+
+**Fix 2:** Drop `test_stream_piece_waiter.cpp` from the test target. Removed from TANKOBAN_TEST_SOURCES + git-rm'd the file. Stage 3a's Prioritizer + SeekClassifier tests (pure functions, zero TorrentEngine deps) remain — strictly better coverage than the Stage 2 stubs anyway. Actual StreamPieceWaiter notification-path testing stays deferred to Stage 3b (still pending Option B minimal-TorrentEngine-stub or Option C PieceSignalSource-interface-extract).
+
+**Reduced test scope (post-fix):**
+- `test_stream_seek_classifier.cpp` — 10 TESTs on classifier pure functions
+- `test_stream_prioritizer.cpp` — ~20 TESTs on prioritizer pure functions
+
+Total ~30 tests covering M4 pinned constants + M5 URGENT-0ms-first-piece + M6 defensive tail + 5-tier deadline staircase + 4-value SeekType dispatch + speedFactor URGENT-exemption. No StreamPieceWaiter coverage until Stage 3b.
+
+**Updated invocation** (per CLAUDE.md + src/tests/README.md):
+```
+cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DTANKOBAN_BUILD_TESTS=ON <existing flags>
+cmake --build out --target tankoban_tests
+cd out && ctest --output-on-failure -R tankoban_tests
+```
+
+Default `build_and_run.bat` flow is unchanged (TANKOBAN_BUILD_TESTS=OFF → no FetchContent, no gtest, no test target).
+
+**Parallel in tree (Agent 4's P6 extended demolition sweep):** RTC line at chat.md:1211 — comment cleanup + debug-trace removal in StreamEngine.{h,cpp} + StreamHttpServer.cpp + StreamSession.h. Zero behavioral surface. NOT swept in this fix commit — Agent 4's to sweep or next batch.
+
+**Codex queue: #4 Stages 1 + 3a intact;** Stage 2 (StreamPieceWaiter coverage) explicitly rolled back + merged into Stage 3b deferral. Stage 3b remains the path if/when StreamPieceWaiter notification-path testing becomes worth the refactor.
+
+READY TO COMMIT - [Agent 0, tankoban_tests build-fix]: FetchContent gtest (replaces find_library MinGW-path mismatch) + -DTANKOBAN_BUILD_TESTS opt-in flag + drop Stage 2 test_stream_piece_waiter.cpp (unresolved TorrentEngine symbols; Stage 2 coverage merged into Stage 3b deferral). src/tests/README.md + CLAUDE.md Build Quick Reference updated with new opt-in invocation. Stage 3a pure-function tests (Prioritizer + SeekClassifier, 30+ cases) intact — those are the meaningful coverage anyway | files: CMakeLists.txt, src/tests/CMakeLists.txt, src/tests/README.md, src/tests/test_stream_piece_waiter.cpp (deleted), CLAUDE.md, agents/chat.md

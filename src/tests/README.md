@@ -6,9 +6,20 @@ Pure-gtest harness mirroring [native_sidecar/tests/](../../native_sidecar/tests/
 
 | Test file | System under test | Scope |
 |---|---|---|
-| [test_stream_piece_waiter.cpp](test_stream_piece_waiter.cpp) | [StreamPieceWaiter](../core/stream/StreamPieceWaiter.h) | Null-engine short-circuit + timeout + destructor + cancellation sentinel (Stage 2 Option A). Notification path deferred to Stage 3b. |
 | [test_stream_seek_classifier.cpp](test_stream_seek_classifier.cpp) | [StreamSeekClassifier](../core/stream/StreamSeekClassifier.h) | `containerMetadataStart` (10MB / 5% threshold pick) + `classifySeek` dispatch (InitialPlayback / UserScrub / ContainerMetadata / Sequential edge cases). Pure functions. |
 | [test_stream_prioritizer.cpp](test_stream_prioritizer.cpp) | [StreamPrioritizer](../core/stream/StreamPrioritizer.h) | M4 compile-time constants pinned; priority-tier dispatch (metadata/seeking/background/normal); CRITICAL HEAD staircase 10/60/110/160/210ms; HEAD linear; end-piece clamping; M5 InitialPlayback 0ms URGENT; UserScrub 300ms CRITICAL; ContainerMetadata 100ms; speedFactor (URGENT-exempt); M6 defensive tail deadlines 1200/1250ms. Pure functions. |
+
+**Dropped (pending Stage 3b):** `test_stream_piece_waiter.cpp` was committed in Stage 2 as the harness-proof test, then removed when the MSVC build surfaced linker errors: StreamPieceWaiter.cpp references TorrentEngine methods (`haveContiguousBytes`, `havePiece`, `pieceRangeForFileOffset`) + connects to its `pieceFinished` signal (needs MOC `staticMetaObject`). Bundling TorrentEngine.cpp into the test target would pull libtorrent. Resurrection requires either Option B (minimal TorrentEngine stub layer) or Option C (extract a `PieceSignalSource` interface) — both deferred per integration memo §5.
+
+## Running
+
+```
+cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DTANKOBAN_BUILD_TESTS=ON <other existing flags>
+cmake --build out --target tankoban_tests
+cd out && ctest --output-on-failure -R tankoban_tests
+```
+
+First configure with `-DTANKOBAN_BUILD_TESTS=ON` fetches GoogleTest via FetchContent (requires network once; subsequent configures cache it). `build_and_run.bat` leaves the option OFF by default — tests are opt-in to avoid adding gtest build time to the default Hemanth flow.
 
 ## Running
 

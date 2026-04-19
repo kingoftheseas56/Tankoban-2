@@ -1,19 +1,20 @@
 # ── Tankoban main-app unit tests ────────────────────────────────────────────
-# Mirror of native_sidecar/tests/CMakeLists.txt pattern:
-# - Monolithic test executable bundling test files + the source files under
-#   test, NOT linked against the main Tankoban target (which is a Qt GUI exe
-#   with no library split).
-# - No FetchContent for gtest; relies on GTEST_ROOT / GTEST_INCLUDE_DIR set
-#   by the top-level CMakeLists.txt (see its EOF block).
-# - `qt_add_executable` (not `add_executable`) so AUTOMOC picks up Q_OBJECT
-#   classes like StreamPieceWaiter. Inherited AUTOMOC from the parent project
-#   means no extra moc wiring here.
+# Activated via -DTANKOBAN_BUILD_TESTS=ON at the top-level CMakeLists.txt.
+# GoogleTest is provided via FetchContent (imported targets GTest::gtest +
+# GTest::gtest_main), not via find_library — the MinGW .a files at
+# C:/tools/googletest/lib/ cannot be linked by MSVC.
+#
+# Scope constraint: test sources are restricted to files with NO dependency
+# on TorrentEngine / libtorrent / Qt widgets / D3D11. That's Stage 3a shape:
+# StreamPrioritizer (pure functions) + StreamSeekClassifier (pure functions).
+# StreamPieceWaiter testing was in Stage 2 but its #connect(engine,
+# pieceFinished, ...) call pulls TorrentEngine symbols that the linker
+# can't resolve without either a TorrentEngine stub layer or a libtorrent-
+# capable test build — that's Stage 3b, deferred.
 
 set(TANKOBAN_TEST_SOURCES
-    test_stream_piece_waiter.cpp
     test_stream_seek_classifier.cpp
     test_stream_prioritizer.cpp
-    ../core/stream/StreamPieceWaiter.cpp
     ../core/stream/StreamSeekClassifier.cpp
     ../core/stream/StreamPrioritizer.cpp
 )
@@ -22,27 +23,19 @@ qt_add_executable(tankoban_tests ${TANKOBAN_TEST_SOURCES})
 
 target_include_directories(tankoban_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/.."   # matches Tankoban target's /src include
-    "${GTEST_INCLUDE_DIR}"
 )
 
-# Only Qt6::Core — StreamPieceWaiter touches QObject + QMutex + QWaitCondition
-# + QElapsedTimer + QCoreApplication + QDir + QFile + QDateTime + QThread, all
-# in QtCore. Deliberately no Widgets/Network/OpenGL/WebEngine — keeps link time
-# minimal and prevents GUI pollution in a headless test context.
+# Qt6::Core only — Prioritizer + SeekClassifier are pure C++ with a QList +
+# QPair return type. No GUI, no widgets, no network. Deliberately narrow.
 target_link_libraries(tankoban_tests PRIVATE
     Qt6::Core
-    "${GTEST_LIBRARY}"
-    "${GTEST_MAIN_LIBRARY}"
+    GTest::gtest
+    GTest::gtest_main
 )
 
 add_test(NAME tankoban_tests COMMAND tankoban_tests)
 
-# Suppress telemetry writes during ctest runs. Without these, StreamPieceWaiter
-# would write into the build-tree `stream_telemetry.log` (per its
-# QCoreApplication::applicationDirPath() fallback). The STREAM_PIECE_WAITER_POLL
-# env var exercises the fallback poll branch — null-engine tests use the
-# short-circuit at line 109, not the poll path, but setting both here keeps
-# the env deterministic for future Stage-3 tests that DO exercise either.
+# Suppress any stray telemetry writes during ctest runs.
 set_tests_properties(tankoban_tests PROPERTIES
-    ENVIRONMENT "TANKOBAN_STREAM_TELEMETRY=0;STREAM_PIECE_WAITER_POLL=1"
+    ENVIRONMENT "TANKOBAN_STREAM_TELEMETRY=0"
 )

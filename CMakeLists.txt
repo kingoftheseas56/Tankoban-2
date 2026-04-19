@@ -409,18 +409,32 @@ target_precompile_headers(Tankoban PRIVATE
     <functional>
 )
 
-# ── C++ unit tests (optional — only if GoogleTest found) ────────────────────
-# Mirror of native_sidecar/CMakeLists.txt:207-218 pattern. Configure stays
-# green on machines without GoogleTest; tests build/run only when present.
-set(GTEST_ROOT "C:/tools/googletest" CACHE PATH "GoogleTest install prefix")
-find_path(GTEST_INCLUDE_DIR gtest/gtest.h HINTS "${GTEST_ROOT}/include")
-find_library(GTEST_LIBRARY gtest HINTS "${GTEST_ROOT}/lib")
-find_library(GTEST_MAIN_LIBRARY gtest_main HINTS "${GTEST_ROOT}/lib")
+# ── C++ unit tests (optional — opt in with -DTANKOBAN_BUILD_TESTS=ON) ───────
+# Original approach used find_library against C:/tools/googletest — but that
+# path holds MinGW-built libgtest.a for the sidecar, which MSVC's link.exe
+# cannot link (different ABI + object format). Main-app is MSVC2022 so it
+# needs an MSVC-built gtest. FetchContent builds gtest from source with the
+# parent compiler, which works for both the MSVC main app AND a future MinGW
+# sidecar adoption (sidecar still uses its own find_library block today).
+#
+# Configure requires network on first run (fetches gtest at the pinned tag);
+# subsequent configures use the CMake cache.
+option(TANKOBAN_BUILD_TESTS "Build tankoban_tests (fetches GoogleTest via FetchContent)" OFF)
 
-if(GTEST_INCLUDE_DIR AND GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
-    message(STATUS "GoogleTest found — building tankoban_tests")
+if(TANKOBAN_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.15.2
+    )
+    # Windows MSVC: force shared CRT on gtest to match Qt6's CRT.
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    message(STATUS "TANKOBAN_BUILD_TESTS=ON - building tankoban_tests")
     enable_testing()
     add_subdirectory(src/tests)
 else()
-    message(STATUS "GoogleTest not found — skipping C++ unit tests")
+    message(STATUS "TANKOBAN_BUILD_TESTS=OFF - skipping C++ unit tests")
 endif()
