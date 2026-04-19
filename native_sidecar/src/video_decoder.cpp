@@ -145,8 +145,13 @@ void VideoDecoder::stop() {
 }
 
 void VideoDecoder::seek(double position_sec) {
+    seek(position_sec, seek_mode_.load());
+}
+
+void VideoDecoder::seek(double position_sec, SeekMode mode) {
     std::lock_guard<std::mutex> lock(seek_mutex_);
     seek_target_sec_ = position_sec;
+    seek_pending_mode_ = mode;
     seek_pending_.store(true);
 }
 
@@ -590,6 +595,19 @@ void VideoDecoder::decode_thread_func(
         if (raw_frame->pts != AV_NOPTS_VALUE) {
             AVRational tb = video_stream->time_base;
             pts_us = av_rescale_q(raw_frame->pts, tb, {1, 1000000});
+        }
+
+        // PLAYER_STREMIO_PARITY Phase 3 — hr-seek decode-to-target skip.
+        // After an Exact-mode seek, the keyframe-aligned backward seek lands
+        // before the target; discard frames whose pts is below target until
+        // the first frame at or past target arrives, then resume normal
+        // processing. Mirrors mpv `--hr-seek=yes` precision.
+        if (seek_skip_active_.load(std::memory_order_acquire)) {
+            int64_t target_us = seek_skip_until_us_.load(std::memory_order_relaxed);
+            if (raw_frame->pts != AV_NOPTS_VALUE && pts_us < target_us) {
+                return true;  // skipped — keep decoding
+            }
+            seek_skip_active_.store(false, std::memory_order_release);
         }
 
         // Pre-start skip: when resuming mid-file, the seek lands on a
@@ -1128,15 +1146,30 @@ void VideoDecoder::decode_thread_func(
         // Check for pending seek
         if (seek_pending_.load()) {
             double seek_sec;
+            SeekMode seek_mode;
             {
                 std::lock_guard<std::mutex> lock(seek_mutex_);
                 seek_sec = seek_target_sec_;
+                seek_mode = seek_pending_mode_;
                 seek_pending_.store(false);
             }
             int64_t ts = static_cast<int64_t>(seek_sec * AV_TIME_BASE);
             av_seek_frame(fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
             avcodec_flush_buffers(codec_ctx);
-            std::fprintf(stderr, "VideoDecoder: seeked to %.3fs\n", seek_sec);
+            // PLAYER_STREMIO_PARITY Phase 3 — hr-seek decode-to-target.
+            // Fast: arm no skip; first decoded frame (post-keyframe) displays.
+            // Exact: arm skip target; process_frame discards frames with
+            //   pts < target_us until the first qualifying frame, matching
+            //   mpv's --hr-seek=yes semantics.
+            if (seek_mode == SeekMode::Exact) {
+                seek_skip_until_us_.store(ts);
+                seek_skip_active_.store(true);
+            } else {
+                seek_skip_active_.store(false);
+            }
+            std::fprintf(stderr, "VideoDecoder: seeked to %.3fs mode=%s\n",
+                         seek_sec,
+                         seek_mode == SeekMode::Exact ? "exact" : "fast");
             continue;
         }
 

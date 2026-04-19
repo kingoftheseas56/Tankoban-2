@@ -44,6 +44,13 @@ public:
     int sendPause();
     int sendResume();
     int sendSeek(double positionSec);
+    // PLAYER_STREMIO_PARITY Phase 3 — per-call seek precision override.
+    // mode = "fast" or "exact"; empty string defers to sticky default set
+    // via sendSetSeekMode (sidecar default is fast).
+    int sendSeek(double positionSec, const QString& modeOverride);
+    // Sticky seek-mode preference. mode = "fast" or "exact". Pre-Phase-3
+    // sidecar binaries return NOT_IMPLEMENTED — SidecarProcess swallows it.
+    int sendSetSeekMode(const QString& mode);
     int sendFrameStep(bool backward = false, double currentPosSec = 0.0);
     int sendStop();
     int sendSetVolume(double volume);

@@ -766,6 +766,18 @@ void VideoPlayer::onSidecarReady()
     if (m_playlistDrawer && m_playlistDrawer->loopFile())
         m_sidecar->sendSetLoopFile(true);
 
+    // PLAYER_STREMIO_PARITY Phase 3 Batch 3.2 — push persisted seek-mode
+    // pref so the first user seek of the session honors the saved choice.
+    // Sidecar default is fast; only push on non-default to keep the wire
+    // quiet for the common case. Pre-Phase-3 sidecar binaries return
+    // NOT_IMPLEMENTED; SidecarProcess swallows that cleanly.
+    {
+        QSettings s("Tankoban", "Tankoban");
+        const QString seekMode = s.value("Player/seekMode", "fast").toString();
+        if (seekMode == "exact")
+            m_sidecar->sendSetSeekMode(seekMode);
+    }
+
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
     // one-shot pending-open token, not just on a non-empty m_pendingFile.
     // Without this, a spurious `ready` event arriving after a user-close
@@ -2974,7 +2986,10 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
             for (const auto& ch : m_chapters) {
                 double start = ch.toObject().value("start").toDouble();
                 if (start > curSec + 1.0) {
-                    m_sidecar->sendSeek(start);
+                    // PLAYER_STREMIO_PARITY Phase 3 — chapter boundaries are
+                    // UX-critical (subtitle sync, scene markers); force Exact
+                    // regardless of sticky user pref.
+                    m_sidecar->sendSeek(start, QStringLiteral("exact"));
                     m_toastHud->showToast(ch.toObject().value("title").toString());
                     break;
                 }
@@ -2987,7 +3002,8 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
             for (int i = m_chapters.size() - 1; i >= 0; --i) {
                 double start = m_chapters[i].toObject().value("start").toDouble();
                 if (start < curSec - 2.0) {
-                    m_sidecar->sendSeek(start);
+                    // PLAYER_STREMIO_PARITY Phase 3 — see chapter_next note.
+                    m_sidecar->sendSeek(start, QStringLiteral("exact"));
                     m_toastHud->showToast(m_chapters[i].toObject().value("title").toString());
                     break;
                 }

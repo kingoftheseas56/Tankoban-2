@@ -216,6 +216,23 @@ int SidecarProcess::sendSeek(double positionSec)
     return sendCommand("seek", p);
 }
 
+int SidecarProcess::sendSeek(double positionSec, const QString& modeOverride)
+{
+    QJsonObject p;
+    p["positionSec"] = positionSec;
+    if (!modeOverride.isEmpty()) {
+        p["mode"] = modeOverride;
+    }
+    return sendCommand("seek", p);
+}
+
+int SidecarProcess::sendSetSeekMode(const QString& mode)
+{
+    QJsonObject p;
+    p["mode"] = mode;
+    return sendCommand("set_seek_mode", p);
+}
+
 int SidecarProcess::sendFrameStep(bool backward, double currentPosSec)
 {
     QJsonObject p;

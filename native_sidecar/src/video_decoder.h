@@ -30,6 +30,12 @@ using DecoderEventCb = std::function<void(const std::string& event,
 
 class VideoDecoder {
 public:
+    // PLAYER_STREMIO_PARITY Phase 3 — seek precision mode.
+    // Fast = snap to nearest keyframe before target (current/legacy behavior).
+    // Exact = decode forward from keyframe, discarding frames with pts < target
+    //         (mpv `--hr-seek=yes` parity).
+    enum class SeekMode { Fast, Exact };
+
     // ring_writer must outlive the decoder. clock may be null (video-only mode).
     // slot_bytes is the max pixel data per SHM slot (for overflow guard).
     VideoDecoder(FrameRingWriter* ring_writer, DecoderEventCb on_event,
@@ -58,8 +64,14 @@ public:
     // Is the decode thread running?
     bool running() const { return running_.load(std::memory_order_acquire); }
 
-    // Seek to a position (seconds). Thread-safe.
+    // Seek to a position (seconds). Thread-safe. Uses the sticky default mode
+    // set via set_seek_mode (Fast unless changed). Use the (pos, mode) overload
+    // to override per-call (chapter nav forces Exact).
     void seek(double position_sec);
+    void seek(double position_sec, SeekMode mode);
+
+    // Sticky default mode for subsequent seek() calls without an explicit mode.
+    void set_seek_mode(SeekMode m) { seek_mode_.store(m); }
 
     // Pause/resume (holds video in place during A/V sync wait).
     void pause()  { paused_.store(true); }
@@ -107,6 +119,16 @@ private:
     std::mutex          seek_mutex_;
     std::atomic<bool>   seek_pending_{false};
     double              seek_target_sec_ = 0.0;
+    SeekMode            seek_pending_mode_ = SeekMode::Fast;  // protected by seek_mutex_
+
+    // Sticky default for seek() calls without explicit mode.
+    std::atomic<SeekMode> seek_mode_{SeekMode::Fast};
+
+    // Active hr-seek skip target pts (us). Read only when seek_skip_active_
+    // is true. Set by decode-loop when an Exact-mode seek lands; cleared by
+    // process_frame when the first frame with pts >= target is encountered.
+    std::atomic<bool>    seek_skip_active_{false};
+    std::atomic<int64_t> seek_skip_until_us_{0};
 
     // Frame step (pending)
     std::atomic<bool>   step_pending_{false};

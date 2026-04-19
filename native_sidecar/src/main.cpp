@@ -872,18 +872,38 @@ static void handle_stop(const Command& cmd) {
 static void handle_seek(const Command& cmd) {
     write_ack(cmd.seq, cmd.sessionId);
     double pos = cmd.payload.value("positionSec", 0.0);
-    // "exact" mode: seek to keyframe before target, then decode forward to exact PTS.
-    // This is the default behavior (pre-start skip in the decoder handles it).
-    // "keyframe" mode: same seek, but skip the forward decode (faster, less precise).
-    // Currently both modes use AVSEEK_FLAG_BACKWARD. The difference is handled
-    // by the decoder's pre-start skip logic, which is always active.
+    // PLAYER_STREMIO_PARITY Phase 3 — optional per-call seek-mode override.
+    // Payload field "mode" accepts "fast" or "exact"; absent = sticky default
+    // last set via set_seek_mode (Fast unless changed). Audio decoder is
+    // mode-agnostic — it has no keyframe concept; Swr drift correction
+    // handles re-sync. Only g_video_dec honors the mode.
+    const std::string mode_str = cmd.payload.value("mode", std::string{});
     std::lock_guard<std::mutex> lock(g_session_mutex);
     if (g_audio_dec) {
         g_audio_dec->seek(pos);
     }
     if (g_video_dec) {
-        g_video_dec->seek(pos);
+        if (mode_str == "exact") {
+            g_video_dec->seek(pos, VideoDecoder::SeekMode::Exact);
+        } else if (mode_str == "fast") {
+            g_video_dec->seek(pos, VideoDecoder::SeekMode::Fast);
+        } else {
+            g_video_dec->seek(pos);
+        }
     }
+}
+
+static void handle_set_seek_mode(const Command& cmd) {
+    write_ack(cmd.seq, cmd.sessionId);
+    const std::string mode_str = cmd.payload.value("mode", std::string{"fast"});
+    VideoDecoder::SeekMode mode = (mode_str == "exact")
+        ? VideoDecoder::SeekMode::Exact
+        : VideoDecoder::SeekMode::Fast;
+    std::lock_guard<std::mutex> lock(g_session_mutex);
+    if (g_video_dec) {
+        g_video_dec->set_seek_mode(mode);
+    }
+    std::fprintf(stderr, "set_seek_mode: %s\n", mode_str.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -1439,6 +1459,9 @@ int main(int argc, char* argv[]) {
 
         } else if (name == "seek") {
             handle_seek(*cmd);
+
+        } else if (name == "set_seek_mode") {
+            handle_set_seek_mode(*cmd);
 
         } else if (name == "frame_step") {
             handle_frame_step(*cmd);
