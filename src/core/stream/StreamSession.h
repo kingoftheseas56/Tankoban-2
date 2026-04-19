@@ -103,6 +103,16 @@ struct StreamSession {
     int    stallPeerHaveCount  = -1;
     bool   stallEmitted        = false;
 
+    // STREAM_STALL_FIX Phase 2 — gate-pass sequential toggle (tactic a).
+    // Flips to true on the first gate-100% crossing per session; the
+    // paired setSequentialDownload(false) call returns pieces past
+    // cursor to libtorrent's normal pick_pieces path (Agent 4B B3
+    // source-verification of torrent.cpp / peer_connection.cpp). Never
+    // flips back — cold-open sequential bias is only useful for head
+    // delivery; once the head is filled, post-gate stalls are what we're
+    // fighting.
+    bool gatePassSequentialOff = false;
+
     // Convenience — updates downloadSpeedEma with alpha=0.2. Seeds the
     // filter on first call (ema==0 && observedSpeed>0).
     void updateSpeedEma(qint64 observedSpeedBytesPerSec) {

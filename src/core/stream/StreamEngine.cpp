@@ -421,6 +421,44 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
             + QString::number(rec.firstPieceArrivalMs - rec.metadataReadyMs));
     }
 
+    // STREAM_STALL_FIX Phase 2 — gate-pass sequential toggle (tactic a).
+    //
+    // Once the head gate fills (contiguousHead >= gateSize), flip
+    // sequential_download OFF for this torrent, one-shot per session.
+    // Rationale (Agent 4B Congress 7 B3 source-verification):
+    // sequential=true constrains libtorrent's normal pick_pieces
+    // candidate set to pieces at/before cursor — pieces past cursor are
+    // invisible until cursor organically reaches them. After gate-pass
+    // this is the dominant cause of mid-playback stalls (piece 5/9/25/40
+    // on 1575eafa baseline) because priority-7 + deadlines alone can't
+    // prise fresh pieces open: time-critical dispatch only touches
+    // pieces with pi.requested>0, and pick_pieces is what seeds
+    // pi.requested>0 in the normal path. Sequential=false returns pieces
+    // past cursor to pick_pieces (runs per-peer-event, not 1-Hz-gated),
+    // so fresh prio-7 pieces get block-requests seeded within
+    // milliseconds.
+    //
+    // Cold-open sequential bias is PRESERVED — the flip only fires after
+    // gatePct crosses 100, which is strictly post-firstPiece. The
+    // earlier GLOBAL toggle-off test (see StreamEngine.cpp:320-325
+    // comment) regressed cold-open 11.5s→32s because it ran during the
+    // head fetch; gating on gate-100 avoids that regime.
+    //
+    // Lock-order: we hold StreamEngine::m_mutex here (acquired at entry
+    // line 274); setSequentialDownload acquires TorrentEngine::m_mutex.
+    // Same order as the existing setSequentialDownload(true) call at
+    // line 326 — validated safe.
+    if (!rec.gatePassSequentialOff && contiguousHead >= gateSize) {
+        m_torrentEngine->setSequentialDownload(rec.infoHash, false);
+        rec.gatePassSequentialOff = true;
+        writeTelemetry(QStringLiteral("gate_pass_sequential_off"),
+            QStringLiteral("hash=") + rec.infoHash.left(8)
+            + QStringLiteral(" elapsedMs=") + QString::number(m_clock.elapsed())
+            + QStringLiteral(" firstPieceMs=") + QString::number(rec.firstPieceArrivalMs)
+            + QStringLiteral(" mdReadyMs=") + QString::number(rec.metadataReadyMs)
+            + QStringLiteral(" gateSize=") + QString::number(gateSize));
+    }
+
     result.selectedFileIndex = rec.selectedFileIndex;
     result.selectedFileName = rec.selectedFileName;
     result.fileSize = totalSize;
