@@ -11,7 +11,11 @@
 
 set(TANKOBAN_TEST_SOURCES
     test_stream_piece_waiter.cpp
+    test_stream_seek_classifier.cpp
+    test_stream_prioritizer.cpp
     ../core/stream/StreamPieceWaiter.cpp
+    ../core/stream/StreamSeekClassifier.cpp
+    ../core/stream/StreamPrioritizer.cpp
 )
 
 qt_add_executable(tankoban_tests ${TANKOBAN_TEST_SOURCES})

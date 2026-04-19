@@ -2,6 +2,14 @@
 
 Pure-gtest harness mirroring [native_sidecar/tests/](../../native_sidecar/tests/) shape. Targets logic-level primitives that can be tested without a GUI event loop. Agent-invokable via `ctest` from the configured build tree.
 
+## Current coverage
+
+| Test file | System under test | Scope |
+|---|---|---|
+| [test_stream_piece_waiter.cpp](test_stream_piece_waiter.cpp) | [StreamPieceWaiter](../core/stream/StreamPieceWaiter.h) | Null-engine short-circuit + timeout + destructor + cancellation sentinel (Stage 2 Option A). Notification path deferred to Stage 3b. |
+| [test_stream_seek_classifier.cpp](test_stream_seek_classifier.cpp) | [StreamSeekClassifier](../core/stream/StreamSeekClassifier.h) | `containerMetadataStart` (10MB / 5% threshold pick) + `classifySeek` dispatch (InitialPlayback / UserScrub / ContainerMetadata / Sequential edge cases). Pure functions. |
+| [test_stream_prioritizer.cpp](test_stream_prioritizer.cpp) | [StreamPrioritizer](../core/stream/StreamPrioritizer.h) | M4 compile-time constants pinned; priority-tier dispatch (metadata/seeking/background/normal); CRITICAL HEAD staircase 10/60/110/160/210ms; HEAD linear; end-piece clamping; M5 InitialPlayback 0ms URGENT; UserScrub 300ms CRITICAL; ContainerMetadata 100ms; speedFactor (URGENT-exempt); M6 defensive tail deadlines 1200/1250ms. Pure functions. |
+
 ## Running
 
 ```bash
