@@ -153,8 +153,16 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
     // libtorrent's time-critical table stays warm between StreamPage's
     // 2 s tick. See onReassertTick for the skip-predicates that keep the
     // tick cheap when no stream is active.
+    // STREAM_ENGINE_REBUILD scheduler-tightening bundle (2026-04-19) —
+    // raise re-assert from 1 Hz to 5 Hz (200 ms) so libtorrent's time-
+    // critical queue stays freshly sorted as playback progresses. Stremio
+    // re-asserts on every poll_read at stream.rs:184 (20-50 Hz at serving
+    // BW); 5 Hz is a middle ground balancing freshness against lock
+    // acquisition cost. Cost: 5× m_mutex + TorrentEngine::m_mutex
+    // acquisitions per second per stream — lock hold time is microseconds,
+    // zero contention risk at typical ≤ 3 concurrent streams.
     m_reassertTimer = new QTimer(this);
-    m_reassertTimer->setInterval(1000);
+    m_reassertTimer->setInterval(200);
     connect(m_reassertTimer, &QTimer::timeout,
             this, &StreamEngine::onReassertTick);
     m_reassertTimer->start();
@@ -308,6 +316,13 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
         // unambiguously win the scheduler. See prepareSeekTarget below for
         // the priority boost; see TorrentEngine::setPiecePriority for the
         // new API surface (Axis 1 territory, Agent 4B pre-offered HELP).
+        //
+        // STREAM_ENGINE_REBUILD 2026-04-19 TOGGLE-TEST: sequential_download
+        // was toggled OFF to test whether it was silently interfering with
+        // time-critical piece selection. Smoke showed no improvement on the
+        // stalled piece AND firstPieceMs regressed from 11.5 s → 32 s, so
+        // sequential is innocent and actively helps cold-open head
+        // delivery. Restored.
         m_torrentEngine->setSequentialDownload(addedHash, true);
 
         StreamSession rec;
@@ -843,11 +858,41 @@ void StreamEngine::reassertStreamingPriorities(StreamSession& s)
     p.downloadSpeed    = static_cast<qint64>(s.downloadSpeedEma);
     p.bitrate          = s.bitrateHint;
 
-    const QList<QPair<int, int>> deadlines =
+    QList<QPair<int, int>> deadlines =
         StreamPrioritizer::calculateStreamingPriorities(p);
     if (deadlines.isEmpty()) return;
 
+    // STREAM_ENGINE_REBUILD scheduler-tightening bundle (2026-04-19) — cap
+    // re-assert output at libtorrent's time-critical queue size (~8 pieces
+    // is the common internal default). Prioritizer can emit up to 30
+    // deadlines (urgent 15 + buffer 15 clamped by cache); without capping,
+    // cold-open head 5 + tail-metadata 2 + seek-prefetch 5 + this 30 =
+    // 42 competing deadlines, only the 8 tightest get scheduler attention.
+    // Truncating to 8 here keeps the time-critical queue fresh per tick;
+    // pieces beyond still have file-level priority 7 (by default for
+    // selected file) — just without explicit deadline ordering. Matches
+    // Stremio's discipline of re-asserting a small urgent window per
+    // poll_read at stream.rs:184.
+    constexpr int kTimeCriticalQueueCap = 8;
+    if (deadlines.size() > kTimeCriticalQueueCap) {
+        deadlines = deadlines.mid(0, kTimeCriticalQueueCap);
+    }
+
     m_torrentEngine->setPieceDeadlines(s.infoHash, deadlines);
+
+    // STREAM_ENGINE_REBUILD 2026-04-19 — pair priority=7 with deadlines on
+    // the urgent head window. Phase 2.6.3 empirical invariant: priority +
+    // deadline together win against libtorrent's general scheduler under
+    // swarm pressure. First 5 deadline entries (Prioritizer emits in
+    // piece-order starting from currentPiece, so first 5 are the CRITICAL
+    // HEAD staircase) get priority=7 — matches kHeadMinPieces floor at
+    // onMetadataReady. Capped at deadlines.size() so small re-assert
+    // outputs don't over-iterate.
+    constexpr int kUrgentPriorityCount = 5;
+    const int priorityCount = qMin<int>(kUrgentPriorityCount, deadlines.size());
+    for (int i = 0; i < priorityCount; ++i) {
+        m_torrentEngine->setPiecePriority(s.infoHash, deadlines[i].first, 7);
+    }
 }
 
 void StreamEngine::onReassertTick()
@@ -924,6 +969,16 @@ void StreamEngine::onStallTick()
         // naturally, user cancels, or source-switch).
         m_torrentEngine->setPiecePriority(lw.infoHash, lw.pieceIndex, 7);
 
+        // STREAM_ENGINE_REBUILD 2026-04-19 — piece-level diagnostic projection.
+        // Captured alongside stall_detected so the next investigation has
+        // libtorrent-internal state: is the piece in the download queue at
+        // all? How many blocks are finished / writing / requested? How many
+        // peers is libtorrent actively downloading this piece FROM right
+        // now? Answers the "scheduler is ignoring priority" vs "peers slow
+        // to respond" fork that peer_have_count alone couldn't.
+        const auto diag = m_torrentEngine->pieceDiagnostic(
+            lw.infoHash, lw.pieceIndex);
+
         // Emit outside the lock to avoid holding m_mutex across file I/O.
         const QString hash  = lw.infoHash;
         const int piece     = lw.pieceIndex;
@@ -934,6 +989,18 @@ void StreamEngine::onStallTick()
             + QStringLiteral(" piece=") + QString::number(piece)
             + QStringLiteral(" wait_ms=") + QString::number(waitMs)
             + QStringLiteral(" peer_have_count=") + QString::number(peerHave));
+        writeTelemetry(QStringLiteral("piece_diag"),
+            QStringLiteral("hash=") + hash.left(8)
+            + QStringLiteral(" piece=") + QString::number(piece)
+            + QStringLiteral(" in_dl_queue=") + (diag.inDownloadQueue ? QStringLiteral("1") : QStringLiteral("0"))
+            + QStringLiteral(" blocks=") + QString::number(diag.blocksInPiece)
+            + QStringLiteral(" finished=") + QString::number(diag.finished)
+            + QStringLiteral(" writing=") + QString::number(diag.writing)
+            + QStringLiteral(" requested=") + QString::number(diag.requested)
+            + QStringLiteral(" peers_with=") + QString::number(diag.peersWithPiece)
+            + QStringLiteral(" peers_dl=") + QString::number(diag.peersDownloadingPiece)
+            + QStringLiteral(" avg_q_ms=") + QString::number(diag.avgPeerQueueMs)
+            + QStringLiteral(" peer_count=") + QString::number(diag.peerCount));
         return;
     }
 
@@ -1019,20 +1086,41 @@ bool StreamEngine::prepareSeekTarget(const QString& infoHash,
     // current gradient regresses.
     seekType = StreamSeekClassifier::classifySeek(byteOffset, fileSize, firstClass);
 
-    const qint64 effective = qMin(prefetchBytes, fileSize - byteOffset);
-    const QPair<int, int> range =
+    // STREAM_ENGINE_REBUILD 2026-04-19 — extend-loop guarantees the seek
+    // prefetch range covers ≥ 5 pieces regardless of torrent piece size.
+    // On 16 MB-piece torrents a 3 MB prefetch yielded just 1 priority=7
+    // piece — same mechanism as the Mode A cold-open bug. Scrub test on
+    // Invincible S04E01 c38beda7 2026-04-19 05:15:33 timed out on piece
+    // 25 at 14.5 s despite 237-250 peers + 10-11 MB/s bandwidth. Matches
+    // kHeadMinPieces floor at onMetadataReady. Maximum probe capped at
+    // fileSize - byteOffset so end-of-file seeks exit cleanly.
+    constexpr int kSeekMinPieces = 5;
+    qint64 probeBytes = qMin(prefetchBytes, fileSize - byteOffset);
+    QPair<int, int> range =
         m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
-                                                  byteOffset, effective);
+                                                  byteOffset, probeBytes);
+    const qint64 maxProbe = fileSize - byteOffset;
+    while (range.first >= 0
+           && (range.second - range.first + 1) < kSeekMinPieces
+           && probeBytes < maxProbe)
+    {
+        probeBytes = qMin(probeBytes * 2, maxProbe);
+        range = m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
+                                                          byteOffset, probeBytes);
+    }
+    const qint64 effective = probeBytes;
     if (range.first < 0 || range.second < range.first) return false;
 
-    // Urgent deadline gradient 200ms → 500ms. Tighter than the 1000ms→8000ms
-    // sliding window (Batch 2.3) because the user is explicitly blocked on
-    // these pieces landing — a "Seeking..." overlay is visible while we
-    // poll. Calling setPieceDeadlines on every retry is idempotent
-    // (updates in place), so a poll-and-retry cadence from StreamPage
-    // keeps urgency fresh without saturation.
-    constexpr int kSeekFirstMs = 200;
-    constexpr int kSeekLastMs  = 500;
+    // STREAM_ENGINE_REBUILD scheduler-tightening bundle (2026-04-19) —
+    // drop seek gradient to Stremio URGENT tier (0→40 ms, handle.rs:
+    // 305-311). Post-bundle scrub smoke on 1575eafa 2026-04-19 05:38 saw
+    // piece 40 time out 15 s × 4 with 49-58 peers + 8-9 MB/s — prior
+    // 200-500 ms gradient couldn't keep seek-prefetch pieces in
+    // libtorrent's time-critical queue while sliding-window pieces
+    // competed for slots. Tightening to URGENT reduces per-piece
+    // deadline budget so the scheduler must serve urgent pieces first.
+    constexpr int kSeekFirstMs = 0;
+    constexpr int kSeekLastMs  = 40;
     QList<QPair<int, int>> deadlines;
     const int pieceCount = range.second - range.first + 1;
     deadlines.reserve(pieceCount);
@@ -1305,8 +1393,21 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
         // of scattering. Semantically orthogonal concerns.
         constexpr qint64 kHeadBytesInitial = 5LL * 1024 * 1024;  // Stremio target
         constexpr int    kHeadMinPieces    = 5;                  // Stremio floor
-        constexpr int    kHeadFirstMs  = 500;
-        constexpr int    kHeadLastMs   = 5000;
+        // STREAM_ENGINE_REBUILD scheduler-tightening bundle (2026-04-19)
+        // — drop head gradient to Stremio URGENT tier (0→40 ms, handle.rs:
+        // 305-311). Prior 200→500 ms worked for cold-open with priority=7
+        // pairing on 5 pieces but still saw piece-40 + piece-9 stalls at
+        // 15 s during scrub on 1575eafa 2026-04-19 05:38-05:39 with 49-58
+        // peers + 8-9 MB/s. Hypothesis: libtorrent time-critical queue
+        // caps at ~8 pieces; when cold-open head 5 + tail-metadata 2 +
+        // seek-prefetch 5 + sliding-window 15 all compete, pieces drop
+        // out of the queue. Tightening to Stremio's URGENT values reduces
+        // per-piece deadline budget so the scheduler cannot "defer" any
+        // urgent piece without missing its deadline. Bundle also caps
+        // Prioritizer re-assert output + raises re-assert cadence to 5 Hz
+        // (see StreamEngine::m_reassertTimer + reassertStreamingPriorities).
+        constexpr int kHeadFirstMs  = 0;
+        constexpr int kHeadLastMs   = 40;
 
         QPair<int, int> headRange =
             m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIdx,
