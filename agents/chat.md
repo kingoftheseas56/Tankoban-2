@@ -812,3 +812,31 @@ ctest --output-on-failure -R tankoban_tests
 **Stages 3+4 (deferred, out of scope):** Stage 3 — notification-path coverage (Option B or C). Stage 4 — `QT_QPA_PLATFORM=offscreen` widget-level tests. Revisit when justified by concrete test sites.
 
 READY TO COMMIT — [Agent 0, main-app verification Stage 2 — GoogleTest harness + StreamPieceWaiter first test]: New src/tests/{CMakeLists.txt, test_stream_piece_waiter.cpp, README.md} + top-level CMakeLists.txt EOF gtest block append (mirrors native_sidecar/CMakeLists.txt:207-218 pattern). `qt_add_executable(tankoban_tests)` with Qt6::Core + GTEST_LIBRARY + GTEST_MAIN_LIBRARY. 4 TESTs covering StreamPieceWaiter Option A: null-engine short-circuit + non-positive-timeout + dtor-with-no-waiters + cancel-flag-respected-through-short-circuit regression sentinel. Custom main() bootstraps QCoreApplication. ENVIRONMENT property suppresses stream_telemetry.log writes during ctest. Configure green on machines without gtest (conditional guard). Stages 3+4 deferred. Agent 4 P3 can ship without tests; Stage 3 adds notification-path tests retroactively when next testable primitive lands | files: src/tests/CMakeLists.txt, src/tests/test_stream_piece_waiter.cpp, src/tests/README.md, CMakeLists.txt, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - Codex repo-hygiene bundle (items #1 + #7 + #3)
+
+Codex flagged 7 repo-hygiene issues 2026-04-18 (re: `project_codex_repo_hygiene_queued.md`). Queue unblocked post-Congress-6-close; picking up three independent items in a single bundle per priority order:
+
+(a) **Item #1 - AGENTS.md rewrite.** Root `AGENTS.md` was forcing Codex to always operate as Agent 7, which caused Codex to behave strangely when invoked for ordinary tasks (Hemanth's 2026-04-18 critique — Codex wrote an audit-mode-framed response to a repo-review question because AGENTS.md said so). Rewrote so DEFAULT mode is general-purpose assistant + Agent 7 mode ONLY activates on explicit trigger: `REQUEST PROTOTYPE` line in chat.md / Trigger B TODO-batch prototype direction / `REQUEST AUDIT` line in chat.md / user explicitly saying "you are Agent 7". All existing Agent 7 rules preserved verbatim inside the "Agent 7 mode" section; default-mode section is new. Governance reminders (no emojis / scoped CSS / etc.) moved to a shared bottom section applying to both modes.
+
+(b) **Item #7 - ASCII protocol keyword convention.** Added GOVERNANCE Rule 16 documenting which strings must stay ASCII (grep anchors for hooks + sweep scripts + cross-terminal compat): `READY TO COMMIT`, `REQUEST PROTOTYPE`, `REQUEST AUDIT`, `REVIEW PASSED` (Agent-6-dormant), ratification keywords (`ratified` / `APPROVES` / `Final Word` / `Execute`), commit-message tag prefix `[Agent N, ...]:`. Rule of thumb: if grepped by a script, ASCII. If prose consumed by Claude, any UTF-8 fine. Going-forward discipline only — no retroactive chat.md rewrite. Closes Codex's PowerShell-mojibake concern for protocol-critical anchors while letting prose em-dashes stay.
+
+(c) **Item #3 - root README.md.** Authored thin README at repo root (~80 lines) for humans + GitHub visitors. Covers: what Tankoban 2 is (single-user Qt6 media library, Windows-only, Stremio-style stream engine), repo map (src/ + native_sidecar/ + agents/ + fix TODOs), quick-build (build_and_run.bat + build2.bat + build_check.bat + sidecar + ctest), what-not-to-touch (agents/ + fix TODOs + gitignored dirs), pointers to CLAUDE.md (live state) + GOVERNANCE.md (rules) + ONBOARDING.md (15-min orientation), agent roster + roles, license (not redistributable), contributing pointer. Does NOT duplicate CLAUDE.md — README is the GitHub landing page, CLAUDE.md is the live dashboard.
+
+**Queued for later (Codex items NOT shipped in this bundle):**
+- **#2 out_old3/ untrack** (104MB of tracked build output) — awaits Hemanth call on destructive history-scrub vs non-destructive going-forward untrack. Asked earlier; still pending.
+- **#5 scripts/repo-health.ps1** — would flag tracked generated files, STATUS.md vs CLAUDE.md freshness, open HELP/CONGRESS, chat.md line count vs rotation threshold, stale READY TO COMMIT lines, files >80KB or >2000 lines. Deferred — low immediate urgency.
+- **#6 large-file refactor policy** — soft-norm Rule 16 candidate; needs the repo-health script at #5 to surface offenders before policy bites. Deferred to when #5 lands.
+- **#4 main-app verification gap** — partially addressed via Stages 1+2 at 404747d + 812e7fd; Stages 3+4 dependency-gated on Agent 4 P3 providing a second testable primitive.
+
+**Parallel-track runners this session:**
+- Agent 4 P3 Prioritizer + SeekClassifier + Session — in-tree uncommitted; needs Agent 4 resume to sweep.
+- Agent 3 PLAYER_STREMIO_PARITY Phase 2+ - parallel-eligible; no mid-session coordination.
+- Hemanth P4 acceptance-smoke - independent (now unblocked post-P2 + P4 landing at 7eef2eb).
+
+**No src/ code touched this bundle.** Governance + docs + Agent-7-trigger-contract only. Ships parallel with Agent 4 P3 + Agent 3 player parity.
+
+READY TO COMMIT - [Agent 0, Codex repo-hygiene bundle items #1 + #7 + #3]: AGENTS.md rewritten with default-mode general-purpose + Agent-7-trigger-gated sections (closes Agent-7-trap that caused 2026-04-18 anomalous Codex framing); GOVERNANCE Rule 16 added codifying ASCII-for-protocol-anchors convention (READY TO COMMIT, REQUEST PROTOTYPE/AUDIT, ratification keywords, commit-tag prefix); root README.md authored (~80 lines) as GitHub landing page pointing to CLAUDE.md for live state + GOVERNANCE.md for rules + ONBOARDING.md for new-contributor track. Items #2/#5/#6 still queued; #4 partially shipped via Stages 1+2 earlier this session. Zero src/ touched | files: AGENTS.md, agents/GOVERNANCE.md, README.md, agents/chat.md

@@ -272,6 +272,16 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
 15. **Self-service execution — don't push agent-capable work onto Hemanth.** Don't ask Hemanth to perform tasks the agent can perform itself. This includes: reading log files (`sidecar_debug_live.log`, `_player_debug.txt`, `[PERF]` traces, etc.), grepping for files or symbols, copying lines from build/perf output, rebuilding the sidecar (per contracts-v2 — agents own this), running git commands (Agent 0 commits), tracing through reference codebases on disk, or any other code-investigation work. If you need data from a log to inform a decision, **read the log yourself**. Hemanth's role is the work only he can do: opening the app and using the UI for behavioral smoke testing, visual confirmation of rendered output, reproducing user-reported bugs by clicking through the product, and final approval on shipped features. Frame your asks accordingly — `"play scenario X in the app and tell me what you observe"` is legitimate; `"paste me the [PERF] line from sidecar_debug_live.log lines 100-120"` is not. (Added 2026-04-16.)
 
+16. **ASCII for protocol-critical anchors.** Certain strings are grep anchors for hooks, sweep scripts, and other agents — they must stay ASCII (`-` hyphen, `:` colon, `|` pipe) so they survive terminal mojibake in PowerShell / cmd.exe / CI logs. The anchors:
+    - `READY TO COMMIT` line trigger
+    - `REQUEST PROTOTYPE` / `REQUEST AUDIT` trigger lines
+    - `REVIEW PASSED` (future — Agent 6 dormant)
+    - Ratification keywords inside CONGRESS.md: `ratified`, `APPROVES`, `Final Word`, `Execute`
+    - Commit-message tag prefix `[Agent N, ...]:`
+    - Rule 11 format delimiter after the trigger — use ASCII ` - ` (hyphen) or `: ` (colon) instead of em-dash ` — ` for anything in the same line as the anchor if you want agents running Codex in PowerShell to parse it reliably. For Claude-only consumption (chat.md body prose, governance docs, commit message bodies below the first line), em-dashes + arrows are fine — Claude Code renders UTF-8 correctly.
+
+    Rule of thumb: if it's grepped by a script or sweep hook, ASCII. If it's prose read by agents, any UTF-8 fine. Going-forward discipline only — do not retroactively rewrite existing chat.md history. (Added 2026-04-19 after Codex 2026-04-18 audit flagged PowerShell-rendering mojibake on em-dashes/arrows.)
+
 ---
 
 ## File Hygiene & Rotation (added 2026-04-16)
