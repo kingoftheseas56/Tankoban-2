@@ -978,6 +978,33 @@ Picked up the post-summon mission for PARITY Phase 3 — precise-seek hr-seek pa
 
 READY TO COMMIT - [Agent 3, PLAYER_STREMIO_PARITY Phase 3 - precise seek --hr-seek parity (Batches 3.1 + 3.2)]: Sidecar VideoDecoder gains `SeekMode {Fast, Exact}` enum + dual `seek()` overloads + sticky default + per-call override; decode-loop arms `seek_skip_until_us_` after Exact-mode seeks; `process_frame` discards frames with pts < target_us until first qualifying frame, then resumes (mirrors mpv `--hr-seek=yes`). Sidecar protocol gains `set_seek_mode` command + optional `mode` field on existing `seek` payload (per-call override; sticky default unchanged when absent). Main.cpp lying comment ("exact mode default" — never true) replaced with honest dispatch. Qt SidecarProcess gains `sendSetSeekMode(QString)` + `sendSeek(double, const QString&)` overload; default `sendSeek(double)` arity preserved verbatim. VideoPlayer chapter_next/chapter_prev force per-call `"exact"` regardless of sticky pref (Phase 3 exit criterion). Sticky pref persisted via global `QSettings("Tankoban/Player/seekMode")`; pushed from `onSidecarReady` only when non-default. Pre-Phase-3 sidecar binaries return NOT_IMPLEMENTED on `set_seek_mode` — SidecarProcess swallows cleanly. **Rule-14 divergence from TODO §3.2:** chose global QSettings over per-show persistence (seek-mode is user-style not per-show attribute; per-show layer trivially additive later). Frame-step untouched per TODO (Phase 8 verify scope). No UI dropdown this batch. **Sidecar build GREEN** via `native_sidecar/build.ps1`; **main app build GREEN** via `build_check.bat` (BUILD OK; second real user of Stage 1 harness after Agent 4's P3). Awaits Hemanth smoke matrix: (1) chapter-jump precision on multi-chapter file, (2) sticky `set_seek_mode` QSettings round-trip, (3) `fast` default unchanged for slider-drag UX | files: native_sidecar/src/video_decoder.{h,cpp}, native_sidecar/src/main.cpp, src/ui/player/SidecarProcess.{h,cpp}, src/ui/player/VideoPlayer.cpp, agents/STATUS.md, agents/chat.md
 
+## Agent 3 - 2026-04-19 - Subtitle baseline lift fix (Hemanth bug — subs flush at frame bottom)
+
+Hemanth reported in same session: subtitles render flush at the absolute bottom edge of the frame (Sopranos screenshot). Researched industry standards — Netflix Timed Text Style Guide ~10% bottom margin, YouTube ~5–10%, BBC + EBU TT-D 10% safe-zone, mpv `--sub-margin-y=22 px` (~2% on 1080p), VLC 20–40 px. Comfortable zone: 6–8% of frame height (~65–85 px at 1080p, ~130–170 px at 4K).
+
+**Root cause:** `setSubtitleLift(0)` at hideControls ([VideoPlayer.cpp:2495](src/ui/player/VideoPlayer.cpp#L2495)) drops the overlay viewport to whatever libass natively renders. For SRT/text subs the injected DEFAULT_ASS_HEADER carries MarginV=40 (in PlayResY=288, ≈14% bottom) which is fine. But ASS/SSA tracks bypass our header and use the file's own Default style — many real-world ASS scripts use MarginV=10 or MarginV=0 (especially BD-rip scripts authored against PlayResY=720+ where 10 is intentionally tight, or anime fansubs where MarginV=0 hugs the safe zone of a 4:3 anchor). Result: flush against frame bezel, exactly Hemanth's screenshot.
+
+**Fix shipped (Qt-only, single-batch):**
+- New helper `int VideoPlayer::subtitleBaselineLiftPx() const` returns 6% of canvas height in physical pixels (dpr-aware). Auto-scales 720p/1080p/4K — Netflix-zone, conservative end so we don't over-lift on shows that ALREADY render mid-frame (e.g., karaoke ASS at top of screen unaffected since the lift is applied at the overlay viewport top-edge, not as a baseline floor on libass internals).
+- `hideControls`: `setSubtitleLift(subtitleBaselineLiftPx())` instead of `setSubtitleLift(0)`. Comment explains the legacy 0 was the bug.
+- `showControls`: `setSubtitleLift(qMax(hudLiftPx, subtitleBaselineLiftPx()))`. Floors HUD lift at baseline so a tiny HUD on a 4K canvas still keeps subs in the safe zone.
+
+**Rule-14 design calls (no menu to Hemanth — sub-bezel is a bug, not a UX choice):**
+- **6% baseline** picked over 8%. Conservative end of Netflix/YouTube zone — reverse-bias means more headroom is preserved for HDR/IMAX content where directors put picture all the way to the edge. If smoke shows too low, bump to 8% (~85 px at 1080p) — single-line constant change.
+- **Additive on top of slider** (not replacing). The TrackPopover margin slider (`video_sub_margin` QSetting, default 40) already exists and the user has muscle memory for "lift above default." Slider's `(margin_v > default_margin) ? margin_v - default_margin : 0` formula stays untouched in [subtitle_renderer.cpp:659](native_sidecar/src/subtitle_renderer.cpp#L659); user-explicit lift sits on top of the new baseline rather than replacing it.
+- **Qt-side fix, not libass MarginV override.** subtitle_renderer.cpp's existing comment explicitly warns against `ass_set_selective_style_override_*` (caused a silent-stop rendering regression previously). The overlay-viewport shift is the safe seam — it's resolution-independent, doesn't touch libass internals, and works for ANY subtitle source (file-ASS / SRT / PGS / DVD bitmap).
+- **No early-render edge case handled.** Initial-paint flush position is a theoretical edge case (controls auto-show on play start at [VideoPlayer.cpp:469](src/ui/player/VideoPlayer.cpp#L469)/951/etc.); if smoke shows first-frame flush before showControls fires, will add `m_canvas->setSubtitleLift(subtitleBaselineLiftPx())` to `buildUI` after the canvas takes layout. Deferred per minimum-viable-fix discipline.
+
+**Files (3 lines + 25 lines):**
+- `src/ui/player/VideoPlayer.h` (+5 lines: helper declaration with comment)
+- `src/ui/player/VideoPlayer.cpp` (+10 lines: helper impl + showControls/hideControls edits)
+
+**Build state:** GREEN via `build_check.bat` (BUILD OK exit 0).
+
+**Smoke for Hemanth:** open the same Sopranos episode that produced the screenshot; observe subs lifted ~65 px off the frame bottom (1080p) regardless of whether HUD is visible. If too low → next batch bumps 6% → 8%. If subtitle popover slider still works (drag up = lift more, drag below 40 = clamps to baseline) → done.
+
+READY TO COMMIT - [Agent 3, subtitle baseline lift fix — closes Hemanth same-session bug report]: New `VideoPlayer::subtitleBaselineLiftPx()` helper returns 6% of canvas height in physical pixels (Netflix safe-zone baseline, dpr-aware, auto-scales 720p/1080p/4K). `hideControls` switches from `setSubtitleLift(0)` to `setSubtitleLift(subtitleBaselineLiftPx())` so subs never sit flush at frame edge regardless of underlying ASS script's MarginV (was broken for file-supplied ASS styles with MarginV<=10, common in BD-rips + anime fansubs). `showControls` floors the HUD lift at the baseline via qMax. Qt-only fix at the overlay-viewport seam — doesn't touch libass internals (existing safety comment at subtitle_renderer.cpp warns against ass_set_selective_style_override_*), works for any subtitle source (ASS/SSA/SRT/PGS/DVD bitmap). Existing TrackPopover margin slider semantics preserved verbatim — user-explicit lift sits additively on top of the baseline. **Rule-14 calls:** 6% conservative end of Netflix/YouTube zone (smoke-bumpable to 8%), additive on slider (preserves muscle memory), Qt-side not libass-side (avoids the prior silent-stop regression). **Build GREEN** via `build_check.bat`. Awaits Hemanth smoke on the same Sopranos episode that produced the screenshot — visible bottom margin should appear regardless of HUD visibility | files: src/ui/player/VideoPlayer.h, src/ui/player/VideoPlayer.cpp, agents/chat.md
+
 
 ---
 
@@ -1245,3 +1272,82 @@ Default `build_and_run.bat` flow is unchanged (TANKOBAN_BUILD_TESTS=OFF → no F
 **Codex queue: #4 Stages 1 + 3a intact;** Stage 2 (StreamPieceWaiter coverage) explicitly rolled back + merged into Stage 3b deferral. Stage 3b remains the path if/when StreamPieceWaiter notification-path testing becomes worth the refactor.
 
 READY TO COMMIT - [Agent 0, tankoban_tests build-fix]: FetchContent gtest (replaces find_library MinGW-path mismatch) + -DTANKOBAN_BUILD_TESTS opt-in flag + drop Stage 2 test_stream_piece_waiter.cpp (unresolved TorrentEngine symbols; Stage 2 coverage merged into Stage 3b deferral). src/tests/README.md + CLAUDE.md Build Quick Reference updated with new opt-in invocation. Stage 3a pure-function tests (Prioritizer + SeekClassifier, 30+ cases) intact — those are the meaningful coverage anyway | files: CMakeLists.txt, src/tests/CMakeLists.txt, src/tests/README.md, src/tests/test_stream_piece_waiter.cpp (deleted), CLAUDE.md, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - Agent 4 fix brief: Mode A stall regression from P4.2 kGateBytes drop
+
+Hemanth smoked the full rebuild on 2026-04-19 08:00-ish. Stream mode looks like it's working (peers connected, MB/s counter moving) but actually never loads. Diagnosis from `out/stream_telemetry.log` + `alert_trace.log` identifies a REGRESSION introduced by P4.2 that wasn't caught by smoke matrices or Stage 3a tests.
+
+### Evidence (telemetry at out/stream_telemetry.log)
+
+Post-rebuild session 2026-04-19 04:05:45-04:06:33 (Invincible S04E01, hash c38beda7):
+
+```
+04:05:45 event=head_deadlines pieces=[0,0] pieceCount=1 headBytes=5242880
+04:05:49 snapshot gateBytes=0/1048576 gatePct=0.0 pieces=[0,0] peers=25 dlBps=378684 firstPieceMs=-1
+04:06:09 snapshot gateBytes=0/1048576 gatePct=0.0 pieces=[0,0] peers=86 dlBps=2465063 firstPieceMs=-1
+04:06:29 snapshot gateBytes=0/1048576 gatePct=0.0 pieces=[0,0] peers=170 dlBps=6652137 firstPieceMs=-1
+04:06:33 event=cancelled lifetimeMs=48857
+```
+
+Peers grew 25→170, dlBps grew 378KB/s→6.6MB/s, ~316 MB total download over 48s, **gateBytes stayed 0**, **firstPieceMs=-1**. Piece 0 never completed. `alert_trace.log` has only the CSV header — zero piece_finished alerts fired for this hash.
+
+Pre-rebuild comparison session 2026-04-18 07:33-07:35 (Jujutsu S01E01):
+```
+07:33:44 event=head_deadlines pieces=[0,1] pieceCount=2 headBytes=5242880
+07:35:21 event=first_piece arrivalMs=297292 mdReadyMs=200217 deltaMs=97075
+07:35:24 snapshot gateBytes=4194304/5242880 gatePct=80.0 pieces=[0,1] firstPieceMs=297292
+```
+
+Head range was **2 pieces** (pre-P4.2 kGateBytes=5MB). First piece arrived 97s after metadata. Slow but eventual. Post-rebuild with 1-piece head: never arrives.
+
+### Root cause
+
+P4.2 (commit 7eef2eb) dropped `kGateBytes` from 5MB → 1MB in [StreamEngine.h](src/core/stream/StreamEngine.h) to align the gate with the new tier-1 probesize (512KB). On typical torrents with 2-8MB piece sizes, the head range collapsed to **1 piece** (see `head_deadlines event pieces=[0,0]` verbatim in telemetry).
+
+Head range ingested into [onMetadataReady at StreamEngine.cpp:1287](src/core/stream/StreamEngine.cpp#L1287) via `pieceRangeForFileOffset(infoHash, fileIdx, 0, kGateBytes)`. kGateBytes=1MB + piece size ≥1MB = 1 piece covers the range. Priority=7 + deadline applied to that single piece at [:1327-1328](src/core/stream/StreamEngine.cpp#L1327).
+
+With only ONE priority=7 piece, libtorrent's general scheduler dominates: it scatters block requests across many pieces (whichever peers offer whatever they have), completing partial pieces everywhere but never finishing piece 0. 316 MB downloaded post-metadata with 0 completed head pieces is the smoking gun.
+
+### Stremio reference (Slice B audit + priorities.rs:126-147)
+
+Stremio's head window formula: `5s × max(bitrate, speed)` clamped `[5MB, 50MB]` / `pieceLen`, then clamped `[5, 250]` pieces. **Minimum 5 pieces in head range, always.** Stremio gives libtorrent a broad urgency window, not a narrow one. Our current 1-piece window is an order of magnitude narrower than Stremio's floor.
+
+### Fix direction (your Rule-14 call on specifics)
+
+Three options with my bias toward Option C:
+
+**Option A — quickest revert:** `kGateBytes` 1MB → 5MB. Gets back 2-3 piece head on typical torrents. Preserves P4.2's "align with tier-1 probesize" intent at the probe side but not the urgency side. 1-line change to StreamEngine.h, zero other edits.
+
+**Option B — Stremio formula in Prioritizer:** port `calculate_priorities` head-window math from priorities.rs:126-147. Compute `targetHeadBytes = clamp(5s × max(bitrate, speed), 5MB, 50MB)`, then `headWindow = clamp(targetHeadBytes / pieceLen, 5, 250)`. Already implemented in your `StreamPrioritizer::calculateStreamingPriorities` per Stage 3a test verification at [test_stream_prioritizer.cpp](src/tests/test_stream_prioritizer.cpp) — BUT the cold-open path via `onMetadataReady` at [StreamEngine.cpp:1287](src/core/stream/StreamEngine.cpp#L1287) doesn't call Prioritizer; it uses its own `pieceRangeForFileOffset(0, kGateBytes)` computation. So option B means routing onMetadataReady's head-range computation through the Prioritizer's formula too.
+
+**Option C — decouple probe trigger from head urgency (my recommendation):** keep `kGateBytes=1MB` as the GATE / PROBE threshold (where the HTTP server opens the pipe to ffmpeg), but compute the URGENCY window separately from Stremio's formula (min 5 pieces, max 13-50MB). The probe can start at 1MB of contiguous head bytes; the urgency window gives libtorrent 5+ pieces to prioritize so ONE slow peer doesn't stall everything. Matches Stremio's actual architecture — they probe small AND urgency-hint broad simultaneously. 2-3 changes: keep kGateBytes as probe threshold; add `StreamPrioritizer::initialPlaybackUrgencyRange(fileSize, pieceLen, bitrate, speed)` helper; route onMetadataReady through it.
+
+Your call on option + implementation shape. If you pick A just for speed, fine — we can follow with C in a subsequent wake once you validate the revert unsticks cold-open.
+
+### Coverage sentinel to add in Stage 3a
+
+[src/tests/test_stream_prioritizer.cpp](src/tests/test_stream_prioritizer.cpp) should gain a regression sentinel: "head range must contain ≥ N pieces on a typical torrent" (where N=5 per Stremio, or N=2 if we accept a minimum-viable revert). Without it, the next contributor to touch kGateBytes can drop it again and ship a silent-stall regression. I'll add this test when you land the fix; no need for you to write the test — just say which N to pin against your chosen option.
+
+### Verification criteria (Hemanth smoke post-fix)
+
+1. Cold-open same Invincible / One Piece / Jujutsu files - expect firstPieceMs < 10s after metadata, gatePct climbing steadily.
+2. `out/stream_telemetry.log` head_deadlines event shows pieceCount ≥ 2 (Option A) or ≥ 5 (Option B/C) on typical 1-8MB piece-size torrents.
+3. `alert_trace.log` shows actual piece_finished entries within seconds of head_deadlines event fire.
+4. No regression on M2/M3 (progress cadence still 1 Hz, priority=7 still paired with deadline on head pieces).
+
+### Scope guardrails
+
+- 12-method TorrentEngine API freeze untouched (only kGateBytes + onMetadataReady head-range computation).
+- M2 alert-pump cadence untouched.
+- M3 priority=7 pairing path untouched (still applies to whatever head range comes out of the fix).
+- StreamSession / Prioritizer / SeekClassifier files untouched for Option A; Option B/C only extends Prioritizer with the urgency-range helper, doesn't mutate existing functions.
+- Sidecar probe (P4 tier 1/2/3 budgets) untouched — kGateBytes stays 1MB as the PROBE trigger threshold in Option C.
+
+Pre-write commitment line in chat.md confirming which option you pick + why (Rule 14) before coding. Then read, then fix, then ship.
+
+**Also needed: metadata-fetch latency (3-5 min on post-rebuild magnets vs. 13-200s pre-rebuild) is a SEPARATE issue.** Not in scope for this fix. Probably trackerSources or DHT setup; can be diagnosed in a follow-up wake by grepping telemetry `mdReadyMs` values across sessions.
+
+READY TO COMMIT - [Agent 0, Agent 4 fix brief: Mode A stall regression from P4.2 kGateBytes drop]: Diagnosis + evidence from out/stream_telemetry.log showing pieceCount=1 head, firstPieceMs=-1 for 48s+ despite 6.6MB/s aggregate download + 170 peers. Root cause: P4.2 dropped kGateBytes 5MB→1MB collapsing head range to 1 piece on typical 2-8MB piece torrents. Stremio's head minimum is 5 pieces. 3 fix options proposed (A: revert 5MB; B: route onMetadataReady through Prioritizer formula; C: decouple probe-trigger from urgency-range). Recommend C. Test sentinel to add in Stage 3a. Scope guardrails preserve 12-method API freeze + M2/M3/StreamSession/P4 probe tiers | files: agents/chat.md
