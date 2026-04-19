@@ -47,14 +47,31 @@ public slots:
                 m_traceFile.flush();
             }
         }
-        int progressTick = 0;
+        // STREAM_ENGINE_REBUILD M2 (integration-memo §5) — alert-pump latency
+        // tightened from 250 ms → 25 ms. Stremio's libtorrent pump runs at
+        // 5 ms (backend/libtorrent/mod.rs:204); 25 ms is a conservative
+        // middle that preserves wake-latency headroom for StreamPieceWaiter
+        // without burning CPU on idle sessions (libtorrent's internal work
+        // is still alert-driven — we're just sampling more often).
+        //
+        // progressTick was "every 4 wait_for_alert returns" = 1 Hz at the
+        // old 250 ms cadence. With the new 25 ms cadence a simple counter
+        // would fire torrentProgress at 10 Hz, flooding downstream
+        // StreamEngine / StreamPage consumers. Converted to wall-clock so
+        // the 1 s emit contract is preserved independent of pump cadence.
+        constexpr int kAlertWaitMs = 25;
+        constexpr qint64 kProgressEmitIntervalMs = 1000;
+        qint64 lastProgressMs = QDateTime::currentMSecsSinceEpoch();
+
         while (m_running) {
-            auto* alert = m_engine->m_session.wait_for_alert(std::chrono::milliseconds(250));
+            auto* alert = m_engine->m_session.wait_for_alert(
+                std::chrono::milliseconds(kAlertWaitMs));
             if (alert) drainAlerts();
             triggerPeriodicResumeSaves();
 
-            if (++progressTick >= 4) {
-                progressTick = 0;
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (nowMs - lastProgressMs >= kProgressEmitIntervalMs) {
+                lastProgressMs = nowMs;
                 emitProgressEvents();
                 m_engine->checkSeedingRules();
             }
