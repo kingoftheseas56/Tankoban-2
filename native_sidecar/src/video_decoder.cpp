@@ -3,7 +3,10 @@
 #include "overlay_shm.h"
 #include "filter_graph.h"
 #include "gpu_renderer.h"
+#include "stream_prefetch.h"
 #include "subtitle_renderer.h"
+
+#include <memory>
 
 #include <algorithm>
 #include <chrono>
@@ -241,16 +244,25 @@ void VideoDecoder::decode_thread_func(
     int64_t chosen_probesize = 0;
     int64_t chosen_analyzedur = 0;
 
-    // STREAM_STALL_FIX Phase 1 (tactic f) — reduced to mpv reconnect-param
-    // parity only. Original scope was a 64 MiB wrapping AVIOContext to mirror
-    // mpv's stream-buffer-size directive, but empirical smoke showed ffmpeg's
-    // synchronous demuxer can't deliver mpv-style readahead pressure without
-    // a dedicated prefetch thread (the custom-IO wrap either blocks cold-open
-    // on the avio_read(2 MiB) path, or trips false AVERROR_EOF returns on the
-    // avio_read_partial path during transient HTTP reconnect windows). The
-    // directly-portable mpv parity — `reconnect_delay_max=5` — is kept below.
-    // See ship post for escalation: Phase 1 as spec'd needs a prefetch-thread
-    // rescope beyond the 1-2 wake budget.
+    // STREAM_STALL_FIX Phase 4 (tactic f) — dedicated prefetch thread + 64
+    // MiB ring buffer between the raw HTTP AVIOContext and the demuxer.
+    // HTTP path opens via avio_open2 then wraps in StreamPrefetch + a
+    // consumer-side AVIOContext with CUSTOM_IO; non-HTTP path stays on the
+    // original synchronous avformat_open_input chain (no benefit from
+    // prefetch for local FS). Phase 1's two failure modes are avoided by
+    // the StreamPrefetch class contract — see stream_prefetch.h header.
+    //
+    // Lifetime: raw_avio is owned by StreamPrefetch (freed in its dtor).
+    // wrap_avio is owned here and freed with av_freep(&wrap_avio->buffer)
+    // + avio_context_free(&wrap_avio). Teardown order at every exit path:
+    // avformat_close_input(fmt_ctx) → free wrap_avio → reset prefetch
+    // unique_ptr (joins thread + closes raw_avio).
+    std::unique_ptr<StreamPrefetch> prefetch;
+    AVIOContext* wrap_avio = nullptr;
+    uint8_t*     wrap_buf  = nullptr;
+    const int    kWrapBufBytes  = 2 * 1024 * 1024;   // demuxer-facing refill granularity
+    const std::size_t kRingBytes = 64 * 1024 * 1024; // mpv stream-buffer-size parity
+
     for (int i = 0; i < tier_count; ++i) {
         const OpenTier& t = tiers[i];
 
@@ -276,8 +288,73 @@ void VideoDecoder::decode_thread_func(
             t.tier, (long long)t.probesize, (long long)t.analyzeduration_us,
             (long long)t.rw_timeout_us);
 
-        int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
-        av_dict_free(&opts);
+        int ret = 0;
+
+        if (is_http) {
+            // 1. Open the raw HTTP AVIOContext with the tier's opts.
+            AVIOContext* raw_avio = nullptr;
+            ret = avio_open2(&raw_avio, path.c_str(), AVIO_FLAG_READ, nullptr, &opts);
+            av_dict_free(&opts);
+            opts = nullptr;
+            if (ret < 0) {
+                char errbuf[256];
+                av_strerror(ret, errbuf, sizeof(errbuf));
+                std::fprintf(stderr,
+                    "VideoDecoder: Tier %d avio_open2 failed: %s\n",
+                    t.tier, errbuf);
+                last_err = std::string("avio_open2:") + errbuf;
+                continue;
+            }
+
+            // 2. Wrap raw_avio in a prefetch thread + 64 MiB ring. Transfers
+            //    ownership of raw_avio to StreamPrefetch.
+            prefetch = std::make_unique<StreamPrefetch>(raw_avio, kRingBytes);
+
+            // 3. Build the consumer-facing AVIOContext. Demuxer reads through
+            //    this; its read_packet callback trampolines into StreamPrefetch.
+            wrap_buf = reinterpret_cast<uint8_t*>(av_malloc(kWrapBufBytes));
+            if (!wrap_buf) {
+                prefetch.reset();
+                last_err = "wrap_buf av_malloc failed";
+                continue;
+            }
+            wrap_avio = avio_alloc_context(
+                wrap_buf, kWrapBufBytes,
+                /*write_flag=*/0,
+                /*opaque=*/prefetch.get(),
+                &StreamPrefetch::read_trampoline,
+                /*write_packet=*/nullptr,
+                &StreamPrefetch::seek_trampoline);
+            if (!wrap_avio) {
+                av_free(wrap_buf); wrap_buf = nullptr;
+                prefetch.reset();
+                last_err = "avio_alloc_context failed";
+                continue;
+            }
+            wrap_avio->seekable = AVIO_SEEKABLE_NORMAL;
+
+            // 4. Pre-allocate fmt_ctx, wire CUSTOM_IO, run avformat_open_input
+            //    with empty path — the custom AVIOContext is the data source.
+            fmt_ctx = avformat_alloc_context();
+            if (!fmt_ctx) {
+                av_freep(&wrap_avio->buffer);
+                avio_context_free(&wrap_avio);
+                wrap_buf = nullptr;
+                prefetch.reset();
+                last_err = "avformat_alloc_context failed";
+                continue;
+            }
+            fmt_ctx->pb     = wrap_avio;
+            fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+            fmt_ctx->probesize            = t.probesize;
+            fmt_ctx->max_analyze_duration = t.analyzeduration_us;
+
+            ret = avformat_open_input(&fmt_ctx, "", nullptr, nullptr);
+        } else {
+            ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, &opts);
+            av_dict_free(&opts);
+            opts = nullptr;
+        }
 
         if (ret < 0) {
             char errbuf[256];
@@ -287,10 +364,16 @@ void VideoDecoder::decode_thread_func(
                 t.tier, errbuf);
             last_err = std::string("open:") + errbuf;
             if (fmt_ctx) { avformat_close_input(&fmt_ctx); fmt_ctx = nullptr; }
+            if (wrap_avio) {
+                av_freep(&wrap_avio->buffer);
+                avio_context_free(&wrap_avio);
+                wrap_buf = nullptr;
+            }
+            prefetch.reset();
             continue;
         }
 
-        if (is_http) {
+        if (is_http && fmt_ctx) {
             fmt_ctx->probesize = t.probesize;
             fmt_ctx->max_analyze_duration = t.analyzeduration_us;
         }
@@ -305,13 +388,22 @@ void VideoDecoder::decode_thread_func(
             last_err = std::string("find_stream_info:") + errbuf;
             avformat_close_input(&fmt_ctx);
             fmt_ctx = nullptr;
+            if (wrap_avio) {
+                av_freep(&wrap_avio->buffer);
+                avio_context_free(&wrap_avio);
+                wrap_buf = nullptr;
+            }
+            prefetch.reset();
             continue;
         }
 
         chosen_tier = t.tier;
         chosen_probesize = t.probesize;
         chosen_analyzedur = t.analyzeduration_us;
-        std::fprintf(stderr, "VideoDecoder: Tier %d passed\n", t.tier);
+        std::fprintf(stderr,
+            "VideoDecoder: Tier %d passed (prefetch=%s ring=%d MiB)\n",
+            t.tier, is_http ? "on" : "off",
+            is_http ? static_cast<int>(kRingBytes / (1024 * 1024)) : 0);
         break;
     }
 
@@ -331,8 +423,22 @@ void VideoDecoder::decode_thread_func(
     (void)chosen_probesize;
     (void)chosen_analyzedur;
 
+    // STREAM_STALL_FIX Phase 4 — helper so every early-return path tears
+    // down the custom-IO chain in the correct order: demuxer close first
+    // (may call seek on wrap_avio), then wrap_avio (buffer + context), then
+    // the prefetch (joins the producer thread, which then closes raw_avio).
+    auto release_custom_io = [&]() {
+        if (wrap_avio) {
+            av_freep(&wrap_avio->buffer);
+            avio_context_free(&wrap_avio);
+            wrap_buf = nullptr;
+        }
+        prefetch.reset();
+    };
+
     if (video_stream_index < 0 || video_stream_index >= static_cast<int>(fmt_ctx->nb_streams)) {
         avformat_close_input(&fmt_ctx);
+        release_custom_io();
         on_event_("error", "UNSUPPORTED_CODEC:invalid video stream index");
         running_.store(false);
         return;
@@ -356,6 +462,7 @@ void VideoDecoder::decode_thread_func(
     const AVCodec* codec = avcodec_find_decoder(video_stream->codecpar->codec_id);
     if (!codec) {
         avformat_close_input(&fmt_ctx);
+        release_custom_io();
         on_event_("error", "DECODE_INIT_FAILED:no decoder found");
         running_.store(false);
         return;
@@ -478,6 +585,7 @@ void VideoDecoder::decode_thread_func(
         std::fprintf(stderr, "VideoDecoder: avcodec_open2 failed: %s\n", errbuf);
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
+        release_custom_io();
         on_event_("error", std::string("DECODE_INIT_FAILED:") + errbuf);
         running_.store(false);
         return;
@@ -1339,6 +1447,7 @@ void VideoDecoder::decode_thread_func(
     }
 #endif
     avformat_close_input(&fmt_ctx);
+    release_custom_io();
 
     std::fprintf(stderr, "VideoDecoder: thread exiting (wrote %lld frames, dropped %lld hw=%s)\n",
                  static_cast<long long>(frames_written),

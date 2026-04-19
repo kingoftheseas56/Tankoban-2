@@ -110,6 +110,7 @@ add_executable(ffmpeg_sidecar
     src/shm_helpers.cpp
     src/ring_buffer.cpp
     src/demuxer.cpp
+    src/stream_prefetch.cpp
     src/video_decoder.cpp
     src/audio_decoder.cpp
     src/av_sync_clock.cpp
