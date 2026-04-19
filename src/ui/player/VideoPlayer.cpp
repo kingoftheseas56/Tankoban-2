@@ -2461,6 +2461,17 @@ void VideoPlayer::updateEpisodeButtons()
     }
 }
 
+int VideoPlayer::subtitleBaselineLiftPx() const
+{
+    // 6% of canvas height — Netflix/YouTube safe-zone for subtitle bottom
+    // margin. Auto-scales 720p/1080p/4K. Applied as a floor so file-supplied
+    // ASS styles with low/zero MarginV never render flush at the frame edge.
+    if (!m_canvas) return 0;
+    const qreal dpr = devicePixelRatioF();
+    const int canvasPxH = qRound(m_canvas->height() * dpr);
+    return qMax(0, qRound(canvasPxH * 0.06));
+}
+
 void VideoPlayer::showControls()
 {
     m_controlBar->show();
@@ -2472,11 +2483,12 @@ void VideoPlayer::showControls()
     // Lift subtitle overlay above the HUD so the control bar doesn't
     // occlude subs. Physical pixels — multiply by dpr so the lift is
     // consistent on HiDPI displays where the swap chain is in physical
-    // pixels but sizeHint() returns logical.
+    // pixels but sizeHint() returns logical. Floored at the 6% baseline
+    // so a tiny HUD on a 4K canvas still keeps subs in the safe zone.
     if (m_canvas) {
         const qreal dpr = devicePixelRatioF();
-        const int liftPx = qRound(m_controlBar->sizeHint().height() * dpr);
-        m_canvas->setSubtitleLift(liftPx);
+        const int hudLiftPx = qRound(m_controlBar->sizeHint().height() * dpr);
+        m_canvas->setSubtitleLift(qMax(hudLiftPx, subtitleBaselineLiftPx()));
     }
     setCursor(Qt::ArrowCursor);
     m_cursorTimer.start();
@@ -2491,8 +2503,10 @@ void VideoPlayer::hideControls()
     if (m_seeking) return;
     m_controlBar->hide();
     m_subOverlay->setControlsVisible(false);
-    // HUD gone — drop subtitles back to their natural position.
-    if (m_canvas) m_canvas->setSubtitleLift(0);
+    // HUD gone — drop to the 6% safe-zone baseline (was 0 = flush at
+    // frame bottom for any ASS file with low MarginV — broken for
+    // file-supplied styles even though our injected SRT header was fine).
+    if (m_canvas) m_canvas->setSubtitleLift(subtitleBaselineLiftPx());
 }
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)

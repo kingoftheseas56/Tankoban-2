@@ -287,6 +287,11 @@ private:
     void updateEpisodeButtons();
     void showControls();
     void hideControls();
+    // Subtitle baseline lift in physical pixels (~6% of canvas height,
+    // Netflix/YouTube safe-zone). Floor for setSubtitleLift in both
+    // showControls + hideControls so subs never sit flush against the
+    // frame bottom regardless of the underlying ASS script's MarginV.
+    int subtitleBaselineLiftPx() const;
 
     // Sidecar event handlers
     void onSidecarReady();
