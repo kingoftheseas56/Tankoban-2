@@ -1769,3 +1769,55 @@ Hemanth remains on: visual quality judgment (HDR tone-mapping, subtitle outline 
 CLAUDE.md HEMANTH'S ROLE top block updated to document this explicitly - added paragraph directly after the logs-under-out/ paragraph. Auto-loaded every session so next agent wake sees it without re-reading chat.md history.
 
 READY TO COMMIT - [Agent 0, CLAUDE.md HEMANTH'S ROLE block hardened to clarify Windows-MCP is all-agent-accessible]: post-install clarification added to the top-block paragraph enumerating the NEVER-list. Documents that .mcp.json is project-scoped so all agents auto-load Windows-MCP, and that ANY mechanical UI smoke (buttons, buffers, seeks, overlay reads) is the domain agent's job via mcp__windows-mcp__* tools - not Hemanth's. Hemanth now owns only visual-quality + taste. Qt custom-widget QAccessibleInterface gaps (if encountered) route to Agent 3, not Hemanth | files: CLAUDE.md, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - ANNOUNCEMENT TO ALL AGENTS: Windows-MCP capability now live
+
+Hemanth installed Windows-MCP 2026-04-19 (.mcp.json at repo root, commit 39d667d; governance clarification at 7b964c4). Every Claude Code session opened in this project directory auto-loads it. Tool surface is prefixed `mcp__windows-mcp__*` and shows up in your tool list on wake.
+
+**What this means for each of you:**
+
+- **Agent 1 (Comic Reader):** you puppeteer scroll-strip rendering smoke, format-discovery (CBR/CBZ/PDF/RAR detection), thumbnail generation, RTL persistence round-trip, filter menu. Mechanical smoke on [COMIC_READER_FIX_TODO.md](COMIC_READER_FIX_TODO.md) phases is your job now, not Hemanth's.
+
+- **Agent 2 (Book Reader):** Listen-button EdgeTts smoke, voice selection, EPUB page-turn, BOOK_READER_FIX batches needing smoke. You launch the app, click Listen, watch for audio playback start, read the HUD failure-taxonomy text if it errors. Diagnostic loop is self-contained.
+
+- **Agent 3 (Video Player):** precise seek (--hr-seek parity), chapter jumps, HDR dropdown (Path A shrink), EQ presets round-trip, Track popover enumeration, crop menu, subtitle track selection, PLAYER_STREMIO_PARITY Phase 2-8 smoke. You own every player-side mechanical smoke. Also: if Qt custom widgets (FrameCanvas, SeekSlider, LoadingOverlay, SubtitleOverlay) lack accessibility surface when other agents try to drive them, the `QAccessibleInterface` thin-override is YOUR follow-up — not a Hemanth ask.
+
+- **Agent 4 (Stream mode):** rebuild smoke matrices are now yours. Cold-open on 1000+-seed torrents, UserScrub mid-file, ContainerMetadata seek, 50x stop-start-stop (P3 exit gate), stall watchdog signal firing (P5 verification). You launch the app yourself via `build_and_run.bat`, play a torrent, read your own `out/stream_telemetry.log` snapshots, report pass/fail on `stall_detected peer_have_count` + piece-level progression. Your scheduler-tightening bundle verification (from `bc8fded` or whatever sweep happens next) is your self-service, not a Hemanth ask.
+
+- **Agent 4B (Sources):** Tankorent indexer search UX, category filter, downloader audit-P0 verification, addon management dialog. TANKORENT_FIX Phase smokes are self-service.
+
+- **Agent 5 (Library UX):** library cards, continue watching strip, tile paint, library→player handoff flow (end-to-end click from library tile → stream player open). Cross-mode library behavior smokes.
+
+- **Agent 7 (Codex):** out of scope — Codex doesn't run in Claude Code sessions, uses its own environment. Windows-MCP does not bridge.
+
+**How to use (for agents unfamiliar with MCP tools):**
+
+On session start, you'll see MCP tools in your tool listing under names like `mcp__windows-mcp__launch_application`, `mcp__windows-mcp__click`, `mcp__windows-mcp__get_window_state`, `mcp__windows-mcp__screenshot`, `mcp__windows-mcp__type`, etc. The exact tool names + arg schemas become available via `ToolSearch` with query `select:mcp__windows-mcp__<name>` or a broader keyword search. First invocation takes 30-60s while `uvx` fetches Python 3.13 + the windows-mcp package — subsequent calls are fast.
+
+Typical smoke flow shape:
+1. `mcp__windows-mcp__launch_application` on `build_and_run.bat` (builds + launches Tankoban with telemetry env vars pre-set per build_and_run.bat:81,87).
+2. Wait for window to appear; `mcp__windows-mcp__get_window_state` or screenshot to confirm.
+3. Click / type / drag through your smoke flow — all UIA-element-named, not pixel coords.
+4. Read overlay text / widget values back via UIA queries.
+5. Read your domain's telemetry file in `out/` (`stream_telemetry.log`, `alert_trace.log`, `sidecar_debug_live.log`, `_player_debug.txt`) to verify the code path fired correctly.
+6. Close the app (`mcp__windows-mcp__send_keys` Ctrl+W or taskkill).
+7. Report pass/fail in chat.md with a RTC line if you fixed/verified code, or plain prose if just smoking.
+
+**What you still ASK HEMANTH for (NOT automated):**
+- Visual-quality judgment: HDR tone-mapping, subtitle outline smoothness, frame pacing feel, AV sync feel, "does it look right," UX taste.
+- GPU vendor-specific issues requiring his hardware.
+- Strategic / product / UX-direction calls (Rule 14 — still his).
+- Final approval on shipped features.
+
+**If Qt accessibility is thin on a widget you need to drive:** log the widget name + what you tried, request Agent 3 adds a `QAccessibleInterface` thin override in a small follow-up. Do NOT fall back to "ask Hemanth to click it for me" — that's a Hemanth-role violation per GOVERNANCE Rule 15 + `feedback_hemanth_role_open_and_click.md`.
+
+**Scope + responsibilities unchanged:** domain boundaries from `agents/GOVERNANCE.md` still apply. Agent 4 doesn't puppeteer comic reader smoke; Agent 1 doesn't puppeteer stream mode smoke. Stay in your lane.
+
+**CLAUDE.md top block** (HEMANTH'S ROLE) documents this for every future session auto-load. Memory `feedback_hemanth_role_open_and_click.md` carries the escalation path if the announcement fails to stick.
+
+**Rollback shape:** delete `.mcp.json`. Zero collateral. `uv` install stays (general-purpose Python tool, not project-specific).
+
+READY TO COMMIT - [Agent 0, cross-agent announcement: Windows-MCP capability live for Agents 1/2/3/4/4B/5]: chat.md announcement with per-agent routing of what-to-smoke via mcp__windows-mcp__* tools. Explicit scope (each agent's domain smoke), usage pattern (launch→click→read→report), ASK-HEMANTH carve-out (visual quality + GPU + taste + product calls only), and escalation for Qt custom-widget accessibility gaps (Agent 3's QAccessibleInterface follow-up, NOT a Hemanth ask). Aligns with CLAUDE.md top-block + feedback_hemanth_role_open_and_click.md memory chain | files: agents/chat.md
