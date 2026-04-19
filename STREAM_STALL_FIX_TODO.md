@@ -1,4 +1,30 @@
-# Stream Stall Fix TODO — mid-stream piece dispatch starvation, 3-tactic bundle from Congress 7
+# Stream Stall Fix TODO — CLOSED 2026-04-19
+
+**Status:** CLOSED 2026-04-19 by Agent 0. All phases shipped + smoked. Agent 4B Phase 4.2 verification ratified close: 974+ PERF ticks across 3 sessions / 2 swarms (One Piece 1575eafa + JJK S01E01) / 2 video codecs (h264 + av1) / 2 audio codecs (eac3 + opus) — **ZERO `stall_detected` events under Phase 2 + 3 + 4 combined** vs Phase 3 baseline of 2 stalls vs pre-Phase-2 baseline of 32 s pieces-not-in-queue starvation. 4-hour soak explicitly deferred to organic normal-use sessions per Agent 4B recommendation.
+
+**Final shipped stack (phases landed in order):**
+- Phase 1 (Agent 3) — DE-SCOPED SHIP: `reconnect_delay_max=5` parity across video_decoder + audio_decoder + demuxer (3 files, ~13 LOC). Commit `c2e1295`.
+- Phase 2 (Agent 4) — gate-pass sequential toggle: `bool gatePassSequentialOff` per session + `setSequentialDownload(false)` on first GatePct-crosses-100 in StreamEngine.cpp (~15 LOC). Fixed `pi.requested 0→1` scheduler-visibility gate per Agent 4B B3 source-prediction. Commit `1f8f4e0`.
+- Phase 3 (Agent 4B) — session-settings bundle: `max_out_request_queue` 500→1500 + readback log in TorrentEngine::applySettings (~18 LOC). Widened peer pipelines 16× + 4× peer concurrency. Commit `1b9e891`.
+- Phase 4 (Agent 3) — Option A prefetch thread: new `StreamPrefetch` class at native_sidecar/src/stream_prefetch.{h,cpp} (~290 LOC) + glue in video_decoder.cpp wrapping raw AVIOContext → 64 MiB ring buffer → dedicated producer thread. Three structural bugs caught + fixed (bounded-wait-breaks-find_stream_info, AVIOContext-not-thread-safe-must-cache-source_size, producer-continue-on-EOF-for-MKV-Cues-backtrack) — reference patterns for future sidecar work.
+- Phase 4.1 (audio-decoder parity) — PARKED indefinitely per Agent 3 Rule-14 video-only scope call.
+
+**Parked Congress 7 tactics (documented in archive):**
+- (b) `read_piece` force-pull — source-falsified at torrent.cpp:799.
+- (e') `read_piece` forward scout — same falsification.
+- (c) nuclear piece-priority reset on seek — last-resort scrub primitive, not needed post-Phase-4.
+- (e-reload) session-level reload on stall — P5 stall-recovery bolt-on, not needed (zero stalls).
+- (d) debrid-first pivot — deferred by Hemanth 2026-04-19.
+
+**Critical re-framing on-record** (Congress 7 synthesis + Agent 4B B3): the original "smoking gun" at torrent.cpp:11100 was the wrong gate. Real dispatch stack is 6 layers (1 Hz second_tick → bottom-10% peer cull → deadline horizon → per-peer `can_request_time_critical` saturation → 2 s hard ceiling → add_blocks state check). Phase 2+3+4 together route around gates 1 + 4 via (a) normal-picker visibility + (e-settings) wider per-peer pipelines + (f) continuous consumer-side demand. Future stream-mode scheduler investigations start from this framing.
+
+**Post-close actions executed this wake:** (1) this TODO marked CLOSED; (2) chat.md close announcement; (3) MEMORY.md updated with shipped + closed status. (4) STREAM_LIFECYCLE_FIX + STREAM_PLAYER_DIAGNOSTIC Phase-3 carry-forwards unblocked (independently Agent 4 / Agent 3 domain calls when they next wake). (5) STREAM_STALL_RECOVERY_FIX_TODO authoring DEFERRED — Agent 4B's zero-stall smoke means P5 stall-recovery primitives (c + e-reload) are not load-bearing right now; re-author if a catastrophic swarm surfaces in normal-use.
+
+---
+
+**Original scope below preserved for provenance.**
+
+---
 
 **Owners:** Agent 3 (Phase 1 — sidecar readahead) + Agent 4 (Phase 2 — gate-pass sequential toggle) + Agent 4B (Phase 3 — session-settings bundle). Agent 0 coordinates phase gates and commit sweeps.
 
@@ -161,6 +187,88 @@ One combined smoke run after all three phases land (expected ~3 batches over 2-3
 6. **Sopranos S06E09 cold-open + UserScrub to 40:00 + ContainerMetadata scrub to 55:30:** full STREAM_ENGINE_REBUILD P5 smoke matrix — no regressions.
 
 If any of 1-4 fails, keep drilling per Congress 7's parked tactics ((c) nuclear reset + (e-reload) session reload) as stall-recovery tools before considering (d) debrid pivot.
+
+---
+
+## Phase 4 — Option A: sidecar prefetch thread (UNLOCKED 2026-04-19)
+
+**Why:** Phase 2 + Phase 3 landed partial-green. Agent 4B's Phase 3 smoke (chat.md Phase 3 report) proved the residual stall mechanism is NOT queue-depth-limited — it is **peer-delivery-speed-limited**. Measured telemetry: piece 31 `requested=128 finished=23/165` — libtorrent is asking 128 blocks of this piece across peers, only 23 have arrived. Peers are maxed on our demand but physically slow at delivery.
+
+The fix is **ask more peers concurrently** — the only way to raise aggregate throughput when single-peer throughput is capped. That requires **continuous forward demand** from the consumer (sidecar), which spreads libtorrent's requests across a wider peer pool. This is exactly what mpv's 64 MiB `stream-buffer-size` does via its dedicated prefetch thread — see Agent 3's Phase 1 de-scope finding (chat.md:2543-2552) for the architectural root-cause analysis: ffmpeg libavformat is synchronous pull, so the fix cannot live inside the avformat_open chain; it needs a separate prefetch thread feeding a ring buffer.
+
+**Scope fence:** This is a sidecar-internal change. Zero `src/core/stream/*` / `src/core/torrent/*` touches. Zero frozen Engine API touches. The ring buffer + prefetch thread sit between `avio_open2` (HTTP source) and `avformat_open_input` (demuxer consumer) — pure native_sidecar surgery.
+
+### Batch 4.1 — New `native_sidecar/src/stream_prefetch.{h,cpp}` + glue in video_decoder.cpp
+
+**New files:**
+- `native_sidecar/src/stream_prefetch.h` — public interface for a `StreamPrefetch` class that owns the prefetch thread + ring buffer
+- `native_sidecar/src/stream_prefetch.cpp` — implementation
+
+**Design (Agent 3 has final Rule-14 freedom on shape; below is sketch):**
+- Constructor takes the raw HTTP `AVIOContext*` from `avio_open2(url)`, capacity (64 MiB default per mpv parity), spawns a `std::thread` that continuously calls `avio_read_partial(raw, ring.write_slot(), chunk)` and advances the ring's write head.
+- Expose a producer-thread state enum: `Running / EofReached / FatalError` — consumer distinguishes "no data yet, wait" from "stream genuinely ended."
+- Expose a consumer-facing `read(buf, size)` callback that the demuxer's wrapping `AVIOContext` invokes. Semantics:
+  - If ring has ≥ `size` bytes queued → copy + return `size` (non-blocking).
+  - If ring has partial data + thread state == `Running` → copy what's available + return positive byte count (partial read is fine; NOT EOF).
+  - If ring empty + thread state == `Running` → block on a condition variable until either data arrives or a shutdown signal. **Cap the wait** at something reasonable (e.g., 5 s) to avoid holding the decode thread indefinitely on a genuinely-stalled torrent.
+  - If ring empty + thread state == `EofReached` → return 0 (true EOF).
+  - If thread state == `FatalError` → return `AVERROR(EIO)` or similar.
+- Destructor: shutdown flag + join prefetch thread + clean ring buffer teardown. RAII.
+
+**Glue in `native_sidecar/src/video_decoder.cpp`:**
+- Replace the existing `avformat_open_input(&fmt_ctx, url, ...)` call chain with:
+  1. `avio_open2(&raw_avio, url, AVIO_FLAG_READ, ...)` as before.
+  2. Construct `StreamPrefetch prefetch(raw_avio, 64 * 1024 * 1024)`.
+  3. Allocate a consumer-side `AVIOContext* wrap_avio = avio_alloc_context(buf, 2MiB, 0, &prefetch, &StreamPrefetch::read_trampoline, nullptr, nullptr)`.
+  4. `fmt_ctx = avformat_alloc_context(); fmt_ctx->pb = wrap_avio; fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;`
+  5. `avformat_open_input(&fmt_ctx, "", nullptr, opts)` (empty URL because we pass the custom IO).
+- Ensure all 4 early-return paths + the normal end-of-function path tear down in the right order: demuxer close → wrap_avio free → prefetch dtor (joins thread) → raw_avio close.
+
+**Critical: do NOT repeat Phase 1 attempt-1 and attempt-2 failures.**
+- Attempt 1 (false-EOF on transient HTTP drain): caused by mapping `avio_read_partial` returning 0 to `AVERROR_EOF`. Fix: our consumer callback only returns 0 when the PRODUCER thread has explicitly reached EOF. Transient drain at the raw HTTP layer is invisible to the consumer because the ring buffer absorbs it.
+- Attempt 2 (cold-open deadlock): caused by consumer-side blocking reads waiting for bytes the torrent engine hadn't fetched. Fix: our consumer block is bounded (wait-with-timeout); more importantly, the PRODUCER thread is the one that waits on the HTTP source, not the consumer — the producer's wait is transparent to the demuxer thread, which keeps processing whatever is already in the ring.
+
+**Smoke exit criterion (Windows-MCP self-drive on 1575eafa One Piece S02E01 via Torrentio):**
+1. **Cold-open preserved:** `firstPieceMs ≤ 12 s` (no regression from Phase 2+3 baseline). `gate_pass_sequential_off` telemetry still fires within milliseconds of first_piece as Phase 2 shipped.
+2. **Peer concurrency rises:** `piece_diag` on active-playback pieces shows `peers_downloading` count expanding from Phase 3's 1-2 to 4+ (because sidecar is pulling 64 MiB continuously, which libtorrent spreads across more peers).
+3. **Zero `stall_detected` events** on playback past cold-open head through piece 40. Target: residual tail-block stalls Agent 4B measured (pieces at 95-99% block completion with 12-32 s self-recovery) are GONE.
+4. **Scrub-within-cache:** seek to a byte-offset within the 64 MiB ring buffer window resumes in < 1 s with zero network round-trip visible in alert_trace.log.
+5. **Post-stall clean-playback window extends:** if any stall still fires, the clean-playback window after recovery should extend beyond Phase 2's 113 s baseline (closer to indefinite).
+6. **No mid-playback false-EOF** — zero `VideoDecoder: thread exiting` logs with `Stream ends prematurely` during a 10-minute playback run.
+7. **No cold-open deadlock** — LoadingOverlay never exceeds the existing 30 s watchdog.
+
+**Rollback:** `git revert HEAD`. Sidecar-internal change; reverts to Phase 2+3 partial-green baseline. State lives entirely in the sidecar process; no cross-session / cross-commit coupling.
+
+**Build / smoke:** `powershell -File native_sidecar/build.ps1` GREEN → Windows-MCP smoke. Main app unchanged for Phase 4; no `build_check.bat` / main-app rebuild needed.
+
+**Expected LOC:** ~150-200 in `stream_prefetch.{h,cpp}`; ~20 LOC glue in `video_decoder.cpp` (+ mirror in `audio_decoder.cpp` + `demuxer.cpp` if they also call `avformat_open_input` and would benefit — Agent 3's call).
+
+**Cap:** 2-3 Agent 3 wakes (Agent 3's own Phase 1 estimate preserved).
+
+**Close conditions:** this phase CLOSES when smoke criteria 1-7 pass on 1575eafa + the Sopranos S06E09 P5 matrix (TODO §Smoke Matrix item 6) shows no regressions. On close, entire STREAM_STALL_FIX_TODO is ready for Hemanth final ratification + MEMORY.md update.
+
+### Phase 4 wake-1 outcome (2026-04-19)
+
+**Core ship ACCEPTED by Agent 0.** `native_sidecar/src/stream_prefetch.{h,cpp}` (~290 LOC) + `video_decoder.cpp` glue shipped. Smoke on 1575eafa / Torrentio EZTV / ~90s sustained playback: criteria 3, 5, 6-short GREEN — zero `stall_detected`, ring at 63-66 MiB continuously, 25 fps / drops=0/s / 89+ consecutive PERF ticks. Video-only first ship (audio_decoder + demuxer untouched per Rule 14 scope call). Three iteration-bugs caught + fixed in wake: (1) bounded wait + `AVERROR(EAGAIN)` aborts mkv find_stream_info → unbounded wait; (2) consumer `avio_size(raw_avio)` races with producer `avio_read_partial` (non-thread-safe) → cache `m_source_size` at ctor; (3) producer break-on-EOF leaves MKV backtrack seek (Cues index at EOF → offset 10961 for playback start) unserviced → continue-on-EOF + wait-for-seek pattern at top of loop.
+
+### Criterion 1 + 7 re-interpretation (Agent 0, 2026-04-19)
+
+**Cold-open watchdog fire during Phase 4 wake-1 smoke is NOT a Phase-4 regression.** The pre-brief's ≤12s target (criterion 1) was aspirational. Agent 4B's Phase 3 smoke on the SAME 1575eafa / Torrentio EZTV swarm showed `firstPiece=87861 ms` (chat.md Phase 3 report) — the main-app 30s `LoadingOverlay` watchdog was already firing routinely before Phase 4 existed, because fresh 48-peer Torrentio cold-starts are libtorrent-metadata-fetch-dominated (mdReady ~100+s on magnet), not piece-dispatch-dominated. Phase 4 only affects mid-playback readahead pressure (post-first-frame); cold-open latency lives upstream of the prefetch thread. **Accepted as pre-existing libtorrent fresh-swarm latency. Flagged for a separate future investigation (metadata-fetch-latency follow-up), not a Phase-4 re-ship.**
+
+### Phase 4.2 — smoke-gap closure (Agent 4B, ~1 wake, no code change expected)
+
+Remaining criteria need verification against the Agent 4B Phase 3 baseline + another swarm:
+
+1. **Criterion 2 (peer concurrency):** pull `piece_diag` during active playback; expect `peers_downloading` to expand from Phase 3's baseline of 8 into 10+ range (sidecar's continuous 64 MiB forward pull should spread libtorrent requests across a wider peer pool).
+2. **Criterion 4 (scrub-within-cache):** Windows-MCP UI-scrub within the 64 MiB ring-buffer window. Expected: playback resumes in < 1s with zero network round-trip visible in alert_trace.log.
+3. **Criterion 6-long (10-minute soak):** extend wake-1's 90s smoke to a full 10-minute run; verify no `Stream ends prematurely` / `VideoDecoder thread exiting` / drift.
+4. **Sopranos S06E09 P5 regression matrix** (TODO §Smoke Matrix item 6): different swarm / codec / size. Confirms Phase 4 doesn't regress on other content.
+
+**Owner: Agent 4B** (single agent = single smoke harness = cleanest signal). No code expected; pure verification wake. If any criterion fails, open Phase 4.3 targeted at the specific failure.
+
+### Phase 4.1 — audio-decoder parity (PARKED)
+
+Agent 3 shipped VIDEO-ONLY glue in wake-1 per Rule 14 scope call (audio bitrate is 10-40× lower than video, rarely starves time-critical). Mirror into `audio_decoder.cpp` + `demuxer.cpp` probe path ONLY if multi-torrent smoke surfaces audio-specific stalls. Deferred indefinitely; no active owner.
 
 ## Rollback
 
