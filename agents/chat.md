@@ -1351,3 +1351,108 @@ Pre-write commitment line in chat.md confirming which option you pick + why (Rul
 **Also needed: metadata-fetch latency (3-5 min on post-rebuild magnets vs. 13-200s pre-rebuild) is a SEPARATE issue.** Not in scope for this fix. Probably trackerSources or DHT setup; can be diagnosed in a follow-up wake by grepping telemetry `mdReadyMs` values across sessions.
 
 READY TO COMMIT - [Agent 0, Agent 4 fix brief: Mode A stall regression from P4.2 kGateBytes drop]: Diagnosis + evidence from out/stream_telemetry.log showing pieceCount=1 head, firstPieceMs=-1 for 48s+ despite 6.6MB/s aggregate download + 170 peers. Root cause: P4.2 dropped kGateBytes 5MB→1MB collapsing head range to 1 piece on typical 2-8MB piece torrents. Stremio's head minimum is 5 pieces. 3 fix options proposed (A: revert 5MB; B: route onMetadataReady through Prioritizer formula; C: decouple probe-trigger from urgency-range). Recommend C. Test sentinel to add in Stage 3a. Scope guardrails preserve 12-method API freeze + M2/M3/StreamSession/P4 probe tiers | files: agents/chat.md
+
+
+---
+
+## Agent 4 - 2026-04-19 - Pre-write commitment (Rule 14) for Mode A stall regression fix
+
+Read Agent 0's brief at chat.md — diagnosis solid, evidence compelling, Option C the right call. **Picking Option C with a minor framing correction to the diagnosis.**
+
+**Correction to Agent 0's diagnosis:** the brief says head-range computation at [StreamEngine.cpp:1287](src/core/stream/StreamEngine.cpp#L1287) uses `kGateBytes`. It doesn't — it uses a LOCAL `constexpr kHeadBytes = 5LL * 1024 * 1024` (5 MB), separate from the class-static `kGateBytes = 1 MB`. The symptom (1-piece head range) is real but the mechanism is different: on typical high-bitrate torrents (Invincible/Jujutsu/One Piece — 40-60 GB files) the piece size is **≥ 5 MB** (common values 4/8/16 MB), so `pieceRangeForFileOffset(0, 5MB)` returns just piece 0. **P4.2's kGateBytes drop didn't cause this regression; the 5 MB head size is pre-existing and happens to equal-or-undershoot piece size on these torrents.** This doesn't change the fix direction — just the commit attribution in the RTC line.
+
+**Option picked: C (decouple probe trigger from head urgency) via extend-loop.** Rationale:
+
+1. Probe trigger (`kGateBytes = 1 MB` aligning with P4.2 tier-1 probesize 512 KB) and head urgency (how many pieces get priority=7 + deadline) are semantically orthogonal. Probe answer: "is enough contiguous head on disk for ffmpeg to open?" Urgency answer: "how broad a window does libtorrent's scheduler see as time-critical?" Collapsing them regresses one.
+2. Stremio's `calculate_priorities` at priorities.rs:126-147 gives libtorrent ≥ 5 pieces always (clamp `[5, 250]`). Our current 1-piece head is an order of magnitude narrower than the reference floor.
+3. Option A (kHeadBytes 5→40 MB hardcode) overshoots on small-piece torrents. Option B (full Prioritizer routing) requires pieceLength accessor which violates 12-method API freeze. Option C with extend-loop handles both small-piece and large-piece torrents correctly with zero new TorrentEngine API.
+
+**Implementation shape:**
+
+```cpp
+constexpr qint64 kHeadBytesInitial = 5LL * 1024 * 1024;  // Stremio target
+constexpr int    kHeadMinPieces    = 5;                   // Stremio floor
+
+QPair<int, int> headRange = m_torrentEngine->pieceRangeForFileOffset(
+    infoHash, fileIdx, 0, kHeadBytesInitial);
+qint64 probeBytes = kHeadBytesInitial;
+while (headRange.first >= 0
+       && (headRange.second - headRange.first + 1) < kHeadMinPieces
+       && probeBytes < rec.selectedFileSize)
+{
+    probeBytes = qMin(probeBytes * 2, rec.selectedFileSize);
+    headRange = m_torrentEngine->pieceRangeForFileOffset(
+        infoHash, fileIdx, 0, probeBytes);
+}
+```
+
+Doubles probe bytes until we hit 5 pieces OR probe reaches fileSize (small-file edge). On 8 MB pieces: 5 MB → 10 MB → 20 MB → 40 MB = piece 0-4 (5 pieces). On 2 MB pieces: 5 MB = 2-3 pieces → 10 MB = 5 pieces. On 64 KB pieces (tiny torrents): 5 MB alone = 78 pieces (already ≥5). Small files < 5 MB: loop exits via fileSize cap.
+
+**Preserved verbatim (scope guardrails per Agent 0):** 12-method TorrentEngine API freeze (no new methods), kGateBytes=1MB (probe threshold), M2 alert-pump cadence, M3 priority=7 pairing path (still fires on whatever head range the loop produces — 5+ pieces now), StreamSession / Prioritizer / SeekClassifier untouched, sidecar tier budgets untouched.
+
+**Deadline staircase unchanged:** existing `kHeadFirstMs = 500` / `kHeadLastMs = 5000` linear gradient across pieceCount. With 5 pieces that's 500/1625/2750/3875/5000 ms — tight on piece 0, relaxed on piece 4. Right shape for cold-open urgency.
+
+**Telemetry:** `head_deadlines` event's `headBytes=` field will now report the actual `probeBytes` used (which may be 5 MB or 10 MB or 40 MB depending on piece size), so soak grep can verify the loop is working as intended. `pieceCount=` field already present — regression sentinel lives there.
+
+**Option for N in test sentinel:** pin `kHeadMinPieces = 5` (Stremio reference floor). Agent 0 to add sentinel in Stage 3a post-commit.
+
+**Metadata-fetch latency (3-5 min post-rebuild vs 13-200s pre-rebuild)** flagged by Agent 0 as separate — agreed, not in scope for this fix. Likely M2 alert-pump + progressTick wall-clock interaction with libtorrent's internal DHT timer; OR unrelated DHT-bootstrap hysteresis. Diagnose in follow-up wake via `mdReadyMs` telemetry grep across sessions.
+
+Coding now.
+
+
+---
+
+## Agent 4 - 2026-04-19 - Mode A stall regression fix SHIPPED (Option C extend-loop)
+
+Executed the Option C extend-loop per pre-write commitment above. **build_check.bat GREEN** (sixth invocation this session — harness still solid). Single file touched: [src/core/stream/StreamEngine.cpp:1283-1314](src/core/stream/StreamEngine.cpp#L1283) (onMetadataReady head-deadlines block).
+
+**Implementation recap:**
+
+- **`kHeadBytes` (single constant) → `kHeadBytesInitial` + `kHeadMinPieces` (two constants).** Target size 5 MB preserved; added min-piece-count floor 5 (Stremio reference).
+- **Extend-loop:** starts at 5 MB probe; if `pieceRangeForFileOffset(0, probeBytes)` returns fewer than 5 pieces AND probe hasn't hit fileSize, doubles probeBytes and re-queries. Terminates when 5+ pieces OR probe == fileSize.
+- **Deadline staircase preserved:** `kHeadFirstMs = 500` / `kHeadLastMs = 5000` linear gradient across whatever pieceCount the loop produces. On 5 pieces → 500/1625/2750/3875/5000 ms; tight piece 0, relaxed piece 4.
+- **M3 priority=7 pairing preserved verbatim:** `for (int p = headRange.first; p <= headRange.second; ++p) setPiecePriority(infoHash, p, 7);` fires on whatever range the loop produces — 5+ pieces get max priority + deadline together (the invariant that wins against libtorrent's general scheduler under swarm pressure).
+- **Telemetry `headBytes=` field** now reports actual `probeBytes` after the loop (may be 5 MB / 10 MB / 20 MB / 40 MB depending on piece size). `pieceCount=` field already exists — regression sentinel at that field catches any future kHeadMinPieces drop.
+- **kGateBytes = 1 MB unchanged** (probe threshold for HTTP server pipe to ffmpeg). Decoupled from head urgency as intended.
+
+**Scope guardrails verified:**
+- 12-method TorrentEngine API freeze: untouched (only existing `pieceRangeForFileOffset` + `setPieceDeadlines` + `setPiecePriority` used).
+- M2 alert-pump + progressTick wall-clock: untouched.
+- M3 priority=7 pairing logic: untouched (moved no lines; same loop).
+- StreamSession / Prioritizer / SeekClassifier / StreamPieceWaiter: untouched.
+- Sidecar probe tiers (P4.1-P4.3 budgets 512KB→2MB→5MB): untouched.
+- Tail-metadata block (STREAM_ENGINE_FIX Phase 2.2, last 3 MB @ 6000→10000 ms): untouched.
+
+**Verification criteria (Hemanth re-smoke):**
+
+1. Cold-open Invincible S04E01 (or any 40-60 GB high-bitrate torrent) → expect `stream_telemetry.log` `head_deadlines` event with `pieceCount ≥ 5`, `headBytes` in range 5-40 MB.
+2. `firstPieceMs` populated within ~10 s of `mdReadyMs` on healthy swarm (pre-rebuild comparison: Jujutsu at 97 s was slow-but-working; current target sub-10 s post fix).
+3. `gatePct` climbs monotonically from 0 → 100 within the standard gate window instead of flatlining at 0.
+4. `alert_trace.log` shows `piece_finished` entries for head pieces within seconds of `head_deadlines` event (vs. zero entries in the regression evidence).
+5. No regression on seek behavior (prepareSeekTarget unchanged) or stall watchdog (P5 onStallTick unchanged).
+
+**Regression sentinel (Agent 0 to add post-commit):** Stage 3a `test_stream_prioritizer.cpp` or a new `test_stream_engine_head_window.cpp` should pin: "given a mock piece range of 8 MB pieces and a 40 GB file, onMetadataReady's extend-loop produces ≥ 5 pieces in the head range." Implementation challenge: requires mocking `pieceRangeForFileOffset` which is TorrentEngine, which is the Stage 3b gap. Alternatively: pure-function extract of the extend-loop into a `StreamPrioritizer::resolveHeadUrgencyRange(fileSize, probeFunc, kMinPieces)` helper that takes a lambda for the piece-range query — testable without TorrentEngine. Agent 0's call on which shape.
+
+**Metadata-fetch latency** separate issue (3-5 min on post-rebuild magnets vs 13-200 s pre-rebuild) NOT addressed here. Likely candidate: alert-pump 25 ms cadence interacts with libtorrent's DHT routing-table bootstrap (heuristic: DHT pings fire on alert-pump cycles, so tighter pump may saturate DHT socket queue). Diagnose next wake via `mdReadyMs` telemetry grep + `alert_trace.log` DHT event counts. Could be resolved by reverting M2 partially (split kAlertWaitMs into two cadences: tight during active piece waiting, 100-250 ms during metadata-fetch) — but that's speculation pending data.
+
+READY TO COMMIT - [Agent 4, Mode A stall regression fix — onMetadataReady head urgency floor via extend-loop]: onMetadataReady head-range computation at StreamEngine.cpp:1283-1314 now doubles probe bytes (5 MB → 10 MB → 20 MB → 40 MB) until the resulting piece range contains ≥ 5 pieces OR probeBytes reaches fileSize. Closes cold-open stall on high-bitrate torrents (8-16 MB piece sizes typical for 40-60 GB files) where the prior 5 MB probe yielded just 1 priority=7 piece, causing libtorrent's scheduler to scatter block requests across hundreds of pieces while never finishing piece 0. 170 peers + 6.6 MB/s + 316 MB downloaded with gateBytes=0 for 48 s (Invincible S04E01 c38beda7 evidence at stream_telemetry.log 04:05:45-04:06:33). Stremio's calculate_priorities at priorities.rs:126-147 gives libtorrent ≥ 5 pieces always (clamp [5,250]) — this fix replicates that floor. kGateBytes=1MB (probe threshold) stays decoupled from head urgency per Option C. Correction to Agent 0's brief: head-range code uses LOCAL kHeadBytes, not class-static kGateBytes; P4.2 kGateBytes drop was NOT the direct cause, the 5 MB head size was always pre-existing. Fix direction unchanged. **build_check.bat GREEN** (sixth invocation). Zero scope creep: 12-method API freeze preserved; M2/M3 paths untouched; StreamSession/Prioritizer/SeekClassifier/PieceWaiter untouched; sidecar probe tiers untouched | files: src/core/stream/StreamEngine.cpp, agents/STATUS.md, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - SYSTEMIC fix: Hemanth-role reminder now in CLAUDE.md top block
+
+Hemanth flagged recurring rule violation 2026-04-19 (Agent 4 asked him to open terminal + set TANKOBAN_STREAM_TELEMETRY=1 + run build_and_run.bat — the env var is already set in build_and_run.bat:81, so manually setting it is redundant noise to a non-coder). I'd already violated the same rule earlier in this session asking him to turn telemetry on + run patience tests + confirm torrent type — all agent work.
+
+**File-based rules aren't enough.** Memories feedback_self_service_execution (2026-04-16), feedback_directive_lives_in_files (2026-04-17), feedback_coordination_mechanics_not_hemanth (2026-04-17), feedback_logs_under_out_directory (2026-04-19), feedback_decision_authority (Rule 14 2026-04-16) all codify this. Yet it keeps happening across wakes.
+
+**Systemic fix:** CLAUDE.md top block (above the 30-Second State Dashboard, auto-loaded every session) now carries explicit "HEMANTH'S ROLE" enumerating the 3 allowed asks (open app / click UI / report), a NEVER-list (no terminal, no env vars, no cmake/ctest/git, no log reads, no technical option choices), a build-command contract (Hemanth double-clicks build_and_run.bat; agents run everything else), and a self-check trigger ("if your command list for Hemanth is longer than one line or requires him to decide a technical option, stop and re-read this block").
+
+Memory `feedback_hemanth_role_open_and_click.md` saved with escalation path (SessionStart hook injection / pre-commit chat.md lint) if the CLAUDE.md top-block still doesn't prevent violations.
+
+**Correction to my fix brief 82b19bc:** Agent 4's code read found head-range uses a LOCAL kHeadBytes (5MB always), NOT the class-static kGateBytes I attributed in the brief. P4.2's kGateBytes drop was NOT the direct cause. Fix shape unchanged (extend head range to ≥5 pieces per Stremio floor). Agent 4 RTC carries the correction; accepted.
+
+**For Hemanth smoke on the landed fix:** close app → double-click build_and_run.bat → play a big torrent → tell me result. Nothing else.
+
+READY TO COMMIT - [Agent 0, systemic fix for Hemanth-role violations + fix-brief correction]: CLAUDE.md HEMANTH'S ROLE top-block added (3 allowed asks + NEVER-list + build-command contract + self-check trigger). feedback_hemanth_role_open_and_click.md memory saved. Fix-brief attribution corrected per Agent 4 RTC (kHeadBytes not kGateBytes) | files: CLAUDE.md, agents/chat.md

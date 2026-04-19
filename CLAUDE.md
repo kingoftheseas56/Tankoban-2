@@ -4,6 +4,37 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 ---
 
+## HEMANTH'S ROLE (READ THIS FIRST, EVERY WAKE)
+
+**Hemanth is NOT a coder.** His role is strictly limited to three actions, total:
+
+1. **Open the app.** Either closes + double-clicks `build_and_run.bat` (which auto-sets `TANKOBAN_STREAM_TELEMETRY=1` + `TANKOBAN_ALERT_TRACE=1`), or clicks the already-running Tankoban window.
+2. **Click something in the UI.** Play a torrent. Seek. Open a book. Whatever the agent asked him to smoke.
+3. **Report what he saw.** "Worked" / "Still stuck" / "Buffer never filled" / screenshot.
+
+**That is the entire Hemanth role.** Do NOT ask him to:
+- Open a terminal
+- Set environment variables manually (they are already set by `build_and_run.bat`)
+- Run `cmake`, `ctest`, `git`, `taskkill`, or any CLI command
+- Read log files (`sidecar_debug_live.log`, `stream_telemetry.log`, `alert_trace.log`, `_player_debug.txt`, etc.)
+- Grep, tail, diff, or parse anything
+- Decide between technical options (Option A vs B vs C — that's Rule 14 agent-call)
+- "Wait for the build" — the build IS the run; `build_and_run.bat` builds then launches
+- Copy-paste output from terminals
+- Know whether tests linked, what phase shipped, what env var does what
+
+**Logs live under `out/` not repo root.** Before asking Hemanth anything diagnostic, `find . -maxdepth 3 -name "*.log"` and `cat` whatever you need. The answer is almost always already on disk.
+
+**Build-command contract** (so no agent has to "invent" these for Hemanth):
+- Run-the-app-with-telemetry: `build_and_run.bat` (env vars are baked in at lines 81 + 87, no manual `set` needed).
+- Verify a .cpp compiles: `build_check.bat` (agent runs it, not Hemanth).
+- Run main-app tests: `-DTANKOBAN_BUILD_TESTS=ON` + `ctest` (agent runs it).
+- Dashboard drift / tracked junk / large files: `/repo-health` or `powershell -NoProfile -File scripts/repo-health.ps1` (agent runs it).
+
+If you are tempted to give Hemanth a terminal command list longer than **one line** or a multi-step procedure that requires him to decide something technical, **stop and re-read this block.** Menu-ing Hemanth with coder steps has been flagged as a recurring brotherhood failure 2026-04-17, 2026-04-18, and 2026-04-19. Rule 14 + Rule 15 + multiple feedback memories codify this already — the block above is the always-loaded pointer.
+
+---
+
 ## 30-Second State Dashboard
 
 **As of:** 2026-04-18 (Agent 0 — **CONGRESS 6 RATIFIED by Hemanth delegation** 2026-04-18 (`Execute` recorded in integration memo §12 by Agent 0 on Hemanth instruction "do it on my behalf"). Integration memo at [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md). **P2/P3/P4 GATES OPEN FOR EXECUTION.** Agent 4 may begin P2 StreamPieceWaiter against Agent 4B's shipped `pieceFinished` signal (`022c4eb`), with M1/M2/M3 decisions at entry. Agent 3 may begin P4 sidecar probe escalation. Agent 4 P3 after P2 lands, with M4/M5/M6 at P3 design entry. Congress 5 + 6 both archived; Agent 7 prior stream audits demoted to [_superseded/](agents/audits/_superseded/). 12-method API freeze active through P6 terminal tag.)
