@@ -1,6 +1,8 @@
 #include "StreamEngine.h"
 #include "StreamHttpServer.h"
 #include "StreamPieceWaiter.h"
+#include "StreamPrioritizer.h"
+#include "StreamSeekClassifier.h"
 #include "core/torrent/TorrentEngine.h"
 
 #include <QCoreApplication>
@@ -114,7 +116,7 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
     QDir().mkpath(m_cacheDir);
 
     // STREAM_ENGINE_FIX Phase 1.1 — start monotonic clock supplying timestamps
-    // for StreamRecord observability fields. Started here so all per-stream
+    // for StreamSession observability fields. Started here so all per-stream
     // ms values share a common origin (engine startup).
     m_clock.start();
 
@@ -144,6 +146,18 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
     connect(m_telemetryTimer, &QTimer::timeout,
             this, &StreamEngine::emitTelemetrySnapshots);
     m_telemetryTimer->start();
+
+    // STREAM_ENGINE_REBUILD P3 — 1 Hz re-assert tick. Walks m_streams on
+    // every fire; for each Serving session with a recent position feed,
+    // re-dispatches the Prioritizer's normal-streaming window so
+    // libtorrent's time-critical table stays warm between StreamPage's
+    // 2 s tick. See onReassertTick for the skip-predicates that keep the
+    // tick cheap when no stream is active.
+    m_reassertTimer = new QTimer(this);
+    m_reassertTimer->setInterval(1000);
+    connect(m_reassertTimer, &QTimer::timeout,
+            this, &StreamEngine::onReassertTick);
+    m_reassertTimer->start();
 
     // One-shot startup line so the log opens visibly when telemetry is on
     // — confirms env-var gate worked + filesystem path resolved.
@@ -287,7 +301,7 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
         // new API surface (Axis 1 territory, Agent 4B pre-offered HELP).
         m_torrentEngine->setSequentialDownload(addedHash, true);
 
-        StreamRecord rec;
+        StreamSession rec;
         rec.infoHash = addedHash;
         rec.magnetUri = magnetUri;
         rec.savePath = m_cacheDir;
@@ -312,7 +326,7 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
     auto it = m_streams.find(existingHash);
 
     // Existing stream — check status
-    StreamRecord& rec = *it;
+    StreamSession& rec = *it;
     result.infoHash = rec.infoHash;
 
     if (!rec.metadataReady) {
@@ -475,7 +489,7 @@ void StreamEngine::stopStream(const QString& infoHash)
         + QStringLiteral(" idx=") + QString::number(it->selectedFileIndex)
         + QStringLiteral(" lifetimeMs=") + QString::number(m_clock.elapsed() - it->metadataReadyMs));
 
-    StreamRecord rec = *it;
+    StreamSession rec = *it;
     m_streams.erase(it);
     lock.unlock();
 
@@ -534,7 +548,7 @@ StreamTorrentStatus StreamEngine::torrentStatus(const QString& infoHash) const
 
 // STREAM_ENGINE_FIX Phase 1.1 — substrate observability snapshot.
 //
-// Pure-read projection of StreamRecord state plus 1-2 calls into TorrentEngine
+// Pure-read projection of StreamSession state plus 1-2 calls into TorrentEngine
 // for piece-coverage data. Safe at telemetry cadence (5-15s). Returns
 // sentinel-defaulted struct for unknown infoHash so callers can treat
 // "no record" identically to "freshly-added record with nothing observed yet."
@@ -556,7 +570,7 @@ StreamEngineStats StreamEngine::statsSnapshot(const QString& infoHash) const
         return s;  // sentinel struct (all -1 / 0 / false / empty)
     }
 
-    const StreamRecord& rec = *it;
+    const StreamSession& rec = *it;
 
     s.activeFileIndex     = rec.selectedFileIndex;
     s.metadataReadyMs     = rec.metadataReadyMs;
@@ -640,28 +654,30 @@ QList<QPair<qint64, qint64>> StreamEngine::contiguousHaveRanges(
 void StreamEngine::updatePlaybackWindow(const QString& infoHash,
                                          double positionSec,
                                          double durationSec,
-                                         qint64 windowBytes)
+                                         qint64 /*windowBytes*/)
 {
-    int    fileIndex = -1;
-    qint64 fileSize  = 0;
-    {
-        QMutexLocker lock(&m_mutex);
-        auto it = m_streams.find(infoHash);
-        if (it == m_streams.end()) return;
-        if (!it->metadataReady) return;
-        fileIndex = it->selectedFileIndex;
-        fileSize  = it->selectedFileSize;
-    }
-
-    if (fileIndex < 0 || fileSize <= 0) return;
+    // STREAM_ENGINE_REBUILD P3 — delegates to StreamPrioritizer +
+    // StreamSeekClassifier. Cached position state persists on the
+    // StreamSession so the 1 Hz re-assert timer (onReassertTick) can
+    // re-dispatch between StreamPage's 2 s telemetry ticks. The legacy
+    // `windowBytes` parameter is preserved on the signature but ignored
+    // here — Prioritizer computes window size from bitrate + EMA speed
+    // per Stremio `priorities.rs:72-122`.
     if (durationSec <= 0.0) return;
     if (positionSec < 0.0) positionSec = 0.0;
-    if (windowBytes <= 0) return;
 
-    // Convert playback time to byte offset. This is a linear
-    // approximation — true byte position depends on codec bitrate
-    // distribution, but over a 20 MB window the error is well within
-    // one piece boundary for typical video bitrates (5-50 Mbps).
+    QMutexLocker lock(&m_mutex);
+    auto it = m_streams.find(infoHash);
+    if (it == m_streams.end()) return;
+    if (!it->metadataReady) return;
+
+    StreamSession& s = *it;
+    const int fileIndex = s.selectedFileIndex;
+    const qint64 fileSize = s.selectedFileSize;
+    if (fileIndex < 0 || fileSize <= 0) return;
+
+    // Linear position-to-byte approximation; error over a 20 MB window
+    // stays within one piece boundary at typical video bitrates.
     const double fraction = qMin(1.0, positionSec / durationSec);
     const qint64 byteOffset = static_cast<qint64>(fraction * fileSize);
     if (byteOffset >= fileSize) {
@@ -669,32 +685,170 @@ void StreamEngine::updatePlaybackWindow(const QString& infoHash,
         // head fetch (via onMetadataReady) isn't pre-empted by stale
         // late-file deadlines.
         m_torrentEngine->clearPieceDeadlines(infoHash);
+        s.lastPlaybackTickMs = m_clock.elapsed();
+        s.lastPlaybackPosSec = positionSec;
+        s.lastDurationSec = durationSec;
+        s.lastPlaybackOffset = fileSize;
         return;
     }
 
-    const qint64 effectiveWindow = qMin(windowBytes, fileSize - byteOffset);
-    const QPair<int, int> windowRange =
-        m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
-                                                  byteOffset, effectiveWindow);
-    if (windowRange.first < 0 || windowRange.second < windowRange.first) return;
+    // Classify this call. Sequential vs UserScrub is distinguished by
+    // comparing against the cached lastPlaybackOffset — small forward
+    // jumps are Sequential, large jumps (or backward) are UserScrub.
+    constexpr qint64 kSequentialForwardBudgetBytes = 5LL * 1024 * 1024;
+    const qint64 prevOffset = s.lastPlaybackOffset;
+    const qint64 delta = byteOffset - prevOffset;
 
-    // Gradient: 1000ms at the head of the window → 8000ms at the tail.
-    // More urgent than the Batch 2.2 5000ms tail because the reader is
-    // actively approaching these pieces; less aggressive than 500ms so
-    // the deadline table isn't saturated with every progress tick.
-    constexpr int kWindowFirstMs = 1000;
-    constexpr int kWindowLastMs  = 8000;
-    QList<QPair<int, int>> deadlines;
-    const int pieceCount = windowRange.second - windowRange.first + 1;
-    deadlines.reserve(pieceCount);
-    for (int i = 0; i < pieceCount; ++i) {
-        const int ms = (pieceCount <= 1)
-            ? kWindowFirstMs
-            : kWindowFirstMs + ((kWindowLastMs - kWindowFirstMs) * i)
-                               / (pieceCount - 1);
-        deadlines.append({ windowRange.first + i, ms });
+    StreamSeekType seekType = StreamSeekClassifier::classifySeek(
+        byteOffset, fileSize, s.firstClassification);
+    if (!s.firstClassification) {
+        // Refine classifySeek's UserScrub return for the Sequential case:
+        // forward delta within kSequentialForwardBudgetBytes = still
+        // Sequential (matches Stremio stream.rs:84-90 "just extend window,
+        // no cleanup"). Backward or large-forward = UserScrub.
+        if (seekType == StreamSeekType::UserScrub
+            && delta >= 0 && delta <= kSequentialForwardBudgetBytes) {
+            seekType = StreamSeekType::Sequential;
+        }
     }
-    m_torrentEngine->setPieceDeadlines(infoHash, deadlines);
+    s.firstClassification = false;
+
+    // Cache position state for the 1 Hz re-assert tick.
+    s.lastPlaybackTickMs = m_clock.elapsed();
+    s.lastPlaybackPosSec = positionSec;
+    s.lastDurationSec    = durationSec;
+    s.lastPlaybackOffset = byteOffset;
+    s.lastSeekType       = seekType;
+    // Feed EMA from the cached dlSpeed (already updated by
+    // TorrentEngine::torrentProgress). Keeps the filter warm even when
+    // no seek has fired since the last tick.
+    s.updateSpeedEma(s.dlSpeed);
+
+    // UserScrub: Stremio `stream.rs:101-108` clears all deadlines first so
+    // the old window doesn't contend with the new one. Defensive
+    // tail-metadata preservation per M6: we re-set the tail deadlines
+    // immediately after the clear (below) so libtorrent's overdue-deadline
+    // semantic doesn't demote moov-atom work. ContainerMetadata
+    // (stream.rs:92-99) PRESERVES head deadlines — no clear.
+    if (seekType == StreamSeekType::UserScrub) {
+        m_torrentEngine->clearPieceDeadlines(infoHash);
+    }
+
+    // Fetch the current piece range for the target offset.
+    const QPair<int, int> pieceRange = m_torrentEngine->pieceRangeForFileOffset(
+        infoHash, fileIndex, byteOffset, qMax<qint64>(s.selectedFileSize - byteOffset, 1));
+    if (pieceRange.first < 0) {
+        lock.unlock();
+        return;
+    }
+
+    // Reassert streaming priorities via the Prioritizer (normal-streaming
+    // window). Runs on every call regardless of seek type — the window
+    // follows the cursor.
+    reassertStreamingPriorities(s);
+
+    // M6 defensive invariant — after UserScrub clear, re-set tail-metadata
+    // deadlines so moov/Cues pieces don't drop off libtorrent's
+    // time-critical radar. Tail-metadata range matches onMetadataReady's
+    // block (last 3 MB). Zero cost if tail and head overlap (small files
+    // with fileSize < kGateBytes + 3 MB).
+    if (seekType == StreamSeekType::UserScrub) {
+        constexpr qint64 kTailBytes    = 3LL * 1024 * 1024;
+        constexpr int    kTailFirstMs  = 6000;
+        constexpr int    kTailLastMs   = 10000;
+        if (fileSize > kTailBytes + kGateBytes) {
+            const qint64 tailOffset = fileSize - kTailBytes;
+            const QPair<int, int> tailRange =
+                m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIndex,
+                                                          tailOffset, kTailBytes);
+            if (tailRange.first >= 0 && tailRange.second >= tailRange.first) {
+                const int tailPieceCount = tailRange.second - tailRange.first + 1;
+                QList<QPair<int, int>> tailDeadlines;
+                tailDeadlines.reserve(tailPieceCount);
+                for (int i = 0; i < tailPieceCount; ++i) {
+                    const int ms = (tailPieceCount <= 1)
+                        ? kTailFirstMs
+                        : kTailFirstMs + ((kTailLastMs - kTailFirstMs) * i)
+                                         / (tailPieceCount - 1);
+                    tailDeadlines.append({ tailRange.first + i, ms });
+                }
+                m_torrentEngine->setPieceDeadlines(infoHash, tailDeadlines);
+            }
+        }
+    }
+
+    // Reset to Sequential after handling the seek — matches Stremio
+    // `stream.rs:112` self.seek_type = SeekType::Sequential so subsequent
+    // ticks don't re-trigger the UserScrub clear / ContainerMetadata
+    // preservation path.
+    if (seekType != StreamSeekType::Sequential) {
+        s.lastSeekType = StreamSeekType::Sequential;
+    }
+}
+
+void StreamEngine::reassertStreamingPriorities(StreamSession& s)
+{
+    // Caller holds m_mutex. Dispatches Stremio's calculate_priorities
+    // port against the cached session state.
+    if (!m_torrentEngine) return;
+    if (!s.metadataReady || s.selectedFileSize <= 0) return;
+
+    // Resolve the current piece from the cached offset.
+    const QPair<int, int> headRange = m_torrentEngine->pieceRangeForFileOffset(
+        s.infoHash, s.selectedFileIndex, s.lastPlaybackOffset, 1);
+    if (headRange.first < 0) return;
+
+    // Total pieces = last piece index + 1. Derived from the file-end
+    // offset so Prioritizer can clamp its window correctly.
+    const QPair<int, int> endRange = m_torrentEngine->pieceRangeForFileOffset(
+        s.infoHash, s.selectedFileIndex, s.selectedFileSize - 1, 1);
+    if (endRange.first < 0) return;
+    const int totalPieces = endRange.second + 1;
+
+    // Piece length — derive from the cached range step. Simpler: ask
+    // TorrentEngine for one piece range + compute from byte-extents. For
+    // now, use the byte-offset-to-piece mapping from pieceRangeForFileOffset
+    // which already returns the right index. Piece length is needed for
+    // Prioritizer's window sizing, so derive it from the first piece's
+    // byte span. Fallback: 2 MB typical torrent piece size.
+    // (A dedicated TorrentEngine::pieceLength() accessor would be cleaner;
+    // adding one post-P3 under integration-memo §8 cross-slice cleanups.)
+    constexpr qint64 kAssumedPieceLength = 2LL * 1024 * 1024;
+
+    StreamPrioritizer::Params p;
+    p.currentPiece     = headRange.first;
+    p.totalPieces      = totalPieces;
+    p.pieceLength      = kAssumedPieceLength;
+    p.priorityLevel    = 1;  // normal streaming
+    p.downloadSpeed    = static_cast<qint64>(s.downloadSpeedEma);
+    p.bitrate          = s.bitrateHint;
+
+    const QList<QPair<int, int>> deadlines =
+        StreamPrioritizer::calculateStreamingPriorities(p);
+    if (deadlines.isEmpty()) return;
+
+    m_torrentEngine->setPieceDeadlines(s.infoHash, deadlines);
+}
+
+void StreamEngine::onReassertTick()
+{
+    // 1 Hz walk. Cheap: we skip sessions without a recent position feed
+    // (cold-open pre-metadata, or paused streams). Held under m_mutex
+    // because reassertStreamingPriorities reads session state; the inner
+    // setPieceDeadlines call drops into TorrentEngine's own m_mutex
+    // without nesting against ours (order: StreamEngine::m_mutex →
+    // TorrentEngine::m_mutex via setPieceDeadlines; never reversed).
+    constexpr qint64 kStaleFeedCutoffMs = 10000;  // skip if no feed in 10 s
+    const qint64 now = m_clock.elapsed();
+
+    QMutexLocker lock(&m_mutex);
+    for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
+        StreamSession& s = *it;
+        if (s.state() != StreamSession::State::Serving) continue;
+        if (s.lastPlaybackTickMs < 0) continue;
+        if (now - s.lastPlaybackTickMs > kStaleFeedCutoffMs) continue;
+        reassertStreamingPriorities(s);
+    }
 }
 
 void StreamEngine::clearPlaybackWindow(const QString& infoHash)
@@ -711,13 +865,16 @@ bool StreamEngine::prepareSeekTarget(const QString& infoHash,
 {
     int    fileIndex = -1;
     qint64 fileSize  = 0;
+    StreamSeekType   seekType = StreamSeekType::UserScrub;
+    bool             firstClass = false;
     {
         QMutexLocker lock(&m_mutex);
         auto it = m_streams.find(infoHash);
         if (it == m_streams.end()) return false;
         if (!it->metadataReady) return false;
-        fileIndex = it->selectedFileIndex;
-        fileSize  = it->selectedFileSize;
+        fileIndex  = it->selectedFileIndex;
+        fileSize   = it->selectedFileSize;
+        firstClass = it->firstClassification;
     }
     if (fileIndex < 0 || fileSize <= 0) return false;
     if (durationSec <= 0.0 || positionSec < 0.0) return false;
@@ -727,6 +884,16 @@ bool StreamEngine::prepareSeekTarget(const QString& infoHash,
     const double fraction = qMin(1.0, positionSec / durationSec);
     const qint64 byteOffset = static_cast<qint64>(fraction * fileSize);
     if (byteOffset >= fileSize) return false;
+
+    // STREAM_ENGINE_REBUILD P3 — classify the seek so telemetry captures
+    // which Stremio-shape branch we took (and so the session's lastSeekType
+    // tracks correctly for the M6 defensive tail-preservation path). The
+    // deadline gradient below stays verbatim from Phase 2.6.3 (empirically
+    // won against libtorrent's scheduler at 18 MB/s on a 200-500 ms
+    // staircase across the full prefetch window); switching to Stremio's
+    // CRITICAL 300 ms × 4-piece shape is a post-P3 tuning question if the
+    // current gradient regresses.
+    seekType = StreamSeekClassifier::classifySeek(byteOffset, fileSize, firstClass);
 
     const qint64 effective = qMin(prefetchBytes, fileSize - byteOffset);
     const QPair<int, int> range =
@@ -888,7 +1055,7 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
     if (it == m_streams.end())
         return;  // Not our torrent
 
-    StreamRecord& rec = *it;
+    StreamSession& rec = *it;
     rec.metadataReady = true;
 
     // STREAM_ENGINE_FIX Phase 1.1 — metadata-ready timestamp. Set once;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QList>
 #include <QMutex>
@@ -71,13 +72,31 @@ public:
                     qint64 fileOffset, qint64 length, int timeoutMs,
                     const std::shared_ptr<std::atomic<bool>>& cancelled);
 
+    // STREAM_ENGINE_REBUILD P5 — oldest-live-wait accessor for the stall
+    // watchdog. Walks the active-waiter registry under m_mutex and returns
+    // the longest continuously-blocked wait's elapsed time + its (hash, piece)
+    // target. `pieceIndex` == -1 when no waiters are currently blocked.
+    //
+    // Cheap — registry is bounded by concurrent HTTP workers (2–4 typical);
+    // safe to call from the 2 s StreamEngine watchdog tick. Read-only; does
+    // not mutate waiter state.
+    struct LongestWait {
+        qint64  elapsedMs  = 0;
+        QString infoHash;
+        int     pieceIndex = -1;
+    };
+    LongestWait longestActiveWait() const;
+
 private slots:
     void onPieceFinished(const QString& infoHash, int pieceIndex);
 
 private:
     struct Waiter {
         QWaitCondition cond;
-        bool awakened = false;
+        bool   awakened = false;
+        qint64 startedMs = 0;  // m_clock.elapsed() at registration (P5
+                               // longestActiveWait input — same monotonic
+                               // origin as StreamEngine's m_clock)
     };
 
     using Key = QPair<QString, int>;  // (hash, pieceIdx)
@@ -88,6 +107,11 @@ private:
     TorrentEngine* m_engine;
     mutable QMutex m_mutex;
     QHash<Key, QList<Waiter*>> m_waiters;
+
+    // Monotonic clock started in ctor. Supplies ms-since-ctor stamps for
+    // Waiter::startedMs so longestActiveWait reports wait durations without
+    // a wall-clock subtraction that could go negative under NTP jumps.
+    QElapsedTimer m_clock;
 
     // Cached at ctor so tests / user overrides stay consistent across every
     // awaitRange call, even if the env var flips mid-run.

@@ -69,6 +69,7 @@ StreamPieceWaiter::StreamPieceWaiter(TorrentEngine* engine, QObject* parent)
     , m_engine(engine)
     , m_pollFallback(g_pollFallback)
 {
+    m_clock.start();
     if (m_engine) {
         // AutoConnection from AlertWorker (QThread) to this main-thread
         // QObject resolves to QueuedConnection. onPieceFinished runs on the
@@ -177,6 +178,7 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
 {
     const Key key{infoHash, pieceIdx};
     Waiter w;
+    w.startedMs = m_clock.elapsed();
 
     QMutexLocker lock(&m_mutex);
     m_waiters[key].append(&w);
@@ -192,6 +194,26 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
         it->removeOne(&w);
         if (it->isEmpty()) m_waiters.erase(it);
     }
+}
+
+StreamPieceWaiter::LongestWait StreamPieceWaiter::longestActiveWait() const
+{
+    LongestWait result;
+    QMutexLocker lock(&m_mutex);
+    if (m_waiters.isEmpty()) return result;
+
+    const qint64 now = m_clock.elapsed();
+    for (auto it = m_waiters.constBegin(); it != m_waiters.constEnd(); ++it) {
+        for (const Waiter* w : it.value()) {
+            const qint64 elapsed = now - w->startedMs;
+            if (elapsed > result.elapsedMs) {
+                result.elapsedMs  = elapsed;
+                result.infoHash   = it.key().first;
+                result.pieceIndex = it.key().second;
+            }
+        }
+    }
+    return result;
 }
 
 void StreamPieceWaiter::onPieceFinished(const QString& infoHash, int pieceIndex)

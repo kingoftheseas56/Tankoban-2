@@ -125,6 +125,9 @@ set(SOURCES
     src/core/stream/StreamHttpServer.cpp
     src/core/stream/StreamEngine.cpp
     src/core/stream/StreamPieceWaiter.cpp
+    src/core/stream/StreamPrioritizer.cpp
+    src/core/stream/StreamSeekClassifier.cpp
+    src/core/stream/StreamSession.cpp
     src/core/stream/StreamLibrary.cpp
     src/core/stream/addon/AddonTransport.cpp
     src/core/stream/addon/AddonRegistry.cpp
@@ -238,6 +241,9 @@ set(HEADERS
     src/core/stream/StreamHttpServer.h
     src/core/stream/StreamEngine.h
     src/core/stream/StreamPieceWaiter.h
+    src/core/stream/StreamPrioritizer.h
+    src/core/stream/StreamSeekClassifier.h
+    src/core/stream/StreamSession.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
     src/core/stream/addon/Manifest.h

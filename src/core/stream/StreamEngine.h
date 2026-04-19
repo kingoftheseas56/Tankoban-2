@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "addon/StreamInfo.h"
+#include "StreamSession.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Slice A architectural non-goals (STREAM_ENGINE_FIX Phase 4.2 — codified
@@ -102,7 +103,7 @@ struct StreamTorrentStatus {
 // engine's own QElapsedTimer; -1 sentinel = event not yet observed). Byte
 // fields are zero-default; piece-range fields are -1 sentinel.
 //
-// Construction is cheap — pure projection of StreamRecord state + 1-2 calls
+// Construction is cheap — pure projection of StreamSession state + 1-2 calls
 // into TorrentEngine for piece coverage data. Safe to call at telemetry
 // cadence (5-15s) without engine load impact.
 struct StreamEngineStats {
@@ -255,44 +256,17 @@ private slots:
     void emitTelemetrySnapshots();
 
 private:
-    struct StreamRecord {
-        QString infoHash;
-        QString magnetUri;
-        QString savePath;
-        int requestedFileIndex = -1;    // from caller, -1 = auto-select
-        QString fileNameHint;
-        int selectedFileIndex = -1;     // resolved after metadata
-        QString selectedFileName;
-        qint64 selectedFileSize = 0;
-        bool metadataReady = false;
-        bool registered = false;        // registered with HTTP server
-        int peers = 0;
-        int dlSpeed = 0;
-
-        // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — per-stream cancellation
-        // token. Initialized to false at record creation (default-ctor ran
-        // on the default-constructed StreamRecord that Qt's QHash operator[]
-        // insert path creates is DOES-NOT-INIT; explicit init in the create
-        // site guarantees a valid shared_ptr before any worker can grab
-        // it). stopStream sets the atomic to true BEFORE erasing; the
-        // shared_ptr lifetime extends past erase because workers that
-        // captured the token in handleConnection retain their reference.
-        std::shared_ptr<std::atomic<bool>> cancelled =
-            std::make_shared<std::atomic<bool>>(false);
-
-        // STREAM_ENGINE_FIX Phase 1.1 — observability fields. All
-        // milliseconds-since-engine-start (m_clock.elapsed()); -1 = not yet
-        // observed. metadataReadyMs is set in onMetadataReady;
-        // firstPieceArrivalMs is set inline in streamFile's gate-progress
-        // block when contiguousHead transitions from 0 to >0 (sub-second
-        // slop bounded by streamFile poll cadence — refined to alert-driven
-        // in Phase 2.3 if cross-domain HELP lands). trackerSourceCount is
-        // a pre-augmentation count from magnet URI parse at record creation
-        // (Phase 3.2 will re-store post-augmentation count on injection).
-        qint64 metadataReadyMs       = -1;
-        qint64 firstPieceArrivalMs   = -1;
-        int    trackerSourceCount    = 0;
-    };
+    // STREAM_ENGINE_REBUILD P3 (R12 atomic Session migration) — per-hash
+    // record is now the externalized `StreamSession` struct at
+    // src/core/stream/StreamSession.h. Field names preserved verbatim so
+    // the 34 consumer sites in StreamEngine.cpp swap `StreamRecord` →
+    // `StreamSession` mechanically without rewriting field accesses.
+    // P3 adds Prioritizer + SeekClassifier state to the same struct
+    // (cached position, EMA speed, bitrate hint, lastSeekType,
+    // firstClassification bit). P6 demolition will collapse the legacy
+    // `metadataReady`/`registered` bool pair into a stored `State` enum
+    // per STREAM_ENGINE_REBUILD_TODO.md §6.1; the enum accessor
+    // `StreamSession::state()` is available today for new code paths.
 
     // STREAM_ENGINE_FIX Phase 1.1 — gate target. Hoisted from streamFile so
     // statsSnapshot reports the same gate the streaming path enforces.
@@ -326,13 +300,28 @@ private:
     // env-var gate is off the slot short-circuits cheaply.
     QTimer* m_telemetryTimer = nullptr;
 
+    // STREAM_ENGINE_REBUILD P3 — 1 Hz re-assert tick. Walks m_streams; for
+    // each Serving session with a recent `updatePlaybackWindow` feed
+    // (lastPlaybackTickMs within the past 10 s), routes through the
+    // Prioritizer to re-emit the normal-streaming deadline window so
+    // libtorrent's time-critical table stays warm between the 2 s StreamPage
+    // telemetry ticks. Cheap when no stream is Serving; skipped when the
+    // session has no position feed yet (cold-open before the first
+    // updatePlaybackWindow call).
+    QTimer* m_reassertTimer = nullptr;
+
     // STREAM_ENGINE_FIX Phase 1.1 — monotonic clock started in ctor; supplies
-    // ms-since-engine-start timestamps for StreamRecord observability fields
+    // ms-since-engine-start timestamps for StreamSession observability fields
     // (metadataReadyMs / firstPieceArrivalMs). Monotonic to survive
     // wall-clock jumps (NTP / DST); engine-relative because absolute epoch
     // is irrelevant for telemetry deltas.
     QElapsedTimer m_clock;
 
     mutable QMutex m_mutex;
-    QHash<QString, StreamRecord> m_streams;
+    QHash<QString, StreamSession> m_streams;
+
+    // STREAM_ENGINE_REBUILD P3 — internal dispatch helpers. Both run under
+    // m_mutex acquired by the caller; neither acquires it themselves.
+    void onReassertTick();
+    void reassertStreamingPriorities(StreamSession& s);
 };
