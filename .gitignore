@@ -5,6 +5,7 @@ out/
 out2/
 out_test/
 out_probe/
+out_old*/
 
 # Sidecar build artifacts (post-migration 2026-04-15). Sources are tracked
 # under native_sidecar/; the build tree produced by build.ps1 is not.

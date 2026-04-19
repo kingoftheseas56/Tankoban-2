@@ -840,3 +840,37 @@ Codex flagged 7 repo-hygiene issues 2026-04-18 (re: `project_codex_repo_hygiene_
 **No src/ code touched this bundle.** Governance + docs + Agent-7-trigger-contract only. Ships parallel with Agent 4 P3 + Agent 3 player parity.
 
 READY TO COMMIT - [Agent 0, Codex repo-hygiene bundle items #1 + #7 + #3]: AGENTS.md rewritten with default-mode general-purpose + Agent-7-trigger-gated sections (closes Agent-7-trap that caused 2026-04-18 anomalous Codex framing); GOVERNANCE Rule 16 added codifying ASCII-for-protocol-anchors convention (READY TO COMMIT, REQUEST PROTOTYPE/AUDIT, ratification keywords, commit-tag prefix); root README.md authored (~80 lines) as GitHub landing page pointing to CLAUDE.md for live state + GOVERNANCE.md for rules + ONBOARDING.md for new-contributor track. Items #2/#5/#6 still queued; #4 partially shipped via Stages 1+2 earlier this session. Zero src/ touched | files: AGENTS.md, agents/GOVERNANCE.md, README.md, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - Codex repo-hygiene item #2: untrack out_old3/
+
+Hemanth greenlit item #2 this session. Non-destructive path chosen (stated default from my earlier 2026-04-18 proposal; destructive history scrub via git-filter-repo remains available as follow-up if Hemanth wants it later).
+
+**What shipped:**
+- `git rm -r --cached out_old3/` - untracks 417 files (101MB of stale build output from the pre-Qt6.10.2 development era) from git index. Files preserved on disk as Hemanth's local artifacts.
+- `.gitignore` gains `out_old*/` pattern (line 8) covering future `out_old*` dirs. Existing exceptions for `agents/audits/_superseded/` (tracked-under-underscore-prefix override) remain in place.
+
+**Effect on agents:**
+- `git ls-files` no longer returns the 417 noise files.
+- `git grep` no longer descends into `out_old3/`.
+- Grep tool (ripgrep-backed) honors .gitignore by default; agents editing/searching the repo will no longer waste context on the stale Ninja build tree.
+- Future clones are 101MB smaller at HEAD (though old commits in history still carry the size until a filter-repo scrub).
+
+**What's NOT addressed by this non-destructive path:**
+- Historical commits through git log still carry the 417 files (any `git clone` downloads them via history). The 101MB remains in `.git/`.
+- If Hemanth wants the full scrub: `git filter-repo --path out_old3 --invert-paths` on a fresh clone, then force-push to GitHub. Rewrites commit SHAs for every commit that touched out_old3/. Destructive; irreversible after push. Solo-user repo so blast radius is limited, but not shipped here by default.
+
+**Codex queue status post-#2:**
+- #1 AGENTS.md rewrite - DONE (fc026af)
+- #3 root README - DONE (fc026af)
+- #7 ASCII protocol convention - DONE (fc026af)
+- **#2 out_old3/ untrack - DONE (this commit)**
+- #5 scripts/repo-health.ps1 - queued (low urgency)
+- #6 large-file refactor policy - depends on #5
+- #4 main-app verification Stages 3+4 - dependency-gated on Agent 4 P3
+
+Agent 0 essentially idle on Codex queue after this ship. Next meaningful Agent 0 work: Stage 3 test coverage when Agent 4 ships P3.
+
+READY TO COMMIT - [Agent 0, Codex repo-hygiene item #2: untrack out_old3/]: `git rm -r --cached out_old3/` (417 files, ~101MB) + `.gitignore` adds `out_old*/` pattern (line 8). Non-destructive path chosen; files preserved on disk. Destructive git-filter-repo scrub remains available as follow-up if Hemanth asks. Agents grep/ls-files no longer surface 101MB of stale Ninja build tree as context noise | files: .gitignore, out_old3/* (417 untracked), agents/chat.md
