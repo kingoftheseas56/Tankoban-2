@@ -93,9 +93,6 @@ private:
     struct Waiter {
         QWaitCondition cond;
         bool   awakened = false;
-        qint64 startedMs = 0;  // m_clock.elapsed() at registration (P5
-                               // longestActiveWait input — same monotonic
-                               // origin as StreamEngine's m_clock)
     };
 
     using Key = QPair<QString, int>;  // (hash, pieceIdx)
@@ -107,8 +104,18 @@ private:
     mutable QMutex m_mutex;
     QHash<Key, QList<Waiter*>> m_waiters;
 
+    // STREAM_ENGINE_REBUILD 2026-04-19 — per-key first-seen timestamp.
+    // Tracks when a (hash, piece) FIRST had a waiter registered, carried
+    // continuously across Waiter create/destroy cycles inside awaitRange's
+    // wake-wait loop. `longestActiveWait` reads from here instead of per-
+    // Waiter startedMs, so continuous-wait duration on one piece isn't
+    // reset every kWakeWaitCapMs=1000 ms (the bug that kept stall_detected
+    // from ever firing despite 15 s piece timeouts). Entry inserted when
+    // the first Waiter for a key registers; removed when the last Waiter
+    // unregisters.
+    QHash<Key, qint64> m_firstSeenMs;
+
     // Monotonic clock started in ctor. Supplies ms-since-ctor stamps for
-    // Waiter::startedMs so longestActiveWait reports wait durations without
-    // a wall-clock subtraction that could go negative under NTP jumps.
+    // m_firstSeenMs entries.
     QElapsedTimer m_clock;
 };

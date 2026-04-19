@@ -88,6 +88,7 @@ StreamPieceWaiter::~StreamPieceWaiter()
         }
     }
     m_waiters.clear();
+    m_firstSeenMs.clear();
 }
 
 bool StreamPieceWaiter::awaitRange(const QString& infoHash, int fileIndex,
@@ -141,6 +142,24 @@ bool StreamPieceWaiter::awaitRange(const QString& infoHash, int fileIndex,
 
         if (firstWaitedPiece < 0) firstWaitedPiece = missingPiece;
 
+        // STREAM_ENGINE_REBUILD 2026-04-19 — on-demand time-critical
+        // marking. Any piece an HTTP worker is actually blocked on becomes
+        // time-critical in libtorrent on the spot — priority=7 + 40 ms
+        // deadline. Closes the gap diagnosed via piece_diag where sidecar
+        // reads ahead of playback position (buffer-read, moov probe, or
+        // untracked seek) to a piece that is NOT yet in the Prioritizer's
+        // output window, so has no time-critical signal set. Without this,
+        // the piece gets scheduled as a regular sequential-download piece
+        // and trickles in at 30+ s wait, even though a simple "peer has
+        // it, priority=7, deadline=40 ms" signal would resolve it in
+        // 1-3 s. Idempotent: setPiecePriority(same value) + setPieceDeadlines
+        // (updates in place) are both safe on repeat calls. Fires at most
+        // once per wake-wait cycle (~1 s) per blocked (hash, piece). Small
+        // per-call cost (two cross-thread API hops); acceptable for the
+        // rare "waiter registered" path.
+        m_engine->setPiecePriority(infoHash, missingPiece, 7);
+        m_engine->setPieceDeadlines(infoHash, {{ missingPiece, 40 }});
+
         const qint64 remaining =
             static_cast<qint64>(timeoutMs) - t.elapsed();
         if (remaining <= 0) break;
@@ -159,10 +178,14 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
 {
     const Key key{infoHash, pieceIdx};
     Waiter w;
-    w.startedMs = m_clock.elapsed();
 
     QMutexLocker lock(&m_mutex);
-    m_waiters[key].append(&w);
+    auto& waiters = m_waiters[key];
+    const bool firstForKey = waiters.isEmpty();
+    waiters.append(&w);
+    if (firstForKey) {
+        m_firstSeenMs.insert(key, m_clock.elapsed());
+    }
 
     // QWaitCondition::wait releases m_mutex for the duration, re-acquires on
     // return. Returns when cond.wakeAll() is called (onPieceFinished or the
@@ -173,7 +196,10 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
     auto it = m_waiters.find(key);
     if (it != m_waiters.end()) {
         it->removeOne(&w);
-        if (it->isEmpty()) m_waiters.erase(it);
+        if (it->isEmpty()) {
+            m_waiters.erase(it);
+            m_firstSeenMs.remove(key);
+        }
     }
 }
 
@@ -181,17 +207,18 @@ StreamPieceWaiter::LongestWait StreamPieceWaiter::longestActiveWait() const
 {
     LongestWait result;
     QMutexLocker lock(&m_mutex);
-    if (m_waiters.isEmpty()) return result;
+    if (m_firstSeenMs.isEmpty()) return result;
 
+    // Walk m_firstSeenMs — one entry per continuously-waited (hash, piece)
+    // across Waiter create/destroy cycles. Elapsed duration here is the
+    // TRUE continuous wait, not the per-Waiter cond.wait() slice.
     const qint64 now = m_clock.elapsed();
-    for (auto it = m_waiters.constBegin(); it != m_waiters.constEnd(); ++it) {
-        for (const Waiter* w : it.value()) {
-            const qint64 elapsed = now - w->startedMs;
-            if (elapsed > result.elapsedMs) {
-                result.elapsedMs  = elapsed;
-                result.infoHash   = it.key().first;
-                result.pieceIndex = it.key().second;
-            }
+    for (auto it = m_firstSeenMs.constBegin(); it != m_firstSeenMs.constEnd(); ++it) {
+        const qint64 elapsed = now - it.value();
+        if (elapsed > result.elapsedMs) {
+            result.elapsedMs  = elapsed;
+            result.infoHash   = it.key().first;
+            result.pieceIndex = it.key().second;
         }
     }
     return result;
