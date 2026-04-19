@@ -79,7 +79,7 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
         if (is_http) {
             av_dict_set(&opts, "reconnect", "1", 0);
             av_dict_set(&opts, "reconnect_streamed", "1", 0);
-            av_dict_set(&opts, "reconnect_delay_max", "10", 0);
+            av_dict_set(&opts, "reconnect_delay_max", "5", 0);  // STREAM_STALL_FIX Phase 1 — mpv stream-lavf-o parity (was 10)
             av_dict_set(&opts, "timeout", "60000000", 0);  // 60s connect (unchanged)
             std::snprintf(num, sizeof(num), "%lld", (long long)t.rw_timeout_us);
             av_dict_set(&opts, "rw_timeout", num, 0);

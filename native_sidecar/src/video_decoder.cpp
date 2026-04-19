@@ -241,6 +241,16 @@ void VideoDecoder::decode_thread_func(
     int64_t chosen_probesize = 0;
     int64_t chosen_analyzedur = 0;
 
+    // STREAM_STALL_FIX Phase 1 (tactic f) — reduced to mpv reconnect-param
+    // parity only. Original scope was a 64 MiB wrapping AVIOContext to mirror
+    // mpv's stream-buffer-size directive, but empirical smoke showed ffmpeg's
+    // synchronous demuxer can't deliver mpv-style readahead pressure without
+    // a dedicated prefetch thread (the custom-IO wrap either blocks cold-open
+    // on the avio_read(2 MiB) path, or trips false AVERROR_EOF returns on the
+    // avio_read_partial path during transient HTTP reconnect windows). The
+    // directly-portable mpv parity — `reconnect_delay_max=5` — is kept below.
+    // See ship post for escalation: Phase 1 as spec'd needs a prefetch-thread
+    // rescope beyond the 1-2 wake budget.
     for (int i = 0; i < tier_count; ++i) {
         const OpenTier& t = tiers[i];
 
@@ -252,7 +262,7 @@ void VideoDecoder::decode_thread_func(
         if (is_http) {
             av_dict_set(&opts, "reconnect", "1", 0);
             av_dict_set(&opts, "reconnect_streamed", "1", 0);
-            av_dict_set(&opts, "reconnect_delay_max", "10", 0);
+            av_dict_set(&opts, "reconnect_delay_max", "5", 0);
             av_dict_set(&opts, "timeout", "60000000", 0);
             std::snprintf(num, sizeof(num), "%lld", (long long)t.rw_timeout_us);
             av_dict_set(&opts, "rw_timeout", num, 0);

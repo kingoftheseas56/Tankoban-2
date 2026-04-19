@@ -172,7 +172,7 @@ void AudioDecoder::audio_thread_func(
     if (is_http) {
         av_dict_set(&opts, "reconnect", "1", 0);
         av_dict_set(&opts, "reconnect_streamed", "1", 0);
-        av_dict_set(&opts, "reconnect_delay_max", "10", 0);
+        av_dict_set(&opts, "reconnect_delay_max", "5", 0);  // STREAM_STALL_FIX Phase 1 — mpv stream-lavf-o parity (was 10)
         av_dict_set(&opts, "timeout", "60000000", 0);
         av_dict_set(&opts, "rw_timeout", "30000000", 0);
         av_dict_set(&opts, "probesize", "20000000", 0);
