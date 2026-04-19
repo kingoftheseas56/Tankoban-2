@@ -328,6 +328,22 @@ void TorrentEngine::applySettings()
     sp.set_int(lt::settings_pack::max_queued_disk_bytes, 32 * 1024 * 1024);
     sp.set_int(lt::settings_pack::request_queue_time, 10);
 
+    // STREAM_STALL_FIX Phase 3 — session-settings bundle (tactic e-settings).
+    // Agent 4B Congress 7 B3 identified `can_request_time_critical` gate-4
+    // saturation at peer_connection.cpp:3543-3558 as the residual-stall
+    // mechanism post-Phase-2 (Agent 4 smoke: avg_peer_q_ms=253, peers_dl=1-2,
+    // tail-block saturation on pieces at 95-99% block completion). The gate
+    // returns false when `download_queue + request_queue > desired_queue_size
+    // * 2`; raising max_out_request_queue (libtorrent default 500) to 1500
+    // widens the per-peer cap so saturated peers can hold deeper pipelines
+    // without hitting that limit. Conservative bump; 2000 reserved for a
+    // future iteration if 1500 is net-positive-but-insufficient.
+    // whole_pieces_threshold left at libtorrent default (20 seconds) — at
+    // 8-16 MB pieces on 5-10 MB/s sustained streams, whole-piece mode sits
+    // well below threshold so is NOT force-triggered. Verified via readback
+    // log after apply_settings below.
+    sp.set_int(lt::settings_pack::max_out_request_queue, 1500);
+
     sp.set_int(lt::settings_pack::request_timeout, 10);
     sp.set_int(lt::settings_pack::peer_timeout, 20);
     sp.set_int(lt::settings_pack::upload_rate_limit, 0); // unlimited — user controls via setGlobalSpeedLimits()
@@ -349,6 +365,18 @@ void TorrentEngine::applySettings()
     sp.set_int(lt::settings_pack::allowed_enc_level, lt::settings_pack::pe_both);
 
     m_session.apply_settings(sp);
+
+    // STREAM_STALL_FIX Phase 3 — session-init verification log. Readback
+    // from m_session.get_settings() (not the staged `sp`) so we log the
+    // actually-applied effective values. Smoke exit criterion: first line
+    // of this log in main-app startup must show max_out_request_queue=1500.
+    {
+        const auto applied = m_session.get_settings();
+        qDebug().noquote() << "[TorrentEngine] session settings applied —"
+            << "max_out_request_queue=" << applied.get_int(lt::settings_pack::max_out_request_queue)
+            << "whole_pieces_threshold=" << applied.get_int(lt::settings_pack::whole_pieces_threshold)
+            << "request_queue_time=" << applied.get_int(lt::settings_pack::request_queue_time);
+    }
 }
 
 void TorrentEngine::loadDhtState()
