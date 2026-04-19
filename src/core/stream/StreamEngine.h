@@ -225,7 +225,7 @@ public:
                            qint64 prefetchBytes = 3LL * 1024 * 1024);
 
     // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — per-stream cancellation token.
-    // Returned shared_ptr is the same one stored in the StreamRecord's
+    // Returned shared_ptr is the same one stored in the StreamSession's
     // `cancelled` field. `stopStream` sets it to true BEFORE erasing the
     // record, so workers already holding the shared_ptr (captured at
     // handleConnection time) observe cancellation even after the record

@@ -1281,32 +1281,61 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
     // Batches 2.3 (sliding window on playback progress) + 2.4 (seek
     // pre-gate) layer additional deadlines on top of this initial set.
     {
-        constexpr qint64 kHeadBytes    = 5LL * 1024 * 1024;   // 5 MB
+        // STREAM_ENGINE_REBUILD Mode A stall fix (2026-04-19) — guarantee
+        // the head urgency window covers ≥ 5 pieces regardless of torrent
+        // piece size. On high-bitrate torrents (8–16 MB pieces are common
+        // for 40–60 GB movies/packs) a 5 MB probe yielded just piece 0 —
+        // libtorrent's scheduler then scattered block requests across
+        // hundreds of pieces instead of converging on piece 0. 170 peers
+        // + 6.6 MB/s + 316 MB downloaded with gateBytes=0/firstPieceMs=-1
+        // was the smoking gun on Invincible S04E01 hash c38beda7.
+        //
+        // Stremio's calculate_priorities at priorities.rs:126-147 clamps
+        // head window to [5, 250] pieces always — that floor is what this
+        // extend-loop replicates. Start at 5 MB; double the probe range
+        // until we have ≥ 5 pieces OR hit fileSize. On 8 MB pieces:
+        // 5 → 10 → 20 → 40 MB yields piece 0–4. On 2 MB pieces: 5 → 10 MB
+        // yields piece 0–4. On 64 KB pieces: 5 MB yields 78 pieces, loop
+        // exits first iteration.
+        //
+        // Probe trigger (kGateBytes = 1 MB, P4.2 tier-1 probesize aligned)
+        // stays decoupled from urgency — HTTP server still opens the pipe
+        // to ffmpeg at 1 MB contiguous head, but libtorrent sees a broad
+        // urgency window so its scheduler converges on head pieces instead
+        // of scattering. Semantically orthogonal concerns.
+        constexpr qint64 kHeadBytesInitial = 5LL * 1024 * 1024;  // Stremio target
+        constexpr int    kHeadMinPieces    = 5;                  // Stremio floor
         constexpr int    kHeadFirstMs  = 500;
         constexpr int    kHeadLastMs   = 5000;
-        const QPair<int, int> headRange =
+
+        QPair<int, int> headRange =
             m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIdx,
-                                                      0, kHeadBytes);
-        // STREAM diagnostic (Agent 4B — temporary trace for stream-head-gate
-        // regression; remove after that bug closes).
+                                                      0, kHeadBytesInitial);
+        qint64 probeBytes = kHeadBytesInitial;
+        const qint64 fileSize = rec.selectedFileSize;
+        while (headRange.first >= 0
+               && (headRange.second - headRange.first + 1) < kHeadMinPieces
+               && probeBytes < fileSize)
+        {
+            probeBytes = qMin(probeBytes * 2, fileSize);
+            headRange = m_torrentEngine->pieceRangeForFileOffset(
+                infoHash, fileIdx, 0, probeBytes);
+        }
+
+        // STREAM_ENGINE_FIX Phase 1.2 — head_deadlines telemetry event.
+        // qDebug sibling removed in P6 (Agent 4B temporary trace for the
+        // stream-head-gate regression, closed via P2 + M3). `headBytes`
+        // reports the ACTUAL probeBytes used after the extend-loop so
+        // soak grep can verify ≥ 5 pieces on large-piece torrents.
         const int diagPieceCount = (headRange.first >= 0 && headRange.second >= headRange.first)
             ? (headRange.second - headRange.first + 1) : 0;
-        qDebug().nospace() << "[STREAM] head-deadlines infoHash="
-            << infoHash.left(8) << " file=" << fileIdx
-            << " headRange=[" << headRange.first << "," << headRange.second
-            << "] pieceCount=" << diagPieceCount;
-        // STREAM_ENGINE_FIX Phase 1.2 — head_deadlines event. Promotes the
-        // Agent 4B temporary qDebug above to structured form. Both stay in
-        // place per Phase 1.2 spec (qDebug as redundant safety net through
-        // Phase 2-3 stabilization); Phase 4.1 removes the qDebug after
-        // structured logs prove sufficient.
         writeTelemetry(QStringLiteral("head_deadlines"),
             QStringLiteral("hash=") + infoHash.left(8)
             + QStringLiteral(" idx=") + QString::number(fileIdx)
             + QStringLiteral(" pieces=[") + QString::number(headRange.first)
             + QStringLiteral(",") + QString::number(headRange.second)
             + QStringLiteral("] pieceCount=") + QString::number(diagPieceCount)
-            + QStringLiteral(" headBytes=") + QString::number(kHeadBytes));
+            + QStringLiteral(" headBytes=") + QString::number(probeBytes));
 
         if (headRange.first >= 0 && headRange.second >= headRange.first) {
             QList<QPair<int, int>> deadlines;
@@ -1560,15 +1589,10 @@ void StreamEngine::applyStreamPriorities(const QString& infoHash, int fileIndex,
     if (fileIndex >= 0 && fileIndex < totalFiles)
         priorities[fileIndex] = 7;  // max priority for selected file
 
-    // STREAM diagnostic (Agent 4B — temporary trace for stream-head-gate
-    // regression; remove after that bug closes).
-    qDebug().nospace() << "[STREAM] applyPriorities infoHash="
-        << infoHash.left(8) << " selected=" << fileIndex
-        << " totalFiles=" << totalFiles;
-    // STREAM_ENGINE_FIX Phase 1.2 — priorities event. Promotes the temp
-    // qDebug above to structured form. Phase 2.4 default field captures
-    // the priority-1-on-non-selected fix being active so future telemetry
-    // reads can verify wiring.
+    // STREAM_ENGINE_FIX Phase 1.2 — priorities telemetry event. qDebug
+    // sibling removed in P6. Phase 2.4 `nonSelectedPriority=1` default
+    // field captures the peer-reciprocity fix being active so future
+    // telemetry reads can verify wiring.
     writeTelemetry(QStringLiteral("priorities"),
         QStringLiteral("hash=") + infoHash.left(8)
         + QStringLiteral(" selected=") + QString::number(fileIndex)

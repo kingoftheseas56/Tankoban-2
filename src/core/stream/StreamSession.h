@@ -10,23 +10,18 @@
 
 // STREAM_ENGINE_REBUILD P3/P6 — per-hash stream record.
 //
-// Replaces the nested `StreamEngine::StreamRecord` struct (P3 rename across
-// 34 consumer sites). Carries the P3 Prioritizer + SeekClassifier state
-// (cached playback position, cached duration, EMA download speed, last
-// classified SeekType, firstClassification bit) alongside the former
-// StreamRecord lifecycle fields.
+// Carries the Prioritizer + SeekClassifier state (cached playback
+// position, cached duration, EMA download speed, last classified
+// SeekType, firstClassification bit) alongside the per-stream lifecycle
+// fields and P5 stall-watchdog state.
 //
 // Kept as a plain movable-copyable struct (NOT a QObject) so
 // `QHash<QString, StreamSession>` by-value continues to work. The 1–2 Hz
 // re-assert timer + 2 s stall watchdog live on StreamEngine (walk
-// m_streams on each tick); Session just holds the state.
-//
-// P6 collapsed the legacy `metadataReady` / `registered` bool pair into a
-// stored `State` enum per STREAM_ENGINE_REBUILD_TODO.md §6.1. Integration-
+// m_streams on each tick); Session just holds the state. Integration-
 // memo §6 12-method API freeze untouched (StreamSession is private-impl).
 struct StreamSession {
-    // Observable lifecycle states. Stored directly post-P6; the accessor
-    // from P3 is removed.
+    // Observable lifecycle states.
     //   Pending        — magnet added, metadata not yet observed
     //   MetadataOnly   — onMetadataReady fired; waiting for HTTP register
     //                    step (rare — file-not-found edge; also the
@@ -39,8 +34,8 @@ struct StreamSession {
         Serving,
     };
 
-    // Former StreamRecord fields — preserved verbatim. Do not rename
-    // without auditing StreamEngine.cpp's consumer sites.
+    // Lifecycle fields — do not rename without auditing StreamEngine.cpp's
+    // consumer sites.
     QString infoHash;
     QString magnetUri;
     QString savePath;

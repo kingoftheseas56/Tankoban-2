@@ -317,10 +317,11 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
         // qWarning fires on timeout so piece-starvation is observable in
         // logs (previously silent failure).
         //
-        // STREAM_ENGINE_REBUILD P2 — waitForPiecesChunk dispatches through
-        // StreamPieceWaiter's notification-driven wake (default) or falls
-        // back to 200 ms polling under STREAM_PIECE_WAITER_POLL=1. Same
-        // bool return / same timeout budget / same cancellation semantics.
+        // STREAM_ENGINE_REBUILD P2/P6 — waitForPiecesChunk dispatches
+        // through StreamPieceWaiter's notification-driven wake; the
+        // 200 ms poll-fallback was removed in P6 along with the
+        // STREAM_PIECE_WAITER_POLL env flag. Same bool return / same
+        // timeout budget / same cancellation semantics.
         if (engine) {
             if (!waitForPiecesChunk(pieceWaiter, engine, entry.infoHash,
                                     entry.fileIndex, offset, toRead, cancelled))
