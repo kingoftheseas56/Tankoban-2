@@ -25,6 +25,8 @@ This file auto-loads into every Claude Code session in this directory. The dashb
 
 **Logs live under `out/` not repo root.** Before asking Hemanth anything diagnostic, `find . -maxdepth 3 -name "*.log"` and `cat` whatever you need. The answer is almost always already on disk.
 
+**UI smoke is NOT Hemanth's job anymore either (as of 2026-04-19).** Windows-MCP is registered in `.mcp.json` at repo root — project-scoped, loaded automatically for every Claude Code session in this project. Any agent (1/2/3/4/4B/5) can drive Tankoban's UI programmatically: launch via build_and_run.bat, click tabs, play torrents, read overlay text, screenshot, check widget state. If your domain needs a smoke and the thing being smoked is mechanical (does the button work? does the buffer fill? does the seek land at the right position?), **you do the smoke via Windows-MCP — do not ask Hemanth.** Hemanth's role further shrinks to visual-quality + taste judgment only (HDR tone-mapping, subtitle smoothness, frame pacing feel, AV sync feel, "does it look right"). If Qt custom widgets lack accessibility surface when you try to drive them, that's Agent 3's QAccessibleInterface follow-up, not a Hemanth ask. MCP tool names are `mcp__windows-mcp__*` — use them.
+
 **Build-command contract** (so no agent has to "invent" these for Hemanth):
 - Run-the-app-with-telemetry: `build_and_run.bat` (env vars are baked in at lines 81 + 87, no manual `set` needed).
 - Verify a .cpp compiles: `build_check.bat` (agent runs it, not Hemanth).

@@ -1747,3 +1747,25 @@ First test plan post-restart: Hemanth says "smoke the P5 stall watchdog" -> I pi
 Rollback: delete .mcp.json. Zero collateral. uv install stays (general-purpose Python tool).
 
 READY TO COMMIT - [Agent 0, Windows-MCP registered for agent-driven UI smoke]: .mcp.json at repo root + uv installed. Windows-MCP uses Windows UI Automation API (semantic element finding, not pixel coords). Enables Agent 0 to programmatically drive Tankoban UI - shrinks Hemanth smoke burden to visual-quality + taste judgment only. Activation: Hemanth restarts Claude Code + runs /mcp to verify. First test plan: P5 stall watchdog smoke on next ask | files: .mcp.json, agents/chat.md
+
+
+---
+
+## Agent 0 - 2026-04-19 - Windows-MCP is NOT Agent-0-only; all agents use it
+
+Hemanth clarifying question post-install: "wait only agent 0 can do this?" Answer: no. `.mcp.json` is project-scoped, so Claude Code auto-loads Windows-MCP for every session opened in this directory. The tool surface (mcp__windows-mcp__* in the tool list) is available to Agents 1 / 2 / 3 / 4 / 4B / 5 as well as me.
+
+My earlier chat.md framing ("Agent 0 can now programmatically launch Tankoban...") was misleading. Corrected the framing in CLAUDE.md HEMANTH'S ROLE top block to emphasize: UI smoke is NOT Hemanth's job anymore for ANY agent, not just Agent 0. If your domain needs a mechanical smoke (does the button work? does the buffer fill? does the seek land at the right position? does the Track popover enumerate correctly?), YOU drive the MCP yourself. You do NOT ask Hemanth.
+
+Routing concrete examples:
+- Agent 4 owes the next Mode A smoke iteration on the scheduler-tightening bundle. Previously an implicit Hemanth ask; now Agent 4 does it via Windows-MCP themselves - launch app, play a torrent, read their own out/stream_telemetry.log snapshots, report pass/fail on stall_detected peer_have_count + piece-9 + piece-40 outcomes.
+- Agent 3 next PLAYER_STREMIO_PARITY smoke: precise seek, HDR, playback speed, EQ presets, Track popover, crop menu. Agent 3 drives the MCP.
+- Agent 2 BOOK_READER_FIX Listen-button smoke: EdgeTts round-trip verification. Agent 2 drives the MCP.
+- Agent 1 COMIC_READER scroll-strip + format-discovery smoke.
+- Agent 4B Tankorent indexer search smoke.
+
+Hemanth remains on: visual quality judgment (HDR tone-mapping, subtitle outline smoothness, frame pacing feel, AV sync feel, "does it look right"), GPU vendor-specific issues, UX taste calls.
+
+CLAUDE.md HEMANTH'S ROLE top block updated to document this explicitly - added paragraph directly after the logs-under-out/ paragraph. Auto-loaded every session so next agent wake sees it without re-reading chat.md history.
+
+READY TO COMMIT - [Agent 0, CLAUDE.md HEMANTH'S ROLE block hardened to clarify Windows-MCP is all-agent-accessible]: post-install clarification added to the top-block paragraph enumerating the NEVER-list. Documents that .mcp.json is project-scoped so all agents auto-load Windows-MCP, and that ANY mechanical UI smoke (buttons, buffers, seeks, overlay reads) is the domain agent's job via mcp__windows-mcp__* tools - not Hemanth's. Hemanth now owns only visual-quality + taste. Qt custom-widget QAccessibleInterface gaps (if encountered) route to Agent 3, not Hemanth | files: CLAUDE.md, agents/chat.md
