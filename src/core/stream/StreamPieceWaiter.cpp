@@ -14,15 +14,10 @@
 
 namespace {
 
-constexpr int kPollIntervalMs = 200;   // fallback polling cadence (matches
-                                       // the pre-rebuild waitForPieces loop)
 constexpr int kWakeWaitCapMs  = 1000;  // cap one QWaitCondition::wait call
                                        // so cancellation + overall timeout
                                        // progress on a bounded cadence even
                                        // if pieceFinished never fires.
-
-// STREAM_PIECE_WAITER_POLL=1 at process start forces async-disable.
-bool g_pollFallback = qgetenv("STREAM_PIECE_WAITER_POLL") == "1";
 
 // Mirror StreamEngine.cpp's telemetry facility locally so the piece_wait
 // event short-circuits on TANKOBAN_STREAM_TELEMETRY=1 without leaking a
@@ -42,7 +37,7 @@ QString resolveTelemetryPath()
 }
 
 void emitPieceWait(const QString& hash, int pieceIdx, qint64 elapsedMs,
-                   bool ok, bool cancelled, const char* mode)
+                   bool ok, bool cancelled)
 {
     if (!g_telemetryEnabled) return;
     const QString line = QStringLiteral("[")
@@ -52,7 +47,6 @@ void emitPieceWait(const QString& hash, int pieceIdx, qint64 elapsedMs,
         + QStringLiteral(" elapsedMs=") + QString::number(elapsedMs)
         + QStringLiteral(" ok=") + (ok ? QStringLiteral("1") : QStringLiteral("0"))
         + QStringLiteral(" cancelled=") + (cancelled ? QStringLiteral("1") : QStringLiteral("0"))
-        + QStringLiteral(" mode=") + QString::fromLatin1(mode)
         + QStringLiteral("\n");
 
     QMutexLocker lock(&g_telemetryMutex);
@@ -67,7 +61,6 @@ void emitPieceWait(const QString& hash, int pieceIdx, qint64 elapsedMs,
 StreamPieceWaiter::StreamPieceWaiter(TorrentEngine* engine, QObject* parent)
     : QObject(parent)
     , m_engine(engine)
-    , m_pollFallback(g_pollFallback)
 {
     m_clock.start();
     if (m_engine) {
@@ -77,11 +70,6 @@ StreamPieceWaiter::StreamPieceWaiter(TorrentEngine* engine, QObject* parent)
         // against worker threads blocked in waitForPiece.
         connect(m_engine, &TorrentEngine::pieceFinished,
                 this, &StreamPieceWaiter::onPieceFinished);
-    }
-
-    if (m_pollFallback) {
-        qInfo() << "StreamPieceWaiter: STREAM_PIECE_WAITER_POLL=1"
-                << "— async-wake disabled, 200ms poll mode";
     }
 }
 
@@ -117,15 +105,13 @@ bool StreamPieceWaiter::awaitRange(const QString& infoHash, int fileIndex,
         const bool wasCancelled =
             cancelled && cancelled->load(std::memory_order_acquire);
         if (wasCancelled) {
-            emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(),
-                          false, true, m_pollFallback ? "poll" : "async");
+            emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(), false, true);
             return false;
         }
 
         if (m_engine->haveContiguousBytes(infoHash, fileIndex,
                                           fileOffset, length)) {
-            emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(),
-                          true, false, m_pollFallback ? "poll" : "async");
+            emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(), true, false);
             return true;
         }
 
@@ -136,7 +122,7 @@ bool StreamPieceWaiter::awaitRange(const QString& infoHash, int fileIndex,
         const QPair<int, int> range = m_engine->pieceRangeForFileOffset(
             infoHash, fileIndex, fileOffset, length);
         if (range.first < 0 || range.second < range.first) {
-            QThread::msleep(kPollIntervalMs);
+            QThread::msleep(200);  // bad-offset retry — rare, small sleep
             continue;
         }
 
@@ -158,18 +144,13 @@ bool StreamPieceWaiter::awaitRange(const QString& infoHash, int fileIndex,
         const qint64 remaining =
             static_cast<qint64>(timeoutMs) - t.elapsed();
         if (remaining <= 0) break;
-        const int waitMs = static_cast<int>(qMin<qint64>(
-            m_pollFallback ? kPollIntervalMs : kWakeWaitCapMs, remaining));
+        const int waitMs = static_cast<int>(
+            qMin<qint64>(kWakeWaitCapMs, remaining));
 
-        if (m_pollFallback) {
-            QThread::msleep(waitMs);
-        } else {
-            waitForPiece(infoHash, missingPiece, waitMs);
-        }
+        waitForPiece(infoHash, missingPiece, waitMs);
     }
 
-    emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(),
-                  false, false, m_pollFallback ? "poll" : "async");
+    emitPieceWait(infoHash, firstWaitedPiece, t.elapsed(), false, false);
     return false;
 }
 

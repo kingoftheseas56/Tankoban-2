@@ -77,44 +77,20 @@ static QPair<qint64, qint64> parseRange(const QString& header, qint64 fileSize)
 static constexpr int CHUNK_SIZE = 256 * 1024;
 static constexpr int PIECE_WAIT_TIMEOUT_MS = 15000;
 
-// STREAM_ENGINE_REBUILD P2 — per-chunk piece wait. Thin adapter over
+// STREAM_ENGINE_REBUILD P2/P6 — per-chunk piece wait. Thin adapter over
 // StreamPieceWaiter so the call site keeps the same shape as the pre-rebuild
 // static waitForPieces (same 15 s timeout, same cancellation-token fast path,
-// same bool return). The async-wake path lives in StreamPieceWaiter;
-// STREAM_PIECE_WAITER_POLL=1 flips the waiter back to the old 200 ms poll
-// cadence for P2 rollback safety (env flag + fallback code path removed in
-// P6 per STREAM_ENGINE_REBUILD_TODO.md §6.1). If no StreamEngine is wired
-// (historical standalone callers), falls through to an inline 200 ms poll —
-// matches pre-rebuild behavior for that edge case without dragging the dead
-// waitForPieces helper along.
+// same bool return). Waiter is always wired post-P6; standalone-callers
+// inline-poll fallback removed along with the STREAM_PIECE_WAITER_POLL
+// env flag.
 static bool waitForPiecesChunk(StreamPieceWaiter* waiter, TorrentEngine* engine,
                                 const QString& infoHash, int fileIndex,
                                 qint64 fileOffset, qint64 length,
                                 const std::shared_ptr<std::atomic<bool>>& cancelled)
 {
-    if (!engine) return false;
-
-    if (waiter) {
-        return waiter->awaitRange(infoHash, fileIndex, fileOffset, length,
-                                  PIECE_WAIT_TIMEOUT_MS, cancelled);
-    }
-
-    // No StreamEngine wired (tests, standalone server). Fall back to the
-    // pre-rebuild 200 ms poll loop, preserved here inline rather than as a
-    // separate function so the dead code path stays visible at the call
-    // site. Same cancellation-token semantics as STREAM_LIFECYCLE_FIX Phase
-    // 5 Batch 5.2.
-    constexpr int kLegacyPollMs = 200;
-    int elapsed = 0;
-    while (elapsed < PIECE_WAIT_TIMEOUT_MS) {
-        if (cancelled && cancelled->load(std::memory_order_acquire))
-            return false;
-        if (engine->haveContiguousBytes(infoHash, fileIndex, fileOffset, length))
-            return true;
-        QThread::msleep(kLegacyPollMs);
-        elapsed += kLegacyPollMs;
-    }
-    return false;
+    if (!engine || !waiter) return false;
+    return waiter->awaitRange(infoHash, fileIndex, fileOffset, length,
+                              PIECE_WAIT_TIMEOUT_MS, cancelled);
 }
 
 // STREAM_PLAYBACK_FIX Batch 1.3 — RAII counter so shutdown drain sees

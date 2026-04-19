@@ -120,6 +120,18 @@ struct StreamEngineStats {
     qint64  dlSpeedBps                 = 0;
     bool    cancelled                  = false;
     int     trackerSourceCount         = 0;
+
+    // STREAM_ENGINE_REBUILD P5 — stall watchdog projection. Additive per
+    // Congress 5 Amendment 2 freeze discipline (signature-frozen, default-
+    // valued extensions that read zero on existing consumers). `stalled`
+    // flips true when StreamPieceWaiter::longestActiveWaitMs > 4000 on an
+    // in-window piece; `stallElapsedMs` carries the elapsed wait at tick
+    // time; `stallPiece` + `stallPeerHaveCount` let the UI surface
+    // scheduler-starvation vs swarm-starvation without a separate query.
+    bool    stalled                    = false;
+    qint64  stallElapsedMs             = 0;
+    int     stallPiece                 = -1;
+    int     stallPeerHaveCount         = -1;
 };
 
 class StreamEngine : public QObject
@@ -256,17 +268,12 @@ private slots:
     void emitTelemetrySnapshots();
 
 private:
-    // STREAM_ENGINE_REBUILD P3 (R12 atomic Session migration) — per-hash
-    // record is now the externalized `StreamSession` struct at
-    // src/core/stream/StreamSession.h. Field names preserved verbatim so
-    // the 34 consumer sites in StreamEngine.cpp swap `StreamRecord` →
-    // `StreamSession` mechanically without rewriting field accesses.
-    // P3 adds Prioritizer + SeekClassifier state to the same struct
-    // (cached position, EMA speed, bitrate hint, lastSeekType,
-    // firstClassification bit). P6 demolition will collapse the legacy
-    // `metadataReady`/`registered` bool pair into a stored `State` enum
-    // per STREAM_ENGINE_REBUILD_TODO.md §6.1; the enum accessor
-    // `StreamSession::state()` is available today for new code paths.
+    // STREAM_ENGINE_REBUILD P3/P6 — per-hash record is the externalized
+    // `StreamSession` struct at src/core/stream/StreamSession.h. P3 added
+    // Prioritizer + SeekClassifier state (cached position, EMA speed,
+    // bitrate hint, lastSeekType, firstClassification bit). P6 collapsed
+    // the legacy metadataReady/registered bool pair into a stored
+    // `StreamSession::state` enum.
 
     // STREAM_ENGINE_FIX Phase 1.1 — gate target. Hoisted from streamFile so
     // statsSnapshot reports the same gate the streaming path enforces.
@@ -310,6 +317,16 @@ private:
     // updatePlaybackWindow call).
     QTimer* m_reassertTimer = nullptr;
 
+    // STREAM_ENGINE_REBUILD P5/P6 — 2 s stall watchdog tick. Reads
+    // m_pieceWaiter->longestActiveWait(); if the longest in-flight wait is
+    // > 4000 ms on an in-window piece and not already flagged on the
+    // session, marks the session stalled, re-asserts priority 7, emits
+    // `stall_detected` telemetry, and leaves the UI projection flipped on
+    // in StreamEngineStats. On the first tick after the stall clears
+    // (either the blocked piece arrived or the waiter count dropped),
+    // emits `stall_recovered` and resets the session fields.
+    QTimer* m_stallTimer = nullptr;
+
     // STREAM_ENGINE_FIX Phase 1.1 — monotonic clock started in ctor; supplies
     // ms-since-engine-start timestamps for StreamSession observability fields
     // (metadataReadyMs / firstPieceArrivalMs). Monotonic to survive
@@ -324,4 +341,10 @@ private:
     // m_mutex acquired by the caller; neither acquires it themselves.
     void onReassertTick();
     void reassertStreamingPriorities(StreamSession& s);
+
+    // STREAM_ENGINE_REBUILD P5 — stall watchdog tick. Acquires m_mutex
+    // itself; calls m_pieceWaiter->longestActiveWait() outside the
+    // StreamEngine-mutex scope to avoid nesting against the waiter's own
+    // lock.
+    void onStallTick();
 };

@@ -159,6 +159,15 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
             this, &StreamEngine::onReassertTick);
     m_reassertTimer->start();
 
+    // STREAM_ENGINE_REBUILD P5/P6 — 2 s stall watchdog tick. P6 removed
+    // the STREAM_STALL_WATCHDOG rollback env flag — the watchdog is the
+    // only path post-P6.
+    m_stallTimer = new QTimer(this);
+    m_stallTimer->setInterval(2000);
+    connect(m_stallTimer, &QTimer::timeout,
+            this, &StreamEngine::onStallTick);
+    m_stallTimer->start();
+
     // One-shot startup line so the log opens visibly when telemetry is on
     // — confirms env-var gate worked + filesystem path resolved.
     writeTelemetry(QStringLiteral("engine_started"),
@@ -329,7 +338,7 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
     StreamSession& rec = *it;
     result.infoHash = rec.infoHash;
 
-    if (!rec.metadataReady) {
+    if (rec.state == StreamSession::State::Pending) {
         result.queued = true;
         result.errorCode = QStringLiteral("METADATA_NOT_READY");
         result.errorMessage = QStringLiteral("Metadata not ready");
@@ -337,7 +346,7 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
     }
 
     // Metadata is ready — check if file is registered with HTTP server
-    if (!rec.registered) {
+    if (rec.state != StreamSession::State::Serving) {
         result.queued = true;
         result.errorCode = QStringLiteral("FILE_NOT_READY");
         result.errorMessage = QStringLiteral("File not ready");
@@ -500,7 +509,7 @@ void StreamEngine::stopStream(const QString& infoHash)
     m_torrentEngine->clearPieceDeadlines(infoHash);
 
     // Unregister from HTTP server
-    if (rec.registered)
+    if (rec.state == StreamSession::State::Serving)
         m_httpServer->unregisterFile(rec.infoHash, rec.selectedFileIndex);
 
     // Remove torrent and delete downloaded data
@@ -581,10 +590,21 @@ StreamEngineStats StreamEngine::statsSnapshot(const QString& infoHash) const
         ? rec.cancelled->load(std::memory_order_acquire) : false;
     s.trackerSourceCount  = rec.trackerSourceCount;
 
+    // STREAM_ENGINE_REBUILD P5 — stall projection. Session fields are set
+    // by onStallTick under m_mutex so the read here is coherent without
+    // extra locking.
+    s.stalled             = (rec.stallStartMs >= 0);
+    if (s.stalled) {
+        s.stallElapsedMs      = m_clock.elapsed() - rec.stallStartMs;
+        s.stallPiece          = rec.stallPiece;
+        s.stallPeerHaveCount  = rec.stallPeerHaveCount;
+    }
+
     // Gate progress + prioritized piece range require TorrentEngine reads;
     // gated on metadata-ready + valid file selection so pre-metadata polls
     // return clean sentinels.
-    if (rec.metadataReady && rec.selectedFileIndex >= 0
+    if (rec.state != StreamSession::State::Pending
+        && rec.selectedFileIndex >= 0
         && rec.selectedFileSize > 0 && m_torrentEngine) {
         const qint64 gateSize =
             qMin(kGateBytes, qMax<qint64>(rec.selectedFileSize, 1));
@@ -626,7 +646,7 @@ QList<QPair<qint64, qint64>> StreamEngine::contiguousHaveRanges(
         QMutexLocker lock(&m_mutex);
         auto it = m_streams.find(infoHash);
         if (it == m_streams.end()) return {};
-        if (!it->metadataReady) return {};
+        if (it->state == StreamSession::State::Pending) return {};
         fileIndex = it->selectedFileIndex;
     }
     if (fileIndex < 0 || !m_torrentEngine) return {};
@@ -669,7 +689,7 @@ void StreamEngine::updatePlaybackWindow(const QString& infoHash,
     QMutexLocker lock(&m_mutex);
     auto it = m_streams.find(infoHash);
     if (it == m_streams.end()) return;
-    if (!it->metadataReady) return;
+    if (it->state == StreamSession::State::Pending) return;
 
     StreamSession& s = *it;
     const int fileIndex = s.selectedFileIndex;
@@ -791,7 +811,7 @@ void StreamEngine::reassertStreamingPriorities(StreamSession& s)
     // Caller holds m_mutex. Dispatches Stremio's calculate_priorities
     // port against the cached session state.
     if (!m_torrentEngine) return;
-    if (!s.metadataReady || s.selectedFileSize <= 0) return;
+    if (s.state == StreamSession::State::Pending || s.selectedFileSize <= 0) return;
 
     // Resolve the current piece from the cached offset.
     const QPair<int, int> headRange = m_torrentEngine->pieceRangeForFileOffset(
@@ -844,10 +864,114 @@ void StreamEngine::onReassertTick()
     QMutexLocker lock(&m_mutex);
     for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
         StreamSession& s = *it;
-        if (s.state() != StreamSession::State::Serving) continue;
+        if (s.state != StreamSession::State::Serving) continue;
         if (s.lastPlaybackTickMs < 0) continue;
         if (now - s.lastPlaybackTickMs > kStaleFeedCutoffMs) continue;
         reassertStreamingPriorities(s);
+    }
+}
+
+void StreamEngine::onStallTick()
+{
+    // STREAM_ENGINE_REBUILD P5 — every 2 s, read the waiter's longest in-
+    // flight wait. Crosses the threshold (4000 ms) = stall. Clears the
+    // threshold = recovery. Both transitions emit telemetry; the stalled
+    // flag on StreamSession drives the statsSnapshot UI projection.
+    //
+    // Lock-ordering: m_pieceWaiter->longestActiveWait() acquires the
+    // waiter's own m_mutex. We call it OUTSIDE our own m_mutex scope to
+    // avoid any risk of nesting (StreamPieceWaiter never holds its mutex
+    // while calling back into StreamEngine, but keeping them cleanly
+    // separated here preserves that property in both directions).
+    constexpr qint64 kStallThresholdMs = 4000;
+
+    if (!m_pieceWaiter || !m_torrentEngine) return;
+    const auto lw = m_pieceWaiter->longestActiveWait();
+
+    QMutexLocker lock(&m_mutex);
+    const qint64 now = m_clock.elapsed();
+
+    // Match the active waiter to its session (lw.infoHash may not point
+    // at a stream we still own — e.g. stopStream raced with a wedged
+    // worker; skip gracefully in that case).
+    StreamSession* stallSession = nullptr;
+    if (lw.pieceIndex >= 0 && !lw.infoHash.isEmpty()) {
+        auto it = m_streams.find(lw.infoHash);
+        if (it != m_streams.end() && it->state == StreamSession::State::Serving) {
+            stallSession = &(*it);
+        }
+    }
+
+    // Detection: longest wait has crossed the 4 s threshold and we have
+    // not already flagged this session as stalled.
+    if (stallSession && lw.elapsedMs >= kStallThresholdMs
+        && !stallSession->stallEmitted) {
+        // R3 falsification data: how many peers claim the blocked piece?
+        // 0 = swarm-starvation (no amount of priority wins); > 0 =
+        // scheduler-starvation (priority 7 can move the piece into the
+        // next request window).
+        const int peerHave = m_torrentEngine->peersWithPiece(
+            lw.infoHash, lw.pieceIndex);
+
+        stallSession->stallStartMs       = now - lw.elapsedMs;
+        stallSession->stallPiece         = lw.pieceIndex;
+        stallSession->stallPeerHaveCount = peerHave;
+        stallSession->stallEmitted       = true;
+
+        // Re-assert priority 7 on the blocked piece. One retry beyond the
+        // 3-retry budget P3 burned through; if this also doesn't unblock,
+        // the session waits for P5.2 recovery semantics (piece arrives
+        // naturally, user cancels, or source-switch).
+        m_torrentEngine->setPiecePriority(lw.infoHash, lw.pieceIndex, 7);
+
+        // Emit outside the lock to avoid holding m_mutex across file I/O.
+        const QString hash  = lw.infoHash;
+        const int piece     = lw.pieceIndex;
+        const qint64 waitMs = lw.elapsedMs;
+        lock.unlock();
+        writeTelemetry(QStringLiteral("stall_detected"),
+            QStringLiteral("hash=") + hash.left(8)
+            + QStringLiteral(" piece=") + QString::number(piece)
+            + QStringLiteral(" wait_ms=") + QString::number(waitMs)
+            + QStringLiteral(" peer_have_count=") + QString::number(peerHave));
+        return;
+    }
+
+    // Recovery: session was stalled but the longest wait has dropped below
+    // threshold OR the blocked piece is no longer the longest (it arrived
+    // and a new wait is now the tail). Either way, the prior stall is
+    // cleared.
+    for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
+        StreamSession& s = *it;
+        if (!s.stallEmitted) continue;
+        const bool sameStallStillActive = stallSession == &s
+            && lw.pieceIndex == s.stallPiece
+            && lw.elapsedMs >= kStallThresholdMs;
+        if (sameStallStillActive) continue;
+
+        const qint64 elapsedSinceStall = now - s.stallStartMs;
+        const QString hash = s.infoHash;
+        const int piece    = s.stallPiece;
+        const char* via    = (stallSession == &s && lw.pieceIndex != piece)
+            ? "piece_arrival"                                 // the blocked piece landed
+            : (s.state != StreamSession::State::Serving
+                 ? "replacement"                              // session torn down
+                 : (s.cancelled && s.cancelled->load()
+                      ? "cancelled"                           // explicit cancel
+                      : "piece_arrival"));                    // default
+
+        s.stallStartMs       = -1;
+        s.stallPiece         = -1;
+        s.stallPeerHaveCount = -1;
+        s.stallEmitted       = false;
+
+        lock.unlock();
+        writeTelemetry(QStringLiteral("stall_recovered"),
+            QStringLiteral("hash=") + hash.left(8)
+            + QStringLiteral(" piece=") + QString::number(piece)
+            + QStringLiteral(" elapsed_ms=") + QString::number(elapsedSinceStall)
+            + QStringLiteral(" via=") + QString::fromLatin1(via));
+        return;  // one recovery per tick; any other sessions wait for the next fire
     }
 }
 
@@ -871,7 +995,7 @@ bool StreamEngine::prepareSeekTarget(const QString& infoHash,
         QMutexLocker lock(&m_mutex);
         auto it = m_streams.find(infoHash);
         if (it == m_streams.end()) return false;
-        if (!it->metadataReady) return false;
+        if (it->state == StreamSession::State::Pending) return false;
         fileIndex  = it->selectedFileIndex;
         fileSize   = it->selectedFileSize;
         firstClass = it->firstClassification;
@@ -1056,7 +1180,8 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
         return;  // Not our torrent
 
     StreamSession& rec = *it;
-    rec.metadataReady = true;
+    if (rec.state == StreamSession::State::Pending)
+        rec.state = StreamSession::State::MetadataOnly;
 
     // STREAM_ENGINE_FIX Phase 1.1 — metadata-ready timestamp. Set once;
     // never overwritten (onMetadataReady can theoretically fire multiple
@@ -1195,6 +1320,21 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
                 deadlines.append({ headRange.first + i, ms });
             }
             m_torrentEngine->setPieceDeadlines(infoHash, deadlines);
+
+            // STREAM_ENGINE_REBUILD M3 (integration-memo §5) — per-piece
+            // priority=7 pairing on head pieces. STREAM_ENGINE_FIX Phase
+            // 2.6.3 empirically proved deadline-alone loses to libtorrent's
+            // general scheduler under swarm pressure (priority+deadline
+            // together win, deadline alone doesn't — applied verbatim in
+            // prepareSeekTarget). Same invariant applies on cold-open head
+            // pieces: priority=7 guarantees libtorrent schedules head
+            // pieces before non-selected-file priority=1 pieces from
+            // applyStreamPriorities, removing a scheduler-starvation path
+            // under the old cold-open 15 s poll ceiling. Idempotent;
+            // collapse-safe on repeat calls.
+            for (int p = headRange.first; p <= headRange.second; ++p) {
+                m_torrentEngine->setPiecePriority(infoHash, p, 7);
+            }
         }
     }
 
@@ -1304,7 +1444,7 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
 
     // Register with HTTP server
     m_httpServer->registerFile(infoHash, fileIdx, filePath, rec.selectedFileSize);
-    rec.registered = true;
+    rec.state = StreamSession::State::Serving;
 }
 
 void StreamEngine::onTorrentProgress(const QString& infoHash, float /*progress*/,

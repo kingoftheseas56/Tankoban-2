@@ -14,18 +14,17 @@
 
 class TorrentEngine;
 
-// STREAM_ENGINE_REBUILD P2 — notification-driven piece-wait primitive.
+// STREAM_ENGINE_REBUILD P2/P6 — notification-driven piece-wait primitive.
 //
 // Replaces the 15 s poll floor at StreamHttpServer::waitForPieces with a
 // QWaitCondition-driven wake on TorrentEngine::pieceFinished. Cold-start
 // wait-floor drops from PIECE_WAIT_POLL_MS=200 ms × up to 75 iterations
 // (15 s ceiling) to alert-pump latency (≤ 250 ms on the current AlertWorker
 // cadence; → ≤ 5–25 ms once M2 tightens wait_for_alert at TorrentEngine.cpp:52
-// in a separate post-audit commit per integration-memo §5).
+// in a bundled post-P3 commit per integration-memo §5).
 //
-// Fallback: STREAM_PIECE_WAITER_POLL=1 at process start forces polling mode —
-// same 200 ms cadence as the pre-rebuild loop. Rollback safety valve during
-// the P2 soak window; removed in P6 per STREAM_ENGINE_REBUILD_TODO.md §6.1.
+// P6 removed the STREAM_PIECE_WAITER_POLL env fallback — async-wake is the
+// only path post-P6.
 //
 // Per-piece wake registry: QHash<(hash, pieceIdx), QList<Waiter*>> guarded
 // by m_mutex. The `pieceFinished` signal slot runs on the main thread (the
@@ -112,8 +111,4 @@ private:
     // Waiter::startedMs so longestActiveWait reports wait durations without
     // a wall-clock subtraction that could go negative under NTP jumps.
     QElapsedTimer m_clock;
-
-    // Cached at ctor so tests / user overrides stay consistent across every
-    // awaitRange call, even if the env var flips mid-run.
-    const bool m_pollFallback;
 };
