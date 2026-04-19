@@ -158,6 +158,29 @@ public:
     // disambiguate those two states.
     int peersWithPiece(const QString& infoHash, int pieceIdx) const;
 
+    // STREAM_ENGINE_REBUILD 2026-04-19 — diagnostic projection of libtorrent's
+    // internal state for a single piece. Used by StreamEngine::onStallTick
+    // to emit a `piece_diag` telemetry event alongside stall_detected so the
+    // next iteration has concrete evidence of WHY libtorrent isn't converging
+    // on a stuck piece (block-level state + peer-level state). Pure read;
+    // additive-only per Congress 5 Amendment 2 API-freeze discipline.
+    // `inDownloadQueue=false` means libtorrent hasn't even started requesting
+    // blocks of this piece — that would be a scheduler issue further upstream
+    // than the 2s-cap / time-critical-queue path explored in the 2026-04-19
+    // failed revert.
+    struct PieceDiag {
+        int blocksInPiece      = 0;
+        int finished           = 0;   // blocks fully received + hash-checked
+        int writing            = 0;   // blocks on disk-write queue
+        int requested          = 0;   // blocks in-flight from a peer
+        bool inDownloadQueue   = false;
+        int peersWithPiece     = 0;   // same semantic as peersWithPiece()
+        int peersDownloadingPiece = 0;// peers where p.downloading_piece_index == pieceIdx
+        int avgPeerQueueMs     = 0;   // mean of peer_info.download_queue_time
+        int peerCount          = 0;
+    };
+    PieceDiag pieceDiagnostic(const QString& infoHash, int pieceIdx) const;
+
     // General tab convenience wrapper (Phase 6.5)
     TorrentDetails torrentDetails(const QString& infoHash) const;
 

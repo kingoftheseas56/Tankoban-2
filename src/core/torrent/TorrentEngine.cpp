@@ -307,7 +307,16 @@ void TorrentEngine::applySettings()
     //   request_queue_time 3 (default) → 10: how many seconds of
     //       outstanding requests libtorrent maintains per peer. Streaming
     //       benefits from deeper queues so a slow-to-respond peer
-    //       doesn't stall the reader frontier.
+    //       doesn't stall the reader frontier. REVERT ATTEMPT 2026-04-19:
+    //       tried dropping to default 3 based on a (mistaken) hypothesis
+    //       that it conflicted with time-critical scheduler's 2s
+    //       download_queue_time break at torrent.cpp:11169. Empirical:
+    //       cold-open REGRESSED from 11.5 s firstPieceMs to >109 s stuck
+    //       at 0% despite 14 MB/s + 177 peers. Deep queue actually HELPS
+    //       dispatch throughput — reverted to 10. Root cause of the
+    //       original piece-5 stall (peer_have_count=149, 31 s wait) is
+    //       still unidentified; need more instrumentation before another
+    //       hypothesis lands.
     //   request_timeout 10 kept: aggressive dropout for unresponsive
     //       peers is good for streaming head-fetch.
     sp.set_int(lt::settings_pack::connections_limit, 400);
@@ -1450,6 +1459,62 @@ int TorrentEngine::peersWithPiece(const QString& infoHash, int pieceIdx) const
     return count;
 }
 
+// STREAM_ENGINE_REBUILD 2026-04-19 — diagnostic projection for a single
+// piece. Consumed by StreamEngine::onStallTick next to the existing
+// stall_detected emit so the telemetry log captures WHY libtorrent isn't
+// converging on a stalled piece. Walks get_download_queue() to find
+// whether libtorrent is even tracking the piece + block-level state, then
+// walks get_peer_info() to count peers-with-piece + peers actively
+// downloading the piece + mean peer queue time. All pure reads; no
+// libtorrent state mutated.
+TorrentEngine::PieceDiag TorrentEngine::pieceDiagnostic(
+    const QString& infoHash, int pieceIdx) const
+{
+    PieceDiag d;
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return d;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti) return d;
+    if (pieceIdx < 0 || pieceIdx >= ti->num_pieces()) return d;
+
+    const lt::piece_index_t pidx(pieceIdx);
+
+    // Block-level state via get_download_queue.
+    std::vector<lt::partial_piece_info> dl;
+    it->handle.get_download_queue(dl);
+    for (const auto& pp : dl) {
+        if (pp.piece_index != pidx) continue;
+        d.inDownloadQueue = true;
+        d.blocksInPiece   = pp.blocks_in_piece;
+        d.finished        = pp.finished;
+        d.writing         = pp.writing;
+        d.requested       = pp.requested;
+        break;
+    }
+
+    // Peer-level state.
+    std::vector<lt::peer_info> peers;
+    it->handle.get_peer_info(peers);
+    qint64 totalQueueMs = 0;
+    for (const auto& p : peers) {
+        d.peerCount++;
+        totalQueueMs += lt::total_milliseconds(p.download_queue_time);
+        if (p.pieces.size() > 0 && pieceIdx < p.pieces.size()
+            && p.pieces[pidx]) {
+            d.peersWithPiece++;
+        }
+        if (p.downloading_piece_index == pidx) {
+            d.peersDownloadingPiece++;
+        }
+    }
+    if (d.peerCount > 0) {
+        d.avgPeerQueueMs = static_cast<int>(totalQueueMs / d.peerCount);
+    }
+    return d;
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -1495,6 +1560,7 @@ bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) con
 bool TorrentEngine::havePiece(const QString&, int) const { return false; }
 void TorrentEngine::setPiecePriority(const QString&, int, int) {}
 int TorrentEngine::peersWithPiece(const QString&, int) const { return -1; }
+TorrentEngine::PieceDiag TorrentEngine::pieceDiagnostic(const QString&, int) const { return {}; }
 void TorrentEngine::flushCache(const QString&) {}
 // STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 stubs — match header decls.
 void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int>>&) {}
