@@ -105,5 +105,8 @@ Path: see `agents/ONBOARDING.md` — 15-minute orientation track that gets a new
 
 - Main app (Release + asset deploy + run): `build_and_run.bat`
 - Main app (Debug, MSVC2022 + Qt6.10.2): `build2.bat`
+- Main app (compile-only, agent-safe): `build_check.bat` — `BUILD OK` / `BUILD FAILED exit=<n>` + 30-line cl.exe tail, no exe run, no GUI spawn (Codex #4 Stage 1)
 - Sidecar (MinGW, installs to `resources/ffmpeg_sidecar/`): `powershell -File native_sidecar/build.ps1`
+- Main-app tests (pure-logic primitives; requires `C:\tools\googletest`): `cd out && ctest --output-on-failure -R tankoban_tests` (Codex #4 Stages 2 + 3a)
+- Repo-health audit (drift surfaces — tracked generated files, large source files, chat.md rotation, STATUS vs CLAUDE drift, RTC backlog, CONGRESS/HELP state): `powershell -NoProfile -File scripts/repo-health.ps1` or `/repo-health` slash command (Codex #5)
 - Always: `taskkill //F //IM Tankoban.exe` before any rebuild (Rule 1).
