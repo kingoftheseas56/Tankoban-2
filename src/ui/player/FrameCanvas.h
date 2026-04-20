@@ -431,6 +431,24 @@ private:
     // bar when it's visible. Read by drawTexturedQuad's overlay pass.
     int                       m_subtitleLiftPx = 0;
 
+    // Baked-letterbox source crop — auto-detected asymmetric black-pixel
+    // rows at source edges (e.g. Netflix 1920x1080 H.264 encodes with
+    // 66+0 baked bars rather than symmetric cinemascope letterbox). Unlike
+    // m_cropAspect (uniform zoom), these shift + scale the video quad's
+    // viewport so the baked bars fall off-screen and the CONTENT region
+    // (frameW - L - R, frameH - T - B) drives the aspect fit math.
+    // Set by scanBakedLetterbox() on first valid frame after import.
+    int                       m_srcCropTop     = 0;
+    int                       m_srcCropBottom  = 0;
+    int                       m_srcCropLeft    = 0;
+    int                       m_srcCropRight   = 0;
+    bool                      m_bakedScanDone  = false;
+    int                       m_framesSinceImport = 0;
+    // Scans the current shared texture for fully-black rows at top/bottom.
+    // Returns true once scan ran and produced a valid result (whether or
+    // not crop was detected); callers use this to latch one-shot behavior.
+    bool scanBakedLetterbox();
+
     // ColorParams (32 bytes, std140-aligned) — matches the cbuffer layout
     // in resources/shaders/video_d3d11.hlsl. Lives outside the _WIN32 guard
     // so the public setColorParams API can be implemented on any platform

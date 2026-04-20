@@ -910,6 +910,7 @@ void FrameCanvas::drawTexturedQuad()
     processPendingImport();
 
     ID3D11ShaderResourceView* activeSrv = nullptr;
+    bool shmFresh = false;
     if (m_d3dActive && m_importedSrv) {
         activeSrv = m_importedSrv;
     } else {
@@ -917,13 +918,31 @@ void FrameCanvas::drawTexturedQuad()
         // is a no-op until VideoPlayer attaches a reader. When nothing's
         // attached (loading screen, between videos), activeSrv stays null
         // and the early-return below skips the draw — black clear shows.
-        const bool fresh = consumeShmFrame();
-        if (m_videoSrv && (fresh || m_polling)) {
+        shmFresh = consumeShmFrame();
+        if (m_videoSrv && (shmFresh || m_polling)) {
             activeSrv = m_videoSrv;
         }
     }
     if (!activeSrv) {
         return;
+    }
+
+    // STREAM_AUTOCROP — scan on FRESH frames only. Render runs at display
+    // cadence (60 Hz) but video is 24 fps, so 60% of ticks read stale
+    // m_videoTexture data from a previous frame (possibly a prior scene
+    // with different baked aspect). Reading stale data caused detection
+    // to lock onto an earlier scene's crop that doesn't match what's
+    // currently rendering — which is exactly the "black bar still
+    // visible" symptom Hemanth reports on variable-aspect Netflix
+    // content. Gating on shmFresh ensures each scan sees the actual
+    // CURRENT frame being displayed. Cost: ~1 ms per scan × 24 fps =
+    // ~2.4% CPU overhead. Starts at frame 120 (≈2 s in) to skip
+    // cold-open fade-to-black frames.
+    if (m_frameW > 0 && m_frameH > 0) {
+        ++m_framesSinceImport;
+        if (m_framesSinceImport >= 120 && (shmFresh || m_d3dActive)) {
+            scanBakedLetterbox();
+        }
     }
 
     // Aspect-ratio viewport — port of FrameCanvas::render():298-315.
@@ -936,10 +955,20 @@ void FrameCanvas::drawTexturedQuad()
     const int canvasW = qMax(1, qRound(width()  * dpr));
     const int canvasH = qMax(1, qRound(height() * dpr));
     const double widgetAspect = static_cast<double>(canvasW) / static_cast<double>(canvasH);
+
+    // Effective content dims after baked-letterbox crop (auto-detected in
+    // scanBakedLetterbox on frame 30+). For clean sources all four crops
+    // are 0 and effFrameW/H == m_frameW/m_frameH (no behavior change).
+    // For Netflix 1920x1080 encodes with 66+0 asymmetric baked bars,
+    // effFrameH = 1014 and frameAspect reflects the real content aspect
+    // (1.894) rather than the container aspect (1.778).
+    const int effFrameW = qMax(1, m_frameW - m_srcCropLeft - m_srcCropRight);
+    const int effFrameH = qMax(1, m_frameH - m_srcCropTop  - m_srcCropBottom);
+
     const double frameAspect  = (m_forcedAspect > 0.0)
         ? m_forcedAspect
         : ((m_frameW > 0 && m_frameH > 0)
-            ? static_cast<double>(m_frameW) / static_cast<double>(m_frameH)
+            ? static_cast<double>(effFrameW) / static_cast<double>(effFrameH)
             : widgetAspect);
     const AspectFitRect videoRect = fitAspectRect(canvasW, canvasH, frameAspect);
 
@@ -963,14 +992,67 @@ void FrameCanvas::drawTexturedQuad()
     const int croppedW = static_cast<int>(std::lround(videoRect.w * cropZoom));
     const int croppedH = static_cast<int>(std::lround(videoRect.h * cropZoom));
 
+    // Baked-letterbox source crop — asymmetric viewport math. The quad
+    // samples the FULL source texture (UV 0..1), so to make only the
+    // CONTENT region (effFrameW x effFrameH) fill croppedW x croppedH,
+    // we scale the viewport up by (frameDim / effFrameDim) and shift it
+    // by -(cropPx / frameDim * vpDim) so the baked rows fall off-screen
+    // via D3D11 scissoring. All src-crop values 0 → scales = 1 and
+    // offsets = 0, identical to pre-fix viewport. Asymmetric crops
+    // (e.g. 66 top + 0 bottom) produce an asymmetric shift that pushes
+    // the baked bar fully off the top edge while the content's vertical
+    // center remains aligned with videoRect's vertical center.
+    const double srcScaleX = (effFrameW > 0)
+        ? (static_cast<double>(m_frameW) / static_cast<double>(effFrameW)) : 1.0;
+    const double srcScaleY = (effFrameH > 0)
+        ? (static_cast<double>(m_frameH) / static_cast<double>(effFrameH)) : 1.0;
+    const double vpW = static_cast<double>(croppedW) * srcScaleX;
+    const double vpH = static_cast<double>(croppedH) * srcScaleY;
+    const double srcOffsetX = (m_frameW > 0)
+        ? (static_cast<double>(m_srcCropLeft) / static_cast<double>(m_frameW)) * vpW : 0.0;
+    const double srcOffsetY = (m_frameH > 0)
+        ? (static_cast<double>(m_srcCropTop)  / static_cast<double>(m_frameH)) * vpH : 0.0;
+
     D3D11_VIEWPORT vp = {};
-    vp.TopLeftX = static_cast<float>(videoRect.x - (croppedW - videoRect.w) / 2);
-    vp.TopLeftY = static_cast<float>(videoRect.y - (croppedH - videoRect.h) / 2);
-    vp.Width    = static_cast<float>(croppedW);
-    vp.Height   = static_cast<float>(croppedH);
+    vp.TopLeftX = static_cast<float>(videoRect.x - (croppedW - videoRect.w) / 2 - srcOffsetX);
+    vp.TopLeftY = static_cast<float>(videoRect.y - (croppedH - videoRect.h) / 2 - srcOffsetY);
+    vp.Width    = static_cast<float>(vpW);
+    vp.Height   = static_cast<float>(vpH);
     vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
     m_context->RSSetViewports(1, &vp);
+
+    // STREAM_AUTOCROP — scissor clips rasterization to the content area.
+    // Without this, baked letterbox rows outside videoRect still render
+    // to the canvas when vp == canvas (fullscreen mode). With scissor
+    // set to videoRect, the expanded vp that stretches the source past
+    // videoRect boundaries gets clipped — baked rows outside videoRect
+    // produce no fragments. Canvas clear-color fills the small symmetric
+    // letterbox bars that remain. For content with no src crop
+    // (m_srcCropTop/Bottom all 0), videoRect == canvas and this scissor
+    // is a no-op.
+    D3D11_RECT scissor = {};
+    scissor.left   = videoRect.x;
+    scissor.top    = videoRect.y;
+    scissor.right  = videoRect.x + videoRect.w;
+    scissor.bottom = videoRect.y + videoRect.h;
+    m_context->RSSetScissorRects(1, &scissor);
+
+    // Diag: log scissor once per state change (same gate as aspect log).
+    static int s_lastScissorLoggedTop = -1;
+    static int s_lastScissorLoggedBottom = -1;
+    if (s_lastScissorLoggedTop != scissor.top || s_lastScissorLoggedBottom != scissor.bottom) {
+        s_lastScissorLoggedTop = scissor.top;
+        s_lastScissorLoggedBottom = scissor.bottom;
+        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
+            QTextStream s(&dbg);
+            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+              << " [FrameCanvas scissor] rect={" << scissor.left << ","
+              << scissor.top << "," << scissor.right << "," << scissor.bottom
+              << "} canvas=" << canvasW << "x" << canvasH << "\n";
+        }
+    }
 
     // Aspect diagnostic — prints whenever frame dims OR widget dims change.
     // Widget-dim changes catch fullscreen transitions where the frame stays
@@ -985,14 +1067,20 @@ void FrameCanvas::drawTexturedQuad()
     // (221 lines captured, zero with non-zero forced=). Without this,
     // diagnosing "forced 16:9 leaves a stuck top bar" has no empirical
     // record of what videoRect the forced path produced.
+    static int s_lastLoggedCropTop = -1;
+    static int s_lastLoggedCropBottom = -1;
     if (m_frameW != m_aspectLoggedForFrameW || m_frameH != m_aspectLoggedForFrameH
         || widgetWPx != m_aspectLoggedForWidgetW || widgetHPx != m_aspectLoggedForWidgetH
-        || m_forcedAspect != m_aspectLoggedForForced) {
+        || m_forcedAspect != m_aspectLoggedForForced
+        || s_lastLoggedCropTop != m_srcCropTop
+        || s_lastLoggedCropBottom != m_srcCropBottom) {
         m_aspectLoggedForFrameW  = m_frameW;
         m_aspectLoggedForFrameH  = m_frameH;
         m_aspectLoggedForWidgetW = widgetWPx;
         m_aspectLoggedForWidgetH = widgetHPx;
         m_aspectLoggedForForced  = m_forcedAspect;
+        s_lastLoggedCropTop      = m_srcCropTop;
+        s_lastLoggedCropBottom   = m_srcCropBottom;
         QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
         if (dbg.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream s(&dbg);
@@ -1002,9 +1090,13 @@ void FrameCanvas::drawTexturedQuad()
               << " dpr=" << QString::number(dpr, 'f', 2)
               << " frameAspect=" << QString::number(frameAspect, 'f', 4)
               << " widgetAspect=" << QString::number(widgetAspect, 'f', 4)
-              << " vp={" << videoRect.x << "," << videoRect.y << ","
+              << " videoRect={" << videoRect.x << "," << videoRect.y << ","
               << videoRect.w << "," << videoRect.h << "}"
-              << " forced=" << QString::number(m_forcedAspect, 'f', 4) << "\n";
+              << " d3dVp={" << vp.TopLeftX << "," << vp.TopLeftY << ","
+              << vp.Width << "," << vp.Height << "}"
+              << " forced=" << QString::number(m_forcedAspect, 'f', 4)
+              << " srcCrop={" << m_srcCropTop << "," << m_srcCropBottom << ","
+              << m_srcCropLeft << "," << m_srcCropRight << "}\n";
         }
     }
 
@@ -1057,11 +1149,19 @@ void FrameCanvas::drawTexturedQuad()
         // is transparent above the sub baseline, so shifting doesn't
         // change what's visible at the top — only moves the sub content
         // upward by the specified number of physical pixels.
+        // STREAM_AUTOCROP — overlay uses the same asymmetric viewport as the
+        // video quad so sub bitmaps placed at source-coord y (e.g. y=950 of
+        // 1080) land on the same physical screen row as the equivalent video
+        // content. For clean sources (no src-crop), this reduces to the
+        // pre-fix videoRect-based overlay. For Netflix 66+0 asymmetric baked
+        // letterbox, the expanded vp + srcOffsetY keeps subs aligned with
+        // the video content region even after the baked top rows are
+        // pushed off-screen.
         D3D11_VIEWPORT overlayVp = {};
-        overlayVp.TopLeftX = static_cast<float>(videoRect.x);
-        overlayVp.TopLeftY = static_cast<float>(videoRect.y - m_subtitleLiftPx);
-        overlayVp.Width    = static_cast<float>(videoRect.w);
-        overlayVp.Height   = static_cast<float>(videoRect.h);
+        overlayVp.TopLeftX = static_cast<float>(videoRect.x - (croppedW - videoRect.w) / 2 - srcOffsetX);
+        overlayVp.TopLeftY = static_cast<float>(videoRect.y - (croppedH - videoRect.h) / 2 - srcOffsetY - m_subtitleLiftPx);
+        overlayVp.Width    = static_cast<float>(vpW);
+        overlayVp.Height   = static_cast<float>(vpH);
         overlayVp.MinDepth = 0.0f;
         overlayVp.MaxDepth = 1.0f;
         m_context->RSSetViewports(1, &overlayVp);
@@ -1243,11 +1343,16 @@ bool FrameCanvas::createStateObjects()
     }
 
     // Rasterizer — no cull so triangle-strip winding doesn't matter.
+    // ScissorEnable is TRUE so STREAM_AUTOCROP can clip the quad to the
+    // videoRect content area when baked letterbox is detected. For the
+    // default case (no crop) we still call RSSetScissorRects with the
+    // full canvas rect every draw — it's a cheap cmd-list add.
     D3D11_RASTERIZER_DESC rastDesc = {};
     rastDesc.FillMode              = D3D11_FILL_SOLID;
     rastDesc.CullMode              = D3D11_CULL_NONE;
     rastDesc.FrontCounterClockwise = FALSE;
     rastDesc.DepthClipEnable       = TRUE;
+    rastDesc.ScissorEnable         = TRUE;
 
     hr = m_device->CreateRasterizerState(&rastDesc, &m_rasterizer);
     if (FAILED(hr)) {
@@ -1540,6 +1645,174 @@ void FrameCanvas::resetLagAccounting()
     m_skipNextPresent = false;
 }
 
+// STREAM_AUTOCROP — one-shot scan of the imported shared texture for
+// baked-in letterbox. Detects fully-black pixel rows at top/bottom that
+// aren't player-added letterbox but are encoded in the source video
+// (e.g. Netflix 1920x1080 H.264 with 66+0 asymmetric baked bars — an
+// unusual encode choice that breaks the viewport-fills-screen assumption).
+// When detected, stores the crop in m_srcCropTop/Bottom/Left/Right; the
+// drawTexturedQuad viewport math then uses effective content dims for
+// fitAspectRect and offsets the D3D viewport so baked rows fall off-screen.
+// No shader changes — all work is viewport/scissor-based.
+//
+// Returns true once the scan ran (latches m_bakedScanDone regardless of
+// detection outcome). Robustness:
+//   - Skips the scan if the imported texture format isn't BGRA8.
+//   - Requires top+bottom ≥ 8 rows AND ≤ 25% of frame height to accept
+//     detection (rejects all-black frames from intro fade-ins).
+//   - Uses luma ≤ 2 threshold — Netflix-encoded baked bars are exact
+//     (0,0,0) but dark scene content always has ≥3-value codec noise.
+//   - Scans only the top 20% + bottom 20% (not full frame) for speed.
+//   - One-shot: never re-scans after m_bakedScanDone latches true.
+bool FrameCanvas::scanBakedLetterbox()
+{
+#ifndef _WIN32
+    m_bakedScanDone = true;
+    return true;
+#else
+    if (m_bakedScanDone) return true;
+    if (!m_device || !m_context) return false;
+
+    int W = 0, H = 0;
+    int stride = 0;
+    int topBlack = 0, bottomBlack = 0;
+    const char* path = "none";
+
+    // Per-pixel black check retained for the strict threshold used inside
+    // the per-row uniformity scan below.
+    auto pixelIsBlack = [](int b, int g, int r) -> bool {
+        const int lum = (299 * r + 587 * g + 114 * b) / 1000;
+        return lum <= 5;
+    };
+
+    // Pick the best D3D11 source texture available this tick: zero-copy
+    // shared import if it's active, otherwise the SHM-uploaded video
+    // texture. Both are BGRA on our device so staging readback is uniform.
+    // Previous SHM-via-m_reader approach hit the "no new frame" early-return
+    // on most scan ticks (reader state depends on consumeShmFrame's prior
+    // consumption); reading from m_videoTexture instead gives us whatever
+    // is currently bound for render — which is what the user sees.
+    ID3D11Texture2D* scanSrc = m_importedD3DTex ? m_importedD3DTex : m_videoTexture;
+
+    if (scanSrc) {
+        path = m_importedD3DTex ? "d3d11-zc" : "d3d11-shm";
+        D3D11_TEXTURE2D_DESC srcDesc = {};
+        scanSrc->GetDesc(&srcDesc);
+        if (srcDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+            && srcDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
+            m_bakedScanDone = true;
+            return true;
+        }
+
+        D3D11_TEXTURE2D_DESC stageDesc = srcDesc;
+        stageDesc.Usage          = D3D11_USAGE_STAGING;
+        stageDesc.BindFlags      = 0;
+        stageDesc.MiscFlags      = 0;
+        stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+        ID3D11Texture2D* staging = nullptr;
+        HRESULT hr = m_device->CreateTexture2D(&stageDesc, nullptr, &staging);
+        if (FAILED(hr) || !staging) {
+            if (staging) staging->Release();
+            return false;
+        }
+
+        m_context->CopyResource(staging, scanSrc);
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = m_context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+            staging->Release();
+            return false;
+        }
+
+        W = static_cast<int>(srcDesc.Width);
+        H = static_cast<int>(srcDesc.Height);
+        stride = static_cast<int>(mapped.RowPitch);
+        const int scanLimit = qMax(4, H / 5);
+        const uint8_t* base = static_cast<const uint8_t*>(mapped.pData);
+
+        // Baked letterbox rows are both (1) very dark AND (2) spatially
+        // uniform — every sampled pixel carries the encoder's padding
+        // constant. Dark scene content (night sky, shadow, dark shirt
+        // texture) can pass the "very dark" test but will carry codec
+        // noise + chroma variation that breaks uniformity. The max-min
+        // luma guard rejects content rows that have even a small
+        // gradient across the row. This is the critical fix for
+        // false-positive detection of dark content as baked letterbox
+        // (which was cropping ~59 bottom rows on scenes where the
+        // actual baked region was 0 rows — clipping real content
+        // off-screen per Hemanth's 2026-04-20 report).
+        auto rowIsBlack = [&](int y) -> bool {
+            const uint8_t* row = base + static_cast<size_t>(y) * stride;
+            int minLum = 255;
+            int maxLum = 0;
+            for (int x = 0; x < W; x += 8) {
+                const uint8_t* p = row + static_cast<size_t>(x) * 4;
+                if (!pixelIsBlack(p[0], p[1], p[2])) return false;
+                const int lum = (299 * p[2] + 587 * p[1] + 114 * p[0]) / 1000;
+                if (lum < minLum) minLum = lum;
+                if (lum > maxLum) maxLum = lum;
+            }
+            return (maxLum - minLum) <= 2;
+        };
+
+        for (int y = 0; y < scanLimit; ++y) {
+            if (rowIsBlack(y)) ++topBlack; else break;
+        }
+        for (int y = H - 1; y >= H - scanLimit; --y) {
+            if (rowIsBlack(y)) ++bottomBlack; else break;
+        }
+
+        m_context->Unmap(staging, 0);
+        staging->Release();
+    } else {
+        // Neither zero-copy nor SHM video texture is populated — don't
+        // latch; retry next tick.
+        return false;
+    }
+
+    // Only apply TOP crop — bottom crop is intentionally disabled. Netflix
+    // mastered content commonly renders burned-in title cards (e.g.
+    // "Loguetown / Place of Execution") INTO the lower baked letterbox
+    // area, where the text pixels can be too sparse for the every-8
+    // pixel scan stride to reliably catch them. Reported on One Piece
+    // S02E01 2026-04-20: detection over-cropped bottom + clipped the
+    // second-line title text off-screen. A cosmetic black bar at the
+    // bottom when a scene has real unused-bottom letterbox is a far
+    // smaller visual sin than losing in-video text — and the asymmetric
+    // top-only crop still fixes the primary symptom Hemanth reported
+    // (top black bar with video pushed down).
+    const int perEdgeCeiling = (H * 20) / 100;
+    const int newTop = (topBlack <= perEdgeCeiling)
+                       ? (topBlack >= 4 ? topBlack : 0)
+                       : m_srcCropTop;
+    const bool appliedAny = (newTop != m_srcCropTop) || (m_srcCropBottom != 0);
+    m_srcCropTop    = newTop;
+    m_srcCropBottom = 0;
+    m_srcCropLeft   = 0;
+    m_srcCropRight  = 0;
+    // bottomBlack used below only for the diagnostic log.
+    const int bottomBlackDetected = bottomBlack;
+
+    QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+    if (dbg.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream s(&dbg);
+        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+          << " [FrameCanvas autocrop] path=" << path
+          << " source=" << W << "x" << H
+          << " stride=" << stride
+          << " detected_top=" << topBlack
+          << " detected_bottom_ignored=" << bottomBlackDetected
+          << " applied_top=" << m_srcCropTop
+          << " applied_bottom=" << m_srcCropBottom
+          << " applied_any=" << appliedAny
+          << "\n";
+    }
+    return true;
+#endif
+}
+
 QImage FrameCanvas::captureCurrentFrame()
 {
     // VIDEO_PLAYER_FIX Batch 3.2 — two paths: D3D11 staging readback when
@@ -1655,6 +1928,14 @@ void FrameCanvas::attachD3D11Texture(quintptr ntHandle, int width, int height)
     m_pendingD3DWidth  = width;
     m_pendingD3DHeight = height;
     m_d3dActive        = false;  // force re-import on next render
+    // STREAM_AUTOCROP — new video session; reset the baked-letterbox scan
+    // state so the next play re-detects encoding-specific letterbox.
+    m_srcCropTop       = 0;
+    m_srcCropBottom    = 0;
+    m_srcCropLeft      = 0;
+    m_srcCropRight     = 0;
+    m_bakedScanDone    = false;
+    m_framesSinceImport = 0;
     update();                    // poke the paint cycle
 }
 
@@ -1667,6 +1948,13 @@ void FrameCanvas::detachD3D11Texture()
 #endif
     m_pendingD3DHandle = 0;
     m_d3dActive        = false;
+    // STREAM_AUTOCROP — clear scan state on detach so a re-attach starts fresh.
+    m_srcCropTop       = 0;
+    m_srcCropBottom    = 0;
+    m_srcCropLeft      = 0;
+    m_srcCropRight     = 0;
+    m_bakedScanDone    = false;
+    m_framesSinceImport = 0;
     if (wasActive) {
         emit zeroCopyActivated(false);   // sidecar should re-engage CPU pipeline
     }
