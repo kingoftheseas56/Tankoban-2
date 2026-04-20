@@ -243,12 +243,11 @@ EdgeTtsClient::SynthResult EdgeTtsClient::synth(const QString& text,
         return {false, {}, {}, QStringLiteral("incomplete_synth")};
     }
 
-    // Sentence-level highlight on the JS side comes from Foliate marks
-    // (`tts_engine_edge.js` already iterates marks), so boundaries array stays
-    // empty in Phase 2. Phase 4 streaming may populate sentence/word boundary
-    // metadata frames if pursued.
-    cacheInsert(cacheKey, CacheEntry{rt.mp3, QJsonArray{}});
-    return {true, rt.mp3, {}, {}};
+    // WordBoundary entries collected from audio.metadata frames during the
+    // round-trip; JS reader consumes these to drive read-along highlight.
+    // Stored in the LRU alongside the MP3 so cache hits also paint highlight.
+    cacheInsert(cacheKey, CacheEntry{rt.mp3, rt.boundaries});
+    return {true, rt.mp3, rt.boundaries, {}};
 }
 
 EdgeTtsClient::RoundTripOutcome
@@ -312,9 +311,38 @@ EdgeTtsClient::runRoundTrip(const QString& text, const QString& voice,
         if (path == QStringLiteral("audio") && !payload.isEmpty()) {
             out.gotAudio = true;
             out.mp3.append(payload);
+        } else if (path == QStringLiteral("audio.metadata") && !payload.isEmpty()) {
+            // WordBoundary frames carry JSON:
+            //   {"Metadata":[{"Type":"WordBoundary",
+            //                 "Data":{"Offset":<100ns ticks>,
+            //                         "Duration":<100ns ticks>,
+            //                         "text":{"Text":"hello","Length":5,
+            //                                 "BoundaryType":"WordBoundary"}}}]}
+            // We flatten into the shape tts_engine_edge.js:506/531 expects:
+            //   [{"text":"hello","offsetMs":500}, ...]
+            // Offset conversion: 100ns ticks / 10000 = ms (10M ticks per sec).
+            QJsonParseError err{};
+            const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+            if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+            const QJsonArray metadata = doc.object().value(QStringLiteral("Metadata")).toArray();
+            for (const QJsonValue& v : metadata) {
+                const QJsonObject m = v.toObject();
+                if (m.value(QStringLiteral("Type")).toString() != QStringLiteral("WordBoundary")) {
+                    continue;
+                }
+                const QJsonObject data = m.value(QStringLiteral("Data")).toObject();
+                const qint64 offsetTicks = static_cast<qint64>(
+                    data.value(QStringLiteral("Offset")).toDouble(0.0));
+                const QJsonObject textObj = data.value(QStringLiteral("text")).toObject();
+                const QString text = textObj.value(QStringLiteral("Text")).toString();
+                if (text.isEmpty()) continue;
+                QJsonObject entry;
+                entry.insert(QStringLiteral("text"), text);
+                entry.insert(QStringLiteral("offsetMs"),
+                             static_cast<qint64>(offsetTicks / 10000));
+                out.boundaries.append(entry);
+            }
         }
-        // path == "audio.metadata" carries sentence/word boundary JSON.
-        // Parsed in Phase 4 streaming; ignored in Phase 2.
     });
 
     auto errorHandler = QObject::connect(m_socket,
@@ -423,11 +451,16 @@ QString EdgeTtsClient::buildSpeechConfigMessage(const QString& requestId,
     (void)requestId;  // speech.config doesn't carry X-RequestId; signature kept
                       // symmetric with buildSsmlMessage for Phase 2 use.
     // speech.config sets the audio format + boundary metadata flags.
-    // Word-boundary disabled at Phase 1 (sentence-only per Readest pattern;
-    // Phase 4 may flip this if word-level highlighting is pursued).
+    // Word-boundary enabled so the server emits audio.metadata frames carrying
+    // per-word {offsetMs, text} entries — consumed by the JS reader to drive
+    // read-along highlight (tts_engine_edge.js:495 fireBoundaries + :422
+    // _bdPoll). Sentence-boundary stays off; JS doesn't use it (sentence
+    // boundaries are already derived from Foliate marks at a higher layer).
+    // String-valued booleans required — the Edge endpoint rejects raw JSON
+    // true/false for this particular pair of flags (rany2/edge-tts quirk).
     QJsonObject metadataOpts{
         {"sentenceBoundaryEnabled", QStringLiteral("false")},
-        {"wordBoundaryEnabled", QStringLiteral("false")},
+        {"wordBoundaryEnabled", QStringLiteral("true")},
     };
     QJsonObject audio{
         {"metadataoptions", metadataOpts},

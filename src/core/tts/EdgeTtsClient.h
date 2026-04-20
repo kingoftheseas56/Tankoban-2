@@ -78,12 +78,13 @@ public:
 private:
 #ifdef HAS_WEBSOCKETS
     // Round-trip outcome shared by probe() + synth(). Bundles the binary
-    // signals (audio received? turn.end seen?) + accumulated MP3 + per-call
-    // structured failure reason.
+    // signals (audio received? turn.end seen?) + accumulated MP3 + parsed
+    // WordBoundary entries + per-call structured failure reason.
     struct RoundTripOutcome {
         bool gotAudio = false;
         bool gotTurnEnd = false;
         QByteArray mp3;          // accumulated audio frames
+        QJsonArray boundaries;   // [{text, offsetMs}, ...] from audio.metadata
         QString errorReason;     // non-empty on early-exit failure
     };
 
