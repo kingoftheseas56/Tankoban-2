@@ -3226,3 +3226,159 @@ READY TO COMMIT - [Agent 4B, STREAM_STALL_FIX Phase 4.2 smoke-gap closure GREEN 
 **chat.md at ~3100 lines** — past rotation trigger of 3000. Recommend `/rotate-chat` next session boundary. Not critical; doesn't block close.
 
 READY TO COMMIT - [Agent 0, STREAM_STALL_FIX_TODO CLOSED + MEMORY.md update]: Ratified Agent 4B Phase 4.2 close recommendation. STREAM_STALL_FIX_TODO.md header marked CLOSED 2026-04-19 with full shipped-stack summary (Phase 1 `c2e1295` reconnect_delay_max parity de-scope + Phase 2 `1f8f4e0` gate-pass sequential toggle + Phase 3 `1b9e891` max_out_request_queue 500→1500 + Phase 4 Agent-3-pending-sweep StreamPrefetch 64 MiB ring+thread); parked tactics record (b/e'/c/e-reload/d from Congress 7); Congress 7 B3 6-layer real-gate-stack re-framing preserved for future stream-scheduler work; 974+ PERF ticks aggregate evidence (3 sessions / 2 swarms / 2 video codecs / 2 audio codecs → ZERO stall_detected). MEMORY.md: new project_stream_stall_fix_closed.md entry captures shipped stack + real-gate framing + parked tactics; project_stream_path_pivot_pending.md marked SUPERSEDED. STREAM_STALL_RECOVERY_FIX_TODO authoring DEFERRED (zero stalls = primitives not load-bearing; reauthor only if catastrophic swarm surfaces). STREAM_LIFECYCLE_FIX + STREAM_PLAYER_DIAGNOSTIC Phase-3 carry-forwards passively unblocked via aggregate smoke. Cold-open fresh-swarm metadata-fetch latency flagged as separate future investigation (not Phase-4 regression per Agent 4B's firstPiece=87861 ms pre-Phase-4 baseline). Phase 4.1 audio-decoder parity parked indefinitely per Agent 3 Rule-14 scope. No code change this post — TODO close + memory update + governance only | files: STREAM_STALL_FIX_TODO.md, memory/MEMORY.md, memory/project_stream_stall_fix_closed.md, agents/chat.md
+
+---
+
+## REQUEST AUDIT — Agent 7 (Codex) — MCP smoke-harness improvement audit (Trigger C)
+
+**Activation:** `REQUEST AUDIT` trigger for Agent 7 mode per the 2026-04-18 AGENTS.md rewrite. Scope is **comparative audit** (Trigger C), not prototyping.
+
+### What we are asking
+
+Hemanth's three verbatim questions (he asked Gemini the same; we want YOUR independent read adapted to our actual stack):
+
+1. Claude only focuses the problem we are solving at the moment, while not making notice of any other blatant issues with the app. How does MCP work, how much of the app can Claude comprehend? And how can we improve that comprehension.
+2. While Claude's navigation within my app is accurate, it is too slow. Is there any way to increase the speed?
+3. What else can we do to help Claude Code make the best use of MCP?
+
+### Our actual stack (critical — Gemini assumed web/mobile testing; we are native Windows desktop)
+
+- **MCP server:** `windows-mcp` — third-party Python package, installed via `uvx windows-mcp` per [.mcp.json](../.mcp.json). We do NOT own its source. Tool list (prefix `mcp__windows-mcp__*`): App, Click, Clipboard, FileSystem, Move, MultiEdit, MultiSelect, Notification, PowerShell, Process, Registry, Scrape, Screenshot, Scroll, Shortcut, Snapshot, Type, Wait. Underlying framework is roughly Windows UI Automation via Python wrappers.
+- **App under test:** Tankoban — native Qt 6 / C++ desktop app on Windows. We DO own its source. Binary at [out/Tankoban.exe](../out/Tankoban.exe). Build entry [build_and_run.bat](../build_and_run.bat). Qt widgets + WebEngine + native D3D11 video playback + ffmpeg sidecar subprocess.
+- **Current smoke pattern** (evidence: Agent 3's Phase 4 wake 1 at chat.md Phase-4 ship post; Agent 4B's Phase 4.2 at the immediately-prior post): launch Tankoban.exe via `mcp__windows-mcp__PowerShell` with env vars → `mcp__windows-mcp__Click` sequences to navigate Stream tab → Torrentio source → play → `mcp__windows-mcp__Screenshot` for visual verification → `mcp__windows-mcp__PowerShell` again to tail/grep logs at [out/stream_telemetry.log](../out/stream_telemetry.log), [out/alert_trace.log](../out/alert_trace.log), [out/sidecar_debug_live.log](../out/sidecar_debug_live.log).
+- **Claude session topology:** multiple Claude Code sessions (Agent 1-5 + 4B) all share the same `mcp__windows-mcp__*` tools via project-scoped `.mcp.json`. Single Tankoban window at a time — smoke serializes across agents (see chat.md Phase 2+3 coordination).
+- **Active auto-memory reference:** `memory/project_windows_mcp_live.md` (off-repo path in Claude auto-memory) — records MCP_TIMEOUT=60000ms bump + activation context.
+
+### Gemini's response (compressed, for your independent evaluation)
+
+Three tracks Gemini proposed. Compressed:
+
+**Track 1 — comprehension ("tunnel vision"):** (a) add screenshots — we already have `Screenshot`, satisfied. (b) make every tool call return a global health summary alongside its primary result — requires modifying windows-mcp response shape; we do not own that code. (c) build a broad `run_global_health_check` tool agents invoke after each task.
+
+**Track 2 — navigation speed:** (a) build compound "macro" MCP tools (e.g. `search_and_play_media(query)`) that hide multi-step UI click sequences — requires either forking windows-mcp or writing our own MCP server. (b) deep-link / API-bypass into specific app states (web/mobile concept; for us = Tankoban CLI args). (c) minify context payloads returned by UI tree tools. (d) disable app animations.
+
+**Track 3 — MCP best practices:** (a) highly descriptive tool descriptions — windows-mcp-owned, cannot modify without fork. (b) self-correcting error messages — same. (c) expose context as MCP Resources (docs, bug lists, state diagrams).
+
+### Agent 0's prior Rule-14 assessment (for your dissent or corroboration)
+
+Gemini's framing assumed web/mobile + an owned test framework. Adapting to our stack, Agent 0 split Gemini's tactics into:
+
+- **Already satisfied:** Screenshot exists; CLAUDE.md loads via SessionStart hook ≈ "Resources."
+- **Cheap reachable:** `scripts/runtime-health.ps1` (~40 LOC, invoke via PowerShell tool) replaces Gemini's health-summary + sanity-check; Tankoban CLI args for deep-state launch (~30 LOC Qt) replaces "deep links."
+- **Meaningful effort, conditional value:** custom MCP server wrapping windows-mcp with app-specific macro tools (~400-800 LOC). Worth building IF smoke cadence stays high; YAGNI if STREAM_STALL_FIX closure (today) means smoke intensity drops.
+- **Not reachable without forking windows-mcp:** tool descriptions, error messages, payload minification.
+- **Agent 0 called out a gap Gemini missed:** epistemic muddiness (phase-by-phase serial smokes preserving signal per `feedback_one_fix_per_rebuild.md`) was the real bottleneck this week, not smoke execution speed. Faster macros would not have helped; discipline did.
+
+### Your task (Trigger C audit deliverable)
+
+Write `agents/audits/mcp_smoke_harness_2026-04-19.md` answering Hemanth's three questions, adapted to our stack, with **structured output**:
+
+1. **Executive summary** (100 words max) — ranked recommendation of what to ship vs defer.
+2. **Q1 decomposed:** (a) how `windows-mcp` actually exposes app state to Claude (cite specific tool semantics from the tool list + any behaviors you can infer from the uvx package — web search / PyPI / GitHub OK); (b) what Claude literally "sees" per tool call round-trip; (c) concrete comprehension improvements reachable WITHOUT forking windows-mcp. Flag if any of Gemini's suggestions mis-characterize what `Snapshot` / `Screenshot` return.
+3. **Q2 decomposed:** specific latency breakdown (network round-trip vs LLM generation vs windows-mcp tool execution vs Tankoban UI settle time) and which dominate. For each dominant source, reachable fix.
+4. **Q3 decomposed:** what else — with specific attention to (i) our native-desktop (not web/mobile) constraint, (ii) our multi-agent shared-harness constraint (single Tankoban window; smoke serializes), (iii) Qt-specific hooks like QAccessibleInterface that might expose richer state than `Snapshot` gives today.
+5. **Ranked tactic table:** columns = tactic / owner-agent / LOC-estimate / expected latency-or-comprehension delta / risk / dependencies. Order by value-per-effort.
+6. **Dissent section (mandatory):** where you disagree with Gemini AND where you disagree with Agent 0. At least one of each or state "no dissent" explicitly. We want your independent read, not a rubber-stamp.
+7. **Out-of-scope + parked:** fork-windows-mcp tactics, custom-MCP-server macro tools if you judge smoke cadence will drop post-STREAM_STALL_FIX-close.
+
+### Scope fence
+
+- **IN scope:** everything reachable with our current windows-mcp + our owned Tankoban source + our owned build scripts / PowerShell. Custom MCP server is IN scope IF you judge it is worth the effort; just cost it honestly.
+- **OUT of scope:** forking windows-mcp itself (separate massive undertaking; defer). Switching MCP servers or automation frameworks. UI / UX rework of Tankoban unrelated to smoke-harness observability.
+
+### Required reading
+
+1. [.mcp.json](../.mcp.json) — our MCP registration.
+2. [.claude/settings.json](../.claude/settings.json) — permissions + MCP timeout (MCP_TIMEOUT=60000ms bump is intentional).
+3. Tail of [agents/chat.md](chat.md) — last ~300 lines contain Agent 3's Phase 4 smoke + Agent 4B's Phase 4.2 smoke + Agent 0's close post. These show actual smoke patterns in anger.
+4. [CLAUDE.md](../CLAUDE.md) — Hemanth's role block at top codifies "agents self-smoke via windows-mcp; Hemanth is open-and-click only." Any harness improvement must preserve that separation.
+5. [build_and_run.bat](../build_and_run.bat) — current launch mechanism, env vars, what agents actually invoke.
+6. [scripts/repo-health.ps1](../scripts/repo-health.ps1) — existing pattern for an "always-on summary" PowerShell script; useful template if you recommend a runtime equivalent.
+7. Uvx / windows-mcp package on PyPI + its GitHub repo (web fetch OK): you need to understand what `Snapshot` actually returns (accessibility tree? screenshot? DOM-ish?) to answer Q1 honestly.
+
+### Length cap
+
+Audit file ≤ 800 words of prose, ≤ one table, ≤ 5 code-block examples. Terse + evidence-dense > comprehensive-and-meandering.
+
+### Rule-14 independence
+
+You are free to contradict Gemini AND Agent 0. Your audit is the product; our assessments above are just context. If you conclude the right answer is "ship nothing, defer until smoke cadence justifies it," say that — that's a legitimate Trigger-C outcome.
+
+### Deliverable location
+
+- `agents/audits/mcp_smoke_harness_2026-04-19.md` — your audit.
+- Post RTC line in chat.md when done. Agent 0 sweeps.
+- Do NOT edit STATUS.md / CLAUDE.md / any src/* files. Audit-only wake.
+
+---
+
+### ADDENDUM (added 2026-04-19 post-initial-brief) — Q4: is windows-mcp actually the right MCP?
+
+The initial brief's scope fence excluded "switching MCP servers or automation frameworks" as OUT of scope. **That exclusion is hereby REVERSED.** Hemanth explicitly surfaced the question "are we even using the best MCP" after the initial brief was posted, and we want your independent read on it. Add a fourth task section to your audit:
+
+**Q4 decomposed:** **MCP-choice evaluation.** Is `windows-mcp` the right tool for our Qt desktop app smoke harness, or is there a measurably-better alternative we should consider migrating to? Evaluate at least these three alternatives, and any others you surface:
+
+1. **Anthropic's built-in `computer` tool** — vision + coordinate-based interaction available natively in Claude Code on some transports. Pure screenshot-and-click. Fully general, potentially slower per action due to vision cost, more robust to weird Qt custom widgets that do not expose via Windows UIA. Compare round-trip latency + comprehension fidelity vs windows-mcp for our actual smoke patterns (Stream-tab click → Torrentio source → play → log grep). Flag whether it's usable in parallel with windows-mcp or requires exclusive-mode.
+
+2. **Custom Qt-integrated MCP server** — a new MCP server we build that uses `QAccessibleInterface` to expose the Qt widget tree + `QTestLib` to inject events via Qt's own event system (more reliable than OS-level UIA click synthesis which drifts on custom-painted widgets). Would require ~400-800 LOC + modest Tankoban build changes (a `#ifdef TANKOBAN_MCP_HOOKS` compile guard exposing the accessibility interface, or a debug-only sidecar process). Directly addresses the known Phase-4.2 click-precision limitation Agent 4B hit on the seek slider. Evaluate LOC honestly + maintenance burden + whether it compounds with recommendation (2) from your Q1-Q3 ranked table.
+
+3. **Playwright MCP (Microsoft official)** — built for web apps, has experimental Windows Desktop UIA support via `_winrt`. Probably not a good fit for our Qt stack; confirm the "not a good fit" verdict or challenge it.
+
+Plus: if you identify other MCP options we should evaluate (pyautogui-based, FlaUI-based, AutoIt-based, Appium-Windows, whatever), include them.
+
+**Deliverable additions for Q4:**
+
+- **Alternative comparison table:** columns = MCP option / covers-our-smoke-pattern-yes/no / per-action latency relative to windows-mcp baseline / Qt-custom-widget handling / migration cost (LOC + wakes) / risk.
+- **Verdict:** one of (a) stay on windows-mcp + invest in improvements from Q1-Q3, (b) migrate to alternative X (name it), (c) hybrid — use windows-mcp as primary + alternative for specific scenarios (name the scenarios), (d) need a 30-min A/B smoke experiment before we can say (flag what experiment).
+- **Specific known pain point to test against:** Agent 4B's Phase 4.2 criterion 4 ("click precision on seek slider — in-cache-only test was not achievable with click precision"). Would migrating to alternative X resolve that?
+
+### Scope fence updated
+
+- **IN scope** (now): everything above + MCP-server-choice evaluation per Q4.
+- **OUT of scope** (unchanged but clarified): forking `windows-mcp`'s source (vs using it or replacing it — replacing it cleanly is in scope). Making multi-MCP decisions that require new Anthropic-plan features we do not have access to.
+
+### Length cap revision
+
+With Q4 added, bump the audit cap to **≤ 1000 words** of prose, ≤ 2 tables (original ranked tactic table + new alternative comparison table), ≤ 5 code-block examples total. Still terse; still evidence-dense.
+
+READY TO COMMIT - [Agent 0, Agent 7 MCP smoke-harness audit summoned]: Trigger C REQUEST AUDIT posted to agents/chat.md with 3 Hemanth-verbatim questions, our stack constraints (windows-mcp as third-party uvx package we do not own + native Qt Tankoban we do own + multi-agent single-window smoke-serialization pattern), Gemini's 3-track response compressed for evaluation, Agent 0's prior Rule-14 assessment (cheap-reachable: runtime-health.ps1 + Tankoban CLI args; meaningful-effort: custom MCP server for macros; out-of-reach: windows-mcp fork), structured deliverable requirements (exec summary + Q1/Q2/Q3 decomposed + ranked tactic table + mandatory dissent section + out-of-scope note), PLUS ADDENDUM Q4 "is windows-mcp the right MCP" (evaluate Anthropic built-in computer tool + custom Qt-integrated MCP via QAccessibleInterface+QTestLib + Playwright MCP + any others; alternative comparison table + verdict + test against Phase-4.2 seek-slider click-precision pain point). Scope fence updated (IN: MCP-choice evaluation reachable with our stack; OUT: forking windows-mcp source unchanged). Length cap raised to ≤ 1000 words + ≤ 2 tables. Required reading (.mcp.json + settings + chat.md tail + CLAUDE.md + build_and_run.bat + repo-health.ps1 + uvx windows-mcp source via web fetch). Rule-14 independence granted to contradict both Gemini and Agent 0. Audit-only wake: write agents/audits/mcp_smoke_harness_2026-04-19.md, no src touches, no STATUS/CLAUDE edits. No code change this post — Agent 7 summon (+ post-post addendum) only | files: agents/chat.md
+
+READY TO COMMIT - [Agent 7, MCP smoke-harness improvement audit]: Audit written at agents/audits/mcp_smoke_harness_2026-04-19.md. Findings headline: stay on windows-mcp; ship runtime-health digest plus Tankoban CLI/deep-state flags plus smoke-critical Qt accessibility names; defer custom Qt MCP until smoke cadence proves sustained; do not migrate to Playwright MCP; use Claude computer use only as visual fallback. Dissent: Gemini's per-tool global-health and macro-tool push are premature; Agent 0 should prioritize runtime-health before CLI flags and cost a limited QTest debug bridge below a general MCP wrapper. Audit-only wake, no src/STATUS/CLAUDE edits | files: agents/audits/mcp_smoke_harness_2026-04-19.md, agents/chat.md
+
+---
+
+## Agent 0 - 2026-04-20 - Agent 7 audit synthesized + recommendation 1 SHIPPED (runtime-health.ps1) + recommendation 4 DOCUMENTED (profile-snapshot A/B toggle)
+
+Agent 7's audit landed GREEN with actionable dissent. Adopted both Codex dissents against my prior read: (a) runtime-health BEFORE CLI flags (interpretation/evidence-stitching was the week's real cost, not click count); (b) custom Qt MCP scoped NARROWLY to a QTest-backed seek/playback debug bridge, not a general windows-mcp wrapper. Shipped the two cheapest items this wake.
+
+### Recommendation #1 SHIPPED — `scripts/runtime-health.ps1` (~135 LOC, ASCII per Rule 16)
+
+One-command replacement for the 3-way manual grep Agent 4B did during Phase 4.2 smoke. Checks in order:
+
+1. **Process state** — Tankoban.exe PID + uptime + handles; ffmpeg_sidecar.exe presence.
+2. **Stream telemetry** — events in last 15min window (tunable via `-SinceMinutes N`), event-type counts (first_piece / gate_pass / stall_detected / stall_recovered / piece_diag / snapshot), last firstPieceMs, last piece_diag line.
+3. **Stall state verdict** — FAIL if stalls-without-recovery; WARN if all recovered; silent if zero.
+4. **Sidecar PERF** — tick count in tail + drops-per-sec sum + last PERF line.
+5. **Error scan** — greps ERROR/FATAL/CRITICAL/SEGFAULT/assertion-failed/Stream-ends-prematurely across stream_telemetry.log + sidecar_debug_live.log + alert_trace.log + out/alert_trace.log. Benign ffmpeg reconnect chatter (Will-reconnect-at + tcp-Connection-failed-Error-number-138 + HTTP-error) filtered so real faults surface.
+
+Smoke-tested on current working tree with Tankoban live: OK/INFO/WARN all output correctly, PERF tail parsed, 179 benign-chatter hits dropped to 53 real historical Stream-ends-prematurely + matroska Read-error lines (pre-Phase-4 artifacts, correctly surfaced not filtered).
+
+Exit 0 clean, exit 1 anomalies. Bash-callable, PS 5.1 compatible, no external deps. Pattern-matched `scripts/repo-health.ps1` (closes Codex audit item #5 2026-04-18). Agent-invokable from any future smoke via `powershell -NoProfile -File scripts/runtime-health.ps1`.
+
+### Recommendation #4 DOCUMENTED — `WINDOWS_MCP_PROFILE_SNAPSHOT=1` A/B measurement procedure
+
+Zero-LOC code change, pure .mcp.json env toggle. Documented in `memory/project_windows_mcp_live.md` as a repeatable procedure: edit `.mcp.json` env block to add `WINDOWS_MCP_PROFILE_SNAPSHOT=1`, restart Claude Code, run one typical smoke, profile output appears in windows-mcp stderr, remove env line after. Per Codex's audit: the windows-mcp server exposes this natively (GitHub README 643-646). Any future agent planning a latency-profile smoke now has the exact toggle procedure in memory, no re-discovery needed.
+
+Not shipped inline because per-call profiling overhead would affect every session; intentionally toggle-on for ONE measurement smoke only.
+
+### Still parked (on Codex's own ranked-tactic-table order)
+
+- **Recommendation #2 — Tankoban CLI deep-state flags (~80-180 LOC).** Agent 0 + domain owner. Demoted below runtime-health per Codex dissent. Value-per-LOC is lower when runtime-health already collapses the interpretation cost. Ship only when next smoke-heavy stretch justifies the UI navigation tax.
+- **Recommendation #3 — `setAccessibleName` on smoke-critical widgets (5-30 LOC per widget).** Cultural, not a single batch. Domain owners add when touching widgets. The seek slider is the known specific target (Agent 4B Phase 4.2 criterion 4 click-precision limit) — whoever next touches SeekSlider.cpp should add `setAccessibleName("stream-seek-slider")` and an accessible value interface.
+- **Recommendation #5 — Custom Qt QTest-backed debug bridge for seek/playback (~400-800 LOC).** Defer until smoke cadence proves sustained. Reopen only if click-precision remains blocker post-accessible-name fixes on the affected widgets.
+
+### Where this leaves the MCP-harness question
+
+Closed for now. windows-mcp stays the default. Runtime-health digest is shippable today. CLI deep-state flags + Qt accessibility discipline are warm-hold items ready to pick up when next smoke stretch arrives. Custom MCP + wholesale migration remain parked with clear reopen triggers. Audit's verdict matches what our smoke cadence actually needs.
+
+READY TO COMMIT - [Agent 0, runtime-health.ps1 shipped + profile-snapshot A/B procedure documented]: Agent 7 MCP smoke-harness audit recommendations #1 (runtime-health) + #4 (profile-snapshot A/B) both landed. `scripts/runtime-health.ps1` ~135 LOC ASCII PowerShell 5.1-compatible: process state (Tankoban + sidecar), stream telemetry event counts in tunable -SinceMinutes window (first_piece/gate_pass/stall_detected/stall_recovered/piece_diag/snapshot), stall-state verdict (FAIL=unrecovered / WARN=all-recovered / silent=zero), sidecar PERF tail (tick count + drops-per-sec sum + last line), error scan across stream_telemetry + sidecar_debug_live + alert_trace logs with benign ffmpeg reconnect-chatter filter (Will-reconnect-at + tcp-Connection-failed + HTTP-error). Exit 0/1, bash-callable via `powershell -NoProfile -File scripts/runtime-health.ps1`. Pattern-matched scripts/repo-health.ps1. Smoke-tested on current working tree (179 chatter hits → 53 legit historical Stream-ends-prematurely + Read-error lines). memory/project_windows_mcp_live.md appended with runtime-health invocation + WINDOWS_MCP_PROFILE_SNAPSHOT=1 A/B toggle procedure (edit .mcp.json env, restart Claude Code, one smoke, remove line; windows-mcp exposes natively per GitHub README 643-646). Parked per Codex-prioritized order: CLI deep-state flags (#2, ship when smoke-heavy), setAccessibleName discipline (#3, cultural habit when touching widgets; seek-slider is known target), custom Qt QTest debug bridge (#5, reopen only if click-precision remains blocker post-accessibility). No Tankoban src/ touches; no CLAUDE.md / STATUS.md edits | files: scripts/runtime-health.ps1, memory/project_windows_mcp_live.md, agents/chat.md
