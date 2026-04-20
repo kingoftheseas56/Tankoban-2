@@ -1149,19 +1149,40 @@ void FrameCanvas::drawTexturedQuad()
         // is transparent above the sub baseline, so shifting doesn't
         // change what's visible at the top — only moves the sub content
         // upward by the specified number of physical pixels.
-        // STREAM_AUTOCROP — overlay uses the same asymmetric viewport as the
-        // video quad so sub bitmaps placed at source-coord y (e.g. y=950 of
-        // 1080) land on the same physical screen row as the equivalent video
-        // content. For clean sources (no src-crop), this reduces to the
-        // pre-fix videoRect-based overlay. For Netflix 66+0 asymmetric baked
-        // letterbox, the expanded vp + srcOffsetY keeps subs aligned with
-        // the video content region even after the baked top rows are
-        // pushed off-screen.
+        //
+        // STREAM_SUBTITLE_HEIGHT_FIX 2026-04-20 (hemanth-reported "subtitle
+        // height in stream mode video streaming"): the overlay viewport
+        // now uses the un-expanded videoRect dimensions (± optional user
+        // cropZoom, which DOES intentionally follow the user's aspect
+        // override), NOT the autocrop-expanded vpW/vpH. Rationale:
+        //
+        //   Prior behavior mirrored the video quad's asymmetric viewport
+        //   so a sub at source-coord y=950 landed on the same physical
+        //   screen row as video content at source y=950. That alignment
+        //   is "correct" only for subtitles authored with knowledge of
+        //   the baked letterbox — which they never are. Meanwhile the
+        //   vertical scale factor srcScaleY = m_frameH/effFrameH (e.g.
+        //   1080/1014 ≈ 1.065 for Netflix 66-row encoded letterbox)
+        //   stretches subtitle GLYPHS vertically by the same ratio,
+        //   producing ~6.5% taller text on Netflix stream content. This
+        //   reads as "subtitle height is off" in streams.
+        //
+        //   Using videoRect (no srcScaleY stretch) maps overlay pixels
+        //   1:1 with canvas rows scaled to videoRect.h, matching the
+        //   unstretched pre-autocrop behavior. Subs sit at their source-
+        //   coord fraction of videoRect — the position delta from
+        //   "content-follow" is <1% of videoRect.h (≈8 px on 1080 lines,
+        //   well inside typical subtitle safe-zone padding and invisible
+        //   compared to the 6.5% glyph stretch). cropZoom is retained in
+        //   the overlay rect so user-driven Crop→2.35:1 still scales subs
+        //   consistently with the video.
+        const int overlayW = static_cast<int>(std::lround(videoRect.w * cropZoom));
+        const int overlayH = static_cast<int>(std::lround(videoRect.h * cropZoom));
         D3D11_VIEWPORT overlayVp = {};
-        overlayVp.TopLeftX = static_cast<float>(videoRect.x - (croppedW - videoRect.w) / 2 - srcOffsetX);
-        overlayVp.TopLeftY = static_cast<float>(videoRect.y - (croppedH - videoRect.h) / 2 - srcOffsetY - m_subtitleLiftPx);
-        overlayVp.Width    = static_cast<float>(vpW);
-        overlayVp.Height   = static_cast<float>(vpH);
+        overlayVp.TopLeftX = static_cast<float>(videoRect.x - (overlayW - videoRect.w) / 2);
+        overlayVp.TopLeftY = static_cast<float>(videoRect.y - (overlayH - videoRect.h) / 2 - m_subtitleLiftPx);
+        overlayVp.Width    = static_cast<float>(overlayW);
+        overlayVp.Height   = static_cast<float>(overlayH);
         overlayVp.MinDepth = 0.0f;
         overlayVp.MaxDepth = 1.0f;
         m_context->RSSetViewports(1, &overlayVp);
