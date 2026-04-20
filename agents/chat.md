@@ -3894,3 +3894,30 @@ Post smoke-by-proxy, Hemanth ratified shipping the one safe MCP speedup immediat
 **Takes effect:** next Claude Code restart. No rebuild, no Tankoban restart needed. Single-file single-line edit.
 
 READY TO COMMIT - [Agent 0, .mcp.json WINDOWS_MCP_SCREENSHOT_SCALE=0.6 shipped]: one-line addition to .mcp.json env block. Downscales windows-mcp screenshots from 1920x1080 to 1152x648 before encoding — ~36% smaller PNG + proportional token reduction per Screenshot call across all agents. Conservative 0.6 scale chosen so Tankoban bottom-HUD filename text stays readable for Bug-1-style smoke verification. Retrievable to 0.5 / 0.75 if smoke regresses (documented in memory/project_windows_mcp_live.md). Scope held tight — skipped BACKEND=dxcam (not installed in uvx env, would error) and PROFILE_SNAPSHOT=1 (separate Bucket 2 A/B measurement, bundling forces extra restart). Takes effect next Claude Code restart, zero code change, zero rebuild. Rollback: delete the one line from .mcp.json env block | files: .mcp.json
+
+---
+
+## [Agent 0, 2026-04-20 ~14:35 IST] 14 plugin skills wired into brotherhood workflow
+
+Hemanth asked "are our agents using these three plugins to full effect?" Honest answer was NO — only `superpowers:using-superpowers` was auto-loading; everything else (claude-mem, example-skills, most of superpowers) sat idle. He ratified incorporating everything that fits.
+
+Shipped `feedback_plugin_skills_adopted.md` memory mapping 14 adopted skills to specific brotherhood triggers + an explicit NOT-adopted list for ~20 that clash with our bespoke governance. Memory is off-git per-machine under `~/.claude/projects/.../memory/`, indexed in MEMORY.md.
+
+**14 ADOPTED:**
+- claude-mem: mem-search (cross-session recall before re-deriving), smart-explore (tree-sitter structural code queries), knowledge-agent (focused brain builder when corpus dense enough), timeline-report (post-milestone narrative).
+- example-skills: mcp-builder (when building MCP servers, e.g. deferred QTest bridge audit #5), skill-creator (brotherhood skill authoring).
+- superpowers: verification-before-completion (every RTC gate), systematic-debugging (every bug hunt — aligns with feedback_evidence_before_analysis.md three-incident log), brainstorming (pre-Congress position drafting), requesting-code-review (self-review before RTC since Agent 6 decommissioned), receiving-code-review (Hemanth correction handling + audit-finding receipt), dispatching-parallel-agents (reference for Agent() branching), subagent-driven-development (reference for subagent-driven fix-TODO phases), writing-skills (paired with skill-creator for deep skill authoring).
+
+**~20 NOT ADOPTED** with explicit reasons:
+- claude-mem make-plan/do + superpowers writing-plans/executing-plans: CONFLICT with fix-TODO system (our 14-section template IS our plan format).
+- claude-mem low-level corpus primitives (build/prime/rebuild/query/list/get): use high-level skills (mem-search / knowledge-agent / smart-*) instead.
+- example-skills web/document/comms (frontend-design / brand-guidelines / pptx / docx / xlsx / pdf / doc-coauthoring / slack-gif / internal-comms / claude-api / webapp-testing / theme-factory / canvas-design / algorithmic-art / web-artifacts-builder): wrong domain for Tankoban (native C++ Qt + BitTorrent + ffmpeg).
+- superpowers using-git-worktrees: EXPLICITLY BANNED per feedback_no_worktrees.md.
+- superpowers finishing-a-development-branch: trunk-only workflow, Rule 11 batching is replacement.
+- superpowers test-driven-development: clashes with smoke-first culture (feedback_quality_standard.md); opt-in ONLY for tankoban_tests pure-logic primitives.
+
+**Net effect:** every brotherhood agent session post-ratification now has 14 wired-in skill triggers mapped to specific workflow moments. mem-search fires on cross-session recall before Grep, verification-before-completion fires pre-RTC, systematic-debugging fires on any bug, etc. Governance-level conflicts explicitly held apart so we don't drift into parallel plan/review systems.
+
+Honest tension call: this is MORE skill surface, which means MORE context loaded per turn when skills fire. Mitigated by lazy-load pattern (Claude Code ToolSearch only pulls schemas on demand; skill descriptions pre-loaded at session start are small) + the discipline that each trigger is specific (not "use this skill whenever" but "use when X happens"). If we see skill-spam regression in practice, the memory gets updated — honest log beats silent abandonment.
+
+READY TO COMMIT - [Agent 0, 14 plugin skills wired into brotherhood workflow via feedback memory]: New off-git memory file feedback_plugin_skills_adopted.md + MEMORY.md index line. Maps 14 claude-mem + example-skills + superpowers skills to specific brotherhood triggers (mem-search on recall, verification-before-completion on RTC, systematic-debugging on bug hunts, mcp-builder for audit-#5 QTest bridge, knowledge-agent for post-P6 focused brains, etc). Explicit NOT-adopted list for ~20 that conflict with fix-TODO system / worktree ban / Rule 11 trunk-only / smoke-first culture. Effect: plugin surface that was installed-but-idle now has wiring into specific workflow moments across every agent session post-ratification. Rollback: delete feedback_plugin_skills_adopted.md + remove MEMORY.md line — both off-git per-machine, nothing to revert repo-side | files: agents/chat.md
