@@ -62,6 +62,13 @@ public:
 
     bool isActive() const { return m_active; }
     QString currentInfoHash() const { return m_infoHash; }
+    // Stream-side filename (actual video file inside the torrent — e.g.
+    // "One.Piece.S02E01.1080p.WEB-DL.x265-HDHub.mkv"). Populated on the
+    // first streamFile() poll that carries a selectedFileName. Consumed
+    // by StreamPage::onReadyToPlay as the HUD displayTitle override so
+    // the player's bottom bar doesn't show the HTTP URL's last segment
+    // ("0" = file index) as the title. Empty until metadata lands.
+    QString currentFileName() const { return m_currentFileName; }
 
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.2 — on-demand buffered-range
     // snapshot + emit. Called from pollStreamStatus each startup tick AND
@@ -171,4 +178,13 @@ private:
     // effects beyond simple metadata lookup; pollBufferedRangesOnce
     // only needs the byte-size scalar).
     qint64 m_currentFileSize = 0;
+
+    // Stream-side filename cache. Populated on each pollStreamStatus tick
+    // that sees a non-empty selectedFileName in StreamFileResult. Reset
+    // by clearSessionState so a new session always starts empty (the
+    // VideoPlayer then falls back to URL basename until metadata lands,
+    // which is already the harmless "0" transient for magnet streams —
+    // bottom HUD just flips from "0" to the real filename once the
+    // first successful poll completes).
+    QString m_currentFileName;
 };

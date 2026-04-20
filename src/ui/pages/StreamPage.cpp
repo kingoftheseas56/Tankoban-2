@@ -1930,8 +1930,20 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // same-session re-entries like an immediate re-open of the same URL.)
     m_session.seekRetry.reset();
 
-    auto launchPlayer = [this, player, httpUrl, streamResumeSec, mainWin]() {
-        player->openFile(httpUrl, {}, 0, streamResumeSec);
+    // Stream-mode HUD title: pass the resolved filename (or direct-URL
+    // Stream.name fallback) into VideoPlayer so the bottom bar shows
+    // the real title instead of the last URL path segment (which is
+    // just the file-index digit — "0", "3" — from
+    // http://127.0.0.1:PORT/stream/{hash}/{idx}). Cached on the
+    // controller side per-session; empty until metadata lands on the
+    // magnet path (harmless — updateTitleElision overwrites on the
+    // next open).
+    const QString streamHudTitle = m_playerController
+                                       ? m_playerController->currentFileName()
+                                       : QString();
+    auto launchPlayer = [this, player, httpUrl, streamResumeSec, mainWin,
+                         streamHudTitle]() {
+        player->openFile(httpUrl, {}, 0, streamResumeSec, streamHudTitle);
         if (auto* mw = qobject_cast<QMainWindow*>(mainWin))
             player->setGeometry(mw->centralWidget()->rect());
         else

@@ -49,7 +49,8 @@ public:
     void openFile(const QString& filePath,
                   const QStringList& playlist = {},
                   int playlistIndex = 0,
-                  double startPositionSec = 0.0);
+                  double startPositionSec = 0.0,
+                  const QString& displayTitle = {});
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 — isIntentional distinguishes
     // user-driven stops (Escape, close, APPCOMMAND_MEDIA_STOP — default)

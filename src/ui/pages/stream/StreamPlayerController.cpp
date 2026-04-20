@@ -55,6 +55,14 @@ void StreamPlayerController::startStream(const QString& imdbId, const QString& m
         || selectedStream.source.kind == StreamSource::Kind::Url) {
         const StreamFileResult oneShot = m_engine->streamFile(m_selectedStream);
         if (oneShot.ok && oneShot.readyToStart) {
+            // Direct streams don't go through pollStreamStatus, so seed the
+            // HUD-title cache here (addon-supplied Stream.name is the best
+            // available label for a direct URL — no filename inside a
+            // torrent to pick from).
+            if (!oneShot.selectedFileName.isEmpty())
+                m_currentFileName = oneShot.selectedFileName;
+            else if (!m_selectedStream.name.isEmpty())
+                m_currentFileName = m_selectedStream.name;
             onStreamReady(oneShot.url);
             return;
         }
@@ -122,6 +130,7 @@ void StreamPlayerController::clearSessionState()
     m_lastBufferedRanges.clear();
     m_lastBufferedFileSize = 0;
     m_currentFileSize      = 0;
+    m_currentFileName.clear();
 }
 
 void StreamPlayerController::onEngineStreamError(const QString& infoHash,
@@ -173,6 +182,14 @@ void StreamPlayerController::pollStreamStatus()
     // this cache in place of a fresh streamFile() call.
     if (result.fileSize > 0)
         m_currentFileSize = result.fileSize;
+
+    // Cache the engine-resolved filename so StreamPage can pass it into
+    // VideoPlayer::openFile as the HUD displayTitle. Pre-metadata this
+    // is empty (engine sets selectedFileName only after the name has
+    // been resolved against the torrent's file list); once populated
+    // it's immutable for the session.
+    if (!result.selectedFileName.isEmpty() && m_currentFileName.isEmpty())
+        m_currentFileName = result.selectedFileName;
 
     if (result.ok && result.readyToStart) {
         m_pollTimer.stop();

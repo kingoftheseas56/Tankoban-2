@@ -280,7 +280,8 @@ VideoPlayer::~VideoPlayer()
 
 void VideoPlayer::openFile(const QString& filePath,
                             const QStringList& playlist, int playlistIndex,
-                            double startPositionSec)
+                            double startPositionSec,
+                            const QString& displayTitle)
 {
     debugLog("[VideoPlayer] openFile: " + filePath);
 
@@ -302,9 +303,17 @@ void VideoPlayer::openFile(const QString& filePath,
     m_currentVideoId = videoIdForFile(filePath);
     m_currentShowId = showIdForFile(filePath);
     // Title for the bottom HUD label — use completeBaseName (strips the
-    // file extension). For URL sources (Stream mode), QFileInfo still
-    // pulls a reasonable basename from the last path segment.
-    m_fullTitle = QFileInfo(filePath).completeBaseName();
+    // file extension). For URL sources (Stream mode) QFileInfo::
+    // completeBaseName on e.g. "http://127.0.0.1:PORT/stream/{hash}/{idx}"
+    // yields just the trailing path segment (the file index — "0", "3",
+    // etc.), which is useless as a title. Callers pass displayTitle to
+    // override with a human-readable name (StreamPage routes
+    // StreamPlayerController::currentFileName() through here).
+    if (!displayTitle.isEmpty()) {
+        m_fullTitle = QFileInfo(displayTitle).completeBaseName();
+    } else {
+        m_fullTitle = QFileInfo(filePath).completeBaseName();
+    }
     updateTitleElision();
     m_playlist = playlist;
     m_playlistIdx = playlistIndex;
@@ -2511,7 +2520,18 @@ void VideoPlayer::hideControls()
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)
 {
-    if (!m_bridge || m_currentVideoId.isEmpty() || m_currentFile.isEmpty())
+    // Stream mode (PersistenceMode::None) never populates m_currentVideoId
+    // because videoIdForFile() requires QFileInfo::exists() which fails on
+    // HTTP URLs. Pre-fix: the videoId guard here early-returned before
+    // either the "videos" write OR the progressUpdated emit, so StreamPage's
+    // progress listener never heard a tick → Continue Watching for streams
+    // was permanently empty. Now the guard only blocks the "videos"-domain
+    // write (moved inside the LibraryVideos branch below); the signal emit
+    // always fires when there's a real current file and a bridge. Stream
+    // writes happen in StreamPage::onReadyToPlay's progressUpdated lambda
+    // via m_bridge->saveProgress("stream", epKey, ...) — that path does
+    // not depend on m_currentVideoId.
+    if (!m_bridge || m_currentFile.isEmpty())
         return;
 
     QJsonObject data;
@@ -2538,7 +2558,11 @@ void VideoPlayer::saveProgress(double positionSec, double durationSec)
     // progressUpdated listener writes into the "stream" domain instead —
     // so we MUST still emit the signal below, just skip the "videos"
     // write that would pollute the Videos-mode continue-watching store.
-    if (m_persistenceMode == PersistenceMode::LibraryVideos) {
+    // videoId presence is re-guarded here since the function-top guard
+    // was relaxed to let stream mode through (URLs never resolve a
+    // real videoId).
+    if (m_persistenceMode == PersistenceMode::LibraryVideos
+        && !m_currentVideoId.isEmpty()) {
         m_bridge->saveProgress("videos", m_currentVideoId, data);
     }
     emit progressUpdated(m_currentFile, positionSec, durationSec);
