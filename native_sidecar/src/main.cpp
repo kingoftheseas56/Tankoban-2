@@ -321,7 +321,13 @@ static void open_worker(Command cmd) {
         {"t_ms_from_open", t_ms_from_open()},
         {"analyze_duration_ms", analyze_duration_ms},
         {"stream_count", static_cast<int>(1 + probe->audio.size() + probe->subs.size())},
-        {"duration_ms", static_cast<int64_t>(probe->duration_sec * 1000.0)}
+        {"duration_ms", static_cast<int64_t>(probe->duration_sec * 1000.0)},
+        // STREAM_DURATION_FIX — surface AVFormatContext::duration_estimation_method
+        // so stream_telemetry.log can grep "duration_method":2 events to audit
+        // which streams fall back to bitrate-estimation. duration_ms is already
+        // forced to 0 upstream when method==2, so this field is the only way
+        // to distinguish "unknown duration" from "truly 0-length stream".
+        {"duration_method", probe->duration_estimation_method}
     });
 
     // STREAM_ENGINE_REBUILD P4 — probe_tier_passed event. Reports which

@@ -69,6 +69,17 @@ struct ProbeResult {
     int64_t probe_elapsed_ms     = 0;
     int64_t probesize_used       = 0;
     int64_t analyzeduration_used = 0;
+
+    // STREAM_DURATION_FIX — AVFormatContext::duration_estimation_method snapshot
+    // from the tier that passed. Values:
+    //   0 = AVFMT_DURATION_FROM_PTS     (derived from stream PTSes — accurate)
+    //   1 = AVFMT_DURATION_FROM_STREAM  (read from stream/container field — accurate)
+    //   2 = AVFMT_DURATION_FROM_BITRATE (derived from observed bitrate × size — UNRELIABLE)
+    // When == 2, duration_sec is forced to 0 upstream because bitrate-estimates
+    // on stream-mode HTTP probes with small probesize frequently double the
+    // true duration (head-credits bitrate << average content bitrate). HUD
+    // then shows "—:—" instead of a wildly-wrong 2h reading for a 1h file.
+    int duration_estimation_method = 0;
 };
 
 // Probe a media file: find video stream dimensions/codec, enumerate tracks.

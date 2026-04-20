@@ -1,7 +1,9 @@
 #include "demuxer.h"
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -128,8 +130,61 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
             continue;
         }
 
+        // STREAM_DURATION_FIX — fmt_ctx->duration is a MAX over every stream's
+        // AVStream::duration. For MKVs where the video+audio stream durations
+        // are not yet resolvable (small probesize, no Cues-at-end visit), the
+        // max picks up whatever subtitle/attachment streams carry — which is
+        // the container's Segment Info Duration field verbatim. Real repro:
+        // hemanth's 59-min One Piece EZTV mkv carries Segment Duration =
+        // 7192.56s, which libavformat inherits onto all 57 subtitle tracks
+        // while the video/audio streams hold AV_NOPTS_VALUE. fmt_ctx->duration
+        // then reports the inflated 7192s and duration_estimation_method tags
+        // it as FROM_STREAM (honest — it DID come from a stream, just not
+        // one that corresponds to playback length).
+        //
+        // Escalate on HTTP when the passing tier either (a) fell back to
+        // FROM_BITRATE (the classic head-bitrate-extrapolation case), or (b)
+        // the video stream's own duration is still unknown (AV_NOPTS_VALUE),
+        // which forces fmt_ctx->duration to inherit from subs/attachments. A
+        // larger probesize frequently lets the matroska demuxer visit Cues at
+        // the tail of the segment via HTTP range-request, which populates
+        // video->duration directly. Final tier accepts what it gets; the
+        // post-loop duration extraction independently guards against trusting
+        // FROM_BITRATE or a bare container-level-only duration.
+        AVStream* vs_probe = (fmt_ctx->nb_streams > 0)
+            ? fmt_ctx->streams[av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO,
+                                                   -1, -1, nullptr, 0)]
+            : nullptr;
+        const bool video_duration_known =
+            vs_probe && vs_probe->duration != AV_NOPTS_VALUE;
+        const bool from_bitrate =
+            fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE;
+        const bool subs_contaminated_container =
+            !video_duration_known && fmt_ctx->duration > 0
+            && fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_STREAM;
+
+        if (is_http && i < tier_count - 1
+            && (from_bitrate || subs_contaminated_container)) {
+            const char* why = from_bitrate
+                ? "FROM_BITRATE (head-bitrate extrapolation)"
+                : "video stream duration unknown; container duration inherited "
+                  "from subtitle/attachment stream (unreliable)";
+            std::fprintf(stderr,
+                "probe_file: Tier %d passed but duration-source is unreliable: %s; "
+                "escalating to Tier %d\n",
+                t.tier, why, tiers[i + 1].tier);
+            avformat_close_input(&fmt_ctx);
+            fmt_ctx = nullptr;
+            last_err = "duration unreliable";
+            continue;
+        }
+
         chosen = t;
-        std::fprintf(stderr, "probe_file: Tier %d passed\n", t.tier);
+        std::fprintf(stderr,
+            "probe_file: Tier %d passed (duration_estimation_method=%d, "
+            "video_dur_known=%d)\n",
+            t.tier, fmt_ctx->duration_estimation_method,
+            video_duration_known ? 1 : 0);
         break;
     }
 
@@ -242,9 +297,89 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
         result.hdr = true;
     }
 
-    // Duration
-    if (fmt_ctx->duration > 0) {
-        result.duration_sec = static_cast<double>(fmt_ctx->duration) / AV_TIME_BASE;
+    // Duration resolution — see STREAM_DURATION_FIX block in the tier loop.
+    //
+    // Priority order, least-to-most-pathological:
+    //   1. Video stream's own AVStream::duration (ground truth for playback
+    //      length — libavformat sets this from the real last-packet PTS when
+    //      Cues are reachable, or from the container's Segment Duration field
+    //      when it correlates with the video track).
+    //   2. fmt_ctx->duration — ONLY if the video stream's duration was known.
+    //      If video duration is AV_NOPTS_VALUE but fmt_ctx->duration is set,
+    //      the max came from audio/sub streams; on many MKVs the subs carry
+    //      the container-level Segment Duration which can be wildly wrong
+    //      (repro: 59-min One Piece mkv whose Segment Duration = 7192s =
+    //      2× real, inherited onto all 57 subtitle tracks).
+    //   3. FROM_BITRATE estimates — never trusted; small-probesize head
+    //      bitrate is rarely representative.
+    //   4. Unknown (result.duration_sec = 0) — HUD shows "—:—" honestly.
+    //
+    // Frame-count cross-check (nb_frames / avg_frame_rate) is computed only
+    // as a secondary sanity check logged to stderr — it's unreliable on MKV
+    // (nb_frames is frequently 0 unless Cues are parsed) so it doesn't gate
+    // the fallback hierarchy.
+    result.duration_estimation_method = fmt_ctx->duration_estimation_method;
+
+    AVStream* vs_dur = (video_idx >= 0) ? fmt_ctx->streams[video_idx] : nullptr;
+    const bool video_duration_known =
+        vs_dur && vs_dur->duration != AV_NOPTS_VALUE;
+    const double video_stream_duration_sec = video_duration_known
+        ? static_cast<double>(vs_dur->duration) * av_q2d(vs_dur->time_base)
+        : 0.0;
+
+    double frame_count_duration_sec = 0.0;
+    if (vs_dur) {
+        const double fps = (vs_dur->avg_frame_rate.den > 0)
+            ? av_q2d(vs_dur->avg_frame_rate) : 0.0;
+        if (vs_dur->nb_frames > 0 && fps > 0.0) {
+            frame_count_duration_sec =
+                static_cast<double>(vs_dur->nb_frames) / fps;
+        }
+        std::fprintf(stderr,
+            "probe_file: video stream duration=%lldus nb_frames=%lld "
+            "avg_fps=%.3f frame_count_est=%.1fs\n",
+            (long long)vs_dur->duration, (long long)vs_dur->nb_frames, fps,
+            frame_count_duration_sec);
+    }
+
+    const double container_duration_sec = (fmt_ctx->duration > 0)
+        ? static_cast<double>(fmt_ctx->duration) / AV_TIME_BASE : 0.0;
+
+    if (video_duration_known
+        && fmt_ctx->duration_estimation_method != AVFMT_DURATION_FROM_BITRATE) {
+        // Preferred path — video stream has its own duration.
+        result.duration_sec = video_stream_duration_sec;
+        if (container_duration_sec > 0.0
+            && std::abs(container_duration_sec - video_stream_duration_sec)
+               > 0.05 * std::max(video_stream_duration_sec, 1.0)) {
+            std::fprintf(stderr,
+                "probe_file: container dur=%.1fs differs from video stream dur "
+                "%.1fs (using video stream — subtitle/attachment streams likely "
+                "carry a stale container-header duration)\n",
+                container_duration_sec, video_stream_duration_sec);
+        }
+    } else if (fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE
+               && fmt_ctx->duration > 0) {
+        std::fprintf(stderr,
+            "probe_file: DISCARDING duration=%lldus (estimation=FROM_BITRATE, "
+            "unreliable on small-probesize HTTP streams)\n",
+            (long long)fmt_ctx->duration);
+        // result.duration_sec stays 0.
+    } else if (fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_PTS
+               && container_duration_sec > 0.0) {
+        // FROM_PTS is libavformat's way of saying "derived by observing packet
+        // PTSes across the whole analyzed window". Even when the per-stream
+        // AVStream::duration field is unset, FROM_PTS is reliable for the
+        // content that was actually scanned. Accept it.
+        result.duration_sec = container_duration_sec;
+    } else if (!video_duration_known && container_duration_sec > 0.0) {
+        std::fprintf(stderr,
+            "probe_file: DISCARDING container dur=%.1fs — video stream duration "
+            "is AV_NOPTS_VALUE, so fmt_ctx->duration was inherited from audio/"
+            "subtitle/attachment streams (unreliable on MKVs whose Segment "
+            "Info Duration field disagrees with real playback length)\n",
+            container_duration_sec);
+        // result.duration_sec stays 0.
     }
 
     // Enumerate audio and subtitle streams

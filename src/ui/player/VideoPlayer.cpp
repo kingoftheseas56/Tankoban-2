@@ -869,7 +869,16 @@ void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
     m_seekBar->blockSignals(false);
 
     m_timeLabel->setText(formatTime(posMs));
-    m_durLabel->setText(formatTime(durMs));
+    // STREAM_DURATION_FIX — when the sidecar reports durationSec=0 it means
+    // the probe's duration estimate was FROM_BITRATE (unreliable) and was
+    // discarded in demuxer.cpp. Show "—:—" to signal unknown honestly, so
+    // the HUD never displays a wildly-wrong number (1h content mis-rendered
+    // as 2h was the repro that motivated this guard).
+    if (durationSec > 0.0) {
+        m_durLabel->setText(formatTime(durMs));
+    } else {
+        m_durLabel->setText(QStringLiteral("\u2014:\u2014"));
+    }
 
     // Save progress every update (~1/sec from sidecar)
     saveProgress(positionSec, durationSec);
