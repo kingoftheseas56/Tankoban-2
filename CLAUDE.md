@@ -82,6 +82,7 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 
 | TODO file | Owner | Phase cursor | Status |
 |-----------|-------|--------------|--------|
+| `PLAYER_COMPARATIVE_AUDIT_TODO.md` | Agent 3 | AUTHORED 2026-04-20, awaiting Phase 1 wake | 4-phase live behavioral audit vs VLC + PotPlayer + mpv-precision-reference. Scope: Tankoban feature set only, NOT VLC/PotPlayer extras. Each phase produces one `agents/audits/comparative_player_*.md` deliverable with CONVERGED/DIVERGED/WORSE/BETTER verdicts per sub-axis. DIVERGED/WORSE findings feed follow-on fix-TODO authoring IF Hemanth ratifies at phase boundary. No src/ changes in this TODO. |
 | `BOOK_READER_FIX_TODO.md` | Agent 2 | 1+2+3+5 SHIPPED | awaiting Hemanth smoke; Phase 4 explicitly deferred |
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
 | `VIDEO_PLAYER_FIX_TODO.md` | Agent 3 | Phases 1+3+5 PASSED, 2/4/7 review-suspended | IINA-identity track |
