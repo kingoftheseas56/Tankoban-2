@@ -204,10 +204,24 @@ QList<StreamPickerChoice> buildPickerChoices(
         out.push_back(c);
     }
 
-    // Same sort policy the legacy dialog used — preserves muscle memory for
-    // any user with a saved choice that was top-of-list before.
+    // STREAM_HTTP_PREFER Phase 0.1 — rank direct HTTP/Url sources ABOVE
+    // magnet sources in the stream picker so debrid-backed CDN links land
+    // first. Cold-open on a libtorrent magnet can take minutes on a fresh
+    // swarm (piece scheduler starvation despite healthy peer + bandwidth
+    // state — see STREAM_HTTP_PREFER_FIX_TODO.md "Created" block for the
+    // log evidence); the same title's HTTP stream via Real-Debrid /
+    // Premiumize / etc is CDN-bound and resolves in seconds. When the
+    // user's addons expose both kinds for a title, HTTP wins the default
+    // selection. Within each tier (direct / magnet / other) the legacy
+    // quality-size-name tiebreak is preserved so a user's muscle memory
+    // for a specific 1080p pick inside a tier still ranks the same.
     std::stable_sort(out.begin(), out.end(),
         [](const StreamPickerChoice& a, const StreamPickerChoice& b) {
+            // Tier 1: direct HTTP/Url first.
+            if (a.isDirect != b.isDirect)                      return a.isDirect;
+            // Tier 2 (within non-direct): magnet-with-seeders before
+            // magnet-without-seeders-or-other-non-direct. Preserves the
+            // legacy ordering *below* the new direct tier.
             const bool aMagWithSeeders =
                 a.stream.source.kind == StreamSource::Kind::Magnet && a.seeders > 0;
             const bool bMagWithSeeders =
@@ -215,6 +229,9 @@ QList<StreamPickerChoice> buildPickerChoices(
             if (aMagWithSeeders != bMagWithSeeders)            return aMagWithSeeders;
             if (aMagWithSeeders && bMagWithSeeders
                 && a.seeders != b.seeders)                     return a.seeders > b.seeders;
+            // Tier-internal tiebreaks (apply inside direct tier too —
+            // higher-quality / bigger-file HTTP stream wins over lower-
+            // quality HTTP stream of the same title).
             if (a.qualitySort != b.qualitySort)                return a.qualitySort > b.qualitySort;
             if (a.sizeBytes != b.sizeBytes)                    return a.sizeBytes > b.sizeBytes;
             return a.displayFilename.toLower() < b.displayFilename.toLower();
