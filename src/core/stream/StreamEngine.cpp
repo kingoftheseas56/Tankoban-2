@@ -176,6 +176,20 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
             this, &StreamEngine::onStallTick);
     m_stallTimer->start();
 
+    // STREAM_HTTP_PREFER investigation Wake 1 (2026-04-20) — 1 Hz cold-open
+    // diagnostic tick. Fires per-head-piece block-level telemetry during
+    // the pre-first-byte window so we can see what libtorrent is actually
+    // doing on a failing cold-open. No-op (zero emits) when no Serving
+    // session is stuck pre-first-byte; cheap lock-walk otherwise. Kept
+    // separate from stall-watchdog because that one keys off firstPieceMs
+    // and can't fire until at least one piece has arrived — which is
+    // exactly the state we're trying to diagnose.
+    m_coldOpenDiagTimer = new QTimer(this);
+    m_coldOpenDiagTimer->setInterval(1000);
+    connect(m_coldOpenDiagTimer, &QTimer::timeout,
+            this, &StreamEngine::onColdOpenDiagTick);
+    m_coldOpenDiagTimer->start();
+
     // One-shot startup line so the log opens visibly when telemetry is on
     // — confirms env-var gate worked + filesystem path resolved.
     writeTelemetry(QStringLiteral("engine_started"),
@@ -1077,6 +1091,102 @@ void StreamEngine::onStallTick()
             + QStringLiteral(" elapsed_ms=") + QString::number(elapsedSinceStall)
             + QStringLiteral(" via=") + QString::fromLatin1(via));
         return;  // one recovery per tick; any other sessions wait for the next fire
+    }
+}
+
+void StreamEngine::onColdOpenDiagTick()
+{
+    // STREAM_HTTP_PREFER investigation Wake 1 (2026-04-20) — per-head-piece
+    // block-level telemetry during the pre-first-byte window. Fires once
+    // per second per Serving session whose firstPieceArrivalMs is still
+    // negative (i.e. not a single head piece has completed yet). The goal
+    // is to close the observability gap in the 14:05 Invincible cold-open
+    // pattern: snapshot telemetry showed dlBps=15 MB/s + peers=193 + pieces
+    // =[0,0] across 119 s — bandwidth was flowing but NO head piece ever
+    // arrived. stall_detected keys off firstPieceMs and therefore can't
+    // fire during cold-open, so the existing piece_diag emit at line 1030
+    // never caught this case.
+    //
+    // For each head piece (prioritizedPieceRangeFirst..Last), we emit:
+    //   cold_open_diag hash=XXX piece=N elapsed_ms=M in_dl_queue=0|1
+    //     blocks=B finished=F writing=W requested=R peers_with=P peers_dl=D
+    //     avg_q_ms=Q peer_count=C
+    //
+    // in_dl_queue=0 on pieces 0-4 across multiple ticks = libtorrent is
+    // ignoring our set_piece_deadline calls entirely (scheduler-starvation
+    // at the picker level; move on the deadline shape or piece-count knobs
+    // in wake 2-4). in_dl_queue=1 with requested=0 across ticks = piece is
+    // registered with the picker but no peer is being asked for its blocks
+    // (downstream of `can_request_time_critical` gate). in_dl_queue=1 with
+    // requested>0 and finished=0 for 10+ ticks = blocks requested but not
+    // delivered (peer-side reject / throttle / partial-piece overhead).
+    //
+    // Acquires m_mutex; TorrentEngine::pieceDiagnostic takes its own lock
+    // via StreamEngine::m_mutex → TorrentEngine::m_mutex (same order as
+    // onReassertTick + onStallTick paths; never reversed).
+    if (!m_torrentEngine) return;
+
+    QMutexLocker lock(&m_mutex);
+    const qint64 now = m_clock.elapsed();
+
+    // Gather work under the lock, emit outside it (writeTelemetry may do
+    // file I/O; holding m_mutex across that would needlessly serialize).
+    struct Entry {
+        QString infoHash;
+        int pieceIndex;
+        qint64 elapsedMs;
+        TorrentEngine::PieceDiag diag;
+    };
+    QList<Entry> entries;
+    entries.reserve(8);
+
+    for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
+        StreamSession& s = *it;
+        if (s.state != StreamSession::State::Serving) continue;
+        if (s.firstPieceArrivalMs >= 0) continue;  // past cold-open
+        if (s.selectedFileIndex < 0) continue;     // file not yet selected
+
+        // Head range = resolve the first piece of the selected file at
+        // offset 0, then diag that piece and the 4 that follow. Matches
+        // the 5-piece window onMetadataReady sets deadlines on (see
+        // kHeadMinPieces = 5 at line 1433). Cheap — 5 pieceDiagnostic
+        // calls per session per second during cold-open; zero emits
+        // after firstPieceArrivalMs populates because the session is
+        // skipped above.
+        const QPair<int, int> headStart =
+            m_torrentEngine->pieceRangeForFileOffset(
+                s.infoHash, s.selectedFileIndex, 0, 1);
+        if (headStart.first < 0) continue;
+
+        constexpr int kColdOpenDiagCount = 5;
+        const qint64 elapsed = (s.metadataReadyMs >= 0)
+            ? (now - s.metadataReadyMs) : now;
+        for (int p = headStart.first;
+             p < headStart.first + kColdOpenDiagCount; ++p) {
+            Entry e;
+            e.infoHash   = s.infoHash;
+            e.pieceIndex = p;
+            e.elapsedMs  = elapsed;
+            e.diag       = m_torrentEngine->pieceDiagnostic(s.infoHash, p);
+            entries.append(std::move(e));
+        }
+    }
+    lock.unlock();
+
+    for (const Entry& e : entries) {
+        writeTelemetry(QStringLiteral("cold_open_diag"),
+            QStringLiteral("hash=") + e.infoHash.left(8)
+            + QStringLiteral(" piece=") + QString::number(e.pieceIndex)
+            + QStringLiteral(" elapsed_ms=") + QString::number(e.elapsedMs)
+            + QStringLiteral(" in_dl_queue=") + (e.diag.inDownloadQueue ? QStringLiteral("1") : QStringLiteral("0"))
+            + QStringLiteral(" blocks=") + QString::number(e.diag.blocksInPiece)
+            + QStringLiteral(" finished=") + QString::number(e.diag.finished)
+            + QStringLiteral(" writing=") + QString::number(e.diag.writing)
+            + QStringLiteral(" requested=") + QString::number(e.diag.requested)
+            + QStringLiteral(" peers_with=") + QString::number(e.diag.peersWithPiece)
+            + QStringLiteral(" peers_dl=") + QString::number(e.diag.peersDownloadingPiece)
+            + QStringLiteral(" avg_q_ms=") + QString::number(e.diag.avgPeerQueueMs)
+            + QStringLiteral(" peer_count=") + QString::number(e.diag.peerCount));
     }
 }
 

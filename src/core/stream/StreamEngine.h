@@ -327,6 +327,21 @@ private:
     // emits `stall_recovered` and resets the session fields.
     QTimer* m_stallTimer = nullptr;
 
+    // STREAM_HTTP_PREFER investigation Wake 1 (2026-04-20) — 1 Hz cold-open
+    // diagnostic tick. Walks m_streams; for each Serving session that has
+    // a prioritized head range set but `firstPieceArrivalMs < 0` (i.e.
+    // still in the pre-first-byte window), emits a `cold_open_diag` event
+    // per head piece via TorrentEngine::pieceDiagnostic — reports whether
+    // libtorrent has the piece in its download queue at all, block-level
+    // progress (finished / writing / requested), and per-peer availability.
+    // The onStallTick watchdog keys off `firstPieceMs` and therefore can't
+    // fire during cold-open; this closes that observability gap so the
+    // "pieces=[0,0] but dlBps=15 MB/s" puzzle becomes readable. Zero
+    // behavior change — pure telemetry; writeTelemetry short-circuits
+    // when TANKOBAN_STREAM_TELEMETRY is off so the tick costs ~1 lock
+    // acquisition per session per second when disabled.
+    QTimer* m_coldOpenDiagTimer = nullptr;
+
     // STREAM_ENGINE_FIX Phase 1.1 — monotonic clock started in ctor; supplies
     // ms-since-engine-start timestamps for StreamSession observability fields
     // (metadataReadyMs / firstPieceArrivalMs). Monotonic to survive
@@ -347,4 +362,12 @@ private:
     // StreamEngine-mutex scope to avoid nesting against the waiter's own
     // lock.
     void onStallTick();
+
+    // STREAM_HTTP_PREFER investigation Wake 1 — cold-open diagnostic tick.
+    // Iterates m_streams under m_mutex, identifies pre-first-byte Serving
+    // sessions, emits `cold_open_diag` per head piece. Acquires m_mutex
+    // itself; TorrentEngine::pieceDiagnostic takes its own m_mutex via
+    // the StreamEngine::m_mutex → TorrentEngine::m_mutex order (never
+    // reversed, same as onReassertTick path).
+    void onColdOpenDiagTick();
 };
