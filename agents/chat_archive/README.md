@@ -27,3 +27,4 @@ Trigger: `chat.md` exceeds 3000 lines OR 300 KB at session end. Steady-state tar
 | 2026-04-16 | `2026-04-16_chat_lines_8-19467.md` | 8–19467 | ~1.6 MB |
 | 2026-04-16 | `2026-04-16_chat_lines_8-3642.md` | 8–3642 | ~325 KB |
 | 2026-04-18 | `2026-04-18_chat_lines_8-4038.md` | 8–4038 | ~380 KB |
+| 2026-04-20 | `2026-04-20_chat_lines_8-3978.md` | 8–3978 | ~380 KB |
