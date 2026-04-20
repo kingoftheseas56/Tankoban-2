@@ -2481,13 +2481,32 @@ void VideoPlayer::updateEpisodeButtons()
 
 int VideoPlayer::subtitleBaselineLiftPx() const
 {
-    // 6% of canvas height — Netflix/YouTube safe-zone for subtitle bottom
-    // margin. Auto-scales 720p/1080p/4K. Applied as a floor so file-supplied
-    // ASS styles with low/zero MarginV never render flush at the frame edge.
+    // STREAM_SUBTITLE_POSITION_FIX 2026-04-20 (hemanth-reported "subs
+    // sit too high vs VLC/mpv/PotPlayer" during PLAYER_COMPARATIVE_AUDIT
+    // Phase 2 smoke): baseline dropped 6% → 2% of canvas height.
+    //
+    // Prior 6% (= 65 px on 1080, 58 px on 974 windowed) was chosen as
+    // the Netflix/YouTube streaming title-safe zone, which is the wrong
+    // reference — that's a broadcast/encoding safe-zone for producers,
+    // not a subtitle-rendering default for consumption players. Applied
+    // as a floor on top of libass MarginV, it pushed subs ~150 px above
+    // where VLC / mpv / PotPlayer render them on the same content.
+    //
+    // Reference-player defaults (measured Phase 2 pilot 2026-04-20):
+    //   mpv:       sub-margin-y=22 → 22 px from bottom
+    //   VLC 3.0.23: ~30 px default (Preferences → Subtitles)
+    //   PotPlayer:  ~20-30 px default
+    //
+    // 2% of canvas = 22 px on 1080, 20 px on 974 — matches mpv, slightly
+    // under VLC. Still a non-zero floor so ASS files with MarginV=0 don't
+    // render flush at the frame edge (prevents the file-supplied-style
+    // issue the original rationale cited). HUD-visible lift path
+    // (qMax(hudLiftPx, baseline)) is unchanged — 120 px hud-height still
+    // wins when controls are up, keeping subs from being occluded.
     if (!m_canvas) return 0;
     const qreal dpr = devicePixelRatioF();
     const int canvasPxH = qRound(m_canvas->height() * dpr);
-    return qMax(0, qRound(canvasPxH * 0.06));
+    return qMax(0, qRound(canvasPxH * 0.02));
 }
 
 void VideoPlayer::showControls()
