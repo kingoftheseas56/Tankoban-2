@@ -275,19 +275,46 @@ void TankorentPage::buildUI()
 
 void TankorentPage::buildSearchControls(QVBoxLayout* parent)
 {
-    auto *row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(8);
+    // Row 1 — query + its immediate actions. Query bar gets a sensible minimum
+    // so it stays prominent at any window width; Search/Cancel sit right next
+    // to it so "type query, click Search" is one hand-motion (per Hemanth
+    // 2026-04-20 UX ask).
+    auto *queryRow = new QHBoxLayout;
+    queryRow->setContentsMargins(0, 0, 0, 0);
+    queryRow->setSpacing(8);
 
     m_queryEdit = new QLineEdit;
     m_queryEdit->setPlaceholderText("Search torrents...");
     m_queryEdit->setFixedHeight(30);
+    m_queryEdit->setMinimumWidth(320);
     connect(m_queryEdit, &QLineEdit::returnPressed, this, &TankorentPage::startSearch);
-    row->addWidget(m_queryEdit, 3);
+    queryRow->addWidget(m_queryEdit, 1);
+
+    m_searchBtn = new QPushButton("Search");
+    m_searchBtn->setFixedHeight(30);
+    m_searchBtn->setMinimumWidth(90);
+    m_searchBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_searchBtn, &QPushButton::clicked, this, &TankorentPage::startSearch);
+    queryRow->addWidget(m_searchBtn);
+
+    m_cancelBtn = new QPushButton("Cancel");
+    m_cancelBtn->setFixedHeight(30);
+    m_cancelBtn->setMinimumWidth(90);
+    m_cancelBtn->setCursor(Qt::PointingHandCursor);
+    m_cancelBtn->setVisible(false);
+    connect(m_cancelBtn, &QPushButton::clicked, this, &TankorentPage::cancelSearch);
+    queryRow->addWidget(m_cancelBtn);
+
+    parent->addLayout(queryRow);
+
+    // Row 2 — filter combos + global actions.
+    auto *row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(8);
 
     m_searchTypeCombo = new QComboBox;
     m_searchTypeCombo->setFixedHeight(30);
-    m_searchTypeCombo->setMinimumWidth(150);
+    m_searchTypeCombo->setMinimumWidth(130);
     m_searchTypeCombo->addItem("Videos",     "videos");
     m_searchTypeCombo->addItem("Books",      "books");
     m_searchTypeCombo->addItem("Audiobooks", "audiobooks");
@@ -296,7 +323,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
 
     m_sourceCombo = new QComboBox;
     m_sourceCombo->setFixedHeight(30);
-    m_sourceCombo->setMinimumWidth(160);
+    m_sourceCombo->setMinimumWidth(140);
     connect(m_sourceCombo, &QComboBox::currentIndexChanged, this, [this]() {
         reloadCategoryOptions();
     });
@@ -304,7 +331,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
 
     m_categoryCombo = new QComboBox;
     m_categoryCombo->setFixedHeight(30);
-    m_categoryCombo->setMinimumWidth(220);
+    m_categoryCombo->setMinimumWidth(180);
     m_categoryCombo->addItem("All categories", "");
     m_categoryCombo->setEnabled(false);
     row->addWidget(m_categoryCombo, 1);
@@ -313,7 +340,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     // and the soft cap. Persisted to QSettings tankorent/filter.
     m_filterCombo = new QComboBox;
     m_filterCombo->setFixedHeight(30);
-    m_filterCombo->setMinimumWidth(140);
+    m_filterCombo->setMinimumWidth(130);
     m_filterCombo->setToolTip("Filter results by seeder count");
     m_filterCombo->addItem("All",            "all");
     m_filterCombo->addItem("Hide dead",      "active");   // seeders >= 1
@@ -332,18 +359,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     // A4: Sort combo removed — sort is now driven by clicking column headers
     // (see onResultsHeaderClicked + compareResults). Default = Seeders desc (A3).
 
-    m_searchBtn = new QPushButton("Search");
-    m_searchBtn->setFixedHeight(30);
-    m_searchBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_searchBtn, &QPushButton::clicked, this, &TankorentPage::startSearch);
-    row->addWidget(m_searchBtn);
-
-    m_cancelBtn = new QPushButton("Cancel");
-    m_cancelBtn->setFixedHeight(30);
-    m_cancelBtn->setCursor(Qt::PointingHandCursor);
-    m_cancelBtn->setVisible(false);
-    connect(m_cancelBtn, &QPushButton::clicked, this, &TankorentPage::cancelSearch);
-    row->addWidget(m_cancelBtn);
+    row->addStretch(1);
 
     m_refreshBtn = new QPushButton("Refresh");
     m_refreshBtn->setFixedHeight(30);
@@ -690,13 +706,21 @@ int TankorentPage::dispatchIndexers(const QString& mediaType,
 {
     const QSet<QString> allowed = kMediaTypeIndexers.value(mediaType);
     const bool hasAllowlist = !allowed.isEmpty();
+    const bool explicitSource = (sourceFilter != "all");
 
     QSettings settings;
     auto wanted = [&](const QString& id) -> bool {
-        if (hasAllowlist && !allowed.contains(id))
+        // When the user picks a specific source, honor the explicit intent and
+        // skip the media-type allowlist. The allowlist exists to keep the
+        // "All Sources" path from spamming irrelevant trackers (e.g. YTS on a
+        // comics search); it should not second-guess an explicit pick like
+        // Nyaa+Videos for anime (Hemanth 2026-04-20).
+        if (explicitSource) {
+            if (sourceFilter != id)
+                return false;
+        } else if (hasAllowlist && !allowed.contains(id)) {
             return false;
-        if (sourceFilter != "all" && sourceFilter != id)
-            return false;
+        }
         return settings.value(
             QStringLiteral("tankorent/indexers/%1/enabled").arg(id), true).toBool();
     };
