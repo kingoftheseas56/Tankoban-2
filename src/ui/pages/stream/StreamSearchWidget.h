@@ -49,6 +49,15 @@ private:
 
     void refreshAllBadges();
 
+    // Per-section initial-display cap. Results beyond this are stashed
+    // in m_{movies,series}Overflow and surfaced via the "Show N more"
+    // button. 6 fits in a single 1700-px-wide row of 200-px tiles so a
+    // freshly-loaded search page shows one tight row per section
+    // instead of a multi-row wall before the user has oriented.
+    static constexpr int kInitialCap = 6;
+    void revealMoviesOverflow();
+    void revealSeriesOverflow();
+
     tankostream::stream::MetaAggregator* m_meta;
     StreamLibrary*                       m_library;
     QNetworkAccessManager*               m_nam;
@@ -60,12 +69,20 @@ private:
     // Split by MetaItemPreview::type (Stremio parity 2026-04-20): two
     // sections — Movies then Series — each with its own header label.
     // Header hides when its section is empty.
-    QLabel*      m_moviesHeader = nullptr;
-    TileStrip*   m_moviesStrip  = nullptr;
-    QLabel*      m_seriesHeader = nullptr;
-    TileStrip*   m_seriesStrip  = nullptr;
+    QLabel*      m_moviesHeader    = nullptr;
+    TileStrip*   m_moviesStrip     = nullptr;
+    QPushButton* m_moviesShowMore  = nullptr;
+    QLabel*      m_seriesHeader    = nullptr;
+    TileStrip*   m_seriesStrip     = nullptr;
+    QPushButton* m_seriesShowMore  = nullptr;
     // Tracked for the relevance scorer in onCatalogResults.
     QString      m_currentQuery;
+
+    // Overflow stashes for the initial-cap / "Show more" reveal. Filled
+    // at the tail of onCatalogResults (post-sort), drained by
+    // reveal{Movies,Series}Overflow when the user clicks Show more.
+    QList<tankostream::addon::MetaItemPreview> m_moviesOverflow;
+    QList<tankostream::addon::MetaItemPreview> m_seriesOverflow;
 
     QString m_posterCacheDir;
 

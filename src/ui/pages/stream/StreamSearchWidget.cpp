@@ -124,15 +124,41 @@ void StreamSearchWidget::buildUI()
         return lbl;
     };
 
+    // "Show N more" expander button. Hidden until onCatalogResults
+    // stashes more than kInitialCap tiles in the matching section;
+    // clicked once, it drains the overflow into the strip and hides
+    // itself. Left-aligned muted text so it reads as an affordance,
+    // not a primary action.
+    auto makeShowMore = [&](QWidget* parent) -> QPushButton* {
+        auto* btn = new QPushButton(parent);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFlat(true);
+        btn->setStyleSheet(
+            "QPushButton { color: rgba(255,255,255,0.65); background: transparent;"
+            " border: none; padding: 6px 2px; text-align: left;"
+            " font-size: 12px; font-weight: 500; }"
+            "QPushButton:hover { color: rgba(255,255,255,0.92); }");
+        btn->hide();
+        return btn;
+    };
+
     m_moviesHeader = makeHeader(QStringLiteral("MOVIES"));
     scrollLayout->addWidget(m_moviesHeader);
     m_moviesStrip = new TileStrip(scrollContent);
     scrollLayout->addWidget(m_moviesStrip);
+    m_moviesShowMore = makeShowMore(scrollContent);
+    scrollLayout->addWidget(m_moviesShowMore);
+    connect(m_moviesShowMore, &QPushButton::clicked,
+            this, &StreamSearchWidget::revealMoviesOverflow);
 
     m_seriesHeader = makeHeader(QStringLiteral("SERIES"));
     scrollLayout->addWidget(m_seriesHeader);
     m_seriesStrip = new TileStrip(scrollContent);
     scrollLayout->addWidget(m_seriesStrip);
+    m_seriesShowMore = makeShowMore(scrollContent);
+    scrollLayout->addWidget(m_seriesShowMore);
+    connect(m_seriesShowMore, &QPushButton::clicked,
+            this, &StreamSearchWidget::revealSeriesOverflow);
 
     scrollLayout->addStretch(1);
 
@@ -149,6 +175,10 @@ void StreamSearchWidget::clearResults()
     if (m_seriesStrip) m_seriesStrip->clear();
     if (m_moviesHeader) m_moviesHeader->hide();
     if (m_seriesHeader) m_seriesHeader->hide();
+    if (m_moviesShowMore) m_moviesShowMore->hide();
+    if (m_seriesShowMore) m_seriesShowMore->hide();
+    m_moviesOverflow.clear();
+    m_seriesOverflow.clear();
     m_tiles.clear();
     m_previewsById.clear();
 }
@@ -237,14 +267,44 @@ void StreamSearchWidget::onCatalogResults(const QList<MetaItemPreview>& results)
     m_statusLabel->setText(QString::number(results.size()) + " results");
     m_statusLabel->show();
 
-    if (!movies.isEmpty()) {
-        m_moviesHeader->show();
-        for (const MetaItemPreview& entry : movies) addResultCard(entry);
-    }
-    if (!series.isEmpty()) {
-        m_seriesHeader->show();
-        for (const MetaItemPreview& entry : series) addResultCard(entry);
-    }
+    // Initial-cap render: only the top kInitialCap per section lands in the
+    // strip on first paint so the user sees the most-relevant set at a
+    // glance (one tight row per section) instead of a multi-row wall.
+    // The rest goes into m_{movies,series}Overflow and is surfaced by the
+    // "Show N more" button under the strip.
+    auto renderCapped = [&](QList<MetaItemPreview>& bucket,
+                            QLabel* header,
+                            QPushButton* showMore,
+                            QList<MetaItemPreview>& overflow) {
+        if (bucket.isEmpty()) return;
+        header->show();
+        const int shown = std::min<int>(bucket.size(), kInitialCap);
+        for (int i = 0; i < shown; ++i) addResultCard(bucket[i]);
+        const int remaining = bucket.size() - shown;
+        if (remaining > 0) {
+            overflow.reserve(remaining);
+            for (int i = shown; i < bucket.size(); ++i)
+                overflow.append(bucket[i]);
+            showMore->setText(QStringLiteral("Show %1 more").arg(remaining));
+            showMore->show();
+        }
+    };
+    renderCapped(movies, m_moviesHeader, m_moviesShowMore, m_moviesOverflow);
+    renderCapped(series, m_seriesHeader, m_seriesShowMore, m_seriesOverflow);
+}
+
+void StreamSearchWidget::revealMoviesOverflow()
+{
+    for (const MetaItemPreview& entry : m_moviesOverflow) addResultCard(entry);
+    m_moviesOverflow.clear();
+    if (m_moviesShowMore) m_moviesShowMore->hide();
+}
+
+void StreamSearchWidget::revealSeriesOverflow()
+{
+    for (const MetaItemPreview& entry : m_seriesOverflow) addResultCard(entry);
+    m_seriesOverflow.clear();
+    if (m_seriesShowMore) m_seriesShowMore->hide();
 }
 
 void StreamSearchWidget::onCatalogError(const QString& message)
