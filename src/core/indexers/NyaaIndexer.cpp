@@ -45,6 +45,7 @@ void NyaaIndexer::fetchPage(const QString& query, const QString& categoryId, int
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "text/html,application/xhtml+xml,*/*");
     req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+    req.setTransferTimeout(15000);
 
     startRequestTimer();
     auto *reply = m_nam->get(req);

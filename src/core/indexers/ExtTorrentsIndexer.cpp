@@ -51,6 +51,7 @@ void ExtTorrentsIndexer::tryNextUrl()
     req.setHeader(QNetworkRequest::UserAgentHeader,
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "text/html,*/*");
+    req.setTransferTimeout(10000);  // per-candidate cap; 6 candidates × 10s = 60s worst case
 
     startRequestTimer();
     auto *reply = m_nam->get(req);
@@ -103,7 +104,16 @@ QList<ExtTorrentsIndexer::ListRow> ExtTorrentsIndexer::parseListPage(const QStri
         QRegularExpression::DotMatchesEverythingOption);
     static const QRegularExpression tdRe("<td[^>]*>(.*?)</td>",
         QRegularExpression::DotMatchesEverythingOption);
-    static const QRegularExpression detailRe("<a[^>]*href=\"(/post-detail/[^\"]+)\"[^>]*>([^<]+)</a>");
+    // Detail URL: always present on the /post-detail/ link.
+    static const QRegularExpression detailPathRe("<a[^>]*href=\"(/post-detail/[^\"]+)\"");
+    // Current extto.org wraps the title in <span class="name"><b>TITLE</b></span>;
+    // older layouts put the title as direct text inside the <a>. Try the modern
+    // shape first, fall back to the legacy shape so we don't silently break
+    // again if the site reverts.
+    static const QRegularExpression titleSpanRe(
+        "<span class=\"name\"><b>([^<]+)</b></span>");
+    static const QRegularExpression legacyTitleRe(
+        "<a[^>]*href=\"/post-detail/[^\"]+\"[^>]*>([^<]+)</a>");
     static const QRegularExpression magnetRe("href=\"(magnet:\\?[^\"]+)\"");
     static const QRegularExpression cssClassRe("class=\"([^\"]+)\"");
     static const QRegularExpression tagStripRe("<[^>]+>");
@@ -122,10 +132,17 @@ QList<ExtTorrentsIndexer::ListRow> ExtTorrentsIndexer::parseListPage(const QStri
 
         ListRow lr;
 
-        auto dm = detailRe.match(cells[0]);
-        if (dm.hasMatch()) {
-            lr.detailPath = dm.captured(1);
-            lr.title = dm.captured(2).trimmed();
+        auto pm = detailPathRe.match(cells[0]);
+        if (pm.hasMatch())
+            lr.detailPath = pm.captured(1);
+
+        auto tm = titleSpanRe.match(cells[0]);
+        if (tm.hasMatch()) {
+            lr.title = tm.captured(1).trimmed();
+        } else {
+            auto lm = legacyTitleRe.match(cells[0]);
+            if (lm.hasMatch())
+                lr.title = lm.captured(1).trimmed();
         }
         if (lr.title.isEmpty())
             continue;
@@ -206,6 +223,7 @@ void ExtTorrentsIndexer::fetchDetailPages()
         req.setHeader(QNetworkRequest::UserAgentHeader,
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
         req.setRawHeader("Accept", "text/html,*/*");
+        req.setTransferTimeout(10000);
 
         auto *reply = m_nam->get(req);
         connect(reply, &QNetworkReply::finished, this, [this, reply, i]() {

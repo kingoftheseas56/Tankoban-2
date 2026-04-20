@@ -30,6 +30,7 @@ void PirateBayIndexer::search(const QString& query, int limit, const QString& ca
     req.setHeader(QNetworkRequest::UserAgentHeader,
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
     req.setRawHeader("Accept", "application/json,*/*");
+    req.setTransferTimeout(15000);
 
     startRequestTimer();
     auto *reply = m_nam->get(req);

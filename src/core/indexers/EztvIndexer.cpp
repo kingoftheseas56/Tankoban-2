@@ -91,6 +91,7 @@ void EztvIndexer::tryNextMirror()
         ? QByteArray(kEztvDefaultCookie)
         : userCookie.toUtf8();
     req.setRawHeader("Cookie", cookie);
+    req.setTransferTimeout(10000);  // fail fast per mirror so fallback can advance
 
     startRequestTimer();
     auto *reply = m_nam->get(req);

@@ -136,6 +136,7 @@ void X1337xIndexer::performSearch(const QString& query, int limit, const QString
     req.setRawHeader("Accept", "text/html,*/*");
     if (!cf.isEmpty())
         req.setRawHeader("Cookie", "cf_clearance=" + cf.toUtf8());
+    req.setTransferTimeout(15000);
 
     startRequestTimer();
     auto *reply = m_nam->get(req);
@@ -280,6 +281,7 @@ void X1337xIndexer::fetchDetailPages(const QList<ListRow>& rows, int limit)
         req.setHeader(QNetworkRequest::UserAgentHeader,
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
         req.setRawHeader("Accept", "text/html,*/*");
+        req.setTransferTimeout(15000);
 
         auto *reply = m_nam->get(req);
         connect(reply, &QNetworkReply::finished, this, [this, reply, i]() {
