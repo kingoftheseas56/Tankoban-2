@@ -53,6 +53,7 @@ StreamSearchWidget::StreamSearchWidget(MetaAggregator* meta, StreamLibrary* libr
 void StreamSearchWidget::search(const QString& query)
 {
     clearResults();
+    m_currentQuery = query.trimmed().toLower();
     // Phase 4 Batch 4.1 — full-page "Searching..." label removed; the subtle
     // spinner in StreamPage's search bar is the loading affordance (TODO
     // explicitly calls out "not a full-page Searching state"). Status label
@@ -109,10 +110,34 @@ void StreamSearchWidget::buildUI()
     auto* scrollContent = new QWidget();
     auto* scrollLayout = new QVBoxLayout(scrollContent);
     scrollLayout->setContentsMargins(16, 8, 16, 16);
-    scrollLayout->setSpacing(0);
+    scrollLayout->setSpacing(12);
 
-    m_strip = new TileStrip(scrollContent);
-    scrollLayout->addWidget(m_strip, 1);
+    // Stremio-parity section layout: Movies first, then Series. Each
+    // section has a small-caps header + its own TileStrip. Headers hide
+    // when the section is empty so a movies-only or series-only query
+    // doesn't show a dangling "SERIES" label with no tiles under it.
+    auto makeHeader = [&](const QString& text) -> QLabel* {
+        auto* lbl = new QLabel(text, scrollContent);
+        lbl->setStyleSheet(
+            "color: rgba(255,255,255,0.55); font-size: 11px; font-weight: 600;"
+            " letter-spacing: 1.5px; padding: 4px 0 2px 0;");
+        return lbl;
+    };
+
+    m_moviesHeader = makeHeader(QStringLiteral("MOVIES"));
+    scrollLayout->addWidget(m_moviesHeader);
+    m_moviesStrip = new TileStrip(scrollContent);
+    scrollLayout->addWidget(m_moviesStrip);
+
+    m_seriesHeader = makeHeader(QStringLiteral("SERIES"));
+    scrollLayout->addWidget(m_seriesHeader);
+    m_seriesStrip = new TileStrip(scrollContent);
+    scrollLayout->addWidget(m_seriesStrip);
+
+    scrollLayout->addStretch(1);
+
+    m_moviesHeader->hide();
+    m_seriesHeader->hide();
 
     m_scroll->setWidget(scrollContent);
     root->addWidget(m_scroll, 1);
@@ -120,7 +145,10 @@ void StreamSearchWidget::buildUI()
 
 void StreamSearchWidget::clearResults()
 {
-    m_strip->clear();
+    if (m_moviesStrip) m_moviesStrip->clear();
+    if (m_seriesStrip) m_seriesStrip->clear();
+    if (m_moviesHeader) m_moviesHeader->hide();
+    if (m_seriesHeader) m_seriesHeader->hide();
     m_tiles.clear();
     m_previewsById.clear();
 }
@@ -144,10 +172,79 @@ void StreamSearchWidget::onCatalogResults(const QList<MetaItemPreview>& results)
         return;
     }
 
-    m_statusLabel->setText(QString::number(results.size()) + " results");
+    // Stremio-parity (2026-04-20): split into Movies vs Series sections,
+    // then sort each section by a relevance score keyed on the user's
+    // query. Addons return results in their own arbitrary order (often
+    // popularity-only, which misbehaves when you search for a specific
+    // title and a more-popular loosely-matched title sorts first).
+    QList<MetaItemPreview> movies;
+    QList<MetaItemPreview> series;
+    for (const MetaItemPreview& entry : results) {
+        const QString type = entry.type.toLower();
+        if (type == QLatin1String("series")) {
+            series.append(entry);
+        } else {
+            // Default bucket = movies. Also catches "movie" and any
+            // adjacent types (anime → "series" upstream in most addons,
+            // but defensive for unmapped types).
+            movies.append(entry);
+        }
+    }
 
-    for (const MetaItemPreview& entry : results)
-        addResultCard(entry);
+    // Relevance scoring. Higher = better match to the current query.
+    // Tiers:
+    //   exact title match (case-insensitive)            → 1000
+    //   title starts with query                         → 500
+    //   query matches a word boundary in the title      → 300
+    //   query appears anywhere in the title (substring) → 100
+    //   otherwise                                       → 0
+    // Ties broken by (a) rating DESC, (b) year DESC — recent popular
+    // content wins over old obscure content among equal-match tiers.
+    const QString q = m_currentQuery;
+    auto relevance = [&q](const MetaItemPreview& e) -> int {
+        if (q.isEmpty()) return 0;
+        const QString name = e.name.toLower();
+        if (name == q)                        return 1000;
+        if (name.startsWith(q))               return 500;
+        // Word-boundary: query appears at the start of any whitespace-
+        // delimited word in the title (e.g. "piece" matches "one piece"
+        // stronger than "masterpiece").
+        if (name.contains(QStringLiteral(" ") + q)) return 300;
+        if (name.contains(q))                 return 100;
+        return 0;
+    };
+    auto sortByRelevance = [&](QList<MetaItemPreview>& list) {
+        std::sort(list.begin(), list.end(),
+            [&](const MetaItemPreview& a, const MetaItemPreview& b) {
+                const int ra = relevance(a);
+                const int rb = relevance(b);
+                if (ra != rb) return ra > rb;
+                // Rating tiebreak (parse as float; empty → 0).
+                const double raRat = a.imdbRating.toDouble();
+                const double rbRat = b.imdbRating.toDouble();
+                if (qFuzzyCompare(1.0 + raRat, 1.0 + rbRat) == false)
+                    return raRat > rbRat;
+                // Year tiebreak (releaseInfo is "2023" or "2023–2025";
+                // compare on leading 4 chars as int).
+                const int aY = a.releaseInfo.left(4).toInt();
+                const int bY = b.releaseInfo.left(4).toInt();
+                return aY > bY;
+            });
+    };
+    sortByRelevance(movies);
+    sortByRelevance(series);
+
+    m_statusLabel->setText(QString::number(results.size()) + " results");
+    m_statusLabel->show();
+
+    if (!movies.isEmpty()) {
+        m_moviesHeader->show();
+        for (const MetaItemPreview& entry : movies) addResultCard(entry);
+    }
+    if (!series.isEmpty()) {
+        m_seriesHeader->show();
+        for (const MetaItemPreview& entry : series) addResultCard(entry);
+    }
 }
 
 void StreamSearchWidget::onCatalogError(const QString& message)
@@ -191,7 +288,13 @@ void StreamSearchWidget::addResultCard(const MetaItemPreview& entry)
         emit metaActivated(it.value());
     });
 
-    m_strip->addTile(card);
+    // Route to the correct section strip (Stremio parity). Everything
+    // that isn't explicitly "series" goes in Movies.
+    TileStrip* targetStrip =
+        (entry.type.toLower() == QLatin1String("series"))
+            ? m_seriesStrip
+            : m_moviesStrip;
+    if (targetStrip) targetStrip->addTile(card);
     m_tiles.push_back(card);
     m_previewsById.insert(entry.id, entry);
 
@@ -219,6 +322,12 @@ void StreamSearchWidget::downloadPoster(const QString& imdbId, const QString& po
     req.setHeader(QNetworkRequest::UserAgentHeader,
         QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
     req.setTransferTimeout(10000);
+    // See CatalogBrowseScreen::ensurePoster — Qt6 default redirect
+    // policy is ManualRedirectPolicy, which silently drops poster
+    // CDN 301/302 responses. Explicit NoLessSafeRedirectPolicy fixes
+    // missing search-result thumbnails (2026-04-20).
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
 
     QPointer<TileCard> guard(card);
     auto* reply = m_nam->get(req);

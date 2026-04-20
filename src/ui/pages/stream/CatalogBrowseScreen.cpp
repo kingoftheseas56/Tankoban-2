@@ -355,16 +355,32 @@ void CatalogBrowseScreen::ensurePoster(const QString& metaId,
                   QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                                  " AppleWebKit/537.36"));
     req.setTransferTimeout(10000);
+    // Follow redirects — image CDNs (images.metahub.space etc.) commonly
+    // 301/302 and Qt6's default ManualRedirectPolicy drops the reply with
+    // no payload. Without this, `reply->error() == NoError` but
+    // `readAll()` returns zero bytes and the .jpg never writes to cache
+    // (symptom: catalog tiles show placeholder letters only). Reported
+    // 2026-04-20.
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
 
     QPointer<TileCard> guard(card);
     QNetworkReply* reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [reply, path, guard]() {
+    const QString diagId = metaId;
+    const QString diagUrl = posterUrl.toString();
+    connect(reply, &QNetworkReply::finished, this, [reply, path, guard, diagId, diagUrl]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning("CatalogBrowseScreen: poster %s fetch failed: %s (url=%s)",
+                     qUtf8Printable(diagId),
+                     qUtf8Printable(reply->errorString()),
+                     qUtf8Printable(diagUrl));
             return;
         }
         const QByteArray bytes = reply->readAll();
         if (bytes.isEmpty()) {
+            qWarning("CatalogBrowseScreen: poster %s got empty body (url=%s)",
+                     qUtf8Printable(diagId), qUtf8Printable(diagUrl));
             return;
         }
         QFile out(path);

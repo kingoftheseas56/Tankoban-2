@@ -431,12 +431,16 @@ void StreamPage::buildSearchBar()
     connect(m_catalogBtn, &QPushButton::clicked,
             this, &StreamPage::onCatalogBtnClicked);
 
-    // Phase 4 Batch 4.1 — live-search debounce. 300ms after the last
-    // textChanged event, onSearchDebounceFired runs the deferred logic.
-    // Enter / Search button path stays as-is for instant fire.
+    // Live-search debounce. 800 ms after the last textChanged event,
+    // onSearchDebounceFired runs the deferred logic. Enter / Search
+    // button path stays as-is for instant fire. Raised from 300 → 800 ms
+    // on 2026-04-20 after Hemanth reported the prior cadence fired
+    // mid-typing (typical mid-word pauses exceed 300 ms). 800 ms matches
+    // Stremio's own live-search debounce — the reference behaviour for
+    // this page.
     m_searchDebounce = new QTimer(this);
     m_searchDebounce->setSingleShot(true);
-    m_searchDebounce->setInterval(300);
+    m_searchDebounce->setInterval(800);
     connect(m_searchDebounce, &QTimer::timeout,
             this, &StreamPage::onSearchDebounceFired);
     connect(m_searchInput, &QLineEdit::textChanged,

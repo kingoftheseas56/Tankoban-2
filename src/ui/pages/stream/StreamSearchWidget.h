@@ -54,10 +54,18 @@ private:
     QNetworkAccessManager*               m_nam;
 
     // UI
-    QPushButton* m_backBtn     = nullptr;
-    QLabel*      m_statusLabel = nullptr;
-    QScrollArea* m_scroll      = nullptr;
-    TileStrip*   m_strip       = nullptr;
+    QPushButton* m_backBtn      = nullptr;
+    QLabel*      m_statusLabel  = nullptr;
+    QScrollArea* m_scroll       = nullptr;
+    // Split by MetaItemPreview::type (Stremio parity 2026-04-20): two
+    // sections — Movies then Series — each with its own header label.
+    // Header hides when its section is empty.
+    QLabel*      m_moviesHeader = nullptr;
+    TileStrip*   m_moviesStrip  = nullptr;
+    QLabel*      m_seriesHeader = nullptr;
+    TileStrip*   m_seriesStrip  = nullptr;
+    // Tracked for the relevance scorer in onCatalogResults.
+    QString      m_currentQuery;
 
     QString m_posterCacheDir;
 
