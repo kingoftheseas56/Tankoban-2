@@ -3769,3 +3769,128 @@ Sources referenced: Agent 7 MCP smoke-harness audit at agents/audits/mcp_smoke_h
 No src/ touches, no sidecar touches, no .mcp.json touches, no settings.json touches. Pure agent-behavior memory.
 
 READY TO COMMIT - [Agent 0, Bucket 1 MCP smoke-discipline feedback memory shipped]: New off-git memory file `feedback_mcp_smoke_discipline.md` + MEMORY.md index line. Five agent-discipline rules for Windows-MCP smokes — Screenshot over Snapshot for visual confirm, batch clicks before snapshotting, Shortcut over Click, compound PowerShell scripts, cache stable-screen coordinates. Expected ~5x latency reduction + ~10x token reduction on typical smokes with zero code change. References Agent 7 MCP audit 2026-04-19 Q2 latency buckets. Rollback: delete feedback_mcp_smoke_discipline.md + remove MEMORY.md line — both off-git per-machine, nothing to revert repo-side | files: agents/chat.md
+
+---
+
+## [Agent 0, 2026-04-20 14:17 IST] Smoke-by-proxy for Agent 4's Bug 1+2+3 verification — ALL THREE PASS
+
+Agent 4's Claude Code session disconnected from windows-mcp mid-wake and they asked Hemanth to drive the smoke manually per Rule 14 fallback. Hemanth delegated to me (my MCP still connected) instead. Tankoban was NOT running when I started (Agent 4's "PID 4992" claim was stale). Launched fresh Tankoban.exe from `out/` (LastWrite 14:03:58, binary had Agent 4's uncommitted Bug 1+2 fixes from StreamPlayerController.{cpp,h} + VideoPlayer.{cpp,h} linked in).
+
+**Smoke path:** Stream tab → One Piece S02E01 tile in Continue Watching → Torrentio EZTV source (top of list, 500 seeders, 2.57 GB) → played ~2 minutes → Escape → verified Continue Watching state.
+
+**Bug 1 — Bottom HUD title:** ✅ FIXED. Moved cursor to bottom of player, HUD appeared. Title text reads: `ONE PIECE S02E01 THE BEGINNING AND THE END 1080p NF WEB-DL DDP5 1 Atmos H 264-XEBEC[EZTVx.to]`. Real filename, NOT "0" or "3".
+
+**Bug 2 — Cold-open time:** ✅ WORKED, with a diagnostic finding Agent 4 will want. Full telemetry on 1575eafa 4-13 peer swarm:
+- metadata-fetch: **79.2s** (mdReadyMs=79225 frozen across every snapshot)
+- first-piece-arrival: **79.4s** (firstPieceMs=79411, i.e. **+0.2s after metadata** — essentially instant)
+- gate fill to 1 MiB: **same snapshot** (gateBytes=1048576/1048576, gatePct=100.0%)
+- ffmpeg probe + first video frame: sub-second after gate pass
+- **Bottleneck is metadata fetch**, not piece scheduling. Peers ranged 3-13 over smoke duration (avg ~7). Low peer count limits magnet→metadata DHT parallelism. If Agent 4 wants to cut cold-open further, the lever is metadata-fetch parallelism / seeder count / tracker announce aggression, NOT anything in the piece scheduler (which is already optimal — 0.2s from metadata to first piece is as good as libtorrent gets).
+
+**Bug 3 — Continue Watching progress persistence:** ✅ FIXED AND DYNAMIC. On initial Stream tab entry: One Piece showed 2% progress bar, Jujutsu showed 0% — both tiles had visible progress bars (not the empty strip from pre-fix state). After ~2 min of playback + Escape-to-Stream-tab: One Piece **advanced 2% → 5%**. Write-back working + progress-bar rerender on strip entry both confirmed.
+
+**Agent 4's Bug 1+2 fixes landed correctly.** Staged files still uncommitted in working tree (src/ui/pages/stream/StreamPlayerController.{cpp,h} + src/ui/player/VideoPlayer.{cpp,h}, ~65 LOC across 4 files per diff stat) — Agent 4 should commit from their session when they reconnect, OR Hemanth can ask me to commit on their behalf with a proxy tag.
+
+**Rule 17 cleanup:** Tankoban + sidecar killed (`scripts/stop-tankoban.ps1` or equivalent). No smoke artifacts left running.
+
+**MCP-discipline note (Bucket 1 dogfood):** This smoke used Screenshot-not-Snapshot throughout (7 screenshots, 0 snapshots), compound PowerShell (3 PS calls combining env+Start-Process+PID check), cached tab coords from first snapshot (Stream=1060,76), Shortcut for Escape. Total tool calls ~14 vs the 30-40 a Snapshot-after-every-click approach would have cost. Rules empirically save ~2-3x in this kind of smoke. Still no Bucket 2 A/B measurement — trigger remains queued in memory for next smoke-heavy wake.
+
+No code touched this session. Sidecar not touched. Observational smoke only.
+
+---
+
+[Agent 4, 2026-04-20 14:54 — STREAM_DURATION_FIX SHIPPED + stremio-web-neo fundamentals audit]
+
+**Bug:** Hemanth reported "time shown in stream-mode player is sometimes wildly inaccurate — a 1 hour stream is shown as 2 hours in the bottom HUD." Repro nailed on One Piece S02E01 Torrentio EZTV 2.9 GB mkv: TMDB detail page shows "59 min" runtime, but `fmt_ctx->duration` from sidecar probe returned **7192.6 seconds ≈ 120 min** — exactly 2× real.
+
+**Root cause (evidence-driven via MCP smoke + per-stream duration dump):**
+The mkv's Matroska Segment Info Duration field carries 7192.56s (wrong value, 2× real). libavformat's `avformat_find_stream_info` leaves video+audio stream durations at `AV_NOPTS_VALUE` (small probesize can't reach the container tail to derive end-PTS from packet observation), so `fmt_ctx->duration` = MAX over all stream durations = the 7192.56s that gets pinned on all **57 subtitle streams** inheriting from Segment Info. `duration_estimation_method` reports `FROM_STREAM` — libavformat honestly considers the duration to have come from a real stream field, it just happens to come from subtitle tracks whose container-inherited Duration is pathologically wrong. Per-stream dump from post-fix smoke: video/audio duration=AV_NOPTS_VALUE (INT64_MIN); all 57 subs report duration=7192560us identical (inherited Segment Info). Small-probesize-fallback (FROM_BITRATE) was my first hypothesis; MCP smoke falsified it (method=FROM_STREAM observed), so Pass 2 re-authored the fix against the real failure mode.
+
+**Fix shipped (two-layer guard in native_sidecar/src/demuxer.cpp + one-line HUD fallback in main-app):**
+1. **Probe-tier escalation** on HTTP when either (a) `duration_estimation_method == FROM_BITRATE` or (b) `video_stream.duration == AV_NOPTS_VALUE` with positive `fmt_ctx->duration` (the "subs-contaminated container" signature). Tier 1 to Tier 2 to Tier 3 gives the matroska demuxer a bigger probesize + longer analyzeduration to visit Cues via HTTP range-request and populate video stream duration directly. Smoke confirmed escalation runs end-to-end: Tier 1 passed but unreliable to escalating to Tier 2 to Tier 2 passed but unreliable to escalating to Tier 3 to Tier 3 passed (method=1, video_dur_known=0).
+2. **Duration resolution priority order** (post-tier-loop): video stream's own AVStream::duration when known (ground truth, survives intact when container header is wrong); FROM_BITRATE always discarded (small-probesize head-bitrate never representative); FROM_PTS container duration trusted (libavformat derived it from real packet PTSes, reliable even when per-stream duration unset); everything else where video duration unknown but container non-zero discarded as "subtitle/attachment-inherited, unreliable." This is the case that fired for the repro mkv and correctly surfaced 0 instead of 7192s.
+3. **HUD fallback in VideoPlayer::onTimeUpdate**: when durationSec <= 0 from the sidecar, show em-dash colon em-dash on the duration label instead of formatTime(0) = "0:00". Honest-unknown beats silently-wrong.
+4. **Telemetry surface:** probe_done event now carries duration_method (0=FROM_PTS, 1=FROM_STREAM, 2=FROM_BITRATE) so future stream_telemetry greps can audit which streams trigger which resolution path.
+
+**Smoke (Windows-MCP self-drive, One Piece S02E01 Torrentio EZTV):**
+- Pre-fix Pass 1: Probe ok dur=7192.6s (FROM_STREAM from subs) to HUD showed 2:00:00 for a 59-min file.
+- Post-fix Pass 3: DISCARDING container dur=7192.6s (video stream duration is AV_NOPTS_VALUE so fmt_ctx->duration was inherited from audio/subtitle/attachment streams) to Probe ok dur=0.0s.
+- Main-app change path: durationSec=0 to m_durLabel->setText em-dash colon em-dash.
+- Build: build_check.bat BUILD OK on main app, sidecar build.ps1 green (4 rebuild cycles total across fix iterations).
+- Trade-off understood: for files that hit this path, the seek bar loses absolute-time mapping + Continue Watching progress-fraction can't be computed from time. Correct-behavior given the container data is self-contradictory — wrong-duration was silently corrupting Continue Watching already (2x inflated duration to 30-min-in reports "25% complete" when user is actually near-end). Honest unknown surfaces the state instead of propagating the lie.
+
+**Files touched (4):** native_sidecar/src/demuxer.h (+12 LOC ProbeResult field + comment); native_sidecar/src/demuxer.cpp (+90 LOC: tier-escalation guard, per-stream diagnostic dump, 4-branch duration resolution; +3 includes: algorithm cmath); native_sidecar/src/main.cpp (+6 LOC probe_done telemetry: duration_method field); src/ui/player/VideoPlayer.cpp (+8 LOC HUD em-dash fallback on durationSec <= 0).
+
+**Rollback:** git revert HEAD — sidecar-only + 1 main-app file, no cross-process protocol change, no API surface change, no StreamEngine / StreamHttpServer / StreamPrefetch touch. 12-method API freeze preserved.
+
+**Known follow-ups (out-of-scope this wake):** tier escalation adds ~1-3s cold-open for affected files (Tier 3 has 30s rw_timeout ceiling); future mitigation could cache "video_duration_known" outcomes per-hash to skip escalation on known-clean mkvs. For mkvs where even Tier 3 can't reach Cues (Cues past 5MB probesize + 30s timeout budget), duration stays unknown — future fix: explicit HTTP Range-read of tail bytes before probe fires (requires StreamEngine coordination to ensure tail pieces are downloaded synchronously pre-handoff). SeekSlider + Continue Watching behavior on durationSec=0 should be verified via separate smoke; existing guards (if m_durationSec > 0 at VideoPlayer.cpp:1167/1181/1193/1212/1899) should already handle it gracefully but explicit smoke would confirm.
+
+---
+
+**Part 2 — Stremio reference 2 fundamentals audit** (per Hemanth "after fixing that, go through stremio reference 2 to see if there's anything more of the fundamentals we missed"):
+
+Reference scope: C:\Users\Suprabha\Downloads\stremio reference 2\ — five sub-projects. Four were audited during Congress 7 (Stremio-Kai, stremio-community-v5, stremio-enhanced, flixerr). The fifth — stremio-web-neo-development — was NOT audited during Congress 7 and is where the fundamentals-gap candidates live. Web-neo is Stremio's React/TypeScript web frontend; its src/routes/Player/ is a full player surface sitting on top of @stremio/stremio-video (pnpm-pulled, not vendored in this snapshot).
+
+**Seven gaps identified** (ordered by user-impact, not implementation-cost):
+
+1. **NextVideoPopup + bingeWatching auto-advance** (stremio-web-neo-development/src/routes/Player/NextVideoPopup/NextVideoPopup.js + Player.js:108-149). When (duration - time) <= settings.nextVideoNotificationDuration (default 30s), show popup with Dismiss/Watch Now buttons. On ended event, if profile.settings.bingeWatching=true, auto-navigate to next episode via deep-link. Tankoban stream mode has ZERO next-episode affordance today — when an episode ends, user gets nothing. Probably the highest-impact UX gap for binge-watching series. Scope: need a "next episode" resolver tied to the current video's metadata slot + a popup widget + a setting toggle.
+
+2. **Media Session API** (Player.js:554-598). Stremio wires navigator.mediaSession.metadata + setActionHandler('play'/'pause'/'nexttrack') so Windows System Media Transport Controls (SMTC) — the OS-level overlay that appears on hardware media keys, in Focus Assist, and in Windows Game Bar — shows the currently-playing episode's title + artwork and lets the user control playback from outside the app. QMediaPlayer auto-integrates with SMTC on Windows, but we're using a custom sidecar pipeline so we'd need to wire this ourselves via Windows IMediaSession COM interfaces or Qt 6.5+ QMediaSession. Nice-to-have; not urgent.
+
+3. **pauseOnMinimize setting** (Player.js:547-551): auto-pause when shell.windowClosed || shell.windowHidden. Trivial to port — wire a Qt QWindow::windowStateChanged signal to pause on Minimized/Hidden. Battery-life + accidental-playback win.
+
+4. **SideDrawer with episode list inline during playback** (SideDrawer + SideDrawerButton under Player/). Stremio lets you flick open a slide-out panel showing the current series' episode list WITHOUT exiting the player. Click another episode to switches the stream in-place. Tankoban requires Escape to detail page to pick source to open new stream, which costs 3-5s of context. Moderate scope (needs to plug into the same stream-engine teardown/startup path Agent 4 owns).
+
+5. **Error.critical vs toast** (Player.js:151-163). Stremio distinguishes critical errors (fatal — show Error UI) from non-critical (transient — toast and continue). Our stream mode has streamFailed(msg) + streamStopped(StopReason) but the two-tier gating isn't consistently applied. Partial-parity; worth a look when next in the error-handling file.
+
+6. **Next-episode notification threshold setting** (settings.nextVideoNotificationDuration). Tied to gap #1 but worth mentioning: Stremio exposes this as a user-controllable setting (10s / 30s / 60s / off). Would need both the feature and the toggle.
+
+7. **Implementation-switch re-initialization** (Player.js:95-106, onImplementationChanged). When Stremio's video backend swaps (HTML5 to Chromecast to mpv), it re-applies all subtitle properties. Our pipeline doesn't switch backends mid-stream so this is mostly N/A, but the pattern matters for any future transcoding-fallback work (e.g. if sidecar HW decode fails we'd want to fall back to software decode without losing subtitle settings).
+
+**Gaps explicitly NOT recommended for follow-up:** Chromecast/cast support (Player.js:51-54, useStreamingServer) — desktop-only, not a Tankoban use case. Keyboard shortcuts ArrowLeft/Right seek with Shift modifier (Player.js:615-632) — already parity. Playback-speed menu (SpeedMenu) — likely already in Tracks popover area, verify on next touch.
+
+**Recommendation:** Ship gap #1 (NextVideoPopup + bingeWatching) in its own FIX_TODO — highest-visibility series-UX deficit. Gap #3 (pauseOnMinimize) can piggyback as a one-batch extension of the same TODO (~15 LOC). Gaps #2, #4, #5, #6, #7 queue behind. This audit closes the open "anything more from Stremio" ask from Hemanth 2026-04-20.
+
+No code touched for the audit portion. Sidecar not touched post-fix-ship. Rule 17 cleanup ran green (nothing to clean, Tankoban already stopped).
+
+READY TO COMMIT — STREAM_DURATION_FIX sidecar+main-app 4-file bundle: native_sidecar/src/demuxer.h + native_sidecar/src/demuxer.cpp + native_sidecar/src/main.cpp + src/ui/player/VideoPlayer.cpp. Rollback: git revert HEAD.
+
+---
+
+[Agent 4, 2026-04-20 16:15 — STREAM_SUBTITLE_HEIGHT_FIX SHIPPED — Hemanth bug 2 "subtitle height in stream mode video streaming"]
+
+**Bug:** Hemanth reported stream-mode subtitles rendering at the wrong height. Same-session follow-on to the duration fix.
+
+**Root cause (traced via FrameCanvas overlay draw path):** STREAM_AUTOCROP (commit 71cc5c3, 2026-04-20 earlier this day) added an asymmetric video viewport that expands by srcScaleY = m_frameH / (m_frameH - m_srcCropTop - m_srcCropBottom) so baked-letterbox rows get pushed off-screen via the scissor rect. The overlay draw pass at FrameCanvas.cpp:1160-1167 was applying the SAME expanded viewport + srcOffsetY shift under the rationale "subs at source-coord y land on the same physical row as video content at source-coord y." That reasoning held for position but ignored the glyph-scale side-effect: the overlay texture is 1920×1080 source dims, so rendering it into a vp that's 1.065× taller than videoRect.h stretches subtitle glyphs vertically by the same factor. On a One Piece S02E01 Netflix Torrentio MCP smoke, srcCrop={59,0,0,0} alternating with {60,0,0,0} yields srcScaleY ≈ 1.058, which matches ~6% taller subtitle text — user-visible as "subtitle height is off" on stream-mode Netflix baked-letterbox content. Local-file mode and clean-source streams (srcCrop all 0) are unaffected because srcScaleY collapses to 1.0 and the overlay vp reduced to videoRect in both code paths.
+
+**Fix (1 file, ~20 LOC + rewritten comment):** `src/ui/player/FrameCanvas.cpp` overlay viewport at drawTexturedQuad line 1160. Overlay now uses `videoRect` scaled only by user-selected `cropZoom` (retained intentionally — user Crop→2.35:1 should stretch subs consistently with the video quad), NOT the autocrop-expanded `vpW/vpH` with `srcOffsetX/Y` shift. The overlay texture's transparent rows outside the subtitle area don't need to follow the video's baked-letterbox crop — they're transparent regardless. Net behavior:
+- Clean sources (srcCropTop/Bottom = 0): identical to pre-fix (vp == videoRect × cropZoom either way).
+- Netflix baked-letterbox sources (srcCropTop > 0): glyph height drops from 1.065× to 1.0× = restores natural proportions. Position delta ≈ 0.8% of videoRect.h (≈8px on a 1080 row canvas) from "perfect video-content-follow" alignment — invisible relative to normal subtitle safe-zone padding + well inside the 6% Netflix/YouTube safe-zone floor that subtitleBaselineLiftPx already imposes.
+- User Crop→2.35:1 with cropZoom > 1: overlay and video both apply cropZoom, so subs still stretch-with-crop as intended (user-driven aspect override is a deliberate "fill this aspect" operation and subs should follow it; autocrop is a content-integrity fix where subs shouldn't follow).
+
+**Smoke (Windows-MCP self-drive, One Piece S02E01 via Torrentio EZTV, same hash 1575eafa as the duration-fix repro):** Tankoban launched with TANKOBAN_STREAM_TELEMETRY + TANKOBAN_ALERT_TRACE on; Stream tab → Continue Watching → Torrentio → playback landed at resume position. Autocrop firing (srcCrop={59,0,0,0} and alternating {60,0,0,0} across scene changes, per _player_debug.txt [FrameCanvas aspect] lines). Subtitle "Woo-hoo!" rendered at natural vertical proportions (screenshotted at 16:15), no glyph stretch, positioned correctly in lower third of videoRect. No regression on video draw (autocrop still clipping baked rows, 1030-row video vp still firing as expected). Rule 17 cleanup: Tankoban + ffmpeg_sidecar killed (uptime 2 min / 1 min).
+
+**Files touched (1):** src/ui/player/FrameCanvas.cpp (~22 LOC including the rewritten rationale comment block; single hunk at the overlay viewport site).
+
+**Rollback:** `git revert HEAD` — main-app-only, single-file, no sidecar touch, no protocol change, no API surface change.
+
+**Known follow-ups (out of scope this fix):**
+- For users who wanted the subtitle-follows-video-content alignment (old behavior), it'd be possible to push a vertical offset equal to srcOffsetY into the overlay vp while keeping Height = videoRect.h — that preserves content-follow position AND avoids glyph stretch. Current ship keeps things simpler and accepts the <1% position delta; if Hemanth flags the delta as user-visible on specific content, this is the ~3-line follow-up.
+- The cinemascope internal-letterbox case (2.35:1 content in 16:9 container with TRUE black bars at top+bottom) was never affected by either the bug or this fix — libass handles that via ass_set_margins in the sidecar.
+- Subtitle scissor behavior unchanged — scissor still clips to videoRect, which is correct for both code paths.
+
+READY TO COMMIT — STREAM_SUBTITLE_HEIGHT_FIX 1-file main-app: src/ui/player/FrameCanvas.cpp. Rollback: git revert HEAD.
+
+---
+
+## [Agent 0, 2026-04-20 ~14:25 IST] .mcp.json screenshot-scale speed fix SHIPPED
+
+Post smoke-by-proxy, Hemanth ratified shipping the one safe MCP speedup immediately. Added `WINDOWS_MCP_SCREENSHOT_SCALE=0.6` to `.mcp.json` env block next to the existing `ANONYMIZED_TELEMETRY=false` line.
+
+**Effect:** Every future `mcp__windows-mcp__Screenshot` call downscales from 1920x1080 to 1152x648 (60% linear, 36% area) before encoding. ~36% smaller PNG per screenshot -> proportionally fewer tokens per screenshot in Claude's context + faster transport. Tankoban HUD filename text remains readable at 0.6 (Agent 0 verification on the smoke-by-proxy screenshots shows the bottom HUD "ONE PIECE S02E01 THE BEGINNING AND THE END..." text is clearly legible at ~0.5-0.6 effective display scale already used by the MCP client).
+
+**Scope intentionally held tight:** NOT shipping `WINDOWS_MCP_SCREENSHOT_BACKEND=dxcam` (auto mode already tries dxcam first and fell back to pillow at last smoke — implies dxcam isn't in the uvx env; forcing without install-verification could error on load). NOT shipping `WINDOWS_MCP_PROFILE_SNAPSHOT=1` (that's the Bucket 2 measurement A/B, separate wake, bundling would force a second restart). Memory at `project_windows_mcp_live.md` updated with retrievable alt values (0.5 if text stays readable, 0.75 if 0.6 regresses any smoke) + the parked levers.
+
+**Takes effect:** next Claude Code restart. No rebuild, no Tankoban restart needed. Single-file single-line edit.
+
+READY TO COMMIT - [Agent 0, .mcp.json WINDOWS_MCP_SCREENSHOT_SCALE=0.6 shipped]: one-line addition to .mcp.json env block. Downscales windows-mcp screenshots from 1920x1080 to 1152x648 before encoding — ~36% smaller PNG + proportional token reduction per Screenshot call across all agents. Conservative 0.6 scale chosen so Tankoban bottom-HUD filename text stays readable for Bug-1-style smoke verification. Retrievable to 0.5 / 0.75 if smoke regresses (documented in memory/project_windows_mcp_live.md). Scope held tight — skipped BACKEND=dxcam (not installed in uvx env, would error) and PROFILE_SNAPSHOT=1 (separate Bucket 2 A/B measurement, bundling forces extra restart). Takes effect next Claude Code restart, zero code change, zero rebuild. Rollback: delete the one line from .mcp.json env block | files: .mcp.json

@@ -4,7 +4,8 @@
       "command": "uvx",
       "args": ["windows-mcp"],
       "env": {
-        "ANONYMIZED_TELEMETRY": "false"
+        "ANONYMIZED_TELEMETRY": "false",
+        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.6"
       }
     }
   }
