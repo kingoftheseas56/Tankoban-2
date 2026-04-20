@@ -1067,13 +1067,17 @@ void FrameCanvas::drawTexturedQuad()
     // (221 lines captured, zero with non-zero forced=). Without this,
     // diagnosing "forced 16:9 leaves a stuck top bar" has no empirical
     // record of what videoRect the forced path produced.
-    static int s_lastLoggedCropTop = -1;
-    static int s_lastLoggedCropBottom = -1;
+    static int    s_lastLoggedCropTop    = -1;
+    static int    s_lastLoggedCropBottom = -1;
+    static double s_lastLoggedCropAspect = -1.0;
+    static int    s_lastLoggedSubLift    = INT_MIN;
     if (m_frameW != m_aspectLoggedForFrameW || m_frameH != m_aspectLoggedForFrameH
         || widgetWPx != m_aspectLoggedForWidgetW || widgetHPx != m_aspectLoggedForWidgetH
         || m_forcedAspect != m_aspectLoggedForForced
         || s_lastLoggedCropTop != m_srcCropTop
-        || s_lastLoggedCropBottom != m_srcCropBottom) {
+        || s_lastLoggedCropBottom != m_srcCropBottom
+        || s_lastLoggedCropAspect != m_cropAspect
+        || s_lastLoggedSubLift != m_subtitleLiftPx) {
         m_aspectLoggedForFrameW  = m_frameW;
         m_aspectLoggedForFrameH  = m_frameH;
         m_aspectLoggedForWidgetW = widgetWPx;
@@ -1081,6 +1085,8 @@ void FrameCanvas::drawTexturedQuad()
         m_aspectLoggedForForced  = m_forcedAspect;
         s_lastLoggedCropTop      = m_srcCropTop;
         s_lastLoggedCropBottom   = m_srcCropBottom;
+        s_lastLoggedCropAspect   = m_cropAspect;
+        s_lastLoggedSubLift      = m_subtitleLiftPx;
         QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
         if (dbg.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream s(&dbg);
@@ -1094,7 +1100,12 @@ void FrameCanvas::drawTexturedQuad()
               << videoRect.w << "," << videoRect.h << "}"
               << " d3dVp={" << vp.TopLeftX << "," << vp.TopLeftY << ","
               << vp.Width << "," << vp.Height << "}"
+              << " scissor={" << scissor.left << "," << scissor.top << ","
+              << (scissor.right - scissor.left) << "," << (scissor.bottom - scissor.top) << "}"
               << " forced=" << QString::number(m_forcedAspect, 'f', 4)
+              << " cropAspect=" << QString::number(m_cropAspect, 'f', 4)
+              << " cropZoom=" << QString::number(cropZoom, 'f', 4)
+              << " subLift=" << m_subtitleLiftPx
               << " srcCrop={" << m_srcCropTop << "," << m_srcCropBottom << ","
               << m_srcCropLeft << "," << m_srcCropRight << "}\n";
         }
