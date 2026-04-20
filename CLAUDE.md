@@ -78,6 +78,8 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 
 ## Active Fix TODOs (owner + phase cursor)
 
+> **Archive note 2026-04-20:** 13 closed / superseded TODOs (STREAM_LIFECYCLE_FIX, PLAYER_LIFECYCLE_FIX, PLAYER_PERF_FIX, PLAYER_UX_FIX, EDGE_TTS_FIX, STREAM_STALL_FIX, CINEMASCOPE_FIX, STREAM_ENGINE_FIX, STREAM_UX_PARITY, STREAM_PARITY, STREAM_PLAYBACK_FIX, STREAM_UX_PARITY_ADD_LATER, NATIVE_D3D11_TODO) have been moved to `agents/_archive/todos/` to declutter repo root. Rows below preserved for historical phase-cursor context. File paths in rows are now relative to `agents/_archive/todos/` for the CLOSED/SUPERSEDED entries; active entries still live at repo root as before.
+
 | TODO file | Owner | Phase cursor | Status |
 |-----------|-------|--------------|--------|
 | `BOOK_READER_FIX_TODO.md` | Agent 2 | 1+2+3+5 SHIPPED | awaiting Hemanth smoke; Phase 4 explicitly deferred |
@@ -142,4 +144,6 @@ Path: see `agents/ONBOARDING.md` — 15-minute orientation track that gets a new
 - Sidecar (MinGW, installs to `resources/ffmpeg_sidecar/`): `powershell -File native_sidecar/build.ps1`
 - Main-app tests (pure-logic primitives; opt in at configure with `-DTANKOBAN_BUILD_TESTS=ON`; fetches GoogleTest via FetchContent on first run, MSVC-built to match main app ABI): `cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DTANKOBAN_BUILD_TESTS=ON <flags>; cmake --build out --target tankoban_tests; cd out && ctest --output-on-failure -R tankoban_tests` (Codex #4 Stage 3a)
 - Repo-health audit (drift surfaces — tracked generated files, large source files, chat.md rotation, STATUS vs CLAUDE drift, RTC backlog, CONGRESS/HELP state): `powershell -NoProfile -File scripts/repo-health.ps1` or `/repo-health` slash command (Codex #5)
-- Always: `taskkill //F //IM Tankoban.exe` before any rebuild (Rule 1).
+- Runtime-health digest (post-smoke log-scan — process state, stream telemetry event counts, sidecar PERF, error-line scan with benign-chatter filter): `powershell -NoProfile -File scripts/runtime-health.ps1` (Agent 7 MCP audit item #1, 2026-04-19)
+- Smoke cleanup (kill Tankoban + ffmpeg_sidecar post-smoke per Rule 17): `powershell -NoProfile -File scripts/stop-tankoban.ps1` (added 2026-04-20)
+- Always: `taskkill //F //IM Tankoban.exe` before any rebuild (Rule 1). And `scripts/stop-tankoban.ps1` after any agent-driven smoke (Rule 17).

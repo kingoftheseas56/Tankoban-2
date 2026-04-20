@@ -282,6 +282,12 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     Rule of thumb: if it's grepped by a script or sweep hook, ASCII. If it's prose read by agents, any UTF-8 fine. Going-forward discipline only — do not retroactively rewrite existing chat.md history. (Added 2026-04-19 after Codex 2026-04-18 audit flagged PowerShell-rendering mojibake on em-dashes/arrows.)
 
+17. **Clean up after agent-driven MCP smoke.** After any agent-driven Windows-MCP smoke that launches `Tankoban.exe` (or the `ffmpeg_sidecar` it spawns), kill the process(es) before ending the wake. Stale processes hold GPU textures, file handles, and an active torrent session bleeding bandwidth — affects the next agent's smoke AND Hemanth's own usage. Run `powershell -NoProfile -File scripts/stop-tankoban.ps1` for one-command compliance (ships with this rule; kills both Tankoban + ffmpeg_sidecar with audit output). Equivalent manual pipeline: `Get-Process -Name Tankoban,ffmpeg_sidecar -ErrorAction SilentlyContinue | Stop-Process -Force`.
+
+    **Distinct from Rule 1** — Rule 1 (`taskkill Tankoban.exe` before every build) guards build-artifact overwrite correctness; Rule 17 is hygiene after smoke regardless of whether a rebuild follows. A smoke run that doesn't precede a rebuild still must clean up.
+
+    Triggered 2026-04-20 after Agent 4 left `Tankoban.exe` running 38 minutes with 1435 handles post-Bug-A smoke session; caught by Hemanth + `scripts/runtime-health.ps1` digest. Suggested by Agent 4 in chat.md, codified by Agent 0 same-session.
+
 ---
 
 ## File Hygiene & Rotation (added 2026-04-16)
