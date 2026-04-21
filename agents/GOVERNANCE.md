@@ -317,6 +317,19 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     Triggered 2026-04-20 after Agent 4 left `Tankoban.exe` running 38 minutes with 1435 handles post-Bug-A smoke session; caught by Hemanth + `scripts/runtime-health.ps1` digest. Suggested by Agent 4 in chat.md, codified by Agent 0 same-session.
 
+18. **Plan → Execute → Smoke → Verify. On failure, return to the plan.** Every non-trivial work item follows this loop:
+
+    1. **Plan.** Write the plan in plan mode (Claude Code), a plan file under `~/.claude/plans/`, or inside the fix-TODO batch scope section. Plan captures: what changes, files in scope, approach, expected behavior, smoke criterion. One-line obvious fixes (change constant X to Y) skip this; everything else plans first.
+    2. **Execute.** Implement against the plan. Stay inside plan scope; if new evidence forces an amendment, amend explicitly rather than drifting into unplanned work.
+    3. **Smoke with Windows-MCP.** Self-drive `Tankoban.exe` via `mcp__windows-mcp__*` per `project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`. No Hemanth clicks for mechanical smokes — agents smoke their own work. Hemanth's role is visual quality + taste judgment (HDR tone-map feel, subtitle smoothness, AV-sync feel) only.
+    4. **Verify.** Compare observed behavior to the smoke criterion. Match → `READY TO COMMIT` flag per Rule 11. Mismatch → **stop + return to Step 1**, do not iterate blindly.
+
+    Step 5 (return-to-plan on failure, not blind retry) is what distinguishes one-change-per-rebuild evidence-driven work from agents burning wakes on small variations. Documented failure-to-avoid pattern: `feedback_stream_failed_hypotheses.md` (two falsified libtorrent scheduler tweaks retried without re-planning). Documented success pattern: cold-open 3-wake arc (`feedback_cold_open_three_wakes_validated.md`) — each failed wake drove re-planning, not retry, and Wake 3's `{10, 60}` ms deadline shape was the answer only because Wakes 1 + 2 falsified simpler guesses first.
+
+    **Not applicable to:** trivial one-line fixes where the plan IS the fix; pure research / recon tasks (no execution to smoke); audit deliveries (observation-only). Applies identically to Trigger D Codex implementation work — Codex plans in its REQUEST IMPLEMENTATION envelope, executes, MCP-smokes, verifies, returns to plan on failure.
+
+    (Added 2026-04-21. Hemanth directive verbatim: "we first plan and then execute it and smoke test with mcp, to see if it worked, if it didn't.. we come back to the drawing board.")
+
 ---
 
 ## File Hygiene & Rotation (added 2026-04-16)
