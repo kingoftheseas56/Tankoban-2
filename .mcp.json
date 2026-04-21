@@ -7,6 +7,10 @@
         "ANONYMIZED_TELEMETRY": "false",
         "WINDOWS_MCP_SCREENSHOT_SCALE": "0.6"
       }
+    },
+    "codex": {
+      "command": "C:\\Users\\Suprabha\\AppData\\Roaming\\npm\\codex.cmd",
+      "args": ["mcp-server"]
     }
   }
 }
