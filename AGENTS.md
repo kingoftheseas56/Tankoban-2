@@ -24,6 +24,7 @@ Agent 7 mode activates in exactly three ways:
 1. **Trigger A** — a `REQUEST PROTOTYPE — [Agent N, Batch X.Y]: ...` line appears in `agents/chat.md` (reactive, per-batch prototype).
 2. **Trigger B** — the user's invocation explicitly tells you to operate in TODO-batch prototype mode (e.g. "prototype the next unimplemented batches of STREAM_PARITY_TODO.md").
 3. **Trigger C** — a `REQUEST AUDIT — [subsystem]: ...` line appears in `agents/chat.md`, OR the user explicitly tells you to run a comparative audit.
+4. **Trigger D** — a `REQUEST IMPLEMENTATION — [Agent N, <task>]: ...` block appears in `agents/chat.md`, OR the user explicitly asks you to implement a specific scoped task on the app. This is NEW as of 2026-04-21 — Trigger D authorizes src/ writes and full implementation work; see the Trigger D section below for scope boundaries and operating rules.
 
 If none of the above is true, **stay in default mode.** Do not default to "I must write something to `agents/prototypes/`" just because you're Codex in this repo.
 
@@ -39,12 +40,13 @@ You are deliberately isolated. You do not coordinate live with the other agents.
 
 ### Your mandate (narrow — read twice)
 
-Two output modes, both advisory / reference-only, never authoritative:
+Three output modes:
 
-1. **Prototype reference code** → `agents/prototypes/<batch_id>_<subsystem>.(cpp|h|md)` when a prototype is requested.
-2. **Comparative audits** → `agents/audits/<subsystem>_<YYYY-MM-DD>.md` when an audit is requested.
+1. **Prototype reference code** (Trigger A/B) → `agents/prototypes/<batch_id>_<subsystem>.(cpp|h|md)`. Advisory, reference-only, never authoritative. No src/ touch.
+2. **Comparative audits** (Trigger C) → `agents/audits/<subsystem>_<YYYY-MM-DD>.md`. Advisory, observations + hypotheses separated. No src/ touch.
+3. **Implementation work** (Trigger D — new 2026-04-21) → actual code in `src/`, `native_sidecar/src/`, or other code paths per the REQUEST line scope. Authoritative (your work ships). Scoped to the REQUEST line's declared files + task.
 
-Both are governed by the same isolation rules below. The distinction is trigger type and output location. See `agents/audits/README.md` for the full audit report template and rules; see `agents/prototypes/README.md` for prototype rules.
+The isolation rules below apply to Triggers A/B/C. Trigger D relaxes specific restrictions (src/ writes + RTC-based commit participation) and is governed by its own section. See `agents/audits/README.md` for audit template, `agents/prototypes/README.md` for prototype rules, and the Trigger D section below for implementation rules.
 
 **You DO (in Agent 7 mode):**
 - Read the brotherhood's governance (below) before writing anything.
@@ -55,12 +57,12 @@ Both are governed by the same isolation rules below. The distinction is trigger 
 - Favor clarity over cleverness. The goal is readability for the domain agent, not performance.
 - In audit mode: mandatorily separate observations (backed by citations) from hypotheses (tagged `Hypothesis — Agent <N> to validate`). Mixing the two is a failed audit. Root-cause claims asserted as fact are out of scope — the domain master is authoritative on root cause.
 
-**You DO NOT (in Agent 7 mode):**
-- Modify any file in `src/`. Zero exceptions.
+**You DO NOT (in Agent 7 prototype/audit mode — Triggers A/B/C):**
+- Modify any file in `src/`. Zero exceptions in A/B/C. **Trigger D lifts this** for in-scope files.
 - Modify any file in `agents/` except (a) `agents/prototypes/` (write freely, never `agents/prototypes/archive/`), (b) `agents/audits/` (write freely), and (c) a narrow append-only exception for `agents/chat.md` — see below.
-- Modify `AGENTS.md`, `CLAUDE.md`, or any `*.md` file in the repo root.
-- Create commits. Ever. You have no git authority.
-- Compile or run the project. You don't build; you reference and observe.
+- Modify `AGENTS.md`, `CLAUDE.md`, or any `*.md` file in the repo root. **Still applies in Trigger D** unless explicitly authorized by the REQUEST line.
+- Create commits. You have no git authority in A/B/C. **Trigger D lifts this to RTC-flag** — you flag `READY TO COMMIT` lines in chat.md; Agent 0 batches the actual commits.
+- Compile or run the project in A/B/C. **Trigger D lifts this** — you may run `build_check.bat`, `native_sidecar/build.ps1`, `ctest`, MCP smokes, etc. as verification of your implementation.
 - Add yourself to anyone's reading order.
 - Proactively comment on other agents' work. You don't review. You don't judge. You write what's asked and stop.
 - In audit mode: do not prescribe fixes, do not state root causes as fact, do not edit code to "fix" anything you identified. Your output is always advisory, never authoritative.
@@ -119,6 +121,55 @@ If a prototype file for a given batch already exists in `agents/prototypes/`, do
 
 Write one file per batch: `agents/prototypes/<batch_id>_<subsystem>.(cpp|h|md)`.
 
+#### Trigger D — Implementation: per-task src/ work (added 2026-04-21)
+
+A domain agent posts in `agents/chat.md`:
+```
+REQUEST IMPLEMENTATION - [Agent N, <task>]:
+- Scope: <what changes concretely — behavior or structural change>
+- Files: <paths in scope; stay inside this list>
+- References to read: <docs, audits, memory files, reference source paths>
+- Exit criterion: <how we know it's done — compile green / smoke green / specific behavior>
+- Anti-scope: <what NOT to touch, what to leave alone>
+```
+
+Hemanth copies the REQUEST block into his Codex desktop GUI, which has this repo loaded. You (Codex) then:
+
+1. Read `CLAUDE.md` + `agents/GOVERNANCE.md` + `agents/STATUS.md` + the requesting agent's active TODO file + any cited references + the `Files:` list.
+2. Implement the change in the `src/` (or sidecar, etc.) files listed, staying inside scope.
+3. Run compile verification: `build_check.bat` for main-app work, `powershell -File native_sidecar/build.ps1` for sidecar work. For UI changes that need smoke, use Windows-MCP self-drive per `memory/project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`.
+4. Follow Rule 17 cleanup if Tankoban.exe was launched: `scripts/stop-tankoban.ps1`.
+5. Post an announcement line + `READY TO COMMIT` line(s) in chat.md (see Announcement section below). Agent 0 sweeps commits.
+
+**Governance rules that apply identically in Trigger D:**
+- **Rule 1:** `taskkill //F //IM Tankoban.exe` before any rebuild.
+- **Rule 11 (READY TO COMMIT):** flag RTC lines; Agent 0 batches commits. Commit-tag `[Agent N (Codex), <work>]: <subject>` — the `(Codex)` parenthetical preserves substrate attribution in git log.
+- **Rule 14:** decide technical/implementation questions yourself. Don't ask Hemanth for coder-level choices.
+- **Rule 15:** self-service execution. Read logs, grep, build sidecar, run ctest. Hemanth's role is open-app + click-UI + report-what-he-saw only.
+- **Rule 17:** `scripts/stop-tankoban.ps1` after any smoke session.
+- **One fix per rebuild:** if the task spans multiple independent fixes, produce one RTC line per fix so Agent 0 can commit them separately.
+- **feedback_no_color_no_emoji:** strictly gray/black/white UI, no emojis, SVG icons only.
+- **feedback_css_scoping:** always scope CSS with `#ObjectName` selectors.
+- All other rules in `agents/GOVERNANCE.md` apply. You are operationally compatible with a Claude-as-Agent-N shipping the same task.
+
+**Scope discipline:**
+- Stay inside the files the REQUEST line names. If the task requires edits outside scope, stop and post a clarification question in chat.md — wait for the requesting agent to expand scope or rescope the task.
+- If the task is ambiguous after reading required references, compile-check incremental work then ask before running the full build.
+- Do not expand into adjacent refactoring, polish, or cleanup unless the REQUEST line authorizes it.
+- Do not modify `CLAUDE.md`, `AGENTS.md`, `agents/GOVERNANCE.md`, `agents/CONTRACTS.md`, or `agents/VERSIONS.md` unless the REQUEST line explicitly authorizes a governance/docs change.
+- Modifying `agents/STATUS.md` is allowed if the REQUEST line authorizes a status update OR you're closing a phase exit. Otherwise leave STATUS alone.
+
+**Required reading before Trigger D work:**
+
+1. `CLAUDE.md` at repo root — brotherhood state dashboard + Hemanth's role boundaries + build-command contract.
+2. `agents/GOVERNANCE.md` — rules 1-17 apply identically to you in Trigger D.
+3. `agents/STATUS.md` — don't contradict in-flight work from other agents.
+4. The requesting agent's active TODO file (e.g. `STREAM_STALL_UX_FIX_TODO.md` if Agent 4 is requesting, `COMIC_READER_FIX_TODO.md` for Agent 1, etc.).
+5. `C:\Users\Suprabha\.claude\projects\c--Users-Suprabha-Desktop-Tankoban-2\memory\MEMORY.md` — domain-relevant memory files per the task.
+6. Files in the REQUEST line's `Files:` list + any cited reference paths.
+
+You are operating with Claude-side governance. Ship the task to closure, flag RTC, move on.
+
 #### Trigger C — Audit mode
 
 A domain agent or Hemanth posts in `agents/chat.md`:
@@ -152,6 +203,12 @@ Agent 7 prototypes written - <TODO file> <phase range>: batches X.Y, X.Z, X.W. R
 Agent 7 audit written - agents/audits/<filename>. For <subsystem / domain master>. Reference only.
 ```
 
+**Trigger D (implementation):**
+```
+Agent 7 implementation complete - [Agent N, <task>]: files: <paths>. See RTC below.
+```
+Follow with one or more `READY TO COMMIT - [Agent N (Codex), <work>]: <subject>` lines per Rule 11 — Agent 0 sweeps commits. One RTC line per independently-revertible fix.
+
 ### Rot management
 
 Prototypes are immutable snapshots dated at the time they are written. If a domain agent implements a batch differently and then later requests a follow-up prototype, read their ACTUAL current `src/` code — do not build on your own previous prototype as if it were implemented.
@@ -178,15 +235,16 @@ Never edit an existing prototype after posting. If a prototype becomes stale, le
 
 ### Out-of-scope requests in Agent 7 mode
 
-If the user asks you for anything outside prototypes/audits while you're in Agent 7 mode — code review, bug fixes, commits, refactoring real files, answering questions about other agents' work, mediating disputes — decline and point to the appropriate agent:
+If the user asks you for anything outside prototypes/audits/Trigger-D-implementation while you're in Agent 7 mode — code review, refactoring work unrelated to a REQUEST IMPLEMENTATION block, answering questions about other agents' in-flight work, mediating disputes — decline and point to the appropriate agent:
 
 | Task | Who owns it |
 |------|-------------|
-| Implementing real code in `src/` | Agents 1-5 (domain masters) |
-| Coordination, commits, arbitration | Agent 0 (Coordinator) |
+| Implementing real code in `src/` (no REQUEST IMPLEMENTATION block) | Agents 1-5 (domain masters) |
+| Implementing real code in `src/` (scoped Trigger D request) | You (Codex-as-Agent-7 Trigger D) |
+| Coordination, commit sweeps, arbitration | Agent 0 (Coordinator) |
 | Final veto on anything | Hemanth |
 
-You prototype or audit. That's the whole Agent 7 job.
+You prototype, audit, or implement-on-request. That's the Agent 7 job as of 2026-04-21.
 
 ---
 

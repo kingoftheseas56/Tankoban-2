@@ -31,7 +31,7 @@ When Agent 0 overrides a domain master: the override justification must be poste
 | 4B | Sources (Tankorent + Tankoyomi) | `SourcesPage.*`, `TankorentPage.*`, `TankoyomiPage.*`, `src/core/torrent/*` (TorrentEngine, TorrentClient), `src/core/TorrentIndexer.h`, `src/core/TorrentResult.h`, `src/core/indexers/*` (Nyaa, PirateBay, 1337x, YTS, EZTV, ExtraTorrents, TorrentsCsv), `src/core/manga/*` (MangaDownloader, WeebCentralScraper, ReadComicsScraper), `dialogs/AddTorrentDialog.*`, `dialogs/TorrentFilesDialog.*`, `dialogs/AddMangaDialog.*`, `dialogs/SpeedLimitDialog.*`, `dialogs/SeedingRulesDialog.*`, `dialogs/QueueLimitsDialog.*` | — |
 | 5 | Library UX | `TileCard.*`, `TileStrip.*`, `ScannerUtils.*`, `LibraryScanner.*`, `BooksScanner.*`, `VideosScanner.*`, `ContextMenuHelper.*`, plus **day-to-day library UX across every mode** — comics, books, videos, stream library pages are Agent 5's working surface (see primary-vs-secondary note below) | — |
 | 6 | Objective Compliance Reviewer | `agents/REVIEW.md` exclusively. Writes NO code. Reads Agents 1-5 output against the **stated objective** of the work — which may be an external reference (Mihon, groundwork, Tankoban-Max), a planning doc (NATIVE_D3D11_TODO.md, Congress motion), a Hemanth brief in chat.md, a spec in an issue, or any explicit task description. Reports where delivery meets the objective and where it falls short. | — |
-| 7 | Prototype Reference Author + Comparative Auditor (Codex) | `agents/prototypes/` and `agents/audits/` (never `src/`, never `agents/*.md` other than `prototypes/README.md` and `audits/README.md`). Driven by `AGENTS.md` at repo root. Writes reference-only prototype code (Triggers A/B) or comparative audit reports (Trigger C) on explicit request. Silent, isolated, not in anyone's reading order. See Prototype + Audit Protocol below. | — |
+| 7 | Prototype Reference Author + Comparative Auditor + Implementation Agent (Codex) | `agents/prototypes/` and `agents/audits/` for Triggers A/B/C; additionally `src/`, `native_sidecar/src/`, and other code paths for Trigger D scoped-implementation work per the REQUEST IMPLEMENTATION block from a domain agent. Never touches `CLAUDE.md`, `AGENTS.md`, `GOVERNANCE.md`, or `CONTRACTS.md` except by explicit authorization. Driven by `AGENTS.md` at repo root. Triggers A/B/C = reference-only. Trigger D = authoritative (ships work, flags `READY TO COMMIT - [Agent N (Codex), <work>]` lines for Agent 0 to sweep). See Prototype + Audit + Implementation Protocol below. | — |
 
 ### Primary vs Secondary Ownership (ratified 2026-04-14 per Hemanth via Agent 3 chat.md post)
 
@@ -159,11 +159,14 @@ Only one review at a time in REVIEW.md. Multiple can queue in chat.md; Agent 6 p
 
 ---
 
-## PROTOTYPE + AUDIT Protocol (added 2026-04-14 — Agent 7)
+## PROTOTYPE + AUDIT + IMPLEMENTATION Protocol (added 2026-04-14 — Agent 7; Trigger D added 2026-04-21)
 
-Agent 7 is the Codex-driven prototype reference author. He is deliberately isolated from the brotherhood: not in Congress, not in anyone's session-start reading order, no override authority, no commit rights, no access to `src/` or any `agents/*.md` file except `prototypes/README.md`. His entire footprint is `agents/prototypes/` plus one announcement line per delivery.
+Agent 7 is the Codex-driven agent. Originally (2026-04-14) scoped to write reference prototypes (Triggers A/B) and comparative audits (Trigger C) only — no src/ writes, no commits, no authority. Expanded 2026-04-21 to include implementation work (Trigger D) — Codex may ship actual code in `src/` when a domain agent posts a `REQUEST IMPLEMENTATION` block with task + scope + files + exit criterion. Trigger D is the implementation substrate for any of Agents 0-5 / 4B who wants to dispatch a scoped task to Codex instead of executing it themselves (rate-limited, stuck fix-loop, Anthropic 500s, or just substrate preference).
 
-Purpose: give a domain agent a concrete second-perspective implementation to look at when facing an architecturally novel or risky batch. The prototype is reference-only — the domain agent writes their own version in `src/`, deciding freely how much (if any) of the prototype's approach to adopt.
+Purposes by trigger:
+- **A/B:** give a domain agent a concrete second-perspective implementation to consult when facing an architecturally novel or risky batch. Reference-only; domain agent writes their own version.
+- **C:** give a domain agent a structured comparative analysis against reference apps, with observations separated from hypotheses. Advisory; domain agent decides which gaps become work.
+- **D:** let a domain agent dispatch a scoped implementation task to Codex when they want to. Authoritative; Codex ships the work and flags RTC for Agent 0 to sweep. Domain agent keeps ownership via the REQUEST block (scope + files + constraints); Codex executes inside that envelope.
 
 ### Triggers
 
@@ -182,6 +185,32 @@ Codex writes one prototype for that batch.
 REQUEST AUDIT — [subsystem name]: <scope / questions> | References: <reference apps or sites>. Web search: authorized.
 ```
 Codex reads the subsystem's current src/ state, web-searches cited reference apps (and adjacent comparable apps), writes a structured comparative audit report to `agents/audits/<subsystem>_<YYYY-MM-DD>.md`. The report separates **observations** (backed by file:line citations on our side + reference code / web citations on the reference side) from **hypothesized root causes** (which must be explicitly labeled `Hypothesis — Agent <N> to validate`). Codex does NOT diagnose root causes authoritatively — the domain master is authoritative on why their subsystem behaves the way it does. Codex observes, compares, and proposes. See `agents/audits/README.md` for the required report template.
+
+**Trigger D — Implementation (per-task src/ work, added 2026-04-21):** A domain agent posts in chat.md:
+```
+REQUEST IMPLEMENTATION — [Agent N, <task>]:
+- Scope: <what changes concretely — behavior or structural change>
+- Files: <paths in scope; Codex stays inside this list>
+- References to read: <docs, audits, memory files, reference source paths>
+- Exit criterion: <how we know it's done — compile green / smoke green / specific behavior>
+- Anti-scope: <what NOT to touch>
+```
+Hemanth copies the REQUEST block into his Codex desktop GUI (which has this repo loaded). Codex reads the REQUEST block + `CLAUDE.md` + `GOVERNANCE.md` + `STATUS.md` + the requesting agent's active TODO + cited references, then performs the implementation work in the listed `src/` / `native_sidecar/src/` paths. Codex compile-verifies (`build_check.bat` or `native_sidecar/build.ps1`), runs smoke via Windows-MCP if the task warrants it, and flags `READY TO COMMIT - [Agent N (Codex), <work>]: <subject>` lines per Rule 11. Agent 0 sweeps commits. The `(Codex)` parenthetical in the RTC tag preserves substrate attribution in git log.
+
+**Why Trigger D exists:** relief valve when a domain Claude agent is rate-limited, hitting 500s, or stuck in a fix-loop — or simply when the domain agent judges the task is better executed on a different substrate. The domain agent keeps ownership by authoring the REQUEST block (they define scope, files, constraints, exit criterion); Codex just executes inside that envelope. Not a substrate-swap (no Codex-as-Agent-N identity claim); Codex remains Agent 7 across all triggers, just with implementation authority under Trigger D specifically.
+
+**Trigger D scope discipline:**
+- Codex stays inside the `Files:` list. If the task requires edits outside scope, Codex posts a clarification question in chat.md and stops — waits for the requesting agent to expand scope or rescope.
+- Codex does NOT modify `CLAUDE.md`, `AGENTS.md`, `agents/GOVERNANCE.md`, `agents/CONTRACTS.md`, `agents/VERSIONS.md`, or other governance docs unless the REQUEST line explicitly authorizes.
+- Codex does NOT expand into adjacent refactoring, polish, or cleanup unless the REQUEST line authorizes.
+- One-fix-per-rebuild: if the task spans multiple independent fixes, Codex produces one RTC line per fix.
+- All other brotherhood rules (1, 11, 14, 15, 17, CSS scoping, no color/emoji, etc.) apply identically to Trigger D work.
+
+**When to pick which trigger:**
+
+- **Trigger A/B (prototype):** architectural novelty; you want a reference-only second perspective to consult; you'll still reimplement in your own style. No src/ touch.
+- **Trigger C (audit):** comparative analysis against reference apps; observation vs hypothesis separation; you'll validate hypotheses and decide which gaps become work. No src/ touch.
+- **Trigger D (implementation):** you want Codex to actually do the work and ship it. You author the REQUEST block with files + constraints + exit criterion; Codex executes inside that envelope and flags RTC. You keep ownership (the REQUEST block IS your plan); Codex executes it.
 
 **Audit vs Agent 6 review — the line:**
 
