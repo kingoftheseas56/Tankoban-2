@@ -63,7 +63,7 @@ taskkill /F /IM Tankoban.exe
 
 ## Agent workflow summary
 
-This repo runs a multi-agent Claude Code (+ Codex) workflow. Summary of roles:
+A non-coder owner runs Tankoban 2 as product manager with supremacy veto while six domain-expert Claude Code agents each own a subsystem and make technical decisions autonomously under Rule 14. Codex participates as a prototype-and-audit agent (Agent 7) and as an on-demand pure-text advisor reachable by any Claude agent via MCP. Coordination lives in files: `agents/chat.md` for narrative, `agents/STATUS.md` for per-agent state, `*_FIX_TODO.md` for phased execution, and a 17-rule governance book for collaboration. No human code review — phase exits are gated on build + behavioral smoke.
 
 | Agent | Role | Domain |
 |---|---|---|
@@ -76,7 +76,14 @@ This repo runs a multi-agent Claude Code (+ Codex) workflow. Summary of roles:
 | Agent 5 | Library UX | `src/ui/pages/*` cross-mode library surface |
 | Agent 7 | Codex | Prototypes + comparative audits (read [AGENTS.md](AGENTS.md) for activation triggers) |
 
-See [agents/GOVERNANCE.md](agents/GOVERNANCE.md) for the full protocol (Congress motions, HELP.md cross-agent asks, READY TO COMMIT format, etc.).
+### How we ship
+
+- **Rule 11 (READY TO COMMIT):** agents post `READY TO COMMIT - [Agent N, <work>]: <subject>` lines in `agents/chat.md`; Agent 0 batches commits via `/commit-sweep` at phase boundaries.
+- **Congress motions** (`agents/CONGRESS.md`) handle decisions that cross domain ownership. Auto-archive on ratification.
+- **HELP.md** tracks cross-agent technical asks — one open at a time.
+- **Fix-TODOs** (`*_FIX_TODO.md` at repo root) carry phased execution plans per subsystem. Phase exits are approved by the owner via UI smoke.
+
+See [agents/GOVERNANCE.md](agents/GOVERNANCE.md) for the full protocol (17 rules, file-ownership matrix, Congress and HELP patterns, session reading order).
 
 ## License
 
