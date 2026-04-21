@@ -29,6 +29,10 @@ _*.csv
 _*/
 *.log
 
+# One-off diagnostic dumps agents generate at repo root (raw chat diffs, etc.)
+chat_diff*.txt
+*_raw.txt
+
 # Exception: audit supersession directory is intentionally tracked (historical reference)
 !agents/audits/_superseded/
 !agents/audits/_superseded/**
