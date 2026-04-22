@@ -1,8 +1,11 @@
 #pragma once
 
+#include <QHash>
+#include <QPixmap>
 #include <QWidget>
 
 #include "core/book/BookResult.h"
+#include "tankolibrary/TransfersView.h"
 
 class CoreBridge;
 class BookScraper;
@@ -11,6 +14,7 @@ class BookResultsGrid;
 class QLineEdit;
 class QPushButton;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QProgressBar;
 class QStackedWidget;
@@ -40,7 +44,9 @@ private:
     void startSearch();
     void cancelSearch();
     void refreshSearchStatus();                     // M2.3 — per-source status builder
-    void onEpubOnlyToggled(bool checked);           // Track B — EPUB-only filter
+    void onFormatFilterToggled(bool checked);       // Track B — any of EPUB/PDF/MOBI toggled
+    void onEnglishOnlyToggled(bool checked);        // Track B — English-only filter
+    void onSortChanged(int idx);                    // Track B closeout — sort combo
     void applyClientFilter();                       // Track B — rebuild grid from m_results honoring filter state
     QList<BookResult> filteredResults() const;      // Track B — m_results narrowed by checkbox state
 
@@ -52,6 +58,11 @@ private:
     void onDetailError(const QString& message);
     void paintDetail(const BookResult& r);
     void loadDetailCover(const QString& url);
+
+    // Track B closeout — grid thumbnail population.
+    void populateGridThumbnails();
+    void fetchAndCacheThumbnail(const QString& md5, const QString& url);
+    void applyThumbnailToCurrentGrid(const QString& md5, const QPixmap& pix);
 
     // Download flow (M2.4 — real Download button + BookDownloader).
     // State machine: Idle → user clicks → Resolving (disabled button +
@@ -67,6 +78,13 @@ private:
     void onDownloaderFailed(const QString& md5, const QString& reason);
 
     void resetDownloadUiToIdle();
+
+    // Track B closeout — Transfers inline tab (Tankoyomi-parity).
+    void showSearchResultsTab();
+    void showTransfersTab();
+    void updateTransfersTabBadge();
+    void refreshTransfersView();
+    TransferRecord* findTransferRecord(const QString& md5);
 
     CoreBridge*            m_bridge = nullptr;
     QNetworkAccessManager* m_nam    = nullptr;
@@ -87,8 +105,14 @@ private:
     QLineEdit*   m_queryEdit         = nullptr;
     QPushButton* m_searchBtn         = nullptr;
     QPushButton* m_cancelBtn         = nullptr;
-    QCheckBox*   m_epubOnlyCheckbox  = nullptr;    // Track B — default ON, QSettings-persisted
-    QLabel*      m_statusLbl         = nullptr;
+    // Track B closeout — format filter is now a multi-select trio; EPUB
+    // default-on, PDF + MOBI default-off (migrated from legacy epub_only key).
+    QCheckBox*   m_epubChk             = nullptr;
+    QCheckBox*   m_pdfChk              = nullptr;
+    QCheckBox*   m_mobiChk             = nullptr;
+    QCheckBox*   m_englishOnlyCheckbox = nullptr;  // Track B — default ON, QSettings-persisted
+    QComboBox*   m_sortCombo           = nullptr;  // Track B closeout — relevance/year/size sort
+    QLabel*      m_statusLbl           = nullptr;
 
     // Results area (lives inside m_resultsPage)
     BookResultsGrid* m_grid = nullptr;
@@ -115,10 +139,22 @@ private:
     BookDownloader* m_downloader     = nullptr;
     DownloadStage   m_downloadStage  = DownloadStage::Idle;
 
-    QList<BookResult> m_results;
-    BookResult        m_selectedResult;        // M2.1 — search-row snapshot for instant-paint
-    bool              m_searchInFlight = false;
-    QNetworkReply*    m_coverReply     = nullptr;  // M2.1 — at-most-one in-flight cover fetch
+    // Track B closeout — Tankoyomi-parity inline Transfers tab.
+    // `m_resultsInnerStack` sits below the tab pills and flips between
+    // `m_grid` (page 0) and `m_transfersView` (page 1). Tab pills are two
+    // QPushButtons styled as a toggle group.
+    QStackedWidget*       m_resultsInnerStack = nullptr;
+    QPushButton*          m_searchResultsTab  = nullptr;
+    QPushButton*          m_transfersTab      = nullptr;
+    QLabel*               m_transfersCounter  = nullptr;   // "Active: X | History: Y"
+    TransfersView*        m_transfersView     = nullptr;
+    QList<TransferRecord> m_transfers;
+
+    QList<BookResult>       m_results;
+    BookResult              m_selectedResult;    // M2.1 — search-row snapshot for instant-paint
+    bool                    m_searchInFlight = false;
+    QNetworkReply*          m_coverReply     = nullptr;  // M2.1 — at-most-one in-flight cover fetch
+    QHash<QString, QPixmap> m_thumbnailCache;     // Track B closeout — md5-keyed in-memory thumbnail cache
 
     // M2.3 — per-scraper search-cycle tracking so multiple sources can
     // complete asynchronously and the status line can report per-source

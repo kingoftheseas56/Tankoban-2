@@ -8,6 +8,8 @@
 #include "core/book/BookDownloader.h"
 
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -16,6 +18,8 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+
+#include <algorithm>
 
 #include <climits>
 
@@ -110,6 +114,38 @@ QString tankoLibraryCoverCacheDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
         + QStringLiteral("/tankolibrary-covers");
+}
+
+// Track B closeout — parse LibGen-style human file-size strings ("3.2 MB",
+// "194 kB", "12 MB") to rough byte counts. Base-10 approximation, good
+// enough for sort ordering; don't use for anything that needs accuracy.
+// Returns 0 on parse failure (unknown formats / empty strings) — those rows
+// sort together at the "smallest" end under ascending, largest end under
+// descending (fine for a sort hint).
+qint64 parseHumanFileSize(const QString& s)
+{
+    static const QRegularExpression kRe(
+        QStringLiteral(R"(\s*(\d+(?:\.\d+)?)\s*([KMG]?i?B)\s*)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto m = kRe.match(s.trimmed());
+    if (!m.hasMatch()) return 0;
+    const double n = m.captured(1).toDouble();
+    const QString u = m.captured(2).toLower();
+    qint64 mult = 1;
+    if      (u.startsWith(QLatin1Char('k'))) mult = 1000;
+    else if (u.startsWith(QLatin1Char('m'))) mult = 1000000;
+    else if (u.startsWith(QLatin1Char('g'))) mult = 1000000000;
+    return qint64(n * double(mult));
+}
+
+int parseYearInt(const QString& s)
+{
+    // LibGen year strings like "2017", "2021-05", "2014 Mars" — just grab
+    // the first 4-digit run.
+    static const QRegularExpression kRe(QStringLiteral("(\\d{4})"));
+    const auto m = kRe.match(s);
+    if (!m.hasMatch()) return 0;
+    return m.captured(1).toInt();
 }
 
 QString extensionFromCoverUrl(const QString& url)
@@ -233,6 +269,11 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge, QWidget* parent)
                         m_selectedResult.coverUrl = normalizedUrl;
                         loadDetailCover(normalizedUrl);
                     }
+                    // Track B closeout — also populate the grid thumbnail for
+                    // any row with this md5 (may or may not be the selected
+                    // row; fetchAndCacheThumbnail short-circuits if already
+                    // cached in memory).
+                    fetchAndCacheThumbnail(normalizedMd5, normalizedUrl);
                 });
 
             connect(libgen, &LibGenScraper::coverUrlFailed, this,
@@ -252,6 +293,9 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge, QWidget* parent)
             this, &TankoLibraryPage::onDownloaderComplete);
     connect(m_downloader, &BookDownloader::downloadFailed,
             this, &TankoLibraryPage::onDownloaderFailed);
+
+    // Track B closeout — Transfers inline tab initial state (empty).
+    updateTransfersTabBadge();
 
     connect(m_grid, &BookResultsGrid::resultActivated,
             this, &TankoLibraryPage::onResultActivated);
@@ -298,7 +342,7 @@ void TankoLibraryPage::buildResultsPage()
 
     m_queryEdit = new QLineEdit(m_resultsPage);
     m_queryEdit->setPlaceholderText(QStringLiteral(
-        "Search Anna's Archive - e.g. \"sapiens\" or \"orwell 1984\""));
+        "Search books - e.g. \"sapiens\" or \"orwell 1984\""));
     m_queryEdit->setMinimumWidth(320);
     connect(m_queryEdit, &QLineEdit::returnPressed, this, &TankoLibraryPage::startSearch);
     searchRow->addWidget(m_queryEdit, 1);
@@ -316,20 +360,74 @@ void TankoLibraryPage::buildResultsPage()
     connect(m_cancelBtn, &QPushButton::clicked, this, &TankoLibraryPage::cancelSearch);
     searchRow->addWidget(m_cancelBtn);
 
-    // Track B — "EPUB only" client-side format filter. Default ON per
-    // Hemanth's "I only need epub" preference. Persisted to QSettings so
-    // the toggle survives Tankoban restarts. Filter operates over cached
-    // m_results — no re-network on toggle.
-    m_epubOnlyCheckbox = new QCheckBox(QStringLiteral("EPUB only"), m_resultsPage);
-    m_epubOnlyCheckbox->setCursor(Qt::PointingHandCursor);
-    m_epubOnlyCheckbox->setToolTip(QStringLiteral(
-        "Show only EPUB — uncheck to see PDF, FB2, MOBI, and other book formats"));
-    const bool epubOnlyDefault = QSettings()
-        .value(QStringLiteral("tankolibrary/epub_only"), true).toBool();
-    m_epubOnlyCheckbox->setChecked(epubOnlyDefault);
-    connect(m_epubOnlyCheckbox, &QCheckBox::toggled,
-            this, &TankoLibraryPage::onEpubOnlyToggled);
-    searchRow->addWidget(m_epubOnlyCheckbox);
+    // Track B closeout — format filter trio: EPUB / PDF / MOBI. Any
+    // combination allowed; if all unchecked, no format filter applies.
+    // Defaults: EPUB on, PDF + MOBI off. One-shot migration from legacy
+    // `tankolibrary/epub_only` key (batch 1 / 2) preserves user intent —
+    // old `true` → epub only; old `false` (user wanted "all") → all three on.
+    {
+        QSettings s;
+        if (!s.contains(QStringLiteral("tankolibrary/format_epub"))) {
+            const bool oldEpubOnly = s.value(QStringLiteral("tankolibrary/epub_only"), true).toBool();
+            if (oldEpubOnly) {
+                s.setValue(QStringLiteral("tankolibrary/format_epub"), true);
+                s.setValue(QStringLiteral("tankolibrary/format_pdf"), false);
+                s.setValue(QStringLiteral("tankolibrary/format_mobi"), false);
+            } else {
+                s.setValue(QStringLiteral("tankolibrary/format_epub"), true);
+                s.setValue(QStringLiteral("tankolibrary/format_pdf"), true);
+                s.setValue(QStringLiteral("tankolibrary/format_mobi"), true);
+            }
+        }
+    }
+
+    auto buildFormatChk = [&](const QString& label, const QString& key, bool defaultOn) {
+        auto* chk = new QCheckBox(label, m_resultsPage);
+        chk->setCursor(Qt::PointingHandCursor);
+        chk->setChecked(QSettings().value(QStringLiteral("tankolibrary/%1").arg(key), defaultOn).toBool());
+        connect(chk, &QCheckBox::toggled,
+                this, &TankoLibraryPage::onFormatFilterToggled);
+        searchRow->addWidget(chk);
+        return chk;
+    };
+    m_epubChk = buildFormatChk(QStringLiteral("EPUB"), QStringLiteral("format_epub"), true);
+    m_pdfChk  = buildFormatChk(QStringLiteral("PDF"),  QStringLiteral("format_pdf"),  false);
+    m_mobiChk = buildFormatChk(QStringLiteral("MOBI"), QStringLiteral("format_mobi"), false);
+    m_epubChk->setToolTip(QStringLiteral("Show EPUB books"));
+    m_pdfChk->setToolTip(QStringLiteral("Show PDF books"));
+    m_mobiChk->setToolTip(QStringLiteral("Show MOBI books"));
+
+    // Track B — "English only" client-side language filter. Default ON per
+    // Hemanth's preference. Persisted to QSettings. Filter operates over
+    // cached m_results — no re-network on toggle. Books with empty/unknown
+    // language are excluded when ON (conservative default).
+    m_englishOnlyCheckbox = new QCheckBox(QStringLiteral("English only"), m_resultsPage);
+    m_englishOnlyCheckbox->setCursor(Qt::PointingHandCursor);
+    m_englishOnlyCheckbox->setToolTip(QStringLiteral(
+        "Show only English — uncheck to see books in other languages"));
+    const bool englishOnlyDefault = QSettings()
+        .value(QStringLiteral("tankolibrary/english_only"), true).toBool();
+    m_englishOnlyCheckbox->setChecked(englishOnlyDefault);
+    connect(m_englishOnlyCheckbox, &QCheckBox::toggled,
+            this, &TankoLibraryPage::onEnglishOnlyToggled);
+    searchRow->addWidget(m_englishOnlyCheckbox);
+
+    // Track B closeout — sort combo. Operates over cached m_results; no
+    // re-network. Index 0 = server-order ("Relevance"); 1/2 = year desc/asc;
+    // 3/4 = size desc/asc. QSettings-persisted.
+    m_sortCombo = new QComboBox(m_resultsPage);
+    m_sortCombo->setCursor(Qt::PointingHandCursor);
+    m_sortCombo->setToolTip(QStringLiteral("Sort results (client-side, no re-network)"));
+    m_sortCombo->addItem(QStringLiteral("Relevance"));
+    m_sortCombo->addItem(QStringLiteral("Year ↓"));   // ↓ descending (newest first)
+    m_sortCombo->addItem(QStringLiteral("Year ↑"));   // ↑ ascending
+    m_sortCombo->addItem(QStringLiteral("Size ↓"));
+    m_sortCombo->addItem(QStringLiteral("Size ↑"));
+    m_sortCombo->setCurrentIndex(
+        QSettings().value(QStringLiteral("tankolibrary/sort"), 0).toInt());
+    connect(m_sortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TankoLibraryPage::onSortChanged);
+    searchRow->addWidget(m_sortCombo);
 
     outer->addLayout(searchRow);
 
@@ -338,8 +436,58 @@ void TankoLibraryPage::buildResultsPage()
         "color: #888; font-size: 12px; background: transparent; border: none;"));
     outer->addWidget(m_statusLbl);
 
+    // Track B closeout — Tankoyomi-parity tab-pill row: "Search Results" +
+    // "Transfers (N)" on the left, "Active: X | History: Y" counter on the
+    // right. Flips the inner QStackedWidget between the results grid
+    // (page 0) and the transfers table (page 1).
+    auto* tabRow = new QHBoxLayout;
+    tabRow->setContentsMargins(0, 4, 0, 4);
+    tabRow->setSpacing(6);
+
+    const QString kTabActiveCss = QStringLiteral(
+        "QPushButton { color: #e6e6e6; background: #2a2a2a; border: 1px solid #444;"
+        " padding: 4px 14px; font-size: 13px; border-radius: 4px; }"
+        "QPushButton:hover { background: #333; }");
+    const QString kTabInactiveCss = QStringLiteral(
+        "QPushButton { color: #888; background: transparent; border: 1px solid transparent;"
+        " padding: 4px 14px; font-size: 13px; border-radius: 4px; }"
+        "QPushButton:hover { color: #ccc; }");
+
+    m_searchResultsTab = new QPushButton(QStringLiteral("Search Results"), m_resultsPage);
+    m_searchResultsTab->setCursor(Qt::PointingHandCursor);
+    m_searchResultsTab->setStyleSheet(kTabActiveCss);
+    m_searchResultsTab->setProperty("activeCss",   kTabActiveCss);
+    m_searchResultsTab->setProperty("inactiveCss", kTabInactiveCss);
+    connect(m_searchResultsTab, &QPushButton::clicked,
+            this, &TankoLibraryPage::showSearchResultsTab);
+    tabRow->addWidget(m_searchResultsTab);
+
+    m_transfersTab = new QPushButton(QStringLiteral("Transfers"), m_resultsPage);
+    m_transfersTab->setCursor(Qt::PointingHandCursor);
+    m_transfersTab->setStyleSheet(kTabInactiveCss);
+    m_transfersTab->setProperty("activeCss",   kTabActiveCss);
+    m_transfersTab->setProperty("inactiveCss", kTabInactiveCss);
+    connect(m_transfersTab, &QPushButton::clicked,
+            this, &TankoLibraryPage::showTransfersTab);
+    tabRow->addWidget(m_transfersTab);
+
+    tabRow->addStretch(1);
+
+    m_transfersCounter = new QLabel(QStringLiteral("Active: 0 | History: 0"), m_resultsPage);
+    m_transfersCounter->setStyleSheet(QStringLiteral(
+        "color: #888; font-size: 12px; background: transparent; border: none;"));
+    tabRow->addWidget(m_transfersCounter);
+
+    outer->addLayout(tabRow);
+
     m_grid = new BookResultsGrid(m_resultsPage);
-    outer->addWidget(m_grid, 1);
+    m_transfersView = new TransfersView(m_resultsPage);
+
+    m_resultsInnerStack = new QStackedWidget(m_resultsPage);
+    m_resultsInnerStack->addWidget(m_grid);           // index 0
+    m_resultsInnerStack->addWidget(m_transfersView);  // index 1
+    m_resultsInnerStack->setCurrentIndex(0);
+    outer->addWidget(m_resultsInnerStack, 1);
 }
 
 void TankoLibraryPage::buildDetailPage()
@@ -543,14 +691,11 @@ void TankoLibraryPage::refreshSearchStatus()
         ? QStringLiteral(")")
         : QString();
 
-    // Track B — append "(N shown)" suffix when the EPUB-only client
-    // filter narrows the visible subset. Honest about cached vs visible.
+    // Track B — append "(N shown)" suffix when any client filter narrows
+    // the visible subset. Honest about cached vs visible.
     QString filterSuffix;
-    if (m_epubOnlyCheckbox && m_epubOnlyCheckbox->isChecked() && !m_searchInFlight) {
-        int shown = 0;
-        for (const BookResult& r : m_results) {
-            if (r.format.compare(QStringLiteral("epub"), Qt::CaseInsensitive) == 0) ++shown;
-        }
+    if (!m_searchInFlight && !m_results.isEmpty()) {
+        const int shown = filteredResults().size();
         if (shown != m_results.size()) {
             filterSuffix = QString(QStringLiteral(" (%1 shown)")).arg(shown);
         }
@@ -561,9 +706,26 @@ void TankoLibraryPage::refreshSearchStatus()
 
 // ── Track B client-side filter ──────────────────────────────────────────────
 
-void TankoLibraryPage::onEpubOnlyToggled(bool checked)
+void TankoLibraryPage::onFormatFilterToggled(bool /*checked*/)
 {
-    QSettings().setValue(QStringLiteral("tankolibrary/epub_only"), checked);
+    QSettings s;
+    if (m_epubChk) s.setValue(QStringLiteral("tankolibrary/format_epub"), m_epubChk->isChecked());
+    if (m_pdfChk)  s.setValue(QStringLiteral("tankolibrary/format_pdf"),  m_pdfChk->isChecked());
+    if (m_mobiChk) s.setValue(QStringLiteral("tankolibrary/format_mobi"), m_mobiChk->isChecked());
+    applyClientFilter();
+    refreshSearchStatus();
+}
+
+void TankoLibraryPage::onEnglishOnlyToggled(bool checked)
+{
+    QSettings().setValue(QStringLiteral("tankolibrary/english_only"), checked);
+    applyClientFilter();
+    refreshSearchStatus();
+}
+
+void TankoLibraryPage::onSortChanged(int idx)
+{
+    QSettings().setValue(QStringLiteral("tankolibrary/sort"), idx);
     applyClientFilter();
     refreshSearchStatus();
 }
@@ -572,25 +734,163 @@ void TankoLibraryPage::applyClientFilter()
 {
     if (!m_grid) return;
     m_grid->setResults(filteredResults());
+    // Track B closeout — re-apply cached thumbnails to the current view.
+    // Any row whose md5 has a pixmap in m_thumbnailCache gets painted
+    // instantly; rows without hit trigger async fetches via fetchCoverUrl.
+    populateGridThumbnails();
+}
+
+void TankoLibraryPage::populateGridThumbnails()
+{
+    if (!m_grid) return;
+    const QList<BookResult> view = filteredResults();
+    auto* libgen = qobject_cast<LibGenScraper*>(scraperFor(QStringLiteral("libgen")));
+    for (int i = 0; i < view.size(); ++i) {
+        const BookResult& r = view[i];
+        const QString md5 = r.md5.trimmed().toLower();
+        if (md5.isEmpty()) continue;
+
+        // Fast path 1: in-memory pixmap cache (same session).
+        if (m_thumbnailCache.contains(md5)) {
+            m_grid->setCoverPixmap(i, m_thumbnailCache.value(md5));
+            continue;
+        }
+        // Fast path 2: disk cache (prior session or detail-view fetch).
+        const QString cached = existingCachedCoverPath(md5);
+        if (!cached.isEmpty()) {
+            QPixmap pix;
+            if (pix.load(cached) && !pix.isNull()) {
+                m_thumbnailCache.insert(md5, pix);
+                m_grid->setCoverPixmap(i, pix);
+                continue;
+            }
+            QFile::remove(cached);
+        }
+        // Slow path: need to fetch /ads.php. If we already know coverUrl
+        // (from a prior coverUrlReady this session), skip the /ads.php hop.
+        if (!r.coverUrl.isEmpty()) {
+            fetchAndCacheThumbnail(md5, r.coverUrl);
+            continue;
+        }
+        if (libgen) libgen->fetchCoverUrl(md5);
+    }
+}
+
+void TankoLibraryPage::fetchAndCacheThumbnail(const QString& md5, const QString& url)
+{
+    if (md5.isEmpty() || url.isEmpty()) return;
+    if (m_thumbnailCache.contains(md5)) {
+        applyThumbnailToCurrentGrid(md5, m_thumbnailCache.value(md5));
+        return;
+    }
+    const QUrl target(url);
+    if (!target.isValid()) return;
+
+    const QString cachePath = cachedCoverPathForUrl(md5, url);
+    if (!cachePath.isEmpty()) {
+        QDir().mkpath(QFileInfo(cachePath).absolutePath());
+    }
+
+    QNetworkRequest req(target);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                                 " AppleWebKit/537.36"));
+    // Same hotlink-referer fix as loadDetailCover — LibGen /covers/ returns
+    // 0 bytes without a same-origin Referer.
+    const QUrl originUrl(target.scheme() + QStringLiteral("://") + target.host() + QStringLiteral("/"));
+    req.setRawHeader("Referer", originUrl.toEncoded());
+    req.setTransferTimeout(10000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply* reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, md5, cachePath, reply]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            const QByteArray bytes = reply->readAll();
+            QImage img;
+            if (img.loadFromData(bytes) && !img.isNull()) {
+                if (!cachePath.isEmpty()) {
+                    QFile out(cachePath);
+                    if (out.open(QIODevice::WriteOnly)) {
+                        out.write(bytes);
+                        out.close();
+                    }
+                }
+                const QPixmap pix = QPixmap::fromImage(img);
+                m_thumbnailCache.insert(md5, pix);
+                applyThumbnailToCurrentGrid(md5, pix);
+            }
+        }
+        reply->deleteLater();
+    });
+}
+
+void TankoLibraryPage::applyThumbnailToCurrentGrid(const QString& md5, const QPixmap& pix)
+{
+    if (!m_grid || pix.isNull()) return;
+    const QList<BookResult> view = filteredResults();
+    for (int i = 0; i < view.size(); ++i) {
+        if (view[i].md5.compare(md5, Qt::CaseInsensitive) == 0) {
+            m_grid->setCoverPixmap(i, pix);
+            return;
+        }
+    }
 }
 
 QList<BookResult> TankoLibraryPage::filteredResults() const
 {
-    if (!m_epubOnlyCheckbox || !m_epubOnlyCheckbox->isChecked()) {
-        // No filter active — return full cached set.
-        return m_results;
-    }
-    // EPUB-only: filter cached m_results to EPUB format. Case-insensitive
-    // match in case a scraper ever returns "EPUB" vs "epub" — current
-    // LibGenScraper lowercases but defend against future drift.
-    QList<BookResult> filtered;
-    filtered.reserve(m_results.size());
-    for (const BookResult& r : m_results) {
-        if (r.format.compare(QStringLiteral("epub"), Qt::CaseInsensitive) == 0) {
-            filtered.append(r);
+    const bool epubOn = m_epubChk && m_epubChk->isChecked();
+    const bool pdfOn  = m_pdfChk  && m_pdfChk->isChecked();
+    const bool mobiOn = m_mobiChk && m_mobiChk->isChecked();
+    // When NO format box is checked, user intent is "show whatever you got" —
+    // treat as no format filter rather than "hide everything".
+    const bool anyFormat = (epubOn || pdfOn || mobiOn);
+    const bool allFormats = anyFormat && epubOn && pdfOn && mobiOn;
+    const bool englishOnly = m_englishOnlyCheckbox && m_englishOnlyCheckbox->isChecked();
+    const int sortIdx = m_sortCombo ? m_sortCombo->currentIndex() : 0;
+
+    QList<BookResult> out;
+    if ((!anyFormat || allFormats) && !englishOnly) {
+        out = m_results;
+    } else {
+        out.reserve(m_results.size());
+        for (const BookResult& r : m_results) {
+            if (anyFormat && !allFormats) {
+                const QString f = r.format.toLower();
+                const bool matchesAny =
+                    (epubOn && f == QLatin1String("epub")) ||
+                    (pdfOn  && f == QLatin1String("pdf"))  ||
+                    (mobiOn && f == QLatin1String("mobi"));
+                if (!matchesAny) continue;
+            }
+            if (englishOnly &&
+                r.language.compare(QStringLiteral("english"), Qt::CaseInsensitive) != 0) continue;
+            out.append(r);
         }
     }
-    return filtered;
+
+    // Track B closeout — stable sort so tie-breaks preserve relevance order.
+    // Index 0 = Relevance (server order); 1/2 year desc/asc; 3/4 size desc/asc.
+    switch (sortIdx) {
+        case 1: std::stable_sort(out.begin(), out.end(),
+                    [](const BookResult& a, const BookResult& b) {
+                        return parseYearInt(a.year) > parseYearInt(b.year);
+                    }); break;
+        case 2: std::stable_sort(out.begin(), out.end(),
+                    [](const BookResult& a, const BookResult& b) {
+                        return parseYearInt(a.year) < parseYearInt(b.year);
+                    }); break;
+        case 3: std::stable_sort(out.begin(), out.end(),
+                    [](const BookResult& a, const BookResult& b) {
+                        return parseHumanFileSize(a.fileSize) > parseHumanFileSize(b.fileSize);
+                    }); break;
+        case 4: std::stable_sort(out.begin(), out.end(),
+                    [](const BookResult& a, const BookResult& b) {
+                        return parseHumanFileSize(a.fileSize) < parseHumanFileSize(b.fileSize);
+                    }); break;
+        default: break;
+    }
+
+    return out;
 }
 
 // ── Detail flow (M2.1) ──────────────────────────────────────────────────────
@@ -700,9 +1000,16 @@ void TankoLibraryPage::paintDetail(const BookResult& r)
         setLabelValue(valueLabel, value, keyLabel);
     };
 
+    // Track B closeout — LibGen returns literal "0" for unknown pages/year on
+    // a lot of rows (Sapiens summary EPUBs, self-published stubs); rendering
+    // "Pages: 0" / "Year: 0" is ugly. Treat a solitary zero as missing.
+    auto dropZero = [](const QString& s) {
+        return (s.trimmed() == QStringLiteral("0")) ? QString() : s;
+    };
+
     hideRow(m_detailPublisher, r.publisher);
-    hideRow(m_detailYear,      r.year);
-    hideRow(m_detailPages,     r.pages);
+    hideRow(m_detailYear,      dropZero(r.year));
+    hideRow(m_detailPages,     dropZero(r.pages));
     hideRow(m_detailLanguage,  r.language);
     hideRow(m_detailFormat,    r.format.toUpper());
     hideRow(m_detailSize,      r.fileSize);
@@ -794,6 +1101,13 @@ void TankoLibraryPage::loadDetailCover(const QString& url)
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                                  " AppleWebKit/537.36"));
+    // LibGen (and likely other shadow-library hosts) serve covers with
+    // hotlink protection — bare GET returns Content-Type image/jpeg but
+    // 0 bytes. A same-origin Referer unblocks the real image payload.
+    // Confirmed via live probe 2026-04-22: bare GET → 0 B; with
+    // Referer=https://libgen.li/ → 114 KB real JPEG.
+    const QUrl originUrl(target.scheme() + QStringLiteral("://") + target.host() + QStringLiteral("/"));
+    req.setRawHeader("Referer", originUrl.toEncoded());
     req.setTransferTimeout(10000);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     m_coverReply = m_nam->get(req);
@@ -953,6 +1267,26 @@ void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList&
     m_detailStatus->setText(QString(QStringLiteral("Downloading %1..."))
                             .arg(suggestedName));
 
+    // Track B closeout — push a new TransferRecord for this download so the
+    // Transfers popover can render it even if the user navigates away.
+    TransferRecord rec;
+    rec.title = title;
+    rec.md5 = md5;
+    rec.state = TransferRecord::State::Downloading;
+    rec.bytesTotal = expectedBytes;
+    rec.startedMs = QDateTime::currentMSecsSinceEpoch();
+    // Replace any prior record for this md5 (user re-downloaded) rather
+    // than stacking duplicates.
+    for (int i = 0; i < m_transfers.size(); ++i) {
+        if (m_transfers[i].md5 == md5) {
+            m_transfers.removeAt(i);
+            break;
+        }
+    }
+    m_transfers.prepend(rec);
+    updateTransfersTabBadge();
+    refreshTransfersView();
+
     m_downloader->startDownload(md5, urls, destDir, suggestedName, expectedBytes);
 }
 
@@ -971,6 +1305,17 @@ void TankoLibraryPage::onScraperResolveFailed(const QString& md5, const QString&
 void TankoLibraryPage::onDownloaderProgress(const QString& md5,
                                             qint64 received, qint64 total)
 {
+    // Track B closeout — ALWAYS update the Transfers record + badge +
+    // popover regardless of what detail row is currently selected. The
+    // stale-guard below only affects the detail-view's own progress bar.
+    if (TransferRecord* rec = findTransferRecord(md5)) {
+        rec->state         = TransferRecord::State::Downloading;
+        rec->bytesReceived = received;
+        if (total > 0) rec->bytesTotal = total;
+    }
+    updateTransfersTabBadge();
+    refreshTransfersView();
+
     if (md5 != m_selectedResult.md5) return;
     if (m_downloadStage != DownloadStage::Downloading) return;
     if (!m_downloadProgress) return;
@@ -994,14 +1339,14 @@ void TankoLibraryPage::onDownloaderProgress(const QString& md5,
 void TankoLibraryPage::onDownloaderComplete(const QString& md5,
                                             const QString& filePath)
 {
-    if (md5 != m_selectedResult.md5) return;
-
-    const QString basename = QFileInfo(filePath).fileName();
-    m_detailStatus->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #8c8; background: transparent; border: none;"));
-    m_detailStatus->setText(QString(QStringLiteral("Downloaded: %1")).arg(basename));
-
-    resetDownloadUiToIdle();
+    // Always: update the transfer record + rescan trigger even if the user
+    // navigated to a different row since clicking Download.
+    if (TransferRecord* rec = findTransferRecord(md5)) {
+        rec->state    = TransferRecord::State::Done;
+        rec->filePath = filePath;
+    }
+    updateTransfersTabBadge();
+    refreshTransfersView();
 
     // Fire the rescan trigger — BooksPage has a persistent signal
     // connection to CoreBridge::rootFoldersChanged that calls its own
@@ -1010,11 +1355,27 @@ void TankoLibraryPage::onDownloaderComplete(const QString& md5,
     if (m_bridge) {
         m_bridge->notifyRootFoldersChanged(QStringLiteral("books"));
     }
+
+    if (md5 != m_selectedResult.md5) return;
+
+    const QString basename = QFileInfo(filePath).fileName();
+    m_detailStatus->setStyleSheet(QStringLiteral(
+        "font-size: 12px; color: #8c8; background: transparent; border: none;"));
+    m_detailStatus->setText(QString(QStringLiteral("Downloaded: %1")).arg(basename));
+
+    resetDownloadUiToIdle();
 }
 
 void TankoLibraryPage::onDownloaderFailed(const QString& md5,
                                           const QString& reason)
 {
+    if (TransferRecord* rec = findTransferRecord(md5)) {
+        rec->state       = TransferRecord::State::Failed;
+        rec->errorReason = reason;
+    }
+    updateTransfersTabBadge();
+    refreshTransfersView();
+
     if (md5 != m_selectedResult.md5) return;
 
     m_detailStatus->setStyleSheet(QStringLiteral(
@@ -1022,4 +1383,74 @@ void TankoLibraryPage::onDownloaderFailed(const QString& md5,
     m_detailStatus->setText(QString(QStringLiteral("Download failed: %1")).arg(reason));
 
     resetDownloadUiToIdle();
+}
+
+// ── Track B closeout — Tankoyomi-parity inline Transfers tab helpers ──────
+
+TransferRecord* TankoLibraryPage::findTransferRecord(const QString& md5)
+{
+    for (TransferRecord& r : m_transfers) {
+        if (r.md5 == md5) return &r;
+    }
+    return nullptr;
+}
+
+void TankoLibraryPage::showSearchResultsTab()
+{
+    if (!m_resultsInnerStack) return;
+    m_resultsInnerStack->setCurrentIndex(0);
+    if (m_searchResultsTab) {
+        m_searchResultsTab->setStyleSheet(
+            m_searchResultsTab->property("activeCss").toString());
+    }
+    if (m_transfersTab) {
+        m_transfersTab->setStyleSheet(
+            m_transfersTab->property("inactiveCss").toString());
+    }
+}
+
+void TankoLibraryPage::showTransfersTab()
+{
+    if (!m_resultsInnerStack) return;
+    refreshTransfersView();           // ensure the view has current data
+    m_resultsInnerStack->setCurrentIndex(1);
+    if (m_searchResultsTab) {
+        m_searchResultsTab->setStyleSheet(
+            m_searchResultsTab->property("inactiveCss").toString());
+    }
+    if (m_transfersTab) {
+        m_transfersTab->setStyleSheet(
+            m_transfersTab->property("activeCss").toString());
+    }
+}
+
+void TankoLibraryPage::updateTransfersTabBadge()
+{
+    int active = 0;
+    int history = 0;
+    for (const TransferRecord& r : m_transfers) {
+        if (r.state == TransferRecord::State::Downloading ||
+            r.state == TransferRecord::State::Queued) {
+            ++active;
+        } else {
+            ++history;
+        }
+    }
+    if (m_transfersTab) {
+        if (active > 0) {
+            m_transfersTab->setText(QString(QStringLiteral("Transfers (%1)")).arg(active));
+        } else {
+            m_transfersTab->setText(QStringLiteral("Transfers"));
+        }
+    }
+    if (m_transfersCounter) {
+        m_transfersCounter->setText(QString(QStringLiteral("Active: %1 | History: %2"))
+                                     .arg(active).arg(history));
+    }
+}
+
+void TankoLibraryPage::refreshTransfersView()
+{
+    if (!m_transfersView) return;
+    m_transfersView->setRecords(m_transfers);
 }
