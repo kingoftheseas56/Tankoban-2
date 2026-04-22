@@ -2,6 +2,7 @@
 #include "TileStrip.h"
 #include "TileCard.h"
 #include "BookSeriesView.h"
+#include "AudiobookDetailView.h"
 #include "core/CoreBridge.h"
 #include "core/BooksScanner.h"
 #include "core/ScannerUtils.h"
@@ -522,6 +523,14 @@ void BooksPage::buildUI()
     connect(m_seriesView, &BookSeriesView::bookSelected, this, &BooksPage::openBook);
     m_stack->addWidget(m_seriesView);
 
+    // AUDIOBOOK_PAIRED_READING_FIX Phase 2.1 — chapter-list detail view on
+    // audiobook tile click. Read-only info view; playback happens inside
+    // BookReader's Audio sidebar tab (Phase 3), not here.
+    m_audiobookDetailView = new AudiobookDetailView(this);
+    connect(m_audiobookDetailView, &AudiobookDetailView::backRequested,
+            this, &BooksPage::showGrid);
+    m_stack->addWidget(m_audiobookDetailView);
+
     outerLayout->addWidget(m_stack, 1);
 
     // ── Keyboard shortcuts (Batch 7) ──
@@ -658,10 +667,46 @@ void BooksPage::addBookSeriesTile(const BookSeriesInfo& series)
 
 void BooksPage::addAudiobookTile(const AudiobookInfo& audiobook)
 {
-    QString subtitle = QString::number(audiobook.trackCount)
-                     + (audiobook.trackCount == 1 ? " track" : " tracks");
+    // Phase 1.3 tile subtitle format: "{N} chapter(s) · HH:MM:SS" when
+    // AudiobookMetaCache has populated durations; fall back to "{N} track(s)"
+    // on cold-cache / probe-fail. Matches Max's detail-view "N chapters ·
+    // HH:MM:SS" shape (see the screenshot Hemanth shared 2026-04-22).
+    const int n = audiobook.trackCount;
+    QString subtitle;
 
-    auto* card = new TileCard("", audiobook.name, subtitle);
+    if (audiobook.totalDurationMs > 0) {
+        const qint64 totalSec = audiobook.totalDurationMs / 1000;
+        const qint64 hh = totalSec / 3600;
+        const qint64 mm = (totalSec % 3600) / 60;
+        const qint64 ss = totalSec % 60;
+        const QString duration = (hh > 0)
+            ? QString("%1:%2:%3")
+                  .arg(hh)
+                  .arg(mm, 2, 10, QChar('0'))
+                  .arg(ss, 2, 10, QChar('0'))
+            : QString("%1:%2")
+                  .arg(mm)
+                  .arg(ss, 2, 10, QChar('0'));
+        subtitle = QString("%1 %2 · %3")
+                       .arg(n)
+                       .arg(n == 1 ? "chapter" : "chapters")
+                       .arg(duration);
+    } else {
+        subtitle = QString("%1 %2")
+                       .arg(n)
+                       .arg(n == 1 ? "track" : "tracks");
+    }
+
+    auto* card = new TileCard(audiobook.coverPath, audiobook.name, subtitle);
+
+    // AUDIOBOOK_PAIRED_READING_FIX Phase 2.1 — click → chapter-list detail
+    // view. Captures the AudiobookInfo by value so the lambda stays valid
+    // even if the underlying list is rebuilt on rescan.
+    connect(card, &TileCard::clicked, this, [this, audiobook]() {
+        m_audiobookDetailView->showAudiobook(audiobook);
+        m_stack->setCurrentIndexAnimated(2);
+    });
+
     m_audiobookStrip->addTile(card);
 }
 

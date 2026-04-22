@@ -15,6 +15,7 @@ class LibraryListView;
 class TileStrip;
 class BooksScanner;
 class BookSeriesView;
+class AudiobookDetailView;
 struct BookSeriesInfo;
 struct AudiobookInfo;
 
@@ -50,6 +51,7 @@ private:
     // Navigation
     FadingStackedWidget* m_stack = nullptr;
     BookSeriesView* m_seriesView = nullptr;
+    AudiobookDetailView* m_audiobookDetailView = nullptr;
 
     // Continue Reading
     QWidget*       m_continueSection = nullptr;
