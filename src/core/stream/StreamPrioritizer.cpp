@@ -1,236 +1,448 @@
 #include "StreamPrioritizer.h"
 
-#include <QtGlobal>
+#include "StreamTelemetryWriter.h"
+#include "core/torrent/TorrentEngine.h"
 
-#include <algorithm>
-
-namespace StreamPrioritizer {
+#include <QDateTime>
 
 namespace {
 
-// Stremio priorities.rs:78 — base urgent window is the max of 15 pieces OR
-// `bitrate * 15s / piece_length`. With unknown bitrate (bitrate = 0) the
-// 15-piece floor applies.
-int urgentBasePieces(qint64 bitrate, qint64 pieceLength)
+constexpr qint64 kDefaultSeekPrefetchBytes = 3LL * 1024 * 1024;
+constexpr qint64 kRetryEscalationMs = 1500;
+constexpr qint64 kTailMetadataBytes = 10LL * 1024 * 1024;
+
+QString seekTypeName(StreamSeekClassifier::SeekType type)
 {
-    int base = 15;
-    if (bitrate > 0 && pieceLength > 0) {
-        const qint64 pieces15s = (bitrate * 15) / pieceLength;
-        base = qMax<int>(base, static_cast<int>(pieces15s));
+    switch (type) {
+    case StreamSeekClassifier::Sequential:
+        return QStringLiteral("Sequential");
+    case StreamSeekClassifier::InitialPlayback:
+        return QStringLiteral("InitialPlayback");
+    case StreamSeekClassifier::UserScrub:
+        return QStringLiteral("UserScrub");
+    case StreamSeekClassifier::ContainerMetadata:
+        return QStringLiteral("ContainerMetadata");
     }
-    return base;
+    return QStringLiteral("Unknown");
 }
 
-// Stremio priorities.rs:87-100 — if download outpaces bitrate by 1.5×, add
-// a 45 s proactive lookahead window. If bitrate is unknown and speed is
-// high (> 5 MB/s), add a fixed 20 pieces.
-int proactiveBonusPieces(qint64 bitrate, qint64 downloadSpeed, qint64 pieceLength)
+int seekBaseDeadlineForRetry(int retries)
 {
-    if (pieceLength <= 0) return 0;
-    if (bitrate > 0) {
-        if (downloadSpeed > (bitrate * 15 / 10)) {  // 1.5× bitrate
-            return static_cast<int>((bitrate * 45) / pieceLength);
-        }
-        return 0;
+    switch (retries) {
+    case 0:
+        return 500;
+    case 1:
+        return 300;
+    default:
+        return 200;
     }
-    // Bitrate unknown fallback
-    if (downloadSpeed > 5LL * 1024 * 1024) return 20;
-    return 0;
 }
 
-}  // namespace
+}
 
-QList<QPair<int, int>> calculateStreamingPriorities(const Params& p)
+StreamPrioritizer::StreamPrioritizer(TorrentEngine* engine)
+    : m_engine(engine)
+{
+    m_clock.start();
+}
+
+void StreamPrioritizer::bindTorrent(TorrentEngine* engine,
+                                    const QString& infoHash,
+                                    int fileIndex,
+                                    qint64 fileSize)
+{
+    m_engine = engine;
+    m_infoHash = infoHash;
+    m_fileIndex = fileIndex;
+    m_fileSize = fileSize;
+    resetSeekState();
+    m_headPieces.clear();
+    m_seekPieces.clear();
+    if (!m_clock.isValid()) {
+        m_clock.start();
+    }
+}
+
+void StreamPrioritizer::updateDownloadRateEma(qint64 downloadRateBps)
+{
+    constexpr double kAlpha = 0.2;
+    if (downloadRateBps <= 0) return;
+    if (m_downloadRateEma <= 0.0) {
+        m_downloadRateEma = static_cast<double>(downloadRateBps);
+        return;
+    }
+    m_downloadRateEma =
+        (kAlpha * static_cast<double>(downloadRateBps))
+        + ((1.0 - kAlpha) * m_downloadRateEma);
+}
+
+int StreamPrioritizer::urgencyWindowPieces(qint64 bitrateBytesPerSec,
+                                           qint64 pieceLength)
+{
+    if (pieceLength <= 0) return 15;
+    if (bitrateBytesPerSec <= 0) return 15;
+    const qint64 pieces = (bitrateBytesPerSec * 15 + pieceLength - 1) / pieceLength;
+    return qBound(15, static_cast<int>(pieces), 60);
+}
+
+int StreamPrioritizer::headWindowPieces(qint64 bitrateBytesPerSec,
+                                        qint64 pieceLength)
+{
+    if (pieceLength <= 0) return 5;
+    if (bitrateBytesPerSec <= 0) return 5;
+    const qint64 pieces = (bitrateBytesPerSec * 5 + pieceLength - 1) / pieceLength;
+    return qBound(5, static_cast<int>(pieces), 250);
+}
+
+QList<QPair<int, int>> StreamPrioritizer::playbackDeadlines(int currentPiece,
+                                                            int urgencyPieces,
+                                                            int headPieces,
+                                                            bool coldOpen)
 {
     QList<QPair<int, int>> out;
-    if (p.pieceLength <= 0 || p.currentPiece < 0 || p.totalPieces <= 0) {
-        return out;
-    }
+    if (currentPiece < 0 || urgencyPieces <= 0) return out;
 
-    // § 1. Dynamic window sizing (priorities.rs:72-122).
-    const int urgentBase = urgentBasePieces(p.bitrate, p.pieceLength);
-    const int proactive  = proactiveBonusPieces(p.bitrate, p.downloadSpeed, p.pieceLength);
-
-    int urgentWindow = 0;
-    int bufferWindow = 0;
-    int maxBufferPieces = 0;
-
-    if (p.cacheEnabled) {
-        const int maxPieces = static_cast<int>(p.cacheSizeBytes / p.pieceLength);
-        int urgent = urgentBase + proactive;
-        urgent = qMin(urgent, maxPieces);
-        urgent = qMin(urgent, 300);  // absolute cap
-        urgentWindow = urgent;
-
-        const int remaining = qMax(0, maxPieces - urgent);
-        bufferWindow = qMin(15, remaining);
-        maxBufferPieces = maxPieces;
-    } else {
-        // Cache-disabled "strict streaming" mode (priorities.rs:117-122).
-        urgentWindow = qMin(urgentBase + proactive, 50);
-        bufferWindow = 0;
-        maxBufferPieces = urgentWindow;
-    }
-
-    // § 2. Head window (priorities.rs:126-147). 5 s of bitrate OR download
-    // speed, bounded to [5 MB, 50 MB], then divided by piece length and
-    // clamped to [5, 250] pieces.
-    constexpr qint64 kTargetBufferSeconds = 5;
-    constexpr qint64 kMinBufferBytes = 5LL * 1024 * 1024;
-    constexpr qint64 kMaxBufferBytes = 50LL * 1024 * 1024;
-
-    qint64 targetHeadBytes = 0;
-    if (p.bitrate > 0) {
-        targetHeadBytes = qBound(kMinBufferBytes,
-                                  p.bitrate * kTargetBufferSeconds,
-                                  kMaxBufferBytes);
-    } else {
-        targetHeadBytes = qBound(kMinBufferBytes,
-                                  p.downloadSpeed * kTargetBufferSeconds,
-                                  kMaxBufferBytes);
-    }
-
-    int headWindow = static_cast<int>(targetHeadBytes / p.pieceLength);
-    headWindow = qBound(5, headWindow, 250);
-
-    // Stremio priorities.rs:150: urgent must be at least head + 15.
-    urgentWindow = qMax(urgentWindow, headWindow + 15);
-
-    const int totalWindow = urgentWindow + bufferWindow;
-    if (totalWindow <= 0) return out;
-
-    // § 3. End-piece clamping (priorities.rs:158-167).
-    const int startPiece = p.currentPiece;
-    int endPiece = qMin(startPiece + totalWindow - 1, p.totalPieces - 1);
-
-    int allowedEnd = (maxBufferPieces > 0)
-        ? qMin(startPiece + maxBufferPieces - 1, p.totalPieces - 1)
-        : (startPiece - 1);
-
-    const int effectiveEnd = qMin(endPiece, allowedEnd);
-    if (effectiveEnd < startPiece) return out;
-
-    // § 4. Per-piece deadline staircase (priorities.rs:180-222).
-    out.reserve(effectiveEnd - startPiece + 1);
-    for (int pidx = startPiece; pidx <= effectiveEnd; ++pidx) {
-        const int distance = pidx - startPiece;
+    out.reserve(urgencyPieces);
+    for (int distance = 0; distance < urgencyPieces; ++distance) {
+        const int piece = currentPiece + distance;
         int deadline = 0;
-
-        if (p.priorityLevel >= 250) {
-            // Metadata / probes — absolute priority
-            deadline = 50;
-        } else if (p.priorityLevel >= 100) {
-            // Seeking tier
-            deadline = 10 + (distance * 10);
-        } else if (p.priorityLevel == 0) {
-            // Background pre-cache — lazy deadlines
-            deadline = 20000 + (distance * 200);
+        if (coldOpen && distance == 0) {
+            deadline = 0;
+        } else if (distance < 5) {
+            deadline = 10 + (distance * 50);
+        } else if (distance < headPieces) {
+            deadline = 250 + ((distance - 5) * 50);
         } else {
-            // Normal streaming (priority=1 default)
-            if (distance < 5) {
-                // CRITICAL HEAD staircase: 10/60/110/160/210 ms
-                // (M5 note: this is NOT the cold-open 0ms URGENT path —
-                // that's handled via seekDeadlines(InitialPlayback) which
-                // ports handle.rs instead of priorities.rs.)
-                deadline = 10 + (distance * 50);
-            } else if (distance < headWindow) {
-                deadline = 250 + ((distance - 5) * 50);
-            } else {
-                const bool isProactive = (distance > urgentBase);
-                deadline = isProactive
-                    ? (10000 + (distance * 50))
-                    : (5000 + (distance * 20));
+            deadline = 5000 + (distance * 20);
+        }
+        out.append({piece, deadline});
+    }
+    return out;
+}
+
+QList<QPair<int, int>> StreamPrioritizer::seekDeadlines(int startPiece,
+                                                        int endPiece,
+                                                        int baseDeadlineMs)
+{
+    QList<QPair<int, int>> out;
+    if (startPiece < 0 || endPiece < startPiece) return out;
+
+    out.reserve(endPiece - startPiece + 1);
+    for (int piece = startPiece; piece <= endPiece; ++piece) {
+        const int distance = piece - startPiece;
+        out.append({piece, baseDeadlineMs + (distance * 10)});
+    }
+    return out;
+}
+
+void StreamPrioritizer::onPlaybackTick(const QString& hash,
+                                       double posSec,
+                                       double durSec,
+                                       qint64 windowBytes)
+{
+    Q_UNUSED(windowBytes);
+
+    if (!m_engine || hash != m_infoHash || m_fileIndex < 0 || m_fileSize <= 0) {
+        return;
+    }
+    if (durSec <= 0.0 || posSec < 0.0) return;
+
+    const qint64 byteOffset = clampByteOffset(
+        static_cast<qint64>((qMin(1.0, posSec / durSec)) * m_fileSize));
+    const PieceLayout layout = resolveLayout(byteOffset);
+    if (layout.currentPiece < 0) return;
+
+    const qint64 bitrate = qMax<qint64>(1, static_cast<qint64>(m_downloadRateEma));
+    const int urgencyPieces = urgencyWindowPieces(bitrate, layout.pieceLength);
+    const int headPieces = headWindowPieces(bitrate, layout.pieceLength);
+    const bool coldOpen = posSec < 5.0 && layout.currentPiece == layout.firstPiece;
+
+    QList<QPair<int, int>> deadlines =
+        playbackDeadlines(layout.currentPiece, urgencyPieces, headPieces, coldOpen);
+    if (layout.lastPiece >= layout.currentPiece) {
+        while (!deadlines.isEmpty() && deadlines.last().first > layout.lastPiece) {
+            deadlines.removeLast();
+        }
+    }
+    if (deadlines.isEmpty()) return;
+
+    m_engine->setPieceDeadlines(hash, deadlines);
+
+    const QSet<int> nextHead = headWindowPieceSet(layout.currentPiece, headPieces);
+    demoteStaleHeadPieces(hash, nextHead);
+    applyPrioritySet(hash, nextHead, 7);
+    m_headPieces = nextHead;
+
+    if (layout.currentPiece == layout.firstPiece) {
+        resetSeekState();
+    }
+}
+
+bool StreamPrioritizer::onSeek(const QString& hash,
+                               StreamSeekClassifier::SeekType type,
+                               double targetPosSec,
+                               qint64 targetByteOffset,
+                               qint64 prefetchBytes)
+{
+    Q_UNUSED(targetPosSec);
+
+    if (!m_engine || hash != m_infoHash || m_fileIndex < 0 || m_fileSize <= 0) {
+        return false;
+    }
+
+    const qint64 byteOffset = clampByteOffset(targetByteOffset);
+    const qint64 neededBytes = effectiveSeekBytes(byteOffset, prefetchBytes);
+    if (neededBytes <= 0) return false;
+
+    const PieceLayout layout = resolveLayout(byteOffset);
+    if (layout.currentPiece < 0) return false;
+
+    const bool ready =
+        m_engine->haveContiguousBytes(hash, m_fileIndex, byteOffset, neededBytes);
+
+    if (type == StreamSeekClassifier::Sequential
+        || type == StreamSeekClassifier::InitialPlayback) {
+        m_lastSeekTelemetry = {layout.currentPiece, ready, 0, -1};
+        return ready;
+    }
+
+    const int endPieceRange = m_engine->pieceRangeForFileOffset(
+        hash, m_fileIndex, byteOffset, neededBytes).second;
+    if (endPieceRange < layout.currentPiece) return ready;
+
+    const bool seekChanged = (m_activeSeekOffset != byteOffset);
+    if (seekChanged) {
+        resetSeekState();
+        m_activeSeekOffset = byteOffset;
+        m_seekStartedMs = m_clock.elapsed();
+    }
+
+    int retries = 0;
+    if (m_seekStartedMs >= 0) {
+        retries = static_cast<int>((m_clock.elapsed() - m_seekStartedMs) / kRetryEscalationMs);
+    }
+    retries = qBound(0, retries, 3);
+
+    if (type == StreamSeekClassifier::UserScrub) {
+        // M6 DEFENSIVE INVARIANT — clear libtorrent's global deadline
+        // table at UserScrub entry. Old pre-seek deadlines otherwise
+        // contend with new seek-target deadlines for time-critical
+        // queue slots, causing stale ghost-deadlines to starve new
+        // pieces. Mirrors pre-P3 StreamEngine behavior + Stremio
+        // Reference backend/libtorrent/stream.rs:101-108. Ported from
+        // pre-P3 HEAD StreamEngine.cpp:823-824.
+        m_engine->clearPieceDeadlines(hash);
+
+        demoteStaleHeadPieces(hash, {});
+        applyPrioritySet(hash, m_seekPieces, 1);
+        m_headPieces.clear();
+        m_seekPieces.clear();
+
+        const int peerHaveCount = m_engine->peersWithPiece(hash, layout.currentPiece);
+        emitSeekTelemetry(type, layout.currentPiece, ready, retries, peerHaveCount, byteOffset);
+        m_lastSeekTelemetry = {layout.currentPiece, ready, retries, peerHaveCount};
+
+        if (!ready && retries > m_seekRetries) {
+            const QList<QPair<int, int>> deadlines =
+                seekDeadlines(layout.currentPiece, endPieceRange,
+                              seekBaseDeadlineForRetry(retries));
+            m_engine->setPieceDeadlines(hash, deadlines);
+
+            QSet<int> nextSeekPieces;
+            for (const auto& deadline : deadlines) {
+                nextSeekPieces.insert(deadline.first);
+            }
+            applyPrioritySet(hash, nextSeekPieces, 7);
+            m_seekPieces = nextSeekPieces;
+            m_seekRetries = retries;
+        }
+
+        // M6 defensive tail-metadata deadline re-assertion. After the
+        // clearPieceDeadlines above wipes the global table, moov/Cues
+        // pieces at the tail would drop off libtorrent's time-critical
+        // radar. The 3 MB tail range matches
+        // StreamEngine::onMetadataReady's tail-priming block; deadline
+        // gradient 6000-10000 ms linearly interpolated keeps tail
+        // under time-critical pressure without competing with head.
+        // Ported from pre-P3 HEAD StreamEngine.cpp:845-866.
+        constexpr qint64 kTailBytes    = 3LL * 1024 * 1024;
+        constexpr int    kTailFirstMs  = 6000;
+        constexpr int    kTailLastMs   = 10000;
+        // Matches StreamEngine kGateBytes post-P4 (1 MB tier 1).
+        // Guard only matters for very small files where head + tail
+        // overlap; stream-mode torrent files are always >> 4 MB so
+        // this is a defensive no-op in practice.
+        constexpr qint64 kGateBytes    = 1LL * 1024 * 1024;
+        if (m_fileSize > kTailBytes + kGateBytes) {
+            const qint64 tailOffset = m_fileSize - kTailBytes;
+            const QPair<int, int> tailRange =
+                m_engine->pieceRangeForFileOffset(hash, m_fileIndex,
+                                                   tailOffset, kTailBytes);
+            if (tailRange.first >= 0 && tailRange.second >= tailRange.first) {
+                const int tailPieceCount = tailRange.second - tailRange.first + 1;
+                QList<QPair<int, int>> tailDeadlines;
+                tailDeadlines.reserve(tailPieceCount);
+                for (int i = 0; i < tailPieceCount; ++i) {
+                    const int ms = (tailPieceCount <= 1)
+                        ? kTailFirstMs
+                        : kTailFirstMs + ((kTailLastMs - kTailFirstMs) * i)
+                                         / (tailPieceCount - 1);
+                    tailDeadlines.append({ tailRange.first + i, ms });
+                }
+                m_engine->setPieceDeadlines(hash, tailDeadlines);
             }
         }
 
-        out.append({ pidx, deadline });
+        return ready;
     }
 
-    return out;
+    const int peerHaveCount = m_engine->peersWithPiece(hash, layout.currentPiece);
+    emitSeekTelemetry(type, layout.currentPiece, ready, 0, peerHaveCount, byteOffset);
+    m_lastSeekTelemetry = {layout.currentPiece, ready, 0, peerHaveCount};
+
+    if (!ready) {
+        const QList<QPair<int, int>> deadlines =
+            seekDeadlines(layout.currentPiece, qMin(layout.currentPiece + 1, endPieceRange), 100);
+        m_engine->setPieceDeadlines(hash, deadlines);
+
+        QSet<int> nextSeekPieces;
+        for (const auto& deadline : deadlines) {
+            nextSeekPieces.insert(deadline.first);
+        }
+        applyPrioritySet(hash, nextSeekPieces, 7);
+        m_seekPieces = nextSeekPieces;
+    }
+
+    return ready;
 }
 
-int initialPlaybackWindowSize(qint64 fileSize, qint64 pieceLength)
+void StreamPrioritizer::clearPlaybackWindow(const QString& hash)
 {
-    if (pieceLength <= 0 || fileSize <= 0) return kMinStartupPieces;
-
-    // handle.rs:266-268: effective target = min(MIN_STARTUP_BYTES, fileSize/20).max(pieceLength)
-    const qint64 fileSizeFifth = fileSize / 20;  // 5 % of file
-    qint64 effective = qMin(kMinStartupBytes, fileSizeFifth);
-    effective = qMax(effective, pieceLength);
-
-    // handle.rs:270-272: pieces_needed = ceil(effective / piece_length)
-    const qint64 piecesNeeded = (effective + pieceLength - 1) / pieceLength;
-
-    // handle.rs:273-274: clamp to [MIN_STARTUP_PIECES, MAX_STARTUP_PIECES]
-    return qBound<int>(kMinStartupPieces,
-                        static_cast<int>(piecesNeeded),
-                        kMaxStartupPieces);
+    if (!m_engine || hash != m_infoHash) return;
+    applyPrioritySet(hash, m_headPieces, 1);
+    applyPrioritySet(hash, m_seekPieces, 1);
+    m_headPieces.clear();
+    m_seekPieces.clear();
+    m_engine->clearPieceDeadlines(hash);
+    resetSeekState();
 }
 
-QList<QPair<int, int>> seekDeadlines(StreamSeekType type,
-                                      int startPiece,
-                                      int lastPiece,
-                                      qint64 fileSize,
-                                      qint64 pieceLength,
-                                      double speedFactor)
+StreamPrioritizer::PieceLayout StreamPrioritizer::resolveLayout(qint64 byteOffset) const
 {
-    QList<QPair<int, int>> out;
-    if (startPiece < 0 || lastPiece < startPiece) return out;
+    PieceLayout layout;
+    if (!m_engine || m_fileIndex < 0 || m_fileSize <= 0) return layout;
 
-    int baseDeadline = 0;
-    int windowSize = 0;
+    const auto current = m_engine->pieceRangeForFileOffset(
+        m_infoHash, m_fileIndex, byteOffset, 1);
+    const auto first = m_engine->pieceRangeForFileOffset(
+        m_infoHash, m_fileIndex, 0, 1);
+    const auto last = m_engine->pieceRangeForFileOffset(
+        m_infoHash, m_fileIndex, qMax<qint64>(0, m_fileSize - 1), 1);
 
-    switch (type) {
-    case StreamSeekType::InitialPlayback:
-        baseDeadline = 0;  // URGENT — stays 0 ms regardless of speedFactor
-        windowSize = initialPlaybackWindowSize(fileSize, pieceLength);
-        break;
-    case StreamSeekType::UserScrub:
-        baseDeadline = 300;  // CRITICAL
-        windowSize = 4;
-        break;
-    case StreamSeekType::ContainerMetadata:
-        baseDeadline = 100;  // CONTAINER-INDEX
-        windowSize = 2;
-        break;
-    case StreamSeekType::Sequential:
-        // Normal-streaming path — return empty; caller uses
-        // calculateStreamingPriorities for this seek type.
-        return out;
+    if (current.first < 0 || first.first < 0 || last.second < first.first) {
+        return layout;
     }
 
-    // handle.rs:287-292: speedFactor multiplies base deadline except for
-    // URGENT (base 0 stays at 0 under any factor because 0 * x = 0).
-    const int adjustedBase = (baseDeadline == 0)
-        ? 0
-        : static_cast<int>(baseDeadline * speedFactor);
-
-    out.reserve(windowSize);
-    for (int i = 0; i < windowSize; ++i) {
-        const int pidx = startPiece + i;
-        if (pidx > lastPiece) break;
-        const int deadline = adjustedBase + (i * 10);  // handle.rs:309 staircase
-        out.append({ pidx, deadline });
-    }
-
-    return out;
+    layout.currentPiece = current.first;
+    layout.firstPiece = first.first;
+    layout.lastPiece = last.second;
+    layout.totalPieces = (layout.lastPiece - layout.firstPiece) + 1;
+    layout.pieceLength = qMax<qint64>(
+        1, (m_fileSize + layout.totalPieces - 1) / layout.totalPieces);
+    return layout;
 }
 
-QList<QPair<int, int>> initialPlaybackTailDeadlines(int startPiece,
-                                                     int lastPiece,
-                                                     int headWindowSize)
+qint64 StreamPrioritizer::clampByteOffset(qint64 byteOffset) const
 {
-    QList<QPair<int, int>> out;
-    // handle.rs:324-331: only set tail deadlines if the tail is strictly
-    // beyond the head window (`last_piece > actual_start_piece + window_size`).
-    if (lastPiece <= startPiece + headWindowSize) return out;
-
-    // last_piece @ 1200 ms, last_piece-1 @ 1250 ms (handle.rs:329-331).
-    out.append({ lastPiece, 1200 });
-    if (lastPiece - 1 > startPiece + headWindowSize) {
-        out.append({ lastPiece - 1, 1250 });
-    }
-    return out;
+    if (m_fileSize <= 0) return 0;
+    if (byteOffset < 0) return 0;
+    if (byteOffset >= m_fileSize) return m_fileSize - 1;
+    return byteOffset;
 }
 
-}  // namespace StreamPrioritizer
+qint64 StreamPrioritizer::effectiveSeekBytes(qint64 byteOffset,
+                                             qint64 requestedBytes) const
+{
+    const qint64 effectiveRequested =
+        (requestedBytes > 0) ? requestedBytes : kDefaultSeekPrefetchBytes;
+    return qMin(effectiveRequested, qMax<qint64>(0, m_fileSize - byteOffset));
+}
+
+QSet<int> StreamPrioritizer::headWindowPieceSet(int currentPiece,
+                                                int headPieces) const
+{
+    QSet<int> pieces;
+    if (currentPiece < 0 || headPieces <= 0) return pieces;
+
+    const int lastHeadPiece = qMin(currentPiece + headPieces - 1,
+                                   resolveLayout(clampByteOffset(0)).lastPiece);
+    for (int piece = currentPiece; piece <= lastHeadPiece; ++piece) {
+        pieces.insert(piece);
+    }
+    return pieces;
+}
+
+QSet<int> StreamPrioritizer::tailPieceSet() const
+{
+    QSet<int> pieces;
+    if (!m_engine || m_fileIndex < 0 || m_fileSize <= kTailMetadataBytes) {
+        return pieces;
+    }
+
+    const qint64 tailOffset = qMax<qint64>(0, m_fileSize - kTailMetadataBytes);
+    const auto range = m_engine->pieceRangeForFileOffset(
+        m_infoHash, m_fileIndex, tailOffset, kTailMetadataBytes);
+    for (int piece = range.first; piece >= 0 && piece <= range.second; ++piece) {
+        pieces.insert(piece);
+    }
+    return pieces;
+}
+
+void StreamPrioritizer::applyPrioritySet(const QString& hash,
+                                         const QSet<int>& pieces,
+                                         int priority) const
+{
+    if (!m_engine) return;
+    for (int piece : pieces) {
+        m_engine->setPiecePriority(hash, piece, priority);
+    }
+}
+
+void StreamPrioritizer::demoteStaleHeadPieces(const QString& hash,
+                                              const QSet<int>& nextHeadPieces)
+{
+    QSet<int> stale = m_headPieces;
+    stale.subtract(nextHeadPieces);
+    stale.subtract(tailPieceSet());
+    applyPrioritySet(hash, stale, 1);
+}
+
+void StreamPrioritizer::emitSeekTelemetry(StreamSeekClassifier::SeekType type,
+                                          int pieceIndex,
+                                          bool ready,
+                                          int retries,
+                                          int peerHaveCount,
+                                          qint64 byteOffset) const
+{
+    if (!streamTelemetryEnabled()) return;
+
+    const QString line = QStringLiteral("[")
+        + QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)
+        + QStringLiteral("] event=seek_target hash=") + m_infoHash.left(8)
+        + QStringLiteral(" piece=") + QString::number(pieceIndex)
+        + QStringLiteral(" ready=") + (ready ? QStringLiteral("1") : QStringLiteral("0"))
+        + QStringLiteral(" retries=") + QString::number(retries)
+        + QStringLiteral(" peer_have_count=") + QString::number(peerHaveCount)
+        + QStringLiteral(" type=") + seekTypeName(type)
+        + QStringLiteral(" byteOffset=") + QString::number(byteOffset)
+        + QStringLiteral("\n");
+    appendStreamTelemetryLine(line);
+}
+
+void StreamPrioritizer::resetSeekState()
+{
+    m_activeSeekOffset = -1;
+    m_seekStartedMs = -1;
+    m_seekRetries = -1;
+    m_lastSeekTelemetry = {};
+}
