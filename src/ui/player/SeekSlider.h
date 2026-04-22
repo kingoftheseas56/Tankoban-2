@@ -28,6 +28,27 @@ public:
     void setBufferedRanges(const QList<QPair<qint64, qint64>>& ranges,
                            qint64 totalBytes);
 
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.3 — classify a seek target for
+    // anticipatory cache-pause UX. Returns true if the byte-position that
+    // maps to `targetSec` (via linear duration→byte projection against
+    // m_durationSec + m_bufferedTotalBytes) lies inside ANY of the
+    // currently-buffered ranges. Callers (VideoPlayer seek handlers) use
+    // the negative result to pre-fire the LoadingOverlay's Buffering
+    // state BEFORE the sidecar's reactive `buffering` event arrives,
+    // matching Stremio's instant "waiting for cache" feel on deep seeks.
+    //
+    // Legacy semantics (return true = "assume buffered, don't pre-fire"):
+    //   - Non-stream mode (m_bufferedTotalBytes <= 0) — library files have
+    //     no buffered-ranges signal; always return true.
+    //   - Empty ranges list — same fall-through.
+    //   - targetSec == 0 AND no ranges — treat as start-of-file; likely the
+    //     caller is resetting, don't pre-fire a dismiss race.
+    // The target-byte projection is approximate (linear interpolation over
+    // duration/totalBytes); it ignores container bitrate variation. Good
+    // enough for seek-UX classification — we're not authoritatively
+    // deciding playback feasibility, just "should we show the pre-fire".
+    bool isTimeBuffered(double targetSec) const;
+
     static constexpr int RANGE = 10000;
 
 signals:

@@ -142,6 +142,23 @@ static const char* SPEED_LABELS[] = { "0.5x","0.75x","1.0x","1.25x","1.5x","1.75
 static const double SPEED_PRESETS[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
 static const int    SPEED_COUNT    = 7;
 
+// STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C instrumentation.
+// Transition-only logging of setStreamStalled + first-per-piece setStreamStallInfo
+// so we can cross-check against LoadingOverlay's [STALL_DEBUG] trail. Writes
+// directly to _player_debug.txt (qDebug doesn't land there on Windows GUI
+// binaries — matches FrameCanvas.cpp:876-890 pattern).
+namespace {
+void logStallPlayerDbg(const QString& line)
+{
+    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream s(&f);
+        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+          << " [STALL_DEBUG][VideoPlayer] " << line << "\n";
+    }
+}
+}  // namespace
+
 // ── Constructor ─────────────────────────────────────────────────────────────
 
 VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
@@ -186,6 +203,13 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     connect(&m_seekThrottle, &QTimer::timeout, this, [this]() {
         if (m_durationSec > 0 && m_seeking)
             m_sidecar->sendSeek(m_pendingSeekVal / 10000.0 * m_durationSec);
+        // Phase 2 Batch 2.3 pre-fire is NOT invoked from the mid-drag
+        // throttle path on purpose: while the user is still dragging,
+        // the target hasn't been committed and the drag may pass over
+        // unbuffered regions en route to a buffered final target. Pre-
+        // firing from here would leave a stale overlay if the release
+        // target turns out to be buffered. sliderReleased owns the
+        // commit-point pre-fire instead.
     });
 
     // VIDEO_PLAYER_FIX Batch 3.1 — restore persisted always-on-top state.
@@ -566,6 +590,10 @@ void VideoPlayer::teardownUi()
     // state emit re-populates. Following TODO spec literally; Hemanth
     // flag if this is a regression (trivial revert: drop the two lines).
     m_durationSec = 0.0;
+    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — clear the
+    // estimate flag so the next session's HUD starts clean. probeDone
+    // from the next openFile will repopulate based on its own probe.
+    m_durationIsEstimate = false;
     if (m_timeLabel)   m_timeLabel->setText(QStringLiteral("\u2014:\u2014"));
     if (m_durLabel)    m_durLabel->setText(QStringLiteral("\u2014:\u2014"));
     if (m_titleLabel) m_titleLabel->setText(QString());
@@ -671,6 +699,107 @@ void VideoPlayer::setPersistenceMode(PersistenceMode mode)
 void VideoPlayer::setStreamMode(bool on)
 {
     m_streamMode = on;
+    // STREAM_STALL_UX_FIX Batch 1 — session bookend also clears the stall
+    // flag so a stale "true" from the prior stream doesn't gate the first
+    // few HUD ticks of the next one before statsSnapshot pushes reality.
+    m_streamStalled = false;
+    // Batch 2 — release any overlay ownership held at session boundary.
+    // Not calling dismiss here: sidecar playerIdle / firstFrame dismiss
+    // chains already own overlay lifecycle during teardown, and
+    // setStreamMode(true) fires BEFORE the next openFile's showLoading,
+    // so lingering state from a prior session would otherwise mask the
+    // fresh cold-open cascade. clearStallDiagnostic keeps the cached
+    // piece/peer fields from bleeding into the next stall's text.
+    m_streamStallOverlayOwner = false;
+    if (m_loadingOverlay) m_loadingOverlay->clearStallDiagnostic();
+}
+
+// STREAM_STALL_UX_FIX Batch 1 — cache the stall flag so onTimeUpdate can
+// suppress positionSec writes while the stream engine has a piece-wait
+// watchdog firing. Pushed from StreamPage's progressUpdated lambda at
+// ~1 Hz; worst-case HUD-freeze latency from real-stall-onset is one
+// stall-watchdog tick (2s) + one progressUpdated tick (1s) + one sidecar
+// timeUpdate (1s) ~ 4s. Acceptable vs the current 13-32s of mis-ticking
+// observed in the 2026-04-21 Invincible smoke. Flip back to false also
+// re-opens the HUD naturally on recovery.
+//
+// Batch 2 extension — on false→true transition, show the LoadingOverlay
+// in Buffering stage so the user sees a legible "buffering" state instead
+// of a silently frozen frame. On true→false transition, clear the stall
+// diagnostic + dismiss the overlay IFF we own it (the sidecar's HTTP
+// stall tracking on m_sidecarBuffering prevents premature dismiss when
+// it independently wants the overlay visible — that path dismisses via
+// bufferingEnded). showBuffering is idempotent so collisions with other
+// sources (cold-open cascade, Agent 3 Batch 2.3 seek pre-fire, sidecar
+// bufferingStarted) are safe — all mutate Stage::Buffering in place.
+void VideoPlayer::setStreamStalled(bool stalled)
+{
+    if (stalled == m_streamStalled) return;  // transition-only dedup
+    const bool wasStalled = m_streamStalled;
+    m_streamStalled = stalled;
+
+    logStallPlayerDbg(QString("setStreamStalled transition stalled=%1 wasStalled=%2 have_overlay=%3 overlay_owner=%4 sidecar_buffering=%5")
+                          .arg(stalled).arg(wasStalled)
+                          .arg(m_loadingOverlay != nullptr)
+                          .arg(m_streamStallOverlayOwner)
+                          .arg(m_sidecarBuffering));
+
+    if (!m_loadingOverlay) return;
+
+    if (!wasStalled && stalled) {
+        m_streamStallOverlayOwner = true;
+        m_loadingOverlay->showBuffering();
+    } else if (wasStalled && !stalled) {
+        m_loadingOverlay->clearStallDiagnostic();
+        if (m_streamStallOverlayOwner) {
+            m_streamStallOverlayOwner = false;
+            // Only dismiss when the sidecar isn't also in an HTTP-stall
+            // state — if it is, its bufferingEnded signal owns the dismiss.
+            if (!m_sidecarBuffering) {
+                m_loadingOverlay->dismiss();
+            }
+        }
+    }
+}
+
+// STREAM_STALL_UX_FIX Batch 2 — enrichment pushed from StreamPage on the
+// same progressUpdated tick as setStreamStalled, only while stalled is
+// true. Forwards piece index + peer-have count to LoadingOverlay which
+// repaints in place when showing Stage::Buffering. Safe to call before
+// showBuffering has landed — LoadingOverlay caches the fields silently
+// and uses them the next time paint runs.
+void VideoPlayer::setStreamStallInfo(int piece, int peerHaveCount)
+{
+    if (!m_loadingOverlay) return;
+    if (piece != m_lastLoggedStallPiece) {
+        logStallPlayerDbg(QString("setStreamStallInfo piece_change piece=%1 peer_have=%2 was_piece=%3 stalled=%4")
+                              .arg(piece).arg(peerHaveCount)
+                              .arg(m_lastLoggedStallPiece)
+                              .arg(m_streamStalled));
+        m_lastLoggedStallPiece = piece;
+    }
+    m_loadingOverlay->setStallDiagnostic(piece, peerHaveCount);
+}
+
+// STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — edge-driven sidecar IPC
+// forwarder per Agent 7 audit av_sub_sync_after_stall_2026-04-21.md
+// Option A + C. Called from StreamPage's connect on StreamEngine's
+// stallDetected/stallRecovered Qt signals. Forwards to sidecar via
+// sendStallPause/sendStallResume which freezes AVSyncClock + halts
+// PortAudio writes on pause; re-anchors clock to current video PTS
+// on resume (mpv paused-for-cache semantics). Only fires in stream
+// mode; library playback has no stall concept. Fires ~2s after real
+// stall watchdog event (vs ~4s polling latency of Batch 1's setStream
+// Stalled) because this is the edge-driven path, not polling.
+void VideoPlayer::onStreamStallEdgeFromEngine(bool detected)
+{
+    if (!m_streamMode) return;
+    if (!m_sidecar)   return;
+    if (detected) {
+        m_sidecar->sendStallPause();
+    } else {
+        m_sidecar->sendStallResume();
+    }
 }
 
 // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — buffered-range snapshot
@@ -829,6 +958,51 @@ void VideoPlayer::onFirstFrame(const QJsonObject& payload)
     m_statsWidth  = w;
     m_statsHeight = h;
     m_statsFps    = payload.value("fps").toDouble(0.0);
+
+    // D-2 aspect-override reset-on-mismatch (2026-04-20 VLC_ASPECT_CROP
+    // audit gap D-2). Closes Tankoban's persistence-policy deviation from
+    // the VLC / PotPlayer standard (neither persists per-file aspect):
+    // when a persisted aspectOverride (from per-file, per-show, or carry)
+    // differs sharply from the content's actual native aspect — e.g.
+    // "16:9" persisted after watching 16:9 shows, then user opens 2.40:1
+    // cinemascope — silently reset to "original" before the canvas attaches
+    // so the first rendered frame carries native aspect, not the stale
+    // override-induced stretch. > 10% ratio drift catches the 16:9-vs-2.40
+    // + 4:3-vs-16:9 classes that produce visible distortion, while leaving
+    // near-match user intents (2.35 vs 2.39, 16:9 vs 1.85) alone. Write
+    // the reset to BOTH per-file and per-show records so subsequent opens
+    // of this file don't re-apply the stale override.
+    if (w > 0 && h > 0) {
+        const double persistedAspect = aspectStringToDouble(m_currentAspect);
+        if (persistedAspect > 0.0) {
+            const double nativeAspect = static_cast<double>(w) / static_cast<double>(h);
+            const double ratioDrift = qAbs(persistedAspect - nativeAspect) / nativeAspect;
+            if (ratioDrift > 0.10) {
+                debugLog(QString("[VideoPlayer] D-2 aspect reset: persisted=%1 (%2) native=%3 drift=%4, reset to original")
+                    .arg(m_currentAspect)
+                    .arg(persistedAspect, 0, 'f', 4)
+                    .arg(nativeAspect, 0, 'f', 4)
+                    .arg(ratioDrift, 0, 'f', 4));
+                m_currentAspect = QStringLiteral("original");
+                if (m_canvas) m_canvas->setForcedAspectRatio(0.0);
+                saveShowPrefs();
+                debugLog(QString("[VideoPlayer] D-2 reset diagnostic: bridge=%1 mode=%2 videoId='%3'")
+                    .arg(m_bridge ? "ok" : "null")
+                    .arg(m_persistenceMode == PersistenceMode::LibraryVideos ? "LibraryVideos" : "None")
+                    .arg(m_currentVideoId));
+                if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos
+                    && !m_currentVideoId.isEmpty()) {
+                    QJsonObject prog = m_bridge->progress("videos", m_currentVideoId);
+                    const bool wasPresent = prog.contains("aspectOverride");
+                    prog["aspectOverride"] = m_currentAspect;
+                    m_bridge->saveProgress("videos", m_currentVideoId, prog);
+                    debugLog(QString("[VideoPlayer] D-2 reset saveProgress: wasPresent=%1 wrote aspectOverride=%2")
+                        .arg(wasPresent).arg(m_currentAspect));
+                }
+            }
+        }
+    }
+
     if (m_showStats && m_statsBadge) {
         m_statsBadge->show();
         m_statsBadge->raise();
@@ -856,32 +1030,67 @@ void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
 {
     if (m_seeking) return;
 
-    // Batch 6.1 — stash last clean position for crash-recovery resume.
-    m_lastKnownPosSec = positionSec;
+    // STREAM_STALL_UX_FIX Batch 1 — during a stream-engine stall, the sidecar
+    // keeps emitting timeUpdate from the audio PTS clock while the video
+    // decoder is dry (FrameCanvas painting the last frame). The positionSec
+    // reported while stalled is meaningless-ahead of what the user actually
+    // sees, so pinning the seek slider + time label prevents the "screen
+    // frozen but clock ticking" lie. m_lastKnownPosSec also stays pinned so
+    // crash-recovery resumes from the last on-screen-accurate second rather
+    // than an extrapolated future position. Duration label + m_durationSec
+    // + setDurationSec still run (duration is invariant mid-playback).
+    // saveProgress still fires so the ~1 Hz progressUpdated tick continues
+    // to drive StreamPage's stats-pull + deadline retarget pipeline; the
+    // saved position is the last-good one via the pinned m_lastKnownPosSec.
+    const bool gateHud = m_streamMode && m_streamStalled;
+
+    if (!gateHud) {
+        m_lastKnownPosSec = positionSec;
+    }
 
     m_durationSec = durationSec;
     m_seekBar->setDurationSec(durationSec);
     qint64 posMs = static_cast<qint64>(positionSec * 1000);
     qint64 durMs = static_cast<qint64>(durationSec * 1000);
 
-    m_seekBar->blockSignals(true);
-    m_seekBar->setValue(durationSec > 0 ? static_cast<int>(positionSec / durationSec * 10000) : 0);
-    m_seekBar->blockSignals(false);
+    if (!gateHud) {
+        m_seekBar->blockSignals(true);
+        m_seekBar->setValue(durationSec > 0 ? static_cast<int>(positionSec / durationSec * 10000) : 0);
+        m_seekBar->blockSignals(false);
 
-    m_timeLabel->setText(formatTime(posMs));
+        m_timeLabel->setText(formatTime(posMs));
+    }
     // STREAM_DURATION_FIX — when the sidecar reports durationSec=0 it means
     // the probe's duration estimate was FROM_BITRATE (unreliable) and was
     // discarded in demuxer.cpp. Show "—:—" to signal unknown honestly, so
     // the HUD never displays a wildly-wrong number (1h content mis-rendered
     // as 2h was the repro that motivated this guard).
+    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — when durationSec
+    // is a bitrate x fileSize estimate (sidecar's last-resort fallback
+    // rescuing pack torrents where video + audio AVStream::duration are
+    // both unset), prefix the formatted time with a tilde to honestly
+    // signal approximation (~10-50% VBR error). User sees "~42:00" and
+    // knows the exact end is plus/minus a few minutes, preserving the
+    // anti-lie UX contract while enabling interactive seek.
+    // m_durationIsEstimate is cached from SidecarProcess::probeDone's
+    // new payload flag; defaults false, stays false on Branch 1 (video
+    // stream duration) + Branch 3 (FROM_PTS) + stream-max fallback where
+    // duration is ground-truth.
     if (durationSec > 0.0) {
-        m_durLabel->setText(formatTime(durMs));
+        const QString durText = formatTime(durMs);
+        m_durLabel->setText(m_durationIsEstimate
+            ? QStringLiteral("~") + durText
+            : durText);
     } else {
         m_durLabel->setText(QStringLiteral("\u2014:\u2014"));
     }
 
-    // Save progress every update (~1/sec from sidecar)
-    saveProgress(positionSec, durationSec);
+    // Save progress every update (~1/sec from sidecar). During a stall we
+    // save (and emit progressUpdated with) the pinned last-good position so
+    // StreamPage's watch-state write + updatePlaybackWindow see reality, not
+    // the extrapolated audio-clock position that's ahead of the screen.
+    const double effectivePosSec = gateHud ? m_lastKnownPosSec : positionSec;
+    saveProgress(effectivePosSec, durationSec);
 }
 
 void VideoPlayer::onStateChanged(const QString& state)
@@ -1187,8 +1396,18 @@ void VideoPlayer::buildUI()
     });
     connect(m_seekBar, &QSlider::sliderReleased, this, [this]() {
         m_seeking = false;
-        if (m_durationSec > 0)
-            m_sidecar->sendSeek(m_seekBar->value() / 10000.0 * m_durationSec);
+        if (m_durationSec > 0) {
+            const double targetSec = m_seekBar->value() / 10000.0 * m_durationSec;
+            // PLAYER_STREMIO_PARITY Phase 2 Batch 2.3 — anticipatory
+            // cache-pause UI on seek commit. See throttle-handler comment
+            // above for rationale. Idempotent: if the drag already pre-
+            // fired showBuffering via the throttle path, setStage(Buffering)
+            // is a no-op same-stage call (returns without re-fade).
+            if (m_loadingOverlay && !m_seekBar->isTimeBuffered(targetSec)) {
+                m_loadingOverlay->showBuffering();
+            }
+            m_sidecar->sendSeek(targetSec);
+        }
         if (m_seekDragOrigin >= 0) {
             m_centerFlash->flash(m_seekBar->value() > m_seekDragOrigin ? SVG_SEEK_FWD : SVG_SEEK_BACK);
             m_seekDragOrigin = -1;
@@ -1508,6 +1727,21 @@ void VideoPlayer::buildUI()
             m_loadingOverlay, &LoadingOverlay::showBuffering);
     connect(m_sidecar, &SidecarProcess::bufferingEnded,
             m_loadingOverlay, &LoadingOverlay::dismiss);
+    // STREAM_STALL_UX_FIX Batch 2 — track sidecar HTTP-stall state so the
+    // stream-engine stall-clear path in setStreamStalled doesn't dismiss
+    // an overlay the sidecar is still holding up. bufferingEnded's own
+    // dismiss above owns that dismiss path independently.
+    connect(m_sidecar, &SidecarProcess::bufferingStarted,
+            this, [this]() { m_sidecarBuffering = true; });
+    connect(m_sidecar, &SidecarProcess::bufferingEnded,
+            this, [this]() { m_sidecarBuffering = false; });
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — structured cache-pause
+    // progress wiring. Sidecar emits `cache_state` at 2 Hz during an active
+    // HTTP stall (between bufferingStarted and bufferingEnded). The existing
+    // bufferingStarted → showBuffering chain still drives the stage +
+    // fade-in; this signal upgrades the text in-place with % + ETA.
+    connect(m_sidecar, &SidecarProcess::cacheStateChanged,
+            m_loadingOverlay, &LoadingOverlay::setCacheProgress);
     // firstFrame is the primary dismiss trigger — by the time the first
     // video frame renders, the Loading window is semantically closed.
     // Qt permits a slot with fewer args than the signal, so firstFrame's
@@ -1532,10 +1766,19 @@ void VideoPlayer::buildUI()
         m_loadingOverlay->setStage(LoadingOverlay::Stage::Probing);
         emit probeStarted();
     });
-    connect(m_sidecar, &SidecarProcess::probeDone, this, [this]() {
+    connect(m_sidecar, &SidecarProcess::probeDone, this,
+            [this](bool durationIsEstimate) {
         // No stage transition — stay in Probing. Next transition fires
         // on decoder_open_start (typically right after probe success).
-        emit probeDone();
+        // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — cache the
+        // estimate flag so subsequent onTimeUpdate ticks render the
+        // HUD duration with a `~` tilde prefix when the sidecar's
+        // probe fell through to the bitrate × fileSize fallback. Pre-
+        // fix sidecars (missing the JSON key) will report false via
+        // QJsonValue default — preserves exact-duration HUD rendering
+        // on those paths.
+        m_durationIsEstimate = durationIsEstimate;
+        emit probeDone();   // zero-arg re-emit preserves downstream consumers
     });
     connect(m_sidecar, &SidecarProcess::decoderOpenStarted, this, [this]() {
         m_loadingOverlay->setStage(LoadingOverlay::Stage::OpeningDecoder);
@@ -2768,6 +3011,7 @@ double VideoPlayer::aspectStringToDouble(const QString& token)
     if (token == QLatin1String("4:3"))    return 4.0 / 3.0;
     if (token == QLatin1String("16:9"))   return 16.0 / 9.0;
     if (token == QLatin1String("2.35:1")) return 2.35;
+    if (token == QLatin1String("2.39:1")) return 2.39;
     if (token == QLatin1String("1.85:1")) return 1.85;
     return 0.0;  // "original" or unknown -> let native aspect apply
 }

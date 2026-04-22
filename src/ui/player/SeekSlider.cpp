@@ -74,6 +74,31 @@ void SeekSlider::setBufferedRanges(const QList<QPair<qint64, qint64>>& ranges,
     update();
 }
 
+// PLAYER_STREMIO_PARITY Phase 2 Batch 2.3 — seek-target buffered classifier.
+// Linear duration→byte projection; see header doc for approximation caveat.
+bool SeekSlider::isTimeBuffered(double targetSec) const
+{
+    // Library-file mode (no buffered-ranges signal) — assume buffered. Also
+    // the empty-ranges-but-totalBytes-set case that happens between a fresh
+    // stream open and the first buffered_ranges emit (0-500 ms window on
+    // typical swarms) — caller shouldn't suppress UI feedback there.
+    if (m_bufferedTotalBytes <= 0 || m_bufferedRanges.isEmpty() || m_durationSec <= 0.0) {
+        return true;
+    }
+    if (targetSec < 0.0) return true;  // clamp-equivalent; don't pre-fire on malformed input
+    const qint64 targetByte = static_cast<qint64>(
+        static_cast<double>(m_bufferedTotalBytes) * (targetSec / m_durationSec));
+    // Short linear scan — ranges list is typically < 20 entries for modern
+    // piece-size torrents (16-MiB pieces × 30 ranges max in a multi-GB file
+    // after significant playback). Binary-search optimisation isn't worth it.
+    for (const auto& r : m_bufferedRanges) {
+        if (targetByte >= r.first && targetByte < r.second) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void SeekSlider::paintEvent(QPaintEvent* e)
 {
     QSlider::paintEvent(e);
