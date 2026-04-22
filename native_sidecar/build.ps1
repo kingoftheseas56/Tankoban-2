@@ -34,6 +34,15 @@ Write-Host "Installing to $installDir..."
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item "$buildDir\ffmpeg_sidecar.exe" "$installDir\ffmpeg_sidecar.exe" -Force
 
+# Copy ffprobe.exe from the same MinGW ffmpeg build — consumed by the main-app
+# AudiobookMetaCache (AUDIOBOOK_PAIRED_READING_FIX Phase 1.1) to extract
+# audiobook chapter durations. Uses the same avformat/avcodec/avutil DLLs
+# already copied below, so no separate DLL set is required.
+$ffprobeExe = "C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin\ffprobe.exe"
+if (Test-Path $ffprobeExe) {
+    Copy-Item $ffprobeExe "$installDir\ffprobe.exe" -Force
+}
+
 # Copy MinGW runtime DLLs
 $mingwBin = "C:\tools\mingw64\bin"
 $runtimeDlls = @("libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll")

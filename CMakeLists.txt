@@ -53,6 +53,7 @@ set(SOURCES
     src/ui/pages/PosterPickerPopover.cpp
     src/ui/pages/SeriesView.cpp
     src/ui/pages/BookSeriesView.cpp
+    src/ui/pages/AudiobookDetailView.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
     src/ui/pages/ShowView.cpp
@@ -128,6 +129,7 @@ set(SOURCES
     src/ui/pages/tankoyomi/MangaResultsGrid.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
+    src/ui/pages/tankolibrary/TransfersView.cpp
     src/core/stream/MetaAggregator.cpp
     src/core/stream/StreamHttpServer.cpp
     src/core/stream/StreamEngine.cpp
@@ -181,6 +183,7 @@ set(HEADERS
     src/ui/pages/PosterPickerPopover.h
     src/ui/pages/SeriesView.h
     src/ui/pages/BookSeriesView.h
+    src/ui/pages/AudiobookDetailView.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
     src/ui/pages/ShowView.h
@@ -253,6 +256,7 @@ set(HEADERS
     src/ui/pages/tankoyomi/MangaResultsGrid.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
+    src/ui/pages/tankolibrary/TransfersView.h
     src/core/stream/MetaAggregator.h
     src/core/stream/StreamHttpServer.h
     src/core/stream/StreamEngine.h
