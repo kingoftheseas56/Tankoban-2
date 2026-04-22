@@ -31,13 +31,19 @@ static const char* TRACK_LIST_SS =
     "}";
 
 static const char* BTN_SS =
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #6
+    // ("subtitle delay row is especially rough: the decrement control
+    // reads as a tiny unlabeled block, while + and Reset are visually
+    // tiny and easy to miss"): bump padding 2/8 → 4/10 and font-size
+    // 11 → 12 so the buttons feel like proper tap targets (delay row
+    // also grows its button height to 30 px in the row layout below).
     "QPushButton {"
     "  background: rgba(40,40,40,230);"
     "  color: #ccc;"
     "  border: 1px solid rgba(255,255,255,0.1);"
     "  border-radius: 4px;"
-    "  padding: 2px 8px;"
-    "  font-size: 11px;"
+    "  padding: 4px 10px;"
+    "  font-size: 12px;"
     "}"
     "QPushButton:hover {"
     "  background: rgba(60,60,60,230);"
@@ -120,11 +126,19 @@ TrackPopover::TrackPopover(QWidget* parent)
     lay->addWidget(m_subList);
 
     // --- Delay row ---
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #6
+    // wanted explicit section separation. Add a "Subtitle Delay"
+    // sub-label so the row's purpose is named, not inferred.
+    auto* subDelayLabel = new QLabel("Subtitle Delay");
+    subDelayLabel->setStyleSheet(LABEL_SS);
+    lay->addWidget(subDelayLabel);
+
     auto* delayRow = new QHBoxLayout;
-    delayRow->setSpacing(4);
+    delayRow->setSpacing(6);
 
     m_delayMinus = new QPushButton(QStringLiteral("\u2212"));
-    m_delayMinus->setFixedSize(28, 24);
+    m_delayMinus->setToolTip("Delay subtitles -100 ms");
+    m_delayMinus->setFixedSize(36, 30);
     m_delayMinus->setStyleSheet(BTN_SS);
     connect(m_delayMinus, &QPushButton::clicked,
             this, [this]() { emit subDelayAdjusted(-100); });
@@ -132,19 +146,19 @@ TrackPopover::TrackPopover(QWidget* parent)
 
     m_delayLabel = new QLabel("0ms");
     m_delayLabel->setStyleSheet(
-        "color: rgba(255,255,255,0.92); font-size: 11px; border: none;");
+        "color: rgba(255,255,255,0.92); font-size: 12px; font-weight: 600; border: none;");
     m_delayLabel->setAlignment(Qt::AlignCenter);
     delayRow->addWidget(m_delayLabel, 1);
 
     m_delayPlus = new QPushButton("+");
-    m_delayPlus->setFixedSize(28, 24);
+    m_delayPlus->setFixedSize(36, 30);
     m_delayPlus->setStyleSheet(BTN_SS);
     connect(m_delayPlus, &QPushButton::clicked,
             this, [this]() { emit subDelayAdjusted(100); });
     delayRow->addWidget(m_delayPlus);
 
     m_delayReset = new QPushButton("Reset");
-    m_delayReset->setFixedSize(44, 24);
+    m_delayReset->setFixedSize(60, 30);
     m_delayReset->setStyleSheet(BTN_SS);
     connect(m_delayReset, &QPushButton::clicked,
             this, [this]() { emit subDelayAdjusted(0); });

@@ -48,9 +48,14 @@ EqualizerPopover::EqualizerPopover(QWidget* parent)
     lay->setContentsMargins(12, 12, 12, 12);
     lay->setSpacing(4);
 
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #7
+    // ("EQ popover reads more like a developer widget than an intentional
+    // audio surface; sliders and frequency labels are tiny"): raise the
+    // section header 10 → 13 px, companion band-slider + label sizes
+    // below also grow so the panel has breathing room.
     auto* header = new QLabel("Equalizer");
     header->setStyleSheet(
-        "color: rgba(214,194,164,240); font-size: 10px; font-weight: 700; border: none;"
+        "color: rgba(214,194,164,240); font-size: 13px; font-weight: 700; border: none;"
     );
     lay->addWidget(header);
 
@@ -101,33 +106,40 @@ EqualizerPopover::EqualizerPopover(QWidget* parent)
         col->setSpacing(2);
         col->setAlignment(Qt::AlignCenter);
 
+        // Phase 4: val label alpha 120→220, font 8→10 px, width 28→32.
         m_valLabels[i] = new QLabel("0");
         m_valLabels[i]->setStyleSheet(
-            "color: rgba(255,255,255,120); font-size: 8px; border: none;");
+            "color: rgba(255,255,255,220); font-size: 10px; font-weight: 500; border: none;");
         m_valLabels[i]->setAlignment(Qt::AlignCenter);
-        m_valLabels[i]->setFixedWidth(28);
+        m_valLabels[i]->setFixedWidth(32);
         col->addWidget(m_valLabels[i]);
 
+        // Phase 4: groove width 4→6, handle 10×10→14×14, slider height
+        // 100→120 for taller gesture.
         m_sliders[i] = new QSlider(Qt::Vertical);
         m_sliders[i]->setRange(-12, 12);  // dB
         m_sliders[i]->setValue(0);
-        m_sliders[i]->setFixedHeight(100);
+        m_sliders[i]->setFixedHeight(120);
         m_sliders[i]->setStyleSheet(
             "QSlider::groove:vertical {"
-            "  width: 4px; background: rgba(255,255,255,25); border-radius: 2px;"
+            "  width: 6px; background: rgba(255,255,255,35); border-radius: 3px;"
             "}"
             "QSlider::handle:vertical {"
-            "  height: 10px; width: 10px; margin: 0 -3px;"
-            "  background: #ccc; border-radius: 5px;"
+            "  height: 14px; width: 14px; margin: 0 -4px;"
+            "  background: #ddd; border-radius: 7px;"
+            "}"
+            "QSlider::handle:vertical:hover {"
+            "  background: #fff;"
             "}"
         );
         col->addWidget(m_sliders[i], 0, Qt::AlignCenter);
 
+        // Phase 4: freq label alpha 100→200, font 8→10 px, width 28→32.
         auto* freqLabel = new QLabel(BAND_LABELS[i]);
         freqLabel->setStyleSheet(
-            "color: rgba(255,255,255,100); font-size: 8px; border: none;");
+            "color: rgba(255,255,255,200); font-size: 10px; border: none;");
         freqLabel->setAlignment(Qt::AlignCenter);
-        freqLabel->setFixedWidth(28);
+        freqLabel->setFixedWidth(32);
         col->addWidget(freqLabel);
 
         bandsRow->addLayout(col);

@@ -1,5 +1,7 @@
 #include "ui/player/PlaylistDrawer.h"
 
+#include "ui/player/PlayerUtils.h"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QEnterEvent>
@@ -7,11 +9,13 @@
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QWheelEvent>
 #include <QSettings>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -62,24 +66,32 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
     div->setStyleSheet("background: rgba(255,255,255,20); border: none;");
     lay->addWidget(div);
 
-    // VIDEO_PLAYER_FIX Batch 5.1 — queue-mode toolbar. Four checkable
-    // buttons: Shuffle, Repeat All, Repeat One, Loop File. Unicode
-    // glyphs (not emojis) per feedback_no_color_no_emoji — stay gray.
+    // VIDEO_PLAYER_UI_POLISH follow-up 2026-04-23 (hemanth-reported after
+    // Phase 4 ship): the glyph+label attempt ("⇄ Shuffle" etc.) ran out
+    // of horizontal space in the 320 px-wide drawer once Save + Load
+    // were laid out alongside, eliding the labels to nonsense like
+    // "⇄...e" / "∞...l" / "1...e" / "...". Reverting to icon-only but
+    // using real SVG (`resources/icons/{shuffle,repeat_all,repeat_one,
+    // loop_file}.svg`) instead of unicode glyphs — matches Tankoyomi
+    // / Sources icon aesthetic, stays crisp at any DPR, and keeps the
+    // tooltip as the name carrier for hover discovery. Button bounds
+    // shrunk to 34×30 so all four toggles + Save + Load fit without
+    // truncation.
     const QString toolbarBtnStyle =
         "QToolButton {"
-        "  color: rgba(255,255,255,140);"
+        "  color: rgba(255,255,255,170);"
         "  background: transparent;"
         "  border: 1px solid rgba(255,255,255,30);"
         "  border-radius: 4px;"
-        "  font-size: 14px;"
-        "  font-weight: 700;"
-        "  padding: 2px;"
+        "  padding: 3px;"
         "}"
-        "QToolButton:hover { color: rgba(255,255,255,220); }"
+        "QToolButton:hover {"
+        "  background: rgba(255,255,255,14);"
+        "  border: 1px solid rgba(255,255,255,60);"
+        "}"
         "QToolButton:checked {"
-        "  color: rgba(245,245,245,245);"
-        "  background: rgba(255,255,255,22);"
-        "  border: 1px solid rgba(255,255,255,80);"
+        "  background: rgba(255,255,255,26);"
+        "  border: 1px solid rgba(255,255,255,90);"
         "}";
 
     auto* toolbar = new QHBoxLayout();
@@ -88,12 +100,13 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
 
     const QSettings s("Tankoban", "Tankoban");
 
-    auto makeBtn = [&](const QString& glyph, const QString& tip,
-                      const QString& key, QToolButton*& slot) {
+    auto makeBtn = [&](const QString& iconPath, const QString& tip,
+                       const QString& key, QToolButton*& slot) {
         slot = new QToolButton();
-        slot->setText(glyph);
+        slot->setIcon(QIcon(iconPath));
+        slot->setIconSize(QSize(18, 18));
         slot->setCheckable(true);
-        slot->setFixedSize(28, 24);
+        slot->setFixedSize(34, 30);
         slot->setCursor(Qt::PointingHandCursor);
         slot->setFocusPolicy(Qt::NoFocus);
         slot->setToolTip(tip);
@@ -102,10 +115,14 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
         toolbar->addWidget(slot);
     };
 
-    makeBtn(QStringLiteral("\u21C4"), tr("Shuffle"),    "player/queueMode/shuffle",   m_btnShuffle);
-    makeBtn(QStringLiteral("\u221E"), tr("Repeat All"), "player/queueMode/repeatAll", m_btnRepeatAll);
-    makeBtn(QStringLiteral("1"),      tr("Repeat One"), "player/queueMode/repeatOne", m_btnRepeatOne);
-    makeBtn(QStringLiteral("\u27F2"), tr("Loop File"),  "player/queueMode/loopFile",  m_btnLoopFile);
+    makeBtn(":/icons/shuffle.svg", tr("Shuffle playback order"),
+            "player/queueMode/shuffle",   m_btnShuffle);
+    makeBtn(":/icons/repeat_all.svg", tr("Repeat all items"),
+            "player/queueMode/repeatAll", m_btnRepeatAll);
+    makeBtn(":/icons/repeat_one.svg", tr("Repeat current item"),
+            "player/queueMode/repeatOne", m_btnRepeatOne);
+    makeBtn(":/icons/loop_file.svg", tr("Loop file"),
+            "player/queueMode/loopFile",  m_btnLoopFile);
     toolbar->addStretch();
 
     // VIDEO_PLAYER_FIX Batch 5.2 — Save / Load buttons (right-aligned after
@@ -157,6 +174,13 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
     // Episode list
     m_list = new QListWidget();
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #4
+    // ("weak hierarchy: current row gets a small play marker, but the
+    // filenames are so dense scanning is harder than it should be"):
+    // strengthen selected-row contrast (bg 18→42) + 3 px off-white
+    // left-border accent + widen item padding 6/4 → 8/10 so the list
+    // scans cleanly at a glance. Hover-not-selected bg 10→16 to
+    // match the new scale.
     m_list->setStyleSheet(
         "QListWidget {"
         "  background: transparent; border: none; outline: none;"
@@ -164,16 +188,18 @@ PlaylistDrawer::PlaylistDrawer(QWidget* parent)
         "QListWidget::item {"
         "  color: rgba(245, 245, 245, 200);"
         "  font-size: 13px;"
-        "  padding: 6px 4px;"
+        "  padding: 8px 10px;"
         "  border: none;"
         "  border-radius: 4px;"
         "}"
         "QListWidget::item:selected {"
-        "  background: rgba(255,255,255,18);"
-        "  color: rgba(245, 245, 245, 245);"
+        "  background: rgba(255,255,255,42);"
+        "  color: rgba(245, 245, 245, 250);"
+        "  border-left: 3px solid rgba(214,194,164,200);"
+        "  padding-left: 7px;"
         "}"
         "QListWidget::item:hover:!selected {"
-        "  background: rgba(255,255,255,10);"
+        "  background: rgba(255,255,255,16);"
         "}"
     );
     connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
@@ -199,7 +225,13 @@ void PlaylistDrawer::populate(const QStringList& paths, int currentIndex)
 {
     m_list->clear();
     for (int i = 0; i < paths.size(); ++i) {
-        QString stem = QFileInfo(paths[i]).completeBaseName();
+        // VIDEO_PLAYER_UI_POLISH Phase 2 2026-04-22 — audit finding #3
+        // ("raw release filenames leak into playback UI"): run each
+        // entry through the shared episodeLabel helper so drawer rows
+        // match the bottom title strip's cleaned format
+        // ("Saiki Kusuo no Psi-nan · Episode 4" instead of the raw
+        // "[DB]Saiki Kusuo no Psi-nan_-_04_(Dual Audio_10bit_BD1080p_x265)").
+        QString stem = player_utils::episodeLabel(paths[i]);
         if (stem.isEmpty()) stem = QString("Track %1").arg(i + 1);
         QString prefix = (i == currentIndex) ? "\u25b6 " : "   ";
         auto* item = new QListWidgetItem(prefix + stem);
@@ -254,6 +286,21 @@ void PlaylistDrawer::enterEvent(QEnterEvent* event)
     // Prevent VideoPlayer's HUD auto-hide while hovering the drawer
     if (parent())
         QMetaObject::invokeMethod(parent(), "showControls");
+}
+
+void PlaylistDrawer::wheelEvent(QWheelEvent* event)
+{
+    // VIDEO_PLAYER_UI_POLISH follow-up 2026-04-23 (hemanth-reported
+    // after Phase 4 ship): scrolling the playlist was also changing
+    // volume because QListWidget doesn't consume wheel events when
+    // it reaches its scroll limit (or when cursor is over non-list
+    // regions of the drawer like the toolbar / auto-advance row),
+    // so the event bubbled to VideoPlayer::wheelEvent which treats
+    // wheel as volume. Accept here so nothing leaks past the drawer.
+    // Child widgets (the QListWidget) still get the wheel event first
+    // and scroll normally when possible — this only short-circuits
+    // the otherwise-propagating residual.
+    event->accept();
 }
 
 void PlaylistDrawer::leaveEvent(QEvent* event)

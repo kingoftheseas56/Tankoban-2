@@ -178,9 +178,14 @@ FilterPopover::~FilterPopover()
 
 QLabel* FilterPopover::makeHeader(const QString& text)
 {
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #7
+    // ("EQ + Filters popovers feel like internal tools; dense controls,
+    // little breathing room, weak visual emphasis"): bump header 10→13
+    // px so Video / Audio / HDR Tone Mapping section headers read as
+    // proper section chrome, matching the EQ popover's Phase 4 header.
     auto* lbl = new QLabel(text);
     lbl->setStyleSheet(
-        "color: rgba(214,194,164,240); font-size: 10px; font-weight: 700; border: none;"
+        "color: rgba(214,194,164,240); font-size: 13px; font-weight: 700; border: none;"
     );
     return lbl;
 }
@@ -189,12 +194,18 @@ FilterPopover::SliderRow FilterPopover::addSliderRow(
     QVBoxLayout* parentLayout, const QString& label,
     int minVal, int maxVal, int defaultVal)
 {
+    // VIDEO_PLAYER_UI_POLISH Phase 4 2026-04-23 — audit finding #7
+    // sibling fix for the Filters popover: row spacing 4→8, label
+    // font 10→12 px + alpha 140→220 (so names read cleanly), slider
+    // groove 4→6 px + handle 12×12→16×16 (bigger gesture target),
+    // value label font 10→12 + alpha 140→220 + width 32→40 so 3-digit
+    // brightness values fit without truncation.
     auto* row = new QHBoxLayout();
-    row->setSpacing(4);
+    row->setSpacing(8);
 
     auto* name = new QLabel(label);
-    name->setStyleSheet("color: rgba(255,255,255,140); font-size: 10px; border: none;");
-    name->setFixedWidth(62);
+    name->setStyleSheet("color: rgba(255,255,255,220); font-size: 12px; border: none;");
+    name->setFixedWidth(84);
     row->addWidget(name);
 
     auto* slider = new QSlider(Qt::Horizontal);
@@ -202,18 +213,21 @@ FilterPopover::SliderRow FilterPopover::addSliderRow(
     slider->setValue(defaultVal);
     slider->setStyleSheet(
         "QSlider::groove:horizontal {"
-        "  height: 4px; background: rgba(255,255,255,25); border-radius: 2px;"
+        "  height: 6px; background: rgba(255,255,255,35); border-radius: 3px;"
         "}"
         "QSlider::handle:horizontal {"
-        "  width: 12px; height: 12px; margin: -4px 0;"
-        "  background: #ccc; border-radius: 6px;"
+        "  width: 16px; height: 16px; margin: -5px 0;"
+        "  background: #ddd; border-radius: 8px;"
+        "}"
+        "QSlider::handle:horizontal:hover {"
+        "  background: #fff;"
         "}"
     );
     row->addWidget(slider, 1);
 
     auto* val = new QLabel(QString::number(defaultVal / 100.0, 'f', 1));
-    val->setStyleSheet("color: rgba(255,255,255,140); font-size: 10px; border: none;");
-    val->setFixedWidth(32);
+    val->setStyleSheet("color: rgba(255,255,255,220); font-size: 12px; font-weight: 500; border: none;");
+    val->setFixedWidth(40);
     val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(val);
 
