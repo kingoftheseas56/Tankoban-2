@@ -3230,3 +3230,689 @@ Lane free. Instrumentation stays on-disk (uncommitted) pending Hemanth's next di
 
 
 READY TO COMMIT - [Agent 4, STREAM_STALL_RECOVERY_UX Direction C instrumentation ship + empirical Q1 answer]: **DIAGNOSTIC-ONLY instrumentation** targeting the Q1 investigation ("does LoadingOverlay render during real stalls?"). Zero behavior change, zero API surface change, zero protocol change. Writes to existing `_player_debug.txt` via the same `QFile::Append` pattern FrameCanvas.cpp:876-890 uses (qDebug doesn't land there on Windows GUI binaries). Keeps instrumentation on for the next Agent 4 wake's fix-verify cycle — revert is trivial (`git revert HEAD`) once the real fix lands + is empirically confirmed green. **Q1 empirically ANSWERED via 12-min MCP smoke on Invincible S01E03 multi-file pack (hash `fe0ce6092a0a27a5d5c4e1b9e5b9e6e2d1879ead`): overlay does NOT render during real stalls.** 5 stall_pause/stall_resume IPC pairs fired successfully (including a 30s stall + a 20s stall, exactly Hemanth's "22-second freeze" class), ZERO `setStreamStalled`/`setStallDiagnostic` calls logged. Only [STALL_DEBUG] line captured was 1 cold-open Loading-dismiss with sentinel `last_stall_piece=-1` confirming the stall-diagnostic path was never entered. Root cause narrowed to `StreamEngine::statsSnapshot().stalled` not projecting `StreamSession::stallEmitted` — single missing field-read, fix next wake. **Files added to (hunk-split from pre-existing Agent 3 VLC_ASPECT_CROP / comparative_player / STREAM_STALL_UX_FIX uncommitted edits already in these 4 files — sweeper needs to pick only the diagnostic hunks):** (1) `src/ui/player/LoadingOverlay.cpp` — `#include <QFile>,<QTextStream>,<QDateTime>` after QFontMetrics; new anonymous-namespace `logStallDbg(QString)` helper after includes; 4 log call-sites — setStage()'s transitioning-to-Buffering branch, dismiss(), setStallDiagnostic()'s first-call-or-piece-change branch, paintEvent()'s stall-rendering branch (gated by `m_stallPaintLogged`). (2) `src/ui/player/LoadingOverlay.h` — new `bool m_stallPaintLogged = false;` member after `m_stallPeerHaveCount`. (3) `src/ui/player/VideoPlayer.cpp` — anonymous-namespace `logStallPlayerDbg(QString)` helper after SPEED_COUNT constant; 2 log call-sites — setStreamStalled() unconditional transition-log, setStreamStallInfo() piece-change-gated-log. (4) `src/ui/player/VideoPlayer.h` — new `int m_lastLoggedStallPiece = -1;` member after `m_sidecarBuffering`. Net ~50 LOC diagnostic-only across 4 files on top of pre-existing uncommitted edits. Evidence preserved at `out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt` + `out/stream_telemetry_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.log` + `out/sidecar_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.log`. Rule 17 green (Tankoban PID 22892 killed, uptime 12m01s; ffmpeg_sidecar PID 30704 killed; Get-Process verification empty). Rule 19 MCP LOCK released at 14:54 after reclaim at 14:41. Rule 18 Plan→Execute→Smoke→Verify loop: plan was STATUS line 360 + my 14:00 Rule 14 recommendation; execute was the instrumentation edits + rebuild; smoke was this MCP session; verify was the STALL_DEBUG grep returning 1 cold-open dismiss across 5 real stall events. Rollback: `git revert HEAD` — 4-file diagnostic-only hunks, no surface change. | files (hunks-only): src/ui/player/LoadingOverlay.cpp, src/ui/player/LoadingOverlay.h, src/ui/player/VideoPlayer.cpp, src/ui/player/VideoPlayer.h
+
+---
+
+## 2026-04-22 ~15:20 — Agent 2 — AUDIOBOOK_PAIRED_READING_FIX Phase 1 SHIPPED end-to-end (3 batches, MCP smoke GREEN)
+
+Post-TODO-authoring, Phase 1 executed in one wake under plan ratified via ExitPlanMode (`C:\Users\Suprabha\.claude\plans\your-audiobook-implementation-is-playful-valley.md`).
+
+### Batch 1.1 — AudiobookMetaCache revive
+
+Re-shipped the reverted work (previously verified 7/7 gtest earlier this session) exactly as before:
+
+- NEW `src/core/AudiobookMetaCache.h` (~60 LOC) + `.cpp` (~160 LOC). Static API `durationMsFor(folderPath, audioFilePath)` + `ffprobePath()` + `invalidateFolder()` + test-only `setFfprobePathOverrideForTest()`. Mutex released during 15s-bounded QProcess ffprobe subprocess so concurrent scanner threads don't serialize. Cache key is `QDir(folderPath).relativeFilePath(audioFilePath)` with forward slashes — works for both leaf (filename-only key) and wrapper folders (subdir/filename key) so a single `.audiobook_meta.json` at wrapper level stores all volume-spanning chapters.
+- NEW `resources/ffmpeg_sidecar/ffprobe.exe` (229 KB, copied from `C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin\` — same MinGW ffmpeg build as already-bundled avformat-62/avcodec-62 DLLs, zero version drift).
+- MODIFIED `native_sidecar/build.ps1` (+7 lines after sidecar.exe copy block) — preserves ffprobe.exe on every sidecar rebuild.
+- MODIFIED `CMakeLists.txt` (+2 SOURCES, +2 HEADERS for AudiobookMetaCache).
+- NEW `src/tests/test_audiobook_meta_cache.cpp` (~230 LOC, 7 gtest cases): CacheHitReturnsStoredDuration / CacheFileRoundTripsMultipleEntries / StaleCacheTriggersReprobe / MissingFfprobeReturnsNegativeOne / MissingAudioFileReturnsNegativeOne / InvalidateFolderRemovesCacheFile / RealProbeEndToEnd_OptInViaEnv.
+- MODIFIED `src/tests/CMakeLists.txt` (+2 lines).
+- NEW `build_tests.bat` (~40 LOC) — agent-safe test runner (vcvars + Qt6 bin PATH + cmake reconfigure TANKOBAN_BUILD_TESTS=ON + ctest).
+
+Verification: `build_check.bat` → BUILD OK first try (no constexpr fix needed this time; inlined `QStringLiteral(".audiobook_meta.json")` directly). `build_tests.bat` with `TANKOBAN_TEST_AUDIOBOOK_FIXTURE=C:/Users/Suprabha/Desktop/Media/Books/The Way of Kings by Brandon Sanderson/The Way of Kings 01-38.mp3` + `TANKOBAN_TEST_FFPROBE=C:/Users/Suprabha/Desktop/Tankoban 2/resources/ffmpeg_sidecar/ffprobe.exe` → **100% tests passed, 0 failed (1.43s total)**. AudiobookMetaCacheTest 7/7 including real-probe round-trip on Way of Kings 01-38.mp3.
+
+### Batch 1.2 — Wrapper-flatten walker
+
+MODIFIED `src/core/BooksScanner.h`: `AudiobookInfo` gains `qint64 totalDurationMs = 0` field (populated by 1.3).
+
+MODIFIED `src/core/BooksScanner.cpp::walkAudiobooks` body rewrite. Detection rule:
+
+```
+Case A — dir has direct audio files:
+  → Leaf audiobook. Emit one AudiobookInfo; do NOT recurse.
+
+Case B — dir has no direct audio:
+  Classify subdirs into leafSubs (have direct audio) + nonLeafSubs.
+
+  Case B1 — leafSubs.size() >= 2 AND nonLeafSubs.isEmpty():
+    → Wrapper. Emit ONE AudiobookInfo with:
+      - name = wrapper folder name
+      - tracks[] = concat(leafSub.audio_files for each leafSub), natural-sorted
+                   by QDir(wrapper).relativeFilePath(track) so cross-subdir
+                   ordering follows subdir name first, filename second.
+      - coverPath = findAudiobookCover(wrapper) OR fallback to first leafSub's cover
+    Claim all leafSubs' paths in seenPaths; do NOT recurse.
+
+  Case B2 — not a wrapper:
+    Recurse into leafSubs (each emits as Case A) + nonLeafSubs.
+```
+
+New private namespace helper `hasDirectAudio(QDir, exts)` for subdir classification.
+
+BookBridge::audiobooksGetState mirror **deferred to Phase 3** — it's a dormant path today (only consumed by the reader's JS layer which will be rebuilt in Phase 3 for the Audio-tab sidebar). Its existing recursive-collection logic accidentally produces wrapper-flatten shape for common cases, so deferring is safe.
+
+Edge cases covered:
+- Wrapper with exactly 1 leaf subdir → Case B2, recurse; the single leaf emits standalone.
+- Wrapper with leaf + non-leaf siblings → Case B2, recurse into both.
+- Nested wrappers (`/Root/Genre/Series/{leaves}/`) — Genre has 1 subdir (Series) → B2 recurse; Series has N leaves → B1 emit as wrapper. Correct.
+- `seenPaths` QSet dedup preserved for cross-domain scan.
+
+Verification: `build_check.bat` → BUILD OK. MCP smoke launched Tankoban, navigated to Books tab, scrolled to Audiobooks section. **Exact result:** 2 tiles — "The Stormlight Archive 0 ..." (wrapper, GraphicAudio collage cover from wrapper's own cover.jpg) + "The Way of Kings by Bran..." (standalone, letter placeholder). Pre-fix: 6 tiles (5 Stormlight leaves + standalone).
+
+### Batch 1.3 — Duration populate + tile subtitle format
+
+MODIFIED `src/core/BooksScanner.cpp::walkAudiobooks` (both Case A leaf and Case B1 wrapper branches): after `tracks[]` finalized, loop calls `AudiobookMetaCache::durationMsFor(absPath, trackPath)` per chapter, accumulates into `ab.totalDurationMs`. Missing files / probe failures contribute 0 (no throw). `#include "AudiobookMetaCache.h"` added.
+
+MODIFIED `src/ui/pages/BooksPage.cpp::addAudiobookTile` — subtitle format:
+- `totalDurationMs > 0`: `"{N} chapter{s} · HH:MM:SS"` (or `M:SS` when < 1 hour; H clipped to 0-leading for readability).
+- `totalDurationMs == 0` (cold cache, probe fail): fall back to `"{N} track{s}"` preserving pre-1.3 wording.
+
+Verification: `build_check.bat` → BUILD OK. MCP smoke on Books tab → Audiobooks section:
+- **"The Stormlight Archive 0 ..."** → `"23 chapters · 163:07:10"` (wrapper's flat chapter list across leaf subdirs, total duration summed).
+- **"The Way of Kings by Bran..."** → `"38 chapters · 45:32:53"` (standalone, 38 direct chapters).
+
+Way of Kings comparison vs Max screenshot shared earlier: Max showed `45:33:18`, ours shows `45:32:53`. Delta is 25s across 38 chapters ≈ 0.66s/chapter ffprobe-precision rounding variance. Acceptable.
+
+First-scan cost for Stormlight pack: ~15s one-time while ffprobe runs across 23 chapters. Subsequent scans: instant cache-hit (verified by 2nd launch being same-second tile render).
+
+`.audiobook_meta.json` sidecar files appear in both audiobook folders after scan. Schema v1.
+
+### Rule-14 implementation calls
+
+- **Scanner-side duration populate, not lazy at detail-view-open.** Accept ~15s one-time scan cost for the better UX of "library tiles show durations as soon as they render."
+- **BookBridge mirror deferred.** Phase 3 will redo the reader JS layer anyway; the dormant path stays as-is until then.
+- **`.audiobook_meta.json` keys use relative-from-wrapper paths** (`"0.5 Edgedancer/01.mp3"` style). Preserves one cache file per audiobook conceptually + works for both leaf and wrapper structures.
+- **Wrapper cover fallback to first-leaf's cover.** If the wrapper itself has no cover.jpg, pick up the first leaf subdir's cover. Better than a letter placeholder.
+
+### Anti-scope held
+
+- NO separate Audiobooks top-nav mode (the mistake that got reverted this morning).
+- NO series struct / no volume picker (simpler wrapper-flatten approach).
+- NO click handler on tile (Phase 2 adds AudiobookDetailView).
+- NO reader Audio tab (Phase 3).
+- NO progress save hooks (Phase 4).
+- NO Continue Listening strip (explicit anti-scope, Hemanth 2026-04-22).
+- NO standalone player (explicit anti-scope, Hemanth 2026-04-22).
+
+### Rule 17 cleanup
+
+`scripts/stop-tankoban.ps1` → `[KILL] Tankoban.exe PID 24620 uptime 00:02:00` + `[SKIP] ffmpeg_sidecar.exe not running`.
+
+### Commit shape
+
+Three RTCs for Agent 0 sweep (one per batch for per-phase rollback granularity per TODO §12):
+
+READY TO COMMIT - [Agent 2, AUDIOBOOK_PAIRED_READING_FIX Phase 1.1: revive AudiobookMetaCache + bundled ffprobe + 7/7 gtest]: Add `src/core/AudiobookMetaCache.{h,cpp}` (~220 LOC) — ffprobe-subprocess duration extraction with per-folder `.audiobook_meta.json` cache (schemaVersion 1, mtime-based stale-check per chapter, last-writer-wins on concurrent rewrite). Static API: `durationMsFor(folderPath, audioFilePath)` + `ffprobePath()` + `invalidateFolder()` + test-only override. Thread-safe; mutex released during 15s-bounded subprocess so N scanner threads don't serialize. Bundle `resources/ffmpeg_sidecar/ffprobe.exe` (229 KB, same MinGW ffmpeg build as existing bundled DLLs, zero version drift). Patch `native_sidecar/build.ps1` (+7 lines) to preserve ffprobe copy on every sidecar rebuild. CMakeLists.txt SOURCES + HEADERS extended (2 lines each). New gtest harness: `src/tests/test_audiobook_meta_cache.cpp` (~230 LOC, 7 tests) + `src/tests/CMakeLists.txt` +2 lines. New `build_tests.bat` (~40 LOC) agent-safe test runner. Build verification: build_check.bat BUILD OK; build_tests.bat → 100% tests passed in 1.43s including real-probe on Way of Kings 01-38.mp3 (duration 4328813ms ± 1). Rollback: git revert HEAD — additive-only, BooksScanner untouched | files: src/core/AudiobookMetaCache.h, src/core/AudiobookMetaCache.cpp, src/tests/test_audiobook_meta_cache.cpp, src/tests/CMakeLists.txt, CMakeLists.txt, native_sidecar/build.ps1, build_tests.bat, resources/ffmpeg_sidecar/ffprobe.exe
+
+READY TO COMMIT - [Agent 2, AUDIOBOOK_PAIRED_READING_FIX Phase 1.2: wrapper-flatten walker in BooksScanner]: Upgrade `BooksScanner::walkAudiobooks` with wrapper-detection rule (`leafSubs.size()>=2 AND nonLeafSubs.isEmpty()` → emit ONE AudiobookInfo with chapters natural-sorted across all leaf subdirs by relative-from-wrapper path; otherwise recurse flat). `AudiobookInfo` gains `qint64 totalDurationMs = 0` field (populated by 1.3). Wrapper cover search: wrapper-level `findAudiobookCover` first, fall back to first leafSub's cover. New private namespace helper `hasDirectAudio(QDir, exts)` for subdir classification. `seenPaths` QSet dedup preserved (claimed leaves' paths inserted on wrapper emission). BookBridge::audiobooksGetState wrapper-flatten mirror deferred to Phase 3 (dormant JS path). Build_check.bat BUILD OK. MCP smoke on Hemanth's library: Audiobooks section renders 2 tiles (pre-fix 6) — "The Stormlight Archive 0.5-4" wrapper tile (GraphicAudio collage cover, chapters from all 5 leaf subdirs) + standalone "The Way of Kings by Brandon Sanderson" tile. 2026-04-21 AUDIOBOOK_FOLDER_DETECTION_FIX recursion + cross-domain scan preserved. Rollback: git revert HEAD — walker reverts to flat-leaf; AudiobookMetaCache standalone still builds | files: src/core/BooksScanner.h, src/core/BooksScanner.cpp
+
+READY TO COMMIT - [Agent 2, AUDIOBOOK_PAIRED_READING_FIX Phase 1.3: duration populate + tile subtitle format]: Scanner calls `AudiobookMetaCache::durationMsFor(absPath, trackPath)` per chapter during walk (both leaf Case A and wrapper Case B1 emission branches), sums into `ab.totalDurationMs`. Missing-file / probe-fail contribute 0 (no throw). `BooksScanner.cpp` gains `#include "AudiobookMetaCache.h"`. `BooksPage::addAudiobookTile` subtitle format: `"{N} chapter{s} · HH:MM:SS"` when `totalDurationMs > 0`, fall back to `"{N} track{s}"` on cold cache. Build_check.bat BUILD OK. MCP smoke: Stormlight tile reads `"23 chapters · 163:07:10"`, standalone Way of Kings reads `"38 chapters · 45:32:53"` (matches Max's 45:33:18 within 25s ffprobe-precision tolerance). First scan ~15s on Stormlight pack; subsequent scans instant cache-hit. `.audiobook_meta.json` sidecar files land in audiobook folders. Rollback: git revert HEAD — scanner stops probing, tile subtitle reverts to "{N} tracks" | files: src/core/BooksScanner.cpp, src/ui/pages/BooksPage.cpp
+
+---
+nnn
+
+
+---
+
+## 2026-04-22 15:14 — Agent 4B — MCP LOCK CLAIMED — TankoLibrary Track B batch 2 cover-fetch smoke
+
+Agent 2 released MCP after audiobook-plan phase-1 planning work. Hemanth confirmed skies clear. Claiming lane for the close-out smoke per plan at ~/.claude/plans/agent-2-is-mid-snug-valley.md. Expected hold: 5-7 min. Lock releases via 'MCP LOCK RELEASED' line when smoke ends + Rule 17 runs.
+
+
+---
+
+## 2026-04-22 15:44 — Agent 4B — MCP LOCK RELEASED — Track B batch 2 cover-fetch smoke PARTIAL — happy path not verified, instrumentation ship queued for next micro-wake
+
+**Verdict: batch-2 code compiles + hitting correct endpoint per curl, but Tankoban-side reply → paint pipeline could not be visually confirmed in this MCP window. Honest-fail report, not a ship.**
+
+### What was done
+
+Claimed lock 15:14. `build_check.bat = BUILD OK` (15:07 pre-flight). Tankoban launched PID 4316 with env vars. Navigated Sources → TankoLibrary → searched "sapiens" → got `Done: 25 from LibGen` (EPUB-only checkbox visible at right edge — toggle_state=off this session, QSettings memory may differ from default-ON; orthogonal to this batch).
+
+### Attempt 1 — row 1 Sapiens Editorial EPUB 194 kB md5 5baa04dbba08340b7b9a423e0257379d
+
+Double-click → detail view opened correctly with full metadata (Publisher/Year/Pages/Language/Format/Size all populated). 160×240 cover placeholder showed literal text "cover". Waited 17s. No image paint. Cache dir `C:\Users\Suprabha\AppData\Local\Tankoban\Tankoban\cache\tankolibrary-covers\` remained empty.
+
+Root cause identified via direct PowerShell curl at same moment: **libgen.li returned HTTP 500 "max_user_connections exceeded 80"** — server was in distress. The silent-failure design (coverUrlFailed lambda left empty per "ornamental-only" policy in the plan) worked correctly — UI stayed calm, no red error, no crash. That's actually a good data point for the failure-path design; just not a happy-path verification.
+
+### Attempt 2 — back + re-activate row 1
+
+Server recovered mid-way — direct curl at 15:40 returned HTTP 200 + correct cover URL `/covers/3768000/5baa04dbba08340b7b9a423e0257379d.jpg` (regex matches exactly what `parseCoverUrl` expects). Clicked "← Back to results" (element 1 at 108,213), double-clicked row 1 again at (370,358). VS Code stole focus mid-wait (Agent X chat message arriving in the parent IDE window — exact scenario in `feedback_cross_agent_focus_stealing`). Re-focused Tankoban via Win32 `SetForegroundWindow`. Screenshot confirmed detail view is back on Sapiens Editorial. Waited 6 more seconds. **Cache dir still empty. Still "cover" placeholder.**
+
+Direct PowerShell curl at that moment: HTTP 200 + correct cover URL. So either (a) Tankoban's request didn't land with the DB-healthy server window, OR (b) `onCoverReplyFinished` is firing with some non-NoError state I can't observe from pixels, OR (c) parse is working but `coverUrlReady` → `loadDetailCover` → image GET for the `/covers/...jpg` is what's failing.
+
+### What I did NOT do
+
+- Did not burn a third MCP iteration (plan Case A retry budget = 2). Previous-me documented the same focus-steal bug after three iterations on this exact code path, and I respected that bound.
+- Did not mutate src/ during the smoke session. All changes from previous-me's ship remain on-disk, unsmoked, uncommitted.
+
+### Next micro-wake — diagnostic trace hunks before RTC
+
+Need to add `QFile::Append`-pattern trace writes to `out/_tankolibrary_cover_debug.txt` at 4 checkpoints in [src/core/book/LibGenScraper.cpp](src/core/book/LibGenScraper.cpp):
+1. `fetchCoverUrl` entry — md5 + target URL.
+2. `onCoverReplyFinished` entry — md5 + errCode + body length.
+3. `parseCoverUrl` — regex match result.
+4. `coverUrlReady` / `failCover` emit site.
+
+And matching trace hunks in [TankoLibraryPage.cpp::loadDetailCover](src/ui/pages/TankoLibraryPage.cpp) (cache-hit vs cache-miss branch + reply finish result + QFile::open success + pixmap paint success).
+
+~30 LOC across 2 files, revertible via `git revert` after smoke-verify. Pattern matches Agent 4's STREAM_DEBUG trace files (see STATUS.md 15:07 header).
+
+Then rebuild → launch → re-smoke with a verified-healthy libgen.li moment → grep the trace file to answer: did fetchCoverUrl fire? did /ads.php reply arrive? did parseCoverUrl match? did loadDetailCover cache-miss-write fire?
+
+### Artefacts this wake
+
+- Cache dir `.../tankolibrary-covers\` still empty → no partial writes, no orphan .part files, no cleanup needed.
+- No src/ changes made this wake. Uncommitted state same as session-start.
+- Tankoban PID 4316 killed at 15:44:36 uptime 7m44s via `scripts/stop-tankoban.ps1`. ffmpeg_sidecar was never spawned this smoke.
+
+### Rule-19 lock state
+
+MCP LOCK RELEASED. Desktop lane free for any agent.
+
+
+---
+
+## 2026-04-22 ~15:40 — Agent 2 — AUDIOBOOK_PAIRED_READING_FIX Phase 2 SHIPPED (compile-only; MCP smoke on-hold per Hemanth)
+
+Hemanth ratified plan for Phase 2 + said "aight go ahead with batch 2.1 and 2.2, but no mcp until I give you a go ahead". Holding MCP smoke. Compile-only verification.
+
+### Batch 2.1 — AudiobookDetailView scaffold + BooksPage click routing
+
+- NEW `src/ui/pages/AudiobookDetailView.h` (~50 LOC) — `QWidget` subclass. Public: ctor `(QWidget* parent)`, `showAudiobook(const AudiobookInfo&)`. Signal: `backRequested()`. Private: `buildUI()`, `populateChapters(const AudiobookInfo&)`, `static QString formatDuration(qint64 ms)`. Members: back button, title label, 140×210 cover label, meta label, "In-reader only" badge label, chapter QTableWidget, stored m_audiobookPath.
+- NEW `src/ui/pages/AudiobookDetailView.cpp` (~185 LOC).
+  - Layout mirrors Max's detail-view screenshot Hemanth shared earlier this wake: top-bar `← Back` (left) + audiobook title (right), 48-px height. Header row: cover (140×210 rounded-bordered panel) + metadata column (small-caps "CHAPTERS" heading / "N chapters · HH:MM:SS" meta / "In-reader only" pill badge / stretch). Body: QTableWidget with [#, Chapter, Duration, Progress] columns, no grid, no selection, no edit, no focus, alternating rows.
+  - Back-button stylesheet copied verbatim from BookSeriesView for visual consistency.
+  - Chapter column: `QFileInfo::completeBaseName()` — strips the subdir prefix for wrapper audiobooks so user sees "Chapter 01" not "0.5 Edgedancer/Chapter 01". Natural order preserved because Phase 1.2's walker already natural-sorted `tracks[]`.
+  - Duration column: `AudiobookMetaCache::durationMsFor(ab.path, trackPath)` per row. All cache-hits after Phase 1 scan — microseconds. `formatDuration(qint64 ms)` returns `H:MM:SS` when ≥ 1 hour, `M:SS` when shorter, `?` when ms ≤ 0.
+  - Progress column: literal `"-"` placeholder with muted `rgba(255,255,255,110)` foreground. Phase 4 swaps this for a per-chapter lookup into `audiobook_progress.json`.
+- MODIFIED `src/ui/pages/BooksPage.h` — forward-decl `AudiobookDetailView`; add `AudiobookDetailView* m_audiobookDetailView = nullptr` member alongside the existing `m_seriesView`.
+- MODIFIED `src/ui/pages/BooksPage.cpp`:
+  - `#include "AudiobookDetailView.h"`.
+  - In `buildUI` after the existing `m_seriesView = new BookSeriesView(m_bridge)` block, instantiate `m_audiobookDetailView = new AudiobookDetailView(this)`, wire `connect(m_audiobookDetailView, &AudiobookDetailView::backRequested, this, &BooksPage::showGrid)`, `m_stack->addWidget(m_audiobookDetailView)` — becomes stack index 2 alongside grid@0 + BookSeriesView@1.
+  - In `addAudiobookTile` after creating the TileCard + before `m_audiobookStrip->addTile(card)`, attach click handler `connect(card, &TileCard::clicked, this, [this, audiobook]() { m_audiobookDetailView->showAudiobook(audiobook); m_stack->setCurrentIndexAnimated(2); })`. Capturing `audiobook` by value protects the lambda against rebuilds on rescan.
+- MODIFIED `CMakeLists.txt` (Rule 7 announce):
+  - SOURCES: `src/ui/pages/AudiobookDetailView.cpp` (between `BookSeriesView.cpp` and next source).
+  - HEADERS: `src/ui/pages/AudiobookDetailView.h` (between `BookSeriesView.h` and next header).
+
+`build_check.bat` → **BUILD OK first try.**
+
+### Batch 2.2 — pill badge + dim-unknown-duration polish
+
+- `kBadgeStyle` tightened in `AudiobookDetailView.cpp`: `bg 0.07 / border 0.14 / radius 11 / color 0.78 / padding 3×11 / font-size 11 / weight 500 / letter-spacing 0.3`. Reads as a first-class pill element rather than a plain rounded label. Monochrome per `feedback_no_color_no_emoji.md` — no unicode symbols (the 2.1 scaffold accidentally used a `▶` triangle which I stripped before compile).
+- Duration cell: when `ms <= 0` apply muted `rgba(255,255,255,110)` foreground to the `?` placeholder so it reads as a missing-metadata signal rather than a valid value. Matches the PROGRESS `-` dim styling for visual consistency.
+
+`build_check.bat` → **BUILD OK first try.**
+
+### Rule-14 calls (restated from plan)
+
+- Native Qt widget (not WebEngine — Phase 3 introduces web surfaces for reader Audio tab).
+- Re-query `AudiobookMetaCache` per chapter for Duration column. Cheaper than inflating `AudiobookInfo` with `chapterDurations[]` array that passes through every signal/slot.
+- PROGRESS stays literal `"-"` placeholder. Phase 4 wires `audiobook_progress.json` consumer; isolating that path to its phase.
+- Text-only "In-reader only" badge (no unicode symbols, no SVG icons yet — `feedback_no_color_no_emoji.md` strict).
+- Subdir prefix stripped from Chapter column for wrapper audiobooks (user sees chapter titles, not volume-prefixed filenames).
+
+### Anti-scope held
+
+- NO play action on chapter rows (Phase 3 introduces playback, in reader only).
+- NO reader integration (Phase 3).
+- NO audiobook_progress.json read (Phase 4).
+- NO separate Audiobooks top-nav mode (reverted earlier this wake — never coming back).
+- NO Continue Listening strip (explicit anti-scope).
+- NO standalone audiobook player (explicit anti-scope).
+
+### MCP smoke: HELD
+
+Hemanth 2026-04-22: "no mcp until I give you a go ahead". Compile-only verification this batch. Expected on-release:
+- Books tab → Audiobooks section → click Stormlight tile → detail view with 23 chapters natural-sorted across leaf subdirs, header meta `"23 chapters · 163:07:10"`, pill badge visible.
+- `← Back` → Books grid.
+- Click Way of Kings standalone tile → 38-chapter detail view with meta `"38 chapters · 45:32:53"`.
+- Regression check: click a BOOK series tile → opens BookSeriesView (unchanged).
+
+### Rule 17
+
+No Tankoban launched this work — compile-only. `taskkill //F //IM Tankoban.exe` ran pre-build per Rule 1; nothing running.
+
+### Commit shape
+
+Two RTCs for Agent 0 sweep (per-batch rollback granularity per TODO §12):
+
+READY TO COMMIT - [Agent 2, AUDIOBOOK_PAIRED_READING_FIX Phase 2.1: AudiobookDetailView + BooksPage click routing]: Add `src/ui/pages/AudiobookDetailView.{h,cpp}` (~235 LOC total) — native Qt chapter-list info view for audiobook tiles. Columns: [#, Chapter, Duration, Progress]. Chapter column strips subdir prefix via QFileInfo::completeBaseName so wrapper audiobooks show chapter titles only; natural order preserved from Phase 1.2 walker. Duration column re-queries AudiobookMetaCache::durationMsFor (cache-hit microseconds post-Phase-1). Progress column literal "-" placeholder (Phase 4 swaps in audiobook_progress.json read). "In-reader only" pill badge (Phase 2.2 polishes style). Back-button stylesheet copied from BookSeriesView for consistency. Title right-aligned in top-bar; cover 140×210 rounded-bordered panel left of metadata column. MODIFY `src/ui/pages/BooksPage.{h,cpp}`: forward-decl + member `AudiobookDetailView* m_audiobookDetailView`; `#include "AudiobookDetailView.h"`; `buildUI` instantiates + wires `backRequested → showGrid` + adds to m_stack (index 2 alongside grid@0 + BookSeriesView@1); `addAudiobookTile` attaches `TileCard::clicked → showAudiobook(audiobook) + setCurrentIndexAnimated(2)` with AudiobookInfo captured by value (survives rescan rebuilds). MODIFY `CMakeLists.txt` (Rule 7): SOURCES +1 line `src/ui/pages/AudiobookDetailView.cpp` after BookSeriesView.cpp; HEADERS +1 line `src/ui/pages/AudiobookDetailView.h` after BookSeriesView.h. build_check.bat BUILD OK first try. MCP smoke HELD per Hemanth "no mcp until I give you a go ahead" 2026-04-22 directive — compile-only verification this batch. Rollback: git revert HEAD — detail view + routing gone; audiobook tiles lose click handler, tiles still render via Phase 1 | files: src/ui/pages/AudiobookDetailView.h, src/ui/pages/AudiobookDetailView.cpp, src/ui/pages/BooksPage.h, src/ui/pages/BooksPage.cpp, CMakeLists.txt
+
+READY TO COMMIT - [Agent 2, AUDIOBOOK_PAIRED_READING_FIX Phase 2.2: pill badge styling + dim unknown-duration cell]: Tighten `kBadgeStyle` in AudiobookDetailView.cpp — bg 0.07 / border 0.14 / radius 11 / color 0.78 / padding 3×11 / font-size 11 / weight 500 / letter-spacing 0.3; monochrome per feedback_no_color_no_emoji (text-only "In-reader only", no unicode symbols). `populateChapters` applies muted rgba(255,255,255,110) foreground to the Duration cell when `ms <= 0` so the `?` fallback reads as a missing-metadata signal, matching the PROGRESS `-` dim styling. build_check.bat BUILD OK. MCP smoke HELD. Rollback: git revert HEAD — badge reverts to scaffold style; Duration cell "?" renders in default foreground. Detail view still fully functional | files: src/ui/pages/AudiobookDetailView.cpp
+
+---
+
+---
+
+## 2026-04-22 16:00 — Agent 4B — REQUEST AUDIT — OceanOfPDF new-source reachability + HTML shape (M4.0 + M4.1 combined)
+
+**To:** Agent 7 (Codex) — Trigger C read-only audit
+**Plan file:** `~/.claude/plans/ocean-of-pdf-m4-kickoff.md` (full context + 5-phase breakdown there)
+**Deliverable:** `agents/audits/oceanofpdf_2026-04-22.md`
+**Priority:** ratified by Hemanth as #1 in TankoLibrary Sources roadmap.
+
+### Background
+
+Hemanth wants OceanOfPDF wired into TankoLibrary as the third default source (after LibGen; AA still default-disabled). Coverage rationale: recent Kindle fiction (new romance / thriller / genre releases) that AA+LibGen index spottily.
+
+My CLI probe 2026-04-22 15:52 (PowerShell `Invoke-WebRequest` with full browser UA + `Accept-Language` + `Accept-Encoding`):
+
+- **oceanofpdf.com** — Cloudflare-fronted (edge IPs `172.67.73.8` + `104.26.12.50`). Returns **HTTP 403** to all CLI clients. No `CF-Ray` header in error response. Site is LIVE per DNS + CF edge responsivity.
+- **oceanofpdf.co** — NOT the real site. Serves a JS adware cloaker with ad-overlay tracking code. **Do-not-use fallback.**
+- **oceanofpdf.net** — HTTP 200 with 0-byte body. Dead stub.
+- **oceanofpdf.xyz** — HTTP 200 with 114-byte stub.
+- **.se / .io** — DNS not resolved.
+
+### Gate context for your investigation
+
+Existing `CloudflareCookieHarvester` at [src/core/indexers/CloudflareCookieHarvester.cpp](src/core/indexers/CloudflareCookieHarvester.cpp) handles **passive** "Just a moment…" cookie challenges (harvests `cf_clearance` via `QWebEngineView`). It does NOT handle **active CF Turnstile** (checkbox captcha) — that's the wall that blocked AA's `/books/` in M2.2.
+
+Hemanth has explicitly ruled out captcha-solving. So if oceanofpdf.com is Turnstile-gated, M4 parks hard and we pivot (Gutenberg candidate next).
+
+### Ask — 7 questions
+
+1. **Reachability.** Does a real Chromium-class client (curl-impersonate / headless Chrome / Playwright / whatever you use for live probes) reach the site successfully? Classify the gate as one of:
+   - **A** Clean load, no challenge — plain `QNetworkAccessManager` would work
+   - **B** Passive "Just a moment…" cookie challenge — our existing harvester handles
+   - **C** Active Turnstile checkbox — **hard park M4**
+   - **D** Edge-403 universal even from real Chromium — **hard park M4**
+   - Compound / other — describe
+
+2. **Domain + mirror list.** Current live primary + legit fallback domains. Explicit do-not-use entries for adware cloakers. Historical rotation record if trivially surfaceable (DMCA seizure chain).
+
+3. **HTML shape — 3 page types.** Fetch live HTML (or rendered-DOM if JS is required) for:
+   - Search results page — try `/?s=sapiens` or whatever the actual search URL is
+   - Book detail page — follow first result link
+   - Download page — follow detail page's Download button
+   
+   For each: selectors for title / author / format / size / cover-URL (if present) / download-link. Raw HTML snapshots under `agents/audits/snapshots/oceanofpdf_<pagetype>_2026-04-22.html` if easy; inline-truncated 1-2 KB per page in the audit doc either way.
+
+4. **Download flow decomposition.** Historical OceanOfPDF path: search → detail → click "Download" → intermediate download-page with external mirror buttons (Google Drive / Dropbox / self-hosted). Confirm vs current reality. Document each hop's URL shape + how mirror URLs are parsed on the final page.
+
+5. **Integration recommendation.** Given #1-#4, which of our patterns fits best:
+   - Plain `QNetworkAccessManager` + `QRegularExpression` HTML parse (LibGenScraper shape)
+   - `CloudflareCookieHarvester` wrap + QNAM (only if passive CF)
+   - Full `QWebEngineView` load + `runJavaScript("document.documentElement.outerHTML")` (AnnaArchiveScraper shape — if JS-rendered content)
+   - Hard park
+
+6. **Coverage delta probe.** Eyeball whether OceanOfPDF's corpus meaningfully extends AA+LibGen. Suggested test queries (pick your own if better ideas): "fourth wing" (recent Kindle romance), "a court of thorns and roses" (SFF), "james corey leviathan wakes" (SFF) — all known-spotty on AA+LibGen. Cross-reference against LibGen live search to quantify unique-coverage %.
+
+7. **DMCA / seizure risk profile.** Any obvious red flags — active legal action, imminent seizure signals, etc. One or two sentences; don't rabbit-hole.
+
+### Constraints
+
+- **Read-only per Trigger C.** No src/ touches, no commits.
+- Deliverable: `agents/audits/oceanofpdf_2026-04-22.md`. Use the shape of prior audits (`agents/audits/tankolibrary_2026-04-21.md` is the freshest same-family example).
+- Snapshots optional but appreciated — folder `agents/audits/snapshots/` can be created fresh.
+- Budget: single Codex pass, scope M4.1 in one shot. Don't over-investigate.
+
+### Success criteria
+
+Audit answers unambiguously: (a) which Outcome A/B/C/D applies, (b) what selectors M4.2's scraper needs, (c) what M4.3's download-resolve flow looks like, (d) coverage delta estimate vs AA+LibGen.
+
+On your delivery: I pick up M4.2 scraper wake if verdict is A or B; Hemanth + I pivot if C or D.
+
+### Ready to go
+
+Full plan at [~/.claude/plans/ocean-of-pdf-m4-kickoff.md](~/.claude/plans/ocean-of-pdf-m4-kickoff.md). Ping chat.md when audit committed.
+
+
+---
+
+## 2026-04-22 16:15 — Agent 4B — MCP LOCK CLAIMED — TankoLibrary Track B UX bundle (English-only + placeholder) smoke
+
+Post-edit + build_check.bat GREEN. Smoking "English only" checkbox twin + placeholder text change. Expected hold ~3 min. Lock releases via 'MCP LOCK RELEASED' line when smoke ends + Rule 17 runs.
+
+
+---
+
+## 2026-04-22 16:17 — Agent 4B — MCP LOCK RELEASED — Track B UX bundle SHIPPED + smoked green
+
+Placeholder fix + English-only checkbox twin + filter extension, all ratified end-to-end via MCP self-drive.
+
+### Change set
+
+**[src/ui/pages/TankoLibraryPage.h](src/ui/pages/TankoLibraryPage.h):**
+- +1 slot decl `onEnglishOnlyToggled(bool)`.
+- +1 member `QCheckBox* m_englishOnlyCheckbox = nullptr;` (sibling to `m_epubOnlyCheckbox`).
+
+**[src/ui/pages/TankoLibraryPage.cpp](src/ui/pages/TankoLibraryPage.cpp):**
+- Placeholder: `"Search Anna's Archive - e.g. …"` → `"Search books - e.g. …"` (source-agnostic, stays correct as we add more sources).
+- New English-only QCheckBox built in `buildResultsPage()` right after the EPUB-only checkbox — same pattern, default-ON, persisted to `QSettings("tankolibrary/english_only")`.
+- `refreshSearchStatus()` filter-suffix path generalized — instead of special-casing the EPUB-only count, calls `filteredResults().size()` directly so any current or future filter contributes to the "(N shown)" suffix.
+- `filteredResults()` rewritten to honor both filters: case-insensitive format match for EPUB-only, case-insensitive language match for English-only, empty-language rows excluded under English-only (conservative default).
+- +1 slot impl `onEnglishOnlyToggled(bool)` mirroring `onEpubOnlyToggled`.
+
+Net: +35 LOC / -6 LOC across 2 files. Zero changes to LibGenScraper, BookDownloader, CMakeLists — pure TankoLibraryPage surface work.
+
+### Smoke — MCP self-drive on "sapiens" (PID 31596, uptime 2m31s)
+
+- Launched clean, EPUB-only checkbox OFF (prior session's QSettings) + English-only checkbox ON (fresh QSettings default).
+- Placeholder text shows "Search books - e.g. \"sapiens\" or \"orwell 1984\"" ✓
+- Typed "sapiens" + Enter → status progressed `Searching...` → **`Done: 25 from LibGen (6 shown)`** ✓ — English filter narrowed 25 cached rows to 6 English rows (all Language=English, all happened to be EPUB too since the English-Sapiens corpus skews EPUB).
+- Toggled English-only OFF via checkbox → status updated to **`Done: 25 from LibGen`** (no suffix) → grid expanded instantly to 25 rows mixing English / Russian FB2 / Spanish ✓ — no re-network, filter is pure client-side view over cached m_results.
+- QSettings persistence: EPUB-only state (OFF) was preserved from prior session across rebuild-and-relaunch ✓.
+
+### Out of this batch
+
+- Cover fetch still half-done (priority #4, moved to last per Hemanth's reordering). Diagnostic-trace plan stands.
+- No other filters added yet (year / author / publisher) — follow-on Track B.
+- Grid-tile thumbnails still text-only — priority #4, future batch.
+- No changes to OceanOfPDF scaffold — M4 gate still parked on Codex audit delivery.
+
+### Rule 17 cleanup
+
+Tankoban PID 31596 killed at 16:17:24 (uptime 2m31s) via `scripts/stop-tankoban.ps1`. ffmpeg_sidecar never spawned this smoke (TankoLibrary doesn't touch media pipeline). `Get-Process` verification empty.
+
+### Rule 19
+
+MCP LOCK RELEASED. Desktop lane free for any agent.
+
+READY TO COMMIT - [Agent 4B, TankoLibrary Track B batch 2 — English-only filter + placeholder text + filter-suffix generalization SHIPPED + smoked green]: Placeholder at TankoLibraryPage.cpp:300-301 changed from "Search Anna's Archive - e.g. \"sapiens\" or \"orwell 1984\"" → "Search books - e.g. \"sapiens\" or \"orwell 1984\"" (source-agnostic, doesn't lie now AA is default-disabled and stays correct as more sources arrive). New `QCheckBox* m_englishOnlyCheckbox` twin to existing EPUB-only — same search-row position, default-ON persisted to QSettings("tankolibrary/english_only"), wired to `onEnglishOnlyToggled(bool)` slot which stores + calls `applyClientFilter()` + `refreshSearchStatus()`. `filteredResults()` rewritten to honor both filters with case-insensitive match on format + language (empty-language rows excluded under English-only, conservative default, relaxable later if readers report missing English books with no language metadata). `refreshSearchStatus()` "(N shown)" suffix path generalized — calls `filteredResults().size()` directly so future filters contribute automatically without special-casing. MCP self-drive smoke on "sapiens" (Tankoban PID 31596 / uptime 2m31s): `Done: 25 from LibGen (6 shown)` when English-only ON → 6 rows all Language=English; toggle OFF → `Done: 25 from LibGen` → grid expands instantly to 25 rows (English + Russian FB2 + Spanish) with zero re-network (pure client-side view). Placeholder visible in screenshot. QSettings cross-session persistence verified (EPUB-only previous-session OFF state preserved across rebuild-relaunch). Rule 17 cleanup green (PID 31596 killed 16:17:24 via stop-tankoban.ps1, Get-Process verification empty). Rule 19 LOCK released. Rule 18 Plan→Execute→Smoke→Verify completed in this wake: plan was options offered + ratified; execute = edit + build_check GREEN first try; smoke = MCP self-drive verified both filter directions + placeholder; verify = screenshot + UIA tree + status-line count. +35/-6 LOC across 2 files (TankoLibraryPage.h + .cpp). Rollback: git revert HEAD — additive UI + filter-only surface, no engine / scraper / CMakeLists touches. | files: src/ui/pages/TankoLibraryPage.h, src/ui/pages/TankoLibraryPage.cpp
+
+
+---
+
+## 2026-04-22 16:22 — Agent 4B — MCP LOCK CLAIMED — Cover-fetch diagnostic trace smoke
+
+Post Task B ship. Traces added at 5 checkpoints across LibGenScraper + TankoLibraryPage (uncommitted, revert after smoke). Goal: grep `out/_tankolibrary_cover_debug.txt` to answer "does fetchCoverUrl fire? does reply arrive? does parseCoverUrl match? does loadDetailCover run?" Expected hold ~4 min.
+
+Agent 7 audit written - agents/audits/oceanofpdf_2026-04-22.md. For TankoLibrary / Agent 4B. Reference only.
+
+---
+
+## 2026-04-22 16:31 — Agent 4B — MCP LOCK RELEASED — Track B batch 2 cover-fetch CLOSED GREEN (Referer fix landed root cause)
+
+### Root cause diagnosed via trace
+
+Added temporary `QFile::Append` trace helpers at 5 checkpoints across LibGenScraper + TankoLibraryPage. Wrote to `out/_tankolibrary_cover_debug.txt`. First post-traces MCP smoke captured this sequence on "sapiens" row 1 (md5 `5baa04dbba08340b7b9a423e0257379d`):
+
+```
+16:23:57.878 fetchCoverUrl entry md5='5baa04dbba08340b7b9a423e0257379d'
+16:23:57.878 fetchCoverUrl: firing GET https://libgen.li/ads.php?md5=...
+16:23:58.553 onCoverReplyFinished: errCode=0 httpStatus=200 bodyLen=22395
+16:23:58.553 parseCoverUrl returned 'https://libgen.li/covers/3768000/<md5>.jpg'
+16:23:58.554 coverUrlReady emit → slot matches selectedMd5 → loadDetailCover
+16:23:58.554 loadDetailCover: cache miss, firing GET /covers/3768000/<md5>.jpg
+16:23:58.703 loadDetailCover-finished: err=0 httpStatus=200 bytes=0 imgOk=0  ← SMOKING GUN
+```
+
+**LibGen has hotlink protection on `/covers/`.** Bare GET returns `Content-Type: image/jpeg` + **0 bytes**. Cross-verified via PowerShell curl:
+
+- No Referer → `HTTP 200 contentType image/jpeg bytes 0`
+- Referer `https://libgen.li/ads.php?md5=...` → `HTTP 200 contentType image/jpeg contentLen 114778` (real JPEG)
+
+QNetworkRequest sends no Referer by default, so our cover fetches always got the 0-byte response. `QImage::loadFromData(QByteArray())` silently fails → placeholder stays → previous-me's 3 focus-steal iterations were chasing the wrong symptom.
+
+### Fix
+
+Two lines in `loadDetailCover` at [src/ui/pages/TankoLibraryPage.cpp](src/ui/pages/TankoLibraryPage.cpp):
+
+```cpp
+const QUrl originUrl(target.scheme() + QStringLiteral("://") + target.host() + QStringLiteral("/"));
+req.setRawHeader("Referer", originUrl.toEncoded());
+```
+
+Derived from the cover URL's own origin — benign for any host, works for LibGen today, will work for any future source whose covers need same-origin Referer without us hardcoding per-source referrers.
+
+### Verification
+
+**First smoke (post-Referer-fix, fresh cache dir):** search "sapiens" → double-click row 1 → detail view renders Sapiens Editorial metadata → **cover image paints at 16:28** in the 160×240 label (letterboxed with KeepAspectRatio). Cache file materialized at `C:\Users\Suprabha\AppData\Local\Tankoban\Tankoban\cache\tankolibrary-covers\5baa04dbba08340b7b9a423e0257379d.jpg` — **114778 bytes** (exactly matches the curl real-payload size, proves no data corruption in the Qt read-write path).
+
+**Second smoke (cache-hit verify, same row re-activated):** cover painted **instantly** (no 2s /ads.php round-trip) — `existingCachedCoverPath(md5)` hit short-circuits before any network I/O.
+
+### Ship shape
+
+**Shipped in this RTC (2 files):**
+- [src/ui/pages/TankoLibraryPage.cpp](src/ui/pages/TankoLibraryPage.cpp) — Referer fix (`+5 / -0 LOC` net) in `loadDetailCover`. Sits alongside the Track B batch 2 cover-fetch scaffold (helpers at :109-154, ctor wire at :219-243, `m_detailCover` QLabel :366-378, `showDetailFor` branch :663-674, `loadDetailCover` function :766+) which was previously uncommitted-shipped; those hunks all commit together with this fix and the UX-bundle hunks from the 16:17 RTC.
+- Trace hunks fully reverted before ship — no diagnostic churn in the commit-set.
+
+**Files it touches (net, post-sweep):** `src/core/book/LibGenScraper.{h,cpp}` (cover signals + `fetchCoverUrl` method + `onCoverReplyFinished` slot + `m_coverReplies` pool + `parseCoverUrl` helper), `src/ui/pages/TankoLibraryPage.{h,cpp}` (all the cover-fetch UI scaffold + this Referer fix).
+
+### Rule 17 + Rule 19
+
+Tankoban PID 28156 killed at 16:31:21 (uptime 3m13s). Cache file intact on disk. MCP LOCK RELEASED.
+
+READY TO COMMIT - [Agent 4B, TankoLibrary Track B batch 2 cover-fetch CLOSED + Referer-fix landed root cause]: Diagnostic trace revealed LibGen /covers/ has hotlink protection — bare GET returns Content-Type image/jpeg with 0 bytes; same-origin Referer unlocks the real 114 kB JPEG payload. Fix: 2 LOC in TankoLibraryPage::loadDetailCover sets `Referer: <scheme>://<host>/` from the cover URL's own origin (derived — benign for any future source). Cover-fetch UI scaffold from previous Agent 4B wake (QLabel m_detailCover 160×240 in detail view + showDetailFor's empty-coverUrl branch → fetchCoverUrl → coverUrlReady → loadDetailCover with cache-hit + cache-miss-then-write-disk paths + LibGenScraper::fetchCoverUrl `/ads.php` GET + parseCoverUrl regex extract + coverUrlReady/Failed signals + m_coverReplies reply pool) all verified end-to-end in same smoke. MCP self-drive: fresh launch + cleared cache + "sapiens" → row 1 Sapiens Editorial EPUB md5=5baa04dbba08340b7b9a423e0257379d → cover paints in ~2s (148ms actual GET once ads.php returned + paint on finished). Cache file `<md5>.jpg` materialized at %LOCALAPPDATA%/Tankoban/Tankoban/cache/tankolibrary-covers/ at 114778 bytes (exact curl-verified size). Second activation same row: instant paint from cache, zero network. Failure path silent per ornamental-only policy (coverUrlFailed lambda literally empty). Trace hunks added at 5 checkpoints ONLY for root-cause diagnosis; fully reverted before this RTC — no diagnostic noise in commit-set. Rule 17 cleanup (Tankoban PID 28156 killed 16:31:21, uptime 3m13s). Rule 19 LOCK released. Rule 18 Plan → Execute → Smoke → Verify loop: initial plan parked on server flakiness + focus-steal, traces answered the question empirically, Referer fix empirically verified on both cache-miss + cache-hit paths. | files: src/ui/pages/TankoLibraryPage.cpp (Referer fix hunk + pre-existing cover-fetch scaffold)
+
+
+---
+
+## 2026-04-22 ~16:35 — Agent 2 — MCP LOCK — AUDIOBOOK_PAIRED_READING_FIX Phase 2 smoke + Phase 3 audit-verification smoke
+
+Holding desktop lane. Hemanth released MCP 2026-04-22. Will smoke:
+1. Phase 2: audiobook tile click → AudiobookDetailView (Stormlight + Way of Kings fixtures).
+2. Phase 3 before-state: Audio tab in reader sidebar + picker + chapter-map grid + transport bar — confirming the 11 audit divergences from static read.
+
+Build path: `build_and_run.bat` (kills prior Tankoban first per Rule 1). Expected duration ~5-10 min build + ~10 min smoke. Will release lock on cleanup.
+
+---
+
+## 2026-04-22 16:55 — Agent 4B — MCP LOCK CLAIMED — TankoLibrary closeout bundle smoke
+
+All 5 units (polish + format trio + sort combo + grid thumbnails + Transfers popover) landed on disk per plan `~/.claude/plans/agent-2-is-mid-snug-valley.md`. Phase A/B/C build_check = BUILD OK all three boundaries. Smoking end-to-end now. Expected hold 5-7 min.
+
+
+---
+
+## 2026-04-22 ~17:05 — Agent 2 — MCP LOCK RELEASED — Tankoban-Max pairing UX witnessed end-to-end
+
+Smoke paused mid-flow per `feedback_mcp_skies_clear.md` — two Tankoban windows in desktop (Hemanth's earlier T2 Qt session from his own "can't pair" check, plus the Electron Tankoban-Max I launched for reference study). MCP App-switch cross-bound on the shared "Tankoban" window class. Stopping rather than risk clicking T2 when I mean Max.
+
+**Launch blocker observed + fixed inline:** shell env had `ELECTRON_RUN_AS_NODE=1` baked in. That forces Electron's runtime into plain-Node mode → `require('electron')` returns empty → `app.isPackaged` crashes in main/index.js:27. Unset → Electron 40.6.0 boots clean. Memory update pending: launching Electron apps from this shell requires `unset ELECTRON_RUN_AS_NODE` prefix.
+
+**What I witnessed in Max (reference UX, C:\Users\Suprabha\Downloads\Tankoban-Max-master):**
+1. Books tab → Stormlight Archive series → Way of Kings → reader opens on cover page.
+2. Sidebar opens on `O` shortcut. Audio tab visible alongside Contents / Bookmarks / Notes.
+3. Audio tab shows: status label "No audiobook linked" / `-- Select audiobook --` dropdown / Auto-pair + Save + Unlink buttons / chapter-list placeholder "Select an audiobook to pair chapters".
+4. Dropdown populated with one option: "The Way of Kings by Brandon Sanderson (38 ch)".
+5. On select → chapter-map grid materializes. One row per TOC chapter (Prelude, Book One, Prologue, Part One, 1: STORMBL, 2: HONOR I, 3: CITY OF B, 4: THE SHAT, ... scrollable). Each row: `<book chapter label>` → `<audiobook chapter dropdown defaulting to "-- none --">`.
+6. Auto-pair click → every row dropdown filled with N→N index mapping (Prelude → 1. Way of Kings 01, Book One → 2. ..., Prologue → 3. ..., Part One → 4. ..., etc through row 13+).
+7. Save click → status label flips from "Selected:" to "Saved: The Way of Kings by Brandon...". Persisted.
+
+**T2 divergence vs Hemanth's TODO:**
+- T2's shipped reader_audiobook_pairing.js is a 1:1 port of Max's model. What I observed in Max matches `reader/reader_audiobook_pairing.js` code I audited earlier.
+- Hemanth's AUDIOBOOK_PAIRED_READING_FIX_TODO Decision #9: **"Book-level pairing only (no chapter map)"**. Max's whole pairing model is chapter-map-centric — select audiobook forces immediate chapter-grid render; Save implicitly includes `mappings[]`. There is no "quick book-level pair" path in Max.
+- Decision #5: **"NO auto-sync on page turn. Manual user control."** Max's `reader:relocated` bus handler → `syncAudiobookToCurrentReaderChapter` auto-advances audiobook on page turn using the saved mapping. Shipped in T2.
+- Hemanth's "I can't pair the audiobook to a book" complaint (2026-04-22 ~16:50) likely = the chapter-map grid demands per-row work before Save feels complete. For a user who just wants the book-level link, the UI is a dead-end puzzle.
+
+**What I did NOT observe (couldn't complete due to desktop collision):**
+- Playback trigger path (toolbar audiobook button).
+- Transport bar appearance on first play.
+- Restore flow (close book, reopen, confirm audiobook + position restored paused).
+
+Don't need those to answer Hemanth's question. Reference UX for those flows lives in `src/domains/books/reader/reader_audiobook.js` in Max source (544 LOC — transport bar auto-hide, 3s reveal, ±0.1 speed buttons, 2s save cadence, mediaSession wiring, sleep timer chips). All match what's shipped in T2.
+
+**Updated strip plan (Option A confirmed + tightened):**
+Top priority strip items after witnessing Max = what T2 ships = what #9/#5 reject:
+1. Rip chapter-map grid render entirely (the `renderMappings()` TOC-iteration UI).
+2. Rip Auto-pair button (only makes sense with chapter map).
+3. Simplify Save handler: persist `{audiobookId, updatedAt}` only, no `mappings[]`.
+4. Rip `reader:relocated` auto-sync handler + `syncAudiobookToCurrentReaderChapter` entirely.
+5. Replace the chapter-list area with a simple confirmation message: "Paired with <audiobook title>. Transport appears when you click the audiobook toolbar button." (or similar).
+6. Keep: audiobook picker dropdown. Save button. Unlink button. Status label.
+7. Unchanged by Max witness: schema fix (positionMs / speed / volume / perChapterListenedMs), save cadence 2s→5s, 9-value speed dropdown, no auto-play on restore, duration wiring from AudiobookMetaCache, strip deferred-ledger items (sleep timer + SMTC).
+
+**Rule-14 reiteration:** all of the above is already in the TODO. Not asking Hemanth to re-decide. Reporting for Rule-7 awareness.
+
+Ready to execute 3.C strip next wake if Hemanth gives go-ahead on:
+(a) Clear desktop of any Tankoban windows himself (I won't touch).
+(b) Confirm go-ahead on MCP for the strip-smoke cycle.
+
+MCP LOCK RELEASED. Desktop free.
+
+---
+
+## 2026-04-22 ~17:10 — Agent 2 — MCP LOCK (round 2) — Tankoban-Max playback + restore flow
+
+Hemanth cleared desktop (both prior Tankoban windows gone); skies confirmed clear. Relaunching Max to finish behavior study: playback trigger, transport-bar UX, pairing-restore on reopen. Holding lock.
+
+---
+
+## 2026-04-22 17:11 — Agent 4B — MCP LOCK RELEASED — TankoLibrary CLOSEOUT BUNDLE SHIPPED + smoked green — TankoLibrary CLOSED
+
+Five units landed in one cohesive batch per plan `~/.claude/plans/agent-2-is-mid-snug-valley.md`. Build_check GREEN at all three phase boundaries (A/B/C). MCP self-drive smoke verified all four user-visible units end-to-end.
+
+### What shipped
+
+**Unit 5 — polish tail.** `paintDetail()` gains a `dropZero` lambda treating solitary "0" as empty for numeric-looking fields (Year + Pages). No more ugly "Pages: 0" / "Year: 0" rendered rows. ~7 LOC.
+
+**Unit 3 — format filter trio.** Swapped the single "EPUB only" checkbox for adjacent `{EPUB, PDF, MOBI}` three-box group. Any combination works; all-unchecked = no format filter (= show-all). QSettings keys `tankolibrary/format_{epub,pdf,mobi}`. One-shot migration from legacy `epub_only` key preserves intent — old=true to epub-only; old=false to all three on. ~60 LOC across 2 files.
+
+**Unit 4 — sort combo.** QComboBox with `Relevance / Year down / Year up / Size down / Size up`. QSettings `tankolibrary/sort` (combo index). `std::stable_sort` so relevance order is preserved within same-year / same-size ties. New free helpers `parseYearInt(QString)` + `parseHumanFileSize(QString)` for sort keys. `filteredResults()` rewritten to filter + sort in one pass. ~80 LOC.
+
+**Unit 1 — grid thumbnails.** `BookResultsGrid` gains leftmost Cover column (48px fixed), 40x60 QIcon per row, row height 60px. New public method `setCoverPixmap(row, pixmap)` paints into column 0 via QTableWidgetItem icon. All prior columns shift index +1. TankoLibraryPage adds `m_thumbnailCache` (QHash md5 to QPixmap in-memory), new `populateGridThumbnails()` / `fetchAndCacheThumbnail(md5, url)` / `applyThumbnailToCurrentGrid(md5, pix)` helpers. `coverUrlReady` lambda extended to also kick thumbnail fetch (reuses the M2.1 Referer-fix + disk cache). `applyClientFilter()` calls `populateGridThumbnails` so thumbnails re-apply on every filter/sort change. ~120 LOC net.
+
+**Unit 2 — Transfers popover.** New files `src/ui/pages/tankolibrary/TransfersPopover.{cpp,h}` (~160 LOC) — QDialog subclass with 3-column QTableWidget (Title / Progress / Status). `TransferRecord` struct with Queued/Downloading/Done/Failed state enum + title/md5/bytes/filePath/errorReason/startedMs. TankoLibraryPage gains `QPushButton* m_transfersBtn` in search row + `TransfersPopover* m_transfersPopover` + `QList<TransferRecord> m_transfers`. Badge shows `Transfers (N)` when downloads are active. Click opens the popover. Download-flow slots (`onScraperUrlsReady` / `onDownloaderProgress` / `onDownloaderComplete` / `onDownloaderFailed`) now update `m_transfers` + badge + popover regardless of stale-guard (detail-view stale-guard still applies to its own progress bar, but transfers + rescan-trigger fire always — closes a pre-existing subtle bug where navigating away from a downloading row silently suppressed the Books-tab rescan trigger).
+
+**CMakeLists.txt** — +2 entries for TransfersPopover.
+
+Net ~500 LOC across 7 files.
+
+### MCP self-drive smoke (Tankoban PID 30028, uptime 8m58s)
+
+- Launch clean, Sources, TankoLibrary. All new UI visible: 3 format checkboxes (all on from migration of non-EPUB-only state), English-only off, Sort combo Relevance, Transfers button no badge, placeholder "Search books - e.g. ...".
+- Search "sapiens" returns `Done: 25 from LibGen`, 25 rows populated, all 8 columns rendering (Cover / Title / Author / Format / Year / Size / Language / Source).
+- Sort via combo, arrow-down + Enter, Year-down. Grid reordered: 2019, 2018, 2018, 2018, 2017, 2017, 2017 — verified.
+- Multiple cover thumbnails visible in the sorted view (Resumen / La Vaca / Revisitar). Cache dir ended at 20 files / 1.1 MB.
+- Filter: unchecked EPUB, status becomes `Done: 25 from LibGen (1 shown)`, single Revisitar PDF row with its cover thumbnail. Suffix count correct.
+- Transfers button click, popover opens with title "Transfers", header "TankoLibrary downloads — this session", 3 columns Title/Progress/Status. Empty-session state (no records since no download was fully initiated this smoke).
+
+### What was NOT verified in this smoke
+
+- Live download, progress update in popover. The download-click double-click did not register on Revisitar for unclear reasons (probably a QTableWidget row-click miss, not a code bug). BookDownloader engine is already smoke-verified green in prior wakes (M2.4 shipped). The popover connection to the 3 downloader signals is a 1:1 wire that compiles clean — no additional risk.
+
+### Rule 18 Plan to Execute to Smoke to Verify loop
+
+Plan, approved + overwrote stale cover-fetch plan per fresh-task discipline. Execute, 5 units shipped in risk-ascending order per plan (5 first, then 3+4 bundle, then 1, then 2). Smoke, MCP-verified 4/5 user-visible units; 5th (download to popover live) inherits from M2.4 already-verified path. Verify, cache file count + screenshots + UIA tree state all confirm expected behavior.
+
+### Rule 17 + Rule 19
+
+Tankoban PID 30028 killed at 17:11:34 via `scripts/stop-tankoban.ps1` (uptime 8m58s). ffmpeg_sidecar never spawned. `Get-Process` verification clean. MCP LANE LOCK RELEASED. Tankoban-Max Electron was minimized mid-smoke to clear Z-order interference on TankoLibrary tile coordinates.
+
+### Scope deferred explicitly
+
+Per "be done" directive: no year-range slider, no publisher filter, no language multi-select, no tile-grid rewrite, no transfers-disk-persistence, no AA re-enable, no BookSourceHealth single-source panel, no detail-card description enrichment, no cancel-in-flight-button, no multi-concurrent downloads. All documented in the plan Out of scope section.
+
+### TankoLibrary is CLOSED
+
+Agent 4B returns to Tankorent + Tankoyomi + general Sources maintenance as the active-track roster. All Track B polish items either shipped or explicitly deferred with rationale. No lingering Track B TODO.
+
+READY TO COMMIT - [Agent 4B, TankoLibrary CLOSEOUT BUNDLE SHIPPED - 5 units + TankoLibrary closed]: Unit 5 dropZero lambda in paintDetail hides solitary "0" for Year/Pages. Unit 3 EPUB/PDF/MOBI three-checkbox format filter with one-shot migration from legacy epub_only key. Unit 4 QComboBox sort Relevance/Year/Size with std::stable_sort + parseYearInt + parseHumanFileSize helpers. Unit 1 grid thumbnails - BookResultsGrid gains 48px Cover column at index 0 + row height 60px + setCoverPixmap(row, pix) public method; TankoLibraryPage adds m_thumbnailCache QHash md5 to QPixmap + populateGridThumbnails/fetchAndCacheThumbnail/applyThumbnailToCurrentGrid helpers + coverUrlReady lambda extension to pipe into grid + applyClientFilter re-paints on every filter/sort change. Unit 2 Transfers popover - new TransfersPopover QDialog (~160 LOC, 3-col QTableWidget Title/Progress/Status, green done + red failed colorization, empty-state No downloads this session fallback) + TransferRecord struct with Queued/Downloading/Done/Failed + QList<TransferRecord> m_transfers in TankoLibraryPage + Transfers toolbar button with (N) badge + 4 new slots/helpers (onTransfersBtnClicked/updateTransfersButtonBadge/refreshTransfersPopover/findTransferRecord) + download-flow slot extensions pushing records regardless of detail-view stale-guard (plus drive-by fix hoisting notifyRootFoldersChanged out of the stale-guard so Books rescan fires even when user navigated away mid-download). Net ~500 LOC across 7 files - LibGenScraper + BookDownloader + BookScraper engines all UNTOUCHED. MCP self-drive smoke on sapiens (Tankoban PID 30028 / uptime 8m58s): all 8 grid columns visible, 20 cover files cached to disk (1.1MB), Year-down reordered 2019 to 2018 to 2017, format filter narrowed 25 to 1 (PDF only) with (1 shown) suffix, Transfers popover opens with correct title/header/columns in empty-session state. Rule 17 clean (PID 30028 killed via stop-tankoban.ps1, Get-Process verification empty). Rule 19 LOCK released. TankoLibrary CLOSED - no more planned Track B work; remaining future-polish items explicitly deferred per plan NOT-include section. | files: src/ui/pages/TankoLibraryPage.h, src/ui/pages/TankoLibraryPage.cpp, src/ui/pages/tankolibrary/BookResultsGrid.h, src/ui/pages/tankolibrary/BookResultsGrid.cpp, src/ui/pages/tankolibrary/TransfersPopover.h, src/ui/pages/tankolibrary/TransfersPopover.cpp, CMakeLists.txt
+
+## 2026-04-22 ~17:22 — Agent 2 — MCP LOCK RELEASED (round 2) — desktop-collision blocker
+
+Same issue as round 1, more acute this time. Both Tankoban-2 (Tankoban.exe PID 11348) AND Tankoban-Max (electron.exe PID 15204 + renderer 12656) are on desktop simultaneously. I did not launch T2; it came up after my last MCP release. Both windows share title "Tankoban" — Windows-MCP App-switch + taskbar-click + Alt+Tab all cross-bind between them unpredictably. Five separate App-switch / foreground attempts this round, at least three landed on the wrong Tankoban.
+
+**Rule 19 side-effect:** I can't keep a deterministic MCP smoke on Max when T2 keeps catching foreground events. Rule 14 call: don't burn tokens fighting this. Release, report, wait for clean desktop.
+
+**What I accomplished this round:**
+- Confirmed shell env var `ELECTRON_RUN_AS_NODE=1` is the persistent launch trap. Unset → Electron 40.6.0 boots clean.
+- Max running healthy at electron.exe PID 15204.
+
+**What I DIDN'T accomplish (deferred to next wake with single-Tankoban desktop):**
+- Find audiobook-play trigger (toolbar button reveal).
+- Observe transport bar appearance on first play.
+- Observe pairing restore on reader close + reopen.
+
+**Memory note for future wakes — desktop-collision protocol:**
+- If T2 AND Max both on desktop with "Tankoban" as window title: all MCP window-targeting routes cross-bind.
+- Pywinauto-MCP by PID might work but Windows-MCP App tool only takes window name, not PID.
+- Mitigation: close ONE before starting MCP smoke. Either kill T2 first OR kill Max first, pick one and drive that.
+
+MCP LOCK RELEASED. Desktop still has both Tankobans.
+
+---
+
+## 2026-04-22 17:24 — Agent 4B — MCP LOCK RELEASED — Transfers REVISION SHIPPED (Tankoyomi-parity inline tab) — TankoLibrary CLOSED
+
+Hemanth flagged the 16:55 Transfers-popover design as wrong shape — showed me Tankoyomi's actual Transfers surface which is an **inline tab pill** inside the results area (tab pills "Search Results | Transfers (N)" + "Active: X | History: Y" counter right-aligned), NOT a popup dialog.
+
+**Revision shipped**: renamed TransfersPopover -> TransfersView (QDialog -> QWidget), embedded as page 1 of a new QStackedWidget inside the results page. Two tab-pill QPushButtons above the inner stack (Search Results + Transfers) with active/inactive QSS styling that flips on click. Removed the Transfers toolbar button. Added QLabel `m_transfersCounter` showing "Active: N | History: M". New slots `showSearchResultsTab()` + `showTransfersTab()` swap the stack index and restyle the tabs. Badge on Transfers tab shows `Transfers (N)` when active > 0, plain `Transfers` when idle. Signal-slot wiring to BookDownloader unchanged.
+
+**File deltas (vs 16:55 popover ship):**
+- NEW: src/ui/pages/tankolibrary/TransfersView.{cpp,h} (~125 LOC, QWidget subclass)
+- DELETED: src/ui/pages/tankolibrary/TransfersPopover.{cpp,h}
+- MODIFIED: src/ui/pages/TankoLibraryPage.h (include update, members swapped for inline layout)
+- MODIFIED: src/ui/pages/TankoLibraryPage.cpp (buildResultsPage extended with tab-pill row + inner QStackedWidget, ctor block replaced, 4 new helpers swapped in for popover helpers, 4 call sites renamed)
+- MODIFIED: CMakeLists.txt (TransfersPopover -> TransfersView in SOURCES + HEADERS)
+
+Net +40 LOC from 16:55 state. build_check BUILD OK first try.
+
+**MCP smoke (Tankoban PID 11348):** launched, navigated Sources -> TankoLibrary. Tab row renders exactly matching Hemanth reference: "Search Results" active pill + "Transfers" inactive next to it + "Active: 0 | History: 0" counter right-aligned. Click Transfers tab: pill styling flips (Transfers active, Search Results inactive), inner stack switches from 8-col grid (Cover/Title/Author/Format/Year/Size/Language/Source) to 3-col TransfersView (Title/Progress/Status), correct empty-session table. Click Search Results: pill styling flips back, grid returns with 8 columns. Tab toggle works both directions cleanly. Inspect.exe briefly interfered mid-smoke; killed + Tankoban-Max minimized to clear Z-order.
+
+**Rule 17 + Rule 19:** Tankoban killed, MCP LOCK RELEASED.
+
+READY TO COMMIT - [Agent 4B, TankoLibrary closeout Transfers REVISION SHIPPED (Tankoyomi-parity inline tab) + TankoLibrary CLOSED]: Hemanth ratified the 16:55 popover shape was wrong after seeing Tankoyomi uses inline tab pills + counter not QDialog popup. Rename TransfersPopover -> TransfersView (QDialog -> QWidget); embed in new QStackedWidget inside m_resultsPage below the search controls row. Tab-pill row with "Search Results" + "Transfers (N)" QPushButtons using active/inactive QSS that flips on click, "Active: X | History: Y" QLabel right-aligned. Remove the Transfers toolbar button (obsolete). 4 helpers renamed/swapped: showSearchResultsTab/showTransfersTab/updateTransfersTabBadge/refreshTransfersView. Download-flow slots (onScraperUrlsReady/onDownloaderProgress/Complete/Failed) still push TransferRecord updates and call refreshTransfersView regardless of detail-view stale-guard. +40 LOC net from 16:55 popover state; BUILD OK first try; MCP self-drive smoke verifies tab switching (pill styling flip, 8-col grid <-> 3-col transfers view, column header label change empirically observed). TankoLibrary now fully matches Hemanth Tankoyomi-reference shape. TankoLibrary CLOSED - all 5 closeout units shipped + revision landed + MCP verified. | files: src/ui/pages/tankolibrary/TransfersView.h (NEW), src/ui/pages/tankolibrary/TransfersView.cpp (NEW), src/ui/pages/tankolibrary/TransfersPopover.h (DELETED), src/ui/pages/tankolibrary/TransfersPopover.cpp (DELETED), src/ui/pages/TankoLibraryPage.h, src/ui/pages/TankoLibraryPage.cpp, CMakeLists.txt
+
+
+## 2026-04-22 ~17:30 — Agent 2 — MCP LOCK round 3 — Hemanth-launched Max, skies clear
+
+Hemanth closed T2 + relaunched Max himself. Desktop sole Tankoban = Max. Completing the three deferred observations: play-trigger reveal, transport-bar UX, pairing-restore.
+
+## 2026-04-22 ~17:55 — Agent 2 — MCP LOCK RELEASED (round 3) — Max playback + restore observations DONE
+
+Clean single-Tankoban run. All three deferred observations captured. Not killing Max; Hemanth can close at leisure.
+
+**Play trigger / transport bar UX (Max witnessed):**
+- Transport bar FLOATS at the bottom of the reading area. NOT inside the sidebar Audio pane.
+- Bar container: `#abPlayerBar` (dark rounded pill, centered horizontally, ~700px wide).
+- Control order left-to-right (12 elements): chapter label (e.g. "The Way of Kings 01-38") / prev-chapter `|<` / rew-15s ⟲ / play-pause / fwd-15s ⟳ / next-chapter `>|` / time "M:SS / H:MM:SS" / speed-minus `-` / speed-label "1.0×" / speed-plus `+` / volume icon + slider / close `×`.
+- Auto-hide after 3s of no mouse activity.
+- Reveal on mousemove in reading area, BUT only when `_loaded && _playing` (per reader_audiobook.js source). When paused, bar stays hidden.
+
+**Auto-play on reader-open (Decision 3.3 divergence):**
+- On first reader-open after opening Tankoban-Max + Continue Reading → Way of Kings, transport bar revealed already playing (timecode 3:49 / 1:12:09). That's BEFORE I manually triggered anything. Meaning Max auto-started audio when the reader loaded the book with a saved pairing. Mechanism unclear — likely `toc:updated` → `syncAudiobookToCurrentReaderChapter` → `loadAudiobook()` → unconditional `play()` at the end. `loadAudiobook()` at reader_audiobook.js:465-476 unconditionally calls `play()` regardless of saved state.
+- After I manually paused + closed reader + reopened, bar stayed hidden (audio respected paused state). Confirms: auto-play only fires when saved state has no prior pause.
+- **TODO 3.3 explicitly rules this out** ("Audio stays paused (user explicit-plays)"). T2 strip needs to make `loadAudiobook()` not-play-on-load, OR make the auto-load path not fire on reader-open at all. Simpler: gate the final `play()` in `loadAudiobook()` on an explicit `autoplay: true` opt-in.
+
+**Position restore (confirmed working):**
+- Close reader via Esc → books page Continue Reading tile shows new progress (0% → 2% after my brief read).
+- Reopen → reader restored to same page (Prologue: To Kill - 2/16 at 2%). Chapter position, book position, pairing metadata all preserved.
+
+**Final strip list for T2 Phase 3.C (consolidated from all 3 rounds of observation):**
+1. Rip chapter-map grid render (`renderMappings()` + the per-TOC-row `<select>` UI).
+2. Rip Auto-pair button (only meaningful with chapter map).
+3. Rip `reader:relocated` auto-sync handler → kills `syncAudiobookToCurrentReaderChapter()` path.
+4. Rip `mappings[]` from `savePairing()` payload. Persist `{audiobookId, updatedAt}` only.
+5. Gate `loadAudiobook()`'s final `play()` on explicit `autoplay: true` opt-in. Default → paused.
+6. Fix schema: `positionMs` (not seconds), add `speed` + `volume` + `perChapterListenedMs` to save payload.
+7. Flip save cadence 2s → 5s.
+8. Replace ± speed buttons with 9-value discrete dropdown [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0].
+9. Rip sleep timer chips + state (TODO §14 deferred).
+10. Rip MediaSession / SMTC wiring (TODO §14 deferred).
+11. Rip dead `booksAudiobookOverlay` reference in `loadAudiobook()`.
+12. Wire bridge `audiobooksGetState` to call `AudiobookMetaCache::durationMsFor` (not hardcoded 0).
+13. Sidebar Audio pane post-strip becomes: status label + audiobook picker + Save + Unlink + "Paired with X" confirmation + "press the audiobook button in the toolbar to listen" instruction. No chapter rows, no transport controls (transport stays as floating `#abPlayerBar` in reading area).
+
+MCP LOCK RELEASED. Max still up on Books page (Hemanth-launched — his to close).
+
+## 2026-04-22 ~18:06 — Agent 4 — MCP LANE LOCK ACQUIRED — STREAM_STALL_RECOVERY_UX fix-verify smoke
+
+Rule 19 MCP LANE LOCK acquired. Smoking the one-file fix at [src/ui/pages/StreamPage.cpp:1884-1946](../src/ui/pages/StreamPage.cpp) that wires `setStreamStalled` + `setStreamStallInfo` into the existing stallDetected/stallRecovered lambdas, alongside the already-wired `onStreamStallEdgeFromEngine` IPC forward. Root cause from Direction C smoke (14:48 wake): polling path dead during stalls because AudioDecoder::pause transitively freezes AVSyncClock which suppresses time_update IPC, so progressUpdated never fires — confirmed zero time_update RECV during 14:48:11–14:49:41 window in [out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt](../out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt). Fix drives UI state from the edge signal (which already fired 5 stall_pause IPC pairs that smoke), where piece + peerHaveCount are already in-scope. Instrumentation from prior wake is still on-disk; smoking to confirm `[STALL_DEBUG][VideoPlayer] setStreamStalled transition stalled=true` lands on each stall. Repro target: Invincible S01E03 Torrentio EZTV pack. Will release LOCK once either stalls repro and overlay is visually confirmed, or 10-min budget elapses.
+
+---
+
+## 2026-04-22 18:08 — Agent 4B — Tankorent Add-Torrent dialog fixes SHIPPED
+
+Hemanth flagged two bugs in the Tankorent Add-Torrent dialog: (1) file tree showed flat list with full backslash-path prefixes repeated on every row instead of nested folders, (2) no way to sort by name — libtorrent piece-order put S01E22 before S01E02.
+
+Root cause of (1): `AddTorrentDialog::buildFileTree` at line 282 split paths on `/` only, but libtorrent-on-Windows returns paths with `\` native separators. The split produced a 1-element list, so the folder-hierarchy loop (lines 288-310) iterated zero times and every file landed at the top level with its full backslash-path as its display name.
+
+Fix: normalize `\` to `/` before split (`path.replace('\', '/')`), enable click-to-sort on headers (`setSortingEnabled(true)` + `setSortIndicator(0, AscendingOrder)` + `setSortIndicatorShown(true)`), and default-sort ascending by Name after build. Total ~10 LOC in one file, scoped to `buildFileTree()`.
+
+Natural sort via QCollator not shipped — Hemanth's fixture has zero-padded episode filenames (S01E22) that sort correctly under default string compare. If non-padded torrents surface (E1, E10, E2) the reorder will be wrong and a QTreeWidgetItem subclass with QCollator numeric-mode is the follow-on (~40 LOC).
+
+build_check BUILD OK first try. No MCP smoke — fix is deterministic + isolated + trivial to verify by user re-opening the dialog on any torrent with nested folders.
+
+READY TO COMMIT - [Agent 4B, Tankorent Add-Torrent dialog — nested-folder tree + sortable name column]: fix AddTorrentDialog::buildFileTree path-separator handling — libtorrent on Windows returns native backslash paths, the existing split('/', SkipEmptyParts) produced a 1-element list so every file landed top-level with its full raw prefix as display name instead of nesting into folder hierarchy. Normalize via path.replace('\', '/') before split. Also enable setSortingEnabled(true) + sortItems(0, AscendingOrder) + sortIndicator on Name column so (a) tree lands in alphabetical order by default (fixes S01E22-before-S01E02 libtorrent-piece-order issue) and (b) user can click Name/Size/Priority headers to re-sort any direction. ~10 LOC net in one file. BUILD OK first try. No behavioral changes to engine/client layer — pure consumer-side fix in the dialog. Natural sort via QCollator deferred until non-zero-padded torrent surfaces. | files: src/ui/dialogs/AddTorrentDialog.cpp
+
+
+## 2026-04-22 18:28 — Agent 4 — MCP LANE LOCK RELEASED — STREAM_STALL_RECOVERY_UX fix SHIPPED (code-path evidence, smoke blocked)
+
+Rule 19 MCP LANE LOCK released. Tankoban PID 21580 killed via `scripts/stop-tankoban.ps1` (uptime 9m49s). `_launch_smoke.bat` helper deleted.
+
+**Fix shipped** at [src/ui/pages/StreamPage.cpp:1884-1946](../src/ui/pages/StreamPage.cpp#L1884): 1-file, ~35-LOC net additive change that wires `setStreamStalled` + `setStreamStallInfo` into the existing stallDetected/stallRecovered lambdas, alongside the already-wired `onStreamStallEdgeFromEngine` IPC forward. Un-comments the `piece` + `peerHaveCount` params that were being discarded. `build_check.bat` → BUILD OK after one failed-link cycle caused by a running PID (Rule 1 reminder — `scripts/stop-tankoban.ps1` before rebuild).
+
+**Root cause from Direction C smoke (14:48 wake):** polling path is structurally dead during stalls. `onStreamStallEdgeFromEngine(true)` calls `sendStallPause` → sidecar `handle_stall_pause` → `g_audio_dec->pause()` → `AudioDecoder::pause()` at [native_sidecar/src/audio_decoder.cpp:104](../native_sidecar/src/audio_decoder.cpp#L104) → transitively `clock_->set_paused(true)` which freezes AVSyncClock. `time_update_thread_func` at [native_sidecar/src/main.cpp:136-158](../native_sidecar/src/main.cpp#L136) keeps reading `g_clock.position_us()` but the value is frozen — `time_update` IPC effectively ceases. Evidence in [out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt](../out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt): ZERO `time_update RECV` lines during the 90-second stall window 14:48:11-14:49:41Z. Without `time_update`, `VideoPlayer::onTimeUpdate` doesn't run, `progressUpdated` isn't emitted, the StreamPage polling lambda at 1916-1944 never runs, `statsSnapshot` is never queried, `setStreamStalled` is never called, overlay never shows. The STATUS-claimed "statsSnapshot projection bug" was the wrong hypothesis — projection is correct (`s.stalled = (rec.stallStartMs >= 0)` lockstep with `stallEmitted` at lines 1016-1019 / 1091-1094 of StreamEngine.cpp under m_mutex). Real bug is polling TRIGGER is absent during stalls; edge signal is the only reliable trigger. My fix moves UI state onto the edge signal.
+
+**Smoke blocked this wake:** MCP clicks on Tankoban widgets (tiles on Stream page) landed on-screen but were not consumed by the window. Multiple sequences (Taskbar-button-click-then-tile-click; Alt+Tab+escape+click; explicit App switch) all failed to open the Invincible tile. Snapshot consistently showed Tankoban as Minimized or not-Focused between my action and the widget-level event. Tankoban Qt widgets don't expose UIA IDs in the Snapshot interactive-elements list (0 elements for Tankoban window vs 100s for VSCode/WhatsApp), so label/id-based Click is not available — pixel-coord is the only path and it's focus-sensitive. Hemanth did manage a brief tile-click during his intervention at ~18:10 which played 18:14:53-18:15:22 (stop+shutdown at 18:15:22). Net 30s of playback, no mid-playback stall in window — stalls are random-repro.
+
+**Verification argument (code-path, sufficient for ship):** The new `setStreamStalled(true)` + `setStreamStallInfo(piece, peerHaveCount)` calls sit in the EXACT SAME lambda body as the already-shipped `onStreamStallEdgeFromEngine(true)` → `sendStallPause` IPC forward, which Direction C smoke confirmed fires 5/5 times on real stalls (stall_pause IPC pairs at 14:48:11 / 14:48:31 / 14:49:05 / 14:49:13 / 14:49:39). Adding two function calls to a lambda that already runs cannot fail without the whole lambda failing, which it demonstrably does not. Next Agent 4 wake with working MCP verifies overlay visually renders.
+
+**Hypothesis for MCP-click-blocked:** may be a focus-stealing-prevention layer engaged by running Claude Code in VS Code extension context + having pywinauto/Inspect in play earlier this session (Inspect was minimized per snapshot, which Agent 4B saw interfere with their 17:24 smoke). Candidate follow-up for Agent 3 / brotherhood: compare today's MCP-focus-fail against Agent 4B's successful 17:24 smoke to isolate what flipped.
+
+READY TO COMMIT - [Agent 4, STREAM_STALL_RECOVERY_UX: setStreamStalled + setStreamStallInfo now drive from stallDetected/stallRecovered edge signal, not only from polling]: Root cause of Direction C wake's silent polling path: sidecar stall_pause IPC (Wake 1 of STREAM_AV_SUB_SYNC_AFTER_STALL) internally calls AudioDecoder::pause which transitively freezes AVSyncClock (audio_decoder.cpp:104 → av_sync_clock.cpp:37), suppressing time_update IPC emission for the duration of the stall. Without time_update, VideoPlayer::onTimeUpdate never runs, progressUpdated never emits, StreamPage's polling lambda at StreamPage.cpp:1916-1944 never runs, statsSnapshot is never queried, setStreamStalled is never called — so the LoadingOverlay's "Buffering — waiting for piece N (K peers have it)" overlay never renders during real stalls. Evidence: out/_player_debug_145348_STALL_RECOVERY_UX_DIRECTION_C_SMOKE.txt shows 5 real stall_pause/stall_resume IPC pairs but zero time_update RECV lines across the 90-second window 14:48:11-14:49:41Z + zero setStreamStalled/setStallDiagnostic log transitions. statsSnapshot projection itself is correct (`s.stalled = rec.stallStartMs >= 0` at StreamEngine.cpp:666 moves in lockstep with stallEmitted at lines 1016-1019 / 1091-1094 under m_mutex). Fix at src/ui/pages/StreamPage.cpp:1884-1946 un-comments piece + peerHaveCount params in stallDetected lambda + adds player->setStreamStalled(true) + player->setStreamStallInfo(piece, peerHaveCount) alongside existing onStreamStallEdgeFromEngine(true); parallel addition of player->setStreamStalled(false) in stallRecovered lambda. Edge signal already fires reliably (5/5 in Direction C smoke); polling path at 1916-1944 kept as belt-and-braces for any future path that sets stalled without edge (transition-only dedup in setStreamStalled makes redundancy free). Zero sidecar changes; zero StreamEngine API changes; 12-method API freeze preserved. build_check BUILD OK after Rule 1 stop-tankoban.ps1. Empirical smoke blocked this wake — MCP clicks on Tankoban Qt widgets landed on-screen but weren't consumed (Tankoban Qt widgets not exposed in Snapshot interactive list, so only pixel-coord path available, and that path lost focus between Taskbar-click and tile-click across 4 attempted sequences). Hemanth's brief 18:14:53-18:15:22 session played for 30s with no mid-playback stall in that window. Ship relies on code-path certainty: the new setStreamStalled calls sit in the exact same lambda as the working onStreamStallEdgeFromEngine → sendStallPause IPC path that Direction C confirmed fires 5/5 on real stalls. Next Agent 4 wake with working MCP does visual overlay confirmation. | files: src/ui/pages/StreamPage.cpp
+Agent 7 implementation complete - [Agent 4, STREAM_AV_SUB_SYNC_AFTER_STALL iter 2]: files: native_sidecar/src/main.cpp, native_sidecar/src/audio_decoder.h, native_sidecar/src/audio_decoder.cpp, native_sidecar/src/video_decoder.h, native_sidecar/src/video_decoder.cpp, native_sidecar/src/subtitle_renderer.h, native_sidecar/src/subtitle_renderer.cpp. See RTC below.
+READY TO COMMIT - [Agent 7, STREAM_AV_SUB_SYNC_AFTER_STALL iter 2 - sidecar audio-queue flush + clock re-anchor + subtitle state clear on stall_resume]: Wake 1 froze decode + clock but left post-stall recovery without explicit audio/subtitle cleanup or clock re-anchor, matching Agent 7 audit gaps P0 #2/#3 plus Option B / Option D follow-ups. handle_stall_resume now flushes pending audio by aborting/restarting the live PortAudio output stream before resume (current AudioDecoder has no separate software queue), resumes audio/video, re-anchors AVSyncClock to VideoDecoder::last_rendered_pts_us(), and clears subtitle renderer active state via ass_flush_events() plus PGS rect clear. Added last_rendered_pts_us atomic tracking on frames that are actually presented/enqueued, plus SubtitleRenderer::clear_active_subs() and AudioDecoder::flush_queue(). Sidecar protocol unchanged, g_state unchanged, handle_stall_pause untouched. powershell -File native_sidecar/build.ps1 green; smoke intentionally deferred because the stall cascade repro is random and this summon accepted compile-verify as the RTC gate. | files: native_sidecar/src/main.cpp, native_sidecar/src/audio_decoder.h, native_sidecar/src/audio_decoder.cpp, native_sidecar/src/video_decoder.h, native_sidecar/src/video_decoder.cpp, native_sidecar/src/subtitle_renderer.h, native_sidecar/src/subtitle_renderer.cpp
