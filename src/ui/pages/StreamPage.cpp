@@ -1890,17 +1890,43 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Hash-filter: only forward signals for the currently-active stream —
     // StreamEngine may have multiple sessions in m_streams; we only care
     // about the one our VideoPlayer is playing.
+    //
+    // STREAM_STALL_RECOVERY_UX 2026-04-22 — also drive UI state (setStream
+    // Stalled + setStreamStallInfo) from the edge signal here, not only
+    // from the polling path in progressUpdated below. Direction C smoke
+    // at 14:48 proved the polling path is structurally dead during stalls:
+    // onStreamStallEdgeFromEngine(true) forwards to sidecar sendStallPause,
+    // which halts the audio decoder (audio_decoder.cpp:104) which freezes
+    // AVSyncClock, which suppresses the sidecar's time_update IPC —
+    // so onTimeUpdate never fires, progressUpdated never emits, the
+    // polling lambda never runs, statsSnapshot is never consulted, and
+    // the LoadingOverlay never shows. Edge signal is the ONLY reliable
+    // trigger during a stall. piece + peerHaveCount come on the signal
+    // already — previously discarded as `/*piece*/`, now forwarded so
+    // the overlay's "Buffering — waiting for piece N (K peers have it)"
+    // text is honest on the first transition without needing a second
+    // polling tick. Polling path in progressUpdated stays as belt-and-
+    // braces for any future path that fires setStreamStalled without
+    // the edge signal (pre-metadata stalls, edge-signal lost to overflow,
+    // etc.) — setStreamStalled's transition-only dedup makes the
+    // redundancy free.
     if (m_streamEngine) {
         disconnect(m_streamEngine, &StreamEngine::stallDetected, this, nullptr);
         disconnect(m_streamEngine, &StreamEngine::stallRecovered, this, nullptr);
         connect(m_streamEngine, &StreamEngine::stallDetected, this,
-            [this, player](const QString& infoHash, int /*piece*/,
-                           qint64 /*waitMs*/, int /*peerHaveCount*/) {
+            [this, player](const QString& infoHash, int piece,
+                           qint64 /*waitMs*/, int peerHaveCount) {
                 const QString active = m_playerController
                     ? m_playerController->currentInfoHash()
                     : QString();
                 if (infoHash != active) return;
-                if (player) player->onStreamStallEdgeFromEngine(true);
+                if (!player) return;
+                // UI state first so the overlay shows before the sidecar
+                // pause freezes the clock (UX-ordering; either order is
+                // correct).
+                player->setStreamStalled(true);
+                player->setStreamStallInfo(piece, peerHaveCount);
+                player->onStreamStallEdgeFromEngine(true);
             });
         connect(m_streamEngine, &StreamEngine::stallRecovered, this,
             [this, player](const QString& infoHash, int /*piece*/,
@@ -1909,7 +1935,13 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                     ? m_playerController->currentInfoHash()
                     : QString();
                 if (infoHash != active) return;
-                if (player) player->onStreamStallEdgeFromEngine(false);
+                if (!player) return;
+                // Dismiss overlay first so it disappears before the
+                // sidecar resume un-freezes the clock (user sees the
+                // overlay clear, then audio resumes — matches the
+                // setStreamStalled(true) ordering on entry).
+                player->setStreamStalled(false);
+                player->onStreamStallEdgeFromEngine(false);
             });
     }
 
