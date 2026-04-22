@@ -3,18 +3,16 @@
 #include "StreamPieceWaiter.h"
 #include "StreamPrioritizer.h"
 #include "StreamSeekClassifier.h"
+#include "StreamTelemetryWriter.h"
 #include "core/torrent/TorrentEngine.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStandardPaths>
-#include <QTextStream>
 #include <QUrl>
 
 static const QStringList VIDEO_EXTENSIONS = {
@@ -25,8 +23,8 @@ static const QStringList VIDEO_EXTENSIONS = {
 // STREAM_ENGINE_FIX Phase 1.2 — structured telemetry log facility.
 //
 // Gated on env var TANKOBAN_STREAM_TELEMETRY=1 read once at process start
-// (cached in g_telemetryEnabled). Output to stream_telemetry.log next to the
-// running executable (QCoreApplication::applicationDirPath), matching
+// (cached in streamTelemetryEnabled()). Output to stream_telemetry.log next
+// to the running executable, matching
 // sidecar_debug_live.log conventions.
 //
 // Format: "[ISO8601-millis] event=<name> hash=<8> field=value ..." — one
@@ -34,11 +32,10 @@ static const QStringList VIDEO_EXTENSIONS = {
 // to future tooling (no JSON-per-line tax to pay yet, per Agent 4 Rule-14
 // pick at TODO open-questions §).
 //
-// Thread-safety: writes serialized via g_telemetryMutex. Called from engine
-// thread (onMetadataReady, periodic timer) and from streamFile callers
-// (poll-driven, may be on any thread). Mutex is fast-path-cheap because
-// when telemetry is disabled the writes short-circuit on the cached flag
-// before any lock acquisition.
+// Thread-safety: lines are enqueued onto a shared background append writer.
+// Called from engine thread (onMetadataReady, periodic timer) and from
+// streamFile callers (poll-driven, may be on any thread). When telemetry is
+// disabled the writes short-circuit before any queue work.
 //
 // Cadence: event-driven for lifecycle transitions (metadata-ready /
 // first-piece-arrival / cancellation / stop) + periodic via QTimer in
@@ -46,38 +43,19 @@ static const QStringList VIDEO_EXTENSIONS = {
 // while serving). Never busy-logs on idle.
 namespace {
 
-bool g_telemetryEnabled = qgetenv("TANKOBAN_STREAM_TELEMETRY") == "1";
-QMutex g_telemetryMutex;
-QString g_telemetryPath;  // resolved lazily on first write to avoid early
-                          // QCoreApplication ordering issues at static-init.
-
-QString resolveTelemetryPath()
-{
-    if (!g_telemetryPath.isEmpty()) return g_telemetryPath;
-    QString dir = QCoreApplication::applicationDirPath();
-    if (dir.isEmpty()) dir = QDir::currentPath();
-    g_telemetryPath = dir + QStringLiteral("/stream_telemetry.log");
-    return g_telemetryPath;
-}
-
 // kv-pair record emit. `event` is the load-bearing label (greppable);
 // `body` is space-separated key=value pairs the caller composes. Caller
 // owns formatting of the body (StreamEngine has the typed values; this
 // helper stays format-agnostic).
 void writeTelemetry(const QString& event, const QString& body)
 {
-    if (!g_telemetryEnabled) return;
+    if (!streamTelemetryEnabled()) return;
     const QString line = QStringLiteral("[")
         + QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)
         + QStringLiteral("] event=") + event
         + (body.isEmpty() ? QString() : (QStringLiteral(" ") + body))
         + QStringLiteral("\n");
-
-    QMutexLocker lock(&g_telemetryMutex);
-    QFile f(resolveTelemetryPath());
-    if (!f.open(QIODevice::Append | QIODevice::Text)) return;
-    QTextStream out(&f);
-    out << line;
+    appendStreamTelemetryLine(line);
 }
 
 // Compose a key=value record from a StreamEngineStats. Used by lifecycle
@@ -190,6 +168,18 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
             this, &StreamEngine::onColdOpenDiagTick);
     m_coldOpenDiagTimer->start();
 
+    // STREAM metadata investigation Wake 1 (2026-04-21) — sibling of the
+    // cold-open diag timer above. Fires 1 Hz; onMetadataFetchDiagTick
+    // predicate-gates on state==Pending so it only emits during the pre-
+    // metadata window (addMagnet → metadata_received_alert). Observed
+    // magnet→metadata window on Torrentio EZTV sources is 93-245 s with
+    // zero granular telemetry today; this closes that gap.
+    m_metadataFetchDiagTimer = new QTimer(this);
+    m_metadataFetchDiagTimer->setInterval(1000);
+    connect(m_metadataFetchDiagTimer, &QTimer::timeout,
+            this, &StreamEngine::onMetadataFetchDiagTick);
+    m_metadataFetchDiagTimer->start();
+
     // One-shot startup line so the log opens visibly when telemetry is on
     // — confirms env-var gate worked + filesystem path resolved.
     writeTelemetry(QStringLiteral("engine_started"),
@@ -199,6 +189,7 @@ StreamEngine::StreamEngine(TorrentEngine* engine, const QString& cacheDir,
 StreamEngine::~StreamEngine()
 {
     stopAll();
+    flushStreamTelemetry();
 }
 
 bool StreamEngine::start()
@@ -210,6 +201,7 @@ void StreamEngine::stop()
 {
     stopAll();
     m_httpServer->stop();
+    flushStreamTelemetry();
 }
 
 int StreamEngine::httpPort() const
@@ -353,6 +345,10 @@ StreamFileResult StreamEngine::streamFile(const QString& magnetUri,
         // fires for tracker-light add-on responses.
         rec.trackerSourceCount =
             static_cast<int>(magnetUri.count(QStringLiteral("tr=")));
+        // STREAM metadata investigation Wake 1 — stamp magnet-add time so
+        // onMetadataFetchDiagTick can report `elapsed_ms` relative to the
+        // actual addMagnet moment, not engine start.
+        rec.addedMs = m_clock.elapsed();
         m_streams.insert(addedHash, rec);
 
         result.queued = true;
@@ -574,6 +570,13 @@ void StreamEngine::stopStream(const QString& infoHash)
     // stops pre-fetching pieces for a playback session that no longer
     // exists. Safe to call even when none were set.
     m_torrentEngine->clearPieceDeadlines(infoHash);
+
+    // STREAM_STALL_WATCHDOG_FIX 2026-04-21 — purge continuous-wait tracking
+    // for this hash so stale m_firstSeenMs entries (pieces that were blocked
+    // when the user stopped the session) don't leak into longestActiveWait()
+    // readings for future sessions.
+    if (m_pieceWaiter)
+        m_pieceWaiter->untrackStream(infoHash);
 
     // Unregister from HTTP server
     if (rec.state == StreamSession::State::Serving)
@@ -1041,6 +1044,12 @@ void StreamEngine::onStallTick()
             + QStringLiteral(" piece=") + QString::number(piece)
             + QStringLiteral(" wait_ms=") + QString::number(waitMs)
             + QStringLiteral(" peer_have_count=") + QString::number(peerHave));
+        // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — Option C foundation.
+        // Promote the telemetry event into a Qt signal so StreamPage can
+        // forward into the sidecar IPC layer. Consumers implement Option
+        // A (mpv-style cache pause) on top. Emitted AFTER writeTelemetry
+        // so the file write isn't interleaved with Qt signal delivery.
+        emit stallDetected(hash, piece, waitMs, peerHave);
         writeTelemetry(QStringLiteral("piece_diag"),
             QStringLiteral("hash=") + hash.left(8)
             + QStringLiteral(" piece=") + QString::number(piece)
@@ -1090,6 +1099,14 @@ void StreamEngine::onStallTick()
             + QStringLiteral(" piece=") + QString::number(piece)
             + QStringLiteral(" elapsed_ms=") + QString::number(elapsedSinceStall)
             + QStringLiteral(" via=") + QString::fromLatin1(via));
+        // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — Option C foundation.
+        // Paired with stallDetected above — signals recovery so consumers
+        // (StreamPage → sidecar IPC → audio_decoder) can re-anchor the
+        // clock + resume audio output. `via` tells the recovery handler
+        // whether the piece actually arrived (normal case) vs replacement
+        // / cancellation (in which case no resync needed — the session
+        // is unwinding).
+        emit stallRecovered(hash, piece, elapsedSinceStall, QString::fromLatin1(via));
         return;  // one recovery per tick; any other sessions wait for the next fire
     }
 }
@@ -1187,6 +1204,71 @@ void StreamEngine::onColdOpenDiagTick()
             + QStringLiteral(" peers_dl=") + QString::number(e.diag.peersDownloadingPiece)
             + QStringLiteral(" avg_q_ms=") + QString::number(e.diag.avgPeerQueueMs)
             + QStringLiteral(" peer_count=") + QString::number(e.diag.peerCount));
+    }
+}
+
+void StreamEngine::onMetadataFetchDiagTick()
+{
+    // STREAM metadata investigation Wake 1 (2026-04-21) — per-Pending-
+    // session 1 Hz diagnostic telemetry during the pre-metadata window.
+    // Closes the observability gap on the 93-245 s magnet→metadata
+    // window observed across Torrentio EZTV smokes this week. Sibling
+    // shape of onColdOpenDiagTick (same lock order, same predicate-gate
+    // discipline, same writeTelemetry emit pattern, same cheap-when-
+    // disabled properties).
+    //
+    // Phase interpretation (for next-wake evidence reading):
+    //   dht_running=0, trackers_ok=0, peers=0         → bootstrap stuck
+    //   dht_running=1, trackers_ok=0, peers=0         → DHT only, trackers failing
+    //   trackers_ok>0, peers=0 over N ticks           → tracker responded but
+    //                                                   no peer handshake completed
+    //   peers>0 but metadata_ready still unfired      → peers connected but
+    //                                                   not exchanging ut_metadata
+    //                                                   (would suggest metadata_
+    //                                                   token_limit / max_meta
+    //                                                   _size tuning target)
+    //
+    // Acquires StreamEngine::m_mutex; metadataFetchDiagnostic takes its
+    // own TorrentEngine::m_mutex via the established SE→TE order.
+    if (!m_torrentEngine) return;
+
+    QMutexLocker lock(&m_mutex);
+    const qint64 now = m_clock.elapsed();
+
+    struct Entry {
+        QString infoHash;
+        qint64 elapsedMs;
+        TorrentEngine::MetadataFetchDiag diag;
+    };
+    QList<Entry> entries;
+    entries.reserve(4);
+
+    for (auto it = m_streams.begin(); it != m_streams.end(); ++it) {
+        StreamSession& s = *it;
+        if (s.state != StreamSession::State::Pending) continue;
+        if (s.metadataReadyMs >= 0) continue;   // defensive — state transitions
+                                                 // from Pending on metadata arrival
+        if (s.infoHash.isEmpty()) continue;
+
+        Entry e;
+        e.infoHash  = s.infoHash;
+        e.elapsedMs = (s.addedMs >= 0) ? (now - s.addedMs) : now;
+        e.diag      = m_torrentEngine->metadataFetchDiagnostic(s.infoHash);
+        entries.append(std::move(e));
+    }
+    lock.unlock();
+
+    for (const Entry& e : entries) {
+        writeTelemetry(QStringLiteral("metadata_fetch_diag"),
+            QStringLiteral("hash=") + e.infoHash.left(8)
+            + QStringLiteral(" elapsed_ms=") + QString::number(e.elapsedMs)
+            + QStringLiteral(" peers_connected=") + QString::number(e.diag.peersConnected)
+            + QStringLiteral(" swarm_seeds=") + QString::number(e.diag.swarmSeeds)
+            + QStringLiteral(" swarm_leechers=") + QString::number(e.diag.swarmLeechers)
+            + QStringLiteral(" trackers_ok=") + QString::number(e.diag.trackersOk)
+            + QStringLiteral(" trackers_total=") + QString::number(e.diag.trackersTotal)
+            + QStringLiteral(" dht_running=") + (e.diag.dhtRunning ? QStringLiteral("1") : QStringLiteral("0"))
+            + QStringLiteral(" announcing=") + (e.diag.announcingToTrackers ? QStringLiteral("1") : QStringLiteral("0")));
     }
 }
 
@@ -1540,22 +1622,86 @@ void StreamEngine::onMetadataReady(const QString& infoHash, const QString& /*nam
         // urgency window so its scheduler converges on head pieces instead
         // of scattering. Semantically orthogonal concerns.
         constexpr qint64 kHeadBytesInitial = 5LL * 1024 * 1024;  // Stremio target
-        constexpr int    kHeadMinPieces    = 5;                  // Stremio floor
+        // STREAM_HTTP_PREFER investigation Wake 2 (2026-04-21) — drop head
+        // piece count 5 → 2, matching Stremio's MAX_STARTUP_PIECES = 2 at
+        // stremio-core-development/enginefs/src/backend/priorities.rs:9.
+        //
+        // Evidence (captured by Wake 1's cold_open_diag telemetry on
+        // Invincible S04E01 c7eaed17 Torrentio EZTV, 150+ diag lines in
+        // out/stream_telemetry.log at 2026-04-21T02:01:32Z+):
+        //   t=0.8s: only piece 0 in download queue, requested=8, peers_dl=1
+        //   t=1.8s: piece 0 finished=29/100, pieces 1-4 in_dl_queue=0 still
+        //   t=2.8s: piece 0 finished=67/100, pieces 1-4 in_dl_queue=0 still
+        //   t=3.8s: piece 0 finished=77/100, piece 1 FINALLY queued
+        //   t=4.8s: piece 1 finished=24/100, piece 2 queued
+        //   t=29.9s: piece 0 done, pieces 1-4 at 82-99%
+        //   first_piece fired at elapsed=30153ms post-metadata
+        //
+        // Pattern: with 5 head pieces each getting priority=7 + deadlines
+        // {0, 10, 20, 30, 40} ms, libtorrent's time-critical scheduler
+        // focuses aggressively on piece 0 (deadline=0 = overdue) and only
+        // queues pieces 1-4 serially as piece 0 nears completion. Net
+        // effect: 30 s cold-open from metadata to first_piece despite
+        // 150+ peers + 10+ MB/s available bandwidth. Stremio opens the
+        // same swarm in ~3 s using 2 pieces with deadlines {10, 60} ms —
+        // both pieces future-urgent from t=0, peer attention splits
+        // evenly, both pieces progress in parallel.
+        //
+        // This Wake 2 change is ONE of the two differentials vs Stremio
+        // (piece count only). If first_piece cold-open drops below 10 s
+        // on next smoke, Wake 2 closes. If not, Wake 3 iterates to the
+        // deadline-shape differential ({0, 40} → {10, 60} ms) since
+        // those are independent knobs.
+        constexpr int    kHeadMinPieces    = 2;                  // Stremio MAX_STARTUP_PIECES
         // STREAM_ENGINE_REBUILD scheduler-tightening bundle (2026-04-19)
-        // — drop head gradient to Stremio URGENT tier (0→40 ms, handle.rs:
-        // 305-311). Prior 200→500 ms worked for cold-open with priority=7
-        // pairing on 5 pieces but still saw piece-40 + piece-9 stalls at
-        // 15 s during scrub on 1575eafa 2026-04-19 05:38-05:39 with 49-58
-        // peers + 8-9 MB/s. Hypothesis: libtorrent time-critical queue
-        // caps at ~8 pieces; when cold-open head 5 + tail-metadata 2 +
-        // seek-prefetch 5 + sliding-window 15 all compete, pieces drop
-        // out of the queue. Tightening to Stremio's URGENT values reduces
-        // per-piece deadline budget so the scheduler cannot "defer" any
-        // urgent piece without missing its deadline. Bundle also caps
-        // Prioritizer re-assert output + raises re-assert cadence to 5 Hz
-        // (see StreamEngine::m_reassertTimer + reassertStreamingPriorities).
-        constexpr int kHeadFirstMs  = 0;
-        constexpr int kHeadLastMs   = 40;
+        // originally dropped head gradient to URGENT tier (0→40 ms, per
+        // handle.rs:305-311). That assumed URGENT was the right tier for
+        // cold-open; turned out to be wrong once Wake-1 cold_open_diag
+        // telemetry captured the actual failure mode.
+        //
+        // STREAM_HTTP_PREFER investigation Wake 3 (2026-04-21) — reshape
+        // to Stremio CRITICAL HEAD tier `{10, 60}` ms (priorities.rs:56-225
+        // `calculate_priorities` first-5-pieces staircase `10 + d × 50` ms).
+        // Wake-2 smoke on Invincible S01E02 01f349dd proved that the Wake-2
+        // piece-count reduction (5 → 2) alone did not break the serial-
+        // piece-progression pattern captured in Wake-1 telemetry: libtorrent
+        // still queued piece 0 alone for 40+ seconds, pieces 1-N stayed
+        // `in_dl_queue=0` until piece 0 neared completion, and first_piece
+        // took 43.8 s post-metadata on a fresh 1500-peer swarm.
+        //
+        // Evidence-indicted root cause: the leading `0 ms` deadline. When
+        // the first head piece has deadline=0 (already overdue at the
+        // moment we call set_piece_deadline), libtorrent's time-critical
+        // scheduler at torrent.cpp:11055-11114 treats it as super-greedy-
+        // overdue and routes the entire time-critical request-bandwidth
+        // budget to that single piece. Subsequent pieces (deadline 10 ms,
+        // 20 ms, 30 ms, 40 ms — all MORE future than piece 0) do not enter
+        // the download queue until piece 0's `free_to_request` drops low
+        // enough to free request slots — which happens only as piece 0
+        // nears completion.
+        //
+        // Stremio's `{10, 60}` shape has NO overdue deadline. Both head
+        // pieces are "imminent future" — piece 0 at 10 ms ahead, piece 1
+        // at 60 ms ahead. Neither is marked overdue so the scheduler does
+        // not enter super-greedy mode on either; it parallelizes block
+        // requests across both pieces simultaneously from t=0. Peers serve
+        // block requests against both pieces concurrently, which is the
+        // pattern that gets Stremio's cold-open to ~3 s on the same swarm
+        // Tankoban takes minutes on.
+        //
+        // Wake 3 is a single-constant-pair change (both endpoints of the
+        // staircase move). Kept kHeadFirstMs/kHeadLastMs naming unchanged;
+        // just numerical values shifted. Extend-loop behavior on
+        // kHeadMinPieces=2 from Wake 2 keeps the scheduler working with
+        // at most 2-3 head pieces as designed.
+        //
+        // If Wake-3 smoke shows `first_piece deltaMs < 10000` on a fresh
+        // torrent, sequential-plan step 3 closes and the cold-open bug is
+        // effectively resolved for the scheduler path. If not, Wake 4
+        // moves to session_settings differential audit vs stream-server-
+        // master per the plan on chat.md.
+        constexpr int kHeadFirstMs  = 10;   // Stremio CRITICAL HEAD leading deadline
+        constexpr int kHeadLastMs   = 60;   // Stremio CRITICAL HEAD trailing deadline (10 + 1*50)
 
         QPair<int, int> headRange =
             m_torrentEngine->pieceRangeForFileOffset(infoHash, fileIdx,
