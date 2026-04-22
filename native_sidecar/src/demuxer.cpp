@@ -28,6 +28,146 @@ static bool starts_with_ci(const std::string& s, const char* prefix) {
     return true;
 }
 
+// STREAM_DURATION_FIX_FOR_PACKS 2026-04-21 — last-resort per-stream scan
+// used by the two DISCARD branches in the duration resolution block
+// (FROM_BITRATE + subs-contaminated-container) before returning 0.
+//
+// Rationale: MKV packs whose Segment Duration is FROM_BITRATE or where
+// the video stream's own duration is AV_NOPTS_VALUE (Cues parsing
+// didn't reach end-of-file during probe) almost always STILL have
+// reliable AUDIO stream duration. Audio packets are smaller + more
+// densely scanned during avformat_find_stream_info + their AVStream
+// ::duration field populates from track-level container metadata that
+// libavformat trusts independently of the Segment-level inheritance
+// logic. Taking the max over non-subtitle streams gives the authoritative
+// content length without trusting the container-level Segment Duration
+// that STREAM_DURATION_FIX (commit c27ce5d) rejects on suspicion of
+// subtitle contamination.
+//
+// Subtitle + attachment streams excluded: they're the exact population
+// STREAM_DURATION_FIX was designed to ignore — subs-contaminated MKVs
+// inherit a stale container duration onto all subtitle tracks, so
+// picking up their `duration` field would reintroduce the 1h-as-2h lie.
+//
+// Sanity threshold: chosen duration >= 60s. Protects against probe-
+// sample-only durations that might be set from a 5-10s analyzed window
+// at Tier 1. Pack-torrent episodes are 20-60+ minutes; the 60s floor
+// excludes any sample-duration artifact without sacrificing legit short
+// content (shorts / previews pass this unless < 1 min, which would be
+// an odd scope for streaming).
+//
+// Called only from branches 2 and 4 of the duration resolution hierarchy
+// — branches 1 (reliable video-stream duration) and 3 (reliable FROM_PTS
+// container duration) never reach this fallback.
+static double try_stream_max_duration(AVFormatContext* fmt_ctx)
+{
+    if (!fmt_ctx) return 0.0;
+    double best = 0.0;
+    int    winner_idx = -1;
+    int    winner_type = AVMEDIA_TYPE_UNKNOWN;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        AVStream* s = fmt_ctx->streams[i];
+        if (!s || !s->codecpar) continue;
+        const AVMediaType t = s->codecpar->codec_type;
+        if (t != AVMEDIA_TYPE_VIDEO && t != AVMEDIA_TYPE_AUDIO) continue;
+        if (s->duration == AV_NOPTS_VALUE) continue;
+        if (s->time_base.den <= 0 || s->time_base.num <= 0) continue;
+        const double d = static_cast<double>(s->duration) * av_q2d(s->time_base);
+        if (d >= 60.0 && d > best) {
+            best = d;
+            winner_idx = static_cast<int>(i);
+            winner_type = t;
+        }
+    }
+    if (best > 0.0 && winner_idx >= 0) {
+        const char* type_str = (winner_type == AVMEDIA_TYPE_VIDEO) ? "video"
+                             : (winner_type == AVMEDIA_TYPE_AUDIO) ? "audio"
+                             : "other";
+        std::fprintf(stderr,
+            "probe_file: stream-max fallback picked stream=%d type=%s dur=%.1fs "
+            "(container duration unreliable — using reliable per-stream value "
+            "instead of 0)\n",
+            winner_idx, type_str, best);
+        return best;
+    }
+    std::fprintf(stderr,
+        "probe_file: stream-max fallback found no stream with duration >= 60s "
+        "(nb_streams=%u); duration stays 0\n",
+        fmt_ctx->nb_streams);
+    return 0.0;
+}
+
+// STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — last-resort estimate
+// after try_stream_max_duration also returns 0. Computes
+//   duration ≈ total_size_bytes * 8 / fmt_ctx->bit_rate
+// Target class: pathological pack torrents (e.g. Invincible S01E02
+// Torrentio EZTV) where all video + audio streams ALSO lack reliable
+// AVStream::duration (only subtitles carry the subs-contaminated stale
+// container duration that STREAM_DURATION_FIX was designed to reject).
+// Wake 1's per-stream-max fallback correctly declined these; Wake 2
+// rescues UX by accepting an approximate bitrate × size estimate,
+// flagged as estimate so the main-app HUD prefixes the display with
+// `~` (tilde) to keep Hemanth's anti-lie rule intact.
+//
+// Sanity bounds: 10s to 10h (10 * 3600s). Guards against:
+//   - bit_rate=0 or negative (undetected → div-by-zero / negative dur)
+//   - avio_size=-1 or 0 (unknown HTTP Content-Length → bogus fraction)
+//   - truncated files where bytes × 8 / bitrate gives absurd durations
+//   - head-bitrate anomalies on very-small-probesize tiers where the
+//     observed bit_rate is wildly non-representative
+//
+// Accuracy: VBR content can have per-minute bitrate varying 50%+ from
+// average, so estimate error is ~10-50%. For ~42min content this means
+// the displayed `~42:00` might be actual 35-50min. Acceptable under the
+// tilde-prefix UX contract: user knows it's approximate + can seek
+// interactively, which is infinitely better than being frozen at 0.
+//
+// Returns 0.0 if any sanity check fails; non-zero duration otherwise.
+// Caller sets result.duration_is_estimate = true when this returns
+// non-zero.
+static double try_bitrate_filesize_fallback(AVFormatContext* fmt_ctx)
+{
+    if (!fmt_ctx) return 0.0;
+    if (fmt_ctx->bit_rate <= 0) {
+        std::fprintf(stderr,
+            "probe_file: bitrate fallback skipped (fmt_ctx->bit_rate=%lld, "
+            "not positive)\n",
+            (long long)fmt_ctx->bit_rate);
+        return 0.0;
+    }
+    if (!fmt_ctx->pb) {
+        std::fprintf(stderr,
+            "probe_file: bitrate fallback skipped (fmt_ctx->pb is null — no "
+            "AVIOContext to query size)\n");
+        return 0.0;
+    }
+    const int64_t size_bytes = avio_size(fmt_ctx->pb);
+    if (size_bytes <= 0) {
+        std::fprintf(stderr,
+            "probe_file: bitrate fallback skipped (avio_size=%lld, "
+            "no Content-Length / unknown file size)\n",
+            (long long)size_bytes);
+        return 0.0;
+    }
+    const double est = static_cast<double>(size_bytes) * 8.0
+                     / static_cast<double>(fmt_ctx->bit_rate);
+    constexpr double kMinSec = 10.0;
+    constexpr double kMaxSec = 10.0 * 3600.0;  // 10 hours
+    if (est < kMinSec || est > kMaxSec) {
+        std::fprintf(stderr,
+            "probe_file: bitrate fallback rejected est=%.1fs — out of sane "
+            "range [%.0fs, %.0fs] (size_bytes=%lld bit_rate=%lld)\n",
+            est, kMinSec, kMaxSec, (long long)size_bytes,
+            (long long)fmt_ctx->bit_rate);
+        return 0.0;
+    }
+    std::fprintf(stderr,
+        "probe_file: bitrate fallback picked dur=%.1fs (size=%lld bytes × 8 "
+        "/ bitrate=%lld bps) — ESTIMATE; main-app will prefix HUD with tilde\n",
+        est, (long long)size_bytes, (long long)fmt_ctx->bit_rate);
+    return est;
+}
+
 static std::string dict_get(AVDictionary* d, const char* key) {
     AVDictionaryEntry* e = av_dict_get(d, key, nullptr, 0);
     return e && e->value ? std::string(e->value) : std::string();
@@ -56,8 +196,23 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
     TierSpec tiers[3];
     int tier_count = 0;
     if (is_http) {
-        tiers[0] = {1,   512 * 1024,      750 * 1000,       5 * 1000 * 1000};
-        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   15 * 1000 * 1000};
+        // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — unified
+        // rw_timeout across all probe tiers to 30s, mirroring the earlier
+        // same-session fix in video_decoder.cpp:233. Same pathology: the
+        // 5s Tier-1 rw_timeout was chosen for fast probe-failure but
+        // persists on the HTTP AVIOContext through every read for the
+        // life of the probe, and TCP backpressure from a frame-rate-
+        // limited consumer or a briefly-starved torrent piece can pause
+        // reads >5s, tripping rw_timeout → reconnect_streamed loop.
+        // Wake 1 smoke (2026-04-21 12:26) observed 45 "Stream ends
+        // prematurely" log lines traced to this remaining 5s/15s
+        // leftover in probe tiers. Dead-source detection unchanged —
+        // still bounded by the `timeout=60s` connect cap set per-tier
+        // below. Worst-case probe-through-all-tiers grows 50s → 90s on
+        // truly-dead sources; acceptable since Torrentio surfaces only
+        // live magnets.
+        tiers[0] = {1,   512 * 1024,      750 * 1000,      30 * 1000 * 1000};
+        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   30 * 1000 * 1000};
         tiers[2] = {3, 5 * 1024 * 1024, 5 * 1000 * 1000,   30 * 1000 * 1000};
         tier_count = 3;
     } else {
@@ -364,7 +519,26 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
             "probe_file: DISCARDING duration=%lldus (estimation=FROM_BITRATE, "
             "unreliable on small-probesize HTTP streams)\n",
             (long long)fmt_ctx->duration);
-        // result.duration_sec stays 0.
+        // STREAM_DURATION_FIX_FOR_PACKS 2026-04-21 — before giving up,
+        // try the per-stream-max fallback. Audio streams typically have
+        // reliable AVStream::duration even when the container-level
+        // estimate is FROM_BITRATE junk; using that value lets seek-math
+        // in VideoPlayer work correctly on pack torrents that would
+        // otherwise collapse to durationSec=0 → scrub-bar-to-zero + HUD
+        // em-dash-right-side + seek-to-zero.
+        result.duration_sec = try_stream_max_duration(fmt_ctx);
+        // Wake 2 2026-04-21 — if per-stream-max also returned 0 (no
+        // reliable video/audio stream duration), try the bitrate × size
+        // estimate. Flagged as estimate so HUD renders `~N:NN`. Applies
+        // only to the pathological pack class where all streams lack
+        // AVStream::duration but bit_rate + Content-Length are known.
+        if (result.duration_sec <= 0.0) {
+            const double est = try_bitrate_filesize_fallback(fmt_ctx);
+            if (est > 0.0) {
+                result.duration_sec = est;
+                result.duration_is_estimate = true;
+            }
+        }
     } else if (fmt_ctx->duration_estimation_method == AVFMT_DURATION_FROM_PTS
                && container_duration_sec > 0.0) {
         // FROM_PTS is libavformat's way of saying "derived by observing packet
@@ -379,7 +553,25 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
             "subtitle/attachment streams (unreliable on MKVs whose Segment "
             "Info Duration field disagrees with real playback length)\n",
             container_duration_sec);
-        // result.duration_sec stays 0.
+        // STREAM_DURATION_FIX_FOR_PACKS 2026-04-21 — same fallback as the
+        // FROM_BITRATE branch above. Subs-contamination discards the
+        // CONTAINER-level duration (which inherited from subtitle streams)
+        // but the per-stream audio duration is still populated from its
+        // own track-level metadata and is trustworthy. This rescues the
+        // pack-torrent case where Hemanth saw scrub-bar / seek buttons /
+        // HUD time all break from durationSec=0 propagation 2026-04-21.
+        result.duration_sec = try_stream_max_duration(fmt_ctx);
+        // Wake 2 2026-04-21 — if per-stream-max also returned 0 (the
+        // pathological Invincible S01E02 pack class where ALL 33 streams
+        // lack AVStream::duration), try bitrate × size estimate. Flagged
+        // so HUD renders with tilde prefix.
+        if (result.duration_sec <= 0.0) {
+            const double est = try_bitrate_filesize_fallback(fmt_ctx);
+            if (est > 0.0) {
+                result.duration_sec = est;
+                result.duration_is_estimate = true;
+            }
+        }
     }
 
     // Enumerate audio and subtitle streams
