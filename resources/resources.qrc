@@ -9,6 +9,10 @@
         <file>icons/error.svg</file>
         <file>icons/waiting.svg</file>
         <file>icons/stalled.svg</file>
+        <file>icons/shuffle.svg</file>
+        <file>icons/repeat_all.svg</file>
+        <file>icons/repeat_one.svg</file>
+        <file>icons/loop_file.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>

@@ -47,6 +47,15 @@ protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    // VIDEO_PLAYER_UI_POLISH follow-up 2026-04-23 (hemanth-reported):
+    // scrolling inside the drawer was also adjusting volume because
+    // wheel events (from QListWidget at scroll limits, or from the
+    // toolbar region) bubbled up to VideoPlayer::wheelEvent which
+    // treats wheel as volume. Override wheelEvent here to accept all
+    // wheel events in the drawer's bounding area so nothing leaks to
+    // the parent. The list's own QListWidget::wheelEvent still runs
+    // first (child-before-parent delivery) and scrolls when possible.
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void dismiss();
