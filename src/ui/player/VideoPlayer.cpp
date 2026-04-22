@@ -326,18 +326,19 @@ void VideoPlayer::openFile(const QString& filePath,
     m_currentFile = filePath;
     m_currentVideoId = videoIdForFile(filePath);
     m_currentShowId = showIdForFile(filePath);
-    // Title for the bottom HUD label — use completeBaseName (strips the
-    // file extension). For URL sources (Stream mode) QFileInfo::
-    // completeBaseName on e.g. "http://127.0.0.1:PORT/stream/{hash}/{idx}"
+    // Title for the bottom HUD label. For URL sources (Stream mode)
+    // QFileInfo on e.g. "http://127.0.0.1:PORT/stream/{hash}/{idx}"
     // yields just the trailing path segment (the file index — "0", "3",
     // etc.), which is useless as a title. Callers pass displayTitle to
     // override with a human-readable name (StreamPage routes
     // StreamPlayerController::currentFileName() through here).
-    if (!displayTitle.isEmpty()) {
-        m_fullTitle = QFileInfo(displayTitle).completeBaseName();
-    } else {
-        m_fullTitle = QFileInfo(filePath).completeBaseName();
-    }
+    // VIDEO_PLAYER_UI_POLISH Phase 2 2026-04-22: run the chosen title
+    // through player_utils::episodeLabel so raw release filenames (e.g.
+    // "[DB]Saiki Kusuo no Psi-nan_-_04_(Dual Audio_10bit_BD1080p_x265)")
+    // render as "Saiki Kusuo no Psi-nan · Episode 4" in the HUD. Closes
+    // audit finding #3 ("raw release filenames leak into playback UI").
+    const QString rawForLabel = !displayTitle.isEmpty() ? displayTitle : filePath;
+    m_fullTitle = player_utils::episodeLabel(rawForLabel);
     updateTitleElision();
     m_playlist = playlist;
     m_playlistIdx = playlistIndex;
@@ -1278,19 +1279,21 @@ void VideoPlayer::buildUI()
 
     // FrameCanvas is a native D3D11 HWND (WA_PaintOnScreen) — mouse events
     // don't bubble to VideoPlayer. Forward via signal carrying y position.
-    // Cursor unhide on any move; HUD reveal only when cursor enters the
-    // bottom-edge zone.
-    connect(m_canvas, &FrameCanvas::mouseActivityAt, this, [this](int y) {
-        // Always: unhide cursor + arm cursor auto-hide.
+    // VIDEO_PLAYER_UI_POLISH Phase 1 2026-04-22 (audit finding #1
+    // "HUD reveal feels unreliable"): prior code gated the HUD reveal on
+    // `y >= height - 120` i.e. only the bottom ~12 % of the frame would
+    // surface the control bar. That made the player feel hesitant — the
+    // auditor had to press L to get controls up because moving the
+    // pointer into the lower player area (bottom third, not bottom 120 px)
+    // wasn't enough. VLC / mpv / PotPlayer all reveal on *any* mouse
+    // motion over the player area and rely on the auto-hide timer to
+    // keep the HUD out of the way — that's the convention we should
+    // match. Y parameter is now unused at the consumer side (kept in
+    // the signal for future needs like cursor-locality-aware effects).
+    connect(m_canvas, &FrameCanvas::mouseActivityAt, this, [this](int /*y*/) {
         setCursor(Qt::ArrowCursor);
         m_cursorTimer.start();
-        // HUD reveal only when cursor is within the bottom-edge zone. Zone
-        // is the control-bar height plus a small margin so the bar appears
-        // before the cursor reaches it.
-        constexpr int kBottomRevealZonePx = 120;
-        if (y >= m_canvas->height() - kBottomRevealZonePx) {
-            showControls();
-        }
+        showControls();
     });
     connect(m_canvas, &FrameCanvas::canvasPixelSizeSettled, this,
         [this](int, int) {
@@ -1299,9 +1302,22 @@ void VideoPlayer::buildUI()
 
     m_controlBar = new QWidget(this);
     m_controlBar->setObjectName("VideoControlBar");
+    // SUBTITLE_VIDEO_BOTTOM_CUTOFF_FIX 2026-04-22 (hemanth-reported
+    // "video cut off at bottom in fullscreen"): the prior 0.92 alpha +
+    // Qt's WA_PaintOnScreen + separate-HWND FrameCanvas render stack
+    // made the HUD panel render fully opaque to DWM composition —
+    // video behind it was invisible, so the bottom ~120 px of video
+    // appeared clipped whenever HUD was visible. Pixel analysis of
+    // tb_D2_fs_paused_hudvisible.png showed RGB=(9,9,9) uniformly
+    // across the HUD bg over a tan/beige video region, confirming zero
+    // video show-through. Dropping alpha 0.92 -> 0.50 matches reference-
+    // player convention (mpv OSC ~0.60, VLC OSD ~0.55, PotPlayer HUD
+    // ~0.60). If the DWM/HWND path still ignores alpha, hideControls
+    // auto-hide-on-pause (companion edit at ~line 2782) still lets the
+    // full 1920x1080 video surface the moment the cursor stills.
     m_controlBar->setStyleSheet(
         "QWidget#VideoControlBar {"
-        "  background: rgba(10, 10, 10, 0.92);"
+        "  background: rgba(10, 10, 10, 0.50);"
         "  border-top: 1px solid rgba(255, 255, 255, 0.08);"
         "}"
     );
@@ -1650,11 +1666,19 @@ void VideoPlayer::buildUI()
     // clicking the label doesn't interfere with context-menu / drag.
     m_titleLabel = new QLabel(m_controlBar);
     m_titleLabel->setObjectName("VideoTitle");
+    // VIDEO_PLAYER_UI_POLISH Phase 3 2026-04-22 — audit finding #5 "the
+    // title line is low-contrast and visually secondary even though it
+    // carries the current item identity." Prior style was
+    // rgba(255,255,255,0.55) at 11 px / 500 — reads as hint text next
+    // to the chips. Raise to 0.95 alpha + 12 px + 600 so the title is
+    // clearly primary text at the same weight class as the chip labels,
+    // matching the bottom-bar hierarchy convention. No color palette
+    // change (still off-white); respects feedback_no_color_no_emoji.
     m_titleLabel->setStyleSheet(
         "QLabel#VideoTitle {"
-        "  color: rgba(255,255,255,0.55);"
-        "  font-size: 11px;"
-        "  font-weight: 500;"
+        "  color: rgba(245,245,245,0.95);"
+        "  font-size: 12px;"
+        "  font-weight: 600;"
         "  padding-left: 12px;"
         "  padding-right: 12px;"
         "}"
@@ -1665,21 +1689,30 @@ void VideoPlayer::buildUI()
     m_titleLabel->setMinimumWidth(0);
     m_titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
 
+    // VIDEO_PLAYER_UI_POLISH Phase 3 2026-04-22 — audit finding #5 "bottom
+    // control bar is visually crowded." Prior layout packed every chip
+    // with uniform 4 px spacing, no visual grouping. Rebalance:
+    //   [back] — [prev|play|next]  —  [title, stretch]  —  [speed]
+    //     [filters|eq]  [tracks|list]
+    // Wider cross-group gaps (16 px) separate transport / title / chip
+    // clusters; narrow 3 px intra-group gaps keep related chips visually
+    // cohesive. No chip count change, no re-order — purely spacing.
     ctrlRow->addWidget(m_backBtn);
-    ctrlRow->addSpacing(8);
+    ctrlRow->addSpacing(16);                      // back → transport
     ctrlRow->addWidget(m_prevEpisodeBtn);
     ctrlRow->addWidget(m_playPauseBtn);
     ctrlRow->addWidget(m_nextEpisodeBtn);
-    ctrlRow->addSpacing(8);
-    ctrlRow->addWidget(m_titleLabel, 1);  // stretch factor 1 — eats leftover space
+    ctrlRow->addSpacing(16);                      // transport → title
+    ctrlRow->addWidget(m_titleLabel, 1);          // stretch — eats leftover space
+    ctrlRow->addSpacing(12);                      // title → speed chip
     ctrlRow->addWidget(m_speedChip);
-    ctrlRow->addSpacing(4);
+    ctrlRow->addSpacing(12);                      // speed → utility cluster
     ctrlRow->addWidget(m_filtersChip);
-    ctrlRow->addSpacing(4);
+    ctrlRow->addSpacing(3);                       // filters ↔ eq (intra-group)
     ctrlRow->addWidget(m_eqChip);
-    ctrlRow->addSpacing(4);
+    ctrlRow->addSpacing(12);                      // utility → track cluster
     ctrlRow->addWidget(m_trackChip);
-    ctrlRow->addSpacing(4);
+    ctrlRow->addSpacing(3);                       // tracks ↔ list (intra-group)
     ctrlRow->addWidget(m_playlistChip);
 
     rootLayout->addLayout(ctrlRow);
@@ -2749,7 +2782,23 @@ int VideoPlayer::subtitleBaselineLiftPx() const
     if (!m_canvas) return 0;
     const qreal dpr = devicePixelRatioF();
     const int canvasPxH = qRound(m_canvas->height() * dpr);
-    return qMax(0, qRound(canvasPxH * 0.02));
+    // SUBTITLE_SINKING_FIX 2026-04-22 + WINDOWED_TOO_HIGH_FIX same-wake
+    // (hemanth two-phase symptom report): fullscreen needed 6 % to stop
+    // subs clipping past the frame bottom on the same-shape Main02 cue
+    // empirically measured at y=1079 (1 px margin) before the bump.
+    // In windowed / maximized mode the overlay vp is already scaled down
+    // by canvas_h / 1080 (e.g. 974/1080 = 0.90 in maximized), which
+    // *compresses* the SHM y-axis upward — so the same 6 % baseline that
+    // was necessary to rescue fullscreen renders windowed subs too high
+    // against a smaller video area. Keep 6 % for fullscreen where the
+    // vp is 1:1 with the SHM, fall back to the prior 2 % in windowed
+    // where the natural compression already supplies ~50 px of headroom.
+    // `m_fullscreen` is the same boolean that drives the aspect log's
+    // widget-dim transitions, so this responds to double-click / F-key
+    // toggles correctly. HUD-visible path (qMax(hudLiftPx, baseline))
+    // unchanged — HUD height still wins when controls are up.
+    const double ratio = m_fullscreen ? 0.06 : 0.02;
+    return qMax(0, qRound(canvasPxH * ratio));
 }
 
 void VideoPlayer::showControls()
@@ -3452,15 +3501,16 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent* event)
     }
 
     QWidget::mouseMoveEvent(event);
-    // Unhide cursor + arm cursor auto-hide for any mouse motion. HUD
-    // reveal is gated to the bottom-edge zone (same zone the canvas-path
-    // mouseActivityAt lambda uses) so a wiggle in the middle of the
-    // frame doesn't flash the control bar.
+    // VIDEO_PLAYER_UI_POLISH Phase 1 2026-04-22: reveal HUD on any mouse
+    // motion, matching VLC / mpv / PotPlayer convention. Prior code gated
+    // reveal to the bottom 120 px which made the player feel hesitant
+    // because moving into the lower player area (bottom third) wouldn't
+    // surface the bar. Twin of the FrameCanvas mouseActivityAt lambda
+    // above — both paths must behave the same since the native D3D11
+    // canvas child doesn't bubble mouse events.
     setCursor(Qt::ArrowCursor);
     m_cursorTimer.start();
-    constexpr int kBottomRevealZonePx = 120;
-    if (event->position().y() >= height() - kBottomRevealZonePx)
-        showControls();
+    showControls();
 }
 
 void VideoPlayer::mouseDoubleClickEvent(QMouseEvent* event)
