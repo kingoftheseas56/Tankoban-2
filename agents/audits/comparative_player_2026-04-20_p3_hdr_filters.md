@@ -219,3 +219,95 @@ Per TODO §7 exit criteria:
 ---
 
 **End of Phase 3 STATIC-ANALYSIS PILOT audit.**
+
+---
+
+## Addendum 2026-04-21 — PotPlayer live re-verification
+
+Per `feedback_audit_reverification_scope.md`. PotPlayer 260401 Preferences navigated live via MCP; Audio AGC + Brightness/Contrast/Saturation panel deferred (tree-scroll + F8 Video Adjust panel out of wake-context-budget).
+
+### A. HDR controls — CORRECTION: built-in HDR options, not madVR-only
+
+Original claim: "PotPlayer: HDR via madVR plugin, hard-clip without."
+
+Observed in **Preferences → Video** (main panel):
+- **`D3D11 GPU RTX Video HDR`** (checkbox, unchecked default) — hardware-accelerated HDR→SDR tone-mapping via NVIDIA RTX.
+- **`Use H/W HDR output mode`** (checkbox, unchecked default) — HDR passthrough to display.
+- `D3D11 GPU Super Resolution`, `D3D11 GPU RTX Video HDR`, `Use H/W HDR output mode`, `10-bit output`, `Enable flip mode compatibility`, `Disable 3D subtitle depth correction` — rich renderer-level HDR feature set.
+
+Also a separate `Pixel Shaders` sub-tab exists (not explored this wake) — likely where custom tone-mapping shader chains live (the madVR-equivalent surface).
+
+Corrected: **PotPlayer has built-in HDR tone-mapping (RTX-accelerated) + HDR passthrough. madVR is optional but not the primary path.** The "hard-clip without madVR" claim is WRONG — RTX Video HDR is a built-in fallback.
+
+### B. Deinterlace mode count — CORRECTION
+
+Original claim: "PotPlayer: 7 deinterlace modes incl DXVA hardware."
+
+Observed in **Preferences → Video → Deinterlacing → Software Deinterlacing → Method dropdown**:
+
+1. Blending (Recommended)
+2. Linear Interpolation
+3. Linear Blend
+4. FFmpeg (Modified)
+5. Cubic Interpolation
+6. Median
+7. Lowpass
+8. Motion Adaptive
+9. Motion Adaptive (2× frame)
+10. BOB (2× frame)
+11. FFmpeg (Original)
+12. Edge Line Average (2× frame)
+13. Field Resize (2× frame)
+14. First field
+15. Second field
+
+**Actual count = 15 software modes.** Plus separate `Hardware Deinterlacing` panel with its own Method dropdown (count not enumerated this wake; includes DXVA per dropdown label).
+
+Corrected: **PotPlayer deinterlace = 15 software modes + Hardware Deinterlacing (DXVA) panel.** Tankoban's 5 modes is a larger gap vs PotPlayer than the original "7 vs 5" framing suggested. Verdict "DIVERGED but idiomatic for modern content" still stands (most of the 15 modes are legacy-interlaced-specific); modern progressive-heavy content doesn't need all 15.
+
+### C. Video filter effects panel — RICHER THAN CLAIMED
+
+Original claim: "PotPlayer: brightness/contrast/saturation via Ctrl+F1 panel or keybinds."
+
+What I found in **Preferences → Video → Effects** panel:
+- Flip Vertical / Flip Horizontal / 270 degrees / Motion Blur / Multi-threaded video processing toggles
+- Soften (Radius / Luma / Chroma)
+- Sharpen (Luma / Chroma)
+- Deblock (Threshold)
+- Gradual Denoise
+- Denoise 3D (Luma / Chroma / Time / High-quality)
+- Temporal noise reducer (3 thresholds)
+- Warpsharp (Depth / Threshold)
+- Deband (Threshold / Radius)
+
+Brightness / Contrast / Saturation NOT in this panel or in `Levels/Offset` (which is video-levels + gamma + pixel-offsets, more technical). B/C/S likely in runtime `F8 Video Adjust` panel (PotPlayer convention) — **not verified this wake**.
+
+Corrected: **PotPlayer Effects panel = rich set of noise/sharp/deband filters; Brightness/Contrast/Saturation location not confirmed (likely runtime F8 panel; unverified).**
+
+### D. Audio normalize / AGC toggle — NOT VERIFIED THIS WAKE
+
+Original claim: "PotPlayer: AGC toggle in Preferences → Audio."
+
+Tree-scroll required to reach Preferences → Audio; deferred. Claim remains docs-sourced.
+
+### E. Preferences → Video → Extend/Crop — NEW FINDING
+
+Not in original Phase 3 audit but surfaced during navigation. Panel has:
+- Method dropdown (Do nothing / ... / pan-scan variants)
+- H. Position (%) + V. Position (%) sliders (default 50/50)
+- Bottom Margin dropdown (default "No Margin"; if set, adds black bar where subs render)
+- "Operate only when subtitles exist" toggle
+
+This is PotPlayer's answer to aspect/crop/pan-scan adjustment + subtitle-letterbox interaction. Relates to VLC_ASPECT_CROP_REFERENCE + SUBTITLE_HEIGHT_POSITION audits.
+
+### Verdicts post-re-verification
+
+- **G1 tone-map algorithm correctness** — not re-verified on PotPlayer (algorithm-internal; PotPlayer's RTX-HDR is GPU driver-assisted, not custom shader). Tankoban's ACES/Reinhard/Hable cross-verification vs Kodi/Narkowicz stands.
+- **G2 HDR surface** — PotPlayer now **MATCHES STANDARD for HDR feature availability** (has built-in options), not "DIVERGED with mpv" as originally positioned vs Tankoban. Tankoban's "honest SDR-hide" is still Tankoban-unique. Re-frame: Tankoban MATCHES the standard that PotPlayer+VLC establish for HDR surfaces BEING AVAILABLE; the SDR-hide behavior is a Tankoban-beyond-standard convenience.
+- **G3 mode count** — PotPlayer 4-tier-tone-mapping not verified this wake (would need Pixel Shaders tab exploration). Tankoban 4 modes (Off/Reinhard/ACES/Hable) + mpv 6 modes (+ Mobius/BT.2390) comparison stands.
+- **H1 deinterlace** — PotPlayer 15 software modes CORRECTED from 7. Tankoban 5 modes gap is larger than original audit suggested. Verdict "DIVERGED but idiomatic for modern content" stands.
+- **H2 interpolation** — not re-verified.
+- **H3 B/C/S** — location not confirmed; deferred.
+- **H4 audio normalize** — not verified; deferred.
+
+**Credibility state:** 2 direct corrections (A HDR, B deinterlace count), 1 description-enrichment (C Effects panel), 2 deferred (D Audio AGC, B/C/S runtime panel). Phase 3 audit body text now spot-corrected on PotPlayer HDR + deinterlace axes.

@@ -275,3 +275,62 @@ Per TODO §6 exit criteria:
 ---
 
 **End of Phase 2 PILOT audit.**
+
+---
+
+## Addendum 2026-04-21 — PotPlayer live re-verification
+
+Per `feedback_audit_reverification_scope.md` (PotPlayer-only re-verification scope for Phase 2/3 docs-sourced claims). PotPlayer 260401 launched on Chainsaw Man (2.40:1, embedded SRT, 14 sub tracks) via MCP, navigated through Preferences panels + runtime menus. Findings below update Phase 2 body claims.
+
+### A. Alt+L subtitle menu structure — CORRECTION STANDS
+
+Observed structure on live run:
+- **Top commands:** `Load Subtitle... Alt+O` / `Add Subtitle...` / `Combine Subtitle...` / `Cycle Subtitle Alt+L` / `Off` / `.srt`
+- **Track list:** 14 `Text -` entries (Default/SDH/Forced English + 11 other languages)
+- **Bottom submenus:** `2nd Subtitle >` / `Cycle between two 2nd subtitles` / `Subtitle Translation >` / `Charset >`
+
+Alt+L is **dual-function** — opens menu AND cycles active subtitle. Not "flat"; structured with dividers. Correction already flagged in 2026-04-20 retroactive spot-check; this confirms.
+
+### B. Default subtitle position — MAJOR CORRECTION
+
+Preferences → Subtitles → Font Style → Position & Margin:
+- `Vertical pos (%): 95` (95% from top = 5% from bottom)
+- `Bottom margin: 5` (px)
+- `Horizontal: 50`, `Paragraph align: Center`
+
+Effective default on 1080 canvas = 1080 × 0.05 + 5 = **~59 px from frame bottom** (matches 63 px measured 2026-04-20). PotPlayer uses **percentage-based** position + fixed px margin, not fixed px. Scales with window size.
+
+Reference range revised:
+- mpv: 22 px (fixed-px)
+- VLC: ~30 px (fixed-px)
+- **PotPlayer: 5% + 5 px ≈ 59 px on 1080** (percentage-scaled)
+- Tankoban post-fix: 2% = 22 px on 1080 (percentage, matches mpv magnitude)
+
+Whether Tankoban's 22 px DEVIATES from standard depends on range framing. Deferred to `SUBTITLE_HEIGHT_POSITION_TODO.md` for rigorous measurement.
+
+### C. Subtitle delay shortcut + step size — CLAIM INACCURATE
+
+Original claim: `Alt+Left` / `Alt+Right` at 500 ms. Actual:
+- Alt+Left = keyframe seek backward 5 sec (OSD: "5 Sec. Backward (by keyframe)")
+- Sub delay step = **3-level config** in Preferences → Subtitles → Language/Sync/Other → `Subtitle sync steps: 0.5 / 5 / 50 Sec.`
+- 500 ms is the small step but shortcut key not Alt+Left/Right; actual shortcut in Keyboard Shortcuts panel, not verified this wake.
+
+Corrected: **PotPlayer sub delay = configurable 3-level step (0.5/5/50 sec default). Shortcut not Alt+arrow.**
+
+### D. Sub style Preferences panel richness — CONFIRMED
+
+Preferences → Subtitles sub-tabs observed: `Subtitles` / `Font Style` / `Fade/3D/Location` / `Subtitle Searching` / `Word Searching` / `Subtitle Browser` / `Language/Sync/Other`. Much deeper + richer than Tankoban's popover. Original claim holds.
+
+### E. Per-file persistence — CONFIRMED
+
+"Remember subtitle track selections" toggle in Language/Sync/Other, enabled by default. Per-file track-pick persistence confirmed.
+
+### Verdicts post-re-verification
+
+- **F1 format support** — not re-tested; original verdicts stand.
+- **F2 track-switcher** — structured submenu is better organized than "flat list" would suggest; no verdict change, description corrected.
+- **F3 sub delay step** — Tankoban 100 ms = mpv 100 ms CONVERGED; PotPlayer 3-level CORRECTED from "500 ms default". Verdict still MATCHES on step-size-magnitude-is-taste axis.
+- **F4 sub position** — PotPlayer ~59 px CORRECTED from ~20-30 px. Tankoban 22 px = mpv. Rigorous measurement deferred to SUBTITLE_HEIGHT_POSITION_TODO.
+- **F5 per-file persistence** — CONFIRMED.
+
+**Credibility state:** 3 direct corrections (A/B/C), 2 confirmations (D/E). Phase 2 audit body text now spot-corrected on PotPlayer axis.
