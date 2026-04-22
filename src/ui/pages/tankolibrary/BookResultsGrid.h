@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPixmap>
 #include <QWidget>
 #include <QList>
 
@@ -7,10 +8,10 @@
 
 class QTableWidget;
 
-// M1 shape: a QTableWidget wrapper that displays BookResult rows with columns
-// Title / Author / Format / Year / Size / Language / Source. Named "Grid"
-// per TODO §5 contract even though the M1 implementation is a list/table —
-// tile-grid refactor is a Track B (polish) task.
+// Columns: Cover / Title / Author / Format / Year / Size / Language / Source.
+// Track B closeout: leftmost Cover column added as a 48px icon slot; lazily
+// populated by TankoLibraryPage via setCoverPixmap(). Rows use fixed 60px
+// height so the 40x60 cover letterbox reads cleanly.
 class BookResultsGrid : public QWidget
 {
     Q_OBJECT
@@ -21,6 +22,10 @@ public:
     void setResults(const QList<BookResult>& results);
     void clearResults();
     int  resultCount() const;
+
+    // Track B closeout — paint a thumbnail into column 0 for the given row.
+    // No-op on invalid row / null pixmap.
+    void setCoverPixmap(int row, const QPixmap& pixmap);
 
 signals:
     void resultActivated(int row);        // double-click / Enter
