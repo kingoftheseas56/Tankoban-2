@@ -137,7 +137,10 @@ Hemanth copies the REQUEST block into his Codex desktop GUI, which has this repo
 
 1. Read `CLAUDE.md` + `agents/GOVERNANCE.md` + `agents/STATUS.md` + the requesting agent's active TODO file + any cited references + the `Files:` list.
 2. Implement the change in the `src/` (or sidecar, etc.) files listed, staying inside scope.
-3. Run compile verification: `build_check.bat` for main-app work, `powershell -File native_sidecar/build.ps1` for sidecar work. For UI changes that need smoke, use Windows-MCP self-drive per `memory/project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`.
+3. Run compile verification: `build_check.bat` for main-app work, `powershell -File native_sidecar/build.ps1` for sidecar work. For UI changes that need smoke, two paths:
+   - **Pixel-based (Windows-MCP)** for visual verification (FrameCanvas pixels, aspect/crop math, subtitle position). Self-drive per `memory/project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`.
+   - **UIA-based (PowerShell UIA / pywinauto)** for structural/state verification (button exists, slider value, which tab is active). Faster (~100ms/interaction) and survives DPI/theme/resize changes. Reusable enumerator at `scripts/uia-dump.ps1`. Selection rubric in `feedback_pywinauto_when.md`. Full recon: `agents/audits/uia_inspection_2026-04-22.md`.
+   - Both paths share ONE desktop — claim `MCP LOCK - [Agent N, <task>]: expecting ~X min.` in chat.md before driving; release at task end. See Rule 19 in `agents/GOVERNANCE.md`.
 4. Follow Rule 17 cleanup if Tankoban.exe was launched: `scripts/stop-tankoban.ps1`.
 5. Post an announcement line + `READY TO COMMIT` line(s) in chat.md (see Announcement section below). Agent 0 sweeps commits.
 
