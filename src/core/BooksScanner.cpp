@@ -1,4 +1,5 @@
 #include "BooksScanner.h"
+#include "AudiobookMetaCache.h"
 #include "ScannerUtils.h"
 
 #include <QDir>
@@ -18,8 +19,26 @@ const QStringList BooksScanner::BOOK_EXTS = {
 };
 
 const QStringList BooksScanner::AUDIO_EXTS = {
-    "*.mp3", "*.m4a", "*.m4b", "*.aac", "*.flac", "*.ogg", "*.opus", "*.wav"
+    "*.mp3", "*.m4a", "*.m4b", "*.aac", "*.flac", "*.ogg", "*.opus", "*.wav", "*.wma"
 };
+
+static const QStringList AUDIOBOOK_COVER_NAMES = {
+    "cover.jpg", "cover.jpeg", "cover.png",
+    "folder.jpg", "folder.jpeg", "folder.png",
+    "front.jpg", "front.jpeg", "front.png"
+};
+
+static QString findAudiobookCover(const QDir& dir)
+{
+    for (const QString& name : AUDIOBOOK_COVER_NAMES) {
+        if (dir.exists(name))
+            return dir.absoluteFilePath(name);
+    }
+    for (const auto& entry : dir.entryInfoList({"*.jpg", "*.jpeg", "*.png"}, QDir::Files)) {
+        return entry.absoluteFilePath();
+    }
+    return {};
+}
 
 static constexpr int THUMB_W = 240;
 static constexpr int THUMB_H = 369;  // int(240 / 0.65) — matches groundwork aspect ratio
@@ -189,46 +208,190 @@ void BooksScanner::scan(const QStringList& bookRoots, const QStringList& audiobo
     }
 
     // ── Scan audiobooks ──
+    //
+    // Max/Groundwork parity: recursive walk where each folder containing direct
+    // audio files becomes one audiobook. Handles nested series layouts like
+    // /Root/Series Wrapper/Book A/*.mp3 where the wrapper has no direct audio
+    // but each leaf does — each leaf registers separately, wrapper is skipped.
+    //
+    // Cross-domain: we also walk bookRoots for audio content. Matches Max's
+    // "drop an audiobook folder anywhere in your library and it's discovered"
+    // behavior. Users with a dedicated audiobook root still get prioritized
+    // coverage; users who organize everything under one book root also work.
+
     QList<AudiobookInfo> allAudiobooks;
+    QSet<QString> seenAudiobookPaths;
 
-    for (const auto& root : audiobookRoots) {
-        // Each immediate subdirectory is an audiobook
-        QDir rootDir(root);
-        for (const auto& entry : rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-            int trackCount = 0;
-            QDirIterator it(entry.absoluteFilePath(), AUDIO_EXTS,
-                           QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                it.next();
-                trackCount++;
-            }
+    QStringList audiobookScanRoots = audiobookRoots;
+    for (const QString& br : bookRoots) {
+        if (!audiobookScanRoots.contains(br))
+            audiobookScanRoots.append(br);
+    }
 
-            if (trackCount > 0) {
-                AudiobookInfo ab;
-                ab.name = ScannerUtils::cleanMediaFolderTitle(entry.fileName());
-                ab.path = entry.absoluteFilePath();
-                ab.trackCount = trackCount;
-                allAudiobooks.append(ab);
-                emit audiobookFound(ab);
-            }
-        }
-
-        // Also check for loose audio files directly in root
-        int looseCount = 0;
-        QDirIterator looseIt(root, AUDIO_EXTS, QDir::Files);
-        while (looseIt.hasNext()) {
-            looseIt.next();
-            looseCount++;
-        }
-        if (looseCount > 0) {
-            AudiobookInfo ab;
-            ab.name = rootDir.dirName();
-            ab.path = root;
-            ab.trackCount = looseCount;
-            allAudiobooks.append(ab);
-            emit audiobookFound(ab);
-        }
+    for (const auto& root : audiobookScanRoots) {
+        walkAudiobooks(QDir(root), collator, allAudiobooks, seenAudiobookPaths, 6);
     }
 
     emit scanFinished(allBooks, allAudiobooks);
+}
+
+namespace {
+
+// Returns true if `dir` contains at least one direct audio file (non-recursive).
+bool hasDirectAudio(const QDir& dir, const QStringList& exts)
+{
+    return !dir.entryInfoList(exts, QDir::Files).isEmpty();
+}
+
+}  // namespace
+
+void BooksScanner::walkAudiobooks(const QDir& dir,
+                                  const QCollator& collator,
+                                  QList<AudiobookInfo>& out,
+                                  QSet<QString>& seenPaths,
+                                  int maxDepth)
+{
+    if (maxDepth < 0) return;
+    if (ScannerUtils::isIgnoredDir(dir.dirName())) return;
+
+    const QString absPath = dir.absolutePath();
+    if (seenPaths.contains(absPath)) return;
+
+    // Case A — this folder has direct audio files. It IS a leaf audiobook.
+    // Don't descend (leaves don't contain wrappers in our model).
+    QFileInfoList audioEntries = dir.entryInfoList(AUDIO_EXTS, QDir::Files);
+    if (!audioEntries.isEmpty()) {
+        seenPaths.insert(absPath);
+
+        QStringList tracks;
+        tracks.reserve(audioEntries.size());
+        for (const auto& fi : audioEntries)
+            tracks.append(fi.absoluteFilePath());
+
+        std::sort(tracks.begin(), tracks.end(),
+                  [&collator](const QString& a, const QString& b) {
+                      return collator.compare(QFileInfo(a).fileName(),
+                                              QFileInfo(b).fileName()) < 0;
+                  });
+
+        AudiobookInfo ab;
+        ab.name = ScannerUtils::cleanMediaFolderTitle(dir.dirName());
+        ab.path = absPath;
+        ab.trackCount = tracks.size();
+        ab.tracks = tracks;
+        ab.coverPath = findAudiobookCover(dir);
+
+        // Phase 1.3 — populate per-chapter + total duration via ffprobe
+        // (cache-first; first scan on a fresh pack probes each file, cached
+        // into .audiobook_meta.json in the folder so subsequent scans hit
+        // in microseconds).
+        qint64 sum = 0;
+        for (const QString& trackPath : tracks) {
+            const qint64 ms = AudiobookMetaCache::durationMsFor(absPath, trackPath);
+            if (ms > 0) sum += ms;
+        }
+        ab.totalDurationMs = sum;
+
+        out.append(ab);
+        emit audiobookFound(ab);
+        return;
+    }
+
+    // Case B — no direct audio. Inspect immediate subdirs and classify.
+    // AUDIOBOOK_PAIRED_READING_FIX Phase 1.2: wrapper-flatten detection.
+    // A folder whose immediate subdirs are ALL leaf-audiobooks (each has
+    // direct audio) AND has NO non-leaf siblings is treated as a "wrapper"
+    // — emits ONE AudiobookInfo with chapters natural-sorted across all
+    // leaf subdirs. This is Hemanth's override of Max-parity: "the folder I
+    // downloaded" should be one tile even if it has sub-folders internally
+    // (e.g. Stormlight Archive 0.5-4/{0.5 Edgedancer, 1 Way of Kings, ...}).
+    QFileInfoList subEntries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+
+    QList<QDir> leafSubdirs;
+    QList<QDir> nonLeafSubdirs;
+    for (const auto& sub : subEntries) {
+        if (ScannerUtils::isIgnoredDir(sub.fileName())) continue;
+        QDir subDir(sub.absoluteFilePath());
+        if (hasDirectAudio(subDir, AUDIO_EXTS))
+            leafSubdirs.append(subDir);
+        else
+            nonLeafSubdirs.append(subDir);
+    }
+
+    // Sort leaves naturally so chapters appear in volume order.
+    std::sort(leafSubdirs.begin(), leafSubdirs.end(),
+              [&collator](const QDir& a, const QDir& b) {
+                  return collator.compare(a.dirName(), b.dirName()) < 0;
+              });
+
+    // Case B1 — wrapper pattern: ≥2 leaf subdirs AND no non-leaf siblings.
+    // Emit ONE AudiobookInfo; claim all leaves' audio as this audiobook's
+    // flat chapter list. Do NOT recurse into the claimed leaves.
+    if (leafSubdirs.size() >= 2 && nonLeafSubdirs.isEmpty()) {
+        seenPaths.insert(absPath);
+
+        AudiobookInfo ab;
+        ab.name = ScannerUtils::cleanMediaFolderTitle(dir.dirName());
+        ab.path = absPath;
+        ab.coverPath = findAudiobookCover(dir);
+
+        QStringList tracks;
+        QString fallbackCover;
+        for (const QDir& leafDir : leafSubdirs) {
+            const QString leafAbs = leafDir.absolutePath();
+            seenPaths.insert(leafAbs);
+
+            QFileInfoList leafAudio =
+                leafDir.entryInfoList(AUDIO_EXTS, QDir::Files);
+            for (const auto& fi : leafAudio)
+                tracks.append(fi.absoluteFilePath());
+
+            // Capture first-leaf's cover as a fallback if the wrapper itself
+            // has no cover.
+            if (fallbackCover.isEmpty())
+                fallbackCover = findAudiobookCover(leafDir);
+        }
+
+        // Natural-sort the full track list using paths RELATIVE to the
+        // wrapper so `0.5 Edgedancer/01.mp3` < `1 The Way Of Kings/01.mp3`
+        // (QCollator sorts the subdir component first, then the filename
+        // within the subdir — the natural order users expect).
+        const QDir wrapperDir(absPath);
+        std::sort(tracks.begin(), tracks.end(),
+                  [&collator, &wrapperDir](const QString& a, const QString& b) {
+                      return collator.compare(wrapperDir.relativeFilePath(a),
+                                              wrapperDir.relativeFilePath(b)) < 0;
+                  });
+
+        if (ab.coverPath.isEmpty())
+            ab.coverPath = fallbackCover;
+
+        ab.tracks = tracks;
+        ab.trackCount = tracks.size();
+
+        // Phase 1.3 — populate total duration for the wrapper (sum across
+        // all chapters spanning all leaf subdirs). Cache keys use relative
+        // paths from the wrapper folder, so cross-subdir chapters coexist
+        // in the single `.audiobook_meta.json` written at wrapper level.
+        qint64 wrapperSum = 0;
+        for (const QString& trackPath : tracks) {
+            const qint64 ms = AudiobookMetaCache::durationMsFor(absPath, trackPath);
+            if (ms > 0) wrapperSum += ms;
+        }
+        ab.totalDurationMs = wrapperSum;
+
+        out.append(ab);
+        emit audiobookFound(ab);
+        return;
+    }
+
+    // Case B2 — not a wrapper. Recurse into leaf subdirs (each becomes its
+    // own standalone AudiobookInfo via Case A) + non-leaf subdirs (to find
+    // deeper leaves or nested wrappers).
+    for (const QDir& leafDir : leafSubdirs) {
+        walkAudiobooks(leafDir, collator, out, seenPaths, maxDepth - 1);
+    }
+    for (const QDir& subDir : nonLeafSubdirs) {
+        walkAudiobooks(subDir, collator, out, seenPaths, maxDepth - 1);
+    }
 }
