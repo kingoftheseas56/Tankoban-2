@@ -10,6 +10,7 @@ class CoreBridge;
 class TorrentClient;
 class TankorentPage;
 class TankoyomiPage;
+class TankoLibraryPage;
 
 class SourcesPage : public QWidget
 {
@@ -34,14 +35,16 @@ private:
     QPushButton* m_backBtn   = nullptr;
     QLabel*      m_backTitle = nullptr;
 
-    // Stack: 0 = launcher, 1 = tankorent, 2 = tankoyomi
+    // Stack: 0 = launcher, 1 = tankorent, 2 = tankoyomi, 3 = tankolibrary
     QStackedWidget* m_stack = nullptr;
 
     // Launcher tiles
-    QPushButton* m_tankorentTile = nullptr;
-    QPushButton* m_tankoyomiTile = nullptr;
+    QPushButton* m_tankorentTile    = nullptr;
+    QPushButton* m_tankoyomiTile    = nullptr;
+    QPushButton* m_tankolibraryTile = nullptr;
 
     // Sub-pages
-    TankorentPage* m_tankorentPage = nullptr;
-    TankoyomiPage* m_tankoyomiPage = nullptr;
+    TankorentPage*    m_tankorentPage    = nullptr;
+    TankoyomiPage*    m_tankoyomiPage    = nullptr;
+    TankoLibraryPage* m_tankolibraryPage = nullptr;
 };

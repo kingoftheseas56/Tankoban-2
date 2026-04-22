@@ -1,15 +1,17 @@
 #include "SourcesPage.h"
 #include "TankorentPage.h"
 #include "TankoyomiPage.h"
+#include "TankoLibraryPage.h"
 #include "core/CoreBridge.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 
 // Stack indices
-static constexpr int IDX_LAUNCHER  = 0;
-static constexpr int IDX_TANKORENT = 1;
-static constexpr int IDX_TANKOYOMI = 2;
+static constexpr int IDX_LAUNCHER     = 0;
+static constexpr int IDX_TANKORENT    = 1;
+static constexpr int IDX_TANKOYOMI    = 2;
+static constexpr int IDX_TANKOLIBRARY = 3;
 
 // ── AppTile helper ──────────────────────────────────────────────────────────
 static QPushButton* createAppTile(const QString& title, const QString& subtitle, QWidget* parent)
@@ -106,6 +108,10 @@ void SourcesPage::buildUI()
     connect(m_tankoyomiTile, &QPushButton::clicked, this, [this]() { navigateTo(IDX_TANKOYOMI); });
     tileRow->addWidget(m_tankoyomiTile);
 
+    m_tankolibraryTile = createAppTile("Tankolibrary", "Books & ebooks", launcher);
+    connect(m_tankolibraryTile, &QPushButton::clicked, this, [this]() { navigateTo(IDX_TANKOLIBRARY); });
+    tileRow->addWidget(m_tankolibraryTile);
+
     launcherOuter->addLayout(tileRow);
     launcherOuter->setAlignment(tileRow, Qt::AlignCenter);
     m_stack->addWidget(launcher);
@@ -117,6 +123,10 @@ void SourcesPage::buildUI()
     // Index 2: Tankoyomi
     m_tankoyomiPage = new TankoyomiPage(m_bridge);
     m_stack->addWidget(m_tankoyomiPage);
+
+    // Index 3: Tankolibrary
+    m_tankolibraryPage = new TankoLibraryPage(m_bridge);
+    m_stack->addWidget(m_tankolibraryPage);
 
     m_stack->setCurrentIndex(IDX_LAUNCHER);
 }
@@ -133,7 +143,7 @@ void SourcesPage::navigateTo(int index)
     if (index == IDX_LAUNCHER) {
         m_backBar->setVisible(false);
     } else {
-        QString titles[] = { QString(), "Tankorent", "Tankoyomi" };
+        QString titles[] = { QString(), "Tankorent", "Tankoyomi", "Tankolibrary" };
         m_backTitle->setText(titles[index]);
         m_backBar->setVisible(true);
     }

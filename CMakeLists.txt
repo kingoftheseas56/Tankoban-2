@@ -35,6 +35,7 @@ set(SOURCES
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
     src/core/BooksScanner.cpp
+    src/core/AudiobookMetaCache.cpp
     src/core/VideosScanner.cpp
     src/core/ScannerUtils.cpp
     src/core/PosterFetcher.cpp
@@ -117,10 +118,16 @@ set(SOURCES
     src/core/manga/WeebCentralScraper.cpp
     src/core/manga/ReadComicsScraper.cpp
     src/core/manga/MangaDownloader.cpp
+    src/core/book/AnnaArchiveScraper.cpp
+    src/core/book/AaSlowDownloadWaitHandler.cpp
+    src/core/book/LibGenScraper.cpp
+    src/core/book/BookDownloader.cpp
     src/ui/dialogs/AddMangaDialog.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/tankoyomi/MangaResultsGrid.cpp
+    src/ui/pages/TankoLibraryPage.cpp
+    src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/core/stream/MetaAggregator.cpp
     src/core/stream/StreamHttpServer.cpp
     src/core/stream/StreamEngine.cpp
@@ -156,6 +163,7 @@ set(HEADERS
     src/core/CoreBridge.h
     src/core/LibraryScanner.h
     src/core/BooksScanner.h
+    src/core/AudiobookMetaCache.h
     src/core/VideosScanner.h
     src/core/ScannerUtils.h
     src/core/PosterFetcher.h
@@ -233,10 +241,18 @@ set(HEADERS
     src/core/manga/WeebCentralScraper.h
     src/core/manga/ReadComicsScraper.h
     src/core/manga/MangaDownloader.h
+    src/core/book/BookResult.h
+    src/core/book/BookScraper.h
+    src/core/book/AnnaArchiveScraper.h
+    src/core/book/AaSlowDownloadWaitHandler.h
+    src/core/book/LibGenScraper.h
+    src/core/book/BookDownloader.h
     src/ui/dialogs/AddMangaDialog.h
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/tankoyomi/MangaResultsGrid.h
+    src/ui/pages/TankoLibraryPage.h
+    src/ui/pages/tankolibrary/BookResultsGrid.h
     src/core/stream/MetaAggregator.h
     src/core/stream/StreamHttpServer.h
     src/core/stream/StreamEngine.h
