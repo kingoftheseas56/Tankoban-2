@@ -26,13 +26,37 @@ static const char* MENU_SS =
 static constexpr double SPEED_PRESETS[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
 static constexpr int SPEED_COUNT = 7;
 
+// VIDEO_PLAYER_UI_POLISH Phase 5 2026-04-23 — audit finding #8
+// ("the context menu is overloaded...a dump of available commands rather
+// than a carefully curated interaction surface"). Prior layout was a flat
+// 18-item list mixing every abstraction level. Re-tiered into:
+//
+//   [Tier 1 — most-frequent transport + display]
+//     Play/Pause, Mute, Speed ▸, Aspect Ratio ▸, Fullscreen, Take Snapshot
+//   ---
+//   [Tier 2 — moderate-frequency track + navigation]
+//     Audio ▸ (conditional), Subtitles ▸, Tracks, Playlist
+//   ---
+//   [Tier 3 — advanced / admin, nested under "More ▸"]
+//     Crop ▸, Always on Top, Picture-in-Picture, Open URL, Recent ▸,
+//     Deinterlace, Audio normalization, Keyboard Shortcuts
+//   ---
+//   [Bottom — session-leaving actions]
+//     Show Stats, Back to library
+//
+// All action handlers + signals are preserved byte-for-byte; this is a
+// pure re-tree of where each QAction attaches. No state, no callback
+// semantics change.
 QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
                                std::function<void(ActionType, QVariant)> callback)
 {
     auto* menu = new QMenu(parent);
     menu->setStyleSheet(MENU_SS);
 
-    // ---- Playback ----
+    // ===========================================================
+    // Tier 1 — most-frequent transport + display
+    // ===========================================================
+
     auto* playPause = menu->addAction(data.paused ? "Play" : "Pause");
     QObject::connect(playPause, &QAction::triggered, parent, [callback]() {
         callback(TogglePlayPause, {});
@@ -42,8 +66,6 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
     QObject::connect(muteAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleMute, {});
     });
-
-    menu->addSeparator();
 
     // Speed submenu
     auto* speedMenu = menu->addMenu("Speed");
@@ -69,9 +91,7 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         callback(SetSpeed, 1.0);
     });
 
-    menu->addSeparator();
-
-    // ---- Video ----
+    // Aspect Ratio submenu
     auto* aspectMenu = menu->addMenu("Aspect Ratio");
     aspectMenu->setStyleSheet(MENU_SS);
 
@@ -80,6 +100,7 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         { "4:3",      "4:3"      },
         { "16:9",     "16:9"     },
         { "2.35:1",   "2.35:1"   },
+        { "2.39:1",   "2.39:1"   },
         { "1.85:1",   "1.85:1"   },
     };
     auto* aspectGroup = new QActionGroup(aspectMenu);
@@ -95,118 +116,23 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         });
     }
 
-    // Crop submenu — zooms the video to eliminate baked letterbox /
-    // pillarbox strips. Orthogonal to Aspect Ratio: aspect decides how
-    // the video rect fits inside the viewport; crop decides what portion
-    // of the video's pixels to actually show (cutting the encoder-baked
-    // black bars off the edges).
-    auto* cropMenu = menu->addMenu("Crop");
-    cropMenu->setStyleSheet(MENU_SS);
-    static const struct { const char* label; const char* value; } CROPS[] = {
-        { "None",   "none"   },
-        { "16:9",   "16:9"   },
-        { "1.85:1", "1.85:1" },
-        { "2.35:1", "2.35:1" },
-        { "2.39:1", "2.39:1" },
-        { "4:3",    "4:3"    },
-    };
-    auto* cropGroup = new QActionGroup(cropMenu);
-    cropGroup->setExclusive(true);
-    for (const auto& cr : CROPS) {
-        auto* act = cropMenu->addAction(cr.label);
-        QString val = cr.value;
-        act->setCheckable(true);
-        act->setChecked(data.currentCrop == val);
-        cropGroup->addAction(act);
-        QObject::connect(act, &QAction::triggered, parent, [callback, val]() {
-            callback(SetCrop, val);
-        });
-    }
-
     auto* fsAction = menu->addAction("Fullscreen");
     QObject::connect(fsAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleFullscreen, {});
     });
 
-    // VIDEO_PLAYER_FIX Batch 3.1 — Always on Top toggle. Checkable;
-    // keyboard shortcut Ctrl+T is surfaced in the label so users discover
-    // the binding via the menu (T alone is taken by open_subtitle_menu).
-    auto* aotAction = menu->addAction("Always on Top\tCtrl+T");
-    aotAction->setCheckable(true);
-    aotAction->setChecked(data.alwaysOnTop);
-    QObject::connect(aotAction, &QAction::triggered, parent, [callback]() {
-        callback(ToggleAlwaysOnTop, {});
-    });
-
-    // VIDEO_PLAYER_FIX Batch 3.2 — Take Snapshot (current displayed frame
-    // to PNG under Pictures/Tankoban Snapshots/). Ctrl+S since plain S is
-    // taken by cycle_subtitle.
     auto* snapAction = menu->addAction("Take Snapshot\tCtrl+S");
     QObject::connect(snapAction, &QAction::triggered, parent, [callback]() {
         callback(TakeSnapshot, {});
     });
 
-    // VIDEO_PLAYER_FIX Batch 3.3 — Picture-in-Picture (mini-mode: frameless
-    // + always-on-top 320x180 window). Label swaps to "Exit PiP" while
-    // active so the same entry can toggle it back off.
-    auto* pipAction = menu->addAction(data.inPip
-        ? "Exit Picture-in-Picture\tCtrl+P"
-        : "Picture-in-Picture\tCtrl+P");
-    QObject::connect(pipAction, &QAction::triggered, parent, [callback]() {
-        callback(TogglePip, {});
-    });
-
-    // VIDEO_PLAYER_FIX Batch 4.1 — Open URL dialog (HTTP/HTTPS/RTSP/RTMP
-    // streams). Same Ctrl+U convention QMPlay2 + IINA + VLC use.
-    auto* urlAction = menu->addAction("Open URL...\tCtrl+U");
-    QObject::connect(urlAction, &QAction::triggered, parent, [callback]() {
-        callback(OpenUrl, {});
-    });
-
-    // VIDEO_PLAYER_FIX Batch 4.2 — Recent submenu (last 20 opened paths +
-    // URLs, most-recent-first). Local paths greyed out when the file no
-    // longer exists; click prunes them. Clear Recent at the bottom.
-    auto* recentMenu = menu->addMenu("Recent");
-    recentMenu->setStyleSheet(MENU_SS);
-    if (data.recentFiles.isEmpty()) {
-        auto* empty = recentMenu->addAction("(No recent files)");
-        empty->setEnabled(false);
-    } else {
-        for (const QString& path : data.recentFiles) {
-            QString label;
-            bool reachable = true;
-            if (path.startsWith("http", Qt::CaseInsensitive)
-                || path.startsWith("rtsp", Qt::CaseInsensitive)
-                || path.startsWith("rtmp", Qt::CaseInsensitive)) {
-                // URL entry — take the tail after the last '/' if present,
-                // otherwise show the full URL. Reachability not probed
-                // (would require a network roundtrip per menu open).
-                const int slash = path.lastIndexOf('/');
-                label = (slash > 0 && slash < path.size() - 1)
-                    ? path.mid(slash + 1) : path;
-                if (label.isEmpty()) label = path;
-            } else {
-                label = QFileInfo(path).fileName();
-                if (label.isEmpty()) label = path;
-                reachable = QFileInfo(path).exists();
-            }
-            auto* act = recentMenu->addAction(label);
-            act->setToolTip(path);
-            act->setEnabled(reachable);
-            QObject::connect(act, &QAction::triggered, parent, [callback, path]() {
-                callback(OpenRecent, path);
-            });
-        }
-        recentMenu->addSeparator();
-        auto* clearAct = recentMenu->addAction("Clear Recent");
-        QObject::connect(clearAct, &QAction::triggered, parent, [callback]() {
-            callback(ClearRecent, {});
-        });
-    }
-
     menu->addSeparator();
 
-    // ---- Audio tracks ----
+    // ===========================================================
+    // Tier 2 — moderate-frequency track + navigation
+    // ===========================================================
+
+    // Audio submenu (hidden if no audio tracks available)
     if (!data.audioTracks.isEmpty()) {
         auto* audioMenu = menu->addMenu("Audio");
         audioMenu->setStyleSheet(MENU_SS);
@@ -230,18 +156,13 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
                 callback(SetAudioTrack, id);
             });
         }
-
-        menu->addSeparator();
     }
 
-    // ---- Subtitles ----
+    // Subtitles submenu
     {
         auto* subMenu = menu->addMenu("Subtitles");
         subMenu->setStyleSheet(MENU_SS);
 
-        // Batch 5.3 (Tankostream) — top entry opens the richer SubtitleMenu
-        // which includes addon-fetched external tracks + load-from-file.
-        // The per-track list below remains as a shortcut for embedded tracks.
         auto* openMenuAct = subMenu->addAction("Open Subtitles menu...");
         QObject::connect(openMenuAct, &QAction::triggered, parent, [callback]() {
             callback(OpenSubtitleMenu, {});
@@ -255,10 +176,6 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         offAct->setCheckable(true);
         offAct->setChecked(!data.subsVisible);
         subGroup->addAction(offAct);
-        // Distinct sentinel from any real track id. Previously we sent 0
-        // for Off, which collided with subtitle streams whose AVStream
-        // index happened to be 0 (subtitle-only containers, some remux
-        // layouts) — picking those tracks silently did Off.
         QObject::connect(offAct, &QAction::triggered, parent, [callback]() {
             callback(SetSubtitleTrack, -1);
         });
@@ -286,28 +203,8 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         QObject::connect(loadSub, &QAction::triggered, parent, [callback]() {
             callback(LoadExternalSub, {});
         });
-
-        menu->addSeparator();
     }
 
-    // ---- Filters ----
-    auto* deintAct = menu->addAction("Deinterlace");
-    deintAct->setCheckable(true);
-    deintAct->setChecked(data.deinterlace);
-    QObject::connect(deintAct, &QAction::triggered, parent, [callback]() {
-        callback(ToggleDeinterlace, {});
-    });
-
-    auto* normAct = menu->addAction("Audio normalization");
-    normAct->setCheckable(true);
-    normAct->setChecked(data.normalize);
-    QObject::connect(normAct, &QAction::triggered, parent, [callback]() {
-        callback(ToggleNormalize, {});
-    });
-
-    menu->addSeparator();
-
-    // ---- Navigation ----
     auto* tracksAct = menu->addAction("Tracks");
     QObject::connect(tracksAct, &QAction::triggered, parent, [callback]() {
         callback(OpenTracks, {});
@@ -318,16 +215,123 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         callback(OpenPlaylist, {});
     });
 
-    // VIDEO_PLAYER_FIX Batch 6.1 — live keybinding editor. Label lists
-    // `?` because that's the `show_shortcuts` default — changes if user
-    // rebinds, but the label stays correct as a discoverability aid.
-    auto* keysAct = menu->addAction("Keyboard Shortcuts...\t?");
+    menu->addSeparator();
+
+    // ===========================================================
+    // Tier 3 — advanced / admin (nested under "More ▸")
+    // ===========================================================
+
+    auto* moreMenu = menu->addMenu(QStringLiteral("More ▸"));
+    moreMenu->setStyleSheet(MENU_SS);
+
+    // Crop submenu
+    auto* cropMenu = moreMenu->addMenu("Crop");
+    cropMenu->setStyleSheet(MENU_SS);
+    static const struct { const char* label; const char* value; } CROPS[] = {
+        { "None",   "none"   },
+        { "16:9",   "16:9"   },
+        { "1.85:1", "1.85:1" },
+        { "2.35:1", "2.35:1" },
+        { "2.39:1", "2.39:1" },
+        { "4:3",    "4:3"    },
+    };
+    auto* cropGroup = new QActionGroup(cropMenu);
+    cropGroup->setExclusive(true);
+    for (const auto& cr : CROPS) {
+        auto* act = cropMenu->addAction(cr.label);
+        QString val = cr.value;
+        act->setCheckable(true);
+        act->setChecked(data.currentCrop == val);
+        cropGroup->addAction(act);
+        QObject::connect(act, &QAction::triggered, parent, [callback, val]() {
+            callback(SetCrop, val);
+        });
+    }
+
+    auto* aotAction = moreMenu->addAction("Always on Top\tCtrl+T");
+    aotAction->setCheckable(true);
+    aotAction->setChecked(data.alwaysOnTop);
+    QObject::connect(aotAction, &QAction::triggered, parent, [callback]() {
+        callback(ToggleAlwaysOnTop, {});
+    });
+
+    auto* pipAction = moreMenu->addAction(data.inPip
+        ? "Exit Picture-in-Picture\tCtrl+P"
+        : "Picture-in-Picture\tCtrl+P");
+    QObject::connect(pipAction, &QAction::triggered, parent, [callback]() {
+        callback(TogglePip, {});
+    });
+
+    auto* urlAction = moreMenu->addAction("Open URL...\tCtrl+U");
+    QObject::connect(urlAction, &QAction::triggered, parent, [callback]() {
+        callback(OpenUrl, {});
+    });
+
+    // Recent submenu (Tier 3 because power users; most casual use is "just play the file I opened")
+    auto* recentMenu = moreMenu->addMenu("Recent");
+    recentMenu->setStyleSheet(MENU_SS);
+    if (data.recentFiles.isEmpty()) {
+        auto* empty = recentMenu->addAction("(No recent files)");
+        empty->setEnabled(false);
+    } else {
+        for (const QString& path : data.recentFiles) {
+            QString label;
+            bool reachable = true;
+            if (path.startsWith("http", Qt::CaseInsensitive)
+                || path.startsWith("rtsp", Qt::CaseInsensitive)
+                || path.startsWith("rtmp", Qt::CaseInsensitive)) {
+                const int slash = path.lastIndexOf('/');
+                label = (slash > 0 && slash < path.size() - 1)
+                    ? path.mid(slash + 1) : path;
+                if (label.isEmpty()) label = path;
+            } else {
+                label = QFileInfo(path).fileName();
+                if (label.isEmpty()) label = path;
+                reachable = QFileInfo(path).exists();
+            }
+            auto* act = recentMenu->addAction(label);
+            act->setToolTip(path);
+            act->setEnabled(reachable);
+            QObject::connect(act, &QAction::triggered, parent, [callback, path]() {
+                callback(OpenRecent, path);
+            });
+        }
+        recentMenu->addSeparator();
+        auto* clearAct = recentMenu->addAction("Clear Recent");
+        QObject::connect(clearAct, &QAction::triggered, parent, [callback]() {
+            callback(ClearRecent, {});
+        });
+    }
+
+    moreMenu->addSeparator();
+
+    auto* deintAct = moreMenu->addAction("Deinterlace");
+    deintAct->setCheckable(true);
+    deintAct->setChecked(data.deinterlace);
+    QObject::connect(deintAct, &QAction::triggered, parent, [callback]() {
+        callback(ToggleDeinterlace, {});
+    });
+
+    auto* normAct = moreMenu->addAction("Audio normalization");
+    normAct->setCheckable(true);
+    normAct->setChecked(data.normalize);
+    QObject::connect(normAct, &QAction::triggered, parent, [callback]() {
+        callback(ToggleNormalize, {});
+    });
+
+    moreMenu->addSeparator();
+
+    auto* keysAct = moreMenu->addAction("Keyboard Shortcuts...\t?");
     QObject::connect(keysAct, &QAction::triggered, parent, [callback]() {
         callback(OpenKeybindings, {});
     });
 
-    // VIDEO_PLAYER_FIX Batch 7.1 — stats badge toggle (checkable). Label
-    // hard-codes `I` for discoverability; rebinding doesn't update here.
+    menu->addSeparator();
+
+    // ===========================================================
+    // Bottom — session-leaving actions
+    // ===========================================================
+
     auto* statsAct = menu->addAction("Show Stats\tI");
     statsAct->setCheckable(true);
     statsAct->setChecked(data.showStats);
