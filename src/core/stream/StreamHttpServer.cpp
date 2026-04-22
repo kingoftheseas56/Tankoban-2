@@ -293,7 +293,21 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
 
         // Client disconnected (user closed the player, sidecar gave up).
         // Caught here before any further waitForPieces / file.read work.
+        //
+        // STREAM_HTTP_SERVE_INTEGRITY 2026-04-21 — this branch was
+        // silent pre-fix; the 2026-04-21 freeze investigation needed to
+        // know whether ffmpeg was closing its own socket (rw_timeout
+        // firing + reconnect_streamed kicking in) vs the server closing
+        // for some other reason. qWarning below reports the close path
+        // + how far we got; next freeze repro will cleanly indict the
+        // client-side close if this branch fires.
         if (socket.state() != QAbstractSocket::ConnectedState) {
+            qWarning().nospace()
+                << "StreamHttpServer: client disconnected mid-stream for "
+                << entry.infoHash << " file=" << entry.fileIndex
+                << " offset=" << offset
+                << " delivered=" << (length - remaining)
+                << "/" << length << " bytes — closing";
             break;
         }
 
@@ -363,6 +377,23 @@ static void handleConnection(qintptr socketDesc, StreamHttpServer* server)
         remaining -= chunk.size();
         offset += chunk.size();
         idleTimer.restart();   // Batch 1.3 — successful progress resets the watchdog.
+    }
+
+    // STREAM_HTTP_SERVE_INTEGRITY 2026-04-21 — pair to the break-path
+    // qWarning logs above: qInfo on successful completion. Next freeze
+    // repro's log tail will cleanly show, per-connection, either:
+    //   "StreamHttpServer: complete delivery ..."                          (normal)
+    //   "StreamHttpServer: client disconnected mid-stream ..."             (ffmpeg closed)
+    //   "StreamHttpServer: idle timeout ..."                               (30s server-side)
+    //   "StreamHttpServer: piece wait timed out/cancelled ..."             (engine)
+    //   "StreamHttpServer: read 0 bytes ..."                               (QFile mid-file EOF)
+    //   "StreamHttpServer: socket.write failed ..."                        (client-side TCP gone)
+    //   "StreamHttpServer: waitForBytesWritten timed out"                  (10s client TCP-stall)
+    // Observability closes the classification gap noted in the plan.
+    if (remaining == 0) {
+        qInfo().nospace()
+            << "StreamHttpServer: complete delivery for " << entry.infoHash
+            << " file=" << entry.fileIndex << " bytes=" << length;
     }
 
     // Batch 1.3 — ConnectionGuard handles socket close + FIN on scope exit.

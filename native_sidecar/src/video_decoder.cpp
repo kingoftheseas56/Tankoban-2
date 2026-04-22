@@ -230,8 +230,29 @@ void VideoDecoder::decode_thread_func(
     OpenTier tiers[3];
     int tier_count = 0;
     if (is_http) {
-        tiers[0] = {1,   512 * 1024,      750 * 1000,       5 * 1000 * 1000};
-        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   15 * 1000 * 1000};
+        // STREAM_HTTP_SERVE_INTEGRITY 2026-04-21 — unified rw_timeout=30s
+        // across all probe tiers. Previously Tier 1=5s / Tier 2=15s /
+        // Tier 3=30s; the 5s was chosen for fast probe-failure but the
+        // rw_timeout PERSISTS on the HTTP AVIOContext for the life of
+        // the stream (including post-open body reads handled by
+        // StreamPrefetch's producer thread via raw_avio). During healthy
+        // streaming where the decoder is frame-rate-limited, the server's
+        // TCP send buffer backs up behind a slow consumer — any per-chunk
+        // read-pause >5s tripped ffmpeg's rw_timeout -> `reconnect_streamed`
+        // close+reopen loop. 2026-04-21 freeze evidence (40 "Stream ends
+        // prematurely" lines across offsets 5.4MB -> 22.5MB, 1290+ late-
+        // frame drops, audio clock drifting 170s ahead of video PTS) at
+        // out/sidecar_debug_STALL_EVIDENCE_111355.log documents the
+        // pathology. 30s matches Tier 3 + the sidecar's own decoder-
+        // stall timeout (stall_count>60 * 500ms), so ffmpeg no longer
+        // bails earlier than the decoder does. Dead-source detection
+        // stays bounded by the unchanged `timeout=60s` connect timeout
+        // at line 278 — a source that never accepts connections still
+        // fails in 60s max. Worst-case probe-through-all-tiers grows
+        // from 50s to 90s for truly-dead sources; acceptable since we
+        // select sources via picker UI so users see failures promptly.
+        tiers[0] = {1,   512 * 1024,      750 * 1000,      30 * 1000 * 1000};
+        tiers[1] = {2, 2 * 1024 * 1024, 2 * 1000 * 1000,   30 * 1000 * 1000};
         tiers[2] = {3, 5 * 1024 * 1024, 5 * 1000 * 1000,   30 * 1000 * 1000};
         tier_count = 3;
     } else {
@@ -404,6 +425,32 @@ void VideoDecoder::decode_thread_func(
             "VideoDecoder: Tier %d passed (prefetch=%s ring=%d MiB)\n",
             t.tier, is_http ? "on" : "off",
             is_http ? static_cast<int>(kRingBytes / (1024 * 1024)) : 0);
+
+        // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — now that find_stream_info
+        // has populated fmt_ctx->bit_rate, compute the byte-position threshold
+        // for "near HTTP EOF". Fires once when consumer crosses it in the
+        // decode loop below. Disabled (-1) when bit_rate is 0 or source size
+        // is unknown — main-app falls back to the pct/remaining duration
+        // check, which works fine on honest-duration sources.
+        if (is_http && prefetch && fmt_ctx && fmt_ctx->bit_rate > 0) {
+            const int64_t size = prefetch->source_size();
+            if (size > 0) {
+                constexpr int64_t kNearEndSeconds = 90;
+                const int64_t margin_bytes =
+                    (static_cast<int64_t>(fmt_ctx->bit_rate) / 8) * kNearEndSeconds;
+                if (size > margin_bytes) {
+                    near_end_bytes_offset_ = size - margin_bytes;
+                    std::fprintf(stderr,
+                        "VideoDecoder: near_end threshold set at byte %lld "
+                        "(source_size=%lld, bit_rate=%lld, margin=%lld bytes / %lld s)\n",
+                        (long long)near_end_bytes_offset_,
+                        (long long)size,
+                        (long long)fmt_ctx->bit_rate,
+                        (long long)margin_bytes,
+                        (long long)kNearEndSeconds);
+                }
+            }
+        }
         break;
     }
 
@@ -1291,6 +1338,27 @@ void VideoDecoder::decode_thread_func(
             continue;
         }
 
+        // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — byte-position-based
+        // near-end-of-stream watchdog. Fires once when the consumer's
+        // read position crosses the 90-s-of-bytes-before-EOF threshold
+        // computed above. Main-app wires this as a parallel nearEndCrossed
+        // trigger so AUTO_NEXT works on bitrate-estimate sources where
+        // the duration-based check is structurally unreachable. Cheap:
+        // one int compare per av_read_frame call, fired at most once per
+        // session, early-out when already fired.
+        if (!near_end_fired_
+            && near_end_bytes_offset_ > 0
+            && prefetch
+            && prefetch->stream_pos() >= near_end_bytes_offset_) {
+            near_end_fired_ = true;
+            std::fprintf(stderr,
+                "VideoDecoder: near_end_estimate fired at stream_pos=%lld "
+                "(threshold=%lld)\n",
+                (long long)prefetch->stream_pos(),
+                (long long)near_end_bytes_offset_);
+            on_event_("near_end_estimate", "");
+        }
+
         ret = av_read_frame(fmt_ctx, pkt);
         if (ret < 0) {
             if (ret == AVERROR_EOF) {
@@ -1320,6 +1388,52 @@ void VideoDecoder::decode_thread_func(
                     on_event_("error", "STREAM_TIMEOUT:no data for 30 seconds");
                     break;
                 }
+
+                // PLAYER_STREMIO_PARITY Phase 2 Batch 2.1 — structured cache_state
+                // event at 2 Hz during stall. Exposes ring-fill / input-rate /
+                // ETA-to-resume / cache-duration so the main-app LoadingOverlay
+                // can render Stremio-style "Buffering — %d%% (resumes in ~%ds)"
+                // messaging instead of the opaque "Buffering..." toast. Silent
+                // outside the stall branch (save IPC). Detail format (colon-
+                // delimited): "bytes_ahead:input_rate_bps:eta_sec:cache_dur_sec".
+                if (prefetch) {
+                    const int64_t bytes_ahead = static_cast<int64_t>(prefetch->bytes_in_ring());
+                    const int64_t rate_bps    = prefetch->estimated_input_rate_bps();
+                    // Resume threshold: ~1 MiB of forward-buffered data tends
+                    // to be enough for mkv/mp4 demuxers to advance past the
+                    // next packet boundary. eta = (threshold - bytes_ahead) /
+                    // rate. Clamp to 0 if already at threshold; clamp to 60 s
+                    // if rate is too small to measure meaningfully.
+                    constexpr int64_t kResumeThresholdBytes = 1 * 1024 * 1024;
+                    double eta_sec = 0.0;
+                    if (bytes_ahead < kResumeThresholdBytes) {
+                        if (rate_bps > 1024) {  // >= 1 KiB/s to be meaningful
+                            eta_sec = static_cast<double>(kResumeThresholdBytes - bytes_ahead)
+                                    / static_cast<double>(rate_bps);
+                            if (eta_sec > 60.0) eta_sec = 60.0;
+                        } else {
+                            eta_sec = -1.0;  // "unknown" sentinel for main-app
+                        }
+                    }
+                    // cache_duration_sec = bytes_ahead / bytes_per_sec_of_content
+                    // Estimate content bitrate from container avg bit_rate;
+                    // fall back to -1.0 if unavailable.
+                    double cache_dur_sec = -1.0;
+                    if (fmt_ctx && fmt_ctx->bit_rate > 0) {
+                        const double content_Bps =
+                            static_cast<double>(fmt_ctx->bit_rate) / 8.0;
+                        if (content_Bps > 0.0) {
+                            cache_dur_sec = static_cast<double>(bytes_ahead) / content_Bps;
+                        }
+                    }
+                    char detail[160];
+                    std::snprintf(detail, sizeof(detail),
+                        "%lld:%lld:%.3f:%.3f",
+                        (long long)bytes_ahead, (long long)rate_bps,
+                        eta_sec, cache_dur_sec);
+                    on_event_("cache_state", detail);
+                }
+
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             } else {
