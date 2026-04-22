@@ -267,6 +267,9 @@ void AddTorrentDialog::showMetadataError(const QString& message)
 void AddTorrentDialog::buildFileTree(const QJsonArray& files)
 {
     m_treeSyncing = true;
+    // Disable sort during build so insertions don't get reshuffled mid-build
+    // (and so the ROLE_FILE_INDEX lookup stays consistent). Re-enabled at end.
+    m_fileTree->setSortingEnabled(false);
     m_fileTree->clear();
     m_fileIndices.clear();
 
@@ -278,6 +281,12 @@ void AddTorrentDialog::buildFileTree(const QJsonArray& files)
         int index = obj["index"].toInt();
         QString path = obj["name"].toString();
         qint64 size = obj["size"].toVariant().toLongLong();
+
+        // Normalize Windows-native backslash separators — libtorrent on
+        // Windows returns paths with \ rather than /; without this fix
+        // the whole path stays as one segment and every file lands at
+        // the top level with its full prefix repeated as its display name.
+        path.replace(QLatin1Char('\\'), QLatin1Char('/'));
 
         QStringList parts = path.split('/', Qt::SkipEmptyParts);
         if (parts.isEmpty()) continue;
@@ -331,6 +340,17 @@ void AddTorrentDialog::buildFileTree(const QJsonArray& files)
     }
 
     m_fileTree->expandAll();
+
+    // Sort alphabetically by Name so episodes land in natural order (E01,
+    // E02, ..., E22) instead of libtorrent's piece-storage order (which is
+    // effectively random from the user's perspective). Also enable
+    // click-to-sort on headers so the user can re-sort by Size or Priority.
+    m_fileTree->setSortingEnabled(true);
+    m_fileTree->sortItems(0, Qt::AscendingOrder);
+    m_fileTree->header()->setSectionsClickable(true);
+    m_fileTree->header()->setSortIndicator(0, Qt::AscendingOrder);
+    m_fileTree->header()->setSortIndicatorShown(true);
+
     m_treeSyncing = false;
 
     // Apply initial colors
