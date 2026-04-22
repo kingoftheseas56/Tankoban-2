@@ -11,6 +11,7 @@ class CoreBridge;
 class BookScraper;
 class BookDownloader;
 class BookResultsGrid;
+class TorrentClient;
 class QLineEdit;
 class QPushButton;
 class QCheckBox;
@@ -23,22 +24,43 @@ class QNetworkReply;
 
 // M1 scaffold + M2.1 detail view — books search sub-app sibling to TankoyomiPage.
 //
-// Current wiring: one scraper (Anna's Archive, QWebEngineView-backed). M3
-// will add LibGenScraper + dual-source aggregation. M2.1 adds a detail view
-// via a QStackedWidget (results page + detail page) swapped in on row
-// double-click. No download button yet (M2.2+); filters + tile-grid in Track B.
+// Current wiring: LibGen (Books tab) + AudioBookBay (Audiobooks tab, new
+// with TANKOLIBRARY_ABB_FIX_TODO M1 2026-04-22). AA stays compiled but
+// disabled at construction-time per captcha findings. Future: LibGen +
+// AA on Books tab, ABB only on Audiobooks tab.
 class TankoLibraryPage : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit TankoLibraryPage(CoreBridge* bridge, QWidget* parent = nullptr);
+    // `client` is the shared TorrentClient (owned by MainWindow / SourcesPage).
+    // Optional for backward compat; when nullptr, Audiobooks-tab Download
+    // fails honestly with "TorrentClient not wired" rather than silently.
+    // Required for the Audiobooks-tab magnet-handoff path (M2 of ABB TODO).
+    explicit TankoLibraryPage(CoreBridge* bridge,
+                              TorrentClient* client = nullptr,
+                              QWidget* parent = nullptr);
 
 private:
+    // Media-type tab (TANKOLIBRARY_ABB_FIX_TODO M1). Books = EPUB/PDF/MOBI
+    // via LibGen. Audiobooks = M4B/MP3 torrents via AudioBookBay.
+    enum class MediaTab { Books, Audiobooks };
+
     // UI builders
     void buildUI();
     void buildResultsPage();
     void buildDetailPage();
+
+    // Media-tab control (M1 — above the search-controls row)
+    void buildMediaTabRow(class QBoxLayout* parent);
+    void showBooksTab();
+    void showAudiobooksTab();
+    void setMediaTab(MediaTab tab);
+    void updateMediaTabVisuals();
+    void applyMediaTabFilterVisibility();
+
+    // Returns the scraper list for the currently-active media tab.
+    const QList<BookScraper*>& activeScrapers() const;
 
     // Search flow (M1 → M2.3 multi-source → Track B client filter)
     void startSearch();
@@ -47,6 +69,7 @@ private:
     void onFormatFilterToggled(bool checked);       // Track B — any of EPUB/PDF/MOBI toggled
     void onEnglishOnlyToggled(bool checked);        // Track B — English-only filter
     void onSortChanged(int idx);                    // Track B closeout — sort combo
+    void onAudioFormatChanged(int idx);             // TANKOLIBRARY_ABB Track B1
     void applyClientFilter();                       // Track B — rebuild grid from m_results honoring filter state
     QList<BookResult> filteredResults() const;      // Track B — m_results narrowed by checkbox state
 
@@ -86,13 +109,16 @@ private:
     void refreshTransfersView();
     TransferRecord* findTransferRecord(const QString& md5);
 
-    CoreBridge*            m_bridge = nullptr;
-    QNetworkAccessManager* m_nam    = nullptr;
+    CoreBridge*            m_bridge        = nullptr;
+    TorrentClient*         m_torrentClient = nullptr;  // M2 ABB: magnet handoff
+    QNetworkAccessManager* m_nam           = nullptr;
 
-    // M2.3 — multi-source scraper list. LibGen first (primary, no anti-bot
-    // gate); AA second (blocked by /books/ captcha, kept available for
-    // future opt-in flow). Order matters for display ordering in the grid.
-    QList<BookScraper*> m_scrapers;
+    // M2.3 + TANKOLIBRARY_ABB_FIX M1 — per-media-tab scraper lists.
+    // Books tab = LibGen (primary, no anti-bot gate). AA remains compiled
+    // but not pushed in ctor per captcha-block finding (M2.2). Audiobooks
+    // tab = AudioBookBay. Tab switch dispatches via activeScrapers().
+    QList<BookScraper*> m_scrapersBooks;
+    QList<BookScraper*> m_scrapersAudiobooks;
 
     BookScraper* scraperFor(const QString& sourceId) const;
 
@@ -100,6 +126,11 @@ private:
     QStackedWidget* m_stack       = nullptr;
     QWidget*        m_resultsPage = nullptr;
     QWidget*        m_detailPage  = nullptr;
+
+    // Media-tab pills above the search row (M1 ABB TODO)
+    MediaTab     m_mediaTab          = MediaTab::Books;
+    QPushButton* m_mediaTabBooksBtn  = nullptr;
+    QPushButton* m_mediaTabAudioBtn  = nullptr;
 
     // Search controls (live inside m_resultsPage)
     QLineEdit*   m_queryEdit         = nullptr;
@@ -112,6 +143,9 @@ private:
     QCheckBox*   m_mobiChk             = nullptr;
     QCheckBox*   m_englishOnlyCheckbox = nullptr;  // Track B — default ON, QSettings-persisted
     QComboBox*   m_sortCombo           = nullptr;  // Track B closeout — relevance/year/size sort
+    // TANKOLIBRARY_ABB Track B1 — Audiobooks-tab format filter: All/M4B/MP3.
+    // Hidden when Books tab is active (applyMediaTabFilterVisibility).
+    QComboBox*   m_audioFormatCombo    = nullptr;
     QLabel*      m_statusLbl           = nullptr;
 
     // Results area (lives inside m_resultsPage)

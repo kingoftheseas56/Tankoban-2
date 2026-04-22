@@ -5,7 +5,10 @@
 #include "core/book/BookScraper.h"
 #include "core/book/AnnaArchiveScraper.h"
 #include "core/book/LibGenScraper.h"
+#include "core/book/AbbScraper.h"
 #include "core/book/BookDownloader.h"
+#include "core/torrent/TorrentClient.h"
+#include "ui/dialogs/AddTorrentDialog.h"   // AddTorrentConfig struct
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -191,8 +194,10 @@ void paintCoverPixmap(QLabel* target, const QPixmap& pixmap)
 
 } // namespace
 
-TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge, QWidget* parent)
-    : QWidget(parent), m_bridge(bridge)
+TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
+                                   TorrentClient* client,
+                                   QWidget* parent)
+    : QWidget(parent), m_bridge(bridge), m_torrentClient(client)
 {
     qRegisterMetaType<BookResult>();
     qRegisterMetaType<QList<BookResult>>();
@@ -205,16 +210,25 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge, QWidget* parent)
     // out captcha-solving, so AA rows show up but can't complete a
     // download — pure noise. Removed from default dispatch here. The
     // AnnaArchiveScraper class stays compiled + registered in CMakeLists;
-    // re-enable by uncommenting the second push below when Hemanth OKs
+    // re-enable by uncommenting the Books-tab push below when Hemanth OKs
     // a visible-webview modal flow OR when AA drops their captcha.
-    m_scrapers << new LibGenScraper(m_nam, this);
-    // m_scrapers << new AnnaArchiveScraper(m_nam, this);   // DISABLED — captcha-blocked
+    //
+    // TANKOLIBRARY_ABB_FIX M1 2026-04-22 — per-media-tab scraper lists.
+    // Books tab uses LibGen; Audiobooks tab uses AudioBookBay. On tab
+    // switch startSearch() dispatches via activeScrapers().
+    m_scrapersBooks << new LibGenScraper(m_nam, this);
+    // m_scrapersBooks << new AnnaArchiveScraper(m_nam, this);   // DISABLED — captcha-blocked
+    m_scrapersAudiobooks << new AbbScraper(m_nam, this);
 
     buildUI();
 
-    // Per-scraper signal wiring. Use lambdas to capture which scraper
-    // emitted so the shared slot can track per-source completion state.
-    for (BookScraper* s : m_scrapers) {
+    // Per-scraper signal wiring. Iterates BOTH tab lists so scrapers in
+    // either tab reach the same slots. Use a lambda that captures the
+    // scraper pointer so the shared slot can track per-source completion
+    // state without needing to inspect the sender pointer.
+    QList<BookScraper*> allScrapers;
+    allScrapers << m_scrapersBooks << m_scrapersAudiobooks;
+    for (BookScraper* s : allScrapers) {
         connect(s, &BookScraper::searchFinished, this,
             [this, s](const QList<BookResult>& results) {
                 if (!m_searchInFlight) return;
@@ -303,10 +317,143 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge, QWidget* parent)
 
 BookScraper* TankoLibraryPage::scraperFor(const QString& sourceId) const
 {
-    for (BookScraper* s : m_scrapers) {
+    // Searches both tab lists — callers of scraperFor don't care which
+    // tab the scraper lives in; they just want the source-id match.
+    for (BookScraper* s : m_scrapersBooks) {
+        if (s->sourceId() == sourceId) return s;
+    }
+    for (BookScraper* s : m_scrapersAudiobooks) {
         if (s->sourceId() == sourceId) return s;
     }
     return nullptr;
+}
+
+const QList<BookScraper*>& TankoLibraryPage::activeScrapers() const
+{
+    return (m_mediaTab == MediaTab::Books) ? m_scrapersBooks : m_scrapersAudiobooks;
+}
+
+// ── Media-tab control (M1 ABB TODO) ─────────────────────────────────────────
+
+void TankoLibraryPage::buildMediaTabRow(QBoxLayout* parent)
+{
+    // Two pill buttons styled as a toggle group — same visual language as
+    // the "Search Results | Transfers" pill row further down, so the page
+    // reads as consistently tab-organized top-to-bottom.
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 4);
+    row->setSpacing(6);
+
+    const QString kTabActiveCss = QStringLiteral(
+        "QPushButton { color: #e6e6e6; background: #2a2a2a; border: 1px solid #444;"
+        " padding: 6px 18px; font-size: 13px; font-weight: 500; border-radius: 4px; }"
+        "QPushButton:hover { background: #333; }");
+    const QString kTabInactiveCss = QStringLiteral(
+        "QPushButton { color: #888; background: transparent; border: 1px solid transparent;"
+        " padding: 6px 18px; font-size: 13px; border-radius: 4px; }"
+        "QPushButton:hover { color: #ccc; }");
+
+    m_mediaTabBooksBtn = new QPushButton(QStringLiteral("Books"), m_resultsPage);
+    m_mediaTabBooksBtn->setCursor(Qt::PointingHandCursor);
+    m_mediaTabBooksBtn->setProperty("activeCss",   kTabActiveCss);
+    m_mediaTabBooksBtn->setProperty("inactiveCss", kTabInactiveCss);
+    connect(m_mediaTabBooksBtn, &QPushButton::clicked,
+            this, &TankoLibraryPage::showBooksTab);
+    row->addWidget(m_mediaTabBooksBtn);
+
+    m_mediaTabAudioBtn = new QPushButton(QStringLiteral("Audiobooks"), m_resultsPage);
+    m_mediaTabAudioBtn->setCursor(Qt::PointingHandCursor);
+    m_mediaTabAudioBtn->setProperty("activeCss",   kTabActiveCss);
+    m_mediaTabAudioBtn->setProperty("inactiveCss", kTabInactiveCss);
+    connect(m_mediaTabAudioBtn, &QPushButton::clicked,
+            this, &TankoLibraryPage::showAudiobooksTab);
+    row->addWidget(m_mediaTabAudioBtn);
+
+    row->addStretch(1);
+
+    parent->addLayout(row);
+
+    // Initial state set by setMediaTab at end of buildResultsPage, once
+    // the filter widgets have been constructed (updateMediaTabVisuals
+    // calls applyMediaTabFilterVisibility which touches the filter chips).
+}
+
+void TankoLibraryPage::showBooksTab()
+{
+    setMediaTab(MediaTab::Books);
+}
+
+void TankoLibraryPage::showAudiobooksTab()
+{
+    setMediaTab(MediaTab::Audiobooks);
+}
+
+void TankoLibraryPage::setMediaTab(MediaTab tab)
+{
+    if (m_mediaTab == tab && m_mediaTabBooksBtn && m_mediaTabAudioBtn) {
+        // Same-tab click — still re-apply visuals (idempotent) but skip
+        // the grid/results clear to avoid visibly flashing on double-click.
+        updateMediaTabVisuals();
+        return;
+    }
+
+    // Cancel any in-flight search from the old tab. Clears results +
+    // resets status so the new tab starts from an empty honest state.
+    if (m_searchInFlight) cancelSearch();
+
+    m_mediaTab = tab;
+    m_results.clear();
+    m_searchCountBySource.clear();
+    m_searchErrorBySource.clear();
+    if (m_grid) m_grid->clearResults();
+
+    // Persist across sessions so the user returns to their last tab.
+    QSettings().setValue(QStringLiteral("tankolibrary/media_tab"),
+                         (tab == MediaTab::Books) ? 0 : 1);
+
+    updateMediaTabVisuals();
+    applyMediaTabFilterVisibility();
+
+    if (m_statusLbl) {
+        m_statusLbl->setText((tab == MediaTab::Books)
+            ? QStringLiteral("Books tab — type a query and hit Enter.")
+            : QStringLiteral("Audiobooks tab — type a query and hit Enter."));
+    }
+
+    // Update placeholder so the query input's hint matches the source.
+    if (m_queryEdit) {
+        m_queryEdit->setPlaceholderText((tab == MediaTab::Books)
+            ? QStringLiteral("Search books - e.g. \"sapiens\" or \"orwell 1984\"")
+            : QStringLiteral("Search audiobooks - e.g. \"stormlight archive\" or \"dune\""));
+    }
+}
+
+void TankoLibraryPage::updateMediaTabVisuals()
+{
+    if (!m_mediaTabBooksBtn || !m_mediaTabAudioBtn) return;
+
+    const bool booksActive = (m_mediaTab == MediaTab::Books);
+    m_mediaTabBooksBtn->setStyleSheet(booksActive
+        ? m_mediaTabBooksBtn->property("activeCss").toString()
+        : m_mediaTabBooksBtn->property("inactiveCss").toString());
+    m_mediaTabAudioBtn->setStyleSheet(booksActive
+        ? m_mediaTabAudioBtn->property("inactiveCss").toString()
+        : m_mediaTabAudioBtn->property("activeCss").toString());
+}
+
+void TankoLibraryPage::applyMediaTabFilterVisibility()
+{
+    // EPUB/PDF/MOBI format checkboxes are book-format-specific — hide
+    // them on the Audiobooks tab where the formats don't apply (ABB rows
+    // are M4B/MP3). English-only + Sort stay visible on both tabs (they
+    // apply equally to book + audiobook results).
+    const bool booksTab = (m_mediaTab == MediaTab::Books);
+    if (m_epubChk) m_epubChk->setVisible(booksTab);
+    if (m_pdfChk)  m_pdfChk->setVisible(booksTab);
+    if (m_mobiChk) m_mobiChk->setVisible(booksTab);
+    // TANKOLIBRARY_ABB Track B1 — audio format combo is mirror-visibility:
+    // shown ONLY on Audiobooks tab (M4B/MP3 vocabulary doesn't apply to EPUBs).
+    if (m_audioFormatCombo) m_audioFormatCombo->setVisible(!booksTab);
 }
 
 // ── UI builders ─────────────────────────────────────────────────────────────
@@ -335,6 +482,12 @@ void TankoLibraryPage::buildResultsPage()
     auto* outer = new QVBoxLayout(m_resultsPage);
     outer->setContentsMargins(12, 12, 12, 12);
     outer->setSpacing(8);
+
+    // Media-tab pills row (M1 ABB TODO) — two pill buttons "Books" +
+    // "Audiobooks" styled as a mutually-exclusive toggle group. Sits at
+    // the very top of the results page so the tab selection frames
+    // everything below (search controls + grid + transfers).
+    buildMediaTabRow(outer);
 
     // Search row
     auto* searchRow = new QHBoxLayout;
@@ -429,6 +582,23 @@ void TankoLibraryPage::buildResultsPage()
             this, &TankoLibraryPage::onSortChanged);
     searchRow->addWidget(m_sortCombo);
 
+    // TANKOLIBRARY_ABB Track B1 — Audiobooks-tab format filter (client-side
+    // over cached m_results; no re-network on toggle). Index 0 = All,
+    // 1 = M4B only, 2 = MP3 only. `applyMediaTabFilterVisibility` hides
+    // this on Books tab so the filter vocabulary stays format-appropriate.
+    m_audioFormatCombo = new QComboBox(m_resultsPage);
+    m_audioFormatCombo->setCursor(Qt::PointingHandCursor);
+    m_audioFormatCombo->setToolTip(QStringLiteral(
+        "Audiobook format filter (client-side, no re-network)"));
+    m_audioFormatCombo->addItem(QStringLiteral("All formats"));
+    m_audioFormatCombo->addItem(QStringLiteral("M4B only"));
+    m_audioFormatCombo->addItem(QStringLiteral("MP3 only"));
+    m_audioFormatCombo->setCurrentIndex(
+        QSettings().value(QStringLiteral("tankolibrary/audio_format"), 0).toInt());
+    connect(m_audioFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TankoLibraryPage::onAudioFormatChanged);
+    searchRow->addWidget(m_audioFormatCombo);
+
     outer->addLayout(searchRow);
 
     m_statusLbl = new QLabel(QStringLiteral("Ready. Type a query and hit Enter."), m_resultsPage);
@@ -488,6 +658,22 @@ void TankoLibraryPage::buildResultsPage()
     m_resultsInnerStack->addWidget(m_transfersView);  // index 1
     m_resultsInnerStack->setCurrentIndex(0);
     outer->addWidget(m_resultsInnerStack, 1);
+
+    // Initial media-tab state (M1 ABB TODO). Restore persisted selection
+    // via QSettings("tankolibrary/media_tab") — 0=Books, 1=Audiobooks.
+    // Default to Books for first-run users. Call AFTER all filter widgets
+    // + grid + status label are constructed, since applyMediaTabFilterVisibility
+    // touches m_epubChk/m_pdfChk/m_mobiChk and updateMediaTabVisuals
+    // toggles button stylesheets.
+    const int persistedTab = QSettings()
+        .value(QStringLiteral("tankolibrary/media_tab"), 0).toInt();
+    m_mediaTab = (persistedTab == 1) ? MediaTab::Audiobooks : MediaTab::Books;
+    updateMediaTabVisuals();
+    applyMediaTabFilterVisibility();
+    if (m_mediaTab == MediaTab::Audiobooks && m_queryEdit) {
+        m_queryEdit->setPlaceholderText(QStringLiteral(
+            "Search audiobooks - e.g. \"stormlight archive\" or \"dune\""));
+    }
 }
 
 void TankoLibraryPage::buildDetailPage()
@@ -638,7 +824,7 @@ void TankoLibraryPage::startSearch()
     }
 
     m_searchInFlight  = true;
-    m_searchesPending = m_scrapers.size();
+    m_searchesPending = activeScrapers().size();
     m_searchCountBySource.clear();
     m_searchErrorBySource.clear();
 
@@ -648,7 +834,11 @@ void TankoLibraryPage::startSearch()
     m_results.clear();
     m_statusLbl->setText(QStringLiteral("Searching..."));
 
-    for (BookScraper* s : m_scrapers) {
+    // Dispatch only to the active media-tab's scraper list. Inactive-tab
+    // scrapers don't participate in this search cycle (preserves honest
+    // per-source status line — "Searching... (AudioBookBay: searching...)"
+    // not "Searching... (LibGen: --, AudioBookBay: searching...)").
+    for (BookScraper* s : activeScrapers()) {
         s->search(query, 30);
     }
 }
@@ -665,11 +855,13 @@ void TankoLibraryPage::cancelSearch()
 
 void TankoLibraryPage::refreshSearchStatus()
 {
-    // Build an honest per-source status line:
+    // Build an honest per-source status line — only for the active media
+    // tab's scrapers so the line reflects what the user's current search
+    // actually dispatched:
     //   "Searching... (LibGen: 20)"   while other scrapers still in flight
     //   "Done: 20 from LibGen, 0 from Anna's Archive (timeout)"   when all finished
     QStringList parts;
-    for (BookScraper* s : m_scrapers) {
+    for (BookScraper* s : activeScrapers()) {
         const QString id = s->sourceId();
         const QString display = s->sourceName();
         if (m_searchErrorBySource.contains(id)) {
@@ -719,6 +911,13 @@ void TankoLibraryPage::onFormatFilterToggled(bool /*checked*/)
 void TankoLibraryPage::onEnglishOnlyToggled(bool checked)
 {
     QSettings().setValue(QStringLiteral("tankolibrary/english_only"), checked);
+    applyClientFilter();
+    refreshSearchStatus();
+}
+
+void TankoLibraryPage::onAudioFormatChanged(int idx)
+{
+    QSettings().setValue(QStringLiteral("tankolibrary/audio_format"), idx);
     applyClientFilter();
     refreshSearchStatus();
 }
@@ -838,9 +1037,13 @@ void TankoLibraryPage::applyThumbnailToCurrentGrid(const QString& md5, const QPi
 
 QList<BookResult> TankoLibraryPage::filteredResults() const
 {
-    const bool epubOn = m_epubChk && m_epubChk->isChecked();
-    const bool pdfOn  = m_pdfChk  && m_pdfChk->isChecked();
-    const bool mobiOn = m_mobiChk && m_mobiChk->isChecked();
+    // Format filter (EPUB/PDF/MOBI) is Books-tab-only. On Audiobooks tab
+    // the chips are hidden (applyMediaTabFilterVisibility) + the formats
+    // don't apply (ABB rows are M4B/MP3); treat format filter as no-op.
+    const bool booksTab = (m_mediaTab == MediaTab::Books);
+    const bool epubOn = booksTab && m_epubChk && m_epubChk->isChecked();
+    const bool pdfOn  = booksTab && m_pdfChk  && m_pdfChk->isChecked();
+    const bool mobiOn = booksTab && m_mobiChk && m_mobiChk->isChecked();
     // When NO format box is checked, user intent is "show whatever you got" —
     // treat as no format filter rather than "hide everything".
     const bool anyFormat = (epubOn || pdfOn || mobiOn);
@@ -848,8 +1051,15 @@ QList<BookResult> TankoLibraryPage::filteredResults() const
     const bool englishOnly = m_englishOnlyCheckbox && m_englishOnlyCheckbox->isChecked();
     const int sortIdx = m_sortCombo ? m_sortCombo->currentIndex() : 0;
 
+    // TANKOLIBRARY_ABB Track B1 — Audiobooks-tab format filter. Index 0 =
+    // all formats (no filter), 1 = M4B only, 2 = MP3 only. Inactive on
+    // Books tab (combo is hidden; treat as no-op anyway for honesty).
+    const int audioFormatIdx = (!booksTab && m_audioFormatCombo)
+        ? m_audioFormatCombo->currentIndex() : 0;
+    const bool audioFilterOn = audioFormatIdx != 0;
+
     QList<BookResult> out;
-    if ((!anyFormat || allFormats) && !englishOnly) {
+    if ((!anyFormat || allFormats) && !englishOnly && !audioFilterOn) {
         out = m_results;
     } else {
         out.reserve(m_results.size());
@@ -864,6 +1074,13 @@ QList<BookResult> TankoLibraryPage::filteredResults() const
             }
             if (englishOnly &&
                 r.language.compare(QStringLiteral("english"), Qt::CaseInsensitive) != 0) continue;
+            if (audioFilterOn) {
+                const QString f = r.format.toUpper();
+                const bool matchesAudio =
+                    (audioFormatIdx == 1 && f == QLatin1String("M4B")) ||
+                    (audioFormatIdx == 2 && f == QLatin1String("MP3"));
+                if (!matchesAudio) continue;
+            }
             out.append(r);
         }
     }
@@ -939,7 +1156,15 @@ void TankoLibraryPage::onResultActivated(int row)
             onDetailError(msg);
         });
 
-    scraper->fetchDetail(m_selectedResult.md5);
+    // BookScraper takes a "md5OrId" string which each scraper interprets
+    // in its own vocabulary. LibGen sets sourceId == md5 so either works;
+    // ABB leaves md5 empty in search rows (info hash lives on the detail
+    // page) and uses sourceId for the URL slug. Pass sourceId for cross-
+    // scraper compatibility — non-empty on every scraper's search row.
+    const QString detailId = m_selectedResult.sourceId.isEmpty()
+        ? m_selectedResult.md5
+        : m_selectedResult.sourceId;
+    scraper->fetchDetail(detailId);
 }
 
 void TankoLibraryPage::showDetailFor(const BookResult& r)
@@ -1143,7 +1368,11 @@ void TankoLibraryPage::resetDownloadUiToIdle()
 {
     m_downloadStage = DownloadStage::Idle;
     if (m_downloadButton) {
-        m_downloadButton->setEnabled(!m_selectedResult.md5.isEmpty());
+        // ABB rows leave md5 empty in search snapshot (info hash fetched
+        // on detail); sourceId (slug) is always populated. Gate on either.
+        const bool hasId =
+            !m_selectedResult.md5.isEmpty() || !m_selectedResult.sourceId.isEmpty();
+        m_downloadButton->setEnabled(hasId);
         m_downloadButton->setText(QStringLiteral("Download"));
     }
     if (m_downloadProgress) {
@@ -1161,7 +1390,13 @@ void TankoLibraryPage::onDownloadClicked()
         return;
     }
 
-    if (m_selectedResult.md5.isEmpty()) {
+    // Use sourceId as primary identity — ABB has empty md5 in search
+    // snapshot (info hash arrives post-detail-fetch). sourceId is always
+    // populated by every scraper's search-row parse.
+    const QString resolveId = m_selectedResult.sourceId.isEmpty()
+        ? m_selectedResult.md5
+        : m_selectedResult.sourceId;
+    if (resolveId.isEmpty()) {
         m_detailStatus->setStyleSheet(QStringLiteral(
             "font-size: 12px; color: #c07; background: transparent; border: none;"));
         m_detailStatus->setText(QStringLiteral("No book selected."));
@@ -1200,23 +1435,31 @@ void TankoLibraryPage::onDownloadClicked()
     m_detailStatus->setText(QString(QStringLiteral("Resolving download URL from %1..."))
                             .arg(scraper->sourceName()));
 
-    scraper->resolveDownload(m_selectedResult.md5);
+    scraper->resolveDownload(resolveId);
 }
 
 void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList& urls)
 {
     // Stale-guard — ignore resolves that aren't for the selected row.
-    if (md5 != m_selectedResult.md5) return;
+    // M2 ABB: AbbScraper passes the URL slug in the `md5` arg here; at
+    // detail-fetch time AbbScraper ALSO sets m_selectedResult.md5 to the
+    // info hash (via detailReady merge), so for ABB rows we match against
+    // BOTH fields — the slug we passed in resolveDownload() and the info
+    // hash now living in m_selectedResult. LibGen path is unchanged.
+    const bool isAbb = (m_selectedResult.source == QLatin1String("audiobookbay"));
+    const bool match = isAbb
+        ? (md5 == m_selectedResult.sourceId || md5 == m_selectedResult.md5)
+        : (md5 == m_selectedResult.md5);
+    if (!match) return;
     if (m_downloadStage != DownloadStage::Resolving) return;
-    if (!m_downloader) return;
 
     if (urls.isEmpty()) {
         onScraperResolveFailed(md5, QStringLiteral("scraper returned empty URL list"));
         return;
     }
 
-    // Pick destination from library config + derive a sanitized filename
-    // from BookResult.title + .format.
+    // Pick destination from library config. Both ABB (torrents land in
+    // books root) and LibGen (EPUBs written to books root) share this.
     const QStringList bookRoots = m_bridge ? m_bridge->rootFolders(QStringLiteral("books"))
                                            : QStringList();
     if (bookRoots.isEmpty()) {
@@ -1225,6 +1468,60 @@ void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList&
         return;
     }
     const QString destDir = bookRoots.first();
+
+    // ── ABB branch: magnet URI → TorrentClient::addMagnet ──
+    // AbbScraper emits downloadResolved with a single-element list whose
+    // sole entry is a magnet:?xt=urn:btih:... URI. Route to TorrentClient
+    // instead of BookDownloader (which only handles HTTP streams).
+    if (isAbb) {
+        if (!m_torrentClient) {
+            onScraperResolveFailed(md5, QStringLiteral(
+                "Audiobook download unavailable — TorrentClient not wired. "
+                "This is a wake-local configuration issue; restart Tankoban "
+                "to pick up the shared TorrentClient from MainWindow."));
+            return;
+        }
+
+        const QString magnet = urls.first();
+
+        // Resolve metadata → get canonical info hash (libtorrent parses the
+        // magnet + queues a metadata fetch from peers/DHT). This is a
+        // synchronous call that returns the hash immediately from the
+        // magnet URI parse; the actual metadata-fetch happens async in the
+        // engine. Empty return = parse failure (malformed magnet).
+        const QString hash = m_torrentClient->resolveMetadata(magnet);
+        if (hash.isEmpty()) {
+            onScraperResolveFailed(md5, QStringLiteral(
+                "Failed to parse magnet URI — info hash missing or malformed"));
+            return;
+        }
+
+        AddTorrentConfig config;
+        config.category        = QStringLiteral("books");
+        config.destinationPath = destDir;
+        config.contentLayout   = QStringLiteral("original");
+        config.sequential      = false;   // audiobooks don't need sequential; listen-in-order done by player
+        config.startPaused     = false;
+        m_torrentClient->startDownload(hash, config);
+
+        // UX post-add: status shows quick confirmation + re-arm the
+        // Download button. Torrent progress surfaces via Tankorent's
+        // Transfers surface (shared engine, shared state), not this
+        // page's internal TransferRecord list — those are HTTP-only.
+        m_downloadStage = DownloadStage::Idle;
+        m_downloadButton->setEnabled(true);
+        m_downloadButton->setText(QStringLiteral("Download"));
+        m_downloadProgress->setVisible(false);
+        m_detailStatus->setStyleSheet(QStringLiteral(
+            "font-size: 12px; color: #7bc47b; background: transparent; border: none;"));
+        m_detailStatus->setText(QStringLiteral(
+            "Torrent added — track progress in Tankorent → Transfers tab."));
+        qInfo() << "[TankoLibraryPage] ABB magnet added to TorrentClient, hash=" << hash;
+        return;
+    }
+
+    // ── Existing LibGen / AA BookDownloader path ──
+    if (!m_downloader) return;
 
     // Build the suggested filename. BookResult.format is lowercased ext
     // (e.g. "epub", "pdf", "cbz"). If empty, fallback to ".bin".

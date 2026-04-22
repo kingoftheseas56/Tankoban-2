@@ -122,6 +122,7 @@ set(SOURCES
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
+    src/core/book/AbbScraper.cpp
     src/core/book/BookDownloader.cpp
     src/ui/dialogs/AddMangaDialog.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
@@ -249,6 +250,7 @@ set(HEADERS
     src/core/book/AnnaArchiveScraper.h
     src/core/book/AaSlowDownloadWaitHandler.h
     src/core/book/LibGenScraper.h
+    src/core/book/AbbScraper.h
     src/core/book/BookDownloader.h
     src/ui/dialogs/AddMangaDialog.h
     src/ui/dialogs/MangaTransferDialog.h
