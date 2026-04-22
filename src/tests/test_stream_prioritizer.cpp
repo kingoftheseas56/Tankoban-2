@@ -117,12 +117,18 @@ TEST(StreamPrioritizerTest, Calculate_CriticalHeadStaircase_10_60_110_160_210) {
 
 TEST(StreamPrioritizerTest, Calculate_HeadLinear_StartsAt250) {
     // distance ∈ [5, headWindow): 250 + (d-5) × 50 ms. First HEAD linear
-    // piece (d=5) should be 250 ms.
+    // piece (d=5) should be 250 ms. Requires headWindow > 5; defaultStreamingParams
+    // has bitrate=0 and downloadSpeed=0 which clamps targetHeadBytes to the
+    // kMinBufferBytes=5MB floor (headWindow=5 exactly → HEAD linear tier
+    // collapses to zero width and d=5 falls through to standard-body 5000+d*20).
+    // A 10 MB/s bitrate opens the tier: targetHeadBytes clamps to
+    // kMaxBufferBytes=50MB → headWindow=50 pieces wide.
     StreamPrioritizer::Params p = defaultStreamingParams();
     p.priorityLevel = 1;
+    p.bitrate       = 10LL * 1024 * 1024;   // 10 MB/s → headWindow=50
 
     const auto pairs = StreamPrioritizer::calculateStreamingPriorities(p);
-    ASSERT_GE(pairs.size(), 6);
+    ASSERT_GE(pairs.size(), 7);
     EXPECT_EQ(pairs[5].second, 250);      // d=5 → 250 ms (HEAD linear start)
     EXPECT_EQ(pairs[6].second, 300);      // d=6 → 300 ms
 }
@@ -156,10 +162,15 @@ TEST(StreamPrioritizerTest, SeekDeadlines_Sequential_ReturnsEmpty) {
 
 TEST(StreamPrioritizerTest, SeekDeadlines_InitialPlayback_UrgentZeroMsStaircase) {
     // M5 invariant: InitialPlayback targets 0 ms URGENT tier per handle.rs:
-    // base 0 ms, staircase 0 / 10 / 20. Window size = kMaxStartupPieces = 2
-    // for a reasonable-sized file.
+    // base 0 ms, staircase 0 / 10 / 20. Window size = min(kMaxStartupPieces,
+    // ceil(startup_bytes / piece_length)). startup_bytes = min(kMinStartupBytes=1MB,
+    // fileSize/20).max(pieceLength). With module-level kPieceLen=1MB the ceil
+    // divides to 1 piece (startup_bytes = max(1MB, 1MB) = 1MB; ceil(1MB/1MB) = 1);
+    // half-MB pieces keep startup_bytes at 1MB and produce ceil(1MB/512KB)=2 pieces,
+    // exercising the full URGENT staircase the test intends.
+    constexpr qint64 kHalfMbPiece = 512LL * 1024;
     const auto pairs = StreamPrioritizer::seekDeadlines(
-        StreamSeekType::InitialPlayback, 0, kLastPiece, kFileSize, kPieceLen);
+        StreamSeekType::InitialPlayback, 0, kLastPiece, kFileSize, kHalfMbPiece);
     ASSERT_EQ(pairs.size(), StreamPrioritizer::kMaxStartupPieces);
     EXPECT_EQ(pairs[0].first,  0);        // piece 0
     EXPECT_EQ(pairs[0].second, 0);        // 0 ms URGENT
