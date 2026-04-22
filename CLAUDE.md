@@ -76,6 +76,69 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 
 ---
 
+## Required Skills & Protocols — non-negotiable every session
+
+Every agent honors the listed skill invocations at the listed triggers. `superpowers:using-superpowers` (auto-loaded at SessionStart) enforces the discipline: *"if even 1% chance a skill applies, invoke it."* 21 skills adopted across three plugin namespaces (`superpowers:` / `claude-mem:` / `example-skills:`) + built-in slash commands. Full rationale + NOT-adopted list: memory `feedback_plugin_skills_adopted.md`.
+
+### Session bootstrap
+
+- **Every wake — `/brief`** for live dashboard. SessionStart hook prints a pre-digest; `/brief` is the full state read.
+- **Every wake — `superpowers:using-superpowers`** (auto-loaded) — reminder to invoke other skills aggressively.
+
+### Before shipping work (pre-RTC)
+
+- **`/superpowers:verification-before-completion`** — evidence-before-assertions checklist. Every RTC, every agent.
+- **`/simplify`** — reuse + efficiency review (fixes issues found). When diff has non-trivial edits.
+- **`/build-verify`** — pre-RTC build gate when `src/` or `native_sidecar/src/` touched. Runs `build_check.bat` or sidecar build; tail-captures last 30 lines on failure.
+- **`/superpowers:requesting-code-review`** — self-review primer on your own diff.
+- **`/security-review`** — security audit of pending changes. REQUIRED when touching `src/core/stream/*`, `src/core/torrent/*`, `native_sidecar/src/*`, or anything handling user-facing input / network-exposed surfaces.
+
+### Debugging & bug hunts
+
+- **`/superpowers:systematic-debugging`** — FIRST, before proposing fixes. Any bug / test failure / unexpected behavior. Aligns with `feedback_evidence_before_analysis.md`.
+
+### Creative / design / feature work
+
+- **`/superpowers:brainstorming`** — before scoping a new feature, fix-TODO, or refactor. Also before posting a Congress position block (reduces Agent 0 synthesis rework).
+- **`/superpowers:writing-plans`** — authoring a standalone plan file at `~/.claude/plans/*.md`. Pairs with Rule 18's plan-execute-smoke-verify loop.
+- **`/superpowers:executing-plans`** — executing a plan file. Structured checkpoint discipline.
+
+### Correction handling
+
+- **`/superpowers:receiving-code-review`** — Hemanth corrects your work / Agent 7 audit lands with findings for your domain. Stops performative agreement + blind re-implementation.
+
+### Cross-session memory + codebase structure
+
+- **`/claude-mem:mem-search`** — "Didn't we solve this before?" / "What was the conclusion on X?" / "How did we fix Y?" BEFORE re-deriving or chat_archive dig.
+- **`/claude-mem:smart-explore`** — "What functions live in X?" / "Class structure of Y?" / "Find all callers of Z?" Tree-sitter AST, more token-efficient than Grep for structural questions.
+
+### Parallel / sub-agent dispatch
+
+- **`/superpowers:dispatching-parallel-agents`** — `Agent()` branching into 2+ independent tasks.
+- **`/superpowers:subagent-driven-development`** — executing a fix-TODO phase via Agent() dispatch.
+
+### Narrow-domain-only
+
+- **`/superpowers:test-driven-development`** — opt-in ONLY for `tankoban_tests` pure-logic primitives (Codex #4 Stage 3a). Smoke-first everywhere else.
+
+### Building new brotherhood tooling
+
+- **`/example-skills:skill-creator` + `/superpowers:writing-skills`** — paired, when creating a new Tankoban skill.
+- **`/example-skills:mcp-builder`** — authoring a new MCP server (e.g. Codex audit item #5 QTest debug bridge).
+
+### Post-milestone + knowledge capture
+
+- **`/claude-mem:timeline-report`** — post-big-ship narrative.
+- **`/claude-mem:knowledge-agent`** — ripe corpus for focused mini-brain (Agent 0 decides when to commission).
+
+### Agent 0 phase-boundary tools (scoped, not universal)
+
+- **`/commit-sweep`** — end of session with pending RTCs.
+- **`/rotate-chat`** — chat.md > 3000 lines or > 300 KB.
+- **`/repo-health`** — drift audit (tracked junk / large files / stale STATUS).
+
+---
+
 ## Active Fix TODOs (owner + phase cursor)
 
 > **Archive note 2026-04-20:** 13 closed / superseded TODOs (STREAM_LIFECYCLE_FIX, PLAYER_LIFECYCLE_FIX, PLAYER_PERF_FIX, PLAYER_UX_FIX, EDGE_TTS_FIX, STREAM_STALL_FIX, CINEMASCOPE_FIX, STREAM_ENGINE_FIX, STREAM_UX_PARITY, STREAM_PARITY, STREAM_PLAYBACK_FIX, STREAM_UX_PARITY_ADD_LATER, NATIVE_D3D11_TODO) have been moved to `agents/_archive/todos/` to declutter repo root. Rows below preserved for historical phase-cursor context. File paths in rows are now relative to `agents/_archive/todos/` for the CLOSED/SUPERSEDED entries; active entries still live at repo root as before.

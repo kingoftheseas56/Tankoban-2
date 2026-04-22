@@ -64,7 +64,18 @@ Tankoban 2 brotherhood pre-digest (auto, $(date +%Y-%m-%d)):
 - chat.md: ${CHAT_LINES} lines${CHAT_WARN}
 - STATUS sections >7d stale:${STALE_AGENTS}
 
-Run /brief for the full live dashboard. CLAUDE.md at repo root has the static state.
+=== REQUIRED SKILL TRIGGERS (invoke at each trigger; CLAUDE.md "Required Skills & Protocols" for full list of 21) ===
+- Session start: /brief (full dashboard)
+- Before ANY RTC: /superpowers:verification-before-completion + /simplify + /build-verify (if src/ or native_sidecar/src/ touched) + /superpowers:requesting-code-review
+- Before RTC on stream / torrent / sidecar / user-input: /security-review
+- On bug / test failure / unexpected behavior: /superpowers:systematic-debugging FIRST (before proposing fixes)
+- On feature scoping OR Congress position draft: /superpowers:brainstorming
+- On plan authoring / execution (~/.claude/plans/*.md): /superpowers:writing-plans + /superpowers:executing-plans
+- On correction from Hemanth or Agent 7 audit: /superpowers:receiving-code-review
+- On "did we solve this before?": /claude-mem:mem-search BEFORE chat_archive dig
+- On structural code queries: /claude-mem:smart-explore
+
+Run /brief for the full live dashboard. CLAUDE.md at repo root has the static state + full skill-trigger map.
 </system-reminder>
 EOF
 
