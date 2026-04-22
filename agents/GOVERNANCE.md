@@ -330,6 +330,30 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     (Added 2026-04-21. Hemanth directive verbatim: "we first plan and then execute it and smoke test with mcp, to see if it worked, if it didn't.. we come back to the drawing board.")
 
+19. **MCP lane lock — one agent drives the desktop at a time.** Multiple agents (Claude sessions + Codex Trigger D) can have their own `windows-mcp` server subprocesses running simultaneously, but the physical desktop is single-point-of-contention — focus, keyboard input, mouse, clipboard, and Tankoban.exe's single-instance model all collide when two agents interact concurrently. The lock protocol:
+
+    **Claim:** before any agent-driven desktop interaction (Tankoban smoke, UIA recon, Inspect.exe, pywinauto drive, any other tool that clicks/types/reads focused-window state), post in `agents/chat.md`:
+    ```
+    MCP LOCK - [Agent N, <task>]: expecting ~X min. <brief scope>
+    ```
+
+    **Hold:** any agent about to do desktop interaction greps for an unreleased `MCP LOCK` line in recent chat.md (last ~50 lines is sufficient). If one exists and is fresh (<15 min since post OR matches the expected-duration estimate), hold — do non-desktop work (file reads, grep, build_check.bat, sidecar compile, research) or stand by until released. If the lock is stale (>15-20 min past its expected duration with no release line), it's reclaimable — post a fresh MCP LOCK line citing the stale takeover.
+
+    **Release:** at smoke / recon / task end, post:
+    ```
+    MCP LOCK RELEASED - [Agent N, <task>]: <one-line outcome>.
+    ```
+
+    Release is mandatory even on failure or abort. A dropped lock strands the lane.
+
+    Windows-MCP for file-system, grep, build, or other non-UI PowerShell work is always unrestricted — the lock covers only desktop-interacting tool use. An agent under LOCK can still issue non-UI MCP calls (e.g. `Get-Process`, reading a log, building the sidecar) in parallel with their smoke work.
+
+    Applies identically to Codex Trigger D — if a REQUEST IMPLEMENTATION block includes MCP smoke verification, Codex claims + releases the LOCK the same way.
+
+    Relates to Rule 17 (Tankoban/ffmpeg_sidecar cleanup at smoke close) — LOCK release and Rule 17 cleanup typically happen together, but they are distinct actions: cleanup terminates processes; LOCK release clears the lane for the next agent.
+
+    (Added 2026-04-22. First live use: Agent 0's UIA inspection recon — see `agents/audits/uia_inspection_2026-04-22.md`.)
+
 ---
 
 ## File Hygiene & Rotation (added 2026-04-16)
