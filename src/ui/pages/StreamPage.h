@@ -135,6 +135,14 @@ private:
         const QHash<QString, QString>& addonsById);
     void showNextEpisodeOverlay();
     void hideNextEpisodeOverlay();
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — sibling of
+    // showNextEpisodeOverlay; reparents the same overlay widget onto the
+    // floating VideoPlayer so it renders OVER still-playing video at the
+    // last ~30-60s of the current episode (Stremio / Netflix binge UX)
+    // instead of waiting until closeRequested. Falls back to the close-
+    // path overlay when VideoPlayer isn't visible (defensive). Trigger
+    // point is onNextEpisodePrefetchStreams once matchedChoice populates.
+    void showNextEpisodeOverlayInPlayer();
     void onNextEpisodeCountdownTick();
     void onNextEpisodePlayNow();
     void onNextEpisodeCancel();
@@ -236,6 +244,13 @@ private:
 
     // Browse layer
     QWidget*     m_browseLayer   = nullptr;
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — m_playerLayer promoted
+    // from buildUi local to member so onNextEpisodeCancel can re-parent
+    // m_nextEpisodeOverlay back into its original layout after the mid-
+    // playback reparent to VideoPlayer. Addition of layout position is
+    // skipped; we rely on showNextEpisodeOverlay (legacy close-path) to
+    // re-position if it fires.
+    QWidget*     m_playerLayer   = nullptr;
     QScrollArea* m_browseScroll  = nullptr;
     QWidget*     m_scrollHome    = nullptr;
     QVBoxLayout* m_scrollLayout  = nullptr;

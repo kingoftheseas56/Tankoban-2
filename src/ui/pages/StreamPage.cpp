@@ -22,6 +22,7 @@
 #include "core/stream/StreamProgress.h"
 
 #include "ui/player/VideoPlayer.h"
+#include "ui/player/SidecarProcess.h"
 #include "ui/dialogs/AddAddonDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
@@ -191,7 +192,11 @@ void StreamPage::buildUI()
         [this](const QString& imdbId) { showDetail(imdbId); });
 
     // Player layer — buffer overlay only (VideoPlayer handles its own controls)
-    auto* playerLayer = new QWidget(this);
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — promoted to member
+    // so onNextEpisodeCancel can restore m_nextEpisodeOverlay's parent
+    // after the mid-playback reparent to VideoPlayer.
+    m_playerLayer = new QWidget(this);
+    auto* playerLayer = m_playerLayer;
     auto* playerLayerLayout = new QVBoxLayout(playerLayer);
     playerLayerLayout->setContentsMargins(0, 0, 0, 0);
     playerLayerLayout->setAlignment(Qt::AlignCenter);
@@ -1392,12 +1397,40 @@ void StreamPage::onNextEpisodePrefetchStreams(
         if (m_session.nextPrefetch->matchedChoice.has_value()) {
             onNextEpisodePlayNow();
         }
+        return;
+    }
+
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — if we reached a
+    // matched choice during normal playback (not the Shift+N shortcut),
+    // surface the overlay NOW as a floating layer over the still-playing
+    // video. Stremio / Netflix UX: user sees "Up next" popup during the
+    // last ~30-60s of the episode (or earlier, depending on how long the
+    // async prefetch took), can Play Now to skip credits, let the 10s
+    // countdown expire to auto-advance, or Cancel to finish the episode
+    // naturally. Previous behavior only showed the overlay on
+    // closeRequested — too late for binge-watch ergonomics.
+    if (m_session.nextPrefetch->matchedChoice.has_value()) {
+        showNextEpisodeOverlayInPlayer();
     }
 }
 
 void StreamPage::showNextEpisodeOverlay()
 {
     if (!m_nextEpisodeOverlay || !m_session.nextPrefetch.has_value()) return;
+
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — defensive reparent
+    // back to m_playerLayer in case the mid-playback path earlier in
+    // this session parented the overlay onto VideoPlayer. The legacy
+    // close-path fires with the player hidden, so a widget parented to
+    // a hidden VideoPlayer would be invisible on show(). Re-adding to
+    // the layout restores the centered geometry the close-path UX
+    // expects.
+    if (m_playerLayer && m_nextEpisodeOverlay->parent() != m_playerLayer) {
+        m_nextEpisodeOverlay->setParent(m_playerLayer);
+        if (auto* lay = qobject_cast<QVBoxLayout*>(m_playerLayer->layout())) {
+            lay->addWidget(m_nextEpisodeOverlay, 0, Qt::AlignCenter);
+        }
+    }
 
     const QString seriesName = m_library
         ? m_library->get(m_session.nextPrefetch->imdbId).name
@@ -1432,6 +1465,74 @@ void StreamPage::hideNextEpisodeOverlay()
 {
     if (m_nextEpisodeCountdownTimer) m_nextEpisodeCountdownTimer->stop();
     if (m_nextEpisodeOverlay) m_nextEpisodeOverlay->hide();
+}
+
+// STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — mid-playback sibling of
+// showNextEpisodeOverlay. Reparents the same overlay widget onto the
+// floating VideoPlayer (found via mainWin->findChild<VideoPlayer*>, same
+// pattern as the progressUpdated-lambda setup at line ~1743) so the
+// overlay paints OVER still-playing video rather than waiting for
+// closeRequested to swap the player away first. Position: bottom-right
+// of the player's rect with 40px horizontal + 80px vertical margins —
+// matches Stremio/Netflix binge-overlay placement (doesn't block content
+// center where the climax of a scene usually plays). Countdown starts
+// fresh at 10s each invocation — safe to re-enter if called twice
+// before dismiss (mutates text in place via setText).
+void StreamPage::showNextEpisodeOverlayInPlayer()
+{
+    if (!m_nextEpisodeOverlay || !m_session.nextPrefetch.has_value()) return;
+
+    auto* mainWin = window();
+    if (!mainWin) return;
+    auto* player = mainWin->findChild<VideoPlayer*>();
+    if (!player || !player->isVisible()) {
+        // Defensive: player not visible (session may have torn down
+        // between prefetch start + stream resolve). Let the close-path
+        // overlay handle it via the existing closeRequested branch.
+        return;
+    }
+
+    m_nextEpisodeOverlay->setParent(player);
+    constexpr int kRightMarginPx  = 40;
+    constexpr int kBottomMarginPx = 80;
+    m_nextEpisodeOverlay->move(
+        player->width()  - m_nextEpisodeOverlay->width()  - kRightMarginPx,
+        player->height() - m_nextEpisodeOverlay->height() - kBottomMarginPx);
+
+    // Text identical to showNextEpisodeOverlay — same "Up next: SeriesName · SxxExx"
+    // + "Playing in Ns..." format. Kept duplicated here rather than
+    // refactored into a helper so the code path stays readable and each
+    // overlay-surface gets to independently tune its own text / layout
+    // (e.g., in-player overlay may want a more subtle font in future).
+    const QString seriesName = m_library
+        ? m_library->get(m_session.nextPrefetch->imdbId).name
+        : QString();
+    const QString label = seriesName.isEmpty()
+        ? QStringLiteral("S%1E%2")
+              .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
+              .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'))
+        : seriesName + QStringLiteral(" · ")
+              + QStringLiteral("S%1E%2")
+                    .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
+                    .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'));
+
+    if (m_nextEpisodeTitleLabel) {
+        m_nextEpisodeTitleLabel->setText(tr("Up next: ") + label);
+    }
+
+    m_nextEpisodeCountdownSec = 10;
+    if (m_nextEpisodeCountdownLabel) {
+        m_nextEpisodeCountdownLabel->setText(
+            tr("Playing in %1s...").arg(m_nextEpisodeCountdownSec));
+    }
+
+    // Do NOT hide m_bufferOverlay or switch m_mainStack — the player
+    // window is already visible (floating above the stack's current
+    // page). We only show our overlay on top.
+    m_nextEpisodeOverlay->show();
+    m_nextEpisodeOverlay->raise();
+
+    if (m_nextEpisodeCountdownTimer) m_nextEpisodeCountdownTimer->start();
 }
 
 void StreamPage::onNextEpisodeCountdownTick()
@@ -1486,9 +1587,38 @@ void StreamPage::onNextEpisodePlayNow()
 
 void StreamPage::onNextEpisodeCancel()
 {
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — two contexts now call
+    // Cancel:
+    //   (a) Legacy close-path: overlay appeared AFTER closeRequested; the
+    //       stream was already stopped; Cancel should return to browse.
+    //   (b) Mid-playback path: overlay appeared DURING last ~30-60s of
+    //       playback (new Stremio-parity path); the stream is still
+    //       running; Cancel should ONLY dismiss the overlay and let the
+    //       user finish watching.
+    // Discriminator: if the player is visible + active, we're in case (b).
+    auto* mainWin = window();
+    auto* player = mainWin ? mainWin->findChild<VideoPlayer*>() : nullptr;
+    const bool midPlayback = player && player->isVisible()
+                          && m_playerController && m_playerController->isActive();
+
     hideNextEpisodeOverlay();
     resetNextEpisodePrefetch();
-    // Stream was already stopped in closeRequested. Just return to browse.
+
+    if (midPlayback) {
+        // Case (b): reparent overlay back to m_playerLayer so if the
+        // close-path later tries to showNextEpisodeOverlay for a future
+        // session, the widget tree is consistent. resetNextEpisodePrefetch
+        // above already cleared matchedChoice so overlayEligible will be
+        // false on close for this session anyway — this is belt-and-
+        // braces cleanup against future session state. Widget is hidden
+        // (via hideNextEpisodeOverlay above) so layout recalc is cheap.
+        if (m_nextEpisodeOverlay && m_playerLayer) {
+            m_nextEpisodeOverlay->setParent(m_playerLayer);
+            m_nextEpisodeOverlay->hide();
+        }
+        return;  // player keeps playing
+    }
+    // Case (a): legacy close-path behavior preserved.
     showBrowse();
 }
 
@@ -1751,8 +1881,68 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Capture current stream info for progress saving
     QString imdbId = m_playerController->property("_imdbId").toString();
     // Use the controller's stored state instead
+    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — wire stream-engine stall
+    // signals to VideoPlayer → sidecar IPC. Disconnect existing bindings
+    // first so a previous session's player instance doesn't double-fire.
+    // Direct-connect from StreamEngine to player (both live across sessions
+    // so no lifetime concerns — StreamEngine is owned by StreamPage,
+    // VideoPlayer is owned by MainWindow, both outlive this lambda).
+    // Hash-filter: only forward signals for the currently-active stream —
+    // StreamEngine may have multiple sessions in m_streams; we only care
+    // about the one our VideoPlayer is playing.
+    if (m_streamEngine) {
+        disconnect(m_streamEngine, &StreamEngine::stallDetected, this, nullptr);
+        disconnect(m_streamEngine, &StreamEngine::stallRecovered, this, nullptr);
+        connect(m_streamEngine, &StreamEngine::stallDetected, this,
+            [this, player](const QString& infoHash, int /*piece*/,
+                           qint64 /*waitMs*/, int /*peerHaveCount*/) {
+                const QString active = m_playerController
+                    ? m_playerController->currentInfoHash()
+                    : QString();
+                if (infoHash != active) return;
+                if (player) player->onStreamStallEdgeFromEngine(true);
+            });
+        connect(m_streamEngine, &StreamEngine::stallRecovered, this,
+            [this, player](const QString& infoHash, int /*piece*/,
+                           qint64 /*elapsedMs*/, const QString& /*via*/) {
+                const QString active = m_playerController
+                    ? m_playerController->currentInfoHash()
+                    : QString();
+                if (infoHash != active) return;
+                if (player) player->onStreamStallEdgeFromEngine(false);
+            });
+    }
+
     connect(player, &VideoPlayer::progressUpdated, this,
-        [this](const QString& /*path*/, double posSec, double durSec) {
+        [this, player](const QString& /*path*/, double posSec, double durSec) {
+            // STREAM_STALL_UX_FIX Batch 1 — push the stream-engine stall flag
+            // into VideoPlayer each tick (~1 Hz). Pulled from statsSnapshot
+            // (sentinel-safe on unknown hash). Kept outside the 2s deadline-
+            // retarget gate so HUD transitions follow the 2s stall watchdog
+            // cadence with only ~1s progressUpdated aliasing, not +2s extra.
+            // No-op in non-stream playback (infoHash empty → setStreamStalled
+            // never gets called; VideoPlayer defaults m_streamStalled=false).
+            //
+            // Batch 2 — when stalled, also push stallPiece + stallPeerHaveCount
+            // so LoadingOverlay's stall-diagnostic text carries "waiting for
+            // piece N (K peers have it)". setStreamStalled(true) shows the
+            // overlay on the false→true transition; setStreamStallInfo runs
+            // every stalled tick to refresh the numbers if stallPiece advances
+            // or peer count changes.
+            {
+                const QString stallHash = m_playerController
+                    ? m_playerController->currentInfoHash()
+                    : QString();
+                if (player && !stallHash.isEmpty() && m_streamEngine) {
+                    const StreamEngineStats stats = m_streamEngine->statsSnapshot(stallHash);
+                    player->setStreamStalled(stats.stalled);
+                    if (stats.stalled) {
+                        player->setStreamStallInfo(stats.stallPiece,
+                                                   stats.stallPeerHaveCount);
+                    }
+                }
+            }
+
             QString epKey = m_session.epKey;
             if (epKey.isEmpty()) return;
             // Only save once real playback has started — ignore probe/initial 0-value updates
@@ -1812,6 +2002,35 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 }
             }
         });
+
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — parallel nearEndCrossed
+    // trigger driven by the sidecar's byte-position watchdog instead of
+    // the pct/remaining duration check above. Required for bitrate-estimate
+    // sources (HUD tilde-prefix) where AVFormatContext::duration is ~2x
+    // inflated and the `pct >= 0.95 || remaining <= 60` check at line ~1989
+    // is structurally unreachable. Both triggers coexist — whichever fires
+    // first wins; the `m_session.nearEndCrossed` guard prevents double-fire.
+    // Honest-duration sources now fire AUTO_NEXT ~30 s earlier (90 s bytes
+    // before EOF vs 60 s remaining) which is a free prefetch-budget bonus.
+    if (player && player->sidecarProcess()) {
+        disconnect(player->sidecarProcess(), &SidecarProcess::nearEndEstimate,
+                   this, nullptr);
+        connect(player->sidecarProcess(), &SidecarProcess::nearEndEstimate, this,
+                [this]() {
+                    if (m_session.nearEndCrossed) return;  // fire-once guard
+                    const QString epKey = m_session.epKey;
+                    if (epKey.isEmpty()) return;
+                    const QStringList parts = epKey.split(':');
+                    if (parts.size() < 4 || parts[0] != QLatin1String("stream"))
+                        return;
+                    m_session.nearEndCrossed = true;
+                    const QString imdbId = parts[1];
+                    const int season  = parts[2].mid(1).toInt();
+                    const int episode = parts[3].mid(1).toInt();
+                    startNextEpisodePrefetch(imdbId, season, episode);
+                },
+                Qt::UniqueConnection);
+    }
 
     // On player close → stop stream, clear progress key, refresh continue strip.
     // Also reset persistence mode so next Videos-mode playback writes to the
