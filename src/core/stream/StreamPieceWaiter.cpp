@@ -1,15 +1,12 @@
 #include "StreamPieceWaiter.h"
+#include "StreamTelemetryWriter.h"
 
 #include "core/torrent/TorrentEngine.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
-#include <QDir>
 #include <QElapsedTimer>
-#include <QFile>
 #include <QMutexLocker>
-#include <QTextStream>
 #include <QThread>
 
 namespace {
@@ -19,27 +16,13 @@ constexpr int kWakeWaitCapMs  = 1000;  // cap one QWaitCondition::wait call
                                        // progress on a bounded cadence even
                                        // if pieceFinished never fires.
 
-// Mirror StreamEngine.cpp's telemetry facility locally so the piece_wait
-// event short-circuits on TANKOBAN_STREAM_TELEMETRY=1 without leaking a
-// writer across translation units. Cadence-gated by env var; zero cost
-// when disabled (cached flag check before any lock).
-bool g_telemetryEnabled = qgetenv("TANKOBAN_STREAM_TELEMETRY") == "1";
-QMutex g_telemetryMutex;
-QString g_telemetryPath;
-
-QString resolveTelemetryPath()
-{
-    if (!g_telemetryPath.isEmpty()) return g_telemetryPath;
-    QString dir = QCoreApplication::applicationDirPath();
-    if (dir.isEmpty()) dir = QDir::currentPath();
-    g_telemetryPath = dir + QStringLiteral("/stream_telemetry.log");
-    return g_telemetryPath;
-}
-
+// Mirror StreamEngine.cpp's telemetry facility locally so piece_wait events
+// share the same background append writer. Cadence-gated by env var; zero
+// cost when disabled.
 void emitPieceWait(const QString& hash, int pieceIdx, qint64 elapsedMs,
                    bool ok, bool cancelled)
 {
-    if (!g_telemetryEnabled) return;
+    if (!streamTelemetryEnabled()) return;
     const QString line = QStringLiteral("[")
         + QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)
         + QStringLiteral("] event=piece_wait hash=") + hash.left(8)
@@ -48,12 +31,7 @@ void emitPieceWait(const QString& hash, int pieceIdx, qint64 elapsedMs,
         + QStringLiteral(" ok=") + (ok ? QStringLiteral("1") : QStringLiteral("0"))
         + QStringLiteral(" cancelled=") + (cancelled ? QStringLiteral("1") : QStringLiteral("0"))
         + QStringLiteral("\n");
-
-    QMutexLocker lock(&g_telemetryMutex);
-    QFile f(resolveTelemetryPath());
-    if (!f.open(QIODevice::Append | QIODevice::Text)) return;
-    QTextStream out(&f);
-    out << line;
+    appendStreamTelemetryLine(line);
 }
 
 }  // namespace
@@ -181,9 +159,23 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
 
     QMutexLocker lock(&m_mutex);
     auto& waiters = m_waiters[key];
-    const bool firstForKey = waiters.isEmpty();
     waiters.append(&w);
-    if (firstForKey) {
+    // STREAM_STALL_WATCHDOG_FIX 2026-04-21 — contains-check preserves the
+    // ORIGINAL first-seen timestamp across awaitRange's wake-wait cycles.
+    // Prior implementation keyed on `firstForKey = waiters.isEmpty()` BEFORE
+    // append + unconditional insert, then removed the entry whenever the
+    // last Waiter unregistered on timeout. Because awaitRange's loop calls
+    // waitForPiece(piece, kWakeWaitCapMs=1000ms), each timeout-and-reprobe
+    // cycle briefly drained the waiter list, which removed m_firstSeenMs,
+    // which a fresh insertion reset to now. Net effect: continuous-wait
+    // tracking maxed out at 1 s even when a single piece had been blocked
+    // for 30+ s, so longestActiveWait() never exceeded the stall_detected
+    // 4 s threshold. Mid-playback piece_waits of 6-8 s routinely observed
+    // in telemetry with ZERO matching stall_detected events despite the
+    // threshold. See agents/chat.md 2026-04-21 20:xx Agent 4 diagnosis
+    // (90 piece_wait >4 s events vs 5 stall_detected today, only
+    // cold-open).
+    if (!m_firstSeenMs.contains(key)) {
         m_firstSeenMs.insert(key, m_clock.elapsed());
     }
 
@@ -198,7 +190,12 @@ void StreamPieceWaiter::waitForPiece(const QString& infoHash, int pieceIdx,
         it->removeOne(&w);
         if (it->isEmpty()) {
             m_waiters.erase(it);
-            m_firstSeenMs.remove(key);
+            // STREAM_STALL_WATCHDOG_FIX 2026-04-21 — intentionally do NOT
+            // remove m_firstSeenMs here. Entry is now cleared on piece
+            // arrival (onPieceFinished) or stream teardown (untrackStream),
+            // which are the two events that semantically end a "continuous
+            // wait on piece X". The previous timeout-driven removal was
+            // the proximate cause of the watchdog-never-fires bug.
         }
     }
 }
@@ -214,6 +211,26 @@ StreamPieceWaiter::LongestWait StreamPieceWaiter::longestActiveWait() const
     // TRUE continuous wait, not the per-Waiter cond.wait() slice.
     const qint64 now = m_clock.elapsed();
     for (auto it = m_firstSeenMs.constBegin(); it != m_firstSeenMs.constEnd(); ++it) {
+        // STREAM_STALL_WATCHDOG_PREFETCH_FIX 2026-04-21 — only report a
+        // piece as "blocking" if at least one awaitRange worker is currently
+        // registered in m_waiters for this key. Without this filter, zombie
+        // m_firstSeenMs entries (abandoned by an awaitRange call that exited
+        // without the piece arriving — typical for prefetch windows the
+        // demuxer moved past) dominate longestActiveWait forever, causing
+        // stall_detected to latch on a prefetch piece far ahead of current
+        // playback. The UI then shows "Buffering — waiting for piece N"
+        // while video continues rendering a closer piece's frames.
+        //
+        // Safety: awaitRange's wake-wait loop briefly drains the waiter
+        // list between cond.wait timeout and the next waitForPiece call
+        // (microseconds under mutex-free re-probe). The 2 s stall watchdog
+        // tick could theoretically sample during that gap and miss a live
+        // wait; empirically the gap is sub-millisecond and even if a tick
+        // collides, the next tick 2 s later catches the same wait (firstSeenMs
+        // persists across those cycles per the 2026-04-21 fix above).
+        auto wit = m_waiters.find(it.key());
+        if (wit == m_waiters.end() || wit->isEmpty()) continue;
+
         const qint64 elapsed = now - it.value();
         if (elapsed > result.elapsedMs) {
             result.elapsedMs  = elapsed;
@@ -228,6 +245,15 @@ void StreamPieceWaiter::onPieceFinished(const QString& infoHash, int pieceIndex)
 {
     const Key key{infoHash, pieceIndex};
     QMutexLocker lock(&m_mutex);
+
+    // STREAM_STALL_WATCHDOG_FIX 2026-04-21 — piece arrived, so any
+    // continuous-wait tracking on this (hash, piece) is semantically over.
+    // Clear firstSeenMs here (the move from waitForPiece's waiter-drain
+    // path). Safe even if m_waiters has no entry for this key — a piece
+    // may finish before any worker has actually registered (e.g. priority
+    // 7 + deadline 40 ms resolves in under one HTTP serving loop cycle).
+    m_firstSeenMs.remove(key);
+
     auto it = m_waiters.find(key);
     if (it == m_waiters.end()) return;
 
@@ -238,5 +264,27 @@ void StreamPieceWaiter::onPieceFinished(const QString& infoHash, int pieceIndex)
     for (auto* w : *it) {
         w->awakened = true;
         w->cond.wakeAll();
+    }
+}
+
+void StreamPieceWaiter::untrackStream(const QString& infoHash)
+{
+    // STREAM_STALL_WATCHDOG_FIX 2026-04-21 — called by StreamEngine::stopStream
+    // to purge continuous-wait entries for a torn-down session. Without this,
+    // m_firstSeenMs entries for pieces that were blocked at stream-stop time
+    // persist (piece never arrives → no onPieceFinished → entry stays), and
+    // longestActiveWait() reads stale elapsed from them. The stall watchdog's
+    // session-lookup filter (`state == Serving`) means a stale entry for a
+    // gone session can't trigger a stall, but it CAN shadow a live shorter
+    // wait on a different session and hide a legitimate mid-playback stall
+    // if the stale entry wins the "longest" contest.
+    QMutexLocker lock(&m_mutex);
+    auto it = m_firstSeenMs.begin();
+    while (it != m_firstSeenMs.end()) {
+        if (it.key().first == infoHash) {
+            it = m_firstSeenMs.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
