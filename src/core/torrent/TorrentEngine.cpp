@@ -364,6 +364,37 @@ void TorrentEngine::applySettings()
     sp.set_int(lt::settings_pack::out_enc_policy, lt::settings_pack::pe_enabled);
     sp.set_int(lt::settings_pack::allowed_enc_level, lt::settings_pack::pe_both);
 
+    // EXPERIMENT 1 (2026-04-23) — Stremio session_params port gated behind
+    // TANKOBAN_STREMIO_TUNE=1 env var. Default OFF preserves current Tankoban
+    // behavior (Tankorent downloads continue working as-is). When ON, applies
+    // the 10 streaming-critical settings Stremio's stream-server sets in
+    // C:\Users\Suprabha\Downloads\Stremio Reference\stream-server-master\
+    // bindings\libtorrent-sys\cpp\wrapper.cpp:186-216. See plan at
+    // ~/.claude/plans/2026-04-23-stremio-tuning-ab-experiment.md.
+    //
+    // Falsifiability bar: >=40% stall-per-10min reduction vs flag-off baseline
+    // AND cold-open must not regress >20%. If bar not met this block gets
+    // git-reverted and a memory entry documents the negative result.
+    //
+    // NOTE: request_queue_time and peer_timeout are already set above with
+    // our own values (10 and 20 respectively); Stremio uses 3 and 60. Under
+    // the experiment flag we OVERWRITE to Stremio's values so the A/B tests
+    // the full Stremio config coherently.
+    const QByteArray stremioTune = qgetenv("TANKOBAN_STREMIO_TUNE");
+    if (stremioTune == "1") {
+        qInfo() << "[TorrentEngine] EXPERIMENT: TANKOBAN_STREMIO_TUNE=1 — applying Stremio session_params overrides.";
+        sp.set_bool(lt::settings_pack::strict_end_game_mode,     true);   // libtorrent default false
+        sp.set_bool(lt::settings_pack::prioritize_partial_pieces, true);  // libtorrent default false
+        sp.set_bool(lt::settings_pack::smooth_connects,          false);  // libtorrent default true
+        sp.set_int (lt::settings_pack::piece_timeout,            5);      // libtorrent default ~20
+        sp.set_int (lt::settings_pack::unchoke_slots_limit,      20);     // libtorrent default 8
+        sp.set_int (lt::settings_pack::min_reconnect_time,       1);      // was set 10 above -> overwrite
+        sp.set_int (lt::settings_pack::connection_speed,         200);    // was set 50 above -> overwrite
+        sp.set_int (lt::settings_pack::peer_connect_timeout,     3);      // was set 7 above -> overwrite
+        sp.set_int (lt::settings_pack::peer_timeout,             60);     // was set 20 above -> overwrite
+        sp.set_int (lt::settings_pack::request_queue_time,       3);      // was set 10 above -> overwrite
+    }
+
     m_session.apply_settings(sp);
 
     // STREAM_STALL_FIX Phase 3 — session-init verification log. Readback
@@ -375,7 +406,16 @@ void TorrentEngine::applySettings()
         qDebug().noquote() << "[TorrentEngine] session settings applied —"
             << "max_out_request_queue=" << applied.get_int(lt::settings_pack::max_out_request_queue)
             << "whole_pieces_threshold=" << applied.get_int(lt::settings_pack::whole_pieces_threshold)
-            << "request_queue_time=" << applied.get_int(lt::settings_pack::request_queue_time);
+            << "request_queue_time=" << applied.get_int(lt::settings_pack::request_queue_time)
+            << "strict_end_game_mode=" << applied.get_bool(lt::settings_pack::strict_end_game_mode)
+            << "prioritize_partial_pieces=" << applied.get_bool(lt::settings_pack::prioritize_partial_pieces)
+            << "smooth_connects=" << applied.get_bool(lt::settings_pack::smooth_connects)
+            << "piece_timeout=" << applied.get_int(lt::settings_pack::piece_timeout)
+            << "unchoke_slots_limit=" << applied.get_int(lt::settings_pack::unchoke_slots_limit)
+            << "min_reconnect_time=" << applied.get_int(lt::settings_pack::min_reconnect_time)
+            << "connection_speed=" << applied.get_int(lt::settings_pack::connection_speed)
+            << "peer_connect_timeout=" << applied.get_int(lt::settings_pack::peer_connect_timeout)
+            << "peer_timeout=" << applied.get_int(lt::settings_pack::peer_timeout);
     }
 }
 
@@ -1543,6 +1583,54 @@ TorrentEngine::PieceDiag TorrentEngine::pieceDiagnostic(
     return d;
 }
 
+// STREAM metadata investigation Wake 1 (2026-04-21) — pre-metadata-window
+// diagnostic. Called at 1 Hz from StreamEngine::onMetadataFetchDiagTick
+// while session state == Pending && mdReadyMs < 0. Walks handle.status() +
+// handle.trackers() once per call to surface DHT / tracker / peer phase
+// state so the 93-245 s magnet→metadata_received window can be diagnosed.
+// Pure read; matches pieceDiagnostic's additive-read-only contract.
+TorrentEngine::MetadataFetchDiag
+TorrentEngine::metadataFetchDiagnostic(const QString& infoHash) const
+{
+    MetadataFetchDiag d;
+    QMutexLocker lock(&m_mutex);
+    d.dhtRunning = m_session.is_dht_running();
+
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return d;
+
+    const auto st = it->handle.status();
+    d.peersConnected       = st.num_peers;
+    d.swarmSeeds           = st.num_complete;
+    d.swarmLeechers        = st.num_incomplete;
+    d.announcingToTrackers = st.announcing_to_trackers;
+
+    // Count trackers with recent successful scrape/announce. A tracker is
+    // "ok" if at least one of its endpoints has zero last_error AND has
+    // either a scrape response populated (scrape_incomplete/complete > 0)
+    // OR is currently updating (indicating an in-flight announce that
+    // hasn't failed yet). Conservative; avoids marking a tracker "ok" on
+    // pure TCP handshake with no protocol response.
+    const auto trackers = it->handle.trackers();
+    d.trackersTotal = static_cast<int>(trackers.size());
+    for (const auto& tr : trackers) {
+        bool ok = false;
+        for (const auto& ih : tr.endpoints) {
+            for (const auto& aih : ih.info_hashes) {
+                if (!aih.last_error
+                    && (aih.scrape_incomplete > 0 || aih.scrape_complete > 0
+                        || aih.updating)) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (ok) break;
+        }
+        if (ok) d.trackersOk++;
+    }
+    return d;
+}
+
 // MOC needs to see the AlertWorker Q_OBJECT
 #include "TorrentEngine.moc"
 
@@ -1589,6 +1677,7 @@ bool TorrentEngine::havePiece(const QString&, int) const { return false; }
 void TorrentEngine::setPiecePriority(const QString&, int, int) {}
 int TorrentEngine::peersWithPiece(const QString&, int) const { return -1; }
 TorrentEngine::PieceDiag TorrentEngine::pieceDiagnostic(const QString&, int) const { return {}; }
+TorrentEngine::MetadataFetchDiag TorrentEngine::metadataFetchDiagnostic(const QString&) const { return {}; }
 void TorrentEngine::flushCache(const QString&) {}
 // STREAM_PLAYBACK_FIX Phase 2 Batch 2.1 stubs — match header decls.
 void TorrentEngine::setPieceDeadlines(const QString&, const QList<QPair<int, int>>&) {}
