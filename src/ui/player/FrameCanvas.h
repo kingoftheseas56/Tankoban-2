@@ -142,6 +142,7 @@ public:
     // baked bars. 0.0 means no crop (default). Subtitle overlay is NOT
     // zoomed; subs stay at natural size anchored to the un-cropped rect.
     void setCropAspect(double aspect);
+    void setUserZoom(double zoom);
     QSize canvasPixelSize() const;
 
     // Lift the subtitle overlay upward by N physical pixels. Used by
@@ -426,6 +427,7 @@ private:
     double                    m_forcedAspect = 0.0;
     // Crop target aspect (see setCropAspect). 0.0 = no crop.
     double                    m_cropAspect   = 0.0;
+    double                    m_userZoom     = 1.0;
     // Subtitle overlay vertical lift in physical pixels. Updated by
     // VideoPlayer::showControls/hideControls to clear the HUD control
     // bar when it's visible. Read by drawTexturedQuad's overlay pass.
@@ -444,6 +446,8 @@ private:
     int                       m_srcCropRight   = 0;
     bool                      m_bakedScanDone  = false;
     int                       m_framesSinceImport = 0;
+    int                       m_bakedScanCandidateTop = -1;
+    int                       m_bakedScanCandidateCount = 0;
     // Scans the current shared texture for fully-black rows at top/bottom.
     // Returns true once scan ran and produced a valid result (whether or
     // not crop was detected); callers use this to latch one-shot behavior.

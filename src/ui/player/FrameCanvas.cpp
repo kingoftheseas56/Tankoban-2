@@ -989,6 +989,13 @@ void FrameCanvas::drawTexturedQuad()
             ? m_cropAspect / frameAspect
             : frameAspect / m_cropAspect;
     }
+    // User-facing zoom / overscan port (2026-04-23, Congress 8 FC).
+    // Mirrors mpv's video-zoom property at mpv-master/options/options.c:161
+    // and aspect composition at mpv-master/video/out/aspect.c:84,178-183,
+    // with VLC's user-facing Zoom menu lifecycle at
+    // vlc-master/modules/gui/qt/menus/menus.cpp:473 and
+    // vlc-master/src/video_output/vout_intf.c:225-231.
+    cropZoom *= m_userZoom;
     const int croppedW = static_cast<int>(std::lround(videoRect.w * cropZoom));
     const int croppedH = static_cast<int>(std::lround(videoRect.h * cropZoom));
 
@@ -1687,15 +1694,19 @@ void FrameCanvas::resetLagAccounting()
 // fitAspectRect and offsets the D3D viewport so baked rows fall off-screen.
 // No shader changes — all work is viewport/scissor-based.
 //
-// Returns true once the scan ran (latches m_bakedScanDone regardless of
-// detection outcome). Robustness:
+// Returns true once the scan has a stable result and latches
+// m_bakedScanDone. Robustness:
 //   - Skips the scan if the imported texture format isn't BGRA8.
 //   - Requires top+bottom ≥ 8 rows AND ≤ 25% of frame height to accept
 //     detection (rejects all-black frames from intro fade-ins).
 //   - Uses luma ≤ 2 threshold — Netflix-encoded baked bars are exact
 //     (0,0,0) but dark scene content always has ≥3-value codec noise.
 //   - Scans only the top 20% + bottom 20% (not full frame) for speed.
-//   - One-shot: never re-scans after m_bakedScanDone latches true.
+//   - Stability gate: requires the same candidate result across several
+//     consecutive scans before latching. This prevents transient dark
+//     frames from being misread as baked letterbox.
+//   - One-shot after latching: never re-scans after m_bakedScanDone
+//     becomes true.
 bool FrameCanvas::scanBakedLetterbox()
 {
 #ifndef _WIN32
@@ -1816,14 +1827,45 @@ bool FrameCanvas::scanBakedLetterbox()
     // top-only crop still fixes the primary symptom Hemanth reported
     // (top black bar with video pushed down).
     const int perEdgeCeiling = (H * 20) / 100;
-    const int newTop = (topBlack <= perEdgeCeiling)
-                       ? (topBlack >= 4 ? topBlack : 0)
-                       : m_srcCropTop;
+    const int candidateTop = (topBlack <= perEdgeCeiling)
+                             ? (topBlack >= 4 ? topBlack : 0)
+                             : 0;
+    constexpr int kStableScansRequired = 5;
+    const bool candidateMatchesPrevious =
+        (m_bakedScanCandidateTop >= 0)
+        && (qAbs(candidateTop - m_bakedScanCandidateTop) <= 2);
+    if (candidateMatchesPrevious) {
+        ++m_bakedScanCandidateCount;
+    } else {
+        m_bakedScanCandidateTop = candidateTop;
+        m_bakedScanCandidateCount = 1;
+    }
+
+    if (m_bakedScanCandidateCount < kStableScansRequired) {
+        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
+            QTextStream s(&dbg);
+            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+              << " [FrameCanvas autocrop] path=" << path
+              << " source=" << W << "x" << H
+              << " stride=" << stride
+              << " detected_top=" << topBlack
+              << " detected_bottom_ignored=" << bottomBlack
+              << " candidate_top=" << m_bakedScanCandidateTop
+              << " stable_count=" << m_bakedScanCandidateCount
+              << "/" << kStableScansRequired
+              << " latched=0\n";
+        }
+        return false;
+    }
+
+    const int newTop = qMax(0, m_bakedScanCandidateTop);
     const bool appliedAny = (newTop != m_srcCropTop) || (m_srcCropBottom != 0);
     m_srcCropTop    = newTop;
     m_srcCropBottom = 0;
     m_srcCropLeft   = 0;
     m_srcCropRight  = 0;
+    m_bakedScanDone = true;
     // bottomBlack used below only for the diagnostic log.
     const int bottomBlackDetected = bottomBlack;
 
@@ -1836,9 +1878,13 @@ bool FrameCanvas::scanBakedLetterbox()
           << " stride=" << stride
           << " detected_top=" << topBlack
           << " detected_bottom_ignored=" << bottomBlackDetected
+          << " candidate_top=" << m_bakedScanCandidateTop
+          << " stable_count=" << m_bakedScanCandidateCount
+          << "/" << kStableScansRequired
           << " applied_top=" << m_srcCropTop
           << " applied_bottom=" << m_srcCropBottom
           << " applied_any=" << appliedAny
+          << " latched=1"
           << "\n";
     }
     return true;
@@ -1968,6 +2014,8 @@ void FrameCanvas::attachD3D11Texture(quintptr ntHandle, int width, int height)
     m_srcCropRight     = 0;
     m_bakedScanDone    = false;
     m_framesSinceImport = 0;
+    m_bakedScanCandidateTop = -1;
+    m_bakedScanCandidateCount = 0;
     update();                    // poke the paint cycle
 }
 
@@ -1987,6 +2035,8 @@ void FrameCanvas::detachD3D11Texture()
     m_srcCropRight     = 0;
     m_bakedScanDone    = false;
     m_framesSinceImport = 0;
+    m_bakedScanCandidateTop = -1;
+    m_bakedScanCandidateCount = 0;
     if (wasActive) {
         emit zeroCopyActivated(false);   // sidecar should re-engage CPU pipeline
     }
@@ -2132,6 +2182,13 @@ void FrameCanvas::setCropAspect(double aspect)
 {
     if (aspect < 0.0) aspect = 0.0;
     m_cropAspect = aspect;
+}
+
+void FrameCanvas::setUserZoom(double zoom)
+{
+    if (zoom < 1.0) zoom = 1.0;
+    if (zoom > 1.2) zoom = 1.2;
+    m_userZoom = zoom;
 }
 
 void FrameCanvas::setSubtitleLift(int physicalPx)

@@ -116,6 +116,27 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         });
     }
 
+    auto* zoomMenu = menu->addMenu("Zoom");
+    zoomMenu->setStyleSheet(MENU_SS);
+    auto* zoomGroup = new QActionGroup(zoomMenu);
+    zoomGroup->setExclusive(true);
+    static const struct { const char* label; int pct; } ZOOMS[] = {
+        { "100%", Z100 },
+        { "105%", Z105 },
+        { "110%", Z110 },
+        { "115%", Z115 },
+        { "120%", Z120 },
+    };
+    for (const auto& zoom : ZOOMS) {
+        auto* act = zoomMenu->addAction(zoom.label);
+        act->setCheckable(true);
+        act->setChecked(data.currentZoomPct == zoom.pct);
+        zoomGroup->addAction(act);
+        QObject::connect(act, &QAction::triggered, parent, [callback, zoom]() {
+            callback(SetZoom, zoom.pct);
+        });
+    }
+
     auto* fsAction = menu->addAction("Fullscreen");
     QObject::connect(fsAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleFullscreen, {});

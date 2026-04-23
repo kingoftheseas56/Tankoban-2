@@ -102,6 +102,52 @@ public:
     void setStreamMode(bool on);
     bool streamMode() const { return m_streamMode; }
 
+    // STREAM_STALL_UX_FIX Batch 1 — mid-playback stall gate for the HUD.
+    // StreamPage pulls StreamEngineStats.stalled each progressUpdated tick
+    // (~1 Hz) and pushes it here. When true, onTimeUpdate skips positionSec
+    // writes to the seek slider + time label so the HUD doesn't lie during
+    // a stall (sidecar keeps emitting timeUpdate from the audio PTS clock
+    // while the video decoder is dry — the decoupled clock creates the
+    // "screen frozen but timer ticking" illusion Hemanth reported
+    // 2026-04-21). Duration label + crash-recovery last-known-position +
+    // saveProgress all stay unconditional — the gate is specifically on
+    // positionSec, which is the only HUD surface that misreads reality
+    // during a stall. Defaults false; library mode never touches this.
+    void setStreamStalled(bool stalled);
+    bool streamStalled() const { return m_streamStalled; }
+
+    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — edge-driven sidecar IPC
+    // forwarder. Called from StreamPage when StreamEngine emits
+    // stallDetected (detected=true) or stallRecovered (detected=false).
+    // Routes to m_sidecar->sendStallPause / sendStallResume which
+    // implements Option A (mpv paused-for-cache) in the sidecar: freezes
+    // AVSyncClock + halts PortAudio writes on pause; re-anchors clock to
+    // current video PTS via seek_anchor on resume. Separate from
+    // setStreamStalled (which is polling-based + drives HUD/overlay) so
+    // the sidecar IPC fires on the actual edge (~2s stall-watchdog
+    // cadence) instead of the ~4s worst-case polling latency. Both
+    // paths coexist; setStreamStalled remains the authority for UI
+    // state, onStreamStallEdgeFromEngine is the authority for decoder
+    // coordination.
+    void onStreamStallEdgeFromEngine(bool detected);
+
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — expose the sidecar handle
+    // so StreamPage can connect to SidecarProcess::nearEndEstimate from
+    // its onReadyToPlay wiring. No ownership transfer; pointer is managed
+    // by VideoPlayer's own lifecycle. May be null during pre-session /
+    // post-teardown — callers must null-check.
+    SidecarProcess* sidecarProcess() const { return m_sidecar; }
+
+    // STREAM_STALL_UX_FIX Batch 2 — per-tick enrichment for the stall
+    // overlay text. Pushed from StreamPage alongside setStreamStalled on
+    // every progressUpdated tick while StreamEngineStats.stalled is true.
+    // Forwards to LoadingOverlay::setStallDiagnostic which repaints in
+    // place when the overlay is currently showing Stage::Buffering. No-op
+    // before setStreamStalled(true) has shown the overlay (stall cache on
+    // LoadingOverlay side updates silently until the overlay appears).
+    void setStreamStallInfo(int piece, int peerHaveCount);
+    void setUserZoom(double zoom);
+
 public slots:
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — slot consumed by
     // StreamPlayerController::bufferedRangesChanged signal. Forwards the
@@ -127,6 +173,7 @@ signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
     void progressUpdated(const QString& path, double positionSec, double durationSec);
+    void userZoomChanged(double zoom);
 
     // PLAYER_UX_FIX Phase 1.2 — sidecar lifecycle plumbing. Fired when the
     // sidecar reports `state_changed{opening}` (right after handle_open
@@ -447,6 +494,27 @@ private:
     // overlay rendering in SeekSlider. False default = library mode (no
     // overlay). StreamPage toggles via setStreamMode around openFile.
     bool   m_streamMode = false;
+    // STREAM_STALL_UX_FIX Batch 1 — cached stall flag pushed from StreamPage
+    // via setStreamStalled each progressUpdated tick. Gates positionSec
+    // writes in onTimeUpdate.
+    bool   m_streamStalled = false;
+    // STREAM_STALL_UX_FIX Batch 2 — overlay ownership tracking. Set true
+    // when the stream-engine stall flipped false→true and we called
+    // showBuffering; reset + dismiss on the true→false transition.
+    // Separate from sidecar buffering tracking (m_sidecarBuffering) so we
+    // don't dismiss an overlay the sidecar is also holding up.
+    bool   m_streamStallOverlayOwner = false;
+    // STREAM_STALL_UX_FIX Batch 2 — tracked sidecar HTTP stall state so
+    // our stream-engine stall-clear path doesn't prematurely dismiss the
+    // overlay when sidecar independently still wants it visible. Flipped
+    // by connects to SidecarProcess::bufferingStarted / bufferingEnded.
+    bool   m_sidecarBuffering = false;
+
+    // STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C
+    // instrumentation. Dedupes [STALL_DEBUG] piece_change log so long stalls
+    // on the same piece don't spam. Reset not required — int field;
+    // negative sentinel means "never logged".
+    int    m_lastLoggedStallPiece = -1;
     bool   m_isHdr      = false;
     bool   m_paused     = false;
     bool   m_seeking    = false;
@@ -474,6 +542,7 @@ private:
     // FrameCanvas::setCropAspect. Persists per-show / per-file alongside
     // aspectOverride.
     QString m_currentCrop = QStringLiteral("none");
+    double  m_userZoom    = 1.0;
 
     // VIDEO_PLAYER_FIX Batch 7.1 — stats badge state. Source metadata
     // stashed from sidecar firstFrame event; drops polled from
@@ -496,6 +565,13 @@ private:
     bool          m_prePipFullscreen  = false;
     QPoint        m_pipDragOrigin     = QPoint(-1, -1);
     double m_durationSec = 0.0;
+    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — pushed from
+    // SidecarProcess::probeDone signal. When true, m_durLabel prefixes
+    // the formatted duration with `~` (tilde) to honestly signal that
+    // the value is a bitrate × fileSize estimate (~10-50% VBR error)
+    // rather than ground-truth container/stream duration. False by
+    // default + reset in teardownUi on session boundary.
+    bool   m_durationIsEstimate = false;
     int    m_pendingSeekVal = 0;
     int    m_seekDragOrigin = -1;
 

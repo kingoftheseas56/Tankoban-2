@@ -41,16 +41,26 @@ struct VideoContextData {
     // to eliminate baked letterbox / pillarbox strips — orthogonal to
     // Aspect Ratio override which changes viewport fit shape.
     QString currentCrop = QStringLiteral("none");
+    int currentZoomPct = 100;
 };
 
 class VideoContextMenu {
 public:
+    enum ZoomLevel {
+        Z100 = 100,
+        Z105 = 105,
+        Z110 = 110,
+        Z115 = 115,
+        Z120 = 120,
+    };
+
     enum ActionType {
         TogglePlayPause,
         ToggleMute,
         SetSpeed,           // data = double speed
         SetAspectRatio,     // data = QString "original"/"4:3"/"16:9"/"2.35:1"/"1.85:1"
         SetCrop,            // data = QString "none"/"16:9"/"2.35:1"/"2.39:1"/"1.85:1"/"4:3"
+        SetZoom,            // data = int zoom percent
         ToggleFullscreen,
         ToggleAlwaysOnTop,  // VIDEO_PLAYER_FIX Batch 3.1
         TakeSnapshot,       // VIDEO_PLAYER_FIX Batch 3.2
