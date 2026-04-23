@@ -321,7 +321,7 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     1. **Plan.** Write the plan in plan mode (Claude Code), a plan file under `~/.claude/plans/`, or inside the fix-TODO batch scope section. Plan captures: what changes, files in scope, approach, expected behavior, smoke criterion. One-line obvious fixes (change constant X to Y) skip this; everything else plans first.
     2. **Execute.** Implement against the plan. Stay inside plan scope; if new evidence forces an amendment, amend explicitly rather than drifting into unplanned work.
-    3. **Smoke with Windows-MCP.** Self-drive `Tankoban.exe` via `mcp__windows-mcp__*` per `project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`. No Hemanth clicks for mechanical smokes — agents smoke their own work. Hemanth's role is visual quality + taste judgment (HDR tone-map feel, subtitle smoothness, AV-sync feel) only.
+    3. **Smoke with MCP.** Self-drive `Tankoban.exe` via `mcp__pywinauto-mcp__*` (primary, UIA-invoke by AutomationId) and `mcp__windows-mcp__*` (secondary, screenshots + keyboard shortcuts + PowerShell) per `project_windows_mcp_live.md` + `feedback_mcp_smoke_discipline.md`. Prefer structural UIA-invoke over pixel clicks for any widget that has an AutomationId (Qt auto-publishes from `objectName()`). No Hemanth clicks for mechanical smokes — agents smoke their own work. Hemanth's role is visual quality + taste judgment (HDR tone-map feel, subtitle smoothness, AV-sync feel) only.
     4. **Verify.** Compare observed behavior to the smoke criterion. Match → `READY TO COMMIT` flag per Rule 11. Mismatch → **stop + return to Step 1**, do not iterate blindly.
 
     Step 5 (return-to-plan on failure, not blind retry) is what distinguishes one-change-per-rebuild evidence-driven work from agents burning wakes on small variations. Documented failure-to-avoid pattern: `feedback_stream_failed_hypotheses.md` (two falsified libtorrent scheduler tweaks retried without re-planning). Documented success pattern: cold-open 3-wake arc (`feedback_cold_open_three_wakes_validated.md`) — each failed wake drove re-planning, not retry, and Wake 3's `{10, 60}` ms deadline shape was the answer only because Wakes 1 + 2 falsified simpler guesses first.
@@ -330,7 +330,7 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     (Added 2026-04-21. Hemanth directive verbatim: "we first plan and then execute it and smoke test with mcp, to see if it worked, if it didn't.. we come back to the drawing board.")
 
-19. **MCP lane lock — one agent drives the desktop at a time.** Multiple agents (Claude sessions + Codex Trigger D) can have their own `windows-mcp` server subprocesses running simultaneously, but the physical desktop is single-point-of-contention — focus, keyboard input, mouse, clipboard, and Tankoban.exe's single-instance model all collide when two agents interact concurrently. The lock protocol:
+19. **MCP lane lock — one agent drives the desktop at a time.** Multiple agents (Claude sessions + Codex Trigger D) can have their own MCP server subprocesses running simultaneously across both `mcp__windows-mcp__*` AND `mcp__pywinauto-mcp__*`, but the physical desktop is single-point-of-contention — focus, keyboard input, mouse, clipboard, and Tankoban.exe's single-instance model all collide when two agents interact concurrently. The lock covers BOTH tool prefixes (a pywinauto UIA-invoke + a windows-mcp screenshot in the same smoke are one session; another agent still has to wait for release). The lock protocol:
 
     **Claim:** before any agent-driven desktop interaction (Tankoban smoke, UIA recon, Inspect.exe, pywinauto drive, any other tool that clicks/types/reads focused-window state), post in `agents/chat.md`:
     ```
@@ -346,7 +346,7 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     Release is mandatory even on failure or abort. A dropped lock strands the lane.
 
-    Windows-MCP for file-system, grep, build, or other non-UI PowerShell work is always unrestricted — the lock covers only desktop-interacting tool use. An agent under LOCK can still issue non-UI MCP calls (e.g. `Get-Process`, reading a log, building the sidecar) in parallel with their smoke work.
+    Either MCP for file-system, grep, build, or other non-UI PowerShell work is always unrestricted — the lock covers only desktop-interacting tool use (anything that clicks, types, focus-steals, or reads focused-window state). An agent under LOCK can still issue non-UI MCP calls (e.g. `Get-Process`, reading a log, building the sidecar) in parallel with their smoke work, and any agent (locked or not) can run non-UI calls from either server at any time.
 
     Applies identically to Codex Trigger D — if a REQUEST IMPLEMENTATION block includes MCP smoke verification, Codex claims + releases the LOCK the same way.
 

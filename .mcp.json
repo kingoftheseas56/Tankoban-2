@@ -8,6 +8,10 @@
         "WINDOWS_MCP_SCREENSHOT_SCALE": "0.6"
       }
     },
+    "pywinauto-mcp": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/sandraschi/pywinauto-mcp", "pywinauto-mcp"]
+    },
     "codex": {
       "command": "C:\\Users\\Suprabha\\AppData\\Roaming\\npm\\codex.cmd",
       "args": ["mcp-server"]
