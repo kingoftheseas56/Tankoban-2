@@ -120,7 +120,16 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
     zoomMenu->setStyleSheet(MENU_SS);
     auto* zoomGroup = new QActionGroup(zoomMenu);
     zoomGroup->setExclusive(true);
+    // 90%/95% shrink the video into a smaller centered viewport so content
+    // painted to the source's absolute edge (sports-broadcast scoreboards
+    // at bleeding-edge y=1079) stays fully visible — reverse overscan.
+    // 100% is the 1:1 source→screen baseline. 105-120% are TV-overscan
+    // analogs (cropping edges to hide bleeding-edge source content). mpv's
+    // video-zoom property accepts both directions; our preset list gives
+    // the user both sides of that range.
     static const struct { const char* label; int pct; } ZOOMS[] = {
+        { "90%",  Z90  },
+        { "95%",  Z95  },
         { "100%", Z100 },
         { "105%", Z105 },
         { "110%", Z110 },

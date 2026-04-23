@@ -47,6 +47,8 @@ struct VideoContextData {
 class VideoContextMenu {
 public:
     enum ZoomLevel {
+        Z90  = 90,
+        Z95  = 95,
         Z100 = 100,
         Z105 = 105,
         Z110 = 110,

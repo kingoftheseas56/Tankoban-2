@@ -144,7 +144,14 @@ static const int    SPEED_COUNT    = 7;
 
 static double clampUserZoom(double zoom)
 {
-    if (zoom < 1.0) return 1.0;
+    // Range [0.90, 1.20]. Below 1.0 = "zoom-out" / reverse-overscan:
+    // video shrinks into a smaller centered viewport with black letterbox
+    // around it, guaranteeing source content at absolute edges (e.g. sports
+    // scoreboards painted to y=1079) stays visible. Above 1.0 = standard
+    // overscan crop. Mirrors mpv's `video-zoom` which accepts negative
+    // values (zoom out) in its exp2 space at
+    // mpv-master/options/options.c:161.
+    if (zoom < 0.9) return 0.9;
     if (zoom > 1.2) return 1.2;
     return zoom;
 }

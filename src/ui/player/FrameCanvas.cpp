@@ -2186,7 +2186,12 @@ void FrameCanvas::setCropAspect(double aspect)
 
 void FrameCanvas::setUserZoom(double zoom)
 {
-    if (zoom < 1.0) zoom = 1.0;
+    // Range matches VideoPlayer::clampUserZoom [0.90, 1.20]. < 1.0
+    // shrinks content into a smaller centered viewport (reverse overscan,
+    // visible letterbox borders); > 1.0 crops edges (standard overscan).
+    // drawTexturedQuad's existing viewport math handles both directions
+    // via the same `croppedW/H = videoRect.w/h * cropZoom` composition.
+    if (zoom < 0.9) zoom = 0.9;
     if (zoom > 1.2) zoom = 1.2;
     m_userZoom = zoom;
 }
