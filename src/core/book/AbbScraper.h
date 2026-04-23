@@ -80,6 +80,13 @@ private:
     // "Info Hash:" <td> row; returns empty string on no match.
     QString parseInfoHash(const QByteArray& html) const;
 
+    // Detail-page parsing — file-list summary. Walks the rows after the
+    // "This is a Multifile/Singlefile Torrent" marker, counts extensions,
+    // returns a compact human summary like "Contents: 1 × .m4b, 1 × .jpg,
+    // 1 × .nfo". Empty string when no file-list block found. TANKOLIBRARY_ABB
+    // Track B — stuffed into BookResult.description for detail-view render.
+    QString parseFileListSummary(const QByteArray& html) const;
+
     // Magnet URI construction - replicates ABB's own /js/main.js client-
     // side logic verbatim. Uses the info hash + 7 hardcoded trackers. The
     // title is url-encoded into the magnet's `dn=` display-name param so

@@ -1,12 +1,16 @@
 #include "AbbScraper.h"
 
 #include <QDebug>
+#include <QMap>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSet>
 #include <QUrl>
 #include <QUrlQuery>
+
+#include <algorithm>
 
 namespace {
 
@@ -407,9 +411,85 @@ void AbbScraper::onDetailReplyFinished()
         detail.sourceId    = slug;
         detail.md5         = infoHash;    // info hash used as the cross-source dedup key
         detail.downloadUrl = magnet;      // magnet URI parked here for future reuse
+        // Track B — file-list summary goes into `description`. ABB rows
+        // leave description empty at search-row parse, so no semantic
+        // conflict. Empty string when parse misses (non-standard detail
+        // page shape) — detail-view hides empty-description row cleanly.
+        detail.description = parseFileListSummary(body);
         reset();
         emit detailReady(detail);
     }
+}
+
+QString AbbScraper::parseFileListSummary(const QByteArray& html) const
+{
+    // File-list block shape per probe artifact detail_rhythm.html:
+    //   <tr><td>This is a Multifile Torrent</td></tr>     OR
+    //   <tr><td>This is a Singlefile Torrent</td></tr>
+    //   <tr><td>filename.ext N.NN KBs/MBs/GBs</td></tr>   x N files
+    //   <tr><td>Combined File Size:</td><td>...</td></tr>  <- stop marker
+    //
+    // Strategy: locate the "This is a ...file Torrent" row; iterate
+    // subsequent <tr><td>SINGLE_CELL_TEXT</td></tr> rows that match the
+    // filename-size pattern; accumulate extension counts; stop on first
+    // non-matching row (usually "Combined File Size:" or a 2-cell row).
+    const QString text = QString::fromUtf8(html);
+
+    static const QRegularExpression kMarkerRe(
+        QStringLiteral(R"RX(<tr>\s*<td[^>]*>\s*This is a (Multifile|Singlefile) Torrent\s*</td>\s*</tr>)RX"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch markerM = kMarkerRe.match(text);
+    if (!markerM.hasMatch()) return QString();
+
+    const int walkStart = markerM.capturedEnd();
+    // Cap the walk to a reasonable window (torrents rarely exceed 200 files).
+    const QString tail = text.mid(walkStart, 32000);
+
+    // Matches single-cell rows like:
+    //   <tr><td>SomeName.m4b 1.53 GBs</td></tr>
+    // Captures: (1)=everything before ext, (2)=ext, (3)=size-with-unit.
+    static const QRegularExpression kFileRe(
+        QStringLiteral(R"RX(<tr>\s*<td[^>]*>\s*([^<]+?)\.([a-zA-Z0-9]+)\s+([0-9.]+\s*[GMK]?Bs?)\s*</td>\s*</tr>)RX"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    QMap<QString, int> extCounts;   // lowercase ext -> count
+    auto it = kFileRe.globalMatch(tail);
+    int total = 0;
+    while (it.hasNext() && total < 200) {
+        const QRegularExpressionMatch m = it.next();
+        const QString ext = m.captured(2).toLower();
+        extCounts[ext]++;
+        ++total;
+    }
+
+    if (extCounts.isEmpty()) return QString();
+
+    // Render as "Contents: N × .ext, M × .ext2" in audio-first order.
+    // Audio extensions rendered first (.m4b / .mp3 / .m4a / .flac / .ogg /
+    // .wav), then the rest alphabetically. Users care about audio counts
+    // foremost.
+    static const QStringList kAudioOrder = {
+        QStringLiteral("m4b"), QStringLiteral("mp3"),
+        QStringLiteral("m4a"), QStringLiteral("flac"),
+        QStringLiteral("ogg"), QStringLiteral("wav")
+    };
+
+    QStringList parts;
+    QSet<QString> rendered;
+    for (const QString& a : kAudioOrder) {
+        if (extCounts.contains(a)) {
+            parts << QStringLiteral("%1 × .%2").arg(extCounts.value(a)).arg(a);
+            rendered.insert(a);
+        }
+    }
+    QList<QString> rest = extCounts.keys();
+    std::sort(rest.begin(), rest.end());
+    for (const QString& ext : rest) {
+        if (rendered.contains(ext)) continue;
+        parts << QStringLiteral("%1 × .%2").arg(extCounts.value(ext)).arg(ext);
+    }
+
+    return QStringLiteral("Contents: ") + parts.join(QStringLiteral(", "));
 }
 
 QString AbbScraper::parseInfoHash(const QByteArray& html) const

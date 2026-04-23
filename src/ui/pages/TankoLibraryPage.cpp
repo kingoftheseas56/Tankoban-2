@@ -163,6 +163,19 @@ QString extensionFromCoverUrl(const QString& url)
     return QStringLiteral("jpg");
 }
 
+// TANKOLIBRARY_ABB Track B2 — cover-cache key helper. LibGen rows have md5
+// populated (content hash); ABB rows have md5 empty post-search (info hash
+// only arrives post-detail) but sourceId populated (URL slug). Fall back so
+// both sources can participate in the unified thumbnail cache without
+// schema churn on BookResult. Slugs are URL-safe, so also usable as disk
+// filenames by cachedCoverPathForUrl.
+QString coverKeyFor(const BookResult& r)
+{
+    const QString md5 = r.md5.trimmed().toLower();
+    if (!md5.isEmpty()) return md5;
+    return r.sourceId.trimmed();
+}
+
 QString existingCachedCoverPath(const QString& md5)
 {
     if (md5.isEmpty()) return QString();
@@ -946,32 +959,38 @@ void TankoLibraryPage::populateGridThumbnails()
     auto* libgen = qobject_cast<LibGenScraper*>(scraperFor(QStringLiteral("libgen")));
     for (int i = 0; i < view.size(); ++i) {
         const BookResult& r = view[i];
-        const QString md5 = r.md5.trimmed().toLower();
-        if (md5.isEmpty()) continue;
+        // TANKOLIBRARY_ABB Track B2 — use coverKeyFor() which falls back to
+        // sourceId when md5 is empty (ABB rows). LibGen unchanged (md5 path).
+        const QString key = coverKeyFor(r);
+        if (key.isEmpty()) continue;
 
         // Fast path 1: in-memory pixmap cache (same session).
-        if (m_thumbnailCache.contains(md5)) {
-            m_grid->setCoverPixmap(i, m_thumbnailCache.value(md5));
+        if (m_thumbnailCache.contains(key)) {
+            m_grid->setCoverPixmap(i, m_thumbnailCache.value(key));
             continue;
         }
         // Fast path 2: disk cache (prior session or detail-view fetch).
-        const QString cached = existingCachedCoverPath(md5);
+        const QString cached = existingCachedCoverPath(key);
         if (!cached.isEmpty()) {
             QPixmap pix;
             if (pix.load(cached) && !pix.isNull()) {
-                m_thumbnailCache.insert(md5, pix);
+                m_thumbnailCache.insert(key, pix);
                 m_grid->setCoverPixmap(i, pix);
                 continue;
             }
             QFile::remove(cached);
         }
-        // Slow path: need to fetch /ads.php. If we already know coverUrl
-        // (from a prior coverUrlReady this session), skip the /ads.php hop.
+        // Fast path 3: we already know coverUrl from search-row parse
+        // (ABB populates it directly; LibGen populates it post-detail-fetch
+        // via coverUrlReady). Skip the cover-URL-resolution round-trip.
         if (!r.coverUrl.isEmpty()) {
-            fetchAndCacheThumbnail(md5, r.coverUrl);
+            fetchAndCacheThumbnail(key, r.coverUrl);
             continue;
         }
-        if (libgen) libgen->fetchCoverUrl(md5);
+        // Slow path (LibGen-only): fetch /ads.php to discover the cover URL.
+        // ABB rows always have coverUrl from parse, so this fallback only
+        // fires for LibGen rows where detail-view hasn't been opened yet.
+        if (libgen) libgen->fetchCoverUrl(key);
     }
 }
 
@@ -1026,9 +1045,13 @@ void TankoLibraryPage::fetchAndCacheThumbnail(const QString& md5, const QString&
 void TankoLibraryPage::applyThumbnailToCurrentGrid(const QString& md5, const QPixmap& pix)
 {
     if (!m_grid || pix.isNull()) return;
+    // TANKOLIBRARY_ABB Track B2 — param `md5` is generalized to "cover key"
+    // (md5 for LibGen, sourceId/slug for ABB). Compare via coverKeyFor() so
+    // both sources match correctly. Signature stays `md5` for minimal diff
+    // against the LibGen-era call sites.
     const QList<BookResult> view = filteredResults();
     for (int i = 0; i < view.size(); ++i) {
-        if (view[i].md5.compare(md5, Qt::CaseInsensitive) == 0) {
+        if (coverKeyFor(view[i]).compare(md5, Qt::CaseInsensitive) == 0) {
             m_grid->setCoverPixmap(i, pix);
             return;
         }
@@ -1413,14 +1436,26 @@ void TankoLibraryPage::onDownloadClicked()
     }
 
     // Check library path BEFORE kicking off network — honest-fast-fail if
-    // nothing's configured.
+    // nothing's configured. TANKOLIBRARY_ABB Track B3 — Audiobooks-tab
+    // rows prefer an `audiobooks` root when the user has configured one
+    // (opt-in separate organization); otherwise they fall back to `books`
+    // (same directory as EPUBs, matching the M2 default). Books-tab rows
+    // continue to use the `books` root exclusively.
+    const bool isAbbSource = (m_selectedResult.source == QLatin1String("audiobookbay"));
+    const QStringList audiobookRoots = (isAbbSource && m_bridge)
+        ? m_bridge->rootFolders(QStringLiteral("audiobooks")) : QStringList();
     const QStringList bookRoots = m_bridge ? m_bridge->rootFolders(QStringLiteral("books"))
                                            : QStringList();
-    if (bookRoots.isEmpty()) {
+    const bool useAudiobooksRoot = !audiobookRoots.isEmpty();
+    const QStringList activeRoots = useAudiobooksRoot ? audiobookRoots : bookRoots;
+    if (activeRoots.isEmpty()) {
         m_detailStatus->setStyleSheet(QStringLiteral(
             "font-size: 12px; color: #c07; background: transparent; border: none;"));
-        m_detailStatus->setText(QStringLiteral(
-            "No books library path configured. Set one in Settings → Libraries first."));
+        m_detailStatus->setText(isAbbSource
+            ? QStringLiteral("No books or audiobooks library path configured. "
+                             "Set one in Settings → Libraries first.")
+            : QStringLiteral("No books library path configured. "
+                             "Set one in Settings → Libraries first."));
         return;
     }
 
@@ -1458,16 +1493,27 @@ void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList&
         return;
     }
 
-    // Pick destination from library config. Both ABB (torrents land in
-    // books root) and LibGen (EPUBs written to books root) share this.
-    const QStringList bookRoots = m_bridge ? m_bridge->rootFolders(QStringLiteral("books"))
-                                           : QStringList();
-    if (bookRoots.isEmpty()) {
+    // Pick destination from library config. TANKOLIBRARY_ABB Track B3 —
+    // ABB audiobooks prefer an `audiobooks` root when configured; fall
+    // back to `books` (the M2 default — keeps current audiobook library
+    // co-located with EPUBs unless user opts into separation). LibGen
+    // always uses `books`. Matching category passed to TorrentClient so
+    // the torrent_finished_alert rescan hook targets the right root.
+    const bool wantAudiobooksRoot = isAbb && m_bridge &&
+        !m_bridge->rootFolders(QStringLiteral("audiobooks")).isEmpty();
+    const QString abbCategory = wantAudiobooksRoot
+        ? QStringLiteral("audiobooks") : QStringLiteral("books");
+    const QStringList activeRoots = (isAbb && m_bridge)
+        ? m_bridge->rootFolders(abbCategory) : QStringList();
+    const QStringList bookRootsForLibgen = m_bridge
+        ? m_bridge->rootFolders(QStringLiteral("books")) : QStringList();
+    const QStringList fallbackRoots = activeRoots.isEmpty() ? bookRootsForLibgen : activeRoots;
+    if (fallbackRoots.isEmpty()) {
         onScraperResolveFailed(md5, QStringLiteral(
-            "books library path is empty — can't choose a download destination"));
+            "books/audiobooks library path is empty — can't choose a download destination"));
         return;
     }
-    const QString destDir = bookRoots.first();
+    const QString destDir = fallbackRoots.first();
 
     // ── ABB branch: magnet URI → TorrentClient::addMagnet ──
     // AbbScraper emits downloadResolved with a single-element list whose
@@ -1496,8 +1542,14 @@ void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList&
             return;
         }
 
+        // Category matches the destination root that was actually chosen.
+        // If audiobooks-root was requested but empty, we fell through to
+        // books-root above; category tracks the actual destination so
+        // TorrentClient's rescan-hook prefix-match stays correct.
+        const QString finalCategory =
+            activeRoots.isEmpty() ? QStringLiteral("books") : abbCategory;
         AddTorrentConfig config;
-        config.category        = QStringLiteral("books");
+        config.category        = finalCategory;
         config.destinationPath = destDir;
         config.contentLayout   = QStringLiteral("original");
         config.sequential      = false;   // audiobooks don't need sequential; listen-in-order done by player
