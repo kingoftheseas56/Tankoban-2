@@ -85,6 +85,16 @@ set TANKOBAN_STREAM_TELEMETRY=1
 :: hypothesis for cold-session 0%-buffering + mid-file-seek-hang classes.
 :: Delete or flip to 0 after diagnosis concludes.
 set TANKOBAN_ALERT_TRACE=1
+:: Stremio libtorrent session_params port (Experiment 1 APPROVED 2026-04-23).
+:: Activates 10 streaming-optimized libtorrent settings in TorrentEngine.cpp
+:: (commit 59cf47b). Empirical: 65% stall reduction, 89.5% cold-open improvement,
+:: 86.3% p99 wait reduction on Invincible S01E01 EZTV. Audit at
+:: agents/audits/stremio_tuning_ab_2026-04-23.md. Interim path until the
+:: STREAM_ENGINE_SPLIT refactor lands (at which point this env var becomes
+:: unnecessary because the stream-dedicated engine always applies the settings
+:: and Tankorent-dedicated engine stays on current defaults). Flip to 0 to
+:: revert to pre-experiment Tankoban behavior for testing.
+set TANKOBAN_STREMIO_TUNE=1
 start "" "%BUILD_DIR%\Tankoban.exe"
 
 endlocal
