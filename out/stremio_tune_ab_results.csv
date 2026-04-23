@@ -1,0 +1,7 @@
+label,treatment,stalls,cold_open_ms,first_piece_ms,p50_wait_ms,p99_wait_ms,playback_s
+baseline-1,OFF,5,36000,20489,4923,32652,630
+baseline-2,OFF,10,42000,13750,5317,32414,623
+baseline-3,OFF,14,8000,37528,5546,50460,624
+treatment-1,ON,5,3000,20697,4237,4949,612
+treatment-2,ON,4,1000,25183,5422,5541,2650
+treatment-3,ON,4,5000,16275,4754,5322,608
