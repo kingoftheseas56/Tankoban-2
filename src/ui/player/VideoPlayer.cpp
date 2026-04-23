@@ -142,6 +142,13 @@ static const char* SPEED_LABELS[] = { "0.5x","0.75x","1.0x","1.25x","1.5x","1.75
 static const double SPEED_PRESETS[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
 static const int    SPEED_COUNT    = 7;
 
+static double clampUserZoom(double zoom)
+{
+    if (zoom < 1.0) return 1.0;
+    if (zoom > 1.2) return 1.2;
+    return zoom;
+}
+
 // STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C instrumentation.
 // Transition-only logging of setStreamStalled + first-per-piece setStreamStallInfo
 // so we can cross-check against LoadingOverlay's [STALL_DEBUG] trail. Writes
@@ -225,6 +232,8 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     // that, so showing the badge earlier would render empty).
     m_showStats = QSettings("Tankoban", "Tankoban")
         .value("player/showStats", false).toBool();
+    setUserZoom(QSettings("Tankoban", "Tankoban")
+        .value("videoPlayer/userZoom", 1.0).toDouble());
 
     // Sidecar events
     connect(m_sidecar, &SidecarProcess::ready,        this, &VideoPlayer::onSidecarReady);
@@ -960,19 +969,43 @@ void VideoPlayer::onFirstFrame(const QJsonObject& payload)
     m_statsHeight = h;
     m_statsFps    = payload.value("fps").toDouble(0.0);
 
-    // D-2 aspect-override reset-on-mismatch (2026-04-20 VLC_ASPECT_CROP
-    // audit gap D-2). Closes Tankoban's persistence-policy deviation from
-    // the VLC / PotPlayer standard (neither persists per-file aspect):
-    // when a persisted aspectOverride (from per-file, per-show, or carry)
-    // differs sharply from the content's actual native aspect — e.g.
-    // "16:9" persisted after watching 16:9 shows, then user opens 2.40:1
-    // cinemascope — silently reset to "original" before the canvas attaches
-    // so the first rendered frame carries native aspect, not the stale
-    // override-induced stretch. > 10% ratio drift catches the 16:9-vs-2.40
-    // + 4:3-vs-16:9 classes that produce visible distortion, while leaving
-    // near-match user intents (2.35 vs 2.39, 16:9 vs 1.85) alone. Write
-    // the reset to BOTH per-file and per-show records so subsequent opens
-    // of this file don't re-apply the stale override.
+    // D-2 aspect-override drift reset (FC-2 option b from
+    // agents/audits/vlc_aspect_crop_reference_2026-04-20.md §10.2).
+    // Closes Hemanth-reported "Chainsaw Man stretches vertically on play"
+    // when a stale persisted aspectOverride (from per-file, per-show, or
+    // carry) differs sharply from the content's actual native aspect.
+    //
+    // Congress 8 reference cite (VLC vlc-master/src/):
+    //   player/medialib.c:244-249  — save path: var_GetNonEmptyString(vout,
+    //     "aspect-ratio") + CompareAssignState() → only persists when user
+    //     changed aspect DURING playback (not on every tick).
+    //   player/medialib.c:105-108  — restore path: var_SetString(vout,
+    //     "aspect-ratio", input->ml.states.aspect_ratio) — per-media MRL
+    //     lookup, scoped to vout lifetime.
+    //   video_output/vout_intf.c:275-277 — aspect-ratio is a per-vout
+    //     VLC_VAR_STRING | VLC_VAR_ISCOMMAND variable, reinitialized each
+    //     new vout (each file open).
+    //   libvlc-module.c:1739 — default is NULL (native aspect passthrough).
+    //
+    // VLC's policy: user-intent-gated persistence via medialib. Only saves
+    // when user explicitly picked an aspect this session; unchanged files
+    // stay at NULL (native). This prevents stale overrides from ever
+    // accumulating.
+    //
+    // Tankoban's policy pre-FC-2: unconditional aspectOverride persistence
+    // on every saveProgress tick + per-show carry. Stale "16:9" from any
+    // prior interaction would re-apply to unrelated content.
+    //
+    // FC-2 option (b) shipped here = safety-net reset-on-drift overlay on
+    // top of unconditional persistence, NOT a wholesale copy of VLC's
+    // user-intent-gated save policy (which would be FC-2 option a —
+    // deferred; requires touching saveProgress/saveShowPrefs save paths,
+    // ~30 LOC scope, candidate for future Congress 8 discipline work).
+    // > 10% ratio drift catches the 16:9-vs-2.40 + 4:3-vs-16:9 classes
+    // that produce visible distortion while leaving near-match user
+    // intents (2.35 vs 2.39, 16:9 vs 1.85) alone. Reset writes to BOTH
+    // per-file and per-show records so subsequent opens don't re-apply
+    // the stale override.
     if (w > 0 && h > 0) {
         const double persistedAspect = aspectStringToDouble(m_currentAspect);
         if (persistedAspect > 0.0) {
@@ -2687,6 +2720,18 @@ void VideoPlayer::toggleAlwaysOnTop()
     m_toastHud->showToast(m_alwaysOnTop ? "Always on top: on" : "Always on top: off");
 }
 
+void VideoPlayer::setUserZoom(double zoom)
+{
+    const double clamped = clampUserZoom(zoom);
+    if (qAbs(m_userZoom - clamped) < 0.0001)
+        return;
+    m_userZoom = clamped;
+    if (m_canvas)
+        m_canvas->setUserZoom(clamped);
+    QSettings("Tankoban", "Tankoban").setValue("videoPlayer/userZoom", clamped);
+    emit userZoomChanged(clamped);
+}
+
 void VideoPlayer::prevEpisode()
 {
     if (m_playlist.isEmpty() || m_playlistIdx <= 0) return;
@@ -3644,6 +3689,7 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
     data.showStats     = m_showStats;
     data.currentAspect = m_currentAspect;
     data.currentCrop   = m_currentCrop;
+    data.currentZoomPct = qRound(m_userZoom * 100.0);
     // VIDEO_PLAYER_FIX Batch 4.2 — fresh QSettings read each menu open.
     // Cheap (small list), avoids cache invalidation complexity.
     data.recentFiles = QSettings("Tankoban", "Tankoban")
@@ -3696,6 +3742,12 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
             m_currentCrop = val;
             saveShowPrefs();
             m_toastHud->showToast(QString("Crop: %1").arg(val));
+            break;
+        }
+        case VideoContextMenu::SetZoom: {
+            const int pct = v.toInt();
+            setUserZoom(static_cast<double>(pct) / 100.0);
+            m_toastHud->showToast(QString("Zoom: %1%").arg(pct));
             break;
         }
         case VideoContextMenu::ToggleFullscreen: toggleFullscreen(); break;

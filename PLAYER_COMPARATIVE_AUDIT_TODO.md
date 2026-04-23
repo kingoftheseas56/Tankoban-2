@@ -221,65 +221,74 @@ Measure on **4K HDR10 BT.2020 PQ sample**:
 
 ---
 
-## 8. Phase 4 — State + Polish + Misc (Agent 3 wake 4, ~45 min)
+## 8. Phase 4 — Source-read pass (Congress 8 discipline step, Agent 3 wake 4, ~60 min)
 
-**Why P1-P2:** cleanup of all remaining Tankoban surfaces with reference peers. Shorter phase (fewer visual diffs, more binary "does it do X? yes/no").
+**Reshaped 2026-04-23 post-CONGRESS 8 ratification.** Per motion §5: Phase 4 becomes "source-read pass" — walks DIVERGED/WORSE findings from Phases 1-3, opens the assigned reference player's source at the behavior site, writes a reference-cited fix-TODO seed per finding. Replaces the pre-Congress "State + Polish + Misc" Phase 4 scope which is redistributed into Phases 1-3 or dropped (see §8.6 below).
 
-**Covers Tankoban surface categories I, O (user-visible subset only), P, Q, R + 2 added surfaces** — ~15 surfaces.
+**Why this shape:** Congress 8 adopts `feedback_reference_during_implementation.md` discipline for the player domain — fix-TODO phase blocks must cite reference file:line before src/ code lands. Phase 4 is the structural hand-off from behavioral-audit findings to reference-cited fix work. Without it, DIVERGED findings from P1-3 risk becoming re-derivation work (the failure mode Hemanth flagged 2026-04-23 leading to this Congress).
 
-### Batch 4.1 — Audio EQ (category I)
+**Covers:** all DIVERGED/WORSE/BETTER-but-fragile findings from completed Phases 1-3 audit deliverables. Not a behavioral-audit phase — an implementation-prep phase.
 
-- 10-band 31-16kHz frequency response measurement — Tankoban presets (Flat/Rock/Pop/Jazz/Classical/BassBoost/TrebleBoost/VocalBoost) vs VLC's built-in preset list vs PotPlayer equivalent
-- Per-band gain range + slider step
-- User-profile save/load UX (Tankoban saves to QSettings `eq/profiles`) vs reference
-- DRC toggle (Tankoban) — Dynamic Range Compression presence + behavior in reference
+**Deliverable:** `agents/audits/comparative_player_2026-04-NN_p4_reference_seeds.md` — structured per-finding walk. Each seed block:
+- Finding ID + verdict (from P1/P2/P3 audit)
+- Tankoban surface + file:line
+- Assigned reference player + bug class (per Congress 8 §3 table)
+- Reference source file:line read for this finding
+- Gap analysis: what reference does vs what Tankoban does
+- Proposed fix-TODO scope (LOC estimate + file list) — **seed only, not authored TODO**
+- Agent 0 ratifies seeds → authors fix-TODOs → summons domain agent
 
-Measure frequency response by playing a **pink noise sample + capturing audio** via each player's output → FFT compare peak amplitudes at band centers. Harness: each player → loopback capture → audacity or PowerShell `Measure-Object` on .wav.
+### Batch 4.1 — DIVERGED/WORSE findings from Phase 1 (Transport + Shell)
 
-### Batch 4.2 — User-visible performance (category O subset)
+Per-finding reference walk using bug-class assignment from Congress 8 §3:
+- Fullscreen geometry / aspect layout / letterbox math findings → open QMPlay2 source (`C:/Users/Suprabha/Downloads/Video player reference/QMPlay2-master/QMPlay2-master/src/gui/MainWidget.cpp` fullscreen handlers + layout math) + IINA secondary (`C:/Users/Suprabha/Downloads/Video player reference/iina-develop/iina-develop/iina/MainWindowController.swift` reserved-HUD-space math for OS-independent ideas).
+- Aspect persistence policy findings → VLC primary at `C:/Users/Suprabha/Downloads/Video player reference/vlc-master/vlc-master/src/player/medialib.c:105-108` (restore) + `:244-249` (save via CompareAssignState) + `src/video_output/vout_intf.c:275-277` (per-vout variable creation). FC-2 shipped 2026-04-23 already demonstrates this walk.
+- Transport / cold-open / seek findings → reference depends on finding's class (mpv for precision-seek; QMPlay2 for Qt-transport chrome).
 
-**SKIP these internals** (drop per §12): SHM overlay internals, D3D11 zero-copy import mechanism, VsyncTimingLogger, SyncClock A/V drift internals.
+### Batch 4.2 — DIVERGED/WORSE findings from Phase 2 (Tracks + Subtitles)
 
-**COMPARE externally-measurable:**
-- Frame-pacing jitter: each player's stat overlay / VLC `Tools > Media Information > Stats` / PotPlayer Ctrl+F1 stats / Tankoban `I` badge. Dropped-frames-per-minute on a sustained 5-minute play.
-- CPU/GPU utilization via PowerShell `Get-Counter` sampled once per second during playback
+- Subtitle positioning / overlay plane findings → mpv primary (`mpv-master/mpv-master/sub/osd.c` + `video/out/gpu_next/*` for plane geometry; internal split from libass text-shaping per Congress 8 §3 class-2 note) + IINA secondary.
+- Tracks popover UX findings → IINA primary + QMPlay2 secondary.
 
-### Batch 4.3 — Persistence (category P)
+### Batch 4.3 — DIVERGED/WORSE findings from Phase 3 (HDR + Filters)
 
-- Resume position: close player mid-playback, reopen same file — does resume-position match across players?
-- Track preference persistence (audio + subtitle language selection) — per-show (Tankoban) vs per-file vs global
-- EQ profile persistence across app-restart
-- Always-on-top persistence (Tankoban Ctrl+T)
-- Stats badge persistence (Tankoban I)
+- HDR tone-mapping findings → **libplacebo** primary (NOT mpv's vo_gpu_next wrapper). libplacebo is not yet cloned — clone to `C:\tools\libplacebo-source\` via `git clone --depth 1 https://github.com/haasn/libplacebo` as first action when Phase 4 reaches HDR findings. See `reference_reader_codebases.md` §video-player note.
+- Color pipeline findings → libplacebo + mpv secondary.
+- EQ / audio-filter findings → mpv `audio/filter/` + VLC `modules/audio_filter/` for comparative implementations.
 
-### Batch 4.4 — Error handling (category Q)
+### Batch 4.4 — Agent 4 stream-HTTP-lifecycle cell (cross-class, DIFFERENT seed path)
 
-- `streamFailed` text path + 3s auto-nav — stream-mode only, mark Tankoban-exclusive if no VLC/PotPlayer stream-analog
-- File-switch recovery (sendStopWithCallback) — comparison: open file A, while playing switch to file B. Tankoban fences stop before re-open.
-- Crash recovery user-visible outcome ONLY — force-kill sidecar via `taskkill /F /IM ffmpeg_sidecar.exe` mid-playback. Does Tankoban auto-resume at last position? Reference players have no sidecar — compare against VLC force-process-kill → main-process resume. **Skip SidecarProcess exponential backoff timing** per §12.
+Per Agent 4's Congress 8 position §5 flag: stream-HTTP-lifecycle class has no P1-3 seeds because VLC/PotPlayer have no stream engine. This cell seeds directly from:
+- STREAM_ENGINE_REBUILD P4 audit findings (Congress 6 artifacts)
+- STREAM_ENGINE_SPLIT_TODO batches (Agent 0 authoring post-experiment-1 approval)
+- Per-batch reference cites: Stremio Reference primary (`C:/Users/Suprabha/Downloads/Stremio Reference/stream-server-master/`, `stremio-video-master/`), mpv-master secondary (sidecar stall-signaling layer: `paused-for-cache` property mirror), IINA tertiary (overlay UX chrome).
+- Agent 4 executes this cell independently; not gated on Agent 3's Batches 4.1-4.3.
 
-### Batch 4.5 — Additional surfaces (category R)
+### Batch 4.5 — BETTER findings pinning
 
-- Always-on-top (Ctrl+T) — reference equivalents
-- Snapshot (Ctrl+S, saves to Pictures/Tankoban Snapshots/, burns subtitles in) — VLC `Shift+S` to snapshots dir, PotPlayer Ctrl+E. Format + path + burn-in comparison.
-- Picture-in-Picture (Ctrl+P, 320×180, pinned bottom-right, always-on-top) — VLC has no native PiP (Qt limitation), PotPlayer has. Comparison.
-- Open URL (Ctrl+U) — HTTP / magnet support comparison (Tankoban has magnet via stream-mode; VLC has HTTP + some streaming protocols; PotPlayer has HTTP)
-- Playlist queue (L toggle PlaylistDrawer, .m3u load/save) — VLC playlist panel, PotPlayer playlist. Behavior + UX comparison.
-- Keybinding live editor (?) — Tankoban-exclusive (PotPlayer has keybind editor buried in Settings; VLC in Preferences). Document UX path depth comparison.
-- Stats badge (I, 1 Hz polled) — VLC stats window, PotPlayer Ctrl+F1. Information density + refresh rate comparison.
-- Right-click context menu content — scope-match axes only (aspect / crop / speed / track — NOT VLC's plugin menu or PotPlayer's extended options).
+BETTER-verdict findings from P1-3 get REFERENCE-REGRESSION-GUARD seeds instead of fix seeds. Example: PLAYER_COMPARATIVE_AUDIT Phase 2 pilot (2026-04-20) found Tankoban's HUD-aware subtitle lift is BETTER than VLC/mpv/PotPlayer (subs auto-lift above HUD controls, then return on hide). Seed records:
+- Surface file:line
+- Reference file:line where reference does the simpler version
+- Pinning note for future audits ("if this regresses we lose a BETTER signal").
 
-### Batch 4.6 — Added surfaces from Plan agent review
+### Batch 4.6 — Original Phase 4 content redistribution note
 
-- **WASAPI exclusive mode** — VLC + PotPlayer both expose via output device settings. Does Tankoban expose WASAPI exclusive? Check sidecar audio path + UI. If not exposed, flag as Tankoban-exclusive-gap (we don't, they do — but per hard-scope constraint §3, this is only a comparison axis if TANKOBAN has some surface for it).
-- **Audio delay control** (AV sync, distinct from subtitle delay) — Tankoban: Ctrl+Minus/Equal per shortcut list. VLC: `k/l` keys. PotPlayer: Alt+Shift+arrow. Step size + reset behavior + UI visibility comparison.
+Pre-Congress-8 Phase 4 scope (EQ / user-visible perf / persistence / error handling / additional surfaces / WASAPI+audio-delay) redistributed topically into Phases 1-3 when those phases execute. No standalone execution of that scope.
+- **EQ frequency-response measurement** (was 4.1) → Phase 3 §7 as added "audio filter axis" batch.
+- **User-visible perf** (was 4.2) → Phase 1 §5 as added frame-pacing/CPU/GPU measurement batch.
+- **Persistence** (was 4.3) → Phase 1 §5 as added resume-position/track-prefs/EQ-profile/always-on-top/stats-badge persistence batch.
+- **Error handling** (was 4.4) → Phase 1 §5 as added streamFailed/file-switch/crash-recovery batch.
+- **Additional surfaces** (was 4.5) → PiP + always-on-top + snapshot + playlist + keybind-editor + stats-badge + context-menu content: distribute across Phase 1 (transport-adjacent) and Phase 2 (track-adjacent) topically. Open URL dropped — Tankoban's magnet-URL support is stream-mode scope, not player scope per §3 scope fence.
+- **WASAPI exclusive + audio delay** (was 4.6) → Phase 3 §7 as added audio-path batches. WASAPI exclusive may drop entirely per §3 Tankoban-feature-set scope fence if Tankoban has no UI surface for it.
+
+Agent 3 applies this redistribution when P1 / P2 / P3 execute; no batch-level reshuffling happens in P4.
 
 ### Phase 4 exit criteria
 
-- `agents/audits/comparative_player_2026-04-NN_p4_state_polish.md` lands.
-- All persistence tests cleaned up — delete test QSettings keys before wake close.
-- Same Rule 17.
-- **Overall audit-closing block:** Agent 3 posts a single cross-phase summary to chat.md: "Comparative audit COMPLETE. 4 phases, 4 audit files. Aggregate: X CONVERGED, Y DIVERGED, Z WORSE, W BETTER. Fix Candidates ratification-request bundles (see phase audits)." Agent 0 triages post-summary.
+- `agents/audits/comparative_player_2026-04-NN_p4_reference_seeds.md` lands with one seed block per DIVERGED/WORSE/BETTER-pinning finding.
+- libplacebo cloned if HDR seeds in scope.
+- **Overall audit-closing block:** Agent 3 posts cross-phase summary to chat.md: "Comparative audit + source-read pass COMPLETE. 4 phases, 4 audit files. Aggregate P1-3: X CONVERGED, Y DIVERGED, Z WORSE, W BETTER. P4 seeded N fix-TODOs (M deferred). Agent 0 triage follows." Agent 0 authors fix-TODOs from ratified seeds on seed-level ratification cadence (not phase-boundary gate — seeds can be ratified in batches).
+- Rule 17 clean.
 
 ---
 
