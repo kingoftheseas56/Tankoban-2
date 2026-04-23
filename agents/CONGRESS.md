@@ -8,12 +8,15 @@ When Hemanth posts a ratification line (`ratified`, `APPROVES`, `Final Word`, or
 
 ## STATUS: NO ACTIVE MOTION
 
-<!-- Previously: CONGRESS 7 (reference-sweep comparative audits — stream-stall escape routes) — RATIFIED
-same-session 2026-04-19 by Hemanth via directional commands ("no debrid for now" + "yes do 1" × 2).
-Archived to agents/congress_archive/2026-04-19_stream_stall_tactics.md. Operative outcome: execute
-SHIP bundle (f) sidecar readahead + (a) gate-pass sequential toggle + (e-settings) max_out_request_queue.
-Defer (d) debrid pivot. Park (c) nuclear reset + (e-reload) session reload as P5 recovery tools.
-Next: Agent 0 authors STREAM_STALL_FIX_TODO.md + summons Agent 3 for batch 1. -->
+<!-- Previously: CONGRESS 8 (reference-driven video player bug closure) — RATIFIED same-session
+2026-04-23 by Hemanth via delegated "Ratify it, agent 0" directive. Archived to
+agents/congress_archive/2026-04-23_reference_driven_player_bug_closure.md. Operative outcome:
+adopt source-reference discipline for player domain (extend feedback_reference_during_implementation
+from stream to stream+player); Agent 3 owns post-ratification execution — Phase-4 reshape of
+PLAYER_COMPARATIVE_AUDIT_TODO + reference_reader_codebases.md memory update + QMPlay2 shallow clone
++ FC-2 (aspect-override persistence) as first reference-discipline test case. Agent 4 carries the
+discipline into STREAM_ENGINE_SPLIT_TODO batches. Agent 7 (unavailable this session) folds in
+post-hoc as additive reference-reading capacity whenever they wake. -->
 
 ---
 
