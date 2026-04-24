@@ -4,19 +4,52 @@
 #include <QPainterPath>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+
+// STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C instrumentation.
+// Traces stall-overlay lifecycle to answer Q1 ("does the overlay render during
+// a 20-30s stall?"). Writes directly to _player_debug.txt using the existing
+// repo pattern (qDebug doesn't land there on Windows GUI binaries). Transition-
+// only logging: no per-tick spam. Paint marker fires at most once per stall
+// cycle (gated by m_stallPaintLogged).
+namespace {
+void logStallDbg(const QString& line)
+{
+    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream s(&f);
+        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
+          << " [STALL_DEBUG][LoadingOverlay] " << line << "\n";
+    }
+}
+}  // namespace
 
 LoadingOverlay::LoadingOverlay(QWidget* parent)
     : QWidget(parent)
 {
-    // Width tuned to fit a comfortably-long filename at 13px with
-    // ellipsis-middle for anything longer. Height matches VolumeHud's
-    // pill aesthetic scaled up for a single line of larger text.
-    setFixedSize(400, 48);
+    // Wake 2026-04-24 — simple-loading-bar geometry per Hemanth directive.
+    // 260×6 is a thin centered indeterminate bar; minimal canvas intrusion
+    // vs the prior 400×48 text-pill. Width tuned so the sweeper band
+    // (30% = ~78 px) reads as a cohesive motion element rather than a
+    // dot.
+    setFixedSize(260, 6);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setAttribute(Qt::WA_NoSystemBackground);
     hide();
 
     m_fadeAnim = new QPropertyAnimation(this, "opacity", this);
+
+    // Indeterminate sweep: 0.0 → 1.0 → 0.0 every 1500 ms (standard
+    // Material/iOS cadence), looped infinitely. Only runs while the
+    // overlay is visible — fadeIn starts it, fadeOut's finished callback
+    // stops it so the timer doesn't tick forever in the background.
+    m_phaseAnim = new QPropertyAnimation(this, "phase", this);
+    m_phaseAnim->setDuration(1500);
+    m_phaseAnim->setStartValue(0.0);
+    m_phaseAnim->setEndValue(1.0);
+    m_phaseAnim->setLoopCount(-1);  // infinite
 }
 
 // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — primary API. Sets the current
@@ -25,6 +58,13 @@ LoadingOverlay::LoadingOverlay(QWidget* parent)
 // a fast open. Fades in from hidden.
 void LoadingOverlay::setStage(Stage stage, const QString& filename)
 {
+    const bool transitioningToBuffering = (stage == Stage::Buffering && m_stage != Stage::Buffering);
+    const bool enteringVisibleBuffering = (stage == Stage::Buffering && !m_visible);
+    if (transitioningToBuffering || enteringVisibleBuffering) {
+        logStallDbg(QString("setStage -> Buffering was_visible=%1 was_stage=%2 opacity=%3")
+                        .arg(m_visible).arg(static_cast<int>(m_stage)).arg(m_opacity));
+        m_stallPaintLogged = false;
+    }
     m_stage = stage;
     if (!filename.isEmpty()) {
         // Display just the basename — full paths are noise in the
@@ -58,8 +98,76 @@ void LoadingOverlay::showBuffering()
 void LoadingOverlay::dismiss()
 {
     if (!m_visible) return;
+    logStallDbg(QString("dismiss was_visible=%1 stage=%2 opacity=%3 last_stall_piece=%4 last_peer_have=%5")
+                    .arg(m_visible).arg(static_cast<int>(m_stage)).arg(m_opacity)
+                    .arg(m_stallPiece).arg(m_stallPeerHaveCount));
     m_visible = false;
+    m_stallPaintLogged = false;
+    clearCacheProgress();     // stale % + ETA must not bleed into next buffering
+    clearStallDiagnostic();   // STREAM_STALL_UX_FIX Batch 2 — same hygiene for stall text
     fadeOut();
+}
+
+// PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — cache-pause progress update.
+// In-place text refresh only; no re-fade. Runs at the sidecar's 2 Hz
+// emission cadence (500 ms per call), which is fine for paint — Qt
+// coalesces update() requests in a single event-loop pass.
+void LoadingOverlay::setCacheProgress(qint64 bytesAhead,
+                                      qint64 inputRateBps,
+                                      double etaResumeSec,
+                                      double cacheDurationSec)
+{
+    m_cacheValid        = true;
+    m_cacheBytesAhead   = bytesAhead;
+    m_cacheInputRateBps = inputRateBps;
+    m_cacheEtaResumeSec = etaResumeSec;
+    m_cacheDurationSec  = cacheDurationSec;
+    // Only repaint if we're currently showing the Buffering stage — no
+    // point refreshing the overlay mid-open. The bufferingStarted signal
+    // must have already run showBuffering() → setStage(Buffering) before
+    // this can do work, so m_visible should be true in the happy path.
+    if (m_visible && m_stage == Stage::Buffering) {
+        update();
+    }
+}
+
+void LoadingOverlay::clearCacheProgress()
+{
+    m_cacheValid        = false;
+    m_cacheBytesAhead   = 0;
+    m_cacheInputRateBps = 0;
+    m_cacheEtaResumeSec = -1.0;
+    m_cacheDurationSec  = -1.0;
+}
+
+// STREAM_STALL_UX_FIX Batch 2 — stream-engine stall diagnostic. Sibling of
+// setCacheProgress. In-place text refresh only; no re-fade. Runs at
+// StreamPage progressUpdated cadence (~1 Hz) while StreamEngineStats.stalled
+// is true. Only repaints when currently in Stage::Buffering — VideoPlayer's
+// setStreamStalled handles the fade-in show transition; this call only
+// enriches the text after the overlay is already up.
+void LoadingOverlay::setStallDiagnostic(int piece, int peerHaveCount)
+{
+    const bool pieceChanged = (piece != m_stallPiece);
+    const bool firstCall    = !m_stallValid;
+    m_stallValid         = true;
+    m_stallPiece         = piece;
+    m_stallPeerHaveCount = peerHaveCount;
+    if (firstCall || pieceChanged) {
+        logStallDbg(QString("setStallDiagnostic piece=%1 peer_have=%2 visible=%3 stage=%4 first_call=%5")
+                        .arg(piece).arg(peerHaveCount).arg(m_visible)
+                        .arg(static_cast<int>(m_stage)).arg(firstCall));
+    }
+    if (m_visible && m_stage == Stage::Buffering) {
+        update();
+    }
+}
+
+void LoadingOverlay::clearStallDiagnostic()
+{
+    m_stallValid         = false;
+    m_stallPiece         = -1;
+    m_stallPeerHaveCount = -1;
 }
 
 void LoadingOverlay::fadeIn()
@@ -78,6 +186,11 @@ void LoadingOverlay::fadeIn()
     m_fadeAnim->setEndValue(1.0);
     disconnect(m_fadeAnim, &QPropertyAnimation::finished, nullptr, nullptr);
     m_fadeAnim->start();
+    // Kick the indeterminate sweep on every fadeIn. Idempotent — start()
+    // on an already-running QPropertyAnimation resets+continues.
+    if (m_phaseAnim && m_phaseAnim->state() != QAbstractAnimation::Running) {
+        m_phaseAnim->start();
+    }
     update();
 }
 
@@ -89,7 +202,11 @@ void LoadingOverlay::fadeOut()
     m_fadeAnim->setEndValue(0.0);
     disconnect(m_fadeAnim, &QPropertyAnimation::finished, nullptr, nullptr);
     connect(m_fadeAnim, &QPropertyAnimation::finished, this, [this]() {
-        if (m_opacity <= 0.01) hide();
+        if (m_opacity <= 0.01) {
+            hide();
+            // Stop the sweep timer so it doesn't tick forever after dismiss.
+            if (m_phaseAnim) m_phaseAnim->stop();
+        }
     });
     m_fadeAnim->start();
 }
@@ -105,6 +222,12 @@ void LoadingOverlay::repositionCentered()
 void LoadingOverlay::setOpacity(qreal o)
 {
     m_opacity = o;
+    update();
+}
+
+void LoadingOverlay::setPhase(qreal p)
+{
+    m_phase = p;
     update();
 }
 
@@ -129,8 +252,57 @@ QString LoadingOverlay::textForStage() const
         return QStringLiteral("Opening decoder\u2026");
     case Stage::DecodingFirstFrame:
         return QStringLiteral("Decoding first frame\u2026");
-    case Stage::Buffering:
-        return QStringLiteral("Buffering\u2026");
+    case Stage::Buffering: {
+        // STREAM_STALL_UX_FIX Batch 2 — stream-engine stall diagnostic wins
+        // over sidecar cache-progress. Swarm state is more actionable to the
+        // user than the sidecar's internal ring percentage; the "frozen
+        // screen" scenario Hemanth reported is specifically the case where
+        // libtorrent is waiting for a piece but the sidecar ring hasn't
+        // drained yet (prefetch absorbs short waits) -- stream-engine stall
+        // source fires before / without the cache-progress source.
+        if (m_stallValid) {
+            if (m_stallPeerHaveCount > 0) {
+                return QStringLiteral("Buffering — waiting for piece %1 (%2 peers have it)")
+                           .arg(m_stallPiece)
+                           .arg(m_stallPeerHaveCount);
+            } else if (m_stallPeerHaveCount == 0) {
+                return QStringLiteral("Buffering — waiting for piece %1 (no peers have it yet)")
+                           .arg(m_stallPiece);
+            } else {
+                return QStringLiteral("Buffering — waiting for piece %1")
+                           .arg(m_stallPiece);
+            }
+        }
+        // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — enriched Buffering text.
+        // Fallback to the plain pill when no cache_state has arrived yet
+        // (startup-of-stall window) OR when sentinel-unknown (honest).
+        if (!m_cacheValid) {
+            return QStringLiteral("Buffering\u2026");
+        }
+        // Resume threshold matches sidecar video_decoder.cpp constant:
+        // 1 MiB forward buffer. Percent clamped to [0, 99] — never show
+        // 100% because at 100% the sidecar should have already emitted
+        // `playing` (stall cleared) which dismisses the overlay.
+        constexpr qint64 kResumeThresholdBytes = 1 * 1024 * 1024;
+        const qint64 rawPct = m_cacheBytesAhead * 100 / kResumeThresholdBytes;
+        const int pct = static_cast<int>(
+            qBound<qint64>(qint64{0}, rawPct, qint64{99}));
+        // eta_resume_sec == -1.0 → rate unmeasurable; render honestly.
+        // Rounded to int seconds; if < 1 s we show "<1s" so the number
+        // doesn't freeze at "0s" while work is clearly still ongoing.
+        QString tail;
+        if (m_cacheEtaResumeSec < 0.0) {
+            tail = QStringLiteral("time unknown");
+        } else if (m_cacheEtaResumeSec < 1.0) {
+            tail = QStringLiteral("resumes in <1s");
+        } else {
+            tail = QStringLiteral("resumes in ~%1s")
+                       .arg(static_cast<int>(m_cacheEtaResumeSec + 0.5));
+        }
+        return QStringLiteral("Buffering \u2014 %1%% (%2)")
+                   .arg(pct)
+                   .arg(tail);
+    }
     case Stage::TakingLonger:
         return QStringLiteral("Taking longer than expected \u2014 close to retry");
     }
@@ -141,28 +313,34 @@ void LoadingOverlay::paintEvent(QPaintEvent*)
 {
     if (m_opacity <= 0.01 || !m_visible) return;
 
+    if (m_stage == Stage::Buffering && m_stallValid && !m_stallPaintLogged) {
+        m_stallPaintLogged = true;
+        logStallDbg(QString("paintEvent Buffering+stall piece=%1 peer_have=%2 opacity=%3 parent_visible=%4")
+                        .arg(m_stallPiece).arg(m_stallPeerHaveCount).arg(m_opacity)
+                        .arg(parentWidget() && parentWidget()->isVisible() ? 1 : 0));
+    }
+
     QPainter p(this);
     p.setOpacity(m_opacity);
     p.setRenderHint(QPainter::Antialiasing);
 
-    // Rounded pill background — matches VolumeHud/CenterFlash aesthetic.
-    QPainterPath bg;
-    bg.addRoundedRect(QRectF(0, 0, width(), height()), 8, 8);
-    p.fillPath(bg, QColor(10, 10, 10, 218));
-    p.setPen(QPen(QColor(255, 255, 255, 46), 1));
-    p.drawPath(bg);
+    // Wake 2026-04-24 — simple indeterminate progress bar per Hemanth
+    // directive. Two layers: subtle track (white @ 30 alpha) + sweeping
+    // band (off-white @ 220 alpha) clipped inside the track. Band is
+    // ~30% of width, animated across [-bandW, width()+bandW] via m_phase
+    // so it enters smoothly from the left, crosses the track, and exits
+    // to the right before the next loop. No text; no stage mapping —
+    // every caller (showLoading / showBuffering / setStage) produces
+    // the same visual.
+    QPainterPath track;
+    track.addRoundedRect(QRectF(0, 0, width(), height()), height() / 2.0, height() / 2.0);
+    p.fillPath(track, QColor(255, 255, 255, 30));
 
-    const QString text = textForStage();
+    const qreal bandW = width() * 0.30;
+    const qreal x     = -bandW + m_phase * (static_cast<qreal>(width()) + bandW);
 
-    p.setPen(QColor(245, 245, 245, 250));
-    QFont f = font();
-    f.setPixelSize(15);
-    p.setFont(f);
-
-    // Elide to pill interior (12px padding each side). Middle-ellipsis
-    // because series filenames commonly share prefixes ("The Sopranos
-    // S03E07 …") where the middle is the identifying part.
-    QFontMetrics fm(f);
-    const QString elided = fm.elidedText(text, Qt::ElideMiddle, width() - 24);
-    p.drawText(rect(), Qt::AlignCenter, elided);
+    p.setClipPath(track);
+    QPainterPath sweep;
+    sweep.addRoundedRect(QRectF(x, 0, bandW, height()), height() / 2.0, height() / 2.0);
+    p.fillPath(sweep, QColor(245, 245, 245, 220));
 }
