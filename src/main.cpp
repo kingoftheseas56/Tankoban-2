@@ -281,26 +281,44 @@ QHeaderView::section {
     font-weight: 800;
 }
 
-/* ── Scrollbars: minimal glass ── */
+/* ── Scrollbars: thin-bubble, brighten on hover ── */
+/* Tankoban-Max overhaul.css thin-bubble convention: track has breathing room
+   around the handle via handle-margin (not scrollbar-padding — Qt QSS ignores
+   padding on QScrollBar). Thumb sits as a pill "floating" inside the track,
+   with hover/pressed brightening steps for interaction feedback. */
 
 QScrollBar:vertical {
     background: transparent;
     border: none;
-    width: 8px;
+    width: 12px;
     margin: 0;
 }
 QScrollBar:horizontal {
     background: transparent;
     border: none;
-    height: 8px;
+    height: 12px;
     margin: 0;
 }
 
-QScrollBar::handle:horizontal, QScrollBar::handle:vertical {
-    background: rgba(255,255,255,36);
+QScrollBar::handle:vertical {
+    background: rgba(255,255,255,60);
     border-radius: 4px;
-    min-height: 20px;
-    min-width: 20px;
+    min-height: 32px;
+    margin: 2px 3px;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(255,255,255,60);
+    border-radius: 4px;
+    min-width: 32px;
+    margin: 3px 2px;
+}
+
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+    background: rgba(255,255,255,110);
+}
+
+QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed {
+    background: rgba(255,255,255,150);
 }
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
