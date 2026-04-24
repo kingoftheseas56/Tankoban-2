@@ -53,6 +53,7 @@ protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void dismiss();

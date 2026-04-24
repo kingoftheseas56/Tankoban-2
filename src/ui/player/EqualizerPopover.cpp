@@ -6,6 +6,7 @@
 #include <QMouseEvent>
 #include <QSettings>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 constexpr int EqualizerPopover::BAND_FREQS[];
 
@@ -406,4 +407,16 @@ void EqualizerPopover::leaveEvent(QEvent* event)
 {
     QFrame::leaveEvent(event);
     emit hoverChanged(false);
+}
+
+void EqualizerPopover::wheelEvent(QWheelEvent* event)
+{
+    // VIDEO_POPOVER_WHEEL 2026-04-24 (hemanth-reported): mirror the
+    // PlaylistDrawer 2026-04-23 fix. Vertical sliders in the EQ accept
+    // wheel for value-change, but wheel over the gaps between sliders /
+    // over the band labels / over the preset combo bubbles to
+    // VideoPlayer::wheelEvent and changes volume while the user is inside
+    // the EQ popover. Accept here so nothing leaks past; sliders still
+    // receive wheel first when the cursor is over them.
+    event->accept();
 }

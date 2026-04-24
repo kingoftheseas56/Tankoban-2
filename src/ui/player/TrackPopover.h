@@ -23,6 +23,11 @@ public:
                   int currentSubId, bool subVisible);
     void setDelay(int ms);
     void setStyle(int fontSize, int margin, bool outline);
+    // VIDEO_SUB_POSITION 2026-04-24 — restore slider UI from persisted
+    // QSettings value at popover construction. signal-blocked write so
+    // no spurious subPositionChanged fires from a programmatic restore.
+    void setSubPosition(int percent);
+    int  subPosition() const;
     void toggle(QWidget* anchor = nullptr);
     bool isOpen() const;
 
@@ -38,12 +43,17 @@ signals:
     void subDelayAdjusted(int deltaMs);
     void subStyleChanged(int fontSize, int margin, bool outline,
                          const QString& fontColor, int bgOpacity);
+    // VIDEO_SUB_POSITION 2026-04-24 — emitted on slider change. 0..100
+    // percent baseline, 100 = bottom (mpv parity). Connected in
+    // VideoPlayer to SidecarProcess::sendSetSubtitlePosition + QSettings.
+    void subPositionChanged(int percent);
     void hoverChanged(bool hovered);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void dismiss();
@@ -64,8 +74,10 @@ private:
     QLabel*      m_delayLabel  = nullptr;
     QSlider*     m_fontSizeSlider = nullptr;
     QSlider*     m_marginSlider   = nullptr;
+    QSlider*     m_subPosSlider   = nullptr;
     QLabel*      m_fontSizeVal = nullptr;
     QLabel*      m_marginVal   = nullptr;
+    QLabel*      m_subPosVal   = nullptr;
     QCheckBox*   m_outlineCb   = nullptr;
     QComboBox*   m_fontColorCombo = nullptr;
     QSlider*     m_bgOpacitySlider = nullptr;

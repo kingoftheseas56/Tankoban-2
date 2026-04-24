@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QLocale> // Phase 6.2 — ISO639 language-code expansion
 #include <QMouseEvent>
+#include <QWheelEvent>
 
 static const int MAX_VISIBLE_ROWS = 4;
 static const int ROW_HEIGHT       = 30;
@@ -218,6 +219,31 @@ TrackPopover::TrackPopover(QWidget* parent)
     mgRow->addWidget(m_marginVal);
     lay->addLayout(mgRow);
 
+    // VIDEO_SUB_POSITION 2026-04-24 — vertical baseline slider. 0..100
+    // percent, 100 = bottom (mpv `sub-pos` parity). Independent of the
+    // libass MarginV "Margin" slider above (which is a fine-tune in
+    // pixels); this one is a coarse percent for lifting subs off the
+    // letterbox bars / scoreboards. Persisted globally via QSettings
+    // by VideoPlayer; signal subPositionChanged carries int 0..100.
+    auto* posRow = new QHBoxLayout;
+    posRow->setSpacing(4);
+    auto* posLbl = new QLabel("Position");
+    posLbl->setStyleSheet(LABEL_SS);
+    posLbl->setFixedWidth(42);
+    posRow->addWidget(posLbl);
+
+    m_subPosSlider = new QSlider(Qt::Horizontal);
+    m_subPosSlider->setRange(0, 100);
+    m_subPosSlider->setValue(100);
+    m_subPosSlider->setStyleSheet(SLIDER_SS);
+    posRow->addWidget(m_subPosSlider, 1);
+
+    m_subPosVal = new QLabel("100");
+    m_subPosVal->setStyleSheet(LABEL_SS);
+    m_subPosVal->setFixedWidth(24);
+    posRow->addWidget(m_subPosVal);
+    lay->addLayout(posRow);
+
     // Outline checkbox
     m_outlineCb = new QCheckBox("Outline");
     m_outlineCb->setChecked(true);
@@ -283,7 +309,32 @@ TrackPopover::TrackPopover(QWidget* parent)
     connect(m_bgOpacitySlider, &QSlider::valueChanged,
             this, &TrackPopover::onStyleWidgetChanged);
 
+    // VIDEO_SUB_POSITION 2026-04-24 — sub-position is its own concern,
+    // not part of the style payload (subStyleChanged carries 5 fields,
+    // none of them are baseline-percent). Direct connection, no debounce
+    // — sidecar atomic store is cheap and slider drag is bounded by Qt
+    // event coalescing.
+    connect(m_subPosSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_subPosVal->setText(QString::number(v));
+        emit subPositionChanged(v);
+    });
+
     hide();
+}
+
+void TrackPopover::setSubPosition(int percent)
+{
+    if (!m_subPosSlider) return;
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    QSignalBlocker b(m_subPosSlider);
+    m_subPosSlider->setValue(percent);
+    if (m_subPosVal) m_subPosVal->setText(QString::number(percent));
+}
+
+int TrackPopover::subPosition() const
+{
+    return m_subPosSlider ? m_subPosSlider->value() : 100;
 }
 
 // ---------------------------------------------------------------
@@ -503,6 +554,19 @@ void TrackPopover::leaveEvent(QEvent* event)
 {
     QFrame::leaveEvent(event);
     emit hoverChanged(false);
+}
+
+void TrackPopover::wheelEvent(QWheelEvent* event)
+{
+    // VIDEO_POPOVER_WHEEL 2026-04-24 (hemanth-reported): mirror the
+    // PlaylistDrawer 2026-04-23 fix. The audio + sub QListWidgets do not
+    // accept wheel events at scroll limits or when the cursor is over the
+    // Style sliders / delay row gaps, so the event bubbled to
+    // VideoPlayer::wheelEvent which treats wheel as volume — popover
+    // scroll changed playback volume simultaneously. Accept here so
+    // nothing leaks past the popover; child widgets still get the wheel
+    // first and scroll normally when possible.
+    event->accept();
 }
 
 // ---------------------------------------------------------------

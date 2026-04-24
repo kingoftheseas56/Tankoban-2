@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QWheelEvent>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -469,4 +470,16 @@ void FilterPopover::leaveEvent(QEvent* event)
 {
     QFrame::leaveEvent(event);
     emit hoverChanged(false);
+}
+
+void FilterPopover::wheelEvent(QWheelEvent* event)
+{
+    // VIDEO_POPOVER_WHEEL 2026-04-24 (hemanth-reported): mirror the
+    // PlaylistDrawer 2026-04-23 fix. Wheel over the gap between sliders
+    // (or over labels / divider rows) doesn't reach a wheel-consuming
+    // child, so it bubbled to VideoPlayer::wheelEvent and changed volume
+    // while the user was inside the Filters popover. Accept here so
+    // nothing leaks past; sliders still receive wheel first and adjust
+    // their values normally.
+    event->accept();
 }
