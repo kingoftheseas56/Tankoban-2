@@ -598,7 +598,6 @@ private:
 
     // Auto-hide
     QTimer m_hideTimer;
-    QTimer m_cursorTimer;
     QTimer m_seekThrottle;
 
     // Batch 4.1 (Player Polish Phase 4) — audio-speed drift-correction

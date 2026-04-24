@@ -191,13 +191,6 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_hideTimer.setInterval(3000);
     connect(&m_hideTimer, &QTimer::timeout, this, &VideoPlayer::hideControls);
 
-    m_cursorTimer.setSingleShot(true);
-    m_cursorTimer.setInterval(2000);
-    connect(&m_cursorTimer, &QTimer::timeout, this, [this]() {
-        if (!m_paused && !m_controlBar->isVisible())
-            setCursor(Qt::BlankCursor);
-    });
-
     m_seekThrottle.setSingleShot(true);
     m_seekThrottle.setInterval(250);
     connect(&m_seekThrottle, &QTimer::timeout, this, [this]() {
@@ -915,6 +908,13 @@ void VideoPlayer::onSidecarReady()
         const QString seekMode = s.value("Player/seekMode", "fast").toString();
         if (seekMode == "exact")
             m_sidecar->sendSetSeekMode(seekMode);
+        // VIDEO_SUB_POSITION 2026-04-24 — push the persisted user-facing
+        // baseline percent so the first file's first frame honors the
+        // saved choice. Sidecar default is 100 (bottom); only push on
+        // non-default to keep the wire quiet for the common case.
+        const int subPos = s.value("videoPlayer/subtitlePosition", 100).toInt();
+        if (subPos != 100)
+            m_sidecar->sendSetSubtitlePosition(subPos);
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
@@ -1315,8 +1315,11 @@ void VideoPlayer::buildUI()
     // match. Y parameter is now unused at the consumer side (kept in
     // the signal for future needs like cursor-locality-aware effects).
     connect(m_canvas, &FrameCanvas::mouseActivityAt, this, [this](int /*y*/) {
-        setCursor(Qt::ArrowCursor);
-        m_cursorTimer.start();
+        // VIDEO_CURSOR_AUTOHIDE 2026-04-24 (hemanth): cursor lifecycle is
+        // bound to HUD lifecycle via showControls/hideControls on m_canvas.
+        // Prior setCursor/Qt::ArrowCursor + m_cursorTimer plumbing targeted
+        // VideoPlayer's Qt logical cursor scope which doesn't reach
+        // FrameCanvas's WA_NativeWindow HWND — blank-cursor never landed.
         showControls();
     });
     connect(m_canvas, &FrameCanvas::canvasPixelSizeSettled, this,
@@ -1867,6 +1870,12 @@ void VideoPlayer::buildUI()
         int margin = s.value("video_sub_margin", 40).toInt();
         bool outline = s.value("video_sub_outline", true).toBool();
         m_trackPopover->setStyle(fontSize, margin, outline);
+        // VIDEO_SUB_POSITION 2026-04-24 — restore the sub-position slider
+        // UI so when the user opens the popover it reflects the persisted
+        // value. The sidecar receives the same value from onSidecarReady
+        // before first-file open (mirrors the seek-mode pattern).
+        const int subPos = s.value("videoPlayer/subtitlePosition", 100).toInt();
+        m_trackPopover->setSubPosition(subPos);
     }
     connect(m_trackPopover, &TrackPopover::audioTrackSelected, this, [this](int id) {
         QString idStr = QString::number(id);
@@ -1931,6 +1940,16 @@ void VideoPlayer::buildUI()
             s.setValue("video_sub_outline", outline);
             s.setValue("video_sub_font_color", fontColor);
             s.setValue("video_sub_bg_opacity", bgOpacity);
+        });
+    // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent slider
+    // in the Tracks popover's Style section. Pushes to sidecar on every
+    // change (atomic store there, cheap) + persists globally. No toast —
+    // visual feedback is the subtitle itself moving.
+    connect(m_trackPopover, &TrackPopover::subPositionChanged, this,
+        [this](int percent) {
+            if (m_sidecar) m_sidecar->sendSetSubtitlePosition(percent);
+            QSettings("Tankoban", "Tankoban")
+                .setValue("videoPlayer/subtitlePosition", percent);
         });
     // Batch 5.3 — Tankostream subtitle menu (addon-fetched external subs
     // + load-from-file). Anchored above m_trackChip like TrackPopover.
@@ -2842,9 +2861,11 @@ void VideoPlayer::showControls()
         const qreal dpr = devicePixelRatioF();
         const int hudLiftPx = qRound(m_controlBar->sizeHint().height() * dpr);
         m_canvas->setSubtitleLift(qMax(hudLiftPx, subtitleBaselineLiftPx()));
+        // VIDEO_CURSOR_AUTOHIDE 2026-04-24 (hemanth): unblank cursor on the
+        // canvas HWND when HUD reveals. setCursor on VideoPlayer alone does
+        // not reach the native child — must target m_canvas directly.
+        m_canvas->unsetCursor();
     }
-    setCursor(Qt::ArrowCursor);
-    m_cursorTimer.start();
     // Don't restart auto-hide timer while playlist drawer is open
     if (!m_playlistDrawer || !m_playlistDrawer->isOpen())
         m_hideTimer.start();
@@ -2869,7 +2890,15 @@ void VideoPlayer::hideControls()
     // HUD gone — drop to the 6% safe-zone baseline (was 0 = flush at
     // frame bottom for any ASS file with low MarginV — broken for
     // file-supplied styles even though our injected SRT header was fine).
-    if (m_canvas) m_canvas->setSubtitleLift(subtitleBaselineLiftPx());
+    if (m_canvas) {
+        m_canvas->setSubtitleLift(subtitleBaselineLiftPx());
+        // VIDEO_CURSOR_AUTOHIDE 2026-04-24 (hemanth): blank the cursor on
+        // the canvas HWND when HUD hides. Reference players (mpv / VLC /
+        // PotPlayer) all hide cursor + HUD as a single idle gesture
+        // regardless of pause state — matches the paused-guard removal
+        // applied to hideControls itself this same day.
+        m_canvas->setCursor(Qt::BlankCursor);
+    }
 }
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)
@@ -3542,8 +3571,9 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent* event)
     // surface the bar. Twin of the FrameCanvas mouseActivityAt lambda
     // above — both paths must behave the same since the native D3D11
     // canvas child doesn't bubble mouse events.
-    setCursor(Qt::ArrowCursor);
-    m_cursorTimer.start();
+    // VIDEO_CURSOR_AUTOHIDE 2026-04-24: cursor unblank handled inside
+    // showControls (m_canvas->unsetCursor) — removed dead setCursor on
+    // VideoPlayer that never reached the canvas HWND.
     showControls();
 }
 
