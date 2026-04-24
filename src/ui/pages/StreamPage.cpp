@@ -5,6 +5,8 @@
 #include "core/stream/addon/AddonRegistry.h"
 #include "ui/pages/stream/AddonManagerScreen.h"
 #include "core/stream/StreamEngine.h"
+#include "core/stream/IStreamEngine.h"
+#include "core/stream/stremio/StreamServerEngine.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/torrent/TorrentEngine.h"
 #include "stream/StreamLibraryLayout.h"
@@ -89,8 +91,18 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
     m_calendarEngine = new tankostream::stream::CalendarEngine(
         m_addonRegistry, m_library, bridge->dataDir(), this);
 
-    QString cacheDir = bridge->dataDir() + "/stream_cache";
-    m_streamEngine = new StreamEngine(torrentEngine, cacheDir, this);
+    // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — env-gated backend selection.
+    // TANKOBAN_USE_STREMIO_SERVER=1 → new Stremio stream-server subprocess
+    // (resources/stream_server/stremio-runtime.exe + server.js). Any other
+    // value (including unset) → legacy libtorrent-based StreamEngine. Phase 2
+    // deletes the legacy path + removes this branch once the pivot proves out.
+    if (qgetenv("TANKOBAN_USE_STREMIO_SERVER") == "1") {
+        const QString pivotCacheDir = bridge->dataDir() + "/stream_server_cache";
+        m_streamEngine = new StreamServerEngine(pivotCacheDir, this);
+    } else {
+        const QString cacheDir = bridge->dataDir() + "/stream_cache";
+        m_streamEngine = new StreamEngine(torrentEngine, cacheDir, this);
+    }
     m_streamEngine->start();
     m_streamEngine->cleanupOrphans();
     m_streamEngine->startPeriodicCleanup();
@@ -1911,38 +1923,53 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // etc.) — setStreamStalled's transition-only dedup makes the
     // redundancy free.
     if (m_streamEngine) {
-        disconnect(m_streamEngine, &StreamEngine::stallDetected, this, nullptr);
-        disconnect(m_streamEngine, &StreamEngine::stallRecovered, this, nullptr);
-        connect(m_streamEngine, &StreamEngine::stallDetected, this,
-            [this, player](const QString& infoHash, int piece,
-                           qint64 /*waitMs*/, int peerHaveCount) {
-                const QString active = m_playerController
-                    ? m_playerController->currentInfoHash()
-                    : QString();
-                if (infoHash != active) return;
-                if (!player) return;
-                // UI state first so the overlay shows before the sidecar
-                // pause freezes the clock (UX-ordering; either order is
-                // correct).
-                player->setStreamStalled(true);
-                player->setStreamStallInfo(piece, peerHaveCount);
-                player->onStreamStallEdgeFromEngine(true);
-            });
-        connect(m_streamEngine, &StreamEngine::stallRecovered, this,
-            [this, player](const QString& infoHash, int /*piece*/,
-                           qint64 /*elapsedMs*/, const QString& /*via*/) {
-                const QString active = m_playerController
-                    ? m_playerController->currentInfoHash()
-                    : QString();
-                if (infoHash != active) return;
-                if (!player) return;
-                // Dismiss overlay first so it disappears before the
-                // sidecar resume un-freezes the clock (user sees the
-                // overlay clear, then audio resumes — matches the
-                // setStreamStalled(true) ordering on entry).
-                player->setStreamStalled(false);
-                player->onStreamStallEdgeFromEngine(false);
-            });
+        // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — lambda bodies shared
+        // across both engine backends. Qt's disconnect/connect function-
+        // pointer form needs the concrete Q_OBJECT type; we branch by
+        // dynamic_cast and reuse the same lambdas for both concrete types.
+        // StreamServerEngine never emits these signals in Phase 1 (stream-
+        // server doesn't expose a cleanly-stall predicate in stats.json);
+        // the connect block is harmless when inactive.
+        auto onStall = [this, player](const QString& infoHash, int piece,
+                                       qint64 /*waitMs*/, int peerHaveCount) {
+            const QString active = m_playerController
+                ? m_playerController->currentInfoHash()
+                : QString();
+            if (infoHash != active) return;
+            if (!player) return;
+            // UI state first so the overlay shows before the sidecar
+            // pause freezes the clock (UX-ordering; either order is
+            // correct).
+            player->setStreamStalled(true);
+            player->setStreamStallInfo(piece, peerHaveCount);
+            player->onStreamStallEdgeFromEngine(true);
+        };
+        auto onRecover = [this, player](const QString& infoHash, int /*piece*/,
+                                         qint64 /*elapsedMs*/, const QString& /*via*/) {
+            const QString active = m_playerController
+                ? m_playerController->currentInfoHash()
+                : QString();
+            if (infoHash != active) return;
+            if (!player) return;
+            // Dismiss overlay first so it disappears before the
+            // sidecar resume un-freezes the clock (user sees the
+            // overlay clear, then audio resumes — matches the
+            // setStreamStalled(true) ordering on entry).
+            player->setStreamStalled(false);
+            player->onStreamStallEdgeFromEngine(false);
+        };
+
+        if (auto* se = dynamic_cast<StreamEngine*>(m_streamEngine)) {
+            disconnect(se, &StreamEngine::stallDetected, this, nullptr);
+            disconnect(se, &StreamEngine::stallRecovered, this, nullptr);
+            connect(se, &StreamEngine::stallDetected,  this, onStall);
+            connect(se, &StreamEngine::stallRecovered, this, onRecover);
+        } else if (auto* sse = dynamic_cast<StreamServerEngine*>(m_streamEngine)) {
+            disconnect(sse, &StreamServerEngine::stallDetected, this, nullptr);
+            disconnect(sse, &StreamServerEngine::stallRecovered, this, nullptr);
+            connect(sse, &StreamServerEngine::stallDetected,  this, onStall);
+            connect(sse, &StreamServerEngine::stallRecovered, this, onRecover);
+        }
     }
 
     connect(player, &VideoPlayer::progressUpdated, this,

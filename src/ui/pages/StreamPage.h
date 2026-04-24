@@ -18,7 +18,13 @@
 
 class CoreBridge;
 class TorrentEngine;
+// STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — m_streamEngine is now held as
+// the abstract IStreamEngine* so we can swap in StreamServerEngine behind
+// an env gate. Legacy StreamEngine forward-decl kept for the ctor branch
+// below; IStreamEngine forward-decl is the field type.
+class IStreamEngine;
 class StreamEngine;
+class StreamServerEngine;
 class StreamLibrary;
 class StreamLibraryLayout;
 class StreamSearchWidget;
@@ -171,8 +177,10 @@ private:
     CoreBridge*      m_bridge;
     TorrentEngine*   m_torrentEngine;
 
-    // Core services
-    StreamEngine*    m_streamEngine = nullptr;
+    // Core services. IStreamEngine* so legacy StreamEngine and new
+    // StreamServerEngine (Phase 1 pivot) are both assignable behind the
+    // env-gated branch at StreamPage.cpp ctor.
+    IStreamEngine*   m_streamEngine = nullptr;
     StreamLibrary*   m_library   = nullptr;
 
     // UI layers

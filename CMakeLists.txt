@@ -138,6 +138,11 @@ set(SOURCES
     src/core/stream/StreamPrioritizer.cpp
     src/core/stream/StreamSeekClassifier.cpp
     src/core/stream/StreamSession.cpp
+    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — Stremio stream-server
+    # subprocess bridge. Gated at runtime by TANKOBAN_USE_STREMIO_SERVER=1.
+    src/core/stream/stremio/StreamServerProcess.cpp
+    src/core/stream/stremio/StreamServerClient.cpp
+    src/core/stream/stremio/StreamServerEngine.cpp
     src/core/stream/StreamLibrary.cpp
     src/core/stream/addon/AddonTransport.cpp
     src/core/stream/addon/AddonRegistry.cpp
@@ -266,6 +271,12 @@ set(HEADERS
     src/core/stream/StreamPrioritizer.h
     src/core/stream/StreamSeekClassifier.h
     src/core/stream/StreamSession.h
+    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — IStreamEngine abstract
+    # interface + Stremio stream-server subprocess bridge headers.
+    src/core/stream/IStreamEngine.h
+    src/core/stream/stremio/StreamServerProcess.h
+    src/core/stream/stremio/StreamServerClient.h
+    src/core/stream/stremio/StreamServerEngine.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
     src/core/stream/addon/Manifest.h
@@ -405,6 +416,46 @@ if(WIN32)
     )
     # Incremental linking for faster link times during development
     target_link_options(Tankoban PRIVATE /INCREMENTAL)
+
+    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — copy Stremio stream-server
+    # subprocess bundle next to Tankoban.exe at post-build time. Required files:
+    #   stremio-runtime.exe (~22 MB)   Node.js repackaged runtime
+    #   server.js           (~6 MB)    webpacked stream-server JS
+    #   ffmpeg.exe / ffprobe.exe       stream-server probes content via these
+    #   av*-58.dll + misc              ffmpeg 4.x shared libs (DO NOT reuse
+    #                                  Tankoban's own ffmpeg_sidecar/ 6.x DLLs —
+    #                                  major version mismatch)
+    #   vcruntime140*.dll              MSVC runtime
+    # The whole bundle lives in resources/stream_server/ committed to the repo
+    # (~91 MB). Gated at runtime by TANKOBAN_USE_STREMIO_SERVER=1; unused when
+    # the legacy libtorrent StreamEngine path runs, but harmless-to-ship so we
+    # keep a single binary artifact for distribution.
+    add_custom_command(TARGET Tankoban POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:Tankoban>/stream_server"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/stremio-runtime.exe"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/server.js"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/ffmpeg.exe"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/ffprobe.exe"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/avcodec-58.dll"
+            # avdevice-58.dll dropped 2026-04-24 (STREAM_SERVER_PIVOT Phase 2A).
+            # ffmpeg avdevice is for device-class inputs (-f dshow / v4l2 / decklink
+            # etc.) which stream-server never uses for playback. Saves ~1.5 MiB off
+            # the bundle. If stream-server fails to spawn with a DLL-load error on
+            # Windows, restore this line + the file under resources/stream_server/.
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/avfilter-7.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/avformat-58.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/avutil-56.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/postproc-55.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/swresample-3.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/swscale-5.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140_1.dll"
+            "$<TARGET_FILE_DIR:Tankoban>/stream_server/"
+        COMMENT "Copying Stremio stream-server bundle to build output"
+        VERBATIM
+    )
 endif()
 
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────

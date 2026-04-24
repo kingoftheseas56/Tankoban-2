@@ -10,7 +10,12 @@
 #include "core/stream/addon/StreamInfo.h"
 
 class CoreBridge;
+// STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — m_engine now held as
+// IStreamEngine* for pivot-vs-legacy polymorphism. streamError connect in
+// StreamPlayerController.cpp ctor branches by dynamic_cast.
+class IStreamEngine;
 class StreamEngine;
+class StreamServerEngine;
 class VideoPlayer;
 
 class StreamPlayerController : public QObject
@@ -45,7 +50,7 @@ public:
     };
     Q_ENUM(StopReason)
 
-    explicit StreamPlayerController(CoreBridge* bridge, StreamEngine* engine,
+    explicit StreamPlayerController(CoreBridge* bridge, IStreamEngine* engine,
                                     QObject* parent = nullptr);
 
     // Phase 4.3 Stream-based entry point. Branches internally by source kind:
@@ -134,7 +139,7 @@ private:
     void clearSessionState();
 
     CoreBridge*   m_bridge;
-    StreamEngine* m_engine;
+    IStreamEngine* m_engine;
 
     QTimer m_pollTimer;
     bool   m_active = false;

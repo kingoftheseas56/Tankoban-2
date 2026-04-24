@@ -134,7 +134,17 @@ struct StreamEngineStats {
     int     stallPeerHaveCount         = -1;
 };
 
-class StreamEngine : public QObject
+// STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — additive interface inheritance.
+// IStreamEngine captures the 15-method surface StreamPage/StreamPlayerController
+// consume so StreamServerEngine can be swapped in behind an env gate without
+// StreamPage needing to branch at every call site. Zero signature changes
+// to StreamEngine's public API — Congress 6 Amendment 2 freeze preserved.
+// `override` keywords added on the 15 virtual methods below for compiler-
+// enforced signature match. `asQObject()` added inline for the SIGNAL-macro
+// connect path both implementations use.
+#include "core/stream/IStreamEngine.h"
+
+class StreamEngine : public QObject, public IStreamEngine
 {
     Q_OBJECT
 
@@ -144,36 +154,38 @@ public:
     ~StreamEngine() override;
 
     // Start/stop the HTTP server
-    bool start();
-    void stop();
-    int httpPort() const;
+    bool start() override;
+    void stop() override;
+    int httpPort() const;   // legacy engine only; not part of IStreamEngine
+
+    QObject* asQObject() override { return this; }
 
     // Main streaming API — caller polls this until ok==true.
     // Magnet path: caller polls until ok==true and URL is a local HTTP URL.
     // Direct/HTTP path: returns immediately with ok==true.
     StreamFileResult streamFile(const QString& magnetUri,
                                 int fileIndex = -1,
-                                const QString& fileNameHint = {});
+                                const QString& fileNameHint = {}) override;
 
     // Phase 4.3 addon-aware overload: dispatches by source kind.
     // Magnet → delegates to the magnet streamFile above.
     // Url/Http → immediate DirectUrl result (skips torrent path).
     // YouTube → UNSUPPORTED_SOURCE error.
-    StreamFileResult streamFile(const tankostream::addon::Stream& stream);
+    StreamFileResult streamFile(const tankostream::addon::Stream& stream) override;
 
     // Stop and clean up a stream
-    void stopStream(const QString& infoHash);
+    void stopStream(const QString& infoHash) override;
 
     // Stop all active streams
-    void stopAll();
+    void stopAll() override;
 
     // Query torrent status for UI
-    StreamTorrentStatus torrentStatus(const QString& infoHash) const;
+    StreamTorrentStatus torrentStatus(const QString& infoHash) const override;
 
     // STREAM_ENGINE_FIX Phase 1.1 — substrate observability snapshot.
     // Pure read; safe to call from any thread (locks m_mutex internally).
     // Returns sentinel-defaulted struct for unknown infoHash.
-    StreamEngineStats statsSnapshot(const QString& infoHash) const;
+    StreamEngineStats statsSnapshot(const QString& infoHash) const override;
 
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.1 — buffered-range
     // observability for the active stream's selected file. Returns sorted
@@ -190,7 +202,7 @@ public:
     // per Agent 3's Rule-14 reshape of TODO §Batch-1.2 (skips sidecar
     // round-trip — sidecar has no use for this data, direct main-app flow
     // matches existing bufferUpdate pattern).
-    QList<QPair<qint64, qint64>> contiguousHaveRanges(const QString& infoHash) const;
+    QList<QPair<qint64, qint64>> contiguousHaveRanges(const QString& infoHash) const override;
 
     // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
     // retargeting. Called from the StreamPage progressUpdated lambda,
@@ -202,13 +214,13 @@ public:
     // deadline → update in place).
     void updatePlaybackWindow(const QString& infoHash,
                               double positionSec, double durationSec,
-                              qint64 windowBytes = 20LL * 1024 * 1024);
+                              qint64 windowBytes = 20LL * 1024 * 1024) override;
 
     // Pair with updatePlaybackWindow. Called on player close / back to
     // browse / source switch so libtorrent isn't pre-fetching ahead of a
     // playback position that no longer exists. Safe to call on an unknown
     // infoHash.
-    void clearPlaybackWindow(const QString& infoHash);
+    void clearPlaybackWindow(const QString& infoHash) override;
 
     // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 — seek/resume target pre-gate.
     // Called by StreamPage before handing a resume offset to the player.
@@ -222,7 +234,7 @@ public:
     // urgency up to date without saturating it.
     bool prepareSeekTarget(const QString& infoHash,
                            double positionSec, double durationSec,
-                           qint64 prefetchBytes = 3LL * 1024 * 1024);
+                           qint64 prefetchBytes = 3LL * 1024 * 1024) override;
 
     // STREAM_LIFECYCLE_FIX Phase 5 Batch 5.1 — per-stream cancellation token.
     // Returned shared_ptr is the same one stored in the StreamSession's
@@ -233,7 +245,7 @@ public:
     // waitForPieces poll loop. Returns an empty shared_ptr if the infoHash
     // isn't registered — StreamHttpServer's handleConnection treats that
     // as "no cancellation token, fall through to pre-5.1 behavior."
-    std::shared_ptr<std::atomic<bool>> cancellationToken(const QString& infoHash) const;
+    std::shared_ptr<std::atomic<bool>> cancellationToken(const QString& infoHash) const override;
 
     // STREAM_ENGINE_REBUILD P2 — shared piece-wait primitive. Lives on
     // StreamEngine so every HTTP worker thread consults the same
@@ -243,14 +255,32 @@ public:
     StreamPieceWaiter* pieceWaiter() const { return m_pieceWaiter; }
 
     // Clean up orphaned cache data from previous sessions
-    void cleanupOrphans();
+    void cleanupOrphans() override;
 
     // Start periodic cleanup timer (call once after start)
-    void startPeriodicCleanup();
+    void startPeriodicCleanup() override;
 
 signals:
     void streamReady(const QString& infoHash, const QString& url);
     void streamError(const QString& infoHash, const QString& message);
+    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — promote stall events from
+    // stream-layer telemetry to player-layer signals so StreamPage can
+    // forward them into the sidecar IPC protocol. Enables sidecar-side
+    // recovery coordination (mpv-style cache pause: freeze audio clock +
+    // re-anchor on recovery) instead of the current uncoordinated pattern
+    // (video catches up via frame-drop, audio keeps advancing clock, subs
+    // render against video PTS — Agent 7's audit at
+    // agents/audits/av_sub_sync_after_stall_2026-04-21.md documents the
+    // anti-pattern + cross-references the fix to mpv's paused-for-cache
+    // semantics). Emitted AFTER the existing writeTelemetry calls so
+    // Qt signal delivery never interleaves with file I/O under m_mutex.
+    // 12-method API freeze still preserved per Congress 6 Amendment 2 —
+    // these are ADDITIVE signals next to the frozen surface, not net-new
+    // methods on the 17-method/2-signal snapshot.
+    void stallDetected(const QString& infoHash, int piece,
+                       qint64 waitMs, int peerHaveCount);
+    void stallRecovered(const QString& infoHash, int piece,
+                        qint64 elapsedMs, const QString& via);
 
 private slots:
     void onMetadataReady(const QString& infoHash, const QString& name,
@@ -269,11 +299,11 @@ private slots:
 
 private:
     // STREAM_ENGINE_REBUILD P3/P6 — per-hash record is the externalized
-    // `StreamSession` struct at src/core/stream/StreamSession.h. P3 added
-    // Prioritizer + SeekClassifier state (cached position, EMA speed,
-    // bitrate hint, lastSeekType, firstClassification bit). P6 collapsed
-    // the legacy metadataReady/registered bool pair into a stored
-    // `StreamSession::state` enum.
+    // `StreamSession` struct at src/core/stream/StreamSession.h. It carries
+    // the selected file metadata, cached playback feed, per-session
+    // classifier/prioritizer instances, and the 500 ms playback tick timer.
+    // P6 collapsed the legacy metadataReady/registered bool pair into a
+    // stored `StreamSession::state` enum.
 
     // STREAM_ENGINE_FIX Phase 1.1 — gate target. Hoisted from streamFile so
     // statsSnapshot reports the same gate the streaming path enforces.
@@ -307,16 +337,6 @@ private:
     // env-var gate is off the slot short-circuits cheaply.
     QTimer* m_telemetryTimer = nullptr;
 
-    // STREAM_ENGINE_REBUILD P3 — 1 Hz re-assert tick. Walks m_streams; for
-    // each Serving session with a recent `updatePlaybackWindow` feed
-    // (lastPlaybackTickMs within the past 10 s), routes through the
-    // Prioritizer to re-emit the normal-streaming deadline window so
-    // libtorrent's time-critical table stays warm between the 2 s StreamPage
-    // telemetry ticks. Cheap when no stream is Serving; skipped when the
-    // session has no position feed yet (cold-open before the first
-    // updatePlaybackWindow call).
-    QTimer* m_reassertTimer = nullptr;
-
     // STREAM_ENGINE_REBUILD P5/P6 — 2 s stall watchdog tick. Reads
     // m_pieceWaiter->longestActiveWait(); if the longest in-flight wait is
     // > 4000 ms on an in-window piece and not already flagged on the
@@ -342,6 +362,17 @@ private:
     // acquisition per session per second when disabled.
     QTimer* m_coldOpenDiagTimer = nullptr;
 
+    // STREAM metadata investigation Wake 1 (2026-04-21) — 1 Hz pre-metadata
+    // diagnostic tick. Walks m_streams; for each session whose state is
+    // Pending (i.e. between addMagnet and metadata_received_alert) emits a
+    // `metadata_fetch_diag` event carrying DHT / tracker / peer phase state
+    // via TorrentEngine::metadataFetchDiagnostic. Gated post-metadata by
+    // the session-state predicate so zero emits on healthy fast-metadata
+    // cold-opens. Sibling-shape of m_coldOpenDiagTimer: same 1 Hz cadence,
+    // same predicate-gate pattern, same lock-order discipline
+    // (StreamEngine::m_mutex → TorrentEngine::m_mutex).
+    QTimer* m_metadataFetchDiagTimer = nullptr;
+
     // STREAM_ENGINE_FIX Phase 1.1 — monotonic clock started in ctor; supplies
     // ms-since-engine-start timestamps for StreamSession observability fields
     // (metadataReadyMs / firstPieceArrivalMs). Monotonic to survive
@@ -352,10 +383,11 @@ private:
     mutable QMutex m_mutex;
     QHash<QString, StreamSession> m_streams;
 
-    // STREAM_ENGINE_REBUILD P3 — internal dispatch helpers. Both run under
-    // m_mutex acquired by the caller; neither acquires it themselves.
-    void onReassertTick();
-    void reassertStreamingPriorities(StreamSession& s);
+    // STREAM_ENGINE_REBUILD P3 — per-session 500 ms playback tick.
+    // Each StreamSession owns its own QTimer; the timer callback routes
+    // through this helper so StreamEngine stays the single place that
+    // acquires m_mutex around session state + TorrentEngine access.
+    void onSessionPlaybackTick(const QString& infoHash);
 
     // STREAM_ENGINE_REBUILD P5 — stall watchdog tick. Acquires m_mutex
     // itself; calls m_pieceWaiter->longestActiveWait() outside the
@@ -368,6 +400,14 @@ private:
     // sessions, emits `cold_open_diag` per head piece. Acquires m_mutex
     // itself; TorrentEngine::pieceDiagnostic takes its own m_mutex via
     // the StreamEngine::m_mutex → TorrentEngine::m_mutex order (never
-    // reversed, same as onReassertTick path).
+    // reversed, same as the playback-tick path).
     void onColdOpenDiagTick();
+
+    // STREAM metadata investigation Wake 1 — 1 Hz pre-metadata diagnostic
+    // tick. Iterates m_streams under m_mutex, identifies sessions still in
+    // state==Pending, calls TorrentEngine::metadataFetchDiagnostic per
+    // session, emits `metadata_fetch_diag` telemetry. Same lock discipline
+    // as onColdOpenDiagTick — engine m_mutex outer, TorrentEngine m_mutex
+    // inner via its own QMutexLocker.
+    void onMetadataFetchDiagTick();
 };

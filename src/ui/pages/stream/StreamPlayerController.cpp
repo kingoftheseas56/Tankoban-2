@@ -1,7 +1,9 @@
 #include "StreamPlayerController.h"
 
 #include "core/CoreBridge.h"
+#include "core/stream/IStreamEngine.h"
 #include "core/stream/StreamEngine.h"
+#include "core/stream/stremio/StreamServerEngine.h"
 #include "core/stream/StreamProgress.h"
 
 #include <QDateTime>
@@ -9,7 +11,7 @@
 using tankostream::addon::Stream;
 using tankostream::addon::StreamSource;
 
-StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamEngine* engine,
+StreamPlayerController::StreamPlayerController(CoreBridge* bridge, IStreamEngine* engine,
                                                QObject* parent)
     : QObject(parent)
     , m_bridge(bridge)
@@ -24,8 +26,14 @@ StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamEngine*
     // StreamEngine: StreamEngine.cpp:517 (no-video torrent) + :620 (generic
     // engine error). Pre-3.3 both were dangling — zero connections found in
     // repo. The 120s HARD_TIMEOUT was the only way out.
-    if (m_engine) {
-        connect(m_engine, &StreamEngine::streamError, this,
+    // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — streamError signal lives on
+    // both concrete engine types with identical signature. Branch by
+    // dynamic_cast since Qt's PMF connect needs a concrete type.
+    if (auto* se = dynamic_cast<StreamEngine*>(m_engine)) {
+        connect(se, &StreamEngine::streamError, this,
+                &StreamPlayerController::onEngineStreamError);
+    } else if (auto* sse = dynamic_cast<StreamServerEngine*>(m_engine)) {
+        connect(sse, &StreamServerEngine::streamError, this,
                 &StreamPlayerController::onEngineStreamError);
     }
 }
