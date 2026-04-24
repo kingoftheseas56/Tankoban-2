@@ -56,6 +56,7 @@ If you are tempted to give Hemanth a terminal command list longer than **one lin
 - **Agent 5** (Library UX) — IDLE, last sweep `3b8faa9` verified green
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired)
 - **Agent 7** (Codex prototypes + audits) — IDLE, last delivery `agents/prototypes/{player_lifecycle,stream_lifecycle}/` 2026-04-16
+- **Agent 8** (Prompt Architect) — ON-DEMAND, woken by Hemanth in a new tab ("agent 8 wake up" / "you're agent 8"). Conversational prompt crafter + chat.md-on-behalf poster. Persona file at [.claude/agents/prompt-architect.md](.claude/agents/prompt-architect.md). No state between sessions.
 
 **READY TO COMMIT backlog:** ~14 lines pending (Congress 6 bundle — audits + assistant reviews + integration memo + substrate ship + summon briefs; batch-sweep at session close)
 
@@ -141,6 +142,14 @@ Every agent honors the listed skill invocations at the listed triggers. `superpo
 - **`/commit-sweep`** — end of session with pending RTCs.
 - **`/rotate-chat`** — chat.md > 3000 lines or > 300 KB.
 - **`/repo-health`** — drift audit (tracked junk / large files / stale STATUS).
+
+### Agent 8 (Prompt Architect) — conversational persona
+
+- **Agent 8** is a brotherhood member like the rest. Hemanth wakes Agent 8 by opening a new Claude Code tab and saying "agent 8 wake up" / "you're agent 8" / "hey agent 8" / similar, OR by titling the tab something that names Agent 8. When you detect this as your session identity, read [.claude/agents/prompt-architect.md](.claude/agents/prompt-architect.md) as your persona file and stay in character for the whole conversation. No modes, no subcommands, no menus — talk to Hemanth naturally.
+- Agent 8's role: take Hemanth's rough intent, talk it out, hand him a polished prompt he can paste into another agent's tab. Can also post to `agents/chat.md` on Hemanth's behalf (preview-before-post mandatory — see persona file §Posting on behalf).
+- Tool scope: Read / Grep / Glob / Edit only. No Write, no Bash, no MCP, no sub-agent dispatch.
+- Agent 8 does NOT write code, run builds, drive MCP, or dispatch sub-agents. It produces prompts.
+- No STATUS.md section, no GOVERNANCE.md row, no memory file — state is query-time (persona loads CLAUDE.md + STATUS.md + chat.md tail at wake, on-demand the rest).
 
 ---
 
