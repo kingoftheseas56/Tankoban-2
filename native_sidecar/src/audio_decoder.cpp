@@ -1,11 +1,13 @@
 #include "audio_decoder.h"
 #include "filter_graph.h"
+#include "stream_prefetch.h"
 
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -113,6 +115,39 @@ void AudioDecoder::resume() {
     pause_cv_.notify_all();
 }
 
+void AudioDecoder::flush_queue() {
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    if (!active_stream_) return;
+
+    const PaError stopped = Pa_IsStreamStopped(active_stream_);
+    if (stopped < 0) {
+        std::fprintf(stderr,
+            "AudioDecoder: Pa_IsStreamStopped failed during flush_queue: %s\n",
+            Pa_GetErrorText(stopped));
+        return;
+    }
+    if (stopped == 1) return;
+
+    const PaError abort_err = Pa_AbortStream(active_stream_);
+    if (abort_err != paNoError) {
+        std::fprintf(stderr,
+            "AudioDecoder: Pa_AbortStream failed during flush_queue: %s\n",
+            Pa_GetErrorText(abort_err));
+        return;
+    }
+
+    const PaError start_err = Pa_StartStream(active_stream_);
+    if (start_err != paNoError) {
+        std::fprintf(stderr,
+            "AudioDecoder: Pa_StartStream failed during flush_queue: %s\n",
+            Pa_GetErrorText(start_err));
+        return;
+    }
+
+    std::fprintf(stderr,
+        "AudioDecoder: flush_queue cleared PortAudio output buffer\n");
+}
+
 void AudioDecoder::seek(double position_sec) {
     std::lock_guard<std::mutex> lock(seek_mutex_);
     seek_target_sec_ = position_sec;
@@ -168,37 +203,126 @@ void AudioDecoder::audio_thread_func(
     AVFormatContext* fmt_ctx = nullptr;
     // Audit P2 — case-insensitive (uppercase "HTTP://" is legal per RFC 3986).
     bool is_http = starts_with_ci(path, "http://") || starts_with_ci(path, "https://");
-    AVDictionary* opts = nullptr;
+
+    // STREAM_SERVER_PIVOT Phase 2A — mirror VideoDecoder's prefetch pattern
+    // (native_sidecar/src/video_decoder.cpp:283-397 "STREAM_STALL_FIX Phase 4
+    // tactic f") onto audio. Without prefetch, libavformat's default HTTP
+    // path issues tiny Range GETs that can't win stream-server piece
+    // priority while video's 64 MiB ring saturates the pipe — Phase 1 smoke
+    // measured 122s audio cold-start. A 16 MiB ring with a dedicated
+    // producer thread gives audio the same continuous forward-read demand
+    // semantics video already enjoys. Ring size is 1/4 of video's because
+    // audio bitrate is ~1/20th (768 kbps EAC3 vs ~20 Mbps HEVC).
+    std::unique_ptr<StreamPrefetch> prefetch;
+    AVIOContext*     wrap_avio = nullptr;
+    uint8_t*         wrap_buf  = nullptr;
+    constexpr int         kAudioWrapBufBytes = 1 * 1024 * 1024;   // 1 MiB demuxer-facing refill granularity
+    constexpr std::size_t kAudioRingBytes    = 16 * 1024 * 1024;  // 16 MiB prefetch window
+
+    auto cleanup_http_io = [&]() {
+        // Teardown order matches VideoDecoder's happy path: demuxer (fmt_ctx)
+        // MUST be closed first by the caller, then wrap_avio (buffer + ctx),
+        // then prefetch reset (which joins the producer thread and closes
+        // the raw source). Safe to call when prefetch was never created
+        // (non-HTTP path or early error before avio_open2 success).
+        if (wrap_avio) {
+            av_freep(&wrap_avio->buffer);
+            avio_context_free(&wrap_avio);
+            wrap_avio = nullptr;
+        }
+        wrap_buf = nullptr;
+        prefetch.reset();
+    };
+
+    int ret = 0;
     if (is_http) {
+        AVDictionary* opts = nullptr;
         av_dict_set(&opts, "reconnect", "1", 0);
         av_dict_set(&opts, "reconnect_streamed", "1", 0);
-        av_dict_set(&opts, "reconnect_delay_max", "5", 0);  // STREAM_STALL_FIX Phase 1 — mpv stream-lavf-o parity (was 10)
+        av_dict_set(&opts, "reconnect_delay_max", "5", 0);  // STREAM_STALL_FIX Phase 1 — mpv stream-lavf-o parity
         av_dict_set(&opts, "timeout", "60000000", 0);
         av_dict_set(&opts, "rw_timeout", "30000000", 0);
-        av_dict_set(&opts, "probesize", "20000000", 0);
-        av_dict_set(&opts, "analyzeduration", "10000000", 0);
-        std::fprintf(stderr, "AudioDecoder: HTTP streaming mode enabled\n");
+        std::fprintf(stderr,
+            "AudioDecoder: HTTP streaming mode enabled (prefetch on, ring=%d MiB)\n",
+            static_cast<int>(kAudioRingBytes / (1024 * 1024)));
+
+        // 1. Open the raw HTTP AVIOContext.
+        AVIOContext* raw_avio = nullptr;
+        ret = avio_open2(&raw_avio, path.c_str(), AVIO_FLAG_READ, nullptr, &opts);
+        av_dict_free(&opts);
+        if (ret < 0) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            std::fprintf(stderr, "AudioDecoder: avio_open2 failed: %s\n", errbuf);
+            on_event_("error", std::string("AUDIO_OPEN_FAILED:avio_open2:") + errbuf);
+            running_.store(false);
+            return;
+        }
+
+        // 2. Wrap raw_avio in a prefetch thread + 16 MiB ring. Transfers
+        //    ownership of raw_avio to StreamPrefetch (freed in its dtor).
+        prefetch = std::make_unique<StreamPrefetch>(raw_avio, kAudioRingBytes);
+
+        // 3. Build the consumer-facing AVIOContext; demuxer reads through
+        //    this, trampolining into StreamPrefetch for each refill.
+        wrap_buf = reinterpret_cast<uint8_t*>(av_malloc(kAudioWrapBufBytes));
+        if (!wrap_buf) {
+            prefetch.reset();  // joins producer + closes raw_avio
+            on_event_("error", "AUDIO_OPEN_FAILED:wrap_buf av_malloc failed");
+            running_.store(false);
+            return;
+        }
+        wrap_avio = avio_alloc_context(
+            wrap_buf, kAudioWrapBufBytes,
+            /*write_flag=*/0,
+            /*opaque=*/prefetch.get(),
+            &StreamPrefetch::read_trampoline,
+            /*write_packet=*/nullptr,
+            &StreamPrefetch::seek_trampoline);
+        if (!wrap_avio) {
+            av_free(wrap_buf); wrap_buf = nullptr;
+            prefetch.reset();
+            on_event_("error", "AUDIO_OPEN_FAILED:avio_alloc_context failed");
+            running_.store(false);
+            return;
+        }
+        wrap_avio->seekable = AVIO_SEEKABLE_NORMAL;
+
+        // 4. Pre-allocate fmt_ctx, wire CUSTOM_IO, open with empty path —
+        //    the wrap_avio IS the data source.
+        fmt_ctx = avformat_alloc_context();
+        if (!fmt_ctx) {
+            cleanup_http_io();
+            on_event_("error", "AUDIO_OPEN_FAILED:avformat_alloc_context failed");
+            running_.store(false);
+            return;
+        }
+        fmt_ctx->pb     = wrap_avio;
+        fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+        fmt_ctx->probesize            = 20000000;
+        fmt_ctx->max_analyze_duration = 10000000;
+
+        ret = avformat_open_input(&fmt_ctx, "", nullptr, nullptr);
+    } else {
+        ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, nullptr);
     }
-    int ret = avformat_open_input(&fmt_ctx, path.c_str(), nullptr, is_http ? &opts : nullptr);
-    if (opts) av_dict_free(&opts);
+
     if (ret < 0) {
         char errbuf[256];
         av_strerror(ret, errbuf, sizeof(errbuf));
         std::fprintf(stderr, "AudioDecoder: avformat_open_input failed: %s\n", errbuf);
+        if (fmt_ctx) { avformat_close_input(&fmt_ctx); }
+        cleanup_http_io();
         on_event_("error", std::string("AUDIO_OPEN_FAILED:") + errbuf);
         running_.store(false);
         return;
-    }
-
-    if (is_http) {
-        fmt_ctx->probesize = 20000000;
-        fmt_ctx->max_analyze_duration = 10000000;
     }
 
     std::fprintf(stderr, "AVSYNC_DIAG audio_open_input_done +%.0fms\n", ms_since());
     ret = avformat_find_stream_info(fmt_ctx, nullptr);
     if (ret < 0) {
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         on_event_("error", "AUDIO_OPEN_FAILED:find_stream_info failed");
         running_.store(false);
         return;
@@ -212,6 +336,7 @@ void AudioDecoder::audio_thread_func(
     if (stream_idx < 0) {
         std::fprintf(stderr, "AudioDecoder: no audio stream found\n");
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         // Not an error — file may be video-only. Signal ready so open flow continues.
         on_event_("audio_ready", "");
         running_.store(false);
@@ -222,6 +347,7 @@ void AudioDecoder::audio_thread_func(
     const AVCodec* codec = avcodec_find_decoder(audio_stream->codecpar->codec_id);
     if (!codec) {
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         on_event_("error", "AUDIO_DECODE_INIT_FAILED:no decoder found");
         running_.store(false);
         return;
@@ -235,6 +361,7 @@ void AudioDecoder::audio_thread_func(
         av_strerror(ret, errbuf, sizeof(errbuf));
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         on_event_("error", std::string("AUDIO_DECODE_INIT_FAILED:") + errbuf);
         running_.store(false);
         return;
@@ -272,6 +399,7 @@ void AudioDecoder::audio_thread_func(
         std::fprintf(stderr, "AudioDecoder: swr_alloc_set_opts2 failed\n");
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         on_event_("error", "AUDIO_DECODE_INIT_FAILED:resampler init failed");
         running_.store(false);
         return;
@@ -281,6 +409,7 @@ void AudioDecoder::audio_thread_func(
         swr_free(&swr);
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
+        cleanup_http_io();
         on_event_("error", "AUDIO_DECODE_INIT_FAILED:swr_init failed");
         running_.store(false);
         return;
@@ -303,6 +432,10 @@ void AudioDecoder::audio_thread_func(
         // 48kHz stereo format; swresample (above) handles converting the
         // file's native rate/channels to that target.
         pa_stream = prewarmed_stream_;
+        {
+            std::lock_guard<std::mutex> lock(stream_mutex_);
+            active_stream_ = pa_stream;
+        }
         actual_latency = prewarmed_latency_;
         std::fprintf(stderr, "AVSYNC_DIAG audio_pa_open_done +%.0fms (prewarmed, skipped)\n", ms_since());
         std::fprintf(stderr, "AVSYNC_DIAG audio_pa_start_done +%.0fms (prewarmed, skipped)\n", ms_since());
@@ -318,6 +451,7 @@ void AudioDecoder::audio_thread_func(
             swr_free(&swr);
             avcodec_free_context(&codec_ctx);
             avformat_close_input(&fmt_ctx);
+            cleanup_http_io();
             on_event_("error", "AUDIO_DEVICE_STARTUP_FAILED:no default output device");
             running_.store(false);
             return;
@@ -342,6 +476,7 @@ void AudioDecoder::audio_thread_func(
             swr_free(&swr);
             avcodec_free_context(&codec_ctx);
             avformat_close_input(&fmt_ctx);
+            cleanup_http_io();
             on_event_("error", std::string("AUDIO_DEVICE_STARTUP_FAILED:") + Pa_GetErrorText(pa_err));
             running_.store(false);
             return;
@@ -355,6 +490,7 @@ void AudioDecoder::audio_thread_func(
             swr_free(&swr);
             avcodec_free_context(&codec_ctx);
             avformat_close_input(&fmt_ctx);
+            cleanup_http_io();
             on_event_("error", std::string("AUDIO_DEVICE_STARTUP_FAILED:") + Pa_GetErrorText(pa_err));
             running_.store(false);
             return;
@@ -363,6 +499,10 @@ void AudioDecoder::audio_thread_func(
         std::fprintf(stderr, "AVSYNC_DIAG audio_pa_start_done +%.0fms\n", ms_since());
         const PaStreamInfo* stream_info = Pa_GetStreamInfo(pa_stream);
         actual_latency = stream_info ? stream_info->outputLatency : PA_LATENCY_SEC;
+        {
+            std::lock_guard<std::mutex> lock(stream_mutex_);
+            active_stream_ = pa_stream;
+        }
         std::fprintf(stderr, "AudioDecoder: PortAudio stream opened (rate=%d ch=%d suggested=%.3fs actual=%.3fs)\n",
                      sample_rate, out_channels, PA_LATENCY_SEC, actual_latency);
         if (clock_) clock_->set_output_latency(actual_latency);
@@ -629,8 +769,17 @@ void AudioDecoder::audio_thread_func(
                 std::fprintf(stderr, "AVSYNC_DIAG audio_first_pa_write +%.0fms pts=%.3fs\n",
                              ms_since(), pts_us / 1e6);
             }
-            pa_err = Pa_WriteStream(pa_stream, out_buf.data(),
-                                    static_cast<unsigned long>(converted));
+            bool stream_missing = false;
+            {
+                std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (!active_stream_) {
+                    stream_missing = true;
+                } else {
+                    pa_err = Pa_WriteStream(active_stream_, out_buf.data(),
+                                            static_cast<unsigned long>(converted));
+                }
+            }
+            if (stream_missing) goto cleanup;
             if (!first_write_logged) {
                 std::fprintf(stderr, "AVSYNC_DIAG audio_first_pa_write_returned +%.0fms\n", ms_since());
                 first_write_logged = true;
@@ -653,6 +802,10 @@ void AudioDecoder::audio_thread_func(
     }
 
 cleanup:
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        active_stream_ = nullptr;
+    }
     // Don't abort/close the pre-warmed stream — it's owned by main.cpp and
     // shared across sessions. Closing it would defeat the whole point of
     // pre-warming (we'd pay the 5s cold-start on the next file).
@@ -668,6 +821,10 @@ cleanup:
     swr_free(&swr);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
+    // STREAM_SERVER_PIVOT Phase 2A — must run AFTER avformat_close_input
+    // so the demuxer has released its grip on wrap_avio. See the
+    // cleanup_http_io lambda definition higher up for teardown ordering.
+    cleanup_http_io();
 
     std::fprintf(stderr, "AudioDecoder: thread exiting\n");
     running_.store(false);

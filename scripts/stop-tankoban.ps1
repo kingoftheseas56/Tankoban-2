@@ -25,7 +25,7 @@ param()
 
 $ErrorActionPreference = 'Continue'
 
-$targets = @('Tankoban', 'ffmpeg_sidecar')
+$targets = @('Tankoban', 'ffmpeg_sidecar', 'stremio-runtime')
 $killed = 0
 $notRunning = 0
 $failed = 0
