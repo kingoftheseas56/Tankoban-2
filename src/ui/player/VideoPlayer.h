@@ -146,7 +146,6 @@ public:
     // before setStreamStalled(true) has shown the overlay (stall cache on
     // LoadingOverlay side updates silently until the overlay appears).
     void setStreamStallInfo(int piece, int peerHaveCount);
-    void setUserZoom(double zoom);
 
 public slots:
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — slot consumed by
@@ -173,7 +172,6 @@ signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
     void progressUpdated(const QString& path, double positionSec, double durationSec);
-    void userZoomChanged(double zoom);
 
     // PLAYER_UX_FIX Phase 1.2 — sidecar lifecycle plumbing. Fired when the
     // sidecar reports `state_changed{opening}` (right after handle_open
@@ -542,7 +540,6 @@ private:
     // FrameCanvas::setCropAspect. Persists per-show / per-file alongside
     // aspectOverride.
     QString m_currentCrop = QStringLiteral("none");
-    double  m_userZoom    = 1.0;
 
     // VIDEO_PLAYER_FIX Batch 7.1 — stats badge state. Source metadata
     // stashed from sidecar firstFrame event; drops polled from

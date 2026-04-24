@@ -116,36 +116,6 @@ QMenu* VideoContextMenu::build(const VideoContextData& data, QWidget* parent,
         });
     }
 
-    auto* zoomMenu = menu->addMenu("Zoom");
-    zoomMenu->setStyleSheet(MENU_SS);
-    auto* zoomGroup = new QActionGroup(zoomMenu);
-    zoomGroup->setExclusive(true);
-    // 90%/95% shrink the video into a smaller centered viewport so content
-    // painted to the source's absolute edge (sports-broadcast scoreboards
-    // at bleeding-edge y=1079) stays fully visible — reverse overscan.
-    // 100% is the 1:1 source→screen baseline. 105-120% are TV-overscan
-    // analogs (cropping edges to hide bleeding-edge source content). mpv's
-    // video-zoom property accepts both directions; our preset list gives
-    // the user both sides of that range.
-    static const struct { const char* label; int pct; } ZOOMS[] = {
-        { "90%",  Z90  },
-        { "95%",  Z95  },
-        { "100%", Z100 },
-        { "105%", Z105 },
-        { "110%", Z110 },
-        { "115%", Z115 },
-        { "120%", Z120 },
-    };
-    for (const auto& zoom : ZOOMS) {
-        auto* act = zoomMenu->addAction(zoom.label);
-        act->setCheckable(true);
-        act->setChecked(data.currentZoomPct == zoom.pct);
-        zoomGroup->addAction(act);
-        QObject::connect(act, &QAction::triggered, parent, [callback, zoom]() {
-            callback(SetZoom, zoom.pct);
-        });
-    }
-
     auto* fsAction = menu->addAction("Fullscreen");
     QObject::connect(fsAction, &QAction::triggered, parent, [callback]() {
         callback(ToggleFullscreen, {});

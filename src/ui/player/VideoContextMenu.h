@@ -41,20 +41,15 @@ struct VideoContextData {
     // to eliminate baked letterbox / pillarbox strips — orthogonal to
     // Aspect Ratio override which changes viewport fit shape.
     QString currentCrop = QStringLiteral("none");
-    int currentZoomPct = 100;
 };
 
 class VideoContextMenu {
 public:
-    enum ZoomLevel {
-        Z90  = 90,
-        Z95  = 95,
-        Z100 = 100,
-        Z105 = 105,
-        Z110 = 110,
-        Z115 = 115,
-        Z120 = 120,
-    };
+    // User-facing Zoom submenu removed 2026-04-24 — videos present as-is
+    // (1:1 source→screen). Aspect Ratio override + Crop submenus remain
+    // for content-aspect correction (different bug class: baked letterbox
+    // strips on off-standard encodes). Sidecar libavfilter pipeline is
+    // retained for yadif/eq color filters.
 
     enum ActionType {
         TogglePlayPause,
@@ -62,7 +57,6 @@ public:
         SetSpeed,           // data = double speed
         SetAspectRatio,     // data = QString "original"/"4:3"/"16:9"/"2.35:1"/"1.85:1"
         SetCrop,            // data = QString "none"/"16:9"/"2.35:1"/"2.39:1"/"1.85:1"/"4:3"
-        SetZoom,            // data = int zoom percent
         ToggleFullscreen,
         ToggleAlwaysOnTop,  // VIDEO_PLAYER_FIX Batch 3.1
         TakeSnapshot,       // VIDEO_PLAYER_FIX Batch 3.2
