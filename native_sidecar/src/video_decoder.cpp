@@ -133,6 +133,7 @@ void VideoDecoder::start(const std::string& path, double start_seconds,
     stop();  // ensure previous thread is done
     stop_flag_.store(false);
     seek_pending_.store(false);
+    last_rendered_pts_us_.store(0, std::memory_order_relaxed);
     sub_stream_indices_ = sub_stream_indices;
     running_.store(true);
     thread_ = std::thread(&VideoDecoder::decode_thread_func, this,
@@ -144,6 +145,7 @@ void VideoDecoder::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
+    last_rendered_pts_us_.store(0, std::memory_order_relaxed);
     running_.store(false);
 }
 
@@ -853,7 +855,13 @@ void VideoDecoder::decode_thread_func(
             overlay_ready = shm->ready();
         }
 #endif
+        // Filter note: when video_filter_ is active (yadif, eq, ...) the
+        // fast_path must be disabled — the shared D3D11 texture carries the
+        // UNFILTERED decoder output. Only the CPU pipeline below runs the
+        // filter graph and writes the filtered frame to the SHM consumed by
+        // main-app. With no active user filters, fast_path stays on.
         bool fast_path = zero_copy_active_.load() && d3d_gpu_copied
+                         && (!video_filter_ || !video_filter_->active())
 #ifdef _WIN32
                          && (!sub_blend_needed || overlay_ready)
 #else
@@ -909,6 +917,7 @@ void VideoDecoder::decode_thread_func(
 #ifdef _WIN32
             write_overlay_frame(sub_blend_needed, pts_us / 1000);
 #endif
+            last_rendered_pts_us_.store(pts_us, std::memory_order_relaxed);
 
             ++frames_written;
 
@@ -1205,6 +1214,7 @@ void VideoDecoder::decode_thread_func(
             write_ptr, data_len,
             fw, fh, fstride,
             pts_us);
+        last_rendered_pts_us_.store(pts_us, std::memory_order_relaxed);
 
         const auto perf_t2 = std::chrono::steady_clock::now();
 

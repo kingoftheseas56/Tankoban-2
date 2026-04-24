@@ -358,16 +358,36 @@ void FrameCanvas::resizeEvent(QResizeEvent* event)
     // ResizeBuffers, otherwise the call fails with DXGI_ERROR_INVALID_CALL.
     releaseBackBufferView();
 
-    // Match swap chain creation: physical-pixel dims, not logical.
+    // FULLSCREEN_BOTTOM_CROP_FIX 2026-04-24: swap-chain flags MUST match
+    // the DXGI_SWAP_CHAIN_DESC1.Flags set at creation, otherwise DXGI
+    // rejects every ResizeBuffers call with E_INVALIDARG (hr=0x80070057).
+    // Pre-fix the call passed SwapChainFlags=0, which silently stripped
+    // FRAME_LATENCY_WAITABLE_OBJECT and failed — so the backbuffer had
+    // stayed at its creation size since the D3D11 swap chain was first
+    // introduced. DXGI's DXGI_SCALING_STRETCH mode hid the bug in
+    // windowed mode (where the backbuffer happened to match the HWND),
+    // but any windowed→fullscreen resize left a stale 974-row backbuffer
+    // stretched up to 1080 rows, clipping 106 source pixels off the
+    // bottom (the scoreboard and photographer-feet Hemanth reported).
     const qreal dpr = devicePixelRatioF();
     HRESULT hr = m_swapChain->ResizeBuffers(
-        0,                          // keep existing buffer count
+        0,
         static_cast<UINT>(qMax(1, qRound(width()  * dpr))),
         static_cast<UINT>(qMax(1, qRound(height() * dpr))),
-        DXGI_FORMAT_UNKNOWN,        // keep existing format
-        0);
+        DXGI_FORMAT_UNKNOWN,
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
     if (FAILED(hr)) {
-        qWarning("FrameCanvas: ResizeBuffers failed, hr=0x%08lx", static_cast<unsigned long>(hr));
+        qWarning("FrameCanvas: ResizeBuffers failed, hr=0x%08lx",
+                 static_cast<unsigned long>(hr));
+        return;
+    }
+    // Re-create the RTV now so subsequent draws don't hit a null m_rtv.
+    // Pre-fix this was deferred until the next draw tick (via
+    // ensureBackBufferView in renderFrame's opening), which worked for
+    // windowed resizes but left the first post-resize frame presenting
+    // a buffer whose RTV hadn't been rebuilt.
+    if (!ensureBackBufferView()) {
+        qWarning("FrameCanvas: ensureBackBufferView after resize failed");
     }
 #endif
 }
@@ -623,6 +643,17 @@ void FrameCanvas::recoverFromDeviceLost()
 
 void FrameCanvas::releaseBackBufferView()
 {
+    // FLIP_DISCARD ResizeBuffers fails with E_INVALIDARG (0x80070057) if
+    // ANY reference to the backbuffer is still live — not just the RTV.
+    // The context's OMSetRenderTargets binding counts as a reference, so
+    // clear it here. Without this, every windowed→fullscreen resize
+    // silently failed and the swapchain stayed stuck at its creation
+    // size, causing the bottom of source content to be clipped at the
+    // stale backbuffer bounds then DXGI_SCALING_STRETCHed to the HWND.
+    if (m_context) {
+        ID3D11RenderTargetView* nullRtv = nullptr;
+        m_context->OMSetRenderTargets(1, &nullRtv, nullptr);
+    }
     if (m_rtv) {
         m_rtv->Release();
         m_rtv = nullptr;
@@ -938,11 +969,19 @@ void FrameCanvas::drawTexturedQuad()
     // CURRENT frame being displayed. Cost: ~1 ms per scan × 24 fps =
     // ~2.4% CPU overhead. Starts at frame 120 (≈2 s in) to skip
     // cold-open fade-to-black frames.
+    // STREAM_AUTOCROP DISABLED 2026-04-24 — Hemanth reported that the
+    // auto-scanner falsely triggers on sports/Netflix content with dark
+    // intro frames or scoreboards, cropping the top and stretching the
+    // viewport so real edges (scoreboards at y=1079) disappear off-screen
+    // at 100% zoom. VLC, mpv, PotPlayer all ship this OFF by default;
+    // "100%" in every reference player means 1:1 source→screen. The
+    // scanBakedLetterbox() function is retained for a future opt-in menu
+    // toggle ("Auto-detect letterbox crop") but no longer fires by default.
+    // With m_srcCropTop/Bottom/Left/Right all 0, the viewport math below
+    // collapses to srcScaleX/Y = 1.0 and srcOffsetX/Y = 0, identical to a
+    // pre-autocrop pass-through.
     if (m_frameW > 0 && m_frameH > 0) {
         ++m_framesSinceImport;
-        if (m_framesSinceImport >= 120 && (shmFresh || m_d3dActive)) {
-            scanBakedLetterbox();
-        }
     }
 
     // Aspect-ratio viewport — port of FrameCanvas::render():298-315.
@@ -989,13 +1028,8 @@ void FrameCanvas::drawTexturedQuad()
             ? m_cropAspect / frameAspect
             : frameAspect / m_cropAspect;
     }
-    // User-facing zoom / overscan port (2026-04-23, Congress 8 FC).
-    // Mirrors mpv's video-zoom property at mpv-master/options/options.c:161
-    // and aspect composition at mpv-master/video/out/aspect.c:84,178-183,
-    // with VLC's user-facing Zoom menu lifecycle at
-    // vlc-master/modules/gui/qt/menus/menus.cpp:473 and
-    // vlc-master/src/video_output/vout_intf.c:225-231.
-    cropZoom *= m_userZoom;
+    // cropZoom here is aspect-correction only. The user-facing Zoom menu
+    // was removed 2026-04-24 — videos present as-is (1:1 source→screen).
     const int croppedW = static_cast<int>(std::lround(videoRect.w * cropZoom));
     const int croppedH = static_cast<int>(std::lround(videoRect.h * cropZoom));
 
@@ -2182,18 +2216,6 @@ void FrameCanvas::setCropAspect(double aspect)
 {
     if (aspect < 0.0) aspect = 0.0;
     m_cropAspect = aspect;
-}
-
-void FrameCanvas::setUserZoom(double zoom)
-{
-    // Range matches VideoPlayer::clampUserZoom [0.90, 1.20]. < 1.0
-    // shrinks content into a smaller centered viewport (reverse overscan,
-    // visible letterbox borders); > 1.0 crops edges (standard overscan).
-    // drawTexturedQuad's existing viewport math handles both directions
-    // via the same `croppedW/H = videoRect.w/h * cropZoom` composition.
-    if (zoom < 0.9) zoom = 0.9;
-    if (zoom > 1.2) zoom = 1.2;
-    m_userZoom = zoom;
 }
 
 void FrameCanvas::setSubtitleLift(int physicalPx)

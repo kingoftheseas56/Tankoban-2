@@ -142,20 +142,6 @@ static const char* SPEED_LABELS[] = { "0.5x","0.75x","1.0x","1.25x","1.5x","1.75
 static const double SPEED_PRESETS[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
 static const int    SPEED_COUNT    = 7;
 
-static double clampUserZoom(double zoom)
-{
-    // Range [0.90, 1.20]. Below 1.0 = "zoom-out" / reverse-overscan:
-    // video shrinks into a smaller centered viewport with black letterbox
-    // around it, guaranteeing source content at absolute edges (e.g. sports
-    // scoreboards painted to y=1079) stays visible. Above 1.0 = standard
-    // overscan crop. Mirrors mpv's `video-zoom` which accepts negative
-    // values (zoom out) in its exp2 space at
-    // mpv-master/options/options.c:161.
-    if (zoom < 0.9) return 0.9;
-    if (zoom > 1.2) return 1.2;
-    return zoom;
-}
-
 // STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C instrumentation.
 // Transition-only logging of setStreamStalled + first-per-piece setStreamStallInfo
 // so we can cross-check against LoadingOverlay's [STALL_DEBUG] trail. Writes
@@ -239,8 +225,6 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     // that, so showing the badge earlier would render empty).
     m_showStats = QSettings("Tankoban", "Tankoban")
         .value("player/showStats", false).toBool();
-    setUserZoom(QSettings("Tankoban", "Tankoban")
-        .value("videoPlayer/userZoom", 1.0).toDouble());
 
     // Sidecar events
     connect(m_sidecar, &SidecarProcess::ready,        this, &VideoPlayer::onSidecarReady);
@@ -2727,18 +2711,6 @@ void VideoPlayer::toggleAlwaysOnTop()
     m_toastHud->showToast(m_alwaysOnTop ? "Always on top: on" : "Always on top: off");
 }
 
-void VideoPlayer::setUserZoom(double zoom)
-{
-    const double clamped = clampUserZoom(zoom);
-    if (qAbs(m_userZoom - clamped) < 0.0001)
-        return;
-    m_userZoom = clamped;
-    if (m_canvas)
-        m_canvas->setUserZoom(clamped);
-    QSettings("Tankoban", "Tankoban").setValue("videoPlayer/userZoom", clamped);
-    emit userZoomChanged(clamped);
-}
-
 void VideoPlayer::prevEpisode()
 {
     if (m_playlist.isEmpty() || m_playlistIdx <= 0) return;
@@ -2880,7 +2852,17 @@ void VideoPlayer::showControls()
 
 void VideoPlayer::hideControls()
 {
-    if (m_paused) return;
+    // VIDEO_HUD_AUTOHIDE_ON_PAUSE 2026-04-24 (hemanth: "100% zoom is just
+    // cropping the bottom part of the screen"): the control bar at 180px
+    // tall with 0.50 alpha obscures the source scoreboard row whenever
+    // the user pauses to read it — reads as "video cut off at bottom"
+    // even though the D3D viewport is 1:1 (videoRect=={0,0,1920,1080}).
+    // Every reference player (mpv OSC, VLC OSD, PotPlayer) auto-hides
+    // the HUD after ~3s of cursor idle REGARDLESS of pause state — only
+    // cursor movement reshows it. Prior `if (m_paused) return` pinned
+    // the HUD visible during every pause, shipped in the April 22 cutoff
+    // fix as a hedge; it was the wrong hedge. The m_seeking guard stays
+    // because active scrubbing needs the progress bar visible.
     if (m_seeking) return;
     m_controlBar->hide();
     m_subOverlay->setControlsVisible(false);
@@ -3696,7 +3678,6 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
     data.showStats     = m_showStats;
     data.currentAspect = m_currentAspect;
     data.currentCrop   = m_currentCrop;
-    data.currentZoomPct = qRound(m_userZoom * 100.0);
     // VIDEO_PLAYER_FIX Batch 4.2 — fresh QSettings read each menu open.
     // Cheap (small list), avoids cache invalidation complexity.
     data.recentFiles = QSettings("Tankoban", "Tankoban")
@@ -3749,12 +3730,6 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
             m_currentCrop = val;
             saveShowPrefs();
             m_toastHud->showToast(QString("Crop: %1").arg(val));
-            break;
-        }
-        case VideoContextMenu::SetZoom: {
-            const int pct = v.toInt();
-            setUserZoom(static_cast<double>(pct) / 100.0);
-            m_toastHud->showToast(QString("Zoom: %1%").arg(pct));
             break;
         }
         case VideoContextMenu::ToggleFullscreen: toggleFullscreen(); break;

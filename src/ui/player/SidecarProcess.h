@@ -43,6 +43,18 @@ public:
     int sendOpen(const QString& filePath, double startSeconds = 0.0);
     int sendPause();
     int sendResume();
+    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — mpv-style cache-pause
+    // semantics. Distinct from sendPause/sendResume (which are user-
+    // initiated) so the sidecar can tell "user paused" from "network
+    // starvation paused" and handle them differently: stall_pause
+    // freezes the master clock + halts PortAudio writes without
+    // flipping the UI pause state; stall_resume re-anchors the clock
+    // to the current video PTS via seek_anchor + restarts audio. Per
+    // Agent 7 audit av_sub_sync_after_stall_2026-04-21.md Option A
+    // (mpv `paused-for-cache`) layered on Option C (telemetry → IPC
+    // promotion).
+    int sendStallPause();
+    int sendStallResume();
     int sendSeek(double positionSec);
     // PLAYER_STREMIO_PARITY Phase 3 — per-call seek precision override.
     // mode = "fast" or "exact"; empty string defers to sticky default set
@@ -187,6 +199,24 @@ signals:
     void bufferingStarted();
     void bufferingEnded();
 
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — structured cache-pause
+    // progress from sidecar (video_decoder.cpp HTTP stall loop emits at
+    // 2 Hz; main.cpp dispatches as `cache_state` JSON). Fires only during
+    // an active stall (between bufferingStarted and bufferingEnded). The
+    // empty-payload `bufferingStarted` / `bufferingEnded` events continue
+    // to mark stall boundaries; this signal surfaces the progress detail
+    // so the LoadingOverlay can render Stremio-style "Buffering — N% (~Xs)".
+    //
+    // Sentinels preserved from sidecar side:
+    //   etaResumeSec == -1.0 → rate too low to estimate ("time unknown")
+    //   cacheDurationSec == -1.0 → container bitrate unavailable
+    // Consumers should render honest-unknown text for sentinel values
+    // instead of computing with them.
+    void cacheStateChanged(qint64 bytesAhead,
+                           qint64 inputRateBps,
+                           double etaResumeSec,
+                           double cacheDurationSec);
+
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — classified open-pipeline
     // progress events. Sidecar Phase 1.1 emits 6 session-scoped events
     // between `state_changed{opening}` and `first_frame` (previously a
@@ -208,11 +238,27 @@ signals:
     // decoder back-pressure; receive is the honest "making progress"
     // signal).
     void probeStarted();
-    void probeDone();
+    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — extended from
+    // parameterless to carry `durationIsEstimate` flag from the sidecar
+    // probe payload. VideoPlayer consumes this to decide whether to
+    // prefix the HUD duration label with `~` (tilde) for estimate
+    // transparency. Qt permits slots with fewer parameters than their
+    // signal; any existing zero-arg listeners to probeDone continue to
+    // compile + run unchanged. Default false for non-estimate paths.
+    void probeDone(bool durationIsEstimate);
     void decoderOpenStarted();
     void decoderOpenDone();
     void firstPacketRead();
     void firstDecoderReceive();
+
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — sidecar fires once per
+    // session when the consumer read position crosses 90 s of bytes before
+    // HTTP EOF. StreamPage wires this as a parallel nearEndCrossed trigger
+    // alongside the existing pct/remaining duration check. Gives AUTO_NEXT
+    // a ground-truth near-end signal on bitrate-estimate sources where the
+    // duration-based check is structurally unreachable. Parameterless —
+    // event presence IS the signal.
+    void nearEndEstimate();
 
     void processClosed();
 

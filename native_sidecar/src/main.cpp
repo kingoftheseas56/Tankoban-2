@@ -117,6 +117,11 @@ static std::atomic<int>     g_canvas_w{0};
 static std::atomic<int>     g_canvas_h{0};
 static FilterGraph*         g_video_filter = nullptr;
 static FilterGraph*         g_audio_filter = nullptr;
+// User filter spec carried by the set_filters IPC channel (yadif, eq).
+// Persisted across media opens within one sidecar session so the freshly-
+// allocated FilterGraph at open_worker line 854 can re-install it.
+static std::string          g_user_video_filter_spec;
+static std::string          g_user_audio_filter_spec;
 static GpuRenderer*         g_gpu_renderer = nullptr;
 #ifdef _WIN32
 static D3D11Presenter*      g_d3d_presenter = nullptr;
@@ -124,6 +129,12 @@ static D3D11Presenter*      g_d3d_presenter = nullptr;
 
 // Open runs on a worker thread so the main stdin loop stays responsive to pings
 static std::thread          g_open_thread;
+
+// Forward decl — defined near the filter handlers. Called from open_worker
+// right after g_video_filter is assigned so zoom / yadif specs that were
+// set before the open (persisted across media changes within one sidecar
+// session) get re-installed on the freshly-allocated FilterGraph.
+static void refresh_video_filter_graph();
 
 // time_update emitter
 static std::atomic<bool>    g_tu_stop{true};
@@ -327,7 +338,16 @@ static void open_worker(Command cmd) {
         // which streams fall back to bitrate-estimation. duration_ms is already
         // forced to 0 upstream when method==2, so this field is the only way
         // to distinguish "unknown duration" from "truly 0-length stream".
-        {"duration_method", probe->duration_estimation_method}
+        {"duration_method", probe->duration_estimation_method},
+        // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — main-app HUD
+        // consumes this to prefix the displayed duration with `~` (tilde)
+        // when true, honestly signaling to the user that the value is a
+        // bitrate × fileSize estimate (±10-50% VBR error) rather than a
+        // ground-truth container/stream duration. Default false — only
+        // true on the pathological pack class where all video + audio
+        // AVStream::duration fields are AV_NOPTS_VALUE and we fell
+        // through to the try_bitrate_filesize_fallback last-resort path.
+        {"duration_is_estimate", probe->duration_is_estimate}
     });
 
     // STREAM_ENGINE_REBUILD P4 — probe_tier_passed event. Reports which
@@ -596,6 +616,19 @@ static void open_worker(Command cmd) {
             }
             write_event("first_decoder_receive", sid, -1, p);
 
+        } else if (event == "near_end_estimate") {
+            // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — byte-position-based
+            // near-end trigger. VideoDecoder fires this once when the
+            // consumer read position crosses ~90 s of bytes from HTTP EOF,
+            // computed from fmt_ctx->bit_rate + avio_size. Gives main-app
+            // a ground-truth "we're near actual EOF" signal that works
+            // regardless of AVFormatContext::duration accuracy — required
+            // for AUTO_NEXT to fire on bitrate-estimate sources where the
+            // main-app pct/remaining check against the ~2x-inflated
+            // estimated duration is structurally unreachable. Empty
+            // payload; presence of the event IS the signal.
+            write_event("near_end_estimate", sid, -1, {});
+
         } else if (event == "buffering") {
             // PLAYER_UX_FIX Phase 2.1 — HTTP-stall retry path emits this
             // from video_decoder.cpp:984 when av_read_frame hits EAGAIN /
@@ -615,6 +648,36 @@ static void open_worker(Command cmd) {
             // state_changed{playing} which is emitted once at first_frame
             // — this fires on EVERY stall-clear transition.
             write_event("playing", sid, -1, {});
+
+        } else if (event == "cache_state") {
+            // PLAYER_STREMIO_PARITY Phase 2 Batch 2.1 — structured cache-pause
+            // progress. Emitted at 2 Hz during HTTP stall from
+            // video_decoder.cpp (see the HTTP stall branch for rationale).
+            // Detail format (colon-delimited):
+            //   "bytes_ahead:input_rate_bps:eta_sec:cache_dur_sec"
+            //   eta_sec == -1.0 means "unmeasurable" (rate below 1 KiB/s)
+            //   cache_dur_sec == -1.0 means "no container bitrate available"
+            size_t c1 = detail.find(':');
+            size_t c2 = (c1 != std::string::npos) ? detail.find(':', c1 + 1) : std::string::npos;
+            size_t c3 = (c2 != std::string::npos) ? detail.find(':', c2 + 1) : std::string::npos;
+            if (c1 != std::string::npos && c2 != std::string::npos && c3 != std::string::npos) {
+                try {
+                    int64_t bytes_ahead = std::stoll(detail.substr(0, c1));
+                    int64_t rate_bps    = std::stoll(detail.substr(c1 + 1, c2 - c1 - 1));
+                    double  eta_sec     = std::stod(detail.substr(c2 + 1, c3 - c2 - 1));
+                    double  cache_dur_sec = std::stod(detail.substr(c3 + 1));
+                    nlohmann::json p;
+                    p["paused_for_cache"]   = true;
+                    p["cache_bytes_ahead"]  = bytes_ahead;
+                    p["raw_input_rate_bps"] = rate_bps;
+                    p["eta_resume_sec"]     = eta_sec;       // -1.0 = unknown
+                    p["cache_duration_sec"] = cache_dur_sec; // -1.0 = unknown
+                    p["t_ms_from_open"]     = lambda_t_ms_from_open();
+                    write_event("cache_state", sid, -1, p);
+                } catch (const std::exception&) {
+                    // malformed detail — drop silently, don't spam logs
+                }
+            }
 
         } else if (event == "decode_error") {
             // Batch 6.3 (Player Polish Phase 6) — non-fatal avcodec error
@@ -789,6 +852,16 @@ static void open_worker(Command cmd) {
         g_probe_subs      = probe->subs;
     }
 
+    // Re-install the persisted filter spec (zoom + user filters) on the
+    // fresh FilterGraph. Spec strings survive teardown_decode; the graph
+    // instance does not. Without this, a user who set zoom=110% and then
+    // switched videos would see 100% until they re-opened the Zoom menu.
+    refresh_video_filter_graph();
+    if (g_audio_filter && !g_user_audio_filter_spec.empty()) {
+        g_audio_filter->destroy();
+        g_audio_filter->set_pending(g_user_audio_filter_spec);
+    }
+
     // --- 5. Start video decode ---
     std::fprintf(stderr, "AVSYNC_DIAG open_video_start +%.0fms\n", open_ms());
     std::vector<int> sub_indices;
@@ -958,6 +1031,72 @@ static void handle_resume(const Command& cmd) {
     if (!g_audio_dec) g_clock.set_paused(false);
     g_state.set_state(State::PLAYING);
     write_event("state_changed", cmd.sessionId, -1, {{"state", "playing"}});
+}
+
+// ---------------------------------------------------------------------------
+// STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — mpv paused-for-cache handlers
+// per Agent 7 audit av_sub_sync_after_stall_2026-04-21.md Options A + C.
+//
+// Distinct from handle_pause/handle_resume in two important ways:
+//   1. Does NOT set g_state or emit "state_changed" — this is a
+//      TRANSPARENT network-stall pause, not a user-initiated pause.
+//      User's play/pause UI stays at "playing"; they see the buffering
+//      overlay from STREAM_STALL_UX_FIX Batch 2, not a pause icon.
+//   2. Semantic intent is "freeze all timelines while cache refills"
+//      (mpv paused-for-cache), not "user wants playback paused".
+//      Identical mechanical effect today (pause clock + decoders) but
+//      the distinction lets future iterations diverge the paths — e.g.
+//      stall_resume may want to flush audio queue + seek_anchor the
+//      clock to current video PTS to prevent pre-stall audio-ahead-of-
+//      video drift from persisting (Agent 7 P0 gap #2). For now keep
+//      it simple — just pause/resume symmetrically. Smoke will tell us
+//      whether audio queue flush + clock re-anchor is needed.
+//
+// Called by main-app StreamPage on StreamEngine::stallDetected /
+// stallRecovered Qt signals → VideoPlayer::onStreamStallEdgeFromEngine
+// → SidecarProcess::sendStallPause / sendStallResume.
+// ---------------------------------------------------------------------------
+
+static void handle_stall_pause(const Command& cmd) {
+    write_ack(cmd.seq, cmd.sessionId);
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (g_audio_dec) g_audio_dec->pause();
+        if (g_video_dec) g_video_dec->pause();
+    }
+    if (!g_audio_dec) g_clock.set_paused(true);
+    // Intentionally no g_state.set_state() and no "state_changed" event.
+    std::fprintf(stderr, "handle_stall_pause: network-stall cache pause "
+        "engaged (clock frozen; audio/video decoders halted; UI state "
+        "unchanged)\n");
+}
+
+static void handle_stall_resume(const Command& cmd) {
+    write_ack(cmd.seq, cmd.sessionId);
+    AudioDecoder* audio_dec = nullptr;
+    VideoDecoder* video_dec = nullptr;
+    SubtitleRenderer* sub_renderer = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        audio_dec = g_audio_dec;
+        video_dec = g_video_dec;
+        sub_renderer = g_sub_renderer;
+        if (audio_dec) audio_dec->flush_queue();
+        if (audio_dec) audio_dec->resume();
+        if (video_dec) video_dec->resume();
+    }
+    if (video_dec) {
+        const int64_t resume_pts_us = video_dec->last_rendered_pts_us();
+        if (resume_pts_us > 0) {
+            g_clock.seek_anchor(resume_pts_us);
+        }
+    }
+    if (!audio_dec) g_clock.set_paused(false);
+    if (sub_renderer) sub_renderer->clear_active_subs();
+    // Intentionally no state_changed emit — mirrors handle_stall_pause.
+    std::fprintf(stderr, "handle_stall_resume: network-stall cache pause "
+        "cleared (audio queue flushed; clock re-anchored; subtitles "
+        "cleared; audio/video decoders unpaused)\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,23 +1415,29 @@ static void handle_set_audio_delay(const Command& cmd) {
 // set_filters handler
 // ---------------------------------------------------------------------------
 
+// Install the user's video filter spec (yadif, eq) on g_video_filter as a
+// pending spec. Factored out of handle_set_filters so open_worker can also
+// re-install the persisted spec on a fresh FilterGraph after teardown.
+static void refresh_video_filter_graph() {
+    if (!g_video_filter) return;
+    g_video_filter->destroy();
+    g_video_filter->set_pending(g_user_video_filter_spec);
+}
+
 static void handle_set_filters(const Command& cmd) {
     write_ack(cmd.seq, cmd.sessionId);
-    std::string vf = cmd.payload.value("video", "");
-    std::string af = cmd.payload.value("audio", "");
+    g_user_video_filter_spec = cmd.payload.value("video", "");
+    g_user_audio_filter_spec = cmd.payload.value("audio", "");
 
-    // Destroy active graphs and set pending specs. The decode threads will
-    // lazily init the filter graphs with actual stream parameters.
-    if (g_video_filter) {
-        g_video_filter->destroy();
-        g_video_filter->set_pending(vf);
-    }
+    refresh_video_filter_graph();
     if (g_audio_filter) {
         g_audio_filter->destroy();
-        g_audio_filter->set_pending(af);
+        g_audio_filter->set_pending(g_user_audio_filter_spec);
     }
 
-    write_event("filters_changed", cmd.sessionId, -1, {{"video", vf}, {"audio", af}});
+    write_event("filters_changed", cmd.sessionId, -1,
+                {{"video", g_user_video_filter_spec},
+                 {"audio", g_user_audio_filter_spec}});
 }
 
 // ---------------------------------------------------------------------------
@@ -1477,6 +1622,15 @@ int main(int argc, char* argv[]) {
 
         } else if (name == "resume") {
             handle_resume(*cmd);
+
+        } else if (name == "stall_pause") {
+            // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — mpv paused-
+            // for-cache entry. Distinct from user pause; no state
+            // flip. See handle_stall_pause for semantics.
+            handle_stall_pause(*cmd);
+
+        } else if (name == "stall_resume") {
+            handle_stall_resume(*cmd);
 
         } else if (name == "set_volume") {
             handle_set_volume(*cmd);

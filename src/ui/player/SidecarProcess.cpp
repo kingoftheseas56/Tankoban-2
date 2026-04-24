@@ -154,6 +154,16 @@ int SidecarProcess::sendOpen(const QString& filePath, double startSeconds)
 
 int SidecarProcess::sendPause()   { return sendCommand("pause"); }
 int SidecarProcess::sendResume()  { return sendCommand("resume"); }
+// STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — mpv paused-for-cache shape.
+// Sidecar distinguishes from user pause/resume: stall_pause freezes
+// AVSyncClock + halts PortAudio writes without flipping UI state;
+// stall_resume seek_anchor's the clock to current video PTS + restarts
+// audio output. Coordinated by StreamEngine::stallDetected/stallRecovered
+// signals routed through StreamPage → SidecarProcess. Pre-fix sidecars
+// don't know these commands → they return NOT_IMPLEMENTED which gets
+// silently swallowed (same forward-compat pattern as sendSetSeekMode).
+int SidecarProcess::sendStallPause()  { return sendCommand("stall_pause"); }
+int SidecarProcess::sendStallResume() { return sendCommand("stall_resume"); }
 int SidecarProcess::sendStop()    { return sendCommand("stop"); }
 int SidecarProcess::sendShutdown(){
     m_intentionalShutdown = true;
@@ -558,6 +568,15 @@ void SidecarProcess::processLine(const QByteArray& line)
             debugLog(QString("[Sidecar] stop_ack seq mismatch or no pending: ackSeq=%1 pending=%2")
                          .arg(ackSeq).arg(m_pendingStopSeq));
         }
+    } else if (name == "near_end_estimate") {
+        // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — sidecar fires once
+        // per session when the consumer read position crosses 90 s of
+        // bytes before HTTP EOF (native_sidecar/src/video_decoder.cpp).
+        // Main-app's session-ID filter earlier in processLine already
+        // ensures this event belongs to the current session. StreamPage
+        // treats this as equivalent to nearEndCrossed for AUTO_NEXT
+        // prefetch scheduling.
+        emit nearEndEstimate();
     } else if (name == "buffering") {
         // PLAYER_UX_FIX Phase 2.2 — sidecar signalled an HTTP-stall
         // (av_read_frame hit EAGAIN/ETIMEDOUT/EIO on a stream URL; see
@@ -574,6 +593,20 @@ void SidecarProcess::processLine(const QByteArray& line)
         // (one-shot at first frame); this can fire repeatedly if a stream
         // stalls and recovers multiple times during a session.
         emit bufferingEnded();
+    } else if (name == "cache_state") {
+        // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — structured cache-pause
+        // progress from sidecar (video_decoder.cpp HTTP stall emits at 2 Hz;
+        // main.cpp "cache_state" dispatch builds the JSON payload). Session
+        // filter already applied upstream (line 449 region). JSON numbers
+        // are doubles under the hood; int64 fields fit within double
+        // precision for realistic ring sizes (64 MiB ring = 67M bytes, well
+        // under 2^53). Sentinel values (-1.0 etaResume or cacheDur) pass
+        // through unchanged for the overlay to render honestly.
+        emit cacheStateChanged(
+            static_cast<qint64>(payload["cache_bytes_ahead"].toDouble()),
+            static_cast<qint64>(payload["raw_input_rate_bps"].toDouble()),
+            payload["eta_resume_sec"].toDouble(),
+            payload["cache_duration_sec"].toDouble());
     }
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — classified open-pipeline
     // event parsing. Sidecar Phase 1.1 emits these 6 session-scoped events
@@ -592,7 +625,14 @@ void SidecarProcess::processLine(const QByteArray& line)
     else if (name == "probe_start") {
         emit probeStarted();
     } else if (name == "probe_done") {
-        emit probeDone();
+        // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — parse the
+        // duration_is_estimate flag added sidecar-side when the bitrate
+        // × fileSize fallback rescued an otherwise-zero duration. Pre-
+        // fix sidecars don't include this key; .toBool() on a missing
+        // QJsonValue returns false, preserving non-estimate behavior.
+        const bool durationIsEstimate =
+            payload.value("duration_is_estimate").toBool();
+        emit probeDone(durationIsEstimate);
     } else if (name == "decoder_open_start") {
         emit decoderOpenStarted();
     } else if (name == "decoder_open_done") {
