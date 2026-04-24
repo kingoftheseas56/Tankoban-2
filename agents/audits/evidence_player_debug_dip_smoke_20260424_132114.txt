@@ -1,0 +1,851 @@
+13:16:24.974 [VideoPlayer] openFile: C:/Users/Suprabha/Desktop/Media/TV/Sports/Shubman_Gill_269_387_vs_England_2nd_Test_2025_,_Edgbaston_Ball_By.mp4
+13:16:24.978 [VideoPlayer] starting sidecar...
+13:16:24.978 [Sidecar] starting: C:/Users/Suprabha/Desktop/Tankoban 2/out/../resources/ffmpeg_sidecar/ffmpeg_sidecar.exe
+13:16:25.029 [Sidecar] started OK, pid=9788
+13:16:25.132 [VideoPlayer] set_canvas_size 1920x974
+13:16:25.133 [Sidecar] SEND: {"name":"set_canvas_size","payload":{"height":974,"width":1920},"seq":1,"sessionId":"212ecb6d-8172-4512-b1dc-1a3d7b564c21","type":"cmd"}
+13:16:26.154 [PERF] frames=52 timer_interval p50/p99=16.68/45.84 ms draw p50/p99=0.05/0.08 ms present p50/p99=0.13/0.46 ms skipped=0 [DXGI] queued=0 vsync_us=0.0
+13:16:27.096 [Sidecar] RECV: ready
+13:16:27.097 [VideoPlayer] set_canvas_size 1920x974
+13:16:27.097 [Sidecar] SEND: {"name":"set_canvas_size","payload":{"height":974,"width":1920},"seq":2,"sessionId":"212ecb6d-8172-4512-b1dc-1a3d7b564c21","type":"cmd"}
+13:16:27.097 [Sidecar] SEND: {"name":"open","payload":{"canvasHeight":974,"canvasWidth":1920,"path":"C:\\Users\\Suprabha\\Desktop\\Media\\TV\\Sports\\Shubman_Gill_269_387_vs_England_2nd_Test_2025_,_Edgbaston_Ball_By.mp4","startSeconds":1686.716},"seq":3,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:27.097 [Sidecar] drop stale event: ack eventSid=212ecb6d-8172-4512-b1dc-1a3d7b564c21 currentSid=f7dd11cb-6484-4b6e-8a4f-a99aaff22e87
+13:16:27.099 [Sidecar] drop stale event: ack eventSid=212ecb6d-8172-4512-b1dc-1a3d7b564c21 currentSid=f7dd11cb-6484-4b6e-8a4f-a99aaff22e87
+13:16:27.099 [Sidecar] RECV: ack
+13:16:27.099 [Sidecar] RECV: state_changed
+13:16:27.099 [VideoPlayer] state=opening file=C:/Users/Suprabha/Desktop/Media/TV/Sports/Shubman_Gill_269_387_vs_England_2nd_Test_2025_,_Edgbaston_Ball_By.mp4
+13:16:27.102 [Sidecar] RECV: probe_start
+13:16:27.148 [Sidecar] RECV: probe_done
+13:16:27.148 [Sidecar] RECV: probe_tier_passed
+13:16:27.155 [PERF] frames=51 timer_interval p50/p99=16.75/58.05 ms draw p50/p99=0.05/0.13 ms present p50/p99=0.12/0.37 ms skipped=0 [DXGI] queued=0 vsync_us=0.0
+13:16:27.164 [Sidecar] RECV: tracks_changed
+13:16:27.174 [Sidecar] SEND: {"name":"set_sub_visibility","payload":{"visible":true},"seq":4,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:27.175 [Sidecar] RECV: media_info
+13:16:27.175 [VideoPlayer] wired/unknown device 'Speakers (Realtek(R) Audio)' → no offset
+13:16:27.176 [Sidecar] SEND: {"name":"set_audio_delay","payload":{"delay_ms":0},"seq":5,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:27.176 [Sidecar] RECV: ack
+13:16:27.177 [Sidecar] RECV: sub_visibility_changed
+13:16:27.177 [Sidecar] RECV: ack
+13:16:27.177 [Sidecar] RECV: audio_delay_changed
+13:16:27.212 [Sidecar] RECV: decoder_open_start
+13:16:27.290 [Sidecar] RECV: decoder_open_done
+13:16:27.290 [Sidecar] RECV: first_packet_read
+13:16:27.309 [Sidecar] RECV: first_decoder_receive
+13:16:27.404 [Sidecar] RECV: first_frame
+13:16:27.404 [STALL_DEBUG][LoadingOverlay] dismiss was_visible=1 stage=3 opacity=0.83819 last_stall_piece=-1 last_peer_have=-1
+13:16:27.405 [VideoPlayer] onFirstFrame: {"codec":"h264","height":1080,"pixelFormat":"bgra8","ptsSec":1686.52,"shmName":"tankoban_frame_9788_0","slotBytes":8294400,"slotCount":4,"wall_clock_delta_from_open_ms":283,"width":1920}
+13:16:27.405 [SHM] attach: name=tankoban_frame_9788_0 slots=4 slotBytes=8294400 totalSize=33177920
+13:16:27.406 [SHM] attach SUCCESS, data=1e24ed80000
+13:16:27.406 [Sidecar] RECV: hwaccel_status
+13:16:27.406 [Sidecar] RECV: state_changed
+13:16:27.407 [Sidecar] RECV: d3d11_texture
+13:16:27.407 [VideoPlayer] d3d11_texture handle=0x634 1920x1080
+13:16:27.407 [Sidecar] RECV: overlay_shm
+13:16:27.407 [VideoPlayer] overlay_shm name=tankoban_frame_9788_1 1920x1080
+13:16:27.408 [OverlayShmReader] attach: name=tankoban_frame_9788_1 1920x1080 total=8294432
+13:16:27.408 [OverlayShmReader] attach SUCCESS
+13:16:27.416 [FrameCanvas scissor] rect={94,0,1826,974} canvas=1920x974
+13:16:27.416 [FrameCanvas aspect] source=1920x1080 widget=1920x974 dpr=1.50 frameAspect=1.7778 widgetAspect=1.9713 videoRect={94,0,1732,974} d3dVp={94,0,1732,974} scissor={94,0,1732,974} forced=0.0000 cropAspect=0.0000 cropZoom=1.0000 subLift=120 srcCrop={0,0,0,0}
+13:16:27.762 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9993038536424806},"seq":6,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:27.795 [Sidecar] RECV: ack
+13:16:28.055 [FrameCanvas aspect] source=1920x1080 widget=1920x974 dpr=1.50 frameAspect=1.7778 widgetAspect=1.9713 videoRect={94,0,1732,974} d3dVp={94,0,1732,974} scissor={94,0,1732,974} forced=0.0000 cropAspect=0.0000 cropZoom=1.0000 subLift=19 srcCrop={0,0,0,0}
+13:16:28.172 [PERF] frames=47 timer_interval p50/p99=16.84/40.50 ms draw p50/p99=0.18/7.17 ms present p50/p99=0.12/0.34 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:16:28.215 [Sidecar] RECV: time_update
+13:16:28.755 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9999719028391171},"seq":7,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:28.756 [Sidecar] RECV: ack
+13:16:29.091 [Sidecar] RECV: heartbeat
+13:16:29.189 [PERF] frames=51 timer_interval p50/p99=16.73/37.06 ms draw p50/p99=0.98/1.59 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16663.9
+13:16:29.214 [Sidecar] RECV: time_update
+13:16:30.223 [PERF] frames=52 timer_interval p50/p99=16.76/38.56 ms draw p50/p99=1.05/1.76 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:16:30.223 [Sidecar] RECV: time_update
+13:16:31.094 [Sidecar] RECV: heartbeat
+13:16:31.223 [PERF] frames=49 timer_interval p50/p99=16.75/38.12 ms draw p50/p99=1.20/2.67 ms present p50/p99=0.15/0.53 ms skipped=0 [DXGI] queued=0 vsync_us=16661.5
+13:16:31.223 [Sidecar] RECV: time_update
+13:16:31.758 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9994312437637678},"seq":8,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:31.761 [Sidecar] RECV: ack
+13:16:32.236 [PERF] frames=41 timer_interval p50/p99=17.62/51.88 ms draw p50/p99=1.23/2.92 ms present p50/p99=0.17/0.41 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:16:32.236 [Sidecar] RECV: time_update
+13:16:32.254 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9979628628732723},"seq":9,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:32.256 [Sidecar] RECV: ack
+13:16:32.751 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9985537764405706},"seq":10,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:32.752 [Sidecar] RECV: ack
+13:16:33.102 [Sidecar] RECV: heartbeat
+13:16:33.229 [Sidecar] RECV: time_update
+13:16:33.262 [PERF] frames=47 timer_interval p50/p99=17.25/45.98 ms draw p50/p99=1.03/2.80 ms present p50/p99=0.13/0.54 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:16:33.282 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9996767533443873},"seq":11,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:16:33.308 [Sidecar] RECV: ack
+13:16:34.213 [Sidecar] RECV: time_update
+13:16:34.271 [PERF] frames=53 timer_interval p50/p99=16.72/38.44 ms draw p50/p99=1.03/1.70 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:16:35.107 [Sidecar] RECV: heartbeat
+13:16:35.233 [Sidecar] RECV: time_update
+13:16:35.296 [PERF] frames=50 timer_interval p50/p99=16.89/36.49 ms draw p50/p99=1.17/1.87 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:16:36.232 [Sidecar] RECV: time_update
+13:16:36.304 [PERF] frames=50 timer_interval p50/p99=16.73/38.02 ms draw p50/p99=1.09/1.80 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:16:37.088 [Sidecar] RECV: heartbeat
+13:16:37.239 [Sidecar] RECV: time_update
+13:16:37.320 [PERF] frames=53 timer_interval p50/p99=16.75/36.90 ms draw p50/p99=1.10/1.81 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:16:38.238 [Sidecar] RECV: time_update
+13:16:38.337 [PERF] frames=52 timer_interval p50/p99=16.67/40.83 ms draw p50/p99=1.08/1.90 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:16:39.109 [Sidecar] RECV: heartbeat
+13:16:39.237 [Sidecar] RECV: time_update
+13:16:39.338 [PERF] frames=51 timer_interval p50/p99=16.72/39.12 ms draw p50/p99=1.09/1.74 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:16:40.233 [Sidecar] RECV: time_update
+13:16:40.363 [PERF] frames=52 timer_interval p50/p99=16.97/35.74 ms draw p50/p99=1.03/1.69 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:16:41.102 [Sidecar] RECV: heartbeat
+13:16:41.219 [Sidecar] RECV: time_update
+13:16:41.370 [PERF] frames=48 timer_interval p50/p99=17.08/38.80 ms draw p50/p99=1.04/1.64 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:16:42.228 [Sidecar] RECV: time_update
+13:16:42.386 [PERF] frames=49 timer_interval p50/p99=16.94/41.92 ms draw p50/p99=1.07/1.72 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:16:43.108 [Sidecar] RECV: heartbeat
+13:16:43.235 [Sidecar] RECV: time_update
+13:16:43.427 [PERF] frames=56 timer_interval p50/p99=16.77/36.91 ms draw p50/p99=1.10/1.71 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:16:44.232 [Sidecar] RECV: time_update
+13:16:44.435 [PERF] frames=50 timer_interval p50/p99=16.94/37.14 ms draw p50/p99=1.00/1.60 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:16:45.107 [Sidecar] RECV: heartbeat
+13:16:45.245 [Sidecar] RECV: time_update
+13:16:45.451 [PERF] frames=51 timer_interval p50/p99=16.70/42.75 ms draw p50/p99=1.52/2.57 ms present p50/p99=0.18/0.29 ms skipped=0 [DXGI] queued=0 vsync_us=16661.7
+13:16:46.236 [Sidecar] RECV: time_update
+13:16:46.488 [PERF] frames=52 timer_interval p50/p99=16.73/40.22 ms draw p50/p99=1.05/1.98 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:16:47.106 [Sidecar] RECV: heartbeat
+13:16:47.228 [Sidecar] RECV: time_update
+13:16:47.501 [PERF] frames=51 timer_interval p50/p99=16.78/38.66 ms draw p50/p99=1.14/1.95 ms present p50/p99=0.15/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:16:48.234 [Sidecar] RECV: time_update
+13:16:48.517 [PERF] frames=49 timer_interval p50/p99=16.80/40.27 ms draw p50/p99=1.10/1.84 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:16:49.105 [Sidecar] RECV: heartbeat
+13:16:49.237 [Sidecar] RECV: time_update
+13:16:49.542 [PERF] frames=55 timer_interval p50/p99=16.82/36.54 ms draw p50/p99=0.99/1.42 ms present p50/p99=0.12/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:16:50.239 [Sidecar] RECV: time_update
+13:16:50.549 [PERF] frames=59 timer_interval p50/p99=16.75/27.99 ms draw p50/p99=1.02/1.67 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:16:51.102 [Sidecar] RECV: heartbeat
+13:16:51.228 [Sidecar] RECV: time_update
+13:16:51.567 [PERF] frames=53 timer_interval p50/p99=16.84/31.20 ms draw p50/p99=1.02/1.96 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:16:52.240 [Sidecar] RECV: time_update
+13:16:52.583 [PERF] frames=57 timer_interval p50/p99=16.80/40.19 ms draw p50/p99=1.12/1.72 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:16:53.109 [Sidecar] RECV: heartbeat
+13:16:53.239 [Sidecar] RECV: time_update
+13:16:53.605 [PERF] frames=55 timer_interval p50/p99=16.77/37.73 ms draw p50/p99=1.08/1.85 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:16:54.239 [Sidecar] RECV: time_update
+13:16:54.616 [PERF] frames=56 timer_interval p50/p99=16.65/37.38 ms draw p50/p99=1.08/1.81 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:16:55.090 [Sidecar] RECV: heartbeat
+13:16:55.251 [Sidecar] RECV: time_update
+13:16:55.629 [PERF] frames=47 timer_interval p50/p99=17.56/38.59 ms draw p50/p99=1.11/1.79 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:16:56.228 [Sidecar] RECV: time_update
+13:16:56.632 [PERF] frames=54 timer_interval p50/p99=16.69/37.41 ms draw p50/p99=1.09/1.64 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.5
+13:16:57.091 [Sidecar] RECV: heartbeat
+13:16:57.252 [Sidecar] RECV: time_update
+13:16:57.649 [PERF] frames=53 timer_interval p50/p99=16.73/37.50 ms draw p50/p99=1.10/1.77 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:16:58.243 [Sidecar] RECV: time_update
+13:16:58.684 [PERF] frames=50 timer_interval p50/p99=16.75/36.74 ms draw p50/p99=0.99/1.67 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:16:59.091 [Sidecar] RECV: heartbeat
+13:16:59.247 [Sidecar] RECV: time_update
+13:16:59.688 [PERF] frames=50 timer_interval p50/p99=16.74/40.19 ms draw p50/p99=0.97/1.38 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:00.243 [Sidecar] RECV: time_update
+13:17:00.698 [PERF] frames=49 timer_interval p50/p99=16.90/38.88 ms draw p50/p99=1.02/1.52 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:01.092 [Sidecar] RECV: heartbeat
+13:17:01.231 [Sidecar] RECV: time_update
+13:17:01.698 [PERF] frames=49 timer_interval p50/p99=16.72/40.05 ms draw p50/p99=1.00/1.70 ms present p50/p99=0.12/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:02.237 [Sidecar] RECV: time_update
+13:17:02.714 [PERF] frames=57 timer_interval p50/p99=16.70/38.07 ms draw p50/p99=1.04/1.63 ms present p50/p99=0.14/0.18 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:17:03.103 [Sidecar] RECV: heartbeat
+13:17:03.238 [Sidecar] RECV: time_update
+13:17:03.739 [PERF] frames=55 timer_interval p50/p99=16.78/39.35 ms draw p50/p99=0.99/1.47 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:17:04.235 [Sidecar] RECV: time_update
+13:17:04.745 [PERF] frames=53 timer_interval p50/p99=16.74/37.72 ms draw p50/p99=0.98/1.68 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:17:05.104 [Sidecar] RECV: heartbeat
+13:17:05.236 [Sidecar] RECV: time_update
+13:17:05.763 [PERF] frames=54 timer_interval p50/p99=16.68/40.58 ms draw p50/p99=1.01/1.49 ms present p50/p99=0.12/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.3
+13:17:06.239 [Sidecar] RECV: time_update
+13:17:06.801 [PERF] frames=57 timer_interval p50/p99=16.72/38.88 ms draw p50/p99=0.98/1.55 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:17:07.106 [Sidecar] RECV: heartbeat
+13:17:07.249 [Sidecar] RECV: time_update
+13:17:07.807 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9990030752123574},"seq":12,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:17:07.808 [PERF] frames=45 timer_interval p50/p99=17.01/55.20 ms draw p50/p99=1.02/3.50 ms present p50/p99=0.16/0.54 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:17:07.809 [Sidecar] RECV: ack
+13:17:08.236 [Sidecar] RECV: time_update
+13:17:08.298 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9998600997964395},"seq":13,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:17:08.300 [Sidecar] RECV: ack
+13:17:08.812 [PERF] frames=53 timer_interval p50/p99=16.83/37.71 ms draw p50/p99=1.03/2.75 ms present p50/p99=0.13/0.38 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:09.110 [Sidecar] RECV: heartbeat
+13:17:09.236 [Sidecar] RECV: time_update
+13:17:09.828 [PERF] frames=51 timer_interval p50/p99=16.82/37.25 ms draw p50/p99=1.00/1.94 ms present p50/p99=0.13/0.36 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:17:10.236 [Sidecar] RECV: time_update
+13:17:10.859 [PERF] frames=49 timer_interval p50/p99=17.06/37.83 ms draw p50/p99=1.03/1.62 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:11.107 [Sidecar] RECV: heartbeat
+13:17:11.237 [Sidecar] RECV: time_update
+13:17:11.862 [PERF] frames=48 timer_interval p50/p99=17.19/36.48 ms draw p50/p99=1.02/1.74 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:12.237 [Sidecar] RECV: time_update
+13:17:12.872 [PERF] frames=48 timer_interval p50/p99=16.96/37.67 ms draw p50/p99=1.13/2.08 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:13.118 [Sidecar] RECV: heartbeat
+13:17:13.251 [Sidecar] RECV: time_update
+13:17:13.878 [PERF] frames=55 timer_interval p50/p99=16.66/39.43 ms draw p50/p99=1.01/1.46 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:14.257 [Sidecar] RECV: time_update
+13:17:14.886 [PERF] frames=47 timer_interval p50/p99=17.00/37.92 ms draw p50/p99=0.96/1.59 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:17:15.096 [Sidecar] RECV: heartbeat
+13:17:15.259 [Sidecar] RECV: time_update
+13:17:15.892 [PERF] frames=52 timer_interval p50/p99=16.74/40.51 ms draw p50/p99=0.99/1.59 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:16.258 [Sidecar] RECV: time_update
+13:17:16.894 [PERF] frames=49 timer_interval p50/p99=16.85/39.01 ms draw p50/p99=1.00/1.69 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:17.096 [Sidecar] RECV: heartbeat
+13:17:17.261 [Sidecar] RECV: time_update
+13:17:17.896 [PERF] frames=51 timer_interval p50/p99=16.70/37.42 ms draw p50/p99=1.08/1.70 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:18.243 [Sidecar] RECV: time_update
+13:17:18.911 [PERF] frames=57 timer_interval p50/p99=16.60/38.69 ms draw p50/p99=0.95/2.02 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:19.097 [Sidecar] RECV: heartbeat
+13:17:19.243 [Sidecar] RECV: time_update
+13:17:19.926 [PERF] frames=54 timer_interval p50/p99=16.72/34.31 ms draw p50/p99=1.05/1.75 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:17:20.260 [Sidecar] RECV: time_update
+13:17:20.961 [PERF] frames=47 timer_interval p50/p99=17.50/38.23 ms draw p50/p99=1.03/1.50 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:17:21.100 [Sidecar] RECV: heartbeat
+13:17:21.244 [Sidecar] RECV: time_update
+13:17:21.969 [PERF] frames=55 timer_interval p50/p99=16.78/36.19 ms draw p50/p99=1.09/1.57 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:17:22.244 [Sidecar] RECV: time_update
+13:17:22.975 [PERF] frames=57 timer_interval p50/p99=16.69/36.01 ms draw p50/p99=1.14/2.09 ms present p50/p99=0.15/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:23.098 [Sidecar] RECV: heartbeat
+13:17:23.245 [Sidecar] RECV: time_update
+13:17:23.992 [PERF] frames=52 timer_interval p50/p99=16.68/37.71 ms draw p50/p99=1.02/1.75 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:17:24.246 [Sidecar] RECV: time_update
+13:17:25.027 [PERF] frames=51 timer_interval p50/p99=16.86/37.21 ms draw p50/p99=1.03/1.55 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:17:25.099 [Sidecar] RECV: heartbeat
+13:17:25.246 [Sidecar] RECV: time_update
+13:17:26.042 [PERF] frames=49 timer_interval p50/p99=16.78/37.46 ms draw p50/p99=1.03/1.89 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:26.246 [Sidecar] RECV: time_update
+13:17:27.058 [PERF] frames=52 timer_interval p50/p99=16.75/43.53 ms draw p50/p99=1.05/1.69 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:27.099 [Sidecar] RECV: heartbeat
+13:17:27.246 [Sidecar] RECV: time_update
+13:17:28.087 [PERF] frames=50 timer_interval p50/p99=16.86/36.02 ms draw p50/p99=1.02/1.55 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:17:28.246 [Sidecar] RECV: time_update
+13:17:29.087 [PERF] frames=49 timer_interval p50/p99=16.71/39.69 ms draw p50/p99=1.04/1.61 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:17:29.099 [Sidecar] RECV: heartbeat
+13:17:29.247 [Sidecar] RECV: time_update
+13:17:30.091 [PERF] frames=49 timer_interval p50/p99=16.98/35.89 ms draw p50/p99=0.98/2.02 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:17:30.248 [Sidecar] RECV: time_update
+13:17:31.096 [PERF] frames=47 timer_interval p50/p99=17.91/37.46 ms draw p50/p99=0.95/1.84 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:31.100 [Sidecar] RECV: heartbeat
+13:17:31.248 [Sidecar] RECV: time_update
+13:17:32.107 [PERF] frames=48 timer_interval p50/p99=17.09/38.49 ms draw p50/p99=1.01/2.03 ms present p50/p99=0.14/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:17:32.248 [Sidecar] RECV: time_update
+13:17:33.100 [Sidecar] RECV: heartbeat
+13:17:33.123 [PERF] frames=51 timer_interval p50/p99=16.81/37.15 ms draw p50/p99=1.05/1.64 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:17:33.249 [Sidecar] RECV: time_update
+13:17:34.154 [PERF] frames=51 timer_interval p50/p99=16.88/39.11 ms draw p50/p99=1.00/1.61 ms present p50/p99=0.14/0.28 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:17:34.249 [Sidecar] RECV: time_update
+13:17:35.101 [Sidecar] RECV: heartbeat
+13:17:35.156 [PERF] frames=53 timer_interval p50/p99=16.88/41.26 ms draw p50/p99=1.02/1.87 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:35.249 [Sidecar] RECV: time_update
+13:17:36.172 [PERF] frames=53 timer_interval p50/p99=16.69/38.48 ms draw p50/p99=1.20/1.90 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:36.250 [Sidecar] RECV: time_update
+13:17:37.101 [Sidecar] RECV: heartbeat
+13:17:37.189 [PERF] frames=56 timer_interval p50/p99=16.70/39.24 ms draw p50/p99=1.07/1.71 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:17:37.251 [Sidecar] RECV: time_update
+13:17:38.214 [PERF] frames=47 timer_interval p50/p99=17.08/41.61 ms draw p50/p99=1.06/1.48 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:38.252 [Sidecar] RECV: time_update
+13:17:39.102 [Sidecar] RECV: heartbeat
+13:17:39.221 [PERF] frames=51 timer_interval p50/p99=16.71/40.83 ms draw p50/p99=1.00/1.79 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:17:39.252 [Sidecar] RECV: time_update
+13:17:40.226 [PERF] frames=50 timer_interval p50/p99=16.67/38.00 ms draw p50/p99=0.99/1.71 ms present p50/p99=0.12/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:40.252 [Sidecar] RECV: time_update
+13:17:41.102 [Sidecar] RECV: heartbeat
+13:17:41.239 [PERF] frames=53 timer_interval p50/p99=16.67/38.42 ms draw p50/p99=1.02/1.55 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:41.254 [Sidecar] RECV: time_update
+13:17:42.254 [PERF] frames=57 timer_interval p50/p99=16.73/34.72 ms draw p50/p99=1.05/2.10 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:42.255 [Sidecar] RECV: time_update
+13:17:43.112 [Sidecar] RECV: heartbeat
+13:17:43.254 [Sidecar] RECV: time_update
+13:17:43.270 [PERF] frames=53 timer_interval p50/p99=16.74/39.78 ms draw p50/p99=1.08/1.59 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:44.255 [Sidecar] RECV: time_update
+13:17:44.287 [PERF] frames=54 timer_interval p50/p99=16.83/39.28 ms draw p50/p99=1.00/1.92 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:17:45.104 [Sidecar] RECV: heartbeat
+13:17:45.261 [Sidecar] RECV: time_update
+13:17:45.325 [PERF] frames=53 timer_interval p50/p99=16.76/38.03 ms draw p50/p99=1.04/2.05 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:46.261 [Sidecar] RECV: time_update
+13:17:46.325 [PERF] frames=47 timer_interval p50/p99=16.80/40.67 ms draw p50/p99=1.03/2.31 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:47.105 [Sidecar] RECV: heartbeat
+13:17:47.259 [Sidecar] RECV: time_update
+13:17:47.336 [PERF] frames=48 timer_interval p50/p99=18.23/38.35 ms draw p50/p99=1.02/1.85 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:17:48.265 [Sidecar] RECV: time_update
+13:17:48.351 [PERF] frames=50 timer_interval p50/p99=16.75/41.20 ms draw p50/p99=1.08/1.59 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:49.106 [Sidecar] RECV: heartbeat
+13:17:49.259 [Sidecar] RECV: time_update
+13:17:49.369 [PERF] frames=55 timer_interval p50/p99=16.74/36.39 ms draw p50/p99=1.07/1.80 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:17:50.258 [Sidecar] RECV: time_update
+13:17:50.393 [PERF] frames=53 timer_interval p50/p99=16.79/40.16 ms draw p50/p99=1.01/1.78 ms present p50/p99=0.13/0.18 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:51.107 [Sidecar] RECV: heartbeat
+13:17:51.267 [Sidecar] RECV: time_update
+13:17:51.402 [PERF] frames=53 timer_interval p50/p99=16.66/38.23 ms draw p50/p99=0.93/1.68 ms present p50/p99=0.12/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:52.265 [Sidecar] RECV: time_update
+13:17:52.418 [PERF] frames=50 timer_interval p50/p99=16.91/35.73 ms draw p50/p99=1.08/1.71 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:53.107 [Sidecar] RECV: heartbeat
+13:17:53.260 [Sidecar] RECV: time_update
+13:17:53.434 [PERF] frames=49 timer_interval p50/p99=16.74/36.78 ms draw p50/p99=1.06/1.71 ms present p50/p99=0.14/0.28 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:54.273 [Sidecar] RECV: time_update
+13:17:54.451 [PERF] frames=59 timer_interval p50/p99=16.71/33.45 ms draw p50/p99=1.01/1.71 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:17:55.109 [Sidecar] RECV: heartbeat
+13:17:55.261 [Sidecar] RECV: time_update
+13:17:55.485 [PERF] frames=46 timer_interval p50/p99=18.44/37.67 ms draw p50/p99=1.00/1.69 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:17:56.262 [Sidecar] RECV: time_update
+13:17:56.501 [PERF] frames=51 timer_interval p50/p99=16.72/38.38 ms draw p50/p99=1.09/1.82 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:17:57.108 [Sidecar] RECV: heartbeat
+13:17:57.263 [Sidecar] RECV: time_update
+13:17:57.517 [PERF] frames=51 timer_interval p50/p99=16.70/38.27 ms draw p50/p99=1.09/1.51 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:58.263 [Sidecar] RECV: time_update
+13:17:58.534 [PERF] frames=48 timer_interval p50/p99=17.07/36.96 ms draw p50/p99=1.07/1.67 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:17:59.127 [Sidecar] RECV: heartbeat
+13:17:59.264 [Sidecar] RECV: time_update
+13:17:59.557 [PERF] frames=57 timer_interval p50/p99=16.74/35.72 ms draw p50/p99=0.94/1.48 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:18:00.264 [Sidecar] RECV: time_update
+13:18:00.566 [PERF] frames=57 timer_interval p50/p99=16.65/39.54 ms draw p50/p99=1.10/1.80 ms present p50/p99=0.14/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:18:01.122 [Sidecar] RECV: heartbeat
+13:18:01.266 [Sidecar] RECV: time_update
+13:18:01.582 [PERF] frames=55 timer_interval p50/p99=16.68/36.87 ms draw p50/p99=1.03/1.50 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:02.266 [Sidecar] RECV: time_update
+13:18:02.599 [PERF] frames=54 timer_interval p50/p99=16.76/37.64 ms draw p50/p99=1.10/1.76 ms present p50/p99=0.14/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:18:03.122 [Sidecar] RECV: heartbeat
+13:18:03.265 [Sidecar] RECV: time_update
+13:18:03.619 [PERF] frames=52 timer_interval p50/p99=16.71/38.65 ms draw p50/p99=1.21/1.98 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16661.7
+13:18:04.266 [Sidecar] RECV: time_update
+13:18:04.638 [PERF] frames=50 timer_interval p50/p99=16.73/37.74 ms draw p50/p99=1.13/1.99 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:18:05.112 [Sidecar] RECV: heartbeat
+13:18:05.269 [Sidecar] RECV: time_update
+13:18:05.641 [PERF] frames=55 timer_interval p50/p99=16.71/38.39 ms draw p50/p99=1.01/1.60 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:18:06.268 [Sidecar] RECV: time_update
+13:18:06.649 [PERF] frames=55 timer_interval p50/p99=16.74/36.55 ms draw p50/p99=1.03/1.76 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.3
+13:18:07.112 [Sidecar] RECV: heartbeat
+13:18:07.270 [Sidecar] RECV: time_update
+13:18:07.665 [PERF] frames=51 timer_interval p50/p99=16.73/39.00 ms draw p50/p99=1.18/2.00 ms present p50/p99=0.15/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:18:08.272 [Sidecar] RECV: time_update
+13:18:08.681 [PERF] frames=54 timer_interval p50/p99=16.60/39.69 ms draw p50/p99=1.02/1.52 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:09.112 [Sidecar] RECV: heartbeat
+13:18:09.273 [Sidecar] RECV: time_update
+13:18:09.707 [PERF] frames=54 timer_interval p50/p99=16.69/38.58 ms draw p50/p99=1.04/1.68 ms present p50/p99=0.14/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:18:10.269 [Sidecar] RECV: time_update
+13:18:10.715 [PERF] frames=52 timer_interval p50/p99=16.73/34.69 ms draw p50/p99=1.04/2.37 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:18:11.113 [Sidecar] RECV: heartbeat
+13:18:11.270 [Sidecar] RECV: time_update
+13:18:11.731 [PERF] frames=51 timer_interval p50/p99=16.98/35.84 ms draw p50/p99=1.11/1.98 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:12.271 [Sidecar] RECV: time_update
+13:18:12.765 [PERF] frames=51 timer_interval p50/p99=16.77/36.10 ms draw p50/p99=1.29/2.16 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16661.8
+13:18:13.136 [Sidecar] RECV: heartbeat
+13:18:13.272 [Sidecar] RECV: time_update
+13:18:13.779 [PERF] frames=50 timer_interval p50/p99=16.76/38.63 ms draw p50/p99=1.18/2.15 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:18:14.275 [Sidecar] RECV: time_update
+13:18:14.796 [PERF] frames=45 timer_interval p50/p99=18.81/47.78 ms draw p50/p99=1.08/2.77 ms present p50/p99=0.13/0.41 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:15.134 [Sidecar] RECV: heartbeat
+13:18:15.273 [Sidecar] RECV: time_update
+13:18:15.834 [PERF] frames=57 timer_interval p50/p99=16.70/38.80 ms draw p50/p99=1.09/1.83 ms present p50/p99=0.14/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:18:16.273 [Sidecar] RECV: time_update
+13:18:16.846 [PERF] frames=54 timer_interval p50/p99=16.70/37.68 ms draw p50/p99=1.19/1.85 ms present p50/p99=0.15/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:18:17.135 [Sidecar] RECV: heartbeat
+13:18:17.274 [Sidecar] RECV: time_update
+13:18:17.862 [PERF] frames=53 timer_interval p50/p99=16.68/37.42 ms draw p50/p99=1.19/2.09 ms present p50/p99=0.14/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:18.274 [Sidecar] RECV: time_update
+13:18:18.885 [PERF] frames=49 timer_interval p50/p99=17.03/37.89 ms draw p50/p99=1.07/1.76 ms present p50/p99=0.12/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:19.136 [Sidecar] RECV: heartbeat
+13:18:19.275 [Sidecar] RECV: time_update
+13:18:19.886 [PERF] frames=48 timer_interval p50/p99=16.87/37.66 ms draw p50/p99=1.03/1.50 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:18:20.275 [Sidecar] RECV: time_update
+13:18:20.890 [PERF] frames=48 timer_interval p50/p99=16.77/38.58 ms draw p50/p99=1.06/1.98 ms present p50/p99=0.13/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:18:21.137 [Sidecar] RECV: heartbeat
+13:18:21.276 [Sidecar] RECV: time_update
+13:18:21.893 [PERF] frames=48 timer_interval p50/p99=17.34/36.59 ms draw p50/p99=1.04/1.99 ms present p50/p99=0.12/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:22.278 [Sidecar] RECV: time_update
+13:18:22.894 [PERF] frames=49 timer_interval p50/p99=17.18/37.07 ms draw p50/p99=1.09/1.69 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:23.116 [Sidecar] RECV: heartbeat
+13:18:23.278 [Sidecar] RECV: time_update
+13:18:23.909 [PERF] frames=50 timer_interval p50/p99=17.35/35.07 ms draw p50/p99=1.04/1.52 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:18:24.278 [Sidecar] RECV: time_update
+13:18:24.911 [PERF] frames=52 timer_interval p50/p99=16.65/37.70 ms draw p50/p99=0.96/1.82 ms present p50/p99=0.12/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:25.116 [Sidecar] RECV: heartbeat
+13:18:25.305 [Sidecar] RECV: time_update
+13:18:25.912 [PERF] frames=48 timer_interval p50/p99=16.77/41.75 ms draw p50/p99=1.17/2.60 ms present p50/p99=0.15/0.46 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:26.294 [Sidecar] RECV: time_update
+13:18:26.926 [PERF] frames=52 timer_interval p50/p99=16.74/34.98 ms draw p50/p99=1.15/2.04 ms present p50/p99=0.13/0.33 ms skipped=0 [DXGI] queued=0 vsync_us=16661.9
+13:18:27.117 [Sidecar] RECV: heartbeat
+13:18:27.294 [Sidecar] RECV: time_update
+13:18:27.861 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9987994749063803},"seq":14,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:27.863 [Sidecar] RECV: ack
+13:18:27.945 [PERF] frames=43 timer_interval p50/p99=17.24/44.23 ms draw p50/p99=1.19/2.99 ms present p50/p99=0.16/0.45 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:28.295 [Sidecar] RECV: time_update
+13:18:28.367 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9978874452619433},"seq":15,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:28.416 [Sidecar] RECV: ack
+13:18:28.860 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9989599252546825},"seq":16,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:28.887 [Sidecar] RECV: ack
+13:18:28.948 [PERF] frames=40 timer_interval p50/p99=17.10/60.86 ms draw p50/p99=1.04/3.07 ms present p50/p99=0.14/0.44 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:18:29.138 [Sidecar] RECV: heartbeat
+13:18:29.295 [Sidecar] RECV: time_update
+13:18:29.363 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9996110265042893},"seq":17,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:29.384 [Sidecar] RECV: ack
+13:18:29.950 [PERF] frames=48 timer_interval p50/p99=16.87/35.39 ms draw p50/p99=1.04/1.67 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16663.6
+13:18:30.295 [Sidecar] RECV: time_update
+13:18:30.958 [PERF] frames=52 timer_interval p50/p99=16.80/40.61 ms draw p50/p99=1.02/1.65 ms present p50/p99=0.13/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:18:31.137 [Sidecar] RECV: heartbeat
+13:18:31.295 [Sidecar] RECV: time_update
+13:18:31.975 [PERF] frames=50 timer_interval p50/p99=16.71/37.59 ms draw p50/p99=1.03/1.54 ms present p50/p99=0.13/0.29 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:18:32.296 [Sidecar] RECV: time_update
+13:18:33.011 [PERF] frames=52 timer_interval p50/p99=16.69/37.46 ms draw p50/p99=1.08/1.69 ms present p50/p99=0.15/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:33.137 [Sidecar] RECV: heartbeat
+13:18:33.296 [Sidecar] RECV: time_update
+13:18:34.012 [PERF] frames=50 timer_interval p50/p99=16.76/37.85 ms draw p50/p99=1.03/1.87 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:34.296 [Sidecar] RECV: time_update
+13:18:35.014 [PERF] frames=50 timer_interval p50/p99=16.74/38.38 ms draw p50/p99=0.98/1.43 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:35.144 [Sidecar] RECV: heartbeat
+13:18:35.296 [Sidecar] RECV: time_update
+13:18:36.017 [PERF] frames=51 timer_interval p50/p99=16.71/35.58 ms draw p50/p99=1.02/1.72 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:18:36.297 [Sidecar] RECV: time_update
+13:18:37.024 [PERF] frames=51 timer_interval p50/p99=16.72/35.80 ms draw p50/p99=1.01/1.57 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:18:37.136 [Sidecar] RECV: heartbeat
+13:18:37.297 [Sidecar] RECV: time_update
+13:18:38.039 [PERF] frames=49 timer_interval p50/p99=16.67/39.58 ms draw p50/p99=1.10/1.95 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:18:38.298 [Sidecar] RECV: time_update
+13:18:39.039 [PERF] frames=52 timer_interval p50/p99=16.82/38.70 ms draw p50/p99=0.99/1.44 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:18:39.136 [Sidecar] RECV: heartbeat
+13:18:39.319 [Sidecar] RECV: time_update
+13:18:40.076 [PERF] frames=52 timer_interval p50/p99=16.86/38.06 ms draw p50/p99=0.99/1.61 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:40.299 [Sidecar] RECV: time_update
+13:18:41.081 [PERF] frames=52 timer_interval p50/p99=16.82/35.20 ms draw p50/p99=1.01/1.89 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:18:41.123 [Sidecar] RECV: heartbeat
+13:18:41.299 [Sidecar] RECV: time_update
+13:18:42.084 [PERF] frames=53 timer_interval p50/p99=16.79/40.76 ms draw p50/p99=1.04/1.52 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:18:42.299 [Sidecar] RECV: time_update
+13:18:43.089 [PERF] frames=52 timer_interval p50/p99=16.78/37.23 ms draw p50/p99=1.12/1.94 ms present p50/p99=0.15/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:18:43.143 [Sidecar] RECV: heartbeat
+13:18:43.300 [Sidecar] RECV: time_update
+13:18:44.105 [PERF] frames=52 timer_interval p50/p99=16.79/37.84 ms draw p50/p99=1.03/1.83 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:18:44.301 [Sidecar] RECV: time_update
+13:18:45.143 [PERF] frames=50 timer_interval p50/p99=16.76/38.73 ms draw p50/p99=1.06/1.80 ms present p50/p99=0.13/0.29 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:18:45.144 [Sidecar] RECV: heartbeat
+13:18:45.302 [Sidecar] RECV: time_update
+13:18:46.154 [PERF] frames=50 timer_interval p50/p99=16.72/38.41 ms draw p50/p99=1.03/1.71 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:46.302 [Sidecar] RECV: time_update
+13:18:47.139 [Sidecar] RECV: heartbeat
+13:18:47.171 [PERF] frames=52 timer_interval p50/p99=16.79/38.91 ms draw p50/p99=1.07/1.79 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:18:47.302 [Sidecar] RECV: time_update
+13:18:48.201 [PERF] frames=47 timer_interval p50/p99=17.27/40.35 ms draw p50/p99=1.09/2.15 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:18:48.305 [Sidecar] RECV: time_update
+13:18:49.134 [Sidecar] RECV: heartbeat
+13:18:49.213 [PERF] frames=51 timer_interval p50/p99=16.75/34.83 ms draw p50/p99=1.06/1.82 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:49.320 [Sidecar] RECV: time_update
+13:18:50.220 [PERF] frames=48 timer_interval p50/p99=16.71/36.90 ms draw p50/p99=1.04/1.53 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:18:50.324 [Sidecar] RECV: time_update
+13:18:51.147 [Sidecar] RECV: heartbeat
+13:18:51.236 [PERF] frames=52 timer_interval p50/p99=16.75/37.34 ms draw p50/p99=1.09/2.03 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:18:51.328 [Sidecar] RECV: time_update
+13:18:52.260 [PERF] frames=49 timer_interval p50/p99=17.29/42.91 ms draw p50/p99=1.22/2.18 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16661.9
+13:18:52.328 [Sidecar] RECV: time_update
+13:18:53.138 [Sidecar] RECV: heartbeat
+13:18:53.269 [PERF] frames=49 timer_interval p50/p99=16.73/38.11 ms draw p50/p99=1.22/3.10 ms present p50/p99=0.14/0.39 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:53.329 [Sidecar] RECV: time_update
+13:18:53.859 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.998082851219512},"seq":18,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:53.861 [Sidecar] RECV: ack
+13:18:54.270 [PERF] frames=40 timer_interval p50/p99=17.96/59.85 ms draw p50/p99=1.13/2.36 ms present p50/p99=0.19/0.41 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:18:54.326 [Sidecar] RECV: time_update
+13:18:54.371 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9992170106163616},"seq":19,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:54.372 [Sidecar] RECV: ack
+13:18:54.869 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":1},"seq":20,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:54.870 [Sidecar] RECV: ack
+13:18:55.143 [Sidecar] RECV: heartbeat
+13:18:55.286 [PERF] frames=56 timer_interval p50/p99=16.72/27.39 ms draw p50/p99=1.04/1.54 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.4
+13:18:55.326 [Sidecar] RECV: time_update
+13:18:56.304 [PERF] frames=48 timer_interval p50/p99=16.91/49.12 ms draw p50/p99=1.28/2.57 ms present p50/p99=0.16/0.52 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:18:56.359 [Sidecar] RECV: time_update
+13:18:56.365 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9985758524485127},"seq":21,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:56.366 [Sidecar] RECV: ack
+13:18:56.867 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9992719114457896},"seq":22,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:56.892 [Sidecar] RECV: ack
+13:18:57.149 [Sidecar] RECV: heartbeat
+13:18:57.326 [Sidecar] RECV: time_update
+13:18:57.327 [PERF] frames=43 timer_interval p50/p99=18.01/60.65 ms draw p50/p99=1.11/2.99 ms present p50/p99=0.15/0.38 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:18:58.329 [Sidecar] RECV: time_update
+13:18:58.331 [PERF] frames=48 timer_interval p50/p99=16.77/44.49 ms draw p50/p99=1.14/2.37 ms present p50/p99=0.14/0.36 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:18:58.867 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9999362063517974},"seq":23,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:18:58.869 [Sidecar] RECV: ack
+13:18:59.141 [Sidecar] RECV: heartbeat
+13:18:59.331 [Sidecar] RECV: time_update
+13:18:59.338 [PERF] frames=50 timer_interval p50/p99=16.83/39.43 ms draw p50/p99=1.02/1.63 ms present p50/p99=0.13/0.28 ms skipped=0 [DXGI] queued=0 vsync_us=16663.5
+13:19:00.325 [Sidecar] RECV: time_update
+13:19:00.351 [PERF] frames=55 timer_interval p50/p99=16.73/36.43 ms draw p50/p99=1.01/1.63 ms present p50/p99=0.14/0.31 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:01.142 [Sidecar] RECV: heartbeat
+13:19:01.325 [Sidecar] RECV: time_update
+13:19:01.368 [PERF] frames=53 timer_interval p50/p99=16.83/37.71 ms draw p50/p99=1.03/1.70 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:19:02.322 [Sidecar] RECV: time_update
+13:19:02.369 [PERF] frames=50 timer_interval p50/p99=16.90/38.03 ms draw p50/p99=1.00/1.42 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16661.8
+13:19:03.132 [Sidecar] RECV: heartbeat
+13:19:03.323 [Sidecar] RECV: time_update
+13:19:03.384 [PERF] frames=51 timer_interval p50/p99=16.86/39.70 ms draw p50/p99=1.03/1.59 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:19:04.324 [Sidecar] RECV: time_update
+13:19:04.389 [PERF] frames=52 timer_interval p50/p99=16.77/37.82 ms draw p50/p99=1.03/1.75 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:19:05.140 [Sidecar] RECV: heartbeat
+13:19:05.322 [Sidecar] RECV: time_update
+13:19:05.400 [PERF] frames=51 timer_interval p50/p99=16.85/39.45 ms draw p50/p99=0.96/1.59 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:19:06.323 [Sidecar] RECV: time_update
+13:19:06.416 [PERF] frames=55 timer_interval p50/p99=16.68/39.60 ms draw p50/p99=1.02/1.69 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:07.140 [Sidecar] RECV: heartbeat
+13:19:07.321 [Sidecar] RECV: time_update
+13:19:07.434 [PERF] frames=56 timer_interval p50/p99=16.73/41.02 ms draw p50/p99=1.03/1.66 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:19:08.324 [Sidecar] RECV: time_update
+13:19:08.446 [PERF] frames=54 timer_interval p50/p99=16.80/36.47 ms draw p50/p99=0.98/1.67 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:09.137 [Sidecar] RECV: heartbeat
+13:19:09.321 [Sidecar] RECV: time_update
+13:19:09.466 [PERF] frames=48 timer_interval p50/p99=17.75/39.43 ms draw p50/p99=0.98/1.54 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:19:10.324 [Sidecar] RECV: time_update
+13:19:10.466 [PERF] frames=46 timer_interval p50/p99=17.27/36.70 ms draw p50/p99=1.01/1.64 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:11.135 [Sidecar] RECV: heartbeat
+13:19:11.324 [Sidecar] RECV: time_update
+13:19:11.482 [PERF] frames=51 timer_interval p50/p99=16.83/36.80 ms draw p50/p99=1.01/1.76 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:19:12.324 [Sidecar] RECV: time_update
+13:19:12.513 [PERF] frames=49 timer_interval p50/p99=16.75/37.40 ms draw p50/p99=1.14/2.01 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:19:13.133 [Sidecar] RECV: heartbeat
+13:19:13.323 [Sidecar] RECV: time_update
+13:19:13.532 [PERF] frames=51 timer_interval p50/p99=16.71/36.76 ms draw p50/p99=1.10/1.65 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:19:14.321 [Sidecar] RECV: time_update
+13:19:14.548 [PERF] frames=58 timer_interval p50/p99=16.65/35.32 ms draw p50/p99=1.04/1.66 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:15.136 [Sidecar] RECV: heartbeat
+13:19:15.327 [Sidecar] RECV: time_update
+13:19:15.586 [PERF] frames=48 timer_interval p50/p99=18.06/37.84 ms draw p50/p99=1.04/1.62 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:19:16.347 [Sidecar] RECV: time_update
+13:19:16.368 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9989501303193967},"seq":24,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:16.393 [Sidecar] RECV: ack
+13:19:16.596 [PERF] frames=47 timer_interval p50/p99=16.77/50.16 ms draw p50/p99=1.20/2.03 ms present p50/p99=0.17/0.42 ms skipped=0 [DXGI] queued=0 vsync_us=16661.8
+13:19:16.864 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9997018025919434},"seq":25,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:16.887 [Sidecar] RECV: ack
+13:19:17.140 [Sidecar] RECV: heartbeat
+13:19:17.325 [Sidecar] RECV: time_update
+13:19:17.636 [PERF] frames=51 timer_interval p50/p99=16.69/38.30 ms draw p50/p99=1.08/1.72 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:18.335 [Sidecar] RECV: time_update
+13:19:18.653 [PERF] frames=56 timer_interval p50/p99=16.65/35.50 ms draw p50/p99=1.12/1.75 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:19:19.154 [Sidecar] RECV: heartbeat
+13:19:19.319 [Sidecar] RECV: time_update
+13:19:19.656 [PERF] frames=51 timer_interval p50/p99=16.80/37.15 ms draw p50/p99=1.01/1.56 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:20.341 [Sidecar] RECV: time_update
+13:19:20.681 [PERF] frames=51 timer_interval p50/p99=16.87/37.45 ms draw p50/p99=1.01/1.53 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:21.153 [Sidecar] RECV: heartbeat
+13:19:21.339 [Sidecar] RECV: time_update
+13:19:21.718 [PERF] frames=45 timer_interval p50/p99=16.89/51.65 ms draw p50/p99=1.04/2.81 ms present p50/p99=0.14/0.34 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:21.862 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9990895994649481},"seq":26,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:21.864 [Sidecar] RECV: ack
+13:19:22.340 [Sidecar] RECV: time_update
+13:19:22.367 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9996774465603956},"seq":27,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:22.367 [Sidecar] RECV: ack
+13:19:22.728 [PERF] frames=51 timer_interval p50/p99=16.72/38.16 ms draw p50/p99=1.15/1.75 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:23.155 [Sidecar] RECV: heartbeat
+13:19:23.340 [Sidecar] RECV: time_update
+13:19:23.729 [PERF] frames=50 timer_interval p50/p99=16.72/36.92 ms draw p50/p99=1.03/1.54 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:19:24.338 [Sidecar] RECV: time_update
+13:19:24.745 [PERF] frames=48 timer_interval p50/p99=17.19/37.26 ms draw p50/p99=1.00/1.36 ms present p50/p99=0.13/0.17 ms skipped=0 [DXGI] queued=0 vsync_us=16663.3
+13:19:25.147 [Sidecar] RECV: heartbeat
+13:19:25.325 [Sidecar] RECV: time_update
+13:19:25.763 [PERF] frames=53 timer_interval p50/p99=16.83/42.00 ms draw p50/p99=1.06/1.98 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:19:26.347 [Sidecar] RECV: time_update
+13:19:26.789 [PERF] frames=55 timer_interval p50/p99=16.76/39.16 ms draw p50/p99=0.98/1.78 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:19:27.150 [Sidecar] RECV: heartbeat
+13:19:27.338 [Sidecar] RECV: time_update
+13:19:27.794 [PERF] frames=50 timer_interval p50/p99=16.78/38.41 ms draw p50/p99=1.12/1.93 ms present p50/p99=0.15/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16661.9
+13:19:28.346 [Sidecar] RECV: time_update
+13:19:28.812 [PERF] frames=49 timer_interval p50/p99=16.81/38.43 ms draw p50/p99=1.04/1.89 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:29.153 [Sidecar] RECV: heartbeat
+13:19:29.342 [Sidecar] RECV: time_update
+13:19:29.842 [PERF] frames=50 timer_interval p50/p99=16.70/37.28 ms draw p50/p99=0.99/1.57 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:30.337 [Sidecar] RECV: time_update
+13:19:30.855 [PERF] frames=53 timer_interval p50/p99=16.79/38.97 ms draw p50/p99=0.94/1.57 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:31.149 [Sidecar] RECV: heartbeat
+13:19:31.336 [Sidecar] RECV: time_update
+13:19:31.859 [PERF] frames=54 timer_interval p50/p99=16.85/34.83 ms draw p50/p99=0.98/1.63 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:32.336 [Sidecar] RECV: time_update
+13:19:32.877 [PERF] frames=53 timer_interval p50/p99=16.76/37.18 ms draw p50/p99=1.15/1.69 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:19:33.150 [Sidecar] RECV: heartbeat
+13:19:33.335 [Sidecar] RECV: time_update
+13:19:33.903 [PERF] frames=58 timer_interval p50/p99=16.78/32.45 ms draw p50/p99=1.09/1.72 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:19:34.337 [Sidecar] RECV: time_update
+13:19:34.908 [PERF] frames=55 timer_interval p50/p99=16.70/37.35 ms draw p50/p99=1.11/1.88 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16661.9
+13:19:35.160 [Sidecar] RECV: heartbeat
+13:19:35.348 [Sidecar] RECV: time_update
+13:19:35.926 [PERF] frames=49 timer_interval p50/p99=16.81/38.41 ms draw p50/p99=1.42/2.39 ms present p50/p99=0.15/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:36.344 [Sidecar] RECV: time_update
+13:19:36.943 [PERF] frames=48 timer_interval p50/p99=16.70/41.22 ms draw p50/p99=1.45/2.26 ms present p50/p99=0.19/0.31 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:37.160 [Sidecar] RECV: heartbeat
+13:19:37.349 [Sidecar] RECV: time_update
+13:19:37.387 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9988707909148584},"seq":28,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:37.417 [Sidecar] RECV: ack
+13:19:37.959 [PERF] frames=43 timer_interval p50/p99=16.74/46.15 ms draw p50/p99=1.65/2.71 ms present p50/p99=0.18/0.31 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:19:38.333 [Sidecar] RECV: time_update
+13:19:38.888 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9994026794754901},"seq":29,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:38.889 [Sidecar] RECV: ack
+13:19:38.998 [PERF] frames=45 timer_interval p50/p99=17.23/42.68 ms draw p50/p99=1.53/2.49 ms present p50/p99=0.19/0.31 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:19:39.141 [Sidecar] RECV: heartbeat
+13:19:39.334 [Sidecar] RECV: time_update
+13:19:39.880 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9987090212611285},"seq":30,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:39.882 [Sidecar] RECV: ack
+13:19:40.008 [PERF] frames=43 timer_interval p50/p99=16.73/47.02 ms draw p50/p99=1.35/2.37 ms present p50/p99=0.19/0.29 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:19:40.336 [Sidecar] RECV: time_update
+13:19:40.401 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.997918831958037},"seq":31,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:40.403 [Sidecar] RECV: ack
+13:19:40.898 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9990854767531443},"seq":32,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:40.922 [Sidecar] RECV: ack
+13:19:41.048 [PERF] frames=43 timer_interval p50/p99=17.28/61.94 ms draw p50/p99=1.12/1.89 ms present p50/p99=0.15/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:19:41.142 [Sidecar] RECV: heartbeat
+13:19:41.335 [Sidecar] RECV: time_update
+13:19:41.392 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":1},"seq":33,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:19:41.415 [Sidecar] RECV: ack
+13:19:42.048 [PERF] frames=54 timer_interval p50/p99=16.72/35.68 ms draw p50/p99=1.03/1.61 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.4
+13:19:42.336 [Sidecar] RECV: time_update
+13:19:43.057 [PERF] frames=51 timer_interval p50/p99=16.78/40.39 ms draw p50/p99=1.09/1.98 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:19:43.142 [Sidecar] RECV: heartbeat
+13:19:43.356 [Sidecar] RECV: time_update
+13:19:44.073 [PERF] frames=48 timer_interval p50/p99=17.12/38.62 ms draw p50/p99=1.08/1.75 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:44.337 [Sidecar] RECV: time_update
+13:19:45.076 [PERF] frames=49 timer_interval p50/p99=16.82/38.13 ms draw p50/p99=1.03/1.50 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:19:45.142 [Sidecar] RECV: heartbeat
+13:19:45.337 [Sidecar] RECV: time_update
+13:19:46.077 [PERF] frames=52 timer_interval p50/p99=16.76/39.88 ms draw p50/p99=1.04/1.96 ms present p50/p99=0.13/0.35 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:19:46.337 [Sidecar] RECV: time_update
+13:19:47.087 [PERF] frames=53 timer_interval p50/p99=16.71/39.84 ms draw p50/p99=1.04/1.78 ms present p50/p99=0.14/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:47.153 [Sidecar] RECV: heartbeat
+13:19:47.344 [Sidecar] RECV: time_update
+13:19:48.098 [PERF] frames=47 timer_interval p50/p99=17.10/45.30 ms draw p50/p99=1.24/2.74 ms present p50/p99=0.16/0.46 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:48.346 [Sidecar] RECV: time_update
+13:19:49.106 [PERF] frames=59 timer_interval p50/p99=16.77/28.87 ms draw p50/p99=0.96/1.72 ms present p50/p99=0.14/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:19:49.147 [Sidecar] RECV: heartbeat
+13:19:49.347 [Sidecar] RECV: time_update
+13:19:50.122 [PERF] frames=59 timer_interval p50/p99=16.70/27.95 ms draw p50/p99=0.98/1.53 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:19:50.347 [Sidecar] RECV: time_update
+13:19:51.162 [PERF] frames=59 timer_interval p50/p99=16.80/29.21 ms draw p50/p99=1.05/1.64 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:51.162 [Sidecar] RECV: heartbeat
+13:19:51.346 [Sidecar] RECV: time_update
+13:19:52.166 [PERF] frames=56 timer_interval p50/p99=16.74/36.78 ms draw p50/p99=1.12/1.69 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:52.347 [Sidecar] RECV: time_update
+13:19:53.158 [Sidecar] RECV: heartbeat
+13:19:53.173 [PERF] frames=52 timer_interval p50/p99=16.81/36.54 ms draw p50/p99=1.08/1.94 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:19:53.343 [Sidecar] RECV: time_update
+13:19:54.187 [PERF] frames=49 timer_interval p50/p99=16.77/38.57 ms draw p50/p99=1.02/1.34 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:19:54.344 [Sidecar] RECV: time_update
+13:19:55.149 [Sidecar] RECV: heartbeat
+13:19:55.218 [PERF] frames=51 timer_interval p50/p99=16.75/37.76 ms draw p50/p99=0.99/1.57 ms present p50/p99=0.12/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:55.342 [Sidecar] RECV: time_update
+13:19:56.238 [PERF] frames=48 timer_interval p50/p99=17.29/37.38 ms draw p50/p99=1.12/1.72 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:19:56.344 [Sidecar] RECV: time_update
+13:19:57.149 [Sidecar] RECV: heartbeat
+13:19:57.254 [PERF] frames=51 timer_interval p50/p99=16.68/40.37 ms draw p50/p99=1.20/1.92 ms present p50/p99=0.15/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:19:57.356 [Sidecar] RECV: time_update
+13:19:58.269 [PERF] frames=48 timer_interval p50/p99=16.74/39.59 ms draw p50/p99=1.05/2.13 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:19:58.345 [Sidecar] RECV: time_update
+13:19:59.147 [Sidecar] RECV: heartbeat
+13:19:59.286 [PERF] frames=49 timer_interval p50/p99=16.93/36.74 ms draw p50/p99=1.23/2.33 ms present p50/p99=0.15/0.28 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:19:59.346 [Sidecar] RECV: time_update
+13:20:00.289 [PERF] frames=47 timer_interval p50/p99=16.85/38.64 ms draw p50/p99=1.18/2.26 ms present p50/p99=0.16/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:20:00.346 [Sidecar] RECV: time_update
+13:20:00.460 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9991509597624302},"seq":34,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:00.460 [Sidecar] RECV: ack
+13:20:01.156 [Sidecar] RECV: heartbeat
+13:20:01.304 [PERF] frames=47 timer_interval p50/p99=16.81/44.93 ms draw p50/p99=1.20/2.83 ms present p50/p99=0.18/0.43 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:01.347 [Sidecar] RECV: time_update
+13:20:01.955 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":1},"seq":35,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:01.955 [Sidecar] RECV: ack
+13:20:02.327 [PERF] frames=55 timer_interval p50/p99=16.66/36.52 ms draw p50/p99=0.97/1.92 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16663.6
+13:20:02.347 [Sidecar] RECV: time_update
+13:20:03.147 [Sidecar] RECV: heartbeat
+13:20:03.335 [PERF] frames=49 timer_interval p50/p99=16.87/37.95 ms draw p50/p99=1.11/1.81 ms present p50/p99=0.14/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:03.348 [Sidecar] RECV: time_update
+13:20:04.336 [PERF] frames=47 timer_interval p50/p99=16.93/39.85 ms draw p50/p99=1.08/1.75 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:04.348 [Sidecar] RECV: time_update
+13:20:05.148 [Sidecar] RECV: heartbeat
+13:20:05.349 [Sidecar] RECV: time_update
+13:20:05.352 [PERF] frames=52 timer_interval p50/p99=16.66/37.55 ms draw p50/p99=1.07/1.82 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:06.355 [Sidecar] RECV: time_update
+13:20:06.359 [PERF] frames=47 timer_interval p50/p99=17.06/38.24 ms draw p50/p99=1.09/1.65 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:07.150 [Sidecar] RECV: heartbeat
+13:20:07.351 [Sidecar] RECV: time_update
+13:20:07.386 [PERF] frames=53 timer_interval p50/p99=16.75/38.58 ms draw p50/p99=1.04/1.71 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:08.354 [Sidecar] RECV: time_update
+13:20:08.387 [PERF] frames=46 timer_interval p50/p99=16.84/58.19 ms draw p50/p99=1.19/2.83 ms present p50/p99=0.14/0.42 ms skipped=0 [DXGI] queued=0 vsync_us=16662.0
+13:20:08.485 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9989939457940221},"seq":36,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:08.487 [Sidecar] RECV: ack
+13:20:08.993 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9980984270324794},"seq":37,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:08.996 [Sidecar] RECV: ack
+13:20:09.164 [Sidecar] RECV: heartbeat
+13:20:09.351 [Sidecar] RECV: time_update
+13:20:09.408 [PERF] frames=42 timer_interval p50/p99=17.76/65.39 ms draw p50/p99=0.99/2.86 ms present p50/p99=0.13/0.45 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:09.462 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.999445617496135},"seq":38,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:09.463 [Sidecar] RECV: ack
+13:20:09.970 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":1},"seq":39,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:09.973 [Sidecar] RECV: ack
+13:20:10.352 [Sidecar] RECV: time_update
+13:20:10.418 [PERF] frames=56 timer_interval p50/p99=16.59/37.98 ms draw p50/p99=0.97/2.29 ms present p50/p99=0.12/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:20:11.154 [Sidecar] RECV: heartbeat
+13:20:11.355 [Sidecar] RECV: time_update
+13:20:11.434 [PERF] frames=51 timer_interval p50/p99=16.69/38.17 ms draw p50/p99=0.99/1.83 ms present p50/p99=0.14/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:20:12.354 [Sidecar] RECV: time_update
+13:20:12.462 [PERF] frames=50 timer_interval p50/p99=16.69/37.46 ms draw p50/p99=1.04/1.66 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:20:13.150 [Sidecar] RECV: heartbeat
+13:20:13.356 [Sidecar] RECV: time_update
+13:20:13.484 [PERF] frames=56 timer_interval p50/p99=16.69/37.57 ms draw p50/p99=1.05/1.66 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:14.357 [Sidecar] RECV: time_update
+13:20:14.486 [PERF] frames=51 timer_interval p50/p99=16.86/37.37 ms draw p50/p99=1.01/1.25 ms present p50/p99=0.12/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:15.169 [Sidecar] RECV: heartbeat
+13:20:15.363 [Sidecar] RECV: time_update
+13:20:15.499 [PERF] frames=49 timer_interval p50/p99=16.79/37.21 ms draw p50/p99=0.99/1.60 ms present p50/p99=0.13/0.34 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:16.371 [Sidecar] RECV: time_update
+13:20:16.515 [PERF] frames=51 timer_interval p50/p99=16.73/36.62 ms draw p50/p99=1.04/2.07 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:17.152 [Sidecar] RECV: heartbeat
+13:20:17.366 [Sidecar] RECV: time_update
+13:20:17.516 [PERF] frames=49 timer_interval p50/p99=16.75/41.20 ms draw p50/p99=1.02/1.66 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:18.369 [Sidecar] RECV: time_update
+13:20:18.532 [PERF] frames=56 timer_interval p50/p99=16.74/37.16 ms draw p50/p99=1.10/1.72 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:19.154 [Sidecar] RECV: heartbeat
+13:20:19.370 [Sidecar] RECV: time_update
+13:20:19.567 [PERF] frames=54 timer_interval p50/p99=16.81/38.72 ms draw p50/p99=1.00/1.52 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:20.372 [Sidecar] RECV: time_update
+13:20:20.574 [PERF] frames=52 timer_interval p50/p99=16.84/36.21 ms draw p50/p99=1.01/1.64 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:20:21.154 [Sidecar] RECV: heartbeat
+13:20:21.372 [Sidecar] RECV: time_update
+13:20:21.581 [PERF] frames=50 timer_interval p50/p99=16.65/39.08 ms draw p50/p99=1.02/1.60 ms present p50/p99=0.12/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:22.373 [Sidecar] RECV: time_update
+13:20:22.597 [PERF] frames=51 timer_interval p50/p99=16.89/36.95 ms draw p50/p99=1.14/1.89 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:23.155 [Sidecar] RECV: heartbeat
+13:20:23.369 [Sidecar] RECV: time_update
+13:20:23.621 [PERF] frames=51 timer_interval p50/p99=16.76/39.13 ms draw p50/p99=1.20/3.46 ms present p50/p99=0.16/0.50 ms skipped=0 [DXGI] queued=0 vsync_us=16661.8
+13:20:24.375 [Sidecar] RECV: time_update
+13:20:24.637 [PERF] frames=49 timer_interval p50/p99=16.73/42.63 ms draw p50/p99=1.31/2.07 ms present p50/p99=0.16/0.31 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:24.972 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9985481385770083},"seq":40,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:25.003 [Sidecar] RECV: ack
+13:20:25.155 [Sidecar] RECV: heartbeat
+13:20:25.377 [Sidecar] RECV: time_update
+13:20:25.480 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9990761232699201},"seq":41,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:25.510 [Sidecar] RECV: ack
+13:20:25.647 [PERF] frames=42 timer_interval p50/p99=17.32/48.20 ms draw p50/p99=1.26/2.50 ms present p50/p99=0.19/0.33 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:26.389 [Sidecar] RECV: time_update
+13:20:26.476 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9980917437536603},"seq":42,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:26.514 [Sidecar] RECV: ack
+13:20:26.663 [PERF] frames=39 timer_interval p50/p99=16.81/52.33 ms draw p50/p99=1.43/2.74 ms present p50/p99=0.22/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:20:26.974 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9973287620356189},"seq":43,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:27.014 [Sidecar] RECV: ack
+13:20:27.156 [Sidecar] RECV: heartbeat
+13:20:27.374 [Sidecar] RECV: time_update
+13:20:27.473 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9984735096412499},"seq":44,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:27.474 [Sidecar] RECV: ack
+13:20:27.690 [PERF] frames=39 timer_interval p50/p99=20.91/52.32 ms draw p50/p99=1.25/2.19 ms present p50/p99=0.17/0.39 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:27.977 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.999444549012068},"seq":45,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:27.979 [Sidecar] RECV: ack
+13:20:28.373 [Sidecar] RECV: time_update
+13:20:28.478 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":1},"seq":46,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:28.503 [Sidecar] RECV: ack
+13:20:28.696 [PERF] frames=53 timer_interval p50/p99=16.63/38.69 ms draw p50/p99=1.04/1.68 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16663.2
+13:20:29.156 [Sidecar] RECV: heartbeat
+13:20:29.368 [Sidecar] RECV: time_update
+13:20:29.712 [PERF] frames=58 timer_interval p50/p99=16.70/35.75 ms draw p50/p99=0.97/1.63 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.1
+13:20:30.369 [Sidecar] RECV: time_update
+13:20:30.729 [PERF] frames=55 timer_interval p50/p99=16.68/38.78 ms draw p50/p99=1.02/1.73 ms present p50/p99=0.13/0.25 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:31.156 [Sidecar] RECV: heartbeat
+13:20:31.369 [Sidecar] RECV: time_update
+13:20:31.753 [PERF] frames=57 timer_interval p50/p99=16.65/37.02 ms draw p50/p99=1.01/1.69 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:32.376 [Sidecar] RECV: time_update
+13:20:32.760 [PERF] frames=50 timer_interval p50/p99=16.87/39.33 ms draw p50/p99=1.24/2.05 ms present p50/p99=0.15/0.43 ms skipped=0 [DXGI] queued=0 vsync_us=16661.6
+13:20:32.977 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9994522598470554},"seq":47,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:33.019 [Sidecar] RECV: ack
+13:20:33.157 [Sidecar] RECV: heartbeat
+13:20:33.380 [Sidecar] RECV: time_update
+13:20:33.477 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9978607367200865},"seq":48,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:33.516 [Sidecar] RECV: ack
+13:20:33.767 [PERF] frames=38 timer_interval p50/p99=18.67/50.00 ms draw p50/p99=1.40/2.71 ms present p50/p99=0.22/0.35 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:34.380 [Sidecar] RECV: time_update
+13:20:34.778 [PERF] frames=40 timer_interval p50/p99=17.24/49.35 ms draw p50/p99=1.37/2.38 ms present p50/p99=0.20/0.34 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:35.194 [Sidecar] RECV: heartbeat
+13:20:35.395 [Sidecar] RECV: time_update
+13:20:35.477 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9985136302558392},"seq":49,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:35.478 [Sidecar] RECV: ack
+13:20:35.794 [PERF] frames=40 timer_interval p50/p99=19.02/48.00 ms draw p50/p99=1.33/2.27 ms present p50/p99=0.20/0.37 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:20:36.372 [Sidecar] RECV: time_update
+13:20:36.479 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.999122272173833},"seq":50,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:36.480 [Sidecar] RECV: ack
+13:20:36.812 [PERF] frames=45 timer_interval p50/p99=17.04/54.32 ms draw p50/p99=1.18/2.75 ms present p50/p99=0.16/0.46 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:36.977 [Sidecar] SEND: {"name":"set_audio_speed","payload":{"speed":0.9996980174381609},"seq":51,"sessionId":"f7dd11cb-6484-4b6e-8a4f-a99aaff22e87","type":"cmd"}
+13:20:36.978 [Sidecar] RECV: ack
+13:20:37.158 [Sidecar] RECV: heartbeat
+13:20:37.384 [Sidecar] RECV: time_update
+13:20:37.833 [PERF] frames=53 timer_interval p50/p99=16.73/40.22 ms draw p50/p99=1.06/1.82 ms present p50/p99=0.14/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:20:38.385 [Sidecar] RECV: time_update
+13:20:38.844 [PERF] frames=54 timer_interval p50/p99=16.84/37.76 ms draw p50/p99=1.02/1.63 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16663.4
+13:20:39.158 [Sidecar] RECV: heartbeat
+13:20:39.394 [Sidecar] RECV: time_update
+13:20:39.844 [PERF] frames=53 timer_interval p50/p99=16.72/38.83 ms draw p50/p99=1.02/1.69 ms present p50/p99=0.14/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:40.391 [Sidecar] RECV: time_update
+13:20:40.859 [PERF] frames=51 timer_interval p50/p99=16.75/37.05 ms draw p50/p99=1.04/1.61 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:41.159 [Sidecar] RECV: heartbeat
+13:20:41.388 [Sidecar] RECV: time_update
+13:20:41.887 [PERF] frames=50 timer_interval p50/p99=16.77/40.29 ms draw p50/p99=1.00/1.52 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:20:42.392 [Sidecar] RECV: time_update
+13:20:42.892 [PERF] frames=49 timer_interval p50/p99=16.87/44.77 ms draw p50/p99=1.20/2.57 ms present p50/p99=0.14/0.32 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:43.159 [Sidecar] RECV: heartbeat
+13:20:43.384 [Sidecar] RECV: time_update
+13:20:43.901 [PERF] frames=52 timer_interval p50/p99=16.67/38.33 ms draw p50/p99=1.05/1.54 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16663.0
+13:20:44.399 [Sidecar] RECV: time_update
+13:20:44.908 [PERF] frames=56 timer_interval p50/p99=16.68/37.97 ms draw p50/p99=1.01/1.76 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:45.160 [Sidecar] RECV: heartbeat
+13:20:45.401 [Sidecar] RECV: time_update
+13:20:45.925 [PERF] frames=53 timer_interval p50/p99=16.83/37.52 ms draw p50/p99=1.03/1.87 ms present p50/p99=0.13/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:20:46.395 [Sidecar] RECV: time_update
+13:20:46.946 [PERF] frames=56 timer_interval p50/p99=16.66/37.29 ms draw p50/p99=0.98/1.75 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.2
+13:20:47.162 [Sidecar] RECV: heartbeat
+13:20:47.394 [Sidecar] RECV: time_update
+13:20:47.949 [PERF] frames=52 timer_interval p50/p99=16.74/38.33 ms draw p50/p99=1.11/1.95 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:48.392 [Sidecar] RECV: time_update
+13:20:48.949 [PERF] frames=52 timer_interval p50/p99=16.72/36.68 ms draw p50/p99=0.98/1.97 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:49.161 [Sidecar] RECV: heartbeat
+13:20:49.391 [Sidecar] RECV: time_update
+13:20:49.957 [PERF] frames=50 timer_interval p50/p99=16.69/36.84 ms draw p50/p99=1.04/2.01 ms present p50/p99=0.13/0.29 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:50.384 [Sidecar] RECV: time_update
+13:20:50.958 [PERF] frames=48 timer_interval p50/p99=17.03/38.45 ms draw p50/p99=1.05/1.70 ms present p50/p99=0.13/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:20:51.161 [Sidecar] RECV: heartbeat
+13:20:51.385 [Sidecar] RECV: time_update
+13:20:51.973 [PERF] frames=52 timer_interval p50/p99=16.72/37.95 ms draw p50/p99=0.98/1.60 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:20:52.387 [Sidecar] RECV: time_update
+13:20:52.990 [PERF] frames=52 timer_interval p50/p99=16.75/38.27 ms draw p50/p99=1.06/1.85 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:53.162 [Sidecar] RECV: heartbeat
+13:20:53.389 [Sidecar] RECV: time_update
+13:20:54.014 [PERF] frames=49 timer_interval p50/p99=17.02/35.74 ms draw p50/p99=0.99/1.66 ms present p50/p99=0.12/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:20:54.402 [Sidecar] RECV: time_update
+13:20:55.030 [PERF] frames=50 timer_interval p50/p99=16.85/37.90 ms draw p50/p99=0.97/1.66 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:20:55.164 [Sidecar] RECV: heartbeat
+13:20:55.383 [Sidecar] RECV: time_update
+13:20:56.039 [PERF] frames=55 timer_interval p50/p99=16.74/37.73 ms draw p50/p99=1.01/1.49 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:56.386 [Sidecar] RECV: time_update
+13:20:57.039 [PERF] frames=52 timer_interval p50/p99=16.75/39.58 ms draw p50/p99=0.96/1.73 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:20:57.163 [Sidecar] RECV: heartbeat
+13:20:57.383 [Sidecar] RECV: time_update
+13:20:58.055 [PERF] frames=54 timer_interval p50/p99=16.80/37.22 ms draw p50/p99=1.11/2.12 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:20:58.408 [Sidecar] RECV: time_update
+13:20:59.085 [PERF] frames=45 timer_interval p50/p99=17.86/57.44 ms draw p50/p99=1.06/3.22 ms present p50/p99=0.15/0.46 ms skipped=0 [DXGI] queued=0 vsync_us=16662.3
+13:20:59.164 [Sidecar] RECV: heartbeat
+13:20:59.384 [Sidecar] RECV: time_update
+13:21:00.088 [PERF] frames=56 timer_interval p50/p99=16.65/39.17 ms draw p50/p99=1.07/1.70 ms present p50/p99=0.13/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.5
+13:21:00.384 [Sidecar] RECV: time_update
+13:21:01.105 [PERF] frames=51 timer_interval p50/p99=16.80/38.81 ms draw p50/p99=0.95/1.52 ms present p50/p99=0.12/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.9
+13:21:01.164 [Sidecar] RECV: heartbeat
+13:21:01.385 [Sidecar] RECV: time_update
+13:21:02.107 [PERF] frames=47 timer_interval p50/p99=16.79/39.48 ms draw p50/p99=1.03/1.94 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:21:02.385 [Sidecar] RECV: time_update
+13:21:03.123 [PERF] frames=49 timer_interval p50/p99=17.03/38.81 ms draw p50/p99=1.13/1.80 ms present p50/p99=0.14/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:21:03.169 [Sidecar] RECV: heartbeat
+13:21:03.385 [Sidecar] RECV: time_update
+13:21:04.137 [PERF] frames=51 timer_interval p50/p99=16.77/37.66 ms draw p50/p99=1.03/1.92 ms present p50/p99=0.14/0.23 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:21:04.387 [Sidecar] RECV: time_update
+13:21:05.173 [PERF] frames=52 timer_interval p50/p99=16.77/36.45 ms draw p50/p99=1.02/1.47 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:21:05.173 [Sidecar] RECV: heartbeat
+13:21:05.387 [Sidecar] RECV: time_update
+13:21:06.186 [PERF] frames=48 timer_interval p50/p99=16.84/40.12 ms draw p50/p99=0.99/1.62 ms present p50/p99=0.13/0.20 ms skipped=0 [DXGI] queued=0 vsync_us=16662.7
+13:21:06.387 [Sidecar] RECV: time_update
+13:21:07.171 [Sidecar] RECV: heartbeat
+13:21:07.203 [PERF] frames=50 timer_interval p50/p99=16.81/38.39 ms draw p50/p99=1.01/1.61 ms present p50/p99=0.14/0.27 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:21:07.388 [Sidecar] RECV: time_update
+13:21:08.229 [PERF] frames=49 timer_interval p50/p99=17.18/39.67 ms draw p50/p99=1.11/2.03 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.6
+13:21:08.388 [Sidecar] RECV: time_update
+13:21:09.178 [Sidecar] RECV: heartbeat
+13:21:09.243 [PERF] frames=55 timer_interval p50/p99=16.70/34.07 ms draw p50/p99=1.00/1.56 ms present p50/p99=0.13/0.19 ms skipped=0 [DXGI] queued=0 vsync_us=16662.1
+13:21:09.390 [Sidecar] RECV: time_update
+13:21:10.249 [PERF] frames=53 timer_interval p50/p99=16.72/39.10 ms draw p50/p99=1.00/1.65 ms present p50/p99=0.13/0.24 ms skipped=0 [DXGI] queued=0 vsync_us=16662.4
+13:21:10.390 [Sidecar] RECV: time_update
+13:21:11.185 [Sidecar] RECV: heartbeat
+13:21:11.251 [PERF] frames=49 timer_interval p50/p99=16.76/38.66 ms draw p50/p99=1.03/1.41 ms present p50/p99=0.13/0.21 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:21:11.390 [Sidecar] RECV: time_update
+13:21:12.252 [PERF] frames=49 timer_interval p50/p99=16.88/36.11 ms draw p50/p99=1.13/1.61 ms present p50/p99=0.14/0.22 ms skipped=0 [DXGI] queued=0 vsync_us=16662.8
+13:21:12.392 [Sidecar] RECV: time_update
+13:21:13.186 [Sidecar] RECV: heartbeat
+13:21:13.269 [PERF] frames=51 timer_interval p50/p99=16.71/37.28 ms draw p50/p99=1.33/2.15 ms present p50/p99=0.15/0.26 ms skipped=0 [DXGI] queued=0 vsync_us=16661.9
