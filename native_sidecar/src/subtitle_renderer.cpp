@@ -229,6 +229,16 @@ void SubtitleRenderer::render_thread_func() {
                     int64_t render_time = pts_ms + delay_ms_.load(std::memory_order_relaxed);
                     if (render_time < 0) render_time = 0;
 
+                    // VIDEO_SUB_POSITION 2026-04-24 — push the user-facing
+                    // baseline percent to libass per-render. Inverted per
+                    // mpv reference (sd_ass.c:554): user 100 = bottom →
+                    // libass 0; user 0 = top → libass 100. Cheap atomic
+                    // load + libass setter; no-op when pct unchanged.
+                    const int sub_pos_pct =
+                        sub_position_pct_.load(std::memory_order_relaxed);
+                    ass_set_line_position(renderer_,
+                        static_cast<double>(100 - sub_pos_pct));
+
                     int changed = 0;
                     ASS_Image* images = ass_render_frame(renderer_, track_,
                                                           static_cast<long long>(render_time),
@@ -633,6 +643,30 @@ void SubtitleRenderer::set_delay_ms(int64_t delay_ms) {
     delay_ms_.store(delay_ms, std::memory_order_relaxed);
 }
 
+void SubtitleRenderer::set_sub_position_pct(int pct) {
+    // VIDEO_SUB_POSITION 2026-04-24 — clamp to [0, 100]. Picked up by the
+    // render thread on the next ass_render_frame (libass) and the next
+    // blend_pgs_rects call (PGS) — no immediate render is forced; user
+    // sees the change on the next decoded frame. Atomic store, no mutex.
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    sub_position_pct_.store(pct, std::memory_order_relaxed);
+}
+
+void SubtitleRenderer::clear_active_subs() {
+    {
+        std::lock_guard<std::mutex> render_lock(render_mutex_);
+        render_pending_ = false;
+        render_complete_ = true;
+    }
+    render_done_cv_.notify_all();
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (track_) ass_flush_events(track_);
+    pgs_rects_.clear();
+    SUB_LOG("clear_active_subs\n");
+}
+
 void SubtitleRenderer::clear_track() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (track_) {
@@ -911,6 +945,18 @@ void SubtitleRenderer::blend_pgs_rects(uint8_t* frame, int stride,
     // Called from the render thread under mutex_. Filters by pts so
     // accumulated events (preload can queue hundreds at file open) only
     // blend when the current playback time is inside their window.
+
+    // VIDEO_SUB_POSITION 2026-04-24 — upward Y-shift in pixels for the
+    // user-facing baseline percent. pct=100 → 0 (no shift, original PGS
+    // y); pct=0 → video_rect_h_ (lift by full video-rect height). Scaled
+    // against video_rect_h_ rather than frame_h_ so cinemascope letterbox
+    // bars stay outside the lift range. The existing clamp loop below
+    // handles dst_y < 0 / dst_y + blit_h > frame_h naturally.
+    const int sub_pos_pct = sub_position_pct_.load(std::memory_order_relaxed);
+    const int sub_offset_y = (video_rect_h_ > 0)
+        ? ((100 - sub_pos_pct) * video_rect_h_) / 100
+        : 0;
+
     for (const auto& rect : pgs_rects_) {
         if (rect.bgra.empty()) continue;
         if (pts_ms < rect.start_ms) continue;
@@ -918,7 +964,7 @@ void SubtitleRenderer::blend_pgs_rects(uint8_t* frame, int stride,
 
         // Clamp rect to frame bounds
         int src_x0 = 0, src_y0 = 0;
-        int dst_x = rect.x, dst_y = rect.y;
+        int dst_x = rect.x, dst_y = rect.y - sub_offset_y;
         int blit_w = rect.w, blit_h = rect.h;
 
         if (dst_x < 0) { src_x0 = -dst_x; blit_w += dst_x; dst_x = 0; }

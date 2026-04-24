@@ -104,6 +104,13 @@ public:
 
     void set_delay_ms(int64_t delay_ms);
 
+    // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent slider.
+    // 100 = bottom (default, mpv parity), 0 = top. Inverted at libass:
+    // `ass_set_line_position(renderer_, 100 - pct)`. PGS path applies an
+    // upward Y-shift to dst_y in blend_pgs_rects clamped to video_rect.
+    void set_sub_position_pct(int pct);
+
+    void clear_active_subs();
     void clear_track();
 
     // Override subtitle style (font size, vertical margin, outline width).
@@ -145,6 +152,11 @@ private:
     std::atomic<bool>   visible_{true};
     std::atomic<int64_t> delay_ms_{0};
     std::atomic<int>    margin_lift_px_{0};  // pixels to shift subs up (HUD visible)
+    // VIDEO_SUB_POSITION 2026-04-24 — user-facing baseline (0..100 percent,
+    // 100 = bottom). Read each render under mutex_ in render_thread_func
+    // for libass (ass_set_line_position) and in blend_pgs_rects for PGS
+    // (Y-offset on dst_y). See set_sub_position_pct.
+    std::atomic<int>    sub_position_pct_{100};
     // User subtitle-style overrides. font_scale_ is applied via libass's
     // renderer-level ass_set_font_scale — safe mid-playback unlike the
     // ass_set_selective_style_override_* APIs which caused a silent-stop

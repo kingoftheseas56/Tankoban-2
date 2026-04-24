@@ -87,6 +87,10 @@ SidecarProcess::SidecarProcess(QObject* parent)
 
 SidecarProcess::~SidecarProcess()
 {
+    // VIDEO_IPC_INSTRUMENTATION 2026-04-24 — flush tracker before teardown.
+    // Safe even if m_ipcLatencies is empty (dumpIpcLatency early-returns).
+    dumpIpcLatency();
+
     if (m_process->state() != QProcess::NotRunning) {
         sendShutdown();
         m_process->waitForFinished(3000);
@@ -134,6 +138,18 @@ int SidecarProcess::sendCommand(const QString& name, const QJsonObject& payload)
     QByteArray line = QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n";
     debugLog("[Sidecar] SEND: " + QString::fromUtf8(line.trimmed()));
     m_process->write(line);
+
+    // VIDEO_IPC_INSTRUMENTATION 2026-04-24 — stamp send-time per seq for the
+    // round-trip tracker. Matched by recordIpcAck when the sidecar's `ack`
+    // event arrives in processLine. Cap the pending-map at
+    // kIpcPendingMaxSize so un-acked commands (pre-rebuild sidecar, or a
+    // handler that skipped write_ack) don't grow the map without bound —
+    // drop oldest arbitrary entries if exceeded. Typical session holds
+    // single-digit pending entries.
+    if (m_ipcPending.size() >= kIpcPendingMaxSize) {
+        m_ipcPending.erase(m_ipcPending.begin());
+    }
+    m_ipcPending.insert(seq, PendingSend{ name, QDateTime::currentMSecsSinceEpoch() });
     return seq;
 }
 
@@ -318,6 +334,13 @@ int SidecarProcess::sendSetSubDelay(double delayMs)
     return sendCommand("set_sub_delay", p);
 }
 
+int SidecarProcess::sendSetSubtitlePosition(int percent)
+{
+    QJsonObject p;
+    p["percent"] = percent;
+    return sendCommand("set_sub_position", p);
+}
+
 int SidecarProcess::sendSetAudioDelay(int delayMs)
 {
     QJsonObject p;
@@ -462,6 +485,15 @@ void SidecarProcess::processLine(const QByteArray& line)
 
     QJsonObject payload = obj["payload"].toObject();
     debugLog("[Sidecar] RECV: " + name);
+
+    // VIDEO_IPC_INSTRUMENTATION 2026-04-24 — generic `ack` event from the
+    // sidecar's write_ack(). Fires for ~every handle_*() — see protocol.cpp
+    // write_ack → write_event("ack", sid, seqAck). Records round-trip
+    // latency per command and returns; no payload processing needed.
+    if (name == QStringLiteral("ack")) {
+        recordIpcAck(obj.value("seqAck").toInt(-1));
+        return;
+    }
 
     if (name == "ready") {
         emit ready();
@@ -886,4 +918,79 @@ int SidecarProcess::pushSubStyle()
         72);
     const int margin = qBound(0, kSubBaseMargin + m_subPixelOffsetY, 200);
     return sendSetSubStyle(fontSize, margin, m_subOutline);
+}
+
+// ── VIDEO_IPC_INSTRUMENTATION 2026-04-24 ────────────────────────────────────
+// Round-trip latency tracker. sendCommand stamps a send-time per seq;
+// processLine's `ack` handler calls recordIpcAck with the seqAck value.
+// dumpIpcLatency writes per-command p50/p99/max/count to out/ipc_latency.log
+// on destructor. Measurement-only — no behavior change.
+
+void SidecarProcess::recordIpcAck(int seqAck)
+{
+    if (seqAck < 0) return;
+    auto it = m_ipcPending.find(seqAck);
+    if (it == m_ipcPending.end()) return;  // stale or already consumed
+    const qint64 rt = QDateTime::currentMSecsSinceEpoch() - it->sendMs;
+    // Guard against clock weirdness — treat negative as zero rather than
+    // polluting the histogram.
+    m_ipcLatencies[it->name].append(rt < 0 ? 0 : rt);
+    m_ipcPending.erase(it);
+}
+
+void SidecarProcess::dumpIpcLatency()
+{
+    if (m_ipcLatencies.isEmpty()) return;
+
+    // Prefer `out/` for consistency with stream_telemetry.log + runtime-health
+    // conventions. Fall back to repo root if `out/` doesn't exist (e.g.,
+    // sidecar launched from a fresh checkout pre-build).
+    QString path = QStringLiteral("out/ipc_latency.log");
+    QFileInfo outDir(QStringLiteral("out"));
+    if (!outDir.exists() || !outDir.isDir()) {
+        path = QStringLiteral("ipc_latency.log");
+    }
+
+    QFile f(path);
+    if (!f.open(QIODevice::Append | QIODevice::Text)) return;
+    QTextStream stream(&f);
+
+    // Session header: wall-clock timestamp + total commands measured
+    int totalSamples = 0;
+    for (auto it = m_ipcLatencies.constBegin(); it != m_ipcLatencies.constEnd(); ++it) {
+        totalSamples += it.value().size();
+    }
+    stream << "## session_end=" << QDateTime::currentDateTime().toString(Qt::ISODate)
+           << " total_commands=" << totalSamples
+           << " distinct_cmd_types=" << m_ipcLatencies.size()
+           << " pending_unmatched=" << m_ipcPending.size()
+           << "\n";
+
+    // Per-command-name rows, sorted alphabetically for stable diffing across
+    // sessions. Within each row: count + p50 + p99 + max in ms.
+    QList<QString> names = m_ipcLatencies.keys();
+    std::sort(names.begin(), names.end());
+    for (const QString& cmdName : names) {
+        QVector<qint64> samples = m_ipcLatencies.value(cmdName);
+        if (samples.isEmpty()) continue;
+        std::sort(samples.begin(), samples.end());
+        const int n = samples.size();
+        const qint64 p50 = samples[n / 2];
+        // p99 index: floor(n * 0.99), clamped to last
+        const int p99Idx = qMin(n - 1, static_cast<int>(n * 0.99));
+        const qint64 p99 = samples[p99Idx];
+        const qint64 maxV = samples.last();
+        stream << "cmd=" << cmdName
+               << " count=" << n
+               << " p50=" << p50 << "ms"
+               << " p99=" << p99 << "ms"
+               << " max=" << maxV << "ms\n";
+    }
+    stream << "\n";
+    f.close();
+
+    // Clear post-dump so a subsequent re-run of the same SidecarProcess
+    // instance (e.g., under testing harness) starts fresh.
+    m_ipcLatencies.clear();
+    m_ipcPending.clear();
 }

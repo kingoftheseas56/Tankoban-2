@@ -4,9 +4,11 @@
 #include <QProcess>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QUrl>
+#include <QVector>
 #include <atomic>
 #include <functional>
 
@@ -73,6 +75,11 @@ public:
     int sendSetSubDelay(double delayMs);
     int sendSetAudioDelay(int delayMs);
     int sendSetSubStyle(int fontSize, int marginV, bool outline);
+    // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent baseline
+    // (100 = bottom, mpv parity). Persisted globally under QSettings
+    // "videoPlayer/subtitlePosition" by VideoPlayer; pushed via this on
+    // every slider change + on onSidecarReady for first-file restore.
+    int sendSetSubtitlePosition(int percent);
     int sendLoadExternalSub(const QString& path);
     int sendSetFilters(bool deinterlace, int brightness, int contrast, int saturation, bool normalize, bool interpolate = false, const QString& deinterlaceFilter = {});
     int sendRawFilters(const QString& videoFilter, const QString& audioFilter);
@@ -302,6 +309,24 @@ private:
     // Batch 5.2 helpers.
     void updateSubtitleCache(const QJsonArray& subtitle, const QString& activeSubId);
     int  pushSubStyle();
+
+    // VIDEO_IPC_INSTRUMENTATION 2026-04-24 — IPC round-trip latency tracker.
+    // sendCommand stamps a send-time per seq; the `ack` event handler in
+    // processLine matches seqAck back to the pending entry and records the
+    // delta in per-command-name histograms. dumpIpcLatency writes p50/p99/
+    // max/count per command to out/ipc_latency.log (append) at shutdown.
+    // Non-behavioral — measurement only. See chat.md 2026-04-24 evening-late
+    // for the strategic context (companion to scripts/compare-mpv-tanko.ps1:
+    // harness tells us IF we regressed; this tells us WHERE the time goes).
+    struct PendingSend {
+        QString name;
+        qint64  sendMs = 0;
+    };
+    void recordIpcAck(int seqAck);
+    void dumpIpcLatency();
+    QHash<int, PendingSend>             m_ipcPending;
+    QHash<QString, QVector<qint64>>     m_ipcLatencies;
+    static constexpr int                kIpcPendingMaxSize = 1024;
 
     QProcess* m_process = nullptr;
     QString   m_sessionId;

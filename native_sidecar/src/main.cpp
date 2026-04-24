@@ -1329,6 +1329,22 @@ static void handle_set_sub_delay(const Command& cmd) {
 }
 
 // ---------------------------------------------------------------------------
+// VIDEO_SUB_POSITION 2026-04-24 — set_sub_position handler
+// User-facing 0..100 percent baseline (100 = bottom default, mpv parity).
+// Sub-renderer inverts for libass (ass_set_line_position) + applies upward
+// Y-shift to PGS dst_y. Atomic state, no mutex; takes effect next render.
+// ---------------------------------------------------------------------------
+
+static void handle_set_sub_position(const Command& cmd) {
+    write_ack(cmd.seq, cmd.sessionId);
+    int percent = cmd.payload.value("percent", 100);
+    if (g_sub_renderer) {
+        g_sub_renderer->set_sub_position_pct(percent);
+    }
+    write_event("sub_position_changed", cmd.sessionId, -1, {{"percent", percent}});
+}
+
+// ---------------------------------------------------------------------------
 // load_external_sub handler
 // ---------------------------------------------------------------------------
 
@@ -1649,6 +1665,9 @@ int main(int argc, char* argv[]) {
 
         } else if (name == "set_sub_delay") {
             handle_set_sub_delay(*cmd);
+
+        } else if (name == "set_sub_position") {
+            handle_set_sub_position(*cmd);
 
         } else if (name == "load_external_sub") {
             handle_load_external_sub(*cmd);
