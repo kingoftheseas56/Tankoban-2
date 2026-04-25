@@ -1519,7 +1519,23 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Pa_Initialize failed: %s\n", Pa_GetErrorText(pa_err));
         // Continue anyway — video-only mode will work
     } else {
-        PaDeviceIndex dev = Pa_GetDefaultOutputDevice();
+        // Path A — prefer WASAPI shared over PortAudio's default host API.
+        // PortAudio's Pa_GetDefaultOutputDevice() returns the device of the
+        // first-registered host API, which on Windows is MME (the 1991-era
+        // legacy API + a compatibility shim layer). WASAPI shared matches
+        // what mpv default + VLC default use. Falls through to the system
+        // default if WASAPI isn't compiled into PortAudio or has no output
+        // devices registered (rare on modern Windows). Same logic mirrored
+        // in audio_decoder.cpp for the lazy-open fallback path.
+        PaDeviceIndex dev = paNoDevice;
+        PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
+        if (wasapi_idx >= 0) {
+            const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
+            if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
+                dev = wasapi_info->defaultOutputDevice;
+            }
+        }
+        if (dev == paNoDevice) dev = Pa_GetDefaultOutputDevice();
         if (dev != paNoDevice) {
             const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
             std::fprintf(stderr, "PortAudio: default output device: %s (%.3fs latency)\n",
@@ -1530,6 +1546,10 @@ int main(int argc, char* argv[]) {
                 g_audio_device_name = info->name;
                 const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
                 g_audio_host_api_name = api ? api->name : "";
+                // Print to stderr so it lands in sidecar_debug_live.log — the JSON
+                // media_info event reaches stdout but never the debug log.
+                std::fprintf(stderr, "PortAudio: host API: %s\n",
+                             api ? api->name : "unknown");
             }
 
             // Pre-warm: open + start a PortAudio stream now so the slow
