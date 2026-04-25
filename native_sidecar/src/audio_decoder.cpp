@@ -445,7 +445,22 @@ void AudioDecoder::audio_thread_func(
         on_event_("audio_ready", "");
     } else {
         PaStreamParameters output_params{};
-        output_params.device = Pa_GetDefaultOutputDevice();
+        // Path A — prefer WASAPI shared (mirrors main.cpp prewarm path).
+        // See main.cpp at the Pa_Initialize block for the full rationale —
+        // MME is PortAudio's Windows default; WASAPI shared matches mpv +
+        // VLC defaults. Lazy-open fallback hits this only when prewarming
+        // failed in main.cpp, which is rare; keeping symmetry prevents a
+        // silent MME-trap if prewarming ever fails.
+        PaDeviceIndex dev_idx = paNoDevice;
+        PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
+        if (wasapi_idx >= 0) {
+            const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
+            if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
+                dev_idx = wasapi_info->defaultOutputDevice;
+            }
+        }
+        if (dev_idx == paNoDevice) dev_idx = Pa_GetDefaultOutputDevice();
+        output_params.device = dev_idx;
         if (output_params.device == paNoDevice) {
             std::fprintf(stderr, "AudioDecoder: no default audio output device\n");
             swr_free(&swr);
