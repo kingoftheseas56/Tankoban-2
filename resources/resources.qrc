@@ -13,6 +13,19 @@
         <file>icons/repeat_all.svg</file>
         <file>icons/repeat_one.svg</file>
         <file>icons/loop_file.svg</file>
+        <file>icons/subtitles.svg</file>
+        <file>icons/audio.svg</file>
+        <file>icons/settings.svg</file>
+        <file>icons/comic_reader/arrow-left.svg</file>
+        <file>icons/comic_reader/triangle-left.svg</file>
+        <file>icons/comic_reader/triangle-right.svg</file>
+        <file>icons/comic_reader/skip-back.svg</file>
+        <file>icons/comic_reader/skip-forward.svg</file>
+        <file>icons/comic_reader/mode-single.svg</file>
+        <file>icons/comic_reader/mode-double.svg</file>
+        <file>icons/comic_reader/mode-scroll.svg</file>
+        <file>icons/comic_reader/gear.svg</file>
+        <file>icons/comic_reader/list.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>

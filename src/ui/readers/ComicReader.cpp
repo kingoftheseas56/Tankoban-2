@@ -28,6 +28,7 @@
 #include <QGraphicsOpacityEffect>
 #include <QColor>
 #include <QImage>
+#include <QIcon>
 #include <QComboBox>
 #include <QFrame>
 #include <QCheckBox>
@@ -264,6 +265,13 @@ void ScrubBar::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     QRectF full(rect());
+
+    // Phase 1.1 redesign 2026-04-25: solid opaque background matches the toolbar's
+    // #080808, so comic-art doesn't bleed through the scrub bar region. Without this
+    // fill the widget defaulted to transparent and the toolbar's old rgba(8,8,8,0.82)
+    // showed page content underneath — both surfaces fixed in tandem.
+    p.fillRect(full, QColor(0x08, 0x08, 0x08));
+
     double trackH = 4.0;
     QRectF track(0.0, (full.height() - trackH) / 2.0, full.width(), trackH);
     double radius = trackH / 2.0;
@@ -485,13 +493,14 @@ void ComicReader::buildUI()
     m_scrollArea->viewport()->installEventFilter(this);
     m_imageLabel->installEventFilter(this);
 
-    // Toolbar
+    // Toolbar — solid black opaque surface (Phase 1.1 redesign 2026-04-25 — no more
+    // page-content bleed-through; HUD reads as one cohesive black bar).
     m_toolbar = new QWidget(this);
     m_toolbar->setObjectName("ComicReaderToolbar");
-    m_toolbar->setFixedHeight(66);
+    m_toolbar->setFixedHeight(78);
     m_toolbar->setStyleSheet(
         "QWidget#ComicReaderToolbar {"
-        "  background: rgba(8, 8, 8, 0.82);"
+        "  background: #080808;"
         "  border-top: 1px solid rgba(255, 255, 255, 0.10);"
         "}"
     );
@@ -504,86 +513,133 @@ void ComicReader::buildUI()
     m_scrubBar = new ScrubBar(m_toolbar);
     tbVBox->addWidget(m_scrubBar);
 
-    // Button row (bottom of toolbar)
+    // Button row (bottom of toolbar) — three-container layout for absolute centering.
+    // leftWrap (back btn) + centerWrap (prev/label/next) + rightWrap (cluster) sit in a
+    // QHBoxLayout where the side wraps have equal minimum width AND equal stretch, so the
+    // center wrap lands at the toolbar's geometric mid-pixel regardless of how many
+    // right-cluster buttons are visible (multi-volume case has 6 buttons, single has 3).
     auto* btnRow = new QWidget(m_toolbar);
     auto* tbLayout = new QHBoxLayout(btnRow);
     tbLayout->setContentsMargins(0, 0, 0, 0);
-    tbLayout->setSpacing(8);
+    tbLayout->setSpacing(0);
     tbVBox->addWidget(btnRow);
 
-    auto makeBtn = [this](const QString& text, int w = 32) {
-        auto* btn = new QPushButton(text, m_toolbar);
-        btn->setFixedSize(w, 28);
+    auto* leftWrap = new QWidget(btnRow);
+    leftWrap->setMinimumWidth(320);
+    auto* leftLayout = new QHBoxLayout(leftWrap);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(6);
+
+    auto* centerWrap = new QWidget(btnRow);
+    auto* centerLayout = new QHBoxLayout(centerWrap);
+    centerLayout->setContentsMargins(0, 0, 0, 0);
+    centerLayout->setSpacing(8);
+
+    auto* rightWrap = new QWidget(btnRow);
+    rightWrap->setMinimumWidth(320);
+    auto* rightLayout = new QHBoxLayout(rightWrap);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(6);
+
+    tbLayout->addWidget(leftWrap, 1);    // stretch 1 — equal with right
+    tbLayout->addWidget(centerWrap, 0);  // stretch 0 — sized to its content
+    tbLayout->addWidget(rightWrap, 1);   // stretch 1 — equal with left
+
+    // Symbol-only icon button (Phase 1 redesign 2026-04-25): 40x40 click target,
+    // 22px SVG inside, white-stroke line idiom matching Netflix/YouTube HUD scale.
+    auto makeIconBtn = [this](const QString& iconPath, int size = 40) {
+        auto* btn = new QPushButton(m_toolbar);
+        btn->setIcon(QIcon(iconPath));
+        btn->setIconSize(QSize(22, 22));
+        btn->setFixedSize(size, size);
         btn->setCursor(Qt::PointingHandCursor);
         btn->setStyleSheet(
-            "QPushButton { color: rgba(255,255,255,0.78); background: rgba(255,255,255,0.06);"
+            "QPushButton { background: rgba(255,255,255,0.06);"
             "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
-            "  padding: 0 8px; font-size: 11px; }"
+            "  padding: 0; }"
             "QPushButton:hover { background: rgba(255,255,255,0.12); }"
         );
         return btn;
     };
 
-    m_backBtn = makeBtn(QChar(0x2190) + QString(" Back"), 70);
+    // State-data button (page-width % readout, parallel to page-counter label).
+    // Kept as text per Hemanth's "no name labels" rule — % is data, not a label.
+    auto makeDataBtn = [this](const QString& text, int w = 56) {
+        auto* btn = new QPushButton(text, m_toolbar);
+        btn->setFixedSize(w, 40);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setStyleSheet(
+            "QPushButton { color: rgba(255,255,255,0.78); background: rgba(255,255,255,0.06);"
+            "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
+            "  padding: 0 8px; font-size: 12px; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.12); }"
+        );
+        return btn;
+    };
+
+    // Left wrap: back button flush-left.
+    m_backBtn = makeIconBtn(":/icons/comic_reader/arrow-left.svg");
+    m_backBtn->setToolTip("Back (Esc)");
     connect(m_backBtn, &QPushButton::clicked, this, [this]() {
         saveCurrentProgress();
         emit closeRequested();
     });
-    tbLayout->addWidget(m_backBtn);
+    leftLayout->addWidget(m_backBtn);
+    leftLayout->addStretch();
 
-    m_prevVolBtn = makeBtn(QString(QChar(0x00AB)), 32);
+    // Center wrap: [prev] [page-label] [next] — sits at toolbar geometric center.
+    m_prevBtn = makeIconBtn(":/icons/comic_reader/triangle-left.svg");
+    m_prevBtn->setToolTip("Previous page (←)");
+    connect(m_prevBtn, &QPushButton::clicked, this, &ComicReader::prevPage);
+    centerLayout->addWidget(m_prevBtn);
+
+    m_pageLabel = new QLabel("1 / 1", m_toolbar);
+    m_pageLabel->setStyleSheet("color: rgba(255,255,255,0.86); font-size: 14px; font-weight: 500; background: transparent;");
+    m_pageLabel->setAlignment(Qt::AlignCenter);
+    m_pageLabel->setMinimumWidth(110);
+    centerLayout->addWidget(m_pageLabel);
+
+    m_nextBtn = makeIconBtn(":/icons/comic_reader/triangle-right.svg");
+    m_nextBtn->setToolTip("Next page (→)");
+    connect(m_nextBtn, &QPushButton::clicked, this, &ComicReader::nextPage);
+    centerLayout->addWidget(m_nextBtn);
+
+    // Right wrap: settings/volume cluster flush-right.
+    // Cluster order: [Mode] [Width%] [Settings] [PrevVol] [NextVol] [VolList].
+    rightLayout->addStretch();
+
+    m_modeBtn = makeIconBtn(":/icons/comic_reader/mode-single.svg");
+    m_modeBtn->setToolTip("Reading mode (M)");
+    connect(m_modeBtn, &QPushButton::clicked, this, &ComicReader::cycleReaderMode);
+    rightLayout->addWidget(m_modeBtn);
+
+    m_portraitBtn = makeDataBtn(QString::number(m_portraitWidthPct) + "%", 56);
+    m_portraitBtn->setToolTip("Page width");
+    connect(m_portraitBtn, &QPushButton::clicked, this, &ComicReader::showPortraitWidthMenu);
+    rightLayout->addWidget(m_portraitBtn);
+
+    m_settingsBtn = makeIconBtn(":/icons/comic_reader/gear.svg");
+    m_settingsBtn->setToolTip("Reader Settings (Ctrl+,)");
+    connect(m_settingsBtn, &QPushButton::clicked, this, &ComicReader::showSettingsPanel);
+    rightLayout->addWidget(m_settingsBtn);
+
+    m_prevVolBtn = makeIconBtn(":/icons/comic_reader/skip-back.svg");
     m_prevVolBtn->setToolTip("Previous volume");
     m_prevVolBtn->hide();
     connect(m_prevVolBtn, &QPushButton::clicked, this, &ComicReader::prevVolume);
-    tbLayout->addWidget(m_prevVolBtn);
+    rightLayout->addWidget(m_prevVolBtn);
 
-    tbLayout->addStretch();
-
-    m_prevBtn = makeBtn(QString(QChar(0x25C1)), 32);
-    connect(m_prevBtn, &QPushButton::clicked, this, &ComicReader::prevPage);
-    tbLayout->addWidget(m_prevBtn);
-
-    m_pageLabel = new QLabel("Page 1 / 1", m_toolbar);
-    m_pageLabel->setStyleSheet("color: rgba(255,255,255,0.78); font-size: 12px; background: transparent;");
-    m_pageLabel->setAlignment(Qt::AlignCenter);
-    m_pageLabel->setMinimumWidth(120);
-    tbLayout->addWidget(m_pageLabel);
-
-    m_nextBtn = makeBtn(QString(QChar(0x25B7)), 32);
-    connect(m_nextBtn, &QPushButton::clicked, this, &ComicReader::nextPage);
-    tbLayout->addWidget(m_nextBtn);
-
-    tbLayout->addStretch();
-
-    // Mode button
-    m_modeBtn = makeBtn("Single", 64);
-    m_modeBtn->setToolTip("Reading mode (M)");
-    connect(m_modeBtn, &QPushButton::clicked, this, &ComicReader::cycleReaderMode);
-    tbLayout->addWidget(m_modeBtn);
-
-    // Portrait width button
-    m_portraitBtn = makeBtn(QString::number(m_portraitWidthPct) + "%", 48);
-    m_portraitBtn->setToolTip("Page width");
-    connect(m_portraitBtn, &QPushButton::clicked, this, &ComicReader::showPortraitWidthMenu);
-    tbLayout->addWidget(m_portraitBtn);
-
-    // P5-4: Settings panel button — gear glyph (U+2699), text presentation
-    m_settingsBtn = makeBtn(QString(QChar(0x2699)), 32);
-    m_settingsBtn->setToolTip("Reader Settings (Ctrl+,)");
-    connect(m_settingsBtn, &QPushButton::clicked, this, &ComicReader::showSettingsPanel);
-    tbLayout->addWidget(m_settingsBtn);
-
-    m_volBtn = makeBtn(QString(QChar(0x2261)), 32);
-    m_volBtn->setToolTip("Volumes (O)");
-    m_volBtn->hide();
-    connect(m_volBtn, &QPushButton::clicked, this, &ComicReader::showVolumeNavigator);
-    tbLayout->addWidget(m_volBtn);
-
-    m_nextVolBtn = makeBtn(QString(QChar(0x00BB)), 32);
+    m_nextVolBtn = makeIconBtn(":/icons/comic_reader/skip-forward.svg");
     m_nextVolBtn->setToolTip("Next volume");
     m_nextVolBtn->hide();
     connect(m_nextVolBtn, &QPushButton::clicked, this, &ComicReader::nextVolume);
-    tbLayout->addWidget(m_nextVolBtn);
+    rightLayout->addWidget(m_nextVolBtn);
+
+    m_volBtn = makeIconBtn(":/icons/comic_reader/list.svg");
+    m_volBtn->setToolTip("Volumes (O)");
+    m_volBtn->hide();
+    connect(m_volBtn, &QPushButton::clicked, this, &ComicReader::showVolumeNavigator);
+    rightLayout->addWidget(m_volBtn);
 
     // Connect scrub bar
     connect(m_scrubBar, &ScrubBar::scrubRequested, this, [this](int page) {
@@ -858,6 +914,13 @@ void ComicReader::openBook(const QString& cbzPath,
 
     // Update toolbar visibility for mode (after applySeriesSettings so restored mode is reflected)
     m_portraitBtn->setVisible(!m_isDoublePage);
+    // Sync mode-button icon to restored m_readerMode (HUD redesign 2026-04-25 — icon, not text).
+    switch (m_readerMode) {
+    case ReaderMode::DoublePage:   m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg")); break;
+    case ReaderMode::ScrollStrip:  m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-scroll.svg")); break;
+    case ReaderMode::SinglePage:
+    default:                       m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg")); break;
+    }
 
     int startPage = restoreSavedPage();
     QJsonObject savedProgress = m_bridge ? m_bridge->progress("comics", itemIdForPath(cbzPath)) : QJsonObject();
@@ -1467,12 +1530,12 @@ void ComicReader::updatePageLabel()
     if (m_isDoublePage && !m_secondPixmap.isNull()) {
         auto* pair = pairForPage(m_currentPage);
         if (pair && pair->leftIndex >= 0) {
-            m_pageLabel->setText(QString("Pages %1-%2 / %3")
+            m_pageLabel->setText(QString("%1-%2 / %3")
                 .arg(pair->rightIndex + 1).arg(pair->leftIndex + 1).arg(total));
             return;
         }
     }
-    m_pageLabel->setText(QString("Page %1 / %2").arg(m_currentPage + 1).arg(total));
+    m_pageLabel->setText(QString("%1 / %2").arg(m_currentPage + 1).arg(total));
 }
 
 // ── Progress ────────────────────────────────────────────────────────────────
@@ -1622,7 +1685,7 @@ void ComicReader::cycleReaderMode()
         m_imageLabel->show();
         buildCanonicalPairingUnits();
         m_portraitBtn->setVisible(false);
-        m_modeBtn->setText("Double");
+        m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg"));
         showToast("Double Page");
         break;
     case ReaderMode::DoublePage:
@@ -1631,7 +1694,7 @@ void ComicReader::cycleReaderMode()
         invalidatePairing();
         m_imageLabel->hide();
         m_portraitBtn->setVisible(true);
-        m_modeBtn->setText("Scroll");
+        m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-scroll.svg"));
         buildScrollStrip();
         showToast("Scroll Strip");
         // Delay scroll-to-page until layout settles and initial pages decode
@@ -1653,7 +1716,7 @@ void ComicReader::cycleReaderMode()
         m_imageLabel->show();
         invalidatePairing();
         m_portraitBtn->setVisible(true);
-        m_modeBtn->setText("Single");
+        m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg"));
         showToast("Single Page");
         break;
     }
@@ -3769,7 +3832,7 @@ void ComicReader::resetSeriesSettings()
     m_imageLabel->show();
     invalidatePairing();
     m_portraitBtn->setVisible(true);
-    m_modeBtn->setText("Single");
+    m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg"));
     if (m_stripCanvas) {
         m_stripCanvas->setFilterBrightness(0);
         m_stripCanvas->setSidePadding(0);
