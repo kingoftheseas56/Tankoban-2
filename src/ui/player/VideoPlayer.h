@@ -27,11 +27,10 @@ class CenterFlash;
 class PlaylistDrawer;
 class StatsBadge;
 class ToastHud;
-class EqualizerPopover;
-class FilterPopover;
-class TrackPopover;
 class SubtitleOverlay;
-class SubtitleMenu;
+class SubtitlePopover;
+class AudioPopover;
+class SettingsPopover;
 
 class VideoPlayer : public QWidget {
     Q_OBJECT
@@ -234,7 +233,8 @@ private:
     void teardownUi();
 
     // PLAYER_UX_FIX Phase 6.4 — cross-chip popover exclusion helper.
-    // Hides whichever of m_filterPopover / m_eqPopover / m_trackPopover /
+    // VIDEO_HUD_MINIMALIST 2026-04-25 reshape: now hides whichever of
+    // m_subtitlePopover / m_audioPopover / m_settingsPopover /
     // m_playlistDrawer is currently open, EXCEPT the one passed as
     // `keep` (may be nullptr to dismiss all). Called from each chip
     // click handler before toggling that chip's own popover, and from
@@ -255,6 +255,28 @@ private:
     void speedUp();
     void speedDown();
     void speedReset();
+
+    // VIDEO_HUD_MINIMALIST 1.x bug-fix 2026-04-25 — true if any of the
+    // three bottom-HUD popovers is currently visible. Called from
+    // hideControls (early-return guard so the HUD doesn't fade while
+    // a popover is open and the user is mid-task). Playlist drawer is
+    // its own widget class with its own auto-hide semantics; not
+    // included here.
+    bool isAnyPopoverOpen() const;
+
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — single dispatch path for
+    // audio + subtitle delay adjustments. Called from both the keyboard
+    // action handlers (Ctrl+= / Ctrl+- / Ctrl+0 for audio; ./, for sub)
+    // and the SettingsPopover's +/- button signal connections.
+    //  - adjustAudioDelay: delta is +/- 50 ms; resets to 0 when delta
+    //    sentinel is treated by callers (keyboard reset clears
+    //    m_audioDelayMs directly before calling). Persists per-Bluetooth-
+    //    device under m_audioDeviceKey + "/manual" flag.
+    //  - adjustSubDelay: delta is +/- 100 ms; delta == 0 clears
+    //    m_subDelayMs absolutely (reset sentinel). Session-only state
+    //    (also flows through saveShowPrefs).
+    void adjustAudioDelay(int delta);
+    void adjustSubDelay(int delta);
     void cycleAudioTrack();
     void cycleSubtitleTrack();
     void toggleSubtitles();
@@ -420,11 +442,14 @@ private:
     PlaylistDrawer*   m_playlistDrawer   = nullptr;
     StatsBadge*       m_statsBadge       = nullptr;
     ToastHud*         m_toastHud         = nullptr;
-    EqualizerPopover* m_eqPopover        = nullptr;
-    FilterPopover*    m_filterPopover    = nullptr;
-    TrackPopover*     m_trackPopover     = nullptr;
     SubtitleOverlay*  m_subOverlay       = nullptr;
-    SubtitleMenu*     m_subMenu          = nullptr;  // Batch 5.3
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — three icon-only chips replace
+    // the prior {1.0x, Filters, EQ, Tracks} cluster. SubtitlePopover
+    // also absorbs the Tankostream addon-fetched external-subs +
+    // load-from-file logic that used to live in SubtitleMenu.
+    SubtitlePopover*  m_subtitlePopover  = nullptr;
+    AudioPopover*     m_audioPopover     = nullptr;
+    SettingsPopover*  m_settingsPopover  = nullptr;
 
     // Current/pending file
     QString     m_currentFile;
@@ -470,10 +495,13 @@ private:
     // set on each openFile; cleared on teardownUi.
     QLabel*      m_titleLabel      = nullptr;
     QString      m_fullTitle;
-    QPushButton* m_speedChip       = nullptr;
-    QPushButton* m_filtersChip     = nullptr;
-    QPushButton* m_eqChip          = nullptr;
-    QPushButton* m_trackChip       = nullptr;
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — Speed/Filters/EQ/Tracks chips
+    // removed. Z/X/C still adjust speed via keyboard with toast
+    // feedback. Filters + EQ functionality dropped per Hemanth (player
+    // shows "original audio and video qualities").
+    QPushButton* m_subtitleChip    = nullptr;
+    QPushButton* m_audioChip       = nullptr;
+    QPushButton* m_settingsChip    = nullptr;
     QPushButton* m_playlistChip    = nullptr;
     QLabel*      m_timeBubble     = nullptr;
 

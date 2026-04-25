@@ -10,11 +10,10 @@
 #include "ui/player/StatsBadge.h"
 #include "ui/player/PlaylistDrawer.h"
 #include "ui/player/ToastHud.h"
-#include "ui/player/EqualizerPopover.h"
-#include "ui/player/FilterPopover.h"
-#include "ui/player/TrackPopover.h"
 #include "ui/player/SubtitleOverlay.h"
-#include "ui/player/SubtitleMenu.h"
+#include "ui/player/SubtitlePopover.h"
+#include "ui/player/AudioPopover.h"
+#include "ui/player/SettingsPopover.h"
 #include "ui/player/OpenUrlDialog.h"
 #include "ui/player/PlayerUtils.h"
 #include "ui/player/SeekSlider.h"
@@ -504,17 +503,19 @@ void VideoPlayer::dismissOtherPopovers(QWidget* keep)
     // keep=nullptr to dismiss whichever is open. Chip :checked state
     // synced to false here so the chip's visual open-state clears when
     // its popover is force-hidden.
-    if (m_filterPopover && m_filterPopover != keep && m_filterPopover->isOpen()) {
-        m_filterPopover->hide();
-        if (m_filtersChip) m_filtersChip->setChecked(false);
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — three icon-only chips replace
+    // the prior {Filters, EQ, Tracks} cluster.
+    if (m_subtitlePopover && m_subtitlePopover != keep && m_subtitlePopover->isOpen()) {
+        m_subtitlePopover->hide();
+        if (m_subtitleChip) m_subtitleChip->setChecked(false);
     }
-    if (m_eqPopover && m_eqPopover != keep && m_eqPopover->isOpen()) {
-        m_eqPopover->hide();
-        if (m_eqChip) m_eqChip->setChecked(false);
+    if (m_audioPopover && m_audioPopover != keep && m_audioPopover->isOpen()) {
+        m_audioPopover->hide();
+        if (m_audioChip) m_audioChip->setChecked(false);
     }
-    if (m_trackPopover && m_trackPopover != keep && m_trackPopover->isOpen()) {
-        m_trackPopover->hide();
-        if (m_trackChip) m_trackChip->setChecked(false);
+    if (m_settingsPopover && m_settingsPopover != keep && m_settingsPopover->isOpen()) {
+        m_settingsPopover->hide();
+        if (m_settingsChip) m_settingsChip->setChecked(false);
     }
     if (m_playlistDrawer && m_playlistDrawer != keep && m_playlistDrawer->isOpen()) {
         m_playlistDrawer->hide();
@@ -527,9 +528,9 @@ void VideoPlayer::setChipsEnabled(bool enable)
     // Phase 6.1 — toggles the :disabled pseudo-state on all four chips.
     // Playlist chip also gets disabled when no file is open, matching the
     // "nothing to interact with" invariant (playlist is empty anyway).
-    if (m_filtersChip) m_filtersChip->setEnabled(enable);
-    if (m_eqChip)      m_eqChip->setEnabled(enable);
-    if (m_trackChip)   m_trackChip->setEnabled(enable);
+    if (m_subtitleChip) m_subtitleChip->setEnabled(enable);
+    if (m_audioChip)    m_audioChip->setEnabled(enable);
+    if (m_settingsChip) m_settingsChip->setEnabled(enable);
     if (m_playlistChip) m_playlistChip->setEnabled(enable);
 }
 
@@ -566,8 +567,9 @@ void VideoPlayer::teardownUi()
     m_subTracks   = {};
 
     // Batch 5.3 — clear Tankostream external subs so the next stream/file
-    // doesn't inherit a stale addon track list in the SubtitleMenu.
-    if (m_subMenu) m_subMenu->setExternalTracks({}, {});
+    // doesn't inherit a stale addon track list. VIDEO_HUD_MINIMALIST
+    // 2026-04-25 routes through the merged SubtitlePopover.
+    if (m_subtitlePopover) m_subtitlePopover->setExternalTracks({}, {});
 
     // PLAYER_UX_FIX Phase 3 Batch 3.1 — reset user-visible HUD surfaces
     // to a clean "loading" state on video switch / user close. Without
@@ -604,17 +606,12 @@ void VideoPlayer::teardownUi()
         m_seekBar->setBufferedRanges({}, 0);
         m_seekBar->blockSignals(false);
     }
-    if (m_trackChip)   m_trackChip->setText(QStringLiteral("Tracks"));
-    if (m_eqChip)      m_eqChip->setText(QStringLiteral("EQ"));
-    if (m_filtersChip) m_filtersChip->setText(QStringLiteral("Filters"));
     if (m_statsBadge)  m_statsBadge->hide();
-    // Dismiss any open chip popovers so their next open shows fresh
-    // content. TrackPopover reads from m_audioTracks/m_subTracks which
-    // were cleared above; EqualizerPopover / FilterPopover keep their
-    // process-wide state, just hide the window.
-    if (m_trackPopover  && m_trackPopover->isOpen())  m_trackPopover->hide();
-    if (m_eqPopover     && m_eqPopover->isOpen())     m_eqPopover->hide();
-    if (m_filterPopover && m_filterPopover->isOpen()) m_filterPopover->hide();
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — dismiss any open chip popovers
+    // so their next open shows fresh content. New three-chip cluster.
+    if (m_subtitlePopover && m_subtitlePopover->isOpen()) m_subtitlePopover->hide();
+    if (m_audioPopover    && m_audioPopover->isOpen())    m_audioPopover->hide();
+    if (m_settingsPopover && m_settingsPopover->isOpen()) m_settingsPopover->hide();
 }
 
 void VideoPlayer::stopPlayback(bool isIntentional)
@@ -666,8 +663,8 @@ void VideoPlayer::setExternalSubtitleTracks(
     const QList<tankostream::addon::SubtitleTrack>& tracks,
     const QHash<QString, QString>& originByTrackKey)
 {
-    if (!m_subMenu) return;
-    m_subMenu->setExternalTracks(tracks, originByTrackKey);
+    if (!m_subtitlePopover) return;
+    m_subtitlePopover->setExternalTracks(tracks, originByTrackKey);
 }
 
 void VideoPlayer::setPersistenceMode(PersistenceMode mode)
@@ -1591,80 +1588,53 @@ void VideoPlayer::buildUI()
     m_nextEpisodeBtn->setStyleSheet(iconBtnStyle);
     connect(m_nextEpisodeBtn, &QPushButton::clicked, this, &VideoPlayer::nextEpisode);
 
-    m_speedChip = new QPushButton("1.0x", m_controlBar);
-    m_speedChip->setCursor(Qt::PointingHandCursor);
-    m_speedChip->setFocusPolicy(Qt::NoFocus);
-    m_speedChip->setStyleSheet(chipStyle);
-    connect(m_speedChip, &QPushButton::clicked, this, [this]() {
-        auto* menu = new QMenu(this);
-        menu->setStyleSheet(
-            "QMenu { background: rgba(16,16,16,240); border: 1px solid rgba(255,255,255,0.12);"
-            "  border-radius: 6px; padding: 4px 0; }"
-            "QMenu::item { color: rgba(245,245,245,0.98); padding: 6px 16px; font-size: 12px; }"
-            "QMenu::item:selected { background: rgba(255,255,255,0.08); }"
-            "QMenu::indicator { width: 14px; height: 14px; margin-left: 6px; }"
-        );
-        for (int i = 0; i < SPEED_COUNT; ++i) {
-            QAction* action = menu->addAction(SPEED_LABELS[i]);
-            action->setCheckable(true);
-            action->setChecked(i == m_speedIdx);
-            double rate = SPEED_PRESETS[i];
-            int idx = i;
-            connect(action, &QAction::triggered, this, [this, rate, idx]() {
-                m_speedIdx = idx;
-                m_sidecar->sendSetRate(rate);
-                m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
-                m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
-            });
-        }
-        menu->addSeparator();
-        QAction* resetAct = menu->addAction("Reset to 1.0x");
-        connect(resetAct, &QAction::triggered, this, [this]() {
-            m_speedIdx = 2; // 1.0x
-            m_sidecar->sendSetRate(1.0);
-            m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
-            m_toastHud->showToast("Speed: 1.0x");
-        });
-        menu->exec(m_speedChip->mapToGlobal(m_speedChip->rect().topLeft()));
-        menu->deleteLater();
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — three icon-only chips (Subtitles
+    // / Audio / Settings) + List. Speed/Filters/EQ/Tracks chips removed
+    // per Hemanth's "make my player more minimalistic" directive. Z/X/C
+    // keys still adjust speed via toast feedback.
+    m_subtitleChip = new QPushButton(m_controlBar);
+    m_subtitleChip->setIcon(QIcon(":/icons/subtitles.svg"));
+    m_subtitleChip->setIconSize(QSize(16, 16));
+    m_subtitleChip->setToolTip("Subtitles");
+    m_subtitleChip->setCursor(Qt::PointingHandCursor);
+    m_subtitleChip->setFocusPolicy(Qt::NoFocus);
+    m_subtitleChip->setStyleSheet(chipStyle);
+    m_subtitleChip->setCheckable(true);
+    connect(m_subtitleChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_subtitlePopover);
+        m_subtitlePopover->toggle(m_subtitleChip);
+        m_subtitleChip->setChecked(m_subtitlePopover->isOpen());
     });
 
-    m_filtersChip = new QPushButton("Filters", m_controlBar);
-    m_filtersChip->setCursor(Qt::PointingHandCursor);
-    m_filtersChip->setFocusPolicy(Qt::NoFocus);
-    m_filtersChip->setStyleSheet(chipStyle);
-    m_filtersChip->setCheckable(true);  // Phase 6.1 — :checked for open state
-    connect(m_filtersChip, &QPushButton::clicked, this, [this]() {
-        // Phase 6.4 — cross-chip exclusion: close any other open popover
-        // before toggling our own, so only one popover is ever visible.
-        dismissOtherPopovers(m_filterPopover);
-        m_filterPopover->toggle(m_filtersChip);
-        m_filtersChip->setChecked(m_filterPopover->isOpen());
+    m_audioChip = new QPushButton(m_controlBar);
+    m_audioChip->setIcon(QIcon(":/icons/audio.svg"));
+    m_audioChip->setIconSize(QSize(16, 16));
+    m_audioChip->setToolTip("Audio");
+    m_audioChip->setCursor(Qt::PointingHandCursor);
+    m_audioChip->setFocusPolicy(Qt::NoFocus);
+    m_audioChip->setStyleSheet(chipStyle);
+    m_audioChip->setCheckable(true);
+    connect(m_audioChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_audioPopover);
+        m_audioPopover->populate(m_audioTracks, m_activeAudioId.toInt());
+        m_audioPopover->toggle(m_audioChip);
+        m_audioChip->setChecked(m_audioPopover->isOpen());
     });
 
-    m_eqChip = new QPushButton("EQ", m_controlBar);
-    m_eqChip->setCursor(Qt::PointingHandCursor);
-    m_eqChip->setFocusPolicy(Qt::NoFocus);
-    m_eqChip->setStyleSheet(chipStyle);
-    m_eqChip->setCheckable(true);
-    connect(m_eqChip, &QPushButton::clicked, this, [this]() {
-        dismissOtherPopovers(m_eqPopover);
-        m_eqPopover->toggle(m_eqChip);
-        m_eqChip->setChecked(m_eqPopover->isOpen());
-    });
-
-    m_trackChip = new QPushButton("Tracks", m_controlBar);
-    m_trackChip->setCursor(Qt::PointingHandCursor);
-    m_trackChip->setFocusPolicy(Qt::NoFocus);
-    m_trackChip->setStyleSheet(chipStyle);
-    m_trackChip->setCheckable(true);
-    connect(m_trackChip, &QPushButton::clicked, this, [this]() {
-        dismissOtherPopovers(m_trackPopover);
-        m_trackPopover->setStyle(m_trackPopover->subFontSize(),
-                                 m_trackPopover->subMargin(),
-                                 m_trackPopover->subOutline());
-        m_trackPopover->toggle(m_trackChip);
-        m_trackChip->setChecked(m_trackPopover->isOpen());
+    m_settingsChip = new QPushButton(m_controlBar);
+    m_settingsChip->setIcon(QIcon(":/icons/settings.svg"));
+    m_settingsChip->setIconSize(QSize(16, 16));
+    m_settingsChip->setToolTip("Settings");
+    m_settingsChip->setCursor(Qt::PointingHandCursor);
+    m_settingsChip->setFocusPolicy(Qt::NoFocus);
+    m_settingsChip->setStyleSheet(chipStyle);
+    m_settingsChip->setCheckable(true);
+    connect(m_settingsChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_settingsPopover);
+        m_settingsPopover->setAudioDelay(m_audioDelayMs);
+        m_settingsPopover->setSubtitleDelay(m_subDelayMs);
+        m_settingsPopover->toggle(m_settingsChip);
+        m_settingsChip->setChecked(m_settingsPopover->isOpen());
     });
 
     m_playlistChip = new QPushButton("List", m_controlBar);
@@ -1731,15 +1701,13 @@ void VideoPlayer::buildUI()
     ctrlRow->addWidget(m_nextEpisodeBtn);
     ctrlRow->addSpacing(16);                      // transport → title
     ctrlRow->addWidget(m_titleLabel, 1);          // stretch — eats leftover space
-    ctrlRow->addSpacing(12);                      // title → speed chip
-    ctrlRow->addWidget(m_speedChip);
-    ctrlRow->addSpacing(12);                      // speed → utility cluster
-    ctrlRow->addWidget(m_filtersChip);
-    ctrlRow->addSpacing(3);                       // filters ↔ eq (intra-group)
-    ctrlRow->addWidget(m_eqChip);
-    ctrlRow->addSpacing(12);                      // utility → track cluster
-    ctrlRow->addWidget(m_trackChip);
-    ctrlRow->addSpacing(3);                       // tracks ↔ list (intra-group)
+    ctrlRow->addSpacing(12);                      // title → utility cluster
+    ctrlRow->addWidget(m_subtitleChip);
+    ctrlRow->addSpacing(6);                       // tight intra-cluster
+    ctrlRow->addWidget(m_audioChip);
+    ctrlRow->addSpacing(6);
+    ctrlRow->addWidget(m_settingsChip);
+    ctrlRow->addSpacing(12);                      // utility → list
     ctrlRow->addWidget(m_playlistChip);
 
     rootLayout->addLayout(ctrlRow);
@@ -1861,108 +1829,81 @@ void VideoPlayer::buildUI()
         emit firstDecoderReceive();
     });
 
-    // Track popover (audio/subtitle track picker — opened by Tracks chip)
-    m_trackPopover = new TrackPopover(this);
-    // Restore saved subtitle style from global preferences
-    {
-        QSettings s("Tankoban", "Tankoban");
-        int fontSize = s.value("video_sub_font_size", 24).toInt();
-        int margin = s.value("video_sub_margin", 40).toInt();
-        bool outline = s.value("video_sub_outline", true).toBool();
-        m_trackPopover->setStyle(fontSize, margin, outline);
-        // VIDEO_SUB_POSITION 2026-04-24 — restore the sub-position slider
-        // UI so when the user opens the popover it reflects the persisted
-        // value. The sidecar receives the same value from onSidecarReady
-        // before first-file open (mirrors the seek-mode pattern).
-        const int subPos = s.value("videoPlayer/subtitlePosition", 100).toInt();
-        m_trackPopover->setSubPosition(subPos);
-    }
-    connect(m_trackPopover, &TrackPopover::audioTrackSelected, this, [this](int id) {
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — three new popovers replace
+    // {TrackPopover + SubtitleMenu + EqualizerPopover + FilterPopover}.
+    // SubtitlePopover is the merged surface (embedded + addon external +
+    // load-from-file). Style controls (font size / margin / position /
+    // outline / color / BG opacity) dropped per Hemanth's "nothing else"
+    // / "nothing fancy". Persisted style values continue to apply via
+    // QSettings reads at startup; they just have no UI surface to change.
+    m_subtitlePopover = new SubtitlePopover(this);
+    m_subtitlePopover->setSidecar(m_sidecar);
+    connect(m_subtitlePopover, &SubtitlePopover::embeddedSubtitleSelected,
+        this, [this](int id) {
+            if (id == 0) {
+                // VIDEO_PLAYER_FIX Batch 1.2 — unified Off path. Routes
+                // through setSubtitleOff for visibility-only semantics
+                // (no set_tracks payload that would crash the sidecar).
+                setSubtitleOff();
+            } else {
+                QString idStr = QString::number(id);
+                if (!m_subsVisible) {
+                    m_subsVisible = true;
+                    m_sidecar->sendSetSubVisibility(true);
+                }
+                m_sidecar->sendSetTracks("", idStr);
+                QString lang = langForTrackId(m_subTracks, idStr);
+                if (!lang.isEmpty())
+                    QSettings("Tankoban", "Tankoban").setValue("video_preferred_sub_lang", lang);
+                m_activeSubId = idStr;
+                saveShowPrefs();
+                m_toastHud->showToast("Subtitle: track " + idStr);
+            }
+        });
+    connect(m_subtitlePopover, &SubtitlePopover::hoverChanged, this, [this](bool hovered) {
+        if (hovered) { m_hideTimer.stop(); showControls(); }
+        else m_hideTimer.start(3000);
+    });
+    // VIDEO_HUD_MINIMALIST polish 2026-04-25 (hemanth: "ensure clicking
+    // icons do not darken them indefinitely") — chip :checked state now
+    // mirrors popover visibility 1:1. The dismissed signal fires from
+    // popover.dismiss() (single chokepoint for item-click + click-
+    // outside paths); dismissOtherPopovers already manually unchecks
+    // chips on its hide() path so all 3 dismiss routes are covered.
+    connect(m_subtitlePopover, &SubtitlePopover::dismissed, this, [this]() {
+        if (m_subtitleChip) m_subtitleChip->setChecked(false);
+    });
+
+    m_audioPopover = new AudioPopover(this);
+    connect(m_audioPopover, &AudioPopover::audioTrackSelected, this, [this](int id) {
         QString idStr = QString::number(id);
         m_sidecar->sendSetTracks(idStr, "");
-        // Save preferred audio language globally
         QString lang = langForTrackId(m_audioTracks, idStr);
         if (!lang.isEmpty())
             QSettings("Tankoban", "Tankoban").setValue("video_preferred_audio_lang", lang);
-        // User-explicit pick — update the active id locally so per-show
-        // prefs save the fresh language (langForTrackId reads m_activeAudioId),
-        // then write. Sidecar's trackChanged echo will redundantly set the
-        // same value later; harmless.
         m_activeAudioId = idStr;
         saveShowPrefs();
         m_toastHud->showToast("Audio: track " + idStr);
     });
-    connect(m_trackPopover, &TrackPopover::subtitleTrackSelected, this, [this](int id) {
-        if (id == 0) {
-            // VIDEO_PLAYER_FIX Batch 1.2 — unified Off path. Previous code
-            // sent sendSetTracks("", "off") which crashes the sidecar via
-            // std::stoi("off") at main.cpp:850. Route through setSubtitleOff
-            // for visibility-only semantics (no set_tracks payload).
-            setSubtitleOff();
-        } else {
-            QString idStr = QString::number(id);
-            // Re-enable visibility before the track change — Phase 1 Batch
-            // 1.2's Off path leaves visibility=false; without this, the
-            // new track lands correctly but renderer stays hidden.
-            if (!m_subsVisible) {
-                m_subsVisible = true;
-                m_sidecar->sendSetSubVisibility(true);
-            }
-            m_sidecar->sendSetTracks("", idStr);
-            // Save preferred subtitle language globally
-            QString lang = langForTrackId(m_subTracks, idStr);
-            if (!lang.isEmpty())
-                QSettings("Tankoban", "Tankoban").setValue("video_preferred_sub_lang", lang);
-            m_activeSubId = idStr;
-            saveShowPrefs();
-            m_toastHud->showToast("Subtitle: track " + idStr);
-        }
+    connect(m_audioPopover, &AudioPopover::hoverChanged, this, [this](bool hovered) {
+        if (hovered) { m_hideTimer.stop(); showControls(); }
+        else m_hideTimer.start(3000);
     });
-    connect(m_trackPopover, &TrackPopover::subDelayAdjusted, this, [this](int deltaMs) {
-        if (deltaMs == 0)
-            m_subDelayMs = 0;
-        else
-            m_subDelayMs += deltaMs;
-        m_sidecar->sendSetSubDelay(m_subDelayMs);
-        m_trackPopover->setDelay(m_subDelayMs);
-        m_toastHud->showToast("Sub delay: " + QString::number(m_subDelayMs) + "ms");
+    connect(m_audioPopover, &AudioPopover::dismissed, this, [this]() {
+        if (m_audioChip) m_audioChip->setChecked(false);
     });
-    connect(m_trackPopover, &TrackPopover::subStyleChanged, this,
-        [this](int fontSize, int margin, bool outline,
-               const QString& fontColor, int bgOpacity) {
-            m_sidecar->sendSetSubStyle(fontSize, margin, outline);
-            m_subOverlay->setStyle(fontSize, margin, outline);
-            m_subOverlay->setColors(fontColor, bgOpacity);
-            // Save subtitle style globally
-            QSettings s("Tankoban", "Tankoban");
-            s.setValue("video_sub_font_size", fontSize);
-            s.setValue("video_sub_margin", margin);
-            s.setValue("video_sub_outline", outline);
-            s.setValue("video_sub_font_color", fontColor);
-            s.setValue("video_sub_bg_opacity", bgOpacity);
-        });
-    // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent slider
-    // in the Tracks popover's Style section. Pushes to sidecar on every
-    // change (atomic store there, cheap) + persists globally. No toast —
-    // visual feedback is the subtitle itself moving.
-    connect(m_trackPopover, &TrackPopover::subPositionChanged, this,
-        [this](int percent) {
-            if (m_sidecar) m_sidecar->sendSetSubtitlePosition(percent);
-            QSettings("Tankoban", "Tankoban")
-                .setValue("videoPlayer/subtitlePosition", percent);
-        });
-    // Batch 5.3 — Tankostream subtitle menu (addon-fetched external subs
-    // + load-from-file). Anchored above m_trackChip like TrackPopover.
-    m_subMenu = new SubtitleMenu(this);
-    m_subMenu->setSidecar(m_sidecar);
 
-    connect(m_trackPopover, &TrackPopover::hoverChanged, this, [this](bool hovered) {
-        if (hovered) {
-            m_hideTimer.stop();
-            showControls();
-        } else {
-            m_hideTimer.start(3000);
-        }
+    m_settingsPopover = new SettingsPopover(this);
+    connect(m_settingsPopover, &SettingsPopover::audioDelayAdjusted,
+        this, [this](int delta) { adjustAudioDelay(delta); });
+    connect(m_settingsPopover, &SettingsPopover::subtitleDelayAdjusted,
+        this, [this](int delta) { adjustSubDelay(delta); });
+    connect(m_settingsPopover, &SettingsPopover::hoverChanged, this, [this](bool hovered) {
+        if (hovered) { m_hideTimer.stop(); showControls(); }
+        else m_hideTimer.start(3000);
+    });
+    connect(m_settingsPopover, &SettingsPopover::dismissed, this, [this]() {
+        if (m_settingsChip) m_settingsChip->setChecked(false);
     });
 
     // Subtitle overlay (sibling of FrameCanvas, NOT child of it — critical for QRhiWidget z-order)
@@ -2007,98 +1948,21 @@ void VideoPlayer::buildUI()
                                m_statsFps, drops);
     });
 
-    // Equalizer popover (10-band audio EQ — opened by EQ chip)
-    m_eqPopover = new EqualizerPopover(this);
-    connect(m_eqPopover, &EqualizerPopover::eqChanged, this, [this](const QString& eqFilter) {
-        // Combine normalize + EQ into audio filter chain
-        QStringList audioParts;
-        if (m_filterPopover->normalize())
-            audioParts << "loudnorm=I=-16";
-        if (!eqFilter.isEmpty())
-            audioParts << eqFilter;
-        m_sidecar->sendRawFilters(m_filterPopover->buildVideoFilter(),
-                                  audioParts.join(","));
-        // Phase 6.1 — sync chip text + dynamic active-property for the
-        // stylesheet's [active="true"] selector (left-border indicator).
-        const bool eqActive = m_eqPopover->isActive();
-        m_eqChip->setText(eqActive ? "EQ (on)" : "EQ");
-        m_eqChip->setProperty("active", eqActive);
-        m_eqChip->style()->unpolish(m_eqChip);
-        m_eqChip->style()->polish(m_eqChip);
-    });
-    connect(m_eqPopover, &EqualizerPopover::hoverChanged, this, [this](bool hovered) {
-        if (hovered) { m_hideTimer.stop(); showControls(); }
-        else if (!m_paused) m_hideTimer.start();
-    });
-    // Batch 4.3 — Dynamic Range Compression toggle forwarded to sidecar.
-    // Pre-Phase-4 sidecar binaries ignore the unknown command cleanly;
-    // main-app ships safely without coordinated sidecar rebuild.
-    connect(m_eqPopover, &EqualizerPopover::drcToggled, this, [this](bool enabled) {
-        if (m_sidecar) m_sidecar->sendSetDrcEnabled(enabled);
-    });
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — Equalizer + Filters popovers
+    // deleted entirely. Sidecar audio/video filter pipeline defaults to
+    // "no filters" so removing the UI = original audio/video qualities
+    // pass straight through, satisfying Hemanth's "I wanna see it that
+    // way" intent without sidecar changes. The shader-side HDR tone-
+    // mapping is also no longer driven from a UI toggle; it remains
+    // off by default. Pre-existing QSettings persisting filter / EQ
+    // state become orphaned reads (no UI to write them); harmless.
 
-    // Filter popover (video/audio filters — opened by Filters chip)
-    m_filterPopover = new FilterPopover(this);
-    connect(m_filterPopover, &FilterPopover::filtersChanged, this,
-        [this](bool deinterlace, int brightness, int contrast, int saturation, bool normalize) {
-            // GPU-side: brightness/contrast/saturation applied in fragment shader (instant)
-            m_canvas->setColorParams(
-                brightness / 100.0f,    // -1.0 to 1.0
-                contrast / 100.0f,      //  0.0 to 2.0
-                saturation / 100.0f,    //  0.0 to 2.0
-                1.0f                    // gamma neutral
-            );
-            // Sidecar-side: deinterlace mode, interpolation, audio normalize
-            bool interpolate = m_filterPopover->interpolate();
-            QString diFilter = m_filterPopover->deinterlaceFilter();
-            m_sidecar->sendSetFilters(deinterlace, 0, 100, 100, normalize, interpolate, diFilter);
-            int count = m_filterPopover->activeFilterCount();
-            m_filtersChip->setText(count > 0 ? QString("Filters (%1)").arg(count) : "Filters");
-            // Phase 6.1 — sync active-property for the left-border
-            // indicator via the [active="true"] stylesheet selector.
-            m_filtersChip->setProperty("active", count > 0);
-            m_filtersChip->style()->unpolish(m_filtersChip);
-            m_filtersChip->style()->polish(m_filtersChip);
-        });
-    connect(m_filterPopover, &FilterPopover::hoverChanged, this, [this](bool hovered) {
-        if (hovered) {
-            m_hideTimer.stop();
-            showControls();
-        } else if (!m_paused) {
-            m_hideTimer.start();
-        }
-    });
-    // HDR tone mapping: wire FilterPopover → shader (Batch 3.4).
-    // Pre-3.4 path drove sidecar's ffmpeg tonemap filter via
-    // sendSetToneMapping; Phase 3 moves the tonemap into our HLSL shader
-    // so the same operator applies end-to-end (SDR, HDR10, HLG all share
-    // one linear-light pipeline). sendSetToneMapping is kept as a no-op
-    // stub for sidecar-protocol stability until Phase 3 exits; removing
-    // it mid-phase would break any still-in-flight sidecar that expects
-    // the command. The peakDetect toggle is no longer meaningful on the
-    // shader side (we don't dynamically re-measure source peak per
-    // frame); will be removed from FilterPopover in Batch 3.5 or at
-    // phase exit.
-    connect(m_filterPopover, &FilterPopover::toneMappingChanged, this,
-        [this](const QString& algorithm, bool /*peakDetect*/) {
-            // PLAYER_UX_FIX Phase 5.1 (Path A). FilterPopover's dropdown
-            // is now {"hable", "reinhard"} — the two algorithms with
-            // actual shader implementations. Previously six entries
-            // landed here, four of which silently fell to mode 0 (Off).
-            // Dead `aces` branch dropped alongside the popover shrink —
-            // FilterPopover never emitted it. The Off fallback remains
-            // as a defensive default for any out-of-list string (e.g.
-            // legacy saved settings from a pre-5.1 build).
-            int mode = 0; // Off / defensive fallback
-            const QString a = algorithm.toLower();
-            if      (a == QStringLiteral("hable"))    mode = 3;
-            else if (a == QStringLiteral("reinhard")) mode = 1;
-            if (m_canvas) m_canvas->setTonemapMode(mode);
-        });
     // HDR detection + chapters from media_info event
     connect(m_sidecar, &SidecarProcess::mediaInfo, this, [this](const QJsonObject& info) {
         m_isHdr = info.value("hdr").toBool(false);
-        m_filterPopover->setHdrMode(m_isHdr);
+        // VIDEO_HUD_MINIMALIST 2026-04-25 — FilterPopover removed.
+        // m_isHdr still drives shader-side tonemap selection downstream
+        // (color_primaries / color_trc forwarded below).
 
         // Batch 3.1 (Player Polish Phase 3) — forward raw AVCOL_PRI_* +
         // AVCOL_TRC_* values to FrameCanvas so its shader can pick the
@@ -2274,7 +2138,6 @@ void VideoPlayer::speedUp()
 {
     m_speedIdx = qMin(m_speedIdx + 1, SPEED_COUNT - 1);
     m_sidecar->sendSetRate(SPEED_PRESETS[m_speedIdx]);
-    m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
     m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
 }
 
@@ -2282,7 +2145,6 @@ void VideoPlayer::speedDown()
 {
     m_speedIdx = qMax(m_speedIdx - 1, 0);
     m_sidecar->sendSetRate(SPEED_PRESETS[m_speedIdx]);
-    m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
     m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
 }
 
@@ -2290,8 +2152,45 @@ void VideoPlayer::speedReset()
 {
     m_speedIdx = 2; // 1.0x
     m_sidecar->sendSetRate(1.0);
-    m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
     m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
+}
+
+// VIDEO_HUD_MINIMALIST 2026-04-25 — single dispatch path for audio
+// and subtitle delay. Both keyboard handlers and SettingsPopover
+// signals route through these.
+void VideoPlayer::adjustAudioDelay(int delta)
+{
+    // delta == 0 is treated as a reset sentinel (mirrors the
+    // audio_delay_reset action body).
+    if (delta == 0) m_audioDelayMs = 0;
+    else            m_audioDelayMs += delta;
+    if (m_sidecar) m_sidecar->sendSetAudioDelay(m_audioDelayMs);
+    if (!m_audioDeviceKey.isEmpty()) {
+        QSettings s("Tankoban", "Tankoban");
+        s.setValue(m_audioDeviceKey, m_audioDelayMs);
+        s.setValue(m_audioDeviceKey + "/manual", true);
+    }
+    if (m_settingsPopover) m_settingsPopover->setAudioDelay(m_audioDelayMs);
+    if (m_toastHud) {
+        if (delta == 0)
+            m_toastHud->showToast("Audio delay reset");
+        else
+            m_toastHud->showToast(QString("Audio delay: %1ms").arg(m_audioDelayMs));
+    }
+}
+
+void VideoPlayer::adjustSubDelay(int delta)
+{
+    if (delta == 0) m_subDelayMs = 0;
+    else            m_subDelayMs += delta;
+    if (m_sidecar) m_sidecar->sendSetSubDelay(m_subDelayMs);
+    if (m_settingsPopover) m_settingsPopover->setSubtitleDelay(m_subDelayMs);
+    if (m_toastHud) {
+        if (delta == 0)
+            m_toastHud->showToast("Sub delay reset");
+        else
+            m_toastHud->showToast("Sub delay: " + QString::number(m_subDelayMs) + "ms");
+    }
 }
 
 // Merge incoming track list into existing cache. Upsert by 'id': add new
@@ -2330,26 +2229,19 @@ void VideoPlayer::onTracksChanged(const QJsonArray& audio, const QJsonArray& sub
     m_activeAudioId = activeAudioId;
     m_activeSubId   = activeSubId;
 
-    // Update track chip label with counts
-    m_trackChip->setText("Tracks");
-
-    // Build TrackPopover payload from the (post-merge) cached lists, NOT
-    // the incoming event arrays — those may be shorter than what we've
-    // already discovered. See mergeTrackList comment above.
-    QJsonArray merged;
-    for (const auto& v : m_audioTracks) {
-        QJsonObject t = v.toObject();
-        t["type"] = "audio";
-        merged.append(t);
-    }
-    for (const auto& v : m_subTracks) {
-        QJsonObject t = v.toObject();
-        t["type"] = "subtitle";
-        merged.append(t);
-    }
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — popovers split by media type;
+    // pass the type-specific cached arrays directly. Cache is post-merge,
+    // so it survives the sidecar emitting shortened tracks_changed
+    // payloads after set_tracks.
+    // VIDEO_HUD_MINIMALIST 1.x bug-fix 2026-04-25 — was passing a typed
+    // `merged` array which exercised a now-deleted defensive type filter;
+    // the chip-click entry point bypassed that path entirely (passing
+    // m_audioTracks without type stamps), causing an empty audio popover
+    // on chip-click. Symmetric for subtitles.
     int audioId = activeAudioId.toInt();
     int subId   = activeSubId.toInt();
-    m_trackPopover->populate(merged, audioId, subId, m_subsVisible);
+    if (m_audioPopover)    m_audioPopover->populate(m_audioTracks, audioId);
+    if (m_subtitlePopover) m_subtitlePopover->setEmbeddedTracksFromJson(m_subTracks, subId, m_subsVisible);
 
     // Restore saved track preferences ONCE per file — only on the first
     // tracks_changed after openFile. Re-running on subsequent events
@@ -2871,6 +2763,13 @@ void VideoPlayer::showControls()
         m_hideTimer.start();
 }
 
+bool VideoPlayer::isAnyPopoverOpen() const
+{
+    return (m_subtitlePopover && m_subtitlePopover->isOpen())
+        || (m_audioPopover    && m_audioPopover->isOpen())
+        || (m_settingsPopover && m_settingsPopover->isOpen());
+}
+
 void VideoPlayer::hideControls()
 {
     // VIDEO_HUD_AUTOHIDE_ON_PAUSE 2026-04-24 (hemanth: "100% zoom is just
@@ -2885,6 +2784,15 @@ void VideoPlayer::hideControls()
     // fix as a hedge; it was the wrong hedge. The m_seeking guard stays
     // because active scrubbing needs the progress bar visible.
     if (m_seeking) return;
+    // VIDEO_HUD_MINIMALIST 1.x bug-fix 2026-04-25 (hemanth: "subtitle and
+    // audio overlays are separate from the bottom hud, meaning the bottom
+    // hud can disappear while the overlays are still active"): popover
+    // open == user is mid-task; HUD must stay visible (the popover is
+    // anchored to a chip in the HUD — popover floating over a fading HUD
+    // is broken). On popover dismiss, AudioPopover/SubtitlePopover/
+    // SettingsPopover::dismiss emits hoverChanged(false) which restarts
+    // the auto-hide timer with a fresh 3s window.
+    if (isAnyPopoverOpen()) return;
     m_controlBar->hide();
     m_subOverlay->setControlsVisible(false);
     // HUD gone — drop to the 6% safe-zone baseline (was 0 = flush at
@@ -3011,7 +2919,7 @@ void VideoPlayer::restoreTrackPreferences()
             if (delay != 0) {
                 m_subDelayMs = delay;
                 m_sidecar->sendSetSubDelay(delay);
-                m_trackPopover->setDelay(delay);
+                if (m_settingsPopover) m_settingsPopover->setSubtitleDelay(delay);
             }
         }
     }
@@ -3262,10 +3170,10 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     // retains its normal binding behavior when no popover is showing.
     if (event->key() == Qt::Key_Escape) {
         const bool anyOpen =
-            (m_filterPopover  && m_filterPopover->isOpen()) ||
-            (m_eqPopover      && m_eqPopover->isOpen()) ||
-            (m_trackPopover   && m_trackPopover->isOpen()) ||
-            (m_playlistDrawer && m_playlistDrawer->isOpen());
+            (m_subtitlePopover && m_subtitlePopover->isOpen()) ||
+            (m_audioPopover    && m_audioPopover->isOpen()) ||
+            (m_settingsPopover && m_settingsPopover->isOpen()) ||
+            (m_playlistDrawer  && m_playlistDrawer->isOpen());
         if (anyOpen) {
             dismissOtherPopovers(nullptr);
             event->accept();
@@ -3315,12 +3223,9 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
         // fights the auto-hide UX when the user is scrubbing through content.
     };
 
-    auto adjustSubDelay = [this](int delta) {
-        m_subDelayMs += delta;
-        m_sidecar->sendSetSubDelay(m_subDelayMs);
-        m_trackPopover->setDelay(m_subDelayMs);
-        m_toastHud->showToast("Sub delay: " + QString::number(m_subDelayMs) + "ms");
-    };
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — adjustSubDelay promoted to
+    // VideoPlayer::adjustSubDelay member function. Local lambda dropped;
+    // dispatch below calls the member directly.
 
     // Dispatch action
     if      (action == "toggle_pause")       togglePause();
@@ -3347,15 +3252,11 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     else if (action == "toggle_mute")        toggleMute();
     else if (action == "toggle_fullscreen" || action == "toggle_fullscreen2")
                                              toggleFullscreen();
-    else if (action == "toggle_deinterlace") {
-        m_filterPopover->setDeinterlace(!m_filterPopover->deinterlace());
-        m_toastHud->showToast(m_filterPopover->deinterlace() ? "Deinterlace on" : "Deinterlace off");
-    }
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — toggle_deinterlace + toggle_normalize
+    // actions deleted with the FilterPopover. Their KeyBindings.cpp
+    // entries (D + Shift+A) also removed. Original audio + video qualities
+    // pass through with no UI to enable filters.
     else if (action == "cycle_audio")        cycleAudioTrack();
-    else if (action == "toggle_normalize") {
-        m_filterPopover->setNormalize(!m_filterPopover->normalize());
-        m_toastHud->showToast(m_filterPopover->normalize() ? "Normalization on" : "Normalization off");
-    }
     else if (action == "cycle_subtitle")     cycleSubtitleTrack();
     else if (action == "toggle_subtitles")   toggleSubtitles();
     else if (action == "toggle_always_on_top") toggleAlwaysOnTop();
@@ -3363,45 +3264,21 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     else if (action == "toggle_pip")           togglePictureInPicture();
     else if (action == "open_url")             showOpenUrlDialog();
     else if (action == "toggle_stats")         toggleStatsBadge();
-    else if (action == "open_subtitle_menu") m_subMenu->toggle(m_trackChip);
+    else if (action == "open_subtitle_menu") {
+        // Reroute T-key to the merged SubtitlePopover anchored on the
+        // new Subtitle chip.
+        if (m_subtitlePopover && m_subtitleChip) {
+            dismissOtherPopovers(m_subtitlePopover);
+            m_subtitlePopover->toggle(m_subtitleChip);
+            m_subtitleChip->setChecked(m_subtitlePopover->isOpen());
+        }
+    }
     else if (action == "sub_delay_minus")    adjustSubDelay(-100);
     else if (action == "sub_delay_plus")     adjustSubDelay(100);
-    else if (action == "sub_delay_reset") {
-        m_subDelayMs = 0;
-        m_sidecar->sendSetSubDelay(0);
-        m_trackPopover->setDelay(0);
-        m_toastHud->showToast("Sub delay reset");
-    }
-    else if (action == "audio_delay_minus") {
-        m_audioDelayMs -= 50;
-        m_sidecar->sendSetAudioDelay(m_audioDelayMs);
-        if (!m_audioDeviceKey.isEmpty()) {
-            QSettings s("Tankoban", "Tankoban");
-            s.setValue(m_audioDeviceKey, m_audioDelayMs);
-            s.setValue(m_audioDeviceKey + "/manual", true);  // user touched it
-        }
-        m_toastHud->showToast(QString("Audio delay: %1ms").arg(m_audioDelayMs));
-    }
-    else if (action == "audio_delay_plus") {
-        m_audioDelayMs += 50;
-        m_sidecar->sendSetAudioDelay(m_audioDelayMs);
-        if (!m_audioDeviceKey.isEmpty()) {
-            QSettings s("Tankoban", "Tankoban");
-            s.setValue(m_audioDeviceKey, m_audioDelayMs);
-            s.setValue(m_audioDeviceKey + "/manual", true);
-        }
-        m_toastHud->showToast(QString("Audio delay: %1ms").arg(m_audioDelayMs));
-    }
-    else if (action == "audio_delay_reset") {
-        m_audioDelayMs = 0;
-        m_sidecar->sendSetAudioDelay(0);
-        if (!m_audioDeviceKey.isEmpty()) {
-            QSettings s("Tankoban", "Tankoban");
-            s.setValue(m_audioDeviceKey, 0);
-            s.setValue(m_audioDeviceKey + "/manual", true);
-        }
-        m_toastHud->showToast("Audio delay reset");
-    }
+    else if (action == "sub_delay_reset")    adjustSubDelay(0);
+    else if (action == "audio_delay_minus")  adjustAudioDelay(-50);
+    else if (action == "audio_delay_plus")   adjustAudioDelay(50);
+    else if (action == "audio_delay_reset")  adjustAudioDelay(0);
     else if (action == "chapter_next") {
         if (!m_chapters.isEmpty()) {
             double curSec = m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0;
@@ -3514,30 +3391,28 @@ void VideoPlayer::mousePressEvent(QMouseEvent* event)
     }
 
     // Close any open popover/drawer when clicking outside of them.
-    // PLAYER_UX_FIX Phase 6.4 — unified dismiss: adds EQ to the list
-    // (previously only dismissed via EqualizerPopover's internal event
-    // filter), and syncs the corresponding chip's :checked state to
-    // false so the visual open-state clears too.
+    // PLAYER_UX_FIX Phase 6.4 — unified dismiss. VIDEO_HUD_MINIMALIST
+    // 2026-04-25 reshape covers the new three-chip cluster.
     bool closedSomething = false;
-    if (m_filterPopover && m_filterPopover->isOpen() &&
-        !m_filterPopover->geometry().contains(event->pos()) &&
-        !m_filtersChip->geometry().contains(event->pos())) {
-        m_filterPopover->hide();
-        if (m_filtersChip) m_filtersChip->setChecked(false);
+    if (m_subtitlePopover && m_subtitlePopover->isOpen() &&
+        !m_subtitlePopover->geometry().contains(event->pos()) &&
+        !m_subtitleChip->geometry().contains(event->pos())) {
+        m_subtitlePopover->hide();
+        if (m_subtitleChip) m_subtitleChip->setChecked(false);
         closedSomething = true;
     }
-    if (m_eqPopover && m_eqPopover->isOpen() &&
-        !m_eqPopover->geometry().contains(event->pos()) &&
-        !m_eqChip->geometry().contains(event->pos())) {
-        m_eqPopover->hide();
-        if (m_eqChip) m_eqChip->setChecked(false);
+    if (m_audioPopover && m_audioPopover->isOpen() &&
+        !m_audioPopover->geometry().contains(event->pos()) &&
+        !m_audioChip->geometry().contains(event->pos())) {
+        m_audioPopover->hide();
+        if (m_audioChip) m_audioChip->setChecked(false);
         closedSomething = true;
     }
-    if (m_trackPopover && m_trackPopover->isOpen() &&
-        !m_trackPopover->geometry().contains(event->pos()) &&
-        !m_trackChip->geometry().contains(event->pos())) {
-        m_trackPopover->hide();
-        if (m_trackChip) m_trackChip->setChecked(false);
+    if (m_settingsPopover && m_settingsPopover->isOpen() &&
+        !m_settingsPopover->geometry().contains(event->pos()) &&
+        !m_settingsChip->geometry().contains(event->pos())) {
+        m_settingsPopover->hide();
+        if (m_settingsChip) m_settingsChip->setChecked(false);
         closedSomething = true;
     }
     if (m_playlistDrawer && m_playlistDrawer->isOpen() &&
@@ -3692,69 +3567,39 @@ void VideoPlayer::dropEvent(QDropEvent* event)
 
 void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
 {
+    // VIDEO_CONTEXT_MENU_MINIMALIST 2026-04-25 (Phase 2) — slim 8-item
+    // menu. See VideoContextMenu.h for the full final shape. Keyboard
+    // bindings for all dropped entries (Pause/Mute/Speed/Snapshot/
+    // Stats/AOT/PiP/OpenURL) are preserved — only the menu surface
+    // goes away.
     VideoContextData data;
-    data.paused = m_paused;
-    data.muted = m_muted;
-    data.currentSpeed = SPEED_PRESETS[m_speedIdx];
-    data.audioTracks = m_audioTracks;
+    data.audioTracks    = m_audioTracks;
     data.subtitleTracks = m_subTracks;
     data.currentAudioId = m_activeAudioId.toInt();
-    data.currentSubId = m_activeSubId.toInt();
-    data.subsVisible = m_subsVisible;
-    data.deinterlace = m_filterPopover->deinterlace();
-    data.normalize = m_filterPopover->normalize();
-    data.alwaysOnTop   = m_alwaysOnTop;
-    data.inPip         = m_inPip;
-    data.showStats     = m_showStats;
-    data.currentAspect = m_currentAspect;
-    data.currentCrop   = m_currentCrop;
-    // VIDEO_PLAYER_FIX Batch 4.2 — fresh QSettings read each menu open.
-    // Cheap (small list), avoids cache invalidation complexity.
-    data.recentFiles = QSettings("Tankoban", "Tankoban")
-                           .value("player/recentFiles").toStringList();
+    data.currentSubId   = m_activeSubId.toInt();
+    data.subsVisible    = m_subsVisible;
+    data.currentAspect  = m_currentAspect;
+    data.currentCrop    = m_currentCrop;
 
     auto* menu = VideoContextMenu::build(data, this,
         [this](VideoContextMenu::ActionType t, QVariant v) {
         switch (t) {
-        case VideoContextMenu::TogglePlayPause: togglePause(); break;
-        case VideoContextMenu::ToggleMute:      toggleMute();  break;
-        case VideoContextMenu::SetSpeed: {
-            double s = v.toDouble();
-            m_sidecar->sendSetRate(s);
-            // Find nearest preset index
-            for (int i = 0; i < SPEED_COUNT; ++i) {
-                if (qAbs(SPEED_PRESETS[i] - s) < 0.01) {
-                    m_speedIdx = i;
-                    break;
-                }
-            }
-            m_speedChip->setText(SPEED_LABELS[m_speedIdx]);
-            m_toastHud->showToast(QString("Speed: %1").arg(SPEED_LABELS[m_speedIdx]));
-            break;
-        }
         case VideoContextMenu::SetAspectRatio: {
-            // The Aspect Ratio submenu was a silent no-op pre-Phase-7
-            // (case was missing from this switch entirely). Now wired to
-            // FrameCanvas::setForcedAspectRatio. "original" → 0 (use natural
-            // frame aspect from m_frameW/m_frameH). Mapping lives in
-            // aspectStringToDouble so the openFile restore path stays in
+            // Aspect Ratio override: rewires FrameCanvas::setForcedAspectRatio.
+            // "original" → 0 (use natural frame aspect from m_frameW/m_frameH).
+            // Mapping in aspectStringToDouble keeps openFile restore path in
             // sync with the menu's write path.
             const QString val = v.toString();
             m_canvas->setForcedAspectRatio(aspectStringToDouble(val));
             m_currentAspect = val;
-            // Write to the per-show record so sibling episodes in the same
-            // folder inherit the user's aspect choice on next open.
             saveShowPrefs();
             m_toastHud->showToast(QString("Aspect: %1").arg(val));
             break;
         }
         case VideoContextMenu::SetCrop: {
-            // Crop-to-aspect: zoom the video viewport uniformly so baked
-            // letterbox / pillarbox strips get clipped by the render
-            // target. Orthogonal to Aspect Ratio — user might run
-            // Aspect=Original + Crop=2.35:1 on a 1920x1080 container with
-            // baked 2.35 content. Mapping mirrors aspectStringToDouble's
-            // convention; "none" → 0.0 = no crop.
+            // Crop-to-aspect: zoom video viewport uniformly so baked
+            // letterbox/pillarbox strips get clipped by the render target.
+            // Orthogonal to Aspect Ratio. "none" → 0.0 = no crop.
             const QString val = v.toString();
             m_canvas->setCropAspect(cropStringToDouble(val));
             m_currentCrop = val;
@@ -3763,57 +3608,16 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
             break;
         }
         case VideoContextMenu::ToggleFullscreen: toggleFullscreen(); break;
-        case VideoContextMenu::ToggleAlwaysOnTop: toggleAlwaysOnTop(); break;
-        case VideoContextMenu::TakeSnapshot:     takeSnapshot();      break;
-        case VideoContextMenu::TogglePip:        togglePictureInPicture(); break;
-        case VideoContextMenu::OpenUrl:          showOpenUrlDialog();     break;
-        case VideoContextMenu::OpenRecent: {
-            const QString path = v.toString();
-            if (path.isEmpty()) break;
-            // URLs always openable (no cheap existence probe); local
-            // files: check on disk, prune + toast if missing.
-            const bool isRemote = player_utils::looksLikeUrl(path)
-                && !path.startsWith("file://", Qt::CaseInsensitive);
-            if (isRemote || QFileInfo(path).exists()) {
-                openFile(path);
-            } else {
-                QSettings s("Tankoban", "Tankoban");
-                QStringList recent = s.value("player/recentFiles").toStringList();
-                recent.removeAll(path);
-                s.setValue("player/recentFiles", recent);
-                m_toastHud->showToast("File no longer exists — removed from recent list");
-            }
-            break;
-        }
-        case VideoContextMenu::OpenKeybindings: openKeybindingEditor(); break;
-        case VideoContextMenu::ToggleStats:     toggleStatsBadge();      break;
-        case VideoContextMenu::ClearRecent: {
-            QSettings("Tankoban", "Tankoban").remove("player/recentFiles");
-            m_toastHud->showToast("Recent list cleared");
-            break;
-        }
         case VideoContextMenu::SetAudioTrack:
             m_sidecar->sendSetTracks(QString::number(v.toInt()), "");
             m_toastHud->showToast("Audio: track " + QString::number(v.toInt()));
             break;
         case VideoContextMenu::SetSubtitleTrack:
-            // Player Polish Batch 5.2 fix (2026-04-15): mirror the
-            // visibility-on-track-switch logic from cycleSubtitleTrack
-            // (around VideoPlayer.cpp:1162). Pre-fix path only sent
-            // sendSetTracks with the new sub id but never adjusted
-            // m_subsVisible / sendSetSubVisibility, so if the user had
-            // previously toggled subtitles off the new track would land
-            // hidden — appearing to the user as "context menu doesn't
-            // change subtitles." Now: picking a real track auto-enables
-            // visibility; picking "off" auto-disables it. Both paths
-            // keep m_subsVisible coherent with sidecar state.
+            // Player Polish Batch 5.2 fix (2026-04-15): visibility-on-
+            // track-switch logic mirrors cycleSubtitleTrack. Picking a
+            // real track auto-enables visibility; picking "off" (sentinel
+            // -1, NOT 0 — id=0 is a real stream) auto-disables it.
             if (v.toInt() == -1) {
-                // VIDEO_PLAYER_FIX Batch 1.2 — unified Off path via
-                // setSubtitleOff() helper. Sentinel is -1 (not 0) so a
-                // subtitle stream with AVStream index 0 is a real track,
-                // not Off. Never sends sendSetTracks("", "off") — that
-                // payload crashes the sidecar via std::stoi("off") at
-                // main.cpp:850 (no try/catch in command-dispatch loop).
                 setSubtitleOff();
             } else {
                 if (!m_subsVisible) {
@@ -3831,25 +3635,9 @@ void VideoPlayer::contextMenuEvent(QContextMenuEvent* e)
                 m_sidecar->sendLoadExternalSub(p);
             break;
         }
-        case VideoContextMenu::OpenSubtitleMenu:
-            m_subMenu->toggle(m_trackChip);
-            break;
-        case VideoContextMenu::ToggleDeinterlace:
-            m_filterPopover->setDeinterlace(!m_filterPopover->deinterlace());
-            m_sidecar->sendSetFilters(m_filterPopover->deinterlace(), 0, 100, 100,
-                                      m_filterPopover->normalize(), m_filterPopover->interpolate(),
-                                      m_filterPopover->deinterlaceFilter());
-            break;
-        case VideoContextMenu::ToggleNormalize:
-            m_filterPopover->setNormalize(!m_filterPopover->normalize());
-            m_sidecar->sendSetFilters(m_filterPopover->deinterlace(), 0, 100, 100,
-                                      m_filterPopover->normalize(), m_filterPopover->interpolate(),
-                                      m_filterPopover->deinterlaceFilter());
-            break;
-        case VideoContextMenu::OpenTracks:   m_trackPopover->toggle(m_trackChip);   break;
-        case VideoContextMenu::OpenPlaylist: m_playlistDrawer->toggle();             break;
-        case VideoContextMenu::BackToLibrary: emit closeRequested();                 break;
-        default: break;
+        case VideoContextMenu::OpenPlaylist:    m_playlistDrawer->toggle();    break;
+        case VideoContextMenu::OpenKeybindings: openKeybindingEditor();        break;
+        case VideoContextMenu::BackToLibrary:   emit closeRequested();         break;
         }
     });
     menu->exec(e->globalPos());

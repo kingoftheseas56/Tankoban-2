@@ -21,7 +21,8 @@ static const struct { const char* action; const char* label; int key; Qt::Keyboa
     // Video
     {"toggle_fullscreen",  "Toggle fullscreen",    Qt::Key_F,            Qt::NoModifier},
     {"toggle_fullscreen2", "Toggle fullscreen",    Qt::Key_F11,          Qt::NoModifier},
-    {"toggle_deinterlace", "Toggle deinterlace",   Qt::Key_D,            Qt::NoModifier},
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — toggle_deinterlace (D) removed
+    // alongside the FilterPopover.
     // VIDEO_PLAYER_FIX Batch 3.1 — plain T is taken by open_subtitle_menu,
     // so Always-on-top lands on Ctrl+T. Surfaced in the context menu too.
     {"toggle_always_on_top", "Always on top",      Qt::Key_T,            Qt::ControlModifier},
@@ -41,7 +42,8 @@ static const struct { const char* action; const char* label; int key; Qt::Keyboa
 
     // Audio / Subs
     {"cycle_audio",        "Cycle audio track",    Qt::Key_A,            Qt::NoModifier},
-    {"toggle_normalize",   "Toggle normalization", Qt::Key_A,            Qt::ShiftModifier},
+    // VIDEO_HUD_MINIMALIST 2026-04-25 — toggle_normalize (Shift+A) removed
+    // alongside the FilterPopover.
     {"cycle_subtitle",     "Cycle subtitle track", Qt::Key_S,            Qt::NoModifier},
     {"toggle_subtitles",   "Toggle subtitles",     Qt::Key_S,            Qt::ShiftModifier},
     {"open_subtitle_menu", "Open subtitles menu",  Qt::Key_T,            Qt::NoModifier},
