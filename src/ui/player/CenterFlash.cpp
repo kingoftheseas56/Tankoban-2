@@ -1,7 +1,6 @@
 #include "ui/player/CenterFlash.h"
 
 #include <QPainter>
-#include <QPainterPath>
 
 CenterFlash::CenterFlash(QWidget* parent)
     : QWidget(parent)
@@ -70,12 +69,13 @@ void CenterFlash::paintEvent(QPaintEvent*)
     p.setOpacity(m_opacity);
     p.setRenderHint(QPainter::Antialiasing);
 
-    // Circle background
-    QPainterPath bg;
-    bg.addEllipse(QRectF(0, 0, width(), height()));
-    p.fillPath(bg, QColor(0, 0, 0, 140));
-
-    // SVG icon centered with padding
+    // VIDEO_HUD_MINIMALIST polish 2026-04-25 (hemanth: "I want that black
+    // blob removed and just for the icons to be in toast"): the prior
+    // black-at-140-alpha ellipse backdrop is gone; bare SVG only. The
+    // 80x80 widget + 20px padding around the 40x40 iconRect is preserved
+    // so the icon's centered-in-canvas position doesn't shift across
+    // builds (the padding was originally for the circle's curve; now
+    // it's just whitespace around a bare icon, which is fine).
     QSvgRenderer renderer(m_svg);
     QRectF iconRect(20, 20, 40, 40);
     renderer.render(&p, iconRect);
