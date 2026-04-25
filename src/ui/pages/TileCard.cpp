@@ -1,4 +1,5 @@
 #include "TileCard.h"
+#include "../Theme.h"
 
 #include <QVBoxLayout>
 #include <QMouseEvent>
@@ -38,8 +39,12 @@ TileCard::TileCard(const QString& thumbPath,
         "#TileImageWrap { border: 1px solid rgba(255,255,255,0.10); "
         "background: rgba(255,255,255,0.04); border-radius: 12px; }");
 
+    // 2px inset on each side keeps the cover off the gold selection border
+    // (border draws inside the wrap's box; without the inset a poster QPixmap
+    // covers all 4 edges of the border and the gold only shows on placeholder
+    // tiles). Mirrors Groundworks's tile_widgets.py wrap-with-margin pattern.
     m_imageLabel = new QLabel(m_imageWrap);
-    m_imageLabel->setFixedSize(m_cardWidth, m_imageHeight);
+    m_imageLabel->setGeometry(2, 2, m_cardWidth - 4, m_imageHeight - 4);
     m_imageLabel->setAlignment(Qt::AlignCenter);
 
     setCardSize(m_cardWidth, m_imageHeight);
@@ -99,7 +104,7 @@ void TileCard::setCardSize(int width, int imageHeight)
     // the cover regardless of layout setSpacing(6).
     setFixedHeight(imageHeight + 56);
     m_imageWrap->setFixedSize(width, imageHeight);
-    m_imageLabel->setFixedSize(width, imageHeight);
+    m_imageLabel->setGeometry(2, 2, width - 4, imageHeight - 4);
 
     if (m_titleLabel) {
         m_titleLabel->setFixedWidth(width);
@@ -112,16 +117,22 @@ void TileCard::setCardSize(int width, int imageHeight)
         m_subtitleLabel->setText(fm.elidedText(m_subtitle, Qt::ElideRight, width - 4));
     }
 
+    // Pixmap renders at inset-label dimensions so it doesn't cover the wrap's
+    // selection border. Outer frame stays at (width, imageHeight); inner image
+    // area is (width-4, imageHeight-4) with a 2px gutter on each side.
+    const int innerW = width - 4;
+    const int innerH = imageHeight - 4;
+
     // ── render cover ────────────────────────────────────
     if (!m_thumbPath.isEmpty()) {
         QPixmap pix(m_thumbPath);
         if (!pix.isNull()) {
-            QPixmap scaled = pix.scaled(width, imageHeight,
+            QPixmap scaled = pix.scaled(innerW, innerH,
                                         Qt::KeepAspectRatioByExpanding,
                                         Qt::SmoothTransformation);
-            int cx = (scaled.width() - width) / 2;
-            int cy = (scaled.height() - imageHeight) / 2;
-            m_basePixmap = roundPixmap(scaled.copy(cx, cy, width, imageHeight),
+            int cx = (scaled.width() - innerW) / 2;
+            int cy = (scaled.height() - innerH) / 2;
+            m_basePixmap = roundPixmap(scaled.copy(cx, cy, innerW, innerH),
                                        CORNER_RADIUS);
             applyBadges();
             return;
@@ -129,7 +140,7 @@ void TileCard::setCardSize(int width, int imageHeight)
     }
 
     // ── placeholder (groundwork spec) ───────────────────
-    QPixmap ph(width, imageHeight);
+    QPixmap ph(innerW, innerH);
     ph.fill(Qt::transparent);
     QPainter p(&ph);
     p.setRenderHint(QPainter::Antialiasing);
@@ -138,7 +149,7 @@ void TileCard::setCardSize(int width, int imageHeight)
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0, 0, 0, 89));
     QPainterPath clip;
-    clip.addRoundedRect(QRectF(0, 0, width, imageHeight),
+    clip.addRoundedRect(QRectF(0, 0, innerW, innerH),
                         CORNER_RADIUS, CORNER_RADIUS);
     p.drawPath(clip);
 
@@ -154,7 +165,7 @@ void TileCard::setCardSize(int width, int imageHeight)
     font.setBold(true);
     p.setFont(font);
     p.setPen(QColor(0x9c, 0xa3, 0xaf));
-    p.drawText(QRect(0, 0, width, imageHeight), Qt::AlignCenter, initial);
+    p.drawText(QRect(0, 0, innerW, innerH), Qt::AlignCenter, initial);
     p.end();
 
     m_basePixmap = ph;
@@ -318,10 +329,17 @@ void TileCard::setFocused(bool focused)
 
 void TileCard::updateBorder()
 {
+    // Highlighted (selected / hover / click-flash / detail-return-flash): 2px solid
+    // gold accent — Groundworks parity, ported from
+    // C:\Users\Suprabha\Desktop\TankobanQTGroundWork\app_qt\ui\pages\tile_widgets.py:566.
+    // Uses Theme::kAccent so the §0 color-memory pick can flip the entire app's
+    // accent in one place if Hemanth changes direction. Radius stays at Tankoban 2's
+    // 12px (Groundworks uses 8px) to preserve our tile-shape identity.
     if (m_selected || m_hovered || m_flashing)
         m_imageWrap->setStyleSheet(
-            "#TileImageWrap { border: 1px solid rgba(255,255,255,0.20); "
-            "background: rgba(255,255,255,0.04); border-radius: 12px; }");
+            QStringLiteral("#TileImageWrap { border: 2px solid %1; "
+                           "background: rgba(255,255,255,0.04); border-radius: 12px; }")
+                .arg(Theme::kAccent));
     else
         m_imageWrap->setStyleSheet(
             "#TileImageWrap { border: 1px solid rgba(255,255,255,0.10); "
