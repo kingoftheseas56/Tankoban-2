@@ -41,6 +41,7 @@ set(SOURCES
     src/core/PosterFetcher.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
+    src/ui/Theme.cpp
     src/ui/GlassBackground.cpp
     src/ui/RootFoldersOverlay.cpp
     src/ui/ContextMenuHelper.cpp
@@ -94,17 +95,20 @@ set(SOURCES
     src/ui/player/VolumeHud.cpp
     src/ui/player/SeekSlider.cpp
     src/ui/player/KeyBindings.cpp
-    src/ui/player/EqualizerPopover.cpp
     src/ui/player/VsyncTimingLogger.cpp
     src/ui/player/CenterFlash.cpp
     src/ui/player/LoadingOverlay.cpp
     src/ui/player/ToastHud.cpp
     src/ui/player/PlaylistDrawer.cpp
     src/ui/player/SubtitleOverlay.cpp
-    src/ui/player/TrackPopover.cpp
-    src/ui/player/FilterPopover.cpp
+    # VIDEO_HUD_MINIMALIST 2026-04-25 — TrackPopover / FilterPopover /
+    # EqualizerPopover / SubtitleMenu replaced by SubtitlePopover +
+    # AudioPopover + SettingsPopover (merged subtitle list absorbs the
+    # SubtitleMenu external/addon-subs + load-from-file functionality).
+    src/ui/player/SubtitlePopover.cpp
+    src/ui/player/AudioPopover.cpp
+    src/ui/player/SettingsPopover.cpp
     src/ui/player/VideoContextMenu.cpp
-    src/ui/player/SubtitleMenu.cpp
     src/ui/player/OpenUrlDialog.cpp
     src/ui/player/KeybindingEditor.cpp
     src/ui/player/StatsBadge.cpp
@@ -132,14 +136,10 @@ set(SOURCES
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
     src/core/stream/MetaAggregator.cpp
-    src/core/stream/StreamHttpServer.cpp
-    src/core/stream/StreamEngine.cpp
-    src/core/stream/StreamPieceWaiter.cpp
-    src/core/stream/StreamPrioritizer.cpp
-    src/core/stream/StreamSeekClassifier.cpp
-    src/core/stream/StreamSession.cpp
-    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — Stremio stream-server
-    # subprocess bridge. Gated at runtime by TANKOBAN_USE_STREMIO_SERVER=1.
+    # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy libtorrent stream
+    # engine deleted (StreamEngine, StreamHttpServer, StreamPieceWaiter,
+    # StreamPrioritizer, StreamSeekClassifier, StreamSession). Stream mode
+    # runs exclusively against the Stremio stream-server subprocess.
     src/core/stream/stremio/StreamServerProcess.cpp
     src/core/stream/stremio/StreamServerClient.cpp
     src/core/stream/stremio/StreamServerEngine.cpp
@@ -231,10 +231,10 @@ set(HEADERS
     src/ui/player/CenterFlash.h
     src/ui/player/PlaylistDrawer.h
     src/ui/player/SubtitleOverlay.h
-    src/ui/player/TrackPopover.h
-    src/ui/player/FilterPopover.h
+    src/ui/player/SubtitlePopover.h
+    src/ui/player/AudioPopover.h
+    src/ui/player/SettingsPopover.h
     src/ui/player/VideoContextMenu.h
-    src/ui/player/SubtitleMenu.h
     src/ui/player/KeybindingEditor.h
     src/ui/player/StatsBadge.h
     src/core/torrent/TorrentEngine.h
@@ -265,15 +265,10 @@ set(HEADERS
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
     src/core/stream/MetaAggregator.h
-    src/core/stream/StreamHttpServer.h
-    src/core/stream/StreamEngine.h
-    src/core/stream/StreamPieceWaiter.h
-    src/core/stream/StreamPrioritizer.h
-    src/core/stream/StreamSeekClassifier.h
-    src/core/stream/StreamSession.h
-    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — IStreamEngine abstract
-    # interface + Stremio stream-server subprocess bridge headers.
-    src/core/stream/IStreamEngine.h
+    # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy engine headers
+    # deleted along with their .cpp counterparts. StreamTypes.h holds the
+    # struct + enum definitions that used to live in StreamEngine.h.
+    src/core/stream/StreamTypes.h
     src/core/stream/stremio/StreamServerProcess.h
     src/core/stream/stremio/StreamServerClient.h
     src/core/stream/stremio/StreamServerEngine.h
@@ -417,19 +412,25 @@ if(WIN32)
     # Incremental linking for faster link times during development
     target_link_options(Tankoban PRIVATE /INCREMENTAL)
 
-    # STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — copy Stremio stream-server
-    # subprocess bundle next to Tankoban.exe at post-build time. Required files:
-    #   stremio-runtime.exe (~22 MB)   Node.js repackaged runtime
-    #   server.js           (~6 MB)    webpacked stream-server JS
-    #   ffmpeg.exe / ffprobe.exe       stream-server probes content via these
-    #   av*-58.dll + misc              ffmpeg 4.x shared libs (DO NOT reuse
-    #                                  Tankoban's own ffmpeg_sidecar/ 6.x DLLs —
-    #                                  major version mismatch)
-    #   vcruntime140*.dll              MSVC runtime
-    # The whole bundle lives in resources/stream_server/ committed to the repo
-    # (~91 MB). Gated at runtime by TANKOBAN_USE_STREMIO_SERVER=1; unused when
-    # the legacy libtorrent StreamEngine path runs, but harmless-to-ship so we
-    # keep a single binary artifact for distribution.
+    # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — copy Stremio stream-server
+    # subprocess bundle next to Tankoban.exe at post-build time. The stream-
+    # server is Stremio's open-source Node.js SEA (MIT licensed); Tankoban
+    # ships it byte-identical to upstream + an attribution file. Attempted
+    # 2026-04-25 to rebrand the binary via rcedit (VERSIONINFO + icon) but
+    # that corrupts the embedded Node.js SEA blob → segfault on launch; the
+    # Stremio branding shows in Windows Firewall dialog + Task Manager until
+    # we invest in rebuilding stream-server from upstream source with our own
+    # SEA construction (deferred, non-trivial). LICENSE.stream-server.txt
+    # ships alongside as MIT attribution.
+    # Required files:
+    #   stremio-runtime.exe (~22 MB)       Node.js SEA — BYTE-IDENTICAL TO UPSTREAM
+    #   server.js           (~6 MB)        webpacked stream-server JS
+    #   ffmpeg.exe / ffprobe.exe           stream-server probes content via these
+    #   av*-58.dll + misc                  ffmpeg 4.x shared libs (DO NOT reuse
+    #                                      Tankoban's own ffmpeg_sidecar/ 6.x DLLs —
+    #                                      major version mismatch)
+    #   vcruntime140*.dll                  MSVC runtime
+    #   LICENSE.stream-server.txt          MIT attribution for the upstream code
     add_custom_command(TARGET Tankoban POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:Tankoban>/stream_server"
@@ -452,8 +453,9 @@ if(WIN32)
             "${CMAKE_SOURCE_DIR}/resources/stream_server/swscale-5.dll"
             "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140.dll"
             "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140_1.dll"
+            "${CMAKE_SOURCE_DIR}/resources/stream_server/LICENSE.stream-server.txt"
             "$<TARGET_FILE_DIR:Tankoban>/stream_server/"
-        COMMENT "Copying Stremio stream-server bundle to build output"
+        COMMENT "Copying Stremio stream-server bundle (MIT-licensed upstream) to build output"
         VERBATIM
     )
 endif()

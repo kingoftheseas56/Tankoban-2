@@ -1,8 +1,6 @@
 #include "StreamPlayerController.h"
 
 #include "core/CoreBridge.h"
-#include "core/stream/IStreamEngine.h"
-#include "core/stream/StreamEngine.h"
 #include "core/stream/stremio/StreamServerEngine.h"
 #include "core/stream/StreamProgress.h"
 
@@ -11,7 +9,7 @@
 using tankostream::addon::Stream;
 using tankostream::addon::StreamSource;
 
-StreamPlayerController::StreamPlayerController(CoreBridge* bridge, IStreamEngine* engine,
+StreamPlayerController::StreamPlayerController(CoreBridge* bridge, StreamServerEngine* engine,
                                                QObject* parent)
     : QObject(parent)
     , m_bridge(bridge)
@@ -20,22 +18,11 @@ StreamPlayerController::StreamPlayerController(CoreBridge* bridge, IStreamEngine
     m_pollTimer.setSingleShot(false);
     connect(&m_pollTimer, &QTimer::timeout, this, &StreamPlayerController::pollStreamStatus);
 
-    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.3 — wire engine-side error signal
-    // into the controller. One-time connect here (controller lives for the
-    // app session; no per-startStream re-wire needed). Emit sites in
-    // StreamEngine: StreamEngine.cpp:517 (no-video torrent) + :620 (generic
-    // engine error). Pre-3.3 both were dangling — zero connections found in
-    // repo. The 120s HARD_TIMEOUT was the only way out.
-    // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — streamError signal lives on
-    // both concrete engine types with identical signature. Branch by
-    // dynamic_cast since Qt's PMF connect needs a concrete type.
-    if (auto* se = dynamic_cast<StreamEngine*>(m_engine)) {
-        connect(se, &StreamEngine::streamError, this,
-                &StreamPlayerController::onEngineStreamError);
-    } else if (auto* sse = dynamic_cast<StreamServerEngine*>(m_engine)) {
-        connect(sse, &StreamServerEngine::streamError, this,
-                &StreamPlayerController::onEngineStreamError);
-    }
+    // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — single-backend world; the
+    // dual-engine dynamic_cast branch is gone. Engine emits streamError on
+    // no-video torrents and generic engine errors; one unconditional connect.
+    connect(m_engine, &StreamServerEngine::streamError, this,
+            &StreamPlayerController::onEngineStreamError);
 }
 
 void StreamPlayerController::startStream(const QString& imdbId, const QString& mediaType,

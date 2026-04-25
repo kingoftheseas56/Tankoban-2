@@ -36,60 +36,62 @@
 #include <atomic>
 #include <memory>
 
-#include "core/stream/IStreamEngine.h"
-#include "core/stream/StreamEngine.h"   // for StreamFileResult / StreamEngineStats / StreamTorrentStatus
+#include "core/stream/StreamTypes.h"
+#include "core/stream/addon/StreamInfo.h"  // for tankostream::addon::Stream
 
 class StreamServerProcess;
 class StreamServerClient;
 
-class StreamServerEngine : public QObject, public IStreamEngine {
+// STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — IStreamEngine interface deleted
+// along with the legacy StreamEngine. StreamServerEngine is now the only
+// backend, inherits QObject directly, no virtual dispatch needed.
+class StreamServerEngine : public QObject {
     Q_OBJECT
 
 public:
     explicit StreamServerEngine(const QString& cacheDir,
                                  QObject* parent = nullptr);
-    ~StreamServerEngine() override;
+    ~StreamServerEngine();
 
-    // IStreamEngine overrides ──────────────────────────────────────────
-    bool start() override;
-    void stop() override;
-    void cleanupOrphans() override;
-    void startPeriodicCleanup() override;
+    // ─── Lifecycle ─────────────────────────────────────────────────────
+    bool start();
+    void stop();
+    void cleanupOrphans();
+    void startPeriodicCleanup();
 
+    // ─── Streaming API ─────────────────────────────────────────────────
     StreamFileResult streamFile(const QString& magnetUri,
                                  int fileIndex = -1,
-                                 const QString& fileNameHint = {}) override;
+                                 const QString& fileNameHint = {});
     StreamFileResult streamFile(
-        const tankostream::addon::Stream& stream) override;
+        const tankostream::addon::Stream& stream);
 
-    void stopStream(const QString& infoHash) override;
-    void stopAll() override;
+    void stopStream(const QString& infoHash);
+    void stopAll();
 
-    StreamTorrentStatus torrentStatus(const QString& infoHash) const override;
-    StreamEngineStats statsSnapshot(const QString& infoHash) const override;
+    // ─── Query API ─────────────────────────────────────────────────────
+    StreamTorrentStatus torrentStatus(const QString& infoHash) const;
+    StreamEngineStats statsSnapshot(const QString& infoHash) const;
 
     QList<QPair<qint64, qint64>> contiguousHaveRanges(
-        const QString& infoHash) const override;
+        const QString& infoHash) const;
 
+    // ─── Playback-window / seek hooks (Phase 1 no-ops) ─────────────────
     void updatePlaybackWindow(const QString& infoHash,
                                double positionSec,
                                double durationSec,
-                               qint64 windowBytes = 20LL * 1024 * 1024) override;
-    void clearPlaybackWindow(const QString& infoHash) override;
+                               qint64 windowBytes = 20LL * 1024 * 1024);
+    void clearPlaybackWindow(const QString& infoHash);
 
     bool prepareSeekTarget(const QString& infoHash,
                             double positionSec,
                             double durationSec,
-                            qint64 prefetchBytes = 3LL * 1024 * 1024) override;
+                            qint64 prefetchBytes = 3LL * 1024 * 1024);
 
     std::shared_ptr<std::atomic<bool>> cancellationToken(
-        const QString& infoHash) const override;
-
-    QObject* asQObject() override { return this; }
+        const QString& infoHash) const;
 
 signals:
-    // Identical shape to StreamEngine's signals (StreamEngine.h:252-271) so
-    // StreamPage's SIGNAL-macro connect-strings match both types.
     void streamReady(const QString& infoHash, const QString& url);
     void streamError(const QString& infoHash, const QString& message);
     void stallDetected(const QString& infoHash, int piece,

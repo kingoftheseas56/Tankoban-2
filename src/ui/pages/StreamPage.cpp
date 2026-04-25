@@ -4,8 +4,6 @@
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/AddonRegistry.h"
 #include "ui/pages/stream/AddonManagerScreen.h"
-#include "core/stream/StreamEngine.h"
-#include "core/stream/IStreamEngine.h"
 #include "core/stream/stremio/StreamServerEngine.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/torrent/TorrentEngine.h"
@@ -71,8 +69,10 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
             });
 
     // Batch 5.3 — route subtitle aggregator results to the VideoPlayer's
-    // SubtitleMenu. Player is created by MainWindow and reachable via
-    // findChild; connection is persistent for the StreamPage lifetime.
+    // SubtitlePopover (merged subtitle UI; previously a separate
+    // SubtitleMenu drawer pre-VIDEO_HUD_MINIMALIST 2026-04-25). Player
+    // is created by MainWindow and reachable via findChild; connection
+    // is persistent for the StreamPage lifetime.
     connect(m_subtitlesAggregator, &tankostream::stream::SubtitlesAggregator::subtitlesReady,
         this, [this](const QList<tankostream::addon::SubtitleTrack>& tracks,
                      const QHash<QString, QString>& originByTrackKey) {
@@ -91,18 +91,13 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
     m_calendarEngine = new tankostream::stream::CalendarEngine(
         m_addonRegistry, m_library, bridge->dataDir(), this);
 
-    // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — env-gated backend selection.
-    // TANKOBAN_USE_STREMIO_SERVER=1 → new Stremio stream-server subprocess
-    // (resources/stream_server/stremio-runtime.exe + server.js). Any other
-    // value (including unset) → legacy libtorrent-based StreamEngine. Phase 2
-    // deletes the legacy path + removes this branch once the pivot proves out.
-    if (qgetenv("TANKOBAN_USE_STREMIO_SERVER") == "1") {
-        const QString pivotCacheDir = bridge->dataDir() + "/stream_server_cache";
-        m_streamEngine = new StreamServerEngine(pivotCacheDir, this);
-    } else {
-        const QString cacheDir = bridge->dataDir() + "/stream_cache";
-        m_streamEngine = new StreamEngine(torrentEngine, cacheDir, this);
-    }
+    // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy libtorrent engine
+    // deleted. Stream mode is stream-server subprocess only, no env gate,
+    // no fallback. Cache lives under dataDir/stream_server_cache (renamed
+    // from the legacy dataDir/stream_cache path).
+    (void)torrentEngine;  // no longer needed by the engine; kept in ctor signature for now
+    const QString cacheDir = bridge->dataDir() + "/stream_server_cache";
+    m_streamEngine = new StreamServerEngine(cacheDir, this);
     m_streamEngine->start();
     m_streamEngine->cleanupOrphans();
     m_streamEngine->startPeriodicCleanup();
@@ -1846,8 +1841,8 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     m_bufferOverlay->show();
 
     // Batch 5.3 — fan out a subtitle request for the selected stream in
-    // parallel with playback prep. Result lands in the SubtitleMenu via the
-    // subtitlesReady connection wired in the ctor.
+    // parallel with playback prep. Result lands in the SubtitlePopover
+    // via the subtitlesReady connection wired in the ctor.
     tankostream::stream::SubtitleLoadRequest subReq;
     subReq.type = (ctx.mediaType == "movie")
                       ? QStringLiteral("movie")
@@ -1959,17 +1954,17 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             player->onStreamStallEdgeFromEngine(false);
         };
 
-        if (auto* se = dynamic_cast<StreamEngine*>(m_streamEngine)) {
-            disconnect(se, &StreamEngine::stallDetected, this, nullptr);
-            disconnect(se, &StreamEngine::stallRecovered, this, nullptr);
-            connect(se, &StreamEngine::stallDetected,  this, onStall);
-            connect(se, &StreamEngine::stallRecovered, this, onRecover);
-        } else if (auto* sse = dynamic_cast<StreamServerEngine*>(m_streamEngine)) {
-            disconnect(sse, &StreamServerEngine::stallDetected, this, nullptr);
-            disconnect(sse, &StreamServerEngine::stallRecovered, this, nullptr);
-            connect(sse, &StreamServerEngine::stallDetected,  this, onStall);
-            connect(sse, &StreamServerEngine::stallRecovered, this, onRecover);
-        }
+        // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — single-backend world;
+        // dual-engine dynamic_cast branch collapsed. StreamServerEngine
+        // doesn't emit stallDetected/stallRecovered today (Phase 2B deferred
+        // Item 6), so these connects are dormant — the player's own stall
+        // detection (VideoPlayer::onStreamStallEdgeFromEngine callers) still
+        // works via other paths. Connect anyway for forward-compat when
+        // stall signals are derived from dlSpeed=0.
+        disconnect(m_streamEngine, &StreamServerEngine::stallDetected, this, nullptr);
+        disconnect(m_streamEngine, &StreamServerEngine::stallRecovered, this, nullptr);
+        connect(m_streamEngine, &StreamServerEngine::stallDetected,  this, onStall);
+        connect(m_streamEngine, &StreamServerEngine::stallRecovered, this, onRecover);
     }
 
     connect(player, &VideoPlayer::progressUpdated, this,
