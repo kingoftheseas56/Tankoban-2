@@ -75,23 +75,28 @@ private:
     PasteKind detectPasteKind(const QString& input) const;
     void applyPasteKindToSearchButton(PasteKind kind);
     void handlePasteAction(PasteKind kind, const QString& input);
-    // Phase 4 Batch 4.1 — live-search pipeline. `onSearchTextChanged` restarts
-    // the 300ms debounce on every keystroke; `onSearchDebounceFired` is the
-    // deferred executor: empty input restores browse, <2 chars no-ops, >=2
-    // chars runs the same path as `onSearchSubmit`. Spinner toggles via
-    // `setSearchBusy` driven by MetaAggregator's catalog result / error.
+    // Phase 4 Batch 4.1 — search pipeline. Live-search debounce removed
+    // 2026-04-25; `onSearchTextChanged` now only drives paste-kind detection
+    // (refreshes the Search button label) + history-dropdown lifecycle
+    // (show on empty+focused, hide on non-empty). Search execution itself
+    // fires on Enter / Search button / history-row click via
+    // `onSearchSubmit`. Spinner toggles via `setSearchBusy` driven by
+    // MetaAggregator's catalog result / error.
     void onSearchTextChanged(const QString& text);
-    void onSearchDebounceFired();
     void setSearchBusy(bool busy);
-    // Phase 4 Batch 4.2 — search history. QSettings-persisted last-20
+    // Phase 4 Batch 4.2 — search history. QSettings-persisted last-10
     // queries, chronological (most-recent-first), deduped on insert.
-    // Dropdown shows top-10 on empty-field focus; click re-runs the
-    // search via the same debounce path, per-row × removes an entry.
+    // Dropdown shows the full list on empty-field focus; row click re-runs
+    // the search, per-row × removes one entry, footer "Clear search history"
+    // wipes the lot. Cap unified to a single value 2026-04-25 (was 20
+    // persisted / 10 rendered split — Hemanth flagged the persisted depth
+    // as too long).
     void buildSearchHistoryDropdown();
     void loadSearchHistory();
     void saveSearchHistory();
     void pushSearchHistory(const QString& query);
     void removeSearchHistoryEntry(const QString& query);
+    void clearSearchHistory();
     void showSearchHistoryDropdown();
     void hideSearchHistoryDropdown();
     void positionSearchHistoryDropdown();
@@ -195,20 +200,24 @@ private:
     // QProgressBar (Qt's built-in "busy" mode — range [0,0]) living between
     // the input and the Search button; shown on search fire, hidden on
     // catalogResults / catalogError.
-    QTimer*      m_searchDebounce = nullptr;
+    //
+    // Live-search debounce was removed 2026-04-25 per Hemanth: even at 800ms
+    // it fired during natural mid-typing pauses. Search now only fires on
+    // Enter / Search button / history-row click. textChanged still drives
+    // paste-kind detection + history dropdown show/hide on empty input.
     QWidget*     m_searchBusy     = nullptr;   // QProgressBar forward-declared; held as QWidget*
 
     // Phase 4 Batch 4.2 — search history. Dropdown is a QFrame child of
     // StreamPage (not the search-bar frame) so it can float over the
     // browse/detail layers via raise(). Positioned manually on show to
     // align with m_searchInput's screen geometry. Settings key
-    // `stream/searchHistory`; max 20 entries persisted, top 10 rendered.
+    // `stream/searchHistory`; cap unified at 10 entries (persisted ==
+    // displayed) — Hemanth 2026-04-25 flagged 20 as too long.
     QFrame*      m_searchHistoryDropdown = nullptr;
     QWidget*     m_searchHistoryList     = nullptr;   // scroll contents
     QTimer*      m_searchHistoryHideTimer = nullptr;  // delays hide on focus-out
     QStringList  m_searchHistory;
-    static constexpr int kMaxSearchHistory    = 20;
-    static constexpr int kDisplaySearchHistory = 10;
+    static constexpr int kMaxSearchHistory = 10;
 
     // Phase 4 Batch 4.3 — current URL-paste detection state (drives
     // Search button label + Enter routing).

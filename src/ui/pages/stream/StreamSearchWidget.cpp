@@ -96,7 +96,7 @@ void StreamSearchWidget::buildUI()
     topLayout->addWidget(m_backBtn);
 
     m_statusLabel = new QLabel(topRow);
-    m_statusLabel->setStyleSheet("color: rgba(255,255,255,0.5); font-size: 12px;");
+    m_statusLabel->setObjectName("StreamStatusText");
     topLayout->addWidget(m_statusLabel);
     topLayout->addStretch();
 
@@ -112,15 +112,17 @@ void StreamSearchWidget::buildUI()
     scrollLayout->setContentsMargins(16, 8, 16, 16);
     scrollLayout->setSpacing(12);
 
-    // Stremio-parity section layout: Movies first, then Series. Each
-    // section has a small-caps header + its own TileStrip. Headers hide
-    // when the section is empty so a movies-only or series-only query
-    // doesn't show a dangling "SERIES" label with no tiles under it.
+    // Section layout 2026-04-25: Series (TV Shows) first, then Movies.
+    // Hemanth flipped the order from the prior Stremio-mirror layout —
+    // his mental model puts TV first because that's the bulk of his
+    // viewing. "SERIES" header text retained (matches the addon-API
+    // type token; no rename needed for the visual swap). Each section
+    // has a small-caps header + its own TileStrip, headers hide when
+    // empty so a movies-only or series-only query doesn't show a
+    // dangling header with no tiles under it.
     auto makeHeader = [&](const QString& text) -> QLabel* {
         auto* lbl = new QLabel(text, scrollContent);
-        lbl->setStyleSheet(
-            "color: rgba(255,255,255,0.55); font-size: 11px; font-weight: 600;"
-            " letter-spacing: 1.5px; padding: 4px 0 2px 0;");
+        lbl->setObjectName("LibraryHeadingSmall");
         return lbl;
     };
 
@@ -142,23 +144,30 @@ void StreamSearchWidget::buildUI()
         return btn;
     };
 
-    m_moviesHeader = makeHeader(QStringLiteral("MOVIES"));
-    scrollLayout->addWidget(m_moviesHeader);
-    m_moviesStrip = new TileStrip(scrollContent);
-    scrollLayout->addWidget(m_moviesStrip);
-    m_moviesShowMore = makeShowMore(scrollContent);
-    scrollLayout->addWidget(m_moviesShowMore);
-    connect(m_moviesShowMore, &QPushButton::clicked,
-            this, &StreamSearchWidget::revealMoviesOverflow);
-
+    // Search-result strips default to small density (TileStrip level 0)
+    // 2026-04-25 per Hemanth: the library uses bigger tiles, but search
+    // is exploration — small tiles let the user scan many candidates
+    // per scroll. Library + search are contextually different surfaces;
+    // small here is the right domain default, not a one-off shrink.
     m_seriesHeader = makeHeader(QStringLiteral("SERIES"));
     scrollLayout->addWidget(m_seriesHeader);
     m_seriesStrip = new TileStrip(scrollContent);
+    m_seriesStrip->setDensity(0);
     scrollLayout->addWidget(m_seriesStrip);
     m_seriesShowMore = makeShowMore(scrollContent);
     scrollLayout->addWidget(m_seriesShowMore);
     connect(m_seriesShowMore, &QPushButton::clicked,
             this, &StreamSearchWidget::revealSeriesOverflow);
+
+    m_moviesHeader = makeHeader(QStringLiteral("MOVIES"));
+    scrollLayout->addWidget(m_moviesHeader);
+    m_moviesStrip = new TileStrip(scrollContent);
+    m_moviesStrip->setDensity(0);
+    scrollLayout->addWidget(m_moviesStrip);
+    m_moviesShowMore = makeShowMore(scrollContent);
+    scrollLayout->addWidget(m_moviesShowMore);
+    connect(m_moviesShowMore, &QPushButton::clicked,
+            this, &StreamSearchWidget::revealMoviesOverflow);
 
     scrollLayout->addStretch(1);
 
@@ -289,8 +298,12 @@ void StreamSearchWidget::onCatalogResults(const QList<MetaItemPreview>& results)
             showMore->show();
         }
     };
-    renderCapped(movies, m_moviesHeader, m_moviesShowMore, m_moviesOverflow);
+    // Render order matches visual order (Series first, Movies second)
+    // for code-reading clarity. Order doesn't affect what the user sees —
+    // each renderCapped just populates a pre-built strip — but matching
+    // the addWidget layout above prevents future-reader confusion.
     renderCapped(series, m_seriesHeader, m_seriesShowMore, m_seriesOverflow);
+    renderCapped(movies, m_moviesHeader, m_moviesShowMore, m_moviesOverflow);
 }
 
 void StreamSearchWidget::revealMoviesOverflow()

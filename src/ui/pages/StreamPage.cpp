@@ -443,18 +443,13 @@ void StreamPage::buildSearchBar()
     connect(m_catalogBtn, &QPushButton::clicked,
             this, &StreamPage::onCatalogBtnClicked);
 
-    // Live-search debounce. 800 ms after the last textChanged event,
-    // onSearchDebounceFired runs the deferred logic. Enter / Search
-    // button path stays as-is for instant fire. Raised from 300 → 800 ms
-    // on 2026-04-20 after Hemanth reported the prior cadence fired
-    // mid-typing (typical mid-word pauses exceed 300 ms). 800 ms matches
-    // Stremio's own live-search debounce — the reference behaviour for
-    // this page.
-    m_searchDebounce = new QTimer(this);
-    m_searchDebounce->setSingleShot(true);
-    m_searchDebounce->setInterval(800);
-    connect(m_searchDebounce, &QTimer::timeout,
-            this, &StreamPage::onSearchDebounceFired);
+    // Live-search debounce REMOVED 2026-04-25 per Hemanth: even at 800 ms
+    // (raised from 300 → 800 ms on 2026-04-20 for the same reason) the
+    // search fired during natural mid-typing pauses while Hemanth was
+    // still composing his query. Search now only fires on Enter / Search
+    // button / history-row click. textChanged is still wired so paste-kind
+    // detection + history-dropdown show/hide-on-empty stay live; it just
+    // no longer arms a deferred search.
     connect(m_searchInput, &QLineEdit::textChanged,
             this, &StreamPage::onSearchTextChanged);
 
@@ -558,7 +553,6 @@ void StreamPage::onSearchSubmit()
     if (query.isEmpty())
         return;
 
-    if (m_searchDebounce) m_searchDebounce->stop();
     hideSearchHistoryDropdown();
 
     // Phase 4 Batch 4.3 — route URL-paste kinds to their action instead
@@ -578,7 +572,12 @@ void StreamPage::onSearchSubmit()
     m_searchWidget->search(query);
 }
 
-// Phase 4 Batch 4.1 — live-search debounce + spinner handlers.
+// Phase 4 Batch 4.1 — search input observer + spinner handlers.
+//
+// Live-search debounce was removed 2026-04-25 per Hemanth. This handler now
+// only updates UI affordances tied to the input's current text — it never
+// kicks off a search. Search execution is gated entirely on Enter, the
+// Search button, or a history-row click (all routed through onSearchSubmit).
 
 void StreamPage::onSearchTextChanged(const QString& text)
 {
@@ -593,11 +592,8 @@ void StreamPage::onSearchTextChanged(const QString& text)
     }
 
     if (trimmed.isEmpty()) {
-        // Clearing restores the home/browse layer. Stop any pending debounce
-        // so a stale deferred fire doesn't kick a search after the user
-        // cleared the field intentionally. If the input is focused, show
-        // the history dropdown (Batch 4.2).
-        if (m_searchDebounce) m_searchDebounce->stop();
+        // Clearing restores the home/browse layer + offers the history
+        // dropdown if the input still has focus (Batch 4.2).
         setSearchBusy(false);
         if (m_searchWidget && m_searchWidget->isVisible()) {
             showBrowse();
@@ -611,36 +607,6 @@ void StreamPage::onSearchTextChanged(const QString& text)
     // Any non-empty text hides the history dropdown (Batch 4.2) — the user
     // is typing a new query, not browsing history.
     hideSearchHistoryDropdown();
-
-    // Phase 4 Batch 4.3 — URL-paste kinds stop the live-search debounce.
-    // The user's intent is an action (play/install), not a text search.
-    // Enter or the repurposed Search button fires the action.
-    if (m_pasteKind != PasteKind::None) {
-        if (m_searchDebounce) m_searchDebounce->stop();
-        return;
-    }
-
-    // <2 chars: don't fire yet, but don't revert either — user is mid-type.
-    if (trimmed.length() < 2) {
-        if (m_searchDebounce) m_searchDebounce->stop();
-        return;
-    }
-
-    // Restart the debounce so only the latest pause in typing survives.
-    if (m_searchDebounce) m_searchDebounce->start();
-}
-
-void StreamPage::onSearchDebounceFired()
-{
-    const QString query = m_searchInput ? m_searchInput->text().trimmed() : QString();
-    if (query.length() < 2) return;   // defensive; user may have deleted
-                                       // chars between textChanged and fire
-
-    hideSearchHistoryDropdown();
-    pushSearchHistory(query);
-    m_browseScroll->hide();
-    setSearchBusy(true);
-    m_searchWidget->search(query);
 }
 
 void StreamPage::setSearchBusy(bool busy)
@@ -836,6 +802,15 @@ void StreamPage::removeSearchHistoryEntry(const QString& query)
     }
 }
 
+void StreamPage::clearSearchHistory()
+{
+    if (m_searchHistory.isEmpty()) return;
+    m_searchHistory.clear();
+    saveSearchHistory();
+    // Empty history → dropdown self-hides on next show, so just hide now.
+    hideSearchHistoryDropdown();
+}
+
 void StreamPage::buildSearchHistoryDropdown()
 {
     m_searchHistoryDropdown = new QFrame(this);
@@ -897,7 +872,7 @@ void StreamPage::showSearchHistoryDropdown()
         return;
     }
 
-    const int rows = qMin(m_searchHistory.size(), kDisplaySearchHistory);
+    const int rows = qMin(m_searchHistory.size(), kMaxSearchHistory);
     const char* kRowBtnStyle =
         "QPushButton { background: transparent; color: #d0d0d0; border: none;"
         "  text-align: left; padding: 6px 10px; font-size: 12px; }"
@@ -905,6 +880,11 @@ void StreamPage::showSearchHistoryDropdown()
     const char* kRemoveBtnStyle =
         "QPushButton { background: transparent; color: rgba(255,255,255,0.45);"
         "  border: none; font-size: 14px; padding: 0 10px; }"
+        "QPushButton:hover { color: #fff; }";
+    const char* kClearAllBtnStyle =
+        "QPushButton { background: transparent; color: rgba(255,255,255,0.55);"
+        "  border: none; text-align: left; padding: 6px 10px;"
+        "  font-size: 11px; font-weight: 500; letter-spacing: 0.4px; }"
         "QPushButton:hover { color: #fff; }";
 
     for (int i = 0; i < rows; ++i) {
@@ -942,6 +922,27 @@ void StreamPage::showSearchHistoryDropdown()
 
         layout->addWidget(row);
     }
+
+    // Footer: "× Clear search history" wipes the entire list. Single visible
+    // affordance per Hemanth's 2026-04-25 ask ("there isn't an option to
+    // clear search history"). Per-entry × on each row above is preserved.
+    // Hairline divider above so the footer reads as a separate action,
+    // not an additional history item.
+    auto* divider = new QFrame(m_searchHistoryList);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setStyleSheet(
+        "QFrame { border: none; background: rgba(255,255,255,0.08);"
+        "  max-height: 1px; min-height: 1px; }");
+    layout->addWidget(divider);
+
+    auto* clearAllBtn = new QPushButton(
+        QStringLiteral("\u00D7  Clear search history"), m_searchHistoryList);
+    clearAllBtn->setCursor(Qt::PointingHandCursor);
+    clearAllBtn->setStyleSheet(kClearAllBtnStyle);
+    clearAllBtn->setFocusPolicy(Qt::NoFocus);
+    connect(clearAllBtn, &QPushButton::clicked,
+            this, &StreamPage::clearSearchHistory);
+    layout->addWidget(clearAllBtn);
 
     m_searchHistoryDropdown->adjustSize();
     positionSearchHistoryDropdown();
@@ -2130,6 +2131,17 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             player->hide();
             showNextEpisodeOverlay();
         }
+        // STREAM_PLAYER_CLOSE_FIX 2026-04-25 — explicit stopPlayback mirroring
+        // MainWindow::closeVideoPlayer (MainWindow.cpp:557). Without this,
+        // m_playerController->stopStream() below only removes the engine-side
+        // torrent — the sidecar process keeps running with already-buffered
+        // HTTP bytes, so audio + video continue playing until the buffer
+        // drains (multiple seconds on HD content). stopPlayback fires
+        // sendStop + sendShutdown to the sidecar so it gracefully closes
+        // the AV pipeline FIRST, then we tell the engine to free the
+        // torrent. Hemanth-reported "video keeps playing even after I close
+        // the video" 2026-04-25.
+        player->stopPlayback();
         m_playerController->stopStream();
         m_continueStrip->refresh();
         m_libraryLayout->refresh();
@@ -2223,6 +2235,13 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             player->setGeometry(mainWin->rect());
         player->show();
         player->raise();
+        // STREAM_PLAYER_FOCUS_FIX 2026-04-25 — explicit setFocus mirroring
+        // MainWindow::openVideoPlayer (MainWindow.cpp:551). Without this, the
+        // player widget shows + raises but keyboard focus stays on whichever
+        // tile / search input had it before, so Space (toggle_pause) and
+        // every other shortcut never reach VideoPlayer::keyPressEvent.
+        // Hemanth-reported "can't pause the video in stream mode" 2026-04-25.
+        player->setFocus();
     };
 
     if (streamResumeSec <= 0.0 || streamSavedDur <= 0.0 || !m_streamEngine
