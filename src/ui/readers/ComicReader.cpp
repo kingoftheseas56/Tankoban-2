@@ -608,7 +608,7 @@ void ComicReader::buildUI()
     // Cluster order: [Mode] [Width%] [Settings] [PrevVol] [NextVol] [VolList].
     rightLayout->addStretch();
 
-    m_modeBtn = makeIconBtn(":/icons/comic_reader/mode-single.svg");
+    m_modeBtn = makeIconBtn(":/icons/comic_reader/mode-double.svg");
     m_modeBtn->setToolTip("Reading mode (M)");
     connect(m_modeBtn, &QPushButton::clicked, this, &ComicReader::cycleReaderMode);
     rightLayout->addWidget(m_modeBtn);
@@ -910,16 +910,15 @@ void ComicReader::openBook(const QString& cbzPath,
     m_volBtn->setVisible(multiVolume);
 
     applySeriesSettings();  // D11: restore portrait width, mode, coupling phase — must precede button visibility
-    m_hudPinned = (m_readerMode != ReaderMode::ScrollStrip); // A2: SinglePage/DoublePage = pinned HUD
+    m_hudPinned = (m_readerMode == ReaderMode::DoublePage); // A2: DoublePage = pinned HUD
 
     // Update toolbar visibility for mode (after applySeriesSettings so restored mode is reflected)
     m_portraitBtn->setVisible(!m_isDoublePage);
     // Sync mode-button icon to restored m_readerMode (HUD redesign 2026-04-25 — icon, not text).
     switch (m_readerMode) {
-    case ReaderMode::DoublePage:   m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg")); break;
     case ReaderMode::ScrollStrip:  m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-scroll.svg")); break;
-    case ReaderMode::SinglePage:
-    default:                       m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg")); break;
+    case ReaderMode::DoublePage:
+    default:                       m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg")); break;
     }
 
     int startPage = restoreSavedPage();
@@ -1677,18 +1676,8 @@ void ComicReader::cycleReaderMode()
     // Save scroll position before switching
     int page = (m_readerMode == ReaderMode::ScrollStrip) ? computePageInView() : m_currentPage;
 
-    switch (m_readerMode) {
-    case ReaderMode::SinglePage:
-        m_readerMode = ReaderMode::DoublePage;
-        m_hudPinned = true;  // DoublePage = pinned HUD
-        clearScrollStrip();
-        m_imageLabel->show();
-        buildCanonicalPairingUnits();
-        m_portraitBtn->setVisible(false);
-        m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg"));
-        showToast("Double Page");
-        break;
-    case ReaderMode::DoublePage:
+    // 2-mode toggle (SinglePage removed 2026-04-25): Double ⇄ Scroll.
+    if (m_readerMode == ReaderMode::DoublePage) {
         m_readerMode = ReaderMode::ScrollStrip;
         m_hudPinned = false; // ScrollStrip = auto-hide HUD
         invalidatePairing();
@@ -1709,17 +1698,17 @@ void ComicReader::cycleReaderMode()
             }
         });
         return; // skip the showPage(page) at the bottom
-    case ReaderMode::ScrollStrip:
-        m_readerMode = ReaderMode::SinglePage;
-        m_hudPinned = true;  // SinglePage = pinned HUD
-        clearScrollStrip();
-        m_imageLabel->show();
-        invalidatePairing();
-        m_portraitBtn->setVisible(true);
-        m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg"));
-        showToast("Single Page");
-        break;
     }
+
+    // Otherwise: ScrollStrip → DoublePage.
+    m_readerMode = ReaderMode::DoublePage;
+    m_hudPinned = true;  // DoublePage = pinned HUD
+    clearScrollStrip();
+    m_imageLabel->show();
+    buildCanonicalPairingUnits();
+    m_portraitBtn->setVisible(false);
+    m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg"));
+    showToast("Double Page");
 
     showPage(page);
 }
@@ -2521,12 +2510,11 @@ void ComicReader::showSettingsPanel()
         // Reading Mode
         m_settingsModeCombo = new QComboBox(m_settingsCard);
         m_settingsModeCombo->setStyleSheet(comboStyle);
-        m_settingsModeCombo->addItem("Single Page", static_cast<int>(ReaderMode::SinglePage));
         m_settingsModeCombo->addItem("Double Page", static_cast<int>(ReaderMode::DoublePage));
         m_settingsModeCombo->addItem("Scroll Strip", static_cast<int>(ReaderMode::ScrollStrip));
         connect(m_settingsModeCombo, &QComboBox::activated, this, [this](int idx) {
             ReaderMode target = static_cast<ReaderMode>(m_settingsModeCombo->itemData(idx).toInt());
-            // 3-mode enum — reach target in at most 2 cycles
+            // 2-mode enum — reach target in at most 1 cycle. Safety bound kept at 4 for paranoia.
             int safety = 0;
             while (m_readerMode != target && safety++ < 4)
                 cycleReaderMode();
@@ -3256,7 +3244,7 @@ void ComicReader::wheelEvent(QWheelEvent* event)
         }
     }
 
-    // No scrollbar (content fits) or single-page FitPage/FitHeight: wheel = page nav
+    // No scrollbar (content fits) or fit-page/fit-height layout: wheel = page nav
     if (event->angleDelta().y() < 0) nextPage();
     else if (event->angleDelta().y() > 0) prevPage();
 }
@@ -3816,7 +3804,7 @@ void ComicReader::resetSeriesSettings()
     s.remove(k);
     // Reset to defaults
     m_portraitWidthPct = 78;
-    m_readerMode = ReaderMode::SinglePage;
+    m_readerMode = ReaderMode::DoublePage;
     m_hudPinned = true;
     m_couplingPhase = "normal";
     m_gutterShadow = 0.35;
@@ -3832,7 +3820,7 @@ void ComicReader::resetSeriesSettings()
     m_imageLabel->show();
     invalidatePairing();
     m_portraitBtn->setVisible(true);
-    m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-single.svg"));
+    m_modeBtn->setIcon(QIcon(":/icons/comic_reader/mode-double.svg"));
     if (m_stripCanvas) {
         m_stripCanvas->setFilterBrightness(0);
         m_stripCanvas->setSidePadding(0);
@@ -3848,7 +3836,9 @@ void ComicReader::saveSeriesSettings()
     QSettings s("Tankoban", "Tankoban");
     QString k = seriesSettingsKey();
     s.setValue(k + "/portraitWidthPct", m_portraitWidthPct);
-    s.setValue(k + "/readerMode",       static_cast<int>(m_readerMode));
+    // readerMode_v2 = post-SinglePage-removal range (0=Double, 1=Scroll). Legacy
+    // readerMode (0=Single/1=Double/2=Scroll) is migrated on read; we only write _v2.
+    s.setValue(k + "/readerMode_v2",    static_cast<int>(m_readerMode));
     s.setValue(k + "/couplingPhase",    m_couplingPhase);
     s.setValue(k + "/gutterShadow",     m_gutterShadow);
     s.setValue(k + "/scalingQuality",   m_scalingQuality == Qt::SmoothTransformation ? 0 : 1);
@@ -3864,7 +3854,7 @@ void ComicReader::saveSeriesSettings()
     // F1: Write last-saved as migration seed for new series
     QVariantMap last;
     last["portraitWidthPct"] = m_portraitWidthPct;
-    last["readerMode"]       = static_cast<int>(m_readerMode);
+    last["readerMode_v2"]    = static_cast<int>(m_readerMode);
     last["couplingPhase"]    = m_couplingPhase;
     last["gutterShadow"]     = m_gutterShadow;
     last["scalingQuality"]   = m_scalingQuality == Qt::SmoothTransformation ? 0 : 1;
@@ -3891,9 +3881,16 @@ void ComicReader::applySeriesSettings()
             QVariantMap last = lastVar.toMap();
             if (last.contains("portraitWidthPct"))
                 setPortraitWidthPct(last["portraitWidthPct"].toInt());
-            if (last.contains("readerMode")) {
-                int mode = last["readerMode"].toInt();
-                if (mode >= 0 && mode <= 2) m_readerMode = static_cast<ReaderMode>(mode);
+            // SinglePage removed 2026-04-25. New writes go to "readerMode_v2" (range 0..1:
+            // 0=Double, 1=Scroll). Legacy "readerMode" (range 0..2: 0=Single, 1=Double,
+            // 2=Scroll) is migrated: legacy 0/1 both upgrade to DoublePage (closest UX
+            // for prior SinglePage users; preserves DoublePage users); legacy 2 → ScrollStrip.
+            if (last.contains("readerMode_v2")) {
+                int v = last["readerMode_v2"].toInt();
+                if (v >= 0 && v <= 1) m_readerMode = static_cast<ReaderMode>(v);
+            } else if (last.contains("readerMode")) {
+                int legacy = last["readerMode"].toInt();
+                m_readerMode = (legacy == 2) ? ReaderMode::ScrollStrip : ReaderMode::DoublePage;
             }
             if (last.contains("couplingPhase"))
                 m_couplingPhase = last["couplingPhase"].toString();
@@ -3926,9 +3923,15 @@ void ComicReader::applySeriesSettings()
     int pct = s.value(k + "/portraitWidthPct", m_portraitWidthPct).toInt();
     setPortraitWidthPct(pct);
 
-    int mode = s.value(k + "/readerMode", static_cast<int>(m_readerMode)).toInt();
-    if (mode >= 0 && mode <= 2)
-        m_readerMode = static_cast<ReaderMode>(mode);
+    // SinglePage removed 2026-04-25 — see saveSeriesSettings comment + the
+    // last_saved_series_settings migration block above for the legacy-int mapping.
+    if (s.contains(k + "/readerMode_v2")) {
+        int v = s.value(k + "/readerMode_v2").toInt();
+        if (v >= 0 && v <= 1) m_readerMode = static_cast<ReaderMode>(v);
+    } else if (s.contains(k + "/readerMode")) {
+        int legacy = s.value(k + "/readerMode").toInt();
+        m_readerMode = (legacy == 2) ? ReaderMode::ScrollStrip : ReaderMode::DoublePage;
+    }
 
     QString phase = s.value(k + "/couplingPhase", m_couplingPhase).toString();
     if (!phase.isEmpty()) m_couplingPhase = phase;
