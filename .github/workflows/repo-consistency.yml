@@ -1,0 +1,26 @@
+# REPO_HYGIENE Phase 5 v1 (2026-04-26) — repo-consistency CI.
+#
+# Runs scripts/repo-consistency.sh on every push + PR. Catches static
+# regressions of Phase 1's hygiene fixes (audit findings 1-3): hardcoded
+# developer paths, missing CMakeLists.txt entries, bare debug-log literals.
+#
+# Lint-only — no build. Full Windows clean-machine build CI ships in v1.x
+# after Phase 2 (vcpkg dependency migration) lands.
+
+name: repo-consistency
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run repo-consistency checks
+        run: bash scripts/repo-consistency.sh
