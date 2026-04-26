@@ -93,9 +93,24 @@ SidecarProcess::~SidecarProcess()
 
     if (m_process->state() != QProcess::NotRunning) {
         sendShutdown();
-        m_process->waitForFinished(3000);
-        if (m_process->state() != QProcess::NotRunning)
-            m_process->kill();
+        ensureTerminated(3000);
+    }
+}
+
+void SidecarProcess::ensureTerminated(int timeoutMs)
+{
+    // CLOSE_AUDIO_CONTINUES_FIX 2026-04-26. Wait for graceful exit; force-kill
+    // if exceeded. Idempotent (early-returns when already NotRunning) so
+    // double-calls from rapid close+open sequences are harmless.
+    if (m_process->state() == QProcess::NotRunning) return;
+    m_process->waitForFinished(timeoutMs);
+    if (m_process->state() != QProcess::NotRunning) {
+        debugLog(QString("[Sidecar] graceful shutdown timed out after %1ms — force-killing pid=%2")
+                 .arg(timeoutMs).arg(m_process->processId()));
+        m_process->kill();
+        // Brief reap window so QProcess marks NotRunning before any
+        // immediately-following m_process->start() call inspects state.
+        m_process->waitForFinished(200);
     }
 }
 

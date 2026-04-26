@@ -89,6 +89,20 @@ public:
     int sendResize(int width, int height);
     int sendShutdown();
 
+    // CLOSE_AUDIO_CONTINUES_FIX 2026-04-26 — wait briefly for the sidecar
+    // process to exit gracefully after sendShutdown, then force-kill if it
+    // hasn't. Shipped because the close-button path (VideoPlayer::stopPlayback)
+    // previously fired sendStop+sendShutdown fire-and-forget — if the sidecar
+    // dispatcher was busy or PortAudio had buffered audio mid-write, the
+    // process stayed alive and audio kept playing until app exit (when the
+    // ~SidecarProcess destructor finally hit its existing wait+kill backstop
+    // at SidecarProcess.cpp:94-99). This makes the same backstop reachable
+    // from any close path with a tighter timeout. Synchronous (blocks the
+    // calling thread). Default 500ms covers the typical clean-exit window
+    // (~50-100ms) with comfortable headroom; longer values are appropriate
+    // for the destructor-on-app-exit case.
+    void ensureTerminated(int timeoutMs = 500);
+
     // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence.
     // Sends `stop` and stores onComplete to fire when the sidecar emits
     // its matching `stop_ack` (emitted after teardown_decode completes,
