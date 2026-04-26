@@ -2,6 +2,7 @@
 #include "TileStrip.h"
 #include "TileCard.h"
 #include "ShowView.h"
+#include <QJsonArray>
 #include "core/CoreBridge.h"
 #include "core/VideosScanner.h"
 #include "core/ScannerUtils.h"
@@ -1119,3 +1120,33 @@ void VideosPage::refreshContinueOnly()
         m_continueRefreshThrottle->start();
     }
 }
+
+// ── REPO_HYGIENE Phase 3 — dev-control bridge snapshot ──────────────────────
+
+QJsonObject VideosPage::devSnapshot(int limit) const
+{
+    QJsonObject snap;
+    snap["gridMode"]       = m_gridMode;
+    snap["scanInProgress"] = m_scanning;
+    snap["hasScanned"]     = m_hasScanned;
+    snap["totalShowCount"] = static_cast<int>(m_showPathToName.size());
+
+    QJsonArray tiles;
+    int n = 0;
+    for (auto it = m_showPathToName.cbegin();
+         it != m_showPathToName.cend() && n < limit; ++it, ++n) {
+        QJsonObject t;
+        t["showPath"] = it.key();
+        t["showName"] = it.value();
+        tiles.append(t);
+    }
+    snap["tiles"] = tiles;
+
+    if (m_showView && m_showView->isVisible())
+        snap["activeShow"] = m_showView->devSnapshot();
+    else
+        snap["activeShow"] = QJsonValue::Null;
+
+    return snap;
+}
+

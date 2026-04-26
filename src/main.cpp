@@ -3,6 +3,7 @@
 #include <QScreen>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QStringList>
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
 #include "ui/MainWindow.h"
@@ -130,6 +131,18 @@ int main(int argc, char *argv[])
     // Single-instance: claim the local socket so subsequent launches signal us.
     auto *instanceServer = createInstanceServer(&window);
     Q_UNUSED(instanceServer);  // window-parented, dies with window
+
+    // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge (gated dev-only).
+    // build_and_run.bat passes --dev-control automatically so the bridge is
+    // live for any agent / tankoctl smoke. Production NSIS builds (Phase 6)
+    // will not pass the flag and will not advertise the socket.
+    const QStringList devArgs = QCoreApplication::arguments();
+    const bool devControlFlag = devArgs.contains(QStringLiteral("--dev-control"));
+    const bool devControlEnv  = qEnvironmentVariableIntValue("TANKOBAN_DEV_CONTROL") == 1;
+    if (devControlFlag || devControlEnv) {
+        window.enableDevControl();
+        dbg("6a-devcontrol-enabled");
+    }
 
 #ifdef Q_OS_WIN
     applyWindowsDarkTitleBar(&window);

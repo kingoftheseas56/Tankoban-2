@@ -95,6 +95,10 @@ set TANKOBAN_ALERT_TRACE=1
 :: and Tankorent-dedicated engine stays on current defaults). Flip to 0 to
 :: revert to pre-experiment Tankoban behavior for testing.
 set TANKOBAN_STREMIO_TUNE=1
-start "" "%BUILD_DIR%\Tankoban.exe"
+:: REPO_HYGIENE Phase 3 (2026-04-26): --dev-control activates the dev-control
+:: bridge (QLocalServer on TankobanDevControl named pipe) so tankoctl + agent
+:: smokes can query app state directly. Production NSIS builds (Phase 6) won't
+:: pass the flag and won't advertise the socket.
+start "" "%BUILD_DIR%\Tankoban.exe" --dev-control
 
 endlocal

@@ -32,6 +32,7 @@ find_package(Qt6GuiPrivate QUIET)
 set(SOURCES
     src/main.cpp
     src/core/DebugLogBuffer.cpp
+    src/devtools/DevControlServer.cpp
     src/core/JsonStore.cpp
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
@@ -170,6 +171,7 @@ set(SOURCES
 
 set(HEADERS
     src/core/DebugLogBuffer.h
+    src/devtools/DevControlServer.h
     src/core/JsonStore.h
     src/core/CoreBridge.h
     src/core/LibraryScanner.h
@@ -516,3 +518,12 @@ if(TANKOBAN_BUILD_TESTS)
 else()
     message(STATUS "TANKOBAN_BUILD_TESTS=OFF - skipping C++ unit tests")
 endif()
+
+# ── tankoctl console client (REPO_HYGIENE Phase 3) ──────────────────────────
+# Companion exe to the dev-control bridge inside Tankoban.exe. Connects to the
+# `TankobanDevControl` named pipe; one command per invocation. Console mode
+# (WIN32_EXECUTABLE OFF) so stdout JSON can be piped / captured. Minimal Qt
+# link surface (Core + Network) — no Gui, no Widgets.
+add_executable(tankoctl tools/tankoctl.cpp)
+set_target_properties(tankoctl PROPERTIES WIN32_EXECUTABLE OFF)
+target_link_libraries(tankoctl PRIVATE Qt6::Core Qt6::Network)

@@ -17,6 +17,9 @@ class RootFoldersOverlay;
 class BookReader;
 class ComicReader;
 class VideoPlayer;
+class VideosPage;
+class DevControlServer;
+class QJsonObject;
 
 class MainWindow : public QMainWindow
 {
@@ -27,6 +30,19 @@ public:
 
     /// Force window to front — used by single-instance signal
     void bringToFront();
+
+    // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge entry point.
+    // Called from main.cpp when --dev-control or TANKOBAN_DEV_CONTROL=1.
+    // Idempotent — only the first invocation listens.
+    void enableDevControl();
+
+    // Dispatcher invoked by DevControlServer on each accepted command.
+    // Returns the full reply object including {"type":"reply"|"error","seq":...}.
+    // Pure UI-thread call.
+    QJsonObject handleDevCommand(const QString& cmd, int seq, const QJsonObject& payload);
+
+    // Top-level snapshot for `get_state` command.
+    QJsonObject devSnapshot() const;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -77,6 +93,14 @@ private:
 
     // Video player overlay
     VideoPlayer *m_videoPlayer = nullptr;
+
+    // VideosPage cached at buildPageStack time — needed by Phase 3
+    // dev-bridge dispatcher (scan_videos / get_videos).
+    VideosPage *m_videosPage = nullptr;
+
+    // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
+    // enableDevControl() is called (gated behind --dev-control flag).
+    DevControlServer *m_devControl = nullptr;
 
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;

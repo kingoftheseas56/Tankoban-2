@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QSettings>
 #include <QMap>
+#include <QJsonObject>
 class QPushButton;
 class QNetworkAccessManager;
 class CoreBridge;
@@ -44,6 +45,10 @@ public:
     // boot, producing the "multiplying folders" symptom. Null-safe — when
     // unset (e.g., test harness), the rename proceeds without the release.
     void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
+
+    // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
+    // Returns library tile state for the `get_videos` command. Pure read.
+    QJsonObject devSnapshot(int limit = 50) const;
 
 signals:
     void playVideo(const QString& filePath);

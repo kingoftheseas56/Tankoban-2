@@ -550,6 +550,9 @@ void VideoPlayer::teardownUi()
     // cleanly; this stop() call prevents a close-mid-open from leaving
     // the timer running to fire over a dismissed overlay.
     m_firstFrameWatchdog.stop();
+    // REPO_HYGIENE Phase 3 (2026-04-26) — reset firstFrame flag for the
+    // next open. Set true in the firstFrame slot (lambda below).
+    m_firstFrameSeen = false;
 
     m_canvas->stopPolling();
     m_canvas->detachShm();
@@ -1792,6 +1795,9 @@ void VideoPlayer::buildUI()
     // confusing in logs. Explicit stop() is clean.
     connect(m_sidecar, &SidecarProcess::firstFrame, this, [this]() {
         m_firstFrameWatchdog.stop();
+        // REPO_HYGIENE Phase 3 (2026-04-26) — flag the dev-bridge's
+        // get_player snapshot that the player has rendered a frame.
+        m_firstFrameSeen = true;
     });
 
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — sub-stage wiring + Batch 1.3
@@ -3719,3 +3725,35 @@ bool VideoPlayer::nativeEvent(const QByteArray& eventType, void* message, qintpt
     return QWidget::nativeEvent(eventType, message, result);
 }
 #endif
+
+// ── REPO_HYGIENE Phase 3 — dev-control bridge snapshot ──────────────────────
+
+QJsonObject VideoPlayer::devSnapshot() const
+{
+    auto persistenceModeStr = [](PersistenceMode m) -> const char* {
+        switch (m) {
+        case PersistenceMode::None:          return "None";
+        case PersistenceMode::LibraryVideos: return "LibraryVideos";
+        }
+        return "Unknown";
+    };
+
+    QJsonObject snap;
+    snap["currentFile"]         = m_currentFile;
+    snap["pendingFile"]         = m_pendingFile;
+    snap["openPending"]         = m_openPending;
+    snap["paused"]              = m_paused;
+    snap["streamMode"]          = m_streamMode;
+    snap["persistenceMode"]     = QString::fromLatin1(persistenceModeStr(m_persistenceMode));
+    snap["streamStalled"]       = m_streamStalled;
+    snap["currentAspect"]       = m_currentAspect;
+    snap["currentCrop"]         = m_currentCrop;
+    snap["durationSec"]         = m_durationSec;
+    snap["lastKnownPosSec"]     = m_lastKnownPosSec;
+    snap["sidecarRetryCount"]   = m_sidecarRetryCount;
+    snap["firstFrameWatchdogActive"] = m_firstFrameWatchdog.isActive();
+    snap["firstFrameSeen"]      = m_firstFrameSeen;
+    snap["visible"]             = isVisible();
+    snap["fullScreen"]          = isFullScreen();
+    return snap;
+}

@@ -8,6 +8,7 @@ class SeekSlider;
 #include <QTimer>
 #include <QIcon>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QProcess>
 
 #include "SyncClock.h"
@@ -146,6 +147,15 @@ public:
     // LoadingOverlay side updates silently until the overlay appears).
     void setStreamStallInfo(int piece, int peerHaveCount);
 
+    // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
+    // Returns the player's load-bearing state as a JSON object for the
+    // `get_player` command. Pure read; no behavior change. Per §6 P3.3
+    // spec — exposes m_currentFile / m_pendingFile / m_openPending /
+    // m_paused / m_streamMode / m_persistenceMode / m_streamStalled /
+    // m_currentAspect / m_currentCrop / m_durationSec /
+    // m_lastKnownPosSec / m_sidecarRetryCount / m_firstFrameSeen + stats.
+    QJsonObject devSnapshot() const;
+
 public slots:
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — slot consumed by
     // StreamPlayerController::bufferedRangesChanged signal. Forwards the
@@ -275,8 +285,12 @@ private:
     //  - adjustSubDelay: delta is +/- 100 ms; delta == 0 clears
     //    m_subDelayMs absolutely (reset sentinel). Session-only state
     //    (also flows through saveShowPrefs).
+    //  - adjustSubPosition: delta is +/- 5 percent; absolute value
+    //    clamped 0..100 (default 100 = bottom, mpv `sub-pos` parity);
+    //    persisted under "videoPlayer/subtitlePosition" QSettings key.
     void adjustAudioDelay(int delta);
     void adjustSubDelay(int delta);
+    void adjustSubPosition(int delta);
     void cycleAudioTrack();
     void cycleSubtitleTrack();
     void toggleSubtitles();
@@ -550,6 +564,7 @@ private:
     int    m_speedIdx   = 2;     // index into speed presets (1.0x)
     int    m_subDelayMs = 0;    // accumulated subtitle delay in ms
     int    m_audioDelayMs = 0;  // user-configurable audio delay (Bluetooth comp)
+    int    m_subPositionPct = 100; // subtitle vertical position (0=top, 100=bottom); mpv sub-pos parity
     QString m_audioDeviceKey;   // QSettings key for current device's offset
     bool   m_subsVisible = true;
     // VIDEO_PLAYER_FIX Batch 3.1 — persisted across app restart via
@@ -662,4 +677,10 @@ private:
     // Qt's single-thread GUI event loop serializes those handlers so
     // no generation-race exists.
     QTimer m_firstFrameWatchdog;
+
+    // REPO_HYGIENE Phase 3 (2026-04-26) — true once the firstFrame slot
+    // has fired for the current open. Reset to false in teardownUi (file
+    // switch / close). Read by devSnapshot() for the dev-bridge's
+    // exit-criterion check that play_file actually rendered a frame.
+    bool m_firstFrameSeen = false;
 };

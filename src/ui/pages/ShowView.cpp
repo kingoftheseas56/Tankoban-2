@@ -2,6 +2,7 @@
 #include "core/ScannerUtils.h"
 #include "core/CoreBridge.h"
 #include "ui/ContextMenuHelper.h"
+#include <QJsonArray>
 
 #include <QPushButton>
 #include <QPixmap>
@@ -946,3 +947,38 @@ QString ShowView::formatDuration(double seconds)
         return QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
     return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
 }
+
+// ── REPO_HYGIENE Phase 3 — dev-control bridge snapshot ──────────────────────
+
+QJsonObject ShowView::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["showName"]     = m_showRootName;
+    snap["showRootPath"] = m_showRootPath;
+    snap["currentRel"]   = m_currentRel;
+    snap["isLoose"]      = m_isLoose;
+    snap["searchText"]   = m_searchText;
+    snap["sortKey"]      = m_sortKey;
+    snap["continueFile"] = m_continueFilePath;
+
+    QJsonArray episodes;
+    if (m_table) {
+        const int rows = m_table->rowCount();
+        snap["rowCount"] = rows;
+        for (int r = 0; r < rows; ++r) {
+            QJsonObject e;
+            QTableWidgetItem* titleItem = m_table->item(r, 0);
+            if (titleItem) {
+                e["title"]    = titleItem->text();
+                e["filePath"] = titleItem->data(FilePathRole).toString();
+            }
+            episodes.append(e);
+        }
+    } else {
+        snap["rowCount"] = 0;
+    }
+    snap["episodes"] = episodes;
+
+    return snap;
+}
+

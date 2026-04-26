@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QMap>
+#include <QJsonObject>
 
 class CoreBridge;
 
@@ -36,6 +37,11 @@ public:
                     const QString& coverThumbPath = QString(),
                     bool isLoose = false);
     void setFileDurations(const QMap<QString, double>& durations);
+
+    // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
+    // Returns active-show state for the `get_videos` command's nested
+    // activeShow object. Pure read; reads m_table rows + nav state.
+    QJsonObject devSnapshot() const;
 
 signals:
     void backRequested();

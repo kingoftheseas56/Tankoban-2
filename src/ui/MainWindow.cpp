@@ -13,6 +13,7 @@
 #include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "devtools/DevControlServer.h"
 
 #include <QVBoxLayout>
 #include <QFrame>
@@ -20,6 +21,9 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QButtonGroup>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -294,8 +298,8 @@ void MainWindow::buildPageStack()
     m_pageStack->addWidget(booksPage);
     dbg("4c-bookspage-created");
 
-    auto *videosPage = new VideosPage(m_bridge);
-    m_pageStack->addWidget(videosPage);
+    m_videosPage = new VideosPage(m_bridge);
+    m_pageStack->addWidget(m_videosPage);
     dbg("4d-videospage-created");
 
     // TorrentClient (shared by StreamPage and SourcesPage)
@@ -310,13 +314,13 @@ void MainWindow::buildPageStack()
     // Share StreamPage's MetaAggregator with VideosPage for "Fetch poster
     // from internet" context-menu action on folder tiles (Agent 5 Batch 1,
     // per HELP.md 2026-04-15 handshake with Agent 4).
-    videosPage->setMetaAggregator(streamPage->metaAggregator());
+    m_videosPage->setMetaAggregator(streamPage->metaAggregator());
 
     // Share TorrentClient with VideosPage so the (auto-)rename path can
     // release any active libtorrent record before the folder is moved on
     // disk — without this libtorrent silently re-creates the original
     // folder + re-downloads, producing the "multiplying folders" symptom.
-    videosPage->setTorrentClient(torrentClient);
+    m_videosPage->setTorrentClient(torrentClient);
 
     auto *sourcesPage = new SourcesPage(m_bridge, torrentClient);
     dbg("4g-sourcespage-created");
@@ -593,4 +597,138 @@ void MainWindow::bringToFront()
     HWND hwnd = reinterpret_cast<HWND>(winId());
     SetForegroundWindow(hwnd);
 #endif
+}
+
+// ── REPO_HYGIENE Phase 3 — dev-control bridge ───────────────────────────────
+
+void MainWindow::enableDevControl()
+{
+    if (m_devControl)
+        return;  // idempotent
+
+    m_devControl = new DevControlServer(this, this);
+    if (!m_devControl->start()) {
+        DebugLogBuffer::instance().error(
+            "devcontrol",
+            QStringLiteral("DevControlServer failed to listen on %1")
+                .arg(QString::fromLatin1(DevControlServer::kSocketName)));
+    } else {
+        DebugLogBuffer::instance().info(
+            "devcontrol",
+            QStringLiteral("DevControlServer listening on %1")
+                .arg(QString::fromLatin1(DevControlServer::kSocketName)));
+    }
+}
+
+QJsonObject MainWindow::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["activePageId"]    = m_activePageId;
+    snap["currentPageIndex"] = m_pageStack ? m_pageStack->currentIndex() : -1;
+    snap["isFullScreen"]    = isFullScreen();
+    snap["isMaximized"]     = isMaximized();
+    snap["windowVisible"]   = isVisible();
+    snap["videoPlayerVisible"] = m_videoPlayer && m_videoPlayer->isVisible();
+    snap["comicReaderVisible"] = m_comicReader && m_comicReader->isVisible();
+    snap["bookReaderVisible"]  = m_bookReader && m_bookReader->isVisible();
+
+    QJsonArray nav;
+    for (const auto& nb : m_navButtons) {
+        QJsonObject o;
+        o["pageId"]  = nb.pageId;
+        o["checked"] = nb.button ? nb.button->isChecked() : false;
+        nav.append(o);
+    }
+    snap["navButtons"] = nav;
+    return snap;
+}
+
+QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJsonObject& payload)
+{
+    auto reply = [seq](QJsonObject extras) {
+        extras["type"] = "reply";
+        extras["seq"]  = seq;
+        return extras;
+    };
+    auto err = [seq](const char* code, const QString& msg) {
+        QJsonObject e;
+        e["type"]    = "error";
+        e["seq"]     = seq;
+        e["code"]    = QString::fromLatin1(code);
+        e["message"] = msg;
+        return e;
+    };
+
+    if (cmd == QLatin1String("ping")) {
+        QJsonArray cmds{ "ping","get_state","open_page","scan_videos",
+                         "get_videos","play_file","close_player",
+                         "get_player","logs" };
+        return reply({
+            {"schema",     "tankoban.dev.v1"},
+            {"appVersion", QApplication::applicationVersion()},
+            {"commands",   cmds},
+            {"features",   QJsonArray{}}
+        });
+    }
+
+    if (cmd == QLatin1String("get_state"))
+        return reply({{"snapshot", devSnapshot()}});
+
+    if (cmd == QLatin1String("open_page")) {
+        const QString pageId = payload.value("pageId").toString();
+        const QStringList valid{"comics","books","videos","stream","sources"};
+        if (!valid.contains(pageId)) {
+            return err("UNKNOWN_PAGE",
+                QStringLiteral("pageId '%1' not in [%2]")
+                    .arg(pageId, valid.join(',')));
+        }
+        activatePage(pageId);
+        return reply({{"activePageId", m_activePageId}});
+    }
+
+    if (cmd == QLatin1String("scan_videos")) {
+        if (!m_videosPage)
+            return err("INTERNAL", "VideosPage not initialized");
+        m_videosPage->triggerScan();
+        return reply({{"triggered", true}});
+    }
+
+    if (cmd == QLatin1String("get_videos")) {
+        if (!m_videosPage)
+            return err("INTERNAL", "VideosPage not initialized");
+        const int limit = payload.value("limit").toInt(50);
+        return reply({{"snapshot", m_videosPage->devSnapshot(limit)}});
+    }
+
+    if (cmd == QLatin1String("play_file")) {
+        const QString path = payload.value("path").toString();
+        if (path.isEmpty())
+            return err("BAD_REQUEST", "payload.path required (non-empty string)");
+        if (!QFileInfo::exists(path))
+            return err("BAD_REQUEST",
+                QStringLiteral("file does not exist: %1").arg(path));
+        openVideoPlayer(path);
+        return reply({{"opened", true}, {"path", path}});
+    }
+
+    if (cmd == QLatin1String("close_player")) {
+        if (!m_videoPlayer || !m_videoPlayer->isVisible())
+            return reply({{"closed", true}, {"alreadyClosed", true}});
+        closeVideoPlayer();
+        return reply({{"closed", true}});
+    }
+
+    if (cmd == QLatin1String("get_player")) {
+        if (!m_videoPlayer || !m_videoPlayer->isVisible())
+            return reply({{"snapshot", QJsonValue::Null}});
+        return reply({{"snapshot", m_videoPlayer->devSnapshot()}});
+    }
+
+    if (cmd == QLatin1String("logs")) {
+        const int limit = payload.value("limit").toInt(100);
+        return reply({{"entries", DebugLogBuffer::instance().recent(limit)}});
+    }
+
+    return err("UNKNOWN_CMD",
+        QStringLiteral("command '%1' not implemented in v1").arg(cmd));
 }
