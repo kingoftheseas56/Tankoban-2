@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "GlassBackground.h"
 #include "RootFoldersOverlay.h"
+#include "widgets/ThemePicker.h"
 #include "pages/ComicsPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
@@ -242,6 +243,13 @@ void MainWindow::buildTopBar()
     layout->addWidget(nav);
     layout->addStretch(1);
 
+    // Theme picker (mode toggle + palette swatch popover) — left of the
+    // library-action cluster (scan + add) per Hemanth 2026-04-25: theme is
+    // app-appearance, scan/add are library-data functions; group by intent.
+    // THEME_SYSTEM_FIX P2.
+    auto* themePicker = new ThemePicker(bar);
+    layout->addWidget(themePicker, 0, Qt::AlignVCenter);
+
     // Rescan button (↻)
     auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), bar);
     scanBtn->setObjectName("IconButton");
@@ -336,6 +344,16 @@ void MainWindow::bindShortcuts()
     // F11 fullscreen toggle
     auto *fs = new QShortcut(QKeySequence(Qt::Key_F11), this);
     connect(fs, &QShortcut::activated, this, [this]() {
+        // Reader/player overlays own F11 themselves. Letting the top-level
+        // window shortcut fire at the same time causes a double-toggle on
+        // one keypress (overlay enters fullscreen, MainWindow bounces back to
+        // maximized), which leaves the taskbar visible and clips bottom-edge
+        // video HUD/content on Windows.
+        if ((m_comicReader && m_comicReader->isVisible())
+            || (m_bookReader && m_bookReader->isVisible())
+            || (m_videoPlayer && m_videoPlayer->isVisible())) {
+            return;
+        }
         if (isFullScreen())
             showMaximized();
         else

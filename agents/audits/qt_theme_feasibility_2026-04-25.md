@@ -1,5 +1,15 @@
 # Qt feasibility audit — Tankoban-Max theme system port
 
+## Spec correction 2026-04-25
+
+Hemanth ratified PATH B and Phase 1 shipped both axes (6 Modes × 7 Presets). On Phase-2 smoke, Hemanth pulled back from the Preset axis — verbatim "I've never asked for colour palletes and they just complicate things because now we have 42 looks (6 themes into 7 colours)". Pre-Phase-3 removal of the Preset axis applied; system reduces to a single Mode axis with each Mode owning its accent.
+
+Audit findings on the Mode axis (§1.1, §1.3, §3.1, §5.2 mode breakdown) remain valid. Preset-axis findings (§1.2 7-swatch registry, §3.2 swatch-popover feasibility, §5.2 P2 swatch-grid scope) are historical reference only — useful as why-not context for future audits, not as forward execution guidance.
+
+The TODO document `THEME_SYSTEM_FIX_TODO.md` carries the live single-axis spec; this audit is preserved unmodified below as the original two-axis investigation that produced the recommendation Hemanth ratified-then-corrected.
+
+---
+
 **Audit author:** Agent 5 (Library UX)
 **Date:** 2026-04-25
 **Trigger:** Hemanth research request — "Now I want something equivalent to Tankoban Max's themes. Can we achieve those themes in QT? Something that elevates our app from its boring minimalist to vibrant themes that can be toggled off and on, just like how it is in tankoban max?"

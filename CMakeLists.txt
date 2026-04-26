@@ -48,6 +48,7 @@ set(SOURCES
     src/ui/widgets/FadingStackedWidget.cpp
     src/ui/widgets/LibraryListView.cpp
     src/ui/widgets/Toast.cpp
+    src/ui/widgets/ThemePicker.cpp
     src/ui/pages/ComicsPage.cpp
     src/ui/pages/BooksPage.cpp
     src/ui/pages/VideosPage.cpp

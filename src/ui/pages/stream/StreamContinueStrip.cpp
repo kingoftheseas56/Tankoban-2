@@ -51,8 +51,7 @@ void StreamContinueStrip::buildUI()
     groupLayout->setSpacing(4);
 
     auto* label = new QLabel("CONTINUE WATCHING", m_group);
-    label->setStyleSheet(
-        "color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    label->setObjectName("LibraryHeading");
     groupLayout->addWidget(label);
 
     m_strip = new TileStrip(m_group);

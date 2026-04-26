@@ -17,14 +17,11 @@ static constexpr int IDX_TANKOLIBRARY = 3;
 static QPushButton* createAppTile(const QString& title, const QString& subtitle, QWidget* parent)
 {
     auto *btn = new QPushButton(parent);
+    btn->setObjectName("AppTile");
     btn->setCursor(Qt::PointingHandCursor);
     btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     btn->setMinimumSize(220, 140);
     btn->setMaximumSize(320, 200);
-    btn->setStyleSheet(
-        "QPushButton { background: rgba(20,20,24,0.7); border: 1px solid #333; border-radius: 12px; }"
-        "QPushButton:hover { border-color: #c7a76b; }"
-    );
 
     auto *layout = new QVBoxLayout(btn);
     layout->setContentsMargins(24, 24, 24, 24);
@@ -32,14 +29,14 @@ static QPushButton* createAppTile(const QString& title, const QString& subtitle,
     layout->setAlignment(Qt::AlignCenter);
 
     auto *titleLbl = new QLabel(title);
+    titleLbl->setObjectName("AppTileTitle");
     titleLbl->setAlignment(Qt::AlignCenter);
-    titleLbl->setStyleSheet("font-size: 18px; font-weight: bold; background: transparent; border: none;");
     titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     layout->addWidget(titleLbl);
 
     auto *subLbl = new QLabel(subtitle);
+    subLbl->setObjectName("AppTileSubtitle");
     subLbl->setAlignment(Qt::AlignCenter);
-    subLbl->setStyleSheet("font-size: 12px; color: #888; background: transparent; border: none;");
     subLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     layout->addWidget(subLbl);
 
@@ -124,8 +121,12 @@ void SourcesPage::buildUI()
     m_tankoyomiPage = new TankoyomiPage(m_bridge);
     m_stack->addWidget(m_tankoyomiPage);
 
-    // Index 3: Tankolibrary
-    m_tankolibraryPage = new TankoLibraryPage(m_bridge);
+    // Index 3: Tankolibrary — shares the SourcesPage TorrentClient so
+    // the Audiobooks-tab magnet-handoff path can call addMagnet on the
+    // same engine that Tankorent uses. Without this wiring the
+    // Audiobooks Download button honestly fails with "TorrentClient not
+    // wired" per TankoLibraryPage ctor nullptr-default contract.
+    m_tankolibraryPage = new TankoLibraryPage(m_bridge, m_client);
     m_stack->addWidget(m_tankolibraryPage);
 
     m_stack->setCurrentIndex(IDX_LAUNCHER);

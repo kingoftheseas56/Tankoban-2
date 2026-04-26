@@ -62,8 +62,7 @@ void StreamLibraryLayout::buildUI()
     // the grid contains BOTH in-progress (also in Continue Watching)
     // AND user-added future-viewing titles, across shows and movies.
     m_sectionLabel = new QLabel("SHOWS & MOVIES", headerRow);
-    m_sectionLabel->setStyleSheet(
-        "color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    m_sectionLabel->setObjectName("LibraryHeading");
     headerLayout->addWidget(m_sectionLabel);
     headerLayout->addStretch();
 

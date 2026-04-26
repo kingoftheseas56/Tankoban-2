@@ -30,7 +30,9 @@ private slots:
 
 private:
     double m_phase = 0.0;
-    QColor m_baseColor{5, 5, 5};
+    QColor m_baseColor{5, 5, 5};   // override hook; only used if m_baseColorOverride
+    bool   m_baseColorOverride = false;  // set by setBaseColor; otherwise canvas
+                                         // tracks Theme::current().bg0
     QTimer m_timer;
     std::vector<GlassBlob> m_blobs;
 };
