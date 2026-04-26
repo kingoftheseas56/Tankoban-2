@@ -19,7 +19,7 @@ public:
     bool render_frame(AVFrame* frame, uint8_t* bgra_out,
                       int out_width, int out_height, int out_stride);
     void set_tone_mapping(const std::string& algorithm, bool peak_detect);
-    void set_hdr_metadata(int color_primaries, int color_trc,
+    void set_hdr_metadata(int color_primaries, int color_trc, int color_space,
                           double max_lum, double min_lum,
                           int max_cll, int max_fall);
     void load_icc_profile(const std::string& path);  // empty = system default
@@ -40,7 +40,7 @@ public:
     bool init() { return false; }
     bool render_frame(void*, uint8_t*, int, int, int) { return false; }
     void set_tone_mapping(const std::string&, bool) {}
-    void set_hdr_metadata(int, int, double, double, int, int) {}
+    void set_hdr_metadata(int, int, int, double, double, int, int) {}
     void load_icc_profile(const std::string&) {}
     bool active() const { return false; }
     void destroy() {}

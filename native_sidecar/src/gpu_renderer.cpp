@@ -45,6 +45,7 @@ struct GpuRenderer::Impl {
     struct pl_color_map_params   color_map;
     struct pl_peak_detect_params peak_params;
     struct pl_color_space        src_csp;
+    int                          src_color_space = 0;  // AVCOL_SPC_* stash (P1; P2 consumes)
     pl_icc_object                icc_obj = nullptr;
     struct pl_icc_profile        target_icc;
     std::vector<uint8_t>         icc_data;  // owns the ICC profile bytes
@@ -236,7 +237,7 @@ void GpuRenderer::set_tone_mapping(const std::string& algorithm, bool peak_detec
                  algorithm.c_str(), peak_detect);
 }
 
-void GpuRenderer::set_hdr_metadata(int color_primaries, int color_trc,
+void GpuRenderer::set_hdr_metadata(int color_primaries, int color_trc, int color_space,
                                     double max_lum, double min_lum,
                                     int max_cll, int max_fall) {
     if (!impl_) return;
@@ -265,8 +266,16 @@ void GpuRenderer::set_hdr_metadata(int color_primaries, int color_trc,
     csp.hdr.max_cll  = static_cast<float>(max_cll);
     csp.hdr.max_fall = static_cast<float>(max_fall);
 
-    std::fprintf(stderr, "GpuRenderer: HDR metadata set — primaries=%d trc=%d max_lum=%.0f max_cll=%d\n",
-                 color_primaries, color_trc, max_lum, max_cll);
+    // LIBPLACEBO_SINGLE_RENDERER_FIX P1 2026-04-25 — stash AVCOL_SPC_*
+    // (BT.709/BT.601/BT.2020 matrix) for P2's SDR render path. HDR rendering
+    // today maps the YUV→RGB matrix from the AVFrame in render_frame's
+    // gpu_renderer_map_avframe call (gpu_renderer.cpp:157), so this stash
+    // is forward-only; P2 will seed pl_src.repr.sys explicitly when SDR
+    // bypasses the AVFrame-derived matrix path.
+    impl_->src_color_space = color_space;
+
+    std::fprintf(stderr, "GpuRenderer: HDR metadata set — primaries=%d trc=%d space=%d max_lum=%.0f max_cll=%d\n",
+                 color_primaries, color_trc, color_space, max_lum, max_cll);
 }
 
 void GpuRenderer::load_icc_profile(const std::string& path) {

@@ -452,6 +452,37 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
         result.hdr = true;
     }
 
+    // LIBPLACEBO_SINGLE_RENDERER_FIX P1 2026-04-25 — resolve UNSPECIFIED
+    // colorspace fields to industry-standard defaults before they reach the
+    // GpuRenderer. Mirrors mpv + swscale behavior: HD content (>=720p)
+    // defaults to BT.709 / BT.709 / BT.709; SD defaults to BT.601 / BT.709
+    // / BT.601 (matrix follows resolution; transfer keeps BT.709 since SD
+    // PAL/NTSC content delivered digitally is almost always re-mastered to
+    // 1.961 gamma). Range UNSPECIFIED → TV/MPEG (limited 16-235), the
+    // overwhelmingly common consumer case. Only touches values that are
+    // AVCOL_*_UNSPECIFIED (==2 for primaries/trc/space, ==0 for range);
+    // explicit values from the codecpar pass through unchanged.
+    {
+        const bool is_hd = (result.height >= 720);
+        if (result.color_primaries == AVCOL_PRI_UNSPECIFIED) {
+            result.color_primaries = is_hd ? AVCOL_PRI_BT709 : AVCOL_PRI_SMPTE170M;
+        }
+        if (result.color_trc == AVCOL_TRC_UNSPECIFIED) {
+            result.color_trc = AVCOL_TRC_BT709;
+        }
+        if (result.color_space == AVCOL_SPC_UNSPECIFIED) {
+            result.color_space = is_hd ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+        }
+        if (result.color_range == AVCOL_RANGE_UNSPECIFIED) {
+            result.color_range = AVCOL_RANGE_MPEG;
+        }
+        std::fprintf(stderr,
+            "[PROBE] colorspace primaries=%d trc=%d space=%d range=%d hdr=%d (%dx%d)\n",
+            result.color_primaries, result.color_trc,
+            result.color_space, result.color_range,
+            result.hdr ? 1 : 0, result.width, result.height);
+    }
+
     // Duration resolution — see STREAM_DURATION_FIX block in the tier loop.
     //
     // Priority order, least-to-most-pathological:
