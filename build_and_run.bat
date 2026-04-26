@@ -22,21 +22,25 @@ if errorlevel 1 (
 )
 
 :: ── Configure (skipped if already configured) ──────────────────────────────
+:: REPO_HYGIENE Phase 2 (2026-04-26) — uses CMakePresets.json + vcpkg.
+:: VCPKG_ROOT auto-set to C:\vcpkg if not already in env. Run setup.bat once
+:: after a fresh clone to install vcpkg deps via the manifest.
+if "%VCPKG_ROOT%"=="" (
+    if exist "C:\vcpkg\vcpkg.exe" (
+        set "VCPKG_ROOT=C:\vcpkg"
+    ) else if exist "C:\tools\vcpkg\vcpkg.exe" (
+        set "VCPKG_ROOT=C:\tools\vcpkg"
+    )
+)
+
 if exist "%BUILD_DIR%\CMakeCache.txt" (
     echo [2/4] Build dir exists — skipping configure.
 ) else (
-    echo [2/4] Configuring CMake...
-    cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -G "Ninja" ^
-        -DCMAKE_BUILD_TYPE=Release ^
-        -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
-        -DLIBTORRENT_ROOT="C:/tools/libtorrent-2.0-msvc" ^
-        -DBOOST_ROOT="C:/tools/boost-1.84.0" ^
-        -DOPENSSL_MSVC_ROOT="C:/tools/openssl-msvc" ^
-        -DLIBTORRENT_INCLUDE_DIR="C:/tools/libtorrent-2.0-msvc/include" ^
-        -DLIBTORRENT_LIBRARY="C:/tools/libtorrent-2.0-msvc/lib/torrent-rasterbar.lib" ^
-        -DBOOST_INCLUDE_DIR="C:/tools/boost-1.84.0"
+    echo [2/4] Configuring CMake via `cmake --preset default`...
+    cmake --preset default
     if errorlevel 1 (
         echo ERROR: CMake configure failed.
+        echo If this is a fresh clone, run setup.bat first to install vcpkg deps.
         pause
         exit /b 1
     )

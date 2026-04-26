@@ -2,7 +2,7 @@
 
 A unified media library + player for Windows. Watch videos, read comics + books, stream from Stremio addons, and manage torrents — all in one Qt6 desktop app.
 
-> **Status:** active development, pre-1.0. Built for Windows 11 + MSVC 2022 + Qt 6.10. Public Releases pending (NSIS installer ships in a future repo-hygiene phase).
+> **Status:** active development, pre-1.0. Built for Windows 11 + MSVC 2022 + Qt 6.10. Public Releases pipeline live (`scripts/version-bump.ps1 -Version 0.X.Y` + tag push triggers `Tankoban-Setup-vX.Y.Z.exe` build).
 
 ---
 
@@ -30,11 +30,10 @@ Pre-built `Tankoban-Setup.exe` ships in a future release. Until then, build from
 
 See [BUILD.md](BUILD.md) for the full guide. Short version:
 
-1. Install prerequisites (Qt 6.10.2, MSVC 2022 Build Tools, libtorrent 2.0, Boost 1.84, OpenSSL, FFmpeg shared).
+1. Install Qt 6.10.2 + MSVC 2022 Build Tools (manual one-time prereqs).
 2. Clone this repo.
-3. From a Developer Command Prompt for VS 2022, run `build_and_run.bat`.
-
-A future hygiene phase will add `vcpkg.json` + `setup.bat` so Qt + MSVC are the only manual prereqs and everything else (libtorrent, Boost, OpenSSL, FFmpeg) becomes automatic on first cmake configure.
+3. Run `setup.bat` once — it auto-clones vcpkg if needed, installs libtorrent + Boost + OpenSSL via `vcpkg.json`, and runs the first cmake configure (~30 min first run; cached after).
+4. After setup, normal dev cycle is `build_and_run.bat`.
 
 ---
 

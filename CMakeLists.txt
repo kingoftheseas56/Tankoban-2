@@ -361,22 +361,25 @@ endif()
 
 target_link_libraries(Tankoban PRIVATE Qt6::Svg)
 
-# ── libtorrent-rasterbar (optional) ──────────────────────────────────────────
-set(LIBTORRENT_ROOT "C:/tools/libtorrent-2.0-msvc" CACHE PATH "libtorrent MSVC install")
-set(BOOST_ROOT "C:/tools/boost-1.84.0" CACHE PATH "Boost headers")
-set(OPENSSL_MSVC_ROOT "C:/tools/openssl-msvc" CACHE PATH "OpenSSL MSVC install")
+# ── libtorrent-rasterbar + Boost + OpenSSL (vcpkg-managed) ───────────────────
+# REPO_HYGIENE Phase 2 (2026-04-26): migrated from hardcoded
+# C:/tools/libtorrent-2.0-msvc + C:/tools/boost-1.84.0 + C:/tools/openssl-msvc
+# paths to vcpkg's find_package CONFIG style. setup.bat runs `vcpkg install`
+# from the manifest at vcpkg.json, then cmake's CMAKE_TOOLCHAIN_FILE (set via
+# CMakePresets.json's `default` preset) picks them up automatically.
+#
+# Pre-vcpkg fallback: users with custom libtorrent/Boost/OpenSSL builds outside
+# vcpkg can still set -DCMAKE_PREFIX_PATH or -DLibtorrentRasterbar_DIR /
+# -DBoost_DIR / -DOpenSSL_ROOT to point at their own configs. find_package's
+# QUIET mode keeps the build green when any dep is missing — torrent engine
+# disables and the Tankorent / Stream features unavailable but the rest of
+# the app still compiles + runs.
+find_package(LibtorrentRasterbar CONFIG QUIET)
+find_package(Boost CONFIG QUIET COMPONENTS system filesystem)
+find_package(OpenSSL QUIET)
 
-find_path(LIBTORRENT_INCLUDE_DIR libtorrent/session.hpp HINTS "${LIBTORRENT_ROOT}/include")
-find_library(LIBTORRENT_LIBRARY torrent-rasterbar HINTS "${LIBTORRENT_ROOT}/lib")
-find_path(BOOST_INCLUDE_DIR boost/version.hpp HINTS "${BOOST_ROOT}")
-
-if(LIBTORRENT_INCLUDE_DIR AND LIBTORRENT_LIBRARY AND BOOST_INCLUDE_DIR)
-    message(STATUS "libtorrent found: ${LIBTORRENT_LIBRARY}")
-    target_include_directories(Tankoban PRIVATE
-        "${LIBTORRENT_INCLUDE_DIR}"
-        "${BOOST_INCLUDE_DIR}"
-        "${OPENSSL_MSVC_ROOT}/include"
-    )
+if(LibtorrentRasterbar_FOUND AND Boost_FOUND AND OpenSSL_FOUND)
+    message(STATUS "libtorrent + Boost + OpenSSL found via vcpkg/find_package")
     target_compile_definitions(Tankoban PRIVATE
         HAS_LIBTORRENT=1
         TORRENT_USE_OPENSSL
@@ -384,13 +387,15 @@ if(LIBTORRENT_INCLUDE_DIR AND LIBTORRENT_LIBRARY AND BOOST_INCLUDE_DIR)
         _WIN32_WINNT=0x0A00
     )
     target_link_libraries(Tankoban PRIVATE
-        "${LIBTORRENT_LIBRARY}"
-        "${OPENSSL_MSVC_ROOT}/lib/libssl.lib"
-        "${OPENSSL_MSVC_ROOT}/lib/libcrypto.lib"
+        LibtorrentRasterbar::torrent-rasterbar
+        Boost::system
+        Boost::filesystem
+        OpenSSL::SSL
+        OpenSSL::Crypto
         ws2_32 mswsock crypt32 iphlpapi bcrypt
     )
 else()
-    message(STATUS "libtorrent NOT found — torrent engine disabled")
+    message(STATUS "libtorrent / Boost / OpenSSL NOT found — torrent engine disabled. Run setup.bat to install via vcpkg.")
 endif()
 
 # ── libarchive (optional, for CBR/RAR support) ───────────────────────────────

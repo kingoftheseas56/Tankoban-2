@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Release (vcpkg + Ninja)",
+      "description": "Default Release build using vcpkg-managed native deps. Qt + MSVC are manual prereqs (see BUILD.md).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_PREFIX_PATH": "C:/tools/qt6sdk/6.10.2/msvc2022_64"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug (vcpkg + Ninja + tests)",
+      "description": "Debug build with tankoban_tests opted in.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_PREFIX_PATH": "C:/tools/qt6sdk/6.10.2/msvc2022_64",
+        "TANKOBAN_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "jobs": 0
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "jobs": 0
+    }
+  ]
+}

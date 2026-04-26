@@ -1,0 +1,14 @@
+{
+  "name": "tankoban",
+  "version-string": "0.1.0",
+  "description": "Unified media library + player for Windows. Main app native deps managed via vcpkg; Qt + MSVC are manual prereqs. Native sidecar deps (FFmpeg + PortAudio + libplacebo + libass + libfribidi + harfbuzz + lcms2 + uchardet + vulkan-1) build with MinGW separately and are not listed here.",
+  "homepage": "https://github.com/kingoftheseas56/Tankoban-2",
+  "license": "MIT",
+  "builtin-baseline": "d46283cf33cf5de7bd88e12156ce03882be1f179",
+  "dependencies": [
+    "libtorrent",
+    "boost-system",
+    "boost-filesystem",
+    "openssl"
+  ]
+}

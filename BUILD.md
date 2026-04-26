@@ -2,7 +2,7 @@
 
 Tankoban targets **Windows 10 / 11 only** (Qt6 + MSVC 2022 + native libtorrent + FFmpeg). Linux / macOS support is not in scope.
 
-This guide covers the current build path. A future hygiene phase will add `setup.bat` + `vcpkg.json` to make most dependencies automatic; until that lands, the prerequisites below are manual one-time installs.
+**Quick path (recommended for fresh clones)**: install Qt 6.10.2 + MSVC 2022 Build Tools, then run `setup.bat` once — it auto-clones vcpkg if needed, installs libtorrent + Boost + OpenSSL via the manifest at `vcpkg.json`, and runs the first cmake configure. After that, normal dev cycle is just `build_and_run.bat`. Native sidecar deps stay manual (it builds with MinGW separately) — see § Native sidecar prerequisites below.
 
 ---
 
@@ -25,17 +25,27 @@ Install [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/down
 C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat
 ```
 
-### 3. Native dependencies (manually-built / vendored)
+### 3. Main app native dependencies (vcpkg-managed)
 
-Until the vcpkg migration phase ships, these need to live at the exact paths `build_and_run.bat` configures:
+`setup.bat` handles these automatically. Manifest is at `vcpkg.json`; baseline pinned for reproducible builds. First-time install of all deps takes ~30 minutes (libtorrent + Boost + OpenSSL build from source). Subsequent runs use vcpkg's binary cache.
 
-| Library | Path | Notes |
-|---|---|---|
-| libtorrent-rasterbar 2.0 | `C:\tools\libtorrent-2.0-msvc` | Built with MSVC 2022; produces `lib/torrent-rasterbar.lib` + headers. |
-| Boost 1.84 | `C:\tools\boost-1.84.0` | Header-only usage works for most components; system + filesystem + program_options need static libs. |
-| OpenSSL | `C:\tools\openssl-msvc` | Required by libtorrent. |
-| FFmpeg shared 6.x | `C:\tools\ffmpeg-master-latest-win64-gpl-shared` | Runtime DLLs added to PATH at launch. |
-| Sherpa-ONNX | `third_party/sherpa-onnx/sherpa-onnx-v1.12.21-win-x64-shared/` | TTS support; in-tree. |
+If you want to install vcpkg manually before running setup.bat:
+
+```cmd
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+set VCPKG_ROOT=C:\vcpkg
+```
+
+setup.bat detects vcpkg at `C:\vcpkg`, `C:\tools\vcpkg`, or wherever `VCPKG_ROOT` env var points.
+
+| Library | Source |
+|---|---|
+| libtorrent-rasterbar 2.0.x | vcpkg `libtorrent` |
+| Boost system + filesystem | vcpkg `boost-system` + `boost-filesystem` |
+| OpenSSL | vcpkg `openssl` (transitive via libtorrent) |
+| FFmpeg shared (sidecar-side, not main app) | manual install — `C:\tools\ffmpeg-master-latest-win64-gpl-shared` |
+| Sherpa-ONNX (TTS) | `third_party/sherpa-onnx/sherpa-onnx-v1.12.21-win-x64-shared/` (vendored in-tree) |
 
 ### 4. Native sidecar prerequisites
 
@@ -48,9 +58,25 @@ The sidecar binary lives in `resources/ffmpeg_sidecar/ffmpeg_sidecar.exe` after 
 
 ---
 
-## Quick build (recommended)
+## First-time setup (fresh clone)
 
-From a Developer Command Prompt for VS 2022 (so MSVC is on PATH), at the repo root:
+```cmd
+setup.bat
+```
+
+This script:
+
+1. Verifies Qt 6.10.2 is installed at the expected path; prints install instructions if not.
+2. Verifies MSVC 2022 Build Tools is installed; prints install instructions if not.
+3. Detects vcpkg at `C:\vcpkg` / `C:\tools\vcpkg` / `VCPKG_ROOT`; auto-clones to `C:\vcpkg` if missing.
+4. Runs `vcpkg install --triplet x64-windows` driven by `vcpkg.json` (~30 min first time, cached after).
+5. Runs `cmake --preset default` to produce a configured build tree at `out/`.
+
+After this succeeds, normal dev cycle is `build_and_run.bat`.
+
+## Quick build (after setup)
+
+From a Developer Command Prompt for VS 2022, at the repo root:
 
 ```cmd
 build_and_run.bat
@@ -60,11 +86,12 @@ This script:
 
 1. Kills any running `Tankoban.exe` / `ninja.exe` / `cl.exe`.
 2. Calls `vcvarsall.bat x64`.
-3. Configures cmake (skipped if `out\CMakeCache.txt` exists) with the 8 dependency `-D` flags baked into the script.
-4. Builds the `Tankoban` executable (and `tankoctl.exe`, the dev-control client) with `cmake --build out --parallel`.
-5. Deploys book-reader resources to `out/resources/book_reader/`.
-6. Sets PATH to include Qt + FFmpeg + Sherpa runtime DLLs.
-7. Launches `Tankoban.exe --dev-control` so the dev bridge is live for development smoke testing.
+3. Auto-sets `VCPKG_ROOT` to `C:\vcpkg` or `C:\tools\vcpkg` if not already in env.
+4. Configures cmake via `cmake --preset default` (skipped if `out\CMakeCache.txt` exists).
+5. Builds the `Tankoban` executable (and `tankoctl.exe`, the dev-control client) with `cmake --build out --parallel`.
+6. Deploys book-reader resources to `out/resources/book_reader/`.
+7. Sets PATH to include Qt + FFmpeg + Sherpa runtime DLLs.
+8. Launches `Tankoban.exe --dev-control` so the dev bridge is live for development smoke testing.
 
 ---
 

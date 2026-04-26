@@ -1,0 +1,132 @@
+# REPO_HYGIENE Phase 6 (2026-04-26) — release pipeline.
+#
+# Triggered by tag push (v*.*.*). Builds Tankoban + tankoctl, runs
+# windeployqt to gather Qt runtime DLLs, stages everything in
+# installer-staging/, runs NSIS to produce Tankoban-Setup.exe, uploads
+# to the GitHub Release as an asset.
+#
+# Companion script: scripts/version-bump.ps1 (bumps CMakeLists.txt
+# project VERSION + tankoban.nsi APP_VERSION + git tag).
+#
+# First-run prerequisites on the user's GitHub repo:
+#   - Settings → Actions → General → "Read and write permissions" enabled
+#     (so the workflow can create/upload to Releases).
+#   - NSIS pre-installed via chocolatey/setup-nsis@v1 in the workflow.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write  # required to create + upload Release assets
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Building Tankoban v$version"
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6.10
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtmultimedia qtwebengine qtwebsockets qtwebchannel'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: d46283cf33cf5de7bd88e12156ce03882be1f179
+
+      - name: Export GitHub Actions cache env
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: CMake configure (Release preset, vcpkg)
+        run: cmake --preset default
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+
+      - name: CMake build (Tankoban only — tankoctl excluded from release)
+        run: cmake --build out --parallel --target Tankoban
+
+      - name: Stage installer artifacts (windeployqt + sidecar + resources)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer-staging | Out-Null
+          Copy-Item out/Tankoban.exe installer-staging/
+
+          # windeployqt gathers Qt runtime DLLs next to the exe.
+          windeployqt --release --no-translations --no-system-d3d-compiler --dir installer-staging/ installer-staging/Tankoban.exe
+
+          # ffmpeg_sidecar (must be pre-built; for the v1.x release pipeline
+          # we expect Hemanth to commit a pre-built ffmpeg_sidecar.exe to
+          # resources/ffmpeg_sidecar/ via a separate build process — building
+          # the MinGW sidecar in CI is a P6.x followup).
+          if (Test-Path resources/ffmpeg_sidecar/ffmpeg_sidecar.exe) {
+            Copy-Item resources/ffmpeg_sidecar/*.exe installer-staging/
+            Copy-Item resources/ffmpeg_sidecar/*.dll installer-staging/ -ErrorAction SilentlyContinue
+          } else {
+            Write-Warning "ffmpeg_sidecar.exe not in resources/ — release will lack video player support."
+          }
+
+          # Book-reader + comic-reader resources.
+          New-Item -ItemType Directory -Force -Path installer-staging/resources | Out-Null
+          if (Test-Path resources/book_reader) {
+            Copy-Item resources/book_reader installer-staging/resources/ -Recurse -Force
+          }
+          if (Test-Path resources/icons) {
+            Copy-Item resources/icons installer-staging/resources/ -Recurse -Force
+          }
+
+      - name: Install NSIS
+        uses: joncloud/makensis-action@v4.1
+        with:
+          script-file: installer/tankoban.nsi
+          arguments: '/V3'
+
+      - name: Rename installer with version suffix
+        shell: pwsh
+        run: |
+          Move-Item installer/Tankoban-Setup.exe Tankoban-Setup-${{ steps.version.outputs.version }}.exe
+
+      - name: Create GitHub Release + upload installer
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Tankoban v${{ steps.version.outputs.version }}
+          body: |
+            Tankoban v${{ steps.version.outputs.version }}
+
+            Download `Tankoban-Setup-${{ steps.version.outputs.version }}.exe` and run.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md) for changes (when authored).
+          draft: false
+          prerelease: false
+          files: Tankoban-Setup-${{ steps.version.outputs.version }}.exe

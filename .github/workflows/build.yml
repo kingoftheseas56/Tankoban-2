@@ -1,0 +1,86 @@
+# REPO_HYGIENE Phase 5 v1.x (2026-04-26) — full Windows-build CI.
+#
+# Runs on every push + PR. Validates that a fresh clone + setup.bat-equivalent
+# (vcpkg manifest install) + cmake --preset default produces a green build.
+# Catches regressions of Phase 1 P1.1 (untracked files in CMakeLists) +
+# Phase 2 (vcpkg dep migration) + Phase 4 (lifecycle bug fixes that need to
+# stay compiling).
+#
+# Companion to repo-consistency.yml (lint, Linux runner, fast). This is the
+# heavy build CI; ~15-30 min first run on a fresh runner because vcpkg
+# binary cache is cold; subsequent runs land in 5-10 min via vcpkg's
+# GitHub Packages binary cache.
+#
+# Native sidecar (MinGW + libplacebo + libass) is NOT built here — its
+# build chain is Hemanth-machine-only for now and falls under Phase 6's
+# release-pipeline scope rather than per-push CI.
+
+name: build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    env:
+      VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6.10
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtmultimedia qtwebengine qtwebsockets qtwebchannel'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: d46283cf33cf5de7bd88e12156ce03882be1f179
+
+      - name: Export GitHub Actions cache env (for vcpkg binary cache)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: CMake configure (preset default — vcpkg installs deps)
+        run: cmake --preset default
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+
+      - name: CMake build (Tankoban + tankoctl)
+        run: cmake --build out --parallel --target Tankoban tankoctl
+
+      - name: Verify exes built
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "out/Tankoban.exe")) {
+            Write-Error "Tankoban.exe missing"
+            exit 1
+          }
+          if (-not (Test-Path "out/tankoctl.exe")) {
+            Write-Error "tankoctl.exe missing"
+            exit 1
+          }
+          $tankobanSize = (Get-Item "out/Tankoban.exe").Length / 1MB
+          Write-Host "Tankoban.exe size: $([math]::Round($tankobanSize, 1)) MB"
+          $tankoctlSize = (Get-Item "out/tankoctl.exe").Length / 1KB
+          Write-Host "tankoctl.exe size: $([math]::Round($tankoctlSize, 1)) KB"
