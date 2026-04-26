@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -130,6 +131,17 @@ static D3D11Presenter*      g_d3d_presenter = nullptr;
 // Open runs on a worker thread so the main stdin loop stays responsive to pings
 static std::thread          g_open_thread;
 
+// SIDECAR_DISPATCHER_NON_BLOCKING_FIX Phase A.1 (2026-04-25 / 2026-04-26)
+// — set_tracks runs on a detached worker thread so the slow subtitle preload
+// (av_read_frame loop on HTTP sources) does not wedge the IPC dispatcher.
+// Cooperative cancellation: a second set_tracks signals cancel to the
+// in-flight worker; preload_subtitle_packets bails at the next loop
+// iteration and the new worker proceeds. teardown_decode also signals
+// cancel + briefly spin-waits for inflight==0 before deleting g_sub_renderer
+// so a racing preload can never deref a freed renderer.
+static std::atomic<bool>    g_set_tracks_cancel{false};
+static std::atomic<int>     g_set_tracks_inflight{0};
+
 // Forward decl — defined near the filter handlers. Called from open_worker
 // right after g_video_filter is assigned so zoom / yadif specs that were
 // set before the open (persisted across media changes within one sidecar
@@ -193,6 +205,26 @@ static void join_open_thread() {
 static void teardown_decode() {
     join_open_thread();
     stop_time_update();
+
+    // SIDECAR_DISPATCHER_NON_BLOCKING_FIX Phase A.1 (2026-04-26) — drain any
+    // in-flight set_tracks_worker before we touch shared state. The worker's
+    // Phase 2 (preload_subtitle_packets) runs OUTSIDE g_session_mutex and
+    // dereferences g_sub_renderer via a captured snapshot; if we delete the
+    // renderer below without first draining the worker, the worker would
+    // touch freed memory. Cancellation atomic + bounded spin-wait
+    // (≤200 ms) keeps teardown responsive while letting the worker bail
+    // cleanly at the next av_read_frame iteration.
+    g_set_tracks_cancel.store(true, std::memory_order_release);
+    for (int i = 0; i < 200; ++i) {
+        if (g_set_tracks_inflight.load(std::memory_order_acquire) == 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // Reset the cancel flag for the next set_tracks invocation. Safe to do
+    // here regardless of whether the spin-wait timed out — any stray worker
+    // still alive will see its own cancel flag set when the next set_tracks
+    // arrives (or simply complete its preload against a stale path; the
+    // tracks_changed emit in Phase 3 will reflect post-teardown empty state).
+    g_set_tracks_cancel.store(false, std::memory_order_release);
 
     // Stop audio and video concurrently for bounded teardown time
     std::thread audio_stop_thread;
@@ -262,6 +294,22 @@ static void teardown_decode() {
     }
 
     g_clock.reset();
+}
+
+// ---------------------------------------------------------------------------
+// LIBPLACEBO_SINGLE_RENDERER_FIX P2 2026-04-26 — env-gated opt-in to run
+// libplacebo (Vulkan + ewa_lanczossharp + ICC) for SDR sources, not just HDR.
+// Phase 0 Q1 = "YES, one renderer for everything"; P2 ships behind env so
+// regression smoke is a same-file A/B (env-off vs env-on). P3 drops the
+// gate. Cached static bool so the env read happens once per process — env
+// vars don't change mid-run.
+// ---------------------------------------------------------------------------
+static bool libplacebo_sdr_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TANKOBAN_LIBPLACEBO_SDR");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +507,18 @@ static void open_worker(Command cmd) {
     mi["chapters"]       = ch_arr;
     mi["audio_device"]   = g_audio_device_name;
     mi["audio_host_api"] = g_audio_host_api_name;
+    // VIDEO_HUD_TIME_LABELS_FIX 2026-04-25 — duration_sec joins the
+    // post-probe payload so VideoPlayer's mediaInfo lambda can populate
+    // m_durLabel + m_durationSec immediately. Previously the time/duration
+    // labels were only updated in onTimeUpdate (post-first-frame), causing
+    // a seconds-to-minutes lag before users saw the total runtime. Same
+    // value is also in probe_done.duration_ms but only the
+    // duration_is_estimate flag is currently forwarded through the
+    // SidecarProcess::probeDone Qt signal — adding it here keeps the
+    // duration grouped with the rest of the probe-derived display data
+    // (HDR / chapters / audio_device) per the established
+    // feedback_sidecar_metadata_decoupling.md pattern.
+    mi["duration_sec"]   = probe->duration_sec;
     write_event("media_info", sid, -1, mi);
 
     // Video decoder on_event callback. Phase 1.1 capture list trimmed —
@@ -777,20 +837,33 @@ static void open_worker(Command cmd) {
     FilterGraph* vfilt = new FilterGraph();
     FilterGraph* afilt = new FilterGraph();
 
-    // --- GPU renderer (libplacebo, optional — only for HDR content) ---
+    // --- GPU renderer (libplacebo, optional — HDR always; SDR opt-in via env) ---
+    // LIBPLACEBO_SINGLE_RENDERER_FIX P2 2026-04-26 — env-gated SDR rollout.
+    // HDR path unchanged. SDR path activates iff TANKOBAN_LIBPLACEBO_SDR=1.
+    // For SDR sources, mastering_max_lum/min_lum/max_cll/max_fall default to
+    // 0 in ProbeResult (HDR side data simply absent); passing zeros is
+    // libplacebo's "use defaults for this transfer/primaries combo" sentinel,
+    // which gives identity tone-mapping for SDR transfers (pass-through). The
+    // ewa_lanczossharp upscaler + ICC profile still apply as in the HDR path.
     GpuRenderer* gpu_ren = nullptr;
-    if (probe->hdr) {
+    const bool sdr_libplacebo = !probe->hdr && libplacebo_sdr_enabled();
+    if (probe->hdr || sdr_libplacebo) {
         gpu_ren = new GpuRenderer();
         if (!gpu_ren->init()) {
-            std::fprintf(stderr, "open_worker: GPU renderer unavailable for HDR, software path\n");
+            std::fprintf(stderr, "open_worker: GPU renderer unavailable (%s), software path\n",
+                         probe->hdr ? "HDR" : "SDR env-gated");
             delete gpu_ren;
             gpu_ren = nullptr;
         } else {
             gpu_ren->set_hdr_metadata(
-                probe->color_primaries, probe->color_trc,
+                probe->color_primaries, probe->color_trc, probe->color_space,
                 probe->mastering_max_lum, probe->mastering_min_lum,
                 probe->max_cll, probe->max_fall);
             gpu_ren->load_icc_profile("");  // auto-detect system display profile
+            if (sdr_libplacebo) {
+                std::fprintf(stderr,
+                    "open_worker: GpuRenderer instantiated for SDR file (TANKOBAN_LIBPLACEBO_SDR=1)\n");
+            }
         }
     }
 
@@ -1160,7 +1233,18 @@ static void preload_subtitle_packets(SubtitleRenderer* renderer,
 
     AVPacket* pkt = av_packet_alloc();
     int count = 0;
+    bool cancelled = false;
     while (av_read_frame(fmt, pkt) >= 0) {
+        // SIDECAR_DISPATCHER_NON_BLOCKING_FIX Phase A.1 — bail clean if a
+        // newer set_tracks arrived (or teardown_decode is about to delete
+        // the renderer). RAII below handles fmt/pkt cleanup; we just need
+        // to break BEFORE touching `renderer` again so the renderer-delete
+        // race in teardown can't strand us mid-process_packet.
+        if (g_set_tracks_cancel.load(std::memory_order_relaxed)) {
+            av_packet_unref(pkt);
+            cancelled = true;
+            break;
+        }
         if (pkt->stream_index == stream_index) {
             AVStream* ss = fmt->streams[stream_index];
             int64_t s_ms = av_rescale_q(pkt->pts, ss->time_base, {1, 1000});
@@ -1172,96 +1256,163 @@ static void preload_subtitle_packets(SubtitleRenderer* renderer,
     }
     av_packet_free(&pkt);
     avformat_close_input(&fmt);
-    std::fprintf(stderr, "preload_subtitle_packets: loaded %d packets from stream %d\n",
-                 count, stream_index);
+    std::fprintf(stderr, "preload_subtitle_packets: loaded %d packets from stream %d%s\n",
+                 count, stream_index, cancelled ? " (cancelled)" : "");
 }
 
 // ---------------------------------------------------------------------------
 // set_tracks handler (audio + subtitle stream switching)
 // ---------------------------------------------------------------------------
 
-static void handle_set_tracks(const Command& cmd) {
-    write_ack(cmd.seq, cmd.sessionId);
+// SIDECAR_DISPATCHER_NON_BLOCKING_FIX Phase A.1 (2026-04-25 / 2026-04-26)
+// — set_tracks_worker runs the slow body of set_tracks on a detached thread.
+// Three-phase mutex hold keeps preload_subtitle_packets OUTSIDE the session
+// mutex so handle_pause / handle_stop / handle_seek can grab it freely
+// while the HTTP scan is in progress. See comments by g_set_tracks_cancel
+// (near line 132) for the renderer-delete race protocol.
+static void set_tracks_worker(Command cmd) {
+    // --- Inflight handshake -------------------------------------------------
+    // If a previous set_tracks worker is still in flight, signal it to bail
+    // and spin-wait briefly (≤100 ms) for it to drop. Matches §5 LOCKED —
+    // ABORT THE FIRST: latest user intent wins.
+    int prev = g_set_tracks_inflight.fetch_add(1, std::memory_order_acq_rel);
+    if (prev > 0) {
+        g_set_tracks_cancel.store(true, std::memory_order_release);
+        for (int i = 0; i < 100; ++i) {
+            if (g_set_tracks_inflight.load(std::memory_order_acquire) <= 1) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    g_set_tracks_cancel.store(false, std::memory_order_release);
 
     std::string new_audio_id = cmd.payload.value("audio_id", "");
     std::string new_sub_id   = cmd.payload.value("sub_id", "");
-
-    std::lock_guard<std::mutex> lock(g_session_mutex);
-
-    bool audio_changed = !new_audio_id.empty() && new_audio_id != g_active_audio_id;
-
-    if (audio_changed && g_audio_dec && !g_current_path.empty()) {
-        // Stop current audio decoder
-        g_audio_dec->stop();
-        delete g_audio_dec;
-        g_audio_dec = nullptr;
-
-        // Capture position, then force-anchor the clock at that position.
-        // seek_anchor re-establishes started_=true at the exact PTS so the
-        // new audio decoder's first update() won't cause a drift.
-        double pos_sec = static_cast<double>(g_clock.position_us()) / 1000000.0;
-        int64_t pos_us = static_cast<int64_t>(pos_sec * 1000000.0);
-        g_clock.seek_anchor(pos_us);
-
-        // Create and start new audio decoder targeting new stream
-        int audio_idx = std::stoi(new_audio_id);
-        auto on_audio_event = [sid = cmd.sessionId](const std::string& event, const std::string& detail) {
-            if (event == "error") {
-                size_t colon = detail.find(':');
-                std::string code = (colon != std::string::npos) ? detail.substr(0, colon) : "AUDIO_DECODE_FAILED";
-                std::string msg  = (colon != std::string::npos) ? detail.substr(colon + 1) : detail;
-                write_error(code, msg, sid);
-            }
-        };
-        g_audio_dec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, g_audio_filter,
-                                       g_pa_stream, g_pa_actual_latency);
-        g_audio_dec->start(g_current_path, pos_sec, audio_idx);
-        g_active_audio_id = new_audio_id;
-
-        std::fprintf(stderr, "set_tracks: switched audio to stream %s at %.3fs\n",
-                     new_audio_id.c_str(), pos_sec);
-    }
-
-    // Handle subtitle visibility from set_tracks payload
     bool sub_vis = cmd.payload.value("sub_visibility", true);
-    if (g_sub_renderer) {
-        g_sub_renderer->set_visible(sub_vis);
-    }
 
-    if (!new_sub_id.empty() && new_sub_id != g_active_sub_id) {
-        g_active_sub_id = new_sub_id;
-        int sub_stream_idx = std::stoi(new_sub_id);
+    // --- Phase 1 (under mutex) ---------------------------------------------
+    // Audio decoder swap + visibility flag + clear_track + load_embedded_track.
+    // Captures path snapshot + sub_stream_idx for Phase 2 (which runs OUTSIDE
+    // the mutex). NOTE: audio_dec->stop() blocks up to ~5 s; rare on
+    // subtitle-only toggles (audio_changed = false). Phase A.2 audit will
+    // surface this for separate Phase A.3 treatment if needed.
+    int sub_stream_idx = -1;
+    bool need_preload = false;
+    std::string path_snapshot;
+    SubtitleRenderer* renderer_snapshot = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+
+        bool audio_changed = !new_audio_id.empty() && new_audio_id != g_active_audio_id;
+
+        if (audio_changed && g_audio_dec && !g_current_path.empty()) {
+            // Stop current audio decoder
+            g_audio_dec->stop();
+            delete g_audio_dec;
+            g_audio_dec = nullptr;
+
+            // Capture position, then force-anchor the clock at that position.
+            // seek_anchor re-establishes started_=true at the exact PTS so the
+            // new audio decoder's first update() won't cause a drift.
+            double pos_sec = static_cast<double>(g_clock.position_us()) / 1000000.0;
+            int64_t pos_us = static_cast<int64_t>(pos_sec * 1000000.0);
+            g_clock.seek_anchor(pos_us);
+
+            // Create and start new audio decoder targeting new stream
+            int audio_idx = std::stoi(new_audio_id);
+            auto on_audio_event = [sid = cmd.sessionId](const std::string& event, const std::string& detail) {
+                if (event == "error") {
+                    size_t colon = detail.find(':');
+                    std::string code = (colon != std::string::npos) ? detail.substr(0, colon) : "AUDIO_DECODE_FAILED";
+                    std::string msg  = (colon != std::string::npos) ? detail.substr(colon + 1) : detail;
+                    write_error(code, msg, sid);
+                }
+            };
+            g_audio_dec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, g_audio_filter,
+                                           g_pa_stream, g_pa_actual_latency);
+            g_audio_dec->start(g_current_path, pos_sec, audio_idx);
+            g_active_audio_id = new_audio_id;
+
+            std::fprintf(stderr, "set_tracks: switched audio to stream %s at %.3fs\n",
+                         new_audio_id.c_str(), pos_sec);
+        }
+
+        // Subtitle visibility flag
         if (g_sub_renderer) {
-            for (const auto& t : g_probe_subs) {
-                if (t.id == new_sub_id) {
-                    g_sub_renderer->clear_track();
-                    g_sub_renderer->load_embedded_track(t.codec_name, t.extradata);
-                    // Preload all subtitle events so mid-playback switches
-                    // don't lose events before the current decode position.
-                    if (!g_current_path.empty()) {
-                        preload_subtitle_packets(g_sub_renderer, g_current_path, sub_stream_idx);
+            g_sub_renderer->set_visible(sub_vis);
+        }
+
+        if (!new_sub_id.empty() && new_sub_id != g_active_sub_id) {
+            g_active_sub_id = new_sub_id;
+            sub_stream_idx = std::stoi(new_sub_id);
+            if (g_sub_renderer) {
+                for (const auto& t : g_probe_subs) {
+                    if (t.id == new_sub_id) {
+                        g_sub_renderer->clear_track();
+                        g_sub_renderer->load_embedded_track(t.codec_name, t.extradata);
+                        // Defer preload to Phase 2 (outside mutex). Capture
+                        // pointers/strings now while we hold the lock so
+                        // teardown_decode can't yank them mid-Phase-2.
+                        if (!g_current_path.empty()) {
+                            need_preload      = true;
+                            path_snapshot     = g_current_path;
+                            renderer_snapshot = g_sub_renderer;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
+            if (g_video_dec) {
+                g_video_dec->set_active_sub_stream(sub_stream_idx);
+            }
+            std::fprintf(stderr, "set_tracks: switched subtitle to stream %s\n",
+                         new_sub_id.c_str());
         }
-        if (g_video_dec) {
-            g_video_dec->set_active_sub_stream(sub_stream_idx);
-        }
-        std::fprintf(stderr, "set_tracks: switched subtitle to stream %s\n",
-                     new_sub_id.c_str());
     }
 
-    // Emit tracks_changed with updated active IDs
-    nlohmann::json p;
-    p["active_audio_id"] = g_active_audio_id;
-    p["active_sub_id"]   = g_active_sub_id;
-    write_event("tracks_changed", cmd.sessionId, -1, p);
+    // --- Phase 2 (NO mutex) ------------------------------------------------
+    // Slow HTTP-bound subtitle preload. Pause / stop / seek can grab the
+    // session mutex while this runs. Cancellation atomic checked inside the
+    // av_read_frame loop. teardown_decode signals cancel + spin-waits for
+    // inflight==0 BEFORE deleting g_sub_renderer, so renderer_snapshot is
+    // guaranteed alive across this call (modulo the spin-wait timeout, which
+    // is bounded by the cancel-flag detection latency = one read iteration).
+    if (need_preload && renderer_snapshot && !path_snapshot.empty()) {
+        preload_subtitle_packets(renderer_snapshot, path_snapshot, sub_stream_idx);
+    }
 
-    // Also emit sub_visibility_changed so the Python side can track
-    // visibility state — previously only handle_set_sub_visibility emitted
-    // this, leaving set_tracks visibility changes invisible to the UI.
-    write_event("sub_visibility_changed", cmd.sessionId, -1, {{"visible", sub_vis}});
+    // --- Phase 3 (brief mutex re-acquire) ----------------------------------
+    // Emit tracks_changed + sub_visibility_changed with the latest active
+    // IDs. Re-read under lock so a teardown that ran during Phase 2 reflects
+    // correctly (active IDs would be cleared).
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        nlohmann::json p;
+        p["active_audio_id"] = g_active_audio_id;
+        p["active_sub_id"]   = g_active_sub_id;
+        write_event("tracks_changed", cmd.sessionId, -1, p);
+
+        // Also emit sub_visibility_changed so the Python side can track
+        // visibility state — previously only handle_set_sub_visibility emitted
+        // this, leaving set_tracks visibility changes invisible to the UI.
+        write_event("sub_visibility_changed", cmd.sessionId, -1, {{"visible", sub_vis}});
+    }
+
+    g_set_tracks_inflight.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+static void handle_set_tracks(const Command& cmd) {
+    // Fast inline ack — the existing dispatch contract.
+    write_ack(cmd.seq, cmd.sessionId);
+
+    // SIDECAR_DISPATCHER_NON_BLOCKING_FIX Phase A.1 — body moved to detached
+    // worker thread. Mirrors handle_open → open_worker shape (main.cpp:920).
+    // The slow part (preload_subtitle_packets HTTP scan) used to run on the
+    // dispatcher thread under g_session_mutex, wedging pause / stop / seek
+    // until the scan completed. With the worker split, dispatcher returns to
+    // stdin within microseconds; the worker holds the mutex only briefly
+    // during the audio swap + sub-track setup, then releases for the slow
+    // preload, and re-acquires briefly to emit tracks_changed.
+    std::thread(set_tracks_worker, cmd).detach();
 }
 
 // ---------------------------------------------------------------------------

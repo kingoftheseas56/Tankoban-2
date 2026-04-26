@@ -634,6 +634,17 @@ void VideoPlayer::stopPlayback(bool isIntentional)
         // the race because the process is going away — any in-flight
         // events from the torn-down session are moot.
         m_sidecar->sendShutdown();
+        // CLOSE_AUDIO_CONTINUES_FIX 2026-04-26 — backstop the fire-and-forget
+        // sendShutdown above so the user-close path actually guarantees the
+        // sidecar (and its audio) is dead before stopPlayback returns. Pre-fix
+        // bug: when the dispatcher was busy or PortAudio had buffered audio
+        // mid-write, the process stayed alive and audio kept playing until
+        // app exit (when ~SidecarProcess hit its existing wait+kill backstop).
+        // 500ms covers the typical ~50-100ms graceful-exit window with
+        // headroom; force-kill on timeout. Synchronous block on the GUI
+        // thread is acceptable here — close-button latency budget tolerates
+        // half a second.
+        m_sidecar->ensureTerminated(500);
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 + 3.2 — intentional stop
@@ -910,8 +921,9 @@ void VideoPlayer::onSidecarReady()
         // saved choice. Sidecar default is 100 (bottom); only push on
         // non-default to keep the wire quiet for the common case.
         const int subPos = s.value("videoPlayer/subtitlePosition", 100).toInt();
-        if (subPos != 100)
-            m_sidecar->sendSetSubtitlePosition(subPos);
+        m_subPositionPct = qBound(0, subPos, 100);
+        if (m_subPositionPct != 100)
+            m_sidecar->sendSetSubtitlePosition(m_subPositionPct);
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
@@ -1633,6 +1645,7 @@ void VideoPlayer::buildUI()
         dismissOtherPopovers(m_settingsPopover);
         m_settingsPopover->setAudioDelay(m_audioDelayMs);
         m_settingsPopover->setSubtitleDelay(m_subDelayMs);
+        m_settingsPopover->setSubtitlePosition(m_subPositionPct);
         m_settingsPopover->toggle(m_settingsChip);
         m_settingsChip->setChecked(m_settingsPopover->isOpen());
     });
@@ -1898,6 +1911,8 @@ void VideoPlayer::buildUI()
         this, [this](int delta) { adjustAudioDelay(delta); });
     connect(m_settingsPopover, &SettingsPopover::subtitleDelayAdjusted,
         this, [this](int delta) { adjustSubDelay(delta); });
+    connect(m_settingsPopover, &SettingsPopover::subtitlePositionAdjusted,
+        this, [this](int delta) { adjustSubPosition(delta); });
     connect(m_settingsPopover, &SettingsPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) { m_hideTimer.stop(); showControls(); }
         else m_hideTimer.start(3000);
@@ -1963,6 +1978,33 @@ void VideoPlayer::buildUI()
         // VIDEO_HUD_MINIMALIST 2026-04-25 — FilterPopover removed.
         // m_isHdr still drives shader-side tonemap selection downstream
         // (color_primaries / color_trc forwarded below).
+
+        // VIDEO_HUD_TIME_LABELS_FIX 2026-04-25 (hemanth: "the time is not
+        // loading immediately after opening a video"): duration arrives
+        // in this post-probe payload (sidecar adds duration_sec next to
+        // hdr/chapters/audio_device). Previously m_timeLabel + m_durLabel
+        // only updated in onTimeUpdate which fires post-first-frame —
+        // labels sat at "—:—" for seconds-to-minutes on slow opens.
+        // probeDone fires before mediaInfo per sidecar emission order
+        // (main.cpp:331 vs :462), so m_durationIsEstimate is already
+        // cached here from the probeDone connect at :1797-1810. Mirror
+        // onTimeUpdate's :1101-1108 estimate-prefix logic exactly so the
+        // initial render matches the per-tick render shape. Optimistic
+        // m_timeLabel="0:00" since position is 0 pre-playback; the first
+        // real onTimeUpdate overrides naturally.
+        const double mediaDurSec = info.value("duration_sec").toDouble(0.0);
+        if (mediaDurSec > 0.0) {
+            m_durationSec = mediaDurSec;
+            const QString durText = formatTime(static_cast<qint64>(mediaDurSec * 1000));
+            if (m_durLabel) m_durLabel->setText(m_durationIsEstimate
+                ? QStringLiteral("~") + durText
+                : durText);
+            if (m_timeLabel) m_timeLabel->setText(formatTime(0));
+            if (m_seekBar) m_seekBar->setDurationSec(mediaDurSec);
+        }
+        // duration <= 0: leave m_durLabel at "—:—" set by teardownUi —
+        // don't lie when the probe couldn't extract a usable duration.
+
 
         // Batch 3.1 (Player Polish Phase 3) — forward raw AVCOL_PRI_* +
         // AVCOL_TRC_* values to FrameCanvas so its shader can pick the
@@ -2191,6 +2233,17 @@ void VideoPlayer::adjustSubDelay(int delta)
         else
             m_toastHud->showToast("Sub delay: " + QString::number(m_subDelayMs) + "ms");
     }
+}
+
+void VideoPlayer::adjustSubPosition(int delta)
+{
+    m_subPositionPct = qBound(0, m_subPositionPct + delta, 100);
+    if (m_sidecar) m_sidecar->sendSetSubtitlePosition(m_subPositionPct);
+    QSettings("Tankoban", "Tankoban")
+        .setValue("videoPlayer/subtitlePosition", m_subPositionPct);
+    if (m_settingsPopover) m_settingsPopover->setSubtitlePosition(m_subPositionPct);
+    if (m_toastHud)
+        m_toastHud->showToast(QString("Sub position: %1%").arg(m_subPositionPct));
 }
 
 // Merge incoming track list into existing cache. Upsert by 'id': add new
