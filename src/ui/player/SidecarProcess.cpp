@@ -1,5 +1,7 @@
 #include "ui/player/SidecarProcess.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -20,10 +22,9 @@
 #include <algorithm>
 
 static void debugLog(const QString& msg) {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    f.open(QIODevice::Append | QIODevice::Text);
-    QTextStream s(&f);
-    s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer instead
+    // of writing to hardcoded C:/Users/Suprabha/.../_player_debug.txt.
+    DebugLogBuffer::instance().info("sidecar-ipc", msg);
 }
 
 // Path to the sidecar executable. Post-migration (2026-04-15) the sidecar
@@ -57,12 +58,10 @@ static QString sidecarPath()
     if (QFile::exists(raw))
         return raw;
 
-    // Transitional fallback: pre-migration groundwork location. Remains
-    // for a session or two while dev machines get their first in-repo
-    // sidecar build; can be removed once everyone has rebuilt locally.
-    QString gw = "C:/Users/Suprabha/Desktop/TankobanQTGroundWork/resources/ffmpeg_sidecar/ffmpeg_sidecar.exe";
-    if (QFile::exists(gw))
-        return gw;
+    // (Transitional pre-migration TankobanQTGroundWork fallback removed
+    // 2026-04-26 per REPO_HYGIENE P1.2 — comment at this site explicitly
+    // marked it as removable. Production + repo-install + raw-build
+    // fallbacks above cover all real cases.)
 
     return {};
 }

@@ -12,6 +12,7 @@
 #include "readers/BookReader.h"
 #include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 
 #include <QVBoxLayout>
 #include <QFrame>
@@ -70,14 +71,14 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
 
     buildPageStack();
     contentLayout->addWidget(m_pageStack, 1);
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5a-pagestack-added\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5a-pagestack-added");
 
     rootLayout->addWidget(content, 1);
 
     // Root folders overlay (hidden by default)
     m_rootFoldersOverlay = new RootFoldersOverlay(m_bridge, root);
     m_rootFoldersOverlay->hide();
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5b-rootfolders-overlay\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5b-rootfolders-overlay");
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::closeRequested, this, &MainWindow::hideRootFolders);
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::foldersChanged, this, [this]() {
         if (auto *comics = m_pageStack->findChild<ComicsPage*>())
@@ -89,7 +90,7 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     });
 
     // Comic reader overlay (hidden by default)
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5c-before-comicreader\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5c-before-comicreader");
     m_comicReader = new ComicReader(m_bridge, root);
     m_comicReader->hide();
     connect(m_comicReader, &ComicReader::closeRequested, this, &MainWindow::closeComicReader);
@@ -122,7 +123,7 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     });
 
     // Video player overlay (hidden by default)
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5e-before-videoplayer\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5e-before-videoplayer");
     m_videoPlayer = new VideoPlayer(m_bridge, root);
     m_videoPlayer->hide();
     connect(m_videoPlayer, &VideoPlayer::closeRequested, this, &MainWindow::closeVideoPlayer);
@@ -138,11 +139,11 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
         }
     });
 
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5f-before-central\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5f-before-central");
     setCentralWidget(root);
     bindShortcuts();
     setupTrayIcon();
-    { FILE* f=fopen("_boot_debug.txt","a"); if(f){fprintf(f,"5g-constructor-done\n");fflush(f);fclose(f);} }
+    DebugLogBuffer::instance().info("mainwindow", "5g-constructor-done");
 
     // Connect comics page to reader
     if (auto *comics = m_pageStack->findChild<ComicsPage*>()) {
@@ -279,8 +280,7 @@ void MainWindow::buildTopBar()
 void MainWindow::buildPageStack()
 {
     auto dbg = [](const char* msg) {
-        FILE* f = fopen("_boot_debug.txt", "a");
-        if (f) { fprintf(f, "%s\n", msg); fflush(f); fclose(f); }
+        DebugLogBuffer::instance().info("mainwindow", QString::fromLatin1(msg));
     };
 
     m_pageStack = new QStackedWidget(this);
@@ -474,7 +474,9 @@ void MainWindow::restoreFromTray()
 
 void MainWindow::quitFromTray()
 {
-    m_quitRequested = true;
+    // REPO_HYGIENE P1.5 (2026-04-26): m_quitRequested flag removed — closeEvent
+    // unconditionally calls QApplication::quit so the prior flag-set was dead
+    // state. Tray "Quit" menu now just exits cleanly via the standard close path.
     close();
 }
 

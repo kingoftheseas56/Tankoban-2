@@ -3,6 +3,7 @@
 
 #include <ass/ass.h>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -32,15 +33,17 @@ private:
 }
 #endif
 
-// Diagnostic log file — writes directly, bypasses pipe issues
+// REPO_HYGIENE P1.2 (2026-04-26) no-op: the prior pattern wrote to a
+// hardcoded developer path (C:\Users\Suprabha\Desktop\TankobanQTGroundWork\
+// sub_debug.log) which (a) leaked the dev-machine path, (b) only worked on
+// that one machine. Native-sidecar logging gets a proper bounded ring
+// buffer in REPO_HYGIENE Phase 4 (sidecar lifecycle hardening). For now
+// SUB_LOG is a no-op; existing call sites compile clean and produce no
+// output. SUB_LOG callers are debug-only (subtitle_renderer trace points).
 static FILE* sub_log() {
-    static FILE* f = nullptr;
-    if (!f) {
-        f = fopen("C:\\Users\\Suprabha\\Desktop\\TankobanQTGroundWork\\sub_debug.log", "w");
-    }
-    return f;
+    return nullptr;
 }
-#define SUB_LOG(...) do { FILE* _f = sub_log(); if (_f) { std::fprintf(_f, __VA_ARGS__); std::fflush(_f); } } while(0)
+#define SUB_LOG(...) do { (void)0; } while(0)
 
 namespace {
 struct FitRect {
@@ -229,15 +232,18 @@ void SubtitleRenderer::render_thread_func() {
                     int64_t render_time = pts_ms + delay_ms_.load(std::memory_order_relaxed);
                     if (render_time < 0) render_time = 0;
 
-                    // VIDEO_SUB_POSITION 2026-04-24 — push the user-facing
-                    // baseline percent to libass per-render. Inverted per
-                    // mpv reference (sd_ass.c:554): user 100 = bottom →
-                    // libass 0; user 0 = top → libass 100. Cheap atomic
-                    // load + libass setter; no-op when pct unchanged.
-                    const int sub_pos_pct =
-                        sub_position_pct_.load(std::memory_order_relaxed);
-                    ass_set_line_position(renderer_,
-                        static_cast<double>(100 - sub_pos_pct));
+                    // VIDEO_SUB_POS_YOFFSET 2026-04-25 — supersedes the
+                    // ass_set_line_position approach (which respected the
+                    // script's MarginV — Hemanth's "still too high"
+                    // complaint on the plane-crash dialog at slider=100)
+                    // AND handles \pos-overridden events libass position
+                    // can't reach (Saiki karaoke). Pass libass=0 (script
+                    // default neutral) and apply a uniform Y-shift to the
+                    // entire rendered ASS_Image list so the composition's
+                    // bottom edge lands at `pct%` down the video rect.
+                    // pct=100 → sub bottom flush with frame bottom; pct=0
+                    // → sub top flush with frame top; linear in between.
+                    ass_set_line_position(renderer_, 0.0);
 
                     int changed = 0;
                     ASS_Image* images = ass_render_frame(renderer_, track_,
@@ -254,7 +260,32 @@ void SubtitleRenderer::render_thread_func() {
                     }
 
                     if (images) {
-                        blend_image_list(images, frame, stride, height);
+                        // Compute bounding box of all ASS_Images for this
+                        // frame so we can shift the whole composition as a
+                        // single unit (multi-line subs stay glued; \pos
+                        // events move with their dialog companions).
+                        int min_top = INT_MAX;
+                        int max_bottom = 0;
+                        for (ASS_Image* it = images; it; it = it->next) {
+                            if (it->w == 0 || it->h == 0) continue;
+                            if (it->dst_y < min_top) min_top = it->dst_y;
+                            const int b = it->dst_y + it->h;
+                            if (b > max_bottom) max_bottom = b;
+                        }
+
+                        int y_shift = 0;
+                        if (max_bottom > 0 && video_rect_h_ > 0
+                            && max_bottom > min_top) {
+                            const int sub_pos_pct =
+                                sub_position_pct_.load(std::memory_order_relaxed);
+                            const int sub_h = max_bottom - min_top;
+                            const int avail = std::max(0, video_rect_h_ - sub_h);
+                            const int target_top =
+                                video_rect_y_ + (sub_pos_pct * avail) / 100;
+                            y_shift = target_top - min_top;
+                        }
+
+                        blend_image_list(images, frame, stride, height, y_shift);
                     }
                 }
             }
@@ -901,7 +932,8 @@ void SubtitleRenderer::blend_into_frame(const std::vector<SubOverlayBitmap>& bit
 }
 
 void SubtitleRenderer::blend_image_list(ASS_Image* img, uint8_t* frame,
-                                        int stride, int frame_h) {
+                                        int stride, int frame_h,
+                                        int y_offset) {
     for (; img; img = img->next) {
         if (img->w == 0 || img->h == 0) continue;
 
@@ -913,7 +945,7 @@ void SubtitleRenderer::blend_image_list(ASS_Image* img, uint8_t* frame,
         if (a_base == 0) continue;
 
         for (int y = 0; y < img->h; ++y) {
-            int dst_y = img->dst_y + y;
+            int dst_y = img->dst_y + y + y_offset;
             if (dst_y < 0 || dst_y >= frame_h) continue;
 
             uint8_t* dst_row = frame + dst_y * stride + img->dst_x * 4;

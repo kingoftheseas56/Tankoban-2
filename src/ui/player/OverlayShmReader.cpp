@@ -1,9 +1,8 @@
 #include "ui/player/OverlayShmReader.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QDebug>
-#include <QFile>
-#include <QTextStream>
-#include <QDateTime>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -13,10 +12,9 @@
 #include <cstring>
 
 static void debugLog(const QString& msg) {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    f.open(QIODevice::Append | QIODevice::Text);
-    QTextStream s(&f);
-    s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer instead
+    // of writing to hardcoded C:/Users/Suprabha/.../_player_debug.txt.
+    DebugLogBuffer::instance().info("overlay-shm-reader", msg);
 }
 
 bool OverlayShmReader::attach(const QString& shmName, int width, int height)

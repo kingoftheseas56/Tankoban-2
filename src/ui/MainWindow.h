@@ -81,7 +81,8 @@ private:
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;
     QMenu           *m_trayMenu = nullptr;
-    bool m_quitRequested = false;
+    // m_quitRequested removed 2026-04-26 (REPO_HYGIENE P1.5): closeEvent
+    // unconditionally calls QApplication::quit, so the flag was unused state.
     bool m_wasMaximizedBeforeHide = false;
     bool m_wasMaximizedBeforeFullscreen = false;
 

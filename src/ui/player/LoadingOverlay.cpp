@@ -1,28 +1,19 @@
 #include "ui/player/LoadingOverlay.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QFileInfo>
 #include <QFontMetrics>
-#include <QFile>
-#include <QTextStream>
-#include <QDateTime>
 
-// STREAM_STALL_RECOVERY_UX investigation 2026-04-22 — Direction C instrumentation.
-// Traces stall-overlay lifecycle to answer Q1 ("does the overlay render during
-// a 20-30s stall?"). Writes directly to _player_debug.txt using the existing
-// repo pattern (qDebug doesn't land there on Windows GUI binaries). Transition-
-// only logging: no per-tick spam. Paint marker fires at most once per stall
-// cycle (gated by m_stallPaintLogged).
+// STREAM_STALL_RECOVERY_UX instrumentation (Direction C, 2026-04-22). Traces
+// stall-overlay lifecycle. Routed through DebugLogBuffer (REPO_HYGIENE P1.2,
+// 2026-04-26) — the prior pattern wrote to a hardcoded developer path.
 namespace {
 void logStallDbg(const QString& line)
 {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    if (f.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream s(&f);
-        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-          << " [STALL_DEBUG][LoadingOverlay] " << line << "\n";
-    }
+    DebugLogBuffer::instance().info("loading-overlay", line);
 }
 }  // namespace
 

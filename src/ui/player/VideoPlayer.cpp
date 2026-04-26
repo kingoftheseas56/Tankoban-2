@@ -19,6 +19,7 @@
 #include "ui/player/SeekSlider.h"
 #include "ui/player/VideoContextMenu.h"
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 
 #include <cmath>   // std::abs — Batch 4.1 audio-speed ticker deadband
 
@@ -56,10 +57,9 @@
 #include <QDateTime>
 
 static void debugLog(const QString& msg) {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    f.open(QIODevice::Append | QIODevice::Text);
-    QTextStream s(&f);
-    s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer instead
+    // of writing to hardcoded C:/Users/Suprabha/.../_player_debug.txt.
+    DebugLogBuffer::instance().info("video-player", msg);
 }
 
 // Stable QSettings key for an audio device. Sanitized so the key is QSettings-safe
@@ -149,12 +149,8 @@ static const int    SPEED_COUNT    = 7;
 namespace {
 void logStallPlayerDbg(const QString& line)
 {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    if (f.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream s(&f);
-        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-          << " [STALL_DEBUG][VideoPlayer] " << line << "\n";
-    }
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+    DebugLogBuffer::instance().info("video-player-stall", line);
 }
 }  // namespace
 
@@ -3379,10 +3375,11 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     }
     else if (action == "vsync_log_toggle") {
         // Phase 0 feasibility instrumentation. F12 starts logging, auto-dumps
-        // after 60 seconds. File path matches _player_debug.txt convention.
-        // Then: python tools/analyze_vsync.py _vsync_timing.csv
-        const QString dumpPath = QStringLiteral(
-            "C:/Users/Suprabha/Desktop/Tankoban 2/_vsync_timing.csv");
+        // after 60 seconds. REPO_HYGIENE P1.2 (2026-04-26): resolved via Qt
+        // standard paths instead of hardcoded developer machine path.
+        const QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir().mkpath(appDataDir);  // ensure exists
+        const QString dumpPath = QDir(appDataDir).absoluteFilePath("_vsync_timing.csv");
         debugLog(QString("[VideoPlayer] vsync_log_toggle pressed (path: %1)").arg(dumpPath));
 
         if (m_canvas->vsyncLoggingEnabled()) {

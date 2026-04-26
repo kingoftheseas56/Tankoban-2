@@ -1,15 +1,13 @@
 #include "ui/player/ShmFrameReader.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QDebug>
-#include <QFile>
-#include <QTextStream>
-#include <QDateTime>
 
 static void debugLog(const QString& msg) {
-    QFile f("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    f.open(QIODevice::Append | QIODevice::Text);
-    QTextStream s(&f);
-    s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << " " << msg << "\n";
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer instead
+    // of writing to hardcoded C:/Users/Suprabha/.../_player_debug.txt.
+    DebugLogBuffer::instance().info("shm-frame-reader", msg);
 }
 
 #ifdef Q_OS_WIN

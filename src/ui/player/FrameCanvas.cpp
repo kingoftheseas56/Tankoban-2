@@ -3,6 +3,8 @@
 #include "OverlayShmReader.h"
 #include "SyncClock.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QImage>
 #include <QMouseEvent>
 #include <algorithm>
@@ -904,21 +906,17 @@ void FrameCanvas::renderFrame()
         }
 #endif
 
-        // Write directly to _player_debug.txt (qDebug doesn't land there —
-        // same pattern the aspect diagnostic at line 789 uses).
-        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&dbg);
-            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-              << QString::asprintf(
-                  " [PERF] frames=%zu timer_interval p50/p99=%.2f/%.2f ms "
-                  "draw p50/p99=%.2f/%.2f ms present p50/p99=%.2f/%.2f ms "
-                  "skipped=%llu [DXGI] queued=%u vsync_us=%.1f\n",
-                  m_perfPresentMs.size(),
-                  tiP50, tiP99, drP50, drP99, prP50, prP99,
-                  static_cast<unsigned long long>(skippedDelta),
-                  dxgiPresentsQueued, dxgiVsyncIntervalUs);
-        }
+        // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+        DebugLogBuffer::instance().info(
+            "frame-canvas",
+            QString::asprintf(
+                "[PERF] frames=%zu timer_interval p50/p99=%.2f/%.2f ms "
+                "draw p50/p99=%.2f/%.2f ms present p50/p99=%.2f/%.2f ms "
+                "skipped=%llu [DXGI] queued=%u vsync_us=%.1f",
+                m_perfPresentMs.size(),
+                tiP50, tiP99, drP50, drP99, prP50, prP99,
+                static_cast<unsigned long long>(skippedDelta),
+                dxgiPresentsQueued, dxgiVsyncIntervalUs));
 
         m_perfTimerIntervalMs.clear();
         m_perfDrawMs.clear();
@@ -1085,14 +1083,13 @@ void FrameCanvas::drawTexturedQuad()
     if (s_lastScissorLoggedTop != scissor.top || s_lastScissorLoggedBottom != scissor.bottom) {
         s_lastScissorLoggedTop = scissor.top;
         s_lastScissorLoggedBottom = scissor.bottom;
-        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&dbg);
-            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-              << " [FrameCanvas scissor] rect={" << scissor.left << ","
-              << scissor.top << "," << scissor.right << "," << scissor.bottom
-              << "} canvas=" << canvasW << "x" << canvasH << "\n";
-        }
+        // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+        DebugLogBuffer::instance().info(
+            "frame-canvas",
+            QString("[scissor] rect={%1,%2,%3,%4} canvas=%5x%6")
+                .arg(scissor.left).arg(scissor.top)
+                .arg(scissor.right).arg(scissor.bottom)
+                .arg(canvasW).arg(canvasH));
     }
 
     // Aspect diagnostic — prints whenever frame dims OR widget dims change.
@@ -1128,28 +1125,30 @@ void FrameCanvas::drawTexturedQuad()
         s_lastLoggedCropBottom   = m_srcCropBottom;
         s_lastLoggedCropAspect   = m_cropAspect;
         s_lastLoggedSubLift      = m_subtitleLiftPx;
-        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&dbg);
-            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-              << " [FrameCanvas aspect] source=" << m_frameW << "x" << m_frameH
-              << " widget=" << canvasW << "x" << canvasH
-              << " dpr=" << QString::number(dpr, 'f', 2)
-              << " frameAspect=" << QString::number(frameAspect, 'f', 4)
-              << " widgetAspect=" << QString::number(widgetAspect, 'f', 4)
-              << " videoRect={" << videoRect.x << "," << videoRect.y << ","
-              << videoRect.w << "," << videoRect.h << "}"
-              << " d3dVp={" << vp.TopLeftX << "," << vp.TopLeftY << ","
-              << vp.Width << "," << vp.Height << "}"
-              << " scissor={" << scissor.left << "," << scissor.top << ","
-              << (scissor.right - scissor.left) << "," << (scissor.bottom - scissor.top) << "}"
-              << " forced=" << QString::number(m_forcedAspect, 'f', 4)
-              << " cropAspect=" << QString::number(m_cropAspect, 'f', 4)
-              << " cropZoom=" << QString::number(cropZoom, 'f', 4)
-              << " subLift=" << m_subtitleLiftPx
-              << " srcCrop={" << m_srcCropTop << "," << m_srcCropBottom << ","
-              << m_srcCropLeft << "," << m_srcCropRight << "}\n";
-        }
+        // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+        DebugLogBuffer::instance().info(
+            "frame-canvas",
+            QString("[aspect] source=%1x%2 widget=%3x%4 dpr=%5 "
+                    "frameAspect=%6 widgetAspect=%7 "
+                    "videoRect={%8,%9,%10,%11} "
+                    "d3dVp={%12,%13,%14,%15} "
+                    "scissor={%16,%17,%18,%19} "
+                    "forced=%20 cropAspect=%21 cropZoom=%22 subLift=%23 "
+                    "srcCrop={%24,%25,%26,%27}")
+                .arg(m_frameW).arg(m_frameH).arg(canvasW).arg(canvasH)
+                .arg(QString::number(dpr, 'f', 2))
+                .arg(QString::number(frameAspect, 'f', 4))
+                .arg(QString::number(widgetAspect, 'f', 4))
+                .arg(videoRect.x).arg(videoRect.y).arg(videoRect.w).arg(videoRect.h)
+                .arg(vp.TopLeftX).arg(vp.TopLeftY).arg(vp.Width).arg(vp.Height)
+                .arg(scissor.left).arg(scissor.top)
+                .arg(scissor.right - scissor.left).arg(scissor.bottom - scissor.top)
+                .arg(QString::number(m_forcedAspect, 'f', 4))
+                .arg(QString::number(m_cropAspect, 'f', 4))
+                .arg(QString::number(cropZoom, 'f', 4))
+                .arg(m_subtitleLiftPx)
+                .arg(m_srcCropTop).arg(m_srcCropBottom)
+                .arg(m_srcCropLeft).arg(m_srcCropRight));
     }
 
     m_context->OMSetRenderTargets(1, &m_rtv, nullptr);
@@ -1876,20 +1875,17 @@ bool FrameCanvas::scanBakedLetterbox()
     }
 
     if (m_bakedScanCandidateCount < kStableScansRequired) {
-        QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&dbg);
-            s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-              << " [FrameCanvas autocrop] path=" << path
-              << " source=" << W << "x" << H
-              << " stride=" << stride
-              << " detected_top=" << topBlack
-              << " detected_bottom_ignored=" << bottomBlack
-              << " candidate_top=" << m_bakedScanCandidateTop
-              << " stable_count=" << m_bakedScanCandidateCount
-              << "/" << kStableScansRequired
-              << " latched=0\n";
-        }
+        // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+        DebugLogBuffer::instance().info(
+            "frame-canvas",
+            QString("[autocrop] path=%1 source=%2x%3 stride=%4 "
+                    "detected_top=%5 detected_bottom_ignored=%6 "
+                    "candidate_top=%7 stable_count=%8/%9 latched=0")
+                .arg(path).arg(W).arg(H).arg(stride)
+                .arg(topBlack).arg(bottomBlack)
+                .arg(m_bakedScanCandidateTop)
+                .arg(m_bakedScanCandidateCount)
+                .arg(kStableScansRequired));
         return false;
     }
 
@@ -1903,24 +1899,21 @@ bool FrameCanvas::scanBakedLetterbox()
     // bottomBlack used below only for the diagnostic log.
     const int bottomBlackDetected = bottomBlack;
 
-    QFile dbg("C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt");
-    if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream s(&dbg);
-        s << QDateTime::currentDateTime().toString("hh:mm:ss.zzz")
-          << " [FrameCanvas autocrop] path=" << path
-          << " source=" << W << "x" << H
-          << " stride=" << stride
-          << " detected_top=" << topBlack
-          << " detected_bottom_ignored=" << bottomBlackDetected
-          << " candidate_top=" << m_bakedScanCandidateTop
-          << " stable_count=" << m_bakedScanCandidateCount
-          << "/" << kStableScansRequired
-          << " applied_top=" << m_srcCropTop
-          << " applied_bottom=" << m_srcCropBottom
-          << " applied_any=" << appliedAny
-          << " latched=1"
-          << "\n";
-    }
+    // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
+    DebugLogBuffer::instance().info(
+        "frame-canvas",
+        QString("[autocrop] path=%1 source=%2x%3 stride=%4 "
+                "detected_top=%5 detected_bottom_ignored=%6 "
+                "candidate_top=%7 stable_count=%8/%9 "
+                "applied_top=%10 applied_bottom=%11 "
+                "applied_any=%12 latched=1")
+            .arg(path).arg(W).arg(H).arg(stride)
+            .arg(topBlack).arg(bottomBlackDetected)
+            .arg(m_bakedScanCandidateTop)
+            .arg(m_bakedScanCandidateCount)
+            .arg(kStableScansRequired)
+            .arg(m_srcCropTop).arg(m_srcCropBottom)
+            .arg(appliedAny));
     return true;
 #endif
 }

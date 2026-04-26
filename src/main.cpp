@@ -4,6 +4,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
@@ -100,10 +101,16 @@ int main(int argc, char *argv[])
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
 
-    // Debug breadcrumbs — writing to file since /subsystem:windows has no console
+    if (signalExistingInstance())
+        return 0;
+
+    // Boot breadcrumbs — routed through DebugLogBuffer (REPO_HYGIENE P1.2,
+    // 2026-04-26). Prior pattern wrote to a relative `_boot_debug.txt` in CWD
+    // on every launch; that file was a developer-machine debug artifact that
+    // shouldn't appear in user runs. The ring buffer is in-memory by default;
+    // set TANKOBAN_DEBUG_LOG=1 to flush to <AppDataLocation>/debug.log.
     auto dbg = [](const char* msg) {
-        FILE* f = fopen("_boot_debug.txt", "a");
-        if (f) { fprintf(f, "%s\n", msg); fflush(f); fclose(f); }
+        DebugLogBuffer::instance().info("boot", QString::fromLatin1(msg));
     };
     dbg("1-app-created");
 
@@ -119,6 +126,10 @@ int main(int argc, char *argv[])
 
     MainWindow window(&bridge);
     dbg("5-mainwindow-created");
+
+    // Single-instance: claim the local socket so subsequent launches signal us.
+    auto *instanceServer = createInstanceServer(&window);
+    Q_UNUSED(instanceServer);  // window-parented, dies with window
 
 #ifdef Q_OS_WIN
     applyWindowsDarkTitleBar(&window);

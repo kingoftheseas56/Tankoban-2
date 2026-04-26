@@ -31,6 +31,7 @@ find_package(Qt6GuiPrivate QUIET)
 # ── Sources ──────────────────────────────────────────────────────────────────
 set(SOURCES
     src/main.cpp
+    src/core/DebugLogBuffer.cpp
     src/core/JsonStore.cpp
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
@@ -168,6 +169,7 @@ set(SOURCES
 )
 
 set(HEADERS
+    src/core/DebugLogBuffer.h
     src/core/JsonStore.h
     src/core/CoreBridge.h
     src/core/LibraryScanner.h

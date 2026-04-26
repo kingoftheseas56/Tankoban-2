@@ -1,6 +1,6 @@
 # REPO_HYGIENE_FIX_TODO
 
-**Status:** AUTHORED 2026-04-26 — awaiting Hemanth ratification of §5 Decisions to unblock Phase 1 execution. Multi-agent, 7-phase arc covering external-AI-audit findings + ChatGPT-tuned dev-control-bridge proposal + Hemanth's strategic intent ("anyone who downloads our source code would be able to build our entire app without any fuss").
+**Status:** Phase 1 ✅ CLOSED 2026-04-26 (foundation: untracked source backfill + ring buffer + path strip + dead-state cleanup + single-instance wire). Phase 3 (dev-control bridge) up next per Rule-14 sequencing change. 7-phase arc covering external-AI-audit findings + ChatGPT-tuned dev-control-bridge proposal + Hemanth's strategic intent ("anyone who downloads our source code would be able to build our entire app without any fuss").
 
 **Owner:** Agent 0 (authoring + governance + cross-phase coordination). Per-phase execution split across Agent 0, Agent 3, Agent 4, Agent 4B, Agent 5, Agent 7 (Codex). See §6 phase-by-phase ownership.
 
@@ -307,13 +307,14 @@ The one phase whose changes touch external state is P6 (publishes to GitHub Rele
 
 ## §13 Cursor (this row maintained by Agent 0)
 
-- Phase 1: queued for execution post §5 ratification.
-- Phase 2: blocked behind Phase 1.
-- Phase 3: blocked behind Phase 1 (ring buffer dependency).
-- Phase 4: parallel-eligible with Phase 3.
-- Phase 5: parallel-eligible with Phase 2.
-- Phase 6: blocked behind Phase 2 + Phase 5.
-- Phase 7: blocked behind Phase 6.
+- Phase 1: ✅ **CLOSED 2026-04-26 ~11:45am.** All sub-steps shipped. Pre-step `/commit-sweep` (13 commits + marker `bd14e5e`). P1.1 (commits `bad1cea` + `d0bfee2`, 7 untracked source files committed). P1.3 (DebugLogBuffer.{h,cpp}, ~150 LOC ring buffer, BUILD OK). P1.2 (13 hardcoded paths stripped across 8 files + 2 native_sidecar files no-op'd, BUILD OK). P1.5 (m_quitRequested deleted, quitFromTray simplified). P1.4 (single-instance wire in src/main.cpp at two insertion points; double-launch smoke GREEN — second instance exit=0 in 1027ms, only one Tankoban.exe alive post-smoke). One bundled commit covering P1.2 + P1.3 + P1.4 + P1.5 + dashboard refresh. Helper batch files `_p1_configure_oneshot.bat` + `_p1_build_oneshot.bat` deleted at close-out per cookbook.
+- **Phase 3 PROMOTED ahead of Phase 2** (Rule-14 call this wake per Hemanth's "when are we going to get to this?" nudge re: dev-control bridge). Phase 3 only depends on Phase 1's ring buffer; Phase 2's vcpkg is heaviest-single-phase build-pipeline polish that lands later.
+- Phase 2 (vcpkg): moved to land near the end of the arc.
+- Phase 3 (dev-control bridge + tankoctl): unblocks immediately after Phase 1 closes; primary next-major work.
+- Phase 4 (lifecycle bug fixes): parallel-eligible with Phase 3 post-Phase-1.
+- Phase 5 (CI): parallel-eligible.
+- Phase 6 (NSIS installer): blocked behind Phase 2 + Phase 5.
+- Phase 7 (docs): blocked behind Phase 6.
 
 ---
 

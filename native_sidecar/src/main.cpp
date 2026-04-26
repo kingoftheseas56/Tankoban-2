@@ -1651,8 +1651,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Redirect stderr to log file (matches Python sidecar behaviour)
-    std::freopen("sidecar_debug_live.log", "a", stderr);
+    // REPO_HYGIENE P1.2 (2026-04-26): stderr redirect now env-gated rather
+    // than unconditional. Prior behavior wrote sidecar_debug_live.log to
+    // CWD on every launch — debug artifact in user-mode runs. Set
+    // TANKOBAN_SIDECAR_DEBUG=1 to re-enable. Phase 4 will replace this
+    // with a proper bounded log file under Qt-resolved app data path.
+    const char* sidecar_debug_env = std::getenv("TANKOBAN_SIDECAR_DEBUG");
+    if (sidecar_debug_env && std::string(sidecar_debug_env) == "1") {
+        std::freopen("sidecar_debug_live.log", "a", stderr);
+    }
     std::fprintf(stderr, "=== native sidecar 8N.3 starting ===\n");
 
 #ifdef _WIN32
