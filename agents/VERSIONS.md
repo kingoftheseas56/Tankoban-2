@@ -10,6 +10,7 @@ This file is the only governance file every agent reads every session. It is int
 | `agents/GOVERNANCE.md` | gov-v3 | 2026-04-16 | Agent 0 | Add Rule 14 (decision authority — agents pick technical options, Hemanth picks product/UX) + Rule 15 (self-service execution — agents read logs/rebuild sidecar/grep themselves; Hemanth's role is UI smoke + visual confirmation only) |
 | `agents/CONTRACTS.md` | contracts-v1 | 2026-04-16 | Agent 0 | Baseline (no semantic changes; version stamp introduced) |
 | `agents/CONTRACTS.md` | contracts-v2 | 2026-04-16 | Agent 0 | Build Verification Rule amended: sidecar build (`native_sidecar/build.ps1`, `build_qrhi.bat`) is now agent-runnable from bash; main app build stays honor-system (MSVC/Ninja/cl.exe unreliable from bash) |
+| `agents/CONTRACTS.md` | contracts-v3 | 2026-04-25 | Agent 0 | New § Skill Provenance in RTCs: non-trivial RTCs (≥1 src/ file or ≥30 LOC) include `Skills invoked: [/skill1, /skill2, ...]` field between message body and `\| files:`; documentation-only this phase, Phase 4 pre-RTC hook adds nag-only enforcement first 30 days. Bumps GOVERNANCE.md Rule 11 format string in lockstep (no separate gov bump). Per SKILL_DISCIPLINE_FIX_TODO §5 ratification |
 
 ## Bump Authority
 

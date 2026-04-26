@@ -44,14 +44,14 @@ If you are tempted to give Hemanth a terminal command list longer than **one lin
 
 ## 30-Second State Dashboard
 
-**As of:** 2026-04-18 (Agent 0 — **CONGRESS 6 RATIFIED by Hemanth delegation** 2026-04-18 (`Execute` recorded in integration memo §12 by Agent 0 on Hemanth instruction "do it on my behalf"). Integration memo at [agents/audits/congress6_integration_2026-04-18.md](agents/audits/congress6_integration_2026-04-18.md). **P2/P3/P4 GATES OPEN FOR EXECUTION.** Agent 4 may begin P2 StreamPieceWaiter against Agent 4B's shipped `pieceFinished` signal (`022c4eb`), with M1/M2/M3 decisions at entry. Agent 3 may begin P4 sidecar probe escalation. Agent 4 P3 after P2 lands, with M4/M5/M6 at P3 design entry. Congress 5 + 6 both archived; Agent 7 prior stream audits demoted to [_superseded/](agents/audits/_superseded/). 12-method API freeze active through P6 terminal tag.)
+**As of:** 2026-04-26 (Agent 0 — **REPO_HYGIENE_FIX_TODO authored** off external-AI-audit + ChatGPT-tuned dev-bridge proposal + Hemanth's strategic intent. 7-phase arc: P1 commit untracked + strip hardcoded paths + log ring buffer / P2 vcpkg + setup.bat / P3 dev-control bridge + tankoctl / P4 lifecycle fixes / P5 CI / P6 installer + Releases / P7 docs. Awaiting Hemanth ratification of §5 Decisions (9 questions w/ Agent 0 recommendations) → Phase 1 kickoff. Multi-agent execution, parallel-where-possible. **Prior wake (2026-04-25):** SKILL_DISCIPLINE_FIX ✅ ALL 6 PHASES CLOSED, single-wake six-phase arc spanning a machine reboot.** Phase 1 diagnosis (no claude.cmd on PATH) + Phase 2 remedy (Option A install + reboot; observations table now alive, /mem-search functional — see [diagnosis §10](agents/audits/claude_mem_persistence_diagnosis_2026-04-25.md)) + §5 ratification (8 strategic Decisions all answered) + Phase 3 contracts-v3 RTC provenance contract (GOVERNANCE.md Rule 11 + CONTRACTS.md new § + commit-sweeper.md regex + session-brief.sh card + VERSIONS.md) + Phase 4 pre-RTC nag hook on Stop event (.claude/scripts/pre-rtc-checker.sh + .claude/settings.json + telemetry JSONL; verified GREEN against live working tree) + Phase 5 memory-degraded sentinel (.claude/scripts/memory-health.sh; auto-demotes /mem-search rule when claude-mem state unhealthy; verified GREEN — currently DEGRADED status correctly fires banner since no built corpus yet) + Phase 6 tiered skill sheet (CLAUDE.md "Required Skills & Protocols" rewritten as Tier 1 Core Mandatory ~6 + Tier 2 Conditional ~13 + Tier 3 Milestone-only ~2; per-agent shortlists in STATUS.md; memory `feedback_plugin_skills_adopted.md` narrowed; new memory `feedback_skill_discipline_remeasurement.md` documents 30-day re-measurement criterion = telemetry ≥30 OR 2026-05-25). TODO archive-ready. Awaits Hemanth `/commit-sweep` to land the bundle (~14 files of substance + carry-through). Concurrent agent state same-wake: A5 shipped THEME_SYSTEM_FIX P3.1 + Light-mode REMOVAL + library polish (audiobooks header consistency + density slider extension to continue strips); A1 has 2 RTCs queued (Phase 1.1 + SinglePage-removal); A3 in HEMANTH-DRIVEN MODE shipped VIDEO_HUD_TIME_LABELS_FIX; A4 STREAM_SERVER_PIVOT P3 shipped earlier today. NOTE: agent state lines + last-smoke + congress fields below from prior wakes and partially stale; full refresh deferred to a future Agent 0 sweep.)
 
 **Active agents:**
 - **Agent 1** (Comic Reader) — IDLE, polish mode (`COMIC_READER_FIX_TODO.md` Phase 6 closed)
 - **Agent 2** (Book Reader) — IDLE, awaiting Hemanth smoke on 8 batches across `BOOK_READER_FIX_TODO.md` Phases 1+2+3+5
 - **Agent 3** (Video Player) — **HEMANTH-DRIVEN MODE 2026-04-25.** All standing player fix-TODOs + audits archived to `agents/_archive/` per Hemanth directive "future video player work will involve Hemanth full hands on." No agent-initiated player audits / TODO authoring / direction-picking going forward. Agent 3 responds to explicit Hemanth change requests only. Shipped-and-live infrastructure preserved: `scripts/compare-mpv-tanko.ps1`, SidecarProcess IPC tracker, subtitle vertical-position slider, cursor auto-hide on canvas, popover wheel isolation. See memory `feedback_hemanth_driving_player_domain.md`.
 - **Agent 2** (Book Reader) — IDLE, **`EDGE_TTS_FIX_TODO` CLOSED 2026-04-16** at `17a202b` (all 5 phases / ~9 batches squashed; Phase 4 streaming deferred conditionally per TODO Phase 4.3 gate). EdgeTtsClient (Qt direct WSS) + EdgeTtsWorker (QThread) shipped; static voice table + LRU cache + failure taxonomy + HUD collapse all in. Awaiting Hemanth main-app build + Listen-button smoke matrix.
-- **Agent 4** (Stream mode) — ACTIVE, **STREAM_SERVER_PIVOT direction SET 2026-04-24** after 4 wakes of STREAM_HTTP_PREFER hit diminishing returns. Wake-4 libtorrent tuning reverted; LoadingOverlay simplified to indeterminate bar this wake. Standing by for Hemanth ratification of STREAM_SERVER_PIVOT_TODO + Agent 7 P0 prototype greenlight before P1 kickoff.
+- **Agent 4** (Stream mode) — ACTIVE, **`SIDECAR_DISPATCHER_NON_BLOCKING_FIX_TODO.md` AUTHORED 2026-04-25 ~22:20** from prior wake's `project_sidecar_dispatcher_non_blocking_decision.md` memory. 2-phase plan: Phase A worker-thread split for `handle_set_tracks` + dispatch-table audit (~1-2 summons); Phase B `Source` abstraction env-gated (~3-5 summons). Awaiting Hemanth §5 ratification → Phase A.1 kickoff. Plan-mode design saved at `~/.claude/plans/so-create-a-comprehensive-effervescent-otter.md`. **Prior in-flight work:** STREAM_PLAYER_LIFECYCLE_FIXUPS layer-1 parity fixes shipped 2026-04-25 ~21:18 (`setFocus` + `stopPlayback` against MainWindow precedent) — they fix the easy path; this new TODO closes the deeper dispatcher-blocking class.
 - **Agent 4B** (Sources) — IDLE, **STREAM_ENGINE_REBUILD P2/P3 substrate SHIPPED** 2026-04-18 (`pieceFinished(QString, int)` signal at TorrentEngine.cpp:158-164 + `peersWithPiece(hash, pieceIdx) const` method + 12-method API freeze on-record — all preserved under STREAM_SERVER_PIVOT; Congress 6 freeze still applies). Next summon: STREAM_SERVER_PIVOT P4 Tankorent-isolation sign-off (verify Agent 4's pivot didn't touch TorrentEngine). `TANKORENT_HYGIENE_FIX` Phases 1+2+3 SHIPPED + committed.
 - **Agent 5** (Library UX + Theme) — IDLE, **THEME_SYSTEM_FIX_TODO.md authored 2026-04-25** from Agent 5's `qt_theme_feasibility_2026-04-25.md` audit; awaiting Hemanth ratification → P1 kickoff (Theme.h infrastructure + applyTheme + split-key QSettings persistence). 4 phases (~4-6 summons): P1 infra → P2 picker UI → P3 light-mode 55-override port → P4 Win11 Mica + tile hover polish.
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired)
@@ -82,66 +82,56 @@ For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into
 
 ---
 
-## Required Skills & Protocols — non-negotiable every session
+## Required Skills & Protocols — tiered (Core Mandatory + Conditional + Milestone-only)
 
-Every agent honors the listed skill invocations at the listed triggers. `superpowers:using-superpowers` (auto-loaded at SessionStart) enforces the discipline: *"if even 1% chance a skill applies, invoke it."* 21 skills adopted across three plugin namespaces (`superpowers:` / `claude-mem:` / `example-skills:`) + built-in slash commands. Full rationale + NOT-adopted list: memory `feedback_plugin_skills_adopted.md`.
+**Restructured 2026-04-25 per SKILL_DISCIPLINE_FIX_TODO Phase 6 + §5 question 1+7+8 ratification.** The prior framing (21 skills, all "mandatory") produced near-zero observable use of long-tail skills (audit `agents/audits/skill_discipline_audit_2026-04-25.md`: 0 explicit `/mem-search`, `/smart-explore`, `/timeline-report`, `/knowledge-agent` mentions across 176-RTC sample). The new framing splits skills by trigger frequency. `superpowers:using-superpowers` (auto-loaded at SessionStart) preserves the meta-rule: *"if even 1% chance a skill applies, invoke it."* — but the actual mandatory floor is now smaller and more honest.
 
-### Session bootstrap
+Full rationale + NOT-adopted list: memory `feedback_plugin_skills_adopted.md`.
 
-- **Every wake — `/brief`** for live dashboard. SessionStart hook prints a pre-digest; `/brief` is the full state read.
-- **Every wake — `superpowers:using-superpowers`** (auto-loaded) — reminder to invoke other skills aggressively.
+### Tier 1 — Core Mandatory (~6 skills, every relevant wake)
 
-### Before shipping work (pre-RTC)
+These fire often enough that every active agent meets them most wakes. The new RTC contract (contracts-v3) requires these to be named in the `Skills invoked: [...]` field on non-trivial RTCs (≥1 src/ file or ≥30 LOC) — see `agents/CONTRACTS.md` § Skill Provenance in RTCs.
 
-- **`/superpowers:verification-before-completion`** — evidence-before-assertions checklist. Every RTC, every agent.
-- **`/simplify`** — reuse + efficiency review (fixes issues found). When diff has non-trivial edits.
-- **`/build-verify`** — pre-RTC build gate when `src/` or `native_sidecar/src/` touched. Runs `build_check.bat` or sidecar build; tail-captures last 30 lines on failure.
-- **`/superpowers:requesting-code-review`** — self-review primer on your own diff.
-- **`/security-review`** — security audit of pending changes. REQUIRED when touching `src/core/stream/*`, `src/core/torrent/*`, `native_sidecar/src/*`, or anything handling user-facing input / network-exposed surfaces.
+- **`/brief`** — every wake start. SessionStart hook prints a pre-digest; `/brief` is the full state read.
+- **`/superpowers:verification-before-completion`** — every RTC, every agent. Evidence-before-assertions checklist. The single load-bearing skill of the brotherhood.
+- **`/simplify`** — every non-trivial diff. Reuse + efficiency review (fixes issues found).
+- **`/build-verify`** — whenever `src/` or `native_sidecar/src/` touched. Runs `build_check.bat` or sidecar build; tail-captures last 30 lines on failure.
+- **`/superpowers:requesting-code-review`** — every non-trivial RTC. Self-review primer on your own diff.
+- **`/superpowers:systematic-debugging`** — whenever the work is bug-shaped (test failure, unexpected behavior, log-grep, smoke iteration). FIRST, before proposing fixes.
 
-### Debugging & bug hunts
+### Tier 2 — Conditional (~13 skills, fire only on specific triggers)
 
-- **`/superpowers:systematic-debugging`** — FIRST, before proposing fixes. Any bug / test failure / unexpected behavior. Aligns with `feedback_evidence_before_analysis.md`.
+NOT mandatory by default. Fire when the trigger matches; otherwise skip without guilt.
 
-### Creative / design / feature work
-
-- **`/superpowers:brainstorming`** — before scoping a new feature, fix-TODO, or refactor. Also before posting a Congress position block (reduces Agent 0 synthesis rework).
-- **`/superpowers:writing-plans`** — authoring a standalone plan file at `~/.claude/plans/*.md`. Pairs with Rule 18's plan-execute-smoke-verify loop.
-- **`/superpowers:executing-plans`** — executing a plan file. Structured checkpoint discipline.
-
-### Correction handling
-
-- **`/superpowers:receiving-code-review`** — Hemanth corrects your work / Agent 7 audit lands with findings for your domain. Stops performative agreement + blind re-implementation.
-
-### Cross-session memory + codebase structure
-
-- **`/claude-mem:mem-search`** — "Didn't we solve this before?" / "What was the conclusion on X?" / "How did we fix Y?" BEFORE re-deriving or chat_archive dig.
-- **`/claude-mem:smart-explore`** — "What functions live in X?" / "Class structure of Y?" / "Find all callers of Z?" Tree-sitter AST, more token-efficient than Grep for structural questions.
-
-### Parallel / sub-agent dispatch
-
-- **`/superpowers:dispatching-parallel-agents`** — `Agent()` branching into 2+ independent tasks.
-- **`/superpowers:subagent-driven-development`** — executing a fix-TODO phase via Agent() dispatch.
-
-### Narrow-domain-only
-
+- **`/security-review`** — when touching `src/core/stream/*`, `src/core/torrent/*`, `native_sidecar/src/*`, or any user-facing input / network-exposed surfaces.
+- **`/superpowers:brainstorming`** — before scoping a new feature, fix-TODO, refactor, or Congress position block.
+- **`/superpowers:writing-plans`** — when authoring a standalone plan file at `~/.claude/plans/*.md`.
+- **`/superpowers:executing-plans`** — when executing a plan file with structured checkpoint discipline.
+- **`/superpowers:receiving-code-review`** — when Hemanth corrects your work or Agent 7 audit lands with findings for your domain.
+- **`/claude-mem:mem-search`** — "Didn't we solve this before?" / "What was the conclusion on X?" BEFORE chat_archive dig. (Auto-demoted by SessionStart hook when claude-mem memory is degraded — see Phase 5 sentinel.)
+- **`/claude-mem:smart-explore`** — structural code queries: "What functions live in X?" / "Class structure of Y?" / "Find all callers of Z?" Tree-sitter AST, more token-efficient than Grep.
+- **`/superpowers:dispatching-parallel-agents`** — when branching into 2+ independent subagents via `Agent()`.
+- **`/superpowers:subagent-driven-development`** — when executing a fix-TODO phase via `Agent()` dispatch.
 - **`/superpowers:test-driven-development`** — opt-in ONLY for `tankoban_tests` pure-logic primitives (Codex #4 Stage 3a). Smoke-first everywhere else.
-
-### Building new brotherhood tooling
-
 - **`/example-skills:skill-creator` + `/superpowers:writing-skills`** — paired, when creating a new Tankoban skill.
-- **`/example-skills:mcp-builder`** — authoring a new MCP server (e.g. Codex audit item #5 QTest debug bridge).
+- **`/example-skills:mcp-builder`** — when authoring a new MCP server.
 
-### Post-milestone + knowledge capture
+### Tier 3 — Milestone-only (~2 skills, post-big-ship narrative)
 
-- **`/claude-mem:timeline-report`** — post-big-ship narrative.
-- **`/claude-mem:knowledge-agent`** — ripe corpus for focused mini-brain (Agent 0 decides when to commission).
+Fire post-milestone, NOT day-to-day. Demoted from prior "mandatory" framing per §5 question 7 — observed zero usage across the 176-RTC audit sample.
+
+- **`/claude-mem:timeline-report`** — post-big-ship narrative. Agent 0 commissions when a TODO closes or a multi-week arc lands.
+- **`/claude-mem:knowledge-agent`** — ripe corpus for focused mini-brain. Agent 0 commissions when a domain has accumulated enough observations to warrant a knowledge-agent.
 
 ### Agent 0 phase-boundary tools (scoped, not universal)
 
 - **`/commit-sweep`** — end of session with pending RTCs.
 - **`/rotate-chat`** — chat.md > 3000 lines or > 300 KB.
 - **`/repo-health`** — drift audit (tracked junk / large files / stale STATUS).
+
+### Re-measurement schedule
+
+A 30-day re-measurement wake is on `/schedule` for ~2026-05-25 (Agent 0). It re-runs the audit's RTC-skill-mention count against the post-Phase-3+4+6 corpus to verify whether (a) the contracts-v3 provenance contract is being honored, (b) the pre-RTC nag hook is reducing missing-field rate, (c) the trim to ~6 core mandatory has not silently demoted any actually-load-bearing skill, and (d) any of the Tier-2 skills should promote to Tier-1 (or vice versa) based on actual usage data. Promote-to-block decision for the Phase 4 hook also depends on this re-measurement.
 
 ### Agent 8 (Prompt Architect) — conversational persona
 
@@ -164,7 +154,10 @@ Every agent honors the listed skill invocations at the listed triggers. `superpo
 | **`TANKOLIBRARY_FIX_TODO.md`** | Agent 4B | **AUTHORED 2026-04-21**, M1 queued pending Agent 4B summon | Greenfield new Sources sub-app (sibling to Tankorent + Tankoyomi) for book discovery via shadow libraries. v1 = 2 stateless sources (Anna's Archive + LibGen); Z-Library deferred as future stateful-source phase. Two tracks: **Track A Main** (M1 scaffold + AA search-only / M2 AA detail + download / M3 LibGen + dual-source fan-out) + **Track B Polish** (filters + cover fetch+cache + detail cards + IndexerHealth). Based on Agent 7 audit [tankolibrary_2026-04-21.md](agents/audits/tankolibrary_2026-04-21.md) (committed `c8052ee`) + Agent 4B domain validation (5/5 hypotheses confirmed, chat.md 14:?? block). New `src/core/book/` tree parallel to `src/core/manga/`; `BookResult` richer than `MangaResult` (format/language/publisher/year/pages/ISBN/MD5/size). Downloads → existing BooksPage library path; `LibraryScanner` picks up on next scan. Openlib selectors NOT ported (pre-drift vs current AA templates); used for flow decomposition only. Reuses `CloudflareCookieHarvester` for AA stage-(a) CF; new `AaSlowDownloadWaitHandler` for stage-(b) countdown + `no_cloudflare` warning handling. |
 | `BOOK_READER_FIX_TODO.md` | Agent 2 | 1+2+3+5 SHIPPED | awaiting Hemanth smoke; Phase 4 explicitly deferred |
 | `COMIC_READER_FIX_TODO.md` | Agent 1 | Phase 6 closed | polish mode (no new UI/UX); 10 phases ~26 batches scoped |
+| **`REPO_HYGIENE_FIX_TODO.md`** | Agent 0 (author + cross-phase coordinator) + multi-agent (per-phase ownership in §6) | **AUTHORED 2026-04-26**, awaiting Hemanth ratification of §5 Decisions (9 strategic questions w/ Agent 0 recommendations) → Phase 1 kickoff | 7-phase arc covering external-AI-audit findings (19 items, 11 critical) + ChatGPT-tuned dev-control-bridge proposal + Hemanth's strategic intent ("anyone clones + builds without fuss"). **P1** commit untracked source + strip hardcoded `C:/Users/Suprabha/...` paths + bounded log ring buffer + wire dead single-instance code (Agent 0 + Agent 3). **P2** vcpkg dependency migration + CMakePresets + setup.bat (Agent 4 + 4B). **P3** dev-control bridge (`DevControlServer.{h,cpp}` + `tankoctl.cpp` + per-class `devSnapshot()`) for ~10x faster agent smokes via direct field reads vs UIA tree walks; coexists with pywinauto-mcp / windows-mcp (Agent 0 + 3 + 5). **P4** lifecycle bug fixes (audit 4-11: JsonStore race, scanner thread ownership, dropped rescans, sidecar UI-thread blocking, native-sidecar `std::stoi` hardening; multi-agent). **P5** GitHub Actions CI (catches future untracked-files-in-CMakeLists regressions; Agent 7 / Codex). **P6** Windows installer + GitHub Releases pipeline (NSIS, auto-build on tag push; Agent 7). **P7** documentation (README + BUILD + ARCHITECTURE + CONTRIBUTING + LICENSE; Agent 0 + 8). Sequencing: P1 first (foundation); P2+P5 parallel; P3+P4 parallel after P1; P6 after P2+P5; P7 after P6. |
+| **`SKILL_DISCIPLINE_FIX_TODO.md`** | Agent 0 (author + first-time executor) | **✅ ALL 6 PHASES CLOSED 2026-04-25** — single-wake six-phase arc spanning a machine reboot. Archive-ready. | 6-phase fix on Agent 7's [skill_discipline_audit_2026-04-25.md](agents/audits/skill_discipline_audit_2026-04-25.md). Load-bearing finding: claude-mem repair is a prerequisite, not a result, of enforcing `/mem-search`. **Phase 1+2 same-wake arc 2026-04-25 — root cause: no `claude.cmd` on PATH (Hemanth uses Claude Code via VS Code extension not CLI); remedy: Option A `npm install -g @anthropic-ai/claude-code` + machine reboot to clear Windows zombie socket on port 37777; verification GREEN — observations table now has Tankoban hits, `/mem-search` works end-to-end (see [diagnosis §10](agents/audits/claude_mem_persistence_diagnosis_2026-04-25.md)).** §5 Decisions ratified 2026-04-25 ~22:30 wholesale per Hemanth — all 8 questions resolved with Agent 0 picks: split core+conditional / provenance required for non-trivial RTCs / nag-only first 30 days / serial memory-before-governance / accept 1-2s pre-RTC hook latency / Codex held to platform-gap'd standard / demote /timeline-report + /knowledge-agent to milestone-only / trim 21-sheet to ~6 core then re-measure 30 days. Phase 3 (RTC `Skills invoked:` provenance + commit-sweeper + contracts-v3 bump). Phase 4 (pre-RTC checker hook). Phase 5 (memory-degraded sentinel). Phase 6 (skill sheet trim + per-agent shortlists). 30-day re-measurement is `/schedule` candidate post-Phase-4. |
 | **`THEME_SYSTEM_FIX_TODO.md`** | Agent 5 | **AUTHORED 2026-04-25**, awaiting Hemanth ratification → P1 kickoff | 4-phase port of Tankoban-Max two-axis theme system to Qt6 + QSS + QGraphicsEffect + QPropertyAnimation. P1 Theme.h infrastructure (palette + preset registry + applyTheme + split-key QSettings). P2 picker UI (top-right topbar icon cluster: sun/moon for axis A dark↔light, paint-palette for axis B 7-swatch popover). P3 light-mode 55-effect-override port from Tankoban-Max `theme-light.css`. P4 Win11 Mica via DwmSetWindowAttribute (Win-only `#ifdef`) + tile hover-lift drop-shadow + memory `feedback_qt_vs_electron_aesthetic.md` narrowing-in-place to F-bucket compositing only. ~4-6 summons, ~400-700 LOC, no new Qt deps. Source audit: `agents/audits/qt_theme_feasibility_2026-04-25.md` PATH B with 6 RESOLVED ANSWERS locked Hemanth 2026-04-25 ~16:30. |
+| **`SIDECAR_DISPATCHER_NON_BLOCKING_FIX_TODO.md`** | Agent 4 (Stream mode) | **AUTHORED 2026-04-25 ~22:20**, awaiting Hemanth §5 ratification → Phase A.1 kickoff | 2-phase fix on the dispatcher-blocking bug class in `native_sidecar/src/`. Surfaced from prior wake (`ade60215` 2026-04-25 ~21:30) as the deeper root cause behind STREAM_PLAYER_LIFECYCLE_FIXUPS — layer-1 parity fixes (`setFocus`/`stopPlayback`) shipped but couldn't reach the wedge case where `handle_set_tracks` blocks the dispatcher inside `preload_subtitle_packets` on HTTP sources. **Phase A (~1-2 summons): worker-thread split for `handle_set_tracks` (mirrors existing `handle_open` → `open_worker` shape) + cooperative cancellation atomic + dispatch-table audit pass.** **Phase B (~3-5 summons, env-gated): `Source` abstraction (`LocalSource` + `HttpSource`) replacing scattered `is_http` branches; lazy subtitle preload for HTTP.** §5 PROPOSED picks: broad Phase A scope / abort-the-first cancellation / env-gated Phase B / author+start same-wake / Agent 4 owns. Hemanth-driven directive 2026-04-25 ~21:30 "I want no compromises on our app — what is the TRUEST fix?" + memory `project_sidecar_dispatcher_non_blocking_decision.md`. Plan-mode design saved at `~/.claude/plans/so-create-a-comprehensive-effervescent-otter.md`. |
 | **`STREAM_SERVER_PIVOT_TODO.md`** | Agent 0 (authored) + Agent 7 P0 + Agent 4 P1-P5 + Agent 4B P4 sign-off | **AUTHORED 2026-04-24**; awaiting Hemanth ratification → Agent 7 Trigger-B P0 prototype kickoff | 7-phase strategic pivot: stream mode off libtorrent C++ engine onto Stremio's own Rust `stream-server` binary (perpetus/stream-server, pre-built Windows exe) as subprocess + REST adapter. Tankorent stays on libtorrent. Pre-built binary download + SHA-256 pin; 127.0.0.1 scope via Windows Firewall inbound rule (no source patches). Legacy-flag rollback window through P4 (`TANKOBAN_STREAM_BACKEND={legacy,server}` CMake option). Agent 7 Trigger-B P0 is HARD GATE — must prove HOLY_GRAIL=1 on Invincible S01E01 + seek test on pre-built binary before any src/ changes. Hemanth decision 2026-04-24 15:34 after 4 wakes of STREAM_HTTP_PREFER tuning hit diminishing returns. **Supersedes STREAM_ENGINE_REBUILD_TODO scope on P5 deletion.** |
 | `STREAM_ENGINE_REBUILD_TODO.md` | Agent 4 (primary) + 4B (substrate) + 3 (sidecar probe) | **SUPERSEDED-on-P5 by STREAM_SERVER_PIVOT_TODO 2026-04-24** — P0 StreamProgress schema_version=1 ship (`ad2bc65`) preserved; Phases 1-6 moot. Archive to `agents/_archive/todos/` at PIVOT P6. | (Historical) Stream engine rebuild against Stremio Reference (libtorrent-rasterbar via libtorrent-sys FFI — semantic port). Retired in favor of running Stremio's reference source compiled as a subprocess — strengthens Congress 8 discipline rather than breaking it. Agent 4B substrate ship (`pieceFinished` signal + `peersWithPiece` method + 12-method API freeze at `022c4eb`) remains part of TorrentEngine API contract; Congress 6 freeze honored throughout pivot. Agent 7 prior stream audits stay demoted at [agents/audits/_superseded/](agents/audits/_superseded/). |
 | `STREAM_LIFECYCLE_FIX_TODO.md` | Agent 4 | **CLOSED 2026-04-16; SUPERSEDED-on-P6 by STREAM_ENGINE_REBUILD** | All 5 phases shipped (~9 batches); audit findings P0-1/P1-1/P1-2/P1-4/P2-2/P2-3 closed; awaiting behavioral smoke. Work rolls into rebuild's preserved lifecycle semantics (StopReason enum + cancellationToken frozen). |
@@ -212,6 +205,7 @@ Path: see `agents/ONBOARDING.md` — 15-minute orientation track that gets a new
 ## Build Quick Reference
 
 - Main app (Release + asset deploy + run): `build_and_run.bat`
+- Main app + libplacebo for SDR (LIBPLACEBO_SINGLE_RENDERER_FIX P2 opt-in, 2026-04-26): `build_and_run_libplacebo_sdr.bat` — wrapper that sets `TANKOBAN_LIBPLACEBO_SDR=1` then invokes `build_and_run.bat`. SDR files run through the same libplacebo pipeline HDR uses today (Vulkan + ewa_lanczossharp + ICC). Drop the wrapper at P3 once the gate is removed from `native_sidecar/src/main.cpp`.
 - Main app (Debug, MSVC2022 + Qt6.10.2): `build2.bat`
 - Main app (compile-only, agent-safe): `build_check.bat` — `BUILD OK` / `BUILD FAILED exit=<n>` + 30-line cl.exe tail, no exe run, no GUI spawn (Codex #4 Stage 1)
 - Sidecar (MinGW, installs to `resources/ffmpeg_sidecar/`): `powershell -File native_sidecar/build.ps1`

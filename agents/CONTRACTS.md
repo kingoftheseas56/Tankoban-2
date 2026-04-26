@@ -206,3 +206,63 @@ If a build break is discovered post-commit, Agent 0 routes it back to the respon
 - **libtorrent guard:** Wrapped in `if(CMAKE_BUILD_TYPE STREQUAL "Release")` — Debug builds skip it cleanly
 - **Build directory:** `out/` is the canonical build. `out2/` and `out_test/` are for experiments only.
 - **Qt modules in use:** `Qt6::Core`, `Qt6::Widgets`, `Qt6::Gui`, `Qt6::Network`, `Qt6::Svg`, `Qt6::OpenGL`, `Qt6::OpenGLWidgets`, `Qt6::GuiPrivate` (for QRhiWidget)
+
+---
+
+## Skill Provenance in RTCs (added 2026-04-25, contracts-v3)
+
+Per Rule 11 in `agents/GOVERNANCE.md`. Contract owner: Agent 0 (coordination). All agents are consumers + producers.
+
+### What
+
+Every non-trivial RTC line in `agents/chat.md` carries a `Skills invoked: [...]` field listing the slash-skills the authoring agent actually invoked during the work the RTC commits.
+
+### Why
+
+The brotherhood's 21-skill discipline (per `CLAUDE.md` § Required Skills & Protocols) is honor-system today. Empirically (Agent 7 audit `skill_discipline_audit_2026-04-25.md`): only 1 of 116 code-touch RTCs explicitly named `/build-verify`; only 2 of 168 debug-shaped RTCs named `/superpowers:systematic-debugging`. Without provenance, the system cannot distinguish "skill skipped" from "skill ran but unrecorded." This contract adds provenance.
+
+### Format
+
+```
+READY TO COMMIT - [Agent N, Tag]: <message> | Skills invoked: [/skill1, /skill2, /skill3] | files: <paths>
+```
+
+- ASCII delimiters per Rule 16 (` | ` between sections; commas inside the list).
+- Each entry must start with `/` — that's the grep anchor for the Phase 4 hook + commit-sweeper.
+- Order does not matter; deduplicate if a skill fired multiple times.
+- Trivial RTCs (per § Trivial vs Non-trivial below) MAY omit the field entirely — the hook will not nag.
+- Field placement is **between** the message body and `| files:` (which stays terminal so commit-sweeper's regex anchor stays stable).
+
+### Trivial vs Non-trivial
+
+A non-trivial RTC is any RTC matching ANY of:
+- ≥1 file under `src/` or `native_sidecar/src/` in the `files:` list
+- ≥30 lines changed cumulative across all listed files (use `git diff --shortstat` against working tree to evaluate)
+
+Trivial RTCs are everything else: doc-only edits (`*.md`, `agents/*.md`, `*_TODO.md`), governance-only (`agents/GOVERNANCE.md`, `agents/CONTRACTS.md`, `agents/VERSIONS.md`), STATUS pivots, single-line edits, agent-state churn, archive moves.
+
+### Minimum-expected list
+
+For non-trivial RTCs, the field SHOULD include at least:
+- `/superpowers:verification-before-completion` (every non-trivial RTC, no exception — this is the evidence-before-assertion check)
+- `/simplify` (whenever the diff has non-trivial edits; usually the same threshold as "non-trivial RTC")
+- `/build-verify` IF `src/` or `native_sidecar/src/` touched
+- `/security-review` IF stream / torrent / sidecar / network / user-input paths touched
+- `/superpowers:requesting-code-review` (recommended, not required — self-review primer)
+- `/superpowers:systematic-debugging` IF the work was bug-shaped (test failure, unexpected behavior, log-grep, smoke iteration)
+
+Beyond the minimum: list whatever else fired. Honest under-listing is better than dishonest padding.
+
+### Enforcement
+
+- **Phase 3 (this contract):** documentation only. The field is now defined as required for non-trivial RTCs; no automated check yet.
+- **Phase 4** (`SKILL_DISCIPLINE_FIX_TODO` next phase): pre-RTC checker hook reads the pending RTC text on `Stop`/equivalent, scans for the field, and prints a nag warning if missing on a non-trivial RTC. Nag-only first 30 days; promote to block iff compliance plateaus below 80% under telemetry.
+- **commit-sweeper:** parses + preserves the field on sweep. If a non-trivial RTC arrives without the field, sweep continues but the final report counts it under "non-trivial RTCs missing skill provenance" for telemetry visibility.
+
+### Cross-platform note
+
+Codex (Agent 7) does not have the same `Skill` tool surface as Claude Code. Codex authors include skill names in chat.md prose / RTC bodies as plain text — the field is text-only at the contract level, so platform mismatch is invisible to the parser. Codex RTCs are graded under the same threshold; if Codex-authored work touches `src/` ≥1 file, the field is required.
+
+### Versioning
+
+contracts-v3 introduces this section. Future amendments (e.g. promote-to-block, threshold tweaks, additional minimum-expected entries) bump contracts-v4+.

@@ -25,6 +25,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/pre-rtc-checker.sh",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

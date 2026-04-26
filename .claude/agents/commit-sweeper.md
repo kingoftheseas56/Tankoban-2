@@ -33,13 +33,13 @@ Diff the blob against the live chat.md and extract added `READY TO COMMIT` lines
 git diff "$SWEEP_BLOB" -- agents/chat.md
 ```
 
-For each `^+READY TO COMMIT —` line in the output, parse with this regex:
+For each `^+READY TO COMMIT [—-]` line in the output (em-dash OR hyphen — both are valid per ASCII Rule 16 governance), parse with this regex:
 ```
-^READY TO COMMIT — \[([^\]]+)\]:\s+(.+?)\s+\|\s+files:\s+(.+?)\s*$
+^READY TO COMMIT [—-] \[([^\]]+)\]:\s+(.+?)(?:\s+\|\s+Skills invoked:\s+\[([^\]]*)\])?\s+\|\s+files:\s+(.+?)\s*$
 ```
 (strip the leading `+` first.)
 
-Capture three groups per match: **tag** (e.g., `Agent 4B, TANKORENT_HYGIENE Phase 1.1`), **message** (commit subject), **files** (comma-separated path list).
+Capture four groups per match: **tag** (e.g., `Agent 4B, TANKORENT_HYGIENE Phase 1.1`), **message** (commit subject), **skills** (optional, comma-separated `/skill1, /skill2` list — empty/missing on trivial RTCs and on legacy pre-contracts-v3 RTCs), **files** (comma-separated path list).
 
 Preserve **chronological order** as they appear in the diff. Do not re-sort.
 
@@ -53,14 +53,20 @@ For each parsed line, in order:
    git diff --name-only HEAD -- "<file>"
    ```
    If the output does NOT include the file (i.e., file is identical to HEAD, or missing entirely), log a warning and **skip the entire line** — do not partial-commit. Move to the next line. Track skipped lines for the final report.
-3. If all files have non-empty diffs:
+3. **Non-trivial RTC check + skill-provenance audit** (added contracts-v3, post-2026-04-25):
+   - An RTC is **non-trivial** if it matches ANY of:
+     - ≥1 file in the `files:` list under `src/` or `native_sidecar/src/`
+     - ≥30 lines changed cumulative against HEAD across all listed files (use `git diff --shortstat HEAD -- <files...>` and sum `insertions + deletions`)
+   - If the RTC is non-trivial AND the parsed **skills** capture group is empty/missing, increment a `missing_skill_provenance_count` tracker for the final report. **Do NOT skip or block the commit on this** — the contract is nag-only via Phase 4 hook; commit-sweeper's role is post-hoc telemetry only.
+   - If the RTC is non-trivial AND the parsed skills list is non-empty: continue. Optional: log the skill list to the final report's "skill provenance audit" section for visibility.
+4. If all files have non-empty diffs:
    - Stage them: `git add "<file1>" "<file2>" ...` (quoted, never `git add -A`).
    - Commit:
      ```
      git commit -m "[<tag>]: <message>"
      ```
-     using a heredoc if the message is multi-line.
-4. **Halt-and-report** on commit failure (pre-commit hook reject, etc.): stop processing further lines, report the failure with the failing tag + message, leave subsequent lines pending. NEVER `--amend`, NEVER `--no-verify`.
+     using a heredoc if the message is multi-line. The full RTC body (including `Skills invoked:` field) goes in the message — preserve verbatim, do not strip the field.
+5. **Halt-and-report** on commit failure (pre-commit hook reject, etc.): stop processing further lines, report the failure with the failing tag + message, leave subsequent lines pending. NEVER `--amend`, NEVER `--no-verify`.
 
 ### Step 4: Sweep marker commit
 
@@ -85,8 +91,11 @@ Commit sweep complete.
 - Committed: <N>
 - Skipped (stale — file missing or clean): <list with reason>
 - Failed (commit hook rejection): <list with reason>
+- Non-trivial RTCs missing Skills invoked field: <count> [<tag list if >0>]
 - Marker commit: <SHA or "skipped (N=0)">
 ```
+
+The `Non-trivial RTCs missing Skills invoked field` line is telemetry — it does NOT affect commit success/failure. Hemanth + Agent 0 read this number across sweeps to track contracts-v3 compliance for the Phase 4 hook nag→block decision (30-day evaluation window from Phase 4 ship). 0 is the goal; non-zero means agents are forgetting the field on non-trivial work.
 
 ## --dry-run mode
 
