@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 
 namespace ScannerUtils {
@@ -40,29 +41,56 @@ QStringList listImmediateSubdirs(const QString& rootPath)
 
 // ── Recursive file walk with directory pruning ───────────────────────
 
+// REPO_HYGIENE Phase 4 P4.4 (2026-04-26) — depth-bounded + symlink-loop-safe
+// + cooperatively cancellable walker. Recursion stops at kMaxWalkDepth even if
+// the tree continues; canonical paths visited are tracked in `seen` to skip
+// symlinks pointing back into the visited set (prevents the unbounded
+// recursion an adversarial symlink loop would otherwise cause).
 static void walkFilesRecursive(const QString& dirPath,
                                const QStringList& nameFilters,
-                               QStringList& out)
+                               QStringList& out,
+                               const CancellationToken* cancel,
+                               int depth,
+                               QSet<QString>& seen)
 {
+    if (cancel && cancel->isCancelled())
+        return;
+    if (depth > kMaxWalkDepth)
+        return;
+
+    QFileInfo info(dirPath);
+    const QString canonical = info.canonicalFilePath();
+    if (canonical.isEmpty() || seen.contains(canonical))
+        return;
+    seen.insert(canonical);
+
     QDir dir(dirPath);
 
     // Collect matching files at this level
     const auto files = dir.entryInfoList(nameFilters, QDir::Files);
-    for (const auto& f : files)
+    for (const auto& f : files) {
+        if (cancel && cancel->isCancelled())
+            return;
         out.append(f.absoluteFilePath());
+    }
 
     // Recurse into non-ignored subdirectories
     const auto subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const auto& sub : subdirs) {
+        if (cancel && cancel->isCancelled())
+            return;
         if (!isIgnoredDir(sub.fileName()))
-            walkFilesRecursive(sub.absoluteFilePath(), nameFilters, out);
+            walkFilesRecursive(sub.absoluteFilePath(), nameFilters,
+                               out, cancel, depth + 1, seen);
     }
 }
 
-QStringList walkFiles(const QString& dirPath, const QStringList& nameFilters)
+QStringList walkFiles(const QString& dirPath, const QStringList& nameFilters,
+                      const CancellationToken* cancel)
 {
     QStringList result;
-    walkFilesRecursive(dirPath, nameFilters, result);
+    QSet<QString> seen;
+    walkFilesRecursive(dirPath, nameFilters, result, cancel, 0, seen);
     return result;
 }
 
@@ -70,15 +98,21 @@ QStringList walkFiles(const QString& dirPath, const QStringList& nameFilters)
 
 QMap<QString, QStringList> groupByFirstLevelSubdir(
     const QStringList& rootFolders,
-    const QStringList& nameFilters)
+    const QStringList& nameFilters,
+    const CancellationToken* cancel)
 {
     QMap<QString, QStringList> result;
 
     for (const auto& root : rootFolders) {
+        if (cancel && cancel->isCancelled())
+            return result;
+
         // 1. Each immediate subdirectory becomes a group
         const QStringList subdirs = listImmediateSubdirs(root);
         for (const auto& subdir : subdirs) {
-            QStringList files = walkFiles(subdir, nameFilters);
+            if (cancel && cancel->isCancelled())
+                return result;
+            QStringList files = walkFiles(subdir, nameFilters, cancel);
             if (!files.isEmpty())
                 result[subdir] = files;
         }

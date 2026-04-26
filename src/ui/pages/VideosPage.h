@@ -103,6 +103,12 @@ private:
     VideosScanner*   m_scanner = nullptr;
     bool             m_hasScanned = false;
     bool             m_scanning = false;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — set true when triggerScan is
+    // called while a scan is in progress. onScanFinished consumes the flag
+    // and fires another triggerScan(). Pre-fix, the second request was
+    // silently dropped — visible as "I just dropped a new folder in but it
+    // doesn't show up" if the user added folders mid-scan.
+    bool             m_rescanPending = false;
 
     // Scan-time durations per show (showPath → {filePath → durationSec})
     QMap<QString, QMap<QString, double>> m_showDurations;

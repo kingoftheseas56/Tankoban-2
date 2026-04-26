@@ -20,6 +20,7 @@ class SeekSlider;
 
 class CoreBridge;
 class KeyBindings;
+class IPlayerBackend;
 class SidecarProcess;
 class ShmFrameReader;
 class FrameCanvas;
@@ -132,11 +133,14 @@ public:
     void onStreamStallEdgeFromEngine(bool detected);
 
     // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — expose the sidecar handle
-    // so StreamPage can connect to SidecarProcess::nearEndEstimate from
+    // so StreamPage can connect to IPlayerBackend::nearEndEstimate from
     // its onReadyToPlay wiring. No ownership transfer; pointer is managed
     // by VideoPlayer's own lifecycle. May be null during pre-session /
     // post-teardown — callers must null-check.
-    SidecarProcess* sidecarProcess() const { return m_sidecar; }
+    // MPV_BACKEND_INTEGRATION P1 2026-04-26: return type now IPlayerBackend*
+    // (was SidecarProcess*); method name preserved per Decision 4 — Phase 6
+    // cleanup may rename to backend() if SidecarProcess survives.
+    IPlayerBackend* sidecarProcess() const { return m_backend; }
 
     // STREAM_STALL_UX_FIX Batch 2 — per-tick enrichment for the stall
     // overlay text. Pushed from StreamPage alongside setStreamStalled on
@@ -434,7 +438,12 @@ private:
     KeyBindings*    m_keys      = nullptr;
 
     // Components
-    SidecarProcess* m_sidecar   = nullptr;
+    // MPV_BACKEND_INTEGRATION P1 2026-04-26: pointer type changed to abstract
+    // IPlayerBackend (was concrete SidecarProcess*); name renamed m_sidecar
+    // -> m_backend to reflect interface routing. Construction in
+    // VideoPlayer.cpp:180 still constructs SidecarProcess concretely (Phase 5
+    // introduces BackendFactory for per-file/per-show backend selection).
+    IPlayerBackend* m_backend   = nullptr;
     ShmFrameReader* m_reader    = nullptr;
     FrameCanvas*    m_canvas    = nullptr;
 

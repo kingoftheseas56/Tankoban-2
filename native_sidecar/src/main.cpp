@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -33,6 +34,45 @@
 // Diagnostic log — writes AVSYNC_DIAG lines to a file for debugging
 // ---------------------------------------------------------------------------
 static FILE* g_diag_file = nullptr;
+
+// REPO_HYGIENE Phase 4 (2026-04-26) — safe std::stoi wrapper. Replaces 6
+// previously-unguarded std::stoi callsites that would throw std::out_of_range
+// or std::invalid_argument on malformed track IDs (e.g. when the sidecar's
+// probe data is truncated, or a stale set_tracks command sends a non-numeric
+// id). Throwing inside an IPC dispatcher is process-fatal; this helper
+// converts parse failures into a structured PARSE_FAILED error event sent
+// over the protocol so the main app can surface a meaningful error.
+//
+// Returns std::nullopt on parse failure; caller MUST early-return / skip
+// the offending operation. The error event is already emitted from inside
+// the helper — caller does not need to repeat it.
+static std::optional<int> safe_stoi(const std::string& s,
+                                    const char* field_name,
+                                    const std::string& sessionId,
+                                    int seqAck = -1) {
+    if (s.empty()) {
+        write_error("PARSE_FAILED",
+            std::string("empty ") + field_name + " (expected integer)",
+            sessionId, seqAck);
+        return std::nullopt;
+    }
+    try {
+        size_t pos = 0;
+        int v = std::stoi(s, &pos);
+        if (pos != s.size()) {
+            write_error("PARSE_FAILED",
+                std::string(field_name) + " has trailing non-digit characters: '" + s + "'",
+                sessionId, seqAck);
+            return std::nullopt;
+        }
+        return v;
+    } catch (const std::exception& e) {
+        write_error("PARSE_FAILED",
+            std::string(field_name) + " parse failed: '" + s + "' (" + e.what() + ")",
+            sessionId, seqAck);
+        return std::nullopt;
+    }
+}
 
 static void diag_open() {
     if (g_diag_file) return;
@@ -886,7 +926,10 @@ static void open_worker(Command cmd) {
                                 g_pa_stream, g_pa_actual_latency);
         int audio_idx = -1;
         if (!probe->audio.empty()) {
-            audio_idx = std::stoi(probe->audio[0].id);
+            // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+            auto parsed = safe_stoi(probe->audio[0].id, "audio_track_id", sid);
+            if (!parsed) return;
+            audio_idx = *parsed;
         }
         adec->start(path, start_sec, audio_idx);
 
@@ -938,8 +981,12 @@ static void open_worker(Command cmd) {
     // --- 5. Start video decode ---
     std::fprintf(stderr, "AVSYNC_DIAG open_video_start +%.0fms\n", open_ms());
     std::vector<int> sub_indices;
-    for (const auto& t : probe->subs)
-        sub_indices.push_back(std::stoi(t.id));
+    for (const auto& t : probe->subs) {
+        // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+        auto parsed = safe_stoi(t.id, "sub_track_id", sid);
+        if (!parsed) return;
+        sub_indices.push_back(*parsed);
+    }
 
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.1 — decoder_open_start event.
     // Fires immediately before spawning the decoder worker thread. Inside
@@ -966,11 +1013,17 @@ static void open_worker(Command cmd) {
     // a track switch happens). Fix: preload on first open the same way
     // handle_set_tracks does on mid-playback switches.
     if (!probe->subs.empty() && g_sub_renderer && !g_current_path.empty()) {
-        const int sub_idx = std::stoi(probe->subs[0].id);
+        // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+        auto parsed = safe_stoi(probe->subs[0].id, "default_sub_id", sid);
+        if (!parsed) return;
+        const int sub_idx = *parsed;
         vdec->set_active_sub_stream(sub_idx);
         preload_subtitle_packets(g_sub_renderer, g_current_path, sub_idx);
     } else if (!probe->subs.empty()) {
-        vdec->set_active_sub_stream(std::stoi(probe->subs[0].id));
+        // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+        auto parsed = safe_stoi(probe->subs[0].id, "default_sub_id", sid);
+        if (!parsed) return;
+        vdec->set_active_sub_stream(*parsed);
     }
 
     // --- 6. Start time_update emitter ---
@@ -1318,7 +1371,11 @@ static void set_tracks_worker(Command cmd) {
             g_clock.seek_anchor(pos_us);
 
             // Create and start new audio decoder targeting new stream
-            int audio_idx = std::stoi(new_audio_id);
+            // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+            auto parsed_aid = safe_stoi(new_audio_id, "new_audio_id",
+                                        cmd.sessionId, cmd.seq);
+            if (!parsed_aid) return;
+            int audio_idx = *parsed_aid;
             auto on_audio_event = [sid = cmd.sessionId](const std::string& event, const std::string& detail) {
                 if (event == "error") {
                     size_t colon = detail.find(':');
@@ -1343,7 +1400,11 @@ static void set_tracks_worker(Command cmd) {
 
         if (!new_sub_id.empty() && new_sub_id != g_active_sub_id) {
             g_active_sub_id = new_sub_id;
-            sub_stream_idx = std::stoi(new_sub_id);
+            // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
+            auto parsed_sid = safe_stoi(new_sub_id, "new_sub_id",
+                                        cmd.sessionId, cmd.seq);
+            if (!parsed_sid) return;
+            sub_stream_idx = *parsed_sid;
             if (g_sub_renderer) {
                 for (const auto& t : g_probe_subs) {
                     if (t.id == new_sub_id) {
@@ -1661,6 +1722,15 @@ int main(int argc, char* argv[]) {
         std::freopen("sidecar_debug_live.log", "a", stderr);
     }
     std::fprintf(stderr, "=== native sidecar 8N.3 starting ===\n");
+
+    // REPO_HYGIENE Phase 4 P4.6 (2026-04-26) — version handshake. Announce
+    // session-strict-mode support to the main app. Once received, the main
+    // app drops session-scoped events with empty sessionId rather than
+    // tolerating them (legacy-binary tolerance was needed pre-handshake).
+    write_event("version", "", -1, {
+        {"schema", "v2"},
+        {"session_strict", true}
+    });
 
 #ifdef _WIN32
     // Request 1ms timer resolution. Windows defaults to ~15.6ms which destroys

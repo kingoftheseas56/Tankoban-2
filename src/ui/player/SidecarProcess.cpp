@@ -82,6 +82,13 @@ SidecarProcess::SidecarProcess(QObject* parent)
     connect(m_process, &QProcess::errorOccurred, this, &SidecarProcess::onProcessError);
     connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, &SidecarProcess::onProcessFinished);
+    // REPO_HYGIENE Phase 4 P4.5 (2026-04-26) — async start. Replaces the
+    // prior 5-second waitForStarted blocking call in start() with an event-
+    // driven log line. errorOccurred is already wired above and surfaces the
+    // FailedToStart case via emit errorOccurred() in onProcessError.
+    connect(m_process, &QProcess::started, this, [this]() {
+        debugLog("[Sidecar] started OK (async), pid=" + QString::number(m_process->processId()));
+    });
 }
 
 SidecarProcess::~SidecarProcess()
@@ -123,13 +130,17 @@ void SidecarProcess::start()
 
     debugLog("[Sidecar] starting: " + path);
     m_intentionalShutdown = false;
+    // REPO_HYGIENE Phase 4 P4.5 (2026-04-26) — async start. Drop the prior
+    // 5-second waitForStarted UI-thread block. QProcess::started + errorOccurred
+    // signals are wired in the ctor; success logs there, FailedToStart routes
+    // through onProcessError → emit errorOccurred. Commands written via
+    // m_process->write() before the process is fully started queue in QProcess's
+    // internal buffer and flush on started — no command loss.
+    //
+    // Carve-out: ensureTerminated()'s waitForFinished + resetAndRestart()'s
+    // waitForFinished are intentional sync waits (CLOSE_AUDIO_CONTINUES_FIX
+    // 2026-04-26 Hemanth-shipped) and stay sync. P4.5 only fixes start().
     m_process->start(path, QStringList());
-    if (!m_process->waitForStarted(5000)) {
-        debugLog("[Sidecar] FAILED to start");
-        emit errorOccurred("Failed to start ffmpeg_sidecar.exe");
-    } else {
-        debugLog("[Sidecar] started OK, pid=" + QString::number(m_process->processId()));
-    }
 }
 
 bool SidecarProcess::isRunning() const
@@ -488,11 +499,36 @@ void SidecarProcess::processLine(const QByteArray& line)
         QStringLiteral("version"),
         QStringLiteral("process_error"),
     };
+
+    // REPO_HYGIENE Phase 4 P4.6 (2026-04-26) — version handshake. Sidecar
+    // emits `{type:event, name:version, payload:{schema:..,session_strict:..}}`
+    // at startup. Capture the strict flag so the filter below can drop
+    // session-scoped events with empty sessionId (pre-handshake tolerance
+    // is no longer needed once sidecar has declared support).
+    if (name == QLatin1String("version")) {
+        const QJsonObject p = obj["payload"].toObject();
+        if (p.value("session_strict").toBool()) {
+            m_sessionStrict = true;
+            debugLog(QString("[Sidecar] version handshake: schema=%1 session_strict=true")
+                         .arg(p.value("schema").toString()));
+        }
+        // Fall through — let downstream handlers see the version event too.
+    }
+
     if (!kProcessGlobalEvents.contains(name)) {
         const QString eventSid = obj["sessionId"].toString();
         if (!eventSid.isEmpty() && eventSid != m_sessionId) {
             debugLog(QString("[Sidecar] drop stale event: %1 eventSid=%2 currentSid=%3")
                          .arg(name, eventSid, m_sessionId));
+            return;
+        }
+        // REPO_HYGIENE Phase 4 P4.6 (2026-04-26) — strict-mode: once the
+        // sidecar has declared session_strict=true, every session-scoped
+        // event MUST carry a non-empty sessionId. Dropping unsigned events
+        // surfaces protocol regressions immediately rather than allowing
+        // silent state corruption.
+        if (m_sessionStrict && eventSid.isEmpty()) {
+            debugLog(QString("[Sidecar] drop unsigned event in strict mode: %1").arg(name));
             return;
         }
     }

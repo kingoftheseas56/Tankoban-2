@@ -37,11 +37,21 @@ public:
 
 private:
     void writerLoop();
-    void commitToDisk(const QString& filename, const QJsonObject& value);
+    bool commitToDisk(const QString& filename, const QJsonObject& value);
 
     QString m_dataDir;
     mutable QMutex m_mutex;
-    QHash<QString, QJsonObject> m_pending;  // coalescing queue keyed by filename
+
+    // REPO_HYGIENE Phase 4 P4.1 (2026-04-26) — race fix.
+    // m_latestValues is the source of truth for read(): every write() inserts
+    // here AND m_pending; reads consult here. Entries never removed during
+    // process lifetime (bounded by # of unique filenames, small in practice).
+    // Without this, a read() racing with the writer thread between erase-from-
+    // pending and disk-rename would return the OLD on-disk value while the
+    // newest in-memory value was mid-flush.
+    QHash<QString, QJsonObject> m_latestValues;
+
+    QHash<QString, QJsonObject> m_pending;  // disk write-queue keyed by filename
     QWaitCondition m_cond;
     std::atomic<bool> m_shutdown{false};
     std::thread m_writer;

@@ -74,6 +74,14 @@ VideosPage::VideosPage(CoreBridge* bridge, QWidget* parent)
                 }
             }, Qt::QueuedConnection);
 
+    // REPO_HYGIENE Phase 4 P4.2 (2026-04-26) — scanner ownership.
+    // Pre-fix dtor did `m_scanThread->quit(); m_scanThread->wait(); delete m_scanner;`
+    // which races with any scanner method still running on the thread between
+    // quit() and wait()'s actual return. Connect deleteLater on thread::finished
+    // instead so Qt's event loop guarantees the scanner is destroyed AFTER all
+    // pending events have drained.
+    connect(m_scanThread, &QThread::finished, m_scanner, &QObject::deleteLater);
+
     m_scanThread->start();
 
     connect(m_bridge, &CoreBridge::rootFoldersChanged, this, [this](const QString& domain) {
@@ -86,7 +94,8 @@ VideosPage::~VideosPage()
 {
     m_scanThread->quit();
     m_scanThread->wait();
-    delete m_scanner;
+    // REPO_HYGIENE Phase 4 P4.2 (2026-04-26): m_scanner is auto-deleted via
+    // the deleteLater connect on thread::finished above. No manual delete.
 }
 
 void VideosPage::buildUI()
@@ -791,8 +800,13 @@ void VideosPage::activate()
 
 void VideosPage::triggerScan()
 {
-    if (m_scanning) return;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer rather than drop.
+    if (m_scanning) {
+        m_rescanPending = true;
+        return;
+    }
     m_scanning = true;
+    m_rescanPending = false;
 
     QStringList roots = m_bridge->rootFolders("videos");
     if (roots.isEmpty()) {
@@ -893,6 +907,14 @@ void VideosPage::onScanFinished(const QList<ShowInfo>& allShows)
     bool wasRescan = m_hasScanned;
     m_hasScanned = true;
     m_scanning = false;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — fire pending rescan (set if
+    // triggerScan was called mid-scan). Defer via single-shot timer to let
+    // the rest of onScanFinished's UI updates settle before the next scan
+    // queues to the scanner thread.
+    if (m_rescanPending) {
+        m_rescanPending = false;
+        QTimer::singleShot(0, this, [this]() { triggerScan(); });
+    }
 
     if (wasRescan) {
         // Atomic swap: clear old tiles, rebuild from complete list

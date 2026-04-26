@@ -50,6 +50,9 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     connect(m_scanner, &BooksScanner::scanFinished,
             this, &BooksPage::onScanFinished, Qt::QueuedConnection);
 
+    // REPO_HYGIENE Phase 4 P4.2 (2026-04-26) — race-safe scanner ownership.
+    connect(m_scanThread, &QThread::finished, m_scanner, &QObject::deleteLater);
+
     m_scanThread->start();
 
     connect(m_bridge, &CoreBridge::rootFoldersChanged, this, [this](const QString& domain) {
@@ -62,7 +65,8 @@ BooksPage::~BooksPage()
 {
     m_scanThread->quit();
     m_scanThread->wait();
-    delete m_scanner;
+    // REPO_HYGIENE Phase 4 P4.2: m_scanner auto-deleted via deleteLater on
+    // thread::finished. No manual delete.
 }
 
 void BooksPage::buildUI()
@@ -588,8 +592,13 @@ void BooksPage::activate()
 
 void BooksPage::triggerScan()
 {
-    if (m_scanning) return;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer rather than drop.
+    if (m_scanning) {
+        m_rescanPending = true;
+        return;
+    }
     m_scanning = true;
+    m_rescanPending = false;
 
     QStringList bookRoots = m_bridge->rootFolders("books");
     QStringList audiobookRoots = m_bridge->rootFolders("audiobooks");
@@ -749,6 +758,11 @@ void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
     bool wasRescan = m_hasScanned;
     m_hasScanned = true;
     m_scanning = false;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — fire pending rescan.
+    if (m_rescanPending) {
+        m_rescanPending = false;
+        QTimer::singleShot(0, this, [this]() { triggerScan(); });
+    }
 
     if (wasRescan) {
         // Atomic swap: clear old tiles, rebuild from complete list

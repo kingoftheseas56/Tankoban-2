@@ -1,6 +1,7 @@
 #pragma once
 
-#include <QObject>
+#include "ui/player/IPlayerBackend.h"
+
 #include <QProcess>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -15,36 +16,28 @@
 class QNetworkAccessManager;
 class QTemporaryFile;
 
-// Batch 5.2 (Tankostream Phase 5) — subtitle track descriptor exposed to
-// the Qt UI. `index` is the ordinal used by the API surface and menus;
-// `sidecarId` is the string ID the sidecar uses in its set_tracks payload.
-// Populated by caching tracks_changed events from the sidecar.
-struct SubtitleTrackInfo {
-    int     index    = -1;
-    QString sidecarId;
-    QString lang;
-    QString title;
-    QString codec;
-    bool    external = false;
-};
-Q_DECLARE_METATYPE(SubtitleTrackInfo)
+// MPV_BACKEND_INTEGRATION P1 2026-04-26 — SubtitleTrackInfo struct +
+// Q_DECLARE_METATYPE moved to IPlayerBackend.h so the interface header is
+// self-contained. SidecarProcess gets the struct via the include above.
 
-// Manages the ffmpeg_sidecar.exe subprocess.
-// Sends JSON commands on stdin, receives JSON events from stdout.
-class SidecarProcess : public QObject {
+// Manages the ffmpeg_sidecar.exe subprocess. Sends JSON commands on stdin,
+// receives JSON events from stdout. Implements IPlayerBackend (P1 2026-04-26)
+// so VideoPlayer can route through the abstract interface; MpvBackend (P2)
+// implements the same interface against an mpv subprocess.
+class SidecarProcess : public IPlayerBackend {
     Q_OBJECT
 
 public:
     explicit SidecarProcess(QObject* parent = nullptr);
     ~SidecarProcess() override;
 
-    void start();
-    bool isRunning() const;
+    void start() override;
+    bool isRunning() const override;
 
     // Commands — returns seq number
-    int sendOpen(const QString& filePath, double startSeconds = 0.0);
-    int sendPause();
-    int sendResume();
+    int sendOpen(const QString& filePath, double startSeconds = 0.0) override;
+    int sendPause() override;
+    int sendResume() override;
     // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — mpv-style cache-pause
     // semantics. Distinct from sendPause/sendResume (which are user-
     // initiated) so the sidecar can tell "user paused" from "network
@@ -55,39 +48,39 @@ public:
     // Agent 7 audit av_sub_sync_after_stall_2026-04-21.md Option A
     // (mpv `paused-for-cache`) layered on Option C (telemetry → IPC
     // promotion).
-    int sendStallPause();
-    int sendStallResume();
-    int sendSeek(double positionSec);
+    int sendStallPause() override;
+    int sendStallResume() override;
+    int sendSeek(double positionSec) override;
     // PLAYER_STREMIO_PARITY Phase 3 — per-call seek precision override.
     // mode = "fast" or "exact"; empty string defers to sticky default set
     // via sendSetSeekMode (sidecar default is fast).
-    int sendSeek(double positionSec, const QString& modeOverride);
+    int sendSeek(double positionSec, const QString& modeOverride) override;
     // Sticky seek-mode preference. mode = "fast" or "exact". Pre-Phase-3
     // sidecar binaries return NOT_IMPLEMENTED — SidecarProcess swallows it.
-    int sendSetSeekMode(const QString& mode);
-    int sendFrameStep(bool backward = false, double currentPosSec = 0.0);
-    int sendStop();
-    int sendSetVolume(double volume);
-    int sendSetMute(bool muted);
-    int sendSetRate(double rate);
-    int sendSetTracks(const QString& audioId, const QString& subId);
-    int sendSetSubVisibility(bool visible);
-    int sendSetSubDelay(double delayMs);
-    int sendSetAudioDelay(int delayMs);
-    int sendSetSubStyle(int fontSize, int marginV, bool outline);
+    int sendSetSeekMode(const QString& mode) override;
+    int sendFrameStep(bool backward = false, double currentPosSec = 0.0) override;
+    int sendStop() override;
+    int sendSetVolume(double volume) override;
+    int sendSetMute(bool muted) override;
+    int sendSetRate(double rate) override;
+    int sendSetTracks(const QString& audioId, const QString& subId) override;
+    int sendSetSubVisibility(bool visible) override;
+    int sendSetSubDelay(double delayMs) override;
+    int sendSetAudioDelay(int delayMs) override;
+    int sendSetSubStyle(int fontSize, int marginV, bool outline) override;
     // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent baseline
     // (100 = bottom, mpv parity). Persisted globally under QSettings
     // "videoPlayer/subtitlePosition" by VideoPlayer; pushed via this on
     // every slider change + on onSidecarReady for first-file restore.
-    int sendSetSubtitlePosition(int percent);
-    int sendLoadExternalSub(const QString& path);
-    int sendSetFilters(bool deinterlace, int brightness, int contrast, int saturation, bool normalize, bool interpolate = false, const QString& deinterlaceFilter = {});
-    int sendRawFilters(const QString& videoFilter, const QString& audioFilter);
-    int sendSetToneMapping(const QString& algorithm, bool peakDetect);
-    int sendSetZeroCopyActive(bool active);
-    int sendSetCanvasSize(int width, int height);
-    int sendResize(int width, int height);
-    int sendShutdown();
+    int sendSetSubtitlePosition(int percent) override;
+    int sendLoadExternalSub(const QString& path) override;
+    int sendSetFilters(bool deinterlace, int brightness, int contrast, int saturation, bool normalize, bool interpolate = false, const QString& deinterlaceFilter = {}) override;
+    int sendRawFilters(const QString& videoFilter, const QString& audioFilter) override;
+    int sendSetToneMapping(const QString& algorithm, bool peakDetect) override;
+    int sendSetZeroCopyActive(bool active) override;
+    int sendSetCanvasSize(int width, int height) override;
+    int sendResize(int width, int height) override;
+    int sendShutdown() override;
 
     // CLOSE_AUDIO_CONTINUES_FIX 2026-04-26 — wait briefly for the sidecar
     // process to exit gracefully after sendShutdown, then force-kill if it
@@ -101,7 +94,7 @@ public:
     // calling thread). Default 500ms covers the typical clean-exit window
     // (~50-100ms) with comfortable headroom; longer values are appropriate
     // for the destructor-on-app-exit case.
-    void ensureTerminated(int timeoutMs = 500);
+    void ensureTerminated(int timeoutMs = 500) override;
 
     // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence.
     // Sends `stop` and stores onComplete to fire when the sidecar emits
@@ -119,7 +112,7 @@ public:
     // sendShutdown) is unchanged.
     int sendStopWithCallback(std::function<void()> onComplete,
                              std::function<void()> onTimeout = nullptr,
-                             int timeoutMs = 2000);
+                             int timeoutMs = 2000) override;
 
     // Edge-case fallback used by VideoPlayer when sendStopWithCallback
     // times out (sidecar hang or pre-Phase-2 binary without stop_ack).
@@ -128,14 +121,14 @@ public:
     // the caller relies on onSidecarReady to dispatch the pending open.
     // Synchronous / GUI-blocking by design — only fires on the edge-case
     // failure path; a brief GUI stall is better than a stuck file-switch.
-    void resetAndRestart();
+    void resetAndRestart() override;
 
     // VIDEO_PLAYER_FIX Batch 5.1 — loop the currently-open file. On enable,
     // sidecar's video decoder treats AVERROR_EOF as a seek-to-0 instead of
     // emitting the `eof` event, avoiding probe+open overhead on each loop.
     // Unknown to pre-5.1 sidecar binaries — they return NOT_IMPLEMENTED
     // cleanly (SidecarProcess swallows that to debug log post-patch).
-    int sendSetLoopFile(bool enabled);
+    int sendSetLoopFile(bool enabled) override;
 
     // Batch 4.1 (Player Polish Phase 4) — dynamic audio-speed adjustment
     // for A/V drift correction. Sidecar applies via `swr_set_compensation`
@@ -144,7 +137,7 @@ public:
     // VideoPlayer's ticker which polls SyncClock::getClockVelocity() and
     // forwards on change beyond deadband. Unknown to pre-Phase-4 sidecar
     // binaries — they ignore the command cleanly (warning log, no break).
-    int sendSetAudioSpeed(double speed);
+    int sendSetAudioSpeed(double speed) override;
 
     // Batch 4.3 (Player Polish Phase 4) — Dynamic Range Compression
     // toggle. Sidecar runs a feed-forward compressor (threshold -12 dB,
@@ -153,7 +146,7 @@ public:
     // dialogue audible" — compresses explosions/music peaks so dialogue
     // RMS rises relative to full-scale. Toggled by EqualizerPopover's
     // DRC checkbox.
-    int sendSetDrcEnabled(bool enabled);
+    int sendSetDrcEnabled(bool enabled) override;
 
     // Batch 5.2 — subtitle protocol extensions for Tankostream Phase 5.
     // Thin Qt-side wrappers composing over existing sidecar commands
@@ -163,153 +156,40 @@ public:
     // Batch 5.3 subtitle menu dispatches through these wrappers.
 
     // Synchronous cached-state getters (updated on every tracks_changed).
-    QList<SubtitleTrackInfo> listSubtitleTracks() const;
-    int activeSubtitleIndex() const;
+    QList<SubtitleTrackInfo> listSubtitleTracks() const override;
+    int activeSubtitleIndex() const override;
 
     // Index-based track selection. index == -1 disables subtitles.
-    int sendSetSubtitleTrack(int index);
+    int sendSetSubtitleTrack(int index) override;
 
     // Download a subtitle from `url` (async) then load via load_external_sub.
     // `offsetPx` + `delayMs` are applied after load. Emits
     // subtitleUrlLoaded(url, localPath, ok) on completion.
-    int sendSetSubtitleUrl(const QUrl& url, int offsetPx = 0, int delayMs = 0);
+    int sendSetSubtitleUrl(const QUrl& url, int offsetPx = 0, int delayMs = 0) override;
 
     // Style composers — each one recomposes the full set_sub_style payload
     // from cached state (offset + size + outline) because sidecar expects
     // font + margin + outline atomically.
-    int sendSetSubtitlePixelOffset(int pixelOffsetY);
-    int sendSetSubtitleSize(double scale);
+    int sendSetSubtitlePixelOffset(int pixelOffsetY) override;
+    int sendSetSubtitleSize(double scale) override;
 
     // int-ms alias matching Batch 5.2 naming (forwards to sendSetSubDelay).
-    int sendSetSubtitleDelayMs(int ms);
+    int sendSetSubtitleDelayMs(int ms) override;
 
-signals:
-    void ready();
-    void firstFrame(const QJsonObject& payload);   // shmName, width, height, slotCount, slotBytes
-    void timeUpdate(double positionSec, double durationSec);
-    void stateChanged(const QString& state);
-    void tracksChanged(const QJsonArray& audio, const QJsonArray& subtitle,
-                       const QString& activeAudioId, const QString& activeSubId);
-    void endOfFile();
-    void errorOccurred(const QString& message);
-    void subtitleText(const QString& text);
-    void subVisibilityChanged(bool visible);
-    void subDelayChanged(double delayMs);
-    void filtersChanged(const QJsonObject& state);
-    void mediaInfo(const QJsonObject& info);
-    void frameStepped(double positionSec);
-    // Emitted when the sidecar publishes a D3D11 shared texture NT handle.
-    // FrameCanvas opens this in its own D3D11 device for zero-copy display
-    // (eliminating the GPU→CPU→GPU round trip we have via SHM).
-    void d3d11Texture(quintptr ntHandle, int width, int height);
-
-    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — overlay SHM ready.
-    // Sidecar writes rendered subtitle BGRA into this named SHM each frame;
-    // FrameCanvas opens it and uploads per-frame to a locally-owned D3D11
-    // overlay texture. Decoupled from the video texture so there's no
-    // cross-process GPU sync — main-app owns all the draw-side resources.
-    void overlayShm(const QString& shmName, int width, int height);
-
-    // PLAYER_UX_FIX Phase 2.2 — sidecar-observed HTTP-stall state on
-    // stream URL playback. `bufferingStarted` fires when
-    // av_read_frame hits EAGAIN/ETIMEDOUT/EIO; `bufferingEnded` fires
-    // when a subsequent read succeeds (stall cleared). Distinct from
-    // the one-shot state_changed{playing} emitted at first_frame —
-    // these can fire repeatedly across a session. Phase 2.3's
-    // LoadingOverlay consumes both to toggle a "Buffering…" indicator.
-    void bufferingStarted();
-    void bufferingEnded();
-
-    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — structured cache-pause
-    // progress from sidecar (video_decoder.cpp HTTP stall loop emits at
-    // 2 Hz; main.cpp dispatches as `cache_state` JSON). Fires only during
-    // an active stall (between bufferingStarted and bufferingEnded). The
-    // empty-payload `bufferingStarted` / `bufferingEnded` events continue
-    // to mark stall boundaries; this signal surfaces the progress detail
-    // so the LoadingOverlay can render Stremio-style "Buffering — N% (~Xs)".
-    //
-    // Sentinels preserved from sidecar side:
-    //   etaResumeSec == -1.0 → rate too low to estimate ("time unknown")
-    //   cacheDurationSec == -1.0 → container bitrate unavailable
-    // Consumers should render honest-unknown text for sentinel values
-    // instead of computing with them.
-    void cacheStateChanged(qint64 bytesAhead,
-                           qint64 inputRateBps,
-                           double etaResumeSec,
-                           double cacheDurationSec);
-
-    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 1.2 — classified open-pipeline
-    // progress events. Sidecar Phase 1.1 emits 6 session-scoped events
-    // between `state_changed{opening}` and `first_frame` (previously a
-    // silent 10-70s window on slow opens). Qt consumers drive the
-    // LoadingOverlay's setStage (Phase 2.1) for classified user-facing
-    // text + can cross-correlate with StreamEngineStats for diagnostic
-    // cohesion (Batch 1.3, Agent 4's surface — future consumer).
-    // All 6 signals are session-filtered at the parser layer via the
-    // PLAYER_LIFECYCLE_FIX pattern; stale-session events dropped before
-    // emit. Payload data is discarded at the signal boundary (minimal
-    // signatures) because the current consumers (LoadingOverlay stage
-    // transitions) don't need the per-event scalars; stderr log + sidecar
-    // payload JSON retain the t_ms_from_open / analyze_duration_ms /
-    // stream_count / pts_ms / etc. for agent-side diagnostics via the
-    // generic `[Sidecar] RECV: <name>` log line at SidecarProcess.cpp:437.
-    // Rule-14 design pick: first_decoder_receive — NOT first_packet_read
-    // — drives the DecodingFirstFrame stage transition in Phase 2.1
-    // (packet-read success before receive-frame success can stall on
-    // decoder back-pressure; receive is the honest "making progress"
-    // signal).
-    void probeStarted();
-    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — extended from
-    // parameterless to carry `durationIsEstimate` flag from the sidecar
-    // probe payload. VideoPlayer consumes this to decide whether to
-    // prefix the HUD duration label with `~` (tilde) for estimate
-    // transparency. Qt permits slots with fewer parameters than their
-    // signal; any existing zero-arg listeners to probeDone continue to
-    // compile + run unchanged. Default false for non-estimate paths.
-    void probeDone(bool durationIsEstimate);
-    void decoderOpenStarted();
-    void decoderOpenDone();
-    void firstPacketRead();
-    void firstDecoderReceive();
-
-    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — sidecar fires once per
-    // session when the consumer read position crosses 90 s of bytes before
-    // HTTP EOF. StreamPage wires this as a parallel nearEndCrossed trigger
-    // alongside the existing pct/remaining duration check. Gives AUTO_NEXT
-    // a ground-truth near-end signal on bitrate-estimate sources where the
-    // duration-based check is structurally unreachable. Parameterless —
-    // event presence IS the signal.
-    void nearEndEstimate();
-
-    void processClosed();
-
-    // Batch 6.1 (Player Polish Phase 6) — fires when QProcess::finished
-    // arrives without a prior sendShutdown(). Distinguishes crash exit
-    // (or non-zero return without shutdown) from normal clean shutdown.
-    // VideoPlayer listens and drives respawn + reopen at last PTS with
-    // max 3 retries + exponential backoff.
-    void processCrashed(int exitCode, QProcess::ExitStatus status);
-
-    // Batch 6.3 (Player Polish Phase 6) — sidecar caught a non-fatal
-    // avcodec error (corrupt packet, lost frame, etc.) and advanced past
-    // it rather than aborting. `code` is the sidecar's category tag
-    // ("DECODE_SKIP_PACKET", "DECODE_SKIP_FRAME"); `message` is the
-    // human-readable `av_strerror` output; `recoverable` is always true
-    // for decode_error (the fatal path still uses `errorOccurred`).
-    // VideoPlayer shows a brief toast; playback keeps going.
-    void decodeError(const QString& code, const QString& message, bool recoverable);
-
-    // Batch 5.2 — subtitle protocol signals.
-    // subtitleTracksListed: pre-parsed mirror of tracksChanged's subtitle
-    // array, populated from the cache. Activates on every tracks_changed.
-    // subtitleTrackApplied: index successfully selected via sendSetSubtitleTrack.
-    // subtitleUrlLoaded: URL download path — ok indicates local file ready.
-    // subtitleOffsetChanged / subtitleSizeChanged: ack echoes for live UI.
-    void subtitleTracksListed(const QList<SubtitleTrackInfo>& tracks, int activeIndex);
-    void subtitleTrackApplied(int index);
-    void subtitleUrlLoaded(const QUrl& url, const QString& localPath, bool ok);
-    void subtitleOffsetChanged(int pixelOffsetY);
-    void subtitleSizeChanged(double scale);
+    // MPV_BACKEND_INTEGRATION P1 2026-04-26 — signals: block removed.
+    // All 33 signals (ready/firstFrame/timeUpdate/stateChanged/tracksChanged/
+    // endOfFile/errorOccurred/subtitleText/subVisibilityChanged/subDelayChanged/
+    // filtersChanged/mediaInfo/frameStepped/d3d11Texture/overlayShm/
+    // bufferingStarted/bufferingEnded/cacheStateChanged/probeStarted/probeDone/
+    // decoderOpenStarted/decoderOpenDone/firstPacketRead/firstDecoderReceive/
+    // nearEndEstimate/processClosed/processCrashed/decodeError/
+    // subtitleTracksListed/subtitleTrackApplied/subtitleUrlLoaded/
+    // subtitleOffsetChanged/subtitleSizeChanged) are declared in
+    // IPlayerBackend.h's signals: block. SidecarProcess inherits them
+    // automatically and emits via the standard `emit signalName()` syntax.
+    // moc generates per-class implementations for both base + derived;
+    // connect() through IPlayerBackend* resolves to the right emitter via
+    // virtual signal dispatch (standard Qt pattern).
 
 private slots:
     void onReadyRead();
@@ -346,6 +226,12 @@ private:
     QString   m_sessionId;
     std::atomic<int> m_seq{0};
     QByteArray m_readBuffer;
+
+    // REPO_HYGIENE Phase 4 P4.6 (2026-04-26) — session-strict mode. Set true
+    // when sidecar emits its `version` event with `session_strict: true` at
+    // startup. Once true, processLine drops session-scoped events with
+    // empty sessionId (rather than the pre-handshake legacy tolerance).
+    bool m_sessionStrict = false;
 
     // Batch 6.1 — true after sendShutdown(), false after start(). Used by
     // onProcessFinished to decide whether a finished event is a normal

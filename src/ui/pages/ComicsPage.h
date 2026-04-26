@@ -69,4 +69,6 @@ private:
     LibraryScanner*  m_scanner = nullptr;
     bool             m_hasScanned = false;
     bool             m_scanning = false;
+    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer-not-drop rescan flag.
+    bool             m_rescanPending = false;
 };

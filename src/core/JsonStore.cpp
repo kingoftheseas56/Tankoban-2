@@ -1,5 +1,7 @@
 #include "JsonStore.h"
 
+#include "DebugLogBuffer.h"
+
 #include <QFile>
 #include <QSaveFile>
 #include <QDir>
@@ -23,13 +25,16 @@ JsonStore::~JsonStore()
 
 QJsonObject JsonStore::read(const QString& filename, const QJsonObject& fallback) const
 {
-    // STREAM_STUTTER_JSONSTORE_FIX: check pending-writes queue first so an
-    // in-process write() followed immediately by read() returns the latest
-    // value even when the disk commit is still queued on the writer thread.
+    // REPO_HYGIENE Phase 4 P4.1 (2026-04-26) — race fix. Read consults the
+    // latest-values map, which always holds the most-recent in-process write
+    // for every filename. The prior implementation read from m_pending, which
+    // the writer thread erased BEFORE commitToDisk fsync+rename, so a read
+    // racing the disk commit could return the previous on-disk value instead
+    // of the latest in-memory one.
     {
         QMutexLocker lock(&m_mutex);
-        auto it = m_pending.find(filename);
-        if (it != m_pending.end())
+        auto it = m_latestValues.find(filename);
+        if (it != m_latestValues.end())
             return it.value();
     }
 
@@ -49,8 +54,10 @@ QJsonObject JsonStore::read(const QString& filename, const QJsonObject& fallback
 void JsonStore::write(const QString& filename, const QJsonObject& value)
 {
     QMutexLocker lock(&m_mutex);
-    // QHash::insert replaces existing value for the same key — coalescing
-    // guarantees only the LATEST value per file ever reaches disk.
+    // m_latestValues is the read-truth; insert always (overwrites prior).
+    m_latestValues.insert(filename, value);
+    // m_pending is the disk write-queue; coalescing newer-replaces-older
+    // means only the latest queued value per file ever reaches disk.
     m_pending.insert(filename, value);
     m_cond.wakeOne();
 }
@@ -68,7 +75,12 @@ void JsonStore::writerLoop()
         QJsonObject value = it.value();
         m_pending.erase(it);
         m_mutex.unlock();
-        commitToDisk(filename, value);  // fsync + atomic rename off main thread
+        const bool ok = commitToDisk(filename, value);  // off main thread
+        if (!ok) {
+            DebugLogBuffer::instance().error(
+                "jsonstore",
+                QStringLiteral("commitToDisk failed for %1").arg(filename));
+        }
         m_mutex.lock();
     }
     // Shutdown drain: flush any writes still queued before the thread exits.
@@ -78,19 +90,26 @@ void JsonStore::writerLoop()
         QJsonObject value = it.value();
         m_pending.erase(it);
         m_mutex.unlock();
-        commitToDisk(filename, value);
+        const bool ok = commitToDisk(filename, value);
+        if (!ok) {
+            DebugLogBuffer::instance().error(
+                "jsonstore",
+                QStringLiteral("shutdown-drain commitToDisk failed for %1")
+                    .arg(filename));
+        }
         m_mutex.lock();
     }
     m_mutex.unlock();
 }
 
-void JsonStore::commitToDisk(const QString& filename, const QJsonObject& value)
+bool JsonStore::commitToDisk(const QString& filename, const QJsonObject& value)
 {
     QString path = m_dataDir + "/" + filename;
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
-        return;
+        return false;
     QJsonDocument doc(value);
-    file.write(doc.toJson(QJsonDocument::Indented));
-    file.commit();
+    if (file.write(doc.toJson(QJsonDocument::Indented)) < 0)
+        return false;
+    return file.commit();
 }
