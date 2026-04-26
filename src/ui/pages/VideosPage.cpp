@@ -165,7 +165,7 @@ void VideosPage::buildUI()
     continueLayout->setContentsMargins(0, 0, 0, 0);
     continueLayout->setSpacing(4);
     auto* continueLabel = new QLabel("CONTINUE WATCHING", m_continueSection);
-    continueLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    continueLabel->setObjectName("LibraryHeading");
     continueLayout->addWidget(continueLabel);
     m_continueStrip = new TileStrip(m_continueSection);
     m_continueStrip->setMode("continue");
@@ -180,7 +180,7 @@ void VideosPage::buildUI()
     showsLayout->setSpacing(8);
 
     auto* showsLabel = new QLabel("SHOWS", showsRow);
-    showsLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    showsLabel->setObjectName("LibraryHeading");
     showsLayout->addWidget(showsLabel);
     showsLayout->addStretch();
 
@@ -218,7 +218,7 @@ void VideosPage::buildUI()
     showsLayout->addWidget(m_sortCombo);
 
     auto* densitySmall = new QLabel("A", showsRow);
-    densitySmall->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 10px;");
+    densitySmall->setObjectName("DensityLabelSmall");
     showsLayout->addWidget(densitySmall);
 
     m_densitySlider = new QSlider(Qt::Horizontal, showsRow);
@@ -230,11 +230,12 @@ void VideosPage::buildUI()
     connect(m_densitySlider, &QSlider::valueChanged, this, [this](int val) {
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
         m_tileStrip->setDensity(val);
+        if (m_continueStrip) m_continueStrip->setDensity(val);
     });
     showsLayout->addWidget(m_densitySlider);
 
     auto* densityLarge = new QLabel("A", showsRow);
-    densityLarge->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 16px;");
+    densityLarge->setObjectName("DensityLabelLarge");
     showsLayout->addWidget(densityLarge);
 
     // View toggle button (grid/list)
@@ -261,6 +262,7 @@ void VideosPage::buildUI()
     m_tileStrip = new TileStrip(gridPage);
     m_tileStrip->hide();
     m_tileStrip->setDensity(savedDensity);
+    if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
     gridLayout->addWidget(m_tileStrip);
 
     // List view (hidden by default — V-key toggles)

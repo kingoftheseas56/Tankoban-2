@@ -66,9 +66,12 @@ void TileStrip::setMode(const QString& mode)
 
 void TileStrip::setDensity(int level)
 {
-    if (m_mode == "continue")
-        return;
-
+    // 2026-04-25 — gate dropped per Hemanth: the density slider is meant
+    // to be a cohesive control across all strips on the page, including
+    // the "continue" mode strip (which previously rendered at a fixed
+    // size). All TileStrip instances on a page now respond to setDensity
+    // uniformly. If continue strips need a "hero" larger ratio later,
+    // that's a follow-up — for now Hemanth wants the simple shape.
     m_density = qBound(0, level, 2);
     static const int widths[]  = { 150, 200, 240 };
     static const int gaps[]    = { 10,  16,  20  };

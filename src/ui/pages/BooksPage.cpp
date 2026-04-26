@@ -132,7 +132,7 @@ void BooksPage::buildUI()
     continueLayout->setContentsMargins(0, 0, 0, 0);
     continueLayout->setSpacing(4);
     auto* continueLabel = new QLabel("CONTINUE READING", m_continueSection);
-    continueLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    continueLabel->setObjectName("LibraryHeading");
     continueLayout->addWidget(continueLabel);
     m_continueStrip = new TileStrip(m_continueSection);
     m_continueStrip->setMode("continue");
@@ -231,7 +231,7 @@ void BooksPage::buildUI()
     booksRowLayout->setSpacing(8);
 
     auto* booksLabel = new QLabel("BOOKS", booksRow);
-    booksLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    booksLabel->setObjectName("LibraryHeading");
     booksRowLayout->addWidget(booksLabel);
     booksRowLayout->addStretch();
 
@@ -269,7 +269,7 @@ void BooksPage::buildUI()
     booksRowLayout->addWidget(m_sortCombo);
 
     auto* densitySmall = new QLabel("A", booksRow);
-    densitySmall->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 10px;");
+    densitySmall->setObjectName("DensityLabelSmall");
     booksRowLayout->addWidget(densitySmall);
 
     m_densitySlider = new QSlider(Qt::Horizontal, booksRow);
@@ -282,11 +282,12 @@ void BooksPage::buildUI()
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
         m_bookStrip->setDensity(val);
         m_audiobookStrip->setDensity(val);
+        if (m_continueStrip) m_continueStrip->setDensity(val);
     });
     booksRowLayout->addWidget(m_densitySlider);
 
     auto* densityLarge = new QLabel("A", booksRow);
-    densityLarge->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 16px;");
+    densityLarge->setObjectName("DensityLabelLarge");
     booksRowLayout->addWidget(densityLarge);
 
     m_viewToggle = new QPushButton(booksRow);
@@ -483,15 +484,18 @@ void BooksPage::buildUI()
     m_audiobookSection = new QWidget(content);
     auto* abLayout = new QVBoxLayout(m_audiobookSection);
     abLayout->setContentsMargins(0, 0, 0, 0);
-    abLayout->setSpacing(0);
+    // 24px matches the parent `layout`'s spacing — gives AUDIOBOOKS-header→tile
+    // gap parity with BOOKS-header-row→tile gap. (Continue Reading uses 4px
+    // intentionally for its denser top-of-page rhythm; Audiobooks sits
+    // mid-scroll and matches the BOOKS section convention.)
+    abLayout->setSpacing(24);
 
-    auto* abHeader = new QWidget(m_audiobookSection);
-    auto* abHeaderLayout = new QVBoxLayout(abHeader);
-    abHeaderLayout->setContentsMargins(24, 20, 24, 12);
-    m_audiobookTitle = new QLabel("Audiobooks", abHeader);
-    m_audiobookTitle->setObjectName("SectionTitle");
-    abHeaderLayout->addWidget(m_audiobookTitle);
-    abLayout->addWidget(abHeader);
+    // Header matches the "CONTINUE READING" / "BOOKS" pattern at :130-139 +
+    // :233-235 — same QLabel#LibraryHeading styling, same direct-add (no
+    // wrapper widget for extra padding).
+    m_audiobookTitle = new QLabel("AUDIOBOOKS", m_audiobookSection);
+    m_audiobookTitle->setObjectName("LibraryHeading");
+    abLayout->addWidget(m_audiobookTitle);
 
     m_audiobookStatus = new QLabel("No audiobooks found", m_audiobookSection);
     m_audiobookStatus->setObjectName("TileSubtitle");
@@ -504,9 +508,12 @@ void BooksPage::buildUI()
     m_audiobookStrip->setMinimumHeight(340);
     abLayout->addWidget(m_audiobookStrip);
 
-    // Apply saved density now that both strips exist
+    // Apply saved density now that all strips exist (book + audiobook +
+    // continue). Continue strip density gate was dropped in TileStrip.cpp
+    // 2026-04-25 so it now responds to setDensity uniformly.
     m_bookStrip->setDensity(savedDensity);
     m_audiobookStrip->setDensity(savedDensity);
+    if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
 
     m_audiobookSection->hide();
     layout->addWidget(m_audiobookSection);

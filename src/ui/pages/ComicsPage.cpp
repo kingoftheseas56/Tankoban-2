@@ -145,7 +145,7 @@ void ComicsPage::buildUI()
     continueLayout->setContentsMargins(0, 0, 0, 0);
     continueLayout->setSpacing(4);
     auto* continueLabel = new QLabel("CONTINUE READING", m_continueSection);
-    continueLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    continueLabel->setObjectName("LibraryHeading");
     continueLayout->addWidget(continueLabel);
     m_continueStrip = new TileStrip(m_continueSection);
     m_continueStrip->setMode("continue");
@@ -256,7 +256,7 @@ void ComicsPage::buildUI()
     seriesLayout->setSpacing(8);
 
     auto* seriesLabel = new QLabel("SERIES", seriesRow);
-    seriesLabel->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px; font-weight: bold; letter-spacing: 1px;");
+    seriesLabel->setObjectName("LibraryHeading");
     seriesLayout->addWidget(seriesLabel);
     seriesLayout->addStretch();
 
@@ -294,7 +294,7 @@ void ComicsPage::buildUI()
     seriesLayout->addWidget(m_sortCombo);
 
     auto* densitySmall = new QLabel("A", seriesRow);
-    densitySmall->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 10px;");
+    densitySmall->setObjectName("DensityLabelSmall");
     seriesLayout->addWidget(densitySmall);
 
     m_densitySlider = new QSlider(Qt::Horizontal, seriesRow);
@@ -306,11 +306,12 @@ void ComicsPage::buildUI()
     connect(m_densitySlider, &QSlider::valueChanged, this, [this](int val) {
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
         m_tileStrip->setDensity(val);
+        if (m_continueStrip) m_continueStrip->setDensity(val);
     });
     seriesLayout->addWidget(m_densitySlider);
 
     auto* densityLarge = new QLabel("A", seriesRow);
-    densityLarge->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 16px;");
+    densityLarge->setObjectName("DensityLabelLarge");
     seriesLayout->addWidget(densityLarge);
 
     // View toggle button (grid/list)
@@ -319,10 +320,8 @@ void ComicsPage::buildUI()
     m_viewToggle->setFixedSize(28, 28);
     m_viewToggle->setText("\u2630"); // hamburger icon
     m_viewToggle->setCursor(Qt::PointingHandCursor);
-    m_viewToggle->setStyleSheet(
-        "#ViewToggle { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); "
-        "border-radius: 4px; color: rgba(255,255,255,0.5); font-size: 14px; }"
-        "#ViewToggle:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7); }");
+    // Styling lives in Theme.cpp QSS template under QPushButton#ViewToggle —
+    // theme-bound (Light/Dark parity).
     connect(m_viewToggle, &QPushButton::clicked, this, &ComicsPage::toggleViewMode);
     seriesLayout->addWidget(m_viewToggle);
 
@@ -337,6 +336,7 @@ void ComicsPage::buildUI()
     m_tileStrip = new TileStrip(gridPage);
     m_tileStrip->hide();
     m_tileStrip->setDensity(savedDensity);
+    if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
     gridLayout->addWidget(m_tileStrip);
 
     // List view (hidden by default — V-key toggles)
