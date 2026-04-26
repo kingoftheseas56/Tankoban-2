@@ -79,7 +79,9 @@ private:
 };
 
 enum class FitMode { FitPage, FitWidth, FitHeight };
-enum class ReaderMode { SinglePage, DoublePage, ScrollStrip };
+// SinglePage removed 2026-04-25 per Hemanth — never used in practice.
+// Persistence migration in applySeriesSettings handles legacy int range 0..2 → new 0..1.
+enum class ReaderMode { DoublePage, ScrollStrip };
 
 struct TwoPagePair {
     int rightIndex = -1;
@@ -284,7 +286,7 @@ private:
     QString     m_seriesName;
 
     // Modes
-    ReaderMode  m_readerMode = ReaderMode::SinglePage;
+    ReaderMode  m_readerMode = ReaderMode::DoublePage;
     FitMode     m_fitMode = FitMode::FitPage;
 
     // Canonical pairing
@@ -391,7 +393,7 @@ private:
     QTimer       m_cursorTimer;
     QTimer       m_hudAutoHideTimer;     // auto-hide HUD after 3s inactivity
     QTimer       m_clickTimer;           // center-zone single/double click debounce
-    bool         m_hudPinned = false;            // true in SinglePage/DoublePage — HUD never auto-hides
+    bool         m_hudPinned = false;            // true in DoublePage — HUD never auto-hides
     bool         m_hudExplicitlyHidden = false; // user pressed H or clicked center to hide
     bool         m_edgeCooldown = false; // 600ms cooldown for edge proximity
 

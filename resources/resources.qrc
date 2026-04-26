@@ -21,11 +21,12 @@
         <file>icons/comic_reader/triangle-right.svg</file>
         <file>icons/comic_reader/skip-back.svg</file>
         <file>icons/comic_reader/skip-forward.svg</file>
-        <file>icons/comic_reader/mode-single.svg</file>
         <file>icons/comic_reader/mode-double.svg</file>
         <file>icons/comic_reader/mode-scroll.svg</file>
         <file>icons/comic_reader/gear.svg</file>
         <file>icons/comic_reader/list.svg</file>
+        <file>icons/sun.svg</file>
+        <file>icons/moon.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>
