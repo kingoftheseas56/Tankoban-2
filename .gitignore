@@ -21,6 +21,12 @@ CMakeUserPresets.json
 third_party/
 models/
 
+# REPO_HYGIENE Phase 2 (2026-04-26) — vcpkg manifest-mode install drops
+# thousands of header files into a per-project dir at repo root. The
+# manifest itself (vcpkg.json) IS tracked; the materialized install tree
+# is not.
+vcpkg_installed/
+
 # Agent scratch: build scripts, logs, debug dumps — convention is underscore prefix
 _*.bat
 _*.txt
