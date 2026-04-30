@@ -34,8 +34,9 @@ void NyaaIndexer::fetchPage(const QString& query, const QString& categoryId, int
     q.addQueryItem("f", "0");
     q.addQueryItem("c", cat);
     q.addQueryItem("q", query);
-    q.addQueryItem("s", "size");
-    q.addQueryItem("o", "desc");
+    // No s/o params — Nyaa defaults to id desc (newest first), matching the
+    // browser's default landing view. Tankorent's click-to-sort handles
+    // subsequent reordering client-side.
     if (page > 1)
         q.addQueryItem("p", QString::number(page));
     url.setQuery(q);
