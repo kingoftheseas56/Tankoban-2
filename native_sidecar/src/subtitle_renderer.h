@@ -15,6 +15,17 @@ struct AVCodecContext;
 
 class SubtitleRenderer {
 public:
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — subtitle vertical position
+    // policy. Standard (default per Q1 ratification) hands the position
+    // slider to libass via ass_set_line_position, respecting authored
+    // ASS script MarginV / \pos events / multi-event layouts. Force
+    // preserves the 2026-04-25 Y-offset hack (Hemanth's "still too high"
+    // override): renders at libass=0 then translates the entire ASS_Image
+    // list down by the slider percent. Force is the opt-in mode for files
+    // whose authored MarginV is too aggressive for Hemanth's preferred
+    // bottom-edge placement (e.g. Saiki Ep 11 plane-crash dialog at 100%).
+    enum class PositionMode { Standard, Force };
+
     // PLAYER_PERF_FIX Phase 3 Batch 3.A — overlay bitmap shape.
     // Infrastructure added as dead code (no caller in the hot path) so the
     // upcoming atomic cutover batch (3.B = former 3.3+3.4) only needs to
@@ -110,14 +121,31 @@ public:
     // upward Y-shift to dst_y in blend_pgs_rects clamped to video_rect.
     void set_sub_position_pct(int pct);
 
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — set the position policy.
+    // Standard (default per Q1 ratification) preserves authored ASS layout;
+    // Force overrides per-event placement with the user-position slider.
+    // Atomic store; takes effect on next render frame.
+    void set_position_mode(PositionMode mode);
+
     void clear_active_subs();
     void clear_track();
+
+    // MPV_FFMPEG_PARITY Phase 2.E (2026-04-30) — feed an embedded font from
+    // the container into libass so authored ASS styles resolving to that
+    // font render correctly instead of falling back to Arial. Called once
+    // per AVMEDIA_TYPE_ATTACHMENT stream during open_worker, BEFORE
+    // load_embedded_track parses the track (libass binds font references
+    // at track-load time for the Default style; adding fonts after gives
+    // "no font" → Arial fallback). Safe to call zero times for files
+    // without attachments. Wraps libass's ass_add_font.
+    void add_font(const std::string& filename, const uint8_t* data, size_t size);
 
     // Override subtitle style (font size, vertical margin, outline width).
     void set_style_override(int font_size, int margin_v, bool outline);
 
 private:
-    void blend_image_list(ASS_Image* img, uint8_t* frame, int stride, int height);
+    void blend_image_list(ASS_Image* img, uint8_t* frame, int stride, int height,
+                          int y_offset = 0);
     void render_thread_func();
 
     // --- PGS bitmap subtitle support ---
@@ -157,6 +185,10 @@ private:
     // for libass (ass_set_line_position) and in blend_pgs_rects for PGS
     // (Y-offset on dst_y). See set_sub_position_pct.
     std::atomic<int>    sub_position_pct_{100};
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard default per Q1
+    // ratification. Read each render under mutex_ in the libass + PGS
+    // paths to gate Y-shift vs ass_set_line_position behavior.
+    std::atomic<PositionMode> position_mode_{PositionMode::Standard};
     // User subtitle-style overrides. font_scale_ is applied via libass's
     // renderer-level ass_set_font_scale — safe mid-playback unlike the
     // ass_set_selective_style_override_* APIs which caused a silent-stop

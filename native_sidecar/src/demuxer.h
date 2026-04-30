@@ -34,6 +34,18 @@ struct Chapter {
     std::string title;
 };
 
+// MPV_FFMPEG_PARITY Phase 2.E (2026-04-30) — embedded font attachment
+// extracted from AVMEDIA_TYPE_ATTACHMENT streams. Required for anime ASS
+// authored-font rendering: without these, libass falls back to Arial
+// when the ASS Default style names a font the host system doesn't have,
+// even when the MKV ships its own copy. main.cpp open_worker iterates
+// these post-probe and feeds each into SubtitleRenderer::add_font BEFORE
+// load_embedded_track parses the track.
+struct AttachmentFont {
+    std::string filename;        // e.g. "Roboto-Medium.ttf" from AVStream metadata "filename" tag
+    std::vector<uint8_t> data;   // raw font bytes from AVStream::codecpar->extradata
+};
+
 struct ProbeResult {
     int         width        = 0;
     int         height       = 0;
@@ -48,6 +60,7 @@ struct ProbeResult {
     std::vector<Track> audio;
     std::vector<Track> subs;
     std::vector<Chapter> chapters;
+    std::vector<AttachmentFont> attachments;  // MPV_FFMPEG_PARITY Phase 2.E
 
     // Colorspace metadata
     int color_primaries = 0;     // AVCOL_PRI_*
@@ -80,6 +93,20 @@ struct ProbeResult {
     // true duration (head-credits bitrate << average content bitrate). HUD
     // then shows "—:—" instead of a wildly-wrong 2h reading for a 1h file.
     int duration_estimation_method = 0;
+
+    // STREAM_DURATION_FIX_FOR_PACKS Wake 2 (2026-04-21) — set true when
+    // duration_sec was rescued by the bitrate × fileSize last-resort
+    // fallback rather than read directly from a reliable container /
+    // stream source. Signals to main-app HUD that the displayed value
+    // is APPROXIMATE (±10-50% VBR error) so it can prefix with `~`
+    // (e.g., `~42:00` instead of `42:00`). Preserves Hemanth's anti-lie
+    // rule (STREAM_DURATION_FIX's origin) — the tilde honestly marks
+    // estimate-quality rather than presenting a fabricated exact value.
+    // False for branches 1 (video-stream-duration) and 3 (FROM_PTS)
+    // which are ground-truth sources, and for the stream-max fallback
+    // which picks a reliable per-stream duration. True only when
+    // try_bitrate_filesize_fallback was the source of the value.
+    bool duration_is_estimate = false;
 };
 
 // Probe a media file: find video stream dimensions/codec, enumerate tracks.

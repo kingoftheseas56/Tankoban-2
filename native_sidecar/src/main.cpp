@@ -869,6 +869,22 @@ static void open_worker(Command cmd) {
     // the full-video rect, margins all zero, pixel_aspect == 1.0. Subs render
     // inside the video area at traditional libass default position.
     sub_ren->configure_geometry(width, height, width, height);
+    // MPV_FFMPEG_PARITY Phase 2.E (2026-04-30) — feed embedded fonts from
+    // MKV attachment streams into libass BEFORE load_embedded_track parses
+    // the ASS Default style. Without this, libass falls back to Arial
+    // when the authored style names a font the host system doesn't have
+    // (silent regression observed on anime BD rips like Vinland Saga
+    // S02E01 + Saiki Kusuo Ep 11). Empty attachments list is a no-op for
+    // simple SRT and PGS files. add_font wraps ass_add_font with a null/
+    // size-zero guard.
+    for (const auto& att : probe->attachments) {
+        sub_ren->add_font(att.filename, att.data.data(), att.data.size());
+    }
+    if (!probe->attachments.empty()) {
+        std::fprintf(stderr,
+                     "open_worker: loaded %zu embedded font(s) into libass\n",
+                     probe->attachments.size());
+    }
     if (!probe->subs.empty()) {
         sub_ren->load_embedded_track(probe->subs[0].codec_name, probe->subs[0].extradata);
     }
@@ -1557,6 +1573,28 @@ static void handle_set_sub_position(const Command& cmd) {
 }
 
 // ---------------------------------------------------------------------------
+// MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — set_sub_position_mode handler
+// Standard (default per Q1 ratification) hands placement to libass /
+// preserves PGS-author intent. Force preserves the 2026-04-25 Y-offset
+// hack for aggressive-MarginV scripts. Payload "mode": "standard"|"force";
+// unknown values default to standard. Atomic store; takes effect next
+// render frame.
+// ---------------------------------------------------------------------------
+
+static void handle_set_sub_position_mode(const Command& cmd) {
+    write_ack(cmd.seq, cmd.sessionId);
+    const std::string mode_str = cmd.payload.value("mode", std::string("standard"));
+    SubtitleRenderer::PositionMode mode =
+        (mode_str == "force") ? SubtitleRenderer::PositionMode::Force
+                              : SubtitleRenderer::PositionMode::Standard;
+    if (g_sub_renderer) {
+        g_sub_renderer->set_position_mode(mode);
+    }
+    write_event("sub_position_mode_changed", cmd.sessionId, -1,
+                {{"mode", mode_str}});
+}
+
+// ---------------------------------------------------------------------------
 // load_external_sub handler
 // ---------------------------------------------------------------------------
 
@@ -1916,6 +1954,9 @@ int main(int argc, char* argv[]) {
 
         } else if (name == "set_sub_position") {
             handle_set_sub_position(*cmd);
+
+        } else if (name == "set_sub_position_mode") {
+            handle_set_sub_position_mode(*cmd);
 
         } else if (name == "load_external_sub") {
             handle_load_external_sub(*cmd);

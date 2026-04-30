@@ -635,6 +635,29 @@ std::optional<ProbeResult> probe_file(const std::string& path) {
                                    s->codecpar->extradata + s->codecpar->extradata_size);
             }
             result.subs.push_back(std::move(t));
+        } else if (s->codecpar->codec_type == AVMEDIA_TYPE_ATTACHMENT) {
+            // MPV_FFMPEG_PARITY Phase 2.E (2026-04-30) — embedded font.
+            // Filename comes from the matroska "filename" metadata tag
+            // (verified via ffprobe on Vinland Saga S02E01: 5 attachments
+            // with TAG:filename=Roboto-Medium.ttf etc). Font bytes live in
+            // AVStream::codecpar->extradata for matroska attachment
+            // streams. Codec is typically ttf/otf — but rather than
+            // gating on codec_id we accept any non-empty attachment;
+            // libass handles font-format detection internally and skips
+            // non-fonts safely. Empty attachments (no extradata) are
+            // dropped because ass_add_font with size==0 is undefined.
+            AttachmentFont att;
+            AVDictionaryEntry* fname_tag =
+                av_dict_get(s->metadata, "filename", nullptr, 0);
+            att.filename = (fname_tag && fname_tag->value)
+                               ? fname_tag->value
+                               : "unknown.ttf";
+            if (s->codecpar->extradata && s->codecpar->extradata_size > 0) {
+                att.data.assign(s->codecpar->extradata,
+                                s->codecpar->extradata +
+                                    s->codecpar->extradata_size);
+                result.attachments.push_back(std::move(att));
+            }
         }
     }
 

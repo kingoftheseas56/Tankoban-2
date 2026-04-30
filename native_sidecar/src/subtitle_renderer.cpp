@@ -232,18 +232,31 @@ void SubtitleRenderer::render_thread_func() {
                     int64_t render_time = pts_ms + delay_ms_.load(std::memory_order_relaxed);
                     if (render_time < 0) render_time = 0;
 
-                    // VIDEO_SUB_POS_YOFFSET 2026-04-25 — supersedes the
-                    // ass_set_line_position approach (which respected the
-                    // script's MarginV — Hemanth's "still too high"
-                    // complaint on the plane-crash dialog at slider=100)
-                    // AND handles \pos-overridden events libass position
-                    // can't reach (Saiki karaoke). Pass libass=0 (script
-                    // default neutral) and apply a uniform Y-shift to the
-                    // entire rendered ASS_Image list so the composition's
-                    // bottom edge lands at `pct%` down the video rect.
-                    // pct=100 → sub bottom flush with frame bottom; pct=0
-                    // → sub top flush with frame top; linear in between.
-                    ass_set_line_position(renderer_, 0.0);
+                    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — position
+                    // policy split. Standard mode (default per Q1) hands
+                    // the slider to libass via ass_set_line_position so
+                    // authored ASS layout (signs / karaoke / multi-event)
+                    // wins; trade-off: scripts with aggressive MarginV
+                    // can render "too high" at slider=100 (Hemanth's
+                    // 2026-04-25 plane-crash-dialog complaint). Force mode
+                    // (opt-in) preserves the 2026-04-25 Y-offset hack:
+                    // pass libass=0 then translate the rendered ASS_Image
+                    // list down by the slider percent so the composition's
+                    // bottom edge lands at pct% down the video rect.
+                    const PositionMode mode =
+                        position_mode_.load(std::memory_order_relaxed);
+                    const int sub_pos_pct =
+                        sub_position_pct_.load(std::memory_order_relaxed);
+
+                    if (mode == PositionMode::Standard) {
+                        // libass: 0 = top of frame, 100 = bottom (matches
+                        // mpv sub-pos semantics directly per docstring).
+                        ass_set_line_position(
+                            renderer_,
+                            static_cast<double>(std::clamp(sub_pos_pct, 0, 100)));
+                    } else {
+                        ass_set_line_position(renderer_, 0.0);
+                    }
 
                     int changed = 0;
                     ASS_Image* images = ass_render_frame(renderer_, track_,
@@ -260,31 +273,32 @@ void SubtitleRenderer::render_thread_func() {
                     }
 
                     if (images) {
-                        // Compute bounding box of all ASS_Images for this
-                        // frame so we can shift the whole composition as a
-                        // single unit (multi-line subs stay glued; \pos
-                        // events move with their dialog companions).
-                        int min_top = INT_MAX;
-                        int max_bottom = 0;
-                        for (ASS_Image* it = images; it; it = it->next) {
-                            if (it->w == 0 || it->h == 0) continue;
-                            if (it->dst_y < min_top) min_top = it->dst_y;
-                            const int b = it->dst_y + it->h;
-                            if (b > max_bottom) max_bottom = b;
-                        }
-
                         int y_shift = 0;
-                        if (max_bottom > 0 && video_rect_h_ > 0
-                            && max_bottom > min_top) {
-                            const int sub_pos_pct =
-                                sub_position_pct_.load(std::memory_order_relaxed);
-                            const int sub_h = max_bottom - min_top;
-                            const int avail = std::max(0, video_rect_h_ - sub_h);
-                            const int target_top =
-                                video_rect_y_ + (sub_pos_pct * avail) / 100;
-                            y_shift = target_top - min_top;
+                        if (mode == PositionMode::Force) {
+                            // Compute bounding box of all ASS_Images so we
+                            // can translate the whole composition as a
+                            // single unit (multi-line subs stay glued;
+                            // \pos events move with their companions).
+                            int min_top = INT_MAX;
+                            int max_bottom = 0;
+                            for (ASS_Image* it = images; it; it = it->next) {
+                                if (it->w == 0 || it->h == 0) continue;
+                                if (it->dst_y < min_top) min_top = it->dst_y;
+                                const int b = it->dst_y + it->h;
+                                if (b > max_bottom) max_bottom = b;
+                            }
+                            if (max_bottom > 0 && video_rect_h_ > 0
+                                && max_bottom > min_top) {
+                                const int sub_h = max_bottom - min_top;
+                                const int avail = std::max(0, video_rect_h_ - sub_h);
+                                const int target_top =
+                                    video_rect_y_ + (sub_pos_pct * avail) / 100;
+                                y_shift = target_top - min_top;
+                            }
                         }
-
+                        // Standard mode: y_shift stays 0; libass owns
+                        // placement and we draw images at their authored
+                        // dst_y unchanged.
                         blend_image_list(images, frame, stride, height, y_shift);
                     }
                 }
@@ -684,6 +698,16 @@ void SubtitleRenderer::set_sub_position_pct(int pct) {
     sub_position_pct_.store(pct, std::memory_order_relaxed);
 }
 
+void SubtitleRenderer::set_position_mode(PositionMode mode) {
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — atomic store; takes
+    // effect on the next render-thread tick. No re-render forced (user
+    // sees the new policy on the next decoded frame). Standard hands
+    // placement to libass / lets PGS author wins; Force preserves the
+    // 2026-04-25 Y-offset hack for files whose authored MarginV is too
+    // aggressive at slider=100.
+    position_mode_.store(mode, std::memory_order_relaxed);
+}
+
 void SubtitleRenderer::clear_active_subs() {
     {
         std::lock_guard<std::mutex> render_lock(render_mutex_);
@@ -708,6 +732,26 @@ void SubtitleRenderer::clear_track() {
     is_pgs_ = false;
     pgs_rects_.clear();
     cleanup_pgs();
+}
+
+void SubtitleRenderer::add_font(const std::string& filename,
+                                const uint8_t* data, size_t size) {
+    // MPV_FFMPEG_PARITY Phase 2.E (2026-04-30) — feed an embedded font
+    // from the MKV/MP4 container into libass. Called per AVMEDIA_TYPE_
+    // ATTACHMENT stream from main.cpp open_worker BEFORE load_embedded_
+    // track. libass copies the data internally so the caller's buffer
+    // is safe to release after this returns. No-op when library_ is null
+    // (ass_library_init failed at construction) or when data/size are
+    // empty (degenerate attachment with no extradata). Library lock is
+    // not strictly required here because ass_add_font is documented as
+    // safe before any track parses, but mutex_ guards future track-load
+    // consistency: future callers may add fonts mid-session.
+    if (!library_ || !data || size == 0) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    ass_add_font(library_,
+                 filename.c_str(),
+                 reinterpret_cast<const char*>(data),
+                 static_cast<int>(size));
 }
 
 void SubtitleRenderer::set_style_override(int font_size, int margin_v, bool outline) {
@@ -984,8 +1028,17 @@ void SubtitleRenderer::blend_pgs_rects(uint8_t* frame, int stride,
     // against video_rect_h_ rather than frame_h_ so cinemascope letterbox
     // bars stay outside the lift range. The existing clamp loop below
     // handles dst_y < 0 / dst_y + blit_h > frame_h naturally.
+    //
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — position policy split.
+    // PGS is a bitmap stream with no notion of authored line-position
+    // metadata (libass's ass_set_line_position has no PGS analogue), so
+    // Standard mode for PGS = no Y-shift (let the BD-author placement
+    // win, like dialog-position metadata in OAR Blu-rays); Force mode =
+    // current 2026-04-24 Y-offset hack lifting bitmaps by user-position.
+    const PositionMode mode =
+        position_mode_.load(std::memory_order_relaxed);
     const int sub_pos_pct = sub_position_pct_.load(std::memory_order_relaxed);
-    const int sub_offset_y = (video_rect_h_ > 0)
+    const int sub_offset_y = (mode == PositionMode::Force && video_rect_h_ > 0)
         ? ((100 - sub_pos_pct) * video_rect_h_) / 100
         : 0;
 
