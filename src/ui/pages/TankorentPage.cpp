@@ -1,5 +1,6 @@
 #include "TankorentPage.h"
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 #include "core/TorrentIndexer.h"
 #include "core/indexers/TorrentsCsvIndexer.h"
 #include "core/indexers/NyaaIndexer.h"
@@ -1202,16 +1203,50 @@ void TankorentPage::showResultsContextMenu(const QPoint& pos)
 
 void TankorentPage::onAddTorrentClicked(int row)
 {
-    if (!m_client || row < 0 || row >= m_displayedResults.size()) return;
+    // Defensive: every guard surfaces a visible reason on m_searchStatus so a
+    // future silent-failure recurrence is diagnosable from the UI alone (no
+    // log dig). Diagnostic breadcrumbs route through DebugLogBuffer so
+    // `tankoctl logs` surfaces every branch — qDebug alone goes to stderr and
+    // never reaches the dev-bridge ring buffer. (Hemanth-reported 2026-04-30:
+    // multiple silent-failure rounds before instrumentation could prove the
+    // path.)
+    auto& dlog = DebugLogBuffer::instance();
+    dlog.info("tankorent", QStringLiteral("onAddTorrentClicked entered row=%1").arg(row));
+
+    if (!m_client) {
+        dlog.warning("tankorent", "onAddTorrentClicked: m_client is null");
+        if (m_searchStatus) m_searchStatus->setText("Torrent client not initialised");
+        return;
+    }
+    if (row < 0 || row >= m_displayedResults.size()) {
+        dlog.warning("tankorent",
+            QStringLiteral("onAddTorrentClicked: row %1 out of range (size %2)")
+                .arg(row).arg(m_displayedResults.size()));
+        m_searchStatus->setText(QStringLiteral("Invalid result row (%1)").arg(row));
+        return;
+    }
 
     const auto& result = m_displayedResults[row];
-    if (result.magnetUri.isEmpty()) return;
+    if (result.magnetUri.isEmpty()) {
+        dlog.warning("tankorent",
+            QStringLiteral("onAddTorrentClicked: row %1 has empty magnetUri (title=%2)")
+                .arg(row).arg(result.title));
+        m_searchStatus->setText("Result has no magnet link — try refreshing the search");
+        return;
+    }
 
     // Dedup check
     if (m_client->isDuplicate(result.magnetUri)) {
+        dlog.info("tankorent",
+            QStringLiteral("onAddTorrentClicked: duplicate (already in m_records) title=%1")
+                .arg(result.title));
         m_searchStatus->setText("Torrent Already Added");
         return;
     }
+
+    dlog.info("tankorent",
+        QStringLiteral("onAddTorrentClicked: resolving metadata title=%1 magnet=%2")
+            .arg(result.title).arg(result.magnetUri.left(80)));
 
     // Open the Add Torrent dialog
     auto defaultPaths = m_client->defaultPaths();
@@ -1220,9 +1255,16 @@ void TankorentPage::onAddTorrentClicked(int row)
     // Start metadata resolution
     QString hash = m_client->resolveMetadata(result.magnetUri);
     if (hash.isEmpty()) {
-        m_searchStatus->setText("Failed to Add Magnet");
+        dlog.warning("tankorent",
+            QStringLiteral("onAddTorrentClicked: resolveMetadata returned empty hash for %1")
+                .arg(result.magnetUri.left(80)));
+        m_searchStatus->setText("Failed to Add Magnet (engine rejected the URI — duplicate draft or invalid)");
         return;
     }
+
+    dlog.info("tankorent",
+        QStringLiteral("onAddTorrentClicked: hash=%1 — about to dlg.exec()")
+            .arg(hash.left(40)));
 
     // Connect engine's metadataReady to populate the dialog
     auto conn = connect(m_client->engine(), &TorrentEngine::metadataReady,
@@ -1237,7 +1279,12 @@ void TankorentPage::onAddTorrentClicked(int row)
         dlg.showMetadataError("Metadata resolution timed out — no peers found");
     });
 
-    if (dlg.exec() == QDialog::Accepted) {
+    const int execResult = dlg.exec();
+    dlog.info("tankorent",
+        QStringLiteral("onAddTorrentClicked: dlg.exec() returned %1 (Accepted=%2 Rejected=%3)")
+            .arg(execResult).arg(QDialog::Accepted).arg(QDialog::Rejected));
+
+    if (execResult == QDialog::Accepted) {
         auto config = dlg.config();
         m_client->startDownload(hash, config);
         m_tabWidget->setCurrentIndex(1); // Switch to Transfers tab

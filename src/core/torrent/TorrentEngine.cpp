@@ -1,4 +1,5 @@
 #include "TorrentEngine.h"
+#include "core/DebugLogBuffer.h"
 
 #ifdef HAS_LIBTORRENT
 
@@ -604,8 +605,52 @@ QString TorrentEngine::addMagnet(const QString& magnetUri, const QString& savePa
         atp.flags |= lt::torrent_flags::upload_mode;
     }
 
+    // Capture parsed info_hashes before the std::move(atp) consumes them — we
+    // need them for the idempotent-reuse fallback below.
+    const auto parsedInfoHashes = atp.info_hashes;
+
     auto handle = m_session.add_torrent(std::move(atp), ec);
     if (ec) {
+        auto& dlog = DebugLogBuffer::instance();
+        const QString ecMsg = QString::fromUtf8(ec.message().c_str());
+        dlog.warning("torrent-engine",
+            QStringLiteral("addMagnet: lt::add_torrent failed code=%1 cat=%2 msg=%3")
+                .arg(ec.value()).arg(QString::fromUtf8(ec.category().name())).arg(ecMsg));
+
+        // Idempotent re-add: when a prior resolveMetadata() draft is still
+        // pending in the libtorrent session (session::remove_torrent only
+        // completes on a later torrent_removed_alert — async at the libtorrent
+        // layer), a fresh add_torrent for the same hash returns
+        // duplicate_torrent. Instead of reporting "Failed to Add Magnet" to
+        // the user, look up the existing handle and reuse it. (Hemanth-reported
+        // 2026-04-30: download icon + right-click "Download…" both surfaced
+        // "Failed to Add Magnet" because every prior cancelled draft pinned
+        // the magnet in the session past the next click.)
+        lt::torrent_handle existing;
+        if (parsedInfoHashes.has_v2())
+            existing = m_session.find_torrent(parsedInfoHashes.v2);
+        if (!existing.is_valid() && parsedInfoHashes.has_v1())
+            existing = m_session.find_torrent(parsedInfoHashes.v1);
+
+        if (existing.is_valid()) {
+            QMutexLocker lock(&m_mutex);
+            QString hash = hashToHex(existing);
+            if (!m_records.contains(hash)) {
+                TorrentRecord rec;
+                rec.infoHash = hash;
+                rec.name     = QString::fromStdString(existing.status().name);
+                rec.savePath = savePath;
+                rec.handle   = existing;
+                m_records.insert(hash, rec);
+            }
+            dlog.info("torrent-engine",
+                QStringLiteral("addMagnet: reusing existing session handle for %1 (add_torrent said: %2)")
+                    .arg(hash.left(40)).arg(ecMsg));
+            return hash;
+        }
+
+        dlog.warning("torrent-engine",
+            QStringLiteral("addMagnet: find_torrent fallback also failed; returning empty hash. ecMsg=%1").arg(ecMsg));
         qWarning() << "Failed to add torrent:" << ec.message().c_str();
         return {};
     }
