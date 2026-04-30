@@ -73,6 +73,10 @@ public:
     // "videoPlayer/subtitlePosition" by VideoPlayer; pushed via this on
     // every slider change + on onSidecarReady for first-file restore.
     int sendSetSubtitlePosition(int percent) override;
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — position policy mode.
+    // "standard" or "force"; persisted under QSettings
+    // "videoPlayer/subtitlePositionMode" by VideoPlayer.
+    int sendSetSubtitlePositionMode(const QString& mode) override;
     int sendLoadExternalSub(const QString& path) override;
     int sendSetFilters(bool deinterlace, int brightness, int contrast, int saturation, bool normalize, bool interpolate = false, const QString& deinterlaceFilter = {}) override;
     int sendRawFilters(const QString& videoFilter, const QString& audioFilter) override;

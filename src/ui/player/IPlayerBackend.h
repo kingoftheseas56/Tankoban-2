@@ -121,6 +121,16 @@ public:
     // VIDEO_SUB_POSITION 2026-04-24 — user-facing 0..100 percent baseline
     // (100 = bottom, mpv parity). Persisted globally under QSettings.
     virtual int sendSetSubtitlePosition(int percent) = 0;
+
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — position policy mode.
+    // mode = "standard" (default per Q1 ratification, libass owns
+    // placement / PGS author wins) or "force" (Y-offset hack opt-in for
+    // aggressive-MarginV scripts). Persisted under QSettings as
+    // "videoPlayer/subtitlePositionMode". mpv backend honors Standard
+    // natively via sub-pos; Force is currently ffmpeg-only (logs a
+    // one-time warning on the mpv path).
+    virtual int sendSetSubtitlePositionMode(const QString& mode) = 0;
+
     virtual int sendLoadExternalSub(const QString& path) = 0;
 
     // Batch 5.2 — async URL download then load via load_external_sub.

@@ -1,6 +1,11 @@
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/KeyBindings.h"
+#include "ui/player/BackendFactory.h"
 #include "ui/player/SidecarProcess.h"
+#ifdef HAS_LIBMPV
+#include "ui/player/MpvBackend.h"
+#include "ui/player/MpvVideoWidget.h"
+#endif
 #include "ui/player/ShmFrameReader.h"
 #include "ui/player/FrameCanvas.h"
 #include "ui/player/VolumeHud.h"
@@ -177,10 +182,15 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_seekFwdIcon  = iconFromSvg(SVG_SEEK_FWD);
 
     m_keys    = new KeyBindings();
-    // MPV_BACKEND_INTEGRATION P1 2026-04-26 — concrete construction stays
-    // SidecarProcess (the only backend in P1). Phase 5 introduces
-    // BackendFactory which picks FfmpegBackend / MpvBackend per-file.
-    m_backend = new SidecarProcess(this);
+    // MPV_RENDER_API_INTEGRATION P7 2026-04-30 — backend selection via
+    // persisted preference + stream-mode override + dev-only
+    // TANKOBAN_FORCE_MPV env var (now wrapped inside BackendFactory).
+    // Apply-on-next-launch semantics: VideoPlayer is constructed once per
+    // Tankoban session, so right-click preference changes via VideosPage
+    // take effect on next launch (per AskUserQuestion 2026-04-30
+    // ratification — keeps current playback unchanged, no mid-session churn).
+    m_currentBackendType = BackendFactory::chooseFor(/*isStreamMode=*/false);
+    m_backend = BackendFactory::create(m_currentBackendType, this);
     m_reader  = new ShmFrameReader();
 
     buildUI();
@@ -217,45 +227,16 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_showStats = QSettings("Tankoban", "Tankoban")
         .value("player/showStats", false).toBool();
 
-    // Sidecar events
-    connect(m_backend,&IPlayerBackend::ready,        this, &VideoPlayer::onSidecarReady);
-    connect(m_backend,&IPlayerBackend::firstFrame,   this, &VideoPlayer::onFirstFrame);
-    connect(m_backend,&IPlayerBackend::timeUpdate,   this, &VideoPlayer::onTimeUpdate);
-    connect(m_backend,&IPlayerBackend::stateChanged,  this, &VideoPlayer::onStateChanged);
-    connect(m_backend,&IPlayerBackend::tracksChanged,  this, &VideoPlayer::onTracksChanged);
-    connect(m_backend,&IPlayerBackend::endOfFile,    this, &VideoPlayer::onEndOfFile);
-    connect(m_backend,&IPlayerBackend::errorOccurred, this, &VideoPlayer::onError);
-    connect(m_backend,&IPlayerBackend::processCrashed, this, &VideoPlayer::onSidecarCrashed);
-
-    // Batch 6.3 — non-fatal decode errors get a throttled toast. Corrupted
-    // files can produce many per second; one toast every 3 s is enough to
-    // communicate "something's wrong, we're skipping past it" without
-    // spamming the UI. Throttle state lives in onDecodeError's static local.
-    connect(m_backend,&IPlayerBackend::decodeError, this,
-            [this](const QString& code, const QString& message, bool recoverable) {
-        debugLog(QString("[VideoPlayer] decode_error code=%1 msg=%2 recoverable=%3")
-                 .arg(code, message).arg(recoverable ? "yes" : "no"));
-        if (!recoverable) return;  // fatal path comes through errorOccurred
-        static qint64 lastToastMs = 0;
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (now - lastToastMs < 3000) return;
-        lastToastMs = now;
-        m_toastHud->showToast("Skipping corrupt frame…");
-    });
-
-    // Batch 6.1 — single-shot restart timer drives backoff between respawns.
+    // 2026-04-30 — non-backend timers stay in the ctor; backend signals
+    // (ready, firstFrame, timeUpdate, etc.) all live in wireBackendSignals
+    // so a mid-session backend swap (switchBackendTo) can rewire them.
     m_sidecarRestartTimer.setSingleShot(true);
     connect(&m_sidecarRestartTimer, &QTimer::timeout, this, &VideoPlayer::restartSidecar);
 
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — 30s first-frame watchdog.
     // Single-shot; armed on openFile entry, cancelled on firstFrame or
     // teardownUi. Fires setStage(TakingLonger) when first-frame doesn't
-    // arrive within 30s (duration chosen to match the sidecar's existing
-    // STREAM_TIMEOUT "no data for 30 seconds" at video_decoder.cpp:1087
-    // so UX aligns with the sidecar's own give-up threshold). Explicit
-    // stop() at all three sites (openFile re-arm, firstFrame dismiss,
-    // teardownUi teardown) — Qt single-thread event loop serializes
-    // those handlers so no generation-check race exists.
+    // arrive within 30s.
     m_firstFrameWatchdog.setSingleShot(true);
     connect(&m_firstFrameWatchdog, &QTimer::timeout, this, [this]() {
         if (m_loadingOverlay) {
@@ -263,24 +244,7 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
         }
     });
 
-    // SubtitleOverlay QLabel is unused under the current native sidecar
-    // renderer (libass frame-blend at native_sidecar/src/subtitle_renderer.cpp
-    // render_blend composites subs into the video BGRA frame, not via a
-    // separate subtitle_text event). Dead subtitleText→setText connect
-    // removed 2026-04-15 post-Agent-7 audit. SubtitleOverlay class kept
-    // in place for a potential future text-fallback path.
-    connect(m_backend,&IPlayerBackend::subVisibilityChanged, this, [this](bool visible) {
-        // VIDEO_PLAYER_FIX Batch 1.2 — keep m_subsVisible coherent with
-        // sidecar renderer state. SubtitleMenu's Off path goes through
-        // SidecarProcess::sendSetSubtitleTrack(-1) → sendSetSubVisibility(false)
-        // which emits this signal; pre-fix, VideoPlayer's m_subsVisible
-        // stayed stale (still true) after a SubtitleMenu Off, so pressing T
-        // (toggleSubtitles) did the wrong flip. Now we mirror sidecar state
-        // on every signal, regardless of which code path drove the change.
-        m_subsVisible = visible;
-        if (!visible)
-            m_subOverlay->setText("");
-    });
+    wireBackendSignals();
 }
 
 VideoPlayer::~VideoPlayer()
@@ -296,9 +260,33 @@ VideoPlayer::~VideoPlayer()
 void VideoPlayer::openFile(const QString& filePath,
                             const QStringList& playlist, int playlistIndex,
                             double startPositionSec,
-                            const QString& displayTitle)
+                            const QString& displayTitle,
+                            std::optional<BackendFactory::Type> explicitBackend)
 {
     debugLog("[VideoPlayer] openFile: " + filePath);
+
+    // 2026-04-30 Phase 1.A — per-open backend reselection.
+    //
+    // Runs unconditionally (was Pre-1.A's has_value()-gated swap; that
+    // version only fired the swap on explicit "Play with X" overrides
+    // and left stream-mode opens with saved-pref-mpv routing through
+    // MpvBackend regardless of §Q4 lock). chooseFor honors the precedence:
+    //   1. m_streamMode → Ffmpeg (§Q4 stream-mode lock — closes the
+    //      audit-flagged "lock break" by re-running on every open;
+    //      m_streamMode is set by StreamPage::onReadyToPlay before
+    //      calling openFile, so a stream open with saved-pref-mpv
+    //      now correctly routes to ffmpeg)
+    //   2. TANKOBAN_FORCE_MPV=1 dev override (Phase 1.A.3 will flip
+    //      its precedence above §Q4 so 1.B+ smokes can drive mpv
+    //      stream playback)
+    //   3. explicitBackend (right-click "Play with X" override)
+    //   4. saved QSettings preference
+    // Same-backend is a no-op fast path inside switchBackendTo.
+    const auto wantBackend =
+        BackendFactory::chooseFor(m_streamMode, explicitBackend);
+    if (wantBackend != m_currentBackendType) {
+        switchBackendTo(wantBackend);
+    }
 
     // VIDEO_PLAYER_FIX Batch 4.2 — record user intent in the recents list
     // before any side effects. Crash-recovery restart (SidecarProcess
@@ -926,6 +914,27 @@ void VideoPlayer::onSidecarReady()
         m_subPositionPct = qBound(0, subPos, 100);
         if (m_subPositionPct != 100)
             m_backend->sendSetSubtitlePosition(m_subPositionPct);
+        // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — push the persisted
+        // position policy mode. Sidecar + mpv backend both default to
+        // Standard; only push on Force to keep wire quiet for the common
+        // case. Validates against {"standard", "force"} so a corrupt
+        // QSettings value can't drive an unknown payload.
+        const QString subPosMode = s.value("videoPlayer/subtitlePositionMode",
+                                           "standard").toString();
+        m_subPositionMode = (subPosMode == QStringLiteral("force"))
+                                ? QStringLiteral("force")
+                                : QStringLiteral("standard");
+        if (m_subPositionMode == QStringLiteral("force"))
+            m_backend->sendSetSubtitlePositionMode(m_subPositionMode);
+        // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — restore subtitle size
+        // scale. Sidecar + mpv backend both default to 1.0; only push on
+        // non-default to keep wire quiet for the common case. Clamps
+        // mirror adjustSubtitleSize so a corrupt QSettings value can't
+        // drive an out-of-range payload.
+        const double subSize = s.value("videoPlayer/subtitleSize", 1.0).toDouble();
+        m_subtitleSize = qBound(0.5, subSize, 2.0);
+        if (!qFuzzyCompare(m_subtitleSize, 1.0))
+            m_backend->sendSetSubtitleSize(m_subtitleSize);
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
@@ -1283,6 +1292,16 @@ void VideoPlayer::restartSidecar()
 void VideoPlayer::buildUI()
 {
     m_canvas = new FrameCanvas(this);
+
+    // 2026-04-30 hotfix — MpvVideoWidget setup/teardown lives in
+    // syncMpvIntegrationToBackend() so a mid-session swap into mpv (via
+    // switchBackendTo + right-click "Play with mpv") wires the widget
+    // correctly. The original P5-redux block here only created m_mpvWidget
+    // when the CTOR-time backend was already mpv; users with default-ffmpeg
+    // saved pref hit a null m_mpvWidget on swap → audio-only playback +
+    // blank video canvas. The helper handles both initial-mpv and
+    // swap-to-mpv paths; this call covers the initial-mpv case.
+    syncMpvIntegrationToBackend();
 
     // Batch 1.2 — hand FrameCanvas a pointer to the master SyncClock so it
     // can call reportFrameLatency() after each Present. Phase 4 reads the
@@ -1648,6 +1667,12 @@ void VideoPlayer::buildUI()
         m_settingsPopover->setAudioDelay(m_audioDelayMs);
         m_settingsPopover->setSubtitleDelay(m_subDelayMs);
         m_settingsPopover->setSubtitlePosition(m_subPositionPct);
+        // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — sync Force-position
+        // checkbox with persisted state on every popover open.
+        m_settingsPopover->setSubtitlePositionMode(m_subPositionMode);
+        // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — sync size value
+        // label with persisted scale on every popover open.
+        m_settingsPopover->setSubtitleSize(m_subtitleSize);
         m_settingsPopover->toggle(m_settingsChip);
         m_settingsChip->setChecked(m_settingsPopover->isOpen());
     });
@@ -1766,86 +1791,11 @@ void VideoPlayer::buildUI()
             m_loadingOverlay, &LoadingOverlay::showLoading);
     connect(this, &VideoPlayer::playerIdle,
             m_loadingOverlay, &LoadingOverlay::dismiss);
-    connect(m_backend,&IPlayerBackend::bufferingStarted,
-            m_loadingOverlay, &LoadingOverlay::showBuffering);
-    connect(m_backend,&IPlayerBackend::bufferingEnded,
-            m_loadingOverlay, &LoadingOverlay::dismiss);
-    // STREAM_STALL_UX_FIX Batch 2 — track sidecar HTTP-stall state so the
-    // stream-engine stall-clear path in setStreamStalled doesn't dismiss
-    // an overlay the sidecar is still holding up. bufferingEnded's own
-    // dismiss above owns that dismiss path independently.
-    connect(m_backend,&IPlayerBackend::bufferingStarted,
-            this, [this]() { m_sidecarBuffering = true; });
-    connect(m_backend,&IPlayerBackend::bufferingEnded,
-            this, [this]() { m_sidecarBuffering = false; });
-    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — structured cache-pause
-    // progress wiring. Sidecar emits `cache_state` at 2 Hz during an active
-    // HTTP stall (between bufferingStarted and bufferingEnded). The existing
-    // bufferingStarted → showBuffering chain still drives the stage +
-    // fade-in; this signal upgrades the text in-place with % + ETA.
-    connect(m_backend,&IPlayerBackend::cacheStateChanged,
-            m_loadingOverlay, &LoadingOverlay::setCacheProgress);
-    // firstFrame is the primary dismiss trigger — by the time the first
-    // video frame renders, the Loading window is semantically closed.
-    // Qt permits a slot with fewer args than the signal, so firstFrame's
-    // QJsonObject payload is discarded by dismiss().
-    connect(m_backend,&IPlayerBackend::firstFrame,
-            m_loadingOverlay, &LoadingOverlay::dismiss);
-    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — cancel the 30s watchdog on
-    // normal first-frame arrival. Without this, a fast open (sub-30s)
-    // would leave the timer running until timeout, which would then try
-    // to flip a dismissed overlay back to TakingLonger — harmless but
-    // confusing in logs. Explicit stop() is clean.
-    connect(m_backend,&IPlayerBackend::firstFrame, this, [this]() {
-        m_firstFrameWatchdog.stop();
-        // REPO_HYGIENE Phase 3 (2026-04-26) — flag the dev-bridge's
-        // get_player snapshot that the player has rendered a frame.
-        m_firstFrameSeen = true;
-    });
-
-    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — sub-stage wiring + Batch 1.3
-    // re-emit pass-through. One lambda per sidecar signal; each drives a
-    // stage transition (or not, per Rule-14 picks above) + re-emits on
-    // VideoPlayer. Lambdas capture `this` — safe because SidecarProcess
-    // is owned by VideoPlayer (parent), so connection lifetime is bounded.
-    connect(m_backend,&IPlayerBackend::probeStarted, this, [this]() {
-        m_loadingOverlay->setStage(LoadingOverlay::Stage::Probing);
-        emit probeStarted();
-    });
-    connect(m_backend,&IPlayerBackend::probeDone, this,
-            [this](bool durationIsEstimate) {
-        // No stage transition — stay in Probing. Next transition fires
-        // on decoder_open_start (typically right after probe success).
-        // STREAM_DURATION_FIX_FOR_PACKS Wake 2 2026-04-21 — cache the
-        // estimate flag so subsequent onTimeUpdate ticks render the
-        // HUD duration with a `~` tilde prefix when the sidecar's
-        // probe fell through to the bitrate × fileSize fallback. Pre-
-        // fix sidecars (missing the JSON key) will report false via
-        // QJsonValue default — preserves exact-duration HUD rendering
-        // on those paths.
-        m_durationIsEstimate = durationIsEstimate;
-        emit probeDone();   // zero-arg re-emit preserves downstream consumers
-    });
-    connect(m_backend,&IPlayerBackend::decoderOpenStarted, this, [this]() {
-        m_loadingOverlay->setStage(LoadingOverlay::Stage::OpeningDecoder);
-        emit decoderOpenStarted();
-    });
-    connect(m_backend,&IPlayerBackend::decoderOpenDone, this, [this]() {
-        // No stage transition — stay in OpeningDecoder. Next transition
-        // fires on first_decoder_receive (honest forward-progress signal).
-        emit decoderOpenDone();
-    });
-    connect(m_backend,&IPlayerBackend::firstPacketRead, this, [this]() {
-        // No stage transition — Rule-14 pick: packet-read success before
-        // receive-frame success can stall on decoder back-pressure;
-        // DecodingFirstFrame waits for first_decoder_receive instead.
-        // Re-emit preserved for Batch 1.3 diagnostic correlation.
-        emit firstPacketRead();
-    });
-    connect(m_backend,&IPlayerBackend::firstDecoderReceive, this, [this]() {
-        m_loadingOverlay->setStage(LoadingOverlay::Stage::DecodingFirstFrame);
-        emit firstDecoderReceive();
-    });
+    // 2026-04-30 — m_backend signal connects (buffering / cache / firstFrame /
+    // probe / decoder-open / firstPacketRead / firstDecoderReceive) live in
+    // wireBackendSignals() at end of file so a backend swap can rewire them.
+    // The connects to `this`/m_loadingOverlay above (playerOpeningStarted /
+    // playerIdle) stay inline — they don't reference m_backend.
 
     // VIDEO_HUD_MINIMALIST 2026-04-25 — three new popovers replace
     // {TrackPopover + SubtitleMenu + EqualizerPopover + FilterPopover}.
@@ -1918,6 +1868,12 @@ void VideoPlayer::buildUI()
         this, [this](int delta) { adjustSubDelay(delta); });
     connect(m_settingsPopover, &SettingsPopover::subtitlePositionAdjusted,
         this, [this](int delta) { adjustSubPosition(delta); });
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Force-position toggle.
+    connect(m_settingsPopover, &SettingsPopover::subtitlePositionModeChanged,
+        this, [this](const QString& mode) { setSubPositionMode(mode); });
+    // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — subtitle size +/-.
+    connect(m_settingsPopover, &SettingsPopover::subtitleSizeAdjusted,
+        this, [this](double delta) { adjustSubtitleSize(delta); });
     connect(m_settingsPopover, &SettingsPopover::hoverChanged, this, [this](bool hovered) {
         if (hovered) { m_hideTimer.stop(); showControls(); }
         else m_hideTimer.start(3000);
@@ -1977,144 +1933,12 @@ void VideoPlayer::buildUI()
     // off by default. Pre-existing QSettings persisting filter / EQ
     // state become orphaned reads (no UI to write them); harmless.
 
-    // HDR detection + chapters from media_info event
-    connect(m_backend,&IPlayerBackend::mediaInfo, this, [this](const QJsonObject& info) {
-        m_isHdr = info.value("hdr").toBool(false);
-        // VIDEO_HUD_MINIMALIST 2026-04-25 — FilterPopover removed.
-        // m_isHdr still drives shader-side tonemap selection downstream
-        // (color_primaries / color_trc forwarded below).
+    // 2026-04-30 — m_backend signal connects (mediaInfo / d3d11Texture /
+    // overlayShm) extracted to wireBackendSignals() at end of file. The
+    // m_canvas connects below (zeroCopyActivated / deviceReconnecting) stay
+    // inline — they're driven by the local FrameCanvas member, not by
+    // m_backend, so a backend swap doesn't affect them.
 
-        // VIDEO_HUD_TIME_LABELS_FIX 2026-04-25 (hemanth: "the time is not
-        // loading immediately after opening a video"): duration arrives
-        // in this post-probe payload (sidecar adds duration_sec next to
-        // hdr/chapters/audio_device). Previously m_timeLabel + m_durLabel
-        // only updated in onTimeUpdate which fires post-first-frame —
-        // labels sat at "—:—" for seconds-to-minutes on slow opens.
-        // probeDone fires before mediaInfo per sidecar emission order
-        // (main.cpp:331 vs :462), so m_durationIsEstimate is already
-        // cached here from the probeDone connect at :1797-1810. Mirror
-        // onTimeUpdate's :1101-1108 estimate-prefix logic exactly so the
-        // initial render matches the per-tick render shape. Optimistic
-        // m_timeLabel="0:00" since position is 0 pre-playback; the first
-        // real onTimeUpdate overrides naturally.
-        const double mediaDurSec = info.value("duration_sec").toDouble(0.0);
-        if (mediaDurSec > 0.0) {
-            m_durationSec = mediaDurSec;
-            const QString durText = formatTime(static_cast<qint64>(mediaDurSec * 1000));
-            if (m_durLabel) m_durLabel->setText(m_durationIsEstimate
-                ? QStringLiteral("~") + durText
-                : durText);
-            if (m_timeLabel) m_timeLabel->setText(formatTime(0));
-            if (m_seekBar) m_seekBar->setDurationSec(mediaDurSec);
-        }
-        // duration <= 0: leave m_durLabel at "—:—" set by teardownUi —
-        // don't lie when the probe couldn't extract a usable duration.
-
-
-        // Batch 3.1 (Player Polish Phase 3) — forward raw AVCOL_PRI_* +
-        // AVCOL_TRC_* values to FrameCanvas so its shader can pick the
-        // right gamut matrix / (eventually) transfer function. Sidecar's
-        // media_info payload carries these straight from the demuxer probe
-        // (demuxer.cpp:66-68). SDR sources normally report BT.709 / sRGB
-        // which select the identity / no-transform path in the shader.
-        const int colorPri = info.value("color_primaries").toInt(0);
-        const int colorTrc = info.value("color_trc").toInt(0);
-        if (m_canvas) {
-            m_canvas->setHdrColorInfo(colorPri, colorTrc);
-        }
-
-        m_chapters = info.value("chapters").toArray();
-        if (!m_chapters.isEmpty())
-            debugLog("[VideoPlayer] chapters: " + QString::number(m_chapters.size()));
-
-        // VIDEO_PLAYER_FIX Batch 2.1 — push chapter start times (ms) to the
-        // seek slider so it can render tick marks. Empty array clears any
-        // previously-rendered ticks (fresh file with no chapter metadata).
-        QList<qint64> chapterMs;
-        chapterMs.reserve(m_chapters.size());
-        for (const auto& c : m_chapters) {
-            const double startSec = c.toObject().value("start").toDouble();
-            chapterMs.append(static_cast<qint64>(startSec * 1000.0));
-        }
-        m_seekBar->setChapterMarkers(chapterMs);
-
-        // Per-device audio offset auto-recall.
-        // Sidecar reports the current audio output device (PortAudio name + host API).
-        // We compute a stable QSettings key per device and look up the user's
-        // calibrated offset. New Bluetooth devices get a 300ms default + a one-time
-        // toast so the user knows to fine-tune. The default is generous because
-        // AirPods on Windows (Bluetooth via Microsoft stack) typically has
-        // 280-350ms of hidden latency that PortAudio can't see.
-        constexpr int BT_DEFAULT_MS = 300;
-        // Migration: previous default was 200ms. If the stored value matches the
-        // old default exactly AND the device looks like Bluetooth AND the user
-        // hasn't manually set a "manual" flag, treat it as auto and bump.
-        constexpr int OLD_BT_DEFAULT_MS = 200;
-
-        QString device  = info.value("audio_device").toString();
-        QString hostApi = info.value("audio_host_api").toString();
-        if (!device.isEmpty()) {
-            m_audioDeviceKey = makeDeviceKey(device, hostApi);
-            QString manualKey = m_audioDeviceKey + "/manual";
-            QSettings s("Tankoban", "Tankoban");
-            QVariant stored = s.value(m_audioDeviceKey);
-            bool wasManual = s.value(manualKey, false).toBool();
-            if (stored.isValid()) {
-                m_audioDelayMs = stored.toInt();
-                // One-time migration of the old auto-default to the new one.
-                if (!wasManual && m_audioDelayMs == OLD_BT_DEFAULT_MS && looksLikeBluetooth(device)) {
-                    m_audioDelayMs = BT_DEFAULT_MS;
-                    s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
-                    if (m_toastHud) {
-                        m_toastHud->showToast(
-                            QString("Bluetooth offset bumped to %1ms (improved default).\n"
-                                    "Fine-tune with Ctrl+= / Ctrl+-.").arg(BT_DEFAULT_MS));
-                    }
-                    debugLog(QString("[VideoPlayer] migrated '%1' from 200ms → %2ms (auto-default bump)")
-                                .arg(device).arg(BT_DEFAULT_MS));
-                } else {
-                    debugLog(QString("[VideoPlayer] audio device '%1' → recalled offset %2ms (%3)")
-                                .arg(device).arg(m_audioDelayMs)
-                                .arg(wasManual ? "manual" : "auto"));
-                }
-            } else if (looksLikeBluetooth(device)) {
-                m_audioDelayMs = BT_DEFAULT_MS;
-                s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
-                // Not manual — leave manualKey unset
-                if (m_toastHud) {
-                    m_toastHud->showToast(
-                        QString("Bluetooth audio detected — using %1ms offset.\n"
-                                "Use Ctrl+= / Ctrl+- to fine-tune.").arg(BT_DEFAULT_MS));
-                }
-                debugLog(QString("[VideoPlayer] Bluetooth device '%1' → default %2ms")
-                            .arg(device).arg(BT_DEFAULT_MS));
-            } else {
-                m_audioDelayMs = 0;
-                debugLog(QString("[VideoPlayer] wired/unknown device '%1' → no offset").arg(device));
-            }
-            m_backend->sendSetAudioDelay(m_audioDelayMs);
-        }
-    });
-    // D3D11 Holy Grail (Windows): when sidecar publishes its shared D3D11
-    // texture handle, hand it to FrameCanvas to import for zero-copy display.
-    // Eliminates GPU→CPU→GPU round trip per frame on HW-accelerated content.
-    connect(m_backend,&IPlayerBackend::d3d11Texture, this,
-        [this](quintptr handle, int w, int h) {
-            debugLog(QString("[VideoPlayer] d3d11_texture handle=0x%1 %2x%3")
-                        .arg(handle, 0, 16).arg(w).arg(h));
-            m_canvas->attachD3D11Texture(handle, w, h);
-        });
-    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
-    // Sidecar writes libass/PGS BGRA into the named SHM each frame;
-    // FrameCanvas opens it and uploads per-frame into its own locally-
-    // owned D3D11 overlay texture, drawn as an alpha-blended quad after
-    // the video quad. No cross-process GPU resource sharing.
-    connect(m_backend,&IPlayerBackend::overlayShm, this,
-        [this](const QString& name, int w, int h) {
-            debugLog(QString("[VideoPlayer] overlay_shm name=%1 %2x%3")
-                        .arg(name).arg(w).arg(h));
-            m_canvas->attachOverlayShm(name, w, h);
-        });
     // FrameCanvas tells us when zero-copy import succeeded/failed so we can
     // tell the sidecar to short-circuit its CPU pipeline (saves ~15ms/frame).
     connect(m_canvas, &FrameCanvas::zeroCopyActivated, this, [this](bool active) {
@@ -2129,18 +1953,8 @@ void VideoPlayer::buildUI()
         m_toastHud->showToast("Reconnecting display…");
     });
 
-    // Frame stepping feedback — update time display
-    connect(m_backend,&IPlayerBackend::frameStepped, this, [this](double posSec) {
-        m_paused = true;
-        updatePlayPauseIcon();
-        qint64 posMs = static_cast<qint64>(posSec * 1000);
-        m_timeLabel->setText(formatTime(posMs));
-        if (m_durationSec > 0) {
-            m_seekBar->blockSignals(true);
-            m_seekBar->setValue(static_cast<int>(posSec / m_durationSec * 10000));
-            m_seekBar->blockSignals(false);
-        }
-    });
+    // 2026-04-30 — m_backend frameStepped connect extracted to
+    // wireBackendSignals() at end of file.
 
     // Time bubble (seek preview — shown above slider during drag)
     m_timeBubble = new QLabel(this);
@@ -2249,6 +2063,48 @@ void VideoPlayer::adjustSubPosition(int delta)
     if (m_settingsPopover) m_settingsPopover->setSubtitlePosition(m_subPositionPct);
     if (m_toastHud)
         m_toastHud->showToast(QString("Sub position: %1%").arg(m_subPositionPct));
+}
+
+void VideoPlayer::adjustSubtitleSize(double delta)
+{
+    // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — clamp 0.5..2.0; push +
+    // persist + toast + sync popover. SidecarProcess::sendSetSubtitleSize
+    // already clamps internally to 0.5..3.0, but we narrow to 0.5..2.0
+    // for UI sanity (3x is rarely useful and wastes slider real estate).
+    double next = m_subtitleSize + delta;
+    if (next < 0.5) next = 0.5;
+    if (next > 2.0) next = 2.0;
+    // Snap to nearest 0.1 step to avoid floating-point drift after many
+    // ±0.1 button presses (0.7 + 0.1 - 0.1 = 0.6999... without snap).
+    next = std::round(next * 10.0) / 10.0;
+    if (qFuzzyCompare(next, m_subtitleSize)) return;
+    m_subtitleSize = next;
+    if (m_backend) m_backend->sendSetSubtitleSize(m_subtitleSize);
+    QSettings("Tankoban", "Tankoban")
+        .setValue("videoPlayer/subtitleSize", m_subtitleSize);
+    if (m_settingsPopover) m_settingsPopover->setSubtitleSize(m_subtitleSize);
+    if (m_toastHud)
+        m_toastHud->showToast(
+            QStringLiteral("Sub size: %1x").arg(m_subtitleSize, 0, 'f', 1));
+}
+
+void VideoPlayer::setSubPositionMode(const QString& mode)
+{
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — sanitize unknown values
+    // to "standard" so a stale popover state can't poison the dispatcher.
+    const QString sanitized = (mode == QStringLiteral("force"))
+                                  ? QStringLiteral("force")
+                                  : QStringLiteral("standard");
+    if (sanitized == m_subPositionMode) return;
+    m_subPositionMode = sanitized;
+    if (m_backend) m_backend->sendSetSubtitlePositionMode(m_subPositionMode);
+    QSettings("Tankoban", "Tankoban")
+        .setValue("videoPlayer/subtitlePositionMode", m_subPositionMode);
+    if (m_toastHud)
+        m_toastHud->showToast(QStringLiteral("Sub position: %1")
+                                  .arg(sanitized == QStringLiteral("force")
+                                           ? QStringLiteral("Force")
+                                           : QStringLiteral("Standard")));
 }
 
 // Merge incoming track list into existing cache. Upsert by 'id': add new
@@ -3165,6 +3021,7 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     m_canvas->setGeometry(0, 0, width(), height());
+    if (m_mpvWidget) m_mpvWidget->setGeometry(0, 0, width(), height());
 
     int barH = m_controlBar->sizeHint().height();
     m_controlBar->setGeometry(0, height() - barH, width(), barH);
@@ -3759,4 +3616,334 @@ QJsonObject VideoPlayer::devSnapshot() const
     snap["visible"]             = isVisible();
     snap["fullScreen"]          = isFullScreen();
     return snap;
+}
+
+// ── Backend wiring (2026-04-30) ──────────────────────────────────────────────
+//
+// Single source of truth for every connect(m_backend, ...) call this class
+// makes. Called from the constructor (after buildUI returns — all member
+// widgets the lambdas reference exist by then) and from switchBackendTo
+// after a mid-session backend swap. Adding a new m_backend signal handler
+// belongs HERE; inline connects elsewhere will silently break swap.
+
+void VideoPlayer::wireBackendSignals()
+{
+    // Core sidecar events (was ctor lines 231-238 pre-refactor).
+    connect(m_backend,&IPlayerBackend::ready,        this, &VideoPlayer::onSidecarReady);
+    connect(m_backend,&IPlayerBackend::firstFrame,   this, &VideoPlayer::onFirstFrame);
+    connect(m_backend,&IPlayerBackend::timeUpdate,   this, &VideoPlayer::onTimeUpdate);
+    connect(m_backend,&IPlayerBackend::stateChanged,  this, &VideoPlayer::onStateChanged);
+    connect(m_backend,&IPlayerBackend::tracksChanged,  this, &VideoPlayer::onTracksChanged);
+    connect(m_backend,&IPlayerBackend::endOfFile,    this, &VideoPlayer::onEndOfFile);
+    connect(m_backend,&IPlayerBackend::errorOccurred, this, &VideoPlayer::onError);
+    connect(m_backend,&IPlayerBackend::processCrashed, this, &VideoPlayer::onSidecarCrashed);
+
+    // Batch 6.3 — non-fatal decode errors get a throttled toast. Corrupted
+    // files can produce many per second; one toast every 3 s is enough to
+    // communicate "something's wrong, we're skipping past it" without
+    // spamming the UI. Throttle state lives in the lambda's static local —
+    // shared across backend swaps (same VideoPlayer instance, same lambda
+    // generated text in source); a fresh swap doesn't reset the throttle,
+    // which is the desired UX (anti-spam stays anti-spam).
+    connect(m_backend,&IPlayerBackend::decodeError, this,
+            [this](const QString& code, const QString& message, bool recoverable) {
+        debugLog(QString("[VideoPlayer] decode_error code=%1 msg=%2 recoverable=%3")
+                 .arg(code, message).arg(recoverable ? "yes" : "no"));
+        if (!recoverable) return;  // fatal path comes through errorOccurred
+        static qint64 lastToastMs = 0;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastToastMs < 3000) return;
+        lastToastMs = now;
+        m_toastHud->showToast("Skipping corrupt frame…");
+    });
+
+    // VIDEO_PLAYER_FIX Batch 1.2 — keep m_subsVisible coherent with sidecar
+    // renderer state across SubtitleMenu Off → toggleSubtitles flip path.
+    connect(m_backend,&IPlayerBackend::subVisibilityChanged, this, [this](bool visible) {
+        m_subsVisible = visible;
+        if (!visible)
+            m_subOverlay->setText("");
+    });
+
+    // Buffering / loading overlay stage transitions (was buildUI lines
+    // 1818-1853 pre-refactor). LoadingOverlay member widget is built in
+    // buildUI before this helper runs the first time.
+    connect(m_backend,&IPlayerBackend::bufferingStarted,
+            m_loadingOverlay, &LoadingOverlay::showBuffering);
+    connect(m_backend,&IPlayerBackend::bufferingEnded,
+            m_loadingOverlay, &LoadingOverlay::dismiss);
+    // STREAM_STALL_UX_FIX Batch 2 — track sidecar HTTP-stall state.
+    connect(m_backend,&IPlayerBackend::bufferingStarted,
+            this, [this]() { m_sidecarBuffering = true; });
+    connect(m_backend,&IPlayerBackend::bufferingEnded,
+            this, [this]() { m_sidecarBuffering = false; });
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.2 — cache progress text upgrade.
+    connect(m_backend,&IPlayerBackend::cacheStateChanged,
+            m_loadingOverlay, &LoadingOverlay::setCacheProgress);
+    // firstFrame is the primary dismiss trigger (overlay closed semantically).
+    connect(m_backend,&IPlayerBackend::firstFrame,
+            m_loadingOverlay, &LoadingOverlay::dismiss);
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — cancel watchdog on first frame.
+    connect(m_backend,&IPlayerBackend::firstFrame, this, [this]() {
+        m_firstFrameWatchdog.stop();
+        m_firstFrameSeen = true;
+    });
+
+    // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — sub-stage wiring + Batch 1.3
+    // re-emit pass-through. Lambdas capture this; SidecarProcess parented
+    // to VideoPlayer so connection lifetime is bounded.
+    connect(m_backend,&IPlayerBackend::probeStarted, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::Probing);
+        emit probeStarted();
+    });
+    connect(m_backend,&IPlayerBackend::probeDone, this,
+            [this](bool durationIsEstimate) {
+        m_durationIsEstimate = durationIsEstimate;
+        emit probeDone();
+    });
+    connect(m_backend,&IPlayerBackend::decoderOpenStarted, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::OpeningDecoder);
+        emit decoderOpenStarted();
+    });
+    connect(m_backend,&IPlayerBackend::decoderOpenDone, this, [this]() {
+        emit decoderOpenDone();
+    });
+    connect(m_backend,&IPlayerBackend::firstPacketRead, this, [this]() {
+        emit firstPacketRead();
+    });
+    connect(m_backend,&IPlayerBackend::firstDecoderReceive, this, [this]() {
+        m_loadingOverlay->setStage(LoadingOverlay::Stage::DecodingFirstFrame);
+        emit firstDecoderReceive();
+    });
+
+    // HDR detection + chapters + per-device audio-offset auto-recall + duration
+    // hoist (was buildUI lines 2030-2146 pre-refactor). Single mediaInfo
+    // payload drives many subsystems — hence the long lambda body.
+    connect(m_backend,&IPlayerBackend::mediaInfo, this, [this](const QJsonObject& info) {
+        m_isHdr = info.value("hdr").toBool(false);
+
+        // VIDEO_HUD_TIME_LABELS_FIX 2026-04-25 — duration hoist (probeDone
+        // fires before mediaInfo; m_durationIsEstimate already cached).
+        const double mediaDurSec = info.value("duration_sec").toDouble(0.0);
+        if (mediaDurSec > 0.0) {
+            m_durationSec = mediaDurSec;
+            const QString durText = formatTime(static_cast<qint64>(mediaDurSec * 1000));
+            if (m_durLabel) m_durLabel->setText(m_durationIsEstimate
+                ? QStringLiteral("~") + durText
+                : durText);
+            if (m_timeLabel) m_timeLabel->setText(formatTime(0));
+            if (m_seekBar) m_seekBar->setDurationSec(mediaDurSec);
+        }
+
+        // Batch 3.1 — forward color primaries / TRC to FrameCanvas shader.
+        const int colorPri = info.value("color_primaries").toInt(0);
+        const int colorTrc = info.value("color_trc").toInt(0);
+        if (m_canvas) {
+            m_canvas->setHdrColorInfo(colorPri, colorTrc);
+        }
+
+        m_chapters = info.value("chapters").toArray();
+        if (!m_chapters.isEmpty())
+            debugLog("[VideoPlayer] chapters: " + QString::number(m_chapters.size()));
+
+        // VIDEO_PLAYER_FIX Batch 2.1 — chapter tick markers on seek slider.
+        QList<qint64> chapterMs;
+        chapterMs.reserve(m_chapters.size());
+        for (const auto& c : m_chapters) {
+            const double startSec = c.toObject().value("start").toDouble();
+            chapterMs.append(static_cast<qint64>(startSec * 1000.0));
+        }
+        m_seekBar->setChapterMarkers(chapterMs);
+
+        // Per-device audio offset auto-recall (Bluetooth defaults +
+        // wired/unknown zeroing + one-time migration).
+        constexpr int BT_DEFAULT_MS = 300;
+        constexpr int OLD_BT_DEFAULT_MS = 200;
+
+        QString device  = info.value("audio_device").toString();
+        QString hostApi = info.value("audio_host_api").toString();
+        if (!device.isEmpty()) {
+            m_audioDeviceKey = makeDeviceKey(device, hostApi);
+            QString manualKey = m_audioDeviceKey + "/manual";
+            QSettings s("Tankoban", "Tankoban");
+            QVariant stored = s.value(m_audioDeviceKey);
+            bool wasManual = s.value(manualKey, false).toBool();
+            if (stored.isValid()) {
+                m_audioDelayMs = stored.toInt();
+                if (!wasManual && m_audioDelayMs == OLD_BT_DEFAULT_MS && looksLikeBluetooth(device)) {
+                    m_audioDelayMs = BT_DEFAULT_MS;
+                    s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
+                    if (m_toastHud) {
+                        m_toastHud->showToast(
+                            QString("Bluetooth offset bumped to %1ms (improved default).\n"
+                                    "Fine-tune with Ctrl+= / Ctrl+-.").arg(BT_DEFAULT_MS));
+                    }
+                    debugLog(QString("[VideoPlayer] migrated '%1' from 200ms → %2ms (auto-default bump)")
+                                .arg(device).arg(BT_DEFAULT_MS));
+                } else {
+                    debugLog(QString("[VideoPlayer] audio device '%1' → recalled offset %2ms (%3)")
+                                .arg(device).arg(m_audioDelayMs)
+                                .arg(wasManual ? "manual" : "auto"));
+                }
+            } else if (looksLikeBluetooth(device)) {
+                m_audioDelayMs = BT_DEFAULT_MS;
+                s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
+                if (m_toastHud) {
+                    m_toastHud->showToast(
+                        QString("Bluetooth audio detected — using %1ms offset.\n"
+                                "Use Ctrl+= / Ctrl+- to fine-tune.").arg(BT_DEFAULT_MS));
+                }
+                debugLog(QString("[VideoPlayer] Bluetooth device '%1' → default %2ms")
+                            .arg(device).arg(BT_DEFAULT_MS));
+            } else {
+                m_audioDelayMs = 0;
+                debugLog(QString("[VideoPlayer] wired/unknown device '%1' → no offset").arg(device));
+            }
+            m_backend->sendSetAudioDelay(m_audioDelayMs);
+        }
+    });
+
+    // D3D11 Holy Grail — sidecar shared D3D11 texture handle → FrameCanvas
+    // zero-copy import path (eliminates GPU→CPU→GPU per frame).
+    connect(m_backend,&IPlayerBackend::d3d11Texture, this,
+        [this](quintptr handle, int w, int h) {
+            debugLog(QString("[VideoPlayer] d3d11_texture handle=0x%1 %2x%3")
+                        .arg(handle, 0, 16).arg(w).arg(h));
+            m_canvas->attachD3D11Texture(handle, w, h);
+        });
+    // PLAYER_PERF_FIX Phase 3 Batch 3.B Option B — subtitle overlay SHM.
+    connect(m_backend,&IPlayerBackend::overlayShm, this,
+        [this](const QString& name, int w, int h) {
+            debugLog(QString("[VideoPlayer] overlay_shm name=%1 %2x%3")
+                        .arg(name).arg(w).arg(h));
+            m_canvas->attachOverlayShm(name, w, h);
+        });
+
+    // Frame stepping feedback — update time display.
+    connect(m_backend,&IPlayerBackend::frameStepped, this, [this](double posSec) {
+        m_paused = true;
+        updatePlayPauseIcon();
+        qint64 posMs = static_cast<qint64>(posSec * 1000);
+        m_timeLabel->setText(formatTime(posMs));
+        if (m_durationSec > 0) {
+            m_seekBar->blockSignals(true);
+            m_seekBar->setValue(static_cast<int>(posSec / m_durationSec * 10000));
+            m_seekBar->blockSignals(false);
+        }
+    });
+}
+
+void VideoPlayer::switchBackendTo(BackendFactory::Type t)
+{
+    if (t == m_currentBackendType) return;  // no-op fast path
+
+    debugLog(QString("[VideoPlayer] switchBackendTo: %1 → %2")
+                .arg(BackendFactory::toString(m_currentBackendType))
+                .arg(BackendFactory::toString(t)));
+
+    if (m_backend) {
+        // Stop the live backend cleanly (mirrors stopPlayback's user-close
+        // teardown — sendStop + sendShutdown + ensureTerminated). The
+        // synchronous 500ms wait is acceptable for a user-driven swap;
+        // the right-click → "Play with X" gesture's latency budget tolerates it.
+        if (m_backend->isRunning()) {
+            m_backend->sendStop();
+            m_backend->sendShutdown();
+            m_backend->ensureTerminated(500);
+        }
+        // Disconnect every signal we wired (mirrors wireBackendSignals' set)
+        // so any in-flight queued events from the dying backend can't deliver
+        // to a half-deleted target. Belt-and-suspenders against deleteLater
+        // racing with pending Qt::QueuedConnection deliveries.
+        m_backend->disconnect(this);
+        m_backend->deleteLater();
+        m_backend = nullptr;
+    }
+
+    m_backend = BackendFactory::create(t, this);
+    m_currentBackendType = t;
+
+    // SubtitlePopover holds a non-signal IPlayerBackend* via setSidecar
+    // (used by its embedded-track + load-from-file paths). Refresh it.
+    if (m_subtitlePopover) m_subtitlePopover->setSidecar(m_backend);
+
+    wireBackendSignals();
+
+    // 2026-04-30 hotfix — toggle MpvVideoWidget visibility + (re)wire its
+    // mpv handle. Without this, swapping ffmpeg → mpv leaves m_mpvWidget
+    // null + FrameCanvas visible: mpv plays audio but video has nowhere
+    // to render (Hemanth-reported "mpv is blank" 2026-04-30 ~17:30).
+    syncMpvIntegrationToBackend();
+}
+
+void VideoPlayer::syncMpvIntegrationToBackend()
+{
+#ifdef HAS_LIBMPV
+    auto* mpvBackend = qobject_cast<MpvBackend*>(m_backend);
+    if (!mpvBackend) {
+        // Active backend is ffmpeg (or HAS_LIBMPV unset upstream).
+        // Hide MpvVideoWidget if it exists from a prior mpv session,
+        // restore FrameCanvas as the active video surface.
+        if (m_mpvWidget) {
+            m_mpvWidget->setMpvHandle(nullptr);
+            m_mpvWidget->hide();
+        }
+        if (m_canvas) m_canvas->show();
+        return;
+    }
+
+    // Active backend is mpv. Lazy-create MpvVideoWidget the first time
+    // mpv is selected (works whether the initial ctor backend was mpv
+    // or we just swapped from ffmpeg). The firstFrameRendered connect is
+    // tied to the widget instance (not to a specific backend) so it's
+    // wired exactly once at first creation.
+    if (!m_mpvWidget) {
+        m_mpvWidget = new MpvVideoWidget(this);
+        m_mpvWidget->setGeometry(0, 0, width(), height());
+        connect(m_mpvWidget, &MpvVideoWidget::firstFrameRendered,
+                this, [this]() {
+                    // Match the SidecarProcess-side firstFrame state transition
+                    // so HUD overlays + watchdogs see the same signal shape.
+                    m_firstFrameSeen = true;
+                });
+    } else {
+        // Re-show after a prior swap-away. Refresh geometry in case the
+        // window was resized while we were on the FrameCanvas branch.
+        m_mpvWidget->setGeometry(0, 0, width(), height());
+    }
+
+    // Backend-specific connects — must be re-made on every swap because
+    // they capture the current mpvBackend pointer. The OLD backend's
+    // connects are auto-disconnected by Qt when its QObject was deleted
+    // in switchBackendTo above.
+    //
+    // ready() fires after MpvBackend::initializeMpv() — at that point the
+    // mpv handle is valid + the widget can attach a render context. If
+    // mpv is ALREADY initialized (mpvHandle non-null), attach immediately
+    // rather than waiting for the next ready cycle.
+    connect(mpvBackend, &IPlayerBackend::ready,
+            this, [this, mpvBackend]() {
+                if (m_mpvWidget) m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
+            });
+    connect(mpvBackend, &MpvBackend::mpvHandleInvalidating,
+            this, [this]() {
+                if (m_mpvWidget) m_mpvWidget->setMpvHandle(nullptr);
+            },
+            Qt::DirectConnection);
+    if (mpvBackend->mpvHandle()) {
+        m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
+    }
+
+    // Toggle render surface: hide FrameCanvas, show MpvVideoWidget.
+    // Don't lower() — that pushes the widget below FrameCanvas's z-stack
+    // position. With FrameCanvas hidden, leave MpvVideoWidget where Qt
+    // placed it at construction time (above FrameCanvas, below later-
+    // constructed HUD widgets which raise themselves on show).
+    if (m_canvas) m_canvas->hide();
+    m_mpvWidget->show();
+#else
+    // libmpv not compiled in — m_backend is always SidecarProcess.
+    // FrameCanvas is the only video surface; nothing to toggle.
+    if (m_canvas) m_canvas->show();
+#endif
 }

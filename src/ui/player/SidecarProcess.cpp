@@ -67,7 +67,7 @@ static QString sidecarPath()
 }
 
 SidecarProcess::SidecarProcess(QObject* parent)
-    : QObject(parent)
+    : IPlayerBackend(parent)
     , m_sessionId(QUuid::createUuid().toString(QUuid::WithoutBraces))
 {
     // Batch 5.2 — register SubtitleTrackInfo for queued signal emissions
@@ -364,6 +364,16 @@ int SidecarProcess::sendSetSubtitlePosition(int percent)
     QJsonObject p;
     p["percent"] = percent;
     return sendCommand("set_sub_position", p);
+}
+
+int SidecarProcess::sendSetSubtitlePositionMode(const QString& mode)
+{
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard / Force toggle.
+    // Sidecar dispatcher sanitizes unknown values to Standard; we pass
+    // through verbatim so a debug log shows what the UI sent.
+    QJsonObject p;
+    p["mode"] = mode;
+    return sendCommand("set_sub_position_mode", p);
 }
 
 int SidecarProcess::sendSetAudioDelay(int delayMs)

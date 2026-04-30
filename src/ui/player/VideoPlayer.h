@@ -15,8 +15,10 @@ class SeekSlider;
 
 #include <QHash>
 #include <QList>
+#include <optional>
 
 #include "core/stream/addon/SubtitleInfo.h"
+#include "ui/player/BackendFactory.h"
 
 class CoreBridge;
 class KeyBindings;
@@ -24,6 +26,8 @@ class IPlayerBackend;
 class SidecarProcess;
 class ShmFrameReader;
 class FrameCanvas;
+class MpvVideoWidget;
+class MpvBackend;
 class VolumeHud;
 class CenterFlash;
 class PlaylistDrawer;
@@ -47,11 +51,22 @@ public:
     // from the "stream" progress domain rather than "videos") pass it here
     // and the seek lands regardless of PersistenceMode. 0.0 preserves
     // existing behavior byte-for-byte.
+    // explicitBackend (added 2026-04-30): per-invocation override for the
+    // VideosPage / ShowView "Play with ffmpeg" / "Play with mpv" right-click
+    // entries. When set, BackendFactory::chooseFor honors it above the saved
+    // QSettings preference but below the §Q4 stream-mode lock and
+    // TANKOBAN_FORCE_MPV. nullopt (default) preserves existing semantics —
+    // VideoPlayer keeps whatever backend it was constructed with (saved
+    // preference at startup), so non-override callers see no behavior change.
+    // When the override differs from the live backend, openFile triggers a
+    // mid-session swap via switchBackendTo() — stop+deleteLater old, create
+    // new, rewire signals — before the rest of openFile proceeds.
     void openFile(const QString& filePath,
                   const QStringList& playlist = {},
                   int playlistIndex = 0,
                   double startPositionSec = 0.0,
-                  const QString& displayTitle = {});
+                  const QString& displayTitle = {},
+                  std::optional<BackendFactory::Type> explicitBackend = std::nullopt);
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 — isIntentional distinguishes
     // user-driven stops (Escape, close, APPCOMMAND_MEDIA_STOP — default)
@@ -239,6 +254,37 @@ protected:
 private:
     void buildUI();
 
+    // 2026-04-30 — connects every IPlayerBackend signal this class consumes
+    // to its handler/lambda. Single source of truth for backend wire-up;
+    // called once from the constructor (after buildUI returns so all member
+    // widgets the lambdas reference exist) and again from switchBackendTo
+    // after a mid-session swap rebuilds m_backend. Adding any new
+    // connect(m_backend, ...) site MUST happen inside this function or a
+    // backend swap will silently drop the new signal handler.
+    void wireBackendSignals();
+
+    // 2026-04-30 — mid-session backend swap driven by openFile's
+    // explicitBackend parameter. Stops the live backend (sendStop +
+    // sendShutdown + ensureTerminated, mirroring stopPlayback's user-close
+    // teardown), deletes it, creates the new backend type via
+    // BackendFactory::create, refreshes downstream pointer holders
+    // (SubtitlePopover::setSidecar + MpvVideoWidget show/hide via
+    // syncMpvIntegrationToBackend), and re-runs wireBackendSignals.
+    // No-op when t == m_currentBackendType.
+    void switchBackendTo(BackendFactory::Type t);
+
+    // 2026-04-30 hotfix — drives the MpvVideoWidget setup/teardown that
+    // pairs with the active backend. Idempotent. Called from buildUI (so
+    // a session that starts in mpv mode wires correctly) and from
+    // switchBackendTo (so a mid-session swap into or out of mpv toggles
+    // the right render surface). Hides FrameCanvas and shows MpvVideoWidget
+    // when m_backend is MpvBackend; reverses on swap-away. Lazy-creates
+    // m_mpvWidget the first time mpv is selected, regardless of whether
+    // the initial ctor-time backend was mpv. Without this, a swap from
+    // ffmpeg-default to mpv leaves m_mpvWidget null + FrameCanvas visible
+    // — mpv plays audio but video has nowhere to render (blank canvas).
+    void syncMpvIntegrationToBackend();
+
     // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown. Detaches canvas/
     // reader + clears cached track lists + stops restart-retry timer.
     // Does NOT touch the sidecar process. Called unconditionally from
@@ -295,6 +341,12 @@ private:
     void adjustAudioDelay(int delta);
     void adjustSubDelay(int delta);
     void adjustSubPosition(int delta);
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard / Force toggle.
+    void setSubPositionMode(const QString& mode);
+    // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — subtitle size +/- (delta
+    // 0.1 = 10%; absolute value clamped 0.5..2.0; persisted under
+    // "videoPlayer/subtitleSize"; pushed via sendSetSubtitleSize).
+    void adjustSubtitleSize(double delta);
     void cycleAudioTrack();
     void cycleSubtitleTrack();
     void toggleSubtitles();
@@ -444,8 +496,19 @@ private:
     // VideoPlayer.cpp:180 still constructs SidecarProcess concretely (Phase 5
     // introduces BackendFactory for per-file/per-show backend selection).
     IPlayerBackend* m_backend   = nullptr;
+    // Tracks the live type behind m_backend so openFile() can detect when
+    // an explicit "Play with X" override differs from current and trigger
+    // a mid-session swap via switchBackendTo. Updated in the ctor and in
+    // every switchBackendTo call — must stay in lockstep with m_backend's
+    // concrete type.
+    BackendFactory::Type m_currentBackendType = BackendFactory::Type::Ffmpeg;
     ShmFrameReader* m_reader    = nullptr;
     FrameCanvas*    m_canvas    = nullptr;
+    // MPV_RENDER_API_INTEGRATION P5 redux 2026-04-29 — QOpenGLWidget child
+    // that owns the libmpv render context when m_backend is MpvBackend.
+    // Layered at the same geometry as m_canvas; FrameCanvas is hidden when
+    // mpv backend is active. Null when SidecarProcess is the active backend.
+    MpvVideoWidget* m_mpvWidget = nullptr;
 
     // Batch 1.2 — master A/V clock. VideoPlayer owns it; FrameCanvas gets
     // a pointer via setSyncClock() in buildUI(). Today only FrameCanvas
@@ -574,6 +637,14 @@ private:
     int    m_subDelayMs = 0;    // accumulated subtitle delay in ms
     int    m_audioDelayMs = 0;  // user-configurable audio delay (Bluetooth comp)
     int    m_subPositionPct = 100; // subtitle vertical position (0=top, 100=bottom); mpv sub-pos parity
+    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — position policy mode.
+    // "standard" (default per Q1 ratification, libass / mpv sub-pos owns
+    // placement) or "force" (Y-offset hack opt-in for aggressive-MarginV
+    // scripts; ffmpeg-only — mpv backend logs a one-time warning).
+    QString m_subPositionMode = QStringLiteral("standard");
+    // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — subtitle size scale.
+    // Default 1.0x = sidecar baseline; clamped 0.5..2.0 in adjustSubtitleSize.
+    double m_subtitleSize = 1.0;
     QString m_audioDeviceKey;   // QSettings key for current device's offset
     bool   m_subsVisible = true;
     // VIDEO_PLAYER_FIX Batch 3.1 — persisted across app restart via
