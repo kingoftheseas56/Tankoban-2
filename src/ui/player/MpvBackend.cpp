@@ -31,6 +31,69 @@ void mpvLog(const QString& msg) {
     DebugLogBuffer::instance().info("MpvBackend", msg);
 }
 
+// MAKE_MPV_SOLO Task 3 — mpv emits color primaries / TRC as strings (e.g.
+// "bt.709", "pq"); the rest of the player consumes the AVCOL_PRI_* /
+// AVCOL_TRC_* int constants the ffmpeg sidecar supplies. Map the strings
+// libmpv actually emits today; UNSPECIFIED on anything outside the table.
+int mpvPrimariesToAv(const char* s) {
+    if (!s || !*s) return 2;  // AVCOL_PRI_UNSPECIFIED
+    if (qstrcmp(s, "bt.709")     == 0) return 1;   // AVCOL_PRI_BT709
+    if (qstrcmp(s, "bt.470bg")   == 0) return 5;   // AVCOL_PRI_BT470BG
+    if (qstrcmp(s, "smpte170m")  == 0) return 6;   // AVCOL_PRI_SMPTE170M
+    if (qstrcmp(s, "smpte240m")  == 0) return 7;   // AVCOL_PRI_SMPTE240M
+    if (qstrcmp(s, "bt.2020")    == 0) return 9;   // AVCOL_PRI_BT2020
+    if (qstrcmp(s, "dci-p3")     == 0) return 11;  // AVCOL_PRI_SMPTE431
+    if (qstrcmp(s, "display-p3") == 0) return 12;  // AVCOL_PRI_SMPTE432
+    return 2;
+}
+int mpvGammaToAv(const char* s) {
+    if (!s || !*s) return 2;  // AVCOL_TRC_UNSPECIFIED
+    if (qstrcmp(s, "bt.1886")    == 0) return 1;   // AVCOL_TRC_BT709-equivalent
+    if (qstrcmp(s, "srgb")       == 0) return 13;  // AVCOL_TRC_IEC61966_2_1
+    if (qstrcmp(s, "linear")     == 0) return 8;   // AVCOL_TRC_LINEAR
+    if (qstrcmp(s, "pq")         == 0) return 16;  // AVCOL_TRC_SMPTE2084 (HDR PQ)
+    if (qstrcmp(s, "hlg")        == 0) return 18;  // AVCOL_TRC_ARIB_STD_B67 (HDR HLG)
+    if (qstrcmp(s, "gamma1.8")   == 0) return 4;   // AVCOL_TRC_GAMMA22-ish
+    if (qstrcmp(s, "gamma2.2")   == 0) return 4;
+    return 2;
+}
+
+// MAKE_MPV_SOLO Task 5 — categorize mpv playback failures into plain-English
+// toast messages. Mirrors the ffmpeg side's pattern (SidecarProcess emits short,
+// non-jargon error strings via errorOccurred → VideoPlayer::onError → toast HUD).
+//
+// Reached from MPV_EVENT_END_FILE when reason == MPV_END_FILE_REASON_ERROR. The
+// error field in mpv_event_end_file is one of the negative mpv_error codes; the
+// most common load-failure paths are LOADING_FAILED (file missing / corrupt /
+// network drop), NOTHING_TO_PLAY (no streams), UNSUPPORTED (codec/format),
+// INVALID_PARAMETER (bad path/URL). Anything else falls through to a labeled
+// pass-through of mpv_error_string so future failure modes still surface
+// readable text without burying the cause.
+QString formatMpvPlaybackError(int errorCode, const QString& path) {
+    const QString name = QFileInfo(path).fileName();
+    const bool isUrl =
+        path.startsWith(QStringLiteral("http://"),  Qt::CaseInsensitive) ||
+        path.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive) ||
+        path.startsWith(QStringLiteral("rtmp://"),  Qt::CaseInsensitive) ||
+        path.startsWith(QStringLiteral("rtsp://"),  Qt::CaseInsensitive);
+
+    switch (errorCode) {
+    case MPV_ERROR_LOADING_FAILED:
+        return isUrl
+            ? QStringLiteral("Couldn't connect to stream. Check your network or the URL.")
+            : QStringLiteral("Couldn't open '%1'. File may be missing or unreadable.").arg(name);
+    case MPV_ERROR_NOTHING_TO_PLAY:
+        return QStringLiteral("'%1' has no playable video or audio streams.").arg(name);
+    case MPV_ERROR_UNSUPPORTED:
+        return QStringLiteral("'%1' uses a codec Tankoban can't play.").arg(name);
+    case MPV_ERROR_INVALID_PARAMETER:
+        return QStringLiteral("Invalid file path or URL.");
+    default:
+        return QStringLiteral("Playback failed: %1")
+                .arg(QString::fromUtf8(mpv_error_string(errorCode)));
+    }
+}
+
 // Convenience: set a string option before mpv_initialize().
 int setOpt(mpv_handle* h, const char* name, const char* value) {
     return mpv_set_option_string(h, name, value);
@@ -312,19 +375,99 @@ void MpvBackend::onWakeup()
             emit decoderOpenDone();
             emit firstPacketRead();
             emit firstDecoderReceive();
-            // Synthesize media_info payload from cached duration/metadata.
+            // MAKE_MPV_SOLO Task 3 — rich mediaInfo bridge. Mirrors the
+            // ffmpeg sidecar's media_info shape (native_sidecar/main.cpp:538-548)
+            // so VideoPlayer's mediaInfo handler at VideoPlayer.cpp:3712-3760
+            // populates HDR badge / color shader / chapter list / per-device
+            // audio-delay recall identically on both backends.
             {
                 QJsonObject mi;
                 mi.insert("duration_sec", m_lastDurationSec);
                 mi.insert("file_path", m_currentFilePath);
+
+                // Color primaries — string from mpv → AV enum int.
+                if (char* p = mpv_get_property_string(m_mpv, "video-params/primaries")) {
+                    mi.insert("color_primaries", mpvPrimariesToAv(p));
+                    mpv_free(p);
+                } else {
+                    mi.insert("color_primaries", 2);  // UNSPECIFIED
+                }
+
+                // Color TRC — needed for both the shader fields AND the HDR
+                // boolean. Capture the string for the HDR derivation below.
+                QString trcStr;
+                if (char* t = mpv_get_property_string(m_mpv, "video-params/gamma")) {
+                    trcStr = QString::fromUtf8(t);
+                    mi.insert("color_trc", mpvGammaToAv(t));
+                    mpv_free(t);
+                } else {
+                    mi.insert("color_trc", 2);
+                }
+
+                // HDR — PQ or HLG TRC means HDR transfer function. Mirrors
+                // demuxer.cpp:450-452 which sets hdr=true on SMPTE2084/HLG.
+                mi.insert("hdr", trcStr == QStringLiteral("pq")
+                                 || trcStr == QStringLiteral("hlg"));
+
+                // Chapter list — mpv emits {title, time}; ffmpeg side uses
+                // {title, start}. Translate so VideoPlayer.cpp:3743's
+                // c.value("start").toDouble() works on both.
+                if (char* json = mpv_get_property_string(m_mpv, "chapter-list")) {
+                    QJsonParseError perr;
+                    QJsonDocument doc = QJsonDocument::fromJson(QByteArray(json), &perr);
+                    if (perr.error == QJsonParseError::NoError && doc.isArray()) {
+                        QJsonArray chapters;
+                        for (const auto& v : doc.array()) {
+                            const QJsonObject c = v.toObject();
+                            QJsonObject out;
+                            out.insert("title", c.value("title").toString());
+                            out.insert("start", c.value("time").toDouble());
+                            chapters.append(out);
+                        }
+                        mi.insert("chapters", chapters);
+                    }
+                    mpv_free(json);
+                }
+
+                // Audio device + host API. mpv's `audio-device` is the user's
+                // device pick (often "auto"); `current-ao` is the actual audio
+                // output module (e.g. "wasapi"). Together they form a stable
+                // per-device key for VideoPlayer's audio-delay recall.
+                if (char* d = mpv_get_property_string(m_mpv, "audio-device")) {
+                    mi.insert("audio_device", QString::fromUtf8(d));
+                    mpv_free(d);
+                }
+                if (char* a = mpv_get_property_string(m_mpv, "current-ao")) {
+                    mi.insert("audio_host_api", QString::fromUtf8(a));
+                    mpv_free(a);
+                }
+
                 emit mediaInfo(mi);
             }
             break;
 
-        case MPV_EVENT_END_FILE:
-            mpvLog("[event] END_FILE");
+        case MPV_EVENT_END_FILE: {
+            // MAKE_MPV_SOLO Task 5 — surface playback failures as user-facing
+            // toast messages. Pre-fix this case treated every end-file as a
+            // clean EOF, including error endings, so failed loads went silent.
+            // mpv tags the reason in event data + carries the error code on
+            // ERROR reason; map it to a plain-English string and route through
+            // the same errorOccurred → VideoPlayer::onError → toast HUD path
+            // the ffmpeg sidecar already uses.
+            auto* eef = static_cast<mpv_event_end_file*>(ev->data);
+            const int reason = eef ? eef->reason : MPV_END_FILE_REASON_EOF;
+            mpvLog(QString("[event] END_FILE reason=%1").arg(reason));
+            if (reason == MPV_END_FILE_REASON_ERROR && eef) {
+                const QString msg = formatMpvPlaybackError(eef->error, m_currentFilePath);
+                mpvLog(QString("[error] code=%1 (%2): %3")
+                          .arg(eef->error)
+                          .arg(QString::fromUtf8(mpv_error_string(eef->error)))
+                          .arg(msg));
+                emit errorOccurred(msg);
+            }
             emit endOfFile();
             break;
+        }
 
         case MPV_EVENT_PLAYBACK_RESTART:
             // Fires on every seek-completion + initial first-frame +
@@ -464,11 +607,24 @@ void MpvBackend::handlePropertyChange(mpv_event_property* prop)
                         const auto o = v.toObject();
                         const QString type = o.value(QStringLiteral("type")).toString();
                         const QString id = QString::number(o.value(QStringLiteral("id")).toInt());
+                        // MAKE_MPV_SOLO Task 6 (2026-05-01) — re-emit `id` as
+                        // a string in the per-track JSON object before
+                        // appending to audio/sub. mpv emits id as int; the
+                        // ffmpeg sidecar emits as string. VideoPlayer's
+                        // mergeTrackList reads `id` as QString — the int
+                        // case skips every track via `if (id.isEmpty())`,
+                        // leaving the embedded sub track-list empty in the
+                        // right-click "Subtitles" submenu and the bottom-HUD
+                        // SubtitlePopover (Pattern A root cause from Task 1
+                        // baseline). Fix: clone the object, overwrite `id`
+                        // with the stringified value, then append.
+                        QJsonObject o2 = o;
+                        o2.insert(QStringLiteral("id"), id);
                         if (type == QLatin1String("audio")) {
-                            audio.append(o);
+                            audio.append(o2);
                             if (o.value(QStringLiteral("selected")).toBool()) activeAud = id;
                         } else if (type == QLatin1String("sub")) {
-                            sub.append(o);
+                            sub.append(o2);
                             if (o.value(QStringLiteral("selected")).toBool()) {
                                 activeSub = id;
                                 activeSubIdx = subIdx;
@@ -767,25 +923,37 @@ int MpvBackend::sendSetAudioDelay(int delayMs)
     return nextSeq();
 }
 
-int MpvBackend::sendSetAudioSpeed(double speed)
+int MpvBackend::sendSetAudioSpeed(double /*speed*/)
 {
-    // Audio-speed adjustment for ±5% A/V drift correction. mpv's
-    // 'audio-pitch-correction' is on by default, so we route through the
-    // same 'speed' property as sendSetRate. Phase 6 differentiates.
-    return sendSetRate(speed);
+    if (!m_mpv) return -1;
+    // MAKE_MPV_SOLO Task 8 (2026-05-01) — no-op on mpv. Pre-fix routed to
+    // sendSetRate which writes to the `speed` property — that changes
+    // playback speed (video + audio together), not just audio sync.
+    // Actively harmful. mpv handles A/V sync internally via its own audio
+    // clock + resampler (audio-pts mode); no manual ±5% drift correction
+    // needed (which is what the ffmpeg sidecar's set_audio_speed does for
+    // its own clock). Accept the IPlayerBackend call but ignore it.
+    return nextSeq();
 }
 
 int MpvBackend::sendSetDrcEnabled(bool enabled)
 {
     if (!m_mpv) return -1;
-    // mpv has acompressor af; toggle by setting the af list. Phase 6
-    // wires the full filter graph; Phase 3 stub records the request.
+    // MAKE_MPV_SOLO Task 8 (2026-05-01) — incremental af-chain edit using
+    // mpv's `af-add` / `af-remove` commands with a `@drc:` label.
+    // Pre-fix: setOpt("af", "acompressor"|"") OVERWROTE the entire audio
+    // filter chain — any other filters (sendRawFilters, future EQ) would
+    // get clobbered each time DRC was toggled. The label-prefixed form
+    // (`@drc:`) lets us add/remove this specific filter by name without
+    // touching neighbors. Idempotent: af-add on a label that already
+    // exists is benign; af-remove on a label that doesn't exist is benign.
+    const int seq = nextSeq();
     if (enabled) {
-        setOpt(m_mpv, "af", "acompressor");
+        cmdAsync(m_mpv, seq, {"af-add", "@drc:acompressor"});
     } else {
-        setOpt(m_mpv, "af", "");
+        cmdAsync(m_mpv, seq, {"af-remove", "@drc"});
     }
-    return nextSeq();
+    return seq;
 }
 
 // ─── Track selection ───────────────────────────────────────────────────────
@@ -866,26 +1034,19 @@ int MpvBackend::sendSetSubtitlePosition(int percent)
 int MpvBackend::sendSetSubtitlePositionMode(const QString& mode)
 {
     if (!m_mpv) return -1;
-    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard mode is mpv's
-    // native behavior via sub-pos (already wired in sendSetSubtitle-
-    // Position above). Force mode would require a libmpv render-hook to
-    // translate the rendered overlay post-libass — out of Phase 2 scope.
-    // Per plan Step 5.7: "Force mode currently ffmpeg-only" if Q1 PROPOSED
-    // Standard-default holds (it did, ratified 2026-04-30 ~21:05pm). Log
-    // a one-time warning when Force is requested so the asymmetry is
-    // visible in debug logs, not silent.
-    if (mode == QStringLiteral("force")) {
-        static bool warned = false;
-        if (!warned) {
-            mpvLog(QStringLiteral(
-                "[sub-pos-mode] Force requested but mpv path supports "
-                "Standard only (libass-native sub-pos). Switch backend to "
-                "ffmpeg for Force-position behavior on this file."));
-            warned = true;
-        }
-    }
-    // No mpv property to set — Standard is implicit in the existing
-    // sub-pos wiring; Force is a no-op on this backend.
+    // MAKE_MPV_SOLO Task 6 (2026-05-01) — Force mode now wires to mpv's
+    // `sub-ass-override` property. Maps:
+    //   "standard" → sub-ass-override=no    (default; preserve authored
+    //                ASS layout — signs/karaoke/multi-event scripts
+    //                stay where the script wrote them)
+    //   "force"    → sub-ass-override=force (override authored positions
+    //                + margins; sub-pos / sub-margin-y now win against
+    //                aggressive-MarginV scripts)
+    // Replaces Phase 2.F's warning-only stub. Same Q4 ratification still
+    // holds: default is Standard so anime ASS authored styles persist
+    // unless user explicitly toggles Force in the SettingsPopover.
+    setOpt(m_mpv, "sub-ass-override",
+           mode == QStringLiteral("force") ? "force" : "no");
     return nextSeq();
 }
 
@@ -898,7 +1059,7 @@ int MpvBackend::sendLoadExternalSub(const QString& path)
     return seq;
 }
 
-int MpvBackend::sendSetSubtitleUrl(const QUrl& url, int /*offsetPx*/, int /*delayMs*/)
+int MpvBackend::sendSetSubtitleUrl(const QUrl& url, int offsetPx, int delayMs)
 {
     if (!m_mpv) return -1;
     const int seq = nextSeq();
@@ -906,15 +1067,31 @@ int MpvBackend::sendSetSubtitleUrl(const QUrl& url, int /*offsetPx*/, int /*dela
                             ? url.toLocalFile().toUtf8()
                             : url.toString().toUtf8();
     cmdAsync(m_mpv, seq, {"sub-add", u.constData(), "select"});
+    // MAKE_MPV_SOLO Task 6 (2026-05-01) — apply offsetPx + delayMs after
+    // the sub-add command. Pre-fix these args were dropped (the /*offsetPx*/
+    // /*delayMs*/ comments named them as deliberately ignored). Now: offset
+    // routes through sub-margin-y (same pixel mapping as
+    // sendSetSubtitlePixelOffset above), and delay routes through sub-delay
+    // (mpv's native sub-timing offset, in seconds; we receive ms).
+    if (offsetPx != 0) {
+        setDouble(m_mpv, "sub-margin-y", static_cast<double>(offsetPx));
+    }
+    if (delayMs != 0) {
+        setDouble(m_mpv, "sub-delay", static_cast<double>(delayMs) / 1000.0);
+    }
     emit subtitleUrlLoaded(url, QString::fromUtf8(u), true);
     return seq;
 }
 
 int MpvBackend::sendSetSubtitlePixelOffset(int pixelOffsetY)
 {
-    // Pixel-offset is the libass-Y-offset hack from the ffmpeg path. mpv
-    // owns sub positioning natively via sub-pos; Phase 6 maps Y-offset to
-    // a percent translation. Stub keeps the IPlayerBackend surface complete.
+    if (!m_mpv) return -1;
+    // MAKE_MPV_SOLO Task 6 (2026-05-01) — pixel-offset now wires to mpv's
+    // native `sub-margin-y` property (in pixels, top-aligned for top
+    // tracks / bottom-aligned for bottom tracks). The ffmpeg side hacks
+    // this via libass Y-translation; mpv owns it natively. Direct
+    // mapping: positive pixelOffsetY moves subs further from edge.
+    setDouble(m_mpv, "sub-margin-y", static_cast<double>(pixelOffsetY));
     emit subtitleOffsetChanged(pixelOffsetY);
     return nextSeq();
 }
@@ -967,7 +1144,13 @@ int MpvBackend::sendSetToneMapping(const QString& algorithm, bool peakDetect)
 {
     if (!m_mpv) return -1;
     if (!algorithm.isEmpty()) setOpt(m_mpv, "tone-mapping", algorithm.toUtf8().constData());
-    setFlag(m_mpv, "hdr-peak-decay-rate", peakDetect);
+    // MAKE_MPV_SOLO Task 4 Phase E (2026-05-01) — was setFlag on
+    // hdr-peak-decay-rate, which is mpv's *numeric* decay-rate option
+    // (default 100ms), not a boolean flag — pre-fix this line silently
+    // no-op'd. The boolean for enabling per-scene peak detection is
+    // hdr-compute-peak. Mirrors libplacebo's pl_peak_detect_params toggle
+    // on the ffmpeg sidecar side (gpu_renderer.cpp:234).
+    setFlag(m_mpv, "hdr-compute-peak", peakDetect);
     return nextSeq();
 }
 
