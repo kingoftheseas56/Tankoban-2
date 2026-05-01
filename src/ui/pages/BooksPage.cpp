@@ -545,7 +545,10 @@ void BooksPage::buildUI()
     outerLayout->addWidget(m_stack, 1);
 
     // ── Keyboard shortcuts (Batch 7) ──
+    // Task 7 (2026-05-01) — scope to widget so it doesn't intercept Esc
+    // when BookReader is shown over this page in the QStackedWidget.
     auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escShortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escShortcut, &QShortcut::activated, this, [this]() {
         if (!m_searchBar->text().trimmed().isEmpty()) {
             m_searchBar->clear();

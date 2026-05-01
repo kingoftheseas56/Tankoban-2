@@ -12,6 +12,7 @@
 #include "core/torrent/TorrentClient.h"
 #include "PosterPickerPopover.h"
 #include "ui/ContextMenuHelper.h"
+#include "ui/player/BackendFactory.h"
 #include "ui/widgets/FadingStackedWidget.h"
 #include "ui/widgets/LibraryListView.h"
 #include <QPushButton>
@@ -431,6 +432,22 @@ void VideosPage::buildUI()
         revealAct->setEnabled(!showPath.isEmpty());
         auto* copyAct = menu->addAction("Copy path");
         copyAct->setEnabled(!showPath.isEmpty());
+
+        // 2026-04-30 — direct-opener entries (ONE-SHOT). Clicking emits
+        // playVideoWithBackend(filePath, type) so VideoPlayer::openFile
+        // honors the override for THIS playback only via switchBackendTo;
+        // the saved player/videoBackend preference is NOT mutated.
+        // No "(current)" suffix because these are play actions, not
+        // preference toggles. Power users who want sticky use the
+        // TANKOBAN_FORCE_MPV env var.
+        menu->addSeparator();
+        auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
+        playFfmpegAct->setEnabled(hasEpisodes);
+#ifdef HAS_LIBMPV
+        auto* playMpvAct = menu->addAction("Play with mpv");
+        playMpvAct->setEnabled(hasEpisodes);
+#endif
+
         menu->addSeparator();
         auto* setPosterAct = menu->addAction("Set poster...");
         QString existingPoster = posterPath(showPath);
@@ -526,6 +543,37 @@ void VideosPage::buildUI()
             ContextMenuHelper::revealInExplorer(showPath);
         } else if (chosen == copyAct) {
             ContextMenuHelper::copyToClipboard(showPath);
+        } else if (chosen == playFfmpegAct
+#ifdef HAS_LIBMPV
+                   || chosen == playMpvAct
+#endif
+                   ) {
+            // Mirror the Play / Continue resume-file resolution above so the
+            // backend-overridden play opens the same file the default Play
+            // would. Empty allFiles falls through silently (the action was
+            // disabled in that case anyway).
+            QString resumeFile;
+            qint64 bestAt = -1;
+            for (const auto& f : allFiles) {
+                QString id = computeVideoId(f);
+                QJsonObject prog = allProg.value(id).toObject();
+                if (prog.value("finished").toBool()) continue;
+                double posSec = prog.value("positionSec").toDouble(0);
+                if (posSec > 0) {
+                    qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
+                    if (upd > bestAt) { bestAt = upd; resumeFile = f; }
+                }
+            }
+            if (resumeFile.isEmpty() && !allFiles.isEmpty())
+                resumeFile = allFiles.first();
+            if (!resumeFile.isEmpty()) {
+                const auto backend =
+#ifdef HAS_LIBMPV
+                    (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
+#endif
+                    BackendFactory::Type::Ffmpeg;
+                emit playVideoWithBackend(resumeFile, backend);
+            }
         } else if (chosen == setPosterAct) {
             QString file = QFileDialog::getOpenFileName(this, "Set poster",
                 QString(), "Images (*.png *.jpg *.jpeg *.bmp *.webp)");
@@ -674,6 +722,19 @@ void VideosPage::buildUI()
         revealAct->setEnabled(!filePath.isEmpty());
         auto* copyAct = menu->addAction("Copy path");
         copyAct->setEnabled(!filePath.isEmpty());
+
+        // MPV_RENDER_API_INTEGRATION P7 2026-04-30 — backend selection
+        // entries (also added on the show-tile menu earlier in this file).
+        // Saves preference to QSettings player/videoBackend; takes effect
+        // on next Tankoban launch (apply-on-next-launch semantics ratified
+        // 2026-04-30 — direct-opener entries (ONE-SHOT). Same shape as the
+        // show-tile menu earlier in this file.
+        menu->addSeparator();
+        auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
+#ifdef HAS_LIBMPV
+        auto* playMpvAct = menu->addAction("Play with mpv");
+#endif
+
         menu->addSeparator();
         auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
         removeAct->setEnabled(!showPath.isEmpty());
@@ -725,6 +786,19 @@ void VideosPage::buildUI()
             ContextMenuHelper::revealInExplorer(filePath);
         } else if (chosen == copyAct) {
             ContextMenuHelper::copyToClipboard(filePath);
+        } else if (chosen == playFfmpegAct
+#ifdef HAS_LIBMPV
+                   || chosen == playMpvAct
+#endif
+                   ) {
+            // Continue-Watching tile already has a single filePath, no
+            // resume-resolution loop needed.
+            const auto backend =
+#ifdef HAS_LIBMPV
+                (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
+#endif
+                BackendFactory::Type::Ffmpeg;
+            emit playVideoWithBackend(filePath, backend);
         } else if (chosen == removeAct) {
             if (ContextMenuHelper::confirmRemove(this, "Remove from library",
                     "Remove this show from the library?\n" + showPath +
@@ -742,8 +816,15 @@ void VideosPage::buildUI()
             toggleViewMode();
     });
 
-    // Escape: clear search if active, else navigate back from ShowView
+    // Escape: clear search if active, else navigate back from ShowView.
+    // MAKE_MPV_SOLO Task 7 (2026-05-01) — scope to WidgetWithChildren so
+    // the shortcut only fires when this page (or its descendants) has
+    // focus. Default Qt::WindowShortcut fired on any Esc press in the
+    // MainWindow even when this page was hidden in the QStackedWidget,
+    // eating Esc before VideoPlayer's back_to_library handler at
+    // VideoPlayer.cpp:3294 could close the player.
     auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escShortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escShortcut, &QShortcut::activated, this, [this]() {
         if (!m_searchBar->text().isEmpty()) {
             m_searchBar->clear();
@@ -782,6 +863,11 @@ void VideosPage::buildUI()
     connect(m_showView, &ShowView::episodeSelected, this, [this](const QString& filePath) {
         emit playVideo(filePath);
     });
+    // 2026-04-30 — backend-override sibling forward, mirrors the shape above.
+    connect(m_showView, &ShowView::episodeSelectedWithBackend, this,
+        [this](const QString& filePath, BackendFactory::Type backend) {
+            emit playVideoWithBackend(filePath, backend);
+        });
     m_stack->addWidget(m_showView);
 
     outerLayout->addWidget(m_stack, 1);
