@@ -1,0 +1,45 @@
+# ffmpeg baseline — Saiki Kusuo no Psi-nan Ep 11
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~11:53am
+
+## File
+Path: C:/Users/Suprabha/Desktop/Media/TV/Saiki Kusuo no Psi-nan/Saiki Kusuo no Psi-nan/[DB]Saiki Kusuo no Psi-nan_-_11_(Dual Audio_10bit_BD1080p_x265).mkv
+Duration: 1431.0s (~23:51)
+Backend: ffmpeg sidecar (sidecar-ipc events confirmed)
+
+## Player snapshot (mid-playback ~7:34)
+currentAspect: original
+currentCrop: none
+streamMode: false
+streamStalled: false
+firstFrameSeen: true
+fullScreen: false (windowed during smoke)
+persistenceMode: LibraryVideos
+sidecarRetryCount: 0
+paused: false (one resume command observed mid-window — sidecar idle-state cycle, not a stall)
+
+## Frame stats (representative samples)
+- frames=55-65 per ~1s window
+- skipped=0 to 1 (1 skip during a resume transition; otherwise clean)
+- timer_interval p50 = 0.4-4ms, p99 = 62-82ms
+- draw p50 = 0.09-0.15ms, p99 = 14-62ms
+- present p50 = 0.09-0.17ms, p99 = 0.22-0.59ms
+- DXGI queued=0
+- vsync_us = 16662 (~60Hz)
+
+## Aspect handling
+source=1920x1080 frameAspect=1.7778 — clean 16:9.
+Windowed widgetAspect=1.9713 produced videoRect={94,0,1732,974} (side-letterbox).
+
+## Audio
+Adaptive audio-clock sync active — set_audio_speed observed across seqs 97-105, normal jitter band.
+
+## Hemanth verdict: YELLOW
+Notes:
+- Subtitles NOT rendering on screen (same as Vinland — pattern across anime ASS files today).
+
+## Implication for mpv comparison
+Two-for-two: ffmpeg path is shipping with broken/missing subtitles on anime ASS files in
+this baseline window. Worth flagging at the final memo: if mpv lights up default subs on
+the same files, that's a major user-facing win for the cutover. If mpv ALSO misses them,
+investigate whether saved-default-track-Off is sticky from a prior session.

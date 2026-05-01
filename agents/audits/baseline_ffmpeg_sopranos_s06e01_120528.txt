@@ -1,0 +1,41 @@
+# ffmpeg baseline — The Sopranos S06E01 (Members Only)
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~12:05pm
+
+## File
+Path: C:/Users/Suprabha/Desktop/Media/TV/The Sopranos/Season 6/The Sopranos (1999) - S06E01 - Members Only (1080p BluRay x265 ImE).mkv
+Backend: ffmpeg sidecar
+Subtitle stream: PGS (image-based, Blu-ray standard)
+
+## Player snapshot at smoke window close
+Snapshot was null at the moment of capture (player exited before snapshot ran). Live PERF
+ring buffer ~30s of representative frames captured below.
+
+## Frame stats (representative samples — Sopranos PGS playback was clean)
+- frames=60-63 per ~1s window
+- skipped=0 across the entire ~30s captured window (zero drops)
+- timer_interval p50 = 13.8-16.7ms, p99 = 40-50ms (excellent — clean ~60Hz cadence)
+- draw p50 = 0.04ms (very fast — PGS bitmap render path is cheap), p99 = 0.06-0.17ms
+- present p50 = 0.09-0.12ms, p99 = 0.18-0.37ms
+- DXGI queued=0
+- vsync_us = 16662 (~60Hz)
+
+## Hemanth verdict: YELLOW
+Notes:
+- PGS subtitles DO render on screen (functional, unlike anime ASS files in prior 3 slots).
+- Subtitles are positioned TOO HIGH on screen (intruding into the visual frame area
+  rather than sitting at the lower-third where dialogue subs usually live).
+- Subtitle repositioning / height adjustment feature in the Settings popover is NOT
+  effective at moving them — slider/Force checkbox does not visibly relocate the PGS
+  output.
+
+## Implication for mpv comparison
+- PGS pipeline is FUNCTIONAL on ffmpeg today (good — won't regress this in the cutover).
+- Vertical positioning + repositioning controls are user-facing weak spots on PGS path
+  today. mpv's PGS handling will need a comparison check here:
+  - If mpv positions PGS at the natural Blu-ray-authored Y-coordinate without manual
+    intervention → mpv WIN (one fewer broken control surface).
+  - If mpv ALSO positions PGS too high without working repositioning → both backends share
+    a positioning bug class. Worth flagging at memo.
+- Frame stats: Sopranos plays absolutely clean on ffmpeg (60fps, 0 skipped, draw <0.05ms).
+  This sets a high bar for mpv on the same file.

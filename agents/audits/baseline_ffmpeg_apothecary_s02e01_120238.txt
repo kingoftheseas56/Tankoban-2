@@ -1,0 +1,36 @@
+# ffmpeg baseline — The Apothecary Diaries S02E01 (Maomao and Maomao)
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~12:02pm
+
+## File
+Path: C:/Users/Suprabha/Desktop/Hemanth's Folder/The Apothecary Diaries S02 1080p Dual Audio WEBRip DD+ x265-EMBER/S02E01-Maomao and Maomao [F878C427].mkv
+Backend: ffmpeg sidecar (verified prior file; no MpvBackend traces this session)
+
+## Player snapshot at smoke window close
+Tankoban was restarted between Saiki Ep 11 and this window — boot events captured at
+timestamp_ms=1777617042051 (~3 min before snapshot). By the time the snapshot ran, the
+videoPlayer was no longer visible; ring buffer contains only boot events + my dev-control
+commands. Live mid-playback frame stats not captured for this file. Hemanth's verdict +
+observations carry the data point.
+
+## Hemanth verdict: YELLOW
+Notes:
+- Subtitles NOT rendering on screen (third in a row across anime files — consistent baseline
+  pattern; pre-existing ffmpeg behavior, not investigated).
+- Seek-accumulation bug: rapid double-tap of Right-arrow (10s seek) does NOT accumulate.
+  First press seeks +10s correctly. Second press shows the seek-flash visual effect but
+  position stays at the prior landing spot — second seek event appears to fire visually
+  but does not advance playback. Behavior described as "shows the effect of being forwarded
+  but it's in the same spot."
+
+## Implication for mpv comparison
+- Subtitle dropout pattern now firmly three-for-three on anime files — strong candidate for
+  "mpv WIN if it loads default sub track."
+- Seek-accumulation bug is a NEW data point not seen on prior two files (because Hemanth
+  didn't seek on those). Worth checking on mpv: does mpv accumulate rapid Right-arrow
+  presses correctly? If yes → another mpv WIN. If no → either UI-layer bug independent of
+  backend, or both backends share the same scrub-debounce.
+
+## Carried forward note
+Tankoban restart between Saiki and this file means session boundaries shifted. Subsequent
+files should re-snapshot get-player before each verdict request.

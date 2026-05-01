@@ -1,0 +1,33 @@
+# ffmpeg baseline — Community S01E01 (Pilot)
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~12:16pm
+
+## File
+Path: C:/Users/Suprabha/Desktop/Hemanth's Folder/Community Season 1  [1080p x265 10bit FS89 Joy]/Community S01E01 Pilot  [1080p x265 10bit Joy].mkv
+Backend: ffmpeg sidecar (file pre-restart; ring buffer rolled over before snapshot)
+Format: SDR 1080p HEVC 10-bit (no HDR), English audio + embedded English subs
+
+## Player snapshot at smoke window close
+Tankoban restarted between The Boys S03E01 and this file (boot events at
+timestamp_ms=1777617939051). Live mid-playback frame stats not captured this slot.
+
+## Hemanth verdict: YELLOW
+Notes:
+- Subtitles DO render on screen (no anime-ASS dropout pattern — embedded English subs
+  appear as expected on this English-source SDR file).
+- Subtitle HEIGHT-ADJUSTMENT slider does NOT work (same shape as Sopranos PGS finding —
+  the position control is non-functional on rendered subs across both PGS and embedded SRT
+  paths).
+- Seek-accumulation bug: rapid Right-arrow + rapid Left-arrow do NOT accumulate (third
+  file showing this behavior; backend-independent UI scrub-debounce bug confirmed).
+
+## Implication for mpv comparison
+- Plain SDR + embedded English sub baseline is FUNCTIONAL on ffmpeg today (the simplest
+  case works for sub display).
+- Sub-position slider non-functional across both PGS and embedded-SRT sub paths today
+  (Sopranos + Community both flagged it). This is a UI-or-pipeline bug independent of
+  whether the sub renders at all. Worth checking if mpv's sub-position handling honors
+  the slider — possible mpv WIN.
+- Seek-accumulation bug: now confirmed on three files (Apothecary, Boys, Community)
+  in both directions. Strong signal: this is a UI-layer scrub-debounce bug NOT bound to
+  ffmpeg backend choice. mpv path may inherit the bug if scrub plumbing is shared.

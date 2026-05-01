@@ -1,0 +1,45 @@
+# ffmpeg baseline — Vinland Saga S02E01
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~11:48am
+
+## File
+Path: C:/Users/Suprabha/Desktop/Media/TV/Vinland Saga/S02E01-Slave [6F5DABBE].mkv
+Duration: 1541.0s (~25:41)
+Backend: ffmpeg sidecar (sidecar-ipc events present in logs; no MpvBackend traces)
+
+## Player snapshot (mid-playback ~2:04)
+currentAspect: original
+currentCrop: none
+streamMode: false
+streamStalled: false
+firstFrameSeen: true
+fullScreen: true (during smoke; later switched to windowed)
+persistenceMode: LibraryVideos
+sidecarRetryCount: 0
+paused: false
+
+## Frame stats (representative samples)
+- frames=61/62/63 per ~1s window
+- skipped=0 across captured window
+- timer_interval p50 = 3-16ms, p99 = 38-75ms
+- draw p50 = 0.11-0.16ms, p99 = 14-31ms
+- present p50 = 0.11-0.14ms, p99 = 0.21-0.61ms
+- DXGI queued=0
+- vsync_us = 16662 (~60Hz)
+
+## Aspect handling
+source=1920x1080 frameAspect=1.7778 — clean 16:9, source matches widget after fullscreen.
+Windowed widgetAspect=1.9713 produced videoRect={94,0,1732,974} (letterbox-from-side).
+
+## Audio
+Adaptive audio-clock sync active — set_audio_speed seqs 21-29 with speed jitter ~0.998-1.0 (normal cadence for ffmpeg sidecar's audio-clock alignment).
+
+## Hemanth verdict: YELLOW
+Notes:
+- Subtitles are NOT rendering on screen. (Sub track may not be auto-selected; pre-existing ffmpeg behavior, not investigated.)
+- In windowed (non-fullscreen) mode the video is cropped at the top edge.
+
+## Implication for mpv comparison
+If mpv loads the default sub track + does not crop in windowed mode → mpv WIN over baseline.
+If mpv reproduces either issue → that's a regression to triage; otherwise these are pre-existing
+ffmpeg limitations that mpv inherits the freedom to fix.

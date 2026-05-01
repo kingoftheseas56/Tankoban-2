@@ -1,0 +1,63 @@
+# ffmpeg baseline — The Boys S03E01 (Payback) — HDR HEVC 10-bit
+# MAKE_MPV_SOLO Task 1 evidence file
+# Captured 2026-05-01 ~12:11pm
+
+## File
+Path: C:/Users/Suprabha/Desktop/Hemanth's Folder/The Boys (2019) Season 3 S03 (1080p AMZN WEB-DL x265 HEVC 10bit EAC3 5.1 Silence)/The Boys (2019) - S03E01 - Payback (1080p AMZN WEB-DL x265 Silence).mkv
+Duration: 3718.7s (~62 min)
+Backend: ffmpeg sidecar
+NOTE: Hemanth opened S03E01 instead of the originally-listed S03E06. Same season pack,
+same HDR HEVC 10-bit profile — equivalent data point for HDR baseline.
+
+## Player snapshot (mid-playback ~4:15, paused for screenshot)
+currentAspect: 16:9 (explicit pick — different from Vinland's "original")
+currentCrop: none
+streamMode: false
+firstFrameSeen: true
+fullScreen: false (windowed during smoke based on snapshot)
+paused: true (Hemanth paused to capture screenshot)
+persistenceMode: LibraryVideos
+
+## Frame stats (representative samples — clean HDR playback)
+- frames=60-61 per ~1s window
+- skipped=0 across the entire ~12s captured window (zero drops)
+- timer_interval p50 = 16.65-16.70ms (rock solid 60Hz cadence)
+- draw p50 = 0.16-0.24ms, p99 = 0.27-0.64ms (slightly higher than Sopranos SDR — expected
+  because HDR tone-mapping shader runs in the present pipeline)
+- present p50 = 0.16-0.26ms, p99 = 0.30-0.80ms
+- DXGI queued=0
+- vsync_us = 16662 (~60Hz)
+
+## HDR rendering (subjective from Hemanth's screenshot — press-paparazzi scene)
+Visual notes from the captured frame:
+- Dim ambient lighting with bright white camera-flash highlights — highlights retain
+  detail (not fully blown out) but the brightest pixels look slightly washed.
+- Skin tones in foreground photographers look reasonable (no oversaturation).
+- Black/dim background areas have detail visible (not crushed to pure black).
+- White subtitle text against dim background reads cleanly.
+- Hemanth did NOT call out HDR color issues in his verdict — implies HDR mapping is
+  acceptable on this file today. Important data point for Task 4 mpv comparison: the bar
+  mpv must clear is "matches this acceptably-rendered HDR baseline."
+
+## Hemanth verdict: YELLOW
+Notes:
+- Same seek-accumulation bug as Apothecary: rapid Right-arrow + rapid Left-arrow do NOT
+  accumulate. Now confirmed in BOTH directions (forward and backward). Second press shows
+  the seek-flash visual but position does not advance/retreat past the first press's
+  landing point. UI-layer scrub-debounce is the leading suspect — backend-independent.
+- Subtitles at top of screen are cropped/clipped by the top edge — visible in the
+  screenshot ("- Starlight, to the right, to the right!" line has fragments of a prior
+  cut-off line above it, partially visible at the very top edge).
+
+## Implication for mpv comparison
+- Frame stats: ffmpeg baseline is excellent on HDR content (60fps clean, draw <0.65ms).
+  Bar for mpv on the same file is high.
+- HDR rendering: subjectively acceptable on ffmpeg today per absence-of-complaint. mpv must
+  match or beat this in Task 4 to satisfy the cutover gate.
+- Seek-accumulation bug: now reproduced on TWO different files (Apothecary + Boys), in
+  both directions. Strong signal that this is a UI-layer bug independent of backend choice.
+  Will need its own fix regardless of which backend ships — but FREE if mpv's UI path
+  routes through different scrub plumbing.
+- Top-edge subtitle clipping: similar shape to Vinland's "video cropped at top in
+  windowed" finding — could be the same widget-vs-frame geometry bug, surfacing on subs
+  this time because they're positioned at the top.
