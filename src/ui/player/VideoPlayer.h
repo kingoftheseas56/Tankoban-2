@@ -713,9 +713,26 @@ private:
     QString    m_activeAudioId;
     QString    m_activeSubId;
 
+    // Task 7 (2026-05-01) — Pattern C fix: seek-accumulation tracker.
+    // m_seekBar->value() lags ~200ms behind real position (waits for
+    // backend time_update echo). Rapid arrow-key double-tap before the
+    // echo lands reads stale base → second seek targets same position
+    // → visible no-op. Holding the pending target lets seekBy accumulate.
+    // Sentinel < 0 means "no pending seek." Cleared on onTimeUpdate when
+    // position lands within ±1s of the pending target.
+    double     m_pendingSeekTargetSec = -1.0;
+
     // Playlist carry-forward (track language preferences across episodes)
+    // Task 6.B (2026-05-01) — also carry the explicit track IDs alongside
+    // lang. Anime release groups put 2-3 same-lang tracks per file (Signs /
+    // Dialogue / CR), so lang-only carry resolves to first-en-match (the
+    // file's "default" track which is conventionally Signs). Carrying the
+    // ID lets restoreTrackPreferences pick the same numbered track on the
+    // next episode; resolveTrack already validates id by lang-agreement.
     QString m_carryAudioLang;
     QString m_carrySubLang;
+    QString m_carryAudioId;
+    QString m_carrySubId;
     QString m_carryAspect;
     QString m_carryCrop;
 
