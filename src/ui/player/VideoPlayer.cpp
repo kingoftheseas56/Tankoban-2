@@ -183,13 +183,13 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
 
     m_keys    = new KeyBindings();
     // MPV_RENDER_API_INTEGRATION P7 2026-04-30 — backend selection via
-    // persisted preference + stream-mode override + dev-only
-    // TANKOBAN_FORCE_MPV env var (now wrapped inside BackendFactory).
+    // persisted preference + dev-only TANKOBAN_FORCE_MPV env var (now
+    // wrapped inside BackendFactory).
     // Apply-on-next-launch semantics: VideoPlayer is constructed once per
     // Tankoban session, so right-click preference changes via VideosPage
     // take effect on next launch (per AskUserQuestion 2026-04-30
     // ratification — keeps current playback unchanged, no mid-session churn).
-    m_currentBackendType = BackendFactory::chooseFor(/*isStreamMode=*/false);
+    m_currentBackendType = BackendFactory::chooseFor();
     m_backend = BackendFactory::create(m_currentBackendType, this);
     m_reader  = new ShmFrameReader();
 
@@ -266,24 +266,14 @@ void VideoPlayer::openFile(const QString& filePath,
     debugLog("[VideoPlayer] openFile: " + filePath);
 
     // 2026-04-30 Phase 1.A — per-open backend reselection.
-    //
-    // Runs unconditionally (was Pre-1.A's has_value()-gated swap; that
-    // version only fired the swap on explicit "Play with X" overrides
-    // and left stream-mode opens with saved-pref-mpv routing through
-    // MpvBackend regardless of §Q4 lock). chooseFor honors the precedence:
-    //   1. m_streamMode → Ffmpeg (§Q4 stream-mode lock — closes the
-    //      audit-flagged "lock break" by re-running on every open;
-    //      m_streamMode is set by StreamPage::onReadyToPlay before
-    //      calling openFile, so a stream open with saved-pref-mpv
-    //      now correctly routes to ffmpeg)
-    //   2. TANKOBAN_FORCE_MPV=1 dev override (Phase 1.A.3 will flip
-    //      its precedence above §Q4 so 1.B+ smokes can drive mpv
-    //      stream playback)
-    //   3. explicitBackend (right-click "Play with X" override)
-    //   4. saved QSettings preference
+    // MAKE_MPV_SOLO Task 2 (2026-05-01) — §Q4 stream-mode lock removed; streams
+    // now honor the saved preference and explicit override the same way library
+    // files do. chooseFor honors the precedence:
+    //   1. TANKOBAN_FORCE_MPV=1 dev override
+    //   2. explicitBackend (right-click "Play with X" override)
+    //   3. saved QSettings preference
     // Same-backend is a no-op fast path inside switchBackendTo.
-    const auto wantBackend =
-        BackendFactory::chooseFor(m_streamMode, explicitBackend);
+    const auto wantBackend = BackendFactory::chooseFor(explicitBackend);
     if (wantBackend != m_currentBackendType) {
         switchBackendTo(wantBackend);
     }
@@ -1075,6 +1065,17 @@ void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
 {
     if (m_seeking) return;
 
+    // Task 7 (2026-05-01) — Pattern C accumulator clear: when the real
+    // position catches up to within ±1s of the pending seek target,
+    // the seek has effectively completed. Subsequent arrow-key presses
+    // re-base from the seekbar value (the standard path). Without this
+    // clear the accumulator would persist forever and prevent seekBar-
+    // based scrubs from re-syncing.
+    if (m_pendingSeekTargetSec >= 0.0
+        && qAbs(positionSec - m_pendingSeekTargetSec) < 1.0) {
+        m_pendingSeekTargetSec = -1.0;
+    }
+
     // STREAM_STALL_UX_FIX Batch 1 — during a stream-engine stall, the sidecar
     // keeps emitting timeUpdate from the audio PTS clock while the video
     // decoder is dry (FrameCanvas painting the last frame). The positionSec
@@ -1188,6 +1189,8 @@ void VideoPlayer::onEndOfFile()
         // Wrap to the top of the queue.
         m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
         m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        m_carryAudioId   = m_activeAudioId;     // Task 6.B
+        m_carrySubId     = m_activeSubId;       // Task 6.B
         m_carryAspect    = m_currentAspect;
         m_carryCrop      = m_currentCrop;
         openFile(m_playlist.at(0), m_playlist, 0);
@@ -1205,6 +1208,8 @@ void VideoPlayer::onEndOfFile()
             next = (m_playlistIdx + 1) % m_playlist.size();
         m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
         m_carrySubLang   = langForTrackId(m_subTracks,   m_activeSubId);
+        m_carryAudioId   = m_activeAudioId;     // Task 6.B
+        m_carrySubId     = m_activeSubId;       // Task 6.B
         m_carryAspect    = m_currentAspect;
         m_carryCrop      = m_currentCrop;
         openFile(m_playlist.at(next), m_playlist, next);
@@ -1225,6 +1230,14 @@ void VideoPlayer::onEndOfFile()
 
 void VideoPlayer::onError(const QString& message)
 {
+    // MAKE_MPV_SOLO Task 5 — failed open means no firstFrame ever fires,
+    // so the 30 s firstFrameWatchdog (armed in openFile) would otherwise
+    // re-show the LoadingOverlay in TakingLonger stage and trap the user
+    // in an "endless buffering" view. Stop the watchdog AND dismiss any
+    // currently-visible overlay so the toast is the only thing on screen.
+    // Both calls are idempotent — safe to fire on mid-playback errors too.
+    m_firstFrameWatchdog.stop();
+    if (m_loadingOverlay) m_loadingOverlay->dismiss();
     m_toastHud->showToast(message);
 }
 
@@ -1463,6 +1476,15 @@ void VideoPlayer::buildUI()
 
     m_seekBar = new SeekSlider(Qt::Horizontal, m_controlBar);
     m_seekBar->setDurationSec(0.0);
+    // Task 7 (2026-05-01) — Esc/keyboard fix: pre-fix the seekbar slider
+    // accepted keyboard focus on click (Qt::QSlider default = StrongFocus),
+    // so any user scrub stole focus from VideoPlayer; subsequent keypresses
+    // (Esc, space, arrows) routed to the slider's default arrow-step
+    // handler instead of VideoPlayer::keyPressEvent. Setting NoFocus keeps
+    // the mouse-drag scrub functional while preventing focus theft. All
+    // other interactive children (transport buttons + chips) already use
+    // Qt::NoFocus per the existing setupUi pattern.
+    m_seekBar->setFocusPolicy(Qt::NoFocus);
     connect(m_seekBar, &QSlider::sliderPressed, this, [this]() {
         m_seeking = true;
         m_seekDragOrigin = m_seekBar->value();
@@ -1891,6 +1913,8 @@ void VideoPlayer::buildUI()
         if (idx >= 0 && idx < m_playlist.size()) {
             m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
             m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+            m_carryAudioId = m_activeAudioId;     // Task 6.B
+            m_carrySubId = m_activeSubId;         // Task 6.B
             m_carryAspect = m_currentAspect;
             m_carryCrop = m_currentCrop;
             openFile(m_playlist[idx], m_playlist, idx);
@@ -2539,9 +2563,11 @@ void VideoPlayer::toggleAlwaysOnTop()
 void VideoPlayer::prevEpisode()
 {
     if (m_playlist.isEmpty() || m_playlistIdx <= 0) return;
-    // Carry forward current track language preferences
+    // Carry forward current track language preferences + Task 6.B IDs
     m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
     m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+    m_carryAudioId = m_activeAudioId;     // Task 6.B
+    m_carrySubId = m_activeSubId;         // Task 6.B
     m_carryAspect = m_currentAspect;
     m_carryCrop = m_currentCrop;
     openFile(m_playlist[m_playlistIdx - 1], m_playlist, m_playlistIdx - 1);
@@ -2550,9 +2576,11 @@ void VideoPlayer::prevEpisode()
 void VideoPlayer::nextEpisode()
 {
     if (m_playlist.isEmpty() || m_playlistIdx >= m_playlist.size() - 1) return;
-    // Carry forward current track language preferences
+    // Carry forward current track language preferences + Task 6.B IDs
     m_carryAudioLang = langForTrackId(m_audioTracks, m_activeAudioId);
     m_carrySubLang = langForTrackId(m_subTracks, m_activeSubId);
+    m_carryAudioId = m_activeAudioId;     // Task 6.B
+    m_carrySubId = m_activeSubId;         // Task 6.B
     m_carryAspect = m_currentAspect;
     m_carryCrop = m_currentCrop;
     openFile(m_playlist[m_playlistIdx + 1], m_playlist, m_playlistIdx + 1);
@@ -2672,6 +2700,11 @@ void VideoPlayer::showControls()
         // not reach the native child — must target m_canvas directly.
         m_canvas->unsetCursor();
     }
+    // Task 7 (2026-05-01) — mpv path mirror. m_mpvWidget is the active
+    // video widget on the mpv backend; cursor blank/unblank must target
+    // it directly for the same reason the canvas path does (parent's
+    // cursor doesn't propagate to a sized child widget).
+    if (m_mpvWidget) m_mpvWidget->unsetCursor();
     // Don't restart auto-hide timer while playlist drawer is open
     if (!m_playlistDrawer || !m_playlistDrawer->isOpen())
         m_hideTimer.start();
@@ -2721,6 +2754,8 @@ void VideoPlayer::hideControls()
         // applied to hideControls itself this same day.
         m_canvas->setCursor(Qt::BlankCursor);
     }
+    // Task 7 (2026-05-01) — mpv path mirror. Same cursor-blank as canvas.
+    if (m_mpvWidget) m_mpvWidget->setCursor(Qt::BlankCursor);
 }
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)
@@ -2806,8 +2841,19 @@ void VideoPlayer::restoreTrackPreferences()
     if (!m_carryAudioLang.isEmpty()) {
         targetAudioLang = m_carryAudioLang;
         targetSubLang = m_carrySubLang;
+        // Task 6.B (2026-05-01) — also consume the carried track IDs.
+        // resolveTrack (below) tries id first and validates by lang
+        // agreement, so adding the id makes anime cross-playlist track
+        // pick respect "user picked sub track 2 on ep 1 → ep 2 also gets
+        // sub track 2 if its lang matches" instead of falling back to
+        // the lang-only resolve which lands on the file's default
+        // (typically Signs/Songs on anime release-group conventions).
+        targetAudioId = m_carryAudioId;
+        targetSubId = m_carrySubId;
         m_carryAudioLang.clear();
         m_carrySubLang.clear();
+        m_carryAudioId.clear();
+        m_carrySubId.clear();
     } else if (m_bridge && m_persistenceMode == PersistenceMode::LibraryVideos) {
         // Gated — Stream-mode playback doesn't persist or restore track
         // preferences via the "videos" domain. Falls through to the
@@ -3125,13 +3171,25 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     }
 
     auto seekBy = [this](double delta) {
-        double curSec = m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0;
+        // Task 7 (2026-05-01) — Pattern C fix: use the pending target as
+        // the seek base if a previous seek hasn't been confirmed by a
+        // time_update yet. Pre-fix, rapid arrow-key double-tap read
+        // m_seekBar->value() (which echoes the BACKEND-confirmed position
+        // and lags ~200ms behind the user's keypress) twice → both
+        // presses computed the same target → second press visually
+        // flashed but landed nowhere. Backend-independent UI bug;
+        // applies to both ffmpeg sidecar AND mpv paths identically.
+        const double basePos = (m_pendingSeekTargetSec >= 0.0)
+            ? m_pendingSeekTargetSec
+            : (m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0.0);
+        const double target = qMax(0.0, basePos + delta);
+        m_pendingSeekTargetSec = target;
         // Clear FrameCanvas's sustained-lag accumulator BEFORE the seek —
         // the wall-clock Present-interval gap across the seek would
         // otherwise arm the 3-in-a-row skip-next-Present guard and
         // produce a visible post-seek pause.
         if (m_canvas) m_canvas->resetLagAccounting();
-        m_backend->sendSeek(qMax(0.0, curSec + delta));
+        m_backend->sendSeek(target);
         m_centerFlash->flash(delta > 0 ? SVG_SEEK_FWD : SVG_SEEK_BACK);
         // No showControls() — the center flash arrow is sufficient feedback.
         // Revealing the bottom HUD on every arrow-key seek is noisy and
