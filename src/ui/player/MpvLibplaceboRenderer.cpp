@@ -53,6 +53,9 @@ extern "C" {
 #ifndef GL_RGBA8
 #define GL_RGBA8 0x8058
 #endif
+#ifndef GL_RGBA16F
+#define GL_RGBA16F 0x881A
+#endif
 
 namespace {
 
@@ -474,7 +477,9 @@ struct MpvLibplaceboRenderer::State {
             gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            fns.texStorageMem2D(GL_TEXTURE_2D, 1, GL_RGBA8,
+            // MAKE_MPV_BEAT_FFMPEG Task 6 step 3 — must match Vulkan-side pl_find_fmt
+            // above (PL_FMT_FLOAT 16/16/4 maps to GL_RGBA16F).
+            fns.texStorageMem2D(GL_TEXTURE_2D, 1, GL_RGBA16F,
                                 slot.width, slot.height,
                                 slot.glMemory,
                                 static_cast<GLuint64>(slot.sharedOffset));
@@ -575,7 +580,9 @@ struct MpvLibplaceboRenderer::State {
         fbo.fbo = static_cast<int>(slotCopy.glFramebuffer);
         fbo.w = slotCopy.width;
         fbo.h = slotCopy.height;
-        fbo.internal_format = GL_RGBA8;
+        // Must match GL_RGBA16F texture format from Step 3.2 + Vulkan-side
+        // PL_FMT_FLOAT 16/16/4 from Step 3.1.
+        fbo.internal_format = GL_RGBA16F;
         int flipY = 0;
         mpv_render_param params[] = {
             { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
@@ -814,12 +821,19 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
         }
 #endif
 
+        // MAKE_MPV_BEAT_FFMPEG Task 6 step 3 (2026-05-02) — RGBA16F (PL_FMT_FLOAT
+        // 16/16/4) replaces RGBA8 UNORM so mpv can write HDR PQ/HLG signal to
+        // the interop texture without the 8-bit-fixed crush that pre-tone-maps
+        // to SDR. The format must match GL-side (GL_RGBA16F) + mpv FBO
+        // internal_format below for the shared-memory contract to hold. Task 1
+        // probe confirmed PL_FMT_FLOAT 16/16/4 available as rgba16hf with
+        // WIN32-exportable handle on Hemanth's UHD 620.
         m_state->format = pl_find_fmt(
-            gpu, PL_FMT_UNORM, 4, 8, 8,
+            gpu, PL_FMT_FLOAT, 4, 16, 16,
             static_cast<pl_fmt_caps>(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
         if (!m_state->format) {
             m_state->interopBlocked = true;
-            m_state->blockReason = QStringLiteral("no RGBA8 sampleable+renderable Vulkan format");
+            m_state->blockReason = QStringLiteral("no RGBA16F sampleable+renderable Vulkan format");
             mprLog(QStringLiteral("OpenGL/Vulkan interop blocked: %1")
                        .arg(m_state->blockReason));
             return false;
@@ -966,8 +980,15 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
     src.repr.sys = PL_COLOR_SYSTEM_RGB;
     src.repr.levels = PL_COLOR_LEVELS_FULL;
     src.repr.alpha = PL_ALPHA_NONE;
-    src.repr.bits.sample_depth = 8;
-    src.repr.bits.color_depth = 8;
+    // MAKE_MPV_BEAT_FFMPEG Task 6 step 3 — match the texture's new RGBA16F
+    // depth so libplacebo's tone-mapping + peak detection (enabled in Task
+    // 6 step 2 via color_map_params + peak_detect_params) operate on the
+    // correct signal range. sample_depth = texture bits per channel (16);
+    // color_depth = source signal bits (16 leaves headroom for HDR PQ which
+    // is technically 10-bit but stored in our 16-bit float texture with
+    // linearization headroom).
+    src.repr.bits.sample_depth = 16;
+    src.repr.bits.color_depth = 16;
     src.color = pl_color_space_srgb;
     src.crop.x0 = 0.0f;
     src.crop.y0 = 0.0f;
