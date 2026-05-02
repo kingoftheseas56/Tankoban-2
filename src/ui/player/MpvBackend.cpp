@@ -1,3 +1,7 @@
+// TANKOBAN_HDR_PROBE: define to activate one-shot HDR capability probes (Task 6.1).
+// Probe output captured 2026-05-02; define removed. Re-add #define to re-probe.
+// #define TANKOBAN_HDR_PROBE 1
+
 // MpvBackend.cpp — IPlayerBackend implementation against in-process libmpv.
 // mpv owns decode/audio/transport. MAKE_MPV_BEAT_FFMPEG Task 3 adds the
 // backend-owned SW render context used by MpvLibplaceboRenderer.
@@ -338,6 +342,34 @@ void MpvBackend::initializeMpv()
         m_mpv = nullptr;
         return;
     }
+
+#ifdef TANKOBAN_HDR_PROBE
+    {
+        // Step 1.3 — probe libmpv for HDR-related option acceptance.
+        // This is observation-only; options are reset immediately after.
+        auto probeOpt = [this](const char* opt, const char* val) {
+            int prc = mpv_set_option_string(m_mpv, opt, val);
+            mpvLog(QStringLiteral("[hdr-probe] %1=%2: rc=%3 %4")
+                .arg(opt).arg(val).arg(prc).arg(prc == 0 ? "ACCEPTED" : "REJECTED"));
+        };
+        probeOpt("tone-mapping", "clip");
+        probeOpt("target-trc", "auto");
+        probeOpt("target-prim", "auto");
+        probeOpt("target-peak", "auto");
+
+        // Reset probe-set options so the probe is observation-only.
+        // Note: "auto" may not be valid for tone-mapping; if rejected, document and skip.
+        int resetTm = mpv_set_option_string(m_mpv, "tone-mapping", "auto");
+        if (resetTm != 0) {
+            mpvLog(QStringLiteral("[hdr-probe] tone-mapping reset to 'auto' REJECTED (rc=%1) — leaving as probed 'clip'").arg(resetTm));
+            // clip is actually a valid functional value; reset back to mpv's natural default
+            mpv_set_option_string(m_mpv, "tone-mapping", "hable");
+        }
+        mpv_set_option_string(m_mpv, "target-trc", "auto");
+        mpv_set_option_string(m_mpv, "target-prim", "auto");
+        mpv_set_option_string(m_mpv, "target-peak", "auto");
+    }
+#endif
 
     m_libplaceboRenderer = std::make_unique<MpvLibplaceboRenderer>();
     if (!m_libplaceboRenderer->attachMpv(m_mpv)) {

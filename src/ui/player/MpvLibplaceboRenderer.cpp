@@ -1,4 +1,8 @@
-﻿#include "MpvLibplaceboRenderer.h"
+﻿// TANKOBAN_HDR_PROBE: define to activate one-shot HDR capability probes (Task 6.1).
+// Probe output captured 2026-05-02; define removed. Re-add #define to re-probe.
+// #define TANKOBAN_HDR_PROBE 1
+
+#include "MpvLibplaceboRenderer.h"
 
 #include "core/DebugLogBuffer.h"
 
@@ -299,6 +303,16 @@ struct MpvLibplaceboRenderer::State {
             return;
         }
         gl->initializeOpenGLFunctions();
+
+#ifdef TANKOBAN_HDR_PROBE
+        {
+            // Step 1.2 — one-shot GL extension probe for HDR interop capability.
+            QByteArray exts(reinterpret_cast<const char*>(gl->glGetString(GL_EXTENSIONS)));
+            mprLog(QStringLiteral("[hdr-probe] GL_EXT_memory_object: %1").arg(exts.contains("GL_EXT_memory_object")));
+            mprLog(QStringLiteral("[hdr-probe] GL_EXT_memory_object_win32: %1").arg(exts.contains("GL_EXT_memory_object_win32")));
+            mprLog(QStringLiteral("[hdr-probe] GL_EXT_semaphore_win32: %1").arg(exts.contains("GL_EXT_semaphore_win32")));
+        }
+#endif
 
         GlInteropFns interopFns;
         QString missing;
@@ -761,6 +775,32 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
             return false;
         }
 
+#ifdef TANKOBAN_HDR_PROBE
+        {
+            // Step 1.1 — one-shot Vulkan/libplacebo probe for RGBA16F exportable format.
+            static bool probed = false;
+            if (!probed) {
+                probed = true;
+                const pl_fmt fmt16f = pl_find_fmt(gpu, PL_FMT_FLOAT, 4, 16, 16,
+                    static_cast<pl_fmt_caps>(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_HOST_READABLE));
+                mprLog(QStringLiteral("[hdr-probe] PL_FMT_FLOAT 16/16/4: %1").arg(fmt16f ? fmt16f->name : "NOT FOUND"));
+                if (fmt16f) {
+                    pl_tex_params tp{};
+                    tp.w = 1920;
+                    tp.h = 1080;
+                    tp.format = fmt16f;
+                    tp.sampleable = true;
+                    tp.renderable = true;
+                    tp.export_handle = PL_HANDLE_WIN32;
+                    pl_tex probe = pl_tex_create(gpu, &tp);
+                    mprLog(QStringLiteral("[hdr-probe] WIN32-exportable RGBA16F tex: %1")
+                        .arg(probe && probe->shared_mem.handle.handle ? "YES" : "NO"));
+                    if (probe) pl_tex_destroy(gpu, &probe);
+                }
+            }
+        }
+#endif
+
         m_state->format = pl_find_fmt(
             gpu, PL_FMT_UNORM, 4, 8, 8,
             static_cast<pl_fmt_caps>(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
@@ -924,8 +964,23 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
     pl_frame target{};
     pl_frame_from_swapchain(&target, &frame);
 
+    // MAKE_MPV_BEAT_FFMPEG Task 5 (2026-05-02) — match the ffmpeg sidecar's
+    // libplacebo scaler config at native_sidecar/src/gpu_renderer.cpp:108-114
+    // so heavy content (Sopranos S06E04 BluRay HEVC 10-bit) plays sharp on
+    // the mpv path. Task 3.5 shipped pl_render_fast_params (CHEAP preset =
+    // bilinear) to lock the bilinear-quality floor that supersedes the
+    // MAKE_MPV_SOLO Task 12.B Tier-0 default. Now that Task 4 measured the
+    // pipeline at 0.000 drops/sec on Community SDR, we have the GPU budget
+    // to flip the scalers to ewa_lanczossharp (upscale) + hermite (downscale)
+    // verbatim from the sidecar reference. pl_render_default_params is the
+    // base (NOT pl_render_fast_params) since gpu_renderer.cpp:109 uses
+    // default; same baseline keeps the comparison apples-to-apples.
+    pl_render_params params = pl_render_default_params;
+    params.upscaler   = &pl_filter_ewa_lanczossharp;
+    params.downscaler = &pl_filter_hermite;
+
     const bool rendered = pl_render_image(
-        m_state->renderer, &src, &target, &pl_render_fast_params);
+        m_state->renderer, &src, &target, &params);
     if (!rendered) {
         mprLog(QStringLiteral("pl_render_image failed for OpenGL interop frame"));
     } else {
