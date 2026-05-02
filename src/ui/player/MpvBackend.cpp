@@ -371,6 +371,39 @@ void MpvBackend::initializeMpv()
     }
 #endif
 
+    // MAKE_MPV_BEAT_FFMPEG Task 6 step 4 (2026-05-02) — disable mpv's
+    // internal tone-mapping so the HDR signal passes through to the
+    // render-API output unmodified. libplacebo (in MpvLibplaceboRenderer)
+    // does the tone-mapping downstream via pl_render_params.color_map_params
+    // + peak_detect_params (added in Task 6 step 2). Without these four
+    // options, mpv tone-maps to whatever its default target-* heuristics
+    // pick (typically SDR sRGB), which crushes the HDR range Task 3's
+    // RGBA16F texture format just lifted.
+    //
+    // tone-mapping=clip  → don't apply any tone curve; pass values straight
+    //                      through (libplacebo will apply the proper curve
+    //                      once Task 5 bridges color metadata into pl_frame).
+    // target-trc=auto    → let mpv pick the transfer curve to match what the
+    //                      render target advertises; combined with our
+    //                      RGBA16F FBO, this means linear-or-PQ-encoded HDR
+    //                      to a high-bit-depth target.
+    // target-prim=auto   → same auto-pick for color primaries (BT.2020 for
+    //                      HDR sources; BT.709 for SDR; mpv picks based on
+    //                      source).
+    // target-peak=auto   → let mpv pick target peak luminance based on the
+    //                      target advertised peak; defers actual peak
+    //                      handling to libplacebo.
+    //
+    // Task 1 probe (agents/audits/mpv_hdr_capability_probe_2026-05-02.md)
+    // confirmed all four options accepted at init (rc=0) on this libmpv
+    // build. These fire on every init (NOT gated by TANKOBAN_HDR_PROBE);
+    // on SDR sources mpv's auto-pick resolves to SDR targets so clip just
+    // clips at 1.0 — no change in behaviour vs the prior defaults.
+    setOpt(m_mpv, "tone-mapping", "clip");
+    setOpt(m_mpv, "target-trc", "auto");
+    setOpt(m_mpv, "target-prim", "auto");
+    setOpt(m_mpv, "target-peak", "auto");
+
     m_libplaceboRenderer = std::make_unique<MpvLibplaceboRenderer>();
     if (!m_libplaceboRenderer->attachMpv(m_mpv)) {
         mpvLog(QStringLiteral("[init] SW render context unavailable; Vulkan widget will clear black"));
