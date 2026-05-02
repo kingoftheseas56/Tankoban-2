@@ -1,4 +1,5 @@
 #include "BookBridge.h"
+#include "core/AudiobookMetaCache.h"
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
 #include "core/tts/EdgeTtsWorker.h"
@@ -414,15 +415,23 @@ QJsonObject BookBridge::audiobooksGetState()
 
             // Build chapters array
             QJsonArray chapters;
+            qint64 totalDurationMs = 0;
             for (const QString& filePath : audioFiles) {
                 QFileInfo fi(filePath);
+                const qint64 durationMs =
+                    AudiobookMetaCache::durationMsFor(abDir.absolutePath(),
+                                                      fi.absoluteFilePath());
                 QJsonObject ch;
                 ch["file"]  = fi.fileName();
                 ch["title"] = fi.completeBaseName();
                 ch["path"]  = fi.absoluteFilePath();
                 ch["size"]  = fi.size();
-                ch["duration"] = 0;
+                ch["duration"] = durationMs > 0
+                    ? static_cast<double>(durationMs)
+                    : 0.0;
                 chapters.append(ch);
+                if (durationMs > 0)
+                    totalDurationMs += durationMs;
             }
 
             QJsonObject ab;
@@ -430,7 +439,7 @@ QJsonObject BookBridge::audiobooksGetState()
             ab["title"]         = entry.fileName();
             ab["path"]          = abDir.absolutePath();
             ab["chapters"]      = chapters;
-            ab["totalDuration"] = 0;
+            ab["totalDuration"] = static_cast<double>(totalDurationMs);
             ab["coverPath"]     = findCover(abDir);
             ab["rootPath"]      = root;
             audiobooks.append(ab);
@@ -499,6 +508,38 @@ QJsonObject BookBridge::windowToggleFullscreen()
 void BookBridge::setFullscreen(bool fs)
 {
     m_fullscreen = fs;
+}
+
+// PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome bridge methods. JS shim
+// (reader_core.js or equivalent) calls these from button click handlers;
+// MainWindow connects the request signals to its chrome slots via the
+// BookReader → BookBridge chain set up in BookReader::buildUI.
+
+void BookBridge::windowMinimize()
+{
+    emit windowMinimizeRequested();
+}
+
+void BookBridge::windowToggleMaximize()
+{
+    emit windowMaximizeToggleRequested();
+}
+
+void BookBridge::windowClose()
+{
+    emit windowCloseRequested();
+}
+
+bool BookBridge::windowIsMaximized() const
+{
+    return m_isMaximized;
+}
+
+void BookBridge::emitWindowMaximizeChanged(bool isMax)
+{
+    if (m_isMaximized == isMax) return;
+    m_isMaximized = isMax;
+    emit windowMaximizeChanged(isMax);
 }
 
 // ── navigation ───────────────────────────────────────────────────────────────

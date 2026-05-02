@@ -1,6 +1,5 @@
 // FEAT-AUDIOBOOK: In-reader audiobook playback module
-// Registered in reader_core.js module array. Uses its own HTMLAudioElement and coordinates with the
-// standalone overlay (audiobook_player_overlay.js) so only one player is active at a time.
+// Registered in reader_core.js module array.
 // Provides transport bar inside the reading area + TTS mutual exclusion.
 (function () {
   'use strict';
@@ -17,12 +16,13 @@
   var _chapterIndex = 0;
   var _playing = false;
   var _audio = null;
-  var _playbackRate = parseFloat(localStorage.getItem('booksAudiobook.rate') || '1.0') || 1.0;
-  var _volume = parseFloat(localStorage.getItem('booksAudiobook.volume') || '1.0') || 1.0;
+  var _playbackRate = 1.0;
+  var _volume = 1.0;
   var _loaded = false;       // true once an audiobook is loaded in the reader session
   var _seekDragging = false;
   var _saveTimer = null;
-  var _lastSavedPos = -1;
+  var _perChapterListenedMs = {};
+  var _lastListenPositionMs = 0;
 
   // Auto-hide state
   var _barHideTimer = null;
@@ -30,11 +30,6 @@
   var _barHoverBottom = false;
   var _barVisible = false;
   var BAR_AUTO_HIDE_MS = 3000;
-
-  // Sleep timer
-  var _abSleepMode = 0;      // 0=off, -1=end-of-chapter, >0=minutes
-  var _abSleepRemaining = 0;
-  var _abSleepInterval = null;
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
   var el = {};
@@ -50,9 +45,7 @@
     el.nextCh      = qs('abNextCh');
     el.time        = qs('abTime');
     el.seek        = qs('abSeek');
-    el.slower      = qs('abSlower');
     el.speed       = qs('abSpeed');
-    el.faster      = qs('abFaster');
     el.volume      = qs('abVolume');
     el.close       = qs('abClose');
   }
@@ -97,8 +90,21 @@
     _audio.addEventListener('ended', onChapterEnded);
     _audio.addEventListener('loadedmetadata', onMetaLoaded);
     _audio.addEventListener('error', onAudioError);
-    _audio.addEventListener('play', function () { _playing = true; updatePlayBtn(); updateMediaSession(); showBar(); startAutoHide(); });
-    _audio.addEventListener('pause', function () { _playing = false; updatePlayBtn(); showBar(); clearAutoHide(); });
+    _audio.addEventListener('play', function () {
+      _lastListenPositionMs = Math.max(0, Math.round((_audio.currentTime || 0) * 1000));
+      _playing = true;
+      updatePlayBtn();
+      showBar();
+      startAutoHide();
+    });
+    _audio.addEventListener('pause', function () {
+      trackListenedDelta();
+      _playing = false;
+      updatePlayBtn();
+      showBar();
+      clearAutoHide();
+      if (_loaded) saveProgress();
+    });
   }
 
   function loadChapter(index) {
@@ -109,6 +115,7 @@
     _audio.src = 'file://' + ch.path.replace(/\\/g, '/').replace(/#/g, '%23');
     _audio.playbackRate = _playbackRate;
     _audio.volume = _volume;
+    _lastListenPositionMs = 0;
     updateChapterLabel();
     updateTimeDisplay(0, 0);
     if (el.seek) { el.seek.value = '0'; el.seek.max = '100'; el.seek.disabled = true; }
@@ -182,6 +189,8 @@
     if (!_audio || !isFinite(_audio.duration)) return;
     var t = Math.max(0, Math.min(_audio.duration, _audio.currentTime + delta));
     _audio.currentTime = t;
+    _lastListenPositionMs = Math.max(0, Math.round(t * 1000));
+    saveProgress();
   }
 
   function nextChapter() {
@@ -207,71 +216,37 @@
   }
 
   function setRate(rate) {
-    _playbackRate = Math.max(0.5, Math.min(3.0, Math.round(rate * 10) / 10));
+    var nextRate = Number(rate);
+    if (!isFinite(nextRate)) return;
+    _playbackRate = Math.max(0.5, Math.min(3.0, nextRate));
     if (_audio) _audio.playbackRate = _playbackRate;
-    if (el.speed) el.speed.textContent = _playbackRate.toFixed(1) + '\u00d7';
-    try { localStorage.setItem('booksAudiobook.rate', String(_playbackRate)); } catch (_) {}
+    if (el.speed) el.speed.value = String(_playbackRate);
+    if (_loaded) saveProgress();
   }
 
   function setVolume(vol) {
     _volume = Math.max(0, Math.min(1, vol));
     if (_audio) _audio.volume = _volume;
     if (el.volume) el.volume.value = _volume;
-    try { localStorage.setItem('booksAudiobook.volume', String(_volume)); } catch (_) {}
+    if (_loaded) saveProgress();
+  }
+
+  function trackListenedDelta() {
+    if (!_audio || !_audiobook) return;
+    var currentMs = Math.max(0, Math.round((_audio.currentTime || 0) * 1000));
+    var deltaMs = currentMs - _lastListenPositionMs;
+    _lastListenPositionMs = currentMs;
+    if (!isFinite(deltaMs) || deltaMs <= 0 || deltaMs > 10000) return;
+    var key = String(_chapterIndex);
+    var prior = Number(_perChapterListenedMs[key] || 0);
+    _perChapterListenedMs[key] = prior + deltaMs;
   }
 
   // ── Sleep timer ────────────────────────────────────────────────────────────
-  function setAbSleepTimer(mode) {
-    _abSleepMode = mode;
-    if (_abSleepInterval) { clearInterval(_abSleepInterval); _abSleepInterval = null; }
-    if (mode > 0) {
-      _abSleepRemaining = mode * 60;
-      _abSleepInterval = setInterval(_tickAbSleep, 1000);
-    } else {
-      _abSleepRemaining = 0;
-    }
-    _syncAbSleepUi();
-  }
-
-  function _tickAbSleep() {
-    if (_abSleepRemaining <= 0) {
-      setAbSleepTimer(0);
-      pause();
-      return;
-    }
-    _abSleepRemaining--;
-    _syncAbSleepBadge();
-  }
-
-  function _syncAbSleepUi() {
-    var chips = document.querySelectorAll('.abSleepChip');
-    for (var i = 0; i < chips.length; i++) {
-      var v = parseInt(chips[i].dataset.sleep, 10);
-      chips[i].classList.toggle('active', v === _abSleepMode);
-    }
-    _syncAbSleepBadge();
-  }
-
-  function _syncAbSleepBadge() {
-    var badge = document.getElementById('abSleepBadge');
-    if (!badge) return;
-    if (_abSleepMode === 0) {
-      badge.classList.add('hidden');
-      badge.textContent = '';
-    } else if (_abSleepMode === -1) {
-      badge.classList.remove('hidden');
-      badge.textContent = 'end ch.';
-    } else {
-      badge.classList.remove('hidden');
-      var m = Math.floor(_abSleepRemaining / 60);
-      var s = _abSleepRemaining % 60;
-      badge.textContent = m + ':' + String(s).padStart(2, '0');
-    }
-  }
-
   // ── Audio event handlers ───────────────────────────────────────────────────
   function onTimeUpdate() {
     if (_seekDragging || !_audio) return;
+    trackListenedDelta();
     var cur = _audio.currentTime || 0;
     var dur = _audio.duration || 0;
     updateTimeDisplay(cur, dur);
@@ -281,24 +256,17 @@
       duration: dur,
       chapterTitle: _audiobook ? _audiobook.chapters[_chapterIndex].title : ''
     });
-    if (Math.abs(cur - _lastSavedPos) > 30) scheduleSave();
+    if (_playing) scheduleSave();
   }
 
   function onMetaLoaded() {
     if (!_audio) return;
+    _lastListenPositionMs = Math.max(0, Math.round((_audio.currentTime || 0) * 1000));
     updateTimeDisplay(_audio.currentTime || 0, _audio.duration || 0);
-    updateMediaSession();
   }
 
   function onChapterEnded() {
     saveProgress();
-    if (_abSleepMode === -1) {
-      setAbSleepTimer(0);
-      _playing = false;
-      updatePlayBtn();
-      bus.emit('audiobook:state', 'idle');
-      return;
-    }
     if (_audiobook && _chapterIndex + 1 < _audiobook.chapters.length) {
       loadChapter(_chapterIndex + 1);
       play();
@@ -318,49 +286,30 @@
   }
 
   // ── MediaSession ───────────────────────────────────────────────────────────
-  function updateMediaSession() {
-    if (!navigator.mediaSession || !_audiobook) return;
-    var ch = _audiobook.chapters[_chapterIndex];
-    var artwork = [];
-    if (_audiobook.coverPath) {
-      var cover = 'file://' + _audiobook.coverPath.replace(/\\/g, '/').replace(/#/g, '%23');
-      artwork.push({ src: cover, sizes: '512x512' });
-    }
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: ch ? ch.title : '',
-        artist: _audiobook.title || '',
-        artwork: artwork
-      });
-    } catch (_) {}
-    try {
-      navigator.mediaSession.setActionHandler('play', play);
-      navigator.mediaSession.setActionHandler('pause', pause);
-      navigator.mediaSession.setActionHandler('previoustrack', prevChapter);
-      navigator.mediaSession.setActionHandler('nexttrack', nextChapter);
-      navigator.mediaSession.setActionHandler('seekbackward', function () { seekRelative(-15); });
-      navigator.mediaSession.setActionHandler('seekforward', function () { seekRelative(15); });
-    } catch (_) {}
-  }
-
   // ── Progress ───────────────────────────────────────────────────────────────
   function scheduleSave() {
-    _lastSavedPos = _audio ? _audio.currentTime : 0;
-    if (_saveTimer) clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(function () { saveProgress(); }, 2000);
+    if (_saveTimer) return;
+    _saveTimer = setTimeout(function () {
+      _saveTimer = null;
+      saveProgress();
+    }, 5000);
   }
 
   function saveProgress(finished) {
     if (!_audiobook || !api) return;
-    var pos = _audio ? _audio.currentTime : 0;
-    _lastSavedPos = pos;
+    if (_saveTimer) {
+      clearTimeout(_saveTimer);
+      _saveTimer = null;
+    }
+    trackListenedDelta();
+    var posMs = _audio ? Math.max(0, Math.round((_audio.currentTime || 0) * 1000)) : 0;
     var data = {
       chapterIndex: _chapterIndex,
-      position: pos,
-      totalChapters: _audiobook.chapters.length,
-      finished: !!finished,
+      positionMs: posMs,
+      speed: _audio ? _audio.playbackRate : _playbackRate,
+      volume: _audio ? _audio.volume : _volume,
+      perChapterListenedMs: _perChapterListenedMs,
       updatedAt: Date.now(),
-      audiobookMeta: { path: _audiobook.path, title: _audiobook.title }
     };
     try { api.audiobooks.saveProgress(_audiobook.id, data); } catch (_) {}
   }
@@ -406,8 +355,9 @@
       try { _audio.currentTime = Math.max(0, next); } catch (_) {}
     }
     _seekDragging = false;
+    _lastListenPositionMs = Math.max(0, Math.round((_audio.currentTime || 0) * 1000));
     updateTimeDisplay(_audio.currentTime || 0, _audio.duration || 0);
-    scheduleSave();
+    saveProgress();
     if (_playing) startAutoHide();
   }
 
@@ -449,37 +399,57 @@
 
     // Mutual exclusion: stop TTS
     if (isTTSActive()) stopTTS();
-    // Mutual exclusion: close standalone audiobook overlay if open
-    try {
-      if (window.booksAudiobookOverlay && window.booksAudiobookOverlay.isOpen && window.booksAudiobookOverlay.isOpen()) {
-        window.booksAudiobookOverlay.close();
-      }
-    } catch (_) {}
 
     _audiobook = audiobook;
     _loaded = true;
+    _perChapterListenedMs = (resumeOpts && resumeOpts.perChapterListenedMs && typeof resumeOpts.perChapterListenedMs === 'object')
+      ? Object.assign({}, resumeOpts.perChapterListenedMs)
+      : {};
     var startIdx = (resumeOpts && resumeOpts.chapterIndex) || 0;
-    var startPos = (resumeOpts && resumeOpts.position) || 0;
+    var startPos = 0;
+    if (resumeOpts && isFinite(Number(resumeOpts.positionMs))) {
+      startPos = Math.max(0, Number(resumeOpts.positionMs) / 1000);
+    } else {
+      startPos = (resumeOpts && resumeOpts.position) || 0;
+    }
+    var autoplay = !!(resumeOpts && resumeOpts.autoplay);
 
     loadChapter(startIdx);
-    showBar();
+    if (resumeOpts && isFinite(Number(resumeOpts.speed))) {
+      _playbackRate = Math.max(0.5, Math.min(3.0, Number(resumeOpts.speed)));
+    }
+    if (resumeOpts && isFinite(Number(resumeOpts.volume))) {
+      _volume = Math.max(0, Math.min(1, Number(resumeOpts.volume)));
+    }
+    if (_audio) {
+      _audio.playbackRate = _playbackRate;
+      _audio.volume = _volume;
+    }
+    if (el.speed) el.speed.value = String(_playbackRate);
+    if (el.volume) el.volume.value = String(_volume);
+    if (autoplay) showBar();
+    else if (el.bar) {
+      el.bar.classList.add('hidden');
+      el.bar.classList.remove('ab-bar-autohide');
+    }
+    _playing = false;
+    updatePlayBtn();
 
     if (startPos > 0) {
       var onMeta = function () {
         _audio.removeEventListener('loadedmetadata', onMeta);
         _audio.currentTime = startPos;
-        play();
+        if (autoplay) play();
       };
       _audio.addEventListener('loadedmetadata', onMeta);
-    } else {
+    } else if (autoplay) {
       play();
     }
 
-    bus.emit('audiobook:state', 'playing');
+    bus.emit('audiobook:state', autoplay ? 'playing' : 'paused');
   }
 
   function closeAudiobook() {
-    setAbSleepTimer(0);
     if (_audio) {
       _audio.pause();
       saveProgress();
@@ -488,9 +458,6 @@
     _audiobook = null;
     _loaded = false;
     if (el.bar) { el.bar.classList.add('hidden'); el.bar.classList.remove('ab-bar-autohide'); }
-    if (navigator.mediaSession) {
-      try { navigator.mediaSession.metadata = null; } catch (_) {}
-    }
     bus.emit('audiobook:state', 'idle');
   }
 
@@ -506,24 +473,15 @@
     if (el.nextCh) el.nextCh.addEventListener('click', nextChapter);
     if (el.rew15) el.rew15.addEventListener('click', function () { seekRelative(-15); });
     if (el.fwd15) el.fwd15.addEventListener('click', function () { seekRelative(15); });
-    if (el.slower) el.slower.addEventListener('click', function () { setRate(_playbackRate - 0.1); });
-    if (el.faster) el.faster.addEventListener('click', function () { setRate(_playbackRate + 0.1); });
     if (el.close) el.close.addEventListener('click', closeAudiobook);
 
     // Sleep timer — cycle through modes on click
-    var _sleepModes = [0, 15, 30, 60, -1];
-    var _sleepLabels = { 0: 'Off', 15: '15m', 30: '30m', 60: '1h', '-1': 'End ch.' };
-    var sleepBtn = qs('abSleepBtn');
-    if (sleepBtn) sleepBtn.addEventListener('click', function () {
-      var idx = _sleepModes.indexOf(_abSleepMode);
-      var next = _sleepModes[(idx + 1) % _sleepModes.length];
-      setAbSleepTimer(next);
-      sleepBtn.title = 'Sleep timer: ' + (_sleepLabels[next] || 'Off');
-    });
-
     // Volume slider
     if (el.volume) {
       el.volume.addEventListener('input', function () { setVolume(parseFloat(el.volume.value)); });
+    }
+    if (el.speed) {
+      el.speed.addEventListener('change', function () { setRate(parseFloat(el.speed.value)); });
     }
 
     // Scrub bar
@@ -598,10 +556,13 @@
     getProgress: function () {
       return {
         chapterIndex: _chapterIndex,
-        position: _audio ? _audio.currentTime : 0,
+        positionMs: _audio ? Math.max(0, Math.round((_audio.currentTime || 0) * 1000)) : 0,
         duration: _audio ? _audio.duration : 0,
         totalChapters: _audiobook ? _audiobook.chapters.length : 0,
-        chapterTitle: _audiobook ? _audiobook.chapters[_chapterIndex].title : ''
+        chapterTitle: _audiobook ? _audiobook.chapters[_chapterIndex].title : '',
+        speed: _playbackRate,
+        volume: _volume,
+        perChapterListenedMs: _perChapterListenedMs
       };
     },
     play: play,

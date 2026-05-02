@@ -22,7 +22,7 @@
 #include "core/stream/StreamProgress.h"
 
 #include "ui/player/VideoPlayer.h"
-#include "ui/player/SidecarProcess.h"
+#include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
@@ -2068,9 +2068,9 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Honest-duration sources now fire AUTO_NEXT ~30 s earlier (90 s bytes
     // before EOF vs 60 s remaining) which is a free prefetch-budget bonus.
     if (player && player->sidecarProcess()) {
-        disconnect(player->sidecarProcess(), &SidecarProcess::nearEndEstimate,
+        disconnect(player->sidecarProcess(), &IPlayerBackend::nearEndEstimate,
                    this, nullptr);
-        connect(player->sidecarProcess(), &SidecarProcess::nearEndEstimate, this,
+        connect(player->sidecarProcess(), &IPlayerBackend::nearEndEstimate, this,
                 [this]() {
                     if (m_session.nearEndCrossed) return;  // fire-once guard
                     const QString epKey = m_session.epKey;

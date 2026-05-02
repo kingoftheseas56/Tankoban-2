@@ -10,6 +10,7 @@
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QCloseEvent>
+#include "ui/player/BackendFactory.h"
 
 class GlassBackground;
 class CoreBridge;
@@ -44,9 +45,21 @@ public:
     // Top-level snapshot for `get_state` command.
     QJsonObject devSnapshot() const;
 
+public slots:
+    // Frameless-chrome public slots — connectable from any takeover surface
+    // (VideoPlayer, ComicReader, BookReader) via the per-view chrome buttons.
+    // PER_VIEW_CHROME_FIX 2026-05-02. Minimize + close already have built-in
+    // QWidget slots (showMinimized, close); only max-toggle needs a named entry.
+    void onChromeMaximizeToggle();
+
 protected:
     void resizeEvent(QResizeEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    // Frameless-chrome support (FRAMELESS_CHROME_FIX 2026-05-01).
+    void changeEvent(QEvent *event) override;
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+#endif
 
 private:
     void buildTopBar();
@@ -66,6 +79,13 @@ private:
 
     // Video player
     void openVideoPlayer(const QString& filePath);
+    // 2026-04-30 — direct-opener variant for the right-click "Play with X"
+    // entries on VideosPage / ShowView. Mirrors openVideoPlayer's body but
+    // routes the explicit backend override through VideoPlayer::openFile's
+    // 6th param so the swap-on-open path in VideoPlayer triggers
+    // switchBackendTo for THIS playback only. Saved pref unchanged.
+    void openVideoPlayerWithBackend(const QString& filePath,
+                                     BackendFactory::Type backend);
     void closeVideoPlayer();
 
     // System tray
@@ -114,6 +134,13 @@ private:
     QWidget       *m_topBar      = nullptr;
     QLabel        *m_brandLabel  = nullptr;
     QButtonGroup  *m_navGroup    = nullptr;
+
+    // Frameless-chrome buttons (FRAMELESS_CHROME_FIX 2026-05-01).
+    // Folded into the right edge of m_topBar so the OS title bar can be dropped.
+    QPushButton   *m_chromeMin   = nullptr;
+    QPushButton   *m_chromeMax   = nullptr;
+    QPushButton   *m_chromeClose = nullptr;
+    void updateMaxRestoreIcon();
 
     // Page stack
     QStackedWidget *m_pageStack = nullptr;

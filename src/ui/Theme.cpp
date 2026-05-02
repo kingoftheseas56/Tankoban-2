@@ -359,6 +359,35 @@ QPushButton#IconButton:disabled {
     border-color: rgba(__INK_RGB__,0.06);
 }
 
+/* ── Frameless chrome buttons (FRAMELESS_CHROME_FIX 2026-05-01) ── */
+/* Win-action cluster (min / max / close) folded into the topbar's right edge.
+   No border, no rounded corners — flat hit-targets that read as window chrome,
+   not as library actions. Hover gives a subtle gray surface; close stays
+   gray-on-gray (no Win11 red — feedback_no_color_no_emoji is strict). */
+
+QPushButton#ChromeMin,
+QPushButton#ChromeMax,
+QPushButton#ChromeClose {
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    min-width: 36px;  max-width: 36px;
+    min-height: 24px; max-height: 24px;
+}
+
+QPushButton#ChromeMin:hover,
+QPushButton#ChromeMax:hover,
+QPushButton#ChromeClose:hover {
+    background: rgba(__INK_RGB__,0.10);
+}
+
+QPushButton#ChromeMin:pressed,
+QPushButton#ChromeMax:pressed,
+QPushButton#ChromeClose:pressed {
+    background: rgba(__INK_RGB__,0.16);
+}
+
 /* ── Content area ── */
 
 QFrame#Content {

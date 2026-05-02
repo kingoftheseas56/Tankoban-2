@@ -1352,6 +1352,8 @@ void VideoPlayer::buildUI()
     m_mpvWidget->hide();
     connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
             this, [this]() {
+                // Task 3: this now means an actual mpv frame reached the
+                // Vulkan swapchain, not just the black pre-frame clear.
                 m_firstFrameSeen = true;
             });
     // Agent 3 2026-05-02 — mouseActivityAt connect disabled while the
@@ -4285,6 +4287,7 @@ void VideoPlayer::syncMpvIntegrationToBackend()
         // Hide MpvVulkanWidget if it exists from a prior mpv session,
         // restore FrameCanvas as the active video surface.
         if (m_mpvWidget) {
+            m_mpvWidget->setLibplaceboRenderer(nullptr);
             m_mpvWidget->setMpvHandle(nullptr);
             m_mpvWidget->hide();
         }
@@ -4303,8 +4306,7 @@ void VideoPlayer::syncMpvIntegrationToBackend()
         m_mpvWidget->setGeometry(0, 0, width(), height());
         connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
                 this, [this]() {
-                    // Match the SidecarProcess-side firstFrame state transition
-                    // so HUD overlays + watchdogs see the same signal shape.
+                    // Actual mpv frame reached the Vulkan swapchain.
                     m_firstFrameSeen = true;
                 });
         // Agent 3 2026-05-02 — paired with the disabled buildUI connect
@@ -4330,14 +4332,21 @@ void VideoPlayer::syncMpvIntegrationToBackend()
     // rather than waiting for the next ready cycle.
     connect(mpvBackend, &IPlayerBackend::ready,
             this, [this, mpvBackend]() {
-                if (m_mpvWidget) m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
+                if (m_mpvWidget) {
+                    m_mpvWidget->setLibplaceboRenderer(mpvBackend->libplaceboRenderer());
+                    m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
+                }
             });
     connect(mpvBackend, &MpvBackend::mpvHandleInvalidating,
             this, [this]() {
-                if (m_mpvWidget) m_mpvWidget->setMpvHandle(nullptr);
+                if (m_mpvWidget) {
+                    m_mpvWidget->setLibplaceboRenderer(nullptr);
+                    m_mpvWidget->setMpvHandle(nullptr);
+                }
             },
             Qt::DirectConnection);
     if (mpvBackend->mpvHandle()) {
+        m_mpvWidget->setLibplaceboRenderer(mpvBackend->libplaceboRenderer());
         m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
     }
 

@@ -432,6 +432,15 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
             auto* playAct = menu->addAction("Play");
             auto* playBeginAct = menu->addAction("Play from beginning");
             menu->addSeparator();
+            // 2026-04-30 — direct-opener entries (ONE-SHOT). Mirrors the
+            // VideosPage show-tile + Continue Watching pattern. Emits
+            // episodeSelectedWithBackend; VideosPage forwards through
+            // its own playVideoWithBackend signal at VideosPage.cpp:~831.
+            auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
+#ifdef HAS_LIBMPV
+            auto* playMpvAct = menu->addAction("Play with mpv");
+#endif
+            menu->addSeparator();
             auto* revealAct = menu->addAction("Reveal in File Explorer");
             revealAct->setEnabled(!filePath.isEmpty());
             auto* copyAct = menu->addAction("Copy file path");
@@ -451,6 +460,17 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
                 prog.remove("positionSec");
                 if (m_bridge) m_bridge->saveProgress("videos", vid, prog);
                 emit episodeSelected(filePath);
+            } else if (chosen == playFfmpegAct
+#ifdef HAS_LIBMPV
+                       || chosen == playMpvAct
+#endif
+                       ) {
+                const auto backend =
+#ifdef HAS_LIBMPV
+                    (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
+#endif
+                    BackendFactory::Type::Ffmpeg;
+                emit episodeSelectedWithBackend(filePath, backend);
             } else if (chosen == revealAct) {
                 ContextMenuHelper::revealInExplorer(filePath);
             } else if (chosen == copyAct) {

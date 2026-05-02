@@ -41,7 +41,10 @@ StreamPrefetch::StreamPrefetch(AVIOContext* raw_avio,
       m_shutdown(false),
       m_seek_pending(false),
       m_seek_offset(0),
-      m_seek_whence(0) {
+      m_seek_whence(0),
+      m_input_rate_bps_ema(0),
+      m_last_rate_sample_time(std::chrono::steady_clock::now()),
+      m_bytes_since_last_sample(0) {
     m_producer = std::thread(&StreamPrefetch::producer_loop, this);
 }
 
@@ -256,9 +259,52 @@ void StreamPrefetch::producer_loop() {
 
         m_write_pos = (m_write_pos + static_cast<std::size_t>(n)) % m_ring.size();
         m_size     += static_cast<std::size_t>(n);
+        update_input_rate_sample(n);
         m_data_cv.notify_all();
     }
 
     // Last-chance wake so a consumer parked on m_data_cv sees shutdown.
     m_data_cv.notify_all();
+}
+
+// PLAYER_STREMIO_PARITY Phase 2 Batch 2.1 — observables + rate tracking.
+
+std::size_t StreamPrefetch::bytes_in_ring() const {
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(m_mutex));
+    return m_size;
+}
+
+int64_t StreamPrefetch::estimated_input_rate_bps() const {
+    return m_input_rate_bps_ema.load(std::memory_order_acquire);
+}
+
+int64_t StreamPrefetch::stream_pos() const {
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — m_stream_pos mutates under
+    // m_mutex in both read() (consume path) and seek() (reset path); lock
+    // for consistency with other observer accessors on this class.
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(m_mutex));
+    return m_stream_pos;
+}
+
+void StreamPrefetch::update_input_rate_sample(int64_t bytes_read) {
+    // Called on producer thread only. Accumulates bytes over sample windows
+    // of ~500 ms; on window close computes instantaneous rate and blends
+    // into EMA (alpha=0.3). Short windows catch burstiness (e.g. an HTTP
+    // chunk arriving after a long stall); EMA smooths seasonal variance.
+    m_bytes_since_last_sample += bytes_read;
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - m_last_rate_sample_time).count();
+    if (elapsed >= 500) {
+        // Guard against elapsed = 0 (clock jitter); min 1 ms.
+        double dt_sec = std::max(elapsed, 1LL) / 1000.0;
+        int64_t rate = static_cast<int64_t>(m_bytes_since_last_sample / dt_sec);
+        int64_t prev = m_input_rate_bps_ema.load(std::memory_order_acquire);
+        int64_t next = (prev == 0)
+            ? rate
+            : static_cast<int64_t>(prev * 0.7 + rate * 0.3);
+        m_input_rate_bps_ema.store(next, std::memory_order_release);
+        m_bytes_since_last_sample = 0;
+        m_last_rate_sample_time = now;
+    }
 }

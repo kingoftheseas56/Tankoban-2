@@ -8,7 +8,7 @@
 #include <QString>
 #include <QUrl>
 
-#include "SidecarProcess.h"
+#include "IPlayerBackend.h"
 #include "core/stream/addon/SubtitleInfo.h"
 
 class QLabel;
@@ -45,10 +45,14 @@ class SubtitlePopover : public QFrame
 public:
     explicit SubtitlePopover(QWidget* parent = nullptr);
 
-    // Wire the sidecar so the popover stays in sync with embedded
-    // tracks on every tracks_changed event and can dispatch the
-    // sub-set-track / sub-set-url commands directly.
-    void setSidecar(SidecarProcess* sidecar);
+    // Wire the playback backend so the popover stays in sync with
+    // embedded tracks on every tracks_changed event and can dispatch
+    // the sub-set-track / sub-set-url commands directly. Pointer type
+    // is the abstract IPlayerBackend (MPV_RENDER_API_INTEGRATION P2
+    // 2026-04-28); concrete instance is SidecarProcess today, MpvBackend
+    // in Phase 3+. setSidecar name preserved per Decision 4 — Phase 6
+    // cleanup may rename if SidecarProcess loses the deprecation race.
+    void setSidecar(IPlayerBackend* sidecar);
 
     // Called by VideoPlayer when the StreamPage SubtitlesAggregator
     // resolves external subs for the currently-playing stream.
@@ -127,7 +131,7 @@ private:
     static QString addonDisplayLabel(const tankostream::addon::SubtitleTrack& t);
     static QString embeddedDisplayLabel(const SubtitleTrackInfo& t);
 
-    SidecarProcess* m_sidecar = nullptr;
+    IPlayerBackend* m_sidecar = nullptr;
 
     QList<SubtitleTrackInfo> m_embeddedTracks;
     int m_activeEmbeddedIndex = -1;

@@ -18,6 +18,11 @@
 #endif
 #endif
 
+#ifdef HAS_LIBMPV
+#include "ui/player/MpvProbe.h"
+#include <cstdlib>
+#endif
+
 // ── Single-instance IPC ─────────────────────────────────────────────────────
 
 static const char *INSTANCE_SERVER_NAME = "TankobanSingleInstance";
@@ -92,6 +97,16 @@ static void applyWindowsDarkTitleBar(QWidget *window)
 
 int main(int argc, char *argv[])
 {
+#ifdef HAS_LIBMPV
+    // MPV_RENDER_API_INTEGRATION Phase 1 smoke gate. Set TANKOBAN_MPV_PROBE=1
+    // to run a libmpv-load smoke and exit without bringing up the UI. Pure
+    // stdlib path; no Qt dependency.
+    if (const char* probe = std::getenv("TANKOBAN_MPV_PROBE");
+        probe && probe[0] == '1' && probe[1] == '\0') {
+        return tankoban::runMpvProbe();
+    }
+#endif
+
 #ifdef Q_OS_WIN
     SetProcessDPIAware();
 #endif

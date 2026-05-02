@@ -774,6 +774,10 @@
   transition: background 0.12s, opacity 0.12s;
 }
 .br-btn:hover { background: rgba(var(--br-reader-accent-rgb), 0.14); }
+/* PER_VIEW_CHROME_FIX 2026-05-02 P5 — Close-button gets the Fluent red hover
+   tint (Windows convention; orthogonal to the embedded-in-nav-row treatment
+   the rest of the cluster inherits from .br-btn). */
+#booksReaderCloseBtn:hover { background: rgba(232, 17, 35, 0.85); color: #ffffff; }
 .br-btn:disabled { opacity: 0.25; cursor: default; pointer-events: none; }
 .br-btn:focus-visible {
   outline: 2px solid rgba(var(--br-reader-accent-rgb), 0.72);

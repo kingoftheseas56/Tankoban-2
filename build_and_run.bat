@@ -64,12 +64,13 @@ if exist "%PROJECT_DIR%\models\kokoro" (
     )
 )
 
-:: ── Deploy book reader resources (if not already present) ─────────────────
+:: ── Deploy book reader resources (sync newer files each build) ─────────────
+:: PER_VIEW_CHROME_FIX 2026-05-02 — was guarded with `if not exist` which
+:: skipped the sync after first build, leaving HTML/CSS/JS edits silently
+:: invisible. /D copies only files newer than destination so re-builds stay
+:: fast. /Y overwrites without prompts.
 if exist "%PROJECT_DIR%\resources\book_reader" (
-    if not exist "%BUILD_DIR%\resources\book_reader" (
-        echo Deploying book reader resources...
-        xcopy /E /I /Q "%PROJECT_DIR%\resources\book_reader" "%BUILD_DIR%\resources\book_reader" >nul 2>&1
-    )
+    xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\book_reader" "%BUILD_DIR%\resources\book_reader" >nul 2>&1
 )
 
 :: ── Run ────────────────────────────────────────────────────────────────────

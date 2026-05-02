@@ -27,7 +27,13 @@ constexpr const char* kOffKey = "off";
 // Typical files have 1-5 sub tracks; 12 covers 99% of cases without
 // making the popover monstrous.
 const int MAX_VISIBLE_ROWS = 12;
-const int ROW_HEIGHT       = 30;
+// VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — bumped 30 → 32 to absorb
+// QSS padding (5px*2) + 12pt font ascent/descent. Hardcoded; do NOT
+// query sizeHintForRow at anchor time — the QListWidget hasn't been
+// width-constrained yet, Qt wraps text at width=0, and sizeHintForRow
+// returns ~178 px per row → popover blows up to ~800 px tall (Hemanth
+// Saiki Ep 12 smoke 2026-04-25 21:14).
+const int ROW_HEIGHT       = 32;
 
 const char* HEADER_SS =
     "color: rgba(214,194,164,0.95);"
@@ -143,15 +149,15 @@ void SubtitlePopover::buildUI()
     lay->addWidget(m_loadFileBtn);
 }
 
-void SubtitlePopover::setSidecar(SidecarProcess* sidecar)
+void SubtitlePopover::setSidecar(IPlayerBackend* sidecar)
 {
     if (m_sidecar == sidecar) return;
     if (m_sidecar) disconnect(m_sidecar, nullptr, this, nullptr);
     m_sidecar = sidecar;
     if (m_sidecar) {
-        connect(m_sidecar, &SidecarProcess::subtitleTracksListed,
+        connect(m_sidecar, &IPlayerBackend::subtitleTracksListed,
                 this, &SubtitlePopover::onEmbeddedTracksListed);
-        // Seed immediately — sidecar may already have fired tracks_changed
+        // Seed immediately — backend may already have fired tracks_changed
         // before the popover was constructed.
         onEmbeddedTracksListed(m_sidecar->listSubtitleTracks(),
                                m_sidecar->activeSubtitleIndex());
@@ -371,24 +377,12 @@ void SubtitlePopover::refreshList()
     m_choiceList->blockSignals(false);
 
     const int rows = qMin(m_choiceList->count(), MAX_VISIBLE_ROWS);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — use Qt's
-    // own row-height measurement instead of the hardcoded ROW_HEIGHT
-    // constant (which underestimates the rendered height once QSS
-    // padding + font metrics + Qt internal margins are accounted for).
-    // sizeHintForRow returns the actual rendered height of the item
-    // post-stylesheet. Falls back to ROW_HEIGHT if no items (defensive).
-    int actualRowH = ROW_HEIGHT;
-    if (m_choiceList->count() > 0) {
-        const int hint = m_choiceList->sizeHintForRow(0);
-        if (hint > 0) actualRowH = hint;
-    }
-    // Generous 8px padding instead of 6 to absorb any frame-width or
-    // viewport-margin slack we don't see at this layer.
-    const int listFixedH = qMax(rows, 1) * actualRowH + 8;
+    // VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — hardcoded ROW_HEIGHT.
+    // The prior sizeHintForRow heuristic was the over-correction that
+    // blew up the popover height when called pre-show (Qt wraps at
+    // width=0). +6 padding absorbs sub-pixel rounding.
+    const int listFixedH = qMax(rows, 1) * ROW_HEIGHT + 6;
     m_choiceList->setFixedHeight(listFixedH);
-    qInfo() << "[SubtitlePopover] refreshList listH=" << listFixedH
-            << "rows=" << rows << "count=" << m_choiceList->count()
-            << "actualRowH=" << actualRowH;
 }
 
 void SubtitlePopover::toggle(QWidget* anchor)
@@ -440,12 +434,6 @@ void SubtitlePopover::wheelEvent(QWheelEvent* event)
 void SubtitlePopover::resizeEvent(QResizeEvent* event)
 {
     QFrame::resizeEvent(event);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — diagnostic
-    // qInfo. Captures any post-show resize that shrinks the popover
-    // after our explicit setGeometry in anchorAbove.
-    qInfo() << "[SubtitlePopover] resizeEvent old=" << event->oldSize()
-            << "new=" << event->size()
-            << "list.size=" << (m_choiceList ? m_choiceList->size() : QSize());
 }
 
 void SubtitlePopover::dismiss()
@@ -503,17 +491,10 @@ void SubtitlePopover::anchorAbove(QWidget* anchor)
     const int paddingV = 10 + 10;  // root layout: setContentsMargins(10, 10, 10, 10)
     const int spacingV = 6 * 2;    // 2 inter-widget gaps in 3-widget VBox
     const int headerH = m_titleLabel ? m_titleLabel->sizeHint().height() : 18;
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — mirror
-    // refreshList's sizeHintForRow approach so the popover height
-    // matches the list's actual rendered content (not the underestimated
-    // ROW_HEIGHT constant).
+    // VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — hardcoded ROW_HEIGHT,
+    // mirrors refreshList's setFixedHeight calc exactly.
     const int rows = m_choiceList ? qMin(m_choiceList->count(), MAX_VISIBLE_ROWS) : 0;
-    int actualRowH = ROW_HEIGHT;
-    if (m_choiceList && m_choiceList->count() > 0) {
-        const int hint = m_choiceList->sizeHintForRow(0);
-        if (hint > 0) actualRowH = hint;
-    }
-    const int listH = qMax(rows, 1) * actualRowH + 8;
+    const int listH = qMax(rows, 1) * ROW_HEIGHT + 6;
     const int footerH = m_loadFileBtn ? m_loadFileBtn->sizeHint().height() : 32;
     const int ph = paddingV + headerH + spacingV + listH + footerH;
 
@@ -528,16 +509,6 @@ void SubtitlePopover::anchorAbove(QWidget* anchor)
         y = qMax(0, (p->height() - ph) / 2);
     }
     setGeometry(x, y, pw, ph);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — diagnostic
-    // qInfo. Logs computed ph + each component + actual size() the
-    // setGeometry call lands at + the inner QListWidget's actual size.
-    qInfo() << "[SubtitlePopover] anchorAbove ph=" << ph
-            << "listH=" << listH << "headerH=" << headerH
-            << "footerH=" << footerH
-            << "popover.size=" << size()
-            << "list.size=" << (m_choiceList ? m_choiceList->size() : QSize())
-            << "parent=" << p->size()
-            << "anchorY=" << (anchor ? anchor->mapTo(p, anchor->rect().topRight()).y() : -1);
 }
 
 QString SubtitlePopover::normalizeAddonKey(const tankostream::addon::SubtitleTrack& t)

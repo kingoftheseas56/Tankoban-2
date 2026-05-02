@@ -68,6 +68,21 @@ public:
     Q_INVOKABLE bool windowIsFullscreen() const;
     Q_INVOKABLE QJsonObject windowToggleFullscreen();
 
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome cluster bridge surface.
+    // JS shim calls these from button click handlers; bridge emits signals
+    // routed to MainWindow chrome slots in BookReader. windowIsMaximized +
+    // windowMaximizeChanged let JS render the correct max/restore icon at
+    // boot and on live state change.
+    Q_INVOKABLE void windowMinimize();
+    Q_INVOKABLE void windowToggleMaximize();
+    Q_INVOKABLE void windowClose();        // chrome Close = exit app (distinct from requestClose = BACK to library)
+    Q_INVOKABLE bool windowIsMaximized() const;
+
+    // Qt-side helper called by BookReader::updateChromeMaxIcon when the
+    // MainWindow's WindowStateChange fires; emits windowMaximizeChanged
+    // through the QWebChannel into the JS shim's icon-swap subscriber.
+    void emitWindowMaximizeChanged(bool isMax);
+
     // ── navigation ──
     Q_INVOKABLE void requestClose();
 
@@ -102,6 +117,16 @@ signals:
     void fullscreenRequested(bool enter);
     void readerReady();
 
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome bridge signals.
+    // Request signals (JS → Qt → MainWindow): emitted from windowMinimize /
+    // windowToggleMaximize Q_INVOKABLEs above. State signal (Qt → JS):
+    // emitted by emitWindowMaximizeChanged so JS swaps the max ↔ restore
+    // icon when the underlying MainWindow state changes via any path.
+    void windowMinimizeRequested();
+    void windowMaximizeToggleRequested();
+    void windowCloseRequested();           // chrome Close = exit app
+    void windowMaximizeChanged(bool isMax);
+
     // Edge TTS completion signals (carry the JS-generated reqId for promise correlation).
     void booksTtsEdgeProbeFinished(quint64 reqId, const QJsonObject& result);
     void booksTtsEdgeVoicesReady(quint64 reqId, const QJsonObject& result);
@@ -125,6 +150,11 @@ private slots:
 private:
     CoreBridge* m_core = nullptr;
     bool m_fullscreen = false;
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome max-state cache. Updated
+    // by emitWindowMaximizeChanged when MainWindow's WindowStateChange
+    // fires; read by windowIsMaximized() so JS can render the correct
+    // max ↔ restore icon at boot.
+    bool m_isMaximized = false;
 
     // Edge TTS worker thread + correlation state. Worker is a QObject moved to
     // m_ttsThread; communicates with this bridge via Qt::QueuedConnection

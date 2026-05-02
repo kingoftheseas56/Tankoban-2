@@ -1,0 +1,15 @@
+shinchiro/mpv-winbuild-cmake release 20260421
+File: mpv-dev-x86_64-v3-20260421-git-5921fe5.7z
+SHA-256: 9f426ff3fd49d072c16e99b8af95e8a82feb4b0f45f1ff5c7a7b0cf9abbf7449
+git rev (mpv): 5921fe5
+Acquired by: setup.bat step 6 (MPV_RENDER_API_INTEGRATION Phase 1, 2026-04-28)
+
+Architecture: x86_64-v3 (Win10+ baseline; AVX2 + BMI2 + FMA + ABM + AES)
+DLL size:     ~121 MB (includes debug symbols; strip optional)
+Import lib:   lib/mpv.lib (renamed from upstream libmpv.dll.a; standard COFF
+              import lib, MSVC link.exe accepts directly)
+Headers:      include/mpv/{client.h,render.h,render_gl.h,stream_cb.h}
+License:      LGPL-2.1+ (see LICENSE.libmpv.txt)
+
+Self-contained: libmpv-2.dll statically links libplacebo / libass / ffmpeg /
+libdav1d / libfreetype / libfribidi etc. No companion DLLs needed at runtime.

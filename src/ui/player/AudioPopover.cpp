@@ -20,7 +20,11 @@
 // Typical files have 1-3 audio tracks; 12 covers 99% of cases without
 // making the popover monstrous.
 static const int MAX_VISIBLE_ROWS = 12;
-static const int ROW_HEIGHT       = 30;
+// VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — see SubtitlePopover.cpp for
+// rationale; hardcoded 32 absorbs QSS padding (5px*2) + 12pt font.
+// Don't query sizeHintForRow at anchor time — it returns wrap-broken
+// values pre-show.
+static const int ROW_HEIGHT       = 32;
 
 static const char* TRACK_LIST_SS =
     "QListWidget {"
@@ -162,20 +166,10 @@ void AudioPopover::populate(const QJsonArray& tracks, int currentAudioId)
     }
 
     const int rows = qMin(m_list->count(), MAX_VISIBLE_ROWS);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — sizeHintForRow
-    // for actual rendered row height (see SubtitlePopover.cpp for full
-    // rationale). Hardcoded ROW_HEIGHT=30 underestimated the rendered
-    // height; padding to 8px instead of 4 absorbs frame slack.
-    int actualRowH = ROW_HEIGHT;
-    if (m_list->count() > 0) {
-        const int hint = m_list->sizeHintForRow(0);
-        if (hint > 0) actualRowH = hint;
-    }
-    const int listFixedH = qMax(rows, 1) * actualRowH + 8;
+    // VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — hardcoded ROW_HEIGHT.
+    // sizeHintForRow returns wrap-broken values pre-show.
+    const int listFixedH = qMax(rows, 1) * ROW_HEIGHT + 6;
     m_list->setFixedHeight(listFixedH);
-    qInfo() << "[AudioPopover] populate listH=" << listFixedH
-            << "rows=" << rows << "count=" << m_list->count()
-            << "actualRowH=" << actualRowH;
 }
 
 void AudioPopover::toggle(QWidget* anchor)
@@ -236,10 +230,6 @@ void AudioPopover::wheelEvent(QWheelEvent* event)
 void AudioPopover::resizeEvent(QResizeEvent* event)
 {
     QFrame::resizeEvent(event);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — diagnostic.
-    qInfo() << "[AudioPopover] resizeEvent old=" << event->oldSize()
-            << "new=" << event->size()
-            << "list.size=" << (m_list ? m_list->size() : QSize());
 }
 
 void AudioPopover::dismiss()
@@ -292,28 +282,14 @@ void AudioPopover::anchorAbove(QWidget* anchor)
     if (pw > 320) pw = 320;
     const int paddingV = 10 + 10;  // root layout: setContentsMargins(10, 10, 10, 10)
     const int spacingV = 6;        // single inter-widget gap (header + list)
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — mirror
-    // populate's sizeHintForRow approach so the popover height matches
-    // the list's actual rendered content (not the underestimated
-    // ROW_HEIGHT constant).
+    // VIDEO_HUD_POPOVER_HEIGHT_FIX 2026-04-25 — hardcoded ROW_HEIGHT,
+    // mirrors populate's setFixedHeight calc exactly.
     const int rows = m_list ? qMin(m_list->count(), MAX_VISIBLE_ROWS) : 0;
-    int actualRowH = ROW_HEIGHT;
-    if (m_list && m_list->count() > 0) {
-        const int hint = m_list->sizeHintForRow(0);
-        if (hint > 0) actualRowH = hint;
-    }
-    const int listH = qMax(rows, 1) * actualRowH + 8;
+    const int listH = qMax(rows, 1) * ROW_HEIGHT + 6;
     const int ph = paddingV + 18 /*header est*/ + spacingV + listH;
 
     const QPoint anchorPos = anchor->mapTo(p, anchor->rect().topRight());
     const int x = qMax(0, anchorPos.x() - pw);
     const int y = qMax(0, anchorPos.y() - ph - 8);
     setGeometry(x, y, pw, ph);
-    // VIDEO_HUD_MINIMALIST 1.x bug-fix re-poke 2026-04-25 — diagnostic.
-    qInfo() << "[AudioPopover] anchorAbove ph=" << ph
-            << "listH=" << listH
-            << "popover.size=" << size()
-            << "list.size=" << (m_list ? m_list->size() : QSize())
-            << "parent=" << p->size()
-            << "anchorY=" << anchorPos.y();
 }

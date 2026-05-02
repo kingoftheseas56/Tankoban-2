@@ -528,6 +528,8 @@ if(LIBMPV_INCLUDE_DIR AND LIBMPV_LIBRARY AND EXISTS "${LIBMPV_ROOT}/bin/libmpv-2
         src/ui/player/MpvProbe.cpp
         src/ui/player/MpvBackend.h
         src/ui/player/MpvBackend.cpp
+        src/ui/player/MpvLibplaceboRenderer.h
+        src/ui/player/MpvLibplaceboRenderer.cpp
         src/ui/player/MpvVideoWidget.h
         src/ui/player/MpvVideoWidget.cpp
         # MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — Vulkan-backed widget

@@ -50,6 +50,7 @@ public:
 
     void pause();
     void resume();
+    void flush_queue();
     void seek(double position_sec);
 
     // Batch 4.1 — Player Polish Phase 4 A/V drift correction.
@@ -91,6 +92,13 @@ private:
     std::mutex              pause_mutex_;
     std::condition_variable pause_cv_;
     std::atomic<bool>       paused_{false};
+
+    // The current implementation has no separate software packet/sample
+    // queue; pending post-stall audio lives in PortAudio's device buffer.
+    // flush_queue() aborts/restarts this stream to drop already-accepted
+    // samples before resume.
+    std::mutex              stream_mutex_;
+    PaStream*               active_stream_ = nullptr;
 
     // Seek request
     std::mutex          seek_mutex_;

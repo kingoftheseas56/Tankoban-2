@@ -5,6 +5,10 @@
 #include <QKeyEvent>
 #include <QTimer>
 #include <QRegularExpression>
+#include <QPushButton>
+#include <QIcon>
+#include <QPropertyAnimation>
+#include <QEasingCurve>
 #include <algorithm>
 
 TileStrip::TileStrip(QWidget* parent)
@@ -60,6 +64,7 @@ void TileStrip::setMode(const QString& mode)
         m_tileSpacingH = 12;
         for (auto* tile : m_tiles)
             tile->setCardSize(m_cardWidth, m_imageHeight);
+        ensureScrollChrome();
     }
     reflowTiles();
 }
@@ -405,7 +410,12 @@ void TileStrip::reflowTiles()
         return;
 
     if (m_mode == "continue") {
-        int x = PADDING;
+        // CONTINUE_SCROLL_ARROWS 2026-05-02 — tiles laid out left-to-right
+        // with m_scrollOffsetX subtracted from each x position. Tiles past
+        // the visible width are simply rendered off-canvas (Qt clips child
+        // widgets at parent bounds).
+        int x = PADDING - m_scrollOffsetX;
+        int contentEnd = PADDING;
         for (auto* tile : m_tiles) {
             if (m_filteredOut.contains(tile)) {
                 tile->hide();
@@ -415,8 +425,15 @@ void TileStrip::reflowTiles()
             tile->move(x, 4);
             tile->show();
             x += m_cardWidth + m_tileSpacingH;
+            contentEnd += m_cardWidth + m_tileSpacingH;
         }
+        // Last tile doesn't need trailing spacing.
+        if (!m_tiles.isEmpty())
+            contentEnd -= m_tileSpacingH;
+        m_totalContentWidth = contentEnd;
         setFixedHeight(m_imageHeight + 56);
+        positionArrows();
+        updateArrowVisibility();
         return;
     }
 
@@ -459,4 +476,97 @@ void TileStrip::reflowTiles()
     }
 
     setFixedHeight(visibleIndex > 0 ? maxBottom + PADDING : 0);
+}
+
+// ── CONTINUE_SCROLL_ARROWS 2026-05-02 — overflow chrome for continue mode ──
+//
+// Lazy-create two transparent chevron buttons (left + right) over the strip.
+// Their visibility is recomputed on every reflow against m_scrollOffsetX vs
+// the overflow extent. Click triggers a QPropertyAnimation on scrollOffsetX
+// (OutCubic 280ms) which re-flows the tiles at the new offset. Window resize
+// → reflowTiles() → updateArrowVisibility() picks up automatically.
+
+void TileStrip::ensureScrollChrome()
+{
+    if (m_leftArrow) return;  // already created
+
+    auto makeArrow = [this](const char* objName, const QString& iconPath,
+                            int direction, const QString& tip) {
+        auto* btn = new QPushButton(this);
+        btn->setObjectName(objName);
+        btn->setFixedSize(36, 56);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setIcon(QIcon(iconPath));
+        btn->setIconSize(QSize(20, 20));
+        btn->setToolTip(tip);
+        btn->setFocusPolicy(Qt::NoFocus);
+        // Transparent surface; subtle hover lift only. Stays out of the way
+        // visually until needed (Stremio-style discretion).
+        btn->setStyleSheet(
+            "QPushButton { background: rgba(0,0,0,0.20); border: none; "
+            "border-radius: 18px; }"
+            "QPushButton:hover { background: rgba(0,0,0,0.40); }"
+            "QPushButton:pressed { background: rgba(0,0,0,0.55); }");
+        connect(btn, &QPushButton::clicked, this,
+                [this, direction]() { animateScrollBy(direction); });
+        btn->hide();  // visibility decided by updateArrowVisibility
+        return btn;
+    };
+
+    m_leftArrow  = makeArrow("ContinueScrollLeft",
+                             ":/icons/chevron_left.svg",  -1, "Scroll left");
+    m_rightArrow = makeArrow("ContinueScrollRight",
+                             ":/icons/chevron_right.svg", +1, "Scroll right");
+
+    m_scrollAnim = new QPropertyAnimation(this, "scrollOffsetX", this);
+    m_scrollAnim->setDuration(280);
+    m_scrollAnim->setEasingCurve(QEasingCurve::OutCubic);
+}
+
+void TileStrip::positionArrows()
+{
+    if (!m_leftArrow || !m_rightArrow) return;
+    const int btnW = 36;
+    const int btnH = 56;
+    // Vertically centered on the tile image area (which sits at y=4 with
+    // m_imageHeight tall).
+    const int yCenter = 4 + m_imageHeight / 2;
+    const int y = yCenter - btnH / 2;
+    m_leftArrow->move(8, y);
+    m_rightArrow->move(width() - btnW - 8, y);
+    m_leftArrow->raise();
+    m_rightArrow->raise();
+}
+
+void TileStrip::updateArrowVisibility()
+{
+    if (!m_leftArrow || !m_rightArrow) return;
+    const bool overflows = m_totalContentWidth > width();
+    const int maxOffset = std::max(0, m_totalContentWidth - width());
+    m_leftArrow->setVisible(overflows && m_scrollOffsetX > 0);
+    m_rightArrow->setVisible(overflows && m_scrollOffsetX < maxOffset);
+}
+
+void TileStrip::setScrollOffsetX(int x)
+{
+    const int maxOffset = std::max(0, m_totalContentWidth - width());
+    const int clamped = std::clamp(x, 0, maxOffset);
+    if (clamped == m_scrollOffsetX) return;
+    m_scrollOffsetX = clamped;
+    reflowTiles();  // re-positions tiles + re-evaluates arrow visibility
+}
+
+void TileStrip::animateScrollBy(int direction)
+{
+    if (!m_scrollAnim) return;
+    // Step = 85% of viewport width so a small slice of the prior column
+    // remains visible after each click — Stremio's behavior.
+    const int step = static_cast<int>(width() * 0.85);
+    const int target = m_scrollOffsetX + direction * step;
+    const int maxOffset = std::max(0, m_totalContentWidth - width());
+    const int clampedTarget = std::clamp(target, 0, maxOffset);
+    m_scrollAnim->stop();
+    m_scrollAnim->setStartValue(m_scrollOffsetX);
+    m_scrollAnim->setEndValue(clampedTarget);
+    m_scrollAnim->start();
 }

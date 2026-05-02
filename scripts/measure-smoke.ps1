@@ -79,16 +79,28 @@ if ($waitMs.Count -gt 0) {
     $p99Wait = [int]$sorted[$p99Idx]
 }
 
-# Playback duration = time from first PERF tick to last PERF tick in the log
-$perfLines = @($lines | Where-Object { $_ -match '\[PERF\] frames=' })
+# Playback duration = time from first PERF tick AFTER the last SEND open to
+# the last PERF tick. Scopes to the current smoke even on cumulative logs.
 $playbackS = -1
-if ($perfLines.Count -ge 2) {
-    $t1 = Parse-LineTime $perfLines[0]
-    $t2 = Parse-LineTime $perfLines[-1]
-    if ($t1 -and $t2) {
-        $playbackS = [int]($t2 - $t1).TotalSeconds
-        # Handle midnight wrap defensively (if negative, add 86400)
-        if ($playbackS -lt 0) { $playbackS += 86400 }
+$lastSendIdx = -1
+for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    if ($lines[$i] -match '\[Sidecar\] SEND: \{"name":"open"') {
+        $lastSendIdx = $i
+        break
+    }
+}
+if ($lastSendIdx -ge 0) {
+    $perfScoped = @()
+    for ($i = $lastSendIdx + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '\[PERF\] frames=') { $perfScoped += $lines[$i] }
+    }
+    if ($perfScoped.Count -ge 2) {
+        $t1 = Parse-LineTime $perfScoped[0]
+        $t2 = Parse-LineTime $perfScoped[-1]
+        if ($t1 -and $t2) {
+            $playbackS = [int]($t2 - $t1).TotalSeconds
+            if ($playbackS -lt 0) { $playbackS += 86400 }
+        }
     }
 }
 

@@ -40,6 +40,14 @@ static const struct { const char* action; const char* label; int key; Qt::Keyboa
     // (mpv convention for its stats overlay).
     {"toggle_stats",         "Show stats",         Qt::Key_I,            Qt::NoModifier},
 
+    // Brightness — MAKE_MPV_SOLO Task 9 follow-up (2026-05-01). v/b sit
+    // adjacent on QWERTY for symmetric muscle memory; r is free + reads
+    // semantically as "Reset". Step ±5 matches BrightnessPopover slider
+    // single-step. Range clamp -100..+100 enforced inside setBrightness.
+    {"brightness_minus",     "Brightness -5",      Qt::Key_V,            Qt::NoModifier},
+    {"brightness_plus",      "Brightness +5",      Qt::Key_B,            Qt::NoModifier},
+    {"brightness_reset",     "Reset brightness",   Qt::Key_R,            Qt::NoModifier},
+
     // Audio / Subs
     {"cycle_audio",        "Cycle audio track",    Qt::Key_A,            Qt::NoModifier},
     // VIDEO_HUD_MINIMALIST 2026-04-25 — toggle_normalize (Shift+A) removed

@@ -22,7 +22,7 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 
-# Tag shared between Start and Stop — we need Stop to re-compute the SAME tag.
+# Tag shared between Start and Stop -- we need Stop to re-compute the SAME tag.
 # Use a small state file in out/ to persist the tag across phases.
 $stateFile = Join-Path $repoRoot "out/ab_smoke_state.json"
 
@@ -38,11 +38,13 @@ if ($Phase -eq "Start") {
         Write-Host "[Start] stream_progress.json not present (already clean)"
     }
 
-    # 2. Truncate _player_debug.txt so THIS smoke's log is self-contained
-    $playerDebug = Join-Path $repoRoot "out/_player_debug.txt"
+    # 2. Truncate _player_debug.txt so THIS smoke's log is self-contained.
+    # NOTE: SidecarProcess.cpp:23 hardcodes "C:/Users/Suprabha/Desktop/Tankoban 2/_player_debug.txt"
+    # i.e. the path is the repo root, NOT out/. Truncate the repo-root path.
+    $playerDebug = Join-Path $repoRoot "_player_debug.txt"
     if (Test-Path $playerDebug) {
         Clear-Content $playerDebug
-        Write-Host "[Start] Truncated _player_debug.txt"
+        Write-Host "[Start] Truncated _player_debug.txt (repo root)"
     }
 
     # 3. Truncate stream_telemetry.log likewise (per-smoke clean)
@@ -102,7 +104,7 @@ if ($Phase -eq "Start") {
 
     # 1. Load state from Start
     if (-not (Test-Path $stateFile)) {
-        throw "[Stop] No state file at $stateFile — did Phase Start run first?"
+        throw "[Stop] No state file at $stateFile -- did Phase Start run first?"
     }
     $state = Get-Content $stateFile | ConvertFrom-Json
     if ($state.label -ne $Label -or $state.treatment -ne $Treatment) {
@@ -115,7 +117,8 @@ if ($Phase -eq "Start") {
     Write-Host "[Stop] Tag=$tag elapsed=${elapsedSec}s"
 
     # 2. Snapshot log files BEFORE killing Tankoban (so PERF tail captures)
-    $playerLogSrc    = Join-Path $repoRoot "out/_player_debug.txt"
+    # NOTE: _player_debug.txt is hardcoded to repo root per SidecarProcess.cpp:23.
+    $playerLogSrc    = Join-Path $repoRoot "_player_debug.txt"
     $sidecarLogSrc   = Join-Path $repoRoot "out/sidecar_debug_live.log"
     $telemetryLogSrc = Join-Path $repoRoot "out/stream_telemetry.log"
 

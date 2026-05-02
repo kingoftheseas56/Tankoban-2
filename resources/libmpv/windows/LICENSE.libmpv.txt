@@ -1,0 +1,32 @@
+libmpv — distributed with Tankoban under LGPL-2.1+
+====================================================
+
+Tankoban bundles libmpv-2.dll, a build of mpv (https://mpv.io) by the mpv
+project, redistributed under the GNU Lesser General Public License
+version 2.1 or later (LGPL-2.1+).
+
+The DLL in this directory is built by shinchiro/mpv-winbuild-cmake
+(https://github.com/shinchiro/mpv-winbuild-cmake) — a third-party
+reproducible-build pipeline that compiles upstream mpv + dependencies into
+a single self-contained Windows shared library.
+
+Source code:
+  https://github.com/mpv-player/mpv
+
+Pinned upstream revision (as bundled here):
+  git 5921fe5  (release tag 20260421)
+
+LGPL obligations covered by Tankoban:
+  - libmpv-2.dll is dynamically linked at runtime (no static link).
+  - Users may replace this DLL with their own libmpv build of compatible
+    ABI; Tankoban will load whichever libmpv-2.dll is found alongside the
+    Tankoban.exe binary first, then fall through to system PATH.
+  - The LGPL-2.1 text is reproduced at:
+    https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+  - Source for this exact build can be reconstructed from the
+    shinchiro/mpv-winbuild-cmake repository at the release tag noted above.
+
+License attribution for sub-libraries statically linked into libmpv-2.dll
+(libplacebo, libass, ffmpeg, libdav1d, etc.) is enumerated by upstream mpv
+at https://github.com/mpv-player/mpv/blob/master/Copyright and inherited
+into this binary distribution.

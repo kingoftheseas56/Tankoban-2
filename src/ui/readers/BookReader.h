@@ -22,9 +22,22 @@ public:
 
     void openBook(const QString& filePath);
 
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome Max icon state push from
+    // MainWindow's WindowStateChange handler. Forwards through the bridge
+    // to JS (P5 wires the JS subscriber that swaps the icon). No-op when
+    // the WebEngine path is disabled.
+    void updateChromeMaxIcon(bool isMaximized);
+
 signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome cluster signals re-emitted
+    // from BookBridge so MainWindow can connect at construction time
+    // (mirrors the closeRequested → MainWindow::closeBookReader pattern).
+    void chromeMinimizeRequested();
+    void chromeMaximizeToggleRequested();
+    void chromeCloseRequested();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

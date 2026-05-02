@@ -76,6 +76,9 @@ public:
     // Pause/resume (holds video in place during A/V sync wait).
     void pause()  { paused_.store(true); }
     void resume() { paused_.store(false); }
+    int64_t last_rendered_pts_us() const {
+        return last_rendered_pts_us_.load(std::memory_order_relaxed);
+    }
 
     // Zero-copy short-circuit (Holy Grail). When true AND HW-decoded AND
     // no subtitle blending is required, skip hwframe_transfer + sws_scale +
@@ -110,6 +113,18 @@ private:
     std::atomic<bool>   running_{false};
     std::atomic<bool>   paused_{false};
     std::atomic<bool>   zero_copy_active_{false};
+    std::atomic<int64_t> last_rendered_pts_us_{0};
+
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — HTTP-byte-position-based
+    // near-end trigger. Computed once after avformat_find_stream_info from
+    // fmt_ctx->bit_rate + StreamPrefetch::source_size(). When consumer's
+    // read position crosses this threshold (90 s of bytes before actual
+    // HTTP EOF), emits `near_end_estimate` event so main-app can drive
+    // AUTO_NEXT even when AVFormatContext::duration is a bitrate-estimate
+    // (HUD tilde-prefix) that makes the main-app pct/remaining check
+    // unreachable. -1 = disabled (bit_rate=0 or avio_size unavailable).
+    int64_t             near_end_bytes_offset_ = -1;
+    bool                near_end_fired_ = false;
     std::atomic<int>    overlay_canvas_w_{0};
     std::atomic<int>    overlay_canvas_h_{0};
     std::unique_ptr<OverlayShm> overlay_shm_;

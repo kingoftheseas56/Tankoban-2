@@ -852,6 +852,30 @@
       els.backBtn.__booksBackBound = true;
     }
     els.minBtn && els.minBtn.addEventListener('click', function () { try { Tanko.api.window.minimize(); } catch (e) {} });
+    // PER_VIEW_CHROME_FIX 2026-05-02 P5 — chrome Max-toggle button + icon
+    // swap. Subscribe to windowMaximizeChanged so the icon (single square
+    // ↔ overlapping squares) reflects the live MainWindow state, even when
+    // toggled via Win+Up / Win+Down / OS taskbar / drag-to-screen-edge.
+    els.maxBtn && els.maxBtn.addEventListener('click', function () { try { Tanko.api.window.toggleMaximize(); } catch (e) {} });
+    function _setMaxIcon(isMax) {
+      var ic = els.maxIcon;
+      if (!ic) return;
+      // Restore icon = two overlapping squares; Max icon = single square.
+      // Both use stroke="currentColor" so they pick up theme + br-btn hover.
+      if (isMax) {
+        ic.innerHTML = '<rect x="6" y="9" width="9" height="9" rx="1"/><path d="M9 9V6h9v9h-3"/>';
+        if (els.maxBtn) els.maxBtn.title = 'Restore';
+      } else {
+        ic.innerHTML = '<rect x="6" y="6" width="12" height="12" rx="1"/>';
+        if (els.maxBtn) els.maxBtn.title = 'Maximize';
+      }
+    }
+    try {
+      Tanko.api.window.isMaximized().then(function (v) { _setMaxIcon(!!v); });
+      if (typeof Tanko.api.window.onMaximizeChanged === 'function') {
+        Tanko.api.window.onMaximizeChanged(_setMaxIcon);
+      }
+    } catch (e) {}
     els.closeBtn && els.closeBtn.addEventListener('click', function () { try { Tanko.api.window.close(); } catch (e) {} });
 
     // Safety-net progress saves: catch window close, app quit, tab switch
@@ -971,7 +995,7 @@
       var pairing = window.booksReaderAudiobookPairing;
       if (pairing && typeof pairing.hasSavedPairing === 'function' && pairing.hasSavedPairing()) {
         if (typeof pairing.triggerAutoLoad === 'function') {
-          pairing.triggerAutoLoad();
+          pairing.triggerAutoLoad({ autoplay: true });
         }
         return;
       }

@@ -181,6 +181,31 @@ public:
     };
     PieceDiag pieceDiagnostic(const QString& infoHash, int pieceIdx) const;
 
+    // STREAM metadata investigation Wake 1 (2026-04-21) — pre-metadata
+    // diagnostic projection. Observed: Torrentio EZTV magnets take 93-245 s
+    // from addMagnet() to metadata_received_alert; post-metadata cold-open
+    // is only ~114 ms (Wake 3 deadline shape fix). The 93-245 s is pure
+    // libtorrent-layer metadata-fetch latency with zero observability
+    // today. This accessor surfaces the pre-metadata phase state so
+    // StreamEngine::onMetadataFetchDiagTick can emit 1 Hz telemetry to
+    // disambiguate between:
+    //   dhtRunning=false, trackersOk=0, peersConnected=0 → bootstrap stuck
+    //   dhtRunning=true,  trackersOk=0, peersConnected=0 → DHT only, trackers failing
+    //   trackersOk>0, peersConnected=0                   → trackers responded but handshake pending
+    //   peersConnected>0 over many ticks (metadata not arriving)
+    //                                                     → peers present but not exchanging metadata
+    // Pure read; additive per 12-method API freeze. Safe to call at 1 Hz.
+    struct MetadataFetchDiag {
+        int  peersConnected       = 0;   // handle.status().num_peers — connected peer sockets
+        int  swarmSeeds           = 0;   // handle.status().num_complete — tracker-reported
+        int  swarmLeechers        = 0;   // handle.status().num_incomplete — tracker-reported
+        int  trackersOk           = 0;   // trackers with recent successful scrape/announce
+        int  trackersTotal        = 0;   // total tracker count (from handle.trackers())
+        bool dhtRunning           = false;   // session::is_dht_running()
+        bool announcingToTrackers = false;   // handle.status().announcing_to_trackers
+    };
+    MetadataFetchDiag metadataFetchDiagnostic(const QString& infoHash) const;
+
     // General tab convenience wrapper (Phase 6.5)
     TorrentDetails torrentDetails(const QString& infoHash) const;
 

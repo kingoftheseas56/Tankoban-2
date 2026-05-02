@@ -5,9 +5,14 @@
 #include <QSet>
 
 class TileCard;
+class QPushButton;
+class QPropertyAnimation;
 
 class TileStrip : public QWidget {
     Q_OBJECT
+    // CONTINUE_SCROLL_ARROWS 2026-05-02 — animated horizontal scroll offset
+    // for "continue" mode. QPropertyAnimation drives this on arrow click.
+    Q_PROPERTY(int scrollOffsetX READ scrollOffsetX WRITE setScrollOffsetX)
 public:
     explicit TileStrip(QWidget* parent = nullptr);
 
@@ -27,6 +32,10 @@ public:
     void clearSelection();
     void selectAll();
     QList<TileCard*> selectedTiles() const;
+
+    // Scroll-offset accessors (animated by QPropertyAnimation in continue mode).
+    int scrollOffsetX() const { return m_scrollOffsetX; }
+    void setScrollOffsetX(int x);
 
 signals:
     void tileClicked(const QString& seriesPath);
@@ -52,6 +61,12 @@ private:
     QList<TileCard*> visibleTileList() const;
     int visibleIndexOf(TileCard* card) const;
 
+    // CONTINUE_SCROLL_ARROWS 2026-05-02 helpers (continue mode only).
+    void ensureScrollChrome();
+    void positionArrows();
+    void updateArrowVisibility();
+    void animateScrollBy(int direction);
+
     QList<TileCard*> m_tiles;
     QSet<TileCard*> m_filteredOut;
     QSet<TileCard*> m_selected;
@@ -66,6 +81,13 @@ private:
     int m_cardWidth = 200;
     int m_imageHeight = 308;
     int m_tileSpacingH = 16;
+
+    // Continue-mode scroll state.
+    int m_scrollOffsetX = 0;
+    int m_totalContentWidth = 0;
+    QPushButton* m_leftArrow = nullptr;
+    QPushButton* m_rightArrow = nullptr;
+    QPropertyAnimation* m_scrollAnim = nullptr;
 
     static constexpr int TILE_SPACING_V = 20;
     static constexpr int PADDING = 0;

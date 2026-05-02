@@ -588,6 +588,9 @@ QString TorrentEngine::addMagnet(const QString& magnetUri, const QString& savePa
     lt::error_code ec;
     lt::add_torrent_params atp = lt::parse_magnet_uri(magnetUri.toStdString(), ec);
     if (ec) {
+        DebugLogBuffer::instance().warning("torrent-engine",
+            QStringLiteral("addMagnet: parse_magnet_uri rejected URI: %1 (uri prefix=%2)")
+                .arg(QString::fromUtf8(ec.message().c_str())).arg(magnetUri.left(80)));
         qWarning() << "Invalid magnet URI:" << ec.message().c_str();
         return {};
     }
@@ -626,10 +629,14 @@ QString TorrentEngine::addMagnet(const QString& magnetUri, const QString& savePa
         // 2026-04-30: download icon + right-click "Download…" both surfaced
         // "Failed to Add Magnet" because every prior cancelled draft pinned
         // the magnet in the session past the next click.)
+        // libtorrent 2.0.x at C:/tools/libtorrent-2.0-msvc only exposes the
+        // sha1_hash overload of find_torrent; the sha256_hash overload was
+        // added in a later 2.x. v1-only magnets have v1 set; hybrid (v1+v2)
+        // magnets ALSO have v1 populated (truncated from v2's first 20 bytes).
+        // v2-only magnets are rare and not handled here — they'd surface as
+        // "Failed to Add Magnet" until libtorrent is upgraded.
         lt::torrent_handle existing;
-        if (parsedInfoHashes.has_v2())
-            existing = m_session.find_torrent(parsedInfoHashes.v2);
-        if (!existing.is_valid() && parsedInfoHashes.has_v1())
+        if (parsedInfoHashes.has_v1())
             existing = m_session.find_torrent(parsedInfoHashes.v1);
 
         if (existing.is_valid()) {

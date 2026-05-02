@@ -1,6 +1,6 @@
 // MpvBackend.cpp — IPlayerBackend implementation against in-process libmpv.
-// Phase 3 (no rendering yet; vo=null). Phase 4-5 add the render API path
-// into FrameCanvas's existing D3D11 swap chain.
+// mpv owns decode/audio/transport. MAKE_MPV_BEAT_FFMPEG Task 3 adds the
+// backend-owned SW render context used by MpvLibplaceboRenderer.
 //
 // File compiled only when CMake finds libmpv on disk (HAS_LIBMPV=1) — see
 // CMakeLists.txt. When libmpv is absent, this TU isn't added to the
@@ -10,6 +10,7 @@
 #include "MpvBackend.h"
 
 #include "core/DebugLogBuffer.h"
+#include "ui/player/MpvLibplaceboRenderer.h"
 
 #include <mpv/client.h>
 
@@ -205,13 +206,10 @@ void MpvBackend::initializeMpv()
     // Hermetic config — don't read user's local mpv config.
     setOpt(m_mpv, "config", "no");
 
-    // P5 redux — start with vo=null so mpv_initialize doesn't try to spin
-    // up vo=libmpv before MpvVideoWidget has created the render context.
-    // If mpv tries vo=libmpv-without-render-context, it logs a fatal and
-    // permanently disables video output (audio still plays — what we saw
-    // on first integration). MpvVideoWidget switches to vo=libmpv via
-    // mpv_set_property_string after mpv_render_context_create succeeds.
-    setOpt(m_mpv, "vo", "null");
+    // MAKE_MPV_BEAT_FFMPEG Task 3: route video through mpv's render API.
+    // The backend creates the SW render context before ready()/loadfile, so
+    // mpv does not permanently fall back to the old audio-only vo=null path.
+    setOpt(m_mpv, "vo", "libmpv");
 
     // Audio + identity.
     setOpt(m_mpv, "audio-client-name", "Tankoban");
@@ -341,6 +339,12 @@ void MpvBackend::initializeMpv()
         return;
     }
 
+    m_libplaceboRenderer = std::make_unique<MpvLibplaceboRenderer>();
+    if (!m_libplaceboRenderer->attachMpv(m_mpv)) {
+        mpvLog(QStringLiteral("[init] SW render context unavailable; Vulkan widget will clear black"));
+        m_libplaceboRenderer.reset();
+    }
+
     observeProperties();
     mpv_set_wakeup_callback(m_mpv, &MpvBackend::wakeupCallback, this);
 
@@ -383,6 +387,7 @@ void MpvBackend::teardownMpv()
     // its resources BEFORE we call mpv_terminate_destroy. Direct connections
     // ensure synchronous teardown ordering on the GUI thread.
     emit mpvHandleInvalidating();
+    m_libplaceboRenderer.reset();
 
     // Detach wakeup before destroy — libmpv may fire the callback during
     // teardown otherwise, racing our destructor.
@@ -1156,6 +1161,9 @@ int MpvBackend::sendOpen(const QString& filePath, double startSeconds)
     if (!m_mpv) return -1;
     m_currentFilePath = filePath;
     m_firstFrameEmitted = false;
+    if (m_libplaceboRenderer) {
+        m_libplaceboRenderer->resetFrameState();
+    }
     m_eofReached = false;
     const QByteArray utf8 = filePath.toUtf8();
     // mpv 0.40+ loadfile signature: <url> [<flags> [<index> [<options>]]].

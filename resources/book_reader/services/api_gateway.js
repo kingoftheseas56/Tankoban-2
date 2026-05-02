@@ -77,6 +77,11 @@
       setFullscreen: tw(function() { var a = arguments; return ea.window && ea.window.setFullscreen ? ea.window.setFullscreen.apply(ea.window, a) : Promise.resolve({ ok: false, error: 'window_set_unavailable' }); }, { ok: false, error: 'window_set_unavailable' }, 'window.setFullscreen'),
       minimize: tw(function() { return ea.window && ea.window.minimize ? ea.window.minimize() : Promise.resolve({ ok: false, error: 'window_minimize_unavailable' }); }, { ok: false, error: 'window_minimize_unavailable' }, 'window.minimize'),
       close: tw(function() { return ea.window && ea.window.close ? ea.window.close() : Promise.resolve({ ok: false, error: 'window_close_unavailable' }); }, { ok: false, error: 'window_close_unavailable' }, 'window.close'),
+      // PER_VIEW_CHROME_FIX 2026-05-02 P5 — chrome Max-toggle + state query
+      // + change-subscription, routed through electronAPI shim to BookBridge.
+      toggleMaximize: tw(function() { return ea.window && ea.window.toggleMaximize ? ea.window.toggleMaximize() : Promise.resolve({ ok: false, error: 'window_toggle_max_unavailable' }); }, { ok: false, error: 'window_toggle_max_unavailable' }, 'window.toggleMaximize'),
+      isMaximized: tw(function() { return ea.window && ea.window.isMaximized ? ea.window.isMaximized() : Promise.resolve(false); }, false, 'window.isMaximized'),
+      onMaximizeChanged: function(cb) { try { if (ea.window && typeof ea.window._onMaximizeChanged === 'function') ea.window._onMaximizeChanged(cb); } catch (e) {} },
     },
 
     // File reading

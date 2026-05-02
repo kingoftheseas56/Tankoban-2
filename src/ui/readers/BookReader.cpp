@@ -64,6 +64,14 @@ void BookReader::buildUI()
     connect(m_bridge, &BookBridge::closeRequested, this, &BookReader::closeRequested);
     connect(m_bridge, &BookBridge::fullscreenRequested, this, &BookReader::fullscreenRequested);
     connect(m_bridge, &BookBridge::readerReady, this, &BookReader::hideLoadingOverlay);
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome request signals re-emitted
+    // out of BookReader so MainWindow can connect at construction.
+    connect(m_bridge, &BookBridge::windowMinimizeRequested,
+            this,     &BookReader::chromeMinimizeRequested);
+    connect(m_bridge, &BookBridge::windowMaximizeToggleRequested,
+            this,     &BookReader::chromeMaximizeToggleRequested);
+    connect(m_bridge, &BookBridge::windowCloseRequested,
+            this,     &BookReader::chromeCloseRequested);
 
     m_channel = new QWebChannel(this);
     m_channel->registerObject("bridge", m_bridge);
@@ -158,8 +166,19 @@ void BookReader::buildUI()
         "        isFullscreen: function() { return Promise.resolve(b.windowIsFullscreen()); },"
         "        toggleFullscreen: function() { return b.windowToggleFullscreen(); },"
         "        setFullscreen: function(v) { var on = v === true || v === 'true'; if (b.windowIsFullscreen() !== on) b.windowToggleFullscreen(); return Promise.resolve({ok:true}); },"
-        "        minimize: function() { return Promise.resolve({ok:false}); },"
-        "        close: function() { b.requestClose(); return Promise.resolve({ok:true}); }"
+        // PER_VIEW_CHROME_FIX 2026-05-02 P4+P5 — chrome cluster surface.
+        // minimize / toggleMaximize / close route to the new BookBridge
+        // Q_INVOKABLEs (which emit signals routed in MainWindow to its
+        // chrome slots). isMaximized lets JS render the correct max ↔
+        // restore icon at boot. _onMaximizeChanged is the subscription
+        // attach used by reader_core.js to swap the icon live.
+        "        minimize: function() { try { b.windowMinimize(); } catch (e) {} return Promise.resolve({ok:true}); },"
+        "        toggleMaximize: function() { try { b.windowToggleMaximize(); } catch (e) {} return Promise.resolve({ok:true}); },"
+        "        isMaximized: function() { return Promise.resolve(b.windowIsMaximized()); },"
+        "        close: function() { try { b.windowClose(); } catch (e) {} return Promise.resolve({ok:true}); },"
+        "        _onMaximizeChanged: function(cb) {"
+        "          try { if (b.windowMaximizeChanged && typeof b.windowMaximizeChanged.connect === 'function') b.windowMaximizeChanged.connect(function(isMax) { try { cb(isMax); } catch (e) {} }); } catch (e) {}"
+        "        }"
         "      },"
         "      clipboard: { copyText: function(t) { return Promise.resolve(); } },"
         "      shell: {"
@@ -489,3 +508,15 @@ void BookReader::loadFallback(const QString& filePath)
 }
 
 #endif
+
+// PER_VIEW_CHROME_FIX 2026-05-02 P4 — Max ↔ Restore icon push from
+// MainWindow. Forwards through the bridge so JS can swap the chrome
+// icon. No-op when WebEngine is disabled (no JS to receive the signal).
+void BookReader::updateChromeMaxIcon(bool isMaximized)
+{
+#ifdef HAS_WEBENGINE
+    if (m_bridge) m_bridge->emitWindowMaximizeChanged(isMaximized);
+#else
+    Q_UNUSED(isMaximized);
+#endif
+}

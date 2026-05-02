@@ -11,6 +11,14 @@ out_old*/
 # under native_sidecar/; the build tree produced by build.ps1 is not.
 native_sidecar/build/
 resources/ffmpeg_sidecar/
+
+# libmpv prebuilt (MPV_RENDER_API_INTEGRATION Phase 1, 2026-04-28) — fetched
+# by setup.bat step 6 from shinchiro/mpv-winbuild-cmake. The DLL + import lib
+# are platform binaries and not tracked. Headers under include/mpv/, the
+# LICENSE file, and VERSION.txt ARE tracked so fresh clones still configure
+# cleanly (CMake skips libmpv with a STATUS line if bin/libmpv-2.dll absent).
+resources/libmpv/windows/bin/
+resources/libmpv/windows/lib/
 .vs/
 .vscode/
 *.user
@@ -45,3 +53,10 @@ chat_diff*.txt
 
 # Congress-check hook local session markers — regenerated each run, not for git
 .claude/.congress-warned-*
+
+# .claude runtime state — lock files + telemetry are machine-local, regenerated
+.claude/*.lock
+.claude/telemetry/
+
+# Compile artifacts from one-off probes outside the CMake build tree
+*.obj

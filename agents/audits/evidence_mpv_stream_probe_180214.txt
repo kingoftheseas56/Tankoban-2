@@ -1,0 +1,152 @@
+# Evidence: mpv Stream-Mode Probe (1.B)
+
+**Date:** 2026-04-30
+**Smoke start:** 18:02pm IST
+**Smoke end:** ~18:09pm IST (Tankoban session continued; player closed mid-smoke at ~18:08pm via accidental keypress)
+**Tankoban version:** `1acc019` (working tree at smoke time also had Phase 1.A + 1.A.3 + Pre-1.A + Pre-1.A.1 hotfix uncommitted)
+**Configuration:** `TANKOBAN_FORCE_MPV=1`, build via `build_and_run.bat`, libmpv 0.41.0-524-g5921fe50b (shinchiro 20260421 build) bundled at `resources/libmpv/windows/`
+**Probe target:** Invincible S01E01 "It's About Time" — Continue-Watching tile in Stream tab; first Torrentio source (1080p WEB-DL x265 SAMPA, 856.1 MB)
+**Stream-server URL:** `http://127.0.0.1:11470/ae017c71ae078a5ff68f9e545523cfb12922372b/1`
+**Smoke duration:** ~5 min steady playback, resumed from saved 38% (lastKnownPosSec=1090.79s) → ended at lastKnownPosSec ~1394s before the player closed
+**Observer:** Agent 3 driving via dev-bridge + pywinauto-mcp + windows-mcp; Hemanth eyes-on-screen for visual verdicts
+
+**Diagnostic setup:** TEMPORARY `mpv_observe_property` calls + dispatcher branches added to `MpvBackend::observeProperties` (4 properties: `paused-for-cache`, `cache-buffering-state`, `demuxer-cache-state`, `cache-secs`) with `[1B]`-prefixed `mpvLog` entries. Reverted before RTC; working tree clean post-1.B. Raw log capture saved alongside this file at `evidence_mpv_stream_probe_180214_logs.txt` (444 lines of demuxer-cache-state events).
+
+---
+
+## 1. Cold-open behavior
+
+- **Time-to-first-frame:** ~5 seconds (from source-click at 18:04 to dev-bridge `firstFrameSeen=true` at 18:04+5s; visual confirmation via screenshot at 18:05).
+- **Visual during cold-open:** brief letterboxed dark frame (Invincible falling above suburb scene), then steady frames advancing. No "Buffering…" overlay shown; no spinner.
+- **LoadingOverlay shown:** **NO**. Confirmed by Hemanth-side visual + dev-bridge state `firstFrameSeen=true` propagated immediately. Pre-1.C this is correct (mpv path doesn't emit `bufferingStarted` because we haven't wired it). Post-1.C this should change — the overlay should fire on cold-open until paused-for-cache→false.
+- **FrameCanvas hidden + MpvVideoWidget composited:** **GREEN**. Pre-1.A.1 hotfix verified end-to-end on stream path (not just library path). `syncMpvIntegrationToBackend` correctly flipped the render surface.
+- **Subjective vs ffmpeg-baseline:** not directly compared this smoke (no fresh ffmpeg-on-same-source baseline). Subjectively the cold-open felt fast; resume from 38% landed correctly with 1090.79s position.
+- **Initial property events:** unable to capture from the very first second (dev-bridge `logs` ring buffer started capturing during steady-state). The `[1B]` log entries that exist begin at t=1187.38s (~18s into observed playback, ~5s after first frame).
+
+```
+2026-04-30 18:04:?? Player opened. tankoctl get-player @ +5s:
+{
+  "currentFile": "http://127.0.0.1:11470/<hash>/1",
+  "durationSec": 2850.816,
+  "firstFrameSeen": true,
+  "lastKnownPosSec": 1090.792,
+  "streamMode": true,
+  "streamStalled": false
+}
+ffmpeg_sidecar.exe: NOT in tasklist
+stremio-runtime.exe: PID 23492 (stream-server backing the URL)
+Tankoban.exe RAM: 1.21 GB (libmpv loaded in-process + 1080p H.265 decode)
+```
+
+## 2. Steady-state playback (~5 min smoke)
+
+- **Frame drops:** not measured (no `frame-drop-count` observation added — could be a 5th probe property if 1.C wants drop telemetry; not blocking for 1.C/1.E shape).
+- **Audio sync feel:** Hemanth-side comment was that mpv playback was working post-Pre-1.A.1 hotfix smoke. No reported audio drift in this 1.B smoke window.
+- **Seek-bar / time-label tracking:** HUD chrome not visible during smoke (Tankoban auto-hides; my `L` key Shortcut attempt to reveal didn't fire — likely lost focus). `tankoctl get-player.lastKnownPosSec` advanced 1090.79→1394 over ~5 min = correct 1Hz time-update flow.
+- **Buffered-range overlay paint on SeekSlider:** **not directly observed** (HUD not revealed during smoke). StreamPlayerController::bufferedRangesChanged is backend-agnostic per parent-plan exploration so it should still paint via VideoPlayer::onBufferedRangesChanged → SeekSlider::setBufferedRanges; verifying this requires HUD reveal + visual check. **Deferred to a quick post-1.B sanity smoke** if the 1.C ship needs it.
+- **Continue-Watching progress save:** progress advanced 38%→47% across the smoke + persisted on player close. Confirms stream-domain progress save (StreamPage progressUpdated → bridge.saveProgress("stream", epKey, state)) works under mpv backend. ✓
+- **mpvLog `[1B]` crumbs (180+ events / 5 min):** dominated by `demuxer-cache-state` updates at sub-second cadence with rich payload. Sample lines:
+
+```
+1777552606477 MpvBackend: [1B] demuxer-cache-state t=1187.38s payload={
+  "cache-end": 1660.50,            // end of buffered range, in seconds
+  "reader-pts": 1187.79,           // current decoder position
+  "cache-duration": 472.71,        // SECONDS of buffer ahead of reader-pts
+  "eof": false,
+  "underrun": false,
+  "idle": true,                    // stream-server not actively pushing right now
+  "total-bytes": 189996544,        // ~190 MB cached
+  "fw-bytes": 157342256,           // ~157 MB forward
+  "raw-input-rate": 562193,        // bytes/sec input — 562 KB/s at this point
+  "ts-per-stream": [
+    {"type":"video","cache-duration":472.71,"reader-pts":1187.79,"cache-end":1660.50},
+    {"type":"audio","cache-duration":472.83,"reader-pts":1187.62,"cache-end":1660.45}
+  ],
+  "bof-cached": false,
+  "eof-c…"  // truncated at 500 chars by probe
+}
+
+# 5 min later:
+1777552841975 MpvBackend: [1B] demuxer-cache-state t=1394.58s payload={
+  "cache-end": 1960.83,
+  "reader-pts": 1394.96,
+  "cache-duration": 565.88,        // grew from 472s → 565s over 5 min
+  "raw-input-rate": 207663,        // dropped from 562 KB/s → 207 KB/s (throttled as buffer filled)
+  ...
+}
+```
+
+- **Buffer behavior:** cache-duration grew from 472s → 565s over the smoke. Stream-server outpaced playback rate; `idle=true` throughout (cache filled to mpv's internal high-water-mark, throttled). `underrun: false` throughout. `eof: false`. Per-stream split between video and audio is roughly synchronous (within 0.1-0.2s).
+
+## 3. Stall behavior
+
+**NOT INDUCED THIS SMOKE.** No natural stall occurred in the 5-min window because the Torrentio magnet had a healthy seed pool + the first source was 1080p H.265 (compact bitrate) so the stream-server stayed >5 minutes ahead of playback throughout. No network-cut test was performed (Hemanth-driven decision to ship this as a partial probe).
+
+**Implications of the absence:**
+- `paused-for-cache`: **0 events fired** in the entire 5-min steady-state window. Confirms it's an EDGE-DRIVEN signal — fires only on the boolean transition false↔true. Useful for `bufferingStarted`/`bufferingEnded` translation in 1.C exactly because it's edge-driven (no spurious spam).
+- `cache-buffering-state`: **0 events fired**. Same edge-driven semantics; only changes during initial buffer-fill or when buffer state crosses a threshold.
+
+This itself is informative for 1.C/1.E shape:
+- Don't try to use `cache-buffering-state` as a real-time progress indicator. It's not chatty enough.
+- Use `paused-for-cache` for the bufferingStarted/Ended edge.
+- Use `demuxer-cache-state.cache-duration` for the "how full is the buffer" continuous signal — it's the chatty property and has actual second-resolution depth.
+
+**A targeted stall test before 1.E ships would be useful** (seek past cache-end, observe the paused-for-cache transition + recovery). Flagging this as a follow-up sub-probe inside 1.E execution rather than re-firing 1.B.
+
+## 4. mpv property surface at observed-state
+
+Property events captured during 5 min FORCE_MPV stream playback:
+
+| Property | Format | Events | Notes |
+|---|---|---|---|
+| `paused-for-cache` | FLAG | **0** | Edge-driven; silent in healthy steady-state. Will fire on stall transitions. |
+| `cache-buffering-state` | DOUBLE | **0** | Edge-driven; tied to buffer-fill state changes. Silent when full. |
+| `demuxer-cache-state` | NODE | **180+** (~0.5/sec) | Chatty; rich payload. **Primary buffer-state signal source.** |
+| `cache-secs` | DOUBLE | **0** | Possibly not exposed in this libmpv build OR no value-change in steady-state. `demuxer-cache-state.cache-duration` provides the same data. |
+
+**Other non-1B properties already wired in MpvBackend:** time-pos (1Hz), pause, eof-reached, track-list, aid/sid, sub-visibility, sub-delay, audio-delay, metadata, filename. Confirmed firing as expected during the smoke.
+
+## 5. Seek pre-gate interaction
+
+**INDIRECTLY EXERCISED.** Resume from saved-position 1090.79s (38% of 2850s) flowed through `StreamPage.cpp:2247-2265` pre-gate path because savedPos>2.0 + savedDur>0 + savedPos<savedDur*0.95. The pre-gate's `m_streamEngine->prepareSeekTarget(infoHash, streamResumeSec, streamSavedDur)` call ran (or its 9s-cap fallback engaged) before the launchPlayer lambda fired openFile; this is what we'd expect for any saved-position resume, not specific to mpv.
+
+**The mpv-vs-ffmpeg distinction was NOT tested:** does mpv's internal pre-buffering make Tankoban's pre-gate redundant for mpv path? Plan-mode 1.E noted this as a question but flagged it as "preserve as-is for Phase 1." Confirming as still preserve-as-is — no relax intended pre-1.E. The pre-gate runs at controller layer before backend openFile, backend-agnostic.
+
+## 6. Implications for 1.C / 1.E shape
+
+**1.C cache property observation — concrete recommendation:**
+- Wire `paused-for-cache` (FLAG) → `bufferingStarted` on rising edge, `bufferingEnded` on falling edge. Edge-driven semantics map cleanly to the IPlayerBackend signal pair.
+- Do NOT wire `cache-buffering-state` (DOUBLE) as a `cacheStateChanged` source — it's not chatty enough for real-time progress, and the LoadingOverlay::setCacheProgress signature wants 4 fields (bytesAhead, inputRateBps, etaResumeSec, cacheDurationSec) that mpv doesn't atomically provide via this property.
+- DO wire `demuxer-cache-state` (NODE) as the `cacheStateChanged` source. Synthesize the 4 LoadingOverlay fields from the node payload:
+  - `bytesAhead` ← `payload.fw-bytes`
+  - `inputRateBps` ← `payload.raw-input-rate`
+  - `etaResumeSec` ← compute from `cache-duration` and `raw-input-rate`, OR pass -1.0 (unmeasurable) if we don't need ETA
+  - `cacheDurationSec` ← `payload.cache-duration`
+- Open question for 1.C: throttle the demuxer-cache-state emission to ~2 Hz (matching ffmpeg sidecar's cache_state cadence per `native_sidecar/src/main.cpp:752-780`)? mpv fires it sub-second; uncapped re-emit would over-flood LoadingOverlay's UI thread. Suggest a 500ms throttle in the MpvBackend handler.
+
+**1.E transparent stall semantics — concrete recommendation:**
+- Plan-mode design (m_inStallPause flag + suppress stateChanged emit while flag is true) is correct.
+- Need a small additional smoke INSIDE 1.E execution: induce a stall (seek past cache-end), confirm `paused-for-cache=true` fires, confirm mpv's `pause` property also fires true at the same time, verify the m_inStallPause gate correctly suppresses stateChanged while letting bufferingStarted through. Allocate ~10 min of 1.E scope to this.
+- Sequencing: 1.C ships first (paused-for-cache → bufferingStarted/Ended translation). 1.E ships after, gating the pause-property-driven stateChanged emit on m_inStallPause flag.
+
+## 7. Anomalies / unexpected findings
+
+- **`cache-secs` silent throughout the smoke.** Possibly not a documented observable in libmpv 0.41.0 at the property name "cache-secs", OR the value didn't change enough to fire a property event. The same data is in `demuxer-cache-state.cache-duration`. Recommend dropping cache-secs from 1.C wiring.
+- **HUD reveal failed via `L` keypress.** Sent via windows-mcp Shortcut after focus call; HUD did not appear. May be a focus-routing issue specific to the mpv-rendering case (MpvVideoWidget consumes keys differently than FrameCanvas?). Quick follow-up sanity check after 1.B: smoke HUD reveal on mpv backend specifically, confirm transport bar / seek slider / time labels all behave equivalently to ffmpeg backend. NOT a 1.B-blocker; flagged for 1.D verify (the parent plan's "verify-only" sub-phase).
+- **Player closed mid-smoke at ~18:08pm.** Cause uncertain — possibly the `L` keypress hit a different binding when focus was wrong, or a click into/near the canvas registered as something else. Doesn't invalidate the data captured pre-close.
+- **stremio-runtime.exe was already running at smoke start.** It survives across player open/close — good. Process lifecycle is owned by Tankoban session, not per-stream.
+- **`demuxer-cache-state` payload fields beyond what mpv docs explicitly call out:** `bof-cached`, `eof-c…(truncated)`, `debug-low-level-seeks`, `debug-byte-level-seeks`, `debug-ts-last`. Useful for 1.C diagnostics but not load-bearing for the IPlayerBackend signal translation.
+
+---
+
+## Verdict for Phase 1.B
+
+**Mechanical surface mapped.** mpv stream playback works end-to-end via FORCE_MPV bypass:
+- Cold-open: GREEN (visible video, correct resume position, correct stream-mode wiring).
+- Steady-state: GREEN (stable buffer, no underruns, healthy progress save).
+- Stall behavior: NOT TESTED — natural stall didn't trigger in 5 min; deferred-target stall test moved into 1.E pre-implementation probe.
+- Property surface: documented sufficient for 1.C/1.E shape decisions.
+
+**Acceptance for 1.B (per parent plan):** "written observation document of mpv's stream-mode surface behavior. Not a ship — just evidence to inform 1.C-F scope." → ✓ this file.
+
+Awaits Hemanth fire on 1.C (cache property observation wiring) — see §6 for concrete shape recommendations.

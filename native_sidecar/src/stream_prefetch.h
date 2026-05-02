@@ -83,8 +83,32 @@ public:
     // Observable state (atomic).
     State state() const { return m_state.load(std::memory_order_acquire); }
 
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.1 — observables for cache_state
+    // event reporting. All are safe to call from any thread.
+
+    // Bytes currently buffered forward of the consumer read pointer.
+    std::size_t bytes_in_ring() const;
+
+    // Total ring capacity (constant after construction).
+    std::size_t ring_capacity() const { return m_ring.size(); }
+
+    // Exponential moving average of producer-side input rate (bytes/sec).
+    // Updated each time the producer completes a partial read from the source.
+    // Returns 0 before the first sample lands.
+    int64_t estimated_input_rate_bps() const;
+
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — accessors for the VideoDecoder
+    // near-end-estimate watchdog. Consumer read position (in the underlying
+    // source stream) lets the decoder compute "bytes remaining until HTTP
+    // EOF" independent of AVFormatContext::duration accuracy. Used to
+    // trigger AUTO_NEXT on bitrate-estimate sources where the main-app
+    // pct/remaining check against the inflated estimate is unreachable.
+    int64_t stream_pos() const;
+    int64_t source_size() const { return m_source_size; }  // cached; no lock
+
 private:
     void producer_loop();
+    void update_input_rate_sample(int64_t bytes_read);
 
     // Ring accounting. All read/write/size access MUST hold m_mutex.
     AVIOContext*          m_raw_avio;
@@ -117,6 +141,12 @@ private:
     std::mutex                m_mutex;
     std::condition_variable   m_data_cv;   // wake consumer when bytes arrive / state changes
     std::condition_variable   m_space_cv;  // wake producer when ring drains / shutdown
+
+    // PLAYER_STREMIO_PARITY Phase 2 Batch 2.1 — input-rate EMA tracker.
+    // Updated on producer thread only; read atomically from observer threads.
+    std::atomic<int64_t>      m_input_rate_bps_ema;  // 0 until first sample
+    std::chrono::steady_clock::time_point m_last_rate_sample_time;
+    int64_t                   m_bytes_since_last_sample;  // producer-local
 
     std::thread               m_producer;
 };

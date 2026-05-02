@@ -24,14 +24,17 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QVector>
 
 #include <atomic>
 #include <functional>
+#include <memory>
 
 // Forward declarations of opaque libmpv types so this header stays
 // includable even when libmpv isn't on disk (CMake graceful-disable).
 struct mpv_handle;
 struct mpv_event_property;
+class MpvLibplaceboRenderer;
 
 class QTimer;
 
@@ -46,6 +49,7 @@ public:
     // can attach a libmpv render context against its own QOpenGLContext.
     // Concrete-class API only — not part of IPlayerBackend.
     mpv_handle* mpvHandle() const { return m_mpv; }
+    MpvLibplaceboRenderer* libplaceboRenderer() const { return m_libplaceboRenderer.get(); }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -142,11 +146,26 @@ private:
     int  nextSeq();
     void emitFirstFrameStub();
 
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — telemetry plumbing.
+    // startTelemetry: captures one-time identity (hwdec/vo/ao/codecs/file)
+    //   right after mpv_initialize succeeds and starts the 5s sample timer.
+    // sampleTelemetry: timer-tick handler. Reads frame-drop-count,
+    //   vo-delayed-frame-count, estimated-vf-fps, playback-time,
+    //   paused-for-cache; appends a TelemetrySample to m_telemetrySamples.
+    // dumpTelemetry: writes the session block (header + per-sample rows +
+    //   summary) to out/mpv_telemetry.log on teardown. Append-only file
+    //   (one block per session) mirroring SidecarProcess::dumpIpcLatency
+    //   contract at SidecarProcess.cpp.
+    void startTelemetry();
+    void sampleTelemetry();
+    void dumpTelemetry();
+
     // libmpv's wakeup callback — fires on a libmpv-internal thread. Posts
     // a queued signal to ourselves so onWakeup() runs on the GUI thread.
     static void wakeupCallback(void* d);
 
     mpv_handle* m_mpv = nullptr;
+    std::unique_ptr<MpvLibplaceboRenderer> m_libplaceboRenderer;
     std::atomic<int> m_seq{0};
     bool m_running = false;
 
@@ -196,6 +215,19 @@ private:
     // semantic to the mpv backend.
     bool   m_inStallPause        = false;
 
+    // MAKE_MPV_SOLO Task 12.A (2026-05-02) — HDR-conditional hwdec auto-pick.
+    // Remembers whether the user set TANKOBAN_MPV_HWDEC at init so the
+    // file-load HDR-detect path doesn't override a deliberate user pick.
+    // Set true in initializeMpv() iff qgetenv returns non-empty; cleared
+    // back to false on teardownMpv() so a subsequent resetAndRestart
+    // re-reads the env var fresh.
+    bool   m_hwdecOverriddenByEnv = false;
+    // Tracks the currently-active hwdec value so the file-load auto-pick
+    // can dedupe (don't re-set if already on d3d11va-copy from a previous
+    // HDR file). String comparison via mpv_get_property_string would also
+    // work; caching the local string saves the round-trip per file open.
+    QString m_currentHwdec;
+
     // 1.E.1 hotfix 2026-04-30 — defer bufferingEnded emit from
     // paused-for-cache falling-edge to the next MPV_EVENT_PLAYBACK_RESTART
     // event. Hemanth-reported (~18:50pm): "the buffering overlay isn't
@@ -214,4 +246,35 @@ private:
     std::function<void()> m_pendingStopComplete;
     std::function<void()> m_pendingStopTimeout;
     QTimer*               m_pendingStopTimer = nullptr;
+
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — periodic telemetry sampling.
+    // Hemanth-flagged half-rate stutter (10-15 fps on 24 fps source) was
+    // diagnosed via [MPV-RENDER] log lines but had no persistent record;
+    // every smoke session lost the data on Tankoban exit. This struct
+    // captures the same shape every 5s into a vector that flushes to
+    // out/mpv_telemetry.log on teardown — append-only, one session block
+    // per run, mirroring SidecarProcess::dumpIpcLatency's pattern.
+    struct TelemetrySample {
+        qint64 elapsedMs;          // ms since startTelemetry
+        int    frameDropCount;     // mpv frame-drop-count (decoder side)
+        int    voDelayedCount;     // mpv vo-delayed-frame-count (display side)
+        double estimatedVfFps;     // mpv estimated-vf-fps (post-filter measured)
+        double playbackTimeSec;    // mpv playback-time (current pts)
+        bool   pausedForCache;     // mpv paused-for-cache (buffering)
+    };
+    QTimer*  m_telemetryTimer    = nullptr;
+    qint64   m_telemetryStartMs  = 0;
+    QVector<TelemetrySample> m_telemetrySamples;
+    // One-time identity captured at startTelemetry. Empty strings indicate
+    // the property wasn't queryable (hwdec on no-hardware-decode files,
+    // ao on vo=null start window before audio device opens, etc.).
+    QString  m_telemetryHwdec;
+    QString  m_telemetryVo;
+    QString  m_telemetryAo;
+    QString  m_telemetryVideoCodec;
+    QString  m_telemetryAudioCodec;
+    QString  m_telemetryFileFormat;
+    QString  m_telemetryFile;
+    double   m_telemetryDurationSec = 0.0;
+    double   m_telemetryDisplayFps  = 0.0;
 };

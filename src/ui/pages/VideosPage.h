@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QMap>
 #include <QJsonObject>
+#include "ui/player/BackendFactory.h"
 class QPushButton;
 class QNetworkAccessManager;
 class CoreBridge;
@@ -52,6 +53,13 @@ public:
 
 signals:
     void playVideo(const QString& filePath);
+    // 2026-04-30 — direct-opener variant carrying an explicit backend
+    // override for the right-click "Play with ffmpeg" / "Play with mpv"
+    // entries. One-shot: the saved player/videoBackend preference is
+    // NOT mutated. Routed through MainWindow::openVideoPlayerWithBackend
+    // → VideoPlayer::openFile's explicitBackend last param.
+    void playVideoWithBackend(const QString& filePath,
+                               BackendFactory::Type backend);
 
 private slots:
     void onShowFound(const ShowInfo& show);
