@@ -29,6 +29,7 @@ extern "C" {
 #include <libplacebo/gpu.h>
 #include <libplacebo/log.h>
 #include <libplacebo/renderer.h>
+#include <libplacebo/shaders/colorspace.h>
 #include <libplacebo/swapchain.h>
 #include <libplacebo/vulkan.h>
 }
@@ -191,6 +192,18 @@ struct InteropSlot {
 
     SlotState state = SlotState::Empty;
 };
+
+// MAKE_MPV_BEAT_FFMPEG Task 6 step 2 — libplacebo color management defaults,
+// matched verbatim against native_sidecar/src/gpu_renderer.cpp:62-63 +
+// 112-113. Constructed once per process. pl_color_map_default_params
+// + pl_peak_detect_default_params provide libplacebo's curated defaults
+// (BT.709/sRGB target, smooth dynamic peak detection); we don't tune
+// them. The renderer points pl_render_params at these per-call so all
+// playback shares one config. Foundation for HDR; effective once Task 3
+// (16F texture) + Task 4 (mpv tone-map disable) + Task 5 (metadata
+// bridge) land — until then the path stays SDR because mpv pre-tone-maps.
+const pl_color_map_params kColorMapParams = pl_color_map_default_params;
+const pl_peak_detect_params kPeakDetectParams = pl_peak_detect_default_params;
 
 } // namespace
 
@@ -964,20 +977,29 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
     pl_frame target{};
     pl_frame_from_swapchain(&target, &frame);
 
-    // MAKE_MPV_BEAT_FFMPEG Task 5 (2026-05-02) — match the ffmpeg sidecar's
-    // libplacebo scaler config at native_sidecar/src/gpu_renderer.cpp:108-114
-    // so heavy content (Sopranos S06E04 BluRay HEVC 10-bit) plays sharp on
-    // the mpv path. Task 3.5 shipped pl_render_fast_params (CHEAP preset =
-    // bilinear) to lock the bilinear-quality floor that supersedes the
-    // MAKE_MPV_SOLO Task 12.B Tier-0 default. Now that Task 4 measured the
-    // pipeline at 0.000 drops/sec on Community SDR, we have the GPU budget
-    // to flip the scalers to ewa_lanczossharp (upscale) + hermite (downscale)
-    // verbatim from the sidecar reference. pl_render_default_params is the
-    // base (NOT pl_render_fast_params) since gpu_renderer.cpp:109 uses
-    // default; same baseline keeps the comparison apples-to-apples.
+    // MAKE_MPV_BEAT_FFMPEG Task 5 + Task 6 step 2 (2026-05-02) — match the
+    // ffmpeg sidecar's libplacebo scaler + color management config at
+    // native_sidecar/src/gpu_renderer.cpp:58-63 + 108-114. Task 5 added
+    // scalers (ewa_lanczossharp upscale + hermite downscale); Task 6 step
+    // 2 adds color_map_params + peak_detect_params (foundation — effective
+    // once Tasks 3-5 deliver HDR-capable RGBA16F texture + mpv tone-map
+    // disable + metadata bridge).
+    //
+    // pl_render_default_params is the base (NOT pl_render_fast_params).
+    // Task 3.5 originally shipped pl_render_fast_params (CHEAP preset =
+    // bilinear scalers, the deliberate Tier-0 floor from MAKE_MPV_SOLO
+    // Task 12.B). After Task 4 measured the new pipeline at 0.000 drops/sec
+    // on Community SDR, we had the GPU budget to flip to default + the
+    // sidecar's high-quality scaler config — which Hemanth's eyeball-
+    // verified GREEN on Sopranos S06E04 ("they both look the same...
+    // pretty much as good as can be") at Task 5 close. The default base
+    // also keeps the apples-to-apples comparison with the sidecar
+    // reference: same baseline + same scalers + same color params.
     pl_render_params params = pl_render_default_params;
-    params.upscaler   = &pl_filter_ewa_lanczossharp;
-    params.downscaler = &pl_filter_hermite;
+    params.upscaler           = &pl_filter_ewa_lanczossharp;
+    params.downscaler         = &pl_filter_hermite;
+    params.color_map_params   = &kColorMapParams;
+    params.peak_detect_params = &kPeakDetectParams;
 
     const bool rendered = pl_render_image(
         m_state->renderer, &src, &target, &params);
