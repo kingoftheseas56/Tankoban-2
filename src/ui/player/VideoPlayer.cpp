@@ -4,7 +4,11 @@
 #include "ui/player/SidecarProcess.h"
 #ifdef HAS_LIBMPV
 #include "ui/player/MpvBackend.h"
-#include "ui/player/MpvVideoWidget.h"
+// MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — MpvVulkanWidget (QOpenGLWidget,
+// OpenGL render path) replaced by MpvVulkanWidget (native HWND, Vulkan +
+// libplacebo). Old header kept ifdef-around-able for emergency revert
+// during Task 2 smoke; deleted entirely in Task 9 cleanup.
+#include "ui/player/MpvVulkanWidget.h"
 #endif
 #include "ui/player/ShmFrameReader.h"
 #include "ui/player/FrameCanvas.h"
@@ -19,6 +23,8 @@
 #include "ui/player/SubtitlePopover.h"
 #include "ui/player/AudioPopover.h"
 #include "ui/player/SettingsPopover.h"
+#include "ui/player/BrightnessPopover.h"
+#include "ui/player/AudioDeviceWatcher.h"
 #include "ui/player/OpenUrlDialog.h"
 #include "ui/player/PlayerUtils.h"
 #include "ui/player/SeekSlider.h"
@@ -220,6 +226,17 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     // construction races the shell's own initial show sequence.
     m_alwaysOnTop = QSettings("Tankoban", "Tankoban")
         .value("player/alwaysOnTop", false).toBool();
+
+    // MAKE_MPV_SOLO Task 8.B (2026-05-02) — Windows audio device-change
+    // watcher. Closes the deferred per-device-delay-recall deliverable
+    // from Task 8 (#3 of 3 named items). Listens for IMMNotificationClient
+    // OnDefaultDeviceChanged events and routes through onAudioDeviceChanged
+    // to apply the saved per-device delay mid-playback. No Hemanth-level
+    // semantics on non-Windows builds (Impl is a stub there) — Windows-
+    // only feature by design.
+    m_audioDeviceWatcher = new AudioDeviceWatcher(this);
+    connect(m_audioDeviceWatcher, &AudioDeviceWatcher::defaultDeviceChanged,
+            this, &VideoPlayer::onAudioDeviceChanged);
 
     // VIDEO_PLAYER_FIX Batch 7.1 — restore stats badge toggle. Applied
     // lazily on the first firstFrame event (no source metadata before
@@ -494,6 +511,13 @@ void VideoPlayer::dismissOtherPopovers(QWidget* keep)
         m_settingsPopover->hide();
         if (m_settingsChip) m_settingsChip->setChecked(false);
     }
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness chip parity with the
+    // other minimalist HUD chips so cross-chip exclusion + ESC dismiss
+    // reach it too.
+    if (m_brightnessPopover && m_brightnessPopover != keep && m_brightnessPopover->isOpen()) {
+        m_brightnessPopover->hide();
+        if (m_brightnessChip) m_brightnessChip->setChecked(false);
+    }
     if (m_playlistDrawer && m_playlistDrawer != keep && m_playlistDrawer->isOpen()) {
         m_playlistDrawer->hide();
         if (m_playlistChip) m_playlistChip->setChecked(false);
@@ -505,10 +529,11 @@ void VideoPlayer::setChipsEnabled(bool enable)
     // Phase 6.1 — toggles the :disabled pseudo-state on all four chips.
     // Playlist chip also gets disabled when no file is open, matching the
     // "nothing to interact with" invariant (playlist is empty anyway).
-    if (m_subtitleChip) m_subtitleChip->setEnabled(enable);
-    if (m_audioChip)    m_audioChip->setEnabled(enable);
-    if (m_settingsChip) m_settingsChip->setEnabled(enable);
-    if (m_playlistChip) m_playlistChip->setEnabled(enable);
+    if (m_subtitleChip)   m_subtitleChip->setEnabled(enable);
+    if (m_audioChip)      m_audioChip->setEnabled(enable);
+    if (m_brightnessChip) m_brightnessChip->setEnabled(enable);  // Task 9
+    if (m_settingsChip)   m_settingsChip->setEnabled(enable);
+    if (m_playlistChip)   m_playlistChip->setEnabled(enable);
 }
 
 void VideoPlayer::teardownUi()
@@ -589,9 +614,10 @@ void VideoPlayer::teardownUi()
     if (m_statsBadge)  m_statsBadge->hide();
     // VIDEO_HUD_MINIMALIST 2026-04-25 — dismiss any open chip popovers
     // so their next open shows fresh content. New three-chip cluster.
-    if (m_subtitlePopover && m_subtitlePopover->isOpen()) m_subtitlePopover->hide();
-    if (m_audioPopover    && m_audioPopover->isOpen())    m_audioPopover->hide();
-    if (m_settingsPopover && m_settingsPopover->isOpen()) m_settingsPopover->hide();
+    if (m_subtitlePopover   && m_subtitlePopover->isOpen())   m_subtitlePopover->hide();
+    if (m_audioPopover      && m_audioPopover->isOpen())      m_audioPopover->hide();
+    if (m_settingsPopover   && m_settingsPopover->isOpen())   m_settingsPopover->hide();
+    if (m_brightnessPopover && m_brightnessPopover->isOpen()) m_brightnessPopover->hide();  // Task 9
 }
 
 void VideoPlayer::stopPlayback(bool isIntentional)
@@ -925,6 +951,17 @@ void VideoPlayer::onSidecarReady()
         m_subtitleSize = qBound(0.5, subSize, 2.0);
         if (!qFuzzyCompare(m_subtitleSize, 1.0))
             m_backend->sendSetSubtitleSize(m_subtitleSize);
+        // MAKE_MPV_SOLO Task 9 (2026-05-01) — restore brightness. Default 0
+        // = neutral on both backends; only push on non-zero to keep wire
+        // quiet for the common case. Clamp mirrors setBrightness so a
+        // corrupt QSettings value can't drive an out-of-range payload.
+        const int brightness = s.value("videoPlayer/brightness", 0).toInt();
+        m_brightness = qBound(-100, brightness, 100);
+        if (m_brightness != 0) {
+            m_backend->sendSetFilters(false, m_brightness,
+                                      /*contrast*/ 100, /*saturation*/ 100,
+                                      false, false, QString());
+        }
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.2 — gate the re-open on the
@@ -1306,7 +1343,28 @@ void VideoPlayer::buildUI()
 {
     m_canvas = new FrameCanvas(this);
 
-    // 2026-04-30 hotfix — MpvVideoWidget setup/teardown lives in
+#ifdef HAS_LIBMPV
+    // Create the native mpv/Vulkan surface before HUD widgets, matching
+    // FrameCanvas construction order. Showing a native HWND after alien HUD
+    // widgets exist can make Windows put the render surface above them.
+    m_mpvWidget = new MpvVulkanWidget(this);
+    m_mpvWidget->setGeometry(0, 0, width(), height());
+    m_mpvWidget->hide();
+    connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
+            this, [this]() {
+                m_firstFrameSeen = true;
+            });
+    // Agent 3 2026-05-02 — mouseActivityAt connect disabled while the
+    // MpvVulkanWidget mouseMoveEvent + nativeEvent paths are off (see
+    // MpvVulkanWidget.cpp). The signal cannot fire so the connect is dead;
+    // kept commented for the Task 2 follow-up that re-enables a safer
+    // mouse-bridge.
+    // connect(m_mpvWidget, &MpvVulkanWidget::mouseActivityAt, this, [this](int /*y*/) {
+    //     showControls();
+    // });
+#endif
+
+    // 2026-04-30 hotfix — MpvVulkanWidget setup/teardown lives in
     // syncMpvIntegrationToBackend() so a mid-session swap into mpv (via
     // switchBackendTo + right-click "Play with mpv") wires the widget
     // correctly. The original P5-redux block here only created m_mpvWidget
@@ -1372,6 +1430,62 @@ void VideoPlayer::buildUI()
 
     m_controlBar = new QWidget(this);
     m_controlBar->setObjectName("VideoControlBar");
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — top-right floating chrome cluster.
+    // Glass-look (per spec §4.1: floating-over-canvas treatment) — semi-
+    // opaque dark plate so the cluster reads against any video content.
+    // Visibility synced with m_controlBar via showControls / hideControls;
+    // hidden in fullscreen. Click signals route through MainWindow chrome
+    // slots (showMinimized / onChromeMaximizeToggle / close).
+    m_chromeOverlay = new QFrame(this);
+    m_chromeOverlay->setObjectName("VideoChromeOverlay");
+    m_chromeOverlay->setAttribute(Qt::WA_StyledBackground, true);
+    m_chromeOverlay->setStyleSheet(
+        "QFrame#VideoChromeOverlay {"
+        "  background: #141418;"
+        "  border: 1px solid rgba(255, 255, 255, 0.10);"
+        "  border-radius: 6px;"
+        "}"
+        "QPushButton#VideoChromeBtn,"
+        "QPushButton#VideoChromeCloseBtn {"
+        "  background: transparent; border: none;"
+        "  border-radius: 4px; padding: 4px;"
+        "}"
+        "QPushButton#VideoChromeBtn:hover {"
+        "  background: rgba(255, 255, 255, 0.16);"
+        "}"
+        "QPushButton#VideoChromeCloseBtn:hover {"
+        "  background: rgba(232, 17, 35, 0.85);"
+        "}"
+    );
+    {
+        auto* chromeLay = new QHBoxLayout(m_chromeOverlay);
+        chromeLay->setContentsMargins(4, 4, 4, 4);
+        chromeLay->setSpacing(2);
+        auto makeChromeBtn = [this](const QString& iconPath, const QString& tip,
+                                    const QString& objName) {
+            auto* b = new QPushButton(m_chromeOverlay);
+            b->setObjectName(objName);
+            b->setIcon(QIcon(iconPath));
+            b->setIconSize(QSize(16, 16));
+            b->setFixedSize(32, 28);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setCursor(Qt::ArrowCursor);
+            b->setToolTip(tip);
+            return b;
+        };
+        m_chromeMinBtn   = makeChromeBtn(":/icons/chrome_min.svg",   "Minimize",       "VideoChromeBtn");
+        m_chromeMaxBtn   = makeChromeBtn(":/icons/chrome_max.svg",   "Maximize",       "VideoChromeBtn");
+        m_chromeCloseBtn = makeChromeBtn(":/icons/chrome_close.svg", "Close Tankoban", "VideoChromeCloseBtn");
+        chromeLay->addWidget(m_chromeMinBtn);
+        chromeLay->addWidget(m_chromeMaxBtn);
+        chromeLay->addWidget(m_chromeCloseBtn);
+        connect(m_chromeMinBtn,   &QPushButton::clicked, this, &VideoPlayer::chromeMinimizeRequested);
+        connect(m_chromeMaxBtn,   &QPushButton::clicked, this, &VideoPlayer::chromeMaximizeToggleRequested);
+        connect(m_chromeCloseBtn, &QPushButton::clicked, this, &VideoPlayer::chromeCloseRequested);
+    }
+    m_chromeOverlay->hide();
+
     // SUBTITLE_VIDEO_BOTTOM_CUTOFF_FIX 2026-04-22 (hemanth-reported
     // "video cut off at bottom in fullscreen"): the prior 0.92 alpha +
     // Qt's WA_PaintOnScreen + separate-HWND FrameCanvas render stack
@@ -1391,6 +1505,7 @@ void VideoPlayer::buildUI()
         "  border-top: 1px solid rgba(255, 255, 255, 0.08);"
         "}"
     );
+    applySurfaceOverlayStyle();
 
     auto* rootLayout = new QVBoxLayout(m_controlBar);
     rootLayout->setContentsMargins(12, 6, 12, 6);
@@ -1626,7 +1741,11 @@ void VideoPlayer::buildUI()
     connect(m_prevEpisodeBtn, &QPushButton::clicked, this, &VideoPlayer::prevEpisode);
 
     m_playPauseBtn = new QPushButton(m_controlBar);
-    m_playPauseBtn->setIcon(m_pauseIcon);
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — icon mirrors STATE not
+    // next-action per Hemanth verbatim "Pause symbol must show when the
+    // video is paused. Play symbol must show when the video is playing."
+    // Initial m_paused=false → currently playing → show play icon (▶).
+    m_playPauseBtn->setIcon(m_playIcon);
     m_playPauseBtn->setIconSize(QSize(20, 20));
     m_playPauseBtn->setFixedSize(40, 36);
     m_playPauseBtn->setCursor(Qt::PointingHandCursor);
@@ -1674,6 +1793,27 @@ void VideoPlayer::buildUI()
         m_audioPopover->populate(m_audioTracks, m_activeAudioId.toInt());
         m_audioPopover->toggle(m_audioChip);
         m_audioChip->setChecked(m_audioPopover->isOpen());
+    });
+
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness chip. Uses
+    // brightness.svg (half-filled circle = universal contrast/brightness
+    // glyph). Sun-shaped icons are NOT reused here — settings.svg is
+    // already drawn as a sun (circle + radial lines), so a sun icon for
+    // brightness would visually duplicate the settings chip in the HUD.
+    // Chip sits between Audio and Settings in the bottom-HUD utility cluster.
+    m_brightnessChip = new QPushButton(m_controlBar);
+    m_brightnessChip->setIcon(QIcon(":/icons/brightness.svg"));
+    m_brightnessChip->setIconSize(QSize(16, 16));
+    m_brightnessChip->setToolTip("Brightness");
+    m_brightnessChip->setCursor(Qt::PointingHandCursor);
+    m_brightnessChip->setFocusPolicy(Qt::NoFocus);
+    m_brightnessChip->setStyleSheet(chipStyle);
+    m_brightnessChip->setCheckable(true);
+    connect(m_brightnessChip, &QPushButton::clicked, this, [this]() {
+        dismissOtherPopovers(m_brightnessPopover);
+        if (m_brightnessPopover) m_brightnessPopover->setBrightness(m_brightness);
+        if (m_brightnessPopover) m_brightnessPopover->toggle(m_brightnessChip);
+        if (m_brightnessPopover) m_brightnessChip->setChecked(m_brightnessPopover->isOpen());
     });
 
     m_settingsChip = new QPushButton(m_controlBar);
@@ -1767,6 +1907,8 @@ void VideoPlayer::buildUI()
     ctrlRow->addWidget(m_subtitleChip);
     ctrlRow->addSpacing(6);                       // tight intra-cluster
     ctrlRow->addWidget(m_audioChip);
+    ctrlRow->addSpacing(6);
+    ctrlRow->addWidget(m_brightnessChip);          // MAKE_MPV_SOLO Task 9
     ctrlRow->addSpacing(6);
     ctrlRow->addWidget(m_settingsChip);
     ctrlRow->addSpacing(12);                      // utility → list
@@ -1902,6 +2044,28 @@ void VideoPlayer::buildUI()
     });
     connect(m_settingsPopover, &SettingsPopover::dismissed, this, [this]() {
         if (m_settingsChip) m_settingsChip->setChecked(false);
+    });
+
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness popover construction +
+    // connects. Live-update on every slider tick (Hemanth gate: drag → see
+    // change immediately). Mirrors the SettingsPopover wiring shape:
+    // valueChanged → setBrightness (push + persist + sync); hoverChanged
+    // gates HUD auto-hide; dismissed unchecks the chip in lockstep.
+    m_brightnessPopover = new BrightnessPopover(this);
+    connect(m_brightnessPopover, &BrightnessPopover::brightnessChanged,
+        this, [this](int v) { setBrightness(v); });
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — popover Reset button
+    // mirrors the keyboard 'r' reset path: setBrightness(0) + toast.
+    connect(m_brightnessPopover, &BrightnessPopover::resetClicked, this, [this]() {
+        setBrightness(0);
+        if (m_toastHud) m_toastHud->showToast(QStringLiteral("Brightness: 0"));
+    });
+    connect(m_brightnessPopover, &BrightnessPopover::hoverChanged, this, [this](bool hovered) {
+        if (hovered) { m_hideTimer.stop(); showControls(); }
+        else m_hideTimer.start(3000);
+    });
+    connect(m_brightnessPopover, &BrightnessPopover::dismissed, this, [this]() {
+        if (m_brightnessChip) m_brightnessChip->setChecked(false);
     });
 
     // Subtitle overlay (sibling of FrameCanvas, NOT child of it — critical for QRhiWidget z-order)
@@ -2064,6 +2228,64 @@ void VideoPlayer::adjustAudioDelay(int delta)
     }
 }
 
+void VideoPlayer::onAudioDeviceChanged(const QString& friendlyName)
+{
+    // MAKE_MPV_SOLO Task 8.B (2026-05-02) — mid-playback audio device
+    // switch handler. Mirrors the file-open recall logic at
+    // VideoPlayer.cpp:3970-4007 but keyed on the watcher-supplied
+    // friendly name + cached host API (the watcher knows the new device
+    // friendly name from Windows IMMDevice property; the host API is
+    // whatever the active backend was running through, captured when
+    // the file last opened via mediaInfo).
+    if (friendlyName.isEmpty()) return;
+    if (!m_backend) return;
+    if (m_audioHostApi.isEmpty()) {
+        // No file ever opened in this session — nothing to recall against.
+        // The next file-open mediaInfo handler will populate hostApi and
+        // recall the saved delay; no further work needed here.
+        return;
+    }
+
+    constexpr int BT_DEFAULT_MS = 300;
+
+    QString newKey = makeDeviceKey(friendlyName, m_audioHostApi);
+    if (newKey == m_audioDeviceKey) return;  // same device, nothing to do
+    m_audioDeviceKey = newKey;
+
+    QSettings s("Tankoban", "Tankoban");
+    QVariant stored = s.value(m_audioDeviceKey);
+
+    if (stored.isValid()) {
+        m_audioDelayMs = stored.toInt();
+        m_backend->sendSetAudioDelay(m_audioDelayMs);
+        if (m_settingsPopover) m_settingsPopover->setAudioDelay(m_audioDelayMs);
+        if (m_toastHud) {
+            m_toastHud->showToast(
+                QString("%1 → %2ms").arg(friendlyName).arg(m_audioDelayMs));
+        }
+        debugLog(QString("[VideoPlayer] audio device switched to '%1' → recalled offset %2ms")
+                    .arg(friendlyName).arg(m_audioDelayMs));
+    } else if (looksLikeBluetooth(friendlyName)) {
+        m_audioDelayMs = BT_DEFAULT_MS;
+        s.setValue(m_audioDeviceKey, BT_DEFAULT_MS);
+        m_backend->sendSetAudioDelay(m_audioDelayMs);
+        if (m_settingsPopover) m_settingsPopover->setAudioDelay(m_audioDelayMs);
+        if (m_toastHud) {
+            m_toastHud->showToast(
+                QString("Bluetooth: %1 → %2ms")
+                    .arg(friendlyName).arg(BT_DEFAULT_MS));
+        }
+        debugLog(QString("[VideoPlayer] Bluetooth device '%1' → default %2ms")
+                    .arg(friendlyName).arg(BT_DEFAULT_MS));
+    } else {
+        m_audioDelayMs = 0;
+        m_backend->sendSetAudioDelay(0);
+        if (m_settingsPopover) m_settingsPopover->setAudioDelay(0);
+        debugLog(QString("[VideoPlayer] wired/unknown device '%1' → no offset")
+                    .arg(friendlyName));
+    }
+}
+
 void VideoPlayer::adjustSubDelay(int delta)
 {
     if (delta == 0) m_subDelayMs = 0;
@@ -2110,6 +2332,54 @@ void VideoPlayer::adjustSubtitleSize(double delta)
     if (m_toastHud)
         m_toastHud->showToast(
             QStringLiteral("Sub size: %1x").arg(m_subtitleSize, 0, 'f', 1));
+}
+
+void VideoPlayer::setBrightness(int value)
+{
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — single dispatch path for the
+    // brightness slider. Clamp -100..+100; dedupe (no-op if unchanged);
+    // push to backend; persist; sync popover label; toast on settle.
+    //
+    // Backend payload shape: reuse the existing 7-arg sendSetFilters
+    // contract with neutral contrast/saturation (100/100) so the ffmpeg
+    // sidecar's `eq=` filter graph is built brightness-only — no behavior
+    // change to contrast/saturation paths. The MpvBackend stub fills with
+    // the `brightness` mpv property only; other params remain ignored.
+    //
+    // Live-update during slider drag is intentional (Hemanth reliability
+    // gate: "Drag the bar → picture brightness changes immediately").
+    // mpv property write is cheap; ffmpeg sidecar set_filters rebuild on
+    // each drag tick may flicker on heavy streams — known follow-up if
+    // observed in practice. Smoke close-gate is the mpv path.
+    if (value < -100) value = -100;
+    if (value > 100)  value = 100;
+    if (value == m_brightness) return;
+    m_brightness = value;
+    if (m_backend) {
+        m_backend->sendSetFilters(false, m_brightness,
+                                  /*contrast*/ 100, /*saturation*/ 100,
+                                  /*normalize*/ false,
+                                  /*interpolate*/ false,
+                                  /*deinterlaceFilter*/ QString());
+    }
+    QSettings("Tankoban", "Tankoban")
+        .setValue("videoPlayer/brightness", m_brightness);
+    if (m_brightnessPopover) m_brightnessPopover->setBrightness(m_brightness);
+    // No toast on every slider tick — would spam the HUD. Slider value
+    // label inside the popover already reads the current value live.
+}
+
+void VideoPlayer::adjustBrightness(int delta)
+{
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — keyboard delta path.
+    // setBrightness clamps + dedupes + pushes; this just adds the toast.
+    const int prev = m_brightness;
+    setBrightness(m_brightness + delta);
+    if (m_brightness == prev) return;  // clamped at limit; suppress toast
+    if (m_toastHud) {
+        const QString sign = (m_brightness > 0) ? "+" : "";
+        m_toastHud->showToast(QStringLiteral("Brightness: %1%2").arg(sign).arg(m_brightness));
+    }
 }
 
 void VideoPlayer::setSubPositionMode(const QString& mode)
@@ -2617,7 +2887,13 @@ void VideoPlayer::adjustVolume(int delta)
 
 void VideoPlayer::updatePlayPauseIcon()
 {
-    m_playPauseBtn->setIcon(m_paused ? m_playIcon : m_pauseIcon);
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — icon mirrors current
+    // STATE per Hemanth verbatim "Pause symbol must show when the video
+    // is paused. Play symbol must show when the video is playing."
+    // (Industry "next-action" convention was inverted on his screen, hence
+    // this flip.) Pre-flip: paused=true → playIcon (next-action = play).
+    // Post-flip: paused=true → pauseIcon (state = paused).
+    m_playPauseBtn->setIcon(m_paused ? m_pauseIcon : m_playIcon);
 }
 
 
@@ -2682,6 +2958,13 @@ void VideoPlayer::showControls()
 {
     m_controlBar->show();
     m_subOverlay->setControlsVisible(true);
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — chrome cluster rides the HUD
+    // show/hide lifecycle. Hidden in fullscreen (matches Windows convention
+    // of no chrome over fullscreen content).
+    if (m_chromeOverlay && !window()->isFullScreen()) {
+        m_chromeOverlay->show();
+        m_chromeOverlay->raise();
+    }
     // The control bar was possibly hidden when the title label received
     // its intended width; re-elide now that layout is guaranteed to have
     // assigned the label its geometry.
@@ -2712,9 +2995,10 @@ void VideoPlayer::showControls()
 
 bool VideoPlayer::isAnyPopoverOpen() const
 {
-    return (m_subtitlePopover && m_subtitlePopover->isOpen())
-        || (m_audioPopover    && m_audioPopover->isOpen())
-        || (m_settingsPopover && m_settingsPopover->isOpen());
+    return (m_subtitlePopover   && m_subtitlePopover->isOpen())
+        || (m_audioPopover      && m_audioPopover->isOpen())
+        || (m_settingsPopover   && m_settingsPopover->isOpen())
+        || (m_brightnessPopover && m_brightnessPopover->isOpen());  // Task 9
 }
 
 void VideoPlayer::hideControls()
@@ -2740,8 +3024,15 @@ void VideoPlayer::hideControls()
     // SettingsPopover::dismiss emits hoverChanged(false) which restarts
     // the auto-hide timer with a fresh 3s window.
     if (isAnyPopoverOpen()) return;
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — keep HUD + chrome alive while the
+    // cursor is parked on the chrome cluster (matches comic reader pattern).
+    if (m_chromeOverlay && m_chromeOverlay->isVisible() && m_chromeOverlay->underMouse()) {
+        m_hideTimer.start();
+        return;
+    }
     m_controlBar->hide();
     m_subOverlay->setControlsVisible(false);
+    if (m_chromeOverlay) m_chromeOverlay->hide();
     // HUD gone — drop to the 6% safe-zone baseline (was 0 = flush at
     // frame bottom for any ASS file with low MarginV — broken for
     // file-supplied styles even though our injected SRT header was fine).
@@ -3094,6 +3385,18 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
         m_toastHud->raise();
     }
 
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — chrome cluster top-right corner.
+    // Hidden in fullscreen; otherwise placed 12px from edges. Sized to its
+    // sizeHint so the QHBoxLayout settles before move().
+    if (m_chromeOverlay) {
+        if (window()->isFullScreen()) {
+            m_chromeOverlay->hide();
+        } else {
+            m_chromeOverlay->resize(m_chromeOverlay->sizeHint());
+            m_chromeOverlay->move(width() - m_chromeOverlay->width() - 12, 12);
+        }
+    }
+
     // VIDEO_PLAYER_FIX Batch 7.1 — stats badge: top-right, below toast
     // so it doesn't collide when both are visible. Auto-sized via
     // adjustSize() inside setStats; we only set position here.
@@ -3109,7 +3412,20 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
     m_subOverlay->raise();
     m_volumeHud->raise();
     m_centerFlash->raise();
+    if (m_chromeOverlay && m_chromeOverlay->isVisible()) m_chromeOverlay->raise();
     if (m_playlistDrawer->isOpen())      m_playlistDrawer->raise();
+}
+
+// PER_VIEW_CHROME_FIX 2026-05-02 P2 — Max ↔ Restore icon swap, called by
+// MainWindow on WindowStateChange so the video player chrome reflects the
+// live state of the underlying window.
+void VideoPlayer::updateChromeMaxIcon(bool isMaximized)
+{
+    if (!m_chromeMaxBtn) return;
+    m_chromeMaxBtn->setIcon(QIcon(isMaximized
+                                  ? ":/icons/chrome_restore.svg"
+                                  : ":/icons/chrome_max.svg"));
+    m_chromeMaxBtn->setToolTip(isMaximized ? "Restore" : "Maximize");
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────
@@ -3133,8 +3449,9 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
         const bool anyOpen =
             (m_subtitlePopover && m_subtitlePopover->isOpen()) ||
             (m_audioPopover    && m_audioPopover->isOpen()) ||
-            (m_settingsPopover && m_settingsPopover->isOpen()) ||
-            (m_playlistDrawer  && m_playlistDrawer->isOpen());
+            (m_settingsPopover   && m_settingsPopover->isOpen()) ||
+            (m_brightnessPopover && m_brightnessPopover->isOpen()) ||  // Task 9
+            (m_playlistDrawer    && m_playlistDrawer->isOpen());
         if (anyOpen) {
             dismissOtherPopovers(nullptr);
             event->accept();
@@ -3237,6 +3554,17 @@ void VideoPlayer::keyPressEvent(QKeyEvent* event)
     else if (action == "toggle_pip")           togglePictureInPicture();
     else if (action == "open_url")             showOpenUrlDialog();
     else if (action == "toggle_stats")         toggleStatsBadge();
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — brightness keyboard
+    // adjustments. v/b for ±5 deltas; r for reset to 0. Each routes through
+    // setBrightness (clamp + push + persist + popover sync) plus a one-shot
+    // toast (slider drag path is intentionally toast-free to avoid HUD
+    // spam; single-key-press is rare enough to toast).
+    else if (action == "brightness_minus")     adjustBrightness(-5);
+    else if (action == "brightness_plus")      adjustBrightness(+5);
+    else if (action == "brightness_reset") {
+        setBrightness(0);
+        if (m_toastHud) m_toastHud->showToast(QStringLiteral("Brightness: 0"));
+    }
     else if (action == "open_subtitle_menu") {
         // Reroute T-key to the merged SubtitlePopover anchored on the
         // new Subtitle chip.
@@ -3387,6 +3715,15 @@ void VideoPlayer::mousePressEvent(QMouseEvent* event)
         !m_settingsChip->geometry().contains(event->pos())) {
         m_settingsPopover->hide();
         if (m_settingsChip) m_settingsChip->setChecked(false);
+        closedSomething = true;
+    }
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness chip click-outside.
+    if (m_brightnessPopover && m_brightnessPopover->isOpen() &&
+        !m_brightnessPopover->geometry().contains(event->pos()) &&
+        m_brightnessChip &&
+        !m_brightnessChip->geometry().contains(event->pos())) {
+        m_brightnessPopover->hide();
+        if (m_brightnessChip) m_brightnessChip->setChecked(false);
         closedSomething = true;
     }
     if (m_playlistDrawer && m_playlistDrawer->isOpen() &&
@@ -3822,6 +4159,11 @@ void VideoPlayer::wireBackendSignals()
         QString hostApi = info.value("audio_host_api").toString();
         if (!device.isEmpty()) {
             m_audioDeviceKey = makeDeviceKey(device, hostApi);
+            // MAKE_MPV_SOLO Task 8.B (2026-05-02) — cache hostApi so the
+            // mid-playback audio-device-change watcher can re-key on
+            // device switch using the same host API tag the backend is
+            // actually running on (sidecar=MME, mpv=wasapi typically).
+            m_audioHostApi = hostApi;
             QString manualKey = m_audioDeviceKey + "/manual";
             QSettings s("Tankoban", "Tankoban");
             QVariant stored = s.value(m_audioDeviceKey);
@@ -3927,7 +4269,7 @@ void VideoPlayer::switchBackendTo(BackendFactory::Type t)
 
     wireBackendSignals();
 
-    // 2026-04-30 hotfix — toggle MpvVideoWidget visibility + (re)wire its
+    // 2026-04-30 hotfix — toggle MpvVulkanWidget visibility + (re)wire its
     // mpv handle. Without this, swapping ffmpeg → mpv leaves m_mpvWidget
     // null + FrameCanvas visible: mpv plays audio but video has nowhere
     // to render (Hemanth-reported "mpv is blank" 2026-04-30 ~17:30).
@@ -3940,30 +4282,37 @@ void VideoPlayer::syncMpvIntegrationToBackend()
     auto* mpvBackend = qobject_cast<MpvBackend*>(m_backend);
     if (!mpvBackend) {
         // Active backend is ffmpeg (or HAS_LIBMPV unset upstream).
-        // Hide MpvVideoWidget if it exists from a prior mpv session,
+        // Hide MpvVulkanWidget if it exists from a prior mpv session,
         // restore FrameCanvas as the active video surface.
         if (m_mpvWidget) {
             m_mpvWidget->setMpvHandle(nullptr);
             m_mpvWidget->hide();
         }
         if (m_canvas) m_canvas->show();
+        applySurfaceOverlayStyle();
         return;
     }
 
-    // Active backend is mpv. Lazy-create MpvVideoWidget the first time
+    // Active backend is mpv. Lazy-create MpvVulkanWidget the first time
     // mpv is selected (works whether the initial ctor backend was mpv
     // or we just swapped from ffmpeg). The firstFrameRendered connect is
     // tied to the widget instance (not to a specific backend) so it's
     // wired exactly once at first creation.
     if (!m_mpvWidget) {
-        m_mpvWidget = new MpvVideoWidget(this);
+        m_mpvWidget = new MpvVulkanWidget(this);
         m_mpvWidget->setGeometry(0, 0, width(), height());
-        connect(m_mpvWidget, &MpvVideoWidget::firstFrameRendered,
+        connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
                 this, [this]() {
                     // Match the SidecarProcess-side firstFrame state transition
                     // so HUD overlays + watchdogs see the same signal shape.
                     m_firstFrameSeen = true;
                 });
+        // Agent 3 2026-05-02 — paired with the disabled buildUI connect
+        // and the disabled mouseMoveEvent + nativeEvent overrides on
+        // MpvVulkanWidget.
+        // connect(m_mpvWidget, &MpvVulkanWidget::mouseActivityAt, this, [this](int /*y*/) {
+        //     showControls();
+        // });
     } else {
         // Re-show after a prior swap-away. Refresh geometry in case the
         // window was resized while we were on the FrameCanvas branch.
@@ -3992,16 +4341,60 @@ void VideoPlayer::syncMpvIntegrationToBackend()
         m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
     }
 
-    // Toggle render surface: hide FrameCanvas, show MpvVideoWidget.
-    // Don't lower() — that pushes the widget below FrameCanvas's z-stack
-    // position. With FrameCanvas hidden, leave MpvVideoWidget where Qt
-    // placed it at construction time (above FrameCanvas, below later-
-    // constructed HUD widgets which raise themselves on show).
+    // Toggle render surface: hide FrameCanvas, show MpvVulkanWidget.
     if (m_canvas) m_canvas->hide();
     m_mpvWidget->show();
+    applySurfaceOverlayStyle();
+
+    // MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — z-order fix. The Vulkan
+    // widget is WA_NativeWindow, which means it owns a child HWND that
+    // Windows renders above non-native QWidgets in its parent's backbuffer.
+    // VideoPlayer's resizeEvent (line 3388-3394) explicitly raises the HUD
+    // widgets to lift them above any sibling native HWND, but that chain
+    // doesn't fire on widget show — only on resize. Without an explicit
+    // raise here, m_mpvWidget's HWND covers the entire VideoPlayer
+    // including controlBar/subOverlay/popovers/center-flash. The
+    // ffmpeg-path equivalent (m_canvas) doesn't show this regression
+    // because m_canvas is created BEFORE the HUD widgets in buildUI; HUD
+    // widgets shown later naturally land above. m_mpvWidget is also
+    // created in buildUI but show() happens in this function, possibly
+    // post-HUD-creation, so explicit raise is the load-bearing call.
+    if (m_controlBar)        m_controlBar->raise();
+    if (m_subOverlay)        m_subOverlay->raise();
+    if (m_volumeHud)         m_volumeHud->raise();
+    if (m_centerFlash)       m_centerFlash->raise();
+    if (m_toastHud)          m_toastHud->raise();
+    if (m_statsBadge && m_statsBadge->isVisible()) m_statsBadge->raise();
+    if (m_chromeOverlay && m_chromeOverlay->isVisible()) m_chromeOverlay->raise();
+    if (m_playlistDrawer && m_playlistDrawer->isOpen()) m_playlistDrawer->raise();
 #else
     // libmpv not compiled in — m_backend is always SidecarProcess.
     // FrameCanvas is the only video surface; nothing to toggle.
     if (m_canvas) m_canvas->show();
 #endif
+}
+
+void VideoPlayer::applySurfaceOverlayStyle()
+{
+    if (!m_controlBar) return;
+
+    bool mpvNativeSurface = false;
+#ifdef HAS_LIBMPV
+    mpvNativeSurface = qobject_cast<MpvBackend*>(m_backend) != nullptr;
+#endif
+
+    // Semi-transparent HUD works on the ffmpeg/FrameCanvas path, but the
+    // Vulkan child HWND cannot be used as a Qt alpha-blend backing surface.
+    // On mpv, keep the HUD panel fully opaque so empty HUD regions never show
+    // the library/main window layer behind VideoPlayer.
+    const QString background = mpvNativeSurface
+        ? QStringLiteral("#0a0a0a")
+        : QStringLiteral("rgba(10, 10, 10, 0.50)");
+
+    m_controlBar->setStyleSheet(
+        QStringLiteral(
+            "QWidget#VideoControlBar {"
+            "  background: %1;"
+            "  border-top: 1px solid rgba(255, 255, 255, 0.08);"
+            "}").arg(background));
 }

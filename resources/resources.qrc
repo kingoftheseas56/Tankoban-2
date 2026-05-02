@@ -16,6 +16,7 @@
         <file>icons/subtitles.svg</file>
         <file>icons/audio.svg</file>
         <file>icons/settings.svg</file>
+        <file>icons/brightness.svg</file>
         <file>icons/comic_reader/arrow-left.svg</file>
         <file>icons/comic_reader/triangle-left.svg</file>
         <file>icons/comic_reader/triangle-right.svg</file>
@@ -26,7 +27,12 @@
         <file>icons/comic_reader/gear.svg</file>
         <file>icons/comic_reader/list.svg</file>
         <file>icons/sun.svg</file>
-        <file>icons/moon.svg</file>
+        <file>icons/chrome_min.svg</file>
+        <file>icons/chrome_max.svg</file>
+        <file>icons/chrome_restore.svg</file>
+        <file>icons/chrome_close.svg</file>
+        <file>icons/chevron_left.svg</file>
+        <file>icons/chevron_right.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>

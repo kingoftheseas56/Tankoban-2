@@ -14,12 +14,14 @@
 #include <mpv/client.h>
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 
@@ -136,6 +138,20 @@ MpvBackend::MpvBackend(QObject* parent)
         if (cb) cb();
     });
 
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — telemetry sample timer. Fires
+    // every 5s while mpv is running; each tick reads counters via
+    // mpv_get_property and appends a TelemetrySample to m_telemetrySamples.
+    // Started in startTelemetry() after mpv_initialize succeeds; stopped
+    // in teardownMpv before mpv_terminate_destroy. Cadence matches the
+    // existing [MPV-RENDER] log line in MpvVideoWidget so cross-correlation
+    // between widget-side frame counts and backend-side mpv counters is
+    // straightforward.
+    m_telemetryTimer = new QTimer(this);
+    m_telemetryTimer->setInterval(5000);
+    m_telemetryTimer->setSingleShot(false);
+    connect(m_telemetryTimer, &QTimer::timeout,
+            this, &MpvBackend::sampleTelemetry);
+
     // Wakeup callback fires on internal libmpv threads; queued connection
     // marshals back to GUI thread before draining.
     connect(this, &MpvBackend::wakeupRequested,
@@ -199,7 +215,91 @@ void MpvBackend::initializeMpv()
 
     // Audio + identity.
     setOpt(m_mpv, "audio-client-name", "Tankoban");
-    setOpt(m_mpv, "hwdec", "auto");
+
+    // MAKE_MPV_SOLO Task 10.5 (2026-05-01) — default `hwdec=no` (CPU
+    // decode), TANKOBAN_MPV_HWDEC env var as escape hatch.
+    //
+    // Why `no` is the default: the Task 10 baseline run with `auto`
+    // selected `d3d11va-copy` on Intel UHD 620 + 1080p HEVC 10-bit and
+    // produced 404 frame-drop-count over 260s with bursty 70-drop windows
+    // (see `out/mpv_telemetry.log` first session block). Two Task 10.5
+    // smokes with `hwdec=no` produced 37 and 31 drops over 255-240s —
+    // ~92% reduction. Plain `d3d11va` (zero-copy) is not available on
+    // Intel UHD 620 + Windows 11 — mpv falls back to CPU decode anyway
+    // — so the GPU↔CPU memcpy in `-copy` is the only thing the auto-
+    // selection adds, and that's what's causing the drops. CPU decode
+    // for 1080p HEVC 10-bit is well within budget on any modern x86.
+    //
+    // Why env var override stays: future users on hardware with working
+    // d3d11va zero-copy (recent NVIDIA / AMD discrete) would benefit
+    // from GPU decode. They can set TANKOBAN_MPV_HWDEC=d3d11va or
+    // =auto-safe via the environment without a rebuild.
+    QByteArray hwdecOverride = qgetenv("TANKOBAN_MPV_HWDEC");
+    const char* hwdecValue = hwdecOverride.isEmpty() ? "no"
+                                                     : hwdecOverride.constData();
+    setOpt(m_mpv, "hwdec", hwdecValue);
+    // MAKE_MPV_SOLO Task 12.A (2026-05-02) — remember whether the user
+    // deliberately picked hwdec via env var. If they did, the file-load
+    // HDR-detect auto-pick path MUST NOT override their choice. The
+    // m_currentHwdec cache mirrors what we just set so the auto-pick
+    // dedupe doesn't re-set unnecessarily.
+    m_hwdecOverriddenByEnv = !hwdecOverride.isEmpty();
+    m_currentHwdec = QString::fromUtf8(hwdecValue);
+    mpvLog(QStringLiteral("[init] hwdec=%1%2")
+               .arg(QString::fromUtf8(hwdecValue))
+               .arg(hwdecOverride.isEmpty() ? " (default)"
+                                            : " (TANKOBAN_MPV_HWDEC override)"));
+
+    // MAKE_MPV_SOLO Task 10.7 (2026-05-02) — picture-quality parity with
+    // the ffmpeg sidecar's libplacebo path. Hemanth-flagged "picture
+    // quality seems better in ffmpeg" 2026-05-01 ~23:30 (post-Task-10.5
+    // smoke). Root cause: mpv defaults to cheap bilinear-class scalers
+    // while the ffmpeg sidecar's libplacebo path uses ewa_lanczossharp
+    // upscaler + hermite downscaler (see native_sidecar/src/
+    // gpu_renderer.cpp:110-111). On a 1080p source rendered into a sub-
+    // 1080p video viewport (after HUD chrome), the chroma reconstruction
+    // + downscale filter is doing real work — and mpv's defaults are
+    // visibly softer there.
+    //
+    // Tier 1 picks (initial attempt 2026-05-02 ~00:05) tried libplacebo
+    // verbatim — `ewa_lanczossharp` upscaler + `hermite` downscaler +
+    // `ewa_lanczossharp` cscale — and tipped Intel UHD 620 OpenGL into
+    // 1585 drops over 120s (13.2 drops/sec, 130× worse than Task 10.5's
+    // hwdec=no floor). Lesson: libplacebo runs on Vulkan compute shaders
+    // and has a much larger shader budget than mpv's OpenGL path on iGPU.
+    // The polar `ewa_*` family is 2D shader work, prohibitive on Intel GL.
+    //
+    // Tier 0 picks (this commit, post-regression) swap to separable
+    // scalers (1D horizontal + 1D vertical passes — much cheaper than
+    // polar 2D, still markedly sharper than mpv's bilinear-class default):
+    //   scale=spline36   (separable, sharp, ~6-tap kernel; wide-used as
+    //                    high-quality preset baseline, e.g., mpv's own
+    //                    profile=gpu-hq sets this)
+    //   dscale=mitchell  (separable; classic high-quality downscaler that
+    //                    avoids both sharp ringing and excessive softness)
+    //   cscale=spline36  (separable chroma reconstruction; matches the
+    //                    upscaler family for visual consistency)
+    //
+    // If Hemanth still finds the picture soft after this, Tier 0.5 adds
+    // deband=yes (cheap perceptual uplift; addresses gradient artifacts
+    // in dark scenes without GPU cost).
+    // MAKE_MPV_SOLO Task 12.B diagnostic (2026-05-02 ~09:48am) —
+    // temporarily flipped scalers to bilinear to test whether Task 10.7
+    // Tier 0 separable-scaler GPU cost is the bottleneck on Hemanth's
+    // heavy-SDR-HEVC stutter (Sopranos S06E04). If this flip restores
+    // smooth playback on Sopranos AND Community SDR floor stays clean,
+    // Task 12.B real fix becomes "scaler-budget-aware pick: bilinear
+    // for heavy content / spline36 for light." If it doesn't help,
+    // revert this and move to the next suspect (telemetry timer / hwdec).
+    // setOpt(m_mpv, "scale",  "spline36");
+    // setOpt(m_mpv, "dscale", "mitchell");
+    // setOpt(m_mpv, "cscale", "spline36");
+    setOpt(m_mpv, "scale",  "bilinear");
+    setOpt(m_mpv, "dscale", "bilinear");
+    setOpt(m_mpv, "cscale", "bilinear");
+    mpvLog(QStringLiteral("[init] scalers: bilinear (Task 12.B diag — "
+                          "testing whether Tier 0 spline36 cost is the "
+                          "Sopranos stutter bottleneck)"));
 
     // Don't render mpv's own OSD; Tankoban draws HUD itself.
     setOpt(m_mpv, "osd-level", "0");
@@ -251,6 +351,14 @@ void MpvBackend::initializeMpv()
     // structurally blocked on Intel iGPU).
     m_running = true;
     mpvLog(QStringLiteral("[init] api=0x%1 ready").arg(mpv_client_api_version(), 0, 16));
+
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — start telemetry capture once
+    // mpv is alive. Identity probes (hwdec/vo/ao/codecs) deferred to the
+    // first sampleTelemetry tick because they're file-state-dependent
+    // (codecs only resolve after the first file opens). startTelemetry
+    // here just zeroes the buffers + starts the timer.
+    startTelemetry();
+
     emit ready();
 }
 
@@ -262,6 +370,14 @@ void MpvBackend::teardownMpv()
         m_pendingStopTimer->stop();
     m_pendingStopComplete = nullptr;
     m_pendingStopTimeout = nullptr;
+
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — flush telemetry BEFORE
+    // mpv_terminate_destroy so the final-counter reads in dumpTelemetry
+    // can still query the live handle. Stop the sampling timer first so
+    // no rogue tick fires mid-dump.
+    if (m_telemetryTimer && m_telemetryTimer->isActive())
+        m_telemetryTimer->stop();
+    dumpTelemetry();
 
     // P5 redux — let any external render-context owner (MpvVideoWidget) free
     // its resources BEFORE we call mpv_terminate_destroy. Direct connections
@@ -299,8 +415,212 @@ void MpvBackend::teardownMpv()
     // a session that ended between paused-for-cache=false and
     // PLAYBACK_RESTART doesn't leak the pending emit into the next session.
     m_pendingBufferingEnd = false;
+    // MAKE_MPV_SOLO Task 10 (2026-05-01) — reset telemetry state so the
+    // next session (resetAndRestart path) starts a fresh sample buffer +
+    // re-captures identity on its first sampleTelemetry tick.
+    m_telemetrySamples.clear();
+    m_telemetryStartMs = 0;
+    m_telemetryHwdec.clear();
+    m_telemetryVo.clear();
+    m_telemetryAo.clear();
+    m_telemetryVideoCodec.clear();
+    m_telemetryAudioCodec.clear();
+    m_telemetryFileFormat.clear();
+    m_telemetryFile.clear();
+    m_telemetryDurationSec = 0.0;
+    m_telemetryDisplayFps  = 0.0;
+    // MAKE_MPV_SOLO Task 12.A — reset hwdec state so the next session's
+    // initializeMpv re-reads the env var fresh and the HDR auto-pick
+    // dedupe doesn't carry stale state across resetAndRestart.
+    m_hwdecOverriddenByEnv = false;
+    m_currentHwdec.clear();
 
     emit processClosed();
+}
+
+// ─── Telemetry (MAKE_MPV_SOLO Task 10) ─────────────────────────────────────
+
+void MpvBackend::startTelemetry()
+{
+    // Called from initializeMpv() right after mpv_initialize succeeds.
+    // Identity probes (hwdec/vo/ao/codecs/file) deferred to the first
+    // sampleTelemetry tick because most of those properties only resolve
+    // after a file is actually loaded — at startTelemetry time the player
+    // is alive but no file is open yet on cold start.
+    m_telemetrySamples.clear();
+    m_telemetryStartMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_telemetryTimer && !m_telemetryTimer->isActive())
+        m_telemetryTimer->start();
+}
+
+namespace {
+
+// Helper: read an mpv string property, copy into QString, mpv_free the
+// returned char*. Returns empty QString on read failure (property absent
+// or property error). All mpv_get_property_string callers in this file
+// honor the same null-check + mpv_free pattern.
+QString mpvReadString(mpv_handle* mpv, const char* name)
+{
+    if (!mpv) return {};
+    if (char* p = mpv_get_property_string(mpv, name)) {
+        QString s = QString::fromUtf8(p);
+        mpv_free(p);
+        return s;
+    }
+    return {};
+}
+
+// Helper: read a mpv int property via MPV_FORMAT_INT64. Returns -1 on
+// read failure (most counters never go negative; -1 is a clear sentinel).
+qint64 mpvReadInt64(mpv_handle* mpv, const char* name)
+{
+    if (!mpv) return -1;
+    int64_t v = -1;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_INT64, &v) < 0) return -1;
+    return v;
+}
+
+// Helper: read a mpv double property via MPV_FORMAT_DOUBLE. Returns 0.0
+// on read failure — caller should interpret 0.0 as "not yet measured"
+// rather than authoritative zero (estimated-vf-fps, playback-time, etc.
+// all start at 0 and grow).
+double mpvReadDouble(mpv_handle* mpv, const char* name)
+{
+    if (!mpv) return 0.0;
+    double v = 0.0;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &v) < 0) return 0.0;
+    return v;
+}
+
+// Helper: read a mpv bool property via MPV_FORMAT_FLAG.
+bool mpvReadFlag(mpv_handle* mpv, const char* name)
+{
+    if (!mpv) return false;
+    int v = 0;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &v) < 0) return false;
+    return v != 0;
+}
+
+} // namespace
+
+void MpvBackend::sampleTelemetry()
+{
+    if (!m_mpv) return;
+
+    // Lazy identity capture on the first tick after a file becomes live.
+    // We detect "file is now loaded" by checking whether any of the
+    // identity properties returns a non-empty value; if so, latch them.
+    // hwdec-current is the most reliable single signal here — it stays
+    // empty pre-file-load and resolves to "no" / "d3d11va-copy" / etc.
+    // post-decode-open. video-codec also resolves at the same moment.
+    if (m_telemetryHwdec.isEmpty()) {
+        const QString hwdec = mpvReadString(m_mpv, "hwdec-current");
+        if (!hwdec.isEmpty()) {
+            m_telemetryHwdec       = hwdec;
+            m_telemetryVo          = mpvReadString(m_mpv, "current-vo");
+            m_telemetryAo          = mpvReadString(m_mpv, "current-ao");
+            m_telemetryVideoCodec  = mpvReadString(m_mpv, "video-codec");
+            m_telemetryAudioCodec  = mpvReadString(m_mpv, "audio-codec");
+            m_telemetryFileFormat  = mpvReadString(m_mpv, "file-format");
+            m_telemetryFile        = mpvReadString(m_mpv, "filename");
+            m_telemetryDurationSec = mpvReadDouble(m_mpv, "duration");
+            m_telemetryDisplayFps  = mpvReadDouble(m_mpv, "display-fps");
+        }
+    }
+
+    TelemetrySample s;
+    s.elapsedMs        = QDateTime::currentMSecsSinceEpoch() - m_telemetryStartMs;
+    s.frameDropCount   = static_cast<int>(mpvReadInt64(m_mpv, "frame-drop-count"));
+    s.voDelayedCount   = static_cast<int>(mpvReadInt64(m_mpv, "vo-delayed-frame-count"));
+    s.estimatedVfFps   = mpvReadDouble(m_mpv, "estimated-vf-fps");
+    s.playbackTimeSec  = mpvReadDouble(m_mpv, "playback-time");
+    s.pausedForCache   = mpvReadFlag(m_mpv, "paused-for-cache");
+    m_telemetrySamples.append(s);
+
+    // Bound memory: 5s cadence × 1024 cap = ~85 minutes per session block,
+    // way past any normal play length. Drop oldest if we ever exceed (ring
+    // semantic) so a forgotten background instance doesn't leak forever.
+    constexpr int kCap = 1024;
+    if (m_telemetrySamples.size() > kCap) {
+        m_telemetrySamples.remove(0, m_telemetrySamples.size() - kCap);
+    }
+}
+
+void MpvBackend::dumpTelemetry()
+{
+    if (m_telemetrySamples.isEmpty()) return;
+
+    // Mirror SidecarProcess::dumpIpcLatency path-resolution: prefer out/
+    // for consistency with stream_telemetry.log + ipc_latency.log; fall
+    // back to repo root if out/ doesn't exist (fresh-checkout edge).
+    QString path = QStringLiteral("out/mpv_telemetry.log");
+    QFileInfo outDir(QStringLiteral("out"));
+    if (!outDir.exists() || !outDir.isDir()) {
+        path = QStringLiteral("mpv_telemetry.log");
+    }
+
+    QFile f(path);
+    if (!f.open(QIODevice::Append | QIODevice::Text)) return;
+    QTextStream stream(&f);
+
+    // ── Session header ────────────────────────────────────────────────────
+    stream << "## session_end=" << QDateTime::currentDateTime().toString(Qt::ISODate)
+           << " samples=" << m_telemetrySamples.size()
+           << " duration_sec=" << QString::number(m_telemetryDurationSec, 'f', 2)
+           << " display_fps=" << QString::number(m_telemetryDisplayFps, 'f', 2)
+           << " hwdec=" << (m_telemetryHwdec.isEmpty() ? "none" : m_telemetryHwdec)
+           << " vo=" << (m_telemetryVo.isEmpty() ? "?" : m_telemetryVo)
+           << " ao=" << (m_telemetryAo.isEmpty() ? "?" : m_telemetryAo)
+           << " video_codec=" << (m_telemetryVideoCodec.isEmpty() ? "?" : m_telemetryVideoCodec)
+           << " audio_codec=" << (m_telemetryAudioCodec.isEmpty() ? "?" : m_telemetryAudioCodec)
+           << " file_format=" << (m_telemetryFileFormat.isEmpty() ? "?" : m_telemetryFileFormat)
+           << " file=" << (m_telemetryFile.isEmpty() ? "?" : m_telemetryFile)
+           << "\n";
+
+    // ── Per-sample rows ──────────────────────────────────────────────────
+    for (const auto& s : m_telemetrySamples) {
+        stream << "sample t=" << (s.elapsedMs / 1000) << "s"
+               << " drops=" << s.frameDropCount
+               << " vo_delayed=" << s.voDelayedCount
+               << " vf_fps=" << QString::number(s.estimatedVfFps, 'f', 2)
+               << " playtime=" << QString::number(s.playbackTimeSec, 'f', 2) << "s"
+               << " buffering=" << (s.pausedForCache ? "true" : "false")
+               << "\n";
+    }
+
+    // ── Summary line ─────────────────────────────────────────────────────
+    int totalDrops    = 0;
+    int totalDelayed  = 0;
+    int bufferingTicks = 0;
+    double sumFps     = 0.0;
+    int    fpsSampleCount = 0;
+    int finalDrops   = m_telemetrySamples.last().frameDropCount;
+    int finalDelayed = m_telemetrySamples.last().voDelayedCount;
+    int firstDrops   = m_telemetrySamples.first().frameDropCount;
+    int firstDelayed = m_telemetrySamples.first().voDelayedCount;
+    if (firstDrops   < 0) firstDrops   = 0;
+    if (firstDelayed < 0) firstDelayed = 0;
+    if (finalDrops   < 0) finalDrops   = 0;
+    if (finalDelayed < 0) finalDelayed = 0;
+    totalDrops   = qMax(0, finalDrops   - firstDrops);
+    totalDelayed = qMax(0, finalDelayed - firstDelayed);
+    for (const auto& s : m_telemetrySamples) {
+        if (s.pausedForCache) ++bufferingTicks;
+        if (s.estimatedVfFps > 0.0) {
+            sumFps += s.estimatedVfFps;
+            ++fpsSampleCount;
+        }
+    }
+    const double avgFps = (fpsSampleCount > 0) ? (sumFps / fpsSampleCount) : 0.0;
+    stream << "## summary"
+           << " avg_vf_fps=" << QString::number(avgFps, 'f', 2)
+           << " total_drops=" << totalDrops
+           << " total_vo_delayed=" << totalDelayed
+           << " buffering_ticks=" << bufferingTicks
+           << "/" << m_telemetrySamples.size()
+           << "\n\n";
+
+    f.close();
 }
 
 void MpvBackend::observeProperties()
@@ -406,8 +726,66 @@ void MpvBackend::onWakeup()
 
                 // HDR — PQ or HLG TRC means HDR transfer function. Mirrors
                 // demuxer.cpp:450-452 which sets hdr=true on SMPTE2084/HLG.
-                mi.insert("hdr", trcStr == QStringLiteral("pq")
-                                 || trcStr == QStringLiteral("hlg"));
+                const bool isHdr = (trcStr == QStringLiteral("pq")
+                                    || trcStr == QStringLiteral("hlg"));
+                mi.insert("hdr", isHdr);
+
+                // MAKE_MPV_SOLO Task 12.A (2026-05-02) — HDR-conditional
+                // hwdec auto-pick. Task 10.5 measured `hwdec=no` (CPU
+                // decode) as the floor for SDR HEVC on Intel UHD 620
+                // (0.10-0.24 drops/sec). Task 12 soak surfaced HDR HEVC
+                // sustains 6-8 drops/sec on the same CPU path — HDR adds
+                // 10-bit decode pressure + tone-mapping shader cost that
+                // pushes the CPU decoder over budget. d3d11va-copy on
+                // SDR was 1.55 drops/sec (worse than CPU) but on HDR is
+                // expected to be dramatically better (the GPU↔CPU memcpy
+                // cost is the same, but GPU decode handles 10-bit HEVC
+                // far cheaper than CPU). So: HDR file → flip to
+                // d3d11va-copy automatically. SDR stays on hwdec=no.
+                //
+                // Honor env-var override: if the user set TANKOBAN_MPV_HWDEC
+                // explicitly at app launch, NEVER override here — they
+                // know what they want. This is auto-pick only for the
+                // default-path users.
+                //
+                // Dedupe via m_currentHwdec cache — if the previous file
+                // was also HDR and we already flipped to d3d11va-copy,
+                // skip the re-set (avoids unnecessary decoder reinit).
+                if (isHdr
+                    && !m_hwdecOverriddenByEnv
+                    && m_currentHwdec != QStringLiteral("d3d11va-copy")) {
+                    const char* hdrHwdec = "d3d11va-copy";
+                    int rc = mpv_set_property_string(m_mpv, "hwdec", hdrHwdec);
+                    if (rc >= 0) {
+                        m_currentHwdec = QString::fromUtf8(hdrHwdec);
+                        mpvLog(QStringLiteral("[hdr-detect] gamma=%1 → "
+                                               "hwdec %2 → %3 (auto-pick)")
+                                   .arg(trcStr,
+                                        QStringLiteral("no"),
+                                        m_currentHwdec));
+                    } else {
+                        mpvLog(QStringLiteral("[hdr-detect] gamma=%1 but "
+                                               "hwdec swap failed: %2")
+                                   .arg(trcStr,
+                                        QString::fromUtf8(mpv_error_string(rc))));
+                    }
+                } else if (!isHdr
+                           && !m_hwdecOverriddenByEnv
+                           && m_currentHwdec == QStringLiteral("d3d11va-copy")) {
+                    // Reverse path: prior file was HDR and flipped us to
+                    // d3d11va-copy; this file is SDR. Flip back to `no`
+                    // so we don't pay the d3d11va-copy memcpy cost on
+                    // SDR (where it measured worse than CPU at 1.55 vs
+                    // 0.24 drops/sec in Task 10.5).
+                    const char* sdrHwdec = "no";
+                    int rc = mpv_set_property_string(m_mpv, "hwdec", sdrHwdec);
+                    if (rc >= 0) {
+                        m_currentHwdec = QString::fromUtf8(sdrHwdec);
+                        mpvLog(QStringLiteral("[hdr-detect] SDR file → "
+                                               "hwdec d3d11va-copy → no "
+                                               "(auto-pick)"));
+                    }
+                }
 
                 // Chapter list — mpv emits {title, time}; ffmpeg side uses
                 // {title, start}. Translate so VideoPlayer.cpp:3743's
@@ -1122,13 +1500,25 @@ int MpvBackend::activeSubtitleIndex() const
 
 // ─── Filters / rendering ───────────────────────────────────────────────────
 
-int MpvBackend::sendSetFilters(bool /*deinterlace*/, int /*brightness*/,
+int MpvBackend::sendSetFilters(bool /*deinterlace*/, int brightness,
                                 int /*contrast*/, int /*saturation*/,
                                 bool /*normalize*/, bool /*interpolate*/,
                                 const QString& /*deinterlaceFilter*/)
 {
-    // Phase 6 maps these to mpv's vf= chain + brightness/contrast/saturation
-    // properties + interpolation flag. Phase 3 stub.
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness-only fill. Hemanth
+    // narrowed Task 9 scope to brightness; contrast/saturation stay
+    // ignored on the mpv path (and unsurfaced in the UI). mpv's
+    // `brightness` property is integer -100..+100, default 0, applied
+    // through the GPU shader (no vf chain rebuild — instant + flicker-free,
+    // satisfies the slider live-update reliability gate). Other params
+    // are accepted but not propagated; the IPlayerBackend signature is
+    // preserved so the sidecar path can keep using contrast=100,
+    // saturation=100 as neutrals.
+    if (!m_mpv) return -1;
+    if (brightness < -100) brightness = -100;
+    if (brightness > 100)  brightness = 100;
+    setOpt(m_mpv, "brightness",
+           QByteArray::number(brightness).constData());
     return nextSeq();
 }
 

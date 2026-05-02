@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QLabel>
 #include <QPushButton>
+#include <QFrame>
 #include <QSlider>
 class SeekSlider;
 #include <QTimer>
@@ -26,7 +27,9 @@ class IPlayerBackend;
 class SidecarProcess;
 class ShmFrameReader;
 class FrameCanvas;
-class MpvVideoWidget;
+// MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — Vulkan-backed widget replaces
+// the QOpenGLWidget MpvVideoWidget for the mpv backend's video surface.
+class MpvVulkanWidget;
 class MpvBackend;
 class VolumeHud;
 class CenterFlash;
@@ -196,10 +199,24 @@ public slots:
         const QList<tankostream::addon::SubtitleTrack>& tracks,
         const QHash<QString, QString>& originByTrackKey);
 
+public:
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — chrome Max icon swap, called by
+    // MainWindow on WindowStateChange so the video player's chrome reflects
+    // the live max/restore state of the underlying window.
+    void updateChromeMaxIcon(bool isMaximized);
+
 signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
     void progressUpdated(const QString& path, double positionSec, double durationSec);
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — top-right chrome cluster routed
+    // to MainWindow's chrome slots. closeRequested above is the BACK arrow
+    // (exit player → return to library); chromeCloseRequested closes the
+    // entire app via MainWindow::close, distinct semantics.
+    void chromeMinimizeRequested();
+    void chromeMaximizeToggleRequested();
+    void chromeCloseRequested();
 
     // PLAYER_UX_FIX Phase 1.2 — sidecar lifecycle plumbing. Fired when the
     // sidecar reports `state_changed{opening}` (right after handle_open
@@ -268,22 +285,23 @@ private:
     // sendShutdown + ensureTerminated, mirroring stopPlayback's user-close
     // teardown), deletes it, creates the new backend type via
     // BackendFactory::create, refreshes downstream pointer holders
-    // (SubtitlePopover::setSidecar + MpvVideoWidget show/hide via
+    // (SubtitlePopover::setSidecar + MpvVulkanWidget show/hide via
     // syncMpvIntegrationToBackend), and re-runs wireBackendSignals.
     // No-op when t == m_currentBackendType.
     void switchBackendTo(BackendFactory::Type t);
 
-    // 2026-04-30 hotfix — drives the MpvVideoWidget setup/teardown that
+    // 2026-04-30 hotfix — drives the MpvVulkanWidget setup/teardown that
     // pairs with the active backend. Idempotent. Called from buildUI (so
     // a session that starts in mpv mode wires correctly) and from
     // switchBackendTo (so a mid-session swap into or out of mpv toggles
-    // the right render surface). Hides FrameCanvas and shows MpvVideoWidget
+    // the right render surface). Hides FrameCanvas and shows MpvVulkanWidget
     // when m_backend is MpvBackend; reverses on swap-away. Lazy-creates
     // m_mpvWidget the first time mpv is selected, regardless of whether
     // the initial ctor-time backend was mpv. Without this, a swap from
     // ffmpeg-default to mpv leaves m_mpvWidget null + FrameCanvas visible
     // — mpv plays audio but video has nowhere to render (blank canvas).
     void syncMpvIntegrationToBackend();
+    void applySurfaceOverlayStyle();
 
     // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown. Detaches canvas/
     // reader + clears cached track lists + stops restart-retry timer.
@@ -340,6 +358,13 @@ private:
     //    persisted under "videoPlayer/subtitlePosition" QSettings key.
     void adjustAudioDelay(int delta);
     void adjustSubDelay(int delta);
+    // MAKE_MPV_SOLO Task 8.B (2026-05-02) — slot for the Windows audio-
+    // device-change watcher. Generates a new device key from the new
+    // friendly name + cached host API, looks up the saved per-device
+    // delay in QSettings, applies it via the active backend's
+    // sendSetAudioDelay, updates m_audioDelayMs, toasts the change.
+    // Mirrors the file-open recall logic at VideoPlayer.cpp:3970-4007.
+    void onAudioDeviceChanged(const QString& friendlyName);
     void adjustSubPosition(int delta);
     // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard / Force toggle.
     void setSubPositionMode(const QString& mode);
@@ -347,6 +372,18 @@ private:
     // 0.1 = 10%; absolute value clamped 0.5..2.0; persisted under
     // "videoPlayer/subtitleSize"; pushed via sendSetSubtitleSize).
     void adjustSubtitleSize(double delta);
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — absolute brightness setter.
+    // value is clamped -100..+100; pushed via backend sendSetFilters with
+    // neutral contrast/saturation (sidecar) or as the `brightness` mpv
+    // property (mpv backend's stub fill); persisted; popover synced.
+    // Live-update on slider drag — Hemanth gate "Drag the bar → picture
+    // brightness changes immediately. No lag."
+    void setBrightness(int value);
+    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — keyboard delta helper.
+    // Wraps setBrightness(m_brightness + delta) + emits a one-shot toast.
+    // Slider drag path stays toast-free (would spam HUD); keyboard path
+    // toasts each press for confirmation.
+    void adjustBrightness(int delta);
     void cycleAudioTrack();
     void cycleSubtitleTrack();
     void toggleSubtitles();
@@ -504,11 +541,10 @@ private:
     BackendFactory::Type m_currentBackendType = BackendFactory::Type::Ffmpeg;
     ShmFrameReader* m_reader    = nullptr;
     FrameCanvas*    m_canvas    = nullptr;
-    // MPV_RENDER_API_INTEGRATION P5 redux 2026-04-29 — QOpenGLWidget child
-    // that owns the libmpv render context when m_backend is MpvBackend.
-    // Layered at the same geometry as m_canvas; FrameCanvas is hidden when
-    // mpv backend is active. Null when SidecarProcess is the active backend.
-    MpvVideoWidget* m_mpvWidget = nullptr;
+    // MAKE_MPV_BEAT_FFMPEG Task 2 — native Vulkan child HWND for the mpv
+    // backend. Layered at the same geometry as m_canvas; FrameCanvas is
+    // hidden when mpv backend is active.
+    MpvVulkanWidget* m_mpvWidget = nullptr;
 
     // Batch 1.2 — master A/V clock. VideoPlayer owns it; FrameCanvas gets
     // a pointer via setSyncClock() in buildUI(). Today only FrameCanvas
@@ -536,6 +572,10 @@ private:
     SubtitlePopover*  m_subtitlePopover  = nullptr;
     AudioPopover*     m_audioPopover     = nullptr;
     SettingsPopover*  m_settingsPopover  = nullptr;
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness-only filter popover.
+    // Hemanth-narrowed scope revert of VIDEO_HUD_MINIMALIST Phase 1's
+    // filter-stack removal; contrast/saturation stay removed.
+    class BrightnessPopover* m_brightnessPopover = nullptr;
 
     // Current/pending file
     QString     m_currentFile;
@@ -564,6 +604,15 @@ private:
 
     // Controls
     QWidget*     m_controlBar      = nullptr;
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — top-right floating chrome cluster
+    // (Min / Max-toggle / Close). Visibility synced with m_controlBar via
+    // showControls / hideControls. Hidden in fullscreen.
+    QFrame*      m_chromeOverlay   = nullptr;
+    QPushButton* m_chromeMinBtn    = nullptr;
+    QPushButton* m_chromeMaxBtn    = nullptr;
+    QPushButton* m_chromeCloseBtn  = nullptr;
+
     // Row 1 (seek)
     QLabel*      m_timeLabel       = nullptr;
     QPushButton* m_seekBackBtn     = nullptr;
@@ -587,6 +636,7 @@ private:
     // shows "original audio and video qualities").
     QPushButton* m_subtitleChip    = nullptr;
     QPushButton* m_audioChip       = nullptr;
+    QPushButton* m_brightnessChip  = nullptr; // MAKE_MPV_SOLO Task 9 (2026-05-01)
     QPushButton* m_settingsChip    = nullptr;
     QPushButton* m_playlistChip    = nullptr;
     QLabel*      m_timeBubble     = nullptr;
@@ -645,7 +695,23 @@ private:
     // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — subtitle size scale.
     // Default 1.0x = sidecar baseline; clamped 0.5..2.0 in adjustSubtitleSize.
     double m_subtitleSize = 1.0;
+    // MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness, range -100..+100,
+    // 0 = neutral. Persisted under "videoPlayer/brightness". Pushed via
+    // sendSetFilters with neutral contrast/saturation (sidecar) or written
+    // as the `brightness` mpv property on the mpv backend.
+    int m_brightness = 0;
     QString m_audioDeviceKey;   // QSettings key for current device's offset
+    // MAKE_MPV_SOLO Task 8.B (2026-05-02) — cached host API tag from the
+    // most-recent file-open mediaInfo. Used by the Windows audio-device
+    // watcher to regenerate m_audioDeviceKey via makeDeviceKey on mid-
+    // playback device switch (the watcher knows the new friendly name
+    // but not the host API the active backend is running through).
+    QString m_audioHostApi;
+    // MAKE_MPV_SOLO Task 8.B (2026-05-02) — Windows IMMNotificationClient
+    // watcher; fires defaultDeviceChanged on default-render-device
+    // switch. Owned by VideoPlayer (parent=this) so destruction is
+    // automatic.
+    class AudioDeviceWatcher* m_audioDeviceWatcher = nullptr;
     bool   m_subsVisible = true;
     // VIDEO_PLAYER_FIX Batch 3.1 — persisted across app restart via
     // QSettings("player/alwaysOnTop"). Applied in the constructor after

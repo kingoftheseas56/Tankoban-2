@@ -91,6 +91,18 @@ set(SOURCES
     src/core/indexers/ExtTorrentsIndexer.cpp
     src/core/indexers/CloudflareCookieHarvester.cpp
     src/ui/player/SidecarProcess.cpp
+    src/ui/player/BackendFactory.cpp
+    # MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — MpvLibplaceboBuildProbe
+    # retired; replaced by the real MpvVulkanWidget below. Probe served
+    # its purpose during Agent 7's Task 1 build-prep (proved libplacebo +
+    # Vulkan link symbols resolve from the main app); its include + dummy
+    # symbol are now subsumed by the actual widget that uses both libs.
+    # src/ui/player/MpvLibplaceboBuildProbe.cpp  -- removed Task 2
+    src/ui/player/MpvVulkanWidget.cpp
+    # MAKE_MPV_SOLO Task 8.B (2026-05-02) — Windows audio device-change
+    # watcher (IMMNotificationClient COM listener + Qt-thread marshaling).
+    # Closes the deferred per-device-delay-recall deliverable from Task 8.
+    src/ui/player/AudioDeviceWatcher.cpp
     src/ui/player/ShmFrameReader.cpp
     src/ui/player/OverlayShmReader.cpp
     src/ui/player/FrameCanvas.cpp
@@ -111,6 +123,10 @@ set(SOURCES
     src/ui/player/SubtitlePopover.cpp
     src/ui/player/AudioPopover.cpp
     src/ui/player/SettingsPopover.cpp
+    # MAKE_MPV_SOLO Task 9 (2026-05-01) — brightness-only filter popover.
+    # Hemanth-narrowed scope revert of VIDEO_HUD_MINIMALIST Phase 1's
+    # filter-stack removal; contrast/saturation stay removed.
+    src/ui/player/BrightnessPopover.cpp
     src/ui/player/VideoContextMenu.cpp
     src/ui/player/OpenUrlDialog.cpp
     src/ui/player/KeybindingEditor.cpp
@@ -227,7 +243,10 @@ set(HEADERS
     src/core/indexers/X1337xIndexer.h
     src/core/indexers/ExtTorrentsIndexer.h
     src/core/indexers/CloudflareCookieHarvester.h
+    src/ui/player/IPlayerBackend.h
     src/ui/player/SidecarProcess.h
+    src/ui/player/BackendFactory.h
+    src/ui/player/AudioDeviceWatcher.h
     src/ui/player/ShmFrameReader.h
     src/ui/player/FrameCanvas.h
     src/ui/player/VideoPlayer.h
@@ -239,6 +258,7 @@ set(HEADERS
     src/ui/player/SubtitlePopover.h
     src/ui/player/AudioPopover.h
     src/ui/player/SettingsPopover.h
+    src/ui/player/BrightnessPopover.h
     src/ui/player/VideoContextMenu.h
     src/ui/player/KeybindingEditor.h
     src/ui/player/StatsBadge.h
@@ -361,6 +381,45 @@ endif()
 
 target_link_libraries(Tankoban PRIVATE Qt6::Svg)
 
+# MAKE_MPV_BEAT_FFMPEG Task 1 (2026-05-02): main-app libplacebo + Vulkan build prep.
+set(LIBPLACEBO_MSVC_ROOT "C:/tools/libplacebo-msvc" CACHE PATH "MSVC libplacebo install for Tankoban main app")
+find_package(Vulkan REQUIRED)
+find_path(LIBPLACEBO_MAIN_INCLUDE_DIR
+    NAMES libplacebo/log.h libplacebo/renderer.h
+    HINTS "${LIBPLACEBO_MSVC_ROOT}/include"
+    REQUIRED
+)
+find_library(LIBPLACEBO_MAIN_LIBRARY
+    NAMES placebo libplacebo
+    HINTS "${LIBPLACEBO_MSVC_ROOT}/lib"
+    REQUIRED
+)
+find_file(LIBPLACEBO_MAIN_RUNTIME
+    NAMES libplacebo-362.dll libplacebo.dll placebo.dll
+    HINTS "${LIBPLACEBO_MSVC_ROOT}/bin"
+    REQUIRED
+)
+find_file(LCMS2_MAIN_RUNTIME
+    NAMES lcms2-2.dll lcms2.dll
+    HINTS "C:/vcpkg/installed/x64-windows/bin"
+    REQUIRED
+)
+message(STATUS "main-app libplacebo found: ${LIBPLACEBO_MAIN_LIBRARY}")
+target_include_directories(Tankoban PRIVATE "${LIBPLACEBO_MAIN_INCLUDE_DIR}")
+target_compile_definitions(Tankoban PRIVATE HAS_LIBPLACEBO_MAIN=1)
+target_link_libraries(Tankoban PRIVATE Vulkan::Vulkan "${LIBPLACEBO_MAIN_LIBRARY}")
+if(WIN32)
+    add_custom_command(TARGET Tankoban POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LIBPLACEBO_MAIN_RUNTIME}"
+            "$<TARGET_FILE_DIR:Tankoban>/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LCMS2_MAIN_RUNTIME}"
+            "$<TARGET_FILE_DIR:Tankoban>/"
+        COMMENT "Copying main-app libplacebo runtime DLLs"
+    )
+endif()
+
 # ── libtorrent-rasterbar + Boost + OpenSSL (vcpkg-managed) ───────────────────
 # REPO_HYGIENE Phase 2 (2026-04-26): migrated from hardcoded
 # C:/tools/libtorrent-2.0-msvc + C:/tools/boost-1.84.0 + C:/tools/openssl-msvc
@@ -395,7 +454,44 @@ if(LibtorrentRasterbar_FOUND AND Boost_FOUND AND OpenSSL_FOUND)
         ws2_32 mswsock crypt32 iphlpapi bcrypt
     )
 else()
-    message(STATUS "libtorrent / Boost / OpenSSL NOT found — torrent engine disabled. Run setup.bat to install via vcpkg.")
+    # TANKORENT_DOWNLOAD_FLOW_FIX (2026-05-01): Phase 2's vcpkg migration silently
+    # disabled the torrent engine when vcpkg failed to install libtorrent (libiconv
+    # port build issue flagged in b1b9acf commit body). Restore the pre-Phase-2
+    # hardcoded-path fallback so existing C:/tools/libtorrent-2.0-msvc installs
+    # still work — Hemanth's case + anyone who has libtorrent installed outside
+    # vcpkg. Either path defines HAS_LIBTORRENT; without it, addMagnet compiles
+    # to a stub that returns empty hash for every magnet, surfacing as
+    # "Failed to Add Magnet" on every download click.
+    set(LIBTORRENT_ROOT "C:/tools/libtorrent-2.0-msvc" CACHE PATH "libtorrent MSVC install")
+    set(BOOST_ROOT "C:/tools/boost-1.84.0" CACHE PATH "Boost headers")
+    set(OPENSSL_MSVC_ROOT "C:/tools/openssl-msvc" CACHE PATH "OpenSSL MSVC install")
+
+    find_path(LIBTORRENT_INCLUDE_DIR libtorrent/session.hpp HINTS "${LIBTORRENT_ROOT}/include")
+    find_library(LIBTORRENT_LIBRARY torrent-rasterbar HINTS "${LIBTORRENT_ROOT}/lib")
+    find_path(BOOST_INCLUDE_DIR boost/version.hpp HINTS "${BOOST_ROOT}")
+
+    if(LIBTORRENT_INCLUDE_DIR AND LIBTORRENT_LIBRARY AND BOOST_INCLUDE_DIR)
+        message(STATUS "libtorrent found via fallback: ${LIBTORRENT_LIBRARY}")
+        target_include_directories(Tankoban PRIVATE
+            "${LIBTORRENT_INCLUDE_DIR}"
+            "${BOOST_INCLUDE_DIR}"
+            "${OPENSSL_MSVC_ROOT}/include"
+        )
+        target_compile_definitions(Tankoban PRIVATE
+            HAS_LIBTORRENT=1
+            TORRENT_USE_OPENSSL
+            BOOST_ALL_NO_LIB
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(Tankoban PRIVATE
+            "${LIBTORRENT_LIBRARY}"
+            "${OPENSSL_MSVC_ROOT}/lib/libssl.lib"
+            "${OPENSSL_MSVC_ROOT}/lib/libcrypto.lib"
+            ws2_32 mswsock crypt32 iphlpapi bcrypt
+        )
+    else()
+        message(WARNING "libtorrent / Boost / OpenSSL NOT found via vcpkg OR fallback paths — torrent engine disabled. Run setup.bat to install via vcpkg, or place libtorrent at C:/tools/libtorrent-2.0-msvc/.")
+    endif()
 endif()
 
 # ── libarchive (optional, for CBR/RAR support) ───────────────────────────────
@@ -412,10 +508,50 @@ else()
     message(STATUS "libarchive NOT found — CBR/RAR support disabled")
 endif()
 
+# ── libmpv (MPV_RENDER_API_INTEGRATION Phase 1, 2026-04-28) ──────────────────
+# Vendored prebuilt from shinchiro/mpv-winbuild-cmake — see setup.bat step 6.
+# bin/ + lib/ are gitignored; setup.bat downloads + extracts them.
+# include/mpv/*.h + LICENSE.libmpv.txt + VERSION.txt ARE tracked so fresh
+# clones configure cleanly without setup.bat (libmpv just disabled until
+# the DLL lands on disk; ffmpeg backend unaffected).
+set(LIBMPV_ROOT "${CMAKE_SOURCE_DIR}/resources/libmpv/windows")
+find_path(LIBMPV_INCLUDE_DIR mpv/client.h HINTS "${LIBMPV_ROOT}/include")
+find_library(LIBMPV_LIBRARY NAMES mpv libmpv libmpv.dll
+             HINTS "${LIBMPV_ROOT}/lib")
+
+if(LIBMPV_INCLUDE_DIR AND LIBMPV_LIBRARY AND EXISTS "${LIBMPV_ROOT}/bin/libmpv-2.dll")
+    message(STATUS "libmpv found: ${LIBMPV_LIBRARY}")
+    target_include_directories(Tankoban PRIVATE "${LIBMPV_INCLUDE_DIR}")
+    target_link_libraries(Tankoban PRIVATE "${LIBMPV_LIBRARY}")
+    target_compile_definitions(Tankoban PRIVATE HAS_LIBMPV=1)
+    target_sources(Tankoban PRIVATE
+        src/ui/player/MpvProbe.cpp
+        src/ui/player/MpvBackend.h
+        src/ui/player/MpvBackend.cpp
+        src/ui/player/MpvVideoWidget.h
+        src/ui/player/MpvVideoWidget.cpp
+        # MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — Vulkan-backed widget
+        # that replaces MpvVideoWidget at construction. Old QOpenGLWidget
+        # source files stay in the target list during the arc so emergency
+        # revert is a one-line VideoPlayer.cpp change. Task 9 deletes them.
+        src/ui/player/MpvVulkanWidget.h
+        src/ui/player/MpvVulkanWidget.cpp
+    )
+    # MpvVideoWidget calls glGetString directly for renderer/vendor logging.
+    target_link_libraries(Tankoban PRIVATE opengl32)
+    set(TANKOBAN_HAS_LIBMPV TRUE)
+else()
+    message(STATUS "libmpv NOT found at ${LIBMPV_ROOT} — run setup.bat (mpv backend disabled)")
+    set(TANKOBAN_HAS_LIBMPV FALSE)
+endif()
+
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)
     target_sources(Tankoban PRIVATE resources/tankoban.rc)
-    target_link_libraries(Tankoban PRIVATE dwmapi winmm d3d11 dxgi d3dcompiler avrt)
+    # MAKE_MPV_SOLO Task 8.B (2026-05-02) — ole32 + propsys for the
+    # Windows audio device-change watcher (IMMNotificationClient COM API
+    # + PROPERTYKEY/PROPVARIANT helpers in PKEY_Device_FriendlyName lookup).
+    target_link_libraries(Tankoban PRIVATE dwmapi winmm d3d11 dxgi d3dcompiler avrt ole32 propsys)
     set_target_properties(Tankoban PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
@@ -468,6 +604,22 @@ if(WIN32)
         COMMENT "Copying Stremio stream-server bundle (MIT-licensed upstream) to build output"
         VERBATIM
     )
+
+    # MPV_RENDER_API_INTEGRATION Phase 1 (2026-04-28) — deploy libmpv-2.dll
+    # next to Tankoban.exe so the loader resolves it from the app dir before
+    # any PATH lookup. LICENSE.libmpv.txt ships alongside per LGPL-2.1+
+    # attribution requirement. Only fires when the libmpv blob is present
+    # (gated by TANKOBAN_HAS_LIBMPV from the find_library block above).
+    if(TANKOBAN_HAS_LIBMPV)
+        add_custom_command(TARGET Tankoban POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${LIBMPV_ROOT}/bin/libmpv-2.dll"
+                "${LIBMPV_ROOT}/LICENSE.libmpv.txt"
+                "$<TARGET_FILE_DIR:Tankoban>/"
+            COMMENT "Copying libmpv-2.dll (LGPL-2.1+ upstream) to build output"
+            VERBATIM
+        )
+    endif()
 endif()
 
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────
