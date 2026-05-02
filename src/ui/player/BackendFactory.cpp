@@ -41,7 +41,27 @@ BackendFactory::Type BackendFactory::chooseFor(std::optional<Type> explicitOverr
 BackendFactory::Type BackendFactory::readPreference()
 {
     QSettings s("Tankoban", "Tankoban");
-    const QString slug = s.value(kKey, kFfmpegSlug).toString();
+    // MAKE_MPV_SOLO Task 11 (2026-05-02) — default-when-key-absent flipped
+    // from `ffmpeg` to `mpv`. Hemanth-paced cutover: new installs (or any
+    // launch where the QSettings key isn't present yet) get mpv as the
+    // default backend. EXISTING users with a stored value of "ffmpeg"
+    // are NOT touched — their saved preference still wins, and they
+    // opt into mpv by manually flipping via the existing right-click
+    // set-default mechanism. The right-click "Play with ffmpeg" /
+    // "Play with mpv" per-file overrides remain unchanged on both UX
+    // and code paths (no menu work in Task 11; stays for the cutover
+    // validation window in Task 12).
+    //
+    // Fences/gates honored before this flip landed: Tasks 7-10 (mpv HUD
+    // parity / Pattern C accumulator / mpv telemetry) all closed; Task
+    // 10.5 (hwdec=no default for the stutter floor) closed; Task 10.7
+    // Tier 0 (separable scalers for picture quality) shipped pending
+    // Hemanth eyeball verdict (deferred per Hemanth "deal stutter after
+    // all the tasks are done if it's still there"); Task 8.B (audio
+    // device-change watcher) shipped same wake. Per the MAKE_MPV_SOLO
+    // dependency clause: "Tasks 7-10 must close GREEN before firing"
+    // — met.
+    const QString slug = s.value(kKey, kMpvSlug).toString();
     return slug == kMpvSlug ? Type::Mpv : Type::Ffmpeg;
 }
 

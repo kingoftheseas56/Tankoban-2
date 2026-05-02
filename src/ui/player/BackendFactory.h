@@ -5,7 +5,8 @@
 // Encapsulates the backend selection logic that was previously a
 // TANKOBAN_FORCE_MPV env var gate at VideoPlayer.cpp:190-199. Reads/writes
 // the persisted preference under QSettings key `player/videoBackend`
-// ("ffmpeg" | "mpv", default "ffmpeg" per Phase 0 §Q2).
+// ("ffmpeg" | "mpv", default "mpv" since MAKE_MPV_SOLO Task 11 cutover
+// 2026-05-02; previously "ffmpeg" per Phase 0 §Q2).
 //
 // Per-invocation explicit override (added 2026-04-30): VideosPage and
 // ShowView right-click menus emit "Play with ffmpeg" / "Play with mpv" as
@@ -32,7 +33,8 @@ public:
     // Precedence (highest wins):
     //   1. TANKOBAN_FORCE_MPV=1    → Mpv   (dev override)
     //   2. explicitOverride.value()→ as specified (per-click "Play with X")
-    //   3. QSettings player/videoBackend (default Ffmpeg per §Q2)
+    //   3. QSettings player/videoBackend (default Mpv since Task 11
+    //      cutover 2026-05-02; previously Ffmpeg per §Q2)
     //   4. !HAS_LIBMPV             → Ffmpeg (mpv backend not compiled in)
     static Type chooseFor(std::optional<Type> explicitOverride = std::nullopt);
 
