@@ -16,6 +16,9 @@
 #include "devtools/DevControlServer.h"
 
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QWidget>
+#include <QTimer>
 #include <QFrame>
 #include <QApplication>
 #include <QResizeEvent>
@@ -24,9 +27,12 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QIcon>
+#include <QEvent>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #endif
 
 // ── Page id constants ───────────────────────────────────────────────────────
@@ -41,6 +47,14 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     : QMainWindow(parent)
     , m_bridge(bridge)
 {
+    // FRAMELESS_CHROME_FIX 2026-05-01: drop OS title bar; chrome buttons
+    // (min/max/close) live in m_topBar's right edge. On Windows we keep
+    // WS_THICKFRAME (re-added in showEvent) and zero out WM_NCCALCSIZE so
+    // Aero snap / Win+Arrow / drag / double-click-max / right-click system
+    // menu all stay native via WM_NCHITTEST returning HTCAPTION on empty
+    // topbar zones.
+    setWindowFlag(Qt::FramelessWindowHint, true);
+
     setWindowTitle("Tankoban");
     // Set a sane default geometry centered on screen
     if (auto *screen = QApplication::primaryScreen()) {
@@ -98,6 +112,12 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     m_comicReader = new ComicReader(m_bridge, root);
     m_comicReader->hide();
     connect(m_comicReader, &ComicReader::closeRequested, this, &MainWindow::closeComicReader);
+    // PER_VIEW_CHROME_FIX 2026-05-02 P3 — chrome cluster signals routed to
+    // MainWindow chrome slots. closeRequested above is BACK (exit reader);
+    // chromeCloseRequested below is full app close.
+    connect(m_comicReader, &ComicReader::chromeMinimizeRequested,        this, &MainWindow::showMinimized);
+    connect(m_comicReader, &ComicReader::chromeMaximizeToggleRequested,  this, &MainWindow::onChromeMaximizeToggle);
+    connect(m_comicReader, &ComicReader::chromeCloseRequested,           this, &MainWindow::close);
     connect(m_comicReader, &ComicReader::fullscreenRequested, this, [this](bool enter) {
         if (enter) {
             m_wasMaximizedBeforeFullscreen = isMaximized();
@@ -114,6 +134,13 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     m_bookReader = new BookReader(m_bridge, root);
     m_bookReader->hide();
     connect(m_bookReader, &BookReader::closeRequested, this, &MainWindow::closeBookReader);
+    // PER_VIEW_CHROME_FIX 2026-05-02 P4 — chrome cluster signals routed to
+    // MainWindow chrome slots (mirrors comic-reader wiring; chrome Close
+    // closes the entire app via MainWindow::close, distinct from
+    // closeRequested above which is the BACK button → exit reader to lib).
+    connect(m_bookReader, &BookReader::chromeMinimizeRequested,        this, &MainWindow::showMinimized);
+    connect(m_bookReader, &BookReader::chromeMaximizeToggleRequested,  this, &MainWindow::onChromeMaximizeToggle);
+    connect(m_bookReader, &BookReader::chromeCloseRequested,           this, &MainWindow::close);
     connect(m_bookReader, &BookReader::fullscreenRequested, this, [this](bool enter) {
         if (enter) {
             m_wasMaximizedBeforeFullscreen = isMaximized();
@@ -131,6 +158,13 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     m_videoPlayer = new VideoPlayer(m_bridge, root);
     m_videoPlayer->hide();
     connect(m_videoPlayer, &VideoPlayer::closeRequested, this, &MainWindow::closeVideoPlayer);
+    // PER_VIEW_CHROME_FIX 2026-05-02 P2 — chrome cluster signals routed to
+    // MainWindow chrome slots (mirrors comic + book reader wiring).
+    // closeRequested above is BACK arrow (exit player → return to library);
+    // chromeCloseRequested below is full app close.
+    connect(m_videoPlayer, &VideoPlayer::chromeMinimizeRequested,        this, &MainWindow::showMinimized);
+    connect(m_videoPlayer, &VideoPlayer::chromeMaximizeToggleRequested,  this, &MainWindow::onChromeMaximizeToggle);
+    connect(m_videoPlayer, &VideoPlayer::chromeCloseRequested,           this, &MainWindow::close);
     connect(m_videoPlayer, &VideoPlayer::fullscreenRequested, this, [this](bool enter) {
         if (enter) {
             m_wasMaximizedBeforeFullscreen = isMaximized();
@@ -162,6 +196,9 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // Connect videos page to player
     if (auto *videos = m_pageStack->findChild<VideosPage*>()) {
         connect(videos, &VideosPage::playVideo, this, &MainWindow::openVideoPlayer);
+        // 2026-04-30 — direct-opener forward for the right-click entries.
+        connect(videos, &VideosPage::playVideoWithBackend,
+                this, &MainWindow::openVideoPlayerWithBackend);
         // Forward player progress to VideosPage for continue strip refresh
         connect(m_videoPlayer, &VideoPlayer::progressUpdated, videos, [videos]() {
             videos->refreshContinueOnly();
@@ -169,6 +206,23 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     }
 
     activatePage(PAGE_COMICS);
+
+    // FRAMELESS_CHROME_FIX 2026-05-01 — re-add WS_THICKFRAME / WS_MAXIMIZEBOX
+    // / WS_MINIMIZEBOX so Aero snap (drag-to-edge), Win+Arrow snap, taskbar
+    // hover thumbnails, and resize cursors stay native. Qt::FramelessWindow-
+    // Hint stripped these styles; without re-adding them WM_NCHITTEST + WM_-
+    // NCCALCSIZE alone won't bring snap back. winId() forces native HWND
+    // creation so SetWindowLong has a valid handle.
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd) {
+        LONG style = ::GetWindowLong(hwnd, GWL_STYLE);
+        ::SetWindowLong(hwnd, GWL_STYLE,
+            style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_CAPTION);
+        ::SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+#endif
 }
 
 // ── Resize ──────────────────────────────────────────────────────────────────
@@ -203,9 +257,23 @@ void MainWindow::buildTopBar()
     layout->setContentsMargins(14, 10, 14, 10);
     layout->setSpacing(12);
 
-    m_brandLabel = new QLabel("Tankoban", bar);
+    // ── Left slot (Brand label, left-aligned in a fixed-width container) ───
+    // FRAMELESS_CHROME_FIX 2026-05-01: structural counterweight. The right
+    // slot holds Theme + scan + add + chrome cluster, which is wider than
+    // the brand label alone. To keep nav horizontally centered on the
+    // window we wrap each side in its own slot and force leftSlot's width
+    // to mirror rightSlot's sizeHint() at the end of buildTopBar(). Robust
+    // to future button additions on either side — no magic numbers.
+    auto* leftSlot = new QWidget(bar);
+    leftSlot->setObjectName("TopBarLeftSlot");
+    auto* leftLayout = new QHBoxLayout(leftSlot);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+    m_brandLabel = new QLabel("Tankoban", leftSlot);
     m_brandLabel->setObjectName("Brand");
-    layout->addWidget(m_brandLabel);
+    leftLayout->addWidget(m_brandLabel);
+    leftLayout->addStretch(1);
+    layout->addWidget(leftSlot);
 
     layout->addStretch(1);
 
@@ -248,15 +316,21 @@ void MainWindow::buildTopBar()
     layout->addWidget(nav);
     layout->addStretch(1);
 
-    // Theme picker (mode toggle + palette swatch popover) — left of the
-    // library-action cluster (scan + add) per Hemanth 2026-04-25: theme is
-    // app-appearance, scan/add are library-data functions; group by intent.
-    // THEME_SYSTEM_FIX P2.
-    auto* themePicker = new ThemePicker(bar);
-    layout->addWidget(themePicker, 0, Qt::AlignVCenter);
+    // Right slot wraps Theme + scan + add + chrome cluster so its sizeHint
+    // can be mirrored onto leftSlot's fixed width (see end of buildTopBar).
+    auto* rightSlot = new QWidget(bar);
+    rightSlot->setObjectName("TopBarRightSlot");
+    auto* rightLayout = new QHBoxLayout(rightSlot);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(12);
 
-    // Rescan button (↻)
-    auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), bar);
+    // Theme picker (mode toggle): theme is app-appearance, scan/add are
+    // library-data; group by intent per Hemanth 2026-04-25.
+    auto* themePicker = new ThemePicker(rightSlot);
+    rightLayout->addWidget(themePicker, 0, Qt::AlignVCenter);
+
+    // Rescan button
+    auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), rightSlot);
     scanBtn->setObjectName("IconButton");
     scanBtn->setFixedSize(28, 24);
     scanBtn->setCursor(Qt::PointingHandCursor);
@@ -266,16 +340,51 @@ void MainWindow::buildTopBar()
         if (auto *b = m_pageStack->findChild<BooksPage*>())  b->triggerScan();
         if (auto *v = m_pageStack->findChild<VideosPage*>()) v->triggerScan();
     });
-    layout->addWidget(scanBtn, 0, Qt::AlignVCenter);
+    rightLayout->addWidget(scanBtn, 0, Qt::AlignVCenter);
 
     // Add folder button (+)
-    auto *addBtn = new QPushButton("+", bar);
+    auto *addBtn = new QPushButton("+", rightSlot);
     addBtn->setObjectName("IconButton");
     addBtn->setFixedSize(28, 24);
     addBtn->setCursor(Qt::PointingHandCursor);
     addBtn->setToolTip("Add root folder");
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::showRootFolders);
-    layout->addWidget(addBtn, 0, Qt::AlignVCenter);
+    rightLayout->addWidget(addBtn, 0, Qt::AlignVCenter);
+
+    // FRAMELESS_CHROME_FIX 2026-05-01: window-action cluster (min / max /
+    // close). 8-px gap separates library actions from window actions.
+    rightLayout->addSpacing(8);
+    auto makeChrome = [rightSlot](const char* objName, const QString& iconPath,
+                                  const QString& tip) {
+        auto* btn = new QPushButton(rightSlot);
+        btn->setObjectName(objName);
+        btn->setFixedSize(36, 24);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setIcon(QIcon(iconPath));
+        btn->setIconSize(QSize(16, 16));
+        btn->setToolTip(tip);
+        btn->setFocusPolicy(Qt::NoFocus);
+        return btn;
+    };
+    m_chromeMin   = makeChrome("ChromeMin",   ":/icons/chrome_min.svg",   "Minimize");
+    m_chromeMax   = makeChrome("ChromeMax",   ":/icons/chrome_max.svg",   "Maximize");
+    m_chromeClose = makeChrome("ChromeClose", ":/icons/chrome_close.svg", "Close");
+
+    connect(m_chromeMin,   &QPushButton::clicked, this, &MainWindow::showMinimized);
+    connect(m_chromeMax,   &QPushButton::clicked, this, &MainWindow::onChromeMaximizeToggle);
+    connect(m_chromeClose, &QPushButton::clicked, this, &MainWindow::close);
+
+    rightLayout->addWidget(m_chromeMin,   0, Qt::AlignVCenter);
+    rightLayout->addWidget(m_chromeMax,   0, Qt::AlignVCenter);
+    rightLayout->addWidget(m_chromeClose, 0, Qt::AlignVCenter);
+
+    layout->addWidget(rightSlot);
+
+    // Width-mirror: leftSlot fixed to rightSlot's preferred width once
+    // child widgets have published their sizeHints (next event-loop tick).
+    QTimer::singleShot(0, this, [leftSlot, rightSlot]() {
+        leftSlot->setFixedWidth(rightSlot->sizeHint().width());
+    });
 
     m_topBar = bar;
 }
@@ -557,6 +666,19 @@ void MainWindow::openVideoPlayer(const QString& filePath)
     m_videoPlayer->setFocus();
 }
 
+void MainWindow::openVideoPlayerWithBackend(const QString& filePath,
+                                              BackendFactory::Type backend)
+{
+    // 2026-04-30 — mirrors openVideoPlayer's body but passes the explicit
+    // backend through openFile's 6th param. VideoPlayer::openFile then runs
+    // switchBackendTo if the override differs from the live backend.
+    m_videoPlayer->openFile(filePath, {}, 0, 0.0, {}, backend);
+    m_videoPlayer->setGeometry(centralWidget()->rect());
+    m_videoPlayer->show();
+    m_videoPlayer->raise();
+    m_videoPlayer->setFocus();
+}
+
 void MainWindow::closeVideoPlayer()
 {
     // Stop playback (kills audio)
@@ -732,3 +854,172 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     return err("UNKNOWN_CMD",
         QStringLiteral("command '%1' not implemented in v1").arg(cmd));
 }
+
+// ── FRAMELESS_CHROME_FIX 2026-05-01 — chrome event plumbing ─────────────────
+//
+// Strategy: Qt::FramelessWindowHint strips the visible OS title bar; on
+// Windows we re-add WS_THICKFRAME via SetWindowLong so Aero snap, Win+Arrow
+// snap, taskbar previews, and resize cursors keep working natively. WM_NCCALC-
+// SIZE returns 0 to make the client area cover the full window (no reserved
+// title-bar strip), and WM_NCHITTEST returns HTCAPTION on empty topbar zones
+// so drag, double-click-maximize, and right-click system menu all fall out
+// for free without any Qt-side mouse plumbing.
+//
+// Reference: Microsoft "Custom title bar" Win11 guidance + the well-known
+// Edge / Notion / WinUI3 pattern.
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::WindowStateChange) {
+        updateMaxRestoreIcon();
+    }
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::updateMaxRestoreIcon()
+{
+    const bool isMax = isMaximized();
+    if (m_chromeMax) {
+        m_chromeMax->setIcon(QIcon(isMax ? ":/icons/chrome_restore.svg"
+                                         : ":/icons/chrome_max.svg"));
+        m_chromeMax->setToolTip(isMax ? "Restore" : "Maximize");
+    }
+    // PER_VIEW_CHROME_FIX 2026-05-02 — fan out to takeover surfaces so their
+    // chrome icons stay in sync with the underlying window state.
+    if (m_comicReader) m_comicReader->updateChromeMaxIcon(isMax);
+    if (m_bookReader)  m_bookReader->updateChromeMaxIcon(isMax);
+    if (m_videoPlayer) m_videoPlayer->updateChromeMaxIcon(isMax);
+}
+
+void MainWindow::onChromeMaximizeToggle()
+{
+    if (isMaximized()) {
+#ifdef Q_OS_WIN
+        // Win32 direct path. Qt's showNormal() leaves the saved
+        // normalGeometry equal to the maximized rect when the window was
+        // opened straight to maximized (no windowed history), so the
+        // restore is a visual no-op. SetWindowPlacement(.showCmd =
+        // SW_SHOWNORMAL, .rcNormalPosition = our centered default) tells
+        // Win32 directly to enter normal state at a specific rect — single
+        // synchronous call, no event-queue race.
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd) {
+            WINDOWPLACEMENT wp = {};
+            wp.length = sizeof(wp);
+            if (::GetWindowPlacement(hwnd, &wp)) {
+                if (auto* scr = screen()) {
+                    const QRect avail = scr->availableGeometry();
+                    const int normalW = wp.rcNormalPosition.right  - wp.rcNormalPosition.left;
+                    const int normalH = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
+                    const bool noWindowedHistory =
+                        normalW >= avail.width()  - 4 ||
+                        normalH >= avail.height() - 4 ||
+                        normalW <= 0 || normalH <= 0;
+                    if (noWindowedHistory) {
+                        const int w = qMin(1280, avail.width()  - 200);
+                        const int h = qMin(800,  avail.height() - 150);
+                        const int x = avail.x() + (avail.width()  - w) / 2;
+                        const int y = avail.y() + (avail.height() - h) / 2;
+                        wp.rcNormalPosition.left   = x;
+                        wp.rcNormalPosition.top    = y;
+                        wp.rcNormalPosition.right  = x + w;
+                        wp.rcNormalPosition.bottom = y + h;
+                    }
+                    wp.showCmd = SW_SHOWNORMAL;
+                    ::SetWindowPlacement(hwnd, &wp);
+                    return;
+                }
+            }
+        }
+#endif
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+#ifdef Q_OS_WIN
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    if (eventType != "windows_generic_MSG")
+        return QMainWindow::nativeEvent(eventType, message, result);
+
+    auto* msg = static_cast<MSG*>(message);
+
+    // ── WM_NCCALCSIZE ────────────────────────────────────────────────────────
+    // wParam=TRUE → lParam is NCCALCSIZE_PARAMS; rgrc[0] is the proposed
+    // window rect, which we leave alone so the client area covers the full
+    // window. We DO inset by the resize-frame thickness when maximized,
+    // otherwise the window extends past visible screen edges by the frame
+    // thickness (~7-9px) and content gets clipped.
+    if (msg->message == WM_NCCALCSIZE && msg->wParam == TRUE) {
+        auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+        if (::IsZoomed(msg->hwnd)) {
+            const int frameX  = ::GetSystemMetrics(SM_CXFRAME);
+            const int frameY  = ::GetSystemMetrics(SM_CYFRAME);
+            const int padding = ::GetSystemMetrics(SM_CXPADDEDBORDER);
+            params->rgrc[0].top    += frameY + padding;
+            params->rgrc[0].left   += frameX + padding;
+            params->rgrc[0].right  -= frameX + padding;
+            params->rgrc[0].bottom -= frameY + padding;
+        }
+        *result = 0;
+        return true;
+    }
+
+    // ── WM_NCHITTEST ─────────────────────────────────────────────────────────
+    // Edge zones return HT*BORDER so the OS draws resize cursors and handles
+    // drag-resize. The topbar's empty zones return HTCAPTION so drag,
+    // double-click-max, and right-click system menu work natively.
+    if (msg->message == WM_NCHITTEST) {
+        const QPoint screenPt(GET_X_LPARAM(msg->lParam),
+                              GET_Y_LPARAM(msg->lParam));
+        const QPoint local = mapFromGlobal(screenPt);
+
+        const int margin = 6;  // resize-zone thickness
+        const QRect r = rect();
+        const bool onLeft   = local.x() <  margin;
+        const bool onRight  = local.x() >= r.width()  - margin;
+        const bool onTop    = local.y() <  margin;
+        const bool onBottom = local.y() >= r.height() - margin;
+        if (onTop && onLeft)         { *result = HTTOPLEFT;     return true; }
+        if (onTop && onRight)        { *result = HTTOPRIGHT;    return true; }
+        if (onBottom && onLeft)      { *result = HTBOTTOMLEFT;  return true; }
+        if (onBottom && onRight)     { *result = HTBOTTOMRIGHT; return true; }
+        if (onLeft)                  { *result = HTLEFT;        return true; }
+        if (onRight)                 { *result = HTRIGHT;       return true; }
+        if (onTop)                   { *result = HTTOP;         return true; }
+        if (onBottom)                { *result = HTBOTTOM;      return true; }
+
+        // Caption zone — empty regions of m_topBar become drag-handle.
+        if (m_topBar) {
+            const QPoint topbarPt = m_topBar->mapFrom(this, local);
+            if (m_topBar->rect().contains(topbarPt)) {
+                QWidget* hit = m_topBar->childAt(topbarPt);
+                // Bare topbar, brand label, slot containers, and TopNav frame
+                // all pass through as caption (drag / double-click-max /
+                // right-click system menu work natively on these zones).
+                // Buttons and the actual nav button widgets sit on top and
+                // receive their own clicks because childAt returns the
+                // deepest visible child and lands on them directly.
+                const QString hitName = hit ? hit->objectName() : QString();
+                const bool isCaption =
+                    !hit ||
+                    hit == m_brandLabel ||
+                    hitName == QLatin1String("TopNav") ||
+                    hitName == QLatin1String("TopBarLeftSlot") ||
+                    hitName == QLatin1String("TopBarRightSlot");
+                if (isCaption) {
+                    *result = HTCAPTION;
+                    return true;
+                }
+            }
+        }
+
+        *result = HTCLIENT;
+        return true;
+    }
+
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif

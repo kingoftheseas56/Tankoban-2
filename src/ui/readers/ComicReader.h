@@ -132,9 +132,22 @@ public:
                   const QStringList& seriesCbzList = {},
                   const QString& seriesName = {});
 
+    // PER_VIEW_CHROME_FIX 2026-05-02 — chrome Max icon swap, called by
+    // MainWindow on WindowStateChange so the comic reader's chrome reflects
+    // the live max/restore state of the underlying window.
+    void updateChromeMaxIcon(bool isMaximized);
+
 signals:
     void closeRequested();
     void fullscreenRequested(bool enter);
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 — top-right chrome cluster routed to
+    // MainWindow's chrome slots. closeRequested above is the BACK button
+    // (exit reader → return to library); chromeCloseRequested closes the
+    // entire app via MainWindow::close, distinct semantics.
+    void chromeMinimizeRequested();
+    void chromeMaximizeToggleRequested();
+    void chromeCloseRequested();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -383,6 +396,15 @@ private:
     SmoothScrollArea* m_scrollArea = nullptr;
     QLabel*      m_imageLabel = nullptr;
     QWidget*     m_toolbar    = nullptr;
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 — top-right floating cluster of min /
+    // max-toggle / close buttons. Visibility synced with m_toolbar via
+    // showToolbar / hideToolbar. Gated off in fullscreen.
+    QFrame*      m_chromeOverlay  = nullptr;
+    QPushButton* m_chromeMinBtn   = nullptr;
+    QPushButton* m_chromeMaxBtn   = nullptr;
+    QPushButton* m_chromeCloseBtn = nullptr;
+
     QPushButton* m_backBtn    = nullptr;
     QPushButton* m_prevBtn    = nullptr;
     QPushButton* m_nextBtn    = nullptr;

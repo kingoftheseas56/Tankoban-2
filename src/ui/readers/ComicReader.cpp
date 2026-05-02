@@ -414,8 +414,10 @@ ComicReader::ComicReader(CoreBridge* bridge, QWidget* parent)
     m_cursorTimer.setSingleShot(true);
     m_cursorTimer.setInterval(3000);
     connect(&m_cursorTimer, &QTimer::timeout, this, [this]() {
-        // Don't hide cursor when hovering over toolbar or its children
+        // Don't hide cursor when hovering over toolbar / chrome / their children
         if (m_toolbar->isVisible() && m_toolbar->underMouse())
+            return;
+        if (m_chromeOverlay && m_chromeOverlay->isVisible() && m_chromeOverlay->underMouse())
             return;
         setCursor(Qt::BlankCursor);
     });
@@ -427,6 +429,7 @@ ComicReader::ComicReader(CoreBridge* bridge, QWidget* parent)
         if (!m_toolbar->isVisible()) return;
         if (m_scrubBar && m_scrubBar->isDragging()) { m_hudAutoHideTimer.start(); return; } // A5: scrub freeze
         if (m_toolbar->underMouse()) { m_hudAutoHideTimer.start(); return; }
+        if (m_chromeOverlay && m_chromeOverlay->underMouse()) { m_hudAutoHideTimer.start(); return; }
         if (isAnyOverlayOpen()) { m_hudAutoHideTimer.start(); return; }
         hideToolbar();
     });
@@ -504,6 +507,65 @@ void ComicReader::buildUI()
         "  border-top: 1px solid rgba(255, 255, 255, 0.10);"
         "}"
     );
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 — top-right floating chrome cluster.
+    // Glass-look (per spec §4.1: floating-over-canvas treatment) — low-alpha
+    // frosted-white tint reads as "of the canvas" against manga pages
+    // without competing for attention with content the user is reading.
+    // Visibility synced with m_toolbar via showToolbar / hideToolbar; hidden
+    // in fullscreen. Three buttons emit signals routed in MainWindow to its
+    // chrome slots (showMinimized / onChromeMaximizeToggle / close).
+    m_chromeOverlay = new QFrame(this);
+    m_chromeOverlay->setObjectName("ComicChromeOverlay");
+    m_chromeOverlay->setAttribute(Qt::WA_StyledBackground, true);
+    // Dark-glass treatment (revised 2026-05-02 mid-P3 after Hemanth flagged
+    // light-tinted backdrop as "barely visible" on white manga pages —
+    // light-on-light failed). Dark backdrop reads on both manga (light)
+    // and future video (dark) canvases. Icons in light gray (#c6c6c6 from
+    // existing SVG stroke) get clear contrast against the dark plate.
+    m_chromeOverlay->setStyleSheet(
+        "QFrame#ComicChromeOverlay {"
+        "  background: rgba(20, 20, 24, 0.62);"
+        "  border: 1px solid rgba(255, 255, 255, 0.10);"
+        "  border-radius: 6px;"
+        "}"
+        "QPushButton#ComicChromeBtn,"
+        "QPushButton#ComicChromeCloseBtn {"
+        "  background: transparent; border: none;"
+        "  border-radius: 4px; padding: 4px;"
+        "}"
+        "QPushButton#ComicChromeBtn:hover {"
+        "  background: rgba(255, 255, 255, 0.16);"
+        "}"
+        "QPushButton#ComicChromeCloseBtn:hover {"
+        "  background: rgba(232, 17, 35, 0.85);"
+        "}"
+    );
+    auto* chromeLay = new QHBoxLayout(m_chromeOverlay);
+    chromeLay->setContentsMargins(4, 4, 4, 4);
+    chromeLay->setSpacing(2);
+    auto makeChromeBtn = [this](const QString& iconPath, const QString& tip,
+                                const QString& objName) {
+        auto* b = new QPushButton(m_chromeOverlay);
+        b->setObjectName(objName);
+        b->setIcon(QIcon(iconPath));
+        b->setIconSize(QSize(16, 16));
+        b->setFixedSize(32, 28);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setCursor(Qt::ArrowCursor);
+        b->setToolTip(tip);
+        return b;
+    };
+    m_chromeMinBtn   = makeChromeBtn(":/icons/chrome_min.svg",   "Minimize",       "ComicChromeBtn");
+    m_chromeMaxBtn   = makeChromeBtn(":/icons/chrome_max.svg",   "Maximize",       "ComicChromeBtn");
+    m_chromeCloseBtn = makeChromeBtn(":/icons/chrome_close.svg", "Close Tankoban", "ComicChromeCloseBtn");
+    chromeLay->addWidget(m_chromeMinBtn);
+    chromeLay->addWidget(m_chromeMaxBtn);
+    chromeLay->addWidget(m_chromeCloseBtn);
+    connect(m_chromeMinBtn,   &QPushButton::clicked, this, &ComicReader::chromeMinimizeRequested);
+    connect(m_chromeMaxBtn,   &QPushButton::clicked, this, &ComicReader::chromeMaximizeToggleRequested);
+    connect(m_chromeCloseBtn, &QPushButton::clicked, this, &ComicReader::chromeCloseRequested);
+    m_chromeOverlay->hide();
 
     auto* tbVBox = new QVBoxLayout(m_toolbar);
     tbVBox->setContentsMargins(16, 6, 16, 0);
@@ -2211,10 +2273,26 @@ void ComicReader::onStripScrollChanged()
 
 // ── Toolbar ─────────────────────────────────────────────────────────────────
 
+void ComicReader::updateChromeMaxIcon(bool isMaximized)
+{
+    if (!m_chromeMaxBtn) return;
+    m_chromeMaxBtn->setIcon(QIcon(isMaximized
+                                  ? ":/icons/chrome_restore.svg"
+                                  : ":/icons/chrome_max.svg"));
+    m_chromeMaxBtn->setToolTip(isMaximized ? "Restore" : "Maximize");
+}
+
 void ComicReader::showToolbar()
 {
     m_toolbar->show(); m_toolbar->raise();
     if (m_toastLabel) m_toastLabel->raise();
+    // PER_VIEW_CHROME_FIX 2026-05-02 — chrome cluster rides the toolbar's
+    // show/hide lifecycle. Hidden in fullscreen (matches Windows convention
+    // of no chrome over fullscreen content).
+    if (m_chromeOverlay && !window()->isFullScreen()) {
+        m_chromeOverlay->show();
+        m_chromeOverlay->raise();
+    }
     // Restore cursor when toolbar appears
     setCursor(Qt::ArrowCursor);
     m_hudAutoHideTimer.start();
@@ -2223,6 +2301,7 @@ void ComicReader::showToolbar()
 void ComicReader::hideToolbar()
 {
     m_toolbar->hide();
+    if (m_chromeOverlay) m_chromeOverlay->hide();
     m_hudAutoHideTimer.stop();
 }
 
@@ -3529,6 +3608,19 @@ void ComicReader::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
     m_scrollArea->setGeometry(0, 0, width(), height());
     m_toolbar->setGeometry(0, height() - m_toolbar->height(), width(), m_toolbar->height());
+
+    // PER_VIEW_CHROME_FIX 2026-05-02 — chrome overlay tracks the canvas's
+    // top-right corner with 12px inset. Fullscreen hides chrome (matches
+    // Windows convention; also caught here in case fullscreen toggle bypassed
+    // the showToolbar gate).
+    if (m_chromeOverlay) {
+        if (window()->isFullScreen()) {
+            m_chromeOverlay->hide();
+        } else {
+            m_chromeOverlay->resize(m_chromeOverlay->sizeHint());
+            m_chromeOverlay->move(width() - m_chromeOverlay->width() - 12, 12);
+        }
+    }
     if (m_endOverlay && m_endOverlay->isVisible())
         m_endOverlay->setGeometry(0, 0, width(), height());
     if (m_volOverlay && m_volOverlay->isVisible())
