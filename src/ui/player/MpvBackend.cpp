@@ -18,6 +18,10 @@
 
 #include <mpv/client.h>
 
+extern "C" {
+#include <libplacebo/colorspace.h>
+}
+
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
@@ -891,6 +895,12 @@ void MpvBackend::onWakeup()
                 }
 
                 emit mediaInfo(mi);
+
+                // MAKE_MPV_BEAT_FFMPEG Task 6 step 5 — push HDR metadata to renderer
+                // so libplacebo can tone-map correctly on the new RGBA16F interop path
+                // (Task 6 step 3 + step 4 set up the texture format + mpv passthrough;
+                // this call delivers the missing third leg — actual color metadata).
+                pushSourceColorSpaceToRenderer();
             }
             break;
 
@@ -1615,6 +1625,59 @@ int MpvBackend::sendSetToneMapping(const QString& algorithm, bool peakDetect)
     // on the ffmpeg sidecar side (gpu_renderer.cpp:234).
     setFlag(m_mpv, "hdr-compute-peak", peakDetect);
     return nextSeq();
+}
+
+void MpvBackend::pushSourceColorSpaceToRenderer()
+{
+    if (!m_mpv || !m_libplaceboRenderer) return;
+
+    pl_color_space csp{};
+
+    // ── color primaries ──────────────────────────────────────────
+    char* primStr = nullptr;
+    mpv_get_property(m_mpv, "video-params/primaries", MPV_FORMAT_STRING, &primStr);
+    if (primStr) {
+        QString p = QString::fromUtf8(primStr);
+        mpv_free(primStr);
+        if      (p == QLatin1String("bt.2020"))    csp.primaries = PL_COLOR_PRIM_BT_2020;
+        else if (p == QLatin1String("bt.709"))     csp.primaries = PL_COLOR_PRIM_BT_709;
+        else if (p == QLatin1String("bt.601-525")) csp.primaries = PL_COLOR_PRIM_BT_601_525;
+        else if (p == QLatin1String("bt.601-625")) csp.primaries = PL_COLOR_PRIM_BT_601_625;
+        else if (p == QLatin1String("dci-p3"))     csp.primaries = PL_COLOR_PRIM_DCI_P3;
+        else if (p == QLatin1String("display-p3")) csp.primaries = PL_COLOR_PRIM_DISPLAY_P3;
+        else                                        csp.primaries = PL_COLOR_PRIM_UNKNOWN;
+    }
+
+    // ── transfer function (gamma curve) ─────────────────────────
+    char* gammaStr = nullptr;
+    mpv_get_property(m_mpv, "video-params/gamma", MPV_FORMAT_STRING, &gammaStr);
+    if (gammaStr) {
+        QString g = QString::fromUtf8(gammaStr);
+        mpv_free(gammaStr);
+        if      (g == QLatin1String("pq"))      csp.transfer = PL_COLOR_TRC_PQ;
+        else if (g == QLatin1String("hlg"))     csp.transfer = PL_COLOR_TRC_HLG;
+        else if (g == QLatin1String("bt.1886")) csp.transfer = PL_COLOR_TRC_BT_1886;
+        else if (g == QLatin1String("srgb"))    csp.transfer = PL_COLOR_TRC_SRGB;
+        else if (g == QLatin1String("linear"))  csp.transfer = PL_COLOR_TRC_LINEAR;
+        else                                     csp.transfer = PL_COLOR_TRC_UNKNOWN;
+    }
+
+    // ── peak luminance (HDR metadata) ────────────────────────────
+    // mpv reports "sig-peak" as a relative multiplier of nominal peak (1.0
+    // = SDR reference white = ~203 nits). Scale to nits for libplacebo's
+    // hdr.max_luma field, which expects absolute candela/m².
+    double peak = 0.0;
+    mpv_get_property(m_mpv, "video-params/sig-peak", MPV_FORMAT_DOUBLE, &peak);
+    if (peak > 0.0) {
+        csp.hdr.max_luma = static_cast<float>(peak * PL_COLOR_SDR_WHITE);
+    }
+
+    m_libplaceboRenderer->setSourceColorSpace(csp);
+
+    mpvLog(QStringLiteral("[task6-hdr] pushed source color space: prim=%1 trc=%2 peak_nits=%3")
+        .arg(static_cast<int>(csp.primaries))
+        .arg(static_cast<int>(csp.transfer))
+        .arg(static_cast<double>(csp.hdr.max_luma), 0, 'f', 1));
 }
 
 int MpvBackend::sendSetZeroCopyActive(bool /*active*/)

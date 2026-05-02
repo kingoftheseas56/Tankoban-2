@@ -51,7 +51,7 @@ extern "C" {
 #define GL_LAYOUT_SHADER_READ_ONLY_EXT 0x9591
 #endif
 #ifndef GL_RGBA8
-#define GL_RGBA8 0x8058
+#define GL_RGBA8 0x8058  // pre-Task-6-step-3 format; no longer used in this file — kept for reference / fallback probes
 #endif
 #ifndef GL_RGBA16F
 #define GL_RGBA16F 0x881A
@@ -478,7 +478,7 @@ struct MpvLibplaceboRenderer::State {
             gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             // MAKE_MPV_BEAT_FFMPEG Task 6 step 3 — must match Vulkan-side pl_find_fmt
-            // above (PL_FMT_FLOAT 16/16/4 maps to GL_RGBA16F).
+            // in renderToSwapchain (PL_FMT_FLOAT 16/16/4 maps to GL_RGBA16F).
             fns.texStorageMem2D(GL_TEXTURE_2D, 1, GL_RGBA16F,
                                 slot.width, slot.height,
                                 slot.glMemory,
@@ -546,6 +546,14 @@ struct MpvLibplaceboRenderer::State {
             }
         }
     }
+
+    // MAKE_MPV_BEAT_FFMPEG Task 6 step 5 — cached source color space pushed
+    // from MpvBackend after probe completes. renderToSwapchain reads this
+    // when constructing pl_frame src.color. Mutex-protected because GUI
+    // thread writes (after probe) and render-tick thread reads.
+    mutable std::mutex colorMutex;
+    pl_color_space sourceColor{};   // PL_COLOR_PRIM_UNKNOWN by default (zero-init)
+    bool sourceColorValid = false;
 
     bool renderOneSlot(int slotIndex, QOpenGLExtraFunctions* gl, GlInteropFns& fns)
     {
@@ -679,6 +687,18 @@ void MpvLibplaceboRenderer::detachMpv()
     m_state->mpv = nullptr;
     m_state->contextReady.store(false, std::memory_order_release);
     m_state->hasRenderedFrame.store(false, std::memory_order_release);
+}
+
+void MpvLibplaceboRenderer::setSourceColorSpace(const pl_color_space& csp)
+{
+    if (!m_state) return;
+    std::lock_guard<std::mutex> lock(m_state->colorMutex);
+    m_state->sourceColor = csp;
+    m_state->sourceColorValid = (csp.primaries != PL_COLOR_PRIM_UNKNOWN);
+    mprLog(QStringLiteral("setSourceColorSpace: prim=%1 trc=%2 valid=%3")
+        .arg(static_cast<int>(csp.primaries))
+        .arg(static_cast<int>(csp.transfer))
+        .arg(m_state->sourceColorValid));
 }
 
 void MpvLibplaceboRenderer::setRenderScheduler(RenderScheduler scheduler)
@@ -989,7 +1009,28 @@ bool MpvLibplaceboRenderer::renderToSwapchain(pl_log log,
     // linearization headroom).
     src.repr.bits.sample_depth = 16;
     src.repr.bits.color_depth = 16;
-    src.color = pl_color_space_srgb;
+    // Note: src.repr.bits.color_depth = 16 (set in Task 6 step 3) describes
+    // the texture's storage precision, not the source signal bit depth. For
+    // HDR PQ the source signal is 10-bit but stored in our 16-bit float
+    // texture; libplacebo uses bits.color_depth for quantization decisions.
+    // 16 leaves headroom; per-frame bit-depth override deferred (mpv's
+    // video-params/colorspace_bit_depth could supply actual source depth
+    // if precision matters in future).
+    // MAKE_MPV_BEAT_FFMPEG Task 6 step 5 (2026-05-02) — apply HDR metadata
+    // bridged from mpv via setSourceColorSpace. If MpvBackend has populated
+    // this (after probe found color primaries), use the bridged value so
+    // libplacebo knows the source is BT.2020+PQ (HDR10) or BT.2020+HLG
+    // (HLG broadcast) or BT.709+sRGB (SDR — fallback). Without this, all
+    // frames look like SDR sRGB regardless of actual HDR metadata.
+    // REPLACES the former hardcoded `src.color = pl_color_space_srgb` fallback.
+    {
+        std::lock_guard<std::mutex> lock(m_state->colorMutex);
+        if (m_state->sourceColorValid) {
+            src.color = m_state->sourceColor;
+        } else {
+            src.color = pl_color_space_srgb;  // fallback — Task 3.5 default
+        }
+    }
     src.crop.x0 = 0.0f;
     src.crop.y0 = 0.0f;
     src.crop.x1 = static_cast<float>(width);

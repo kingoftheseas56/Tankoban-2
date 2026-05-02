@@ -146,6 +146,12 @@ private:
     int  nextSeq();
     void emitFirstFrameStub();
 
+    // MAKE_MPV_BEAT_FFMPEG Task 6 step 5 — extract HDR color metadata from
+    // mpv (video-params/primaries + gamma + sig-peak) after probe completes
+    // + push to MpvLibplaceboRenderer so libplacebo gets correct
+    // pl_frame.color on each render tick.
+    void pushSourceColorSpaceToRenderer();
+
     // MAKE_MPV_SOLO Task 10 (2026-05-01) — telemetry plumbing.
     // startTelemetry: captures one-time identity (hwdec/vo/ao/codecs/file)
     //   right after mpv_initialize succeeds and starts the 5s sample timer.
