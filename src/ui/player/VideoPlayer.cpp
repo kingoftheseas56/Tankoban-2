@@ -2154,12 +2154,47 @@ void VideoPlayer::buildUI()
         "border: 1px solid rgba(255,255,255,0.12);"
     );
     m_timeBubble->hide();
+
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — re-apply backend-aware
+    // overlay style now that all transient HUD widgets exist (m_volumeHud
+    // at line 1924, m_toastHud at line 2103, etc.). The earlier call at
+    // line 1510 styled m_controlBar correctly but its fan-out null-checks
+    // skipped the not-yet-created HUDs. Idempotent on m_controlBar; sets
+    // setBackdropOpaque(mpvNativeSurface) on m_volumeHud + m_toastHud.
+    applySurfaceOverlayStyle();
 }
 
 // ── Controls ────────────────────────────────────────────────────────────────
 
 void VideoPlayer::togglePause()
 {
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — defensive m_paused resync
+    // before deciding which path. Hemanth-reported pause/un-pause asymmetric
+    // bug (2026-05-03 Task 7 smoke): keyPress dispatched action='toggle_pause'
+    // 7 times but state stuck paused. Hypothesis: m_inStallPause flag
+    // (MpvBackend.cpp:1143) gets stuck-true under timing races with
+    // paused-for-cache events on local files, suppressing all subsequent
+    // stateChanged emits — VideoPlayer's m_paused never updates past the
+    // first pause, all subsequent togglePause calls go down the same branch
+    // (one-way no-op). Bug did not reproduce on second launch but root
+    // cause unconfirmed.
+    //
+    // Fix shape: query mpv's actual pause property directly via the
+    // MpvBackend cast and resync m_paused BEFORE deciding sendPause vs
+    // sendResume. Even if stateChanged emit got suppressed by m_inStallPause,
+    // this re-check forces correct path selection. Only applies on mpv
+    // backend; ffmpeg/SidecarProcess path uses a different state-machine
+    // and doesn't have this bug shape.
+#ifdef HAS_LIBMPV
+    if (auto* mpvb = qobject_cast<MpvBackend*>(m_backend)) {
+        const bool actuallyPaused = mpvb->isPausedSnapshot();
+        if (actuallyPaused != m_paused) {
+            m_paused = actuallyPaused;
+            updatePlayPauseIcon();  // mirror onStateChanged side-effect
+        }
+    }
+#endif
+
     if (m_paused) {
         m_backend->sendResume();
         m_centerFlash->flash(SVG_PLAY);
@@ -2181,8 +2216,17 @@ void VideoPlayer::toggleMute()
 {
     m_muted = !m_muted;
     m_backend->sendSetMute(m_muted);
-    m_volumeHud->showVolume(m_volume, m_muted);
-    m_toastHud->showToast(m_muted ? "Muted" : "Unmuted");
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — VolumeHud abandoned in
+    // favor of ToastHud-style text popup per Hemanth directive ("just the
+    // text, like, how the pop up for speed is"). VolumeHud's alpha-aware
+    // pill paint timing on the mpv backend produced library bleed-through
+    // during the fade window even after multiple paint-restructure
+    // attempts; the simpler text toast pattern (already proven on Speed)
+    // sidesteps the issue entirely. m_volumeHud stays as dead member;
+    // full delete is a cleanup follow-up.
+    m_toastHud->showToast(m_muted
+        ? QStringLiteral("Volume: %1%% (muted)").arg(m_volume)
+        : QStringLiteral("Volume: %1%%").arg(m_volume));
 }
 
 void VideoPlayer::speedUp()
@@ -2884,7 +2928,11 @@ void VideoPlayer::adjustVolume(int delta)
         m_backend->sendSetMute(false);
     }
     m_backend->sendSetVolume(m_volume / 100.0);  // 150 → 1.5, etc.
-    m_volumeHud->showVolume(m_volume, m_muted);
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — see toggleMute above for
+    // rationale: VolumeHud abandoned, ToastHud-style text popup replaces it.
+    m_toastHud->showToast(m_muted
+        ? QStringLiteral("Volume: %1%% (muted)").arg(m_volume)
+        : QStringLiteral("Volume: %1%%").arg(m_volume));
 }
 
 void VideoPlayer::updatePlayPauseIcon()
@@ -4406,4 +4454,18 @@ void VideoPlayer::applySurfaceOverlayStyle()
             "  background: %1;"
             "  border-top: 1px solid rgba(255, 255, 255, 0.08);"
             "}").arg(background));
+
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — fan-out the same backend-
+    // aware-opaque pattern Codex established for VideoControlBar in Task 2
+    // to ToastHud (transient text-toast widget). VolumeHud was abandoned
+    // mid-Task-8 in favor of routing volume display through ToastHud per
+    // Hemanth directive (the VolumeHud fade-window paint timing on the
+    // mpv backend produced library bleed-through that multiple paint-
+    // restructure attempts couldn't cleanly fix; ToastHud's QGraphicsOpacity
+    // Effect-driven fade behaves differently and Hemanth confirmed it works
+    // for the Speed toast). CenterFlash explicitly EXCLUDED — Hemanth had
+    // Codex remove its black-blob backdrop in the 2026-04-25 minimalist
+    // redesign; re-adding any backdrop (even mpv-conditional) would
+    // conflict with that user-direction.
+    if (m_toastHud) m_toastHud->setBackdropOpaque(mpvNativeSurface);
 }

@@ -20,15 +20,10 @@ ToastHud::ToastHud(QWidget* parent)
     m_label->setWordWrap(false);
     m_label->setTextInteractionFlags(Qt::NoTextInteraction);
     m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    m_label->setStyleSheet(
-        "background: rgba(10,10,10,217);"
-        "color: rgba(245,245,245,250);"
-        "border: 1px solid rgba(255,255,255,31);"
-        "border-radius: 6px;"
-        "padding: 8px 14px;"
-        "font-size: 12px;"
-        "font-weight: 600;"
-    );
+    // MAKE_MPV_BEAT_FFMPEG Task 8 — backdrop alpha refactored to a method
+    // call (setBackdropOpaque) so VideoPlayer can flip it backend-aware.
+    // Default state is the pre-Task-8 ffmpeg-friendly alpha=217 styling.
+    setBackdropOpaque(false);
 
     m_effect = new QGraphicsOpacityEffect(this);
     m_effect->setOpacity(0.0);
@@ -71,10 +66,25 @@ void ToastHud::showToast(const QString& message)
     adjustSize();
     m_label->move(0, 0);
 
-    // Position top-right of parent, 12px inset
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — moved from top-right →
+    // top-left → center-bottom-above-HUD. Iteration trail:
+    //   (1) Top-right (original): meshed with chrome cluster Min/Max/Close
+    //       added in PER_VIEW_CHROME_FIX P2 (2026-05-02).
+    //   (2) Top-left: meshed with the Tankoban app-text on MainWindow's top
+    //       bar (separate regression: top bar shouldn't be visible in video
+    //       mode but is, per Hemanth 2026-05-03; tracked as Task 8 carry-
+    //       forward).
+    //   (3) Center-bottom-above-HUD (current): mirrors the original
+    //       VolumeHud placement, known-clear region — sits above the opaque
+    //       VideoControlBar (Codex Task 2 made it #0a0a0a on mpv) and below
+    //       the video content. Auto-hides cleanly with the rest of the HUD
+    //       lifecycle since both share the same parent.
     if (p) {
-        int x = p->width() - width() - 12;
-        move(x, 12);
+        QWidget* bar = p->findChild<QWidget*>("VideoControlBar");
+        const int barH = (bar && bar->isVisible()) ? bar->sizeHint().height() : 0;
+        const int x = (p->width() - width()) / 2;
+        const int y = p->height() - barH - height() - 18;
+        move(qMax(0, x), qMax(0, y));
     }
 
     // Fade in
@@ -98,4 +108,22 @@ void ToastHud::startFadeOut()
     m_fadeAnim->setStartValue(m_effect->opacity());
     m_fadeAnim->setEndValue(0.0);
     m_fadeAnim->start();
+}
+
+void ToastHud::setBackdropOpaque(bool opaque)
+{
+    m_backdropOpaque = opaque;
+    // MAKE_MPV_BEAT_FFMPEG Task 8 — alpha 217 for ffmpeg/FrameCanvas path
+    // (composites cleanly), 255 (fully opaque) for mpv path (Vulkan child
+    // HWND below means alpha<255 lets library page bleed through).
+    const char* alpha = opaque ? "255" : "217";
+    m_label->setStyleSheet(QStringLiteral(
+        "background: rgba(10,10,10,%1);"
+        "color: rgba(245,245,245,250);"
+        "border: 1px solid rgba(255,255,255,31);"
+        "border-radius: 6px;"
+        "padding: 8px 14px;"
+        "font-size: 12px;"
+        "font-weight: 600;"
+    ).arg(QString::fromUtf8(alpha)));
 }

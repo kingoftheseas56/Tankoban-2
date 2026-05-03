@@ -63,6 +63,15 @@ public:
     int sendOpen(const QString& filePath, double startSeconds = 0.0) override;
     int sendPause() override;
     int sendResume() override;
+
+    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — non-virtual snapshot of
+    // mpv's current pause state, queried lock-free from the cached
+    // m_isPaused field that handlePropertyChange updates. Used by
+    // VideoPlayer::togglePause for defensive resync against the
+    // m_inStallPause-suppressed-stateChanged bug class. Not on
+    // IPlayerBackend (mpv-specific defensive sync; ffmpeg path doesn't
+    // have this bug shape).
+    bool isPausedSnapshot() const { return m_isPaused; }
     int sendStallPause() override;
     int sendStallResume() override;
     int sendSeek(double positionSec) override;
