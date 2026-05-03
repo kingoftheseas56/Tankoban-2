@@ -530,16 +530,19 @@ if(LIBMPV_INCLUDE_DIR AND LIBMPV_LIBRARY AND EXISTS "${LIBMPV_ROOT}/bin/libmpv-2
         src/ui/player/MpvBackend.cpp
         src/ui/player/MpvLibplaceboRenderer.h
         src/ui/player/MpvLibplaceboRenderer.cpp
-        src/ui/player/MpvVideoWidget.h
-        src/ui/player/MpvVideoWidget.cpp
-        # MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — Vulkan-backed widget
-        # that replaces MpvVideoWidget at construction. Old QOpenGLWidget
-        # source files stay in the target list during the arc so emergency
-        # revert is a one-line VideoPlayer.cpp change. Task 9 deletes them.
+        # MAKE_MPV_BEAT_FFMPEG Task 9 (2026-05-03) — MpvVideoWidget.{h,cpp}
+        # deleted. The QOpenGLWidget renderer was replaced by MpvVulkanWidget +
+        # MpvLibplaceboRenderer (Tasks 2 + 3 + 3.5) which run mpv's OpenGL
+        # render API on a dedicated render thread and composite via libplacebo
+        # into a Vulkan swapchain. The old widget had no remaining call sites
+        # post-Task-3.5 swap; emergency-revert window closed after Task 7
+        # subtitle smoke verified the new pipeline end-to-end.
         src/ui/player/MpvVulkanWidget.h
         src/ui/player/MpvVulkanWidget.cpp
     )
-    # MpvVideoWidget calls glGetString directly for renderer/vendor logging.
+    # MpvLibplaceboRenderer's render thread uses OpenGL via QOpenGLContext
+    # for mpv's render API (MPV_RENDER_API_TYPE_OPENGL); calls glGetString
+    # for renderer/vendor logging + GL_EXT_memory_object_win32 interop.
     target_link_libraries(Tankoban PRIVATE opengl32)
     set(TANKOBAN_HAS_LIBMPV TRUE)
 else()
