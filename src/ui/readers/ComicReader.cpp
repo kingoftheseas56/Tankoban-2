@@ -609,12 +609,17 @@ void ComicReader::buildUI()
 
     // Symbol-only icon button (Phase 1 redesign 2026-04-25): 40x40 click target,
     // 22px SVG inside, white-stroke line idiom matching Netflix/YouTube HUD scale.
+    // Qt::NoFocus mirrors the makeChromeBtn precedent at line 554 — without it, a
+    // QPushButton defaults to StrongFocus, and Qt's QPushButton arrow-key handling
+    // walks focus to the next button in the focus chain, so arrow keys never reach
+    // ComicReader::keyPressEvent. Keyboard scrolling fix 2026-05-03.
     auto makeIconBtn = [this](const QString& iconPath, int size = 40) {
         auto* btn = new QPushButton(m_toolbar);
         btn->setIcon(QIcon(iconPath));
         btn->setIconSize(QSize(22, 22));
         btn->setFixedSize(size, size);
         btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::NoFocus);
         btn->setStyleSheet(
             "QPushButton { background: rgba(255,255,255,0.06);"
             "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
@@ -626,10 +631,12 @@ void ComicReader::buildUI()
 
     // State-data button (page-width % readout, parallel to page-counter label).
     // Kept as text per Hemanth's "no name labels" rule — % is data, not a label.
+    // Qt::NoFocus per makeIconBtn comment above.
     auto makeDataBtn = [this](const QString& text, int w = 56) {
         auto* btn = new QPushButton(text, m_toolbar);
         btn->setFixedSize(w, 40);
         btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::NoFocus);
         btn->setStyleSheet(
             "QPushButton { color: rgba(255,255,255,0.78); background: rgba(255,255,255,0.06);"
             "  border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;"
@@ -973,6 +980,34 @@ void ComicReader::openBook(const QString& cbzPath,
 
     applySeriesSettings();  // D11: restore portrait width, mode, coupling phase — must precede button visibility
     m_hudPinned = (m_readerMode == ReaderMode::DoublePage); // A2: DoublePage = pinned HUD
+
+    // First-volume init fix 2026-05-03 — applySeriesSettings flips
+    // m_readerMode but does not build/tear-down the renderer. Without this
+    // sync, opening a fresh-session volume that defaults to ScrollStrip
+    // renders a stuck single page on m_imageLabel: m_isScrollStrip is the
+    // macro (m_readerMode == ScrollStrip) so it's true, but m_stripCanvas
+    // is still nullptr, so showPage's strip branch (line ~1252) falls
+    // through to the DoublePage decode path. Width-slider changes also
+    // no-op because setPortraitWidthPct's strip branch needs m_stripCanvas.
+    // Mirror cycleReaderMode's DoublePage⇄ScrollStrip plumbing here.
+    if (m_readerMode == ReaderMode::ScrollStrip) {
+        if (!m_stripCanvas) {
+            m_imageLabel->hide();
+            buildScrollStrip();
+        } else {
+            // Subsequent volume in same session — refresh strip slot count
+            // for the new volume's pages + drop stale scaled pixmaps from
+            // the prior volume. (Pre-fix this drift was silent because the
+            // user opened scroll volumes that happened to match.)
+            m_stripCanvas->setPageCount(m_pageNames.size());
+            m_stripCanvas->invalidateScaledCache();
+        }
+    } else if (m_stripCanvas) {
+        // DoublePage now, but a ScrollStrip canvas leaked in from the
+        // prior volume — tear it down and re-show the single-page label.
+        clearScrollStrip();
+        m_imageLabel->show();
+    }
 
     // Update toolbar visibility for mode (after applySeriesSettings so restored mode is reflected)
     m_portraitBtn->setVisible(!m_isDoublePage);
@@ -1967,8 +2002,44 @@ void ComicReader::setPortraitWidthPct(int pct)
     m_portraitWidthPct = pct;
     m_portraitBtn->setText(QString::number(pct) + "%");
     if (m_isScrollStrip) {
+        // Width change re-flows page Y offsets (portraits scale, spreads
+        // stay full-viewport-width). Raw scroll value lands on a different
+        // page after reflow — anchor on the page-at-center + within-page
+        // fraction so the user's reading position is preserved.
+        auto* vbar = m_scrollArea->verticalScrollBar();
+        const int viewH = qMax(1, m_scrollArea->viewport()->height());
+        int anchorPage = -1;
+        double anchorFracInPage = 0.0;
+        if (m_stripCanvas && vbar) {
+            anchorPage = m_stripCanvas->pageAtCenter(viewH);
+            if (anchorPage >= 0 && anchorPage < m_pageNames.size()) {
+                const double pageTop = m_stripCanvas->pageTopY(anchorPage);
+                const double pageBot = (anchorPage + 1 < m_pageNames.size())
+                    ? m_stripCanvas->pageTopY(anchorPage + 1)
+                    : m_stripCanvas->totalHeight();
+                const double pageH = qMax(1.0, pageBot - pageTop);
+                const double centerY = double(vbar->value()) + viewH / 2.0;
+                anchorFracInPage = qBound(0.0, (centerY - pageTop) / pageH, 1.0);
+            }
+        }
+
         reflowScrollStrip();
         refreshVisibleStripPages();
+
+        if (anchorPage >= 0 && anchorPage < m_pageNames.size()
+            && m_stripCanvas && vbar) {
+            const double newPageTop = m_stripCanvas->pageTopY(anchorPage);
+            const double newPageBot = (anchorPage + 1 < m_pageNames.size())
+                ? m_stripCanvas->pageTopY(anchorPage + 1)
+                : m_stripCanvas->totalHeight();
+            const double newPageH = qMax(1.0, newPageBot - newPageTop);
+            const double newCenterY = newPageTop + anchorFracInPage * newPageH;
+            const int target = qBound(vbar->minimum(),
+                                      int(newCenterY - viewH / 2.0),
+                                      vbar->maximum());
+            vbar->setValue(target);
+            m_scrollArea->syncExternalScroll(target);
+        }
     } else {
         m_displayCachePage = -1;
         displayCurrentPage();
@@ -2267,8 +2338,23 @@ void ComicReader::onStripScrollChanged()
         updatePageLabel();
     }
 
-    // Coalesced refresh via 16ms timer
-    m_stripRefreshTimer.start();
+    // Page-loading seamlessness fix 2026-05-03 — pre-fix this called
+    // m_stripRefreshTimer.start(), a single-shot 16ms timer that restarts
+    // on every scroll event. SmoothScrollArea drains at 60Hz (16ms cadence
+    // per SmoothScrollArea.h DRAIN_INTERVAL_MS), so during continuous
+    // scroll the timer was reset before it could ever fire, and
+    // refreshVisibleStripPages — which queues decodes for the prefetch
+    // zone via requestDecode — never ran while the user was actively
+    // scrolling. Pages came into view as blank slots until the user
+    // paused. Tankoban-Max prefetches every animation frame in its strip
+    // render loop (state_machine.js:310-313 "Prefetch the next page when
+    // we're nearing the end of the current page"); calling refresh
+    // directly here matches that cadence. The function is cheap: small-N
+    // QMap lookups + non-blocking requestDecode + hasScaled() skip on
+    // already-scaled pages. The m_stripRefreshTimer backstop remains for
+    // non-scroll dimension-hint reflows (decode-pool dimensionsReady
+    // signal can shift slot heights without firing the scrollbar).
+    refreshVisibleStripPages();
 }
 
 // ── Toolbar ─────────────────────────────────────────────────────────────────
@@ -3275,6 +3361,17 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
             auto* vbar = m_scrollArea->verticalScrollBar();
             if (vbar && vbar->maximum() > 0) { vbar->setValue(vbar->value() - 80); }
             else prevPage();
+        } else if (m_isScrollStrip) {
+            // Keyboard-scroll fix 2026-05-03 — scroll-strip Up/Down was
+            // unhandled, falling through to default no-op. Match DoublePage's
+            // 80px step for consistency; mirrors Tankoban-Max's
+            // input_keyboard.js:480-491 manual-scroll arrow handler in spirit.
+            // Right/Left already wired via the case at line 3312-3313 to
+            // nextPage/prevPage which page-aligned-jumps in strip mode.
+            if (auto* vbar = m_scrollArea->verticalScrollBar()) {
+                vbar->setValue(vbar->value() - 80);
+                m_scrollArea->syncExternalScroll(vbar->value());
+            }
         }
         break;
     case Qt::Key_Down:
@@ -3282,6 +3379,11 @@ void ComicReader::keyPressEvent(QKeyEvent* event)
             auto* vbar = m_scrollArea->verticalScrollBar();
             if (vbar && vbar->maximum() > 0) { vbar->setValue(vbar->value() + 80); }
             else nextPage();
+        } else if (m_isScrollStrip) {
+            if (auto* vbar = m_scrollArea->verticalScrollBar()) {
+                vbar->setValue(vbar->value() + 80);
+                m_scrollArea->syncExternalScroll(vbar->value());
+            }
         }
         break;
     default: QWidget::keyPressEvent(event);
