@@ -38,6 +38,13 @@ FrameCanvas::FrameCanvas(QWidget* parent)
     setMouseTracking(true);
 
 #ifdef _WIN32
+    // MAKE_FFMPEG_BEAT_MPV Task 4 — derive default CSV dump path with a
+    // session timestamp so each ffmpeg run's pacing trace lands as its
+    // own file (vs overwriting on every relaunch). Lives under out/ next
+    // to the other telemetry logs. Auto-dumped in the destructor.
+    m_vsyncDumpPath = QStringLiteral("out/frame_pacing_%1.csv")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+
     m_renderTimer.setTimerType(Qt::PreciseTimer);
     m_renderTimer.setInterval(16);
     connect(&m_renderTimer, &QTimer::timeout, this, &FrameCanvas::renderFrame);
@@ -56,6 +63,22 @@ FrameCanvas::~FrameCanvas()
 {
 #ifdef _WIN32
     m_renderTimer.stop();
+
+    // MAKE_FFMPEG_BEAT_MPV Task 4 — auto-dump pacing CSV on close.
+    // Mirrors the mpv telemetry session_end behavior: each ffmpeg run
+    // produces a complete per-frame trace at out/frame_pacing_*.csv
+    // without anyone needing to flip a flag mid-run. Skipped if no
+    // samples were collected (e.g., FrameCanvas was constructed but
+    // never rendered — preview-only consumers).
+    if (m_vsyncLoggingOn && m_vsyncLogger.sampleCount() > 0
+        && !m_vsyncDumpPath.isEmpty()) {
+        const int written = m_vsyncLogger.dumpToCsv(m_vsyncDumpPath);
+        DebugLogBuffer::instance().info(
+            "frame-canvas",
+            QString::asprintf("[PACING] auto-dump samples=%d path=%s",
+                              written, m_vsyncDumpPath.toUtf8().constData()));
+    }
+
     tearDownD3D();
 #endif
     // Delete the overlay reader after tearDownD3D so it outlives any
@@ -729,7 +752,8 @@ void FrameCanvas::renderFrame()
             m_vsyncLogger.recordSampleFromSwapChain(
                 nullptr, 0.0, /*frameSkipped=*/true, ema, vel,
                 /*chosenFrameId=*/0, /*fallbackUsed=*/false,
-                /*producerDropsSinceLast=*/0, /*consumerLateMs=*/0.0);
+                /*producerDropsSinceLast=*/0, /*consumerLateMs=*/0.0,
+                /*zeroCopyActive=*/(m_importedD3DTex != nullptr));
         }
         return;
     }
@@ -833,10 +857,34 @@ void FrameCanvas::renderFrame()
         // the SHM-boundary overflow-drop metrics (both 0 if no consume).
         const double ema = m_syncClock ? m_syncClock->latencyEmaMs() : 0.0;
         const double vel = m_syncClock ? m_syncClock->getClockVelocity() : 1.0;
+        const bool zeroCopy = (m_importedD3DTex != nullptr);
         m_vsyncLogger.recordSampleFromSwapChain(
             m_swapChain, frameLatencyMs, /*frameSkipped=*/false, ema, vel,
             m_lastChosenFrameId, m_lastFallbackUsed,
-            m_lastProducerDrops, m_lastConsumerLateMs);
+            m_lastProducerDrops, m_lastConsumerLateMs, zeroCopy);
+
+        // MAKE_FFMPEG_BEAT_MPV Task 4 — accumulate 1 Hz [PACING] window stats.
+        // Counts presented (non-skipped) frames; folds in zero-copy fraction,
+        // fallback fraction, producer-drops sum, chosen-id-gap count
+        // (id sequence non-monotone or repeated → stale-frame indicator),
+        // and consumer-late distribution. Flushed alongside [PERF] block.
+        ++m_pacingFrameSamples;
+        if (zeroCopy) ++m_pacingZeroCopyCount;
+        if (m_lastFallbackUsed) ++m_pacingFallbackCount;
+        m_pacingProducerDropsSum += m_lastProducerDrops;
+        if (m_lastChosenFrameId != 0) {
+            ++m_pacingChosenIdSamples;
+            // gap = expected next - actual; >0 means producer skipped some
+            // frames, ==0 means perfect monotone, <0 means we re-picked the
+            // same or older frame (stale-frame repeat — the "repeats stale
+            // frames" symptom from the audit's plain-English ask).
+            if (m_pacingPrevChosenId != 0
+                && m_lastChosenFrameId <= m_pacingPrevChosenId) {
+                ++m_pacingChosenIdGapCount;
+            }
+            m_pacingPrevChosenId = m_lastChosenFrameId;
+        }
+        m_pacingConsumerLateMs.push_back(m_lastConsumerLateMs);
     }
 
     // PLAYER_PERF_FIX Batch 1.1 — always-on 1 Hz [PERF] diagnostic. Lives
@@ -918,11 +966,54 @@ void FrameCanvas::renderFrame()
                 static_cast<unsigned long long>(skippedDelta),
                 dxgiPresentsQueued, dxgiVsyncIntervalUs));
 
+        // MAKE_FFMPEG_BEAT_MPV Task 4 — paired [PACING] line. Reads the
+        // window's pacing accumulators (incremented per non-skipped tick)
+        // and emits a plain-English-readable summary so an agent can scan
+        // the log linearly and tell which of {late frames, stale repeats,
+        // dropped producer frames, fell off zero-copy, fallback path}
+        // is firing. Percentile helper mirrors the [PERF] block above.
+        if (m_pacingFrameSamples > 0) {
+            const double zcPct = m_pacingZeroCopyCount * 100.0
+                                 / static_cast<double>(m_pacingFrameSamples);
+            const double fbPct = m_pacingChosenIdSamples > 0
+                                 ? m_pacingFallbackCount * 100.0
+                                       / static_cast<double>(m_pacingChosenIdSamples)
+                                 : 0.0;
+            double clP50 = 0.0;
+            double clP99 = 0.0;
+            if (!m_pacingConsumerLateMs.empty()) {
+                clP50 = pct(m_pacingConsumerLateMs, 0.50);
+                clP99 = pct(m_pacingConsumerLateMs, 0.99);
+            }
+            DebugLogBuffer::instance().info(
+                "frame-canvas",
+                QString::asprintf(
+                    "[PACING] frames=%llu zero_copy=%.1f%% fallback=%.1f%% "
+                    "producer_drops=%llu stale_repeats=%llu "
+                    "consumer_late_ms p50/p99=%.2f/%.2f",
+                    static_cast<unsigned long long>(m_pacingFrameSamples),
+                    zcPct, fbPct,
+                    static_cast<unsigned long long>(m_pacingProducerDropsSum),
+                    static_cast<unsigned long long>(m_pacingChosenIdGapCount),
+                    clP50, clP99));
+        }
+
         m_perfTimerIntervalMs.clear();
         m_perfDrawMs.clear();
         m_perfPresentMs.clear();
         m_perfSkippedPresentsBase = m_framesSkippedTotal;
         m_perfWindowTimer.restart();
+
+        // Reset pacing accumulators for the next 1 Hz window. m_pacingPrevChosenId
+        // is intentionally NOT reset — chosen-id monotonicity is a session-wide
+        // invariant; resetting it would mask gaps that straddle a window boundary.
+        m_pacingFrameSamples = 0;
+        m_pacingZeroCopyCount = 0;
+        m_pacingFallbackCount = 0;
+        m_pacingProducerDropsSum = 0;
+        m_pacingChosenIdGapCount = 0;
+        m_pacingChosenIdSamples = 0;
+        m_pacingConsumerLateMs.clear();
     }
 }
 

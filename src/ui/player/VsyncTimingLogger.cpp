@@ -96,7 +96,8 @@ void VsyncTimingLogger::recordSampleFromSwapChain(IDXGISwapChain1* swapChain,
                                                   quint64 chosenFrameId,
                                                   bool fallbackUsed,
                                                   quint32 producerDropsSinceLast,
-                                                  double consumerLateMs)
+                                                  double consumerLateMs,
+                                                  bool zeroCopyActive)
 {
     static QElapsedTimer timer;
     if (!timer.isValid()) timer.start();
@@ -116,6 +117,7 @@ void VsyncTimingLogger::recordSampleFromSwapChain(IDXGISwapChain1* swapChain,
     s.fallbackUsed = fallbackUsed;
     s.producerDropsSinceLast = producerDropsSinceLast;
     s.consumerLateMs = consumerLateMs;
+    s.zeroCopyActive = zeroCopyActive;
 
     s.dxgiValid = false;
     if (swapChain) {
@@ -150,7 +152,7 @@ int VsyncTimingLogger::dumpToCsv(const QString& path)
     out << "wall_ns,qt_interval_ns,dxgi_valid,present_count,present_refresh,"
            "sync_qpc_time,sync_refresh,frame_latency_ms,frame_skipped,"
            "latency_ema_ms,clock_velocity,chosen_frame_id,fallback_used,"
-           "producer_drops_since_last,consumer_late_ms\n";
+           "producer_drops_since_last,consumer_late_ms,zero_copy_active\n";
 
     int count = sampleCount();
     int start = wrapped_ ? head_ : 0;
@@ -172,7 +174,8 @@ int VsyncTimingLogger::dumpToCsv(const QString& path)
             << s.chosenFrameId << ','
             << (s.fallbackUsed ? 1 : 0) << ','
             << s.producerDropsSinceLast << ','
-            << s.consumerLateMs << '\n';
+            << s.consumerLateMs << ','
+            << (s.zeroCopyActive ? 1 : 0) << '\n';
         ++written;
     }
 

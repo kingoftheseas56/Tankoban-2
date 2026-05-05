@@ -66,6 +66,14 @@ public:
     // within readBestForClock tolerance. Agent 6 verifies: 60fps on 60Hz
     // healthy system → both near zero; GPU stall → drops burst; startup/
     // seek → brief negative consumer late values.
+    //
+    // zeroCopyActive (MAKE_FFMPEG_BEAT_MPV Task 4): true when this tick
+    // rendered from the imported D3D11 shared texture (Holy Grail
+    // zero-copy path). False when the SHM/CPU path was active. Lets
+    // post-mortem CSV analysis distinguish "stutter on the fast path" vs
+    // "stutter because we fell off the fast path" — the audit's O5 / P1
+    // ambiguity. Read directly from FrameCanvas's m_importedD3DTex
+    // pointer at sample time.
 #ifdef _WIN32
     void recordSampleFromSwapChain(IDXGISwapChain1* swapChain,
                                    double frameLatencyMs = 0.0,
@@ -75,7 +83,8 @@ public:
                                    quint64 chosenFrameId = 0,
                                    bool fallbackUsed = false,
                                    quint32 producerDropsSinceLast = 0,
-                                   double consumerLateMs = 0.0);
+                                   double consumerLateMs = 0.0,
+                                   bool zeroCopyActive = false);
 #endif
 
     // Dump all currently-buffered samples to a CSV file. Resets the ring.
@@ -106,6 +115,7 @@ private:
         bool    fallbackUsed;     // Batch 2.1 — readLatest fallback path taken
         quint32 producerDropsSinceLast;  // Batch 2.2 — frameIds sidecar produced that we never saw
         double  consumerLateMs;   // Batch 2.2 — (clock - ptsUs) ms for consumed frame
+        bool    zeroCopyActive;   // MAKE_FFMPEG_BEAT_MPV Task 4 — true if rendered from imported D3D11 shared texture this tick
     };
 
     std::vector<Sample> ring_;

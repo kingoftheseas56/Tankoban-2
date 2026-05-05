@@ -304,6 +304,11 @@ private:
     // / dxgiValid=false on non-Win); the actual GetFrameStatistics call is
     // gated inside _WIN32 in renderFrame.
     VsyncTimingLogger         m_vsyncLogger;
+    // MAKE_FFMPEG_BEAT_MPV Task 4 — currently FALSE per the 2026-05-04 ~17:58pm
+    // perceptual-cost finding on UHD 620 under load. Briefly flipped TRUE
+    // 2026-05-05 ~10:25am to capture backend-swap-pollution evidence
+    // (frame_pacing_20260505_102803.csv); reverted afterward. Re-enable only
+    // via env var (TANKOBAN_FFMPEG_PACING=1) per the carry-forward debt.
     bool                      m_vsyncLoggingOn = false;
     QString                   m_vsyncDumpPath;
 
@@ -397,6 +402,25 @@ private:
     quint64                   m_previousConsumedFrameId = 0;
     quint32                   m_lastProducerDrops       = 0;
     double                    m_lastConsumerLateMs      = 0.0;
+
+    // MAKE_FFMPEG_BEAT_MPV Task 4 — 1 Hz [PACING] diagnostic accumulators,
+    // paired with the existing [PERF] block. Flushed at the same window
+    // boundary so a single timestamped pair of log lines tells the
+    // smoothness story in plain English without needing the offline CSV.
+    // Counters cumulate within a window; consumer-late samples retained
+    // for percentile. zero_copy_active and fallback_used are sample-counts
+    // because the goal is "what fraction of presented frames were on the
+    // fast path" and "what fraction of consumed frames fell through to
+    // readLatest". skipped is captured directly from m_framesSkippedTotal
+    // delta to mirror the existing [PERF] skipped column.
+    quint64                   m_pacingFrameSamples       = 0;
+    quint64                   m_pacingZeroCopyCount      = 0;
+    quint64                   m_pacingFallbackCount      = 0;
+    quint64                   m_pacingProducerDropsSum   = 0;
+    quint64                   m_pacingChosenIdGapCount   = 0;
+    quint64                   m_pacingPrevChosenId       = 0;
+    quint64                   m_pacingChosenIdSamples    = 0;
+    std::vector<double>       m_pacingConsumerLateMs;
 
     // Phase 5 — pending-import slot. attachD3D11Texture (any thread) writes
     // these; processPendingImport (GPU thread, inside drawTexturedQuad)
