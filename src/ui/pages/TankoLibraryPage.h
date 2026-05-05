@@ -33,7 +33,7 @@ class TankoLibraryPage : public QWidget
     Q_OBJECT
 
 public:
-    // `client` is the shared TorrentClient (owned by MainWindow / SourcesPage).
+    // `client` is the shared TorrentClient (owned by MainWindow).
     // Optional for backward compat; when nullptr, Audiobooks-tab Download
     // fails honestly with "TorrentClient not wired" rather than silently.
     // Required for the Audiobooks-tab magnet-handoff path (M2 of ABB TODO).

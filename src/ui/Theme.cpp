@@ -428,6 +428,63 @@ QPushButton#SidebarAction:hover {
     border-color: __BORDER_HI__;
 }
 
+/* ── Sources sidebar drawer (off-canvas, OLED black, mode-agnostic) ── */
+
+QFrame#SidebarDrawer {
+    background: #000000;
+    border-right: 1px solid rgba(255,255,255,0.08);
+}
+
+QLabel#SidebarSectionHeader {
+    color: rgba(255,255,255,0.55);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    padding: 8px 4px;
+    background: transparent;
+}
+
+QPushButton#SidebarItem {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: rgba(255,255,255,0.90);
+    text-align: left;
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QPushButton#SidebarItem:hover {
+    background: rgba(255,255,255,0.06);
+}
+
+QPushButton#SidebarItem[active="true"] {
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.15);
+}
+
+/* Hamburger button: topbar-bound, theme-aware ink color */
+
+QPushButton#HamburgerButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0px;
+    min-width: 28px;  max-width: 28px;
+    min-height: 24px; max-height: 24px;
+    color: rgba(__INK_RGB__,0.78);
+}
+
+QPushButton#HamburgerButton:hover {
+    background: rgba(__INK_RGB__,0.10);
+    border-color: __BORDER_HI__;
+}
+
+QPushButton#HamburgerButton:disabled {
+    color: rgba(__INK_RGB__,0.30);
+}
+
 /* ── Tile cards ── */
 
 QFrame#TileCard {
