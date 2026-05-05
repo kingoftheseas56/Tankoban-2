@@ -732,11 +732,23 @@ void VideoDecoder::decode_thread_func(
             }
 
             if (sub_renderer_->bitmap_subtitles_active()) {
+                static bool logged_bitmap_sub_path = false;
+                if (!logged_bitmap_sub_path) {
+                    std::fprintf(stderr, "subtitle-dispatch: bitmap path ov=%dx%d\n", ov_w, ov_h);
+                    std::fflush(stderr);
+                    logged_bitmap_sub_path = true;
+                }
                 static thread_local std::vector<SubtitleRenderer::SubOverlayBitmap> tiles;
                 sub_renderer_->render_to_bitmaps(pts_ms, tiles);
                 SubtitleRenderer::blend_into_frame(
                     tiles, overlay_frame.data(), ov_w, ov_h, ov_w * 4);
             } else {
+                static bool logged_text_sub_path = false;
+                if (!logged_text_sub_path) {
+                    std::fprintf(stderr, "subtitle-dispatch: text path ov=%dx%d\n", ov_w, ov_h);
+                    std::fflush(stderr);
+                    logged_text_sub_path = true;
+                }
                 sub_renderer_->render_blend(
                     overlay_frame.data(), ov_w, ov_h, ov_w * 4, pts_ms);
             }

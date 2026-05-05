@@ -6,6 +6,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -43,7 +44,18 @@ private:
 static FILE* sub_log() {
     return nullptr;
 }
-#define SUB_LOG(...) do { (void)0; } while(0)
+static bool subtitle_diag_enabled() {
+    static const bool enabled = []() {
+        const char* explicit_diag = std::getenv("TANKOBAN_SUBTITLE_DIAG");
+        if (explicit_diag && explicit_diag[0] != '\0' && std::strcmp(explicit_diag, "0") != 0) {
+            return true;
+        }
+        const char* sidecar_debug = std::getenv("TANKOBAN_SIDECAR_DEBUG");
+        return sidecar_debug && sidecar_debug[0] != '\0' && std::strcmp(sidecar_debug, "0") != 0;
+    }();
+    return enabled;
+}
+#define SUB_LOG(...) do { if (subtitle_diag_enabled()) { std::fprintf(stderr, __VA_ARGS__); std::fflush(stderr); } } while(0)
 
 namespace {
 struct FitRect {
@@ -281,19 +293,67 @@ void SubtitleRenderer::render_thread_func() {
                             // \pos events move with their companions).
                             int min_top = INT_MAX;
                             int max_bottom = 0;
+                            int visual_min_top = INT_MAX;
+                            int visual_max_bottom = 0;
+                            int n_images = 0;
                             for (ASS_Image* it = images; it; it = it->next) {
                                 if (it->w == 0 || it->h == 0) continue;
+                                ++n_images;
                                 if (it->dst_y < min_top) min_top = it->dst_y;
                                 const int b = it->dst_y + it->h;
                                 if (b > max_bottom) max_bottom = b;
+
+                                const uint8_t a_base = static_cast<uint8_t>(
+                                    255 - (it->color & 0xFF));
+                                if (a_base == 0 || !it->bitmap) continue;
+                                for (int y = 0; y < it->h; ++y) {
+                                    const uint8_t* src_row = it->bitmap + y * it->stride;
+                                    bool row_visible = false;
+                                    for (int x = 0; x < it->w; ++x) {
+                                        if (src_row[x] != 0) {
+                                            row_visible = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!row_visible) continue;
+
+                                    const int top = it->dst_y + y;
+                                    const int bottom = top + 1;
+                                    if (top < visual_min_top) visual_min_top = top;
+                                    if (bottom > visual_max_bottom) visual_max_bottom = bottom;
+                                }
                             }
                             if (max_bottom > 0 && video_rect_h_ > 0
                                 && max_bottom > min_top) {
-                                const int sub_h = max_bottom - min_top;
+                                const bool has_visual_bounds =
+                                    visual_max_bottom > 0
+                                    && visual_min_top != INT_MAX
+                                    && visual_max_bottom > visual_min_top;
+                                const int anchor_top =
+                                    has_visual_bounds ? visual_min_top : min_top;
+                                const int anchor_bottom =
+                                    has_visual_bounds ? visual_max_bottom : max_bottom;
+                                const int sub_h = anchor_bottom - anchor_top;
                                 const int avail = std::max(0, video_rect_h_ - sub_h);
                                 const int target_top =
                                     video_rect_y_ + (sub_pos_pct * avail) / 100;
-                                y_shift = target_top - min_top;
+                                y_shift = target_top - anchor_top;
+
+                                static int64_t last_force_log_ms = -5000;
+                                if (changed || (render_time - last_force_log_ms >= 2000)) {
+                                    SUB_LOG("force-pos: pct=%d video_rect=(y=%d h=%d w=%d) frame_h=%d "
+                                            "ass_image_count=%d min_top=%d max_bottom=%d sub_h=%d "
+                                            "avail=%d target_top=%d y_shift=%d "
+                                            "visual_min_top=%d visual_max_bottom=%d visual_h=%d anchor=%s\n",
+                                        sub_pos_pct, video_rect_y_, video_rect_h_, video_rect_w_, frame_h_,
+                                        n_images, min_top, max_bottom, sub_h,
+                                            avail, target_top, y_shift,
+                                            has_visual_bounds ? visual_min_top : -1,
+                                            has_visual_bounds ? visual_max_bottom : -1,
+                                            has_visual_bounds ? (visual_max_bottom - visual_min_top) : -1,
+                                            has_visual_bounds ? "alpha" : "image");
+                                    last_force_log_ms = render_time;
+                                }
                             }
                         }
                         // Standard mode: y_shift stays 0; libass owns
@@ -827,6 +887,58 @@ void SubtitleRenderer::render_to_bitmaps(int64_t pts_ms,
             if (t < rect.start_ms) continue;
             if (rect.end_ms != INT64_MAX && t >= rect.end_ms) continue;
             out.push_back(map_pgs_rect_to_canvas(rect));
+        }
+
+        const PositionMode mode =
+            position_mode_.load(std::memory_order_relaxed);
+        const int sub_pos_pct =
+            sub_position_pct_.load(std::memory_order_relaxed);
+        if (mode == PositionMode::Force && video_rect_h_ > 0 && !out.empty()) {
+            int visual_min_top = INT_MAX;
+            int visual_max_bottom = 0;
+            for (const auto& tile : out) {
+                if (tile.bgra.empty() || tile.w <= 0 || tile.h <= 0) continue;
+                for (int y = 0; y < tile.h; ++y) {
+                    bool row_visible = false;
+                    const size_t row_base = static_cast<size_t>(y) * tile.w * 4;
+                    for (int x = 0; x < tile.w; ++x) {
+                        if (tile.bgra[row_base + static_cast<size_t>(x) * 4 + 3] != 0) {
+                            row_visible = true;
+                            break;
+                        }
+                    }
+                    if (!row_visible) continue;
+
+                    const int top = tile.y + y;
+                    const int bottom = top + 1;
+                    if (top < visual_min_top) visual_min_top = top;
+                    if (bottom > visual_max_bottom) visual_max_bottom = bottom;
+                }
+            }
+
+            if (visual_max_bottom > 0
+                && visual_min_top != INT_MAX
+                && visual_max_bottom > visual_min_top) {
+                const int visual_h = visual_max_bottom - visual_min_top;
+                const int avail = std::max(0, video_rect_h_ - visual_h);
+                const int target_top =
+                    video_rect_y_ + (std::clamp(sub_pos_pct, 0, 100) * avail) / 100;
+                const int y_shift = target_top - visual_min_top;
+                for (auto& tile : out) {
+                    tile.y += y_shift;
+                }
+
+                static int64_t last_pgs_force_log_ms = -5000;
+                if (t - last_pgs_force_log_ms >= 2000) {
+                    SUB_LOG("pgs-force-pos: pct=%d video_rect=(y=%d h=%d w=%d) frame_h=%d "
+                            "tile_count=%zu visual_min_top=%d visual_max_bottom=%d visual_h=%d "
+                            "avail=%d target_top=%d y_shift=%d\n",
+                            sub_pos_pct, video_rect_y_, video_rect_h_, video_rect_w_, frame_h_,
+                            out.size(), visual_min_top, visual_max_bottom, visual_h,
+                            avail, target_top, y_shift);
+                    last_pgs_force_log_ms = t;
+                }
+            }
         }
         return;
     }
