@@ -1,15 +1,6 @@
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/KeyBindings.h"
-#include "ui/player/BackendFactory.h"
 #include "ui/player/SidecarProcess.h"
-#ifdef HAS_LIBMPV
-#include "ui/player/MpvBackend.h"
-// MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — MpvVulkanWidget (QOpenGLWidget,
-// OpenGL render path) replaced by MpvVulkanWidget (native HWND, Vulkan +
-// libplacebo). Old header kept ifdef-around-able for emergency revert
-// during Task 2 smoke; deleted entirely in Task 9 cleanup.
-#include "ui/player/MpvVulkanWidget.h"
-#endif
 #include "ui/player/ShmFrameReader.h"
 #include "ui/player/FrameCanvas.h"
 #include "ui/player/VolumeHud.h"
@@ -188,15 +179,10 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_seekFwdIcon  = iconFromSvg(SVG_SEEK_FWD);
 
     m_keys    = new KeyBindings();
-    // MPV_RENDER_API_INTEGRATION P7 2026-04-30 — backend selection via
-    // persisted preference + dev-only TANKOBAN_FORCE_MPV env var (now
-    // wrapped inside BackendFactory).
-    // Apply-on-next-launch semantics: VideoPlayer is constructed once per
-    // Tankoban session, so right-click preference changes via VideosPage
-    // take effect on next launch (per AskUserQuestion 2026-04-30
-    // ratification — keeps current playback unchanged, no mid-session churn).
-    m_currentBackendType = BackendFactory::chooseFor();
-    m_backend = BackendFactory::create(m_currentBackendType, this);
+    // MPV_CUTOVER 2026-05-05 — single backend (ffmpeg sidecar). Direct
+    // construction; the BackendFactory abstraction was removed when the
+    // dual-backend support was cut.
+    m_backend = new SidecarProcess(this);
     m_reader  = new ShmFrameReader();
 
     buildUI();
@@ -244,9 +230,8 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_showStats = QSettings("Tankoban", "Tankoban")
         .value("player/showStats", false).toBool();
 
-    // 2026-04-30 — non-backend timers stay in the ctor; backend signals
-    // (ready, firstFrame, timeUpdate, etc.) all live in wireBackendSignals
-    // so a mid-session backend swap (switchBackendTo) can rewire them.
+    // Non-backend timers in the ctor; backend signals (ready, firstFrame,
+    // timeUpdate, etc.) all live in wireBackendSignals.
     m_sidecarRestartTimer.setSingleShot(true);
     connect(&m_sidecarRestartTimer, &QTimer::timeout, this, &VideoPlayer::restartSidecar);
 
@@ -277,23 +262,9 @@ VideoPlayer::~VideoPlayer()
 void VideoPlayer::openFile(const QString& filePath,
                             const QStringList& playlist, int playlistIndex,
                             double startPositionSec,
-                            const QString& displayTitle,
-                            std::optional<BackendFactory::Type> explicitBackend)
+                            const QString& displayTitle)
 {
     debugLog("[VideoPlayer] openFile: " + filePath);
-
-    // 2026-04-30 Phase 1.A — per-open backend reselection.
-    // MAKE_MPV_SOLO Task 2 (2026-05-01) — §Q4 stream-mode lock removed; streams
-    // now honor the saved preference and explicit override the same way library
-    // files do. chooseFor honors the precedence:
-    //   1. TANKOBAN_FORCE_MPV=1 dev override
-    //   2. explicitBackend (right-click "Play with X" override)
-    //   3. saved QSettings preference
-    // Same-backend is a no-op fast path inside switchBackendTo.
-    const auto wantBackend = BackendFactory::chooseFor(explicitBackend);
-    if (wantBackend != m_currentBackendType) {
-        switchBackendTo(wantBackend);
-    }
 
     // VIDEO_PLAYER_FIX Batch 4.2 — record user intent in the recents list
     // before any side effects. Crash-recovery restart (SidecarProcess
@@ -930,18 +901,23 @@ void VideoPlayer::onSidecarReady()
         m_subPositionPct = qBound(0, subPos, 100);
         if (m_subPositionPct != 100)
             m_backend->sendSetSubtitlePosition(m_subPositionPct);
-        // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — push the persisted
-        // position policy mode. Sidecar + mpv backend both default to
-        // Standard; only push on Force to keep wire quiet for the common
-        // case. Validates against {"standard", "force"} so a corrupt
-        // QSettings value can't drive an unknown payload.
+        // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — restore the persisted
+        // subtitle position-policy mode. Defaults flipped this wake from
+        // "standard" → "force" (sidecar + VideoPlayer in lockstep) so
+        // ffmpeg subs anchor to true frame bottom by default, matching
+        // mpv. The push-on-force gate (former "only push on Force to
+        // keep wire quiet") was REMOVED because the new sidecar default
+        // is Force — a stored "standard" must now be pushed to override
+        // the sidecar's Force default. Always-push semantics preserve
+        // existing user choice across both modes; one-event chatter at
+        // file open is acceptable. Validates against {"standard", "force"}
+        // so a corrupt QSettings value can't drive an unknown payload.
         const QString subPosMode = s.value("videoPlayer/subtitlePositionMode",
-                                           "standard").toString();
-        m_subPositionMode = (subPosMode == QStringLiteral("force"))
-                                ? QStringLiteral("force")
-                                : QStringLiteral("standard");
-        if (m_subPositionMode == QStringLiteral("force"))
-            m_backend->sendSetSubtitlePositionMode(m_subPositionMode);
+                                           "force").toString();
+        m_subPositionMode = (subPosMode == QStringLiteral("standard"))
+                                ? QStringLiteral("standard")
+                                : QStringLiteral("force");
+        m_backend->sendSetSubtitlePositionMode(m_subPositionMode);
         // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — restore subtitle size
         // scale. Sidecar + mpv backend both default to 1.0; only push on
         // non-default to keep wire quiet for the common case. Clamps
@@ -1342,39 +1318,7 @@ void VideoPlayer::restartSidecar()
 void VideoPlayer::buildUI()
 {
     m_canvas = new FrameCanvas(this);
-
-#ifdef HAS_LIBMPV
-    // Create the native mpv/Vulkan surface before HUD widgets, matching
-    // FrameCanvas construction order. Showing a native HWND after alien HUD
-    // widgets exist can make Windows put the render surface above them.
-    m_mpvWidget = new MpvVulkanWidget(this);
-    m_mpvWidget->setGeometry(0, 0, width(), height());
-    m_mpvWidget->hide();
-    connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
-            this, [this]() {
-                // Task 3: this now means an actual mpv frame reached the
-                // Vulkan swapchain, not just the black pre-frame clear.
-                m_firstFrameSeen = true;
-            });
-    // Agent 3 2026-05-02 — mouseActivityAt connect disabled while the
-    // MpvVulkanWidget mouseMoveEvent + nativeEvent paths are off (see
-    // MpvVulkanWidget.cpp). The signal cannot fire so the connect is dead;
-    // kept commented for the Task 2 follow-up that re-enables a safer
-    // mouse-bridge.
-    // connect(m_mpvWidget, &MpvVulkanWidget::mouseActivityAt, this, [this](int /*y*/) {
-    //     showControls();
-    // });
-#endif
-
-    // 2026-04-30 hotfix — MpvVulkanWidget setup/teardown lives in
-    // syncMpvIntegrationToBackend() so a mid-session swap into mpv (via
-    // switchBackendTo + right-click "Play with mpv") wires the widget
-    // correctly. The original P5-redux block here only created m_mpvWidget
-    // when the CTOR-time backend was already mpv; users with default-ffmpeg
-    // saved pref hit a null m_mpvWidget on swap → audio-only playback +
-    // blank video canvas. The helper handles both initial-mpv and
-    // swap-to-mpv paths; this call covers the initial-mpv case.
-    syncMpvIntegrationToBackend();
+    applySurfaceOverlayStyle();
 
     // Batch 1.2 — hand FrameCanvas a pointer to the master SyncClock so it
     // can call reportFrameLatency() after each Present. Phase 4 reads the
@@ -1391,6 +1335,13 @@ void VideoPlayer::buildUI()
     // sidecar via sendSetAudioSpeed. Sidecar's SwrContext applies
     // swr_set_compensation to pad/drop samples, closing the Kodi-DVDClock-
     // style A/V feedback loop end-to-end.
+    //
+    // MAKE_FFMPEG_BEAT_MPV Task 6 attempted-fix REVERTED 2026-05-04:
+    // tried widening deadband 0.0005→0.002 + noise floor 5→10ms.
+    // Empirically regressed Gill 43 from smooth → stuttery; suppressing
+    // the corrections starved the AV-sync loop. The IPC traffic was the
+    // EFFECT of needing corrections, not the CAUSE of stutter. Restored
+    // 0.0005 deadband.
     m_audioSpeedTicker.setInterval(500);
     m_audioSpeedTicker.setTimerType(Qt::CoarseTimer);
     connect(&m_audioSpeedTicker, &QTimer::timeout, this, [this]() {
@@ -1743,10 +1694,10 @@ void VideoPlayer::buildUI()
     connect(m_prevEpisodeBtn, &QPushButton::clicked, this, &VideoPlayer::prevEpisode);
 
     m_playPauseBtn = new QPushButton(m_controlBar);
-    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — icon mirrors STATE not
-    // next-action per Hemanth verbatim "Pause symbol must show when the
-    // video is paused. Play symbol must show when the video is playing."
-    // Initial m_paused=false → currently playing → show play icon (▶).
+    // 2026-05-05 — initial icon = play triangle (▶). Player just opened,
+    // no playback yet, button = "click to play" (next-action convention,
+    // matches YouTube/Netflix). Once playback starts, onStateChanged →
+    // updatePlayPauseIcon() flips to ▌▌ pause-icon ("click to pause").
     m_playPauseBtn->setIcon(m_playIcon);
     m_playPauseBtn->setIconSize(QSize(20, 20));
     m_playPauseBtn->setFixedSize(40, 36);
@@ -2180,20 +2131,6 @@ void VideoPlayer::togglePause()
     // cause unconfirmed.
     //
     // Fix shape: query mpv's actual pause property directly via the
-    // MpvBackend cast and resync m_paused BEFORE deciding sendPause vs
-    // sendResume. Even if stateChanged emit got suppressed by m_inStallPause,
-    // this re-check forces correct path selection. Only applies on mpv
-    // backend; ffmpeg/SidecarProcess path uses a different state-machine
-    // and doesn't have this bug shape.
-#ifdef HAS_LIBMPV
-    if (auto* mpvb = qobject_cast<MpvBackend*>(m_backend)) {
-        const bool actuallyPaused = mpvb->isPausedSnapshot();
-        if (actuallyPaused != m_paused) {
-            m_paused = actuallyPaused;
-            updatePlayPauseIcon();  // mirror onStateChanged side-effect
-        }
-    }
-#endif
 
     if (m_paused) {
         m_backend->sendResume();
@@ -2497,16 +2434,10 @@ void VideoPlayer::onTracksChanged(const QJsonArray& audio, const QJsonArray& sub
     if (m_audioPopover)    m_audioPopover->populate(m_audioTracks, audioId);
     if (m_subtitlePopover) m_subtitlePopover->setEmbeddedTracksFromJson(m_subTracks, subId, m_subsVisible);
 
-    // Restore saved track preferences ONCE per file — only on the first
-    // tracks_changed after openFile. Re-running on subsequent events
-    // would override manual picks: user selects sub 3, sidecar echoes
-    // tracks_changed with active_sub_id=3, preference match resolves
-    // preferred-lang to a different id, set_tracks fires and yanks the
-    // user's choice back. Latched via m_tracksRestored (reset on openFile).
-    if (!m_tracksRestored) {
-        m_tracksRestored = true;
-        restoreTrackPreferences();
-    }
+    // Track restore is intentionally deferred to firstFrame. The sidecar
+    // emits tracks_changed before its open-time default subtitle preload;
+    // restoring here races with that preload and can be overwritten back to
+    // stream 3 (Signs) after we already sent stream 4 (Dialogue).
 
     // External-sub auto-load. Runs once per file after tracks_changed
     // so m_subTracks reflects the authoritative embedded-track list. If
@@ -2937,13 +2868,14 @@ void VideoPlayer::adjustVolume(int delta)
 
 void VideoPlayer::updatePlayPauseIcon()
 {
-    // MAKE_MPV_SOLO Task 9 follow-up (2026-05-01) — icon mirrors current
-    // STATE per Hemanth verbatim "Pause symbol must show when the video
-    // is paused. Play symbol must show when the video is playing."
-    // (Industry "next-action" convention was inverted on his screen, hence
-    // this flip.) Pre-flip: paused=true → playIcon (next-action = play).
-    // Post-flip: paused=true → pauseIcon (state = paused).
-    m_playPauseBtn->setIcon(m_paused ? m_pauseIcon : m_playIcon);
+    // 2026-05-05 — REVERTED to industry "next-action" convention per Hemanth
+    // verbatim "Option B is what I've always wanted" (YouTube / Netflix
+    // pattern: button depicts what a click would do, not the current state).
+    // paused=true  → playIcon  (▶ "click to play")
+    // paused=false → pauseIcon (▌▌ "click to pause")
+    // The May 1 state-mirror flip is rolled back; centerFlash convention
+    // (flash the action just taken) already aligns with this.
+    m_playPauseBtn->setIcon(m_paused ? m_playIcon : m_pauseIcon);
 }
 
 
@@ -3033,11 +2965,6 @@ void VideoPlayer::showControls()
         // not reach the native child — must target m_canvas directly.
         m_canvas->unsetCursor();
     }
-    // Task 7 (2026-05-01) — mpv path mirror. m_mpvWidget is the active
-    // video widget on the mpv backend; cursor blank/unblank must target
-    // it directly for the same reason the canvas path does (parent's
-    // cursor doesn't propagate to a sized child widget).
-    if (m_mpvWidget) m_mpvWidget->unsetCursor();
     // Don't restart auto-hide timer while playlist drawer is open
     if (!m_playlistDrawer || !m_playlistDrawer->isOpen())
         m_hideTimer.start();
@@ -3095,8 +3022,6 @@ void VideoPlayer::hideControls()
         // applied to hideControls itself this same day.
         m_canvas->setCursor(Qt::BlankCursor);
     }
-    // Task 7 (2026-05-01) — mpv path mirror. Same cursor-blank as canvas.
-    if (m_mpvWidget) m_mpvWidget->setCursor(Qt::BlankCursor);
 }
 
 void VideoPlayer::saveProgress(double positionSec, double durationSec)
@@ -3408,7 +3333,6 @@ void VideoPlayer::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     m_canvas->setGeometry(0, 0, width(), height());
-    if (m_mpvWidget) m_mpvWidget->setGeometry(0, 0, width(), height());
 
     int barH = m_controlBar->sizeHint().height();
     m_controlBar->setGeometry(0, height() - barH, width(), barH);
@@ -4059,17 +3983,23 @@ QJsonObject VideoPlayer::devSnapshot() const
     snap["firstFrameWatchdogActive"] = m_firstFrameWatchdog.isActive();
     snap["firstFrameSeen"]      = m_firstFrameSeen;
     snap["visible"]             = isVisible();
-    snap["fullScreen"]          = isFullScreen();
+    // MAKE_MPV_BEAT_FFMPEG carry-forward S7 (2026-05-03) — was
+    // isFullScreen() (Qt method on this widget). VideoPlayer is a child
+    // widget, never the top-level, so QWidget::isFullScreen() always
+    // returned false even when F-key + toggleFullscreen() had flipped
+    // the top-level window into fullscreen. Use window()->isFullScreen()
+    // to mirror the rest of the codebase (lines 3014, 3442). Field
+    // m_fullscreen is the alternative source-of-truth — both agree.
+    snap["fullScreen"]          = window() && window()->isFullScreen();
     return snap;
 }
 
-// ── Backend wiring (2026-04-30) ──────────────────────────────────────────────
+// ── Backend wiring ───────────────────────────────────────────────────────────
 //
 // Single source of truth for every connect(m_backend, ...) call this class
-// makes. Called from the constructor (after buildUI returns — all member
-// widgets the lambdas reference exist by then) and from switchBackendTo
-// after a mid-session backend swap. Adding a new m_backend signal handler
-// belongs HERE; inline connects elsewhere will silently break swap.
+// makes. Called from the constructor after buildUI returns (all member
+// widgets the lambdas reference exist by then). Adding a new m_backend
+// signal handler belongs HERE; inline connects elsewhere are out of pattern.
 
 void VideoPlayer::wireBackendSignals()
 {
@@ -4132,6 +4062,14 @@ void VideoPlayer::wireBackendSignals()
     connect(m_backend,&IPlayerBackend::firstFrame, this, [this]() {
         m_firstFrameWatchdog.stop();
         m_firstFrameSeen = true;
+        // Restore saved track preferences ONCE per file after the sidecar's
+        // open preload is complete. This makes restored subtitle/audio picks
+        // the final command in the open sequence, avoiding the default-sub
+        // preload race diagnosed by the subtitle force-position logs.
+        if (!m_tracksRestored) {
+            m_tracksRestored = true;
+            restoreTrackPreferences();
+        }
     });
 
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.1 — sub-stage wiring + Batch 1.3
@@ -4283,189 +4221,20 @@ void VideoPlayer::wireBackendSignals()
     });
 }
 
-void VideoPlayer::switchBackendTo(BackendFactory::Type t)
-{
-    if (t == m_currentBackendType) return;  // no-op fast path
-
-    debugLog(QString("[VideoPlayer] switchBackendTo: %1 → %2")
-                .arg(BackendFactory::toString(m_currentBackendType))
-                .arg(BackendFactory::toString(t)));
-
-    if (m_backend) {
-        // Stop the live backend cleanly (mirrors stopPlayback's user-close
-        // teardown — sendStop + sendShutdown + ensureTerminated). The
-        // synchronous 500ms wait is acceptable for a user-driven swap;
-        // the right-click → "Play with X" gesture's latency budget tolerates it.
-        if (m_backend->isRunning()) {
-            m_backend->sendStop();
-            m_backend->sendShutdown();
-            m_backend->ensureTerminated(500);
-        }
-        // Disconnect every signal we wired (mirrors wireBackendSignals' set)
-        // so any in-flight queued events from the dying backend can't deliver
-        // to a half-deleted target. Belt-and-suspenders against deleteLater
-        // racing with pending Qt::QueuedConnection deliveries.
-        m_backend->disconnect(this);
-        m_backend->deleteLater();
-        m_backend = nullptr;
-    }
-
-    m_backend = BackendFactory::create(t, this);
-    m_currentBackendType = t;
-
-    // SubtitlePopover holds a non-signal IPlayerBackend* via setSidecar
-    // (used by its embedded-track + load-from-file paths). Refresh it.
-    if (m_subtitlePopover) m_subtitlePopover->setSidecar(m_backend);
-
-    wireBackendSignals();
-
-    // 2026-04-30 hotfix — toggle MpvVulkanWidget visibility + (re)wire its
-    // mpv handle. Without this, swapping ffmpeg → mpv leaves m_mpvWidget
-    // null + FrameCanvas visible: mpv plays audio but video has nowhere
-    // to render (Hemanth-reported "mpv is blank" 2026-04-30 ~17:30).
-    syncMpvIntegrationToBackend();
-}
-
-void VideoPlayer::syncMpvIntegrationToBackend()
-{
-#ifdef HAS_LIBMPV
-    auto* mpvBackend = qobject_cast<MpvBackend*>(m_backend);
-    if (!mpvBackend) {
-        // Active backend is ffmpeg (or HAS_LIBMPV unset upstream).
-        // Hide MpvVulkanWidget if it exists from a prior mpv session,
-        // restore FrameCanvas as the active video surface.
-        if (m_mpvWidget) {
-            m_mpvWidget->setLibplaceboRenderer(nullptr);
-            m_mpvWidget->setMpvHandle(nullptr);
-            m_mpvWidget->hide();
-        }
-        if (m_canvas) m_canvas->show();
-        applySurfaceOverlayStyle();
-        return;
-    }
-
-    // Active backend is mpv. Lazy-create MpvVulkanWidget the first time
-    // mpv is selected (works whether the initial ctor backend was mpv
-    // or we just swapped from ffmpeg). The firstFrameRendered connect is
-    // tied to the widget instance (not to a specific backend) so it's
-    // wired exactly once at first creation.
-    if (!m_mpvWidget) {
-        m_mpvWidget = new MpvVulkanWidget(this);
-        m_mpvWidget->setGeometry(0, 0, width(), height());
-        connect(m_mpvWidget, &MpvVulkanWidget::firstFrameRendered,
-                this, [this]() {
-                    // Actual mpv frame reached the Vulkan swapchain.
-                    m_firstFrameSeen = true;
-                });
-        // Agent 3 2026-05-02 — paired with the disabled buildUI connect
-        // and the disabled mouseMoveEvent + nativeEvent overrides on
-        // MpvVulkanWidget.
-        // connect(m_mpvWidget, &MpvVulkanWidget::mouseActivityAt, this, [this](int /*y*/) {
-        //     showControls();
-        // });
-    } else {
-        // Re-show after a prior swap-away. Refresh geometry in case the
-        // window was resized while we were on the FrameCanvas branch.
-        m_mpvWidget->setGeometry(0, 0, width(), height());
-    }
-
-    // Backend-specific connects — must be re-made on every swap because
-    // they capture the current mpvBackend pointer. The OLD backend's
-    // connects are auto-disconnected by Qt when its QObject was deleted
-    // in switchBackendTo above.
-    //
-    // ready() fires after MpvBackend::initializeMpv() — at that point the
-    // mpv handle is valid + the widget can attach a render context. If
-    // mpv is ALREADY initialized (mpvHandle non-null), attach immediately
-    // rather than waiting for the next ready cycle.
-    connect(mpvBackend, &IPlayerBackend::ready,
-            this, [this, mpvBackend]() {
-                if (m_mpvWidget) {
-                    m_mpvWidget->setLibplaceboRenderer(mpvBackend->libplaceboRenderer());
-                    m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
-                }
-            });
-    connect(mpvBackend, &MpvBackend::mpvHandleInvalidating,
-            this, [this]() {
-                if (m_mpvWidget) {
-                    m_mpvWidget->setLibplaceboRenderer(nullptr);
-                    m_mpvWidget->setMpvHandle(nullptr);
-                }
-            },
-            Qt::DirectConnection);
-    if (mpvBackend->mpvHandle()) {
-        m_mpvWidget->setLibplaceboRenderer(mpvBackend->libplaceboRenderer());
-        m_mpvWidget->setMpvHandle(mpvBackend->mpvHandle());
-    }
-
-    // Toggle render surface: hide FrameCanvas, show MpvVulkanWidget.
-    if (m_canvas) m_canvas->hide();
-    m_mpvWidget->show();
-    applySurfaceOverlayStyle();
-
-    // MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — z-order fix. The Vulkan
-    // widget is WA_NativeWindow, which means it owns a child HWND that
-    // Windows renders above non-native QWidgets in its parent's backbuffer.
-    // VideoPlayer's resizeEvent (line 3388-3394) explicitly raises the HUD
-    // widgets to lift them above any sibling native HWND, but that chain
-    // doesn't fire on widget show — only on resize. Without an explicit
-    // raise here, m_mpvWidget's HWND covers the entire VideoPlayer
-    // including controlBar/subOverlay/popovers/center-flash. The
-    // ffmpeg-path equivalent (m_canvas) doesn't show this regression
-    // because m_canvas is created BEFORE the HUD widgets in buildUI; HUD
-    // widgets shown later naturally land above. m_mpvWidget is also
-    // created in buildUI but show() happens in this function, possibly
-    // post-HUD-creation, so explicit raise is the load-bearing call.
-    if (m_controlBar)        m_controlBar->raise();
-    if (m_subOverlay)        m_subOverlay->raise();
-    if (m_volumeHud)         m_volumeHud->raise();
-    if (m_centerFlash)       m_centerFlash->raise();
-    if (m_toastHud)          m_toastHud->raise();
-    if (m_statsBadge && m_statsBadge->isVisible()) m_statsBadge->raise();
-    if (m_chromeOverlay && m_chromeOverlay->isVisible()) m_chromeOverlay->raise();
-    if (m_playlistDrawer && m_playlistDrawer->isOpen()) m_playlistDrawer->raise();
-#else
-    // libmpv not compiled in — m_backend is always SidecarProcess.
-    // FrameCanvas is the only video surface; nothing to toggle.
-    if (m_canvas) m_canvas->show();
-#endif
-}
-
 void VideoPlayer::applySurfaceOverlayStyle()
 {
     if (!m_controlBar) return;
 
-    bool mpvNativeSurface = false;
-#ifdef HAS_LIBMPV
-    mpvNativeSurface = qobject_cast<MpvBackend*>(m_backend) != nullptr;
-#endif
-
-    // Semi-transparent HUD works on the ffmpeg/FrameCanvas path, but the
-    // Vulkan child HWND cannot be used as a Qt alpha-blend backing surface.
-    // On mpv, keep the HUD panel fully opaque so empty HUD regions never show
-    // the library/main window layer behind VideoPlayer.
-    const QString background = mpvNativeSurface
-        ? QStringLiteral("#0a0a0a")
-        : QStringLiteral("rgba(10, 10, 10, 0.50)");
-
+    // FrameCanvas path supports semi-transparent HUD via Qt alpha-blend on
+    // its backing surface (D3D11 swap chain). Single-backend post MPV_CUTOVER
+    // 2026-05-05 — the prior mpv-Vulkan-opaque branch is gone with the mpv
+    // backend itself.
     m_controlBar->setStyleSheet(
         QStringLiteral(
             "QWidget#VideoControlBar {"
-            "  background: %1;"
+            "  background: rgba(10, 10, 10, 0.50);"
             "  border-top: 1px solid rgba(255, 255, 255, 0.08);"
-            "}").arg(background));
+            "}"));
 
-    // MAKE_MPV_BEAT_FFMPEG Task 8 (2026-05-03) — fan-out the same backend-
-    // aware-opaque pattern Codex established for VideoControlBar in Task 2
-    // to ToastHud (transient text-toast widget). VolumeHud was abandoned
-    // mid-Task-8 in favor of routing volume display through ToastHud per
-    // Hemanth directive (the VolumeHud fade-window paint timing on the
-    // mpv backend produced library bleed-through that multiple paint-
-    // restructure attempts couldn't cleanly fix; ToastHud's QGraphicsOpacity
-    // Effect-driven fade behaves differently and Hemanth confirmed it works
-    // for the Speed toast). CenterFlash explicitly EXCLUDED — Hemanth had
-    // Codex remove its black-blob backdrop in the 2026-04-25 minimalist
-    // redesign; re-adding any backdrop (even mpv-conditional) would
-    // conflict with that user-direction.
-    if (m_toastHud) m_toastHud->setBackdropOpaque(mpvNativeSurface);
+    if (m_toastHud) m_toastHud->setBackdropOpaque(false);
 }

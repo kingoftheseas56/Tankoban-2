@@ -185,10 +185,26 @@ private:
     // for libass (ass_set_line_position) and in blend_pgs_rects for PGS
     // (Y-offset on dst_y). See set_sub_position_pct.
     std::atomic<int>    sub_position_pct_{100};
-    // MPV_FFMPEG_PARITY Phase 2.F (2026-04-30) — Standard default per Q1
-    // ratification. Read each render under mutex_ in the libass + PGS
-    // paths to gate Y-shift vs ass_set_line_position behavior.
-    std::atomic<PositionMode> position_mode_{PositionMode::Standard};
+    // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — default flipped from
+    // PositionMode::Standard → PositionMode::Force per Hemanth direct
+    // ("ffmpeg subtitles are perpetually high; mpv positions correctly").
+    // Standard delegated to libass which respected each script's authored
+    // MarginV (~130px on typical fansubs); Force applies a uniform Y-shift
+    // on the rendered ASS_Image list to anchor the subtitle bottom at
+    // pct% down the video rect, matching mpv's sub-pos behavior. Trade-off:
+    // multi-event ASS scripts (signs+karaoke+dialog) shift as one bounding
+    // box; same trade-off mpv carries. Users who explicitly want libass
+    // MarginV behavior flip via the Standard/Force toggle in
+    // SettingsPopover; their saved choice still wins because VideoPlayer
+    // pushes the persisted mode at every file open (gate removed in same
+    // wake — see VideoPlayer.cpp).
+    //
+    // Prior context (preserved): MPV_FFMPEG_PARITY Phase 2.F (2026-04-30)
+    // ratified Standard default per Q1 to preserve authored ASS layout
+    // for multi-event cases. Hemanth's daily-use evidence post-cutover
+    // weighed common-case (single-line dialog) over the multi-event
+    // edge case; that's why Force is now the default.
+    std::atomic<PositionMode> position_mode_{PositionMode::Force};
     // User subtitle-style overrides. font_scale_ is applied via libass's
     // renderer-level ass_set_font_scale — safe mid-playback unlike the
     // ass_set_selective_style_override_* APIs which caused a silent-stop

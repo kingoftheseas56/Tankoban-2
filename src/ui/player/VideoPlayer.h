@@ -19,7 +19,6 @@ class SeekSlider;
 #include <optional>
 
 #include "core/stream/addon/SubtitleInfo.h"
-#include "ui/player/BackendFactory.h"
 
 class CoreBridge;
 class KeyBindings;
@@ -27,10 +26,6 @@ class IPlayerBackend;
 class SidecarProcess;
 class ShmFrameReader;
 class FrameCanvas;
-// MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — Vulkan-backed widget replaces
-// the QOpenGLWidget MpvVideoWidget for the mpv backend's video surface.
-class MpvVulkanWidget;
-class MpvBackend;
 class VolumeHud;
 class CenterFlash;
 class PlaylistDrawer;
@@ -54,22 +49,11 @@ public:
     // from the "stream" progress domain rather than "videos") pass it here
     // and the seek lands regardless of PersistenceMode. 0.0 preserves
     // existing behavior byte-for-byte.
-    // explicitBackend (added 2026-04-30): per-invocation override for the
-    // VideosPage / ShowView "Play with ffmpeg" / "Play with mpv" right-click
-    // entries. When set, BackendFactory::chooseFor honors it above the saved
-    // QSettings preference but below the §Q4 stream-mode lock and
-    // TANKOBAN_FORCE_MPV. nullopt (default) preserves existing semantics —
-    // VideoPlayer keeps whatever backend it was constructed with (saved
-    // preference at startup), so non-override callers see no behavior change.
-    // When the override differs from the live backend, openFile triggers a
-    // mid-session swap via switchBackendTo() — stop+deleteLater old, create
-    // new, rewire signals — before the rest of openFile proceeds.
     void openFile(const QString& filePath,
                   const QStringList& playlist = {},
                   int playlistIndex = 0,
                   double startPositionSec = 0.0,
-                  const QString& displayTitle = {},
-                  std::optional<BackendFactory::Type> explicitBackend = std::nullopt);
+                  const QString& displayTitle = {});
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 — isIntentional distinguishes
     // user-driven stops (Escape, close, APPCOMMAND_MEDIA_STOP — default)
@@ -271,36 +255,13 @@ protected:
 private:
     void buildUI();
 
-    // 2026-04-30 — connects every IPlayerBackend signal this class consumes
-    // to its handler/lambda. Single source of truth for backend wire-up;
-    // called once from the constructor (after buildUI returns so all member
-    // widgets the lambdas reference exist) and again from switchBackendTo
-    // after a mid-session swap rebuilds m_backend. Adding any new
-    // connect(m_backend, ...) site MUST happen inside this function or a
-    // backend swap will silently drop the new signal handler.
+    // Connects every IPlayerBackend signal this class consumes to its
+    // handler/lambda. Single source of truth for backend wire-up; called
+    // once from the constructor after buildUI returns (so all member widgets
+    // the lambdas reference exist). Adding any new connect(m_backend, ...)
+    // site belongs HERE.
     void wireBackendSignals();
 
-    // 2026-04-30 — mid-session backend swap driven by openFile's
-    // explicitBackend parameter. Stops the live backend (sendStop +
-    // sendShutdown + ensureTerminated, mirroring stopPlayback's user-close
-    // teardown), deletes it, creates the new backend type via
-    // BackendFactory::create, refreshes downstream pointer holders
-    // (SubtitlePopover::setSidecar + MpvVulkanWidget show/hide via
-    // syncMpvIntegrationToBackend), and re-runs wireBackendSignals.
-    // No-op when t == m_currentBackendType.
-    void switchBackendTo(BackendFactory::Type t);
-
-    // 2026-04-30 hotfix — drives the MpvVulkanWidget setup/teardown that
-    // pairs with the active backend. Idempotent. Called from buildUI (so
-    // a session that starts in mpv mode wires correctly) and from
-    // switchBackendTo (so a mid-session swap into or out of mpv toggles
-    // the right render surface). Hides FrameCanvas and shows MpvVulkanWidget
-    // when m_backend is MpvBackend; reverses on swap-away. Lazy-creates
-    // m_mpvWidget the first time mpv is selected, regardless of whether
-    // the initial ctor-time backend was mpv. Without this, a swap from
-    // ffmpeg-default to mpv leaves m_mpvWidget null + FrameCanvas visible
-    // — mpv plays audio but video has nowhere to render (blank canvas).
-    void syncMpvIntegrationToBackend();
     void applySurfaceOverlayStyle();
 
     // PLAYER_LIFECYCLE_FIX Phase 2 — UI-only teardown. Detaches canvas/
@@ -533,18 +494,8 @@ private:
     // VideoPlayer.cpp:180 still constructs SidecarProcess concretely (Phase 5
     // introduces BackendFactory for per-file/per-show backend selection).
     IPlayerBackend* m_backend   = nullptr;
-    // Tracks the live type behind m_backend so openFile() can detect when
-    // an explicit "Play with X" override differs from current and trigger
-    // a mid-session swap via switchBackendTo. Updated in the ctor and in
-    // every switchBackendTo call — must stay in lockstep with m_backend's
-    // concrete type.
-    BackendFactory::Type m_currentBackendType = BackendFactory::Type::Ffmpeg;
     ShmFrameReader* m_reader    = nullptr;
     FrameCanvas*    m_canvas    = nullptr;
-    // MAKE_MPV_BEAT_FFMPEG Task 2 — native Vulkan child HWND for the mpv
-    // backend. Layered at the same geometry as m_canvas; FrameCanvas is
-    // hidden when mpv backend is active.
-    MpvVulkanWidget* m_mpvWidget = nullptr;
 
     // Batch 1.2 — master A/V clock. VideoPlayer owns it; FrameCanvas gets
     // a pointer via setSyncClock() in buildUI(). Today only FrameCanvas
@@ -691,7 +642,16 @@ private:
     // "standard" (default per Q1 ratification, libass / mpv sub-pos owns
     // placement) or "force" (Y-offset hack opt-in for aggressive-MarginV
     // scripts; ffmpeg-only — mpv backend logs a one-time warning).
-    QString m_subPositionMode = QStringLiteral("standard");
+    // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — default flipped from
+    // "standard" → "force" so ffmpeg subtitles anchor to true frame
+    // bottom by default (matches mpv sub-pos behavior). Standard mode
+    // delegated to libass which respected each script's authored MarginV
+    // (~130px on typical fansubs); Force applies a uniform Y-shift on
+    // the rendered ASS_Image list to anchor at pct% down the video rect.
+    // Users who want libass MarginV-respecting layout flip via the
+    // SettingsPopover Standard/Force toggle. See subtitle_renderer.h for
+    // sidecar-side default + the always-push semantic in VideoPlayer.cpp.
+    QString m_subPositionMode = QStringLiteral("force");
     // MPV_FFMPEG_PARITY Phase 2.G (2026-04-30) — subtitle size scale.
     // Default 1.0x = sidecar baseline; clamped 0.5..2.0 in adjustSubtitleSize.
     double m_subtitleSize = 1.0;
