@@ -1,6 +1,7 @@
 #include "ShowView.h"
 #include "core/ScannerUtils.h"
 #include "core/CoreBridge.h"
+#include "core/library/VideoCategory.h"
 #include "ui/ContextMenuHelper.h"
 #include <QJsonArray>
 
@@ -22,6 +23,7 @@
 #include <QIcon>
 #include <QShortcut>
 #include <QMessageBox>
+#include <QMenu>
 #include <algorithm>
 
 static const QStringList VIDEO_EXTS = {
@@ -293,6 +295,20 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
     m_coverLabel->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
     m_coverLabel->setStyleSheet("background: transparent; padding: 16px;");
     m_coverLabel->setMinimumHeight(200);
+    m_coverLabel->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_coverLabel, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        if (m_showRootPath.isEmpty())
+            return;
+        auto* menu = ContextMenuHelper::createMenu(this);
+        auto* moveMenu = menu->addMenu("Move to");
+        QMap<QAction*, VideoCategory> moveActions;
+        for (const auto& info : videoCategoryInfos())
+            moveActions.insert(moveMenu->addAction(QString::fromUtf8(info.label)), info.category);
+        QAction* chosen = menu->exec(m_coverLabel->mapToGlobal(pos));
+        if (moveActions.contains(chosen))
+            emit categoryMoveRequested(m_showRootPath, moveActions.value(chosen));
+        menu->deleteLater();
+    });
     m_coverLabel->hide();
     contentLayout->addWidget(m_coverLabel);
 
@@ -432,15 +448,6 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
             auto* playAct = menu->addAction("Play");
             auto* playBeginAct = menu->addAction("Play from beginning");
             menu->addSeparator();
-            // 2026-04-30 — direct-opener entries (ONE-SHOT). Mirrors the
-            // VideosPage show-tile + Continue Watching pattern. Emits
-            // episodeSelectedWithBackend; VideosPage forwards through
-            // its own playVideoWithBackend signal at VideosPage.cpp:~831.
-            auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
-#ifdef HAS_LIBMPV
-            auto* playMpvAct = menu->addAction("Play with mpv");
-#endif
-            menu->addSeparator();
             auto* revealAct = menu->addAction("Reveal in File Explorer");
             revealAct->setEnabled(!filePath.isEmpty());
             auto* copyAct = menu->addAction("Copy file path");
@@ -460,17 +467,6 @@ ShowView::ShowView(CoreBridge* bridge, QWidget* parent)
                 prog.remove("positionSec");
                 if (m_bridge) m_bridge->saveProgress("videos", vid, prog);
                 emit episodeSelected(filePath);
-            } else if (chosen == playFfmpegAct
-#ifdef HAS_LIBMPV
-                       || chosen == playMpvAct
-#endif
-                       ) {
-                const auto backend =
-#ifdef HAS_LIBMPV
-                    (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
-#endif
-                    BackendFactory::Type::Ffmpeg;
-                emit episodeSelectedWithBackend(filePath, backend);
             } else if (chosen == revealAct) {
                 ContextMenuHelper::revealInExplorer(filePath);
             } else if (chosen == copyAct) {
@@ -779,8 +775,14 @@ void ShowView::populateTable(const QString& folderPath)
     }
 
     // ── File rows ──
-    QDir dir(folderPath);
-    auto fileInfos = dir.entryInfoList(VIDEO_EXTS, QDir::Files);
+    QList<QFileInfo> fileInfos;
+    QFileInfo looseFile(folderPath);
+    if (m_isLoose && looseFile.isFile()) {
+        fileInfos.append(looseFile);
+    } else {
+        QDir dir(folderPath);
+        fileInfos = dir.entryInfoList(VIDEO_EXTS, QDir::Files);
+    }
 
     // Search filter
     if (!m_searchText.isEmpty()) {
@@ -900,7 +902,9 @@ void ShowView::buildContinueBar()
     QString scopePath = m_showRootPath;
     if (!m_currentRel.isEmpty())
         scopePath = m_showRootPath + "/" + m_currentRel;
-    QStringList allFiles = ScannerUtils::walkFiles(scopePath, VIDEO_EXTS);
+    QStringList allFiles = (m_isLoose && QFileInfo(scopePath).isFile())
+        ? QStringList{scopePath}
+        : ScannerUtils::walkFiles(scopePath, VIDEO_EXTS);
     qint64 bestAt = -1;
     QString bestPath, bestTitle, bestId;
     double bestPosSec = 0, bestDurSec = 0;
@@ -1001,4 +1005,3 @@ QJsonObject ShowView::devSnapshot() const
 
     return snap;
 }
-

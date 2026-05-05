@@ -10,7 +10,6 @@
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QCloseEvent>
-#include "ui/player/BackendFactory.h"
 
 class GlassBackground;
 class CoreBridge;
@@ -19,7 +18,9 @@ class BookReader;
 class ComicReader;
 class VideoPlayer;
 class VideosPage;
+class OrganisePage;
 class DevControlServer;
+class SidebarDrawer;
 class QJsonObject;
 
 class MainWindow : public QMainWindow
@@ -45,6 +46,12 @@ public:
     // Top-level snapshot for `get_state` command.
     QJsonObject devSnapshot() const;
 
+    // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — public opener exposed
+    // for the `--play-file` CLI auto-open flow used by the compare-mpv /
+    // compare-ffmpeg launcher batch files. Internal callers continue to
+    // use the private overload at lines 92+. Wrapper just forwards.
+    void openVideoFromCli(const QString& filePath);
+
 public slots:
     // Frameless-chrome public slots — connectable from any takeover surface
     // (VideoPlayer, ComicReader, BookReader) via the per-view chrome buttons.
@@ -65,6 +72,22 @@ private:
     void buildTopBar();
     void buildPageStack();
     void bindShortcuts();
+    // Re-mirror m_topBarLeftSlot's fixed width to m_topBarRightSlot's
+    // current sizeHint. Called after right-slot content visibility changes
+    // (e.g. Organise button shown/hidden on page activation) to keep the
+    // central nav pills geometrically centered in the window.
+    void mirrorTopBarSlotWidths();
+
+    // FRAMELESS_CHROME_FULLSCREEN_EXIT_FIX 2026-05-04 — re-apply the
+    // Win32 frameless-style hack (keep WS_CAPTION etc + SWP_FRAMECHANGED
+    // to re-fire WM_NCCALCSIZE) whenever the window state changes in a
+    // way that may have reset our styles. Called from the constructor
+    // (initial setup) and from changeEvent on Qt::WindowFullScreen
+    // transitions (fixes the brief OS-title-bar flash on fullscreen
+    // exit + the carry-forward S2 takeover-flash bug). No-op on
+    // non-Windows platforms.
+    void applyFramelessWin32Style();
+
     void activatePage(const QString &pageId);
     void showRootFolders();
     void hideRootFolders();
@@ -79,13 +102,6 @@ private:
 
     // Video player
     void openVideoPlayer(const QString& filePath);
-    // 2026-04-30 — direct-opener variant for the right-click "Play with X"
-    // entries on VideosPage / ShowView. Mirrors openVideoPlayer's body but
-    // routes the explicit backend override through VideoPlayer::openFile's
-    // 6th param so the swap-on-open path in VideoPlayer triggers
-    // switchBackendTo for THIS playback only. Saved pref unchanged.
-    void openVideoPlayerWithBackend(const QString& filePath,
-                                     BackendFactory::Type backend);
     void closeVideoPlayer();
 
     // System tray
@@ -117,6 +133,7 @@ private:
     // VideosPage cached at buildPageStack time — needed by Phase 3
     // dev-bridge dispatcher (scan_videos / get_videos).
     VideosPage *m_videosPage = nullptr;
+    OrganisePage *m_organisePage = nullptr;
 
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).
@@ -132,14 +149,24 @@ private:
 
     // Top bar
     QWidget       *m_topBar      = nullptr;
+    QWidget       *m_topBarLeftSlot  = nullptr;  // brand + hamburger; width mirrors right slot
+    QWidget       *m_topBarRightSlot = nullptr;  // theme/scan/add/organise/chrome
     QLabel        *m_brandLabel  = nullptr;
     QButtonGroup  *m_navGroup    = nullptr;
+    QPushButton   *m_hamburgerBtn = nullptr;
+
+    // SOURCES_SIDEBAR — slide-in left drawer holding Tankorent / Tankoyomi /
+    // TankoLibrary list buttons. Toggled by m_hamburgerBtn. Replaces the prior
+    // PAGE_SOURCES topbar entry; the three sub-pages are now peer pages in
+    // m_pageStack.
+    SidebarDrawer *m_sidebar     = nullptr;
 
     // Frameless-chrome buttons (FRAMELESS_CHROME_FIX 2026-05-01).
     // Folded into the right edge of m_topBar so the OS title bar can be dropped.
     QPushButton   *m_chromeMin   = nullptr;
     QPushButton   *m_chromeMax   = nullptr;
     QPushButton   *m_chromeClose = nullptr;
+    QPushButton   *m_organiseBtn = nullptr;
     void updateMaxRestoreIcon();
 
     // Page stack

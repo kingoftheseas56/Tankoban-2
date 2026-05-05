@@ -6,18 +6,20 @@
 #include "core/CoreBridge.h"
 #include "core/VideosScanner.h"
 #include "core/ScannerUtils.h"
+#include "core/library/VideoCategoryStore.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/MetaItem.h"
 #include "core/torrent/TorrentClient.h"
 #include "PosterPickerPopover.h"
 #include "ui/ContextMenuHelper.h"
-#include "ui/player/BackendFactory.h"
 #include "ui/widgets/FadingStackedWidget.h"
 #include "ui/widgets/LibraryListView.h"
 #include <QPushButton>
 #include <QNetworkAccessManager>
 #include <QPointer>
+#include <QAction>
+#include <QMenu>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -170,7 +172,9 @@ void VideosPage::buildUI()
     m_clickTimer->setInterval(250);
     connect(m_clickTimer, &QTimer::timeout, this, &VideosPage::executePendingClick);
 
-    // ── 2. Continue Watching section ──
+    // ── 2. Continue Watching section (flat-only — per-category mode removed
+    //      2026-05-05 per Hemanth "remove the continue watching per category
+    //      feature altogether it's a mess looks like a mess") ──
     m_continueSection = new QWidget(gridPage);
     auto* continueLayout = new QVBoxLayout(m_continueSection);
     continueLayout->setContentsMargins(0, 0, 0, 0);
@@ -190,7 +194,7 @@ void VideosPage::buildUI()
     showsLayout->setContentsMargins(0, 0, 0, 0);
     showsLayout->setSpacing(8);
 
-    auto* showsLabel = new QLabel("SHOWS", showsRow);
+    auto* showsLabel = new QLabel("LIBRARY", showsRow);
     showsLabel->setObjectName("LibraryHeading");
     showsLayout->addWidget(showsLabel);
     showsLayout->addStretch();
@@ -224,7 +228,7 @@ void VideosPage::buildUI()
     connect(m_sortCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
         QString key = m_sortCombo->itemData(idx).toString();
         QSettings("Tankoban", "Tankoban").setValue("library_sort_videos", key);
-        m_tileStrip->sortTiles(key);
+        sortCategoryRows();
     });
     showsLayout->addWidget(m_sortCombo);
 
@@ -240,8 +244,7 @@ void VideosPage::buildUI()
     m_densitySlider->setValue(qBound(0, savedDensity, 2));
     connect(m_densitySlider, &QSlider::valueChanged, this, [this](int val) {
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
-        m_tileStrip->setDensity(val);
-        if (m_continueStrip) m_continueStrip->setDensity(val);
+        applyDensityToAllStrips(val);
     });
     showsLayout->addWidget(m_densitySlider);
 
@@ -270,11 +273,33 @@ void VideosPage::buildUI()
     m_statusLabel->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
     gridLayout->addWidget(m_statusLabel);
 
-    m_tileStrip = new TileStrip(gridPage);
-    m_tileStrip->hide();
-    m_tileStrip->setDensity(savedDensity);
+    m_categoriesContainer = new QWidget(gridPage);
+    m_categoriesLayout = new QVBoxLayout(m_categoriesContainer);
+    m_categoriesLayout->setContentsMargins(0, 0, 0, 0);
+    m_categoriesLayout->setSpacing(22);
+    for (const auto& info : videoCategoryInfos()) {
+        const VideoCategory category = info.category;
+
+        auto* section = new QWidget(m_categoriesContainer);
+        auto* sectionLayout = new QVBoxLayout(section);
+        sectionLayout->setContentsMargins(0, 0, 0, 0);
+        sectionLayout->setSpacing(4);
+        auto* label = new QLabel(videoCategoryHeading(category), section);
+        label->setObjectName("LibraryHeading");
+        sectionLayout->addWidget(label);
+        auto* strip = new TileStrip(section);
+        strip->setDensity(savedDensity);
+        sectionLayout->addWidget(strip);
+        section->hide();
+        m_categorySections.insert(category, section);
+        m_categoryStrips.insert(category, strip);
+        if (category == VideoCategory::Miscellaneous)
+            m_tileStrip = strip;
+        m_categoriesLayout->addWidget(section);
+    }
     if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
-    gridLayout->addWidget(m_tileStrip);
+    m_categoriesContainer->hide();
+    gridLayout->addWidget(m_categoriesContainer);
 
     // List view (hidden by default — V-key toggles)
     m_listView = new LibraryListView(gridPage);
@@ -306,7 +331,9 @@ void VideosPage::buildUI()
 
     // ── Helper: mark all episodes watched/unwatched ──
     auto markAllEpisodes = [this, computeVideoId](const QString& showPath, bool setFinished) {
-        QStringList allFiles = ScannerUtils::walkFiles(showPath, videoExts);
+        QStringList allFiles = QFileInfo(showPath).isFile()
+            ? QStringList{showPath}
+            : ScannerUtils::walkFiles(showPath, videoExts);
         for (const auto& f : allFiles) {
             QString id = computeVideoId(f);
             QJsonObject prog = m_bridge->progress("videos", id);
@@ -433,20 +460,13 @@ void VideosPage::buildUI()
         auto* copyAct = menu->addAction("Copy path");
         copyAct->setEnabled(!showPath.isEmpty());
 
-        // 2026-04-30 — direct-opener entries (ONE-SHOT). Clicking emits
-        // playVideoWithBackend(filePath, type) so VideoPlayer::openFile
-        // honors the override for THIS playback only via switchBackendTo;
-        // the saved player/videoBackend preference is NOT mutated.
-        // No "(current)" suffix because these are play actions, not
-        // preference toggles. Power users who want sticky use the
-        // TANKOBAN_FORCE_MPV env var.
         menu->addSeparator();
-        auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
-        playFfmpegAct->setEnabled(hasEpisodes);
-#ifdef HAS_LIBMPV
-        auto* playMpvAct = menu->addAction("Play with mpv");
-        playMpvAct->setEnabled(hasEpisodes);
-#endif
+        auto* moveMenu = menu->addMenu("Move to");
+        QMap<QAction*, VideoCategory> moveActions;
+        for (const auto& info : videoCategoryInfos()) {
+            auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
+            moveActions.insert(act, info.category);
+        }
 
         menu->addSeparator();
         auto* setPosterAct = menu->addAction("Set poster...");
@@ -486,16 +506,33 @@ void VideosPage::buildUI()
         } else if (chosen == markAct) {
             markAllEpisodes(showPath, !allWatched);
         } else if (chosen == clearContAct) {
-            for (const auto& f : allFiles) {
-                QString id = computeVideoId(f);
-                QJsonObject prog = m_bridge->progress("videos", id);
-                if (!prog.isEmpty()) {
-                    prog.remove("positionSec");
-                    prog.remove("finished");
-                    m_bridge->saveProgress("videos", id, prog);
-                }
+            // Clear by path-prefix match on the stored progress entries
+            // rather than walking the disk + recomputing computeVideoId.
+            // walkFiles can miss nested files; computeVideoId depends on
+            // mtime which may drift between play and clear (Windows Defender
+            // touch, antivirus, sync clients) → the recomputed id no longer
+            // matches the stored progress key, so the lookup misses and the
+            // entry survives. Iterating allProgress by stored path avoids
+            // both failure modes.
+            QJsonObject allProg = m_bridge->allProgress("videos");
+            bool changed = false;
+            for (auto it = allProg.begin(); it != allProg.end(); ++it) {
+                QJsonObject prog = it.value().toObject();
+                const QString entryPath = prog.value("path").toString();
+                if (entryPath.isEmpty())
+                    continue;
+                const bool match = (entryPath == showPath)
+                    || entryPath.startsWith(showPath + QLatin1Char('/'))
+                    || entryPath.startsWith(showPath + QLatin1Char('\\'));
+                if (!match)
+                    continue;
+                prog.remove("positionSec");
+                prog.remove("finished");
+                m_bridge->saveProgress("videos", it.key(), prog);
+                changed = true;
             }
-            refreshContinueStrip();
+            if (changed)
+                refreshContinueStrip();
         } else if (chosen == renameAct) {
             // Inline rename — QLineEdit appears over the tile title, Enter commits,
             // Escape cancels, focus-out commits. No modal dialog.
@@ -543,37 +580,8 @@ void VideosPage::buildUI()
             ContextMenuHelper::revealInExplorer(showPath);
         } else if (chosen == copyAct) {
             ContextMenuHelper::copyToClipboard(showPath);
-        } else if (chosen == playFfmpegAct
-#ifdef HAS_LIBMPV
-                   || chosen == playMpvAct
-#endif
-                   ) {
-            // Mirror the Play / Continue resume-file resolution above so the
-            // backend-overridden play opens the same file the default Play
-            // would. Empty allFiles falls through silently (the action was
-            // disabled in that case anyway).
-            QString resumeFile;
-            qint64 bestAt = -1;
-            for (const auto& f : allFiles) {
-                QString id = computeVideoId(f);
-                QJsonObject prog = allProg.value(id).toObject();
-                if (prog.value("finished").toBool()) continue;
-                double posSec = prog.value("positionSec").toDouble(0);
-                if (posSec > 0) {
-                    qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
-                    if (upd > bestAt) { bestAt = upd; resumeFile = f; }
-                }
-            }
-            if (resumeFile.isEmpty() && !allFiles.isEmpty())
-                resumeFile = allFiles.first();
-            if (!resumeFile.isEmpty()) {
-                const auto backend =
-#ifdef HAS_LIBMPV
-                    (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
-#endif
-                    BackendFactory::Type::Ffmpeg;
-                emit playVideoWithBackend(resumeFile, backend);
-            }
+        } else if (moveActions.contains(chosen)) {
+            moveShowToCategory(showPath, moveActions.value(chosen));
         } else if (chosen == setPosterAct) {
             QString file = QFileDialog::getOpenFileName(this, "Set poster",
                 QString(), "Images (*.png *.jpg *.jpeg *.bmp *.webp)");
@@ -703,9 +711,10 @@ void VideosPage::buildUI()
         QJsonObject prog = m_bridge->progress("videos", videoId);
         bool finished = prog.value("finished").toBool();
 
-        // Find the show folder this episode belongs to
+        // Find the show identity this episode belongs to. Scanner data is
+        // authoritative here because loose-file tiles use the file path itself.
         QFileInfo fi(filePath);
-        QString showPath = fi.absolutePath();
+        QString showPath = m_fileToShowRoot.value(filePath, fi.absolutePath());
 
         auto* menu = ContextMenuHelper::createMenu(this);
         auto* playAct = menu->addAction("Play / Continue");
@@ -723,17 +732,13 @@ void VideosPage::buildUI()
         auto* copyAct = menu->addAction("Copy path");
         copyAct->setEnabled(!filePath.isEmpty());
 
-        // MPV_RENDER_API_INTEGRATION P7 2026-04-30 — backend selection
-        // entries (also added on the show-tile menu earlier in this file).
-        // Saves preference to QSettings player/videoBackend; takes effect
-        // on next Tankoban launch (apply-on-next-launch semantics ratified
-        // 2026-04-30 — direct-opener entries (ONE-SHOT). Same shape as the
-        // show-tile menu earlier in this file.
         menu->addSeparator();
-        auto* playFfmpegAct = menu->addAction("Play with ffmpeg");
-#ifdef HAS_LIBMPV
-        auto* playMpvAct = menu->addAction("Play with mpv");
-#endif
+        auto* moveMenu = menu->addMenu("Move to");
+        QMap<QAction*, VideoCategory> moveActions;
+        for (const auto& info : videoCategoryInfos()) {
+            auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
+            moveActions.insert(act, info.category);
+        }
 
         menu->addSeparator();
         auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
@@ -786,19 +791,8 @@ void VideosPage::buildUI()
             ContextMenuHelper::revealInExplorer(filePath);
         } else if (chosen == copyAct) {
             ContextMenuHelper::copyToClipboard(filePath);
-        } else if (chosen == playFfmpegAct
-#ifdef HAS_LIBMPV
-                   || chosen == playMpvAct
-#endif
-                   ) {
-            // Continue-Watching tile already has a single filePath, no
-            // resume-resolution loop needed.
-            const auto backend =
-#ifdef HAS_LIBMPV
-                (chosen == playMpvAct) ? BackendFactory::Type::Mpv :
-#endif
-                BackendFactory::Type::Ffmpeg;
-            emit playVideoWithBackend(filePath, backend);
+        } else if (moveActions.contains(chosen)) {
+            moveShowToCategory(showPath, moveActions.value(chosen));
         } else if (chosen == removeAct) {
             if (ContextMenuHelper::confirmRemove(this, "Remove from library",
                     "Remove this show from the library?\n" + showPath +
@@ -808,6 +802,65 @@ void VideosPage::buildUI()
         }
         menu->deleteLater();
     });
+
+    // Other category strips share the core "open / play / move" behavior.
+    // The Miscellaneous strip keeps the older full maintenance menu above.
+    for (auto it = m_categoryStrips.begin(); it != m_categoryStrips.end(); ++it) {
+        TileStrip* strip = it.value();
+        if (!strip || strip == m_tileStrip)
+            continue;
+        strip->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(strip, &QWidget::customContextMenuRequested, this,
+                [this, strip, computeVideoId](const QPoint& pos) {
+            auto* card = strip->tileAt(pos);
+            if (!card) return;
+
+            const QString showPath = card->property("seriesPath").toString();
+            const QString showName = card->property("seriesName").toString();
+            const QStringList allFiles = card->property("isLoose").toBool()
+                ? QStringList{card->property("primaryFilePath").toString()}
+                : ScannerUtils::walkFiles(showPath, videoExts);
+
+            auto* menu = ContextMenuHelper::createMenu(this);
+            auto* playAct = menu->addAction("Play / Continue");
+            playAct->setEnabled(!allFiles.isEmpty());
+            auto* openAct = menu->addAction("Open show");
+            menu->addSeparator();
+            auto* moveMenu = menu->addMenu("Move to");
+            QMap<QAction*, VideoCategory> moveActions;
+            for (const auto& info : videoCategoryInfos()) {
+                auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
+                moveActions.insert(act, info.category);
+            }
+
+            auto* chosen = menu->exec(strip->mapToGlobal(pos));
+            if (chosen == playAct && !allFiles.isEmpty()) {
+                QString resumeFile;
+                qint64 bestAt = -1;
+                const QJsonObject allProg = m_bridge->allProgress("videos");
+                for (const auto& f : allFiles) {
+                    const QString id = computeVideoId(f);
+                    const QJsonObject prog = allProg.value(id).toObject();
+                    if (prog.value("finished").toBool()) continue;
+                    if (prog.value("positionSec").toDouble(0) > 0) {
+                        const qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
+                        if (upd > bestAt) { bestAt = upd; resumeFile = f; }
+                    }
+                }
+                if (resumeFile.isEmpty())
+                    resumeFile = allFiles.first();
+                emit playVideo(resumeFile);
+            } else if (chosen == openAct) {
+                m_showView->setFileDurations(m_showDurations.value(showPath));
+                m_showView->showFolder(showPath, showName, posterPathFor(showPath),
+                                       card->property("isLoose").toBool());
+                m_stack->setCurrentIndexAnimated(1);
+            } else if (moveActions.contains(chosen)) {
+                moveShowToCategory(showPath, moveActions.value(chosen));
+            }
+            menu->deleteLater();
+        });
+    }
 
     // V-key: toggle grid/list view
     auto* viewToggleShortcut = new QShortcut(QKeySequence(Qt::Key_V), this);
@@ -831,7 +884,8 @@ void VideosPage::buildUI()
         } else if (m_stack->currentIndex() == 1) {
             showGrid();
         } else {
-            m_tileStrip->clearSelection();
+            for (TileStrip* strip : m_categoryStrips)
+                if (strip) strip->clearSelection();
         }
     });
 
@@ -846,11 +900,14 @@ void VideosPage::buildUI()
     // Ctrl+A: select all tiles
     auto* ctrlAShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_A), this);
     connect(ctrlAShortcut, &QShortcut::activated, this, [this]() {
-        if (m_stack->currentIndex() == 0 && !m_searchBar->hasFocus())
-            m_tileStrip->selectAll();
+        if (m_stack->currentIndex() == 0 && !m_searchBar->hasFocus()) {
+            for (TileStrip* strip : m_categoryStrips)
+                if (strip && strip->isVisible()) strip->selectAll();
+        }
     });
 
-    m_gridMode = QSettings("Tankoban", "Tankoban").value("library_view_mode_videos", "grid").toString() == "grid";
+    QSettings settings("Tankoban", "Tankoban");
+    m_gridMode = settings.value("library_view_mode_videos", "grid").toString() == "grid";
     if (!m_gridMode) toggleViewMode();
 
     gridLayout->addStretch();
@@ -863,11 +920,8 @@ void VideosPage::buildUI()
     connect(m_showView, &ShowView::episodeSelected, this, [this](const QString& filePath) {
         emit playVideo(filePath);
     });
-    // 2026-04-30 — backend-override sibling forward, mirrors the shape above.
-    connect(m_showView, &ShowView::episodeSelectedWithBackend, this,
-        [this](const QString& filePath, BackendFactory::Type backend) {
-            emit playVideoWithBackend(filePath, backend);
-        });
+    connect(m_showView, &ShowView::categoryMoveRequested,
+            this, &VideosPage::moveShowToCategory);
     m_stack->addWidget(m_showView);
 
     outerLayout->addWidget(m_stack, 1);
@@ -896,12 +950,15 @@ void VideosPage::triggerScan()
 
     QStringList roots = m_bridge->rootFolders("videos");
     if (roots.isEmpty()) {
-        m_tileStrip->clear();
+        clearCategoryRows();
+        clearContinueRows();
         m_listView->clear();
         m_showDurations.clear();
         m_fileToShowRoot.clear();
         m_showPathToName.clear();
-        m_tileStrip->hide();
+        m_showsById.clear();
+        m_allShows.clear();
+        setGridRowsVisible(false);
         m_statusLabel->setText("Add a videos folder to get started");
         m_statusLabel->show();
         m_hasScanned = true;
@@ -911,14 +968,17 @@ void VideosPage::triggerScan()
 
     if (!m_hasScanned) {
         // First scan: clear tiles, show scanning label for progressive loading
-        m_tileStrip->clear();
+        clearCategoryRows();
+        clearContinueRows();
         m_listView->clear();
         m_showDurations.clear();
         m_fileToShowRoot.clear();
         m_showPathToName.clear();
+        m_showsById.clear();
+        m_allShows.clear();
         m_statusLabel->setText("Scanning...");
         m_statusLabel->show();
-        m_tileStrip->hide();
+        setGridRowsVisible(false);
     }
     // Rescan: keep old tiles visible — atomic swap happens in onScanFinished
 
@@ -927,6 +987,14 @@ void VideosPage::triggerScan()
 }
 
 void VideosPage::addShowTile(const ShowInfo& show)
+{
+    VideoCategoryStore store(m_bridge->store());
+    const VideoCategory category = store.categoryFor(VideoCategoryStore::itemIdForShow(show));
+    TileStrip* strip = m_categoryStrips.value(category, m_categoryStrips.value(VideoCategory::Miscellaneous));
+    addShowTileToStrip(show, strip);
+}
+
+void VideosPage::addShowTileToStrip(const ShowInfo& show, TileStrip* strip)
 {
     QString subtitle;
     if (show.episodeCount == 1)
@@ -946,6 +1014,8 @@ void VideosPage::addShowTile(const ShowInfo& show)
     card->setProperty("fileCount", show.episodeCount);
     card->setProperty("newestMtime", show.newestMtimeMs);
     card->setProperty("isLoose", show.isLoose);
+    if (!show.files.isEmpty())
+        card->setProperty("primaryFilePath", show.files.first().path);
 
     // Store scan-time durations for this show
     QMap<QString, double> durations;
@@ -964,7 +1034,8 @@ void VideosPage::addShowTile(const ShowInfo& show)
         m_clickTimer->start();
     });
     card->installEventFilter(this);
-    m_tileStrip->addTile(card);
+    if (strip)
+        strip->addTile(card);
 
     // Also add to list view
     LibraryListView::ItemData listItem;
@@ -983,16 +1054,21 @@ void VideosPage::onShowFound(const ShowInfo& show)
     // First scan: progressive loading
     if (m_statusLabel->isVisible()) {
         m_statusLabel->hide();
-        m_tileStrip->show();
+        setGridRowsVisible(true);
     }
     addShowTile(show);
 }
 
 void VideosPage::onScanFinished(const QList<ShowInfo>& allShows)
 {
-    bool wasRescan = m_hasScanned;
     m_hasScanned = true;
     m_scanning = false;
+    m_allShows = allShows;
+    m_showsById.clear();
+    for (const auto& show : m_allShows)
+        m_showsById.insert(VideoCategoryStore::itemIdForShow(show), show);
+
+    VideoCategoryStore(m_bridge->store()).ensureAssignments(m_allShows);
     // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — fire pending rescan (set if
     // triggerScan was called mid-scan). Defer via single-shot timer to let
     // the rest of onScanFinished's UI updates settle before the next scan
@@ -1002,28 +1078,18 @@ void VideosPage::onScanFinished(const QList<ShowInfo>& allShows)
         QTimer::singleShot(0, this, [this]() { triggerScan(); });
     }
 
-    if (wasRescan) {
-        // Atomic swap: clear old tiles, rebuild from complete list
-        m_tileStrip->clear();
-        m_listView->clear();
-        m_showDurations.clear();
-        m_fileToShowRoot.clear();
-        m_showPathToName.clear();
-
-        for (const auto& show : allShows)
-            addShowTile(show);
-    }
+    rebuildLibraryRows();
 
     if (allShows.isEmpty()) {
-        m_tileStrip->hide();
+        setGridRowsVisible(false);
         m_statusLabel->setObjectName("LibraryEmptyLabel");
         m_statusLabel->setAlignment(Qt::AlignCenter);
         m_statusLabel->setText("No videos found\nAdd a root folder via the + button or browse Sources for content");
         m_statusLabel->show();
     } else {
         m_statusLabel->hide();
-        m_tileStrip->show();
-        m_tileStrip->sortTiles(m_sortCombo->currentData().toString());
+        setGridRowsVisible(m_gridMode);
+        sortCategoryRows();
     }
 
     refreshContinueStrip();
@@ -1041,6 +1107,75 @@ void VideosPage::showGrid()
     m_stack->setCurrentIndexAnimated(0);
 }
 
+void VideosPage::clearCategoryRows()
+{
+    for (TileStrip* strip : m_categoryStrips)
+        if (strip) strip->clear();
+    for (QWidget* section : m_categorySections)
+        if (section) section->hide();
+}
+
+void VideosPage::clearContinueRows()
+{
+    if (m_continueStrip) m_continueStrip->clear();
+    if (m_continueSection) m_continueSection->hide();
+}
+
+void VideosPage::rebuildLibraryRows()
+{
+    clearCategoryRows();
+    m_listView->clear();
+    m_showDurations.clear();
+    m_fileToShowRoot.clear();
+    m_showPathToName.clear();
+
+    for (const auto& show : m_allShows)
+        addShowTile(show);
+
+    sortCategoryRows();
+    applySearch();
+}
+
+void VideosPage::sortCategoryRows()
+{
+    const QString key = m_sortCombo ? m_sortCombo->currentData().toString() : QStringLiteral("name_asc");
+    for (TileStrip* strip : m_categoryStrips)
+        if (strip) strip->sortTiles(key);
+}
+
+void VideosPage::setGridRowsVisible(bool visible)
+{
+    if (m_categoriesContainer)
+        m_categoriesContainer->setVisible(visible);
+    for (auto it = m_categorySections.begin(); it != m_categorySections.end(); ++it) {
+        TileStrip* strip = m_categoryStrips.value(it.key());
+        it.value()->setVisible(visible && strip && strip->visibleCount() > 0);
+    }
+}
+
+void VideosPage::applyDensityToAllStrips(int val)
+{
+    for (TileStrip* strip : m_categoryStrips)
+        if (strip) strip->setDensity(val);
+    if (m_continueStrip)
+        m_continueStrip->setDensity(val);
+}
+
+void VideosPage::moveShowToCategory(const QString& showId, VideoCategory category)
+{
+    if (showId.isEmpty())
+        return;
+    VideoCategoryStore(m_bridge->store()).setCategory(showId, category);
+    refreshFromCategoryStore();
+    emit categoryAssignmentsChanged();
+}
+
+void VideosPage::refreshFromCategoryStore()
+{
+    rebuildLibraryRows();
+    refreshContinueStrip();
+}
+
 void VideosPage::toggleViewMode()
 {
     m_gridMode = !m_gridMode;
@@ -1048,11 +1183,11 @@ void VideosPage::toggleViewMode()
                                                 m_gridMode ? "grid" : "list");
     if (m_gridMode) {
         m_listView->hide();
-        m_tileStrip->show();
+        setGridRowsVisible(true);
         m_densitySlider->show();
         m_viewToggle->setText("\u2630");
     } else {
-        m_tileStrip->hide();
+        setGridRowsVisible(false);
         m_listView->show();
         m_densitySlider->hide();
         m_viewToggle->setText("\u2637");
@@ -1062,19 +1197,24 @@ void VideosPage::toggleViewMode()
 void VideosPage::applySearch()
 {
     QString query = m_searchBar->text();
-    m_tileStrip->filterTiles(query);
+    int visible = 0;
+    for (TileStrip* strip : m_categoryStrips) {
+        if (!strip) continue;
+        strip->filterTiles(query);
+        visible += strip->visibleCount();
+    }
     m_listView->setTextFilter(query);
 
-    if (m_tileStrip->visibleCount() == 0 && !query.trimmed().isEmpty()) {
+    if (visible == 0 && !query.trimmed().isEmpty()) {
         m_statusLabel->setObjectName("LibraryEmptyLabel");
         m_statusLabel->setAlignment(Qt::AlignCenter);
         m_statusLabel->setText(
             QString("No results for \"%1\"").arg(query.trimmed()));
         m_statusLabel->show();
-        m_tileStrip->hide();
-    } else if (m_tileStrip->visibleCount() > 0) {
+        setGridRowsVisible(false);
+    } else if (visible > 0) {
         m_statusLabel->hide();
-        m_tileStrip->show();
+        setGridRowsVisible(m_gridMode);
     }
 }
 
@@ -1118,7 +1258,137 @@ QString VideosPage::formatSize(qint64 bytes)
     return QString::number(gb, 'f', 1) + " GB";
 }
 
+QString VideosPage::resolveShowPath(const QString& filePath) const
+{
+    auto it = m_fileToShowRoot.constFind(filePath);
+    if (it != m_fileToShowRoot.constEnd())
+        return it.value();
+
+    // Scanner may not enumerate nested files in show.files (e.g. Season N
+    // episodes under a parent series folder). Find the show root whose path
+    // is the longest prefix of filePath — that's the matching top-level show.
+    QString best;
+    for (auto sit = m_showPathToName.constBegin(); sit != m_showPathToName.constEnd(); ++sit) {
+        const QString& candidate = sit.key();
+        if (candidate.isEmpty())
+            continue;
+        if (filePath.startsWith(candidate + QLatin1Char('/'))
+            || filePath.startsWith(candidate + QLatin1Char('\\'))) {
+            if (candidate.length() > best.length())
+                best = candidate;
+        }
+    }
+    if (!best.isEmpty())
+        return best;
+
+    return QFileInfo(filePath).absolutePath();
+}
+
+QList<VideosPage::ContinueItem> VideosPage::collectContinueItems()
+{
+    QList<ContinueItem> items;
+    QJsonObject allProg = m_bridge->allProgress("videos");
+    if (allProg.isEmpty())
+        return items;
+
+    QMap<QString, ContinueItem> showMap;
+
+    for (auto it = allProg.begin(); it != allProg.end(); ++it) {
+        QJsonObject prog = it.value().toObject();
+        if (prog.value("finished").toBool())
+            continue;
+
+        double posSec = prog.value("positionSec").toDouble(0);
+        double durSec = prog.value("durationSec").toDouble(0);
+        if (posSec <= 0)
+            continue;
+
+        QString filePath = prog.value("path").toString();
+        if (filePath.isEmpty() || !QFile::exists(filePath))
+            continue;
+
+        qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();
+        QString showPath = resolveShowPath(filePath);
+        QFileInfo showInfo(showPath);
+        const QString fallbackName = showInfo.isFile()
+            ? ScannerUtils::cleanMediaFolderTitle(showInfo.completeBaseName())
+            : ScannerUtils::cleanMediaFolderTitle(QDir(showPath).dirName());
+
+        auto existing = showMap.find(showPath);
+        if (existing == showMap.end()) {
+            ContinueItem item;
+            item.updatedAt = updatedAt;
+            item.showPath = showPath;
+            item.showName = m_showPathToName.value(showPath, fallbackName);
+            item.resumeFilePath = filePath;
+            item.resumePosSec = posSec;
+            item.resumeDurSec = durSec;
+            showMap.insert(showPath, item);
+        } else if (updatedAt > existing->updatedAt) {
+            existing->updatedAt = updatedAt;
+            existing->resumeFilePath = filePath;
+            existing->resumePosSec = posSec;
+            existing->resumeDurSec = durSec;
+        }
+    }
+
+    items = showMap.values();
+    std::sort(items.begin(), items.end(), [](const ContinueItem& a, const ContinueItem& b) {
+        return a.updatedAt > b.updatedAt;
+    });
+    return items;
+}
+
+void VideosPage::addContinueTile(TileStrip* strip, const ContinueItem& item)
+{
+    if (!strip)
+        return;
+
+    const QString poster = posterPathFor(item.showPath);
+    const QString thumbPath = QFile::exists(poster) ? poster : QString();
+    const int pct = (item.resumeDurSec > 0)
+        ? qBound(0, static_cast<int>(item.resumePosSec / item.resumeDurSec * 100), 100)
+        : 0;
+
+    auto* card = new TileCard(thumbPath, item.showName, QString::number(pct) + "%");
+    card->setProperty("filePath", item.resumeFilePath);
+    card->setProperty("seriesPath", item.showPath);
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        m_pendingClickPath = card->property("filePath").toString();
+        m_pendingClickName.clear();
+        m_pendingIsPlay = true;
+        m_clickTimer->start();
+    });
+    card->installEventFilter(this);
+    strip->addTile(card);
+}
+
 void VideosPage::refreshContinueStrip()
+{
+    // Compute new state first so we can decide whether to hide vs. just
+    // re-populate without toggling the section's visibility — the prior
+    // clearContinueRows() unconditionally hide()'d, then we'd show() again
+    // after re-adding tiles, causing a double layout reflow that flashed
+    // as a visible vertical "shake" when the user cleared a single show
+    // from a multi-show continue strip (Hemanth report 2026-05-05 ~22:50pm).
+    QList<ContinueItem> items = collectContinueItems();
+    if (items.isEmpty()) {
+        if (m_continueStrip) m_continueStrip->clear();
+        if (m_continueSection) m_continueSection->hide();
+        return;
+    }
+
+    if (items.size() > 40)
+        items = items.mid(0, 40);
+
+    if (m_continueStrip) m_continueStrip->clear();
+    for (const ContinueItem& item : items)
+        addContinueTile(m_continueStrip, item);
+    if (m_continueSection && !m_continueSection->isVisible())
+        m_continueSection->show();
+}
+
+void VideosPage::refreshContinueStripLegacy()
 {
     m_continueStrip->clear();
 
@@ -1153,9 +1423,9 @@ void VideosPage::refreshContinueStrip()
             continue;
 
         qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();
-        // Use scanner's show root, not episode's immediate parent dir
-        QString showPath = m_fileToShowRoot.value(filePath,
-                                                   QFileInfo(filePath).absolutePath());
+        // Use scanner's show root; falls back to longest-prefix-match across
+        // known shows for nested files (e.g. Sopranos/Season 6/episode.mkv).
+        QString showPath = resolveShowPath(filePath);
 
         auto existing = showMap.find(showPath);
         if (existing == showMap.end()) {

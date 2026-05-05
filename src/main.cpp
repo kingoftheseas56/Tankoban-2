@@ -4,6 +4,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QStringList>
+#include <QTimer>
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
 #include "ui/MainWindow.h"
@@ -16,11 +17,6 @@
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
-#endif
-
-#ifdef HAS_LIBMPV
-#include "ui/player/MpvProbe.h"
-#include <cstdlib>
 #endif
 
 // ── Single-instance IPC ─────────────────────────────────────────────────────
@@ -97,16 +93,6 @@ static void applyWindowsDarkTitleBar(QWidget *window)
 
 int main(int argc, char *argv[])
 {
-#ifdef HAS_LIBMPV
-    // MPV_RENDER_API_INTEGRATION Phase 1 smoke gate. Set TANKOBAN_MPV_PROBE=1
-    // to run a libmpv-load smoke and exit without bringing up the UI. Pure
-    // stdlib path; no Qt dependency.
-    if (const char* probe = std::getenv("TANKOBAN_MPV_PROBE");
-        probe && probe[0] == '1' && probe[1] == '\0') {
-        return tankoban::runMpvProbe();
-    }
-#endif
-
 #ifdef Q_OS_WIN
     SetProcessDPIAware();
 #endif
@@ -116,6 +102,8 @@ int main(int argc, char *argv[])
     app.setOrganizationName("Tankoban");
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
+
+    const QStringList cliArgs = QCoreApplication::arguments();
 
     if (signalExistingInstance())
         return 0;
@@ -144,15 +132,14 @@ int main(int argc, char *argv[])
     dbg("5-mainwindow-created");
 
     // Single-instance: claim the local socket so subsequent launches signal us.
-    auto *instanceServer = createInstanceServer(&window);
+    QLocalServer* instanceServer = createInstanceServer(&window);
     Q_UNUSED(instanceServer);  // window-parented, dies with window
 
     // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge (gated dev-only).
     // build_and_run.bat passes --dev-control automatically so the bridge is
     // live for any agent / tankoctl smoke. Production NSIS builds (Phase 6)
     // will not pass the flag and will not advertise the socket.
-    const QStringList devArgs = QCoreApplication::arguments();
-    const bool devControlFlag = devArgs.contains(QStringLiteral("--dev-control"));
+    const bool devControlFlag = cliArgs.contains(QStringLiteral("--dev-control"));
     const bool devControlEnv  = qEnvironmentVariableIntValue("TANKOBAN_DEV_CONTROL") == 1;
     if (devControlFlag || devControlEnv) {
         window.enableDevControl();
@@ -168,6 +155,20 @@ int main(int argc, char *argv[])
     window.raise();
     window.activateWindow();
     dbg("7-window-shown");
+
+    // `--play-file <path>` auto-opens a video on launch via command-line.
+    // Routed through 0-delay
+    // singleShot so the call lands AFTER showMaximized realizes the layout
+    // (openVideoPlayer uses centralWidget()->rect() for geometry; pre-
+    // realization that returns 0x0).
+    const int playFileIdx = cliArgs.indexOf(QStringLiteral("--play-file"));
+    if (playFileIdx >= 0 && playFileIdx + 1 < cliArgs.size()) {
+        const QString filePath = cliArgs.at(playFileIdx + 1);
+        QTimer::singleShot(0, &window, [&window, filePath]() {
+            window.openVideoFromCli(filePath);
+        });
+        dbg("7a-playfile-queued");
+    }
 
 #ifdef Q_OS_WIN
     // Force foreground on Windows — showMaximized alone isn't enough

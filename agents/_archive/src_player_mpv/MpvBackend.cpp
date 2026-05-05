@@ -758,6 +758,25 @@ void MpvBackend::onWakeup()
             if (ev->data) handlePropertyChange(static_cast<mpv_event_property*>(ev->data));
             break;
 
+        case MPV_EVENT_START_FILE:
+            mpvLog("[event] START_FILE");
+            // MAKE_MPV_BEAT_FFMPEG carry-forward S5 (2026-05-03) — clear
+            // libplacebo renderer's source color-space cache on in-process
+            // file-switch. START_FILE fires BEFORE the new file's color
+            // metadata is probed; without this clear, the prior file's
+            // HDR primaries / transfer / peak luminance leak into the
+            // first frames of the new file (visible as a brief miscolor
+            // window on HDR-to-SDR or SDR-to-HDR file swaps in a single
+            // playlist session). FILE_LOADED below repopulates correctly
+            // via pushSourceColorSpaceToRenderer once the new file's
+            // video-params/* properties are populated. Renderer's clear
+            // contract per MpvLibplaceboRenderer.h:50-53: zero-init
+            // pl_color_space falls back to pl_color_space_srgb.
+            if (m_libplaceboRenderer) {
+                m_libplaceboRenderer->setSourceColorSpace(pl_color_space{});
+            }
+            break;
+
         case MPV_EVENT_FILE_LOADED:
             mpvLog("[event] FILE_LOADED");
             // Phase 3: synthesize the open-pipeline progression that
@@ -1616,13 +1635,24 @@ int MpvBackend::sendRawFilters(const QString& videoFilter, const QString& audioF
 int MpvBackend::sendSetToneMapping(const QString& algorithm, bool peakDetect)
 {
     if (!m_mpv) return -1;
-    if (!algorithm.isEmpty()) setOpt(m_mpv, "tone-mapping", algorithm.toUtf8().constData());
-    // MAKE_MPV_SOLO Task 4 Phase E (2026-05-01) — was setFlag on
-    // hdr-peak-decay-rate, which is mpv's *numeric* decay-rate option
-    // (default 100ms), not a boolean flag — pre-fix this line silently
-    // no-op'd. The boolean for enabling per-scene peak detection is
-    // hdr-compute-peak. Mirrors libplacebo's pl_peak_detect_params toggle
-    // on the ffmpeg sidecar side (gpu_renderer.cpp:234).
+    // MAKE_MPV_BEAT_FFMPEG carry-forward S4 (2026-05-03) — when the
+    // libplacebo composite path is active (post-Task-3 architecture),
+    // libplacebo (not mpv) owns tone mapping; mpv runs tone-mapping=clip
+    // per init at line 406 so HDR values pass through unchanged for
+    // libplacebo's pl_color_map_params to consume. Pre-fix this method
+    // unconditionally overwrote that load-bearing clip with the user-
+    // supplied algorithm — would silently break the libplacebo HDR
+    // pipeline if a UI toggle ever wired through to here. Bug is latent
+    // today (no UI call site yet in src/ui) but the gate closes the
+    // door before that wiring lands. Future work: route the algorithm
+    // to libplacebo's pl_color_map_params.tone_mapping_function via an
+    // MpvLibplaceboRenderer runtime setter.
+    if (!m_libplaceboRenderer && !algorithm.isEmpty()) {
+        setOpt(m_mpv, "tone-mapping", algorithm.toUtf8().constData());
+    }
+    // hdr-compute-peak left unconditional — on the libplacebo path it's
+    // a no-op (mpv isn't tone-mapping), on legacy/fallback path it
+    // toggles per-scene peak detect per Task 4 Phase E intent.
     setFlag(m_mpv, "hdr-compute-peak", peakDetect);
     return nextSeq();
 }

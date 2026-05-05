@@ -37,7 +37,9 @@ set(SOURCES
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
     src/core/BooksScanner.cpp
-    src/core/AudiobookMetaCache.cpp
+    src/core/library/VideoCategory.cpp
+    src/core/library/VideoCategoryStore.cpp
+    src/core/library/VideoClassifier.cpp
     src/core/VideosScanner.cpp
     src/core/ScannerUtils.cpp
     src/core/PosterFetcher.cpp
@@ -49,15 +51,17 @@ set(SOURCES
     src/ui/ContextMenuHelper.cpp
     src/ui/widgets/FadingStackedWidget.cpp
     src/ui/widgets/LibraryListView.cpp
+    src/ui/widgets/SidebarDrawer.cpp
     src/ui/widgets/Toast.cpp
     src/ui/widgets/ThemePicker.cpp
     src/ui/pages/ComicsPage.cpp
     src/ui/pages/BooksPage.cpp
     src/ui/pages/VideosPage.cpp
+    src/ui/pages/OrganisePage.cpp
+    src/ui/pages/CategoryEditorPage.cpp
     src/ui/pages/PosterPickerPopover.cpp
     src/ui/pages/SeriesView.cpp
     src/ui/pages/BookSeriesView.cpp
-    src/ui/pages/AudiobookDetailView.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
     src/ui/pages/ShowView.cpp
@@ -72,7 +76,6 @@ set(SOURCES
     src/ui/readers/PageCache.cpp
     src/ui/readers/ThumbnailGenerator.cpp
     src/core/EpubParser.cpp
-    src/ui/pages/SourcesPage.cpp
     src/ui/pages/TankorentPage.cpp
     src/ui/pages/TankoyomiPage.cpp
     src/ui/pages/IndexerStatusPanel.cpp
@@ -91,14 +94,6 @@ set(SOURCES
     src/core/indexers/ExtTorrentsIndexer.cpp
     src/core/indexers/CloudflareCookieHarvester.cpp
     src/ui/player/SidecarProcess.cpp
-    src/ui/player/BackendFactory.cpp
-    # MAKE_MPV_BEAT_FFMPEG Task 2 (2026-05-02) — MpvLibplaceboBuildProbe
-    # retired; replaced by the real MpvVulkanWidget below. Probe served
-    # its purpose during Agent 7's Task 1 build-prep (proved libplacebo +
-    # Vulkan link symbols resolve from the main app); its include + dummy
-    # symbol are now subsumed by the actual widget that uses both libs.
-    # src/ui/player/MpvLibplaceboBuildProbe.cpp  -- removed Task 2
-    src/ui/player/MpvVulkanWidget.cpp
     # MAKE_MPV_SOLO Task 8.B (2026-05-02) — Windows audio device-change
     # watcher (IMMNotificationClient COM listener + Qt-thread marshaling).
     # Closes the deferred per-device-delay-recall deliverable from Task 8.
@@ -192,7 +187,9 @@ set(HEADERS
     src/core/CoreBridge.h
     src/core/LibraryScanner.h
     src/core/BooksScanner.h
-    src/core/AudiobookMetaCache.h
+    src/core/library/VideoCategory.h
+    src/core/library/VideoCategoryStore.h
+    src/core/library/VideoClassifier.h
     src/core/VideosScanner.h
     src/core/ScannerUtils.h
     src/core/PosterFetcher.h
@@ -203,14 +200,16 @@ set(HEADERS
     src/ui/ContextMenuHelper.h
     src/ui/widgets/FadingStackedWidget.h
     src/ui/widgets/LibraryListView.h
+    src/ui/widgets/SidebarDrawer.h
     src/ui/widgets/Toast.h
     src/ui/pages/ComicsPage.h
     src/ui/pages/BooksPage.h
     src/ui/pages/VideosPage.h
+    src/ui/pages/OrganisePage.h
+    src/ui/pages/CategoryEditorPage.h
     src/ui/pages/PosterPickerPopover.h
     src/ui/pages/SeriesView.h
     src/ui/pages/BookSeriesView.h
-    src/ui/pages/AudiobookDetailView.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
     src/ui/pages/ShowView.h
@@ -224,7 +223,6 @@ set(HEADERS
     src/ui/readers/PageCache.h
     src/ui/readers/ThumbnailGenerator.h
     src/core/EpubParser.h
-    src/ui/pages/SourcesPage.h
     src/ui/pages/TankorentPage.h
     src/ui/pages/TankoyomiPage.h
     src/ui/pages/IndexerStatusPanel.h
@@ -245,7 +243,6 @@ set(HEADERS
     src/core/indexers/CloudflareCookieHarvester.h
     src/ui/player/IPlayerBackend.h
     src/ui/player/SidecarProcess.h
-    src/ui/player/BackendFactory.h
     src/ui/player/AudioDeviceWatcher.h
     src/ui/player/ShmFrameReader.h
     src/ui/player/FrameCanvas.h
@@ -508,47 +505,9 @@ else()
     message(STATUS "libarchive NOT found — CBR/RAR support disabled")
 endif()
 
-# ── libmpv (MPV_RENDER_API_INTEGRATION Phase 1, 2026-04-28) ──────────────────
-# Vendored prebuilt from shinchiro/mpv-winbuild-cmake — see setup.bat step 6.
-# bin/ + lib/ are gitignored; setup.bat downloads + extracts them.
-# include/mpv/*.h + LICENSE.libmpv.txt + VERSION.txt ARE tracked so fresh
-# clones configure cleanly without setup.bat (libmpv just disabled until
-# the DLL lands on disk; ffmpeg backend unaffected).
-set(LIBMPV_ROOT "${CMAKE_SOURCE_DIR}/resources/libmpv/windows")
-find_path(LIBMPV_INCLUDE_DIR mpv/client.h HINTS "${LIBMPV_ROOT}/include")
-find_library(LIBMPV_LIBRARY NAMES mpv libmpv libmpv.dll
-             HINTS "${LIBMPV_ROOT}/lib")
-
-if(LIBMPV_INCLUDE_DIR AND LIBMPV_LIBRARY AND EXISTS "${LIBMPV_ROOT}/bin/libmpv-2.dll")
-    message(STATUS "libmpv found: ${LIBMPV_LIBRARY}")
-    target_include_directories(Tankoban PRIVATE "${LIBMPV_INCLUDE_DIR}")
-    target_link_libraries(Tankoban PRIVATE "${LIBMPV_LIBRARY}")
-    target_compile_definitions(Tankoban PRIVATE HAS_LIBMPV=1)
-    target_sources(Tankoban PRIVATE
-        src/ui/player/MpvProbe.cpp
-        src/ui/player/MpvBackend.h
-        src/ui/player/MpvBackend.cpp
-        src/ui/player/MpvLibplaceboRenderer.h
-        src/ui/player/MpvLibplaceboRenderer.cpp
-        # MAKE_MPV_BEAT_FFMPEG Task 9 (2026-05-03) — MpvVideoWidget.{h,cpp}
-        # deleted. The QOpenGLWidget renderer was replaced by MpvVulkanWidget +
-        # MpvLibplaceboRenderer (Tasks 2 + 3 + 3.5) which run mpv's OpenGL
-        # render API on a dedicated render thread and composite via libplacebo
-        # into a Vulkan swapchain. The old widget had no remaining call sites
-        # post-Task-3.5 swap; emergency-revert window closed after Task 7
-        # subtitle smoke verified the new pipeline end-to-end.
-        src/ui/player/MpvVulkanWidget.h
-        src/ui/player/MpvVulkanWidget.cpp
-    )
-    # MpvLibplaceboRenderer's render thread uses OpenGL via QOpenGLContext
-    # for mpv's render API (MPV_RENDER_API_TYPE_OPENGL); calls glGetString
-    # for renderer/vendor logging + GL_EXT_memory_object_win32 interop.
-    target_link_libraries(Tankoban PRIVATE opengl32)
-    set(TANKOBAN_HAS_LIBMPV TRUE)
-else()
-    message(STATUS "libmpv NOT found at ${LIBMPV_ROOT} — run setup.bat (mpv backend disabled)")
-    set(TANKOBAN_HAS_LIBMPV FALSE)
-endif()
+# MPV_CUTOVER 2026-05-05 — libmpv detection + linkage + DLL deployment removed.
+# mpv backend retired in favor of single-backend ffmpeg sidecar architecture.
+# libplacebo + Vulkan stack lives on in native_sidecar/ for the ffmpeg path.
 
 # ── Windows-specific ─────────────────────────────────────────────────────────
 if(WIN32)
@@ -610,21 +569,6 @@ if(WIN32)
         VERBATIM
     )
 
-    # MPV_RENDER_API_INTEGRATION Phase 1 (2026-04-28) — deploy libmpv-2.dll
-    # next to Tankoban.exe so the loader resolves it from the app dir before
-    # any PATH lookup. LICENSE.libmpv.txt ships alongside per LGPL-2.1+
-    # attribution requirement. Only fires when the libmpv blob is present
-    # (gated by TANKOBAN_HAS_LIBMPV from the find_library block above).
-    if(TANKOBAN_HAS_LIBMPV)
-        add_custom_command(TARGET Tankoban POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${LIBMPV_ROOT}/bin/libmpv-2.dll"
-                "${LIBMPV_ROOT}/LICENSE.libmpv.txt"
-                "$<TARGET_FILE_DIR:Tankoban>/"
-            COMMENT "Copying libmpv-2.dll (LGPL-2.1+ upstream) to build output"
-            VERBATIM
-        )
-    endif()
 endif()
 
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────
@@ -650,36 +594,6 @@ target_precompile_headers(Tankoban PRIVATE
     <algorithm>
     <functional>
 )
-
-# ── C++ unit tests (optional — opt in with -DTANKOBAN_BUILD_TESTS=ON) ───────
-# Original approach used find_library against C:/tools/googletest — but that
-# path holds MinGW-built libgtest.a for the sidecar, which MSVC's link.exe
-# cannot link (different ABI + object format). Main-app is MSVC2022 so it
-# needs an MSVC-built gtest. FetchContent builds gtest from source with the
-# parent compiler, which works for both the MSVC main app AND a future MinGW
-# sidecar adoption (sidecar still uses its own find_library block today).
-#
-# Configure requires network on first run (fetches gtest at the pinned tag);
-# subsequent configures use the CMake cache.
-option(TANKOBAN_BUILD_TESTS "Build tankoban_tests (fetches GoogleTest via FetchContent)" OFF)
-
-if(TANKOBAN_BUILD_TESTS)
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG v1.15.2
-    )
-    # Windows MSVC: force shared CRT on gtest to match Qt6's CRT.
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-
-    message(STATUS "TANKOBAN_BUILD_TESTS=ON - building tankoban_tests")
-    enable_testing()
-    add_subdirectory(src/tests)
-else()
-    message(STATUS "TANKOBAN_BUILD_TESTS=OFF - skipping C++ unit tests")
-endif()
 
 # ── tankoctl console client (REPO_HYGIENE Phase 3) ──────────────────────────
 # Companion exe to the dev-control bridge inside Tankoban.exe. Connects to the

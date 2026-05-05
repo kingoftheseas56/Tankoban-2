@@ -10,7 +10,9 @@
 #include <QSettings>
 #include <QMap>
 #include <QJsonObject>
-#include "ui/player/BackendFactory.h"
+#include <QVBoxLayout>
+#include "core/VideosScanner.h"
+#include "core/library/VideoCategory.h"
 class QPushButton;
 class QNetworkAccessManager;
 class CoreBridge;
@@ -20,7 +22,6 @@ class TileStrip;
 class TorrentClient;
 class VideosScanner;
 class ShowView;
-struct ShowInfo;
 namespace tankostream { namespace stream { class MetaAggregator; } }
 
 class VideosPage : public QWidget {
@@ -32,6 +33,8 @@ public:
     void activate();
     void triggerScan();
     void refreshContinueOnly();
+    void refreshFromCategoryStore();
+    QList<ShowInfo> currentShows() const { return m_allShows; }
 
     // Shared MetaAggregator handle owned by StreamPage. Set once at MainWindow
     // wire-up; powers the "Fetch poster from internet" context-menu action on
@@ -53,13 +56,7 @@ public:
 
 signals:
     void playVideo(const QString& filePath);
-    // 2026-04-30 — direct-opener variant carrying an explicit backend
-    // override for the right-click "Play with ffmpeg" / "Play with mpv"
-    // entries. One-shot: the saved player/videoBackend preference is
-    // NOT mutated. Routed through MainWindow::openVideoPlayerWithBackend
-    // → VideoPlayer::openFile's explicitBackend last param.
-    void playVideoWithBackend(const QString& filePath,
-                               BackendFactory::Type backend);
+    void categoryAssignmentsChanged();
 
 private slots:
     void onShowFound(const ShowInfo& show);
@@ -70,8 +67,35 @@ private slots:
     void refreshContinueStrip();
 
 private:
+    struct ContinueItem {
+        qint64 updatedAt = 0;
+        QString showPath;
+        QString showName;
+        QString resumeFilePath;
+        double resumePosSec = 0.0;
+        double resumeDurSec = 0.0;
+    };
+
     void buildUI();
     void addShowTile(const ShowInfo& show);
+    void addShowTileToStrip(const ShowInfo& show, TileStrip* strip);
+    void rebuildLibraryRows();
+    void clearCategoryRows();
+    void sortCategoryRows();
+    void setGridRowsVisible(bool visible);
+    void applyDensityToAllStrips(int val);
+    void moveShowToCategory(const QString& showId, VideoCategory category);
+    QList<ContinueItem> collectContinueItems();
+    // Map an episode file path back to its show-root folder. Prefers the
+    // m_fileToShowRoot map populated by the scanner; falls back to walking
+    // m_showPathToName looking for the longest path that is a prefix of
+    // filePath. The walk handles shows whose nested files (e.g. "Sopranos
+    // /Season 6/S06E04.mkv") aren't enumerated in show.files — without
+    // it Continue Watching tiles label as "Season 6" instead of "Sopranos".
+    QString resolveShowPath(const QString& filePath) const;
+    void addContinueTile(TileStrip* strip, const ContinueItem& item);
+    void clearContinueRows();
+    void refreshContinueStripLegacy();
     void toggleViewMode();
     void executePendingClick();
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -86,7 +110,11 @@ private:
     FadingStackedWidget*    m_stack = nullptr;
     QWidget*         m_continueSection = nullptr;
     TileStrip*       m_continueStrip = nullptr;
-    TileStrip*       m_tileStrip = nullptr;
+    TileStrip*       m_tileStrip = nullptr; // compatibility pointer to Miscellaneous strip
+    QWidget*         m_categoriesContainer = nullptr;
+    QVBoxLayout*     m_categoriesLayout = nullptr;
+    QMap<VideoCategory, QWidget*>   m_categorySections;
+    QMap<VideoCategory, TileStrip*> m_categoryStrips;
     LibraryListView* m_listView = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLineEdit*       m_searchBar = nullptr;
@@ -124,6 +152,8 @@ private:
     // File path → show root (for continue strip dedup by show, not by subfolder)
     QMap<QString, QString> m_fileToShowRoot;
     QMap<QString, QString> m_showPathToName;
+    QMap<QString, ShowInfo> m_showsById;
+    QList<ShowInfo> m_allShows;
 
     tankostream::stream::MetaAggregator* m_meta = nullptr;
     QNetworkAccessManager* m_nam = nullptr;  // lazy-init on first poster fetch

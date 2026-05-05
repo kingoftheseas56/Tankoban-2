@@ -12,7 +12,7 @@
 #include <QVBoxLayout>
 #include <QMap>
 #include <QJsonObject>
-#include "ui/player/BackendFactory.h"
+#include "core/library/VideoCategory.h"
 
 class CoreBridge;
 
@@ -47,14 +47,7 @@ public:
 signals:
     void backRequested();
     void episodeSelected(const QString& filePath);
-    // 2026-04-30 — direct-opener variant carrying explicit backend override
-    // for the per-episode menu's "Play with ffmpeg" / "Play with mpv"
-    // entries. One-shot: saved player/videoBackend pref unchanged.
-    // VideosPage forwards this through to its own playVideoWithBackend
-    // signal in the same shape as the existing episodeSelected → playVideo
-    // forward at VideosPage.cpp:~831.
-    void episodeSelectedWithBackend(const QString& filePath,
-                                     BackendFactory::Type backend);
+    void categoryMoveRequested(const QString& showId, VideoCategory category);
 
 private:
     void buildBreadcrumb();
