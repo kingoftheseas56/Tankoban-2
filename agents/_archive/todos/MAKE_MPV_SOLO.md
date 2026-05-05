@@ -22,7 +22,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
 
 *Tasks 1-15 authored — the full arc from baseline through ffmpeg decommission. Tasks 16+ would only land if validation window (Task 12) or follow-on smoke surfaces new gaps; otherwise plan archives after Task 15.*
 
-- [ ] **1. Bench the current ffmpeg behavior on a test corpus.**
+- [x] **1. Bench the current ffmpeg behavior on a test corpus.** ✅ closed 2026-05-01 — `agents/audits/baseline_ffmpeg_summary_2026-05-01.md` (6 YELLOW corpus + 6 patterns surfaced).
   - **What this involves (plain English):** Agent (via MCP) opens 5-10 video files Hemanth picks on the current ffmpeg player, lets each play long enough to settle, captures the technical logs to evidence files. No code changes — pure measurement so we have a baseline to compare future mpv changes against.
   - **What Hemanth does for the smoke test:** Pick the corpus — mix of subtitle types (anime ASS karaoke, simple SRT, PGS Blu-ray rip), HDR/SDR, common codecs. Watch each playback for ~30 seconds. Score each one GREEN (looks right, no glitches) / YELLOW (some issue but watchable) / RED (broken / unwatchable).
   - **Goal:** We measure how the current ffmpeg player behaves on a real set of files so later changes have a fair comparison point.
@@ -30,7 +30,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** corpus paths picked in coordination with Hemanth; output evidence files in `agents/audits/`; existing `scripts/compare-mpv-tanko.ps1` log-parser harness if useful.
   - **Smoke owner:** Hemanth picks corpus + records subjective verdicts; Agent (MCP) runs the playback + captures evidence.
 
-- [ ] **2. Remove the stream-mode override that forces ffmpeg.**
+- [x] **2. Remove the stream-mode override that forces ffmpeg.** ✅ closed 2026-05-01 — `BackendFactory.cpp::chooseFor(std::optional<Type>)` signature change; saved-pref now wins on streams.
   - **What this involves (plain English):** One small code change to `BackendFactory.cpp` removes the hidden rule "if it's a stream, force ffmpeg." After this, the saved player choice (mpv or ffmpeg) wins on streams the same way it wins on library files.
   - **What Hemanth does for the smoke test:** Set the saved player to mpv (right-click a video → set as default, or whatever the existing UI is). Open a stream from the Sources tab. Confirm mpv is running it — the right-click "current backend" indicator should say mpv, and no ffmpeg sidecar process should be visible in Task Manager.
   - **Goal:** If your saved player choice is mpv, streams use mpv too. Today there's a hidden override that ignores your choice on streams.
@@ -38,7 +38,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/BackendFactory.cpp` (the §Q4 stream-mode lock at lines 28-38).
   - **Smoke owner:** Hemanth.
 
-- [ ] **3. Bridge mpv's media info into the rest of the player.**
+- [x] **3. Bridge mpv's media info into the rest of the player.** ✅ closed 2026-05-01 — MpvBackend `FILE_LOADED` emit gets hdr / color_primaries / color_trc / chapters / audio_device / audio_host_api fields.
   - **What this involves (plain English):** mpv currently only tells the rest of the player two things — file duration and file path. Real ffmpeg files send a richer info bundle (HDR flag, color settings, chapter list, audio device). Code change makes mpv send the same richer bundle so the rest of the player has the data it needs to populate the HUD badges, chapter popover, and per-device audio-delay recall.
   - **What Hemanth does for the smoke test:** Open an HDR file on mpv. Look for the HDR badge in the player HUD (top-right corner area where it shows "HDR10" or similar). Open the chapter list popover — confirm chapters appear if the file has them. Agent verifies the technical fields populate via `tankoctl get-player` first.
   - **Goal:** mpv tells the rest of the player the same kind of file info ffmpeg already does — whether the file is HDR, what colors it uses, the chapter list, which audio device.
@@ -46,7 +46,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (the `mediaInfo` payload at lines 304-320), possibly `src/ui/player/MpvBackend.h` for new property bridges.
   - **Smoke owner:** Agent (MCP) for `tankoctl get-player` field-population; Hemanth for visible HDR badge + chapter list verification.
 
-- [ ] **4. HDR + tone-mapping parity on mpv.**
+- [x] **4. HDR + tone-mapping parity on mpv.** ✅ closed 2026-05-01 — `agents/audits/task4_close_2026-05-01.md`; both backends auto-pick bt.2446a; Hemanth verbatim "yeah it looks good as can be so green".
   - **What this involves (plain English):** This one's about visual quality, not feature plumbing. mpv has its own HDR rendering path; the task tunes it so HDR films look right on Hemanth's specific display. Heavy because there's no automatic test — Hemanth's eyes decide. Iterative: agent ships a tone-mapping setting, Hemanth scores, agent adjusts, repeat until GREEN.
   - **What Hemanth does for the smoke test:** Pick an HDR film known well (Sopranos S06E09, The Boys S03E06, or one of the go-tos). Right-click → Play with ffmpeg, watch a known-tricky scene (bright highlights, dark shadows, skin tones). Close. Right-click → Play with mpv, watch the same scene. Tell the agent GREEN / YELLOW / RED for mpv vs the ffmpeg memory. If RED or YELLOW, describe what looks off ("highlights blown out," "skin too red," "shadows crushed") — agent iterates tone-mapping settings.
   - **Goal:** HDR films play correctly on mpv on Hemanth's display, matching or improving over how ffmpeg renders them today.
@@ -54,7 +54,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (`sendSetToneMapping` at lines 966-972), `src/ui/player/MpvVideoWidget.cpp` (HDR-related render context options).
   - **Smoke owner:** Hemanth.
 
-- [ ] **5. Surface clear error messages when mpv playback fails.**
+- [x] **5. Surface clear error messages when mpv playback fails.** ✅ closed 2026-05-01 — `MPV_EVENT_END_FILE` reason-aware emit + `onError` dismisses LoadingOverlay + stops firstFrameWatchdog.
   - **What this involves (plain English):** Right now if mpv hits a problem (file missing, network drop, can't decode), the player either goes silent or shows a generic error. Code change makes it surface a sensible, plain-English message Hemanth can read. Foundational for every future smoke — without this, when mpv fails Hemanth has nothing to report back beyond "it didn't work."
   - **What Hemanth does for the smoke test:** Agent injects the failure cases first via MCP and confirms each fires a message. Hemanth's only part: agent sends one screenshot of a failure message; Hemanth reads it like a non-developer would and tells the agent if it makes sense ("does this tell me what went wrong without needing logs?").
   - **Goal:** When something breaks on mpv (file missing, broken stream URL, codec unsupported, network drop), the player says clearly what went wrong instead of going silent or showing a generic error.
@@ -62,7 +62,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (error handling around lines 304-355), possibly `src/ui/player/VideoPlayer.cpp` if UI handling needs updating to render mpv errors the same way it renders sidecar errors.
   - **Smoke owner:** Agent (MCP) for failure injection; Hemanth for one screenshot to verify visible message shape.
 
-- [ ] **6. Subtitle residuals — Force-position toggle, pixel offset, URL subtitle offset/delay.**
+- [x] **6. Subtitle residuals — Force-position toggle, pixel offset, URL subtitle offset/delay.** ✅ closed 2026-05-01 — `agents/audits/task6_close_2026-05-01.md`; 3 stubs filled + Pattern A track-id stringify. **6.B** in-session carry-id extension also ✅ same wake (m_carrySubId/m_carryAudioId fields).
   - **What this involves (plain English):** Three subtitle features that don't work on mpv yet. The Force-position toggle (today logs a warning and does nothing on mpv); the pixel-offset slider (emits the change but doesn't move the subtitle on mpv); and external URL subtitles loaded with offset/delay parameters (mpv loads the URL but ignores the timing args). Code change wires all three to mpv's native subtitle property surface.
   - **What Hemanth does for the smoke test:** Open an mpv-backed file with subtitles. Toggle the Force-position toggle ON; drag the position slider; see subtitles move on screen. Then load an external URL subtitle (drag-drop or "Load subtitle" entry) with a delay value applied; confirm the subtitle timing matches the dialogue.
   - **Goal:** Force-position toggle + pixel-offset slider + URL subtitle offset/delay all work on mpv the same way they work on ffmpeg.
@@ -70,7 +70,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (the stubs at lines 866-911 — `sendSetSubtitlePositionMode` + `sendSetSubtitlePixelOffset` + `sendSetSubtitleUrl`).
   - **Smoke owner:** Hemanth.
 
-- [ ] **7. HUD, focus, mouse, and keyboard parity under MpvVideoWidget.**
+- [x] **7. HUD, focus, mouse, and keyboard parity under MpvVideoWidget.** ✅ closed 2026-05-01 — `agents/audits/task7_close_2026-05-01.md`; Pattern C seek-accumulator + Esc QShortcut scope fix + cursor on m_mpvWidget + setMouseTracking. (Note: post-MAKE_MPV_BEAT_FFMPEG arc, MpvVideoWidget has been replaced by MpvVulkanWidget — fixes carried via Task 3.5 swap.)
   - **What this involves (plain English):** Phase 1 left a known edge — HUD reveal on mouse hover, popover focus, and keyboard shortcuts (space / arrows / F / Esc) don't all behave the same on mpv as on ffmpeg. Code change closes the gap so the player chrome feels identical regardless of which backend is rendering.
   - **What Hemanth does for the smoke test:** Open an mpv-backed file. Hover the mouse over the player area — HUD should reveal smoothly. Press space (pauses), arrow keys (seeks 5s/10s), F (fullscreen toggles), Esc (closes player). All shortcuts should behave the same as ffmpeg. Open a popover (subtitle / settings / audio); confirm it opens, takes focus, and the keyboard shortcuts inside the popover work.
   - **Goal:** HUD reveal on hover, popover toggles, fullscreen, close button, and keyboard shortcuts all behave the same on mpv as on ffmpeg.
@@ -78,7 +78,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvVideoWidget.cpp`, `src/ui/player/MpvVideoWidget.h`, `src/ui/player/VideoPlayer.cpp` (event routing).
   - **Smoke owner:** Hemanth.
 
-- [ ] **8. Audio polish — speed-sync, DRC, per-device delay recall.**
+- [x] **8. Audio polish — speed-sync, DRC, per-device delay recall.** ✅ closed 2026-05-03 (8.B sub-item closed this wake). Audio-speed → no-op; DRC → af-add/af-remove with @drc label (`agents/audits/task8_close_2026-05-01.md`). **8.B per-device delay recall** ✅ shipped via housekeeping commit `c9b365a` 2026-05-02 — `src/ui/player/AudioDeviceWatcher.{h,cpp}` (Windows IMMNotificationClient watcher + non-Windows stub) + `VideoPlayer.cpp:237-239` connect + `VideoPlayer.cpp:2277-2333 onAudioDeviceChanged` slot mirroring file-open recall path. Compile-verified by `c9b365a` landing; functional smoke (Bluetooth-headphones plug/unplug while playing) is Hemanth's lane and queued for next opportunistic test.
   - **What this involves (plain English):** Three audio features partially working on mpv. Audio-speed sync (currently maps to mpv `speed` which changes playback speed instead of just audio sync); DRC dynamic-range compression (overwrites the audio filter chain which can collide with other filters); per-device audio-delay recall (depends on Task 3 mediaInfo bridge sending audio-device fields). Code change fixes all three.
   - **What Hemanth does for the smoke test:** Open an mpv-backed file. Toggle DRC on/off mid-playback; hear the loudness even out then snap back. Then switch your audio output device (Bluetooth headphones, speakers, HDMI) and confirm the saved per-device delay applies automatically — you shouldn't need to re-tune the delay slider after the device switch.
   - **Goal:** Audio-speed sync, DRC (loudness compression), and per-device audio-delay recall all work on mpv.
@@ -86,7 +86,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (audio surface at lines 740-789), `src/ui/player/VideoPlayer.cpp` (per-device recall logic). Depends on Task 3 mediaInfo bridge for audio-device fields.
   - **Smoke owner:** Hemanth.
 
-- [ ] **9. Structured filters and EQ wiring.**
+- [x] **9. Structured filters and EQ wiring.** ✅ closed 2026-05-01 — Hemanth-narrowed scope to brightness-only (contrast/saturation cut per VIDEO_HUD_MINIMALIST). `BrightnessPopover.{h,cpp}` + chip + brightness.svg + MpvBackend::sendSetFilters wired via mpv `brightness` property. Hemanth verbatim "the brightness feature works".
   - **What this involves (plain English):** When you open the filter or EQ popover today on mpv, the controls don't actually change the picture — they're no-op stubs in the mpv backend. Code change wires them through to mpv's video filter graph so the controls actually work.
   - **What Hemanth does for the smoke test:** Open an mpv-backed file. Open the filter popover. Slide brightness, contrast, saturation. Confirm the picture changes live as you slide each one.
   - **Goal:** When you pull up the filter or EQ popover, the controls actually affect the picture on mpv.
@@ -94,7 +94,7 @@ Audit anchor: `agents/audits/mpv_replacement_readiness_audit_2026-05-01.md` (Age
   - **Files in scope:** `src/ui/player/MpvBackend.cpp` (the `sendSetFilters` stub at lines 948-964).
   - **Smoke owner:** Hemanth.
 
-- [ ] **10. Frame-drop and performance telemetry from mpv.**
+- [x] **10. Frame-drop and performance telemetry from mpv.** ✅ closed (writer at `MpvBackend.cpp:630` writing append-only session blocks to `out/mpv_telemetry.log`; ~105KB on disk last written 2026-05-03 16:24, used as evidence in MAKE_MPV_BEAT_FFMPEG Tasks 4 + 9 closes — drops/sec rate per-session + cmd p50/p99 + decoder state).
   - **What this involves (plain English):** Today we can't tell from logs how mpv playback performed — no frame-drop counter, no decoder state record, no render timing. Code change adds a telemetry log file (equivalent to the `out/ipc_latency.log` the ffmpeg side already has) so future regressions are diagnosable from logs alone without needing eyes on the screen.
   - **What Hemanth does for the smoke test:** Mostly an agent task. Agent runs an mpv-backed playback for ~5 minutes; checks the new mpv telemetry log; confirms frame-drop counter, decoder state, render-timing entries are populated and meaningful. Hemanth's part: optional — only if the agent reports an unexpected number, agent may ask "did you notice any stuttering during the 5-minute test?" to confirm or contradict the numbers.
   - **Goal:** We can tell from logs how mpv playback performed (dropped frames, decoder state, render timing) so regressions are diagnosable from telemetry alone.
@@ -172,3 +172,13 @@ Two more patterns from the baseline are comparison bars rather than bugs:
 ---
 
 _Plan archive-ready after Task 15 closes. Tasks 16+ would only land if validation (Task 12) or follow-on smoke surfaces gaps not anticipated in Tasks 1-15._
+
+---
+
+## Tracking summary (added 2026-05-03)
+
+- **Closed (10 + 2 sub-items):** Tasks 1-10 + Task 6.B + Task 8.B.
+- **Cutover queue (5 tasks, all gated on Task 12 Hemanth soak):** Tasks 11-15.
+- **Cross-arc note:** The `MAKE_MPV_BEAT_FFMPEG` 9-task arc (re-platforming the mpv renderer onto Vulkan + libplacebo + RGBA16F + HDR metadata bridge) closed 2026-05-03 ~16:25; that close empirically validated mpv quality matches ffmpeg per Hemanth's Task 5 verdict, satisfying SOLO's prerequisite for Task 11+ default-flip.
+- **Pattern D status:** still pinned to Task 12 validation re-test gate per `## Pattern re-test gates` section above.
+- **Carry-forward from MAKE_MPV_BEAT_FFMPEG (7 items, NON-blocking for SOLO cutover):** HUD bleed-through architectural fix (Plan-Mode-worthy); MainWindow top-bar flashing regression; aspect-ratio composite (target-crop math); sendSetToneMapping runtime override; MPV_EVENT_START_FILE stale-metadata clear; sub-position/size slider explicit drag verification; fullscreen flag get-player mismatch.
