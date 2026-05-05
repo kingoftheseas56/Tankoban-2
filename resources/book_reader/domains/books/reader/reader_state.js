@@ -116,7 +116,6 @@
       themeBtn: qs('booksReaderThemeBtn'),
       // FIX_TTSH: settings button triggers mega panel
       listenBtn: qs('booksReaderListenToggle') || qs('booksReaderListenBtn'),
-      audiobookBtn: qs('booksReaderAudiobookBtn'),
       minBtn: qs('booksReaderMinBtn'),
       maxBtn: qs('booksReaderMaxBtn'),
       maxIcon: qs('booksReaderMaxIcon'),

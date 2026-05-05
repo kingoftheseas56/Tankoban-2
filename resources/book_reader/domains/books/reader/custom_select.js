@@ -2,8 +2,8 @@
 // QWebEngineView white-blob rendering glitch on Windows.
 //
 // Provides a full shim: innerHTML, appendChild, options[], remove(), value,
-// selectedIndex, and change events so tts_hud.js, reader_audiobook_pairing.js,
-// and reader_appearance.js all work unchanged.
+// selectedIndex, and change events so tts_hud.js and reader_appearance.js
+// all work unchanged.
 //
 // Uses MutationObserver to auto-upgrade dynamically-created <select> elements.
 (function () {

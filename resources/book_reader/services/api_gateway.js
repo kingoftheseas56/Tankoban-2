@@ -152,16 +152,6 @@
       warmup: tw(function() { var a = arguments; return ea.booksTtsEdge && ea.booksTtsEdge.warmup ? ea.booksTtsEdge.warmup.apply(ea.booksTtsEdge, a) : Promise.resolve({ ok: false, error: 'tts_warmup_unavailable' }); }, { ok: false, error: 'tts_warmup_unavailable' }, 'booksTtsEdge.warmup'),
       resetInstance: tw(function() { var a = arguments; return ea.booksTtsEdge && ea.booksTtsEdge.resetInstance ? ea.booksTtsEdge.resetInstance.apply(ea.booksTtsEdge, a) : Promise.resolve({ ok: true }); }, { ok: true }, 'booksTtsEdge.resetInstance'),
     },
-
-    // Audiobooks
-    audiobooks: {
-      getState: tw(function() { return ea.audiobooks && ea.audiobooks.getState ? ea.audiobooks.getState() : Promise.resolve({ audiobooks: [] }); }, { audiobooks: [] }, 'audiobooks.getState'),
-      getProgress: tw(function() { var a = arguments; return ea.audiobooks && ea.audiobooks.getProgress ? ea.audiobooks.getProgress.apply(ea.audiobooks, a) : Promise.resolve(null); }, null, 'audiobooks.getProgress'),
-      saveProgress: tw(function() { var a = arguments; return ea.audiobooks && ea.audiobooks.saveProgress ? ea.audiobooks.saveProgress.apply(ea.audiobooks, a) : Promise.resolve(); }, undefined, 'audiobooks.saveProgress'),
-      getPairing: tw(function() { var a = arguments; return ea.audiobooks && ea.audiobooks.getPairing ? ea.audiobooks.getPairing.apply(ea.audiobooks, a) : Promise.resolve(null); }, null, 'audiobooks.getPairing'),
-      savePairing: tw(function() { var a = arguments; return ea.audiobooks && ea.audiobooks.savePairing ? ea.audiobooks.savePairing.apply(ea.audiobooks, a) : Promise.resolve(); }, undefined, 'audiobooks.savePairing'),
-      deletePairing: tw(function() { var a = arguments; return ea.audiobooks && ea.audiobooks.deletePairing ? ea.audiobooks.deletePairing.apply(ea.audiobooks, a) : Promise.resolve(); }, undefined, 'audiobooks.deletePairing'),
-    },
   };
 
   window.Tanko.apiReady = true;

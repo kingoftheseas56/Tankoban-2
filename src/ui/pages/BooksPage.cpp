@@ -2,7 +2,6 @@
 #include "TileStrip.h"
 #include "TileCard.h"
 #include "BookSeriesView.h"
-#include "AudiobookDetailView.h"
 #include "core/CoreBridge.h"
 #include "core/BooksScanner.h"
 #include "core/ScannerUtils.h"
@@ -33,9 +32,7 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
 {
     setObjectName("books");
     qRegisterMetaType<BookSeriesInfo>("BookSeriesInfo");
-    qRegisterMetaType<AudiobookInfo>("AudiobookInfo");
     qRegisterMetaType<QList<BookSeriesInfo>>("QList<BookSeriesInfo>");
-    qRegisterMetaType<QList<AudiobookInfo>>("QList<AudiobookInfo>");
 
     buildUI();
 
@@ -45,8 +42,6 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
 
     connect(m_scanner, &BooksScanner::bookSeriesFound,
             this, &BooksPage::onBookSeriesFound, Qt::QueuedConnection);
-    connect(m_scanner, &BooksScanner::audiobookFound,
-            this, &BooksPage::onAudiobookFound, Qt::QueuedConnection);
     connect(m_scanner, &BooksScanner::scanFinished,
             this, &BooksPage::onScanFinished, Qt::QueuedConnection);
 
@@ -56,7 +51,7 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     m_scanThread->start();
 
     connect(m_bridge, &CoreBridge::rootFoldersChanged, this, [this](const QString& domain) {
-        if (domain == "books" || domain == "audiobooks")
+        if (domain == "books")
             triggerScan();
     });
 }
@@ -285,7 +280,6 @@ void BooksPage::buildUI()
     connect(m_densitySlider, &QSlider::valueChanged, this, [this](int val) {
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
         m_bookStrip->setDensity(val);
-        m_audiobookStrip->setDensity(val);
         if (m_continueStrip) m_continueStrip->setDensity(val);
     });
     booksRowLayout->addWidget(m_densitySlider);
@@ -484,43 +478,11 @@ void BooksPage::buildUI()
     m_bookHitsSection->hide();
     layout->addWidget(m_bookHitsSection);
 
-    // ── Audiobooks section ──
-    m_audiobookSection = new QWidget(content);
-    auto* abLayout = new QVBoxLayout(m_audiobookSection);
-    abLayout->setContentsMargins(0, 0, 0, 0);
-    // 24px matches the parent `layout`'s spacing — gives AUDIOBOOKS-header→tile
-    // gap parity with BOOKS-header-row→tile gap. (Continue Reading uses 4px
-    // intentionally for its denser top-of-page rhythm; Audiobooks sits
-    // mid-scroll and matches the BOOKS section convention.)
-    abLayout->setSpacing(24);
-
-    // Header matches the "CONTINUE READING" / "BOOKS" pattern at :130-139 +
-    // :233-235 — same QLabel#LibraryHeading styling, same direct-add (no
-    // wrapper widget for extra padding).
-    m_audiobookTitle = new QLabel("AUDIOBOOKS", m_audiobookSection);
-    m_audiobookTitle->setObjectName("LibraryHeading");
-    abLayout->addWidget(m_audiobookTitle);
-
-    m_audiobookStatus = new QLabel("No audiobooks found", m_audiobookSection);
-    m_audiobookStatus->setObjectName("TileSubtitle");
-    m_audiobookStatus->setAlignment(Qt::AlignCenter);
-    m_audiobookStatus->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 40px;");
-    abLayout->addWidget(m_audiobookStatus);
-
-    m_audiobookStrip = new TileStrip(m_audiobookSection);
-    m_audiobookStrip->hide();
-    m_audiobookStrip->setMinimumHeight(340);
-    abLayout->addWidget(m_audiobookStrip);
-
-    // Apply saved density now that all strips exist (book + audiobook +
-    // continue). Continue strip density gate was dropped in TileStrip.cpp
-    // 2026-04-25 so it now responds to setDensity uniformly.
+    // Apply saved density now that all strips exist. Continue strip density
+    // gate was dropped in TileStrip.cpp 2026-04-25 so it now responds to
+    // setDensity uniformly.
     m_bookStrip->setDensity(savedDensity);
-    m_audiobookStrip->setDensity(savedDensity);
     if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
-
-    m_audiobookSection->hide();
-    layout->addWidget(m_audiobookSection);
 
     layout->addStretch(1);
     scroll->setWidget(content);
@@ -533,14 +495,6 @@ void BooksPage::buildUI()
     connect(m_seriesView, &BookSeriesView::backRequested, this, &BooksPage::showGrid);
     connect(m_seriesView, &BookSeriesView::bookSelected, this, &BooksPage::openBook);
     m_stack->addWidget(m_seriesView);
-
-    // AUDIOBOOK_PAIRED_READING_FIX Phase 2.1 — chapter-list detail view on
-    // audiobook tile click. Read-only info view; playback happens inside
-    // BookReader's Audio sidebar tab (Phase 3), not here.
-    m_audiobookDetailView = new AudiobookDetailView(this);
-    connect(m_audiobookDetailView, &AudiobookDetailView::backRequested,
-            this, &BooksPage::showGrid);
-    m_stack->addWidget(m_audiobookDetailView);
 
     outerLayout->addWidget(m_stack, 1);
 
@@ -604,14 +558,12 @@ void BooksPage::triggerScan()
     m_rescanPending = false;
 
     QStringList bookRoots = m_bridge->rootFolders("books");
-    QStringList audiobookRoots = m_bridge->rootFolders("audiobooks");
 
-    if (bookRoots.isEmpty() && audiobookRoots.isEmpty()) {
+    if (bookRoots.isEmpty()) {
         m_bookStrip->clear();
         m_bookStrip->hide();
         m_bookStatus->setText("Add a books folder to get started");
         m_bookStatus->show();
-        m_audiobookSection->hide();
         m_hasScanned = true;
         m_scanning = false;
         return;
@@ -627,18 +579,11 @@ void BooksPage::triggerScan()
         m_bookStatus->setText("Scanning...");
         m_bookStatus->show();
         m_bookStrip->hide();
-
-        m_audiobookStrip->clear();
-        m_audiobookStatus->setText("Scanning...");
-        m_audiobookStatus->show();
-        m_audiobookStrip->hide();
-        m_audiobookSection->show();
     }
     // Rescan: keep old tiles visible — atomic swap happens in onScanFinished
 
     QMetaObject::invokeMethod(m_scanner, "scan", Qt::QueuedConnection,
-                              Q_ARG(QStringList, bookRoots),
-                              Q_ARG(QStringList, audiobookRoots));
+                              Q_ARG(QStringList, bookRoots));
 }
 
 void BooksPage::addBookSeriesTile(const BookSeriesInfo& series)
@@ -684,51 +629,6 @@ void BooksPage::addBookSeriesTile(const BookSeriesInfo& series)
     m_bookStrip->addTile(card);
 }
 
-void BooksPage::addAudiobookTile(const AudiobookInfo& audiobook)
-{
-    // Phase 1.3 tile subtitle format: "{N} chapter(s) · HH:MM:SS" when
-    // AudiobookMetaCache has populated durations; fall back to "{N} track(s)"
-    // on cold-cache / probe-fail. Matches Max's detail-view "N chapters ·
-    // HH:MM:SS" shape (see the screenshot Hemanth shared 2026-04-22).
-    const int n = audiobook.trackCount;
-    QString subtitle;
-
-    if (audiobook.totalDurationMs > 0) {
-        const qint64 totalSec = audiobook.totalDurationMs / 1000;
-        const qint64 hh = totalSec / 3600;
-        const qint64 mm = (totalSec % 3600) / 60;
-        const qint64 ss = totalSec % 60;
-        const QString duration = (hh > 0)
-            ? QString("%1:%2:%3")
-                  .arg(hh)
-                  .arg(mm, 2, 10, QChar('0'))
-                  .arg(ss, 2, 10, QChar('0'))
-            : QString("%1:%2")
-                  .arg(mm)
-                  .arg(ss, 2, 10, QChar('0'));
-        subtitle = QString("%1 %2 · %3")
-                       .arg(n)
-                       .arg(n == 1 ? "chapter" : "chapters")
-                       .arg(duration);
-    } else {
-        subtitle = QString("%1 %2")
-                       .arg(n)
-                       .arg(n == 1 ? "track" : "tracks");
-    }
-
-    auto* card = new TileCard(audiobook.coverPath, audiobook.name, subtitle);
-
-    // AUDIOBOOK_PAIRED_READING_FIX Phase 2.1 — click → chapter-list detail
-    // view. Captures the AudiobookInfo by value so the lambda stays valid
-    // even if the underlying list is rebuilt on rescan.
-    connect(card, &TileCard::clicked, this, [this, audiobook]() {
-        m_audiobookDetailView->showAudiobook(audiobook);
-        m_stack->setCurrentIndexAnimated(2);
-    });
-
-    m_audiobookStrip->addTile(card);
-}
-
 void BooksPage::onBookSeriesFound(const BookSeriesInfo& series)
 {
     // On rescan: skip incremental tiles — atomic rebuild in onScanFinished
@@ -742,21 +642,7 @@ void BooksPage::onBookSeriesFound(const BookSeriesInfo& series)
     addBookSeriesTile(series);
 }
 
-void BooksPage::onAudiobookFound(const AudiobookInfo& audiobook)
-{
-    // On rescan: skip incremental tiles — atomic rebuild in onScanFinished
-    if (m_hasScanned) return;
-
-    // First scan: progressive loading
-    if (m_audiobookStatus->isVisible()) {
-        m_audiobookStatus->hide();
-        m_audiobookStrip->show();
-    }
-    addAudiobookTile(audiobook);
-}
-
-void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
-                                const QList<AudiobookInfo>& allAudiobooks)
+void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks)
 {
     bool wasRescan = m_hasScanned;
     m_hasScanned = true;
@@ -778,10 +664,6 @@ void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
 
         for (const auto& series : allBooks)
             addBookSeriesTile(series);
-
-        m_audiobookStrip->clear();
-        for (const auto& ab : allAudiobooks)
-            addAudiobookTile(ab);
     }
 
     // Populate list view
@@ -806,19 +688,6 @@ void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks,
         m_bookStatus->hide();
         m_bookStrip->show();
         m_bookStrip->sortTiles(m_sortCombo->currentData().toString());
-    }
-
-    if (allAudiobooks.isEmpty()) {
-        m_audiobookStrip->hide();
-        if (m_bridge->rootFolders("audiobooks").isEmpty())
-            m_audiobookSection->hide();
-        else {
-            m_audiobookStatus->setText("No audiobooks found in your library folders");
-            m_audiobookStatus->show();
-        }
-    } else {
-        m_audiobookStatus->hide();
-        m_audiobookStrip->show();
     }
 
     refreshContinueStrip();
@@ -887,16 +756,10 @@ void BooksPage::applySearch()
     if (!searchActive) {
         // No search — show all, delegate to simple filter
         m_bookStrip->filterTiles(QString());
-        m_audiobookStrip->filterTiles(QString());
 
         if (m_bookStrip->totalCount() > 0) {
             m_bookStatus->hide();
             m_bookStrip->show();
-        }
-        if (m_audiobookStrip->totalCount() > 0) {
-            m_audiobookSection->show();
-            m_audiobookStatus->hide();
-            m_audiobookStrip->show();
         }
         return;
     }
@@ -904,7 +767,6 @@ void BooksPage::applySearch()
     QStringList queryTokens = tokenize(rawQuery);
     if (queryTokens.isEmpty()) {
         m_bookStrip->filterTiles(QString());
-        m_audiobookStrip->filterTiles(rawQuery);
         return;
     }
 
@@ -971,9 +833,6 @@ void BooksPage::applySearch()
     if (bookHitCount > 0)
         m_bookHitsSection->show();
 
-    // Audiobooks — simple filter
-    m_audiobookStrip->filterTiles(rawQuery);
-
     // Books section empty state
     if (m_bookStrip->visibleCount() == 0 && bookHitCount == 0) {
         m_bookStatus->setObjectName("LibraryEmptyLabel");
@@ -985,17 +844,6 @@ void BooksPage::applySearch()
     } else if (m_bookStrip->visibleCount() > 0) {
         m_bookStatus->hide();
         m_bookStrip->show();
-    }
-
-    // Audiobooks section empty state
-    if (m_audiobookStrip->totalCount() > 0) {
-        if (m_audiobookStrip->visibleCount() == 0 && searchActive) {
-            m_audiobookSection->hide();
-        } else if (m_audiobookStrip->visibleCount() > 0) {
-            m_audiobookSection->show();
-            m_audiobookStatus->hide();
-            m_audiobookStrip->show();
-        }
     }
 }
 

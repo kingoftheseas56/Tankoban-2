@@ -56,14 +56,6 @@ public:
     Q_INVOKABLE void booksDisplayNamesSave(const QString& bookId, const QString& name);
     Q_INVOKABLE void booksDisplayNamesDelete(const QString& bookId);
 
-    // ── audiobooks ──
-    Q_INVOKABLE QJsonObject audiobooksGetState();
-    Q_INVOKABLE QJsonObject audiobooksGetProgress(const QString& abId);
-    Q_INVOKABLE void audiobooksSaveProgress(const QString& abId, const QJsonObject& data);
-    Q_INVOKABLE QJsonObject audiobooksGetPairing(const QString& bookId);
-    Q_INVOKABLE void audiobooksSavePairing(const QString& bookId, const QJsonObject& data);
-    Q_INVOKABLE void audiobooksDeletePairing(const QString& bookId);
-
     // ── window ──
     Q_INVOKABLE bool windowIsFullscreen() const;
     Q_INVOKABLE QJsonObject windowToggleFullscreen();

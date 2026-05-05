@@ -23,8 +23,6 @@
     window.booksReaderSidebar,
     window.booksReaderRuler,
     // LISTEN_P0: TTS removed from reader — moved to dedicated Listening mode
-    window.booksReaderAudiobook,        // FEAT-AUDIOBOOK: in-reader audiobook player
-    window.booksReaderAudiobookPairing, // FEAT-AUDIOBOOK: chapter pairing sidebar tab
     window.booksReaderKeyboard,
   ];
 
@@ -920,12 +918,6 @@
       var st = RS.state;
       if (!st || !st.book) return;
 
-      // FEAT-AUDIOBOOK: mutual exclusion — stop audiobook before TTS starts
-      var abPlayer = window.booksReaderAudiobook;
-      if (abPlayer && abPlayer.isLoaded && abPlayer.isLoaded()) {
-        try { abPlayer.closeAudiobook(); } catch (_) {}
-      }
-
       // Pause/resume active playback without re-initializing (avoids duplicate sessions).
       try {
         var preState = (typeof tts.getState === 'function') ? (tts.getState() || 'idle') : 'idle';
@@ -979,31 +971,6 @@
           try { tts.play(0, { startFromVisible: true }); } catch (e) {}
         }).catch(function () {});
       } catch (e) {}
-    });
-
-    // FEAT-AUDIOBOOK: reader toolbar audiobook button (smart detect)
-    els.audiobookBtn && els.audiobookBtn.addEventListener('click', function () {
-      // 1. If audiobook already loaded in reader — toggle play/pause
-      var abPlayer = window.booksReaderAudiobook;
-      if (abPlayer && abPlayer.isLoaded && abPlayer.isLoaded()) {
-        if (typeof abPlayer.togglePlayPause === 'function') {
-          abPlayer.togglePlayPause();
-        }
-        return;
-      }
-      // 2. If pairing exists but not loaded — auto-load paired audiobook
-      var pairing = window.booksReaderAudiobookPairing;
-      if (pairing && typeof pairing.hasSavedPairing === 'function' && pairing.hasSavedPairing()) {
-        if (typeof pairing.triggerAutoLoad === 'function') {
-          pairing.triggerAutoLoad({ autoplay: true });
-        }
-        return;
-      }
-      // 3. No pairing — open sidebar Audio tab
-      var sidebar = window.booksReaderSidebar;
-      if (sidebar && typeof sidebar.openTab === 'function') {
-        sidebar.openTab('audio');
-      }
     });
 
     // BUILD_OVERHAUL: host-level dict/annot handlers live in dedicated modules

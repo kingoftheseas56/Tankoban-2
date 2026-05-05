@@ -1,5 +1,5 @@
-/* ══════════════════════════════════════════════════════════════
-   BUILD_OVERHAUL: Books Reader — Standard Layout
+﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   BUILD_OVERHAUL: Books Reader â€” Standard Layout
    Toolbar + Sidebar + Reading Area + Footer
    All classes prefixed with br- to avoid video/comic player conflicts
 
@@ -18,11 +18,11 @@
      TTS Bar & Mini Bar .................. line ~1447
      Floating Overlay Panels ............. line ~2153
      Chapter-Aware Reading ............... line ~2565
-   ══════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ══════ SECTION: Sub-Mode Tabs & Continue Listening ══════ */
+/* â•â•â•â•â•â• SECTION: Sub-Mode Tabs & Continue Listening â•â•â•â•â•â• */
 
-/* ── LISTEN_P1: Books sub-mode tab strip (Reading / Listening) ── */
+/* â”€â”€ LISTEN_P1: Books sub-mode tab strip (Reading / Listening) â”€â”€ */
 .books-mode-tabs {
   display: flex;
   gap: 4px;
@@ -54,7 +54,7 @@
   border-color: rgba(255,255,255,0.22);
   font-weight: 500;
 }
-/* Keep reading content container transparent — it's just a grouping wrapper */
+/* Keep reading content container transparent â€” it's just a grouping wrapper */
 #booksReadingContent {
   display: contents;
 }
@@ -75,9 +75,9 @@
   background: rgba(74,144,217,0.85);
   border-radius: 0 0 0 0;
 }
-/* ══════ SECTION: Chapter TOC Panel ══════ */
+/* â•â•â•â•â•â• SECTION: Chapter TOC Panel â•â•â•â•â•â• */
 
-/* ── LISTEN_P5: Chapter TOC panel ── */
+/* â”€â”€ LISTEN_P5: Chapter TOC panel â”€â”€ */
 .lp-toc-btn {
   display: flex;
   align-items: center;
@@ -172,9 +172,9 @@
 }
 .lp-toc-empty.hidden { display: none; }
 
-/* ══════ SECTION: TTS Listening Player Overlay ══════ */
+/* â•â•â•â•â•â• SECTION: TTS Listening Player Overlay â•â•â•â•â•â• */
 
-/* ── LISTEN_P3: TTS Listening player overlay ── */
+/* â”€â”€ LISTEN_P3: TTS Listening player overlay â”€â”€ */
 .lp-shell {
   position: fixed;
   inset: 0;
@@ -507,7 +507,7 @@
 }
 .lp-inline-check input { transform: translateY(1px); }
 
-/* LP_TTS_REPLICA: TTS bar + mega + diag within listening player shell — LISTEN_THEME */
+/* LP_TTS_REPLICA: TTS bar + mega + diag within listening player shell â€” LISTEN_THEME */
 .lp-shell > .lp-tts-bar.booksReaderTtsBar {
   background: var(--lp-card-bg, #0e1018) !important;
   border: 1px solid var(--lp-border, rgba(255,255,255,0.16)) !important;
@@ -550,9 +550,9 @@
   min-width: 32px;
 }
 
-/* ══════ SECTION: Layout Shell & Reader Themes ══════ */
+/* â•â•â•â•â•â• SECTION: Layout Shell & Reader Themes â•â•â•â•â•â• */
 
-/* ── Layout shell ─────────────────────────────────────────── */
+/* â”€â”€ Layout shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reader {
   --br-reader-bg: #101216;
   --br-reader-text: #e4e8ef;
@@ -702,9 +702,9 @@
   --br-reader-bar-border: rgba(0,0,0,0.18);
 }
 
-/* ══════ SECTION: Toolbar ══════ */
+/* â•â•â•â•â•â• SECTION: Toolbar â•â•â•â•â•â• */
 
-/* ── Toolbar (48px, always visible) ───────────────────────── */
+/* â”€â”€ Toolbar (48px, always visible) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-toolbar {
   position: absolute;
   top: 0;
@@ -756,7 +756,7 @@
   white-space: nowrap;
 }
 
-/* ── Toolbar buttons ──────────────────────────────────────── */
+/* â”€â”€ Toolbar buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-btn {
   appearance: none;
   display: inline-flex;
@@ -774,7 +774,7 @@
   transition: background 0.12s, opacity 0.12s;
 }
 .br-btn:hover { background: rgba(var(--br-reader-accent-rgb), 0.14); }
-/* PER_VIEW_CHROME_FIX 2026-05-02 P5 — Close-button gets the Fluent red hover
+/* PER_VIEW_CHROME_FIX 2026-05-02 P5 â€” Close-button gets the Fluent red hover
    tint (Windows convention; orthogonal to the embedded-in-nav-row treatment
    the rest of the cluster inherits from .br-btn). */
 #booksReaderCloseBtn:hover { background: rgba(232, 17, 35, 0.85); color: #ffffff; }
@@ -786,7 +786,7 @@
 .br-btn-sm { font-size: 11px; min-width: 24px; height: 26px; padding: 0 4px; }
 .br-btn-ghost { color: var(--muted, #8b8fa3); }
 .br-btn-ghost:hover { color: var(--text); }
-/* TASK1: SVG icon sizing — inherits color via currentColor */
+/* TASK1: SVG icon sizing â€” inherits color via currentColor */
 .br-btn svg { width: 18px; height: 18px; vertical-align: middle; fill: currentColor; }
 .br-btn-sm svg { width: 14px; height: 14px; }
 .iconBtn svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
@@ -795,9 +795,9 @@
 .br-hist-btn { font-size: 10px; min-width: 24px; opacity: 0.6; }
 .br-hist-btn:not(:disabled):hover { opacity: 1; }
 
-/* ══════ SECTION: Main Area & Sidebar ══════ */
+/* â•â•â•â•â•â• SECTION: Main Area & Sidebar â•â•â•â•â•â• */
 
-/* ── Main area (flex row) ─────────────────────────────────── */
+/* â”€â”€ Main area (flex row) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-main {
   flex: 1;
   display: flex;
@@ -805,7 +805,7 @@
   position: relative;
 }
 
-/* ── Sidebar (310px, collapsible) ─────────────────────────── */
+/* â”€â”€ Sidebar (310px, collapsible) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-sidebar {
   width: 310px;
   flex-shrink: 0;
@@ -1183,9 +1183,9 @@
   border-color: rgba(255,255,255,0.12);
 }
 
-/* ══════ SECTION: Reading Area & Ruler ══════ */
+/* â•â•â•â•â•â• SECTION: Reading Area & Ruler â•â•â•â•â•â• */
 
-/* ── Reading area ─────────────────────────────────────────── */
+/* â”€â”€ Reading area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reading-area {
   flex: 1;
   position: relative;
@@ -1194,7 +1194,7 @@
   overflow: hidden;
 }
 
-/* ── Reading ruler (Readest-inspired) ───────────────────────── */
+/* â”€â”€ Reading ruler (Readest-inspired) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reading-ruler {
   position: absolute;
   inset: 0;
@@ -1338,7 +1338,7 @@
   transition: opacity 0.2s, background 0.15s;
 }
 .br-reading-area:hover .br-nav-arrow { opacity: 0.35; }
-/* scroll mode CSS removed — always paginated */
+/* scroll mode CSS removed â€” always paginated */
 .br-nav-arrow:hover { opacity: 1 !important; background: rgba(255,255,255,0.05); }
 /* LIGHT_FIX: nav arrow hover on light themes */
 [data-reader-theme="light"] .br-nav-arrow:hover,
@@ -1351,9 +1351,9 @@
 .br-nav-right { right: 0; border-radius: 4px 0 0 4px; }
 .br-nav-arrow svg { width: 22px; height: 22px; fill: currentColor; }
 
-/* ══════ SECTION: Navigation Arrows & Footer ══════ */
+/* â•â•â•â•â•â• SECTION: Navigation Arrows & Footer â•â•â•â•â•â• */
 
-/* ── Footer (always visible) ─────────────────────────────── */
+/* â”€â”€ Footer (always visible) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-footer {
   position: absolute;
   left: 0;
@@ -1374,7 +1374,7 @@
 }
 .br-progress-row.hidden { display: none !important; }
 
-/* Scrub bar — modern thin-track design */
+/* Scrub bar â€” modern thin-track design */
 .br-scrub {
   position: relative;
   height: 18px;
@@ -1524,7 +1524,7 @@
   white-space: nowrap;
 }
 
-/* TTS mini controls in footer — centered */
+/* TTS mini controls in footer â€” centered */
 .br-tts-mini {
   display: flex;
   align-items: center;
@@ -1554,9 +1554,9 @@
 
 .br-footer-spacer { flex: 1; }
 
-/* ══════ SECTION: Reader Theme Attributes ══════ */
+/* â•â•â•â•â•â• SECTION: Reader Theme Attributes â•â•â•â•â•â• */
 
-/* ── Reader theme data attributes on host ─────────────────── */
+/* â”€â”€ Reader theme data attributes on host â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-host[data-reader-theme="light"] { background: #ffffff; color: #111111; }
 .br-host[data-reader-theme="sepia"] { background: #f4ecdc; color: #4d3d2c; }
 .br-host[data-reader-theme="dark"] { background: #101216; color: #e4e8ef; }
@@ -1589,9 +1589,9 @@
 }
 /* Paged mode: foliate-view shadow DOM handles its own overflow clipping */
 
-/* ══════ SECTION: HUD Auto-Hide & Fullscreen ══════ */
+/* â•â•â•â•â•â• SECTION: HUD Auto-Hide & Fullscreen â•â•â•â•â•â• */
 
-/* ── HUD auto-hide ────────────────────────────────────────── */
+/* â”€â”€ HUD auto-hide â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reader .br-toolbar,
 .br-reader .br-footer {
   transition: opacity 0.25s ease, transform 0.25s ease, visibility 0s ease 0s;
@@ -1653,7 +1653,7 @@
   visibility: visible;
 }
 
-/* ── Focus-visible outlines ───────────────────────────────── */
+/* â”€â”€ Focus-visible outlines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reader .br-btn:focus-visible,
 .br-reader select:focus-visible,
 .br-reader input:focus-visible {
@@ -1662,7 +1662,7 @@
   border-radius: 4px;
 }
 
-/* ── Responsive: narrow screens ───────────────────────────── */
+/* â”€â”€ Responsive: narrow screens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 700px) {
   .br-sidebar { width: 260px; }
   .br-sidebar.collapsed { margin-left: -260px; }
@@ -1675,7 +1675,7 @@
   .br-sidebar.collapsed { margin-left: -100%; }
 }
 
-/* ── Fullscreen overrides ─────────────────────────────────── */
+/* â”€â”€ Fullscreen overrides â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 body.inBooksReader .topbar { display: none !important; }
 body.inBooksReader main { padding: 0 !important; max-width: none !important; margin: 0 !important; }
 body.inBooksReader #booksLibraryView { height: 100vh; }
@@ -1686,14 +1686,14 @@ body.inBooksReader .br-reader {
   border-radius: 0;
 }
 
-/* ══════ SECTION: TTS Bar & Mini Bar ══════ */
+/* â•â•â•â•â•â• SECTION: TTS Bar & Mini Bar â•â•â•â•â•â• */
 
-/* ── TTS bar repositioned inside reading area ─────────────── */
+/* â”€â”€ TTS bar repositioned inside reading area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reading-area > .booksReaderTtsBar {
   bottom: 16px;
 }
 
-/* ── TTS mini bar repositioned in footer ──────────────────── */
+/* â”€â”€ TTS mini bar repositioned in footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-footer .booksTtsMiniBar {
   position: static;
   transform: none;
@@ -1701,12 +1701,12 @@ body.inBooksReader .br-reader {
 }
 .br-footer .booksTtsMiniBar.hidden { display: none !important; }
 
-/* ── Return to TTS repositioned ───────────────────────────── */
+/* â”€â”€ Return to TTS repositioned â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-reader .booksReaderReturnTts {
   top: 56px;
 }
 
-/* ── Keyboard shortcuts panel in sidebar ──────────────────── */
+/* â”€â”€ Keyboard shortcuts panel in sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-shortcuts-list {
   padding: 4px 0;
 }
@@ -2552,11 +2552,11 @@ select.booksReaderTtsHlStyle {
   background: rgba(240, 120, 120, 0.12);
 }
 
-/* ══════ SECTION: Floating Overlay Panels ══════ */
+/* â•â•â•â•â•â• SECTION: Floating Overlay Panels â•â•â•â•â•â• */
 
-/* ── Floating overlay panels ────────────────────────────── */
+/* â”€â”€ Floating overlay panels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-/* Backdrop — transparent click target */
+/* Backdrop â€” transparent click target */
 .br-overlay-backdrop {
   position: absolute;
   inset: 0;
@@ -2705,7 +2705,7 @@ select.booksReaderTtsHlStyle {
 [data-reader-theme="solarized"] .br-overlay-title { color: #586e75; }
 [data-reader-theme="solarized"] .br-overlay-header { border-bottom-color: rgba(101,123,131,0.10); }
 
-/* Theme-agnostic overlay surfaces — uses --br-reader-* vars set by every theme */
+/* Theme-agnostic overlay surfaces â€” uses --br-reader-* vars set by every theme */
 .booksReaderTtsDiag,
 .booksReaderDictPopup,
 .booksAnnotPopup,
@@ -2716,7 +2716,7 @@ select.booksReaderTtsHlStyle {
   border-color: var(--br-reader-border, rgba(255,255,255,0.07));
   box-shadow: 0 4px 18px rgba(0,0,0,0.18);
 }
-/* TTS bar icons — fixed HUD colours; mega/dict/annot use theme vars */
+/* TTS bar icons â€” fixed HUD colours; mega/dict/annot use theme vars */
 .booksReaderTtsBar .iconBtn { color: #f5f5f5; }
 .booksReaderTtsMega .iconBtn,
 .booksReaderDictPopup .iconBtn,
@@ -2836,9 +2836,9 @@ select.booksReaderTtsHlStyle {
   .br-overlay { left: 0 !important; right: 0 !important; transform: none !important; }
 }
 
-/* ══════ SECTION: Chapter-Aware Reading ══════ */
+/* â•â•â•â•â•â• SECTION: Chapter-Aware Reading â•â•â•â•â•â• */
 
-/* ── Chapter transition card ──────────────────────────────── */
+/* â”€â”€ Chapter transition card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .br-chapter-transition {
   position: absolute;
   inset: 0;
@@ -2892,9 +2892,9 @@ select.booksReaderTtsHlStyle {
   font-size: 12px;
   color: var(--br-reader-muted, rgba(255,255,255,0.45));
 }
-/* scroll mode chapter transition variant removed — always paginated */
+/* scroll mode chapter transition variant removed â€” always paginated */
 
-/* ── Enhanced TOC items (chapter playlist) ────────────────── */
+/* â”€â”€ Enhanced TOC items (chapter playlist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .volNavItem { flex-wrap: wrap; }
 .br-toc-status {
   width: 7px;
@@ -2945,7 +2945,7 @@ select.booksReaderTtsHlStyle {
 .volNavItem:hover .br-toc-progress-fill { opacity: 0.55; }
 .volNavItem.active .br-toc-progress-fill { opacity: 1; }
 
-/* ── Theme variants for chapter features ──────────────────── */
+/* â”€â”€ Theme variants for chapter features â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 [data-reader-theme="light"] .br-chapter-transition { background: rgba(255,255,255,0.6); }
 [data-reader-theme="light"] .br-chapter-transition-card {
   background: #fff;
@@ -3013,9 +3013,9 @@ select.booksReaderTtsHlStyle {
   pointer-events: auto;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    Legacy stubs migrated from styles.css (Session 7)
-   ══════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 /* Foliate view sizing */
 .booksReaderHost .booksFoliateView,
@@ -3190,302 +3190,6 @@ select.booksReaderTtsHlStyle {
 }
 .booksTtsMiniSleep:not(:empty) { color: #e8a838; }
 
-/* ══════ FEAT-AUDIOBOOK: In-reader audiobook transport bar ══════ */
-.ab-player-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  position: absolute;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #111318;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 9px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-  z-index: 58;
-  max-width: calc(100% - 24px);
-  transition: opacity 300ms;
-  color: #f5f5f5;
-}
-.ab-player-bar.hidden { display: none; }
-.ab-player-bar.ab-bar-autohide {
-  opacity: 0;
-  pointer-events: none;
-}
-.ab-chapter-label {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: #a0a4b0;
-  cursor: default;
-}
-.ab-bar-btn { min-width: 24px; font-size: 12px; }
-.ab-bar-play { min-width: 28px; }
-.ab-bar-time {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: #a0a4b0;
-  min-width: 80px;
-  text-align: center;
-  white-space: nowrap;
-}
-.ab-bar-seek {
-  -webkit-appearance: none;
-  appearance: none;
-  width: min(220px, 22vw);
-  min-width: 120px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.ab-bar-seek::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #eee;
-  border: none;
-  cursor: pointer;
-}
-.ab-bar-speed {
-  min-width: 36px;
-  text-align: center;
-  color: #a0a4b0;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.ab-bar-vol-icon { opacity: 0.7; flex-shrink: 0; color: #f5f5f5; }
-.ab-bar-volume {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 54px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.ab-bar-volume::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #eee;
-  border: none;
-  cursor: pointer;
-}
-/* Position inside reading area (same as TTS bar) */
-.br-reading-area > .ab-player-bar { bottom: 16px; }
-
-/* Mobile: stretch full width */
-@media (max-width: 980px) {
-  .ab-player-bar {
-    left: 8px;
-    right: 8px;
-    max-width: none;
-    transform: none;
-  }
-}
-
-/* Audiobook bar icons — fixed HUD */
-.ab-player-bar .iconBtn { color: #f5f5f5; }
-
-/* ══════ FEAT-AUDIOBOOK: Audio sidebar pane (chapter pairing) ══════ */
-.ab-pair-header {
-  padding: 10px 10px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ab-pair-status {
-  font-size: 12px;
-}
-select.ab-pair-select {
-  width: 100%;
-  padding: 5px 8px;
-  font-size: 12px;
-  border-radius: 5px;
-  border: 1px solid rgba(var(--chrome-rgb, 255,255,255), 0.15);
-  background: #1e2028;
-  color: var(--text-primary, #eee);
-  outline: none;
-}
-select.ab-pair-select option {
-  background: #1e2028;
-  color: var(--text-primary, #eee);
-}
-select.ab-pair-select:focus {
-  border-color: var(--vx-accent, #7c5cfc);
-}
-/* Custom dropdown overrides for audiobook selects */
-.br-custom-select.ab-pair-select,
-.br-custom-select.ab-pair-ch-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-}
-.br-custom-select.ab-pair-select { width: 100%; }
-.br-custom-select.ab-pair-ch-select { width: 100%; flex: 1; min-width: 0; }
-.br-custom-select.ab-pair-select .br-custom-select__trigger,
-.br-custom-select.ab-pair-ch-select .br-custom-select__trigger {
-  padding: 5px 8px;
-  font-size: 12px;
-  border-radius: 5px;
-  border: 1px solid rgba(var(--chrome-rgb, 255,255,255), 0.15);
-  background: #1e2028;
-  color: var(--text-primary, #eee);
-}
-.br-custom-select.ab-pair-select .br-custom-select__dropdown,
-.br-custom-select.ab-pair-ch-select .br-custom-select__dropdown {
-  background: #1e2028;
-}
-.br-custom-select.ab-pair-select .br-custom-select__option,
-.br-custom-select.ab-pair-ch-select .br-custom-select__option {
-  color: var(--text-primary, #eee);
-  font-size: 12px;
-}
-.ab-pair-actions {
-  display: flex;
-  gap: 6px;
-  padding: 4px 10px 8px;
-}
-.ab-pair-btn {
-  padding: 4px 10px;
-  font-size: 11px;
-  border: 1px solid rgba(var(--chrome-rgb, 255,255,255), 0.12);
-  border-radius: 4px;
-  background: rgba(var(--chrome-rgb, 255,255,255), 0.04);
-  color: var(--text-primary, #eee);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.ab-pair-btn:hover {
-  background: rgba(var(--chrome-rgb, 255,255,255), 0.08);
-}
-.ab-pair-unlink {
-  color: #e05555;
-  border-color: rgba(224, 85, 85, 0.2);
-}
-.ab-pair-unlink:hover {
-  background: rgba(224, 85, 85, 0.08);
-}
-.ab-pair-list {
-  overflow-y: auto;
-  max-height: calc(100vh - 280px);
-}
-.ab-pair-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-bottom: 1px solid rgba(var(--chrome-rgb, 255,255,255), 0.06);
-}
-.ab-pair-row:last-child { border-bottom: none; }
-.ab-pair-book-ch {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-primary, #eee);
-}
-.ab-pair-arrow {
-  color: var(--muted, #8b8fa3);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-select.ab-pair-ch-select {
-  width: 140px;
-  flex-shrink: 0;
-  padding: 3px 4px;
-  font-size: 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--chrome-rgb, 255,255,255), 0.12);
-  background: #1e2028;
-  color: var(--text-primary, #eee);
-  outline: none;
-}
-select.ab-pair-ch-select option {
-  background: #1e2028;
-  color: var(--text-primary, #eee);
-}
-select.ab-pair-ch-select:focus {
-  border-color: var(--vx-accent, #7c5cfc);
-}
-.ab-pair-empty {
-  padding: 16px 10px;
-  text-align: center;
-}
-
-/* Light theme overrides for pairing pane */
-[data-reader-theme="light"] select.ab-pair-select,
-[data-reader-theme="sepia"] select.ab-pair-select,
-[data-reader-theme="paper"] select.ab-pair-select,
-[data-reader-theme="light"] select.ab-pair-ch-select,
-[data-reader-theme="sepia"] select.ab-pair-ch-select,
-[data-reader-theme="paper"] select.ab-pair-ch-select {
-  background: #f5f5f5;
-  border-color: rgba(0,0,0,0.12);
-  color: var(--br-reader-text);
-}
-[data-reader-theme="light"] select.ab-pair-select option,
-[data-reader-theme="sepia"] select.ab-pair-select option,
-[data-reader-theme="paper"] select.ab-pair-select option,
-[data-reader-theme="light"] select.ab-pair-ch-select option,
-[data-reader-theme="sepia"] select.ab-pair-ch-select option,
-[data-reader-theme="paper"] select.ab-pair-ch-select option {
-  background: #f5f5f5;
-  color: var(--br-reader-text);
-}
-/* Light theme for custom dropdown audiobook selects */
-[data-reader-theme="light"] .br-custom-select.ab-pair-select .br-custom-select__trigger,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-select .br-custom-select__trigger,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-select .br-custom-select__trigger,
-[data-reader-theme="light"] .br-custom-select.ab-pair-ch-select .br-custom-select__trigger,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-ch-select .br-custom-select__trigger,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-ch-select .br-custom-select__trigger {
-  background: #f5f5f5;
-  border-color: rgba(0,0,0,0.12);
-  color: var(--br-reader-text);
-}
-[data-reader-theme="light"] .br-custom-select.ab-pair-select .br-custom-select__dropdown,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-select .br-custom-select__dropdown,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-select .br-custom-select__dropdown,
-[data-reader-theme="light"] .br-custom-select.ab-pair-ch-select .br-custom-select__dropdown,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-ch-select .br-custom-select__dropdown,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-ch-select .br-custom-select__dropdown {
-  background: #f5f5f5;
-}
-[data-reader-theme="light"] .br-custom-select.ab-pair-select .br-custom-select__option,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-select .br-custom-select__option,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-select .br-custom-select__option,
-[data-reader-theme="light"] .br-custom-select.ab-pair-ch-select .br-custom-select__option,
-[data-reader-theme="sepia"] .br-custom-select.ab-pair-ch-select .br-custom-select__option,
-[data-reader-theme="paper"] .br-custom-select.ab-pair-ch-select .br-custom-select__option {
-  color: var(--br-reader-text);
-}
-[data-reader-theme="light"] .ab-pair-btn,
-[data-reader-theme="sepia"] .ab-pair-btn,
-[data-reader-theme="paper"] .ab-pair-btn {
-  background: rgba(0,0,0,0.03);
-  border-color: rgba(0,0,0,0.10);
-  color: var(--br-reader-text);
-}
-[data-reader-theme="light"] .ab-pair-book-ch,
-[data-reader-theme="sepia"] .ab-pair-book-ch,
-[data-reader-theme="paper"] .ab-pair-book-ch {
-  color: var(--br-reader-text);
-}
-
 /* Scrub bubble visibility (for books scrub bar) */
 .scrubBubble.visible {
   opacity: 1 !important;
@@ -3534,7 +3238,7 @@ select.ab-pair-ch-select:focus {
 /* Annotation item meta */
 .booksAnnotItemMeta { font-size: 10px; color: var(--muted,#888); }
 
-/* ── Custom CSS textarea ── */
+/* â”€â”€ Custom CSS textarea â”€â”€ */
 .br-settings-textarea {
   width: 100%; box-sizing: border-box; font-family: monospace; font-size: 11px;
   background: var(--input-bg, #1a1c22); color: var(--text, #d4d4d4);

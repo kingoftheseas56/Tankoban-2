@@ -15,9 +15,7 @@ class LibraryListView;
 class TileStrip;
 class BooksScanner;
 class BookSeriesView;
-class AudiobookDetailView;
 struct BookSeriesInfo;
-struct AudiobookInfo;
 
 class BooksPage : public QWidget {
     Q_OBJECT
@@ -33,9 +31,7 @@ signals:
 
 private slots:
     void onBookSeriesFound(const BookSeriesInfo& series);
-    void onAudiobookFound(const AudiobookInfo& audiobook);
-    void onScanFinished(const QList<BookSeriesInfo>& allBooks,
-                        const QList<AudiobookInfo>& allAudiobooks);
+    void onScanFinished(const QList<BookSeriesInfo>& allBooks);
     void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
     void applySearch();
@@ -44,14 +40,12 @@ private slots:
 private:
     void buildUI();
     void addBookSeriesTile(const BookSeriesInfo& series);
-    void addAudiobookTile(const AudiobookInfo& audiobook);
 
     CoreBridge*    m_bridge = nullptr;
 
     // Navigation
     FadingStackedWidget* m_stack = nullptr;
     BookSeriesView* m_seriesView = nullptr;
-    AudiobookDetailView* m_audiobookDetailView = nullptr;
 
     // Continue Reading
     QWidget*       m_continueSection = nullptr;
@@ -81,12 +75,6 @@ private:
     QPushButton*     m_viewToggle = nullptr;
     QSlider*         m_densitySlider = nullptr;
     bool             m_gridMode = true;
-
-    // Audiobooks section
-    QWidget*       m_audiobookSection = nullptr;
-    QLabel*        m_audiobookTitle = nullptr;
-    TileStrip*     m_audiobookStrip = nullptr;
-    QLabel*        m_audiobookStatus = nullptr;
 
     // Scanner
     QThread*       m_scanThread = nullptr;

@@ -1,15 +1,10 @@
 #include "BookBridge.h"
-#include "core/AudiobookMetaCache.h"
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
 #include "core/tts/EdgeTtsWorker.h"
 
 #include <QFile>
 #include <QFileInfo>
-#include <QDir>
-#include <QCoreApplication>
-#include <QDirIterator>
-#include <QCollator>
 #include <QCryptographicHash>
 #include <QUuid>
 #include <QDateTime>
@@ -21,18 +16,6 @@ static const QString SETTINGS_FILE      = QStringLiteral("books_settings.json");
 static const QString BOOKMARKS_FILE     = QStringLiteral("books_bookmarks.json");
 static const QString ANNOTATIONS_FILE   = QStringLiteral("books_annotations.json");
 static const QString DISPLAY_NAMES_FILE = QStringLiteral("books_display_names.json");
-static const QString AB_PROGRESS_FILE   = QStringLiteral("audiobook_progress.json");
-static const QString AB_PAIRINGS_FILE   = QStringLiteral("audiobook_pairings.json");
-
-static const QStringList AUDIO_EXTS = {
-    "mp3", "m4a", "m4b", "ogg", "opus", "flac", "wav", "aac", "wma"
-};
-static const QStringList COVER_NAMES = {
-    "cover.jpg", "cover.png", "folder.jpg", "front.jpg"
-};
-static const QSet<QString> IGNORE_DIRS = {
-    "__macosx", ".git", ".svn", "$recycle.bin", "system volume information", "node_modules"
-};
 
 BookBridge::BookBridge(CoreBridge* core, QObject* parent)
     : QObject(parent)
@@ -344,151 +327,6 @@ void BookBridge::booksDisplayNamesDelete(const QString& bookId)
     QJsonObject all = m_core->store().read(DISPLAY_NAMES_FILE);
     all.remove(bookId);
     m_core->store().write(DISPLAY_NAMES_FILE, all);
-}
-
-// ── audiobooks ───────────────────────────────────────────────────────────────
-
-static bool isAudioFile(const QString& fileName)
-{
-    QString ext = QFileInfo(fileName).suffix().toLower();
-    return AUDIO_EXTS.contains(ext);
-}
-
-static QString findCover(const QDir& dir)
-{
-    for (const QString& name : COVER_NAMES) {
-        if (dir.exists(name))
-            return dir.absoluteFilePath(name);
-    }
-    // Fallback: first jpg/png in folder
-    for (const auto& entry : dir.entryInfoList({"*.jpg", "*.jpeg", "*.png"}, QDir::Files)) {
-        return entry.absoluteFilePath();
-    }
-    return {};
-}
-
-static QString audiobookId(const QString& folderPath)
-{
-    return QString(QCryptographicHash::hash(folderPath.toUtf8(),
-                   QCryptographicHash::Sha1).toHex().left(20));
-}
-
-QJsonObject BookBridge::audiobooksGetState()
-{
-    if (!m_core) return {{"audiobooks", QJsonArray()}};
-
-    QStringList roots = m_core->rootFolders("audiobooks");
-    QJsonArray audiobooks;
-
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
-
-    for (const QString& root : roots) {
-        QDir rootDir(root);
-        if (!rootDir.exists()) continue;
-
-        // Each immediate subdirectory is a potential audiobook
-        for (const auto& entry : rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-            QString dirName = entry.fileName().toLower();
-            if (IGNORE_DIRS.contains(dirName)) continue;
-
-            QDir abDir(entry.absoluteFilePath());
-            QStringList audioFiles;
-
-            // Recursively collect audio files
-            QDirIterator it(abDir.absolutePath(), QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                it.next();
-                if (isAudioFile(it.fileName()))
-                    audioFiles.append(it.filePath());
-            }
-
-            if (audioFiles.isEmpty()) continue;
-
-            // Natural sort for chapter order
-            std::sort(audioFiles.begin(), audioFiles.end(),
-                      [&collator](const QString& a, const QString& b) {
-                          return collator.compare(QFileInfo(a).fileName(),
-                                                  QFileInfo(b).fileName()) < 0;
-                      });
-
-            // Build chapters array
-            QJsonArray chapters;
-            qint64 totalDurationMs = 0;
-            for (const QString& filePath : audioFiles) {
-                QFileInfo fi(filePath);
-                const qint64 durationMs =
-                    AudiobookMetaCache::durationMsFor(abDir.absolutePath(),
-                                                      fi.absoluteFilePath());
-                QJsonObject ch;
-                ch["file"]  = fi.fileName();
-                ch["title"] = fi.completeBaseName();
-                ch["path"]  = fi.absoluteFilePath();
-                ch["size"]  = fi.size();
-                ch["duration"] = durationMs > 0
-                    ? static_cast<double>(durationMs)
-                    : 0.0;
-                chapters.append(ch);
-                if (durationMs > 0)
-                    totalDurationMs += durationMs;
-            }
-
-            QJsonObject ab;
-            ab["id"]            = audiobookId(abDir.absolutePath());
-            ab["title"]         = entry.fileName();
-            ab["path"]          = abDir.absolutePath();
-            ab["chapters"]      = chapters;
-            ab["totalDuration"] = static_cast<double>(totalDurationMs);
-            ab["coverPath"]     = findCover(abDir);
-            ab["rootPath"]      = root;
-            audiobooks.append(ab);
-        }
-    }
-
-    return {{"audiobooks", audiobooks}};
-}
-
-QJsonObject BookBridge::audiobooksGetProgress(const QString& abId)
-{
-    if (!m_core) return {};
-    QJsonObject all = m_core->store().read(AB_PROGRESS_FILE);
-    return all.value(abId).toObject();
-}
-
-void BookBridge::audiobooksSaveProgress(const QString& abId, const QJsonObject& data)
-{
-    if (!m_core) return;
-    QJsonObject all = m_core->store().read(AB_PROGRESS_FILE);
-    QJsonObject entry = data;
-    entry["updatedAt"] = QDateTime::currentMSecsSinceEpoch();
-    all[abId] = entry;
-    m_core->store().write(AB_PROGRESS_FILE, all);
-}
-
-QJsonObject BookBridge::audiobooksGetPairing(const QString& bookId)
-{
-    if (!m_core) return {};
-    QJsonObject all = m_core->store().read(AB_PAIRINGS_FILE);
-    return all.value(bookId).toObject();
-}
-
-void BookBridge::audiobooksSavePairing(const QString& bookId, const QJsonObject& data)
-{
-    if (!m_core) return;
-    QJsonObject all = m_core->store().read(AB_PAIRINGS_FILE);
-    QJsonObject entry = data;
-    entry["updatedAt"] = QDateTime::currentMSecsSinceEpoch();
-    all[bookId] = entry;
-    m_core->store().write(AB_PAIRINGS_FILE, all);
-}
-
-void BookBridge::audiobooksDeletePairing(const QString& bookId)
-{
-    if (!m_core) return;
-    QJsonObject all = m_core->store().read(AB_PAIRINGS_FILE);
-    all.remove(bookId);
-    m_core->store().write(AB_PAIRINGS_FILE, all);
 }
 
 // ── window ───────────────────────────────────────────────────────────────────
