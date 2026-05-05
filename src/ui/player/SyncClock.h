@@ -110,6 +110,14 @@ public:
         // a real drift signal. Introduced a 5ms noise floor so "normal with
         // hiccups" sits at velocity 1.000, and gentled the slope so the
         // clamp is only reached at ~20ms sustained EMA (genuine drift).
+        //
+        // MAKE_FFMPEG_BEAT_MPV Task 6 attempted-fix REVERTED 2026-05-04:
+        // tried widening floor 5→10ms + deadband 0.0005→0.002 to suppress
+        // set_audio_speed churn that correlated with frame_latency p99
+        // spikes. Empirically REGRESSED Gill 43 (smooth → stuttery) by
+        // suppressing the AV-sync corrections that were keeping playback
+        // locked. The IPC traffic was the EFFECT of needing corrections,
+        // not the CAUSE of stutter. Restored 5ms floor.
         const double ema = m_latencyEmaMs.load();
         constexpr double kNoiseFloorMs = 5.0;
         double adj = (ema - kNoiseFloorMs) / 3000.0;
