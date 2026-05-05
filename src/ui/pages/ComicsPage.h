@@ -27,6 +27,12 @@ public:
     void activate();
     void triggerScan();
 
+    // Public so MainWindow::closeComicReader can refresh the continue
+    // strip the moment the reader returns to the library — mirrors the
+    // VideosPage::refreshContinueOnly precedent at MainWindow.cpp:696-698.
+    // 2026-05-03 — Hemanth verbatim "I want it instantaneous."
+    void refreshContinueStrip();
+
 signals:
     void openComic(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
 
@@ -36,7 +42,6 @@ private slots:
     void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
     void applySearch();
-    void refreshContinueStrip();
     void onCardClicked();
     void onTileContextMenu(const QPoint& pos);
     void onMultiSelectContextMenu(const QList<TileCard*>& selected, const QPoint& globalPos);

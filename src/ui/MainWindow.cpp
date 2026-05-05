@@ -5,8 +5,12 @@
 #include "pages/ComicsPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
-#include "pages/SourcesPage.h"
+#include "pages/OrganisePage.h"
 #include "pages/StreamPage.h"
+#include "pages/TankorentPage.h"
+#include "pages/TankoyomiPage.h"
+#include "pages/TankoLibraryPage.h"
+#include "widgets/SidebarDrawer.h"
 #include "core/torrent/TorrentClient.h"
 #include "readers/ComicReader.h"
 #include "readers/BookReader.h"
@@ -29,6 +33,7 @@
 #include <QJsonObject>
 #include <QIcon>
 #include <QEvent>
+#include <QWindowStateChangeEvent>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -36,11 +41,16 @@
 #endif
 
 // ── Page id constants ───────────────────────────────────────────────────────
-static constexpr const char *PAGE_COMICS  = "comics";
-static constexpr const char *PAGE_BOOKS   = "books";
-static constexpr const char *PAGE_VIDEOS  = "videos";
-static constexpr const char *PAGE_STREAM  = "stream";
-static constexpr const char *PAGE_SOURCES = "sources";
+static constexpr const char *PAGE_COMICS       = "comics";
+static constexpr const char *PAGE_BOOKS        = "books";
+static constexpr const char *PAGE_VIDEOS       = "videos";
+static constexpr const char *PAGE_ORGANISE     = "organise";
+static constexpr const char *PAGE_STREAM       = "stream";
+// SOURCES_SIDEBAR 2026-05-05 — PAGE_SOURCES removed; replaced by three peer
+// pages reachable via the slide-in left sidebar drawer.
+static constexpr const char *PAGE_TANKORENT    = "tankorent";
+static constexpr const char *PAGE_TANKOYOMI    = "tankoyomi";
+static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
 
 // ── Constructor ─────────────────────────────────────────────────────────────
 MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
@@ -92,6 +102,15 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     DebugLogBuffer::instance().info("mainwindow", "5a-pagestack-added");
 
     rootLayout->addWidget(content, 1);
+
+    m_sidebar = new SidebarDrawer(root);
+    m_sidebar->hide();
+    connect(m_hamburgerBtn, &QPushButton::clicked, m_sidebar, &SidebarDrawer::toggle);
+    connect(m_sidebar, &SidebarDrawer::sourceClicked, this, [this](const QString& pageId) {
+        activatePage(pageId);
+        if (m_sidebar)
+            m_sidebar->close();
+    });
 
     // Root folders overlay (hidden by default)
     m_rootFoldersOverlay = new RootFoldersOverlay(m_bridge, root);
@@ -175,6 +194,13 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
             else
                 showNormal();
         }
+        // SOURCES_SIDEBAR 2026-05-05 — disable hamburger toggle while video is
+        // fullscreen + force-close any already-open drawer (avoids drawer
+        // floating over a fullscreen video).
+        if (m_hamburgerBtn)
+            m_hamburgerBtn->setEnabled(!enter);
+        if (enter && m_sidebar && m_sidebar->isOpen())
+            m_sidebar->close();
     });
 
     DebugLogBuffer::instance().info("mainwindow", "5f-before-central");
@@ -196,9 +222,6 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // Connect videos page to player
     if (auto *videos = m_pageStack->findChild<VideosPage*>()) {
         connect(videos, &VideosPage::playVideo, this, &MainWindow::openVideoPlayer);
-        // 2026-04-30 — direct-opener forward for the right-click entries.
-        connect(videos, &VideosPage::playVideoWithBackend,
-                this, &MainWindow::openVideoPlayerWithBackend);
         // Forward player progress to VideosPage for continue strip refresh
         connect(m_videoPlayer, &VideoPlayer::progressUpdated, videos, [videos]() {
             videos->refreshContinueOnly();
@@ -213,16 +236,12 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // Hint stripped these styles; without re-adding them WM_NCHITTEST + WM_-
     // NCCALCSIZE alone won't bring snap back. winId() forces native HWND
     // creation so SetWindowLong has a valid handle.
-#ifdef Q_OS_WIN
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (hwnd) {
-        LONG style = ::GetWindowLong(hwnd, GWL_STYLE);
-        ::SetWindowLong(hwnd, GWL_STYLE,
-            style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_CAPTION);
-        ::SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-#endif
+    // FRAMELESS_CHROME_FIX 2026-05-01 — initial Win32 style application.
+    // Factored into applyFramelessWin32Style() helper 2026-05-04 so the
+    // same block can be re-fired on fullscreen-exit transitions
+    // (changeEvent below) — fixes the brief OS-title-bar flash Hemanth
+    // observed when exiting fullscreen on the mpv video player.
+    applyFramelessWin32Style();
 }
 
 // ── Resize ──────────────────────────────────────────────────────────────────
@@ -265,10 +284,27 @@ void MainWindow::buildTopBar()
     // to mirror rightSlot's sizeHint() at the end of buildTopBar(). Robust
     // to future button additions on either side — no magic numbers.
     auto* leftSlot = new QWidget(bar);
+    m_topBarLeftSlot = leftSlot;
     leftSlot->setObjectName("TopBarLeftSlot");
     auto* leftLayout = new QHBoxLayout(leftSlot);
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(0);
+
+    // SOURCES_SIDEBAR 2026-05-05 — hamburger button before brand label.
+    // Toggles the left slide-in drawer holding Tankorent / Tankoyomi /
+    // TankoLibrary. Sized to match IconButton precedent (28x24); not
+    // checkable, not part of m_navGroup (it's a toggle, not a content-mode peer).
+    m_hamburgerBtn = new QPushButton(leftSlot);
+    m_hamburgerBtn->setObjectName("HamburgerButton");
+    m_hamburgerBtn->setFixedSize(28, 24);
+    m_hamburgerBtn->setCursor(Qt::PointingHandCursor);
+    m_hamburgerBtn->setIcon(QIcon(":/icons/hamburger.svg"));
+    m_hamburgerBtn->setIconSize(QSize(16, 16));
+    m_hamburgerBtn->setToolTip("Open sidebar (Ctrl+5)");
+    m_hamburgerBtn->setFocusPolicy(Qt::NoFocus);
+    leftLayout->addWidget(m_hamburgerBtn, 0, Qt::AlignVCenter);
+    leftLayout->addSpacing(8);
+
     m_brandLabel = new QLabel("Tankoban", leftSlot);
     m_brandLabel->setObjectName("Brand");
     leftLayout->addWidget(m_brandLabel);
@@ -293,7 +329,9 @@ void MainWindow::buildTopBar()
         { PAGE_BOOKS,   "Books"   },
         { PAGE_VIDEOS,  "Videos"  },
         { PAGE_STREAM,  "Stream"  },
-        { PAGE_SOURCES, "Sources" },
+        // SOURCES_SIDEBAR 2026-05-05 — Sources entry removed; the three sub-pages
+        // (Tankorent / Tankoyomi / TankoLibrary) are now reachable via the
+        // hamburger-toggled left drawer.
     };
 
     for (const auto &def : navDefs) {
@@ -319,6 +357,7 @@ void MainWindow::buildTopBar()
     // Right slot wraps Theme + scan + add + chrome cluster so its sizeHint
     // can be mirrored onto leftSlot's fixed width (see end of buildTopBar).
     auto* rightSlot = new QWidget(bar);
+    m_topBarRightSlot = rightSlot;
     rightSlot->setObjectName("TopBarRightSlot");
     auto* rightLayout = new QHBoxLayout(rightSlot);
     rightLayout->setContentsMargins(0, 0, 0, 0);
@@ -328,6 +367,23 @@ void MainWindow::buildTopBar()
     // library-data; group by intent per Hemanth 2026-04-25.
     auto* themePicker = new ThemePicker(rightSlot);
     rightLayout->addWidget(themePicker, 0, Qt::AlignVCenter);
+
+    m_organiseBtn = new QPushButton(rightSlot);
+    m_organiseBtn->setObjectName("IconButton");
+    m_organiseBtn->setFixedSize(28, 24);
+    m_organiseBtn->setIcon(QIcon(":/icons/organise.svg"));
+    m_organiseBtn->setIconSize(QSize(16, 16));
+    m_organiseBtn->setCursor(Qt::PointingHandCursor);
+    m_organiseBtn->setToolTip("Organise video categories");
+    m_organiseBtn->hide();
+    connect(m_organiseBtn, &QPushButton::clicked, this, [this]() {
+        if (m_videosPage)
+            m_videosPage->activate();
+        if (m_organisePage && m_videosPage)
+            m_organisePage->setShows(m_videosPage->currentShows());
+        activatePage(PAGE_ORGANISE);
+    });
+    rightLayout->addWidget(m_organiseBtn, 0, Qt::AlignVCenter);
 
     // Rescan button
     auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), rightSlot);
@@ -382,11 +438,19 @@ void MainWindow::buildTopBar()
 
     // Width-mirror: leftSlot fixed to rightSlot's preferred width once
     // child widgets have published their sizeHints (next event-loop tick).
-    QTimer::singleShot(0, this, [leftSlot, rightSlot]() {
-        leftSlot->setFixedWidth(rightSlot->sizeHint().width());
-    });
+    // Re-runs on every activatePage() since right-slot content (Organise btn)
+    // changes visibility per page — without re-mirroring the central nav pills
+    // shift off-center when entering Videos/Organise mode.
+    QTimer::singleShot(0, this, [this]() { mirrorTopBarSlotWidths(); });
 
     m_topBar = bar;
+}
+
+void MainWindow::mirrorTopBarSlotWidths()
+{
+    if (!m_topBarLeftSlot || !m_topBarRightSlot)
+        return;
+    m_topBarLeftSlot->setFixedWidth(m_topBarRightSlot->sizeHint().width());
 }
 
 // ── Page stack ──────────────────────────────────────────────────────────────
@@ -411,7 +475,25 @@ void MainWindow::buildPageStack()
     m_pageStack->addWidget(m_videosPage);
     dbg("4d-videospage-created");
 
-    // TorrentClient (shared by StreamPage and SourcesPage)
+    m_organisePage = new OrganisePage(m_bridge);
+    m_pageStack->addWidget(m_organisePage);
+    connect(m_organisePage, &OrganisePage::backToVideosRequested, this, [this]() {
+        activatePage(PAGE_VIDEOS);
+    });
+    connect(m_organisePage, &OrganisePage::assignmentsChanged, this, [this]() {
+        if (m_videosPage)
+            m_videosPage->refreshFromCategoryStore();
+        if (m_organisePage && m_videosPage)
+            m_organisePage->setShows(m_videosPage->currentShows());
+    });
+    connect(m_videosPage, &VideosPage::categoryAssignmentsChanged, this, [this]() {
+        if (m_organisePage && m_videosPage)
+            m_organisePage->setShows(m_videosPage->currentShows());
+    });
+    dbg("4d2-organisepage-created");
+
+    // TorrentClient (shared by StreamPage, VideosPage, TankorentPage,
+    // TankoLibraryPage). Hoisted at MainWindow scope post-SOURCES_SIDEBAR.
     auto *torrentClient = new TorrentClient(m_bridge, this);
     dbg("4e-torrentclient-created");
 
@@ -431,9 +513,20 @@ void MainWindow::buildPageStack()
     // folder + re-downloads, producing the "multiplying folders" symptom.
     m_videosPage->setTorrentClient(torrentClient);
 
-    auto *sourcesPage = new SourcesPage(m_bridge, torrentClient);
-    dbg("4g-sourcespage-created");
-    m_pageStack->addWidget(sourcesPage);
+    auto *tankorentPage = new TankorentPage(m_bridge, torrentClient);
+    tankorentPage->setObjectName(PAGE_TANKORENT);
+    m_pageStack->addWidget(tankorentPage);
+    dbg("4g-tankorentpage-created");
+
+    auto *tankoyomiPage = new TankoyomiPage(m_bridge);
+    tankoyomiPage->setObjectName(PAGE_TANKOYOMI);
+    m_pageStack->addWidget(tankoyomiPage);
+    dbg("4g2-tankoyomipage-created");
+
+    auto *tankoLibraryPage = new TankoLibraryPage(m_bridge, torrentClient);
+    tankoLibraryPage->setObjectName(PAGE_TANKOLIBRARY);
+    m_pageStack->addWidget(tankoLibraryPage);
+    dbg("4g3-tankolibrarypage-created");
     dbg("4h-pagestack-complete");
 }
 
@@ -452,7 +545,11 @@ void MainWindow::bindShortcuts()
     bind(QKeySequence("Ctrl+2"), PAGE_BOOKS);
     bind(QKeySequence("Ctrl+3"), PAGE_VIDEOS);
     bind(QKeySequence("Ctrl+4"), PAGE_STREAM);
-    bind(QKeySequence("Ctrl+5"), PAGE_SOURCES);
+    auto* sidebarShortcut = new QShortcut(QKeySequence("Ctrl+5"), this);
+    connect(sidebarShortcut, &QShortcut::activated, this, [this]() {
+        if (m_sidebar)
+            m_sidebar->toggle();
+    });
 
     // F11 fullscreen toggle
     auto *fs = new QShortcut(QKeySequence(Qt::Key_F11), this);
@@ -485,6 +582,11 @@ void MainWindow::activatePage(const QString &pageId)
     for (auto &nav : m_navButtons) {
         nav.button->setChecked(nav.pageId == pageId);
     }
+    if (m_organiseBtn)
+        m_organiseBtn->setVisible(pageId == PAGE_VIDEOS || pageId == PAGE_ORGANISE);
+    // Right-slot width changes when Organise btn shows/hides — re-mirror
+    // leftSlot via the next event-loop tick so nav pills stay centered.
+    QTimer::singleShot(0, this, [this]() { mirrorTopBarSlotWidths(); });
 
     for (int i = 0; i < m_pageStack->count(); ++i) {
         if (m_pageStack->widget(i)->objectName() == pageId) {
@@ -496,10 +598,15 @@ void MainWindow::activatePage(const QString &pageId)
                 books->activate();
             if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
                 videos->activate();
-            if (auto *sources = qobject_cast<SourcesPage*>(m_pageStack->widget(i)))
-                sources->activate();
+            if (auto *organise = qobject_cast<OrganisePage*>(m_pageStack->widget(i))) {
+                if (m_videosPage)
+                    organise->setShows(m_videosPage->currentShows());
+                organise->activate();
+            }
             if (auto *stream = qobject_cast<StreamPage*>(m_pageStack->widget(i)))
                 stream->activate();
+            if (m_sidebar)
+                m_sidebar->setActiveSource(pageId);
             break;
         }
     }
@@ -511,6 +618,9 @@ QString MainWindow::domainForPage(const QString& pageId) const
     if (pageId == PAGE_COMICS)  return "comics";
     if (pageId == PAGE_BOOKS)   return "books";
     if (pageId == PAGE_VIDEOS)  return "videos";
+    if (pageId == PAGE_ORGANISE) return "videos";
+    if (pageId == PAGE_TANKORENT || pageId == PAGE_TANKOYOMI || pageId == PAGE_TANKOLIBRARY)
+        return "sources";
     return "";
 }
 
@@ -666,17 +776,13 @@ void MainWindow::openVideoPlayer(const QString& filePath)
     m_videoPlayer->setFocus();
 }
 
-void MainWindow::openVideoPlayerWithBackend(const QString& filePath,
-                                              BackendFactory::Type backend)
+// FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — public wrapper for the
+// `--play-file` CLI flag (compare-mpv.bat / compare-ffmpeg.bat entry
+// point). Just forwards to the private overload above; exists to keep
+// openVideoPlayer itself private.
+void MainWindow::openVideoFromCli(const QString& filePath)
 {
-    // 2026-04-30 — mirrors openVideoPlayer's body but passes the explicit
-    // backend through openFile's 6th param. VideoPlayer::openFile then runs
-    // switchBackendTo if the override differs from the live backend.
-    m_videoPlayer->openFile(filePath, {}, 0, 0.0, {}, backend);
-    m_videoPlayer->setGeometry(centralWidget()->rect());
-    m_videoPlayer->show();
-    m_videoPlayer->raise();
-    m_videoPlayer->setFocus();
+    openVideoPlayer(filePath);
 }
 
 void MainWindow::closeVideoPlayer()
@@ -798,7 +904,8 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
 
     if (cmd == QLatin1String("open_page")) {
         const QString pageId = payload.value("pageId").toString();
-        const QStringList valid{"comics","books","videos","stream","sources"};
+        const QStringList valid{"comics","books","videos","organise","stream",
+                                "tankorent","tankoyomi","tankolibrary"};
         if (!valid.contains(pageId)) {
             return err("UNKNOWN_PAGE",
                 QStringLiteral("pageId '%1' not in [%2]")
@@ -871,9 +978,49 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
 void MainWindow::changeEvent(QEvent *event)
 {
     if (event->type() == QEvent::WindowStateChange) {
+        // FRAMELESS_CHROME_FULLSCREEN_EXIT_FIX 2026-05-04 — when the
+        // window leaves Qt::WindowFullScreen, Win32 has just restored
+        // the chrome window styles (WS_CAPTION / WS_THICKFRAME / etc.)
+        // that showFullScreen() stripped on entry. Qt does NOT fire
+        // SWP_FRAMECHANGED on its own, so WM_NCCALCSIZE doesn't re-
+        // execute; the OS draws one or two frames with the title bar
+        // visible before something else (resize, paint) wakes the
+        // message up. Visible as a brief title-bar flash on every
+        // fullscreen exit — Hemanth-observed on mpv player exit, also
+        // covers the carry-forward S2 takeover-flash bug from MAKE_MPV
+        // _BEAT_FFMPEG arc (any state transition that rebuilt the
+        // window style hit the same race). Re-applying the helper here
+        // forces SWP_FRAMECHANGED → WM_NCCALCSIZE re-fires immediately
+        // → no flash.
+        auto* sce = static_cast<QWindowStateChangeEvent*>(event);
+        const bool wasFullscreen   = sce->oldState() & Qt::WindowFullScreen;
+        const bool isFullscreenNow = windowState()    & Qt::WindowFullScreen;
+        if (wasFullscreen && !isFullscreenNow) {
+            applyFramelessWin32Style();
+        }
         updateMaxRestoreIcon();
     }
     QMainWindow::changeEvent(event);
+}
+
+// FRAMELESS_CHROME_FULLSCREEN_EXIT_FIX 2026-05-04 — extracted from
+// MainWindow constructor (lines ~210-225 of the original FRAMELESS_-
+// CHROME_FIX 2026-05-01 ship) so the same Win32 hack can be re-applied
+// on fullscreen-exit transitions. See changeEvent above for the second
+// call site, and the function-pointer comment in MainWindow.h for the
+// full motivation.
+void MainWindow::applyFramelessWin32Style()
+{
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd) {
+        LONG style = ::GetWindowLong(hwnd, GWL_STYLE);
+        ::SetWindowLong(hwnd, GWL_STYLE,
+            style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_CAPTION);
+        ::SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+#endif
 }
 
 void MainWindow::updateMaxRestoreIcon()
