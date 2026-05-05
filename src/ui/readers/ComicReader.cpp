@@ -179,7 +179,17 @@ void SideNavArrow::paintEvent(QPaintEvent*)
 
 VerticalThumb::VerticalThumb(QWidget* parent) : QWidget(parent)
 {
-    setCursor(Qt::SizeVerCursor);
+    // Cursor fix 2026-05-03 — was Qt::SizeVerCursor, the wrong cursor: that's
+    // the resize affordance (drag a horizontal divider up/down to resize),
+    // not the scroll-thumb affordance. Qt's own QScrollBar leaves its thumb
+    // at the default arrow cursor. The override also bled across into the
+    // bottom HUD area because VerticalThumb's geometry is (width-14, 0, 14,
+    // height) — a full-height right-edge column raise()'d to the top in
+    // buildScrollStrip line 2164 — so Qt::SizeVerCursor was leaking onto
+    // whatever sat underneath at the right edge (Hemanth: "the mouse cursor
+    // while dragging the horizontal scroll bar turns into this symbol: |
+    // with arrow on top and bottom"). Default arrow is the Qt-idiomatic
+    // pick.
 }
 
 void VerticalThumb::setProgress(double f)
@@ -1022,6 +1032,28 @@ void ComicReader::openBook(const QString& cbzPath,
     QJsonObject savedProgress = m_bridge ? m_bridge->progress("comics", itemIdForPath(cbzPath)) : QJsonObject();
     bool hadProgress = savedProgress.contains("updatedAt");
     double savedScrollFrac = savedProgress["scrollFraction"].toDouble(0.0);
+
+    // Open-time progress persist 2026-05-03 — mirrors Tankoban-Max's
+    // BUILD 19E_OPENFILE_PERSIST pattern (open.js:289-291: "Ensure at
+    // least one progress snapshot is scheduled so Open File books land
+    // in Continue Reading"). showPage's saveCurrentProgress at the end
+    // of this function is the primary save, but it's queued through
+    // JsonStore's async writer + Windows Defender 50-300ms-per-commit
+    // overhead (JsonStore.h:18-21). If the user's app-close races the
+    // writer drain, the queued B-write can be lost — the next launch
+    // then surfaces volume A as "Continue Reading" because A's last
+    // save was the most recent one to actually reach disk. Fixing this
+    // earlier in the pipeline narrows the race: the open-time save
+    // lands in the queue immediately, ahead of all the showPage +
+    // applySeriesSettings reflow work, so it has more wall-clock time
+    // to drain before any subsequent close. Hemanth verbatim "if I
+    // open a new volume from the volume picker and close the app, it
+    // still shows the old volume." Note: m_currentPage is still 0
+    // here (set at openBook line 941, before restoreSavedPage moves
+    // startPage); the showPage save below will overwrite with the
+    // restored page + a fresher updatedAt.
+    saveCurrentProgress();
+
     showPage(startPage);
 
     // Batch K: restore scroll fraction in scroll-strip mode
