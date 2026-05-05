@@ -74,15 +74,47 @@ void VideosScanner::scan(const QStringList& rootFolders)
         });
 
         bool isLoose = showPath.endsWith("::LOOSE");
-        if (isLoose)
-            showPath = showPath.chopped(7);
+        if (isLoose) {
+            for (const auto& f : files) {
+                QFileInfo fi(f);
+                const qint64 sz = fi.size();
+                const qint64 mt = fi.lastModified().toMSecsSinceEpoch();
+
+                ShowInfo info;
+                info.showName = ScannerUtils::cleanMediaFolderTitle(fi.completeBaseName());
+                if (info.showName.isEmpty())
+                    info.showName = fi.fileName();
+                info.showPath = fi.absoluteFilePath();
+                info.isLoose = true;
+                info.episodeCount = 1;
+                info.totalSizeBytes = sz;
+                info.newestMtimeMs = mt;
+
+                ShowInfo::FileEntry fe;
+                fe.path = fi.absoluteFilePath();
+                fe.sizeBytes = sz;
+                fe.mtimeMs = mt;
+
+                QString key = cacheKey(fe.path, sz, mt);
+                auto cit = m_durationCache.find(key);
+                if (cit != m_durationCache.end()) {
+                    fe.durationSec = cit.value();
+                } else {
+                    fe.durationSec = 0.0;
+                    m_pendingProbes.append(fe.path);
+                }
+
+                info.files.append(fe);
+                allShows.append(info);
+                emit showFound(info);
+            }
+            continue;
+        }
 
         ShowInfo info;
-        info.showName = isLoose
-            ? "Loose files"
-            : ScannerUtils::cleanMediaFolderTitle(QDir(showPath).dirName());
+        info.showName = ScannerUtils::cleanMediaFolderTitle(QDir(showPath).dirName());
         info.showPath = showPath;
-        info.isLoose = isLoose;
+        info.isLoose = false;
         info.episodeCount = files.size();
 
         qint64 totalSize = 0;
