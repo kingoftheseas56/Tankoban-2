@@ -82,7 +82,15 @@ void BookReader::buildUI()
 
     // Allow local file access for loading book files via file:// URLs
     m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
-    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+    // BOOK_DICTIONARY_FIX 2026-05-04: reader_dict.js fetches Wiktionary REST API
+    // (https://en.wiktionary.org/api/rest_v1/page/definition/<word>) from the
+    // file:// reader HTML. With this attribute false, that cross-origin fetch
+    // is blocked → popup shows "No definition found" for every word. Flipping
+    // to true matches Tankoban-Max's Electron webSecurity posture; tradeoff is
+    // that EPUB content (user-supplied) can also phone home, same as Calibre/
+    // Apple Books/Kindle threat model. Foliate-JS sandboxes EPUB chapters into
+    // their own iframes so the parent file:// origin is the primary surface.
+    m_webView->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
 
     // The HTML loads from file://, so qrc:///qtwebchannel/qwebchannel.js is not
     // reachable via <script src>. Inject Qt's built-in qwebchannel.js via the
@@ -243,15 +251,7 @@ void BookReader::buildUI()
         "            return _call(b.booksTtsEdgeResetStart, []);"
         "          }"
         "        };"
-        "      })(),"
-        "      audiobooks: {"
-        "        getState: function() { return b.audiobooksGetState(); },"
-        "        getProgress: function(id) { return b.audiobooksGetProgress(id); },"
-        "        saveProgress: function(id, d) { return b.audiobooksSaveProgress(id, d); },"
-        "        getPairing: function(id) { return b.audiobooksGetPairing(id); },"
-        "        savePairing: function(id, d) { return b.audiobooksSavePairing(id, d); },"
-        "        deletePairing: function(id) { return b.audiobooksDeletePairing(id); }"
-        "      }"
+        "      })()"
         "    };"
         "    window.__ebookNav = {"
         "      requestClose: function() { b.requestClose(); },"
