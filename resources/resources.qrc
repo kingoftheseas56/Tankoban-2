@@ -16,6 +16,9 @@
         <file>icons/subtitles.svg</file>
         <file>icons/audio.svg</file>
         <file>icons/settings.svg</file>
+        <file>icons/organise.svg</file>
+        <file>icons/plus.svg</file>
+        <file>icons/minus.svg</file>
         <file>icons/brightness.svg</file>
         <file>icons/comic_reader/arrow-left.svg</file>
         <file>icons/comic_reader/triangle-left.svg</file>
@@ -34,6 +37,10 @@
         <file>icons/chevron_left.svg</file>
         <file>icons/chevron_right.svg</file>
         <file>icons/tankoban_app_icon.png</file>
+        <file>icons/hamburger.svg</file>
+        <file>icons/magnet.svg</file>
+        <file>icons/tankoyomi.svg</file>
+        <file>icons/book.svg</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>
 </RCC>
