@@ -83,6 +83,18 @@ private slots:
 private:
     QString discoverBinaryPath() const;
 
+    // Writes <cacheDir>/server-settings.json with our BT-tuning overrides
+    // before launch. server.js reads this file at boot (server.js:12627) and
+    // overlays it on its own defaults — official Stremio downstream-config
+    // path, no JS patching. Restores the cold-open / high-seeder throughput
+    // win that Experiment 1 (TANKOBAN_STREMIO_TUNE, 2026-04-23) delivered on
+    // our libtorrent before STREAM_SERVER_PIVOT Phase 3 (d1c812e, 2026-04-25)
+    // moved Stream mode onto stream-server's bundled libtorrent (which uses
+    // its own conservative defaults: 55 max connections, 3.5 MB/s hard cap).
+    // No-op + warning on write failure — server falls back to its own
+    // defaults rather than blocking the launch.
+    void writeServerSettings(const QString& cacheDir) const;
+
     QProcess*          m_process = nullptr;
     QByteArray         m_stdoutBuffer;
     QByteArray         m_stderrBuffer;

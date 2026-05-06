@@ -2,7 +2,10 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QTimer>
@@ -53,6 +56,33 @@ QString StreamServerProcess::discoverBinaryPath() const
     return {};
 }
 
+void StreamServerProcess::writeServerSettings(const QString& cacheDir) const
+{
+    // Values picked to restore Experiment 1's pre-pivot win on high-seeder
+    // torrents. Defaults from server.js:12640-12645 are conservative
+    // (3.5 MB/s hard cap, 55 connections, 4s request timeout) and bottleneck
+    // cold-open + metadata fetch even when 2000+ seeders are available.
+    QJsonObject overrides;
+    overrides.insert(QStringLiteral("btMaxConnections"), 200);
+    overrides.insert(QStringLiteral("btDownloadSpeedSoftLimit"), 52428800);   // 50 MB/s
+    overrides.insert(QStringLiteral("btDownloadSpeedHardLimit"), 104857600);  // 100 MB/s
+    overrides.insert(QStringLiteral("btRequestTimeout"), 8000);               // 4s -> 8s, more patient with sluggish peers
+    overrides.insert(QStringLiteral("btMinPeersForStable"), 10);
+
+    const QString path = QDir(cacheDir).filePath(QStringLiteral("server-settings.json"));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qWarning().noquote()
+            << "StreamServerProcess: could not write server-settings.json at"
+            << path << "—" << f.errorString()
+            << "(stream-server will fall back to its own defaults)";
+        return;
+    }
+    f.write(QJsonDocument(overrides).toJson(QJsonDocument::Indented));
+    f.close();
+    qInfo().noquote() << "StreamServerProcess: wrote BT tuning overrides to" << path;
+}
+
 bool StreamServerProcess::start(const QString& cacheDir)
 {
     if (isRunning()) {
@@ -76,6 +106,7 @@ bool StreamServerProcess::start(const QString& cacheDir)
     // Ensure cacheDir exists so server.js doesn't bomb trying to mkdir.
     if (!cacheDir.isEmpty()) {
         QDir().mkpath(cacheDir);
+        writeServerSettings(cacheDir);
     }
 
     // Process environment: inherit system, then override our two knobs.
