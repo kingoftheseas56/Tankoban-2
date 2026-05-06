@@ -2512,3 +2512,386 @@ Torrent Catalogs is a third-party addon and can drift over time. If the Top Seed
 | files: src/core/stream/addon/AddonRegistry.cpp, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
 
 READY TO COMMIT - [Agent 7 (Trigger D), STREAM_CATALOG_OVERHAUL FOLLOWUP 2026-05-06 03:59PM]: addon registry seed extended with the four missing catalogs Hemanth originally asked for. Cinemeta imdbRating movie+series creates Featured rows; Torrent Catalogs addon com.stremio.torrentio.catalog.addon v1.0.2 creates Top Seeded rows via top-movies and top-series. kSchemaVersion bumped to 3 so existing v2 addon stores reseed; migration skips duplicate preserved user addons by manifest id. Six total catalog rows now match Stremio's standard set. The "N catalogs" status text under Back is removed while useful loading/error status paths remain. Live manifests/endpoints verified during implementation; catalog IDs cited in body. Agent 4 owns ongoing maintenance - Torrent Catalogs is third-party and catalog IDs may drift over time. Hemanth-driven smoke pending per his standing no-MCP call. | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/core/stream/addon/AddonRegistry.cpp, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_DETAIL_METADATA_POLISH CLOSED — 2026-05-06 ~16:20pm
+
+### What shipped
+
+The chunky 5-chip metadata row below the title in StreamDetailView is replaced with a single tight muted-gray inline string (Stremio parity). Hemanth verbatim 2026-05-06: *"What are those big ass blocks containing year runtime etc? Can the series/show page be a little more aesthetic?"* The screenshot confirmed the diagnosis — the chips' QSS intent (small soft pills, padding `2px 10px`, 11px font) was correct, but the layout stretched them vertically into ~100px chunky boxes; visual was wrong relative to Stremio's reference.
+
+End-state for Hemanth's screenshot reproducer (The Legend of Aang detail view):
+```
+2026 · 99 min · Animation, Action, Adventure · Movie
+```
+Single 12px `rgba(255,255,255,0.62)` line, no boxes, no borders, no fixed-height. Wraps cleanly at narrow widths via `setWordWrap(true)`. Sits where the chip row used to (left column, directly below title) — drops a noticeable amount of vertical real estate that the description + cast + episode list now reclaim.
+
+### Diff shape — true /simplify
+
+Six members → one. 21 lines of QHBoxLayout-with-5-chips construction → 18 lines of single QLabel + tight transparent QSS. `applyChips` body rewritten as `QStringList parts; ... parts.join(" · ")` with show/hide on `m_metaLine`. Function signature + callers preserved (caller-compat with both `showEntry`'s first-paint preview-hint route and `onMetaItemReady`'s richer-meta route).
+
+### Files modified (2)
+
+- **`src/ui/pages/stream/StreamDetailView.h`** — removed `m_chipsRow` (QWidget) + `m_chipYear` / `m_chipRuntime` / `m_chipGenres` / `m_chipRating` / `m_chipType` (5 QLabels). Added `m_metaLine` (1 QLabel) with rationale comment.
+- **`src/ui/pages/stream/StreamDetailView.cpp`** — chip-row construction block replaced with single `m_metaLine = new QLabel(this)` + `setObjectName("StreamDetailMetaLine")` + tight `QLabel#StreamDetailMetaLine { background: transparent; border: none; color: rgba(255,255,255,0.62); font-size: 12px; font-weight: 400; padding: 0; margin: 4px 0 0 0; }` + `setWordWrap(true)` + initial `hide()`. `applyChips` body rewritten: 5-step QStringList composition (year with trailing-en-dash normalization, runtime, genres-joined-by-comma capped at 3, "Series"/"Movie" type, "IMDb 7.5" rating), final `parts.join(" · ")`, show/hide on the resulting text.
+
+### Decisions (Rule 14 calls)
+
+- **No star glyph (★ / U+2605) prefix on the IMDb rating.** `feedback_no_color_no_emoji.md` mandates grayscale-only + no emojis + SVG icons only. U+2605 black-star renders as a colored emoji on systems that fall through to a color-emoji font (segoe-ui-emoji etc.). Literal "IMDb 7.5" matches the prior chip's behavior exactly — zero risk of font-fallback regression. Stremio uses the star inline; for Tankoban that's a deviation from parity but in line with the project palette rule.
+- **Genre internal separator flipped `· → ,`.** Comma-separated genres inside the genre section, middle-dot ` · ` reserved for between-section duty (Stremio idiom). Matches the screenshot reference.
+- **Genre cap kept at 3.** Same as prior chip behavior (`mid(0, 3)`).
+- **Year ongoing-series normalize preserved.** `2023–` → `2023–present` (en-dash trailing → en-dash + present). Applied inside the year-conditional block.
+- **`m_metaLine->hide()` initial state.** Prior chips were individually hidden+shown by their setChip lambda; the new single label hides until at least one part populates the joined string.
+- **Defensive `if (!m_metaLine) return;` guard at function entry** — function shipped before the construction call could conceivably fire (theoretically possible during early showEntry before buildUI completes); cheap safety, zero behavior change in normal flow.
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try**.
+- `build_and_run.bat` — Tankoban PID 18896 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId=stream`, `currentPageIndex=4` — Stream page constructs without crash on the new metadata-line code path.
+- `scripts/stop-tankoban.ps1` — Tankoban + 5 stale stremio-runtime instances killed clean (the 5 stranded stremio-runtimes from earlier wakes were bonus housekeeping; the relevant kill is the just-booted Tankoban).
+
+UI render verification (single inline metadata line visible, no chunky boxes, wrap-at-narrow-widths) is Hemanth's lane per the brief's no-MCP call.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch via `build_and_run.bat` → Stream page → search a show → open detail view.
+2. Below the title, confirm a **single tight metadata line** like `2026 · 99 min · Animation, Action, Adventure · Movie` (or whatever fields the show exposes). **No more chunky boxes.**
+3. Same for a movie — Stremio-style inline string.
+4. Confirm the text is **subtle muted gray**, not bold, no borders or rounded backgrounds.
+5. Resize the window narrower → confirm the line **wraps gracefully** to a second line (no overflow / no horizontal scroll).
+6. **Regression-free check**: hero image, title, "Add to Library" button, description, cast row, episode list, source list (right pane release-name primary cards), right-click "Add torrent to Tankorent" menu — all still render and work as before.
+7. **Edge-case observation**: if a show is missing some fields (e.g. no rating, no runtime), the line still renders cleanly from what's available. No leading/trailing dots, no empty separator artifacts. Truly empty (preview not loaded yet) → the line hides entirely (no empty box artifact).
+
+### Discipline
+
+- **/simplify** — applied literally. Five chips → one label. Six members → one. Two functions touched, both shrunk. No new abstraction; no chip-strip widget class introduced. Preserves the full original semantic (year-trailing-dash normalize, genre-cap-3, type→"Series"/"Movie", IMDb prefix).
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. `applyChips` signature unchanged → both callers (showEntry first-paint at line 153, onMetaItemReady at line 778) need no callsite update. setWordWrap true handles narrow-width wrap. Empty-text branch handles "preview hasn't loaded" cleanly. QStringList.join with ` · ` separator never brackets missing data.
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flip on Stream page BEFORE posting RTC. The QLabel rendering is structurally implied — Qt renders QLabel; the only thing that could go wrong is the QSS not winning the cascade, but the object-name-scoped selector + `!important`-equivalent specificity guarantees it.
+- **/security-review N/A** per brief — pure UI-string composition, no network/input/IPC surfaces touched.
+
+### Carry-forward
+
+- None. Surgical fix, surgical scope.
+- Note for future: if Hemanth ever wants the star-glyph parity with Stremio, an SVG monochrome star icon (per the no-emoji rule's "SVG icons only" carve-out) prepended to the IMDb section would be the path. Defer until asked.
+
+READY TO COMMIT - [Agent 4, STREAM_DETAIL_METADATA_POLISH 2026-05-06 ~16:20pm — five-chip metadata row collapsed to single tight muted-gray inline line below the title (Stremio parity). Hemanth screenshot diagnosis: chips' intended pill QSS (padding 2px 10px, 11px, 10px border-radius) was correct but the layout stretched vertically into ~100px chunky boxes. End-state: `2026 · 99 min · Animation, Action, Adventure · Movie` as one rgba(255,255,255,0.62) 12px QLabel#StreamDetailMetaLine, setWordWrap(true), no border, no rounded background. Header: m_chipsRow + m_chipYear/Runtime/Genres/Rating/Type (6 members) → m_metaLine (1). Construction: 21-line QHBoxLayout+5-chip block → 18-line single QLabel + tight transparent QSS + initial hide(). applyChips body: setChip-lambda + 5 calls → QStringList parts; conditional appends; parts.join(" · "); show/hide on result. Year-trailing-en-dash normalize preserved (2023– → 2023–present). Genre cap kept at 3. Genre internal separator flipped `· → ,` (Stremio idiom: comma inside genres, middle-dot between sections). No star glyph (U+2605) per feedback_no_color_no_emoji.md — literal "IMDb 7.5" matches prior chip's behavior + zero font-fallback risk. applyChips signature + 2 callers (showEntry:153 + onMetaItemReady:778) unchanged. 2 files modified. build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 18896 boots clean; tankoctl open-page stream flips activePageId=stream + currentPageIndex=4 without crash on new metadata-line path; stop-tankoban.ps1 clean kill (also picked up 5 stale stremio-runtime instances stranded from earlier wakes — bonus housekeeping). UI render verification (single inline line visible, wrap-on-narrow, no chunky boxes) deferred to Hemanth per brief's no-MCP call. Hemanth-facing smoke checklist embedded in body above (7 steps).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/stream/StreamDetailView.h, src/ui/pages/stream/StreamDetailView.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE CLOSED — 2026-05-06 ~16:51pm
+
+### What shipped — Bugs 1 & 2 closed; Bug 3 instrumented for Hemanth-driven RC validation
+
+Hemanth verbatim 2026-05-06: *"A show I opened and started playing must immediately appear in continue watching and the stream mode library. Not only does it not happen immediately, it never happens. I just watched a show for nearly 1 minute, closed it and went back to the library, it just doesn't appear."* + *"And also it turns out the timer in the timeline/hud bar is still showing 00:00 even two minutes into the video."*
+
+### Bug 1 — Continue Watching never appears (TWO coupled root causes)
+
+Code-walk identified both RCs:
+
+1. **Save gate trip** — `StreamPage.cpp:2042` returned when `durSec <= 0.0`. HTTP-URL streams via stream-server commonly land `durSec=0` because the sidecar's demuxer discards FROM_BITRATE estimates as unreliable (anti-lie contract per `VideoPlayer.cpp:1122-1126` — same rule that motivates "—:—" duration in the HUD). Save never fires → JsonStore stream-domain entry never written → Continue Watching empty.
+
+2. **Library coupling in refresh** — `StreamContinueStrip.cpp:121` filters `if (imdbId.isEmpty() || !m_library->has(imdbId)) continue;`. **Even if save lands, the show must be in StreamLibrary for its tile to render.** This is why Bug 1 + Bug 2 are coupled tighter than the brief assumed: the brief authored them as parallel issues; reading refresh's code reveals they're sequential gates. Auto-library-add (Bug 2) is a HARD DEPENDENCY for Bug 1's Continue Watching tile to actually surface.
+
+**Fix shipped:**
+- **Gate relax** at `StreamPage.cpp` progressUpdated lambda — drop `|| durSec <= 0.0`. Preserve the 5s `posSec` floor (probe/initial-zero ticks still filtered). Saving with `durSec=0` is downstream-safe: `StreamProgress::percent` guards div-by-0 (returns 0.0); `StreamContinueStrip::refresh` filters only on `pos < MIN_POSITION_SEC`; `isFinished` returns false when percent < 90%.
+- **Auto-library-add** wired immediately after `saveProgress` in the same lambda, gated by new `m_session.autoLibraryAdded` (once-per-session). Closes the library coupling. Implementation in Bug 2 below.
+
+### Bug 2 — Library auto-add (Stremio parity)
+
+New `StreamDetailView::autoAddToLibrary()` public method — strictly add-only mirror of the add-side branch of `onLibraryButtonClicked`. Idempotent: short-circuits when `m_library->has(m_currentImdb)` (preserves user-added entries). Builds the `StreamLibraryEntry` from `m_lastPreviewHint` (always populated by `showEntry` either from the catalog/home/search hint OR reconstructed from the library-tile path).
+
+`StreamPage` calls it from progressUpdated's lambda on the FIRST successful save in a session via `m_session.autoLibraryAdded` gate. Picked path (b) per brief §6.2 — save-tied trigger, not source-activate (avoids adding when user backs out of stream-pick before any actual play). m_session.autoLibraryAdded resets on every new session via `m_session = PlaybackSession{}` default-init in `resetSession`. Explicit Remove via `onLibraryButtonClicked` stays distinct — auto-add never toggles off.
+
+### Bug 3 — HUD shows 00:00 (RC NOT YET CONFIRMED — instrumented for Hemanth-driven validation)
+
+Code-walk inconclusive. Possible RCs:
+- **H3.A (shared with H1.A — high prior)**: `durSec=0` lands but `positionSec` advances. HUD already renders `m_durLabel="—:—"` for `durSec=0` (`VideoPlayer.cpp:1144`); `m_timeLabel=formatTime(posMs)` ticks unconditionally (line 1120). If this is the RC, Bug 1's gate-relax fix transitively pulls Bug 3 along (saves now fire → ProgressUpdated chain proves the time-source pipeline is alive).
+- **H3.B/C (deeper)**: If `positionSec` itself stays 0 across ticks OR `onTimeUpdate` never fires for HTTP-URL streams (stream-server pipeline doesn't emit `time_update` IPC), that's an upstream sidecar / stream-server issue OUT of this RTC's scope — separate RTC needed.
+
+Without MCP this wake (Hemanth-driven smoke per his standing call), I cannot run Phase 1 trace empirically. **Defer Bug 3 fix to follow-up RTC** after Hemanth's smoke captures the trace via `tankoctl logs`. Documented as honest deviation from brief §10.
+
+### Phase 1 instrumentation — DebugLogBuffer traces baked in
+
+Per brief §4 the RC hypotheses are plausible from code-read but only the trace decides. Since I can't run the trace empirically (no MCP), the traces stay in tree until follow-up RTC strips them after Hemanth's first smoke validates RC. Pattern mirrors TankorentPage's `onAddTorrentClicked` diagnostic instrumentation (post-2026-04-30 silent-failure debugging) — DebugLogBuffer is the right sink because `tankoctl logs` ring buffer surfaces it; `qDebug()` does NOT land in `_player_debug.txt` on Windows GUI builds (memory ID 1718).
+
+Traces (5 prefixes for grep-ability):
+- `[STREAM_PROGRESS_TRACE]` — 4 points in StreamPage's progressUpdated lambda: tick entry (every tick) / skip-empty-epKey / skip-posSec-gate / saved (with epKey + posSec + durSec + finished).
+- `[STREAM_PROGRESS_TRACE]` — auto-library-add fired marker.
+- `[STREAM_CONTINUE_TRACE]` — `StreamContinueStrip::refresh()` entry (allProgress.size) + per-candidate accept/skip with reason text.
+- `[STREAM_HUD_TRACE]` — `VideoPlayer::onTimeUpdate` entry, **gated by `m_streamMode`** so non-stream playback doesn't flood the ring buffer at 1 Hz. Captures positionSec / durationSec / streamStalled.
+
+What the traces will tell us:
+- **Bug 1 RC confirmed** if `[STREAM_PROGRESS_TRACE]` shows ticks with `durSec=0.00` and the saved trace fires (gate relax worked).
+- **Bug 2 confirmed** if `[STREAM_CONTINUE_TRACE]` shows candidates accepted (vs prior empty-library skip-with-reason).
+- **Bug 3 RC distinguished**:
+  - If `[STREAM_HUD_TRACE]` shows posSec advancing but durSec=0 → H3.A (shared, fixed transitively by Bug 1 gate relax).
+  - If posSec stays 0.00 across ticks → upstream sidecar PTS issue, separate RTC scope.
+  - If trace never fires → onTimeUpdate slot wire broken in stream mode, separate RTC.
+
+### Files modified (5)
+
+- `src/ui/pages/StreamPage.h` — added `bool autoLibraryAdded = false;` to PlaybackSession struct (default-init means resetSession's `m_session = PlaybackSession{}` implicitly resets per-session).
+- `src/ui/pages/StreamPage.cpp` — added `#include "core/DebugLogBuffer.h"`; relaxed the progressUpdated gate (drop `|| durSec <= 0.0`); added 4 DebugLogBuffer traces; wired auto-library-add via `m_detailView->autoAddToLibrary()` gated by `m_session.autoLibraryAdded`.
+- `src/ui/pages/stream/StreamDetailView.h` — declared public `void autoAddToLibrary();` method with rationale comment.
+- `src/ui/pages/stream/StreamDetailView.cpp` — implemented `autoAddToLibrary()` (idempotent add-only mirror of `onLibraryButtonClicked` add-branch; uses `m_lastPreviewHint` for entry construction).
+- `src/ui/pages/stream/StreamContinueStrip.cpp` — added `#include "core/DebugLogBuffer.h"`; added refresh-entry trace with allProgress size; added per-candidate accept/skip traces with reason text.
+- `src/ui/player/VideoPlayer.cpp` — added stream-mode-gated DebugLogBuffer trace at `onTimeUpdate` entry capturing posSec / durSec / streamStalled.
+
+(6 files in total counting both the .h pair on StreamDetailView; 5 logical modifications.)
+
+### Honest deviations from brief
+
+1. **Phase 1 traces NOT stripped (brief §4.7).** Cannot run trace empirically without MCP/UI access — no way to drive stream-mode playback from agent-side. Traces stay in tree until follow-up RTC after Hemanth's first smoke validates RC via `tankoctl logs`. Rule 14 call: shipping the high-confidence Bug 1 + Bug 2 fixes immediately + leaving traces for one validation cycle beats waiting indefinitely for trace data I can't capture.
+2. **Bug 3 NOT directly fixed.** RC needs trace to disambiguate. Shipped diagnostic instrumentation; if `[STREAM_HUD_TRACE]` shows posSec advancing the gate-relax already covers Bug 3 transitively; otherwise follow-up RTC.
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try** after 6 src/ touches.
+- `build_and_run.bat` — Tankoban PID 4844 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId=stream`, no crash on the new instrumented + gate-relaxed code paths.
+- `scripts/stop-tankoban.ps1` — Tankoban + 2 stale stremio-runtime instances killed clean.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch via `build_and_run.bat` → Stream → search a show → open detail view → play an episode → watch ~30 seconds.
+2. While watching, observe the HUD time label. Note specifically: is the elapsed-time side ticking forward (00:01, 00:02, ...)? Or stuck at 00:00?
+3. Close the player. Library home view should now show:
+   - **The episode in Continue Watching** with progress bar (or a "watched for X" tile if duration was unknown — `durSec=0` case).
+   - **The show added to the Stream library tiles** (auto-add fired on first save).
+4. Re-enter the show's detail view — the "Add to Library" button should now read "Remove from Library".
+5. Click "Remove from Library" → confirm the entry is removed from library tiles. Continue Watching entry stays (independent of library membership at the JsonStore layer; visual rendering in StreamContinueStrip will then drop it on next refresh because of the library-has filter — that's expected and matches Stremio).
+6. **Trace dump**: after step 3, dump `out\tankoctl.exe logs 200` — paste back the lines containing `[STREAM_PROGRESS_TRACE]`, `[STREAM_CONTINUE_TRACE]`, `[STREAM_HUD_TRACE]`. The trace tells us:
+   - Did `[STREAM_PROGRESS_TRACE] tick ...` fire with `durSec=0.00` or with a real value?
+   - Did `[STREAM_PROGRESS_TRACE] saved ...` fire (proves gate-relax worked)?
+   - Did `[STREAM_PROGRESS_TRACE] auto-library-add fired` line appear?
+   - Did `[STREAM_CONTINUE_TRACE] candidate accepted` lines appear, or were they all `candidate skipped reason=...`?
+   - Did `[STREAM_HUD_TRACE]` lines show posSec advancing?
+7. Edge case: play, watch only 2 seconds, close → no Continue Watching entry should appear (5s posSec floor preserved); no library auto-add either (auto-add gated on first save which requires posSec≥5).
+8. Regression-free check: stream search, source pick, "Add torrent to Tankorent" right-click menu, detail metadata line — all should render and work as before.
+
+### Discipline
+
+- **/superpowers:systematic-debugging** — followed the spirit (instrument before fix on uncertain RCs). Letter deviation: can't run trace empirically; baked traces into tree for Hemanth round-trip.
+- **/simplify** — single-method extraction (autoAddToLibrary mirrors onLibraryButtonClicked's add-branch). One field added (autoLibraryAdded). Gate relax dropped one condition. No new abstractions.
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. Bug 1 gate-relax forward-compatible with all H1 hypotheses. Auto-add idempotent. autoLibraryAdded session-default-init resets correctly. Traces gated by m_streamMode where flood-risk exists.
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flip BEFORE posting RTC. Bug 3 verification explicitly deferred and labeled as such.
+- **/security-review N/A** — pure data-flow + diagnostic instrumentation; no network/input/IPC widening.
+
+### Carry-forward
+
+- **Follow-up RTC** strips Phase 1 traces after Hemanth's first smoke captures the RC validation data via `tankoctl logs` (per Hemanth-facing checklist step 6).
+- **Bug 3 follow-up** if `[STREAM_HUD_TRACE]` shows posSec stuck at 0 OR trace never fires: separate RTC investigates upstream sidecar PTS-clock issue OR stream-mode `onTimeUpdate` wire break.
+
+READY TO COMMIT - [Agent 4, STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 ~16:51pm — Bugs 1 & 2 closed; Bug 3 instrumented for Hemanth-driven RC validation. Bug 1 RC TWO-coupled via code-walk: (a) StreamPage.cpp:2042 gate `if (posSec<5 || durSec<=0) return` — HTTP-URL streams via stream-server land durSec=0 (sidecar discards FROM_BITRATE per VideoPlayer.cpp:1122-26 anti-lie); save never fires; (b) StreamContinueStrip.cpp:121 filters `!m_library->has(imdbId)` — even after save lands, library-membership is required for the tile to render. Bug 2 is a HARD DEPENDENCY for Bug 1, not a parallel issue. Fix: gate relax (drop durSec≤0 check; preserve 5s posSec floor) + auto-library-add at first session save via new StreamDetailView::autoAddToLibrary() public method (idempotent add-only mirror of onLibraryButtonClicked add-branch; uses m_lastPreviewHint same as explicit-add path). New m_session.autoLibraryAdded gate fires once-per-session; resets on resetSession's PlaybackSession{} default-init. Explicit Remove stays distinct — auto-add never toggles off. Bug 3 (HUD 00:00) RC inconclusive from code-walk — possible H3.A (shared with Bug 1's durSec=0; gate-relax pulls Bug 3 along transitively), H3.B/C (upstream sidecar PTS or stream-mode onTimeUpdate wire break — separate RTC scope). Phase 1 instrumentation baked in via DebugLogBuffer (5 prefixes [STREAM_PROGRESS_TRACE] / [STREAM_CONTINUE_TRACE] / [STREAM_HUD_TRACE]) so Hemanth's first smoke validates RC via tankoctl logs. Traces NOT stripped per brief §4.7 — Rule 14 call: cannot run trace empirically without MCP/UI access (no agent-side stream-mode playback driver); follow-up RTC strips after RC validation. 6 files modified. build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 4844 boots clean; tankoctl open-page stream flips activePageId without crash on new code paths; stop-tankoban.ps1 clean kill. Hemanth-facing smoke checklist embedded in body above (8 steps; step 6 is the trace-dump capture).] | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp, src/ui/pages/stream/StreamDetailView.h, src/ui/pages/stream/StreamDetailView.cpp, src/ui/pages/stream/StreamContinueStrip.cpp, src/ui/player/VideoPlayer.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_CATALOG_THUMBNAIL_PERSISTENCE CLOSED — 2026-05-06 ~17:21pm
+
+### What shipped — perf + lifecycle fix on Codex's catalog board
+
+Hemanth verbatim 2026-05-06: *"The thumbnails in catalog take forever to load and that happens even after they loaded once and I just went back to another page and came back."* Two coupled performance problems, both rooted in the same lifecycle choice. Closed both.
+
+### Bug A — Full teardown + rebuild on every catalog re-entry
+
+`CatalogBrowseScreen::open(...)` (line 163) → `showHomeBoard()` (line 345) → bumps `m_generation`, clears `m_previewsById`, `clearRows()`, recreates fresh `CatalogAggregator` per row, re-fires `aggregator->load(q)` on every row. Returning to the catalog after navigating away pays the full network metadata fan-out cost AGAIN even when nothing changed. The screen is kept alive by `StreamPage::m_catalogBrowse` (constructed once at line 318), so the data was already there — just being thrown away.
+
+**Fix**: `m_needsRebuild` flag (default `true`); `showHomeBoard` short-circuits when `!m_needsRebuild && !m_rows.isEmpty()`; sets to `false` after a successful build. New public `invalidate()` method flips it back to `true`. `AddonRegistry::addonsChanged` auto-wired to `invalidate()` in the ctor — addon installs/removes / config flips trigger a fresh rebuild as expected.
+
+The existing `m_generation` counter is **preserved untouched** in the short-circuit branch. Any in-flight async catalog-page replies tagged with the prior generation still apply correctly because the lambda captures `RowState*` directly and the rows are still alive. Rebuild branch still increments generation as before.
+
+### Bug B — Disk decode every paint on cache hits
+
+`ensurePoster()` (line 549) on a disk-cache hit called `card->setThumbPath(path)`, which inside `setCardSize` calls `QPixmap(m_thumbPath)` — a fresh disk read + decode every time. With ~60-90 tiles across 6 rows, that's 60-90 disk reads per navigation, even when the cached file content is identical to what it was 5 seconds ago.
+
+**Fix**: 3-layer cache cascade in `ensurePoster`:
+- **Layer 1** — in-memory pixmap cache (`m_posterPixmapCache`, `QHash<QString, QPixmap>` keyed by metaId). Hit → `setThumbPixmap` (instant, zero decode).
+- **Layer 2** — disk cache (existing). Hit → `QPixmap(path)` decode once, **promote to Layer 1**, `setThumbPixmap`.
+- **Layer 3** — network fetch via `PosterFetcher::download` (existing). On success → decode the just-saved disk file once, **promote to Layer 1**, `setThumbPixmap`.
+
+After the first display of any tile, subsequent re-entries hit Layer 1 and skip the disk decode entirely.
+
+`makeTile` simplified: was double-decoding (pre-validate the disk file via `QPixmap(cached).isNull()` just to discard the pixmap, then construct `TileCard` with the cached path which re-decodes inside `setCardSize`). Now always passes empty thumb to TileCard ctor + always calls `ensurePoster`. The cache cascade handles cleanup of corrupt files (Layer 2's `QFile::remove(path)` on null pixmap), so the pre-validation block is gone.
+
+### TileCard pre-decoded entry point
+
+Added `TileCard::setThumbPixmap(const QPixmap&)` + `m_thumbPixmap` member. Used by callers with a pre-decoded raw pixmap (the in-memory cache layer). `setCardSize` now prefers `m_thumbPixmap` over `QPixmap(m_thumbPath)`. `setThumbPath` clears `m_thumbPixmap` so a path update reasserts authority — no stale-pixmap risk after a tile recycles.
+
+`m_basePixmap` (post-scale/round-render result inside TileCard) is unchanged. The two caches serve different purposes: `m_thumbPixmap` skips the disk read, `m_basePixmap` skips the scale+crop+round on layout changes.
+
+### Files modified (4)
+
+- **`src/ui/pages/TileCard.h`** — added `void setThumbPixmap(const QPixmap&);` declaration + `QPixmap m_thumbPixmap` member + rationale comments.
+- **`src/ui/pages/TileCard.cpp`** — implemented `setThumbPixmap`; `setThumbPath` clears `m_thumbPixmap`; `setCardSize`'s render-cover branch prefers `m_thumbPixmap` over disk decode.
+- **`src/ui/pages/stream/CatalogBrowseScreen.h`** — added `#include <QPixmap>`; new public `invalidate()` method; new private `m_posterPixmapCache` (QHash<QString, QPixmap>) + `m_needsRebuild` (bool, default true) members with rationale comments.
+- **`src/ui/pages/stream/CatalogBrowseScreen.cpp`** — ctor wires `AddonRegistry::addonsChanged → invalidate`; `showHomeBoard` short-circuits on `!m_needsRebuild && !m_rows.isEmpty()`; `ensurePoster` rewritten as 3-layer cache cascade with QPointer guards on the async network callback for both `CatalogBrowseScreen` (self) and `TileCard` (guard); `makeTile` simplified to single-pipeline (empty-thumb ctor + always-call ensurePoster).
+
+### StreamPage lifetime confirmed (no change)
+
+`m_catalogBrowse = new tankostream::stream::CatalogBrowseScreen(m_addonRegistry, this)` at `StreamPage.cpp:318` — constructed once at page-stack build time, kept alive across navigation. The short-circuit path in §3.4 of the brief is sufficient on its own; no StreamPage edit needed.
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try** after 4 src/ touches.
+- `build_and_run.bat` — Tankoban PID 25300 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId=stream`, no crash on the new code paths.
+- `scripts/stop-tankoban.ps1` — Tankoban + 2 stale stremio-runtime instances killed clean.
+
+UI render verification (instant re-entry, tiles persist visibly, no spinner) is Hemanth's lane per brief's no-MCP call.
+
+### Hemanth-facing smoke checklist
+
+**Cold-load behavior** (acceptable — this is the first-time-ever case where the network fan-out is unavoidable):
+1. Cold launch via `build_and_run.bat` → Stream → Catalog button.
+2. First load: tiles populate over a few seconds (network fetch + first-time decode).
+
+**Re-entry behavior** (the bug Hemanth flagged):
+3. After tiles have all loaded once, navigate elsewhere — search a show, open a detail view, or switch modes (Comics/Books/Videos).
+4. Return to Stream → Catalog. **Tiles should appear INSTANTLY**, no loading state, no re-fetch.
+5. Repeat the navigation cycle 3-4 times — every re-entry should be instant.
+6. Restart the app fresh (cold). Open the catalog. **First-load pace should be similar to before** (since the disk cache populates the in-memory cache lazily on first ensurePoster call, the warm-restart IS faster than the very-first-ever launch but slower than mid-session re-entry — that's correct, the in-memory cache is session-scoped by design).
+
+**Regression-free check**:
+7. Click a tile → still opens the show/movie detail.
+8. "See all" on a row → still opens the single-catalog detail view.
+9. Other Stream-mode flows: search, detail view, source pick, "Add torrent to Tankorent" right-click menu, metadata line — all unchanged.
+10. Install or remove a Stremio addon (if applicable) → next catalog open should rebuild fresh (the `addonsChanged` signal flipped `invalidate()`).
+
+### Discipline
+
+- **/simplify** — applied literally. One QHash + one bool flag + one public method on the catalog screen; one extra member + one new setter on TileCard. No new abstraction class, no PosterCacheService singleton, no LRU eviction policy, no TTL-based invalidation. `makeTile` actually got SHORTER (-7 LOC) by routing all cache-check logic through the single ensurePoster pipeline.
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. m_generation guard preserved (short-circuit doesn't touch it; rebuild branch still increments). QPointer guards on the async network callback (both self + tile-card). setThumbPath clears m_thumbPixmap so path updates reassert authority. addonsChanged auto-wire is the right signal — fired by AddonRegistry on install/remove/config changes per its existing contract.
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flip on Stream page BEFORE posting RTC.
+- **/security-review N/A** per brief — pure perf fix, no network/input/IPC widening.
+
+### Carry-forward
+
+- None blocking. The 3-layer cache is unbounded session-scoped; if memory becomes a concern at the catalog scale (~3 MB peak per the comment), a coarse LRU helper can be added in a follow-up. Brief §7 explicitly anti-pattern'd over-engineering this without smoke evidence — defer until real signal.
+- Any future "manual refresh" affordance can call `invalidate()` directly. Not adding the button this RTC since Hemanth didn't ask for one.
+
+READY TO COMMIT - [Agent 4, STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 ~17:21pm — catalog tiles now persist instantly across navigation. Two coupled fixes: (a) showHomeBoard short-circuits when m_rows non-empty AND m_needsRebuild=false (default true; flips false after rebuild; flipped back to true via new invalidate() method auto-wired to AddonRegistry::addonsChanged in ctor) — eliminates the full teardown + network fan-out on every re-entry (StreamPage keeps m_catalogBrowse alive across navigation, screen survival was already there but the screen was throwing away its own data on every open); (b) 3-layer poster cache in ensurePoster: Layer 1 in-memory QPixmap (new, m_posterPixmapCache), Layer 2 disk file (existing — now promotes to Layer 1 on hit), Layer 3 PosterFetcher network (existing — now promotes to Layer 1 on success). Eliminates the 60-90 disk decodes per navigation that the prior `setThumbPath → QPixmap(path)` decode-every-paint shape produced. New TileCard::setThumbPixmap(QPixmap&) + m_thumbPixmap member as the pre-decoded entry point; setCardSize prefers it over m_thumbPath disk decode. setThumbPath clears m_thumbPixmap so path updates reassert authority (no stale-pixmap risk on tile recycle). makeTile simplified: was double-decoding (pre-validate disk + reconstruct with path → setCardSize re-decode), now always passes empty thumb + always calls ensurePoster (single-pipeline cache cascade). m_generation guard preserved exactly — short-circuit branch doesn't touch it; rebuild branch still increments; in-flight async replies tagged with prior generation still apply to still-alive rows via captured RowState*. QPointer guards on the network callback for both CatalogBrowseScreen (self) and TileCard. 4 files modified; makeTile body actually -7 LOC. build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 25300 boots clean; tankoctl open-page stream flips activePageId without crash on new code paths; stop-tankoban.ps1 clean kill. UI render verification (instant re-entry; tiles persist visibly across navigation cycles) deferred to Hemanth per brief's no-MCP call. Hemanth-facing smoke checklist embedded in body above (10 steps).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/TileCard.h, src/ui/pages/TileCard.cpp, src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_NAV_BACK_STACK CLOSED — 2026-05-06 ~20:07pm
+
+### What shipped — depth-first nav stack + player-exit restore
+
+Hemanth verbatim 2026-05-06: *"Clicking back in any layer of stream mode directly takes me all the way back to the main stream mode library page... I'm watching a video, I close the player I find myself on the library rather than the series page."*
+
+The 5 child screens' `backRequested` signals were all hardcoded to `showBrowse()` (jumps to Library). And **load-bearing** at `onStreamStopped` line 2557 (formerly): `showBrowse()` fired on every player UserEnd close, yanking the user away from their originating Detail view. **Both** issues closed in one pass with a single nav-stack abstraction.
+
+### The shape
+
+- **`NavEntry` struct** with `Kind` enum (Browse / CatalogBrowse / Detail / AddonManager / Calendar / Search) + per-kind context fields (catalog params; detail imdbId+optional MetaItemPreview+preselects; search query).
+- **`QStack<NavEntry> m_navStack`** — depth-first nav history. Library is the stack bottom; each forward navigation pushes; `goBack` pops + re-shows.
+- **`std::optional<NavEntry> m_beforePlayerEntry`** — snapshot captured at player launch; restored at player close.
+- **`showEntryRaw(NavEntry)`** — the visual transition implied by Kind, WITHOUT pushing. Used by show* slots after push, by `goBack` after pop, and by `restorePlayerExitView` directly. Per-kind cleanup helpers (cancelAutoLaunch / hideNextEpisodeOverlay / resetNextEpisodePrefetch) preserved exactly.
+- **`showSearchResults()`** — visual-only restore of the search overlay (no re-fetch); m_searchWidget caches its query+results across hide/show cycles. Used by `showEntryRaw(Kind::Search)` AND by `onSearchSubmit` before the actual `m_searchWidget->search(query)` network call.
+- **`goBack()`** — single slot wired to all 5 child screens' `backRequested` (DetailView / AddonManagerScreen / CatalogBrowseScreen / CalendarScreen / StreamSearchWidget). Stack-bottom is a no-op re-show; future cross-mode propagation can be added if Hemanth wants.
+- **`restorePlayerExitView()`** — restores `m_beforePlayerEntry` if present; defensive `showBrowse()` fallback if no snapshot. Called from 3 player-close sites: `onStreamStopped UserEnd` (THE load-bearing one), the defensive 3s post-failure timer, and `onNextEpisodeCancel` case (a).
+
+### `onSearchSubmit` re-submit nuance
+
+Re-submitting a query while already on Search **replaces the top entry's query** (no duplicate stack layer). Stack stays clean; depth-first Back behavior is preserved. New search from Library or Detail pushes a fresh Search entry as expected.
+
+### `showDetail` idempotency preserved
+
+Both `showDetail(imdbId)` and `showDetail(preview, ...)` overloads keep their existing same-imdb early-return guard (Qt delivers both single-click + double-click on a double-tap). The guard now ALSO prevents double-pushing onto the stack on accidental re-clicks.
+
+### Files modified (2)
+
+- `src/ui/pages/StreamPage.h` — `#include <QStack>`; declared `goBack()` + `restorePlayerExitView()` + `showEntryRaw(NavEntry)` + `showSearchResults()`; new `NavEntry` struct + `QStack<NavEntry> m_navStack` + `std::optional<NavEntry> m_beforePlayerEntry` members with rationale comments.
+- `src/ui/pages/StreamPage.cpp` — implemented goBack / showSearchResults / showEntryRaw / restorePlayerExitView; refactored 6 show* slots (Browse / AddonManager / CatalogBrowse / Calendar / Detail x2) to push + delegate; reworked onSearchSubmit to push Search + showSearchResults + run search; replaced 5 `backRequested → showBrowse` wires with `goBack`; m_beforePlayerEntry snapshot in launchPlayer lambda; `restorePlayerExitView()` at 3 close sites (onStreamStopped UserEnd line 2557; defensive 3s timer line 2489; onNextEpisodeCancel case (a) line 1633). Also confirmed 2 remaining `showBrowse()` callsites are intentional (search-input-cleared-to-empty + restorePlayerExitView fallback).
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try**.
+- `build_and_run.bat` — Tankoban PID 19556 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId=stream`, no crash on the new nav-stack code paths.
+- `scripts/stop-tankoban.ps1` — Tankoban + 2 stale stremio-runtime instances killed clean.
+
+UI verification (back-button depth-first behavior + player-close lands on Detail) is Hemanth's lane per brief's no-MCP call.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch → Stream → at Library home.
+2. Click "Catalog" → CatalogBrowseScreen opens. Click any tile → StreamDetailView. Click Back → returns to **CatalogBrowseScreen** (NOT Library).
+3. Click Back again on CatalogBrowseScreen → returns to **Library**.
+4. Library → Search → search a show → click a result → Detail → click Back → returns to **Search results** (with query + results preserved).
+5. Library → click a Continue Watching tile → Detail → Back → returns to **Library** (only Library was previous).
+6. **Player-close test**: Library → Catalog → Detail → click an episode source → play → close player → returns to **Detail** (NOT Library — this is the load-bearing fix).
+7. Search → click result → Detail → play episode → close → returns to **Detail**. Click Back → returns to **Search results**.
+8. Library → Calendar → click episode → Detail → Back → **Calendar**.
+9. Open AddonManager → click some addon (if applicable) → Back → AddonManager. Back again → Library.
+10. Edge: Library → Catalog → Detail → Catalog ("see all" inside catalog) → Detail → Back → Catalog → Back → Detail → Back → Catalog → Back → Library. **Depth-first pop order; no skipped layers.**
+
+**Regression-free**:
+11. Existing flows (search, source pick, "Add torrent to Tankorent" right-click menu, detail metadata line, Continue Watching, library auto-add from prior STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE ship) all still work.
+12. Switching content modes (Comics / Books / Videos) and back to Stream **resets the stack to Library** — that's correct; cross-mode switch is a context reset.
+
+### Discipline
+
+- **/simplify** — single-struct (NavEntry, all-fields-optional flat shape; no polymorphism / std::variant); single QStack member; one private helper (showEntryRaw); one slot (goBack). Per-kind cleanup helpers preserved exactly — no behavior drift in the visual transitions.
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. Player launch/restore symmetry verified at 3 close sites. m_beforePlayerEntry consumed (reset()) at restore so a second close path doesn't restore a stale snapshot. showDetail idempotency guard now ALSO prevents double-stack-push. onSearchSubmit re-submit-on-Search top-replace prevents stack pollution from repeated searches.
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flip on Stream page BEFORE posting RTC.
+- **/security-review N/A** per brief — pure UI navigation refactor, no new IPC/network/input surfaces.
+
+### Carry-forward
+
+- **CatalogBrowseScreen internal nav** (home-board ↔ single-catalog drilldown) is NOT in StreamPage's stack. The screen's own state is preserved across hide/show cycles (the screen is a member of StreamPage, never destroyed mid-session). User experience: if you drilled into a single catalog, navigated to Detail, and then Back, you land on the catalog's drilldown view — not its home board. That matches Stremio's behavior and is correct.
+- **Cross-mode propagation** of Back (e.g., Stream → Library → Back → Comics) is not implemented. Out of scope per brief.
+- **Stack cap** not implemented (unbounded growth). Practical limit ~5-6 entries; if smoke surfaces issues, follow-up adds a cap-at-16-and-drop-oldest-above-Browse helper.
+
+READY TO COMMIT - [Agent 4, STREAM_NAV_BACK_STACK 2026-05-06 ~20:07pm — Stream-mode back button now pops one layer at a time instead of jumping to Library home (Hemanth-reported "Clicking back in any layer of stream mode directly takes me all the way back to the main stream mode library page"). New NavEntry struct (Kind: Browse/CatalogBrowse/Detail/AddonManager/Calendar/Search + per-kind context) + QStack<NavEntry> m_navStack. New goBack slot pops + re-shows; wired to all 5 child screens' backRequested signals (DetailView/AddonManagerScreen/CatalogBrowseScreen/CalendarScreen/StreamSearchWidget). New showEntryRaw helper does the visual transition WITHOUT pushing — used by show* (post-push), goBack (post-pop), and restore. 6 show* slots refactored to push-then-delegate. onSearchSubmit pushes Search OR replaces top-of-stack-Search query (no duplicate stack layer on re-submit). Player launch (launchPlayer lambda) snapshots m_navStack.top() into m_beforePlayerEntry; new restorePlayerExitView() consumes the snapshot at 3 close sites (onStreamStopped UserEnd — the load-bearing yank-to-Library bug; defensive 3s post-failure timer; onNextEpisodeCancel case (a)). Closes Hemanth-reported "I close the player I find myself on the library rather than the series page" — player close now lands on the originating Detail / Catalog / Search view. Defensive showBrowse fallback when no snapshot exists. showDetail idempotency guards now also prevent double-push. CatalogBrowseScreen internal home↔drilldown nav is preserved as-is (out of stack scope). 2 files modified. build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 19556 boots clean; tankoctl open-page stream flips activePageId without crash on new nav-stack code paths; stop-tankoban.ps1 clean kill (also picked up 1 stale stremio-runtime). UI verification (depth-first Back + player-close lands on originating view) deferred to Hemanth per brief's no-MCP call. Hemanth-facing smoke checklist embedded in body above (12 steps; step 6 is the player-close-to-Detail load-bearing test).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp, agents/chat.md
+
+---
+
+[Agent 0 → Agent 4, 2026-05-06 ~22:30pm]: Hemanth pinged me at 22:25pm with "the back button besides catalog is not working now" — turns out he meant the in-screen Back button on CatalogBrowseScreen, not the StreamPage-level back stack you (Agent 4) just shipped above. Closing the gap your STREAM_NAV_BACK_STACK carry-forward explicitly carved out as out-of-scope ("CatalogBrowseScreen internal home↔drilldown nav is preserved as-is"). Hemanth ratified shipping it from my side directly rather than handing back to you, since it's a 5-line lambda swap. Letting you know via this post + the RTC below; if the fix doesn't match what you'd have shipped, ping me on next wake and we'll iterate.
+
+READY TO COMMIT - [Agent 0, STREAM_CATALOG_BACK_TWO_LAYER_FIX 2026-05-06 ~22:50pm — TWO STACKED FIXES for Hemanth-reported "the back button besides catalog is not working now". Initial fix (CatalogBrowseScreen.cpp lambda swap) addressed only the deep-dive case; Hemanth screenshot at ~22:45pm proved the actual symptom was Back doing nothing on the multi-row home board (Level 1) — not the deep-dive level. Second-pass /superpowers:systematic-debugging traced root cause to Agent 4's just-shipped STREAM_NAV_BACK_STACK (RTC above): m_navStack is never seeded in the StreamPage constructor; only show*() slots push. Path: open Tankoban → Stream tab → click Catalog → onCatalogBtnClicked → showCatalogBrowse pushes onto EMPTY stack → navStack=[CatalogBrowse]. Click Back → goBack hits `size <= 1` branch which only defended against `isEmpty()`, NOT against `size==1 with non-Browse top` → showEntryRaw(m_navStack.top()) re-shows the same CatalogBrowse view. Looks like Back is dead. **Layer 1 fix (CatalogBrowseScreen.cpp:213-227)**: lambda swap on the Back button — `if (m_activeCatalogIndex >= 0) showHomeBoard(); else emit backRequested();`. Closes the deep-dive case (Level 2 → Level 1 within the catalog screen) that Agent 4's STREAM_NAV_BACK_STACK explicitly carved out as out-of-scope. **Layer 2 fix (StreamPage.cpp:1000-1020 goBack)**: replaced the `if isEmpty push Browse` defensive shim with unconditional normalize-to-Browse on top-of-stack escape — clears whatever's on the stack and seeds Browse fresh. Single point of defense covers any weird stack state (empty / single non-Browse / future regressions). 12-line cite-comment in goBack names the regression source + path-trace + reasoning. **Verification**: build_check.bat BUILD OK 5s after taskkill (Tankoban was running mid-rebuild — Hemanth had been testing my Layer-1-only first attempt, hence the LNK1168 on first try). UI smoke deferred to Hemanth — open Tankoban fresh → Stream → Catalog button → click Back → expect Stream library home (NOT stuck on catalog). Then re-test deep-dive: drill "See all" on a row → Back → expect multi-row home board. Both flows should escape correctly.] | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/stream/CatalogBrowseScreen.cpp, src/ui/pages/StreamPage.cpp, agents/chat.md
+
+---
+
+Agent 7 CMake heads-up - STREAM_AND_VIDEO_POSTER_PERF will add src/core/PosterCache.cpp to SOURCES and src/core/PosterCache.h to HEADERS.
+
+Agent 7 implementation complete - [Agent 4+5, STREAM_AND_VIDEO_POSTER_PERF]: files: CMakeLists.txt, src/core/PosterCache.h, src/core/PosterCache.cpp, src/core/PosterFetcher.cpp, src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, src/ui/pages/VideosPage.cpp, src/ui/pages/PosterPickerPopover.cpp. See RTC below.
+
+Agent 7 STREAM_AND_VIDEO_POSTER_PERF close-out 2026-05-06:
+- Shared PosterCache added: bounded 1000-entry session pixmap cache plus QThreadPool QImageReader disk decode; QPixmap conversion and cache writes stay on the GUI thread.
+- Stream catalog now uses PosterCache layer 1, async disk decode layer 2, PosterFetcher layer 3, and rewrites only images.metahub.space /poster/<size>/<id>/img catalog URLs to /poster/small/<id>/img. Detail poster URLs are untouched.
+- PosterFetcher now sets Http2AllowedAttribute on every poster request, preserving Agent 5's 30s timeout, metahub ?format=jpg rewrite, redirect policy, decode validation, and DebugLogBuffer instrumentation.
+- VideosPage tile construction, Continue tiles, Set/Paste/Remove poster, and Fetch poster success now update PosterCache and the clicked tile immediately with setThumbPixmap instead of waiting for a scanner refresh or UI-thread disk decode.
+- PosterPickerPopover thumbnails now hit PosterCache first and decode cached disk files off the UI thread.
+- Verification: taskkill /F /IM Tankoban.exe; build_check.bat -> BUILD OK. Metahub small thumbnail probe: https://images.metahub.space/poster/small/tt0944947/img?format=jpg returned JPEG, 28984 bytes, 300x450.
+- No MCP smoke run per Hemanth's standing no-MCP call. Hemanth-facing smoke is the gate.
+
+Agent 4 brief: Stream-side maintenance should keep CatalogBrowseScreen on the shared PosterCache path. Only catalog/tile-shaped views should use the metahub small rewrite; Stream detail hero/full posters should keep full-size URLs.
+
+Agent 5 brief: Videos-side maintenance should keep PosterFetcher Phase 2 correctness instrumentation intact. This RTC does not replace VIDEOS_FETCH_POSTER_FIX silent-fail/correctness work; it layers perceived-speed caching and async decode on top of it.
+
+Hemanth-facing smoke checklist:
+  Stream catalog (LIFT 1-4):
+  1. Cold launch -> Stream -> Catalog. Tiles should populate within ~2-3 seconds (vs prior multi-second progressive pop-in). Stremio-grade fast.
+  2. Navigate to another Stream view, return to catalog. Tiles appear instantly (in-memory cache hit).
+  3. Restart app fresh. Open catalog. First-paint pace is similar to (1) - slightly slower than warm re-entry but visibly faster than the current build.
+  4. Tiles render with smaller thumbnails (~300x450 source from metahub small on current CDN); confirm visual quality at ~120x180 tile size is acceptable (slight loss vs full poster source acceptable; Stremio does the same).
+  VideosPage auto-fetch (LIFT 5):
+  5. Right-click a video tile with no poster -> Fetch poster from internet. Picker opens within ~2-3 seconds when search is warm. Pick a candidate. Tile poster updates within ~3-5 seconds total after the click (vs prior literal minutes).
+  6. Repeat on a second video. Cache hits ensure if the same poster URL or show poster path was previously fetched, the result is instant.
+  Regression-free:
+  7. Tiles still click through correctly to Detail / Show view.
+  8. The Add torrent to Tankorent, Move to category, existing context menu flows on both video tiles and stream cards still work.
+  9. Detail view's hero image (full-size poster) still renders at full quality - only catalog/tile-shaped views use the small thumbnail.
+
+READY TO COMMIT - [Agent 4+5 (Codex), STREAM_AND_VIDEO_POSTER_PERF 2026-05-06]: poster rendering now uses a shared session PosterCache and async disk decode across Stream catalog, Videos tiles, and PosterPickerPopover. Added src/core/PosterCache.{h,cpp} with 1000-entry LRU and QThreadPool QImageReader decode; wired CMakeLists SOURCES/HEADERS after prior CMake heads-up. PosterFetcher now allows HTTP/2 on poster requests while preserving Agent 5's timeout, metahub ?format=jpg, redirect, decode-validation, and logging fixes. CatalogBrowseScreen now uses PosterCache -> async disk -> PosterFetcher and rewrites only metahub catalog poster URLs to the small poster variant. VideosPage now paints Set/Paste/Fetch poster results directly through PosterCache/setThumbPixmap and removes stale cache on Remove poster; library and continue tiles decode existing posters off the UI thread. PosterPickerPopover thumbnails now share the cache and async decode path. Build verification: taskkill /F /IM Tankoban.exe then build_check.bat BUILD OK. Metahub small probe returned JPEG 28984 bytes 300x450 for tt0944947. No MCP smoke per Hemanth no-MCP call; Hemanth smoke checklist posted above. | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: CMakeLists.txt, src/core/PosterCache.h, src/core/PosterCache.cpp, src/core/PosterFetcher.cpp, src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, src/ui/pages/VideosPage.cpp, src/ui/pages/PosterPickerPopover.cpp, agents/chat.md
