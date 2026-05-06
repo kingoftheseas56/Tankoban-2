@@ -20,7 +20,8 @@ namespace {
 // (top/movie + top/series with search extra) so MetaAggregator's manifest-
 // driven search finds it. v1 stream_addons.json files predate that seed —
 // bump triggers a reseed on next load.
-constexpr int kSchemaVersion = 2;
+// v3 follow-up: reseed default users into six catalog rows.
+constexpr int kSchemaVersion = 3;
 
 QJsonObject manifestToJson(const AddonManifest& m)
 {
@@ -546,6 +547,9 @@ void AddonRegistry::load()
         }
         seedDefaults();  // clears m_addons + pushes fresh protected defaults
         for (const AddonDescriptor& a : userInstalled) {
+            if (indexOfId(a.manifest.id) >= 0) {
+                continue;
+            }
             m_addons.push_back(a);
         }
         save();
@@ -634,7 +638,19 @@ void AddonRegistry::seedDefaults()
         topSeries.name  = QStringLiteral("Popular");
         topSeries.extra = {searchExtra, genreExtra, skipExtra};
 
-        cinemeta.manifest.catalogs = {topMovie, topSeries};
+        ManifestCatalog imdbMovie;
+        imdbMovie.id    = QStringLiteral("imdbRating");
+        imdbMovie.type  = QStringLiteral("movie");
+        imdbMovie.name  = QStringLiteral("Featured");
+        imdbMovie.extra = {genreExtra, skipExtra};
+
+        ManifestCatalog imdbSeries;
+        imdbSeries.id    = QStringLiteral("imdbRating");
+        imdbSeries.type  = QStringLiteral("series");
+        imdbSeries.name  = QStringLiteral("Featured");
+        imdbSeries.extra = {genreExtra, skipExtra};
+
+        cinemeta.manifest.catalogs = {topMovie, topSeries, imdbMovie, imdbSeries};
     }
     m_addons.push_back(cinemeta);
 
@@ -660,6 +676,55 @@ void AddonRegistry::seedDefaults()
         torrentio.manifest.resources = {streamRes};
     }
     m_addons.push_back(torrentio);
+
+    AddonDescriptor torrentCatalogs;
+    torrentCatalogs.transportUrl = QUrl(QStringLiteral("https://torrent-catalogs.strem.fun/manifest.json"));
+    torrentCatalogs.flags.official = false;
+    torrentCatalogs.flags.enabled = true;
+    torrentCatalogs.flags.protectedAddon = false;
+    torrentCatalogs.manifest.id = QStringLiteral("com.stremio.torrentio.catalog.addon");
+    torrentCatalogs.manifest.version = QStringLiteral("1.0.2");
+    torrentCatalogs.manifest.name = QStringLiteral("Torrent Catalogs");
+    torrentCatalogs.manifest.types = {
+        QStringLiteral("movie"), QStringLiteral("series"), QStringLiteral("anime"),
+    };
+    {
+        ManifestResource catalog;
+        catalog.name = QStringLiteral("catalog");
+        torrentCatalogs.manifest.resources = {catalog};
+    }
+    {
+        ManifestExtraProp seededWindowExtra;
+        seededWindowExtra.name = QStringLiteral("genre");
+        seededWindowExtra.options = {
+            QStringLiteral("Yesterday"),
+            QStringLiteral("This Week"),
+            QStringLiteral("Last Week"),
+            QStringLiteral("This Month"),
+            QStringLiteral("Last Month"),
+            QStringLiteral("All Time"),
+        };
+        seededWindowExtra.optionsLimit = 1;
+
+        ManifestExtraProp skipExtra;
+        skipExtra.name = QStringLiteral("skip");
+        skipExtra.optionsLimit = 1;
+
+        ManifestCatalog topSeededMovies;
+        topSeededMovies.id = QStringLiteral("top-movies");
+        topSeededMovies.type = QStringLiteral("movie");
+        topSeededMovies.name = QStringLiteral("Top Seeded");
+        topSeededMovies.extra = {seededWindowExtra, skipExtra};
+
+        ManifestCatalog topSeededSeries;
+        topSeededSeries.id = QStringLiteral("top-series");
+        topSeededSeries.type = QStringLiteral("series");
+        topSeededSeries.name = QStringLiteral("Top Seeded");
+        topSeededSeries.extra = {seededWindowExtra, skipExtra};
+
+        torrentCatalogs.manifest.catalogs = {topSeededMovies, topSeededSeries};
+    }
+    m_addons.push_back(torrentCatalogs);
 }
 
 }
