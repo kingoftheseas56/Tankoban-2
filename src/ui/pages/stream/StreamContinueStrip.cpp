@@ -1,6 +1,7 @@
 #include "StreamContinueStrip.h"
 
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
@@ -76,6 +77,20 @@ void StreamContinueStrip::refresh()
     StreamProgress::clearNextUnwatchedCache();
 
     QJsonObject allProgress = m_bridge->allProgress("stream");
+
+    // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — diagnostic trace.
+    // Captures whether allProgress sees the just-saved progress entries when
+    // refresh() runs at closeRequested. Two failure modes refresh() narrates:
+    // (a) allProgress empty → save never landed in JsonStore (Bug 1 RC = save
+    // gate); (b) allProgress non-empty but no candidates pass the
+    // `library->has` filter at line 121 (Bug 1 RC = library coupling, which
+    // Bug 2's auto-library-add fix addresses). Trace stays in tree until
+    // follow-up RTC validates RC via Hemanth's `tankoctl logs` capture.
+    auto& dlog = DebugLogBuffer::instance();
+    dlog.info("stream",
+        QStringLiteral("[STREAM_CONTINUE_TRACE] refresh() allProgress size=%1")
+            .arg(allProgress.size()));
+
     if (allProgress.isEmpty()) {
         m_group->hide();
         return;
@@ -118,8 +133,19 @@ void StreamContinueStrip::refresh()
             episode = parts[3].mid(1).toInt();   // "e3" → 3
         }
 
-        if (imdbId.isEmpty() || !m_library->has(imdbId))
+        if (imdbId.isEmpty() || !m_library->has(imdbId)) {
+            dlog.info("stream",
+                QStringLiteral("[STREAM_CONTINUE_TRACE] candidate skipped epKey=%1 imdbId=%2 reason=%3")
+                    .arg(key).arg(imdbId)
+                    .arg(imdbId.isEmpty() ? QStringLiteral("imdbId empty")
+                                          : QStringLiteral("not in library")));
             continue;
+        }
+        dlog.info("stream",
+            QStringLiteral("[STREAM_CONTINUE_TRACE] candidate accepted epKey=%1 imdbId=%2 posSec=%3 durSec=%4")
+                .arg(key).arg(imdbId)
+                .arg(state.value("positionSec").toDouble(0), 0, 'f', 2)
+                .arg(state.value("durationSec").toDouble(0), 0, 'f', 2));
 
         const auto existing = mostRecent.find(imdbId);
         if (existing == mostRecent.end() || updated > existing->updatedAt) {

@@ -1078,6 +1078,23 @@ void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
 {
     if (m_seeking) return;
 
+    // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — diagnostic trace
+    // (stream mode only — non-stream playback floods the ring buffer at 1 Hz
+    // and Hemanth's Bug 3 report is stream-specific). Captures whether
+    // onTimeUpdate fires at all during stream playback, and with what values.
+    // Trace stays in tree until follow-up RTC validates RC via Hemanth's
+    // `tankoctl logs` capture. If the trace shows positionSec ticking forward
+    // → HUD Bug 3 is downstream (label/setStreamMode gate); if positionSec
+    // stays 0 across ticks → upstream sidecar PTS-clock issue (separate
+    // RTC scope).
+    if (m_streamMode) {
+        DebugLogBuffer::instance().info("stream",
+            QStringLiteral("[STREAM_HUD_TRACE] onTimeUpdate posSec=%1 durSec=%2 streamStalled=%3")
+                .arg(positionSec, 0, 'f', 2)
+                .arg(durationSec, 0, 'f', 2)
+                .arg(m_streamStalled ? 1 : 0));
+    }
+
     // Task 7 (2026-05-01) — Pattern C accumulator clear: when the real
     // position catches up to within ±1s of the pending seek target,
     // the seek has effectively completed. Subsequent arrow-key presses
