@@ -1,5 +1,6 @@
 #include "PosterPickerPopover.h"
 
+#include "core/DebugLogBuffer.h"
 #include "core/PosterFetcher.h"
 
 #include <QCryptographicHash>
@@ -132,8 +133,16 @@ void PosterPickerPopover::showAtGlobal(
         m_posterUrls.append(c.poster);
         m_metaNames.append(c.name);
 
-        if (c.poster.isValid() && nam)
+        if (c.poster.isValid() && nam) {
             loadThumb(i, c.poster, nam);
+        } else {
+            DebugLogBuffer::instance().warning("poster-picker",
+                QStringLiteral("loadThumb skipped row=%1 name='%2' urlValid=%3 nam=%4 url='%5'")
+                    .arg(QString::number(i), c.name,
+                         c.poster.isValid() ? "true" : "false",
+                         nam ? "ok" : "null",
+                         c.poster.toString()));
+        }
     }
 
     // Fixed height based on row count so the list doesn't over-expand when
@@ -184,7 +193,17 @@ void PosterPickerPopover::loadThumb(int rowIndex, const QUrl& url, QNetworkAcces
 
     auto applyThumb = [this, rowIndex, path]() {
         QPixmap pm(path);
-        if (pm.isNull()) return;
+        if (pm.isNull()) {
+            // Fetcher reported ok but on-disk file won't decode. Should not
+            // happen post-PosterFetcher pre-validation; still log to surface
+            // any future write/race regression.
+            DebugLogBuffer::instance().warning("poster-picker",
+                QStringLiteral("applyThumb null pixmap row=%1 path='%2' fileExists=%3 size=%4")
+                    .arg(QString::number(rowIndex), path,
+                         QFile::exists(path) ? "true" : "false",
+                         QString::number(QFile(path).size())));
+            return;
+        }
         if (rowIndex < 0 || rowIndex >= m_list->count()) return;
         m_list->item(rowIndex)->setIcon(QIcon(
             pm.scaled(kThumbW, kThumbH,
