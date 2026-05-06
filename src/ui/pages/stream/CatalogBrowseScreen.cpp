@@ -9,14 +9,15 @@
 #include <QLabel>
 #include <QLayoutItem>
 #include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QPointer>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <algorithm>
 
+#include "core/PosterFetcher.h"
 #include "core/stream/CatalogAggregator.h"
 #include "core/stream/addon/AddonRegistry.h"
 #include "core/stream/addon/Descriptor.h"
@@ -31,6 +32,99 @@ using tankostream::addon::ManifestExtraProp;
 using tankostream::addon::MetaItemPreview;
 
 namespace tankostream::stream {
+namespace {
+
+constexpr int kHomeRowInitialCap = 18;
+
+class CatalogRow final : public QWidget
+{
+public:
+    CatalogRow(const QString& title, QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("StreamCatalogRow"));
+
+        auto* root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(4);
+
+        auto* header = new QHBoxLayout();
+        header->setContentsMargins(0, 0, 0, 0);
+        header->setSpacing(8);
+
+        m_title = new QLabel(title, this);
+        m_title->setObjectName(QStringLiteral("StreamCatalogRowTitle"));
+        header->addWidget(m_title);
+        header->addStretch();
+
+        m_seeAll = new QPushButton(QStringLiteral("See all"), this);
+        m_seeAll->setObjectName(QStringLiteral("StreamCatalogSeeAll"));
+        m_seeAll->setCursor(Qt::PointingHandCursor);
+        m_seeAll->setFocusPolicy(Qt::NoFocus);
+        header->addWidget(m_seeAll);
+        root->addLayout(header);
+
+        m_status = new QLabel(QStringLiteral("Loading..."), this);
+        m_status->setObjectName(QStringLiteral("StreamCatalogRowStatus"));
+        root->addWidget(m_status);
+
+        m_strip = new TileStrip(this);
+        m_strip->setMode(QStringLiteral("continue"));
+        m_strip->setDensity(0);
+        root->addWidget(m_strip);
+    }
+
+    TileStrip* strip() const { return m_strip; }
+    QPushButton* seeAllButton() const { return m_seeAll; }
+
+    void setLoading()
+    {
+        m_strip->clear();
+        m_status->setText(QStringLiteral("Loading..."));
+        m_status->show();
+        m_seeAll->setEnabled(false);
+    }
+
+    void setLoaded(int count)
+    {
+        if (count > 0) {
+            m_status->hide();
+            m_seeAll->setEnabled(true);
+            return;
+        }
+        m_status->setText(QStringLiteral("No results"));
+        m_status->show();
+        m_seeAll->setEnabled(false);
+    }
+
+    void setError(const QString& message)
+    {
+        m_strip->clear();
+        m_status->setText(message);
+        m_status->show();
+        m_seeAll->setEnabled(false);
+    }
+
+private:
+    QLabel* m_title = nullptr;
+    QLabel* m_status = nullptr;
+    QPushButton* m_seeAll = nullptr;
+    TileStrip* m_strip = nullptr;
+};
+
+QString normalizedCatalogText(const QString& text)
+{
+    return text.trimmed().toLower();
+}
+
+} // namespace
+
+struct CatalogBrowseScreen::RowState {
+    int catalogIndex = -1;
+    CatalogItem item;
+    CatalogRow* row = nullptr;
+    CatalogAggregator* aggregator = nullptr;
+};
 
 CatalogBrowseScreen::CatalogBrowseScreen(AddonRegistry* registry, QWidget* parent)
     : QWidget(parent)
@@ -61,20 +155,24 @@ CatalogBrowseScreen::CatalogBrowseScreen(AddonRegistry* registry, QWidget* paren
         });
 }
 
+CatalogBrowseScreen::~CatalogBrowseScreen()
+{
+    clearRows();
+}
+
 void CatalogBrowseScreen::open(const QString& addonId,
                                const QString& type,
                                const QString& catalogId)
 {
     rebuildSelectors();
 
-    m_suppressReload = true;
-    selectAddon(addonId);
-    rebuildCatalogCombo();
-    selectCatalog(type, catalogId);
-    rebuildFilterBar();
-    m_suppressReload = false;
+    const int index = catalogIndexFor(addonId, type, catalogId);
+    if (index >= 0) {
+        showDetailForCatalog(index);
+        return;
+    }
 
-    reload();
+    showHomeBoard();
 }
 
 void CatalogBrowseScreen::buildUi()
@@ -82,15 +180,18 @@ void CatalogBrowseScreen::buildUi()
     setObjectName(QStringLiteral("StreamCatalogBrowseScreen"));
     setStyleSheet(QStringLiteral(
         "#StreamCatalogBrowseScreen { background: transparent; }"
-        "#StreamCatalogStatus { color: #9ca3af; font-size: 11px; }"
-        "#StreamCatalogBack { color: #d1d5db; background: rgba(255,255,255,0.07);"
+        "#StreamCatalogStatus, #StreamCatalogRowStatus { color: #9ca3af; font-size: 11px; }"
+        "#StreamCatalogTitle { color: #f3f4f6; font-size: 16px; font-weight: 700; }"
+        "#StreamCatalogRowTitle { color: #f3f4f6; font-size: 13px; font-weight: 700; }"
+        "#StreamCatalogBack, #StreamCatalogSeeAll, #StreamCatalogLoadMore {"
+        " color: #d1d5db; background: rgba(255,255,255,0.07);"
         " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
         " padding: 4px 10px; }"
-        "#StreamCatalogBack:hover { border-color: rgba(255,255,255,0.22); }"
-        "#StreamCatalogLoadMore { color: #d1d5db; background: rgba(255,255,255,0.07);"
-        " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
-        " padding: 6px 14px; }"
-        "#StreamCatalogLoadMore:hover { border-color: rgba(255,255,255,0.22); }"));
+        "#StreamCatalogLoadMore { padding: 6px 14px; }"
+        "#StreamCatalogBack:hover, #StreamCatalogSeeAll:hover, #StreamCatalogLoadMore:hover {"
+        " border-color: rgba(255,255,255,0.22); }"
+        "#StreamCatalogSeeAll:disabled { color: rgba(255,255,255,0.28);"
+        " border-color: rgba(255,255,255,0.07); background: rgba(255,255,255,0.03); }"));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(16, 8, 16, 12);
@@ -106,14 +207,9 @@ void CatalogBrowseScreen::buildUi()
             this, &CatalogBrowseScreen::backRequested);
     topBar->addWidget(backButton);
 
-    m_addonCombo = new QComboBox(this);
-    m_addonCombo->setMinimumWidth(220);
-    topBar->addWidget(m_addonCombo);
-
-    m_catalogCombo = new QComboBox(this);
-    m_catalogCombo->setMinimumWidth(260);
-    topBar->addWidget(m_catalogCombo);
-
+    auto* title = new QLabel(QStringLiteral("Catalog"), this);
+    title->setObjectName(QStringLiteral("StreamCatalogTitle"));
+    topBar->addWidget(title);
     topBar->addStretch();
     root->addLayout(topBar);
 
@@ -121,87 +217,61 @@ void CatalogBrowseScreen::buildUi()
     m_filterLayout = new QHBoxLayout(m_filterRow);
     m_filterLayout->setContentsMargins(0, 0, 0, 0);
     m_filterLayout->setSpacing(8);
+    m_filterRow->hide();
     root->addWidget(m_filterRow);
 
-    m_statusLabel = new QLabel(QStringLiteral("Idle"), this);
+    m_statusLabel = new QLabel(this);
     m_statusLabel->setObjectName(QStringLiteral("StreamCatalogStatus"));
     root->addWidget(m_statusLabel);
 
-    auto* scroll = new QScrollArea(this);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setWidgetResizable(true);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scroll = new QScrollArea(this);
+    m_scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll->setWidgetResizable(true);
+    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    auto* content = new QWidget(scroll);
-    auto* contentLayout = new QVBoxLayout(content);
-    contentLayout->setContentsMargins(0, 0, 0, 0);
-    contentLayout->setSpacing(10);
+    m_scrollContent = new QWidget(m_scroll);
+    m_contentLayout = new QVBoxLayout(m_scrollContent);
+    m_contentLayout->setContentsMargins(0, 0, 0, 0);
+    m_contentLayout->setSpacing(12);
 
-    m_strip = new TileStrip(content);
-    contentLayout->addWidget(m_strip);
+    m_strip = new TileStrip(m_scrollContent);
+    m_strip->setDensity(0);
+    m_strip->hide();
+    m_contentLayout->addWidget(m_strip);
 
-    m_loadMoreButton = new QPushButton(QStringLiteral("Load More"), content);
+    m_loadMoreButton = new QPushButton(QStringLiteral("Load More"), m_scrollContent);
     m_loadMoreButton->setObjectName(QStringLiteral("StreamCatalogLoadMore"));
     m_loadMoreButton->setCursor(Qt::PointingHandCursor);
     m_loadMoreButton->hide();
     connect(m_loadMoreButton, &QPushButton::clicked, this, [this]() {
+        if (m_activeCatalogIndex < 0) {
+            return;
+        }
         m_loadMoreButton->setEnabled(false);
         m_aggregator->loadNextPage();
         m_loadMoreButton->setEnabled(true);
     });
-    contentLayout->addWidget(m_loadMoreButton, 0, Qt::AlignCenter);
-    contentLayout->addStretch();
+    m_contentLayout->addWidget(m_loadMoreButton, 0, Qt::AlignCenter);
+    m_contentLayout->addStretch();
 
-    scroll->setWidget(content);
-    root->addWidget(scroll, 1);
+    m_scroll->setWidget(m_scrollContent);
+    root->addWidget(m_scroll, 1);
 
-    // Phase 1 Batch 1.1 — emit with full MetaItemPreview payload. Both
-    // single-click and double-click open detail (paired-fire is filtered
-    // by StreamPage::showDetail's idempotency guard).
-    auto activate = [this](TileCard* card) {
-        const QString id = card->property("metaId").toString();
-        if (id.isEmpty()) return;
-        const auto it = m_previewsById.constFind(id);
-        if (it == m_previewsById.constEnd()) return;
-        emit metaActivated(it.value());
-    };
-    connect(m_strip, &TileStrip::tileSingleClicked, this, activate);
-    connect(m_strip, &TileStrip::tileDoubleClicked, this, activate);
-
-    connect(m_addonCombo, &QComboBox::currentIndexChanged, this, [this](int) {
-        if (m_suppressReload) {
-            return;
-        }
-        rebuildCatalogCombo();
-        rebuildFilterBar();
-        reload();
-    });
-    connect(m_catalogCombo, &QComboBox::currentIndexChanged, this, [this](int) {
-        if (m_suppressReload) {
-            return;
-        }
-        rebuildFilterBar();
-        reload();
-    });
+    connectStripActivation(m_strip);
 }
 
 void CatalogBrowseScreen::rebuildSelectors()
 {
-    m_suppressReload = true;
     m_catalogItems.clear();
-    m_addonCombo->clear();
 
     if (!m_registry) {
-        m_suppressReload = false;
         return;
     }
 
-    QHash<QString, QString> addonLabelById;
     for (const AddonDescriptor& addon : m_registry->list()) {
         if (!addon.flags.enabled) {
             continue;
         }
-        addonLabelById.insert(addon.manifest.id, addon.manifest.name);
         for (const ManifestCatalog& c : addon.manifest.catalogs) {
             CatalogItem item;
             item.addonId = addon.manifest.id;
@@ -213,35 +283,9 @@ void CatalogBrowseScreen::rebuildSelectors()
             m_catalogItems.push_back(item);
         }
     }
-
-    for (auto it = addonLabelById.constBegin(); it != addonLabelById.constEnd(); ++it) {
-        m_addonCombo->addItem(it.value(), it.key());
-    }
-
-    rebuildCatalogCombo();
-    rebuildFilterBar();
-    m_suppressReload = false;
 }
 
-void CatalogBrowseScreen::rebuildCatalogCombo()
-{
-    const bool wasSuppressed = m_suppressReload;
-    m_suppressReload = true;
-    m_catalogCombo->clear();
-
-    const QString addonId = currentAddonId();
-    for (int i = 0; i < m_catalogItems.size(); ++i) {
-        const CatalogItem& c = m_catalogItems[i];
-        if (c.addonId != addonId) {
-            continue;
-        }
-        const QString text = c.title + QStringLiteral(" (") + c.type + QStringLiteral(")");
-        m_catalogCombo->addItem(text, i);
-    }
-    m_suppressReload = wasSuppressed;
-}
-
-void CatalogBrowseScreen::rebuildFilterBar()
+void CatalogBrowseScreen::clearFilterBar()
 {
     while (QLayoutItem* item = m_filterLayout->takeAt(0)) {
         if (QWidget* widget = item->widget()) {
@@ -249,12 +293,19 @@ void CatalogBrowseScreen::rebuildFilterBar()
         }
         delete item;
     }
+}
+
+void CatalogBrowseScreen::rebuildFilterBar()
+{
+    clearFilterBar();
 
     const CatalogItem* c = currentCatalog();
     if (!c) {
+        m_filterRow->hide();
         return;
     }
 
+    int controlCount = 0;
     for (const ManifestExtraProp& prop : c->extra) {
         if (prop.name == QStringLiteral("skip")) {
             continue;
@@ -284,9 +335,166 @@ void CatalogBrowseScreen::rebuildFilterBar()
             }
         });
         m_filterLayout->addWidget(combo);
+        ++controlCount;
     }
 
     m_filterLayout->addStretch();
+    m_filterRow->setVisible(controlCount > 0);
+}
+
+void CatalogBrowseScreen::showHomeBoard()
+{
+    ++m_generation;
+    m_activeCatalogIndex = -1;
+    m_previewsById.clear();
+    clearRows();
+    clearFilterBar();
+    m_filterRow->hide();
+    m_strip->clear();
+    m_strip->hide();
+    m_loadMoreButton->hide();
+
+    const QList<int> indices = sortedCatalogIndices();
+    if (indices.isEmpty()) {
+        m_statusLabel->setText(QStringLiteral("No catalogs available"));
+        return;
+    }
+    m_statusLabel->clear();
+
+    const int generation = m_generation;
+    const int insertBefore = m_contentLayout->indexOf(m_strip);
+    for (const int index : indices) {
+        if (index < 0 || index >= m_catalogItems.size()) {
+            continue;
+        }
+
+        auto* state = new RowState;
+        state->catalogIndex = index;
+        state->item = m_catalogItems.at(index);
+        state->row = new CatalogRow(displayTitleForCatalog(state->item), m_scrollContent);
+        state->aggregator = new CatalogAggregator(m_registry, this);
+        m_rows.append(state);
+
+        m_contentLayout->insertWidget(insertBefore + m_rows.size() - 1, state->row);
+        connectStripActivation(state->row->strip());
+        connect(state->row->seeAllButton(), &QPushButton::clicked, this,
+                [this, index]() { showDetailForCatalog(index); });
+
+        state->row->setLoading();
+
+        connect(state->aggregator, &CatalogAggregator::catalogPage, this,
+            [this, state, generation](const QList<MetaItemPreview>& items, bool) {
+                if (generation != m_generation || !m_rows.contains(state)) {
+                    return;
+                }
+                appendRowTiles(state, items);
+            });
+        connect(state->aggregator, &CatalogAggregator::catalogError, this,
+            [this, state, generation](const QString& addonId, const QString& message) {
+                if (generation != m_generation || !m_rows.contains(state) || !state->row) {
+                    return;
+                }
+                state->row->setError(QStringLiteral("Catalog error (") + addonId +
+                                     QStringLiteral("): ") + message);
+            });
+
+        CatalogQuery q;
+        q.addonId = state->item.addonId;
+        q.type = state->item.type;
+        q.catalogId = state->item.id;
+        state->aggregator->load(q);
+    }
+}
+
+void CatalogBrowseScreen::showDetailForCatalog(int catalogIndex)
+{
+    if (catalogIndex < 0 || catalogIndex >= m_catalogItems.size()) {
+        showHomeBoard();
+        return;
+    }
+
+    ++m_generation;
+    clearRows();
+    m_activeCatalogIndex = catalogIndex;
+    m_previewsById.clear();
+    m_strip->clear();
+    m_strip->show();
+    rebuildFilterBar();
+    reload();
+}
+
+void CatalogBrowseScreen::clearRows()
+{
+    for (RowState* row : m_rows) {
+        if (!row) {
+            continue;
+        }
+        if (row->aggregator) {
+            row->aggregator->disconnect(this);
+            delete row->aggregator;
+        }
+        delete row->row;
+        delete row;
+    }
+    m_rows.clear();
+}
+
+QList<int> CatalogBrowseScreen::sortedCatalogIndices() const
+{
+    QList<int> indices;
+    indices.reserve(m_catalogItems.size());
+    for (int i = 0; i < m_catalogItems.size(); ++i) {
+        indices.append(i);
+    }
+
+    auto rankFor = [this](int index) {
+        const CatalogItem& item = m_catalogItems.at(index);
+        const QString type = item.type.toLower();
+        const QString text = normalizedCatalogText(displayTitleForCatalog(item) + QLatin1Char(' ') + item.id);
+        const bool movie = type == QLatin1String("movie");
+        const bool series = type == QLatin1String("series");
+        if (movie && text.contains(QStringLiteral("popular"))) return 0;
+        if (series && text.contains(QStringLiteral("popular"))) return 1;
+        if (movie && text.contains(QStringLiteral("featured"))) return 2;
+        if (series && text.contains(QStringLiteral("featured"))) return 3;
+        if (movie && text.contains(QStringLiteral("seeded"))) return 4;
+        if (series && text.contains(QStringLiteral("seeded"))) return 5;
+        return 1000 + index;
+    };
+
+    std::stable_sort(indices.begin(), indices.end(),
+        [&](int a, int b) {
+            const int ra = rankFor(a);
+            const int rb = rankFor(b);
+            if (ra != rb) {
+                return ra < rb;
+            }
+            return a < b;
+        });
+    return indices;
+}
+
+QString CatalogBrowseScreen::displayTitleForCatalog(const CatalogItem& item) const
+{
+    const QString raw = item.title.trimmed().isEmpty() ? item.id : item.title.trimmed();
+    const QString lowered = raw.toLower();
+    if (lowered.contains(QStringLiteral("movie"))
+        || lowered.contains(QStringLiteral("show"))
+        || lowered.contains(QStringLiteral("series"))) {
+        return raw;
+    }
+
+    const QString type = item.type.toLower();
+    if (type == QLatin1String("movie")) {
+        return QStringLiteral("Movies ") + raw;
+    }
+    if (type == QLatin1String("series")) {
+        const QString prefix = lowered.contains(QStringLiteral("seeded"))
+                                   ? QStringLiteral("Series ")
+                                   : QStringLiteral("Shows ");
+        return prefix + raw;
+    }
+    return item.type.toUpper() + QLatin1Char(' ') + raw;
 }
 
 void CatalogBrowseScreen::reload()
@@ -308,7 +516,8 @@ void CatalogBrowseScreen::reload()
 
     m_strip->clear();
     m_previewsById.clear();
-    m_statusLabel->setText(QStringLiteral("Loading..."));
+    m_statusLabel->setText(QStringLiteral("Loading ") + displayTitleForCatalog(*c) +
+                           QStringLiteral("..."));
     m_loadMoreButton->hide();
     m_aggregator->load(q);
 }
@@ -341,130 +550,157 @@ void CatalogBrowseScreen::ensurePoster(const QString& metaId,
                                        const QUrl& posterUrl,
                                        TileCard* card)
 {
-    if (!posterUrl.isValid() || !card) {
+    if (!card) {
         return;
     }
+
     const QString path = posterCachePath(metaId);
     if (QFile::exists(path)) {
-        card->setThumbPath(path);
+        if (!QPixmap(path).isNull()) {
+            card->setThumbPath(path);
+            return;
+        }
+        QFile::remove(path);
+    }
+
+    if (!posterUrl.isValid() || posterUrl.isEmpty()) {
+        qInfo("CatalogBrowseScreen: poster url empty for %s",
+              qUtf8Printable(metaId));
         return;
     }
 
-    QNetworkRequest req(posterUrl);
-    req.setHeader(QNetworkRequest::UserAgentHeader,
-                  QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                                 " AppleWebKit/537.36"));
-    req.setTransferTimeout(10000);
-    // Follow redirects — image CDNs (images.metahub.space etc.) commonly
-    // 301/302 and Qt6's default ManualRedirectPolicy drops the reply with
-    // no payload. Without this, `reply->error() == NoError` but
-    // `readAll()` returns zero bytes and the .jpg never writes to cache
-    // (symptom: catalog tiles show placeholder letters only). Reported
-    // 2026-04-20.
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                     QNetworkRequest::NoLessSafeRedirectPolicy);
-
     QPointer<TileCard> guard(card);
-    QNetworkReply* reply = m_nam->get(req);
-    const QString diagId = metaId;
-    const QString diagUrl = posterUrl.toString();
-    connect(reply, &QNetworkReply::finished, this, [reply, path, guard, diagId, diagUrl]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            qWarning("CatalogBrowseScreen: poster %s fetch failed: %s (url=%s)",
-                     qUtf8Printable(diagId),
-                     qUtf8Printable(reply->errorString()),
-                     qUtf8Printable(diagUrl));
-            return;
-        }
-        const QByteArray bytes = reply->readAll();
-        if (bytes.isEmpty()) {
-            qWarning("CatalogBrowseScreen: poster %s got empty body (url=%s)",
-                     qUtf8Printable(diagId), qUtf8Printable(diagUrl));
-            return;
-        }
-        QFile out(path);
-        if (out.open(QIODevice::WriteOnly)) {
-            out.write(bytes);
-            out.close();
-            if (guard) {
+    PosterFetcher::download(m_nam, posterUrl, path, this,
+        [guard, path](bool ok) {
+            if (ok && guard) {
                 guard->setThumbPath(path);
             }
+        });
+}
+
+TileCard* CatalogBrowseScreen::makeTile(const MetaItemPreview& item)
+{
+    if (item.id.isEmpty() || item.name.isEmpty()) {
+        return nullptr;
+    }
+
+    QString subtitle = item.releaseInfo;
+    if (!item.imdbRating.isEmpty()) {
+        if (!subtitle.isEmpty()) {
+            subtitle += QStringLiteral(" \u00B7 ");
         }
-    });
+        subtitle += QStringLiteral("IMDb ") + item.imdbRating;
+    }
+
+    const QString cached = posterCachePath(item.id);
+    const bool hasUsableCachedPoster = QFile::exists(cached) && !QPixmap(cached).isNull();
+    if (QFile::exists(cached) && !hasUsableCachedPoster) {
+        QFile::remove(cached);
+    }
+
+    auto* card = new TileCard(hasUsableCachedPoster ? cached : QString(),
+                              item.name,
+                              subtitle);
+    card->setProperty("metaId", item.id);
+    card->setProperty("metaType", item.type);
+    m_previewsById.insert(item.id, item);
+
+    if (!hasUsableCachedPoster) {
+        ensurePoster(item.id, item.poster, card);
+    }
+
+    return card;
+}
+
+void CatalogBrowseScreen::connectStripActivation(TileStrip* strip)
+{
+    if (!strip) {
+        return;
+    }
+
+    auto activate = [this](TileCard* card) {
+        if (!card) {
+            return;
+        }
+        const QString id = card->property("metaId").toString();
+        if (id.isEmpty()) {
+            return;
+        }
+        const auto it = m_previewsById.constFind(id);
+        if (it == m_previewsById.constEnd()) {
+            return;
+        }
+        emit metaActivated(it.value());
+    };
+    connect(strip, &TileStrip::tileSingleClicked, this, activate);
+    connect(strip, &TileStrip::tileDoubleClicked, this, activate);
+}
+
+void CatalogBrowseScreen::appendRowTiles(RowState* row,
+                                         const QList<MetaItemPreview>& items)
+{
+    if (!row || !row->row) {
+        return;
+    }
+
+    row->row->strip()->clear();
+    int rendered = 0;
+    for (const MetaItemPreview& item : items) {
+        if (rendered >= kHomeRowInitialCap) {
+            break;
+        }
+        TileCard* card = makeTile(item);
+        if (!card) {
+            continue;
+        }
+        row->row->strip()->addTile(card);
+        ++rendered;
+    }
+    row->row->setLoaded(rendered);
 }
 
 void CatalogBrowseScreen::appendTiles(const QList<MetaItemPreview>& items)
 {
     for (const MetaItemPreview& item : items) {
-        if (item.id.isEmpty() || item.name.isEmpty()) {
+        TileCard* card = makeTile(item);
+        if (!card) {
             continue;
         }
-
-        // Canonical Stream subtitle: year + IMDb rating (matches StreamLibraryLayout).
-        QString subtitle = item.releaseInfo;
-        if (!item.imdbRating.isEmpty()) {
-            if (!subtitle.isEmpty()) {
-                subtitle += QStringLiteral(" \u00B7 ");
-            }
-            subtitle += QStringLiteral("IMDb ") + item.imdbRating;
-        }
-
-        const QString cached = posterCachePath(item.id);
-        auto* card = new TileCard(
-            QFile::exists(cached) ? cached : QString(),
-            item.name,
-            subtitle);
-        card->setProperty("metaId", item.id);
-        card->setProperty("metaType", item.type);
         m_strip->addTile(card);
-        m_previewsById.insert(item.id, item);
-
-        if (!QFile::exists(cached)) {
-            ensurePoster(item.id, item.poster, card);
-        }
     }
-}
-
-QString CatalogBrowseScreen::currentAddonId() const
-{
-    return m_addonCombo->currentData().toString();
 }
 
 const CatalogBrowseScreen::CatalogItem* CatalogBrowseScreen::currentCatalog() const
 {
-    const QVariant v = m_catalogCombo->currentData();
-    const int idx = v.canConvert<int>() ? v.toInt() : -1;
-    if (idx < 0 || idx >= m_catalogItems.size()) {
+    if (m_activeCatalogIndex < 0 || m_activeCatalogIndex >= m_catalogItems.size()) {
         return nullptr;
     }
-    return &m_catalogItems[idx];
+    return &m_catalogItems[m_activeCatalogIndex];
 }
 
-void CatalogBrowseScreen::selectAddon(const QString& addonId)
+int CatalogBrowseScreen::catalogIndexFor(const QString& addonId,
+                                         const QString& type,
+                                         const QString& catalogId) const
 {
-    for (int i = 0; i < m_addonCombo->count(); ++i) {
-        if (m_addonCombo->itemData(i).toString() == addonId) {
-            m_addonCombo->setCurrentIndex(i);
-            return;
-        }
+    if (addonId.isEmpty() && type.isEmpty() && catalogId.isEmpty()) {
+        return -1;
     }
-}
 
-void CatalogBrowseScreen::selectCatalog(const QString& type, const QString& catalogId)
-{
-    for (int i = 0; i < m_catalogCombo->count(); ++i) {
-        const QVariant itemData = m_catalogCombo->itemData(i);
-        const int sourceIdx = itemData.canConvert<int>() ? itemData.toInt() : -1;
-        if (sourceIdx < 0 || sourceIdx >= m_catalogItems.size()) {
+    for (int i = 0; i < m_catalogItems.size(); ++i) {
+        const CatalogItem& c = m_catalogItems.at(i);
+        if (!addonId.isEmpty() && c.addonId != addonId) {
             continue;
         }
-        const CatalogItem& c = m_catalogItems[sourceIdx];
-        if (c.type == type && c.id == catalogId) {
-            m_catalogCombo->setCurrentIndex(i);
-            return;
+        if (!type.isEmpty() && c.type != type) {
+            continue;
         }
+        if (!catalogId.isEmpty() && c.id != catalogId) {
+            continue;
+        }
+        return i;
     }
+
+    return -1;
 }
 
-}
+} // namespace tankostream::stream
