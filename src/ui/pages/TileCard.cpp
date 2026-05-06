@@ -124,19 +124,27 @@ void TileCard::setCardSize(int width, int imageHeight)
     const int innerH = imageHeight - 4;
 
     // ── render cover ────────────────────────────────────
-    if (!m_thumbPath.isEmpty()) {
-        QPixmap pix(m_thumbPath);
-        if (!pix.isNull()) {
-            QPixmap scaled = pix.scaled(innerW, innerH,
-                                        Qt::KeepAspectRatioByExpanding,
-                                        Qt::SmoothTransformation);
-            int cx = (scaled.width() - innerW) / 2;
-            int cy = (scaled.height() - innerH) / 2;
-            m_basePixmap = roundPixmap(scaled.copy(cx, cy, innerW, innerH),
-                                       CORNER_RADIUS);
-            applyBadges();
-            return;
-        }
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — prefer the pre-
+    // decoded m_thumbPixmap (set via setThumbPixmap) over decoding from
+    // m_thumbPath every call. The pre-decoded path is a no-op disk read
+    // when the caller already has the raw pixmap cached in memory; the
+    // path-decode branch is preserved for callers that only have a path.
+    QPixmap pix;
+    if (!m_thumbPixmap.isNull()) {
+        pix = m_thumbPixmap;
+    } else if (!m_thumbPath.isEmpty()) {
+        pix = QPixmap(m_thumbPath);
+    }
+    if (!pix.isNull()) {
+        QPixmap scaled = pix.scaled(innerW, innerH,
+                                    Qt::KeepAspectRatioByExpanding,
+                                    Qt::SmoothTransformation);
+        int cx = (scaled.width() - innerW) / 2;
+        int cy = (scaled.height() - innerH) / 2;
+        m_basePixmap = roundPixmap(scaled.copy(cx, cy, innerW, innerH),
+                                   CORNER_RADIUS);
+        applyBadges();
+        return;
     }
 
     // ── placeholder (groundwork spec) ───────────────────
@@ -177,7 +185,27 @@ void TileCard::setCardSize(int width, int imageHeight)
 void TileCard::setThumbPath(const QString& path)
 {
     m_thumbPath = path;
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — clear the
+    // pre-decoded pixmap when the path becomes authoritative again.
+    // Otherwise an old m_thumbPixmap from a prior cache hit would
+    // shadow the new path's contents.
+    m_thumbPixmap = QPixmap();
     // Force re-render by temporarily invalidating dimensions
+    int w = m_cardWidth, h = m_imageHeight;
+    m_cardWidth = 0;
+    m_imageHeight = 0;
+    setCardSize(w, h);
+}
+
+// STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — pre-decoded entry.
+// Caller passes an already-decoded raw pixmap (from in-memory cache);
+// setCardSize uses it directly instead of doing a fresh QPixmap(path)
+// disk read. Authoritative over m_thumbPath until setThumbPath flips
+// back. Used by CatalogBrowseScreen's poster-cache layer.
+void TileCard::setThumbPixmap(const QPixmap& pixmap)
+{
+    m_thumbPixmap = pixmap;
+    // Force re-render — same trick as setThumbPath.
     int w = m_cardWidth, h = m_imageHeight;
     m_cardWidth = 0;
     m_imageHeight = 0;

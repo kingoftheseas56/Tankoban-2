@@ -40,6 +40,14 @@ public:
               const QString& type,
               const QString& catalogId);
 
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — explicit cache
+    // invalidation hook. Callers fire this when the catalog data may have
+    // changed (refresh button, addon-registry changes, etc) so the next
+    // showHomeBoard re-runs the full teardown + network fan-out instead
+    // of short-circuiting on the in-memory rows. AddonRegistry::addonsChanged
+    // is auto-wired from the ctor; manual callers can invoke this directly.
+    void invalidate();
+
 signals:
     void backRequested();
     void metaActivated(const tankostream::addon::MetaItemPreview& preview);
@@ -98,6 +106,15 @@ private:
     int m_activeCatalogIndex = -1;
     int m_generation = 0;
     QHash<QString, tankostream::addon::MetaItemPreview> m_previewsById;
+
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — short-circuit gate
+    // for showHomeBoard. true means "next showHomeBoard call should run
+    // the full teardown + rebuild path." false means "rows are still
+    // valid; just present them." Default true so the FIRST showHomeBoard
+    // call after construction always builds. invalidate() flips it true
+    // when catalogue data may have changed; showHomeBoard flips it false
+    // after a successful build.
+    bool m_needsRebuild = true;
 };
 
 }

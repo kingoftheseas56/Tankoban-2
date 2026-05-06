@@ -16,7 +16,9 @@
 #include <QStandardPaths>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <functional>
 
+#include "core/PosterCache.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/CatalogAggregator.h"
 #include "core/stream/addon/AddonRegistry.h"
@@ -117,6 +119,26 @@ QString normalizedCatalogText(const QString& text)
     return text.trimmed().toLower();
 }
 
+QString posterCacheKey(const QString& metaId)
+{
+    return QStringLiteral("stream:") + metaId;
+}
+
+QUrl catalogThumbnailUrl(const QUrl& posterUrl)
+{
+    if (posterUrl.host() != QLatin1String("images.metahub.space")) {
+        return posterUrl;
+    }
+
+    QUrl out = posterUrl;
+    QStringList parts = out.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (parts.size() >= 3 && parts.at(0) == QLatin1String("poster")) {
+        parts[1] = QStringLiteral("small");
+        out.setPath(QLatin1Char('/') + parts.join(QLatin1Char('/')));
+    }
+    return out;
+}
+
 } // namespace
 
 struct CatalogBrowseScreen::RowState {
@@ -153,6 +175,16 @@ CatalogBrowseScreen::CatalogBrowseScreen(AddonRegistry* registry, QWidget* paren
             m_statusLabel->setText(QStringLiteral("Catalog error (") + addonId +
                                    QStringLiteral("): ") + message);
         });
+
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — addon installs /
+    // removes / config changes flip m_needsRebuild so the next showHomeBoard
+    // re-runs the full teardown + network fan-out. Without this, an addon
+    // change leaves stale rows on the board until the user manually
+    // restarts the catalog screen.
+    if (m_registry) {
+        connect(m_registry, &AddonRegistry::addonsChanged,
+                this, &CatalogBrowseScreen::invalidate);
+    }
 }
 
 CatalogBrowseScreen::~CatalogBrowseScreen()
@@ -203,8 +235,20 @@ void CatalogBrowseScreen::buildUi()
     auto* backButton = new QPushButton(QStringLiteral("Back"), this);
     backButton->setObjectName(QStringLiteral("StreamCatalogBack"));
     backButton->setCursor(Qt::PointingHandCursor);
-    connect(backButton, &QPushButton::clicked,
-            this, &CatalogBrowseScreen::backRequested);
+    // STREAM_CATALOG_BACK_TWO_LEVEL_FIX 2026-05-06 — the catalog overhaul
+    // (a386d52) introduced an in-screen 2-level nav (multi-row home board
+    // ↔ single-catalog deep-dive via "See all") but kept the back button
+    // wired to bubble straight up to StreamPage::goBack. Result: Back
+    // jumped all the way out of the catalog screen instead of returning
+    // one level. Now: if we're in single-catalog mode, return to home
+    // board; else escape via backRequested.
+    connect(backButton, &QPushButton::clicked, this, [this]() {
+        if (m_activeCatalogIndex >= 0) {
+            showHomeBoard();
+        } else {
+            emit backRequested();
+        }
+    });
     topBar->addWidget(backButton);
 
     auto* title = new QLabel(QStringLiteral("Catalog"), this);
@@ -342,16 +386,38 @@ void CatalogBrowseScreen::rebuildFilterBar()
     m_filterRow->setVisible(controlCount > 0);
 }
 
+// STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — public escape hatch for
+// the showHomeBoard short-circuit. Called from the AddonRegistry::addonsChanged
+// signal (auto-wired in ctor) and any future manual-refresh affordance.
+void CatalogBrowseScreen::invalidate()
+{
+    m_needsRebuild = true;
+}
+
 void CatalogBrowseScreen::showHomeBoard()
 {
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — short-circuit when
+    // the rows are already populated AND nothing has invalidated them since.
+    // The screen is kept alive across navigation by StreamPage (m_catalogBrowse
+    // is a member; never destroyed mid-session), so the existing rows + their
+    // tiles + their pixmaps remain valid. Skipping the teardown + rebuild is
+    // what makes re-entry instant. The existing m_generation counter is
+    // preserved untouched in this branch — any in-flight async catalog-page
+    // replies tagged with the prior generation still apply correctly to
+    // the still-alive rows.
+    if (!m_needsRebuild && !m_rows.isEmpty()) {
+        return;
+    }
+    m_needsRebuild = false;
+
     ++m_generation;
     m_activeCatalogIndex = -1;
     m_previewsById.clear();
     clearRows();
     clearFilterBar();
     m_filterRow->hide();
-    m_strip->clear();
     m_strip->hide();
+    m_strip->clear();
     m_loadMoreButton->hide();
 
     const QList<int> indices = sortedCatalogIndices();
@@ -546,6 +612,12 @@ QString CatalogBrowseScreen::posterCachePath(const QString& metaId) const
     return m_posterCacheDir + QLatin1Char('/') + metaId + QStringLiteral(".jpg");
 }
 
+// STREAM_AND_VIDEO_POSTER_PERF 2026-05-06 — shared three-layer cache:
+//   Layer 1: PosterCache in-memory pixmap — instant, no disk read
+//   Layer 2: disk cache decoded with QImageReader on QThreadPool
+//   Layer 3: PosterFetcher network fetch — async HTTP/2-enabled request
+// Cinemeta/metahub catalog posters are rewritten to the small variant because
+// catalog tiles render around 120x180; detail views keep their full poster URL.
 void CatalogBrowseScreen::ensurePoster(const QString& metaId,
                                        const QUrl& posterUrl,
                                        TileCard* card)
@@ -555,27 +627,69 @@ void CatalogBrowseScreen::ensurePoster(const QString& metaId,
     }
 
     const QString path = posterCachePath(metaId);
-    if (QFile::exists(path)) {
-        if (!QPixmap(path).isNull()) {
-            card->setThumbPath(path);
-            return;
+    const QString cacheKey = posterCacheKey(metaId);
+    QPointer<TileCard> guard(card);
+    QPointer<CatalogBrowseScreen> self(this);
+
+    auto applyDecoded = [guard](const QPixmap& pix) {
+        if (guard && !pix.isNull()) {
+            guard->setThumbPixmap(pix);
         }
-        QFile::remove(path);
+    };
+
+    const QPixmap cached = PosterCache::instance().get(cacheKey);
+    if (!cached.isNull()) {
+        card->setThumbPixmap(cached);
+        return;
     }
 
-    if (!posterUrl.isValid() || posterUrl.isEmpty()) {
+    const QUrl requestUrl = catalogThumbnailUrl(posterUrl);
+    std::function<void()> startDownload;
+    startDownload = [this, self, guard, path, cacheKey, requestUrl]() {
+        if (!self || !requestUrl.isValid() || requestUrl.isEmpty()) {
+            return;
+        }
+        PosterFetcher::download(m_nam, requestUrl, path, this,
+            [self, guard, path, cacheKey](bool ok) {
+                if (!self || !ok) {
+                    return;
+                }
+                PosterCache::instance().decodeFileAsync(cacheKey, path, self,
+                    [guard, path](const QPixmap& pix) {
+                        if (guard && !pix.isNull()) {
+                            guard->setThumbPixmap(pix);
+                        } else if (guard) {
+                            guard->setThumbPath(path);
+                        }
+                    });
+            });
+    };
+
+    if (QFile::exists(path)) {
+        PosterCache::instance().decodeFileAsync(cacheKey, path, this,
+            [self, path, requestUrl, startDownload, applyDecoded](const QPixmap& pix) {
+                if (!self) {
+                    return;
+                }
+                if (!pix.isNull()) {
+                    applyDecoded(pix);
+                    return;
+                }
+                QFile::remove(path);
+                if (requestUrl.isValid() && !requestUrl.isEmpty()) {
+                    startDownload();
+                }
+            });
+        return;
+    }
+
+    if (!requestUrl.isValid() || requestUrl.isEmpty()) {
         qInfo("CatalogBrowseScreen: poster url empty for %s",
               qUtf8Printable(metaId));
         return;
     }
 
-    QPointer<TileCard> guard(card);
-    PosterFetcher::download(m_nam, posterUrl, path, this,
-        [guard, path](bool ok) {
-            if (ok && guard) {
-                guard->setThumbPath(path);
-            }
-        });
+    startDownload();
 }
 
 TileCard* CatalogBrowseScreen::makeTile(const MetaItemPreview& item)
@@ -592,22 +706,21 @@ TileCard* CatalogBrowseScreen::makeTile(const MetaItemPreview& item)
         subtitle += QStringLiteral("IMDb ") + item.imdbRating;
     }
 
-    const QString cached = posterCachePath(item.id);
-    const bool hasUsableCachedPoster = QFile::exists(cached) && !QPixmap(cached).isNull();
-    if (QFile::exists(cached) && !hasUsableCachedPoster) {
-        QFile::remove(cached);
-    }
-
-    auto* card = new TileCard(hasUsableCachedPoster ? cached : QString(),
-                              item.name,
-                              subtitle);
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — single-pipeline path.
+    // Was: pre-validate cache via QPixmap(cached).isNull() (full disk decode
+    // just to discard), then construct TileCard with the cached path which
+    // would re-decode AGAIN inside setCardSize. Two wasted decodes per tile
+    // per call. Now: always construct with empty thumb + always call
+    // ensurePoster. ensurePoster's Layer 1 (in-memory) + Layer 2 (disk +
+    // promote to memory) handle the cache-hit path with at most one decode
+    // per metaId for the lifetime of the screen, and the corrupt-file
+    // cleanup moves into Layer 2.
+    auto* card = new TileCard(QString(), item.name, subtitle);
     card->setProperty("metaId", item.id);
     card->setProperty("metaType", item.type);
     m_previewsById.insert(item.id, item);
 
-    if (!hasUsableCachedPoster) {
-        ensurePoster(item.id, item.poster, card);
-    }
+    ensurePoster(item.id, item.poster, card);
 
     return card;
 }

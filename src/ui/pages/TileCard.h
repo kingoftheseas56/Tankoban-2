@@ -20,6 +20,14 @@ public:
     void setIsNew(bool isNew);
     void setIsFolder(bool isFolder);
     void setThumbPath(const QString& path);
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — pre-decoded entry
+    // point so callers with an in-memory pixmap cache can skip the
+    // `QPixmap(path)` disk decode that setThumbPath performs every call.
+    // Used by CatalogBrowseScreen's 3-layer poster cache (memory → disk →
+    // network) for instant re-entry to the catalog board. Falling back to
+    // the path remains via setThumbPath for callers that don't keep
+    // raw pixmaps around.
+    void setThumbPixmap(const QPixmap& pixmap);
     void setSelected(bool selected);
     void setFocused(bool focused);
 
@@ -58,6 +66,12 @@ private:
     QLineEdit* m_renameEdit = nullptr;
 
     QString m_thumbPath;
+    // STREAM_CATALOG_THUMBNAIL_PERSISTENCE 2026-05-06 — raw decoded pixmap
+    // stash. setThumbPixmap populates it directly; setCardSize prefers
+    // this over re-decoding from m_thumbPath. Cleared when setThumbPath
+    // updates the path (path-side becomes authoritative again). m_basePixmap
+    // is the post-scale/crop/round-render result (separate concept).
+    QPixmap m_thumbPixmap;
     QString m_title;
     QString m_subtitle;
     QPixmap m_basePixmap;
