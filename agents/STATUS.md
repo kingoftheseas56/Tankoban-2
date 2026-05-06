@@ -896,7 +896,7 @@ Open debt (pre-parity, non-blocking, unchanged from prior wakes):
  - StreamPage scroll-parity fix awaiting Hemanth smoke (earlier session carryover).
  - Multiplying-folders pre-fix residue — held per concrete repro evidence policy.
 Scope note: Per Hemanth 2026-04-14, Agent 5 owns ALL library-side UX across every mode. This wake's Preset-axis removal touches Theme infrastructure + topbar picker — in-domain.
-Last session: 2026-05-05 ~22:55pm (CLEAR_CONTINUE_WATCHING_FIX — two-bug close: UI shake from hide+show oscillation eliminated; multi-click reliability fixed by switching from walkFiles+computeVideoId(mtime-dependent) to direct allProgress iteration + path-prefix match. BUILD OK first try)
+Last session: 2026-05-06 ~13:38pm (VIDEOS_FETCH_POSTER_FIX Phase 2C closed — wrong-name-search bug fixed. cleanMediaFolderTitle re-appends season tokens for folder identity correctness (~20 callers depend on that), but the poster-search caller needs the bare title. 7-line regex post-strip at the ONE call site (installFolderTileContextMenu's fetchPosterAct) drops trailing Season/Series/Vol/S0N patterns. Trace: query='Community Season 1' (16 noisy) → query='Community' (10 clean). Hemanth verbatim "yes it's working". Phase 2D editable search box for non-English titles declined by Hemanth ("forget about the non-english titles then, good work"). Full poster fix arc CLOSED: Phase 1 instrumentation + Phase 2A timeout 10s→30s + Phase 2B metahub `?format=jpg` + Phase 2C season-suffix strip)
 Governance seen: gov-v3 | Contracts seen: contracts-v2
 
 ---

@@ -6,6 +6,7 @@
 #include "core/CoreBridge.h"
 #include "core/VideosScanner.h"
 #include "core/ScannerUtils.h"
+#include "core/DebugLogBuffer.h"
 #include "core/library/VideoCategoryStore.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/MetaAggregator.h"
@@ -28,6 +29,7 @@
 #include <QSettings>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QRegularExpression>
 #include <QFileInfo>
 #include <QEvent>
 #include <QShortcut>
@@ -38,6 +40,13 @@
 #include <QStandardPaths>
 #include <QImageReader>
 #include <QMessageBox>
+
+namespace {
+const QStringList kVideoExts = {
+    "*.mp4", "*.mkv", "*.avi", "*.webm", "*.mov", "*.wmv",
+    "*.flv", "*.m4v", "*.ts",  "*.mpg", "*.mpeg", "*.ogv",
+};
+}
 
 QString VideosPage::posterPathFor(const QString& showPath)
 {
@@ -293,8 +302,6 @@ void VideosPage::buildUI()
         section->hide();
         m_categorySections.insert(category, section);
         m_categoryStrips.insert(category, strip);
-        if (category == VideoCategory::Miscellaneous)
-            m_tileStrip = strip;
         m_categoriesLayout->addWidget(section);
     }
     if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
@@ -312,7 +319,6 @@ void VideosPage::buildUI()
     gridLayout->addWidget(m_listView, 1);
 
     // ── Helper: compute video ID for a file ──
-    static const QStringList videoExts = {"*.mp4","*.mkv","*.avi","*.webm","*.mov","*.wmv","*.flv","*.m4v","*.ts","*.mpg","*.mpeg","*.ogv"};
     auto computeVideoId = [](const QString& filePath) -> QString {
         QFileInfo fi(filePath);
         QString raw = fi.absoluteFilePath() + "::" + QString::number(fi.size())
@@ -333,7 +339,7 @@ void VideosPage::buildUI()
     auto markAllEpisodes = [this, computeVideoId](const QString& showPath, bool setFinished) {
         QStringList allFiles = QFileInfo(showPath).isFile()
             ? QStringList{showPath}
-            : ScannerUtils::walkFiles(showPath, videoExts);
+            : ScannerUtils::walkFiles(showPath, kVideoExts);
         for (const auto& f : allFiles) {
             QString id = computeVideoId(f);
             QJsonObject prog = m_bridge->progress("videos", id);
@@ -350,7 +356,7 @@ void VideosPage::buildUI()
         (const QString& oldPath, const QString& newPath) -> bool {
         struct Migration { QString relPath; QString oldId; QJsonObject data; };
         QList<Migration> migrations;
-        const QStringList oldFiles = ScannerUtils::walkFiles(oldPath, videoExts);
+        const QStringList oldFiles = ScannerUtils::walkFiles(oldPath, kVideoExts);
         for (const auto& oldFile : oldFiles) {
             const QString oldId = computeVideoId(oldFile);
             QJsonObject prog = m_bridge->progress("videos", oldId);
@@ -384,319 +390,17 @@ void VideosPage::buildUI()
         return true;
     };
 
-    // ── Grid context menu — single selection ──
-    m_tileStrip->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_tileStrip, &QWidget::customContextMenuRequested, this, [this, computeVideoId, markAllEpisodes, posterPath, renameShowFolder](const QPoint& pos) {
-        // Check for multi-selection first
-        auto selected = m_tileStrip->selectedTiles();
-        if (selected.size() > 1) {
-            // ── Multi-select context menu ──
-            auto* menu = ContextMenuHelper::createMenu(this);
-            auto* playFirstAct = menu->addAction("Play first selected");
-            menu->addSeparator();
-            auto* markWatchedAct = menu->addAction("Mark all as watched");
-            auto* markUnwatchedAct = menu->addAction("Mark all as unwatched");
-            menu->addSeparator();
-            auto* removeAct = ContextMenuHelper::addDangerAction(menu,
-                QString("Remove %1 items").arg(selected.size()));
-
-            auto* chosen = menu->exec(m_tileStrip->mapToGlobal(pos));
-            if (chosen == playFirstAct) {
-                QString path = selected.first()->property("seriesPath").toString();
-                QStringList files = ScannerUtils::walkFiles(path, videoExts);
-                if (!files.isEmpty())
-                    emit playVideo(files.first());
-            } else if (chosen == markWatchedAct || chosen == markUnwatchedAct) {
-                bool setFinished = (chosen == markWatchedAct);
-                for (auto* card : selected)
-                    markAllEpisodes(card->property("seriesPath").toString(), setFinished);
-            } else if (chosen == removeAct) {
-                if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                        QString("Remove %1 items from library?\nFiles will not be deleted from disk.")
-                            .arg(selected.size()))) {
-                    triggerScan();
-                }
-            }
-            menu->deleteLater();
-            return;
-        }
-
-        // ── Single-select context menu ──
-        auto* card = m_tileStrip->tileAt(pos);
-        if (!card) return;
-
-        QString showPath = card->property("seriesPath").toString();
-        QString showName = card->property("seriesName").toString();
-
-        QStringList allFiles = ScannerUtils::walkFiles(showPath, videoExts);
-        QJsonObject allProg = m_bridge->allProgress("videos");
-        bool hasEpisodes = !allFiles.isEmpty();
-
-        bool allWatched = hasEpisodes;
-        bool hasProgress = false;
-        for (const auto& f : allFiles) {
-            QString id = computeVideoId(f);
-            QJsonObject prog = allProg.value(id).toObject();
-            if (!prog.value("finished").toBool())
-                allWatched = false;
-            if (!prog.isEmpty())
-                hasProgress = true;
-        }
-
-        auto* menu = ContextMenuHelper::createMenu(this);
-        auto* playAct = menu->addAction("Play / Continue");
-        playAct->setEnabled(hasEpisodes);
-        auto* playBeginAct = menu->addAction("Play from beginning");
-        playBeginAct->setEnabled(hasEpisodes);
-        menu->addSeparator();
-        auto* markAct = menu->addAction(allWatched ? "Mark all as unwatched" : "Mark all as watched");
-        auto* clearContAct = menu->addAction("Clear from Continue Watching");
-        clearContAct->setEnabled(hasProgress);
-        menu->addSeparator();
-        auto* renameAct = menu->addAction("Rename");
-        auto* autoRenameAct = menu->addAction("Auto-rename");
-        auto* revealAct = menu->addAction("Reveal in File Explorer");
-        revealAct->setEnabled(!showPath.isEmpty());
-        auto* copyAct = menu->addAction("Copy path");
-        copyAct->setEnabled(!showPath.isEmpty());
-
-        menu->addSeparator();
-        auto* moveMenu = menu->addMenu("Move to");
-        QMap<QAction*, VideoCategory> moveActions;
-        for (const auto& info : videoCategoryInfos()) {
-            auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
-            moveActions.insert(act, info.category);
-        }
-
-        menu->addSeparator();
-        auto* setPosterAct = menu->addAction("Set poster...");
-        QString existingPoster = posterPath(showPath);
-        auto* removePosterAct = menu->addAction("Remove poster");
-        removePosterAct->setEnabled(QFile::exists(existingPoster));
-        auto* pastePosterAct = menu->addAction("Paste image as poster");
-        pastePosterAct->setEnabled(QApplication::clipboard()->mimeData()->hasImage());
-        auto* fetchPosterAct = menu->addAction("Fetch poster from internet");
-        fetchPosterAct->setEnabled(m_meta != nullptr && !showPath.isEmpty());
-        menu->addSeparator();
-        auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
-        removeAct->setEnabled(!showPath.isEmpty());
-
-        auto* chosen = menu->exec(m_tileStrip->mapToGlobal(pos));
-        if (chosen == playAct) {
-            // Find best resume episode or first episode
-            QString resumeFile;
-            qint64 bestAt = -1;
-            for (const auto& f : allFiles) {
-                QString id = computeVideoId(f);
-                QJsonObject prog = allProg.value(id).toObject();
-                if (prog.value("finished").toBool()) continue;
-                double posSec = prog.value("positionSec").toDouble(0);
-                if (posSec > 0) {
-                    qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
-                    if (upd > bestAt) { bestAt = upd; resumeFile = f; }
-                }
-            }
-            if (resumeFile.isEmpty() && !allFiles.isEmpty())
-                resumeFile = allFiles.first();
-            if (!resumeFile.isEmpty())
-                emit playVideo(resumeFile);
-        } else if (chosen == playBeginAct) {
-            if (!allFiles.isEmpty())
-                emit playVideo(allFiles.first());
-        } else if (chosen == markAct) {
-            markAllEpisodes(showPath, !allWatched);
-        } else if (chosen == clearContAct) {
-            // Clear by path-prefix match on the stored progress entries
-            // rather than walking the disk + recomputing computeVideoId.
-            // walkFiles can miss nested files; computeVideoId depends on
-            // mtime which may drift between play and clear (Windows Defender
-            // touch, antivirus, sync clients) → the recomputed id no longer
-            // matches the stored progress key, so the lookup misses and the
-            // entry survives. Iterating allProgress by stored path avoids
-            // both failure modes.
-            QJsonObject allProg = m_bridge->allProgress("videos");
-            bool changed = false;
-            for (auto it = allProg.begin(); it != allProg.end(); ++it) {
-                QJsonObject prog = it.value().toObject();
-                const QString entryPath = prog.value("path").toString();
-                if (entryPath.isEmpty())
-                    continue;
-                const bool match = (entryPath == showPath)
-                    || entryPath.startsWith(showPath + QLatin1Char('/'))
-                    || entryPath.startsWith(showPath + QLatin1Char('\\'));
-                if (!match)
-                    continue;
-                prog.remove("positionSec");
-                prog.remove("finished");
-                m_bridge->saveProgress("videos", it.key(), prog);
-                changed = true;
-            }
-            if (changed)
-                refreshContinueStrip();
-        } else if (chosen == renameAct) {
-            // Inline rename — QLineEdit appears over the tile title, Enter commits,
-            // Escape cancels, focus-out commits. No modal dialog.
-            connect(card, &TileCard::renameCompleted, this,
-                [this, showPath, renameShowFolder](bool commit, const QString& newName) {
-                    if (!commit) return;
-                    const QString dirName = QDir(showPath).dirName();
-                    const QString parentPath = QFileInfo(showPath).absolutePath();
-                    const QString oldPath = parentPath + "/" + dirName;
-                    const QString newPath = parentPath + "/" + newName;
-                    if (QFileInfo::exists(newPath)) {
-                        QMessageBox::warning(this, "Rename failed",
-                            "A folder named \"" + newName + "\" already exists in this location.");
-                    } else if (renameShowFolder(oldPath, newPath)) {
-                        triggerScan();
-                    } else {
-                        QMessageBox::warning(this, "Rename failed",
-                            "Could not rename \"" + dirName + "\".\n"
-                            "The folder may be in use by another program.");
-                    }
-                }, Qt::SingleShotConnection);
-            card->beginRename();
-        } else if (chosen == autoRenameAct) {
-            QString dirName = QDir(showPath).dirName();
-            QString cleaned = ScannerUtils::cleanMediaFolderTitle(dirName);
-            if (cleaned.isEmpty() || cleaned == dirName) {
-                QMessageBox::information(this, "Auto-rename",
-                    "Auto-rename not needed — \"" + dirName + "\" is already clean.");
-            } else {
-                QString parentPath = QFileInfo(showPath).absolutePath();
-                QString oldPath = parentPath + "/" + dirName;
-                QString newPath = parentPath + "/" + cleaned;
-                if (QFileInfo::exists(newPath)) {
-                    QMessageBox::warning(this, "Auto-rename failed",
-                        "A folder named \"" + cleaned + "\" already exists in this location.");
-                } else if (renameShowFolder(oldPath, newPath)) {
-                    triggerScan();
-                } else {
-                    QMessageBox::warning(this, "Auto-rename failed",
-                        "Could not rename \"" + dirName + "\" to \"" + cleaned + "\".\n"
-                        "The folder may be in use by another program.");
-                }
-            }
-        } else if (chosen == revealAct) {
-            ContextMenuHelper::revealInExplorer(showPath);
-        } else if (chosen == copyAct) {
-            ContextMenuHelper::copyToClipboard(showPath);
-        } else if (moveActions.contains(chosen)) {
-            moveShowToCategory(showPath, moveActions.value(chosen));
-        } else if (chosen == setPosterAct) {
-            QString file = QFileDialog::getOpenFileName(this, "Set poster",
-                QString(), "Images (*.png *.jpg *.jpeg *.bmp *.webp)");
-            if (!file.isEmpty()) {
-                QImage img(file);
-                if (!img.isNull()) {
-                    img.save(existingPoster, "JPEG", 92);
-                    triggerScan();
-                }
-            }
-        } else if (chosen == removePosterAct) {
-            QFile::remove(existingPoster);
-            triggerScan();
-        } else if (chosen == fetchPosterAct) {
-            // Clean the folder title for the search query. Auto-rename uses the
-            // same helper — this works on both already-cleaned and raw folder
-            // names (the helper is idempotent on clean input).
-            const QString dirName = QDir(showPath).dirName();
-            QString query = ScannerUtils::cleanMediaFolderTitle(dirName);
-            if (query.isEmpty()) query = dirName;
-            const QString destPath = posterPath(showPath);
-            const QPoint globalPos = m_tileStrip->mapToGlobal(pos);
-
-            if (!m_nam) m_nam = new QNetworkAccessManager(this);
-            QPointer<TileCard> cardGuard(card);
-            QPointer<VideosPage> selfGuard(this);
-            QNetworkAccessManager* nam = m_nam;
-
-            // Download a chosen poster URL to destPath and refresh the tile.
-            // Shared by both single-match auto-apply and picker selection.
-            // Surfaces download failures as a dialog so the user isn't left
-            // wondering why nothing happened (quiet-fail was the original bug).
-            auto applyPoster = [cardGuard, destPath, nam, selfGuard](const QUrl& poster) {
-                if (!selfGuard || !poster.isValid()) return;
-                PosterFetcher::download(nam, poster, destPath, selfGuard,
-                    [cardGuard, destPath, selfGuard](bool ok) {
-                        if (!selfGuard) return;
-                        if (ok) {
-                            if (cardGuard) cardGuard->setThumbPath(destPath);
-                            return;
-                        }
-                        QMessageBox::information(selfGuard, "Poster download failed",
-                            "Could not download the poster image. Try again or pick "
-                            "a different match.");
-                    });
-            };
-
-            // Branching on result count: 0 → info dialog; 1 → auto-apply;
-            // 2+ → disambiguation picker. Candidates with no name or no poster
-            // URL are filtered out up front so every visible picker row is
-            // selectable — otherwise placeholder-thumb rows would silently fail
-            // on click.
-            auto handleResults = [selfGuard, applyPoster, query, globalPos, nam](
-                const QList<tankostream::addon::MetaItemPreview>& results) {
-                if (!selfGuard) return;
-                QList<tankostream::addon::MetaItemPreview> usable;
-                usable.reserve(results.size());
-                for (const auto& r : results) {
-                    if (r.name.isEmpty()) continue;
-                    if (!r.poster.isValid()) continue;
-                    usable.append(r);
-                }
-                if (usable.isEmpty()) {
-                    QMessageBox::information(selfGuard, "No match found",
-                        QStringLiteral("No matching poster found for \"%1\".").arg(query));
-                    return;
-                }
-                if (usable.size() == 1) {
-                    applyPoster(usable.first().poster);
-                    return;
-                }
-                // Multi-match — show picker. Popover is one-shot, self-deletes
-                // on any dismissal (selection, outside click, Escape).
-                auto* picker = new PosterPickerPopover(selfGuard);
-                QObject::connect(picker, &PosterPickerPopover::posterChosen,
-                                 selfGuard,
-                                 [applyPoster](const QUrl& url, const QString& /*name*/) {
-                                     applyPoster(url);
-                                 });
-                picker->showAtGlobal(usable, globalPos, nam);
-            };
-
-            // Series first, then movie fallback so stray movie folders still work.
-            m_meta->searchByTitle(query, QStringLiteral("series"),
-                [selfGuard, handleResults, query](
-                    const QList<tankostream::addon::MetaItemPreview>& results,
-                    const QString& /*error*/) {
-                    if (!selfGuard) return;
-                    if (results.isEmpty()) {
-                        selfGuard->m_meta->searchByTitle(query, QStringLiteral("movie"),
-                            [selfGuard, handleResults](
-                                const QList<tankostream::addon::MetaItemPreview>& r2,
-                                const QString& /*error*/) {
-                                if (!selfGuard) return;
-                                handleResults(r2);
-                            });
-                        return;
-                    }
-                    handleResults(results);
-                });
-        } else if (chosen == pastePosterAct) {
-            QImage img = QApplication::clipboard()->image();
-            if (!img.isNull()) {
-                img.save(existingPoster, "JPEG", 92);
-                triggerScan();
-            }
-        } else if (chosen == removeAct) {
-            if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                    "Remove this show from the library?\n" + showPath +
-                    "\nFiles will not be deleted from disk.")) {
-                triggerScan();
-            }
-        }
-        menu->deleteLater();
-    });
+    // ── Grid context menus: full folder-tile menu (Play / Continue, Mark
+    //    watched, Clear from CW, Rename, Auto-rename, Reveal, Copy path,
+    //    Move to..., Set/Remove/Paste/Fetch poster, Remove) on EVERY
+    //    category strip — restored 2026-05-06 after Codex's 2026-05-05
+    //    multi-category ship narrowed it to Misc-only via the m_tileStrip
+    //    alias. See VideosPage::installFolderTileContextMenu. ──
+    for (TileStrip* strip : m_categoryStrips) {
+        if (!strip) continue;
+        installFolderTileContextMenu(strip, computeVideoId, markAllEpisodes,
+                                     posterPath, renameShowFolder);
+    }
 
     // ── Continue-tile context menu ──
     m_continueStrip->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -803,65 +507,6 @@ void VideosPage::buildUI()
         menu->deleteLater();
     });
 
-    // Other category strips share the core "open / play / move" behavior.
-    // The Miscellaneous strip keeps the older full maintenance menu above.
-    for (auto it = m_categoryStrips.begin(); it != m_categoryStrips.end(); ++it) {
-        TileStrip* strip = it.value();
-        if (!strip || strip == m_tileStrip)
-            continue;
-        strip->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(strip, &QWidget::customContextMenuRequested, this,
-                [this, strip, computeVideoId](const QPoint& pos) {
-            auto* card = strip->tileAt(pos);
-            if (!card) return;
-
-            const QString showPath = card->property("seriesPath").toString();
-            const QString showName = card->property("seriesName").toString();
-            const QStringList allFiles = card->property("isLoose").toBool()
-                ? QStringList{card->property("primaryFilePath").toString()}
-                : ScannerUtils::walkFiles(showPath, videoExts);
-
-            auto* menu = ContextMenuHelper::createMenu(this);
-            auto* playAct = menu->addAction("Play / Continue");
-            playAct->setEnabled(!allFiles.isEmpty());
-            auto* openAct = menu->addAction("Open show");
-            menu->addSeparator();
-            auto* moveMenu = menu->addMenu("Move to");
-            QMap<QAction*, VideoCategory> moveActions;
-            for (const auto& info : videoCategoryInfos()) {
-                auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
-                moveActions.insert(act, info.category);
-            }
-
-            auto* chosen = menu->exec(strip->mapToGlobal(pos));
-            if (chosen == playAct && !allFiles.isEmpty()) {
-                QString resumeFile;
-                qint64 bestAt = -1;
-                const QJsonObject allProg = m_bridge->allProgress("videos");
-                for (const auto& f : allFiles) {
-                    const QString id = computeVideoId(f);
-                    const QJsonObject prog = allProg.value(id).toObject();
-                    if (prog.value("finished").toBool()) continue;
-                    if (prog.value("positionSec").toDouble(0) > 0) {
-                        const qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
-                        if (upd > bestAt) { bestAt = upd; resumeFile = f; }
-                    }
-                }
-                if (resumeFile.isEmpty())
-                    resumeFile = allFiles.first();
-                emit playVideo(resumeFile);
-            } else if (chosen == openAct) {
-                m_showView->setFileDurations(m_showDurations.value(showPath));
-                m_showView->showFolder(showPath, showName, posterPathFor(showPath),
-                                       card->property("isLoose").toBool());
-                m_stack->setCurrentIndexAnimated(1);
-            } else if (moveActions.contains(chosen)) {
-                moveShowToCategory(showPath, moveActions.value(chosen));
-            }
-            menu->deleteLater();
-        });
-    }
-
     // V-key: toggle grid/list view
     auto* viewToggleShortcut = new QShortcut(QKeySequence(Qt::Key_V), this);
     connect(viewToggleShortcut, &QShortcut::activated, this, [this]() {
@@ -925,6 +570,343 @@ void VideosPage::buildUI()
     m_stack->addWidget(m_showView);
 
     outerLayout->addWidget(m_stack, 1);
+}
+
+// VIDEOS_LIBRARY_FULL_CONTEXT_MENU 2026-05-06 — restored full folder-tile
+// menu on every category strip after Codex's 2026-05-05 multi-category ship
+// narrowed it to Misc-only. Body is lifted verbatim from the prior
+// m_tileStrip-bound lambda; the only deltas are (a) parametrized on
+// `strip` instead of m_tileStrip, (b) closures take std::function args
+// instead of inline lambda captures, (c) videoExts is now file-scope
+// kVideoExts. Multi-select branch fires when strip->selectedTiles().size() > 1
+// — TileStrip already supports multi-select uniformly, so per-category
+// strips inherit it for free.
+void VideosPage::installFolderTileContextMenu(
+    TileStrip* strip,
+    std::function<QString(const QString&)> computeVideoId,
+    std::function<void(const QString&, bool)> markAllEpisodes,
+    std::function<QString(const QString&)> posterPath,
+    std::function<bool(const QString&, const QString&)> renameShowFolder)
+{
+    if (!strip)
+        return;
+    strip->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(strip, &QWidget::customContextMenuRequested, this,
+        [this, strip, computeVideoId, markAllEpisodes, posterPath, renameShowFolder]
+        (const QPoint& pos) {
+        // Check for multi-selection first
+        auto selected = strip->selectedTiles();
+        if (selected.size() > 1) {
+            // ── Multi-select context menu ──
+            auto* menu = ContextMenuHelper::createMenu(this);
+            auto* playFirstAct = menu->addAction("Play first selected");
+            menu->addSeparator();
+            auto* markWatchedAct = menu->addAction("Mark all as watched");
+            auto* markUnwatchedAct = menu->addAction("Mark all as unwatched");
+            menu->addSeparator();
+            auto* removeAct = ContextMenuHelper::addDangerAction(menu,
+                QString("Remove %1 items").arg(selected.size()));
+
+            auto* chosen = menu->exec(strip->mapToGlobal(pos));
+            if (chosen == playFirstAct) {
+                QString path = selected.first()->property("seriesPath").toString();
+                QStringList files = ScannerUtils::walkFiles(path, kVideoExts);
+                if (!files.isEmpty())
+                    emit playVideo(files.first());
+            } else if (chosen == markWatchedAct || chosen == markUnwatchedAct) {
+                bool setFinished = (chosen == markWatchedAct);
+                for (auto* card : selected)
+                    markAllEpisodes(card->property("seriesPath").toString(), setFinished);
+            } else if (chosen == removeAct) {
+                if (ContextMenuHelper::confirmRemove(this, "Remove from library",
+                        QString("Remove %1 items from library?\nFiles will not be deleted from disk.")
+                            .arg(selected.size()))) {
+                    triggerScan();
+                }
+            }
+            menu->deleteLater();
+            return;
+        }
+
+        // ── Single-select context menu ──
+        auto* card = strip->tileAt(pos);
+        if (!card) return;
+
+        QString showPath = card->property("seriesPath").toString();
+        QString showName = card->property("seriesName").toString();
+
+        QStringList allFiles = card->property("isLoose").toBool()
+            ? QStringList{card->property("primaryFilePath").toString()}
+            : ScannerUtils::walkFiles(showPath, kVideoExts);
+        QJsonObject allProg = m_bridge->allProgress("videos");
+        bool hasEpisodes = !allFiles.isEmpty();
+
+        bool allWatched = hasEpisodes;
+        bool hasProgress = false;
+        for (const auto& f : allFiles) {
+            QString id = computeVideoId(f);
+            QJsonObject prog = allProg.value(id).toObject();
+            if (!prog.value("finished").toBool())
+                allWatched = false;
+            if (!prog.isEmpty())
+                hasProgress = true;
+        }
+
+        auto* menu = ContextMenuHelper::createMenu(this);
+        auto* playAct = menu->addAction("Play / Continue");
+        playAct->setEnabled(hasEpisodes);
+        auto* playBeginAct = menu->addAction("Play from beginning");
+        playBeginAct->setEnabled(hasEpisodes);
+        menu->addSeparator();
+        auto* markAct = menu->addAction(allWatched ? "Mark all as unwatched" : "Mark all as watched");
+        auto* clearContAct = menu->addAction("Clear from Continue Watching");
+        clearContAct->setEnabled(hasProgress);
+        menu->addSeparator();
+        auto* renameAct = menu->addAction("Rename");
+        auto* autoRenameAct = menu->addAction("Auto-rename");
+        auto* revealAct = menu->addAction("Reveal in File Explorer");
+        revealAct->setEnabled(!showPath.isEmpty());
+        auto* copyAct = menu->addAction("Copy path");
+        copyAct->setEnabled(!showPath.isEmpty());
+
+        menu->addSeparator();
+        auto* moveMenu = menu->addMenu("Move to");
+        QMap<QAction*, VideoCategory> moveActions;
+        for (const auto& info : videoCategoryInfos()) {
+            auto* act = moveMenu->addAction(videoCategoryLabel(info.category));
+            moveActions.insert(act, info.category);
+        }
+
+        menu->addSeparator();
+        auto* setPosterAct = menu->addAction("Set poster...");
+        QString existingPoster = posterPath(showPath);
+        auto* removePosterAct = menu->addAction("Remove poster");
+        removePosterAct->setEnabled(QFile::exists(existingPoster));
+        auto* pastePosterAct = menu->addAction("Paste image as poster");
+        pastePosterAct->setEnabled(QApplication::clipboard()->mimeData()->hasImage());
+        auto* fetchPosterAct = menu->addAction("Fetch poster from internet");
+        fetchPosterAct->setEnabled(m_meta != nullptr && !showPath.isEmpty());
+        menu->addSeparator();
+        auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
+        removeAct->setEnabled(!showPath.isEmpty());
+
+        auto* chosen = menu->exec(strip->mapToGlobal(pos));
+        if (chosen == playAct) {
+            QString resumeFile;
+            qint64 bestAt = -1;
+            for (const auto& f : allFiles) {
+                QString id = computeVideoId(f);
+                QJsonObject prog = allProg.value(id).toObject();
+                if (prog.value("finished").toBool()) continue;
+                double posSec = prog.value("positionSec").toDouble(0);
+                if (posSec > 0) {
+                    qint64 upd = prog.value("updatedAt").toVariant().toLongLong();
+                    if (upd > bestAt) { bestAt = upd; resumeFile = f; }
+                }
+            }
+            if (resumeFile.isEmpty() && !allFiles.isEmpty())
+                resumeFile = allFiles.first();
+            if (!resumeFile.isEmpty())
+                emit playVideo(resumeFile);
+        } else if (chosen == playBeginAct) {
+            if (!allFiles.isEmpty())
+                emit playVideo(allFiles.first());
+        } else if (chosen == markAct) {
+            markAllEpisodes(showPath, !allWatched);
+        } else if (chosen == clearContAct) {
+            QJsonObject allProg = m_bridge->allProgress("videos");
+            bool changed = false;
+            for (auto it = allProg.begin(); it != allProg.end(); ++it) {
+                QJsonObject prog = it.value().toObject();
+                const QString entryPath = prog.value("path").toString();
+                if (entryPath.isEmpty())
+                    continue;
+                const bool match = (entryPath == showPath)
+                    || entryPath.startsWith(showPath + QLatin1Char('/'))
+                    || entryPath.startsWith(showPath + QLatin1Char('\\'));
+                if (!match)
+                    continue;
+                prog.remove("positionSec");
+                prog.remove("finished");
+                m_bridge->saveProgress("videos", it.key(), prog);
+                changed = true;
+            }
+            if (changed)
+                refreshContinueStrip();
+        } else if (chosen == renameAct) {
+            QObject::connect(card, &TileCard::renameCompleted, this,
+                [this, showPath, renameShowFolder](bool commit, const QString& newName) {
+                    if (!commit) return;
+                    const QString dirName = QDir(showPath).dirName();
+                    const QString parentPath = QFileInfo(showPath).absolutePath();
+                    const QString oldPath = parentPath + "/" + dirName;
+                    const QString newPath = parentPath + "/" + newName;
+                    if (QFileInfo::exists(newPath)) {
+                        QMessageBox::warning(this, "Rename failed",
+                            "A folder named \"" + newName + "\" already exists in this location.");
+                    } else if (renameShowFolder(oldPath, newPath)) {
+                        triggerScan();
+                    } else {
+                        QMessageBox::warning(this, "Rename failed",
+                            "Could not rename \"" + dirName + "\".\n"
+                            "The folder may be in use by another program.");
+                    }
+                }, Qt::SingleShotConnection);
+            card->beginRename();
+        } else if (chosen == autoRenameAct) {
+            QString dirName = QDir(showPath).dirName();
+            QString cleaned = ScannerUtils::cleanMediaFolderTitle(dirName);
+            if (cleaned.isEmpty() || cleaned == dirName) {
+                QMessageBox::information(this, "Auto-rename",
+                    "Auto-rename not needed — \"" + dirName + "\" is already clean.");
+            } else {
+                QString parentPath = QFileInfo(showPath).absolutePath();
+                QString oldPath = parentPath + "/" + dirName;
+                QString newPath = parentPath + "/" + cleaned;
+                if (QFileInfo::exists(newPath)) {
+                    QMessageBox::warning(this, "Auto-rename failed",
+                        "A folder named \"" + cleaned + "\" already exists in this location.");
+                } else if (renameShowFolder(oldPath, newPath)) {
+                    triggerScan();
+                } else {
+                    QMessageBox::warning(this, "Auto-rename failed",
+                        "Could not rename \"" + dirName + "\" to \"" + cleaned + "\".\n"
+                        "The folder may be in use by another program.");
+                }
+            }
+        } else if (chosen == revealAct) {
+            ContextMenuHelper::revealInExplorer(showPath);
+        } else if (chosen == copyAct) {
+            ContextMenuHelper::copyToClipboard(showPath);
+        } else if (moveActions.contains(chosen)) {
+            moveShowToCategory(showPath, moveActions.value(chosen));
+        } else if (chosen == setPosterAct) {
+            QString file = QFileDialog::getOpenFileName(this, "Set poster",
+                QString(), "Images (*.png *.jpg *.jpeg *.bmp *.webp)");
+            if (!file.isEmpty()) {
+                QImage img(file);
+                if (!img.isNull()) {
+                    img.save(existingPoster, "JPEG", 92);
+                    triggerScan();
+                }
+            }
+        } else if (chosen == removePosterAct) {
+            QFile::remove(existingPoster);
+            triggerScan();
+        } else if (chosen == fetchPosterAct) {
+            const QString dirName = QDir(showPath).dirName();
+            QString query = ScannerUtils::cleanMediaFolderTitle(dirName);
+            // VIDEOS_FETCH_POSTER_FIX Phase 2C 2026-05-06 — strip trailing
+            // "Season N" / "Series N" / "S0N" tokens from the search query.
+            // cleanMediaFolderTitle re-appends season info because folder
+            // IDENTITY needs the season suffix (catalog labels distinguish
+            // "Sopranos Season 1" from "Sopranos Season 6"). But Cinemeta's
+            // searchByTitle gets confused by the season suffix and returns
+            // alphabetical/weak matches (Hemanth: "click on Community Season 1
+            // returns 1 Litre of Tears, 1 vs. 100, 1-800-Missing — wrong shows").
+            // The poster search wants the bare show title; strip-after-clean
+            // preserves identity-correctness for every other caller of
+            // cleanMediaFolderTitle while fixing the search-query case.
+            static const QRegularExpression seasonSuffix(
+                QStringLiteral("\\s*(?:Season|Series|Vol\\.?|Volume)\\s+\\d+\\s*$|\\s*S\\d{1,2}\\s*$"),
+                QRegularExpression::CaseInsensitiveOption);
+            query.replace(seasonSuffix, QString());
+            query = query.trimmed();
+            if (query.isEmpty()) query = dirName;
+            const QString destPath = posterPath(showPath);
+            const QPoint globalPos = strip->mapToGlobal(pos);
+
+            if (!m_nam) m_nam = new QNetworkAccessManager(this);
+            QPointer<TileCard> cardGuard(card);
+            QPointer<VideosPage> selfGuard(this);
+            QNetworkAccessManager* nam = m_nam;
+
+            auto applyPoster = [cardGuard, destPath, nam, selfGuard](const QUrl& poster) {
+                if (!selfGuard || !poster.isValid()) return;
+                PosterFetcher::download(nam, poster, destPath, selfGuard,
+                    [cardGuard, destPath, selfGuard](bool ok) {
+                        if (!selfGuard) return;
+                        if (ok) {
+                            if (cardGuard) cardGuard->setThumbPath(destPath);
+                            return;
+                        }
+                        QMessageBox::information(selfGuard, "Poster download failed",
+                            "Could not download the poster image. Try again or pick "
+                            "a different match.");
+                    });
+            };
+
+            auto handleResults = [selfGuard, applyPoster, query, globalPos, nam](
+                const QList<tankostream::addon::MetaItemPreview>& results) {
+                if (!selfGuard) return;
+                QList<tankostream::addon::MetaItemPreview> usable;
+                usable.reserve(results.size());
+                int withName = 0;
+                int withPoster = 0;
+                for (const auto& r : results) {
+                    if (!r.name.isEmpty()) ++withName;
+                    if (r.poster.isValid()) ++withPoster;
+                    if (r.name.isEmpty()) continue;
+                    if (!r.poster.isValid()) continue;
+                    usable.append(r);
+                }
+                DebugLogBuffer::instance().info("videospage",
+                    QStringLiteral("fetchPoster query='%1' results=%2 withName=%3 withPoster=%4 usable=%5")
+                        .arg(query)
+                        .arg(results.size())
+                        .arg(withName)
+                        .arg(withPoster)
+                        .arg(usable.size()));
+                if (usable.isEmpty()) {
+                    QMessageBox::information(selfGuard, "No match found",
+                        QStringLiteral("No matching poster found for \"%1\".").arg(query));
+                    return;
+                }
+                if (usable.size() == 1) {
+                    applyPoster(usable.first().poster);
+                    return;
+                }
+                auto* picker = new PosterPickerPopover(selfGuard);
+                QObject::connect(picker, &PosterPickerPopover::posterChosen,
+                                 selfGuard,
+                                 [applyPoster](const QUrl& url, const QString& /*name*/) {
+                                     applyPoster(url);
+                                 });
+                picker->showAtGlobal(usable, globalPos, nam);
+            };
+
+            m_meta->searchByTitle(query, QStringLiteral("series"),
+                [selfGuard, handleResults, query](
+                    const QList<tankostream::addon::MetaItemPreview>& results,
+                    const QString& /*error*/) {
+                    if (!selfGuard) return;
+                    if (results.isEmpty()) {
+                        selfGuard->m_meta->searchByTitle(query, QStringLiteral("movie"),
+                            [selfGuard, handleResults](
+                                const QList<tankostream::addon::MetaItemPreview>& r2,
+                                const QString& /*error*/) {
+                                if (!selfGuard) return;
+                                handleResults(r2);
+                            });
+                        return;
+                    }
+                    handleResults(results);
+                });
+        } else if (chosen == pastePosterAct) {
+            QImage img = QApplication::clipboard()->image();
+            if (!img.isNull()) {
+                img.save(existingPoster, "JPEG", 92);
+                triggerScan();
+            }
+        } else if (chosen == removeAct) {
+            if (ContextMenuHelper::confirmRemove(this, "Remove from library",
+                    "Remove this show from the library?\n" + showPath +
+                    "\nFiles will not be deleted from disk.")) {
+                triggerScan();
+            }
+        }
+        menu->deleteLater();
+    });
 }
 
 void VideosPage::setMetaAggregator(tankostream::stream::MetaAggregator* meta)
@@ -1260,20 +1242,38 @@ QString VideosPage::formatSize(qint64 bytes)
 
 QString VideosPage::resolveShowPath(const QString& filePath) const
 {
-    auto it = m_fileToShowRoot.constFind(filePath);
-    if (it != m_fileToShowRoot.constEnd())
+    // Normalize to forward-slash form for comparison. video_progress.json
+    // stores paths in mixed slash conventions across watch sessions (forward
+    // slashes from QFileDialog, backslashes from drag-drop / Explorer entry
+    // points), and the same logical file can land in the JSON twice with
+    // different separators. Without normalization those become two distinct
+    // showMap keys downstream → Continue Watching shows duplicate tiles for
+    // the same show. Comparison-only normalization; original strings are
+    // preserved for the returned showPath so downstream lookups against
+    // m_showPathToName still hit (scanner-side keys retain native form).
+    const QString p = QDir::fromNativeSeparators(filePath);
+
+    // Hot path: exact lookup. Try BOTH normalized and original forms because
+    // the scanner may have inserted under either depending on entry point.
+    if (auto it = m_fileToShowRoot.constFind(p); it != m_fileToShowRoot.constEnd())
         return it.value();
+    if (p != filePath) {
+        if (auto it = m_fileToShowRoot.constFind(filePath); it != m_fileToShowRoot.constEnd())
+            return it.value();
+    }
 
     // Scanner may not enumerate nested files in show.files (e.g. Season N
     // episodes under a parent series folder). Find the show root whose path
     // is the longest prefix of filePath — that's the matching top-level show.
+    // Normalize candidates for comparison; return the original key so
+    // downstream m_showPathToName lookups still hit.
     QString best;
     for (auto sit = m_showPathToName.constBegin(); sit != m_showPathToName.constEnd(); ++sit) {
         const QString& candidate = sit.key();
         if (candidate.isEmpty())
             continue;
-        if (filePath.startsWith(candidate + QLatin1Char('/'))
-            || filePath.startsWith(candidate + QLatin1Char('\\'))) {
+        const QString candidateNorm = QDir::fromNativeSeparators(candidate);
+        if (p.startsWith(candidateNorm + QLatin1Char('/'))) {
             if (candidate.length() > best.length())
                 best = candidate;
         }
@@ -1281,7 +1281,25 @@ QString VideosPage::resolveShowPath(const QString& filePath) const
     if (!best.isEmpty())
         return best;
 
-    return QFileInfo(filePath).absolutePath();
+    // Last-resort fallback. Default Qt would return the immediate parent
+    // directory, which makes Continue Watching show one tile per Season
+    // folder rather than one per show (Sopranos/Season 5/EpX and
+    // Sopranos/Season 6/EpY become two tiles instead of one). Climb up
+    // past season-shaped folder names so multi-season shows collapse to a
+    // single show-root key. Patterns matched (case-insensitive, exact
+    // segment): "Season N", "S01"-"S999", "Disc N", "Volume N", "Vol N",
+    // "Part N", "CD N". Folder names that EMBED these tokens but aren't
+    // exactly equal to them (e.g. "Community Season 1 [1080p ...]") are
+    // intentionally NOT climbed — that folder IS the show root.
+    static const QRegularExpression kSeasonLike(
+        QStringLiteral("^(season\\s*\\d+|s\\d{1,3}|disc\\s*\\d+|volume\\s*\\d+|vol\\s*\\d+|part\\s*\\d+|cd\\s*\\d+)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    QDir parent = QFileInfo(p).absoluteDir();
+    while (kSeasonLike.match(parent.dirName()).hasMatch()) {
+        if (!parent.cdUp())
+            break;
+    }
+    return parent.absolutePath();
 }
 
 QList<VideosPage::ContinueItem> VideosPage::collectContinueItems()

@@ -11,6 +11,7 @@
 #include <QMap>
 #include <QJsonObject>
 #include <QVBoxLayout>
+#include <functional>
 #include "core/VideosScanner.h"
 #include "core/library/VideoCategory.h"
 class QPushButton;
@@ -93,6 +94,20 @@ private:
     // /Season 6/S06E04.mkv") aren't enumerated in show.files — without
     // it Continue Watching tiles label as "Season 6" instead of "Sopranos".
     QString resolveShowPath(const QString& filePath) const;
+    // Bind the full folder-tile context menu (Play/Continue, Play from
+    // beginning, Mark watched/unwatched, Clear from CW, Rename, Auto-rename,
+    // Reveal, Copy path, Move to..., Set/Remove/Paste/Fetch poster, Remove)
+    // to a TileStrip. Same shape regardless of which category the strip
+    // represents. Pre-multi-category, this menu lived inline on the single
+    // m_tileStrip; post-multi-category (Codex's 2026-05-05 ship) other
+    // category strips got a 3-action reduced menu — Hemanth's regression
+    // closure 2026-05-06 reinstates the full menu on every strip.
+    void installFolderTileContextMenu(
+        TileStrip* strip,
+        std::function<QString(const QString&)> computeVideoId,
+        std::function<void(const QString&, bool)> markAllEpisodes,
+        std::function<QString(const QString&)> posterPath,
+        std::function<bool(const QString&, const QString&)> renameShowFolder);
     void addContinueTile(TileStrip* strip, const ContinueItem& item);
     void clearContinueRows();
     void refreshContinueStripLegacy();
@@ -110,7 +125,6 @@ private:
     FadingStackedWidget*    m_stack = nullptr;
     QWidget*         m_continueSection = nullptr;
     TileStrip*       m_continueStrip = nullptr;
-    TileStrip*       m_tileStrip = nullptr; // compatibility pointer to Miscellaneous strip
     QWidget*         m_categoriesContainer = nullptr;
     QVBoxLayout*     m_categoriesLayout = nullptr;
     QMap<VideoCategory, QWidget*>   m_categorySections;
