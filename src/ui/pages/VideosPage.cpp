@@ -8,6 +8,7 @@
 #include "core/ScannerUtils.h"
 #include "core/DebugLogBuffer.h"
 #include "core/library/VideoCategoryStore.h"
+#include "core/PosterCache.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/MetaItem.h"
@@ -29,6 +30,7 @@
 #include <QSettings>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QRegularExpression>
 #include <QFileInfo>
 #include <QEvent>
@@ -40,12 +42,45 @@
 #include <QStandardPaths>
 #include <QImageReader>
 #include <QMessageBox>
+#include <QPixmap>
 
 namespace {
 const QStringList kVideoExts = {
     "*.mp4", "*.mkv", "*.avi", "*.webm", "*.mov", "*.wmv",
     "*.flv", "*.m4v", "*.ts",  "*.mpg", "*.mpeg", "*.ogv",
 };
+
+QString videoPosterCacheKey(const QString& posterPath)
+{
+    return QStringLiteral("video:") + posterPath;
+}
+
+void applyPosterPathToCard(TileCard* card, const QString& posterPath, QObject* context)
+{
+    if (!card || posterPath.isEmpty() || !QFile::exists(posterPath)) {
+        return;
+    }
+
+    const QString cacheKey = videoPosterCacheKey(posterPath);
+    const QPixmap cached = PosterCache::instance().get(cacheKey);
+    if (!cached.isNull()) {
+        card->setThumbPixmap(cached);
+        return;
+    }
+
+    QPointer<TileCard> guard(card);
+    PosterCache::instance().decodeFileAsync(cacheKey, posterPath, context,
+        [guard, posterPath](const QPixmap& pix) {
+            if (!guard) {
+                return;
+            }
+            if (!pix.isNull()) {
+                guard->setThumbPixmap(pix);
+            } else {
+                QFile::remove(posterPath);
+            }
+        });
+}
 }
 
 QString VideosPage::posterPathFor(const QString& showPath)
@@ -787,11 +822,17 @@ void VideosPage::installFolderTileContextMenu(
                 QImage img(file);
                 if (!img.isNull()) {
                     img.save(existingPoster, "JPEG", 92);
+                    const QPixmap pix = QPixmap::fromImage(img);
+                    if (!pix.isNull()) {
+                        PosterCache::instance().put(videoPosterCacheKey(existingPoster), pix);
+                        card->setThumbPixmap(pix);
+                    }
                     triggerScan();
                 }
             }
         } else if (chosen == removePosterAct) {
             QFile::remove(existingPoster);
+            PosterCache::instance().remove(videoPosterCacheKey(existingPoster));
             triggerScan();
         } else if (chosen == fetchPosterAct) {
             const QString dirName = QDir(showPath).dirName();
@@ -827,7 +868,18 @@ void VideosPage::installFolderTileContextMenu(
                     [cardGuard, destPath, selfGuard](bool ok) {
                         if (!selfGuard) return;
                         if (ok) {
-                            if (cardGuard) cardGuard->setThumbPath(destPath);
+                            PosterCache::instance().decodeFileAsync(
+                                videoPosterCacheKey(destPath), destPath, selfGuard,
+                                [cardGuard, destPath](const QPixmap& pix) {
+                                    if (!cardGuard) {
+                                        return;
+                                    }
+                                    if (!pix.isNull()) {
+                                        cardGuard->setThumbPixmap(pix);
+                                    } else {
+                                        cardGuard->setThumbPath(destPath);
+                                    }
+                                });
                             return;
                         }
                         QMessageBox::information(selfGuard, "Poster download failed",
@@ -896,6 +948,11 @@ void VideosPage::installFolderTileContextMenu(
             QImage img = QApplication::clipboard()->image();
             if (!img.isNull()) {
                 img.save(existingPoster, "JPEG", 92);
+                const QPixmap pix = QPixmap::fromImage(img);
+                if (!pix.isNull()) {
+                    PosterCache::instance().put(videoPosterCacheKey(existingPoster), pix);
+                    card->setThumbPixmap(pix);
+                }
                 triggerScan();
             }
         } else if (chosen == removeAct) {
@@ -988,9 +1045,9 @@ void VideosPage::addShowTileToStrip(const ShowInfo& show, TileStrip* strip)
     QString hash = QString(QCryptographicHash::hash(show.showPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
     QString base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     QString poster = base + "/Tankoban/data/posters/" + hash + ".jpg";
-    QString thumbPath = QFile::exists(poster) ? poster : QString();
 
-    auto* card = new TileCard(thumbPath, show.showName, subtitle);
+    auto* card = new TileCard(QString(), show.showName, subtitle);
+    applyPosterPathToCard(card, poster, this);
     card->setProperty("seriesPath", show.showPath);
     card->setProperty("seriesName", show.showName);
     card->setProperty("fileCount", show.episodeCount);
@@ -1363,12 +1420,12 @@ void VideosPage::addContinueTile(TileStrip* strip, const ContinueItem& item)
         return;
 
     const QString poster = posterPathFor(item.showPath);
-    const QString thumbPath = QFile::exists(poster) ? poster : QString();
     const int pct = (item.resumeDurSec > 0)
         ? qBound(0, static_cast<int>(item.resumePosSec / item.resumeDurSec * 100), 100)
         : 0;
 
-    auto* card = new TileCard(thumbPath, item.showName, QString::number(pct) + "%");
+    auto* card = new TileCard(QString(), item.showName, QString::number(pct) + "%");
+    applyPosterPathToCard(card, poster, this);
     card->setProperty("filePath", item.resumeFilePath);
     card->setProperty("seriesPath", item.showPath);
     connect(card, &TileCard::clicked, this, [this, card]() {
@@ -1487,13 +1544,13 @@ void VideosPage::refreshContinueStripLegacy()
         // Use show poster if available
         QString hash = QString(QCryptographicHash::hash(item.showPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
         QString poster = base + "/Tankoban/data/posters/" + hash + ".jpg";
-        QString thumbPath = QFile::exists(poster) ? poster : QString();
 
         int pct = (item.resumeDurSec > 0)
             ? qBound(0, static_cast<int>(item.resumePosSec / item.resumeDurSec * 100), 100) : 0;
         QString subtitle = QString::number(pct) + "%";
 
-        auto* card = new TileCard(thumbPath, item.showName, subtitle);
+        auto* card = new TileCard(QString(), item.showName, subtitle);
+        applyPosterPathToCard(card, poster, this);
         card->setProperty("filePath", item.resumeFilePath);
         connect(card, &TileCard::clicked, this, [this, card]() {
             m_pendingClickPath = card->property("filePath").toString();

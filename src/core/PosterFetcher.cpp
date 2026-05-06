@@ -83,6 +83,10 @@ void PosterFetcher::download(QNetworkAccessManager* nam,
     // safer-scheme policy so HTTP→HTTPS and HTTPS→HTTPS redirects complete.
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
+    // STREAM_AND_VIDEO_POSTER_PERF 2026-05-06: poster fan-out is many small
+    // CDN images. Allow HTTP/2 so Qt can multiplex on hosts that support it
+    // instead of being capped by HTTP/1.1 per-host connection limits.
+    req.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
 
     QNetworkReply* reply = nam->get(req);
     QObject* receiver = ctx ? ctx : nam;

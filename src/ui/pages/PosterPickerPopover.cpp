@@ -1,6 +1,7 @@
 #include "PosterPickerPopover.h"
 
 #include "core/DebugLogBuffer.h"
+#include "core/PosterCache.h"
 #include "core/PosterFetcher.h"
 
 #include <QCryptographicHash>
@@ -190,9 +191,9 @@ void PosterPickerPopover::loadThumb(int rowIndex, const QUrl& url, QNetworkAcces
         QCryptographicHash::hash(url.toString().toUtf8(),
                                  QCryptographicHash::Sha1).toHex().left(20));
     const QString path = m_thumbCacheDir + QLatin1Char('/') + urlHash + QStringLiteral(".jpg");
+    const QString cacheKey = QStringLiteral("picker:") + urlHash;
 
-    auto applyThumb = [this, rowIndex, path]() {
-        QPixmap pm(path);
+    auto applyThumb = [this, rowIndex, path](const QPixmap& pm) {
         if (pm.isNull()) {
             // Fetcher reported ok but on-disk file won't decode. Should not
             // happen post-PosterFetcher pre-validation; still log to surface
@@ -210,22 +211,42 @@ void PosterPickerPopover::loadThumb(int rowIndex, const QUrl& url, QNetworkAcces
                       Qt::KeepAspectRatio, Qt::SmoothTransformation)));
     };
 
+    const QPixmap cached = PosterCache::instance().get(cacheKey);
+    if (!cached.isNull()) {
+        applyThumb(cached);
+        return;
+    }
+
     if (QFile::exists(path)) {
-        QPixmap pm(path);
-        if (!pm.isNull()) {
-            applyThumb();
-            return;
-        }
-        // Cached file is corrupt (pre-validation build, aborted write, bad
-        // HTML response written as .jpg). Remove and fall through to a
-        // fresh download.
-        QFile::remove(path);
+        QPointer<PosterPickerPopover> self(this);
+        PosterCache::instance().decodeFileAsync(cacheKey, path, this,
+            [self, path, applyThumb](const QPixmap& pm) {
+                if (!self) {
+                    return;
+                }
+                if (!pm.isNull()) {
+                    applyThumb(pm);
+                    return;
+                }
+                // Cached file is corrupt (pre-validation build, aborted write,
+                // bad HTML response written as .jpg). Remove it; the next
+                // picker open will fetch a clean copy.
+                QFile::remove(path);
+            });
+        return;
     }
 
     QPointer<PosterPickerPopover> self(this);
     PosterFetcher::download(nam, url, path, this,
-        [self, applyThumb](bool ok) {
+        [self, cacheKey, path, applyThumb](bool ok) {
             if (!self) return;
-            if (ok) applyThumb();
+            if (ok) {
+                PosterCache::instance().decodeFileAsync(cacheKey, path, self,
+                    [self, applyThumb](const QPixmap& pm) {
+                        if (self) {
+                            applyThumb(pm);
+                        }
+                    });
+            }
         });
 }

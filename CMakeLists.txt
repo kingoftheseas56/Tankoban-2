@@ -43,6 +43,7 @@ set(SOURCES
     src/core/VideosScanner.cpp
     src/core/ScannerUtils.cpp
     src/core/PosterFetcher.cpp
+    src/core/PosterCache.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
     src/ui/Theme.cpp
@@ -193,6 +194,7 @@ set(HEADERS
     src/core/VideosScanner.h
     src/core/ScannerUtils.h
     src/core/PosterFetcher.h
+    src/core/PosterCache.h
     src/core/ArchiveReader.h
     src/ui/MainWindow.h
     src/ui/GlassBackground.h
