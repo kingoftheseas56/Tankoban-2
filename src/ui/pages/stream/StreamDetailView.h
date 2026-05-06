@@ -72,6 +72,18 @@ public:
     // tileDoubleClicked for one user double-click gesture).
     const QString& currentImdb() const { return m_currentImdb; }
 
+    // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — auto-add the
+    // currently-shown show/movie to StreamLibrary (no-op if already present).
+    // Called from StreamPage's progressUpdated lambda on the FIRST successful
+    // save in a session, gated by m_session.autoLibraryAdded. Idempotent —
+    // exists-check guards against duplicate adds; preserves any user-added
+    // entry's existing fields (StreamLibrary::add itself dedups by imdb).
+    // Builds the StreamLibraryEntry from m_lastPreviewHint, the same source
+    // onLibraryButtonClicked uses on the explicit-button path. No-op if no
+    // preview hint is cached (defensive — showEntry stashes one on every
+    // open).
+    void autoAddToLibrary();
+
 signals:
     void backRequested();
 

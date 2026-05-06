@@ -714,6 +714,34 @@ void StreamDetailView::refreshLibraryButton()
     m_libraryBtn->style()->polish(m_libraryBtn);
 }
 
+// STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — Bug 2 entry point.
+// Called from StreamPage's progressUpdated lambda on the FIRST successful
+// save in a session (gated by m_session.autoLibraryAdded). Mirrors the
+// add-side of onLibraryButtonClicked but is strictly add-only — never
+// toggles off an existing entry. Idempotent: m_library->has(imdbId)
+// short-circuits when the user has already pinned this show manually.
+void StreamDetailView::autoAddToLibrary()
+{
+    if (m_currentImdb.isEmpty() || !m_library) return;
+    if (m_library->has(m_currentImdb)) return;
+    if (!m_lastPreviewHint.has_value()) return;
+
+    const auto& p = *m_lastPreviewHint;
+    StreamLibraryEntry entry;
+    entry.imdb        = p.id;
+    entry.type        = p.type;
+    entry.name        = p.name;
+    entry.year        = p.releaseInfo;
+    entry.poster      = p.poster.toString();
+    entry.description = p.description;
+    entry.imdbRating  = p.imdbRating;
+    m_library->add(entry);
+    // StreamLibrary::add emits libraryChanged → refreshLibraryButton runs
+    // via the connection wired in buildUI; if the user is currently on
+    // the detail view of this show, the button will flip from "Add to
+    // Library" → "Remove from Library" reactively.
+}
+
 void StreamDetailView::onLibraryButtonClicked()
 {
     if (m_currentImdb.isEmpty() || !m_library) return;
