@@ -1,6 +1,7 @@
 #include "StreamPage.h"
 
 #include "core/CoreBridge.h"
+#include "core/DebugLogBuffer.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/AddonRegistry.h"
 #include "ui/pages/stream/AddonManagerScreen.h"
@@ -143,7 +144,7 @@ void StreamPage::buildUI()
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
 
-    connect(m_detailView, &StreamDetailView::backRequested, this, &StreamPage::showBrowse);
+    connect(m_detailView, &StreamDetailView::backRequested, this, &StreamPage::goBack);
     connect(m_detailView, &StreamDetailView::playRequested, this, &StreamPage::onPlayRequested);
     connect(m_detailView, &StreamDetailView::sourceActivated,
             this, &StreamPage::onSourceActivated);
@@ -310,7 +311,7 @@ void StreamPage::buildUI()
     m_mainStack->addWidget(m_addonManager); // index 3: addons
 
     connect(m_addonManager, &AddonManagerScreen::backRequested,
-            this, &StreamPage::showBrowse);
+            this, &StreamPage::goBack);
     // addAddonRequested stays unwired until Batch 2.2 ships AddAddonDialog.
 
     // Catalog browse layer (Phase 3 Batch 3.3)
@@ -318,7 +319,7 @@ void StreamPage::buildUI()
     m_mainStack->addWidget(m_catalogBrowse); // index 4: catalog browse
 
     connect(m_catalogBrowse, &tankostream::stream::CatalogBrowseScreen::backRequested,
-            this, &StreamPage::showBrowse);
+            this, &StreamPage::goBack);
     connect(m_catalogBrowse, &tankostream::stream::CatalogBrowseScreen::metaActivated, this,
         [this](const tankostream::addon::MetaItemPreview& preview) {
             showDetail(preview);
@@ -341,7 +342,7 @@ void StreamPage::buildUI()
 
     // Screen → navigation.
     connect(m_calendarScreen, &tankostream::stream::CalendarScreen::backRequested,
-            this, &StreamPage::showBrowse);
+            this, &StreamPage::goBack);
     connect(m_calendarScreen, &tankostream::stream::CalendarScreen::refreshRequested,
             this, [this]() {
                 if (m_calendarEngine && m_calendarScreen) {
@@ -536,7 +537,7 @@ void StreamPage::buildBrowseLayer()
     m_searchWidget->hide();
     layerLayout->addWidget(m_searchWidget, 1);
 
-    connect(m_searchWidget, &StreamSearchWidget::backRequested, this, &StreamPage::showBrowse);
+    connect(m_searchWidget, &StreamSearchWidget::backRequested, this, &StreamPage::goBack);
     connect(m_searchWidget, &StreamSearchWidget::libraryChanged, m_libraryLayout, &StreamLibraryLayout::refresh);
     // Phase 1 Batch 1.2 — search-tile click opens the detail view with the
     // result's MetaItemPreview. Previously the click toggled library add/
@@ -569,7 +570,22 @@ void StreamPage::onSearchSubmit()
     }
 
     pushSearchHistory(query);
-    m_browseScroll->hide();
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — push a Search entry onto the
+    // nav stack so Back from a Detail view (entered via search-result
+    // click) returns to Search. Re-submitting from an existing Search
+    // overwrites the current entry's query (no duplicate stack layer)
+    // so the depth stays clean.
+    if (!m_navStack.isEmpty() && m_navStack.top().kind == NavEntry::Kind::Search) {
+        m_navStack.top().searchQuery = query;
+    } else {
+        NavEntry e;
+        e.kind = NavEntry::Kind::Search;
+        e.searchQuery = query;
+        m_navStack.push(e);
+    }
+
+    showSearchResults();   // visual transition (hide browseScroll, show searchWidget)
     setSearchBusy(true);
     m_searchWidget->search(query);
 }
@@ -976,57 +992,181 @@ bool StreamPage::eventFilter(QObject* obj, QEvent* event)
     return QWidget::eventFilter(obj, event);
 }
 
+// STREAM_NAV_BACK_STACK 2026-05-06 — depth-first back navigation.
+// Pop one entry off m_navStack; re-show the previous entry without
+// pushing. Stack-bottom (Library) is a no-op re-show — currently
+// stays on Library; future enhancement could propagate up to
+// MainWindow if cross-mode back is wanted.
+void StreamPage::goBack()
+{
+    if (m_navStack.size() <= 1) {
+        // STREAM_CATALOG_BACK_NAVSTACK_SEED_FIX 2026-05-06 — Hemanth-reported
+        // "the back button besides catalog is not working now": when user
+        // opens Tankoban → Stream tab → clicks Catalog without ever pushing
+        // Browse first (the ctor doesn't seed it; only show*() slots push),
+        // navStack ends up [CatalogBrowse] only. Original guard only caught
+        // the empty-stack case, so size=1 with non-Browse top was a no-op
+        // (re-showed the same view, looked like Back was broken). Fix:
+        // unconditional normalize to Browse on top-of-stack escape — clears
+        // whatever's there and seeds Browse fresh.
+        m_navStack.clear();
+        NavEntry e;
+        e.kind = NavEntry::Kind::Browse;
+        m_navStack.push(e);
+        showEntryRaw(m_navStack.top());
+        return;
+    }
+    m_navStack.pop();
+    showEntryRaw(m_navStack.top());
+}
+
+// STREAM_NAV_BACK_STACK 2026-05-06 — restore the search overlay visual
+// state without re-running the network fetch. m_searchWidget caches its
+// query + results widgets across hide/show cycles, so a simple
+// hide-browse + show-search is sufficient. Used by showEntryRaw on
+// Kind::Search restore; onSearchSubmit calls it explicitly before
+// invoking m_searchWidget->search() to actually run a fresh query.
+void StreamPage::showSearchResults()
+{
+    m_browseScroll->hide();
+    m_searchWidget->show();
+}
+
+// STREAM_NAV_BACK_STACK 2026-05-06 — internal view-swap helper. Does
+// the visual transition implied by NavEntry::kind WITHOUT pushing onto
+// m_navStack. show* slots push then call this; goBack pops then calls
+// this; the player-exit restore path calls this directly.
+void StreamPage::showEntryRaw(const NavEntry& entry)
+{
+    using Kind = NavEntry::Kind;
+    switch (entry.kind) {
+    case Kind::Browse:
+        m_mainStack->setCurrentIndex(0);
+        m_searchWidget->hide();
+        m_browseScroll->show();
+        // Phase 4 Batch 4.1 — defensive spinner reset when navigating
+        // away from search (covers the "user hit Back / Esc while a
+        // search was in flight" case — the later catalogResults lands
+        // but the UI is already elsewhere).
+        setSearchBusy(false);
+        // Phase 4 Batch 4.2 — defensive history-dropdown dismissal.
+        hideSearchHistoryDropdown();
+        // 2026-04-15 — cancel any pending seek-pre-gate retry. User
+        // navigated away; no more launchPlayer should fire.
+        m_session.seekRetry.reset();
+        // Invalidate any in-flight play context so a late streamsReady
+        // arrival followed by an accidental card-click can't dispatch
+        // playback for the title the user just backed away from.
+        m_session.pending.valid = false;
+        cancelAutoLaunch();
+        // Phase 2 Batch 2.5 — if a next-episode overlay was pending,
+        // clear it; user explicitly navigated away.
+        hideNextEpisodeOverlay();
+        resetNextEpisodePrefetch();
+        if (m_homeBoard)
+            m_homeBoard->refresh();
+        if (m_libraryLayout)
+            m_libraryLayout->refresh();
+        break;
+
+    case Kind::CatalogBrowse:
+        if (!m_catalogBrowse) break;
+        cancelAutoLaunch();
+        hideNextEpisodeOverlay();
+        resetNextEpisodePrefetch();
+        m_catalogBrowse->open(entry.catalogAddonId,
+                              entry.catalogType,
+                              entry.catalogId);
+        m_mainStack->setCurrentIndex(4);
+        break;
+
+    case Kind::Detail:
+        if (!m_detailView) break;
+        cancelAutoLaunch();
+        if (entry.detailHasPreview) {
+            m_detailView->showEntry(entry.detailPreview.id,
+                                    entry.detailPreselectSeason,
+                                    entry.detailPreselectEpisode,
+                                    entry.detailPreview);
+        } else {
+            m_detailView->showEntry(entry.detailImdbId);
+        }
+        m_mainStack->setCurrentIndex(1);
+        break;
+
+    case Kind::AddonManager:
+        if (!m_addonManager) break;
+        cancelAutoLaunch();
+        hideNextEpisodeOverlay();
+        resetNextEpisodePrefetch();
+        m_addonManager->refresh();
+        m_mainStack->setCurrentIndex(3);
+        break;
+
+    case Kind::Calendar:
+        if (!m_calendarScreen || !m_calendarEngine) break;
+        cancelAutoLaunch();
+        hideNextEpisodeOverlay();
+        resetNextEpisodePrefetch();
+        m_calendarScreen->setLoading(true);
+        m_mainStack->setCurrentIndex(5);
+        m_calendarEngine->loadUpcoming();
+        break;
+
+    case Kind::Search:
+        showSearchResults();
+        break;
+    }
+}
+
+// STREAM_NAV_BACK_STACK 2026-05-06 — restore pre-player view if snapshot
+// was captured at launch; otherwise fall back to library (legacy
+// default). Called from onStreamStopped UserEnd, the defensive 3s
+// post-close timer, and onNextEpisodeCancel case (a).
+void StreamPage::restorePlayerExitView()
+{
+    if (m_beforePlayerEntry.has_value()) {
+        const NavEntry entry = *m_beforePlayerEntry;
+        m_beforePlayerEntry.reset();
+        showEntryRaw(entry);
+        return;
+    }
+    showBrowse();
+}
+
 void StreamPage::showBrowse()
 {
-    m_mainStack->setCurrentIndex(0);
-    m_searchWidget->hide();
-    m_browseScroll->show();
-    // Phase 4 Batch 4.1 — defensive spinner reset when navigating away from
-    // search (covers the "user hit Back / Esc while a search was in flight"
-    // case — the later catalogResults lands but the UI is already elsewhere).
-    setSearchBusy(false);
-    // Phase 4 Batch 4.2 — defensive history-dropdown dismissal.
-    hideSearchHistoryDropdown();
-    // 2026-04-15 — cancel any pending seek-pre-gate retry. User navigated
-    // away; no more launchPlayer should fire.
-    m_session.seekRetry.reset();
-    // Invalidate any in-flight play context so a late streamsReady arrival
-    // followed by an accidental card-click can't dispatch playback for the
-    // title the user just backed away from.
-    m_session.pending.valid = false;
-    cancelAutoLaunch();
-    // Phase 2 Batch 2.5 — if a next-episode overlay was pending, clear it;
-    // user explicitly navigated away.
-    hideNextEpisodeOverlay();
-    resetNextEpisodePrefetch();
-    if (m_homeBoard)
-        m_homeBoard->refresh();
-    if (m_libraryLayout)
-        m_libraryLayout->refresh();
+    // STREAM_NAV_BACK_STACK 2026-05-06 — Library is the stack bottom.
+    // showBrowse explicitly resets the stack to a clean Browse-only
+    // state. Called on Stream-mode entry, on legitimate library-home
+    // navigation (e.g. nav-bar Library button), and as the legacy
+    // fallback when no pre-player snapshot exists.
+    m_navStack.clear();
+    NavEntry e;
+    e.kind = NavEntry::Kind::Browse;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::showAddonManager()
 {
-    cancelAutoLaunch();
-    hideNextEpisodeOverlay();
-    resetNextEpisodePrefetch();
-    if (m_addonManager) {
-        m_addonManager->refresh();
-    }
-    m_mainStack->setCurrentIndex(3);
+    NavEntry e;
+    e.kind = NavEntry::Kind::AddonManager;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::showCatalogBrowse(const QString& addonId, const QString& type,
-                                   const QString& catalogId, const QString& /*title*/)
+                                   const QString& catalogId, const QString& title)
 {
-    if (!m_catalogBrowse) {
-        return;
-    }
-    cancelAutoLaunch();
-    hideNextEpisodeOverlay();
-    resetNextEpisodePrefetch();
-    m_catalogBrowse->open(addonId, type, catalogId);
-    m_mainStack->setCurrentIndex(4);
+    NavEntry e;
+    e.kind = NavEntry::Kind::CatalogBrowse;
+    e.catalogAddonId = addonId;
+    e.catalogType = type;
+    e.catalogId = catalogId;
+    e.catalogTitle = title;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::onCatalogBtnClicked()
@@ -1045,12 +1185,10 @@ void StreamPage::onCatalogBtnClicked()
 void StreamPage::showCalendar()
 {
     if (!m_calendarScreen || !m_calendarEngine) return;
-    cancelAutoLaunch();
-    hideNextEpisodeOverlay();
-    resetNextEpisodePrefetch();
-    m_calendarScreen->setLoading(true);
-    m_mainStack->setCurrentIndex(5);
-    m_calendarEngine->loadUpcoming();
+    NavEntry e;
+    e.kind = NavEntry::Kind::Calendar;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::showDetail(const QString& imdbId)
@@ -1060,18 +1198,17 @@ void StreamPage::showDetail(const QString& imdbId)
     // gesture (first mousePress → single-click, then the second press becomes
     // a dedicated double-click event). The second call would otherwise reset
     // the detail state + re-fire the meta fetch just as the first call's
-    // response lands.
+    // response lands AND would push a duplicate Detail entry onto m_navStack.
     if (m_mainStack->currentIndex() == 1 && m_detailView
         && m_detailView->currentImdb() == imdbId) {
         return;
     }
-    // Phase 2 Batch 2.4 — switching to a different detail entry clears any
-    // in-flight auto-launch from the prior entry. Movie paths also hit this
-    // via onPlayRequested's own cancelAutoLaunch, but series detail doesn't
-    // auto-fire playRequested — need the cancel here for that case.
-    cancelAutoLaunch();
-    m_detailView->showEntry(imdbId);
-    m_mainStack->setCurrentIndex(1);
+    NavEntry e;
+    e.kind = NavEntry::Kind::Detail;
+    e.detailImdbId = imdbId;
+    e.detailHasPreview = false;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
@@ -1088,9 +1225,15 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
         && m_detailView->currentImdb() == preview.id) {
         return;
     }
-    cancelAutoLaunch();
-    m_detailView->showEntry(preview.id, preselectSeason, preselectEpisode, preview);
-    m_mainStack->setCurrentIndex(1);
+    NavEntry e;
+    e.kind = NavEntry::Kind::Detail;
+    e.detailImdbId = preview.id;
+    e.detailHasPreview = true;
+    e.detailPreview = preview;
+    e.detailPreselectSeason = preselectSeason;
+    e.detailPreselectEpisode = preselectEpisode;
+    m_navStack.push(e);
+    showEntryRaw(e);
 }
 
 void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType,
@@ -1628,8 +1771,10 @@ void StreamPage::onNextEpisodeCancel()
         }
         return;  // player keeps playing
     }
-    // Case (a): legacy close-path behavior preserved.
-    showBrowse();
+    // Case (a): player has already closed; restore the pre-player view
+    // (STREAM_NAV_BACK_STACK 2026-05-06) so the user lands on their
+    // originating Detail / Catalog / Search page instead of library.
+    restorePlayerExitView();
 }
 
 void StreamPage::resetNextEpisodePrefetch()
@@ -2036,14 +2181,70 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 }
             }
 
-            QString epKey = m_session.epKey;
-            if (epKey.isEmpty()) return;
-            // Only save once real playback has started — ignore probe/initial 0-value updates
-            if (posSec < 5.0 || durSec <= 0.0) return;
+            // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — diagnostic
+            // trace baked in via DebugLogBuffer so `tankoctl logs` surfaces
+            // every progressUpdated tick during stream playback. Hemanth-driven
+            // smoke captures the actual posSec/durSec values for RC validation
+            // (no MCP this RTC means no in-wake empirical run; trace stays in
+            // tree until follow-up RTC after Hemanth's first smoke confirms
+            // whether durSec lands as 0 across HTTP-URL streams as predicted).
+            auto& dlog = DebugLogBuffer::instance();
+            const QString epKey = m_session.epKey;
 
-            bool finished = (durSec > 0 && posSec / durSec >= 0.9);
-            QJsonObject state = StreamProgress::makeWatchState(posSec, durSec, finished);
+            dlog.info("stream",
+                QStringLiteral("[STREAM_PROGRESS_TRACE] tick epKey=%1 posSec=%2 durSec=%3")
+                    .arg(epKey).arg(posSec, 0, 'f', 2).arg(durSec, 0, 'f', 2));
+
+            if (epKey.isEmpty()) {
+                dlog.info("stream",
+                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip — empty epKey"));
+                return;
+            }
+
+            // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE Bug 1 fix: gate relaxed.
+            // Was: `if (posSec < 5.0 || durSec <= 0.0) return;`
+            // HTTP-URL streams via stream-server commonly land durSec=0 because
+            // the sidecar's demuxer discards FROM_BITRATE estimates as
+            // unreliable (see VideoPlayer.cpp:1122-1126 — same anti-lie
+            // contract that motivates "—:—" duration in the HUD). Saving with
+            // durSec=0 is downstream-safe: StreamProgress::percent guards
+            // div-by-0 (returns 0.0); StreamContinueStrip::refresh filters
+            // only on `pos < MIN_POSITION_SEC` (StreamContinueStrip.cpp:106);
+            // isFinished returns false when percent < 90%. Drop the durSec
+            // gate so Continue Watching gets entries even when the addon
+            // doesn't expose duration. The 5s posSec floor is preserved —
+            // probe/initial-0 ticks still get filtered.
+            if (posSec < 5.0) {
+                dlog.info("stream",
+                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip — posSec under 5s gate (posSec=%1)")
+                        .arg(posSec, 0, 'f', 2));
+                return;
+            }
+
+            const bool finished = (durSec > 0 && posSec / durSec >= 0.9);
+            const QJsonObject state = StreamProgress::makeWatchState(posSec, durSec, finished);
             m_bridge->saveProgress("stream", epKey, state);
+
+            dlog.info("stream",
+                QStringLiteral("[STREAM_PROGRESS_TRACE] saved epKey=%1 posSec=%2 durSec=%3 finished=%4")
+                    .arg(epKey).arg(posSec, 0, 'f', 2).arg(durSec, 0, 'f', 2).arg(finished ? 1 : 0));
+
+            // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE Bug 2 fix: auto-add to
+            // StreamLibrary on the FIRST successful save in this session.
+            // Stremio behavior — opening + playing a stream implicitly pins
+            // it. Idempotent (StreamDetailView::autoAddToLibrary checks
+            // m_library->has(imdbId) before add). Once-per-session gate via
+            // m_session.autoLibraryAdded so we don't churn add() every tick.
+            // Coupled with Bug 1 — even after the gate-relax fix, Continue
+            // Watching's StreamContinueStrip filters at line 121 with
+            // `!m_library->has(imdbId)`; library auto-add is the second piece
+            // that makes the just-watched tile appear in the strip on close.
+            if (!m_session.autoLibraryAdded && m_detailView) {
+                m_session.autoLibraryAdded = true;
+                m_detailView->autoAddToLibrary();
+                dlog.info("stream",
+                    QStringLiteral("[STREAM_PROGRESS_TRACE] auto-library-add fired (first save in session)"));
+            }
 
             // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
             // retargeting. Rate-limited to once per 2s so libtorrent's
@@ -2266,6 +2467,17 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                                        : QString();
     auto launchPlayer = [this, player, httpUrl, streamResumeSec, mainWin,
                          streamHudTitle]() {
+        // STREAM_NAV_BACK_STACK 2026-05-06 — snapshot the current top-of-
+        // stack view so onStreamStopped UserEnd / the defensive 3s timer /
+        // onNextEpisodeCancel case (a) can all restore it after teardown
+        // instead of yanking the user to library home (Hemanth-reported
+        // 2026-05-06: "I close the player I find myself on the library
+        // rather than the series page"). The user almost always launched
+        // from a Detail view; this snapshot brings them back there.
+        m_beforePlayerEntry = m_navStack.isEmpty()
+            ? std::optional<NavEntry>{}
+            : std::make_optional(m_navStack.top());
+
         player->openFile(httpUrl, {}, 0, streamResumeSec, streamHudTitle);
         if (auto* mw = qobject_cast<QMainWindow*>(mainWin))
             player->setGeometry(mw->centralWidget()->rect());
@@ -2429,7 +2641,10 @@ void StreamPage::onStreamFailed(const QString& message)
         if (!isCurrentGeneration(gen)) return;
         constexpr int kPlayerLayerIndex = 2;
         if (m_mainStack->currentIndex() != kPlayerLayerIndex) return;
-        if (!m_playerController->isActive()) showBrowse();
+        // STREAM_NAV_BACK_STACK 2026-05-06 — restore pre-player view if
+        // we have a snapshot (typical post-failure recovery path); fall
+        // back to library if no snapshot was captured (defensive).
+        if (!m_playerController->isActive()) restorePlayerExitView();
     });
 }
 
@@ -2497,6 +2712,13 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
     if (m_nextEpisodeOverlay && m_nextEpisodeOverlay->isVisible()) {
         return;
     }
-    showBrowse();
+    // STREAM_NAV_BACK_STACK 2026-05-06 — load-bearing for Hemanth's bug.
+    // Was: showBrowse() — yanked the user to library on every player
+    // close. Now: restore the pre-player view from the launchPlayer
+    // snapshot so the user lands on their originating Detail / Catalog
+    // / Search page. Falls back to showBrowse only when no snapshot
+    // exists (e.g., stream started without going through onSourceActivated
+    // or the snapshot was already consumed).
+    restorePlayerExitView();
 }
 

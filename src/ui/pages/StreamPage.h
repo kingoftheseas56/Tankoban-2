@@ -4,6 +4,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStack>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -131,6 +132,22 @@ private:
     void showDetail(const tankostream::addon::MetaItemPreview& preview,
                     int preselectSeason  = -1,
                     int preselectEpisode = -1);
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — depth-first back navigation.
+    // Pops one layer off m_navStack and re-shows the previous entry via
+    // showEntryRaw (no push). Stack-bottom (Library home) is a no-op
+    // re-show. Wired to all 5 child screens' backRequested signals
+    // (StreamDetailView / AddonManagerScreen / CatalogBrowseScreen /
+    // CalendarScreen / StreamSearchWidget).
+    void goBack();
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — restore the pre-player view if
+    // a snapshot was captured at launch; otherwise fall back to library
+    // (legacy default). Called from onStreamStopped UserEnd, the defensive
+    // 3s post-close timer in onStreamFailed, and onNextEpisodeCancel
+    // case (a). Closes Hemanth-reported "I close the player I find myself
+    // on the library rather than the series page" 2026-05-06.
+    void restorePlayerExitView();
     void onPlayRequested(const QString& imdbId, const QString& mediaType,
                          int season, int episode);
 
@@ -402,6 +419,16 @@ private:
         std::optional<NextEpisodePrefetch> nextPrefetch;  // Batch 1.3 migrated (was m_nextPrefetch)
         bool nearEndCrossed = false;        // Batch 1.3 migrated (was m_nearEndCrossed)
         bool nextShortcutPending = false;   // Batch 1.3 migrated (was m_nextShortcutPending)
+        // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — once-per-session
+        // gate so progressUpdated's first successful save auto-adds the
+        // current show/movie to StreamLibrary. Stremio behavior: opening +
+        // playing a stream pins it in the library so the Continue Watching
+        // strip can surface it (StreamContinueStrip::refresh's library-has
+        // gate at StreamContinueStrip.cpp:121 was the second blocker on Bug 1
+        // — saved progress alone wasn't enough for the tile to appear).
+        // Reset implicitly by `m_session = PlaybackSession{}` in resetSession
+        // (default-init).
+        bool autoLibraryAdded = false;
         qint64 lastDeadlineUpdateMs = 0;    // Batch 1.2 migrated (was m_lastDeadlineUpdateMs)
         std::shared_ptr<SeekRetryState> seekRetry;  // Batch 1.3 migrated (was raw QObject* m_seekRetryState)
 
@@ -410,6 +437,65 @@ private:
 
     PlaybackSession m_session;
     quint64 m_nextGeneration = 1;  // Monotonic; never wraps in practical lifetime. 0 reserved.
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — depth-first navigation history.
+    // Each forward navigation pushes a NavEntry; goBack pops + re-shows.
+    // Library home is the stack bottom (always entry [0] when non-empty).
+    // Per-kind context is preserved in NavEntry so the restore path can
+    // reconstitute the view fully without re-running expensive setup.
+    // Search restoration uses the cached m_searchWidget state (no
+    // re-fetch); CatalogBrowse calls m_catalogBrowse->open(...) which
+    // short-circuits via its own m_needsRebuild gate (no re-fetch).
+    struct NavEntry {
+        enum class Kind {
+            Browse,           // library home (stack bottom)
+            CatalogBrowse,    // CatalogBrowseScreen home or single-catalog
+            Detail,           // StreamDetailView — series or movie
+            AddonManager,     // AddonManagerScreen
+            Calendar,         // CalendarScreen
+            Search,           // StreamSearchWidget overlay
+        };
+        Kind kind = Kind::Browse;
+
+        // CatalogBrowse context (forwarded to m_catalogBrowse->open).
+        QString catalogAddonId;
+        QString catalogType;
+        QString catalogId;
+        QString catalogTitle;
+
+        // Detail context. Two flavors:
+        //   (a) imdbId-only — library-tile / continue-watching / calendar path
+        //   (b) preview-hint — catalog / home / search path with full preview
+        // detailHasPreview discriminates.
+        QString detailImdbId;
+        bool    detailHasPreview = false;
+        tankostream::addon::MetaItemPreview detailPreview;
+        int     detailPreselectSeason  = -1;
+        int     detailPreselectEpisode = -1;
+
+        // Search context — query string preserved for diagnostics + future
+        // re-run-on-stale escape hatch. Restore reads cached widget state.
+        QString searchQuery;
+    };
+    QStack<NavEntry> m_navStack;
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — view that was top-of-stack at
+    // the moment the player overlay was launched. closeRequested handler
+    // restores it after teardown so player close lands on the originating
+    // Detail view (not the library default). std::optional for the
+    // "no playback active" idle state.
+    std::optional<NavEntry> m_beforePlayerEntry;
+
+    // STREAM_NAV_BACK_STACK 2026-05-06 — internal view-swap helper. Does
+    // the visual transition implied by NavEntry::kind WITHOUT touching
+    // m_navStack. show* slots push a NavEntry then call this; goBack
+    // pops then calls this; closeRequested restore calls this directly.
+    void showEntryRaw(const NavEntry& entry);
+    // Search-side helper used by showEntryRaw(Kind::Search) and direct
+    // callers (e.g. onSearchSubmit). Restores the visual search overlay
+    // without re-running the network search; cached query/results in
+    // m_searchWidget are preserved across hide/show cycles.
+    void showSearchResults();
 
     // Accessors — async closures capture currentGeneration() at creation and
     // check isCurrentGeneration(gen) at fire time to reject stale callbacks.
