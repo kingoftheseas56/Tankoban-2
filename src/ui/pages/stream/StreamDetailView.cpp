@@ -290,28 +290,28 @@ void StreamDetailView::buildUI()
     m_titleLabel->setStyleSheet("color: #e0e0e0; font-size: 16px; font-weight: bold;");
     leftCol->addWidget(m_titleLabel);
 
-    // Phase 3 Batch 3.1 — chip row. Sits directly below the title. Individual
-    // chips hide when empty (set by applyChips / onMetaItemReady).
-    m_chipsRow = new QWidget(this);
-    auto* chipsLayout = new QHBoxLayout(m_chipsRow);
-    chipsLayout->setContentsMargins(0, 0, 0, 0);
-    chipsLayout->setSpacing(6);
-    const char* kChipStyle =
-        "QLabel { background: rgba(255,255,255,0.08); color: #d0d0d0;"
-        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 10px;"
-        "  padding: 2px 10px; font-size: 11px; }";
-    m_chipYear    = new QLabel(m_chipsRow);
-    m_chipRuntime = new QLabel(m_chipsRow);
-    m_chipGenres  = new QLabel(m_chipsRow);
-    m_chipRating  = new QLabel(m_chipsRow);
-    m_chipType    = new QLabel(m_chipsRow);
-    for (QLabel* c : {m_chipYear, m_chipRuntime, m_chipGenres, m_chipRating, m_chipType}) {
-        c->setStyleSheet(kChipStyle);
-        c->hide();
-        chipsLayout->addWidget(c);
-    }
-    chipsLayout->addStretch();
-    leftCol->addWidget(m_chipsRow);
+    // STREAM_DETAIL_METADATA_POLISH 2026-05-06 — single inline metadata
+    // line (Stremio parity). Replaces the earlier 5-chip row whose QSS
+    // (padding 2px 10px, 11px font, 10px border-radius) intended small
+    // pills but visually rendered as ~100px chunky blocks once stretched
+    // by the parent layout. Stremio's detail view shows year · runtime ·
+    // genres · type · IMDb rating as a single muted-gray inline string —
+    // less visual noise, more vertical space for description + episodes.
+    m_metaLine = new QLabel(this);
+    m_metaLine->setObjectName(QStringLiteral("StreamDetailMetaLine"));
+    m_metaLine->setWordWrap(true);
+    m_metaLine->setStyleSheet(
+        "QLabel#StreamDetailMetaLine {"
+        "  background: transparent;"
+        "  border: none;"
+        "  color: rgba(255,255,255,0.62);"
+        "  font-size: 12px;"
+        "  font-weight: 400;"
+        "  padding: 0;"
+        "  margin: 4px 0 0 0;"
+        "}");
+    m_metaLine->hide();   // hidden until applyChips lands first non-empty paint
+    leftCol->addWidget(m_metaLine);
 
     // 2026-04-15 — m_infoLabel removed. Chips row above already shows
     // year + type + rating from the first-paint preview hint; the info
@@ -442,6 +442,8 @@ void StreamDetailView::buildUI()
     m_sourcesList = new tankostream::stream::StreamSourceList(this);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::sourceActivated,
             this, &StreamDetailView::sourceActivated);
+    connect(m_sourcesList, &tankostream::stream::StreamSourceList::addToTankorentRequested,
+            this, &StreamDetailView::addToTankorentRequested);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::autoLaunchCancelRequested,
             this, &StreamDetailView::autoLaunchCancelRequested);
     rightCol->addWidget(m_sourcesList, 1);
@@ -923,12 +925,15 @@ void StreamDetailView::applyChips(const QString& year,
                                    const QString& rating,
                                    const QString& type)
 {
-    auto setChip = [](QLabel* c, const QString& text) {
-        if (!c) return;
-        if (text.trimmed().isEmpty()) { c->hide(); return; }
-        c->setText(text.trimmed());
-        c->show();
-    };
+    // STREAM_DETAIL_METADATA_POLISH 2026-05-06 — compose ONE muted-gray
+    // inline string from the present fields. Empty-field branches just
+    // skip the QStringList append so " · " separators never bracket
+    // missing data (no leading/trailing dots, no doubled separators).
+    // Genres now use comma-separation INSIDE the genre section; middle-
+    // dot " · " is reserved between sections (Stremio idiom).
+    if (!m_metaLine) return;
+
+    QStringList parts;
 
     // 2026-04-15 — normalize Stremio "2023–" ongoing format to
     // "2023–present" so the trailing en-dash doesn't read as a dangling

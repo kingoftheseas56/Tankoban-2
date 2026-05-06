@@ -30,18 +30,32 @@ public:
 signals:
     void clicked(const tankostream::stream::StreamPickerChoice& choice);
 
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — emitted on right-click of a
+    // magnet card. Non-magnet cards (HTTP/URL/youtube direct streams)
+    // suppress the menu entirely so the affordance never appears for
+    // sources Tankorent can't act on.
+    void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+
 protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
+    // STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — re-elide the primary
+    // release-name label on width change so long titles stay
+    // visually-truncated with "…" rather than visibly clipped at the
+    // pixel boundary. Tooltip carries the full untruncated string.
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void buildUI();
     void applyStateStyle();
+    void reelideTitle();
 
     static QString addonInitials(const QString& addonName);
 
     StreamPickerChoice m_choice;
+    QLabel*            m_titleLabel = nullptr;
     bool m_hovered  = false;
     bool m_selected = false;
 };

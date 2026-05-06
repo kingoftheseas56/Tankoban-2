@@ -60,6 +60,16 @@ public:
     // lifetime, so this pointer is stable for the app session.
     tankostream::stream::MetaAggregator* metaAggregator() const { return m_metaAggregator; }
 
+signals:
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — emitted when the user
+    // right-clicks a magnet stream card and picks "Add torrent to
+    // Tankorent". MainWindow listens; it activates Tankorent and calls
+    // TankorentPage::addMagnetFromExternal. `displayName` is informational
+    // (logged + surfaced in Tankorent's status row); the magnet itself
+    // is the load-bearing payload.
+    void addToTankorentRequested(const QString& magnetUri,
+                                 const QString& displayName);
+
 private:
     void buildUI();
     void buildSearchBar();
@@ -129,6 +139,14 @@ private:
     // StreamPlayerController (takes over what StreamPickerDialog::accept
     // used to trigger post-exec).
     void onSourceActivated(const tankostream::stream::StreamPickerChoice& choice);
+
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — user right-clicked a magnet
+    // stream card and picked "Add torrent to Tankorent". Defensive guard
+    // (sourceKind/magnetUri must be valid — UI-side menu hides for
+    // non-magnets, but signal-arrival is still validated), then re-emits
+    // the addToTankorentRequested(magnetUri, displayName) signal upward
+    // for MainWindow.
+    void onAddToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
 
     // Phase 2 Batch 2.4 — auto-launch orchestration.
     void onAutoLaunchFire();

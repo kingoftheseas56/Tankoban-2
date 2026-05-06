@@ -1203,13 +1203,15 @@ void TankorentPage::showResultsContextMenu(const QPoint& pos)
 
 void TankorentPage::onAddTorrentClicked(int row)
 {
-    // Defensive: every guard surfaces a visible reason on m_searchStatus so a
-    // future silent-failure recurrence is diagnosable from the UI alone (no
-    // log dig). Diagnostic breadcrumbs route through DebugLogBuffer so
-    // `tankoctl logs` surfaces every branch — qDebug alone goes to stderr and
-    // never reaches the dev-bridge ring buffer. (Hemanth-reported 2026-04-30:
-    // multiple silent-failure rounds before instrumentation could prove the
-    // path.)
+    // Row-bounds + empty-magnet validation lives here (caller-context);
+    // post-validation, the resolveMetadata + AddTorrentDialog.exec() +
+    // startDownload sequence is shared with addMagnetFromExternal via
+    // startSingleAddFlow (STREAM_ADD_TO_TANKORENT_DIALOG_FIX 2026-05-06).
+    // Diagnostic breadcrumbs route through DebugLogBuffer so
+    // `tankoctl logs` surfaces every branch — qDebug alone goes to stderr
+    // and never reaches the dev-bridge ring buffer. (Hemanth-reported
+    // 2026-04-30: multiple silent-failure rounds before instrumentation
+    // could prove the path.)
     auto& dlog = DebugLogBuffer::instance();
     dlog.info("tankorent", QStringLiteral("onAddTorrentClicked entered row=%1").arg(row));
 
@@ -1235,35 +1237,63 @@ void TankorentPage::onAddTorrentClicked(int row)
         return;
     }
 
+    startSingleAddFlow(result.magnetUri, result.title);
+}
+
+// STREAM_ADD_TO_TANKORENT_DIALOG_FIX 2026-05-06 — shared single-add body.
+// Mirrors the in-Tankorent click flow exactly (resolve metadata, populate
+// dialog as engine emits metadataReady, exec the dialog modally, start
+// download with the user-picked AddTorrentConfig on Accepted, drop the
+// draft on Cancel). Callers handle their own context-specific validation
+// (row-bounds for in-Tankorent search clicks; empty-magnet check for
+// cross-page hand-off) before delegating here.
+void TankorentPage::startSingleAddFlow(const QString& magnetUri,
+                                       const QString& title)
+{
+    auto& dlog = DebugLogBuffer::instance();
+
+    if (!m_client) {
+        dlog.warning("tankorent", "startSingleAddFlow: m_client is null");
+        if (m_searchStatus) m_searchStatus->setText("Torrent client not initialised");
+        return;
+    }
+    if (magnetUri.isEmpty()) {
+        dlog.warning("tankorent",
+            QStringLiteral("startSingleAddFlow: empty magnetUri (title=%1)").arg(title));
+        if (m_searchStatus) m_searchStatus->setText("Empty magnet — nothing to add");
+        return;
+    }
+
     // Dedup check
-    if (m_client->isDuplicate(result.magnetUri)) {
+    if (m_client->isDuplicate(magnetUri)) {
         dlog.info("tankorent",
-            QStringLiteral("onAddTorrentClicked: duplicate (already in m_records) title=%1")
-                .arg(result.title));
-        m_searchStatus->setText("Torrent Already Added");
+            QStringLiteral("startSingleAddFlow: duplicate (already in m_records) title=%1")
+                .arg(title));
+        if (m_searchStatus) m_searchStatus->setText("Torrent Already Added");
         return;
     }
 
     dlog.info("tankorent",
-        QStringLiteral("onAddTorrentClicked: resolving metadata title=%1 magnet=%2")
-            .arg(result.title).arg(result.magnetUri.left(80)));
+        QStringLiteral("startSingleAddFlow: resolving metadata title=%1 magnet=%2")
+            .arg(title).arg(magnetUri.left(80)));
 
     // Open the Add Torrent dialog
     auto defaultPaths = m_client->defaultPaths();
-    AddTorrentDialog dlg(result.title, QString(), defaultPaths, this);
+    AddTorrentDialog dlg(title, QString(), defaultPaths, this);
 
     // Start metadata resolution
-    QString hash = m_client->resolveMetadata(result.magnetUri);
+    const QString hash = m_client->resolveMetadata(magnetUri);
     if (hash.isEmpty()) {
         dlog.warning("tankorent",
-            QStringLiteral("onAddTorrentClicked: resolveMetadata returned empty hash for %1")
-                .arg(result.magnetUri.left(80)));
-        m_searchStatus->setText("Failed to Add Magnet (engine rejected the URI — duplicate draft or invalid)");
+            QStringLiteral("startSingleAddFlow: resolveMetadata returned empty hash for %1")
+                .arg(magnetUri.left(80)));
+        if (m_searchStatus)
+            m_searchStatus->setText("Failed to Add Magnet (engine rejected the URI — duplicate draft or invalid)");
         return;
     }
 
     dlog.info("tankorent",
-        QStringLiteral("onAddTorrentClicked: hash=%1 — about to dlg.exec()")
+        QStringLiteral("startSingleAddFlow: hash=%1 — about to dlg.exec()")
             .arg(hash.left(40)));
 
     // Connect engine's metadataReady to populate the dialog
@@ -1281,14 +1311,14 @@ void TankorentPage::onAddTorrentClicked(int row)
 
     const int execResult = dlg.exec();
     dlog.info("tankorent",
-        QStringLiteral("onAddTorrentClicked: dlg.exec() returned %1 (Accepted=%2 Rejected=%3)")
+        QStringLiteral("startSingleAddFlow: dlg.exec() returned %1 (Accepted=%2 Rejected=%3)")
             .arg(execResult).arg(QDialog::Accepted).arg(QDialog::Rejected));
 
     if (execResult == QDialog::Accepted) {
         auto config = dlg.config();
         m_client->startDownload(hash, config);
-        m_tabWidget->setCurrentIndex(1); // Switch to Transfers tab
-        m_searchStatus->setText("Download Started");
+        if (m_tabWidget) m_tabWidget->setCurrentIndex(1); // Switch to Transfers tab
+        if (m_searchStatus) m_searchStatus->setText("Download Started");
     } else {
         // User cancelled — clean up the draft torrent
         m_client->deleteTorrent(hash, false);
@@ -1683,6 +1713,48 @@ void TankorentPage::onAddFromUrlClicked()
     } else if (skipped > 0) {
         m_searchStatus->setText(QStringLiteral("All %1 skipped (duplicates or invalid)").arg(skipped));
     }
+}
+
+// STREAM_ADD_TO_TANKORENT_DIALOG_FIX 2026-05-06 — cross-page magnet
+// hand-off entry point. Was previously routed through addMagnetBatch
+// (the BULK path which by design skips the per-magnet AddTorrentDialog —
+// popping a dialog 10× during a bulk add would be hostile UX), causing
+// a regression where the cross-page right-click → "Add torrent to
+// Tankorent" auto-started without the file-selection / priority overlay.
+// Hemanth verbatim 2026-05-06: "Why is it adding torrent to tankorent
+// without the torrent downloader overlay popping up? The overlay where
+// you select or deselect files, set download priorities etc — it needs
+// to be there." Now mirrors the single-add path exactly via the shared
+// startSingleAddFlow helper. displayName carries the release name from
+// StreamPage's onAddToTankorentRequested (extractReleaseName output) and
+// becomes the dialog's title — what the user will see on the modal.
+void TankorentPage::addMagnetFromExternal(const QString& magnetUri,
+                                          const QString& displayName)
+{
+    auto& dlog = DebugLogBuffer::instance();
+    dlog.info("tankorent",
+        QStringLiteral("addMagnetFromExternal entered: display='%1' magnet=%2")
+            .arg(displayName).arg(magnetUri.left(80)));
+
+    // Caller-context validation; full sequence (m_client null check,
+    // duplicate detect, resolveMetadata, dialog exec, startDownload /
+    // deleteTorrent) is shared via startSingleAddFlow.
+    if (magnetUri.isEmpty()) {
+        dlog.warning("tankorent",
+            QStringLiteral("addMagnetFromExternal: empty magnet (display='%1')")
+                .arg(displayName));
+        if (m_searchStatus) m_searchStatus->setText("Empty magnet — nothing to add");
+        return;
+    }
+
+    // Title fallback: use displayName when present (StreamPage extracts the
+    // release name); fall back to a truncated magnet form so the dialog
+    // header still has something to render. AddTorrentDialog will overlay
+    // the engine-supplied torrent name once metadataReady fires anyway.
+    const QString title = !displayName.isEmpty()
+                              ? displayName
+                              : QStringLiteral("Magnet: %1").arg(magnetUri.left(40));
+    startSingleAddFlow(magnetUri, title);
 }
 
 // ── Drag-drop ───────────────────────────────────────────────────────────────

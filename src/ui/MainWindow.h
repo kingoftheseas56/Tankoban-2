@@ -19,6 +19,8 @@ class ComicReader;
 class VideoPlayer;
 class VideosPage;
 class OrganisePage;
+class StreamPage;
+class TankorentPage;
 class DevControlServer;
 class SidebarDrawer;
 class QJsonObject;
@@ -113,6 +115,15 @@ private:
     // Map page id → domain for root folders
     QString domainForPage(const QString& pageId) const;
 
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — handler for StreamPage's
+    // addToTankorentRequested signal. Activates Tankorent (PAGE_TANKORENT)
+    // and forwards the magnet to TankorentPage::addMagnetFromExternal.
+    // Page-switch only — does NOT pause/teardown any in-flight stream
+    // playback session (the user can be watching one stream and queueing
+    // another for download in parallel).
+    void onAddToTankorentRequested(const QString& magnetUri,
+                                   const QString& displayName);
+
     CoreBridge *m_bridge = nullptr;
 
     // Glass background
@@ -134,6 +145,14 @@ private:
     // dev-bridge dispatcher (scan_videos / get_videos).
     VideosPage *m_videosPage = nullptr;
     OrganisePage *m_organisePage = nullptr;
+
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — cached at buildPageStack
+    // time so the cross-page magnet hand-off (right-click stream card →
+    // "Add torrent to Tankorent") can connect StreamPage's outbound
+    // signal at construction without doing a qobject_cast walk through
+    // m_pageStack on each invocation.
+    StreamPage    *m_streamPage    = nullptr;
+    TankorentPage *m_tankorentPage = nullptr;
 
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).

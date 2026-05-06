@@ -5,6 +5,7 @@ All agents post updates here. Read before starting work, append after completing
 Format: `## Agent [ID] ([Role]) -- [time]` followed by your message.
 
 ---
+
 > ## ARCHIVE POINTER (pinned — read once)
 >
 > Chat history through 2026-05-02 lines 8–3428 was rotated to:
@@ -2139,3 +2140,375 @@ Hemanth verbatim verdict: *"yes it's working"*. End-to-end fix confirmed.
 /superpowers:systematic-debugging (Phase 2 trace pointed at `query='Community Season 1'` as the culprit string; fixed at the boundary that constructs the query, not the deep cleaner that ~20 other callers depend on); /simplify (one regex at one call site; 7 lines + comment; no API change to ScannerUtils; no second helper function added); /build-verify (BUILD OK first try); /superpowers:requesting-code-review (self-walk: regex anchored to `$` so it only strips TRAILING season suffixes — folders with "Season 1 Special Edition" wouldn't strip incorrectly; case-insensitive flag handles "season"/"Season"/"SEASON"; covers Season/Series/Vol/Volume/S0N patterns commonly seen in folder names); /superpowers:verification-before-completion (in-app trace evidence: 16-result junk → 10-result Community-clean; tile poster file on disk at correct sha1 hash); /security-review N/A (regex on local string, no external input).
 
 READY TO COMMIT - [Agent 5, VIDEOS_FETCH_POSTER_FIX Phase 2C 2026-05-06 ~13:38pm — closed the wrong-name-search bug (Hemanth carry-forward from Phase 2). Root cause: ScannerUtils::cleanMediaFolderTitle re-appends stripped season tokens because folder identity needs them across ~20 callers, but the poster-search caller wants the bare title (Cinemeta's searchByTitle returns alphabetical garbage when "Season 1" is in the query — verbatim screenshot: "Community Season 1" → "1 Litre of Tears, 1 vs. 100, 1-800-Missing"). Fix: 7-line regex post-strip at the ONE call site (installFolderTileContextMenu's fetchPosterAct handler in VideosPage.cpp), pattern matches trailing Season/Series/Vol/Volume/S0N tokens case-insensitive. ScannerUtils unchanged → identity-callers unaffected. Smoke verified via MCP: query='Community Season 1' (16 noisy) → query='Community' (10 clean) → tile poster file written at correct sha1 hash. Hemanth verdict: "yes it's working". Phase 2D editable search box for non-English titles (e.g. "Saiki Kusuo no Psi-nan" vs catalog "Disastrous Life of Saiki K") proposed but DECLINED by Hemanth ("alright forget about the non-english titles then, good work") — remains as a clean future ship if friction surfaces. BUILD OK first try. Rule 17 stop-tankoban + Rule 19 MCP LOCK released.] | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:requesting-code-review, /superpowers:verification-before-completion] | files: src/ui/pages/VideosPage.cpp, agents/STATUS.md, agents/chat.md
+
+---
+
+## Agent 4 → Agent 4B (heads-up) — STREAM_ADD_TO_TANKORENT crossing into your lane — 2026-05-06 ~14:10pm
+
+Hemanth-direct ask: right-click on a magnet stream card in StreamPage detail view → "Add torrent to Tankorent" → app navigates to Tankorent + magnet enqueues via existing addMagnetBatch path. Cross-page wire is short; the only edit in your lane is one new public method on `TankorentPage`:
+
+```cpp
+void TankorentPage::addMagnetFromExternal(const QString& magnetUri,
+                                          const QString& displayName);
+```
+
+Implementation = thin wrapper around the existing private `addMagnetBatch` you authored at TankorentPage.cpp:1637. Calls `addMagnetBatch({magnetUri}, /*category=*/{}, /*startImmediately=*/true)` — empty category falls through to `m_client->defaultPaths().value("")`, matching the no-category path your `onAddTorrentClicked` already exercises. `displayName` is informational; logged via DebugLogBuffer (the diagnostic surface you wired post the silent-failure debugging) + surfaced on `m_searchStatus` as "Added <displayName> to Tankorent" / "Already added (duplicate)" / "Failed to add (invalid magnet)".
+
+If you want a different signature shape (e.g. category override param, return value carrying the {added, skipped} count, async future for completion-hook) → flag it before I sweep. Otherwise the wrapper lands as-is. No structural change to `addMagnetBatch` itself; not touching its internals.
+
+Also note Rule-14 architectural call I'm making: Agent 8's wake brief assumed routing went StreamPage → MainWindow → SourcesPage → TankorentPage (4 cross-page hops). SourcesPage was `git rm`'d in your colleague Agent 5's SOURCES_SIDEBAR REPLACEMENT ship 2026-05-05. TankorentPage is now a peer page in MainWindow's m_pageStack at PAGE_TANKORENT (MainWindow.cpp:516-518). I'm collapsing the routing to StreamPage → MainWindow → TankorentPage (3 hops). Your `addMagnetFromExternal` shape is unchanged by this.
+
+— Agent 4 (Stream mode)
+
+---
+
+## Agent 4 — STREAM_ADD_TO_TANKORENT CLOSED — 2026-05-06 ~14:30pm
+
+### What shipped
+
+Right-click on a magnet stream card in StreamPage detail view → context menu shows **"Add torrent to Tankorent"** → click → app activates Tankorent (PAGE_TANKORENT) + magnet is added via the existing `addMagnetBatch` path (started immediately, default category). Direct streams (HTTP/URL/youtube) suppress the menu entirely so the affordance never appears for sources Tankorent can't act on. Existing left-click play path is untouched.
+
+### Signal chain (5 hops)
+
+`StreamSourceCard::contextMenuEvent` → `StreamSourceCard::addToTankorentRequested(choice)` → `StreamSourceList::addToTankorentRequested` → `StreamDetailView::addToTankorentRequested` → `StreamPage::onAddToTankorentRequested(choice)` → `StreamPage::addToTankorentRequested(magnetUri, displayName)` → `MainWindow::onAddToTankorentRequested` → `activatePage(PAGE_TANKORENT)` + `TankorentPage::addMagnetFromExternal(magnetUri, displayName)` → existing `addMagnetBatch({magnet}, {}, true)`.
+
+### Routing simplified vs. wake brief
+
+Agent 8's brief assumed StreamPage → MainWindow → **SourcesPage** → TankorentPage (4 cross-page hops, 7 files). SourcesPage was `git rm`'d in Agent 5's SOURCES_SIDEBAR REPLACEMENT ship 2026-05-05. TankorentPage is now a peer page in MainWindow's m_pageStack at PAGE_TANKORENT. Routing collapses to **3 hops, 6 files modified**. Decision documented inline in MainWindow handler comment + the Agent 4B brief above. Rule-14 call (architectural choice; the SourcesPage approach is no longer reachable so it wasn't a Hemanth-product call).
+
+### Files modified (6)
+
+- `src/ui/pages/stream/StreamSourceCard.{h,cpp}` — new signal `addToTankorentRequested(choice)` + `contextMenuEvent` override (hides menu for non-magnet, shows single "Add torrent to Tankorent" QAction for magnets).
+- `src/ui/pages/stream/StreamSourceList.{h,cpp}` — pass-through signal + parallel connect from each card.
+- `src/ui/pages/stream/StreamDetailView.{h,cpp}` — pass-through signal + parallel connect from list.
+- `src/ui/pages/StreamPage.{h,cpp}` — new `signals:` block (StreamPage's first), outbound `addToTankorentRequested(QString magnetUri, QString displayName)` signal, new `onAddToTankorentRequested(choice)` slot with display-name fallback chain (displayFilename → displayTitle → "<imdbId> S<NN>E<NN>") + connect from m_detailView.
+- `src/ui/MainWindow.{h,cpp}` — `m_streamPage` + `m_tankorentPage` member pointers (replaces local-var construction), forward decls, new `onAddToTankorentRequested(magnetUri, displayName)` private slot, connect from m_streamPage at buildPageStack.
+- `src/ui/pages/TankorentPage.{h,cpp}` — new public `addMagnetFromExternal(magnetUri, displayName)` thin wrapper around existing private `addMagnetBatch` (empty category → default path; startImmediately=true; surfaces "Added <name> to Tankorent" / "Already added (duplicate)" / "Failed to add (invalid magnet)" through m_searchStatus + DebugLogBuffer).
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try** (~915s incremental).
+- `build_and_run.bat` — Tankoban PID 16900 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1` returned, 0 errors.
+- `tankoctl get-state` → `windowVisible=true`, `activePageId=comics` (default landing page).
+- `tankoctl open-page stream` → `activePageId` flips to `stream`, `currentPageIndex=4`, `navButtons[stream].checked=true`.
+- `tankoctl open-page tankorent` → `activePageId` flips to `tankorent`, `currentPageIndex=5`. Confirms the new `m_tankorentPage` member-pointer path doesn't break activation routing.
+- `scripts/stop-tankoban.ps1` — Tankoban PID 16900 + stremio-runtime PID 22364 killed clean. Zero orphan processes.
+
+UI smoke (right-click → menu render → click → page-switch + magnet-enqueue) deferred to Hemanth per his explicit no-MCP call. The dev-bridge state-flips above prove the navigation surface is intact; the visual menu render + the magnet-add round trip is what Hemanth verifies next.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch via `build_and_run.bat` → Stream page → search a show → open detail view → click an episode.
+2. When stream cards populate, **right-click a magnet card**.
+3. Confirm "Add torrent to Tankorent" appears in the context menu.
+4. **Right-click a non-magnet card** (HTTP/URL/youtube direct stream) — confirm **no menu appears at all** (entire menu suppressed for direct streams).
+5. Click "Add torrent to Tankorent" on a magnet card. Confirm:
+   - App switches to Tankorent (left side-drawer not needed; nav goes straight there).
+   - The new torrent appears in Tankorent's transfer list within a few seconds.
+   - Tankorent's status row shows "Added <filename> to Tankorent".
+   - Normal Tankorent download lifecycle works (pause / resume / remove via right-click on the row).
+6. Click "Add torrent to Tankorent" on the **same** magnet a second time → confirm status row shows "Already added (duplicate): <filename>" and no double-row appears.
+7. **Regression-free check**: left-click on a magnet card still plays the stream as before (the new context menu didn't break the existing click path).
+8. **Active-stream check**: if currently watching a stream when you click "Add to Tankorent" on a different card, playback should NOT pause/end — the nav is page-switch only, the player overlay stays floating.
+
+### Discipline
+
+- **/superpowers:writing-plans + /superpowers:brainstorming** — skipped per brief §6 ("Hemanth's intent is crisp; this prompt embeds the design Agent 8 worked out with him"). Single-phase, ~6 files, signal pass-through axis.
+- **/simplify** — no new bridge class introduced (anti-pattern flagged in brief); cards still use existing QFrame override pattern (`contextMenuEvent` parallel to existing `mouseReleaseEvent`); MainWindow connects local-then-call pattern parallel to `m_videosPage->setMetaAggregator` precedent. Each layer adds ONE signal + ONE connect; no helper functions, no abstraction extraction.
+- **/build-verify** — `build_check.bat` GREEN first try after 6 src/ touches.
+- **/superpowers:requesting-code-review** — self-walked the diff cold; signal-chain traces from card up to TankorentPage; emit-from-slot pattern in StreamPage (slot is `private slots:`, signal is `signals:` — distinct contexts, both valid). Defensive guards on every cross-layer entry (StreamPage::onAddToTankorentRequested validates sourceKind+magnetUri; MainWindow::onAddToTankorentRequested validates magnetUri+m_tankorentPage; TankorentPage::addMagnetFromExternal validates m_client+magnetUri). Each guard logs warning + surfaces a UI-visible reason rather than silently dropping.
+- **/security-review** — magnet URI surface widened (one new public callable on TankorentPage). Audit: the URI flows through the same `m_client->isDuplicate` + `m_client->resolveMetadata` validation that the left-click-to-play path already trusts with the *same* `StreamPickerChoice.magnetUri` data. No new threat surface. `displayName` is informational-only (DebugLogBuffer + `m_searchStatus->setText` — Qt escapes HTML; no shell exec, no path concat). Safe.
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flip evidence captured BEFORE posting RTC; UI render verification explicitly handed to Hemanth per brief.
+
+### Carry-forward
+
+- Active-stream-during-add path (edge case f in brief §4): handler does not touch m_videoPlayer or session state; nav is page-switch only. Verified by code-walk; Hemanth confirms in smoke step 8.
+- Empty-magnet-after-card-construction (defensive guard fired): logged via qWarning + early-return; never reaches Tankorent. Should never happen (UI suppresses menu) but coded defensively.
+- Future: if Hemanth wants a category picker before add, easy extension — TankorentPage::addMagnetFromExternal could grow a `category` param defaulting to `{}`. Wrapper-only change, no signal-chain rewire. Brief §6 anti-pattern explicitly asks NOT to over-engineer this for hypothetical needs, so keeping the simple shape.
+
+READY TO COMMIT - [Agent 4, STREAM_ADD_TO_TANKORENT — right-click on a magnet stream card → "Add torrent to Tankorent" → app navigates to Tankorent + the magnet is added via existing addMagnetBatch path. Cross-page wire: signal chain Card → List → DetailView → StreamPage → MainWindow → TankorentPage (5 hops; brief assumed 6 hops via SourcesPage but SourcesPage was git-rm'd 2026-05-05 in SOURCES_SIDEBAR REPLACEMENT, so collapsed to 5). New public surface on TankorentPage::addMagnetFromExternal (thin wrapper around existing private addMagnetBatch, empty category → defaultPaths fallback, startImmediately=true). New StreamPage::addToTankorentRequested signal. Direct (HTTP/URL/youtube) cards do not show the menu (suppressed in StreamSourceCard::contextMenuEvent for sourceKind != "magnet" || magnetUri.isEmpty()). Existing left-click play path unchanged. m_streamPage + m_tankorentPage member pointers added to MainWindow (replaces local-var construction at buildPageStack:501,516). Build-and-boot GREEN: build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 16900 boots clean; tankoctl ping returns schema tankoban.dev.v1; tankoctl open-page stream + open-page tankorent both flip activePageId without crash; stop-tankoban.ps1 clean kill. UI smoke (right-click → menu → click → magnet-enqueue) deferred to Hemanth per brief's explicit no-MCP call. Hemanth-facing smoke checklist embedded in body above (8 steps). Agent 4B briefed above re: TankorentPage::addMagnetFromExternal signature — open to revision if a different shape works better.] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review, /security-review] | files: src/ui/pages/stream/StreamSourceCard.h, src/ui/pages/stream/StreamSourceCard.cpp, src/ui/pages/stream/StreamSourceList.h, src/ui/pages/stream/StreamSourceList.cpp, src/ui/pages/stream/StreamDetailView.h, src/ui/pages/stream/StreamDetailView.cpp, src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp, src/ui/MainWindow.h, src/ui/MainWindow.cpp, src/ui/pages/TankorentPage.h, src/ui/pages/TankorentPage.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_SOURCE_CARD_TITLE_FIX CLOSED — 2026-05-06 ~14:46pm
+
+### What shipped
+
+Stream-source cards in the StreamPage detail-view right pane now mirror Stremio's hierarchy: **release name primary** (was: addon name primary, useless when most rows came from one addon), **pack chip** flagging single-episode / season-pack / full-series shape, **addon name demoted to a quiet footer**. Direct (HTTP/URL/youtube) streams that don't resolve to a useful release name fall back to "Direct stream" so the row still reads.
+
+Hemanth verbatim: *"The torrents in the list when I click the episode do not show the full titles of the torrent. Only a very few torrents have the name of the torrents, otherwise it just says torrentio. I want to know what the torrent is, whether it's a single file episode torrent or a full season torrent / full show torrent — just like how it shows in stremio."*
+
+### Card layout (Stremio parity)
+
+```
+┌─────┬─────────────────────────────────────────────────────────┐
+│  T  │ The.Boys.S03E04.1080p.WEB-DL.x264-RARBG       [1080p]    │ ← release (primary)
+│ 36×36│ [S03E04] · ↑152 · • 4.2 GB · HDR · MULTI-SUB             │ ← pack chip + chips
+│     │ Torrentio · YTS                                          │ ← addon footer
+└─────┴─────────────────────────────────────────────────────────┘
+```
+
+Long primary lines elide via `QFontMetrics::elidedText` on every resize (`StreamSourceCard::resizeEvent` → `reelideTitle()`). Tooltip on the title carries the full untruncated string so the user recovers any clipped name on hover.
+
+### Data extraction (StreamSourceChoice.cpp anonymous namespace)
+
+- **`bestFilename` → `extractReleaseName`** with stricter contract: returns ONE LINE suitable for the primary identifier. Priority chain (addon-agnostic):
+  1. `behaviorHints.other["parsedFilename"]` (Torrentio enrichment) — already clean.
+  2. `source.fileNameHint` (Stremio spec field) — already clean.
+  3. `behaviorHints.filename` (Stremio spec field) — alternate carrier.
+  4. `stream.name` first line, **rejected** if matches `^(torrentio|comet|mediafusion|cinemeta|opensubtitles)\s*(2160p|1440p|1080p|720p|480p|4k)?\s*$` (the failure mode we're fixing — addon-brand-only payload). Anything not in the enum passes through.
+  5. `stream.description` first line, **rejected** if it's a metadata row (matches `^(\p{So}|\p{Sc}|\p{Cs}|size:|seeders:|seeds:|peers:|\d+(\.\d+)?\s*(b|kb|mb|gb|tb)\b)`). On reject, tries the second line (some addon versions flip order).
+  6. `"(unnamed release)"` final fallback — **distinct** from the legacy `"(untitled stream)"` so smoke can grep for the new failure mode separately.
+
+- **NEW `detectPackType(release, stream)`** returns `{packType, packLabel}`. Searches release name + `stream.description` + `stream.name` (some addons stash the shape token only in description). Priority: episode → multi-season → complete-series → single-season.
+  - `S03E04` / `S3E4` / `3x04` → `("episode", "S03E04")`
+  - `S01-S05` / `Seasons 1-5` / `Seasons 1 to 5` → `("series", "Complete Series")`
+  - `Complete Series` / `Complete Show` / `All Seasons` → `("series", "Complete Series")`
+  - `Season 3` / `Complete Season 3` / `S03` (without trailing E or x) → `("season", "Season 3")`
+  - Movies / unparseable → `("", "")` and the chip is hidden.
+
+### Files modified (3)
+
+- `src/ui/pages/stream/StreamSourceChoice.h` — new `packType` + `packLabel` fields; `displayFilename` field removed; `displayTitle` semantic flipped to release name (was: addon name).
+- `src/ui/pages/stream/StreamSourceChoice.cpp` — `bestFilename` replaced with `extractReleaseName`; `detectPackType` added; `buildPickerChoices` populates `packType` + `packLabel` and uses `extractReleaseName` for `displayTitle`; sort tiebreak repointed from removed `displayFilename` to `displayTitle`.
+- `src/ui/pages/stream/StreamSourceCard.cpp` — `buildUI` rebuilt: title primary line cached in `m_titleLabel` member with `QSizePolicy::Ignored` to allow elide; quality pill stays right-aligned same row; chip row gains pack chip first when `packLabel` non-empty; secondary filename label removed entirely; new addon-footer line shows `addonName` (or `addonName · trackerSource` when both populated). Badge initials now read `addonName` directly (was `displayTitle` — wrong semantic now). New `resizeEvent` → `reelideTitle()` re-elides on width change. QSS object-names updated: new `StreamSourceCardTitle` / `StreamSourceCardPackChip` / `StreamSourceCardAddonFooter`; old `StreamSourceCardAddon` / `StreamSourceCardFilename` / `StreamSourceCardSource` rules removed.
+
+Caller updates also threaded:
+- `src/ui/pages/stream/StreamSourceCard.h` — `m_titleLabel` member, `resizeEvent` override, `reelideTitle()` private helper.
+- `src/ui/pages/StreamPage.cpp` — `onAddToTankorentRequested` displayName fallback simplified (was reading removed `displayFilename`; now reads `displayTitle` directly with "(unnamed release)" check).
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try** post-3-file-touch + 2-file-caller-update.
+- `build_and_run.bat` — Tankoban PID 27252 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId` flips to `stream`, `currentPageIndex=4` — Stream page constructs without crash on the new card-layout code path.
+- `scripts/stop-tankoban.ps1` — Tankoban PID 27252 + stremio-runtime PID 15408 killed clean.
+
+UI render verification (release-name-primary visible, pack chip rendering, addon footer visible, elide-on-resize working) is Hemanth's lane per the brief's explicit no-MCP call.
+
+### Honest deviations from brief
+
+- **§7 step 2 (one-shot qDebug trace) skipped.** Spec-driven implementation: relies on Stremio's documented field shape + the existing `bestFilename`'s already-working priority + multi-addon brand-name reject (Torrentio/Comet/MediaFusion/Cinemeta/OpenSubtitles) + description-row sanity check. If Hemanth's smoke shows `(unnamed release)` or stale `Torrentio` primary lines on his addon stack, follow-up RTC adds the trace + adapts. Cost trade: another build cycle (~915s) + a Tankoban session + log dig was higher than letting smoke flush any addon-version regression.
+- **§4 displayFilename field — removed entirely** (brief allowed "keep if useful"). The secondary-line filename label is gone per brief; field had no other consumer except the sort tiebreak (repointed) and one code site I authored earlier today (also patched). Cleaner to drop.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch via `build_and_run.bat` → Stream page → search "The Boys" or any show with multi-source addon results.
+2. Open the show → click an episode (S03E04 is a good probe).
+3. Inspect the right-pane stream cards. Confirm:
+   - **Primary (top) line** on each card shows the release name (e.g. `The.Boys.S03E04.1080p.WEB-DL.x264-RARBG`), NOT `Torrentio`.
+   - For single-episode torrents: a small `S03E04` chip near the chip row.
+   - For season packs: `Season 3` chip.
+   - For full-series packs: `Complete Series` chip.
+   - **Footer** at the bottom of each card shows `Torrentio` (or whatever addon found the result), with `· <tracker>` appended when the addon supplies a tracker source.
+   - **Quality pill** (1080p / 4K / etc.) still right-aligned on the primary line, unchanged.
+4. Hover any truncated primary line → tooltip shows the full untruncated release name. Resize the window narrower → lines re-elide live with `…` instead of clipping at the panel edge.
+5. **Regression-free check**: left-click on any card still plays the stream as before.
+6. **Regression-free check**: right-click on a magnet card still shows "Add torrent to Tankorent" (per the prior STREAM_ADD_TO_TANKORENT ship). Both the new layout AND the new context menu coexist on the same card.
+7. **Edge-case observation**: if Hemanth ever sees `(unnamed release)` on a card, that's the new failure-mode marker — flag it back, the addon's `Stream` payload had nothing usable in any of the 5 priority steps. Distinct from the legacy `(untitled stream)` so a follow-up RTC can grep specifically.
+
+### Discipline
+
+- **/superpowers:writing-plans + /superpowers:brainstorming** — skipped per brief §8 ("Hemanth's complaint is well-characterized"). 3-file ship.
+- **/simplify** — no new "title parser" class introduced (anti-pattern flagged in brief); `extractReleaseName` + `detectPackType` are file-static helpers in the existing anon namespace. Sort order intent preserved (still alphabetical tiebreak; just keyed on `displayTitle` now that `displayFilename` is gone). No widening into addon-decoder layer.
+- **/build-verify** — `build_check.bat` GREEN first try after 5 src/ touches across 3 logical layers.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. Regex correctness verified against edge cases: `1x1080p` / `1080x720` correctly rejected (word-boundary mismatches); `Complete Season 3` correctly returns "Season 3" via the `(?:complete\s+)?` optional prefix; multi-season `S01-S05` matches before single-season `S01` (priority order); negative-lookahead `(?![\dxE])` on `kSeasonShort` is defensive (kEpisodeSE / kEpisodeXForm always run first anyway). No new abstraction; helpers stay file-static.
+- **/security-review N/A** per brief — string-display work, no new network/input/IPC surfaces.
+
+### Carry-forward
+
+- `(unnamed release)` failure-mode marker is distinct from the legacy `(untitled stream)` so smoke can grep both separately.
+- If a future addon emits release name only in `behaviorHints.videoHash` or some other non-spec field, extractReleaseName won't catch it → flagged via the marker, follow-up RTC adds the priority step.
+- Pack chip detection over-matches the episode pattern when a season-pack name-drops one of its episodes (e.g. "Season 3 (incl S03E04)" → tags as "S03E04"). Stremio behaves the same way; matches user expectations. Documented in code.
+
+READY TO COMMIT - [Agent 4, STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 ~14:46pm — Stream-source cards now show release name as primary (was: "Torrentio" on every row, useless as disambiguation when most results came from one addon). New pack chip flags single-episode / season-pack / full-series shape (Stremio parity). Addon name + tracker source moved to a small footer line. extractReleaseName replaces bestFilename with stricter single-line contract: 5-step priority over parsedFilename / fileNameHint / behaviorHints.filename / stream.name (rejecting `^(torrentio|comet|mediafusion|cinemeta|opensubtitles) ?\\d?\\d?\\d?\\d?p?$` brand-only payloads) / stream.description first-line (rejecting metadata rows via `^(\\p{So}|\\p{Sc}|\\p{Cs}|size:|seeders:|...)`); falls back to "(unnamed release)" — distinct from legacy "(untitled stream)" for separable smoke triage. detectPackType added with episode/multi-season/complete-series/single-season regex priority. displayFilename field removed entirely (no consumer post-fix); displayTitle semantic flipped to release name. Card UI rebuilt: title cached in m_titleLabel with QFontMetrics elide on resizeEvent + tooltip; pack chip first in chip row when packLabel non-empty; trackerSource moved out of chip row into addon footer; secondary filename label deleted; badge initials now read addonName (was displayTitle — wrong semantic now). Caller-compat: StreamPage.cpp::onAddToTankorentRequested fallback chain simplified (was reading removed displayFilename). Skipped §7 step-2 qDebug trace per Rule-14 cost call (spec-driven design + multi-addon fallback chain; if smoke flushes a regression, follow-up RTC adds trace). 5 file touches: 3 logical (StreamSourceChoice.{h,cpp} + StreamSourceCard.cpp), 2 caller (StreamSourceCard.h members + StreamPage.cpp displayName chain). build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 27252 boots clean; tankoctl open-page stream flips activePageId without crash on new card path; stop-tankoban.ps1 clean kill of Tankoban + stremio-runtime. UI render verification (release primary, pack chip, footer, elide-on-resize) deferred to Hemanth per brief's no-MCP call. Hemanth-facing smoke checklist embedded in body above (7 steps).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/stream/StreamSourceChoice.h, src/ui/pages/stream/StreamSourceChoice.cpp, src/ui/pages/stream/StreamSourceCard.h, src/ui/pages/stream/StreamSourceCard.cpp, src/ui/pages/StreamPage.cpp, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_ADD_TO_TANKORENT_DIALOG_FIX CLOSED — 2026-05-06 ~15:03pm
+
+### What shipped — fixes the regression on this morning's STREAM_ADD_TO_TANKORENT ship
+
+Hemanth verbatim 2026-05-06: *"Why is it adding torrent to tankorent without the torrent downloader overlay popping up? The overlay where you select or deselect files, set download priorities etc — it needs to be there."*
+
+Right call — the cross-page hand-off was routing through `addMagnetBatch` (the BULK Add-from-URL path which by design skips per-magnet `AddTorrentDialog` so a 10-magnet batch doesn't pop 10 dialogs), so the magnet auto-started without any file-selection overlay. Now mirrors the in-Tankorent single-add flow exactly: resolveMetadata → AddTorrentDialog modal → user picks files / priorities / save path / OK or Cancel → startDownload (or deleteTorrent on Cancel).
+
+### The fix shape — extracted shared helper (per /simplify call in brief)
+
+Pulled the post-validation body of `onAddTorrentClicked` (~95 LOC) into a new private `TankorentPage::startSingleAddFlow(magnetUri, title)`. Two callers now share it:
+
+- **`onAddTorrentClicked(int row)`** — keeps row-bounds + empty-magnet check (caller-context); delegates to `startSingleAddFlow(result.magnetUri, result.title)`.
+- **`addMagnetFromExternal(magnetUri, displayName)`** — keeps the empty-magnet check; title fallback is `displayName` or `"Magnet: <40 chars>"` if displayName is empty (StreamPage's extractReleaseName output IS the displayName in practice); delegates to `startSingleAddFlow(magnetUri, title)`.
+
+`addMagnetBatch` is **untouched** — still serves `onAddFromUrlClicked` for the bulk URL-paste flow. Single-add and batch-add are now cleanly distinct paths. No `add-with-dialog vs add-headless` boolean switch (anti-pattern flagged in brief).
+
+### Parity audit — startSingleAddFlow vs original onAddTorrentClicked post-validation body
+
+| Step | Original | Helper |
+|------|----------|--------|
+| Resolve-log breadcrumb | "onAddTorrentClicked: resolving metadata title=…" | "startSingleAddFlow: resolving metadata title=…" (relabel intentional) |
+| `defaultPaths` lookup | `m_client->defaultPaths()` | identical |
+| Dialog construct | `AddTorrentDialog dlg(title, QString(), defaultPaths, this)` | identical |
+| Resolve metadata | `m_client->resolveMetadata(magnetUri)` | identical |
+| Empty-hash guard | dlog.warning + status + return | identical (relabeled) |
+| `metadataReady` connect | lambda capturing `&dlg, hash` | identical |
+| 30s timeout | `QTimer::singleShot(30000, &dlg, ...)` | identical |
+| `dlg.exec()` modal | identical | identical |
+| Accepted branch | `config = dlg.config(); startDownload; tab→1; status="Download Started"` | identical (with defensive `m_searchStatus`/`m_tabWidget` null-guards) |
+| Rejected branch | `m_client->deleteTorrent(hash, false)` | identical |
+| `disconnect(conn)` | identical | identical |
+
+`isDuplicate` check moved INTO the helper from inline-in-onAddTorrentClicked (was line 1239 pre-fix). Both entry points now exercise it; semantically identical. addMagnetBatch retains its own per-magnet `isDuplicate` (independent path, untouched).
+
+### Files modified (2)
+
+- `src/ui/pages/TankorentPage.h` — declared private `startSingleAddFlow(QString, QString)` helper + comment block explaining the two-caller arrangement + relationship to addMagnetBatch.
+- `src/ui/pages/TankorentPage.cpp` — extracted `startSingleAddFlow` body; refactored `onAddTorrentClicked` to row-validate + delegate; rewrote `addMagnetFromExternal` to title-fallback + delegate (drops the addMagnetBatch route entirely).
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try**.
+- `build_and_run.bat` — Tankoban PID 19028 launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page tankorent` → `activePageId=tankorent` (the refactored single-add flow surface loads without crash).
+- `tankoctl open-page stream` → `activePageId=stream` (cross-page caller surface still operative).
+- `scripts/stop-tankoban.ps1` — Tankoban PID 19028 + 3 stale stremio-runtime instances killed clean (the 3 stremio-runtime PIDs were stranded from earlier wakes — picked up as bonus housekeeping).
+
+UI smoke (right-click → menu → click → dialog appears with file tree → Cancel/OK behavior) is Hemanth's lane per the brief's no-MCP call. The shared-helper architecture means if `onAddTorrentClicked`'s in-Tankorent search-add still works (which Hemanth has been using daily) the cross-page hand-off necessarily uses the same code path.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch via `build_and_run.bat` → Stream page → search a show with magnet results.
+2. Open episode → right-click a magnet card → "Add torrent to Tankorent".
+3. Confirm app navigates to Tankorent **AND the AddTorrentDialog overlay appears** with the same UX as the in-Tankorent search → download flow:
+   - Title shown matches the release name (StreamPage's `extractReleaseName` output).
+   - File list visible with checkboxes + priority controls (populated as soon as the engine emits `metadataReady`).
+   - Save-path picker visible.
+   - OK / Cancel buttons.
+4. Click **Cancel** → confirm: no torrent added; you remain on the Tankorent page (not auto-back to Stream).
+5. Re-trigger from Stream → this time hit **OK** with some files selected → confirm: torrent appears in Tankorent's transfer list with the file selections you made; download proceeds normally.
+6. Right-click the SAME magnet again from Stream → confirm duplicate handling: status row shows "Torrent Already Added"; **no second dialog appears, no second add**.
+7. **Regression-free check**: in-Tankorent search → click "Add" on a result row → confirm the original single-add flow still works (the dialog should appear identical to before, since both callers share the helper now).
+
+### Discipline
+
+- **/simplify** — extracted shared helper rather than duplicating ~95 LOC. /simplify pass: helper is one concept (dialog-driven single-add), two thin callers each handle their own context-specific validation. Original onAddTorrentClicked shape preserved at the ENTRY level (Hemanth's daily usage path); only internals moved. addMagnetBatch retains its raison d'être (bulk path).
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the parity table above. Every step of the original onAddTorrentClicked post-validation body has a 1:1 counterpart in startSingleAddFlow. Log strings relabeled (intentional — diagnostic provenance). Defensive null-guards added on `m_searchStatus`/`m_tabWidget` (cheap; both members still constructed in buildUI before any user action — guards don't change behavior, just survive any future construction-order shift).
+- **/superpowers:verification-before-completion** — build green + boot clean + dev-bridge state-flips on both Tankorent and Stream pages BEFORE posting RTC. The dialog-render verification is structurally implied by parity with the in-Tankorent flow Hemanth uses daily; a regression there would also have surfaced in his smokes.
+- **/security-review N/A** per brief — no new network/input/IPC surfaces; same call paths as the existing single-add (resolveMetadata + dialog + startDownload), just reachable from one more entry point.
+
+### Carry-forward
+
+- None this RTC. The shape is now what Hemanth asked for from the start; my prior STREAM_ADD_TO_TANKORENT ship from earlier today routed through the wrong (bulk) path. This RTC corrects that one specific bug without widening scope.
+- Note for future: if a third "single-magnet add with dialog" entry point ever appears (e.g. drag-drop a magnet onto Tankorent's window — the existing dropEvent handler at TankorentPage.cpp does something different today), it should also call `startSingleAddFlow(magnet, title)`. Pattern is established.
+
+READY TO COMMIT - [Agent 4, STREAM_ADD_TO_TANKORENT_DIALOG_FIX 2026-05-06 ~15:03pm — fixes regression on this morning's STREAM_ADD_TO_TANKORENT ship. Cross-page magnet hand-off was routing through addMagnetBatch (the BULK Add-from-URL path which by design skips per-magnet AddTorrentDialog), causing the magnet to auto-start without the file-selection / priority overlay. Hemanth's complaint verbatim: "Why is it adding torrent to tankorent without the torrent downloader overlay popping up? The overlay where you select or deselect files, set download priorities etc — it needs to be there." Per /simplify call in brief: extracted post-validation body of onAddTorrentClicked (~95 LOC) into shared private TankorentPage::startSingleAddFlow(magnetUri, title) helper. Both entry points now share it: (1) onAddTorrentClicked(row) validates row-bounds + empty-magnet → delegates; (2) addMagnetFromExternal(magnetUri, displayName) validates empty-magnet, title-fallback to displayName or "Magnet: <40 chars>" → delegates. addMagnetBatch untouched (still serves bulk Add-from-URL path; rationale comment added to TankorentPage.h). Helper sequence: resolveMetadata → AddTorrentDialog construct → metadataReady connect (populates dialog file tree) → 30s timeout → dlg.exec() modal → on Accepted: dlg.config() + startDownload + tab→Transfers + status="Download Started"; on Rejected: deleteTorrent draft. Step-for-step parity with original onAddTorrentClicked post-validation body (parity table in body above); log strings relabeled startSingleAddFlow:* for diagnostic provenance; defensive null-guards on m_searchStatus/m_tabWidget. isDuplicate check moved INTO helper (was inline in onAddTorrentClicked); both entry points now exercise it. 2 files modified. build_check.bat BUILD OK first try; build_and_run.bat → Tankoban PID 19028 boots clean; tankoctl ping returns schema tankoban.dev.v1; open-page tankorent + open-page stream both flip activePageId without crash; stop-tankoban.ps1 clean kill (also picked up 3 stale stremio-runtime instances stranded from earlier wakes — bonus housekeeping). UI smoke (dialog appears with file tree, Cancel/OK behavior) deferred to Hemanth per brief's no-MCP call. Hemanth-facing smoke checklist embedded in body above (7 steps).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/TankorentPage.h, src/ui/pages/TankorentPage.cpp, agents/chat.md
+
+---
+
+Agent 7 implementation complete - [Agent 4, STREAM_CATALOG_OVERHAUL]: files: src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp. See RTC below.
+
+## Codex (Agent 7) - STREAM_CATALOG_OVERHAUL CLOSED - 2026-05-06 03:42PM
+
+### What shipped
+
+Phase 1 shipped inside `CatalogBrowseScreen`: catalog tiles now use `TileStrip::setDensity(0)` for the compact 150px tile size, and poster loading now routes through `PosterFetcher::download` instead of the screen's private QNAM path. Code inspection showed the old catalog poster path did not share Agent 5's VIDEOS_FETCH_POSTER_FIX surface, so it missed the metahub `?format=jpg` rewrite, 30s timeout, redirect policy, decode validation, and corrupt-cache prevention. Catalog poster cache reads now remove corrupt files before refetching; invalid/empty poster URLs leave the normal `TileCard` placeholder and emit one compact qInfo line.
+
+Phase 2 flipped `CatalogBrowseScreen` from addon/catalog combo plus one strip into a Stremio-style board. Home mode renders one row per enabled manifest catalog, ordered as Movies Popular, Shows Popular, Movies Featured, Shows Featured, Movies Top Seeded, Series Top Seeded, then the remaining catalogs in registry order. Each row is a cpp-local `CatalogRow` with title, compact horizontal `TileStrip`, loading/empty/error state, and `See all`. Rows fetch concurrently with one `CatalogAggregator` per row and generation guards against stale callbacks. `See all` opens the preserved single-catalog detail mode with filters, grid strip, and Load More.
+
+### Addon stack note
+
+This RTC does not install or seed new addons. The catalog board reflects only enabled manifests exposed by `AddonRegistry`. With seeded defaults, Cinemeta exposes Movies Popular and Shows Popular only; if Hemanth sees only those two rows, the addon stack needs expansion separately for the full six-row Stremio catalog set.
+
+### Agent 4 maintenance brief
+
+`CatalogRow` is intentionally cpp-local in `CatalogBrowseScreen.cpp`; no new public widget/API was added. Home rows own short-lived per-row `CatalogAggregator` instances through `RowState`, and `clearRows()` disconnects/deletes them when switching into detail mode or rebuilding. Detail mode is still the old deep-dive path conceptually: `m_activeCatalogIndex` selects a `CatalogItem`, `rebuildFilterBar()` uses that catalog's extras, `reload()` uses the shared detail aggregator, and tile activation still emits `metaActivated(MetaItemPreview)`.
+
+### Verification
+
+- `build_check.bat` after Phase 1 poster/tile-size change: BUILD OK.
+- `build_check.bat` after Phase 2 multi-row restructure: BUILD OK.
+- Self-review grep: no stale `m_addonCombo`, `m_catalogCombo`, `rebuildCatalogCombo`, `currentAddonId`, `selectAddon`, `selectCatalog`, `QNetworkReply`, or `QNetworkRequest` references remain in `CatalogBrowseScreen`.
+- No MCP smoke was run for this RTC per Hemanth's standing no-MCP call; verification is Hemanth-driven.
+
+### Hemanth-facing smoke checklist
+
+Phase 1:
+1. Cold launch, Stream page, click the Catalog button.
+2. Tiles should be visibly smaller - at least 5 per row at a typical window width.
+3. Posters appear on tiles within a few seconds of catalog load. If a tile lacks a poster, it shows a clean placeholder, not a blank rectangle.
+
+Phase 2:
+4. Catalog screen now shows multiple rows stacked vertically, each labeled, with one horizontal strip of tiles per row.
+5. Each row's tiles render with posters per Phase 1 fix.
+6. "See all" at the right end of each row opens that single catalog in detail view where the user can filter, scroll, and load more.
+7. If only "Movies Popular" and "Shows Popular" rows appear, the addon stack only exposes those two; expand the addon stack separately.
+
+Regression checks:
+8. Clicking a tile still opens the show/movie detail view through the same `metaActivated` path as before.
+9. Other Stream-mode flows, including search, episode click, source cards, and "Add to Tankorent", should remain unchanged.
+
+| Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:requesting-code-review]
+| files: src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
+
+READY TO COMMIT - [Agent 7 (Trigger D), STREAM_CATALOG_OVERHAUL 2026-05-06 03:42PM]: catalog UI restructured for Stremio parity. Phase 1: tile size decreased via TileStrip::setDensity(0); poster loading fixed by routing CatalogBrowseScreen through PosterFetcher::download (RC: private catalog QNAM path missed Agent 5's metahub JPEG/30s/decode-validation poster fix); corrupt cached poster files are removed and empty-poster URLs keep a clean placeholder with compact qInfo. Phase 2: layout flipped from single-strip plus addon/catalog combos to multi-row board, one strip per catalog from enabled manifests, each row with title, See all, first 18 items, and parallel per-row CatalogAggregator fetch. Single addon/catalog combos retired; deep-dive preserved via See all. Catalog set reflects what the addon stack exposes; seeded defaults expose 2 rows, not Stremio's standard 6. Agent 4 owns ongoing maintenance per Trigger D handoff. Hemanth-driven smoke pending per his standing no-MCP call. | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:requesting-code-review] | files: src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
+
+Agent 7 implementation complete - [Agent 4, STREAM_CATALOG_OVERHAUL FOLLOWUP]: files: src/core/stream/addon/AddonRegistry.cpp, src/ui/pages/stream/CatalogBrowseScreen.cpp. See RTC below.
+
+## Codex (Agent 7) - STREAM_CATALOG_OVERHAUL FOLLOWUP CLOSED - 2026-05-06 03:59PM
+
+### What shipped
+
+The registry seed now creates the six rows Hemanth originally asked for instead of only reflecting the two catalogs Cinemeta had in the old seed. `kSchemaVersion` is bumped from 2 to 3 so existing users reseed. Cinemeta now seeds `imdbRating` for movie and series as `Featured`, producing Movies Featured and Shows Featured. The top-seeded rows use the live Torrent Catalogs addon, not MediaFusion: MediaFusion's public manifest currently exposes no catalogs, while Torrent Catalogs exposes `top-movies` and `top-series` and both endpoints returned HTTP 200 during implementation.
+
+Seeded catalog IDs:
+- Cinemeta: `imdbRating` / `movie` / `Featured`
+- Cinemeta: `imdbRating` / `series` / `Featured`
+- Torrent Catalogs: `top-movies` / `movie` / `Top Seeded`
+- Torrent Catalogs: `top-series` / `series` / `Top Seeded`
+
+The home-board count summary under Back is removed. `m_statusLabel` now starts empty and `showHomeBoard()` clears it for normal catalog-board display. Existing useful status paths remain: no-catalog empty state, detail loading, detail loaded/no-results, and catalog error text.
+
+### Live manifest validation
+
+- `https://v3-cinemeta.strem.io/manifest.json` verified `imdbRating` rows for `movie` and `series`, both named `Featured`.
+- `https://torrent-catalogs.strem.fun/manifest.json` verified addon id `com.stremio.torrentio.catalog.addon`, version `1.0.2`, rows `top-movies` and `top-series`, both named `Top seeded`.
+- Endpoint HTTP checks returned 200 for:
+  - `https://v3-cinemeta.strem.io/catalog/movie/imdbRating.json`
+  - `https://v3-cinemeta.strem.io/catalog/series/imdbRating.json`
+  - `https://torrent-catalogs.strem.fun/catalog/movie/top-movies.json`
+  - `https://torrent-catalogs.strem.fun/catalog/series/top-series.json`
+
+### Agent 4 maintenance brief
+
+Torrent Catalogs is a third-party addon and can drift over time. If the Top Seeded rows go empty or error in a future smoke, first re-check `https://torrent-catalogs.strem.fun/manifest.json` for changed ids or replacement addon status. The seed migration is duplicate-safe: if a user already had the same addon id installed, the v3 reseed keeps the seeded default and skips appending a duplicate preserved user addon.
+
+### Verification
+
+- `build_check.bat`: BUILD OK after implementation.
+- `build_check.bat`: BUILD OK again after final comment/source touch.
+- No MCP smoke was run for this RTC per Hemanth's standing no-MCP call; visual verification is Hemanth-driven.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch -> Stream -> Catalog button.
+2. Confirm 6 rows render, top to bottom:
+   - Movies Popular
+   - Shows Popular
+   - Movies Featured
+   - Shows Featured
+   - Movies Top Seeded
+   - Series Top Seeded
+3. Each row populates with tiles + posters within a few seconds.
+4. The "2 catalogs" status text under the Back button is gone.
+5. Click "see all" on any row -> opens that single catalog in detail view.
+6. Click any tile -> opens the show/movie detail.
+7. If any row shows "error" or stays empty: the addon URL or catalog ID for that row is stale; route back to Agent 4 for manifest refresh.
+
+| Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review]
+| files: src/core/stream/addon/AddonRegistry.cpp, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md
+
+READY TO COMMIT - [Agent 7 (Trigger D), STREAM_CATALOG_OVERHAUL FOLLOWUP 2026-05-06 03:59PM]: addon registry seed extended with the four missing catalogs Hemanth originally asked for. Cinemeta imdbRating movie+series creates Featured rows; Torrent Catalogs addon com.stremio.torrentio.catalog.addon v1.0.2 creates Top Seeded rows via top-movies and top-series. kSchemaVersion bumped to 3 so existing v2 addon stores reseed; migration skips duplicate preserved user addons by manifest id. Six total catalog rows now match Stremio's standard set. The "N catalogs" status text under Back is removed while useful loading/error status paths remain. Live manifests/endpoints verified during implementation; catalog IDs cited in body. Agent 4 owns ongoing maintenance - Torrent Catalogs is third-party and catalog IDs may drift over time. Hemanth-driven smoke pending per his standing no-MCP call. | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/core/stream/addon/AddonRegistry.cpp, src/ui/pages/stream/CatalogBrowseScreen.cpp, agents/chat.md

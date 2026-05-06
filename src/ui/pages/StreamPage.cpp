@@ -147,6 +147,8 @@ void StreamPage::buildUI()
     connect(m_detailView, &StreamDetailView::playRequested, this, &StreamPage::onPlayRequested);
     connect(m_detailView, &StreamDetailView::sourceActivated,
             this, &StreamPage::onSourceActivated);
+    connect(m_detailView, &StreamDetailView::addToTankorentRequested,
+            this, &StreamPage::onAddToTankorentRequested);
     // Phase 3 Batch 3.5 (deferred ship) — direct-URL trailer playback.
     // Routes through the same ad-hoc-stream pattern as Batch 4.3's URL
     // paste handler: synthesize a httpSource Stream, set m_session.pending
@@ -1769,6 +1771,42 @@ void StreamPage::onStreamNextEpisodeShortcut()
     startNextEpisodePrefetch(m_session.pending.imdbId,
                              m_session.pending.season,
                              m_session.pending.episode);
+}
+
+void StreamPage::onAddToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice)
+{
+    // Defensive guard. The card-side menu suppresses the action for
+    // non-magnet sources (StreamSourceCard::contextMenuEvent), so a
+    // signal-arrival here with a bad payload would only happen if a
+    // future code path emits the signal directly without going through
+    // the card. Treat as no-op rather than crash.
+    if (choice.sourceKind != QLatin1String("magnet")
+     || choice.magnetUri.isEmpty()) {
+        qWarning() << "StreamPage::onAddToTankorentRequested: refusing non-magnet"
+                   << "sourceKind=" << choice.sourceKind
+                   << "magnetUri.isEmpty=" << choice.magnetUri.isEmpty();
+        return;
+    }
+
+    // Display name. STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 repurposed
+    // displayTitle to carry the release name (was: addon name). It is
+    // now the right primary identifier here — no longer needs the
+    // displayFilename fallback (field removed). Session-pending fallback
+    // synthesizes a "<imdbId> S<NN>E<NN>" identifier when extractReleaseName
+    // bottomed out at "(unnamed release)" but we have episode context.
+    QString displayName = choice.displayTitle;
+    if ((displayName.isEmpty() || displayName == QLatin1String("(unnamed release)"))
+     && m_session.pending.valid
+     && m_session.pending.mediaType == QLatin1String("series")
+     && m_session.pending.season > 0
+     && m_session.pending.episode > 0) {
+        displayName = QStringLiteral("%1 S%2E%3")
+                          .arg(m_session.pending.imdbId)
+                          .arg(m_session.pending.season, 2, 10, QChar('0'))
+                          .arg(m_session.pending.episode, 2, 10, QChar('0'));
+    }
+
+    emit addToTankorentRequested(choice.magnetUri, displayName);
 }
 
 void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice& choice)

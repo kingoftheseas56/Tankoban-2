@@ -85,6 +85,11 @@ signals:
     // StreamPage saves the choice and hands off to StreamPlayerController.
     void sourceActivated(const tankostream::stream::StreamPickerChoice& choice);
 
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — re-emitted from the embedded
+    // StreamSourceList's addToTankorentRequested signal. StreamPage owns
+    // the next upstream hop into MainWindow.
+    void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+
     // Phase 2 Batch 2.4 — forwarded from StreamSourceList's Pick-different
     // button; StreamPage listens to abort the auto-launch timer.
     void autoLaunchCancelRequested();
@@ -187,16 +192,14 @@ private:
     //   2. Poster (preview hint or library entry) — scaled + darkened
     //   3. Hidden if neither is available
     QLabel*       m_heroLabel     = nullptr;
-    // Phase 3 Batch 3.1 — chip row replacing the old single-line m_infoLabel.
-    // Individual chips hide themselves when their field is empty. m_infoLabel
-    // remains as the first-paint surface (from showEntry's preview hint);
-    // chips are populated by onMetaItemReady once the richer meta lands.
-    QWidget*      m_chipsRow      = nullptr;
-    QLabel*       m_chipYear      = nullptr;
-    QLabel*       m_chipRuntime   = nullptr;
-    QLabel*       m_chipGenres    = nullptr;
-    QLabel*       m_chipRating    = nullptr;
-    QLabel*       m_chipType      = nullptr;
+    // STREAM_DETAIL_METADATA_POLISH 2026-05-06 — single inline metadata
+    // line (year · runtime · genres · type · IMDb rating) replacing the
+    // earlier 5-chip row. Stremio-parity tight muted-gray text below the
+    // title; no boxes, no borders. Hidden via empty-text branch when no
+    // fields populate (e.g. before preview hint lands). Composed by
+    // applyChips() — name + signature retained for caller compat with
+    // showEntry's first-paint and onMetaItemReady's richer-meta paint.
+    QLabel*       m_metaLine      = nullptr;
     // Phase 1 Batch 1.2 — Add/Remove Library toggle in the header area.
     // Text + styling refresh on every showEntry + on libraryChanged. Phase 3
     // Batch 3.1 will restyle when the hero image lands.

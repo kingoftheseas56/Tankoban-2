@@ -28,6 +28,19 @@ class TankorentPage : public QWidget
 public:
     explicit TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget* parent = nullptr);
 
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — cross-page magnet hand-off
+    // entry point. Called by MainWindow::onAddToTankorentRequested when
+    // the user picks "Add torrent to Tankorent" on a Stream-mode source
+    // card. Thin wrapper around the existing private addMagnetBatch
+    // (empty category → m_client->defaultPaths().value("") fallback,
+    // matching the no-category flow); displayName is informational and
+    // appears in m_searchStatus + DebugLogBuffer. Duplicate / invalid
+    // magnets are surfaced through the same status row, not silently
+    // dropped — addMagnetBatch's existing isDuplicate path is
+    // authoritative.
+    void addMagnetFromExternal(const QString& magnetUri,
+                               const QString& displayName);
+
 private:
     void buildUI();
     void buildSearchControls(QVBoxLayout* parent);
@@ -57,9 +70,24 @@ private:
 
     // Iterates a list of magnet URIs through isDuplicate + resolveMetadata +
     // startDownload with a minimal AddTorrentConfig. Returns {added, skipped}.
+    // Used by the bulk add-from-URL path (onAddFromUrlClicked) where popping
+    // a per-magnet AddTorrentDialog 10× would be hostile UX. NOT used by the
+    // single-add flows — those go through startSingleAddFlow below.
     QPair<int, int> addMagnetBatch(const QStringList& magnets,
                                    const QString& category,
                                    bool startImmediately);
+
+    // STREAM_ADD_TO_TANKORENT_DIALOG_FIX 2026-05-06 — shared single-add
+    // body extracted from onAddTorrentClicked. Drives the
+    // resolveMetadata + AddTorrentDialog.exec() + startDownload (or
+    // deleteTorrent on cancel) sequence. Two entry points share it:
+    //   1. onAddTorrentClicked(row): in-Tankorent search-result click
+    //   2. addMagnetFromExternal(magnet, displayName): cross-page hand-off
+    //      from StreamPage's right-click "Add torrent to Tankorent"
+    // Both call this AFTER their own context-specific validation
+    // (row bounds, empty-magnet, etc).
+    void startSingleAddFlow(const QString& magnetUri,
+                            const QString& title);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

@@ -497,15 +497,16 @@ void MainWindow::buildPageStack()
     auto *torrentClient = new TorrentClient(m_bridge, this);
     dbg("4e-torrentclient-created");
 
-    // Stream page
-    auto *streamPage = new StreamPage(m_bridge, torrentClient->engine());
-    m_pageStack->addWidget(streamPage);
+    // Stream page — m_streamPage cache (STREAM_ADD_TO_TANKORENT 2026-05-06)
+    // so we can wire the magnet-handoff signal without a qobject_cast walk.
+    m_streamPage = new StreamPage(m_bridge, torrentClient->engine());
+    m_pageStack->addWidget(m_streamPage);
     dbg("4f-streampage-created");
 
     // Share StreamPage's MetaAggregator with VideosPage for "Fetch poster
     // from internet" context-menu action on folder tiles (Agent 5 Batch 1,
     // per HELP.md 2026-04-15 handshake with Agent 4).
-    m_videosPage->setMetaAggregator(streamPage->metaAggregator());
+    m_videosPage->setMetaAggregator(m_streamPage->metaAggregator());
 
     // Share TorrentClient with VideosPage so the (auto-)rename path can
     // release any active libtorrent record before the folder is moved on
@@ -513,10 +514,18 @@ void MainWindow::buildPageStack()
     // folder + re-downloads, producing the "multiplying folders" symptom.
     m_videosPage->setTorrentClient(torrentClient);
 
-    auto *tankorentPage = new TankorentPage(m_bridge, torrentClient);
-    tankorentPage->setObjectName(PAGE_TANKORENT);
-    m_pageStack->addWidget(tankorentPage);
+    m_tankorentPage = new TankorentPage(m_bridge, torrentClient);
+    m_tankorentPage->setObjectName(PAGE_TANKORENT);
+    m_pageStack->addWidget(m_tankorentPage);
     dbg("4g-tankorentpage-created");
+
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — cross-page magnet hand-off.
+    // Connect after both pages exist; routes the right-click "Add torrent
+    // to Tankorent" action through MainWindow's nav layer rather than
+    // having StreamPage talk directly to TankorentPage (cross-page
+    // coordination convention).
+    connect(m_streamPage, &StreamPage::addToTankorentRequested,
+            this, &MainWindow::onAddToTankorentRequested);
 
     auto *tankoyomiPage = new TankoyomiPage(m_bridge);
     tankoyomiPage->setObjectName(PAGE_TANKOYOMI);
@@ -610,6 +619,35 @@ void MainWindow::activatePage(const QString &pageId)
             break;
         }
     }
+}
+
+// ── STREAM_ADD_TO_TANKORENT cross-page hand-off ─────────────────────────────
+// (2026-05-06) StreamPage emits addToTankorentRequested after the user
+// right-clicks a magnet stream card and picks "Add torrent to Tankorent".
+// This handler activates the Tankorent page and forwards the magnet through
+// TankorentPage's existing addMagnetBatch path (wrapped as
+// addMagnetFromExternal). Page-switch only — does NOT pause/teardown any
+// active stream playback session.
+//
+// Routing simplified vs. Agent 8's wake brief: brief assumed StreamPage →
+// MainWindow → SourcesPage → TankorentPage (4 hops). SourcesPage was
+// `git rm`'d in the SOURCES_SIDEBAR REPLACEMENT ship 2026-05-05;
+// TankorentPage is now a peer page in m_pageStack, so the nav goes
+// straight there.
+void MainWindow::onAddToTankorentRequested(const QString& magnetUri,
+                                           const QString& displayName)
+{
+    if (magnetUri.isEmpty()) {
+        qWarning() << "MainWindow::onAddToTankorentRequested: empty magnet, ignoring";
+        return;
+    }
+    if (!m_tankorentPage) {
+        qWarning() << "MainWindow::onAddToTankorentRequested: m_tankorentPage null";
+        return;
+    }
+
+    activatePage(PAGE_TANKORENT);
+    m_tankorentPage->addMagnetFromExternal(magnetUri, displayName);
 }
 
 // ── Root folders overlay ────────────────────────────────────────────────────

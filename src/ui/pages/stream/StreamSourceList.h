@@ -47,6 +47,11 @@ signals:
     void sourceActivated(const tankostream::stream::StreamPickerChoice& choice);
     void autoLaunchCancelRequested();
 
+    // STREAM_ADD_TO_TANKORENT (2026-05-06) — re-emitted from each card's
+    // addToTankorentRequested signal. StreamDetailView owns the next
+    // upstream hop.
+    void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+
 private:
     void buildUI();
     void clearCards();
