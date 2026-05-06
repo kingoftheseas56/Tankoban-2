@@ -935,32 +935,49 @@ void StreamDetailView::applyChips(const QString& year,
 
     QStringList parts;
 
-    // 2026-04-15 — normalize Stremio "2023–" ongoing format to
-    // "2023–present" so the trailing en-dash doesn't read as a dangling
-    // separator in the chip. Same fix is applied in StreamLibraryLayout
-    // tile subtitles for consistency.
-    QString yearDisplay = year;
-    if (yearDisplay.endsWith(QChar(0x2013)) || yearDisplay.endsWith(QChar('-'))) {
-        yearDisplay.chop(1);
-        yearDisplay += QStringLiteral("\u2013present");
+    if (!year.trimmed().isEmpty()) {
+        // Preserve the Stremio ongoing-series normalization: trailing
+        // en-dash reads as a dangling separator inline; replace with
+        // "<year>-present". Same fix applied in StreamLibraryLayout
+        // tile subtitles for consistency.
+        QString y = year.trimmed();
+        if (y.endsWith(QChar(0x2013)) || y.endsWith(QChar('-'))) {
+            y.chop(1);
+            y += QStringLiteral("\u2013present");
+        }
+        parts << y;
     }
-    setChip(m_chipYear,    yearDisplay);
-    setChip(m_chipRuntime, runtime);
 
-    QString genreText;
+    if (!runtime.trimmed().isEmpty())
+        parts << runtime.trimmed();
+
     if (!genres.isEmpty()) {
         const QStringList firstThree = genres.mid(0, 3);
-        genreText = firstThree.join(QStringLiteral(" \u00B7 "));
+        parts << firstThree.join(QStringLiteral(", "));
     }
-    setChip(m_chipGenres, genreText);
 
-    setChip(m_chipRating, rating.isEmpty() ? QString() : (QStringLiteral("IMDb ") + rating));
-    QString typeText;
-    if (type == QStringLiteral("series"))      typeText = QStringLiteral("Series");
-    else if (type == QStringLiteral("movie"))  typeText = QStringLiteral("Movie");
-    setChip(m_chipType, typeText);
-    // 2026-04-15 — legacy m_infoLabel removed; chips are now the sole
-    // metadata surface. No hide/show coordination needed.
+    if (type == QStringLiteral("series"))
+        parts << QStringLiteral("Series");
+    else if (type == QStringLiteral("movie"))
+        parts << QStringLiteral("Movie");
+
+    if (!rating.trimmed().isEmpty()) {
+        // Plain "IMDb 7.5" \u2014 no star glyph per
+        // feedback_no_color_no_emoji.md (grayscale-only, no emoji,
+        // SVG icons only). U+2605 star would render as a colored
+        // emoji in some font fallbacks; literal text is the safe
+        // parity move with the prior chip's behavior.
+        parts << QStringLiteral("IMDb ") + rating.trimmed();
+    }
+
+    const QString text = parts.join(QStringLiteral(" \u00B7 "));
+
+    if (text.isEmpty()) {
+        m_metaLine->hide();
+    } else {
+        m_metaLine->setText(text);
+        m_metaLine->show();
+    }
 }
 
 // ─── Phase 3 Batch 3.3 — description clamp + show-more toggle ────────────────
