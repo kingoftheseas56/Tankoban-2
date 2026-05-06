@@ -32,8 +32,15 @@ struct StreamPickerChoice {
     QString fileNameHint;
 
     // ── UI display fields ────────────────────────────────────────────────
-    QString     displayTitle;     // bold top line — usually addonName, or "Direct"
-    QString     displayFilename;  // middle line — parsedFilename / fileNameHint / desc
+    // STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — displayTitle semantic
+    // changed: WAS the addon name (Stremio shows release name primary,
+    // we were showing "Torrentio" on every card — useless as
+    // disambiguation when most results come from one addon). Now carries
+    // the extracted release name (e.g. "The.Boys.S03E04.1080p..."); the
+    // addon name moves to the card's footer line via addonName above.
+    // For direct streams with no resolvable release name, falls back to
+    // "Direct stream" so the row still reads.
+    QString     displayTitle;     // primary line — release name (addon-agnostic)
     QString     displayQuality;   // right-aligned pill — "1080p", "4K HDR", "-"
     qint64      sizeBytes = 0;    // raw; card formats via humanSize
     int         seeders   = 0;    // magnet only; -1 for non-magnet (rendered as "-")
@@ -41,6 +48,15 @@ struct StreamPickerChoice {
     QString     trackerSource;    // small-caps footer hint when populated
     bool        isDirect  = false; // true for HTTP/URL direct streams
     int         qualitySort = 0;   // 5=2160p, 4=1440p, 3=1080p, 2=720p, 1=480p, 0=unknown
+
+    // STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — release-shape chip data,
+    // Stremio parity. Surfaced inline on the chip row (between title and
+    // footer) so a glance at a card answers "single episode? season pack?
+    // full series?" without parsing the release name. Empty when no
+    // pattern matches (e.g. movies — no S/E shape to detect, no chip
+    // shown). detectPackType is the populator; see StreamSourceChoice.cpp.
+    QString     packType;         // "" | "episode" | "season" | "series"
+    QString     packLabel;        // "" | "S03E04" | "Season 3" | "Complete Series"
 };
 
 // Build the full sorted picker-choice list from aggregator output.

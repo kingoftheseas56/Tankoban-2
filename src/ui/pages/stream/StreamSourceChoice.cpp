@@ -106,21 +106,166 @@ QString buildMagnetUri(const Stream& stream)
     return uri;
 }
 
-// Pick the best available "filename" to display on the card middle line.
-// Priority: parsedFilename (from the Torrentio enrichment) → source.fileNameHint
-// (Stremio spec field or already-promoted parsedFilename) → behaviorHints.filename
-// → stream.description → stream.name → "(untitled stream)".
-QString bestFilename(const Stream& stream)
+// STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — replaced bestFilename with
+// stricter extractReleaseName contract: returns ONE LINE suitable for the
+// card's primary identifier label (Stremio parity).
+//
+// Priority (addon-agnostic — Torrentio, Comet, MediaFusion, Jackett-relayed
+// addons all emit roughly this shape, with the exact field varying per
+// addon-version):
+//   1. behaviorHints.other["parsedFilename"] — Torrentio-style enrichment;
+//      already a clean single line.
+//   2. source.fileNameHint — Stremio spec field; already clean.
+//   3. behaviorHints.filename — Stremio spec field, alternate carrier.
+//   4. stream.name — addon-supplied; reject if it's just an addon brand
+//      tag with optional resolution echo ("Torrentio", "Torrentio 1080p")
+//      since that's the failure mode we're fixing. Otherwise take
+//      first line.
+//   5. stream.description first line — Torrentio packs the release name
+//      on line 1 with size/seeders/source on subsequent lines marked by
+//      glyphs (💾 4.2 GB, 👤 152, etc). Reject the first line if it's
+//      ITSELF a metadata row (starts with a glyph or "Size:"/"Seeders:").
+//   6. "(unnamed release)" — distinct from the legacy "(untitled stream)"
+//      so smoke can grep for the new failure mode separately.
+QString extractReleaseName(const Stream& stream)
 {
+    auto firstLine = [](const QString& s) -> QString {
+        const int nl = s.indexOf(QLatin1Char('\n'));
+        return (nl < 0 ? s : s.left(nl)).trimmed();
+    };
+
     const QString parsed = stream.behaviorHints.other
                                .value(QStringLiteral("parsedFilename")).toString().trimmed();
-    if (!parsed.isEmpty()) return parsed;
+    if (!parsed.isEmpty()) return firstLine(parsed);
 
-    if (!stream.source.fileNameHint.isEmpty()) return stream.source.fileNameHint;
-    if (!stream.behaviorHints.filename.isEmpty()) return stream.behaviorHints.filename;
-    if (!stream.description.isEmpty()) return stream.description;
-    if (!stream.name.isEmpty()) return stream.name;
-    return QStringLiteral("(untitled stream)");
+    if (!stream.source.fileNameHint.isEmpty())
+        return firstLine(stream.source.fileNameHint);
+    if (!stream.behaviorHints.filename.isEmpty())
+        return firstLine(stream.behaviorHints.filename);
+
+    // stream.name — reject if it's just the addon brand. The pattern
+    // captures "Torrentio", "Comet", "MediaFusion", "Cinemeta" optionally
+    // followed by a resolution token ("Torrentio 1080p"). Anchored so
+    // longer names like "Torrentio Plus +" still pass through.
+    if (!stream.name.isEmpty()) {
+        static const QRegularExpression kAddonBrandOnly(
+            QStringLiteral("^(torrentio|comet|mediafusion|cinemeta|opensubtitles)"
+                           "\\s*(2160p|1440p|1080p|720p|480p|4k)?\\s*$"),
+            QRegularExpression::CaseInsensitiveOption);
+        const QString candidate = firstLine(stream.name);
+        if (!kAddonBrandOnly.match(candidate).hasMatch()) {
+            return candidate;
+        }
+    }
+
+    // stream.description — first line, but reject if it's a metadata row.
+    if (!stream.description.isEmpty()) {
+        const QString line0 = firstLine(stream.description);
+        // Heuristic for metadata-only first lines: starts with a known
+        // metadata glyph (Stremio-style 💾 ≈ U+1F4BE, 👤 ≈ U+1F464) or
+        // a "Size:"/"Seeders:" prefix, OR is purely numeric/sizing data.
+        static const QRegularExpression kMetadataRow(
+            QStringLiteral("^(\\p{So}|\\p{Sc}|\\p{Cs}|size:|seeders:|seeds:|peers:|"
+                           "\\d+(\\.\\d+)?\\s*(b|kb|mb|gb|tb)\\b)"),
+            QRegularExpression::CaseInsensitiveOption);
+        if (!line0.isEmpty() && !kMetadataRow.match(line0).hasMatch()) {
+            return line0;
+        }
+        // First line was metadata — try the second line. Torrentio
+        // sometimes flips order across addon versions (release name on
+        // line 2, metadata on line 1).
+        const int firstNl = stream.description.indexOf(QLatin1Char('\n'));
+        if (firstNl > 0 && firstNl + 1 < stream.description.size()) {
+            const QString line1 = firstLine(stream.description.mid(firstNl + 1));
+            if (!line1.isEmpty() && !kMetadataRow.match(line1).hasMatch()) {
+                return line1;
+            }
+        }
+    }
+
+    return QStringLiteral("(unnamed release)");
+}
+
+// STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — release-shape detector.
+// Walks the release name + (as a fallback) the full description blob for
+// episode/season/series patterns. Returns {packType, packLabel}; both
+// empty on no match (movies, ad-hoc HTTP streams, anything without a
+// recognizable shape token).
+//
+// Priority: episode > season > series. A season pack that name-drops one
+// of its included episodes ("Season 3 (incl S03E04)") will trip the
+// episode detector first — that's fine, Stremio behaves the same way.
+QPair<QString, QString> detectPackType(const QString& releaseName,
+                                        const Stream& stream)
+{
+    // Search both the release name AND the full description blob — some
+    // addons stash the shape token only in description (not in the name).
+    const QString haystack = releaseName + QLatin1Char('\n') + stream.description
+                           + QLatin1Char('\n') + stream.name;
+
+    // 1) Single episode — S03E04, S3E4, 3x04, season 3 episode 4.
+    static const QRegularExpression kEpisodeSE(
+        QStringLiteral("\\bS(\\d{1,2})\\s*[xE]\\s*(\\d{1,3})\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kEpisodeXForm(
+        QStringLiteral("\\b(\\d{1,2})x(\\d{1,3})\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (auto m = kEpisodeSE.match(haystack); m.hasMatch()) {
+        return { QStringLiteral("episode"),
+                 QStringLiteral("S%1E%2")
+                     .arg(m.captured(1).toInt(), 2, 10, QChar('0'))
+                     .arg(m.captured(2).toInt(), 2, 10, QChar('0')) };
+    }
+    if (auto m = kEpisodeXForm.match(haystack); m.hasMatch()) {
+        return { QStringLiteral("episode"),
+                 QStringLiteral("S%1E%2")
+                     .arg(m.captured(1).toInt(), 2, 10, QChar('0'))
+                     .arg(m.captured(2).toInt(), 2, 10, QChar('0')) };
+    }
+
+    // 2) Multi-season pack — "S01-S05", "Season 1-5", "Seasons 1 to 5".
+    //    Detected before single-season because "Season 1-5" contains
+    //    "Season 1" as a substring.
+    static const QRegularExpression kMultiSeason(
+        QStringLiteral("\\b(?:S(\\d{1,2})\\s*-\\s*S(\\d{1,2})|"
+                       "Seasons?\\s*(\\d{1,2})\\s*(?:-|to)\\s*(\\d{1,2}))\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (auto m = kMultiSeason.match(haystack); m.hasMatch()) {
+        return { QStringLiteral("series"),
+                 QStringLiteral("Complete Series") };
+    }
+
+    // 3) Complete-series free-text markers.
+    static const QRegularExpression kCompleteSeries(
+        QStringLiteral("\\b(complete\\s+(series|show|collection)|all\\s+seasons)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (kCompleteSeries.match(haystack).hasMatch()) {
+        return { QStringLiteral("series"),
+                 QStringLiteral("Complete Series") };
+    }
+
+    // 4) Single season — "Season 3", "S03 (without episode)", "Complete Season 3".
+    static const QRegularExpression kSeasonWord(
+        QStringLiteral("\\b(?:complete\\s+)?Seasons?\\s*(\\d{1,2})\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (auto m = kSeasonWord.match(haystack); m.hasMatch()) {
+        return { QStringLiteral("season"),
+                 QStringLiteral("Season %1").arg(m.captured(1).toInt()) };
+    }
+    // "S03" alone (no episode token following) — but be careful: "S03E04"
+    // would have matched kEpisodeSE above, so by the time we reach here
+    // a bare S\d+ implies a season pack. Use a negative-lookahead to
+    // ensure we don't grab the S of an unrecognized SXX*EXX form.
+    static const QRegularExpression kSeasonShort(
+        QStringLiteral("\\bS(\\d{1,2})(?![\\dxE])\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (auto m = kSeasonShort.match(haystack); m.hasMatch()) {
+        return { QStringLiteral("season"),
+                 QStringLiteral("Season %1").arg(m.captured(1).toInt()) };
+    }
+
+    // No shape detected — movie, ad-hoc HTTP stream, or unparseable.
+    return { QString(), QString() };
 }
 
 // Resolve the best addon label. Aggregator threads addon metadata through
@@ -189,8 +334,19 @@ QList<StreamPickerChoice> buildPickerChoices(
 
         resolveAddonLabel(stream, addonsById, c.addonId, c.addonName);
 
-        c.displayTitle    = c.isDirect ? QStringLiteral("Direct") : c.addonName;
-        c.displayFilename = bestFilename(stream);
+        // STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — primary line is now
+        // the release name (Stremio parity); addon name moves to the
+        // card footer line. Direct streams without a resolvable release
+        // name fall back to "Direct stream" so the row still reads.
+        const QString release = extractReleaseName(stream);
+        if (c.isDirect && release == QLatin1String("(unnamed release)")) {
+            c.displayTitle = QStringLiteral("Direct stream");
+        } else {
+            c.displayTitle = release;
+        }
+        const auto pack   = detectPackType(release, stream);
+        c.packType        = pack.first;
+        c.packLabel       = pack.second;
         c.displayQuality  = extractQuality(stream);
         c.sizeBytes       = extractSizeBytes(stream);
         c.seeders         = (stream.source.kind == StreamSource::Kind::Magnet)
@@ -234,7 +390,11 @@ QList<StreamPickerChoice> buildPickerChoices(
             // quality HTTP stream of the same title).
             if (a.qualitySort != b.qualitySort)                return a.qualitySort > b.qualitySort;
             if (a.sizeBytes != b.sizeBytes)                    return a.sizeBytes > b.sizeBytes;
-            return a.displayFilename.toLower() < b.displayFilename.toLower();
+            // STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 — alphabetical
+            // tiebreak now keys on displayTitle (release name) since
+            // displayFilename was removed. Same intent — stable
+            // ordering within a tier.
+            return a.displayTitle.toLower() < b.displayTitle.toLower();
         });
 
     return out;
