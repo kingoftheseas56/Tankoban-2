@@ -24,6 +24,10 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
             this, &TorrentClient::onTorrentFinished);
     connect(m_engine, &TorrentEngine::torrentError,
             this, &TorrentClient::onTorrentError);
+    connect(m_engine, &TorrentEngine::storageMoved,
+            this, &TorrentClient::onStorageMoved);
+    connect(m_engine, &TorrentEngine::storageMoveFailed,
+            this, &TorrentClient::onStorageMoveFailed);
 
     loadRecords();
     m_engine->start();
@@ -257,6 +261,45 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
         m_engine->startTorrent(infoHash, config.destinationPath);
 
     emit torrentAdded(infoHash);
+}
+
+void TorrentClient::moveStorage(const QString& infoHash, const QString& newSavePath)
+{
+    if (newSavePath.isEmpty()) return;
+    if (!m_records.contains(infoHash)) return;
+
+    QJsonObject rec = m_records[infoHash].toObject();
+    const QString oldSavePath = rec.value("savePath").toString();
+    const QString category    = rec.value("category").toString();
+
+    // Same path = no-op (avoid spurious storage_moved_alert + rescan churn).
+    if (QDir(oldSavePath).absolutePath().compare(
+            QDir(newSavePath).absolutePath(), Qt::CaseInsensitive) == 0) {
+        return;
+    }
+
+    // Ensure destination exists. libtorrent will create the torrent's own
+    // subfolder, but the parent must exist or move_storage fails immediately.
+    QDir().mkpath(newSavePath);
+
+    // Optimistic record update — mirrors startTorrent's pattern. If
+    // libtorrent ultimately reports failure, onStorageMoveFailed reverts
+    // the record below.
+    rec["savePath"] = newSavePath;
+    m_records[infoHash] = rec;
+    saveRecords();
+
+    m_engine->moveStorage(infoHash, newSavePath);
+    emit torrentUpdated(infoHash);
+
+    // Notify rescan on both old and new category roots so library views
+    // refresh — old folder may now be empty, new folder will be filling.
+    // The actual rescan fires after libtorrent's move completes (in
+    // onStorageMoved); this immediate emit covers any UI that just wants
+    // the row to redraw with the new savePath.
+    if (m_bridge && !category.isEmpty()) {
+        m_bridge->notifyRootFoldersChanged(category);
+    }
 }
 
 float TorrentClient::downloadProgress(const QString& folderPath) const
@@ -557,6 +600,54 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("error");
         rec["errorMessage"] = message;
+        m_records[infoHash] = rec;
+        saveRecords();
+    }
+    emit torrentUpdated(infoHash);
+}
+
+void TorrentClient::onStorageMoved(const QString& infoHash, const QString& newPath)
+{
+    qDebug() << "Torrent storage moved:" << infoHash << "→" << newPath;
+    if (!m_records.contains(infoHash)) return;
+
+    // Reconcile the persisted savePath with what libtorrent actually settled
+    // on (paths may have been canonicalized/normalized by the OS during move).
+    QJsonObject rec = m_records[infoHash].toObject();
+    rec["savePath"] = newPath;
+    m_records[infoHash] = rec;
+    saveRecords();
+
+    emit torrentUpdated(infoHash);
+
+    // Library rescan now that files are physically at the new location. Match
+    // newPath against this category's tracked roots — same prefix-match shape
+    // as onTorrentFinished (TorrentClient.cpp completion handler).
+    const QString category = rec.value("category").toString();
+    if (m_bridge && !category.isEmpty()) {
+        const QString normNew = QDir(newPath).absolutePath();
+        for (const QString& root : m_bridge->rootFolders(category)) {
+            const QString normRoot = QDir(root).absolutePath();
+            if (normNew.startsWith(normRoot, Qt::CaseInsensitive)) {
+                m_bridge->notifyRootFoldersChanged(category);
+                break;
+            }
+        }
+    }
+}
+
+void TorrentClient::onStorageMoveFailed(const QString& infoHash, const QString& message)
+{
+    qWarning() << "Torrent move_storage failed:" << infoHash << message;
+    // The optimistic savePath update from moveStorage() above is now stale —
+    // files never made it. Stamp the error onto the record so the UI can
+    // surface it, but leave the savePath as-is: libtorrent will keep serving
+    // from wherever the files actually are, and the user can retry the move
+    // or delete+re-add. Reverting savePath would risk pointing at a folder
+    // that's now half-moved (libtorrent doesn't roll back partial copies).
+    if (m_records.contains(infoHash)) {
+        QJsonObject rec = m_records[infoHash].toObject();
+        rec["errorMessage"] = QStringLiteral("Move failed: ") + message;
         m_records[infoHash] = rec;
         saveRecords();
     }

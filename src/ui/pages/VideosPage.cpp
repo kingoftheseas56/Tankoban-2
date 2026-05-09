@@ -409,8 +409,26 @@ void VideosPage::buildUI()
         if (m_torrentClient)
             m_torrentClient->releaseFolder(oldPath);
 
-        if (!QFile::rename(oldPath, newPath))
+        // Retry rename on transient sharing violations. lt::session::remove_torrent
+        // (called from releaseFolder above) is asynchronous — file handles can
+        // stay open for hundreds of ms while libtorrent's disk thread flushes
+        // + closes per-file mmaps. Other holders (PosterCache, AV scanners,
+        // Explorer preview pane) can also momentarily lock the parent on
+        // Windows. Retry every 100ms for ~1s; the rename succeeds the instant
+        // any holder releases, regardless of which one it was.
+        bool renamed = false;
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            if (QFile::rename(oldPath, newPath)) {
+                renamed = true;
+                break;
+            }
+            QThread::msleep(100);
+        }
+        if (!renamed) {
+            qWarning() << "renameShowFolder: rename failed after 10 retries —"
+                       << oldPath << "→" << newPath;
             return false;
+        }
 
         for (const auto& m : migrations) {
             const QString newFile = QDir(newPath).absoluteFilePath(m.relPath);

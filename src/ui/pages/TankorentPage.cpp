@@ -37,6 +37,8 @@
 #include <QTimer>
 #include <QIcon>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileDialog>
 #include <QUrl>
 #include <QMessageBox>
 #include <QProgressBar>
@@ -234,6 +236,27 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     // Transfers table context menu
     connect(m_transfersTable, &QTableWidget::customContextMenuRequested,
             this, &TankorentPage::showTransfersContextMenu);
+
+    // Storage-move feedback toasts. Fire from libtorrent via TorrentClient's
+    // alert handlers when a "Set Location..." invocation completes or fails.
+    // Capture the torrent name lazily via listActive() lookup so we don't
+    // hold a dangling reference if the row was removed mid-move.
+    connect(m_client->engine(), &TorrentEngine::storageMoved, this,
+        [this](const QString& infoHash, const QString& newPath) {
+            QString name = infoHash.left(10);
+            for (const auto& t : m_client->listActive()) {
+                if (t.infoHash == infoHash) { name = t.name; break; }
+            }
+            Toast::show(this, tr("Moved \"%1\" to %2").arg(name, newPath));
+        });
+    connect(m_client->engine(), &TorrentEngine::storageMoveFailed, this,
+        [this](const QString& infoHash, const QString& message) {
+            QString name = infoHash.left(10);
+            for (const auto& t : m_client->listActive()) {
+                if (t.infoHash == infoHash) { name = t.name; break; }
+            }
+            Toast::show(this, tr("Move failed for \"%1\": %2").arg(name, message));
+        });
 
     // Double-click or Info column click opens TorrentPropertiesWidget.
     auto openPropertiesFor = [this](int row) {
@@ -1610,6 +1633,28 @@ void TankorentPage::showTransfersContextMenu(const QPoint& pos)
             QDesktopServices::openUrl(QUrl::fromLocalFile(firstInfo.savePath));
     });
     openFolder->setEnabled(!firstInfo.savePath.isEmpty());
+
+    // Set Location — relocate the torrent's downloaded files to a new folder.
+    // Single-selection only; multi-select move would need batched confirmation
+    // and per-row destination handling that's out of scope for v1.
+    auto* setLocationAction = menu->addAction("Set Location...", this,
+        [this, firstHash, firstInfo]() {
+            const QString seed = firstInfo.savePath.isEmpty()
+                ? QDir::homePath()
+                : firstInfo.savePath;
+            const QString chosen = QFileDialog::getExistingDirectory(
+                this, tr("Set Location: %1").arg(firstInfo.name), seed,
+                QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+            if (chosen.isEmpty()) return;
+            if (QDir(chosen).absolutePath().compare(
+                    QDir(firstInfo.savePath).absolutePath(),
+                    Qt::CaseInsensitive) == 0) {
+                return;
+            }
+            m_client->moveStorage(firstHash, chosen);
+            Toast::show(this, tr("Moving \"%1\"...").arg(firstInfo.name));
+        });
+    setLocationAction->setEnabled(selectedHashes.size() == 1);
 
     menu->addAction("View Files...", this, [this, firstHash]() {
         auto* dlg = new TorrentPropertiesWidget(m_client, this);

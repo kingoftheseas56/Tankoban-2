@@ -165,6 +165,16 @@ private:
             else if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
                 qWarning() << "Resume data save failed:" << a->message().c_str();
             }
+            else if (auto* sma = lt::alert_cast<lt::storage_moved_alert>(a)) {
+                auto hash = TorrentEngine::hashToHex(sma->handle);
+                QString newPath = QString::fromUtf8(sma->storage_path());
+                emit m_engine->storageMoved(hash, newPath);
+            }
+            else if (auto* smf = lt::alert_cast<lt::storage_moved_failed_alert>(a)) {
+                auto hash = TorrentEngine::hashToHex(smf->handle);
+                emit m_engine->storageMoveFailed(hash,
+                    QString::fromStdString(smf->message()));
+            }
             // STREAM_ENGINE_REBUILD P2 — pieceFinished signal surface. The
             // piece_progress alert category is enabled unconditionally below
             // (applySettings alert_mask); each piece_finished_alert becomes
@@ -793,6 +803,23 @@ void TorrentEngine::startTorrent(const QString& infoHash, const QString& newSave
     }
 
     it->handle.resume();
+}
+
+void TorrentEngine::moveStorage(const QString& infoHash, const QString& newSavePath)
+{
+    if (newSavePath.isEmpty()) return;
+
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid()) return;
+    if (newSavePath == it->savePath) return;
+
+    // libtorrent does the heavy lifting — move existing files, verify, then
+    // serve from the new location. dont_replace preserves any pre-existing
+    // files at the destination (matches qBittorrent's default behavior).
+    it->handle.move_storage(newSavePath.toStdString(),
+                            lt::move_flags_t::dont_replace);
+    it->savePath = newSavePath;
 }
 
 void TorrentEngine::resumeTorrent(const QString& infoHash)
@@ -1696,6 +1723,7 @@ void TorrentEngine::stop() {}
 QString TorrentEngine::addMagnet(const QString&, const QString&, bool) { return {}; }
 QString TorrentEngine::addFromResume(const QString&, const QString&, bool) { return {}; }
 void TorrentEngine::startTorrent(const QString&, const QString&) {}
+void TorrentEngine::moveStorage(const QString&, const QString&) {}
 void TorrentEngine::setFilePriorities(const QString&, const QVector<int>&) {}
 void TorrentEngine::renameFile(const QString&, int, const QString&) {}
 QList<TrackerInfo> TorrentEngine::trackersFor(const QString&) const { return {}; }

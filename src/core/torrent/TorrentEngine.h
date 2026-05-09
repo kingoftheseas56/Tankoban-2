@@ -115,6 +115,13 @@ public:
     void    setSequentialDownload(const QString& infoHash, bool sequential);
     void    flattenFiles(const QString& infoHash);
     void    startTorrent(const QString& infoHash, const QString& newSavePath);
+    // Relocate an active/completed torrent's save path. Mirrors qBittorrent's
+    // "Set Location" — wraps libtorrent::torrent_handle::move_storage(), which
+    // copies+verifies files asynchronously and emits storage_moved_alert on
+    // success or storage_moved_failed_alert on failure. The engine's in-memory
+    // record's savePath is updated optimistically; consumers should listen on
+    // storageMoveFailed and revert their persisted state if the move fails.
+    void    moveStorage(const QString& infoHash, const QString& newSavePath);
     void    resumeTorrent(const QString& infoHash);
     void    pauseTorrent(const QString& infoHash);
     void    removeTorrent(const QString& infoHash, bool deleteFiles = false);
@@ -316,6 +323,14 @@ signals:
                          int dlSpeed, int ulSpeed, int peers, int seeds);
     void torrentFinished(const QString& infoHash);
     void torrentError(const QString& infoHash, const QString& message);
+
+    // Emitted when libtorrent finishes relocating a torrent's storage. Fired
+    // from the AlertWorker thread on storage_moved_alert / storage_moved_failed_alert
+    // — receivers must connect with QueuedConnection (Qt::AutoConnection from a
+    // main-thread receiver resolves to that). Pure observation; no state change
+    // happens inside the emit.
+    void storageMoved(const QString& infoHash, const QString& newPath);
+    void storageMoveFailed(const QString& infoHash, const QString& message);
 
     // STREAM_ENGINE_REBUILD P2 — emitted once per libtorrent
     // piece_finished_alert from the AlertWorker thread. Consumers must

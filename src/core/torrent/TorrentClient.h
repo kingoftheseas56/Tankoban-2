@@ -65,6 +65,15 @@ public:
     void resumeTorrent(const QString& infoHash);
     void deleteTorrent(const QString& infoHash, bool deleteFiles);
 
+    // Relocate the torrent's downloaded files to a new save path. Optimistic
+    // update of the persisted record + immediate libtorrent move_storage call;
+    // libtorrent emits storage_moved_alert on success or
+    // storage_moved_failed_alert on failure (handled in onStorageMoved /
+    // onStorageMoveFailed). Triggers a library rescan for both the old and
+    // new path's category roots so library views refresh after the move
+    // completes.
+    void moveStorage(const QString& infoHash, const QString& newSavePath);
+
     // Force operations
     void forceStart(const QString& infoHash);
     void clearForceStart(const QString& infoHash);
@@ -111,6 +120,8 @@ private slots:
                          qint64 totalSize, const QJsonArray& files);
     void onTorrentFinished(const QString& infoHash);
     void onTorrentError(const QString& infoHash, const QString& message);
+    void onStorageMoved(const QString& infoHash, const QString& newPath);
+    void onStorageMoveFailed(const QString& infoHash, const QString& message);
 
 private:
     void loadRecords();
