@@ -98,8 +98,20 @@ int main(int argc, char *argv[])
 #endif
 
     QApplication app(argc, argv);
+    // TANKOBAN_BETA_DATA_NAMESPACE 2026-05-07 — beta builds persist user
+    // data (settings, JsonStore, library, posters) under
+    // %APPDATA%\TankobanBeta\ instead of %APPDATA%\Tankoban\, so a
+    // beta install can coexist with an active dev tree without sharing
+    // schema state. Define is set at build time via
+    // -DTANKOBAN_BETA=ON in CMake; dev builds leave it undefined.
+#ifdef TANKOBAN_BETA_DATA_NAMESPACE
+    app.setApplicationName("TankobanBeta");
+    app.setOrganizationName("TankobanBeta");
+    app.setApplicationDisplayName("Tankoban Beta");
+#else
     app.setApplicationName("Tankoban");
     app.setOrganizationName("Tankoban");
+#endif
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
 

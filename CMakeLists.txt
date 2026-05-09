@@ -7,6 +7,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# TANKOBAN_BETA_DATA_NAMESPACE 2026-05-07 — when -DTANKOBAN_BETA=ON, the
+# build sets the TANKOBAN_BETA_DATA_NAMESPACE preprocessor define so
+# main.cpp registers QApplication under "TankobanBeta" instead of
+# "Tankoban", isolating beta user data (%APPDATA%\TankobanBeta\) from
+# the active dev tree's data dir. Defaults to OFF so dev builds remain
+# unchanged.
+option(TANKOBAN_BETA "Build a beta-flavored binary that uses an isolated user data dir" OFF)
+
 # ── Qt6 ──────────────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS
     Core
@@ -165,6 +173,7 @@ set(SOURCES
     src/core/stream/StreamAggregator.cpp
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/CalendarEngine.cpp
+    src/core/stream/StreamBulkPlan.cpp
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
@@ -311,6 +320,7 @@ set(HEADERS
     src/core/stream/StreamAggregator.h
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/CalendarEngine.h
+    src/core/stream/StreamBulkPlan.h
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamSearchWidget.h
@@ -379,6 +389,12 @@ if(TARGET Qt6::Multimedia)
 endif()
 
 target_link_libraries(Tankoban PRIVATE Qt6::Svg)
+
+# TANKOBAN_BETA_DATA_NAMESPACE — see top-of-file option block.
+if(TANKOBAN_BETA)
+    target_compile_definitions(Tankoban PRIVATE TANKOBAN_BETA_DATA_NAMESPACE=1)
+    message(STATUS "Tankoban: BETA build — user data namespaces to TankobanBeta")
+endif()
 
 # MAKE_MPV_BEAT_FFMPEG Task 1 (2026-05-02): main-app libplacebo + Vulkan build prep.
 set(LIBPLACEBO_MSVC_ROOT "C:/tools/libplacebo-msvc" CACHE PATH "MSVC libplacebo install for Tankoban main app")
