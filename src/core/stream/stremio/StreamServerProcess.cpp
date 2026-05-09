@@ -106,7 +106,42 @@ bool StreamServerProcess::start(const QString& cacheDir)
     // Ensure cacheDir exists so server.js doesn't bomb trying to mkdir.
     if (!cacheDir.isEmpty()) {
         QDir().mkpath(cacheDir);
-        writeServerSettings(cacheDir);
+        // STREAM_SERVER_BT_TUNING_REVERT 2026-05-08 — writeServerSettings()
+        // call disabled. Hemanth-reported regression 2026-05-07 ~16:00pm:
+        // "video doesn't play, only shows frames, no audio, too much
+        // buffering". Diagnosis evidence (Phase 1 systematic-debugging,
+        // /superpowers:systematic-debugging):
+        //   - Live <cacheDir>/server-settings.json showed merged state
+        //     with overrides applied: btMaxConnections=200 (vs server.js
+        //     default 55, 3.6×), btDownloadSpeedHardLimit=104857600 (100
+        //     MB/s vs default 3.5 MB/s, 28.5×), btRequestTimeout=8000
+        //     (vs 4000ms, 2×), btMinPeersForStable=10.
+        //   - stream_telemetry.log post-override (May 7 06:00–10:30 IST)
+        //     showed multiple metadata_ready→cancelled-within-60s
+        //     patterns with progress=0; pre-override sidecar_debug_live.log
+        //     baseline (May 5 22:36) was a long healthy 25fps playback
+        //     session with PGS subtitle overlay decoding cleanly.
+        //   - ipc_latency.log was healthy throughout (1–5ms p50 on most
+        //     cmds), ruling out sidecar IPC saturation.
+        // Hypothesis: the bandwidth jump from 3.5 MB/s → 100 MB/s breaks
+        // stream-server's streaming-optimized piece scheduler. Stremio's
+        // server.js piece picker assumes a throttled budget — pieces near
+        // the play head are sequentially prioritized at 3.5 MB/s. With
+        // the cap raised, libtorrent fans out requests to non-sequential
+        // pieces; audio packets (typically scattered through the byte
+        // stream) arrive after video frames, causing silent playback +
+        // perpetual buffering.
+        // The Experiment 1 win the function was trying to restore
+        // (89.5% cold-open improvement, 86.3% p99 wait reduction) was
+        // achieved on the OLD libtorrent C++ engine where Tankoban had
+        // direct piece-priority control. On stream-server's bundled
+        // libtorrent we have no such control; the override is the wrong
+        // tool for this engine's piece-scheduling model.
+        // Function preserved for a possible future stream-server-
+        // compatible re-tune (smaller delta, env-gated opt-in, or a
+        // different mechanism that respects sequential piece priority).
+        // To re-enable for testing: uncomment the call below.
+        // writeServerSettings(cacheDir);
     }
 
     // Process environment: inherit system, then override our two knobs.
