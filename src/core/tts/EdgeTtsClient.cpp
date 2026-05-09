@@ -8,10 +8,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QElapsedTimer>
 #include <QRandomGenerator>
+#include <QSslSocket>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
+#include <QUrl>
 #include <QUuid>
 
 #ifdef HAS_WEBSOCKETS
@@ -32,10 +35,10 @@ constexpr const char* kTrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 constexpr const char* kWssBase =
     "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
 
-// Edge browser version pinned to a recent stable. The Sec-MS-GEC-Version
-// header echoes this; Microsoft accepts a window of versions but we pick
-// one that mirrors what Edge actually sends today.
-constexpr const char* kEdgeVersion = "1-130.0.2849.68";
+// Edge browser version pinned to the current public edge-tts protocol value.
+// The endpoint rejects stale Sec-MS-GEC-Version values with HTTP 403 before
+// the WebSocket upgrade, so keep this aligned with rany2/edge-tts constants.
+constexpr const char* kEdgeVersion = "1-143.0.3650.75";
 
 // User-Agent + Origin spoofed to match what real Edge sends. Microsoft's
 // endpoint does not strictly require these but inconsistent values can
@@ -43,8 +46,8 @@ constexpr const char* kEdgeVersion = "1-130.0.2849.68";
 constexpr const char* kUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0.0.0 Safari/537.36 "
-    "Edg/130.0.0.0";
+    "Chrome/143.0.3650.75 Safari/537.36 "
+    "Edg/143.0.3650.75";
 
 constexpr const char* kOrigin =
     "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
@@ -174,13 +177,420 @@ void EdgeTtsClient::buildVoiceTable() {
 
 #ifndef HAS_WEBSOCKETS
 
-EdgeTtsClient::ProbeResult EdgeTtsClient::probe(const QString&) {
-    return {false, QStringLiteral("websockets_unavailable")};
+namespace {
+
+struct ManualFrame {
+    bool ok = false;
+    quint8 opcode = 0;
+    QByteArray payload;
+    QString error;
+};
+
+struct ManualRoundTripOutcome {
+    bool gotAudio = false;
+    bool gotTurnEnd = false;
+    QByteArray mp3;
+    QJsonArray boundaries;
+    QString errorReason;
+};
+
+QString manualConnectionId() {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').toLower();
 }
 
-EdgeTtsClient::SynthResult EdgeTtsClient::synth(const QString&, const QString&,
-                                                double, double) {
-    return {false, {}, {}, QStringLiteral("websockets_unavailable")};
+QString manualRequestId() {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').toLower();
+}
+
+QString manualMuidCookie() {
+    QString out;
+    out.reserve(32);
+    auto* rng = QRandomGenerator::global();
+    for (int i = 0; i < 32; ++i) {
+        const int v = rng->bounded(16);
+        out.append(QChar::fromLatin1(v < 10 ? '0' + v : 'A' + (v - 10)));
+    }
+    return out;
+}
+
+QString manualTimestamp() {
+    return QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzzZ"));
+}
+
+QString manualSanitizeXml(const QString& raw) {
+    QString out;
+    out.reserve(raw.size());
+    for (QChar c : raw) {
+        if (c == QChar('&')) out.append(QStringLiteral("&amp;"));
+        else if (c == QChar('<')) out.append(QStringLiteral("&lt;"));
+        else if (c == QChar('>')) out.append(QStringLiteral("&gt;"));
+        else if (c == QChar('"')) out.append(QStringLiteral("&quot;"));
+        else if (c == QChar('\'')) out.append(QStringLiteral("&apos;"));
+        else if (c.isPrint() || c.isSpace()) out.append(c);
+    }
+    return out;
+}
+
+QString manualRatePercent(double rate) {
+    const int pct = static_cast<int>((rate - 1.0) * 100.0 + (rate >= 1.0 ? 0.5 : -0.5));
+    return pct >= 0 ? QStringLiteral("+%1%").arg(pct)
+                    : QStringLiteral("%1%").arg(pct);
+}
+
+QString manualPitchHz(double pitch) {
+    const int hz = static_cast<int>((pitch - 1.0) * 50.0);
+    return hz >= 0 ? QStringLiteral("+%1Hz").arg(hz)
+                   : QStringLiteral("%1Hz").arg(hz);
+}
+
+QString manualSpeechConfigMessage(const QString& outputFormat) {
+    QJsonObject metadataOpts{
+        {"sentenceBoundaryEnabled", QStringLiteral("false")},
+        {"wordBoundaryEnabled", QStringLiteral("true")},
+    };
+    QJsonObject audio{
+        {"metadataoptions", metadataOpts},
+        {"outputFormat", outputFormat},
+    };
+    QJsonObject synthesis{{"audio", audio}};
+    QJsonObject context{{"synthesis", synthesis}};
+    QJsonObject root{{"context", context}};
+    const QByteArray body = QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+    return QStringLiteral("X-Timestamp:%1\r\n"
+                          "Content-Type:application/json; charset=utf-8\r\n"
+                          "Path:speech.config\r\n\r\n%2")
+        .arg(manualTimestamp(), QString::fromUtf8(body));
+}
+
+QString manualSsmlMessage(const QString& requestId, const QString& text,
+                          const QString& voice, double rate, double pitch) {
+    QString locale = QStringLiteral("en-US");
+    const int dash2 = voice.indexOf('-', voice.indexOf('-') + 1);
+    if (dash2 > 0) locale = voice.left(dash2);
+
+    const QString ssml =
+        QStringLiteral("<speak version='1.0' "
+                       "xmlns='http://www.w3.org/2001/10/synthesis' "
+                       "xml:lang='%1'>"
+                       "<voice name='%2'>"
+                       "<prosody pitch='%3' rate='%4' volume='+0%'>%5</prosody>"
+                       "</voice></speak>")
+            .arg(locale, voice, manualPitchHz(pitch), manualRatePercent(rate),
+                 manualSanitizeXml(text));
+
+    return QStringLiteral("X-RequestId:%1\r\n"
+                          "Content-Type:application/ssml+xml\r\n"
+                          "X-Timestamp:%2\r\n"
+                          "Path:ssml\r\n\r\n%3")
+        .arg(requestId, manualTimestamp(), ssml);
+}
+
+QByteArray manualParseBinaryFrame(const QByteArray& raw, QString* outPath) {
+    if (outPath) outPath->clear();
+    if (raw.size() < 2) return {};
+    const quint16 headerLen = (static_cast<quint8>(raw[0]) << 8) |
+                              static_cast<quint8>(raw[1]);
+    if (raw.size() < 2 + headerLen) return {};
+    const QByteArray headerBytes = raw.mid(2, headerLen);
+    if (outPath) {
+        const QStringList lines = QString::fromUtf8(headerBytes).split(QStringLiteral("\r\n"));
+        for (const QString& line : lines) {
+            if (line.startsWith(QStringLiteral("Path:"))) {
+                *outPath = line.mid(5).trimmed();
+                break;
+            }
+        }
+    }
+    return raw.mid(2 + headerLen);
+}
+
+bool manualReadUntil(QSslSocket& socket, QByteArray* buffer, qsizetype bytesNeeded, QElapsedTimer& timer, int timeoutMs) {
+    while (buffer->size() < bytesNeeded) {
+        const int remaining = timeoutMs - static_cast<int>(timer.elapsed());
+        if (remaining <= 0) return false;
+        if (!socket.waitForReadyRead(qMin(remaining, 1000))) {
+            if (socket.error() != QAbstractSocket::UnknownSocketError) return false;
+        }
+        buffer->append(socket.readAll());
+    }
+    return true;
+}
+
+bool manualWriteFrame(QSslSocket& socket, quint8 opcode, const QByteArray& payload) {
+    QByteArray frame;
+    frame.append(static_cast<char>(0x80 | (opcode & 0x0F)));
+    const quint64 len = static_cast<quint64>(payload.size());
+    if (len <= 125) {
+        frame.append(static_cast<char>(0x80 | static_cast<quint8>(len)));
+    } else if (len <= 0xFFFF) {
+        frame.append(static_cast<char>(0x80 | 126));
+        frame.append(static_cast<char>((len >> 8) & 0xFF));
+        frame.append(static_cast<char>(len & 0xFF));
+    } else {
+        frame.append(static_cast<char>(0x80 | 127));
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            frame.append(static_cast<char>((len >> shift) & 0xFF));
+        }
+    }
+
+    QByteArray mask(4, Qt::Uninitialized);
+    const quint32 m = QRandomGenerator::global()->generate();
+    mask[0] = static_cast<char>((m >> 24) & 0xFF);
+    mask[1] = static_cast<char>((m >> 16) & 0xFF);
+    mask[2] = static_cast<char>((m >> 8) & 0xFF);
+    mask[3] = static_cast<char>(m & 0xFF);
+    frame.append(mask);
+    for (int i = 0; i < payload.size(); ++i) {
+        frame.append(static_cast<char>(static_cast<quint8>(payload[i]) ^
+                                       static_cast<quint8>(mask[i % 4])));
+    }
+
+    return socket.write(frame) == frame.size() && socket.flush();
+}
+
+ManualFrame manualReadFrame(QSslSocket& socket, QByteArray* buffer, QElapsedTimer& timer, int timeoutMs) {
+    ManualFrame out;
+    if (!manualReadUntil(socket, buffer, 2, timer, timeoutMs)) {
+        out.error = QStringLiteral("wss_read_timeout");
+        return out;
+    }
+    const quint8 b0 = static_cast<quint8>((*buffer)[0]);
+    const quint8 b1 = static_cast<quint8>((*buffer)[1]);
+    const bool masked = (b1 & 0x80) != 0;
+    quint64 len = b1 & 0x7F;
+    qsizetype pos = 2;
+    if (len == 126) {
+        if (!manualReadUntil(socket, buffer, pos + 2, timer, timeoutMs)) {
+            out.error = QStringLiteral("wss_read_timeout");
+            return out;
+        }
+        len = (static_cast<quint8>((*buffer)[pos]) << 8) |
+              static_cast<quint8>((*buffer)[pos + 1]);
+        pos += 2;
+    } else if (len == 127) {
+        if (!manualReadUntil(socket, buffer, pos + 8, timer, timeoutMs)) {
+            out.error = QStringLiteral("wss_read_timeout");
+            return out;
+        }
+        len = 0;
+        for (int i = 0; i < 8; ++i) {
+            len = (len << 8) | static_cast<quint8>((*buffer)[pos + i]);
+        }
+        pos += 8;
+    }
+    QByteArray mask;
+    if (masked) {
+        if (!manualReadUntil(socket, buffer, pos + 4, timer, timeoutMs)) {
+            out.error = QStringLiteral("wss_read_timeout");
+            return out;
+        }
+        mask = buffer->mid(pos, 4);
+        pos += 4;
+    }
+    if (len > static_cast<quint64>(64 * 1024 * 1024)) {
+        out.error = QStringLiteral("wss_frame_too_large");
+        return out;
+    }
+    if (!manualReadUntil(socket, buffer, pos + static_cast<qsizetype>(len), timer, timeoutMs)) {
+        out.error = QStringLiteral("wss_read_timeout");
+        return out;
+    }
+    QByteArray payload = buffer->mid(pos, static_cast<qsizetype>(len));
+    buffer->remove(0, pos + static_cast<qsizetype>(len));
+    if (masked) {
+        for (int i = 0; i < payload.size(); ++i) {
+            payload[i] = static_cast<char>(static_cast<quint8>(payload[i]) ^
+                                           static_cast<quint8>(mask[i % 4]));
+        }
+    }
+    out.ok = true;
+    out.opcode = b0 & 0x0F;
+    out.payload = std::move(payload);
+    return out;
+}
+
+void manualAppendMetadataBoundaries(const QByteArray& payload, QJsonArray* boundaries) {
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+    const QJsonArray metadata = doc.object().value(QStringLiteral("Metadata")).toArray();
+    for (const QJsonValue& v : metadata) {
+        const QJsonObject m = v.toObject();
+        if (m.value(QStringLiteral("Type")).toString() != QStringLiteral("WordBoundary")) continue;
+        const QJsonObject data = m.value(QStringLiteral("Data")).toObject();
+        const qint64 offsetTicks = static_cast<qint64>(data.value(QStringLiteral("Offset")).toDouble(0.0));
+        const QJsonObject textObj = data.value(QStringLiteral("text")).toObject();
+        const QString text = textObj.value(QStringLiteral("Text")).toString();
+        if (text.isEmpty()) continue;
+        QJsonObject entry;
+        entry.insert(QStringLiteral("text"), text);
+        entry.insert(QStringLiteral("offsetMs"), static_cast<qint64>(offsetTicks / 10000));
+        boundaries->append(entry);
+    }
+}
+
+ManualRoundTripOutcome manualRoundTrip(const QString& text, const QString& voice,
+                                       double rate, double pitch, int timeoutMs) {
+    ManualRoundTripOutcome out;
+    const QString secMsGec = EdgeTtsClient::generateSecMSGEC(QDateTime::currentSecsSinceEpoch());
+    const QString urlText = QStringLiteral("%1?TrustedClientToken=%2"
+                                           "&ConnectionId=%3"
+                                           "&Sec-MS-GEC=%4"
+                                           "&Sec-MS-GEC-Version=%5")
+                                .arg(QString::fromLatin1(kWssBase),
+                                     QString::fromLatin1(kTrustedClientToken),
+                                     manualConnectionId(), secMsGec,
+                                     QString::fromLatin1(kEdgeVersion));
+    const QUrl url(urlText);
+    QSslSocket socket;
+    socket.connectToHostEncrypted(url.host(), 443);
+    if (!socket.waitForEncrypted(5000)) {
+        qDebug() << "[EdgeTtsClient] manual WSS TLS failed:" << socket.errorString();
+        out.errorReason = QStringLiteral("wss_handshake_fail");
+        return out;
+    }
+
+    QByteArray keyBytes(16, Qt::Uninitialized);
+    for (int i = 0; i < keyBytes.size(); ++i) {
+        keyBytes[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
+    }
+    const QByteArray secKey = keyBytes.toBase64();
+    const QByteArray target = (url.path() + QStringLiteral("?") + url.query(QUrl::FullyEncoded)).toUtf8();
+    QByteArray req;
+    req += "GET " + target + " HTTP/1.1\r\n";
+    req += "Host: " + url.host().toLatin1() + "\r\n";
+    req += "Upgrade: websocket\r\n";
+    req += "Connection: Upgrade\r\n";
+    req += "Sec-WebSocket-Version: 13\r\n";
+    req += "Sec-WebSocket-Key: " + secKey + "\r\n";
+    req += "User-Agent: " + QByteArray(kUserAgent) + "\r\n";
+    req += "Origin: " + QByteArray(kOrigin) + "\r\n";
+    req += "Cache-Control: no-cache\r\n";
+    req += "Pragma: no-cache\r\n";
+    req += "Cookie: MUID=" + manualMuidCookie().toLatin1() + "\r\n";
+    req += "\r\n";
+    socket.write(req);
+    if (!socket.waitForBytesWritten(5000)) {
+        out.errorReason = QStringLiteral("wss_handshake_fail");
+        return out;
+    }
+
+    QByteArray buffer;
+    QElapsedTimer timer;
+    timer.start();
+    while (!buffer.contains("\r\n\r\n")) {
+        const int remaining = 5000 - static_cast<int>(timer.elapsed());
+        if (remaining <= 0 || !socket.waitForReadyRead(qMin(remaining, 1000))) {
+            qDebug() << "[EdgeTtsClient] manual WSS HTTP upgrade timeout/error:" << socket.errorString();
+            out.errorReason = QStringLiteral("wss_handshake_fail");
+            return out;
+        }
+        buffer.append(socket.readAll());
+    }
+    const int headerEnd = buffer.indexOf("\r\n\r\n");
+    const QByteArray header = buffer.left(headerEnd);
+    buffer.remove(0, headerEnd + 4);
+    if (!header.startsWith("HTTP/1.1 101") && !header.startsWith("HTTP/1.0 101")) {
+        qDebug() << "[EdgeTtsClient] manual WSS upgrade rejected:" << header.left(160);
+        out.errorReason = QStringLiteral("wss_handshake_fail");
+        return out;
+    }
+
+    const QString requestId = manualRequestId();
+    if (!manualWriteFrame(socket, 0x1, manualSpeechConfigMessage(QString::fromLatin1(kDefaultOutputFormat)).toUtf8()) ||
+        !manualWriteFrame(socket, 0x1, manualSsmlMessage(requestId, text, voice, rate, pitch).toUtf8())) {
+        out.errorReason = QStringLiteral("wss_send_fail");
+        return out;
+    }
+
+    QElapsedTimer roundTimer;
+    roundTimer.start();
+    QByteArray currentMessage;
+    quint8 currentOpcode = 0;
+    while (roundTimer.elapsed() < timeoutMs) {
+        ManualFrame frame = manualReadFrame(socket, &buffer, roundTimer, timeoutMs);
+        if (!frame.ok) {
+            if (!out.gotAudio) out.errorReason = QStringLiteral("network_blocked");
+            break;
+        }
+        if (frame.opcode == 0x8) break; // close
+        if (frame.opcode == 0x9) { // ping
+            manualWriteFrame(socket, 0xA, frame.payload);
+            continue;
+        }
+        if (frame.opcode == 0xA) continue; // pong
+        if (frame.opcode == 0x1 || frame.opcode == 0x2) {
+            currentOpcode = frame.opcode;
+            currentMessage = frame.payload;
+        } else if (frame.opcode == 0x0 && currentOpcode) {
+            currentMessage.append(frame.payload);
+        } else {
+            continue;
+        }
+
+        if (currentOpcode == 0x1) {
+            const QString msg = QString::fromUtf8(currentMessage);
+            if (msg.contains(QStringLiteral("Path:turn.end")) ||
+                msg.contains(QStringLiteral("Path: turn.end"))) {
+                out.gotTurnEnd = true;
+                break;
+            }
+        } else if (currentOpcode == 0x2) {
+            QString path;
+            const QByteArray payload = manualParseBinaryFrame(currentMessage, &path);
+            if (path == QStringLiteral("audio") && !payload.isEmpty()) {
+                out.gotAudio = true;
+                out.mp3.append(payload);
+            } else if (path == QStringLiteral("audio.metadata") && !payload.isEmpty()) {
+                manualAppendMetadataBoundaries(payload, &out.boundaries);
+            }
+        }
+        currentOpcode = 0;
+        currentMessage.clear();
+    }
+    socket.disconnectFromHost();
+    if (!out.gotAudio && out.errorReason.isEmpty()) out.errorReason = QStringLiteral("network_blocked");
+    return out;
+}
+
+}  // namespace
+
+EdgeTtsClient::ProbeResult EdgeTtsClient::probe(const QString& voice) {
+    if (voice.isEmpty()) {
+        return {false, QStringLiteral("voice_empty")};
+    }
+    auto rt = manualRoundTrip(QString::fromLatin1(kProbeText), voice, 1.0, 1.0,
+                              kProbeTimeoutMs);
+    if (!rt.errorReason.isEmpty()) return {false, rt.errorReason};
+    if (!rt.gotAudio) return {false, QStringLiteral("no_audio_received")};
+    return {true, {}};
+}
+
+EdgeTtsClient::SynthResult EdgeTtsClient::synth(const QString& text,
+                                                const QString& voice,
+                                                double rate, double pitch) {
+    if (text.trimmed().isEmpty()) {
+        return {false, {}, {}, QStringLiteral("text_empty")};
+    }
+    if (voice.isEmpty()) {
+        return {false, {}, {}, QStringLiteral("voice_empty")};
+    }
+
+    const QString outputFormat = QString::fromLatin1(kDefaultOutputFormat);
+    const QByteArray cacheKey = makeCacheKey(text, voice, rate, pitch, outputFormat);
+    CacheEntry hit;
+    if (cacheLookup(cacheKey, &hit)) {
+        return {true, hit.mp3, hit.boundaries, {}};
+    }
+
+    constexpr int kSynthTimeoutMs = 12000;
+    auto rt = manualRoundTrip(text, voice, rate, pitch, kSynthTimeoutMs);
+    if (!rt.errorReason.isEmpty()) return {false, {}, {}, rt.errorReason};
+    if (!rt.gotAudio) return {false, {}, {}, QStringLiteral("no_audio_received")};
+    if (!rt.gotTurnEnd) return {false, {}, {}, QStringLiteral("incomplete_synth")};
+    cacheInsert(cacheKey, CacheEntry{rt.mp3, rt.boundaries});
+    return {true, rt.mp3, rt.boundaries, {}};
 }
 
 #else  // HAS_WEBSOCKETS
