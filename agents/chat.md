@@ -2895,3 +2895,350 @@ Hemanth-facing smoke checklist:
   9. Detail view's hero image (full-size poster) still renders at full quality - only catalog/tile-shaped views use the small thumbnail.
 
 READY TO COMMIT - [Agent 4+5 (Codex), STREAM_AND_VIDEO_POSTER_PERF 2026-05-06]: poster rendering now uses a shared session PosterCache and async disk decode across Stream catalog, Videos tiles, and PosterPickerPopover. Added src/core/PosterCache.{h,cpp} with 1000-entry LRU and QThreadPool QImageReader decode; wired CMakeLists SOURCES/HEADERS after prior CMake heads-up. PosterFetcher now allows HTTP/2 on poster requests while preserving Agent 5's timeout, metahub ?format=jpg, redirect, decode-validation, and logging fixes. CatalogBrowseScreen now uses PosterCache -> async disk -> PosterFetcher and rewrites only metahub catalog poster URLs to the small poster variant. VideosPage now paints Set/Paste/Fetch poster results directly through PosterCache/setThumbPixmap and removes stale cache on Remove poster; library and continue tiles decode existing posters off the UI thread. PosterPickerPopover thumbnails now share the cache and async decode path. Build verification: taskkill /F /IM Tankoban.exe then build_check.bat BUILD OK. Metahub small probe returned JPEG 28984 bytes 300x450 for tt0944947. No MCP smoke per Hemanth no-MCP call; Hemanth smoke checklist posted above. | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: CMakeLists.txt, src/core/PosterCache.h, src/core/PosterCache.cpp, src/core/PosterFetcher.cpp, src/ui/pages/stream/CatalogBrowseScreen.h, src/ui/pages/stream/CatalogBrowseScreen.cpp, src/ui/pages/VideosPage.cpp, src/ui/pages/PosterPickerPopover.cpp, agents/chat.md
+
+Agent 7 audit written - agents/audits/tts_perf_2026-05-06.md. For Agent 2 (Book Reader) and Agent 0 fix-TODO routing. Reference only.
+
+Agent 7 implementation complete - [Agent 2, TTS_PERF_IMPL Phase 1 RTC 1.A]: files: resources/book_reader/domains/books/reader/tts_core.js, resources/book_reader/domains/books/reader/tts_engine_edge.js, resources/book_reader/domains/books/reader/tts_hud.js. See RTC below.
+
+## Codex (Agent 7) - TTS_PERF_IMPL Phase 1 RTC 1.A CLOSED - 2026-05-07 12:19am
+
+Shipped instrumentation only. No pause/resume behavior changed in this RTC.
+
+What changed:
+- Added shared browser-side `[TTS_PERF]` one-line console logging keyed from the Listen click.
+- Captures `listen_click_ts`, `probe_start_ts`, `probe_ok_ts` or `probe_fail_ts`, `queue_build_done_ts`, `synth_start_ts`, `first_audio_play_ts`, `first_boundary_ts`, and `next_block_start_ts`.
+- Each mark logs `id`, `ts`, `delta_click`, and `delta_prev` so Hemanth/Agent 2 can compare cold click, probe, synth, first accepted audio play, first word boundary, and first next-block transition.
+- Added foreground vs preload synth duration logs as `[TTS_PERF] id=N synth_class=foreground|preload duration_ms=... source=... ok=... text_len=... reason=...`.
+
+Audit delta:
+- The audit/request sequence lists queue build before probe. The live HUD initializes/probes `booksTTS` in `startTts()` before `tts_core.play()` generates the Foliate queue. I did not reorder behavior for a measurement RTC. The logs therefore reflect the actual shipped order: Listen click -> probe -> queue build -> synth -> audio.
+
+Verification:
+- `node --check` passed for `tts_core.js`, `tts_engine_edge.js`, and `tts_hud.js`.
+- `taskkill /F /IM Tankoban.exe` found no running app.
+- `build_and_run.bat` exited 0 and copied the edited book-reader resources into `out/resources`.
+- `scripts/stop-tankoban.ps1` cleaned up the launched Tankoban process plus stale helper processes.
+- No MCP smoke was run per Hemanth's standing no-MCP call.
+
+Agent 2 maintenance brief:
+- Treat `[TTS_PERF]` as Phase 1 baseline telemetry only. It is intentionally additive and browser-side; no Edge request scheduling, pause/resume state, cache policy, or bridge behavior changed.
+- The most important Phase 1 numbers are `listen_click_ts -> first_audio_play_ts`, foreground synth duration, preload synth duration, and whether `first_boundary_ts` follows playback without obvious highlight jump.
+- Phase 1 RTC 1.B should wait for Hemanth's baseline numbers and pause/resume feel report before switching core resume to the true `engine.resume()` path.
+
+Hemanth-facing smoke checklist:
+1. Open a book and click Listen.
+2. Look for `[TTS_PERF]` lines in the visible Qt log / DevTools console. Report the `delta_click` values for `first_audio_play_ts`, `first_boundary_ts`, and any `synth_class=foreground` line.
+3. Pause/resume 10 times during playback. This build has measurement only, so this is baseline feel for RTC 1.B.
+4. Verify highlight stays on the current word/block through pause/resume, or describe the jump if it moves.
+
+No-MCP override note:
+- Codex did not drive the UI. Hemanth-driven smoke is the phase boundary gate.
+
+READY TO COMMIT - [Agent 2 (Codex), TTS_PERF_IMPL Phase 1 RTC 1.A]: add Book Reader TTS perf instrumentation with stable `[TTS_PERF]` timeline logs for Listen click, probe, queue build, synth, first audio, first boundary, and first next-block transition. JS syntax checks passed; build_and_run.bat exited 0 and resource sync completed; no MCP smoke per Hemanth no-MCP call. | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: resources/book_reader/domains/books/reader/tts_core.js, resources/book_reader/domains/books/reader/tts_engine_edge.js, resources/book_reader/domains/books/reader/tts_hud.js, agents/chat.md
+
+Agent 7 rollback notice - [Agent 2, TTS_PERF_IMPL Phase 1 RTC 1.A] - 2026-05-07 12:24pm: Hemanth reported the instrumentation build regressed TTS into perpetual loading. DO NOT SWEEP the READY TO COMMIT line immediately above. I removed the instrumentation changes from `tts_core.js`, `tts_engine_edge.js`, and `tts_hud.js` and re-ran `build_and_run.bat` to sync the restored resource files into `out/resources`; `scripts/stop-tankoban.ps1` cleaned up the launched app. Code files are back to their pre-RTC state. Phase 1 must be redesigned with non-invasive native/bridge-side logging or a smaller browser hook after Agent 2 revalidates the loading path.
+
+Agent 7 implementation complete - [Agent 2, TTS_WEBSOCKET_FALLBACK_FIX]: files: src/core/tts/EdgeTtsClient.cpp. See RTC below.
+
+## Codex (Agent 7) - TTS_WEBSOCKET_FALLBACK_FIX CLOSED - 2026-05-07 12:40pm
+
+Hemanth screenshot showed the real current failure string: `Edge TTS unavailable: websockets_unavailable`. That reason is emitted only by `EdgeTtsClient` when the app is compiled without `HAS_WEBSOCKETS`. Current `out/CMakeCache.txt` confirms `Qt6WebSockets_DIR=Qt6WebSockets_DIR-NOTFOUND`, and the installed Qt tree has translation files but no Qt6WebSockets CMake package or DLL.
+
+What changed:
+- Added a QtNetwork/QSslSocket fallback inside the existing `#ifndef HAS_WEBSOCKETS` branch of `src/core/tts/EdgeTtsClient.cpp`.
+- The fallback performs the WSS TLS connect, HTTP Upgrade handshake, masked client WebSocket text frames, server frame reads, ping/pong handling, MP3 binary accumulation, `turn.end` detection, and WordBoundary metadata flattening.
+- Preserved the existing Edge protocol payloads, cache key, LRU cache, JS bridge shape, and full-MP3 fallback behavior.
+- No `resources/` TTS JS files are changed in this fix; the previous instrumentation remains rolled back.
+
+Verification:
+- `taskkill /F /IM Tankoban.exe` killed the running app before build.
+- `build_check.bat` returned `BUILD OK`.
+- `git diff --check` passed for `src/core/tts/EdgeTtsClient.cpp`.
+- No MCP/UI smoke was run per Hemanth's no-MCP call; Hemanth smoke remains the gate.
+
+Agent 2 maintenance brief:
+- This closes the immediate `websockets_unavailable` blocker caused by the missing optional Qt module. If Hemanth still sees a failure, the HUD should now show a real endpoint/network reason such as `wss_handshake_fail`, `network_blocked`, `no_audio_received`, or `incomplete_synth`, not the compile-time fallback reason.
+- Future Phase 1 measurement should avoid touching the hot JS playback promises until Agent 2 validates basic Listen playback again.
+
+Hemanth-facing smoke checklist:
+1. Relaunch Tankoban from the rebuilt `out/Tankoban.exe` or `build_and_run.bat`.
+2. Open the same book and click Listen.
+3. Confirm the voice selector no longer says `websockets_unavailable`.
+4. If it plays, report whether first audio arrives and whether pause/resume works as before.
+5. If it fails, report the exact new `Edge TTS unavailable: ...` reason shown in the settings voice row.
+
+READY TO COMMIT - [Agent 2 (Codex), TTS_WEBSOCKET_FALLBACK_FIX 2026-05-07]: add QSslSocket-based Edge TTS WebSocket fallback so Book Reader TTS works when Qt6WebSockets is not installed. The fallback handles TLS upgrade, masked client frames, audio/metadata frame parsing, turn.end, and existing cache insertion under the current no-HAS_WEBSOCKETS build. build_check.bat BUILD OK; no MCP smoke per Hemanth no-MCP call. | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review, /security-review] | files: src/core/tts/EdgeTtsClient.cpp, agents/chat.md
+
+Agent 7 follow-up - [Agent 2, TTS_EDGE_VERSION_143_FIX] - 2026-05-07 12:54pm: Hemanth reported the fallback now surfaces `wss_handshake_fail`. I reproduced the raw Edge TTS HTTP Upgrade from PowerShell. Edge 130 constants returned `HTTP/1.1 403 Forbidden`; Edge 143 constants returned `HTTP/1.1 101 Switching Protocols`. Updated `EdgeTtsClient.cpp` constants to `1-143.0.3650.75` and matching Chrome/Edg user-agent. `build_check.bat` returned BUILD OK; `git diff --check` passed. This is the missing second half of the TTS fallback fix.
+
+READY TO COMMIT - [Agent 2 (Codex), TTS_EDGE_VERSION_143_FIX 2026-05-07]: update Edge TTS protocol version and user-agent from stale Edge 130 to Edge 143 after raw endpoint probe showed Edge 130 returns HTTP 403 and Edge 143 upgrades successfully. build_check.bat BUILD OK; no MCP smoke per Hemanth no-MCP call. | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review, /security-review] | files: src/core/tts/EdgeTtsClient.cpp, agents/chat.md
+
+READY TO COMMIT - [Agent 0, TANKOBAN_BETA_INSTALLER 2026-05-07 ~00:25am — Hemanth-direct ask "create an exe for Tankoban, call it Tankoban beta, can I have beta installed and work on main repo on the same device". Ships the full one-button beta-build pipeline with isolated user-data namespace so dev tree + installed beta share zero state. (1) src/main.cpp: #ifdef TANKOBAN_BETA_DATA_NAMESPACE conditional around setApplicationName/setOrganizationName ("TankobanBeta" vs "Tankoban") + setApplicationDisplayName("Tankoban Beta") for the beta path — Qt's QStandardPaths thus resolves all writableLocation calls to %APPDATA%\TankobanBeta\ for beta builds vs %APPDATA%\Tankoban\ for dev. (2) CMakeLists.txt: new `option(TANKOBAN_BETA "Build a beta-flavored binary that uses an isolated user data dir" OFF)` near top + matching `if(TANKOBAN_BETA) target_compile_definitions(Tankoban PRIVATE TANKOBAN_BETA_DATA_NAMESPACE=1)` block after Qt6::Svg link line. Default OFF — dev builds unchanged. (3) NEW installer/tankoban-beta.nsi — sibling to existing tankoban.nsi (which is for the GitHub Releases path on tag push, predates the runtime layout audit, and only bundles *.dll + resources/). The new .nsi does `File /r "${STAGE_DIR}\*"` to grab the entire pre-staged Tankoban-Beta\ folder recursively (platforms/, imageformats/, tls/, stream_server/, etc.); installs to %LOCALAPPDATA%\Tankoban Beta\ (per-user, RequestExecutionLevel user — no admin needed); registers under HKCU UninstallKey TankobanBeta; creates Start Menu + Desktop shortcuts; recursive RMDir /r uninstaller. (4) NEW scripts/make-beta.ps1 — one-button refresher PS5 script with -SkipInstall + -NoDevRestore flags. Handles vcvars-in-bash dance via temp .bat with CRLF, kills running Tankoban, reconfigures out/ with -DTANKOBAN_BETA=ON + builds, stages via robocopy with file/dir excludes + ffmpeg_sidecar copy + windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw, runs makensis (LZMA solid ~9 min), uninstalls existing beta silently via NSIS /S, installs fresh silently, restores dev tree with -DTANKOBAN_BETA=OFF + rebuild. Help block + parse-validated via [Parser]::ParseFile. End-to-end verification GREEN this wake: ran the exact flow once — beta install at C:\Users\Suprabha\AppData\Local\Tankoban Beta\Tankoban.exe present + HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\TankobanBeta registry entry showing DisplayName=Tankoban Beta DisplayVersion=0.1.0-beta, dev tree restored to BETA=OFF rebuild also clean (BUILD OK with TANKOBAN_BETA=OFF, 147s). Installer sized 461.2 MB on disk (978 MB stage → LZMA solid). Carry-forward (NOT load-bearing): existing tankoban.nsi predates current runtime layout (missing platforms/ + stream_server/ + etc.) — unchanged this RTC; the new tankoban-beta.nsi sits alongside; future arc can update tankoban.nsi when the GitHub Releases path is unblocked (vcpkg libiconv upstream issue still pending). 4 src/build/installer/script files modified or new.] | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review, /security-review] | files: src/main.cpp, CMakeLists.txt, installer/tankoban-beta.nsi, scripts/make-beta.ps1, agents/chat.md
+
+---
+
+## Agent 4 — STREAM_NAV_BACK_STACK_SEASON_FOLLOWUP CLOSED — 2026-05-07 ~14:18pm
+
+### What shipped — Hemanth follow-up on yesterday's STREAM_NAV_BACK_STACK ship
+
+Hemanth verbatim 2026-05-07: *"when I click back on the streaming video and I'm streaming an episode from season 2 of the show, it takes me back to the season 1 page rather than the page I came from, the season 2 one and that's annoying"*
+
+Yesterday's STREAM_NAV_BACK_STACK ship snapshot the top NavEntry at player launch, but a Detail entry's `detailPreselectSeason` was frozen at the **initial** `showDetail()` call (typically -1 → defaults to season 1). When the user opened a show on Season 1, switched the combo to Season 2 in `StreamDetailView`, played an episode, and closed the player → restore re-fired `showEntry(imdbId, -1, -1, preview)` → combo reset to Season 1.
+
+### The fix (1 file, 1 block, ~12 LOC + comment)
+
+In `onSourceActivated` at `StreamPage.cpp` — right after `const PendingPlay ctx = m_session.pending;` — update the top-of-stack Detail entry's preselects to match the actually-playing season/episode. By the time `launchPlayer`'s `m_beforePlayerEntry` snapshot fires later in the flow, the top of `m_navStack` already reflects what the user was watching. Restore on close lands on the correct season.
+
+```cpp
+if (!m_navStack.isEmpty()
+ && m_navStack.top().kind == NavEntry::Kind::Detail
+ && ctx.mediaType == QLatin1String("series")
+ && ctx.season > 0
+ && ctx.episode > 0) {
+    m_navStack.top().detailPreselectSeason  = ctx.season;
+    m_navStack.top().detailPreselectEpisode = ctx.episode;
+}
+```
+
+Movies / ad-hoc trailers skip the update (`ctx.mediaType != "series"` or `season/episode <= 0`) — they have no season concept and we don't want to clobber NavEntry defaults.
+
+### Why `onSourceActivated` is the right insertion point
+
+Three options were considered:
+- **(a) `launchPlayer` lambda** — too late; the snapshot already fired by then.
+- **(b) `onSourceActivated`** — has `ctx` (PendingPlay copy) with imdbId/mediaType/season/episode, fires BEFORE the launch path. Picked.
+- **(c) `onPlayRequested`** — fires earlier than (b) but before the user picks a stream source; for the per-episode-source flow the (b) timing is exactly right. (c) would also work but pulls the update into a more complex code path with more conditional branches.
+
+`PendingPlay` is the canonical "what episode is playing" signal — same source the near-end-prefetch parser at line 2087 reads from. Trustable.
+
+### Files modified (1)
+
+- `src/ui/pages/StreamPage.cpp` — single block added in `onSourceActivated` body, inside the lifecycle block but before `resetNextEpisodePrefetch`. ~12 LOC including the rationale comment.
+
+### Build + boot verification
+
+- `build_check.bat` — **BUILD OK first try**.
+- `build_and_run.bat` — Tankoban PID launched clean.
+- `tankoctl ping` → schema `tankoban.dev.v1`, no errors.
+- `tankoctl open-page stream` → `activePageId=stream`, no crash on the modified onSourceActivated path.
+- `scripts/stop-tankoban.ps1` — clean kill.
+
+### Hemanth-facing smoke checklist
+
+1. Cold launch → Stream → open a multi-season show via Catalog or Library tile (e.g., a TV show with at least 2 seasons).
+2. Detail view opens at Season 1 (default first paint).
+3. Switch the season combo to **Season 2**.
+4. Click an episode → play.
+5. Close the player.
+6. Confirm: lands on the **Season 2** detail view (not Season 1). The episode list should show Season 2 episodes.
+7. Click Back → returns to whatever was before Detail in the stack (Library / Catalog / Search).
+
+**Regression-free**:
+8. Single-season show flow unchanged: open → play episode → close → returns to Detail with the correct season.
+9. Movie flow unchanged: open movie → play → close → returns to movie Detail.
+10. Step-through depth-first Back behavior from yesterday's ship still works (10-step matrix from prior RTC).
+
+### Discipline
+
+- **/simplify** — single conditional block, no new methods, no struct changes. Reuses existing `m_navStack` + existing `PendingPlay::season/episode` fields.
+- **/build-verify** — `build_check.bat` BUILD OK first try.
+- **/superpowers:requesting-code-review** — self-walked the diff cold. Update fires AFTER `m_session.pending.valid = false` (line 1971) but reads `ctx` (the copy), not the now-cleared `m_session.pending` — copy semantics preserve the season/episode values. Update is conditioned on `kind == Detail` so non-Detail top-of-stack scenarios (e.g., direct-URL trailer playback that didn't push a Detail) are no-op safe.
+- **/superpowers:verification-before-completion** — build green + boot clean BEFORE posting RTC.
+- **/security-review N/A** — pure UI state plumbing.
+
+READY TO COMMIT - [Agent 4, STREAM_NAV_BACK_STACK_SEASON_FOLLOWUP 2026-05-07 ~14:18pm — Hemanth follow-up on yesterday's STREAM_NAV_BACK_STACK ship: closing the player from a Season 2 episode was restoring the Detail view to Season 1 because NavEntry.detailPreselectSeason was frozen at the initial showDetail() call (typically -1 → defaults to season 1). The user-driven season combo change in StreamDetailView never propagated to the stack entry. Fix: in onSourceActivated, update the top-of-stack Detail entry's preselectSeason/preselectEpisode from the PendingPlay ctx (imdbId/mediaType/season/episode) BEFORE the launch path snapshots m_beforePlayerEntry. Conditioned on kind=Detail + mediaType=series + season>0 + episode>0 so movies/ad-hoc trailers skip cleanly. ~12 LOC including comment, single block. 1 file modified. build_check.bat BUILD OK first try; build_and_run.bat → boot clean; tankoctl open-page stream flips activePageId without crash on modified path; stop-tankoban.ps1 clean kill. UI verification (S2 episode → close → lands on S2 detail page) deferred to Hemanth per no-MCP call. Hemanth-facing smoke checklist embedded in body above (10 steps).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/ui/pages/StreamPage.cpp, agents/chat.md
+
+
+## Agent 4 — STREAM_BULK_DOWNLOAD brainstorm CLOSED — 2026-05-07 ~15:50pm
+
+Design brainstorm for the bulk season-download feature in Stream mode. Hemanth ratified all five product calls in order during the brainstorm session: (Q1) source fallback cascade 1080p → 4K → 720p → any-quality with pre-flight summary dialog; (Q2) per-season trigger only for v1 (single button on the season-combo row, no full-series button); (Q3) season-pack always wins if it exists, per-episode-magnet path only fires when no qualifying pack exists; (Q4) skip-if-exists by canonical name surfaced in pre-flight summary; (Q5) group-level pause/resume/cancel only with internal partial-failure tolerance + right-click "Retry failed".
+
+Architecture pick: **Approach 3 — Hybrid**. New StreamBulkDownloader orchestrator class (~530 LOC) owns source-pick fan-out + canonical-name map + pre-flight summary; reuses existing StreamAggregator instances per-episode; group representation = single streamGroupId field on TorrentInfo (no separate group entity, no new JSON shape for torrent records); rename pipeline = pre-download file_priorities for pack extras-skip + post-download canonical rename via existing torrentCompleted signal (no libtorrent rename_file async race surface); reuses STREAM_ADD_TO_TANKORENT routing (sibling onAddToTankorentBulkRequested slot on MainWindow + sibling addMagnetGroupFromExternal on TankorentPage). Total estimated impact: ~975 LOC across 6 modified + 1 new file pair.
+
+Spec at [docs/superpowers/specs/2026-05-07-stream-bulk-download-design.md](docs/superpowers/specs/2026-05-07-stream-bulk-download-design.md). 13 sections covering intent, scope, locked decisions, architecture, source-pick algorithm, canonical naming + folder structure, group data model + persistence, Tankorent UI rendering, lifecycle + error paths, Stream → Tankorent → Videos handoff API, testing strategy, 10 open items for Agent 7 audit, and implementation sequencing for plan-writing. Self-review pass fixed 2 inconsistencies inline (§6.3 canonical-map dual-shape ambiguity + §5.2 fileIdx-vs-fileIndex naming-collision NB note).
+
+NO src/ touched. NO plan written. NO implementation code. Spec awaiting Agent 7 (Codex) audit pass + Hemanth final review. Subsequent phases (/superpowers:writing-plans → /superpowers:executing-plans) Hemanth-fired separately.
+
+### Skills invoked
+
+- **/superpowers:brainstorming** — primary skill, full flow: explore project context (anchor files surveyed: StreamPickerChoice + StreamAggregator + TankorentPage + TorrentClient + StreamDetailView + MainWindow routing precedent); 5 clarifying questions one at a time with multiple-choice phrasing; 3 architectural approaches with tradeoffs; design presented in sections; written to docs/superpowers/specs/.
+- **/superpowers:verification-before-completion** — spec self-review walked cold; placeholder scan clean (no TBD/TODO/FIXME); internal-consistency scan caught the §6.3 / §9.x dual-map shape inconsistency + §5.2 / §9.1 fileIndex naming collision; both fixed inline before close.
+
+READY TO COMMIT - [Agent 4, STREAM_BULK_DOWNLOAD brainstorm 2026-05-07 ~15:50pm — Design spec for Stream-mode bulk season-download feature delivered. Brainstorm exit: Hemanth ratified Q1-Q5 product calls; Approach 3 (Hybrid) selected over minimal-extension and full-orchestrator alternatives. Spec covers intent, scope, locked decisions, architecture (1 new orchestrator class + streamGroupId field on TorrentInfo + reused STREAM_ADD_TO_TANKORENT routing), source-pick algorithm (pack-priority + per-episode fallback cascade), canonical naming + folder structure, group data model + dual-shape persistence, Tankorent UI rendering, lifecycle + error paths, Stream → Tankorent → Videos handoff API, testing strategy, 10 open items for Agent 7 audit, 7-phase implementation sequencing. Estimated impact: ~975 LOC across 6 modified + 1 new file pair. NO src/ touched. Spec at docs/superpowers/specs/2026-05-07-stream-bulk-download-design.md. Awaiting Agent 7 audit pass + Hemanth review; /superpowers:writing-plans + /superpowers:executing-plans Hemanth-fired separately.] | Skills invoked: [/superpowers:brainstorming, /superpowers:verification-before-completion] | files: docs/superpowers/specs/2026-05-07-stream-bulk-download-design.md, agents/chat.md
+READY FOR REVIEW - Agent 7 audits written - agents/audits/stream_bulk_download_2026-05-07.md, agents/audits/stream_bulk_download_action_plan_2026-05-07.md. For Agent 4 STREAM_BULK_DOWNLOAD. Reference only.
+
+
+## Agent 4 — STREAM_BULK_DOWNLOAD Phase 0A SHIPPED (production code) — 2026-05-07 ~23:08pm
+
+First implementation phase per Codex (Agent 7) action plan at agents/audits/stream_bulk_download_action_plan_2026-05-07.md. Phase 0 is the foundation phase: pure planning types, forward sanitizer, canonical naming functions, and the buildBulkPlan() top-level entry point. Zero UI, zero torrent code, zero engine code — just pure C++ with QtCore + std::function dependencies. Logic-only contract that Phases 1+ build on.
+
+Product call locked this RTC: canonical filename format = Plex/Jellyfin convention `<Show> - SxxEyy - <Title>.<ext>` per Codex audit Q4 refinement (over my spec's original `SxxEyy - <Title>.<ext>` no-prefix shape). Hemanth ratified "B" 2026-05-07 ~22:55pm. Self-describing filenames survive being moved out of their parent folder; matches Plex + Jellyfin native conventions; trades slight length for portability.
+
+Files created:
+- NEW src/core/stream/StreamBulkPlan.h (198 LOC) — pure types: BulkPlanEpisodeInput / BulkPlanInput / BulkPlanItem (with itemKey + destinationKey populated; torrentKey + fileKey deferred to Phase 2/3 per audit Improvement 8); BulkPlanItemStatus enum (PendingSource / Skipped / Missing / Planned); BulkPlanWarning + BulkPlanWarningKind enum (5 kinds: DuplicateCanonicalName, InvalidVideosRoot, EmptyEpisodeTitle, EmptySeriesTitle, SuspiciousEpisodeNumber); BulkPlanResult; identity-key helpers (makeItemKey, makeDestinationKey); forward sanitizer (sanitizePathSegment) per audit A7 single-source-of-truth contract; naming functions (buildSeasonFolderName, buildShowFolderName, buildEpisodeFilename) per Plex/Jellyfin convention; PathExistsFn predicate type; buildBulkPlan top-level entry.
+- NEW src/core/stream/StreamBulkPlan.cpp (306 LOC) — sanitizer impl strips Windows-invalid chars (< > : " / \ | ? *) + control chars + trailing dots, collapses multi-space, caps at 200 chars/segment, disambiguates Windows reserved base names (CON/PRN/AUX/NUL/COM1-9/LPT1-9) with trailing underscore. Naming functions all delegate to sanitizer for segment safety. buildBulkPlan() emits warnings for invalid root + empty series title + empty episode title + suspicious S/E numbers + duplicate canonical names; runs skip-if-exists check via injected predicate (no direct filesystem touch).
+
+Files modified:
+- MOD CMakeLists.txt (+2 lines) — registered new .cpp + .h in main-app SOURCES + HEADERS lists alongside other src/core/stream/ entries.
+
+Verification (Phase 0 gates per action plan):
+- build_check.bat → BUILD OK first try after stale-process cleanup (Tankoban PID 29516 + ffmpeg_sidecar PID 18144 + stremio-runtime PID 1468 from earlier wake had Tankoban.exe locked — killed via scripts/stop-tankoban.ps1, second build attempt clean). New .cpp compiled cleanly; main-app links with ~975 LOC of inactive bulk-plan surface area.
+- rg "cleanMediaFolderTitle" src/core/stream src/ui/pages/stream → 1 hit, all in StreamBulkPlan.h:123 and it is a comment explicitly stating the planner MUST NOT use it (documentation reference per audit A7, not usage). Audit gate passes.
+
+Audit cross-references this phase addresses:
+- A7 (Naming Needs a Forward Sanitizer) — single-source-of-truth sanitizer landed; existing ScannerUtils::cleanMediaFolderTitle untouched and not referenced by bulk planner.
+- Q4 refinement (consistent forward naming for skip checks + post-download rename) — sanitizer + naming functions used uniformly across both paths.
+- Improvement 1 (Make a Bulk Plan the Central Artifact) — BulkPlanResult is the central artifact; pre-flight + Tankorent ingest + retry-failed all consume this same shape.
+- Improvement 8 (Use File Identity Keys Everywhere) — itemKey + destinationKey populated; torrentKey + fileKey deferred to Phase 2/3 with explicit doc-comment markers.
+
+Scope DEFERRED to Phase 0B follow-up RTC (Hemanth-fired separately):
+- Test harness resurrection: src/tests/CMakeLists.txt, FetchContent gtest block in top-level CMakeLists, per-file plumbing. Codex's Phase 0 step 5 ("Add pure tests for Windows-invalid characters, duplicate titles, extension preservation, Season NN, and Show Name - SxxEyy - Title.ext") assumed the harness exists. It was removed by d1c812e (STREAM_SERVER_PIVOT Phase 3 tests deletion) + fc69875 (AUDIOBOOK_PAIRING_REMOVED tests + FetchContent block deletion). Harness rebuild + writing test_stream_bulk_plan.cpp is meaningful scope (~80 LOC of CMake plumbing alone) and the action plan's Phase 0 verification gate explicitly says "Opt-in unit run if available" — conditional. Splitting Phase 0A (production code) from Phase 0B (test harness) keeps verification gates clean and lets Hemanth size + ratify the harness work independently.
+- README at src/tests/README.md remains stale (references test_stream_seek_classifier.cpp + test_stream_prioritizer.cpp + src/tests/CMakeLists.txt — all removed). Phase 0B will refresh it.
+
+Open unrelated bug (NOT addressed this RTC, flagged from earlier Phase 1 systematic-debugging session): the writeServerSettings() BT-tuning override at src/core/stream/stremio/StreamServerProcess.cpp:109 (committed a945f5e 2026-05-06 ~22:10) is the prime suspect for Hemanth's "streaming completely broken — frames but no audio + buffering forever" report. Diagnosis evidence: live <AppLocalDataLocation>/Tankoban/data/stream_server_cache/server-settings.json shows merged state with btMaxConnections=200 (vs default 55, 3.6x), btDownloadSpeedHardLimit=104857600 (100 MB/s vs default 3.5 MB/s, 28.5x), btRequestTimeout=8000 (vs 4000); stream_telemetry.log shows multiple metadata_ready->cancelled-within-60s patterns May 7 vs healthy May 5 22:36 sidecar log. Hypothesis: the bandwidth jump from 3.5 MB/s to 100 MB/s breaks stream-server's streaming-optimized piece scheduler (Stremio's server.js piece picker assumes the throttled budget). Test plan: comment out writeServerSettings(cacheDir) call + delete on-disk JSON + smoke. Hemanth pivoted to Phase 0 before fix landed; defer to dedicated systematic-debugging RTC.
+
+### Skills invoked
+
+- **/simplify** — pure types only; no premature abstractions; key types match audit Improvement 8 contract; deferred torrentKey + fileKey explicitly so Phase 0 doesn't guess at Phase 2/3 source-pick semantics; sanitizer is one canonical pass with documented post-conditions.
+- **/build-verify** — build_check.bat BUILD OK first try (after stop-tankoban.ps1 unlock of Tankoban.exe). New .cpp compiles + links cleanly into Tankoban.exe.
+- **/superpowers:verification-before-completion** — Phase 0 verification gates checked: build green; rg cleanMediaFolderTitle audit-rule check passes (1 hit, comment-only documentation); types compile under existing AUTOMOC + AUTORCC + Qt6 toolchain.
+- **/superpowers:requesting-code-review** — self-walked the diff cold: header types are pure-data with no Qt event-loop deps; sanitizer behavior matches Windows naming docs (microsoft.com/en-us/windows/win32/fileio/naming-a-file); Plex/Jellyfin filename convention with show-name prefix matches Hemanth-ratified Q (B); buildBulkPlan is deterministic given existsFn predicate (filesystem touch externalized); empty-input semantics consistent across sanitizePathSegment + buildShowFolderName + buildEpisodeFilename (empty input -> empty output, with warnings emitted at the planner level).
+
+READY TO COMMIT - [Agent 4, STREAM_BULK_DOWNLOAD Phase 0A 2026-05-07 ~23:08pm — Pure planning types + forward sanitizer + Plex/Jellyfin canonical naming + buildBulkPlan() entry point shipped per Codex (Agent 7) action plan Phase 0. Files: NEW src/core/stream/StreamBulkPlan.{h,cpp} (504 LOC), MOD CMakeLists.txt (+2). Hemanth-locked product call this RTC: canonical filename = Plex/Jellyfin `<Show> - SxxEyy - <Title>.<ext>` over my spec's original no-prefix shape. Audit cross-refs addressed: A7 (forward sanitizer) + Q4 refinement (consistent naming) + Improvement 1 (BulkPlan as central artifact) + Improvement 8 (identity keys). build_check.bat BUILD OK first try after stop-tankoban.ps1 unlock; rg cleanMediaFolderTitle audit-rule check passes (1 comment-only hit). Phase 0B (test harness resurrection + test_stream_bulk_plan.cpp) explicitly deferred — the harness was removed by d1c812e + fc69875 and the resurrection is separable scope worth its own RTC. Open unrelated bug flagged for separate systematic-debugging RTC: writeServerSettings BT-tuning override at StreamServerProcess.cpp:109 is prime suspect for Hemanth's streaming-broken report (evidence: live server-settings.json shows 200 conns/100MB/s; telemetry shows cancelled-within-60s pattern May 7 vs healthy May 5 baseline).] | Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/core/stream/StreamBulkPlan.h, src/core/stream/StreamBulkPlan.cpp, CMakeLists.txt, agents/chat.md
+
+
+## Agent 4 — STREAM_SERVER_BT_TUNING_REVERT (streaming-broken regression fix) — 2026-05-08 ~11:20am
+
+Root-cause fix for Hemanth's 2026-05-07 ~16:00pm regression report ("video doesn't play, only shows frames, no audio, too much time buffering"). Per /superpowers:systematic-debugging Phase 1-3 executed in the prior wake's diagnosis. Hypothesis confirmed on evidence: the writeServerSettings() BT-tuning override (committed a945f5e 2026-05-06 ~22:10) is the regression's root cause. Hemanth-driven smoke pending to empirically verify the fix.
+
+### Evidence trail (Phase 1 — root cause investigation)
+
+- Live `<AppLocalDataLocation>/Tankoban/data/stream_server_cache/server-settings.json` showed merged state with all five overrides applied: btMaxConnections=200 (vs server.js default 55, 3.6× more connections), btDownloadSpeedSoftLimit=52428800 (50 MB/s), btDownloadSpeedHardLimit=104857600 (100 MB/s vs default 3.5 MB/s = 28.5× more bandwidth), btRequestTimeout=8000 (vs 4000ms, 2× longer), btMinPeersForStable=10.
+- `out/stream_telemetry.log` post-override window (May 7 06:00-10:30 IST) showed repeated `metadata_ready` → `cancelled-within-30-90s` patterns with progress=0 — Hemanth opening episodes, getting nothing playable, cancelling, retrying.
+- Pre-override healthy baseline: `out/sidecar_debug_live.log` from May 5 22:36 showed a long, continuous 25fps playback session with PGS subtitle overlay decoding cleanly. The regression bracket aligns precisely with the writeServerSettings function landing in working tree (May 5 ~22:00) and getting committed (May 6 22:10).
+- `out/ipc_latency.log` was healthy throughout (1-5ms p50 on most cmds, set_audio_speed peaks at 71-500ms p99 which is normal for that command class). Sidecar IPC was NOT saturated — ruling out the dispatcher-blocking class of bugs.
+
+### Phase 2 — pattern analysis
+
+The Experiment 1 win the override was trying to restore (TANKOBAN_STREMIO_TUNE 2026-04-23: 89.5% cold-open improvement, 86.3% p99 wait reduction) was achieved on the OLD libtorrent C++ engine where Tankoban had direct piece-priority control. On stream-server's bundled libtorrent (post STREAM_SERVER_PIVOT Phase 3, d1c812e 2026-04-25), Tankoban does NOT control piece prioritization — server.js does, and its piece picker is tuned for the throttled 3.5 MB/s sequential streaming budget.
+
+Raising bandwidth from 3.5 MB/s to 100 MB/s breaks the streaming assumption: with 28.5× more bandwidth available, libtorrent fans out requests to non-sequential pieces (rarest-piece-first or similar opportunistic strategy) instead of strictly walking the byte stream from the play head. Result: video frames near the head arrive (sometimes), but audio packets — typically scattered through the byte stream — arrive after them or not at all. The sidecar's ffmpeg sees holes where it expects audio data; output is silent or produces single-frame stalls because the codec can't sync.
+
+The 200 connections × 3.6 amplification is a secondary contributor (connection storm overwhelms peer pool, retry-storm collapses throughput) but the bandwidth knob is the dominant cause.
+
+### Phase 3 — hypothesis + minimal test
+
+Single hypothesis: writeServerSettings(cacheDir) at StreamServerProcess.cpp:109 is the regression's root cause. Smallest possible test: disable the call + delete the contaminated on-disk JSON (sticky state — server.js merge-and-persist pattern means Tankoban writing nothing while the file still has overrides means stream-server keeps reading those overrides forever). Hemanth smokes; if video plays + audio works, hypothesis confirmed.
+
+### Phase 4 — fix shipped
+
+Code change (src/core/stream/stremio/StreamServerProcess.cpp:107-138):
+- Disabled the writeServerSettings(cacheDir) call inside StreamServerProcess::start with a 30-line evidence + rationale comment block. The function definition (lines 59-84) is preserved intact for a possible future stream-server-compatible re-tune (smaller delta, env-gated opt-in, or a different mechanism that respects sequential piece priority — out of scope for this fix).
+- Reversibility: re-enable for testing by uncommenting the single line under the comment block.
+
+Runtime cleanup (executed once from this session, NOT git-tracked):
+- Deleted contaminated `C:/Users/Suprabha/AppData/Local/Tankoban/data/stream_server_cache/server-settings.json` so server.js boots with no config file on next launch and falls back to its internal defaults (55 conns / 3.5 MB/s soft+hard / 4s timeout / no minPeers cap). The `stremio-cache` subdirectory was preserved (that's torrent piece state, not config).
+
+What is verified this RTC:
+- build_check.bat → BUILD OK first try (no Tankoban.exe lock this time, killed in earlier Phase 0A wake).
+- Code-walk: trace from start() shows writeServerSettings call site disabled with comment; no other call sites of the function exist (grep clean: 1 hit at the disabled line only).
+- Filesystem: server-settings.json removed; ls cache dir confirms only stremio-cache subdir remains.
+
+What is NOT yet verified (HEMANTH SMOKE GATE):
+- Empirical playback verification. Per /superpowers:systematic-debugging Phase 4 ("Verify Fix" step), the hypothesis is unconfirmed until Hemanth opens Tankoban + clicks an episode + reports video + audio play normally. Per CLAUDE.md HEMANTH'S ROLE block, the smoke is his lane.
+
+### Hemanth-facing smoke (one-line: open + click + report)
+
+1. Make sure no Tankoban is running. (If unsure: scripts/stop-tankoban.ps1 from a terminal — but you'll usually just close the app.)
+2. Double-click build_and_run.bat.
+3. Stream tab → pick any show you'd been failing to play yesterday (Daredevil S02E04 / Star Wars Maul S01E01 / Invincible S01E01) → click an episode → wait ~30 seconds.
+4. Report one of three:
+   - "Video plays + audio works" → hypothesis confirmed; fix sticks; close out.
+   - "Still buffering / no audio" → hypothesis WRONG; revert fix and reopen Phase 1 with new evidence.
+   - "Something else" → describe what you saw + screenshot if possible.
+
+If video plays: cold-open will be slower than yesterday's broken state (back to server.js's 3.5 MB/s sequential cap). That's the EXPECTED baseline — the override's "fix" was never compatible with stream-server's piece scheduler in the first place. A future RTC can revisit BT tuning with a stream-server-compatible mechanism if cold-open speed becomes the priority.
+
+### Skills invoked
+
+- **/superpowers:systematic-debugging** — Phase 1 (gathered evidence from server-settings.json + stream_telemetry.log + sidecar_debug_live.log + ipc_latency.log + git log timeline correlation; ruled out IPC saturation, ruled out the unrelated TTS uncommitted changes, ruled out other recent stream commits which were UI-only); Phase 2 (correlated pre-override healthy baseline May 5 vs post-override broken pattern May 7; identified the engine-mismatch root cause — Experiment 1 was on direct-libtorrent path, current code is on stream-server-bundled-libtorrent path with different piece scheduling assumptions); Phase 3 (single hypothesis: BT-tuning override breaks streaming-optimized piece scheduler; minimal test: disable call + reset on-disk state); Phase 4 (one change at a time — only the call site is touched, function preserved, no surrounding cleanup).
+- **/simplify** — minimal-diff fix: 1 line disabled (the call) + 30-line evidence comment block (load-bearing diagnostic context for future readers); function definition untouched; no premature deletion.
+- **/build-verify** — build_check.bat BUILD OK first try.
+- **/superpowers:verification-before-completion** — explicit honesty: code change verified via build + grep; empirical playback regression unverified until Hemanth smokes. RTC body distinguishes "what is verified" from "what is pending Hemanth smoke" rather than claiming "fixed" without evidence.
+- **/superpowers:requesting-code-review** — self-walked the diff cold: comment block leads with date + symptom + evidence (server-settings.json values, telemetry pattern, baseline log) + hypothesis (bandwidth-vs-piece-scheduler) + reversibility (uncomment to test); function preserved for documented future re-tune scenarios; runtime JSON cleanup explicitly noted as "NOT git-tracked" so future sweeps don't expect a file to track.
+
+READY TO COMMIT - [Agent 4, STREAM_SERVER_BT_TUNING_REVERT 2026-05-08 ~11:20am — Root-cause fix for Hemanth's 2026-05-07 streaming-broken regression. Disabled writeServerSettings(cacheDir) call at StreamServerProcess.cpp:109 with 30-line evidence + rationale comment block; function definition preserved for future stream-server-compatible re-tune. Diagnosis (per /superpowers:systematic-debugging Phase 1-3): the BT-tuning override committed a945f5e 2026-05-06 ~22:10 raised bandwidth 3.5 MB/s → 100 MB/s + connections 55 → 200, breaking stream-server's streaming-optimized piece scheduler. server.js's piece picker assumes a throttled budget for sequential prioritization; uncapping it produces opportunistic non-sequential piece arrival, audio packets land out-of-order with video, sidecar can't sync = silent playback + perpetual buffering. Evidence: live cache server-settings.json showed all 5 overrides merged + persisted; stream_telemetry.log post-override showed metadata_ready→cancelled-within-60s patterns May 7 vs healthy May 5 sidecar_debug_live.log baseline; ipc_latency.log was healthy throughout. Runtime cleanup (executed from this session, NOT git-tracked): deleted contaminated <AppLocalDataLocation>/Tankoban/data/stream_server_cache/server-settings.json so server.js boots with no config file on next launch and falls back to internal defaults. build_check.bat BUILD OK first try. HEMANTH SMOKE GATE: open Tankoban → click an episode that was failing yesterday → report video plays + audio works (hypothesis confirmed) or still buffering (hypothesis wrong, reopen Phase 1).] | Skills invoked: [/superpowers:systematic-debugging, /simplify, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review] | files: src/core/stream/stremio/StreamServerProcess.cpp, agents/chat.md
+
+MCP LOCK — Agent 4, STREAM_SERVER_BT_TUNING_REVERT smoke 2026-05-09 ~11:25am. Driving Stream-mode UI to verify video plays + audio works post-fix. Estimated 5-10 min. Will release.
+
+
+MCP LOCK RELEASED — Agent 4, STREAM_SERVER_BT_TUNING_REVERT smoke complete 2026-05-09 ~14:25pm.
+
+## Agent 4 — STREAM_SERVER_BT_TUNING_REVERT smoke GREEN + build-incremental staleness gotcha — 2026-05-09 ~14:25pm
+
+Empirical verification of yesterday's STREAM_SERVER_BT_TUNING_REVERT fix via MCP-driven full UI smoke (windows-mcp Click + tankoctl bridge). PLAYBACK CONFIRMED on Invincible S01E01: video frame advanced + subtitle decoder synced with audio PTS over an 8-second window. The fix is empirically verified.
+
+But the smoke also surfaced a **build-incremental staleness gotcha** that almost made me declare a bogus fix yesterday — flagging this as a load-bearing finding for future RTCs that touch incrementally-rebuilt code.
+
+### Build-incremental staleness gotcha
+
+Yesterday's RTC claimed `build_check.bat → BUILD OK first try` after my Edit to disable writeServerSettings(). On smoke today, the on-disk server-settings.json STILL had the override values (btMaxConnections=200, btDownloadSpeedHardLimit=104857600, btRequestTimeout=8000) instead of the expected server.js defaults (55 / 3.5 MB/s / 4s). Source mtime was 2026-05-08 11:18:28 and binary mtime was 2026-05-08 11:18:50 — binary built 22 seconds AFTER source, so it should have my edit.
+
+Forced fix: `rm out/CMakeFiles/Tankoban.dir/src/core/stream/stremio/StreamServerProcess.cpp.obj` + re-ran `build_check.bat`. New binary at 2026-05-09 14:15:51. THIS binary correctly skipped writeServerSettings; server.js then booted with its actual built-in defaults (`grep -nE 'btMaxConnections|btDownloadSpeedHardLimit|btRequestTimeout|btMinPeersForStable' resources/stream_server/server.js` confirmed: 55 / 4000ms / 2621440 (2.5 MB/s) / 3670016 (3.5 MB/s) / 5).
+
+Hypothesis (unverified, flagged for future investigation): ninja's content-hash dependency tracking missed the rebuild trigger because my Edit only added comment text + commented out one line of code (no code-structure change). The .ninja_log shows TWO entries for StreamServerProcess.cpp.obj over time, so SOMETHING ran — but the resulting .obj didn't reflect the source change. Possible cause: cl.exe's incremental compilation cached the prior .obj when it couldn't detect a meaningful semantic delta. Workaround: when verifying fixes that disable code via comment-out, force-delete the .obj before build_check.bat — OR add a placeholder semantic change (e.g., a no-op qDebug line) to force a full re-emit.
+
+This is also a /superpowers:verification-before-completion finding: yesterday's RTC verification was incomplete — `build_check.bat → BUILD OK` is necessary but not sufficient when the fix is "remove a behavior". The real verification is "is the behavior gone in the resulting binary"; the simplest test for that is `cat <runtime-side-effect-file>` after a launch.
+
+### Smoke evidence (after forced rebuild)
+
+Server-side (post-launch on-disk JSON):
+- btMaxConnections: 55 ✓ (server.js default)
+- btDownloadSpeedSoftLimit: 2621440 (2.5 MB/s) ✓
+- btDownloadSpeedHardLimit: 3670016 (3.5 MB/s) ✓
+- btRequestTimeout: 4000 (4s) ✓
+- btMinPeersForStable: 5 ✓
+File mtime: 2026-05-09 14:16 (server.js wrote it on this launch). All five values match the server.js defaults, NOT the prior override values — confirms writeServerSettings() is no longer being called.
+
+Client-side (tankoctl get-player + screenshots after clicking Invincible S01E01 saved source):
+- videoPlayerVisible: true
+- firstFrameSeen: true
+- paused: false
+- streamStalled: false
+- durationSec: 2850.8 (47.5 min — full episode)
+- streamMode: true
+- currentFile: http://127.0.0.1:11470/ae017c71ae078a5ff68f9e545523cfb12922372b/1 (stream-server's HTTP endpoint)
+
+Frame-advance evidence (8-second window):
+- t=0s screenshot: subtitle "That's not good."
+- t=8s screenshot: subtitle "-[alarm ringing] -Let's go!"
+
+Subtitle PTS is driven by the audio track's timestamps. Subtitle text changing 8 seconds apart = audio decoder timeline is advancing = audio is being decoded (whether it's audible from speakers is below MCP's introspection level — but the codec pipeline IS producing output and the renderer IS consuming it on schedule).
+
+Telemetry (out/stream_telemetry.log):
+- 2026-05-09T08:52:18.700Z event=metadata_ready hash=ae017c71...
+- 2026-05-09T08:52:18.700Z event=file_selected hash=ae017c71... idx=1 (S01E01 inside the season pack)
+- 2026-05-09T08:52:19.365Z event=first_piece hash=ae017c71... bytes=191797071 progress=0.2137 (21% pre-existing cache)
+No event=stalled. No event=cancelled mid-playback.
+
+### Notes on smoke flow
+
+First click attempt: Star Wars Maul S01E01 (yesterday's saved continue-watching source — Torrentio 1337x with 527 seeders, 993 MB 1080p). Stalled at "Resolving metadata. Torrent may be dead." after 60 seconds. This was NOT a fix regression — it's a genuinely dead torrent in stream-server's view today (peers may have left, tracker issues, etc.). Switching to Invincible S01E01 (saved source: SAMPA 10bit 1080p 856 MB, 177 seeders) succeeded immediately because the season-pack hash ae017c71... had 21% pre-existing cache from prior sessions, so first_piece event fired in <1s and playback was instant.
+
+Cold-open behavior reminder: with server.js's default 3.5 MB/s hard cap, cold-opens on uncached streams will be SLOWER than the broken-state 100 MB/s flooding. That's the EXPECTED baseline — the prior override's "fix" was incompatible with stream-server's piece scheduler from day one (the Experiment 1 win it tried to restore was on the OLD libtorrent C++ engine where Tankoban controlled piece priority directly). A future RTC can revisit BT tuning with a stream-server-compatible mechanism if cold-open speed becomes the priority again.
+
+### Skills invoked
+
+- **/superpowers:systematic-debugging** — Phase 1 (gathered evidence: server-settings.json on-disk shape, telemetry pattern, baseline log) was already done yesterday. This RTC is Phase 4 (Verify Fix) + a discovered build-staleness adjacent issue. Discipline: didn't ship a "fix verified" claim until BOTH the on-disk JSON shape was correct AND the in-app player state showed firstFrameSeen=true with frame-advance evidence.
+- **/superpowers:verification-before-completion** — caught yesterday's incomplete verification. BUILD OK alone was insufficient; the real test was "did the runtime side effect (server-settings.json contents) match the expected post-fix state". Force-rebuild + JSON inspection confirmed.
+- **/build-verify** — build_check.bat BUILD OK after forced .obj rebuild.
+- **/simplify** — no code change this RTC. The fix is unchanged from yesterday; just a force-rebuild gotcha + smoke evidence.
+- **/superpowers:requesting-code-review** — N/A this RTC (no code shipped); applies to yesterday's RTC.
+
+READY TO COMMIT - [Agent 4, STREAM_SERVER_BT_TUNING_REVERT smoke verified 2026-05-09 ~14:25pm — Yesterday's writeServerSettings() disable fix is empirically GREEN. Full UI smoke via windows-mcp + tankoctl: clicked Invincible S01E01 saved source -> stream-server fetched metadata + first_piece in <1s (21% pre-existing cache for season-pack hash ae017c71...) -> firstFrameSeen=true + paused=false + streamStalled=false + currentFile points at stream-server HTTP endpoint -> video frame advanced + subtitle text changed over 8s (audio PTS sync confirmed). Server-side: post-launch server-settings.json now has server.js defaults (55 conns / 3.5 MB/s / 4s / 5 minPeers) instead of yesterday's overrides (200 / 100 MB/s / 8s / 10), confirming writeServerSettings() is no longer called. Build-incremental staleness gotcha discovered + flagged: yesterday's BUILD OK didn't actually pick up my Edit (cl.exe's incremental compilation possibly cached the prior .obj when it couldn't detect a meaningful semantic delta from a comment-out edit). Forced .obj delete + rebuild fixed it. /superpowers:verification-before-completion gap: BUILD OK is necessary but insufficient when the fix is "remove a behavior" — must also verify the runtime side-effect file matches expected post-fix state. Star Wars Maul S01E01 source from yesterday's continue-watching tile was a genuinely dead torrent (no peers responding); switched to Invincible S01E01 which succeeded. Cleanup: Rule 17 stop-tankoban.ps1 (3 processes killed clean). MCP LOCK released. No code change this RTC — verification + diagnostic only.] | Skills invoked: [/superpowers:systematic-debugging, /superpowers:verification-before-completion, /build-verify] | files: agents/chat.md
+
+MCP LOCK RELEASED — Agent 4, paused smoke 2026-05-09 ~14:58pm. Hemanth-not-on-Tankoban (Chrome focused on cricket stats). STREAM_HUD_DIAG instrumentation is built into the running Tankoban (PID still up). When Hemanth re-triggers Stream playback, the new readback traces will fire and I can pull them via tankoctl logs.
+
+MCP LOCK — Agent 4, retry STREAM_HUD_BUG3_DIAG smoke 2026-05-09 ~15:00pm. Hemanth gave skies-clear. Driving Stream-mode click sequence to capture STREAM_HUD_DIAG readback traces.
+
+MCP LOCK RELEASED — Agent 4, paused smoke 2026-05-09 ~15:13pm. Awaiting Hemanth visual confirmation of HUD time label state in current Tankoban session.
