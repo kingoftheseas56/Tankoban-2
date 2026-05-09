@@ -1970,6 +1970,28 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     const PendingPlay ctx = m_session.pending;
     m_session.pending.valid = false;
 
+    // STREAM_NAV_BACK_STACK 2026-05-07 — Hemanth follow-up: closing the
+    // player from a Season 2 episode was restoring the Detail view back
+    // to Season 1 because the NavEntry.detailPreselectSeason was frozen
+    // at the initial showDetail() call (typically -1 for "no
+    // preselection" → defaults to season 1). The user-driven season
+    // combo change inside StreamDetailView never propagated to the
+    // stack entry. Update the top Detail entry's preselects here, where
+    // we have the actually-playing season/episode in `ctx`. By the time
+    // launchPlayer's m_beforePlayerEntry snapshot fires, the top of
+    // m_navStack already reflects what they were watching, so close +
+    // restore lands on the correct season. Non-series media (movies,
+    // ad-hoc trailers) skip the update — ctx.season/episode are 0/0
+    // there and we don't want to clobber the entry's defaults.
+    if (!m_navStack.isEmpty()
+     && m_navStack.top().kind == NavEntry::Kind::Detail
+     && ctx.mediaType == QLatin1String("series")
+     && ctx.season > 0
+     && ctx.episode > 0) {
+        m_navStack.top().detailPreselectSeason  = ctx.season;
+        m_navStack.top().detailPreselectEpisode = ctx.episode;
+    }
+
     // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.2 — audit P2-2 close. Pre-4.2 code
     // reset only m_session.nearEndCrossed + m_session.nextPrefetch inline,
     // skipping m_session.nextShortcutPending + the MetaAggregator/StreamAggregator
