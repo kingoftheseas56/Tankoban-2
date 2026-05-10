@@ -1,4 +1,5 @@
 #include "audio_decoder.h"
+#include "audio_device_watcher.h"
 #include "filter_graph.h"
 #include "stream_prefetch.h"
 
@@ -63,13 +64,15 @@ static constexpr int    PA_CHANNELS      = 2;
 
 AudioDecoder::AudioDecoder(AVSyncClock* clock, VolumeControl* volume, AudioEventCb on_event,
                            FilterGraph* audio_filter,
-                           PaStream* prewarmed_stream, double prewarmed_latency)
+                           PaStream* prewarmed_stream, double prewarmed_latency,
+                           uint32_t bind_generation)
     : clock_(clock)
     , volume_(volume)
     , on_event_(std::move(on_event))
     , audio_filter_(audio_filter)
     , prewarmed_stream_(prewarmed_stream)
     , prewarmed_latency_(prewarmed_latency)
+    , bind_generation_(bind_generation)
 {}
 
 AudioDecoder::~AudioDecoder() {
@@ -174,6 +177,103 @@ void AudioDecoder::set_drc_enabled(bool on) {
     // chunk. No mutex needed because compressor state is thread-local
     // to audio_thread_func.
     drc_enabled_.store(on, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// AUDIO_HOT_DEVICE_REROUTE (2026-05-10) — open a fresh PA stream on the
+// current WASAPI default and atomically swap it into active_stream_.
+// Audio thread only. Closes any previous decoder-owned stream after the
+// swap (main.cpp owns prewarmed_stream_ — never closed here).
+//
+// Race policy (Option B): we read the current default at Pa_OpenStream
+// time. If the OS migrates again between our read and Pa_OpenStream's
+// internal device-resolution, we may bind to the still-newer default —
+// strictly better than missing a reroute. The next reroute notification
+// (a real one) will trigger another rebuild.
+//
+// Lock ordering: Pa_OpenStream / Pa_StartStream are slow (5+s on cold
+// BT). We do them OUTSIDE stream_mutex_ to avoid blocking flush_queue /
+// seek for that long; only the swap happens under the lock. The old
+// owned stream is closed AFTER the lock is released so a still-pending
+// flush_queue can run between the swap and the close.
+// ---------------------------------------------------------------------------
+
+bool AudioDecoder::rebuild_for_new_default(int sample_rate, int out_channels,
+                                           double& actual_latency,
+                                           PaStream** pa_stream_owned_inout,
+                                           double elapsed_ms) {
+    // Resolve current WASAPI default. Mirrors the lazy-open path above.
+    PaDeviceIndex dev_idx = paNoDevice;
+    PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
+    if (wasapi_idx >= 0) {
+        const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
+        if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
+            dev_idx = wasapi_info->defaultOutputDevice;
+        }
+    }
+    if (dev_idx == paNoDevice) dev_idx = Pa_GetDefaultOutputDevice();
+    if (dev_idx == paNoDevice) {
+        std::fprintf(stderr,
+                     "AudioDecoder: rebuild — no default output device after reroute\n");
+        return false;
+    }
+
+    PaStreamParameters out_params{};
+    out_params.device = dev_idx;
+    out_params.channelCount = out_channels;
+    out_params.sampleFormat = paFloat32;
+    out_params.suggestedLatency = PA_LATENCY_SEC;
+    out_params.hostApiSpecificStreamInfo = nullptr;
+
+    PaStream* new_stream = nullptr;
+    PaError pa_err = Pa_OpenStream(&new_stream, nullptr, &out_params,
+                                   sample_rate, PA_BLOCK_SIZE,
+                                   paClipOff, nullptr, nullptr);
+    if (pa_err != paNoError) {
+        std::fprintf(stderr, "AudioDecoder: rebuild Pa_OpenStream failed: %s\n",
+                     Pa_GetErrorText(pa_err));
+        return false;
+    }
+    pa_err = Pa_StartStream(new_stream);
+    if (pa_err != paNoError) {
+        std::fprintf(stderr, "AudioDecoder: rebuild Pa_StartStream failed: %s\n",
+                     Pa_GetErrorText(pa_err));
+        Pa_CloseStream(new_stream);
+        return false;
+    }
+
+    const PaStreamInfo* si = Pa_GetStreamInfo(new_stream);
+    const double new_latency = si ? si->outputLatency : PA_LATENCY_SEC;
+
+    // Swap under mutex; close old owned outside mutex.
+    PaStream* to_close = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        // *pa_stream_owned_inout is non-null when the decoder previously
+        // opened its own stream (initial lazy-open OR a prior rebuild).
+        // It's nullptr when we entered via the prewarm reuse path; in that
+        // case the prewarm stays bound to the old device and main.cpp's
+        // invalidate_prewarm_if_stale at the next handle_open will close it.
+        if (*pa_stream_owned_inout != nullptr) {
+            to_close = *pa_stream_owned_inout;
+        }
+        active_stream_ = new_stream;
+        *pa_stream_owned_inout = new_stream;
+    }
+    if (to_close) {
+        Pa_AbortStream(to_close);
+        Pa_CloseStream(to_close);
+    }
+
+    actual_latency = new_latency;
+    if (clock_) clock_->set_output_latency(new_latency);
+
+    const PaDeviceInfo* dev_info = Pa_GetDeviceInfo(dev_idx);
+    std::fprintf(stderr,
+                 "AVSYNC_DIAG audio_reroute_complete +%.0fms dev_idx=%d latency=%.3fs name='%s'\n",
+                 elapsed_ms, static_cast<int>(dev_idx), new_latency,
+                 dev_info && dev_info->name ? dev_info->name : "");
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,8 +522,21 @@ void AudioDecoder::audio_thread_func(
         avcodec_flush_buffers(codec_ctx);
     }
 
+    // AUDIO_HOT_DEVICE_REROUTE — baseline for the reroute-detection poll.
+    // For prewarm path we trust main.cpp's bind_generation_ snapshot
+    // (validated via invalidate_prewarm_if_stale at handle_open top).
+    // For lazy-open path we override below with the value we read
+    // pre-Pa_OpenStream — Option-B race policy: a reroute that races our
+    // open produces at most ONE spurious rebuild on first poll, which is
+    // preferable to missing a real reroute.
+    observed_reroute_generation_ = bind_generation_;
+
     // --- PortAudio stream: use pre-warmed if available, else open lazily ---
     PaStream* pa_stream = nullptr;
+    // Streams opened by THIS decoder — closed at cleanup (or replaced via
+    // rebuild_for_new_default during a reroute). Never tracks prewarmed_stream_;
+    // main.cpp owns prewarm lifetime.
+    PaStream* pa_stream_owned = nullptr;
     double actual_latency = PA_LATENCY_SEC;
     PaError pa_err = paNoError;  // function-scoped; used below in Pa_WriteStream loop
     if (prewarmed_stream_) {
@@ -476,6 +589,16 @@ void AudioDecoder::audio_thread_func(
         output_params.suggestedLatency = PA_LATENCY_SEC;
         output_params.hostApiSpecificStreamInfo = nullptr;
 
+        // AUDIO_HOT_DEVICE_REROUTE — capture the reroute counter BEFORE
+        // Pa_OpenStream binds to a device. If a reroute fires between this
+        // read and Pa_OpenStream's device-resolution, the stream may bind
+        // to the new default while we still have observed=N; first poll
+        // sees cur=N+1 != observed and triggers a (correct, non-spurious)
+        // rebuild on the freshly-bound new default. The reverse race
+        // (read-after-bind) would silently miss a reroute — strictly worse.
+        const uint32_t lazy_pre_open_gen = audio_device_watcher::g_audio_reroute_generation.load(
+            std::memory_order_acquire);
+
         pa_err = Pa_OpenStream(
             &pa_stream,
             nullptr,           // no input
@@ -514,6 +637,11 @@ void AudioDecoder::audio_thread_func(
         std::fprintf(stderr, "AVSYNC_DIAG audio_pa_start_done +%.0fms\n", ms_since());
         const PaStreamInfo* stream_info = Pa_GetStreamInfo(pa_stream);
         actual_latency = stream_info ? stream_info->outputLatency : PA_LATENCY_SEC;
+        // AUDIO_HOT_DEVICE_REROUTE — record this lazy-opened stream as
+        // decoder-owned (must close at cleanup) and seal the observed
+        // reroute generation to the value we captured pre-Pa_OpenStream.
+        pa_stream_owned = pa_stream;
+        observed_reroute_generation_ = lazy_pre_open_gen;
         {
             std::lock_guard<std::mutex> lock(stream_mutex_);
             active_stream_ = pa_stream;
@@ -779,6 +907,31 @@ void AudioDecoder::audio_thread_func(
                 }
             }
 
+            // AUDIO_HOT_DEVICE_REROUTE — poll the reroute counter before
+            // each blocking Pa_WriteStream. If the COM notification thread
+            // bumped the generation (BT connect, USB plug, HDMI switch),
+            // rebuild on the new WASAPI default BEFORE writing — otherwise
+            // we'd emit one final buffer to the dying device. ~50-200ms
+            // audible gap during reroute matches the OS audio reroute
+            // baseline; deliberately no crossfade (would require a parallel
+            // stream open and is timing-fragile for negligible benefit).
+            {
+                const uint32_t cur_gen = audio_device_watcher::g_audio_reroute_generation.load(
+                    std::memory_order_acquire);
+                if (cur_gen != observed_reroute_generation_) {
+                    std::fprintf(stderr,
+                                 "audio: reroute observed gen=%u (was %u); rebuilding stream\n",
+                                 cur_gen, observed_reroute_generation_);
+                    if (!rebuild_for_new_default(sample_rate, out_channels,
+                                                 actual_latency, &pa_stream_owned,
+                                                 ms_since())) {
+                        on_event_("error", "AUDIO_DEVICE_LOST:reroute open failed");
+                        goto cleanup;
+                    }
+                    observed_reroute_generation_ = cur_gen;
+                }
+            }
+
             // Write to PortAudio (blocking)
             if (!first_write_logged) {
                 std::fprintf(stderr, "AVSYNC_DIAG audio_first_pa_write +%.0fms pts=%.3fs\n",
@@ -824,11 +977,19 @@ cleanup:
     // Don't abort/close the pre-warmed stream — it's owned by main.cpp and
     // shared across sessions. Closing it would defeat the whole point of
     // pre-warming (we'd pay the 5s cold-start on the next file).
-    if (pa_stream && pa_stream != prewarmed_stream_) {
+    //
+    // AUDIO_HOT_DEVICE_REROUTE — pa_stream_owned tracks every stream THIS
+    // decoder opened (initial lazy-open AND any rebuild during reroute);
+    // rebuild_for_new_default closes the previous owned stream when it
+    // swaps in a new one, so at cleanup time pa_stream_owned points at
+    // most to the latest one. Prewarm stays bound to whatever device it
+    // was opened against; main.cpp closes it on next handle_open if stale
+    // or at sidecar shutdown.
+    if (pa_stream_owned) {
         // Abort (not stop) for immediate silence — Pa_StopStream drains the
         // buffer which causes audible lingering after the player is closed.
-        Pa_AbortStream(pa_stream);
-        Pa_CloseStream(pa_stream);
+        Pa_AbortStream(pa_stream_owned);
+        Pa_CloseStream(pa_stream_owned);
     }
 
     av_frame_free(&frame);

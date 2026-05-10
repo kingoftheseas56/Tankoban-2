@@ -113,6 +113,7 @@ add_executable(ffmpeg_sidecar
     src/stream_prefetch.cpp
     src/video_decoder.cpp
     src/audio_decoder.cpp
+    src/audio_device_watcher.cpp
     src/av_sync_clock.cpp
     src/encoding_detect.cpp
     src/subtitle_renderer.cpp
@@ -185,7 +186,11 @@ if(HAS_LIBPLACEBO)
 endif()
 
 if(WIN32)
-    target_link_libraries(ffmpeg_sidecar PRIVATE ws2_32 dwrite gdi32 shlwapi dbghelp d3d11 dxgi winmm avrt)
+    # ole32 added 2026-05-10 for AUDIO_HOT_DEVICE_REROUTE — sidecar needs
+    # CoInitializeEx + CoCreateInstance + CoUninitialize to register an
+    # IMMNotificationClient that listens for default-output-device changes
+    # (audio_device_watcher.cpp).
+    target_link_libraries(ffmpeg_sidecar PRIVATE ws2_32 dwrite gdi32 shlwapi dbghelp d3d11 dxgi winmm avrt ole32)
 endif()
 
 # Ensure console app (stdin/stdout needed for JSON protocol)

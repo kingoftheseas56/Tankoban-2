@@ -1,4 +1,5 @@
 #include "audio_decoder.h"
+#include "audio_device_watcher.h"
 #include "av_sync_clock.h"
 #include "d3d11_presenter.h"
 #include "demuxer.h"
@@ -135,6 +136,13 @@ static std::atomic<bool> g_zero_copy_active{false};
 // stream and routes file audio through swresample to its fixed format.
 static PaStream* g_pa_stream = nullptr;
 static double    g_pa_actual_latency = 0.0;
+// AUDIO_HOT_DEVICE_REROUTE — snapshot of audio_device_watcher::g_audio_reroute_generation
+// captured at the moment g_pa_stream was bound to its WASAPI default. If the
+// live counter has advanced past this value at handle_open time, the prewarm
+// stream is bound to a now-non-default device — close it and let the audio
+// thread lazy-open on the new default. Same value also passed into AudioDecoder
+// as bind_generation so its first poll has a correct baseline.
+static uint32_t  g_pa_prewarm_generation = 0;
 static constexpr int PREWARM_SAMPLE_RATE = 48000;
 static constexpr int PREWARM_CHANNELS    = 2;
 
@@ -241,6 +249,36 @@ static void join_open_thread() {
 // ---------------------------------------------------------------------------
 // Teardown — stop audio + video + clean SHM
 // ---------------------------------------------------------------------------
+
+// AUDIO_HOT_DEVICE_REROUTE — close the prewarmed PA stream if it's bound to
+// a device that's no longer the system default. Called at the top of
+// handle_open and at the top of the set_tracks audio-rebuild block, i.e.
+// every site that's about to construct a new AudioDecoder. After a close,
+// the next AudioDecoder receives nullptr for prewarmed_stream_ and lazy-
+// opens on the new default — a one-time ~5s cost on first play after a
+// reroute that fired while no decoder was running. Acceptable per the
+// AUDIO_HOT_DEVICE_REROUTE brief §3.4 (a) + (c).
+//
+// Always advances g_pa_prewarm_generation to the current value so that
+// the NEXT prewarm (if we ever re-prewarm) starts with a clean baseline.
+// Today we never re-prewarm — only main(): startup does — so this branch
+// just keeps the bookkeeping honest in case future code adds re-prewarm.
+static void invalidate_prewarm_if_stale() {
+    const uint32_t cur = audio_device_watcher::g_audio_reroute_generation.load(
+        std::memory_order_acquire);
+    if (cur != g_pa_prewarm_generation) {
+        if (g_pa_stream) {
+            std::fprintf(stderr,
+                         "audio: prewarm stale across reroute (gen %u -> %u); closing\n",
+                         g_pa_prewarm_generation, cur);
+            Pa_StopStream(g_pa_stream);
+            Pa_CloseStream(g_pa_stream);
+            g_pa_stream = nullptr;
+            g_pa_actual_latency = 0.0;
+        }
+        g_pa_prewarm_generation = cur;
+    }
+}
 
 static void teardown_decode() {
     join_open_thread();
@@ -939,7 +977,8 @@ static void open_worker(Command cmd) {
     if (has_audio) {
         std::fprintf(stderr, "AVSYNC_DIAG open_audio_start +%.0fms\n", open_ms());
         adec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, afilt,
-                                g_pa_stream, g_pa_actual_latency);
+                                g_pa_stream, g_pa_actual_latency,
+                                g_pa_prewarm_generation);
         int audio_idx = -1;
         if (!probe->audio.empty()) {
             // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
@@ -1053,6 +1092,13 @@ static void handle_open(const Command& cmd) {
         teardown_decode();
     }
     join_open_thread();
+
+    // AUDIO_HOT_DEVICE_REROUTE — close prewarm if it's bound to an
+    // old default that the user has since migrated away from. Done
+    // BEFORE open_worker runs so the AudioDecoder constructed inside
+    // it sees either a fresh prewarm or nullptr (=> lazy-open path
+    // on the current WASAPI default).
+    invalidate_prewarm_if_stale();
 
     // Ack immediately on the main thread (keeps stdin loop responsive)
     write_ack(cmd.seq, cmd.sessionId);
@@ -1379,6 +1425,11 @@ static void set_tracks_worker(Command cmd) {
             delete g_audio_dec;
             g_audio_dec = nullptr;
 
+            // AUDIO_HOT_DEVICE_REROUTE — same staleness check as
+            // handle_open. set_tracks creates a new AudioDecoder, so
+            // it shares handle_open's exposure to a stale prewarm.
+            invalidate_prewarm_if_stale();
+
             // Capture position, then force-anchor the clock at that position.
             // seek_anchor re-establishes started_=true at the exact PTS so the
             // new audio decoder's first update() won't cause a drift.
@@ -1401,7 +1452,8 @@ static void set_tracks_worker(Command cmd) {
                 }
             };
             g_audio_dec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, g_audio_filter,
-                                           g_pa_stream, g_pa_actual_latency);
+                                           g_pa_stream, g_pa_actual_latency,
+                                           g_pa_prewarm_generation);
             g_audio_dec->start(g_current_path, pos_sec, audio_idx);
             g_active_audio_id = new_audio_id;
 
@@ -1830,6 +1882,16 @@ int main(int argc, char* argv[]) {
             out_params.sampleFormat = paFloat32;
             out_params.suggestedLatency = info ? info->defaultLowOutputLatency : 0.3;
             out_params.hostApiSpecificStreamInfo = nullptr;
+            // AUDIO_HOT_DEVICE_REROUTE — capture the reroute generation
+            // BEFORE Pa_OpenStream binds to a device. audio_device_watcher
+            // hasn't been registered yet at this point in main() (init()
+            // runs after this prewarm block; see below), so the value is
+            // 0 unless a reroute somehow already fired — in any case we
+            // want this snapshot to be the baseline that AudioDecoder
+            // gets passed as bind_generation for its first reroute poll.
+            const uint32_t prewarm_pre_open_gen =
+                audio_device_watcher::g_audio_reroute_generation.load(
+                    std::memory_order_acquire);
             PaError oerr = Pa_OpenStream(&g_pa_stream, nullptr, &out_params,
                                           PREWARM_SAMPLE_RATE, 1024,
                                           paClipOff, nullptr, nullptr);
@@ -1837,8 +1899,10 @@ int main(int argc, char* argv[]) {
                 Pa_StartStream(g_pa_stream);
                 const PaStreamInfo* si = Pa_GetStreamInfo(g_pa_stream);
                 g_pa_actual_latency = si ? si->outputLatency : 0.32;
-                std::fprintf(stderr, "Audio pre-warm: opened %dHz %dch (latency=%.3fs)\n",
-                             PREWARM_SAMPLE_RATE, PREWARM_CHANNELS, g_pa_actual_latency);
+                g_pa_prewarm_generation = prewarm_pre_open_gen;
+                std::fprintf(stderr, "Audio pre-warm: opened %dHz %dch (latency=%.3fs gen=%u)\n",
+                             PREWARM_SAMPLE_RATE, PREWARM_CHANNELS,
+                             g_pa_actual_latency, g_pa_prewarm_generation);
             } else {
                 std::fprintf(stderr, "Audio pre-warm failed: %s — falling back to lazy open\n",
                              Pa_GetErrorText(oerr));
@@ -1848,6 +1912,14 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "PortAudio: no default output device\n");
         }
     }
+
+    // AUDIO_HOT_DEVICE_REROUTE (2026-05-10) — register IMMNotificationClient
+    // so the sidecar follows Windows default-output-device changes mid-playback
+    // (BT headphones connect, USB headset plug, HDMI sink switch). Failure is
+    // non-fatal — sidecar continues without device-reroute. Registered AFTER
+    // Pa_Initialize so the audio path is fully up by the time notifications
+    // can fire; unregistered BEFORE Pa_Terminate at shutdown.
+    audio_device_watcher::init();
 
     // Start non-blocking stdout writer (prevents pipe-buffer deadlocks)
     start_stdout_writer();
@@ -1898,6 +1970,11 @@ int main(int argc, char* argv[]) {
             write_event("closed", sid, seq);
             stop_stdout_writer();
             std::fprintf(stderr, "Shutdown received -- exiting\n");
+            // AUDIO_HOT_DEVICE_REROUTE — unregister IMMNotificationClient
+            // BEFORE Pa_Terminate so any in-flight notification finishes
+            // running before PortAudio releases device handles. Idempotent
+            // and safe even if init() returned false.
+            audio_device_watcher::shutdown();
             Pa_Terminate();
 #ifdef _WIN32
             timeEndPeriod(1);
@@ -2007,6 +2084,9 @@ int main(int argc, char* argv[]) {
     teardown_decode();
     stop_stdout_writer();
     std::fprintf(stderr, "stdin closed -- exiting\n");
+    // AUDIO_HOT_DEVICE_REROUTE — unregister BEFORE PA stream close +
+    // Pa_Terminate so any in-flight notification can complete safely.
+    audio_device_watcher::shutdown();
     if (g_pa_stream) { Pa_StopStream(g_pa_stream); Pa_CloseStream(g_pa_stream); g_pa_stream = nullptr; }
     Pa_Terminate();
 #ifdef _WIN32
