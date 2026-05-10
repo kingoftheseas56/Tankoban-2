@@ -11,6 +11,7 @@
 #include "core/PosterCache.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/MetaAggregator.h"
+#include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/addon/MetaItem.h"
 #include "core/torrent/TorrentClient.h"
 #include "PosterPickerPopover.h"
@@ -987,6 +988,35 @@ void VideosPage::installFolderTileContextMenu(
 void VideosPage::setMetaAggregator(tankostream::stream::MetaAggregator* meta)
 {
     m_meta = meta;
+}
+
+void VideosPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
+{
+    m_downloadIndex = idx;
+
+    // Forward to the scanner so it filters Stream-owned files at scan time.
+    if (m_scanner)
+        m_scanner->setStreamDownloadIndex(idx);
+
+    if (!m_downloadIndex) return;
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 5 (2026-05-10) — debounced rescan when
+    // the download-index changes (bulk completion landing N episodes;
+    // Remove-from-Library evicting many entries). 500ms window collapses
+    // batches into a single triggerScan call. Spec §8.3.
+    if (!m_streamDownloadDebounce) {
+        m_streamDownloadDebounce = new QTimer(this);
+        m_streamDownloadDebounce->setSingleShot(true);
+        m_streamDownloadDebounce->setInterval(500);
+        connect(m_streamDownloadDebounce, &QTimer::timeout, this, [this]() {
+            triggerScan();
+        });
+    }
+    connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+            this, [this]() {
+                if (m_streamDownloadDebounce)
+                    m_streamDownloadDebounce->start();  // restart the window
+            }, Qt::QueuedConnection);
 }
 
 void VideosPage::activate()

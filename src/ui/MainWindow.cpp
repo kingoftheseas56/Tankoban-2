@@ -12,11 +12,14 @@
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
 #include "core/torrent/TorrentClient.h"
+#include "core/stream/StreamDownloadIndex.h"
+#include "core/stream/StreamRescueScanner.h"
 #include "readers/ComicReader.h"
 #include "readers/BookReader.h"
 #include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
 
 #include <QVBoxLayout>
@@ -172,6 +175,14 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
         }
     });
 
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
+    // bulk-downloaded episodes. Constructed after CoreBridge is set so
+    // JsonStore is available; consumed by VideosScanner / StreamPage in
+    // later phases. Dead-code-wired in Phase 1.
+    m_streamDownloadIndex = new StreamDownloadIndex(&m_bridge->store(), this);
+    DebugLogBuffer::instance().info(QStringLiteral("boot"),
+        QStringLiteral("stream-download-index-created"));
+
     // Video player overlay (hidden by default)
     DebugLogBuffer::instance().info("mainwindow", "5e-before-videoplayer");
     m_videoPlayer = new VideoPlayer(m_bridge, root);
@@ -229,6 +240,60 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     }
 
     activatePage(PAGE_COMICS);
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 6 — first-launch migration
+    // gate. Reads <dataDir>/stream_downloads_meta.json: if migrationVersion
+    // >= 1 nothing happens; otherwise we walk Videos roots, regex-match the
+    // canonical bulk-download layout, query Cinemeta to resolve each show,
+    // register per-episode entries in StreamDownloadIndex, and materialize
+    // StreamLibrary entries. Spec §9.1.
+    //
+    // Deferred to QTimer::singleShot(0, ...) so the constructor finishes,
+    // the window paints once, and the modal dialog has a sane parent that's
+    // already shown. The gate is also a no-op when there are no Videos
+    // roots (writes the version pin so we don't re-check on every launch).
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_bridge) return;
+        JsonStore& store = m_bridge->store();
+        const QJsonObject migMeta = store.read(QStringLiteral("stream_downloads_meta.json"));
+        const int storedVersion = migMeta.value(QStringLiteral("migrationVersion")).toInt(0);
+        if (storedVersion >= 1) return;  // already migrated
+
+        const QStringList videoRoots = m_bridge->rootFolders(QStringLiteral("videos"));
+        if (videoRoots.isEmpty()) {
+            // No Videos roots — nothing to migrate. Pin migrationVersion so
+            // we don't re-check on every launch.
+            QJsonObject pin;
+            pin[QStringLiteral("migrationVersion")] = 1;
+            pin[QStringLiteral("completedAt")] =
+                static_cast<double>(QDateTime::currentMSecsSinceEpoch());
+            store.write(QStringLiteral("stream_downloads_meta.json"), pin);
+            return;
+        }
+
+        // m_streamPage is the canonical home for the StreamLibrary +
+        // MetaAggregator instances; both shared via the public accessors
+        // mirroring the existing metaAggregator() pattern. Either being
+        // null at this point is a structural bug — bail rather than crash.
+        if (!m_streamPage) return;
+        StreamLibrary* library = m_streamPage->streamLibrary();
+        tankostream::stream::MetaAggregator* meta = m_streamPage->metaAggregator();
+        if (!m_streamDownloadIndex || !library || !meta) return;
+
+        // STREAM_BULK_DOWNLOAD_V2 2026-05-10 — run the migration silently.
+        // Hemanth verbatim: "make sure i don't see this notification anymore"
+        // re: the StreamRescueProgressDialog popup. The migration adds
+        // matched shows to the Stream library either way; the popup only
+        // surfaced "0 shows / 0 episodes" feedback the user didn't want
+        // visible. Scanner runs in the background as before; results
+        // appear silently in the Stream library when matches succeed.
+        auto* scanner = new StreamRescueScanner(
+            m_streamDownloadIndex, library, meta,
+            &store, videoRoots, this);
+        connect(scanner, &StreamRescueScanner::complete,
+                scanner, &QObject::deleteLater);
+        scanner->start();
+    });
 
     // FRAMELESS_CHROME_FIX 2026-05-01 — re-add WS_THICKFRAME / WS_MAXIMIZEBOX
     // / WS_MINIMIZEBOX so Aero snap (drag-to-edge), Win+Arrow snap, taskbar
@@ -497,11 +562,33 @@ void MainWindow::buildPageStack()
     auto *torrentClient = new TorrentClient(m_bridge, this);
     dbg("4e-torrentclient-created");
 
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire the stream-side
+    // download index into TorrentClient so onFileRenamed() registers each
+    // published bulk-episode file as it lands. Both objects exist by now
+    // (m_streamDownloadIndex was constructed at line ~180; TorrentClient just
+    // created above). Non-owning pointer; nullptr-tolerant on the receiver.
+    if (m_streamDownloadIndex)
+        torrentClient->setStreamDownloadIndex(m_streamDownloadIndex);
+
     // Stream page — m_streamPage cache (STREAM_ADD_TO_TANKORENT 2026-05-06)
     // so we can wire the magnet-handoff signal without a qobject_cast walk.
-    m_streamPage = new StreamPage(m_bridge, torrentClient->engine());
+    m_streamPage = new StreamPage(m_bridge, torrentClient);
     m_pageStack->addWidget(m_streamPage);
     dbg("4f-streampage-created");
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 3 — wire the download
+    // index into StreamPage so (a) the home board's tiles render the
+    // DOWNLOADED chip and refresh on entriesChanged, and (b) StreamLibrary's
+    // remove() evicts per-episode rows when a show leaves the library.
+    if (m_streamPage && m_streamDownloadIndex)
+        m_streamPage->setStreamDownloadIndex(m_streamDownloadIndex);
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 5 — wire the download index
+    // into VideosPage so the Videos scanner skips Stream-owned files (spec
+    // §3 P1 + §6.4 + §8) and the page rescans (debounced 500ms) when the
+    // index changes (bulk completion / Remove-from-Library batches).
+    if (m_videosPage && m_streamDownloadIndex)
+        m_videosPage->setStreamDownloadIndex(m_streamDownloadIndex);
 
     // Share StreamPage's MetaAggregator with VideosPage for "Fetch poster
     // from internet" context-menu action on folder tiles (Agent 5 Batch 1,
@@ -526,6 +613,13 @@ void MainWindow::buildPageStack()
     // coordination convention).
     connect(m_streamPage, &StreamPage::addToTankorentRequested,
             this, &MainWindow::onAddToTankorentRequested);
+    connect(m_streamPage, &StreamPage::addToTankorentBulkRequested,
+            this, &MainWindow::onAddToTankorentBulkRequested);
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — downloaded-episode
+    // click. StreamPage has already kicked the SubtitlesAggregator fan-out
+    // by the time this fires; MainWindow's slot handles the VideoPlayer open.
+    connect(m_streamPage, &StreamPage::playLocalFileFromStreamRequested,
+            this, &MainWindow::onPlayLocalFileFromStreamRequested);
 
     auto *tankoyomiPage = new TankoyomiPage(m_bridge);
     tankoyomiPage->setObjectName(PAGE_TANKOYOMI);
@@ -648,6 +742,31 @@ void MainWindow::onAddToTankorentRequested(const QString& magnetUri,
 
     activatePage(PAGE_TANKORENT);
     m_tankorentPage->addMagnetFromExternal(magnetUri, displayName);
+}
+
+void MainWindow::onAddToTankorentBulkRequested(
+    const StreamBulkGroupRecord& group,
+    const tankostream::stream::BulkPackVerificationResult& verifierOutput,
+    const QString& displayLabel)
+{
+    if (group.groupId.isEmpty()) {
+        qWarning() << "MainWindow::onAddToTankorentBulkRequested: empty group id, ignoring";
+        return;
+    }
+    if (!m_tankorentPage) {
+        qWarning() << "MainWindow::onAddToTankorentBulkRequested: m_tankorentPage null";
+        return;
+    }
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 1 — bulk dispatch deliberately stays on
+    // the current Stream page (per Hemanth ask 2026-05-10: "rather than
+    // taking me to Tankorent to show me the downloads, the show page in
+    // stream mode itself can have a download progress column"). The
+    // Tankorent grouped row is still created — manual navigation to
+    // Tankorent surfaces it as before. Single-add path at
+    // onAddToTankorentRequested keeps the original activate-to-Tankorent
+    // behavior because that flow is a distinct user gesture.
+    m_tankorentPage->addMagnetGroupFromExternal(group, verifierOutput, displayLabel);
 }
 
 // ── Root folders overlay ────────────────────────────────────────────────────
@@ -812,6 +931,46 @@ void MainWindow::openVideoPlayer(const QString& filePath)
     m_videoPlayer->show();
     m_videoPlayer->raise();
     m_videoPlayer->setFocus();
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — Stream-mode playback
+// gateway for bulk-downloaded episodes. Spec §6.2.
+//
+// StreamPage has already done the SubtitlesAggregator fan-out (Spec §10.2)
+// against a synthetic Stream by the time this slot fires; MainWindow's
+// responsibility is the actual VideoPlayer open. The imdbId/season/episode
+// args are kept on the signal so a future iteration can teach VideoPlayer
+// to write Stream-domain progress under the canonical
+// `stream:imdb:sNN:eMM` key (Spec §10.1 Continue Watching surfacing) — that
+// bridging is a separable follow-up; the open + signal flow is the Phase 4
+// critical path.
+void MainWindow::onPlayLocalFileFromStreamRequested(
+    const QString& localPath, const QString& imdbId,
+    const QString& showTitle, int season, int episode)
+{
+    Q_UNUSED(imdbId);
+    Q_UNUSED(showTitle);
+    Q_UNUSED(season);
+    Q_UNUSED(episode);
+
+    if (localPath.isEmpty() || !QFileInfo::exists(localPath)) {
+        DebugLogBuffer::instance().warning(
+            QStringLiteral("stream"),
+            QStringLiteral("onPlayLocalFileFromStreamRequested: file missing"),
+            QJsonObject{{QStringLiteral("path"), localPath}});
+        return;
+    }
+
+    openVideoPlayer(localPath);
+
+    // VideoPlayer currently has no public setVideoTitle()/setTitle() entry
+    // point — its m_titleLabel + m_fullTitle are private and populated from
+    // the file's basename inside openFile(). The Cinemeta-rich
+    // "<Show> · S01E03" title is a cosmetic improvement; the canonical
+    // filename ("Show - S01E03 - Title.mkv") that openFile derives is
+    // already a sensible display string post-Phase-3 canonical-naming.
+    // TODO STREAM_DOWNLOADED_LIBRARY follow-up: add VideoPlayer::setVideoTitle
+    // and route the rich title here. Out of scope for Phase 4.
 }
 
 // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — public wrapper for the

@@ -6,6 +6,8 @@
 #include <QList>
 #include <QMetaType>
 
+class StreamDownloadIndex;
+
 struct ShowInfo {
     struct FileEntry {
         QString path;
@@ -31,6 +33,11 @@ public:
 
     void setCacheDir(const QString& dir) { m_cacheDir = dir; }
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 5 (2026-05-10) — non-owning pointer.
+    // When set, scan() filters out files that the index marks as Stream-owned
+    // before grouping them into shows; spec §3 P1 + §6.4 + §8.
+    void setStreamDownloadIndex(StreamDownloadIndex* idx) { m_downloadIndex = idx; }
+
 public slots:
     void scan(const QStringList& rootFolders);
     void backgroundProbeDurations();
@@ -50,4 +57,5 @@ private:
     QString m_cacheDir;
     QMap<QString, double> m_durationCache;  // cacheKey -> seconds
     QStringList m_pendingProbes;            // file paths still needing probe
+    StreamDownloadIndex* m_downloadIndex = nullptr;  // non-owning; Phase 5
 };

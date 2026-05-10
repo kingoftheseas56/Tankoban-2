@@ -23,6 +23,7 @@ class TileStrip;
 class TorrentClient;
 class VideosScanner;
 class ShowView;
+class StreamDownloadIndex;
 namespace tankostream { namespace stream { class MetaAggregator; } }
 
 class VideosPage : public QWidget {
@@ -50,6 +51,13 @@ public:
     // boot, producing the "multiplying folders" symptom. Null-safe — when
     // unset (e.g., test harness), the rename proceeds without the release.
     void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 5 (2026-05-10) — wire the stream-side
+    // download index. Forwards to m_scanner so file-level skipping happens at
+    // scan time, and subscribes to entriesChanged with a 500ms debounced
+    // rescan so bulk-completion / Remove-from-Library batches collapse into
+    // one triggerScan. Spec §8.3.
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
 
     // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
     // Returns library tile state for the `get_videos` command. Pure read.
@@ -172,4 +180,10 @@ private:
     tankostream::stream::MetaAggregator* m_meta = nullptr;
     QNetworkAccessManager* m_nam = nullptr;  // lazy-init on first poster fetch
     TorrentClient*         m_torrentClient = nullptr;
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 5 (2026-05-10) — non-owning. Set once at
+    // MainWindow wire-up. m_streamDownloadDebounce is lazy-constructed in the
+    // setter to coalesce bursts of entriesChanged signals into one triggerScan.
+    StreamDownloadIndex*   m_downloadIndex = nullptr;
+    QTimer*                m_streamDownloadDebounce = nullptr;
 };

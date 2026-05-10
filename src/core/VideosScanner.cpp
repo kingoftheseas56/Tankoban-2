@@ -1,5 +1,6 @@
 #include "VideosScanner.h"
 #include "ScannerUtils.h"
+#include "core/stream/StreamDownloadIndex.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -68,6 +69,26 @@ void VideosScanner::scan(const QStringList& rootFolders)
     for (auto it = showMap.begin(); it != showMap.end(); ++it) {
         QString showPath = it.key();
         QStringList& files = it.value();
+
+        // STREAM_DOWNLOADED_LIBRARY Phase 5 (2026-05-10) — drop files that
+        // the stream-side download index marks as Stream-owned. They live on
+        // disk at the canonical path but Stream mode is the blessed UI for
+        // them (spec §3 P1 + §6.4 + §8). Single QHash::contains per file
+        // (~1µs); no measurable scanner regression. If every file in this
+        // show is Stream-owned, skip the show entirely to avoid emitting an
+        // empty ShowInfo.
+        if (m_downloadIndex) {
+            QStringList filtered;
+            filtered.reserve(files.size());
+            for (const QString& path : files) {
+                const QString key = StreamDownloadIndex::computeCanonicalKey(path);
+                if (!m_downloadIndex->isStreamOwned(key))
+                    filtered.append(path);
+            }
+            files = filtered;
+            if (files.isEmpty())
+                continue;
+        }
 
         std::sort(files.begin(), files.end(), [&collator](const QString& a, const QString& b) {
             return collator.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
