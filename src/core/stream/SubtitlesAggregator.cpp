@@ -11,6 +11,7 @@
 #include "addon/AddonTransport.h"
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
+#include "core/DebugLogBuffer.h"
 
 using tankostream::addon::AddonDescriptor;
 using tankostream::addon::AddonRegistry;
@@ -123,6 +124,10 @@ void SubtitlesAggregator::load(const SubtitleLoadRequest& request)
     m_requestExtra = buildSubtitleExtra(request.selectedStream);
 
     if (!m_registry || m_request.type.isEmpty() || m_request.id.isEmpty()) {
+        DebugLogBuffer::instance().warning(QStringLiteral("subtitles-agg"),
+            QStringLiteral("load aborted: empty registry/type/id"),
+            QJsonObject{{QStringLiteral("type"), m_request.type},
+                        {QStringLiteral("id"), m_request.id}});
         emit subtitlesReady({}, {});
         return;
     }
@@ -132,6 +137,11 @@ void SubtitlesAggregator::load(const SubtitleLoadRequest& request)
     if (cacheIt != m_cache.end()) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (now - cacheIt->timestampMs < kSubtitleCacheTtlMs) {
+            DebugLogBuffer::instance().info(QStringLiteral("subtitles-agg"),
+                QStringLiteral("cache hit, emitting cached tracks"),
+                QJsonObject{{QStringLiteral("type"), m_request.type},
+                            {QStringLiteral("id"), m_request.id},
+                            {QStringLiteral("tracks"), cacheIt->tracks.size()}});
             emit subtitlesReady(cacheIt->tracks, cacheIt->originByTrackKey);
             return;
         }
@@ -141,7 +151,17 @@ void SubtitlesAggregator::load(const SubtitleLoadRequest& request)
     const QList<AddonDescriptor> addons =
         m_registry->findByResourceType(QStringLiteral("subtitles"), m_request.type);
 
+    DebugLogBuffer::instance().info(QStringLiteral("subtitles-agg"),
+        QStringLiteral("load: registry returned subtitle addons"),
+        QJsonObject{{QStringLiteral("type"), m_request.type},
+                    {QStringLiteral("id"), m_request.id},
+                    {QStringLiteral("matched_addons"), addons.size()},
+                    {QStringLiteral("extras"), m_requestExtra.size()}});
+
     if (addons.isEmpty()) {
+        DebugLogBuffer::instance().warning(QStringLiteral("subtitles-agg"),
+            QStringLiteral("no addons advertise resource:subtitles for this type — emitting empty"),
+            QJsonObject{{QStringLiteral("type"), m_request.type}});
         emit subtitlesReady({}, {});
         return;
     }
@@ -219,6 +239,13 @@ void SubtitlesAggregator::dispatch()
                 onAddonFailed(addonId, message);
             });
 
+        DebugLogBuffer::instance().info(QStringLiteral("subtitles-agg"),
+            QStringLiteral("dispatch: HTTP fetch fired"),
+            QJsonObject{{QStringLiteral("addon"), addon.addonId},
+                        {QStringLiteral("baseUrl"), addon.baseUrl.toString()},
+                        {QStringLiteral("type"), m_request.type},
+                        {QStringLiteral("id"), m_request.id}});
+
         worker->fetchResource(addon.baseUrl, req);
     }
 }
@@ -233,6 +260,7 @@ void SubtitlesAggregator::onAddonReady(const QString& addonId, const QJsonObject
     const QJsonArray raw = payload.value(QStringLiteral("subtitles")).toArray();
     const QList<SubtitleTrack> parsed = parseSubtitleArray(raw);
 
+    int newTracks = 0;
     for (const SubtitleTrack& track : parsed) {
         const QString key = canonicalTrackKey(track);
         if (key.isEmpty() || m_seenTrackKeys.contains(key)) {
@@ -241,7 +269,16 @@ void SubtitlesAggregator::onAddonReady(const QString& addonId, const QJsonObject
         m_seenTrackKeys.insert(key);
         m_originByTrackKey.insert(key, addonId);
         m_tracks.append(track);
+        ++newTracks;
     }
+
+    DebugLogBuffer::instance().info(QStringLiteral("subtitles-agg"),
+        QStringLiteral("addon reply parsed"),
+        QJsonObject{{QStringLiteral("addon"), addonId},
+                    {QStringLiteral("raw_subtitles_in_payload"), raw.size()},
+                    {QStringLiteral("parsed_valid"), parsed.size()},
+                    {QStringLiteral("new_after_dedup"), newTracks},
+                    {QStringLiteral("running_total"), m_tracks.size()}});
 
     completeOne();
 }
@@ -252,6 +289,11 @@ void SubtitlesAggregator::onAddonFailed(const QString& addonId, const QString& m
     if (pendingIt != m_pendingByAddon.end()) {
         pendingIt->inFlight = false;
     }
+
+    DebugLogBuffer::instance().warning(QStringLiteral("subtitles-agg"),
+        QStringLiteral("addon fetch failed"),
+        QJsonObject{{QStringLiteral("addon"), addonId},
+                    {QStringLiteral("error"), message}});
 
     emit subtitlesError(addonId, message);
     completeOne();
@@ -269,6 +311,12 @@ void SubtitlesAggregator::completeOne()
     entry.tracks = m_tracks;
     entry.originByTrackKey = m_originByTrackKey;
     m_cache.insert(makeCacheKey(m_request), entry);
+
+    DebugLogBuffer::instance().info(QStringLiteral("subtitles-agg"),
+        QStringLiteral("emitting subtitlesReady"),
+        QJsonObject{{QStringLiteral("type"), m_request.type},
+                    {QStringLiteral("id"), m_request.id},
+                    {QStringLiteral("final_track_count"), m_tracks.size()}});
 
     emit subtitlesReady(m_tracks, m_originByTrackKey);
 }

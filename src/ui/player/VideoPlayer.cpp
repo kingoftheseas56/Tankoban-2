@@ -542,10 +542,20 @@ void VideoPlayer::teardownUi()
     m_audioTracks = {};
     m_subTracks   = {};
 
-    // Batch 5.3 — clear Tankostream external subs so the next stream/file
-    // doesn't inherit a stale addon track list. VIDEO_HUD_MINIMALIST
-    // 2026-04-25 routes through the merged SubtitlePopover.
-    if (m_subtitlePopover) m_subtitlePopover->setExternalTracks({}, {});
+    // STREAM_SUBTITLES_NO_ADDON 2026-05-10: do NOT clear external tracks here.
+    // teardownUi runs at the top of openFile (line 514 contract). When stream-
+    // mode resolves a source, StreamPage fires SubtitlesAggregator::load in
+    // parallel with the stream-server metadata resolve. The aggregator's HTTP
+    // round-trip to OpenSubs is much faster than stream-server metadata, so
+    // setExternalTracks(30 tracks) lands on the popover BEFORE openFile's
+    // teardownUi runs — and the unconditional wipe here erased them, leaving
+    // the popover with only "Off" + "Load from file..." despite the aggregator
+    // having delivered valid addon tracks. The cited stale-carry-across risk
+    // is already handled by the aggregator's natural overwrite: every source
+    // pick triggers a fresh load() that emits subtitlesReady with the new
+    // file's tracks (or empty if the addon has none), which overwrites the
+    // popover via setExternalTracks. No path needs an explicit clear here.
+    // (Original Batch 5.3 line preserved in git history at this point.)
 
     // PLAYER_UX_FIX Phase 3 Batch 3.1 — reset user-visible HUD surfaces
     // to a clean "loading" state on video switch / user close. Without

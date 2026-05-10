@@ -1,5 +1,7 @@
 #include "SubtitlePopover.h"
 
+#include "core/DebugLogBuffer.h"
+
 #include <QApplication>
 #include <QDebug>
 #include <QEvent>
@@ -170,6 +172,19 @@ void SubtitlePopover::setExternalTracks(
 {
     m_addonTracks = tracks;
     m_addonOriginsByKey = originByTrackKey;
+    {
+        QString firstUrl;
+        QString firstLang;
+        if (!tracks.isEmpty()) {
+            firstUrl = tracks.front().url.toString();
+            firstLang = tracks.front().lang;
+        }
+        DebugLogBuffer::instance().info(QStringLiteral("subtitles-popover"),
+            QStringLiteral("setExternalTracks received"),
+            QJsonObject{{QStringLiteral("track_count"), tracks.size()},
+                        {QStringLiteral("first_lang"), firstLang},
+                        {QStringLiteral("first_url"), firstUrl}});
+    }
     rebuildChoices();
     refreshList();
 }

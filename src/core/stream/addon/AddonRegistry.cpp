@@ -21,7 +21,13 @@ namespace {
 // driven search finds it. v1 stream_addons.json files predate that seed —
 // bump triggers a reseed on next load.
 // v3 follow-up: reseed default users into six catalog rows.
-constexpr int kSchemaVersion = 3;
+// v4 (STREAM_SUBTITLES_NO_ADDON 2026-05-10): seed OpenSubtitles V3 as a
+// fourth protected default. Prior seeds had no addon advertising the
+// `subtitles` resource, so SubtitlesAggregator::findByResourceType always
+// returned empty and the SubtitlePopover only ever showed internal mkv
+// tracks + "Load from file..." for users who never manually installed
+// a subtitle addon — a Stremio-parity gap surfaced by Hemanth 2026-05-10.
+constexpr int kSchemaVersion = 4;
 
 QJsonObject manifestToJson(const AddonManifest& m)
 {
@@ -725,6 +731,35 @@ void AddonRegistry::seedDefaults()
         torrentCatalogs.manifest.catalogs = {topSeededMovies, topSeededSeries};
     }
     m_addons.push_back(torrentCatalogs);
+
+    // STREAM_SUBTITLES_NO_ADDON (2026-05-10) — OpenSubtitles V3, the canonical
+    // Stremio-Inc subtitle addon. Without it seeded, no installed addon
+    // advertises `resource:subtitles` and SubtitlesAggregator emits an empty
+    // result on every stream pick (no addon-fetched .srt tracks, only mkv-
+    // internal). Marked protected so the user can't accidentally uninstall
+    // a load-bearing default. Schema v4 reseed migration in load() picks
+    // this up retroactively for existing installs without disturbing any
+    // user-installed non-protected addons.
+    AddonDescriptor opensubs;
+    opensubs.transportUrl = QUrl(QStringLiteral("https://opensubtitles-v3.strem.io/manifest.json"));
+    opensubs.flags.official = true;
+    opensubs.flags.enabled = true;
+    opensubs.flags.protectedAddon = true;
+    opensubs.manifest.id = QStringLiteral("org.stremio.opensubtitlesv3");
+    opensubs.manifest.version = QStringLiteral("1.0.0");
+    opensubs.manifest.name = QStringLiteral("OpenSubtitles v3");
+    opensubs.manifest.description = QStringLiteral("OpenSubtitles v3 Addon for Stremio");
+    opensubs.manifest.types = {QStringLiteral("movie"), QStringLiteral("series")};
+    {
+        ManifestResource subRes;
+        subRes.name = QStringLiteral("subtitles");
+        subRes.hasTypes = true;
+        subRes.types = {QStringLiteral("movie"), QStringLiteral("series")};
+        subRes.hasIdPrefixes = true;
+        subRes.idPrefixes = {QStringLiteral("tt")};
+        opensubs.manifest.resources = {subRes};
+    }
+    m_addons.push_back(opensubs);
 }
 
 }
