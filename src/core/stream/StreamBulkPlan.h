@@ -13,12 +13,17 @@
 // Phase 0B scope (follow-up RTC): test harness resurrection + tests.
 
 #include <QList>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
 #include <functional>
 
+#include "ui/pages/stream/StreamSourceChoice.h"
+
 namespace tankostream::stream {
+
+struct BulkSourceCollectionPayload;
 
 // ── Inputs ────────────────────────────────────────────────────────────────
 
@@ -102,6 +107,62 @@ struct BulkPlanResult {
     QString                showSeasonAbsolutePath; // <root>/<show>/<season>
 };
 
+// Phase 3 source-selection output. This policy is intentionally separate
+// from StreamSourceChoice's row ordering: bulk season selection prioritizes
+// episode coverage and deterministic quality cascade over picker UI sorting.
+enum class BulkSelectionMode {
+    Pack,
+    PerEpisode,
+};
+
+enum class BulkSelectionReason {
+    Picked,
+    MissingNoSource,
+    PackCovered,
+};
+
+struct BulkSelectionItem {
+    QString itemKey;                  // "<seriesId>:S<NN>E<NN>"
+    int episodeNum = 0;               // 1-based
+    StreamPickerChoice choice;        // empty when reason==MissingNoSource
+    int pickQuality = 0;              // choice.qualitySort; 0 when missing
+    bool fallbackUsed = false;        // true when picked quality is not 1080p
+    BulkSelectionReason reason = BulkSelectionReason::MissingNoSource;
+};
+
+enum class BulkSelectionWarningKind {
+    NoPackCandidate,
+    PackUnverified,
+    QualityFallbackUsed,
+    MissingEpisodes,
+    TieBreakAmbiguous,
+};
+
+struct BulkSelectionWarning {
+    BulkSelectionWarningKind kind;
+    QString detail;                  // human-readable; not user-facing yet
+    QString relatedItemKey;          // "" when not item-specific
+};
+
+struct BulkSelectionPreflightSummary {
+    int totalEpisodes = 0;
+    int toDownload = 0;
+    int alreadyInLibrary = 0;
+    int missingNoSource = 0;
+    QMap<int, int> qualityBreakdown; // qualitySort -> selected item count
+    bool packMode = false;
+    QString packLabel;
+    qint64 estimatedTotalBytes = 0;
+};
+
+struct BulkSelectionPlan {
+    QList<BulkSelectionItem> items;
+    QList<BulkSelectionWarning> warnings;
+    BulkSelectionPreflightSummary preflight;
+    QString groupShape; // "pack" or "per-episode"
+    BulkSelectionMode mode = BulkSelectionMode::PerEpisode;
+};
+
 // ── Identity-key helpers (audit Improvement 8) ────────────────────────────
 
 // Stable item key for one planned episode. Format: "<seriesId>:S<NN>E<NN>".
@@ -114,6 +175,16 @@ QString makeItemKey(const QString& seriesId, int season, int episode);
 QString makeDestinationKey(const QString& showFolderName,
                            const QString& seasonFolderName,
                            const QString& canonicalFilename);
+
+// Stable torrent key for group-store foreign keys. Phase 1 supports v1
+// SHA-1 info hashes only: lowercase 40-character hex. Invalid / empty
+// inputs return an empty key so callers do not persist ambiguous IDs.
+QString makeTorrentKey(const QString& infoHash);
+
+// Stable file key for one torrent item. Format:
+// "<normalizedInfoHash>:<fileIndex>". fileIndex=-1 means whole-torrent /
+// per-episode mode. Invalid info hashes return an empty key.
+QString makeFileKey(const QString& infoHash, int fileIndex);
 
 // ── Forward sanitizer (audit A7) ──────────────────────────────────────────
 
@@ -194,5 +265,8 @@ using PathExistsFn = std::function<bool(const QString& absolutePath)>;
 // supply one; tests use this null-default for sanitizer-only coverage.
 BulkPlanResult buildBulkPlan(const BulkPlanInput& input,
                              const PathExistsFn& existsFn = {});
+
+BulkSelectionPlan buildBulkSelection(const BulkPlanResult& planResult,
+                                     const BulkSourceCollectionPayload& sources);
 
 }  // namespace tankostream::stream

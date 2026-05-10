@@ -17,6 +17,7 @@ struct AddTorrentConfig {
     QString category;         // "comics", "books", "audiobooks", "videos"
     QString destinationPath;
     QString contentLayout;    // "original", "subfolder", "no_subfolder"
+    QString streamGroupId;    // empty = ungrouped; bulk stream groups fill this
     bool    sequential   = false;
     bool    startPaused  = false;
     QVector<int>   selectedIndices;   // file indices with priority > 0

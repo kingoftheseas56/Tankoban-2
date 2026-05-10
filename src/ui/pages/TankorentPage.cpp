@@ -32,7 +32,9 @@
 #include <QStyleFactory>
 #include <QNetworkAccessManager>
 #include <QApplication>
+#include <QBrush>
 #include <QClipboard>
+#include <QColor>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QIcon>
@@ -44,6 +46,9 @@
 #include <QProgressBar>
 #include <QHash>
 #include <QSet>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QVariantMap>
 #include <QMimeData>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -193,6 +198,164 @@ static const CategoryOption* categoryOptionsForSite(const QString& siteKey)
     return nullptr;
 }
 
+enum class RowKind {
+    FlatTorrent,
+    Group,
+    GroupChild,
+};
+
+QString rowKindToString(RowKind kind)
+{
+    switch (kind) {
+    case RowKind::FlatTorrent: return QStringLiteral("FlatTorrent");
+    case RowKind::Group:       return QStringLiteral("Group");
+    case RowKind::GroupChild:  return QStringLiteral("GroupChild");
+    }
+    return QStringLiteral("FlatTorrent");
+}
+
+RowKind rowKindFromString(const QString& kind)
+{
+    if (kind == QLatin1String("Group")) return RowKind::Group;
+    if (kind == QLatin1String("GroupChild")) return RowKind::GroupChild;
+    return RowKind::FlatTorrent;
+}
+
+QVariantMap transferRowMeta(RowKind kind,
+                            const QString& infoHash = QString(),
+                            const QString& groupId = QString(),
+                            const QString& itemKey = QString())
+{
+    QVariantMap meta;
+    meta.insert(QStringLiteral("kind"), rowKindToString(kind));
+    if (!infoHash.isEmpty()) meta.insert(QStringLiteral("infoHash"), infoHash);
+    if (!groupId.isEmpty()) meta.insert(QStringLiteral("groupId"), groupId);
+    if (!itemKey.isEmpty()) meta.insert(QStringLiteral("itemKey"), itemKey);
+    return meta;
+}
+
+QVariantMap transferRowMeta(const QTableWidget* table, int row)
+{
+    if (!table || row < 0) return {};
+    auto* item = table->item(row, 0);
+    return item ? item->data(Qt::UserRole).toMap() : QVariantMap();
+}
+
+RowKind transferRowKind(const QVariantMap& meta)
+{
+    return rowKindFromString(meta.value(QStringLiteral("kind")).toString());
+}
+
+QString transferRowSelectionKey(const QVariantMap& meta)
+{
+    switch (transferRowKind(meta)) {
+    case RowKind::FlatTorrent:
+        return QStringLiteral("torrent:%1").arg(meta.value(QStringLiteral("infoHash")).toString());
+    case RowKind::Group:
+        return QStringLiteral("group:%1").arg(meta.value(QStringLiteral("groupId")).toString());
+    case RowKind::GroupChild:
+        return QStringLiteral("child:%1:%2")
+            .arg(meta.value(QStringLiteral("groupId")).toString(),
+                 meta.value(QStringLiteral("itemKey")).toString());
+    }
+    return {};
+}
+
+bool isTerminalStreamBulkItemState(const QString& state)
+{
+    return state == QLatin1String("Published")
+        || state == QLatin1String("MissingSource")
+        || state == QLatin1String("MetadataFailed")
+        || state == QLatin1String("PublishFailed")
+        || state == QLatin1String("Failed")
+        || state == QLatin1String("Completed")
+        || state == QLatin1String("Cancelled")
+        || state == QLatin1String("Orphaned");
+}
+
+bool isSkippedForWantedBytes(const QString& state)
+{
+    return state == QLatin1String("Cancelled")
+        || state == QLatin1String("MissingSource")
+        || state == QLatin1String("MetadataFailed")
+        || state == QLatin1String("PublishFailed")
+        || state == QLatin1String("Failed")
+        || state == QLatin1String("Orphaned");
+}
+
+bool isFailedStreamBulkItemState(const QString& state)
+{
+    return state == QLatin1String("MissingSource")
+        || state == QLatin1String("MetadataFailed")
+        || state == QLatin1String("PublishFailed")
+        || state == QLatin1String("Failed");
+}
+
+QString torrentStatusText(const TorrentInfo& t)
+{
+    if (t.stateString == QLatin1String("downloading")) return QStringLiteral("Downloading");
+    if (t.stateString == QLatin1String("paused")) return QStringLiteral("Paused");
+    if (t.stateString == QLatin1String("seeding")) return QStringLiteral("Seeding");
+    if (t.stateString == QLatin1String("error"))
+        return t.errorMessage.isEmpty()
+            ? QStringLiteral("Error")
+            : QStringLiteral("Error: %1").arg(t.errorMessage.left(40));
+    if (t.stateString == QLatin1String("metadata")) return QStringLiteral("Resolving");
+    if (t.stateString == QLatin1String("completed")) return QStringLiteral("Completed");
+    if (t.stateString == QLatin1String("checking")) return QStringLiteral("Checking");
+    return QStringLiteral("Stalled");
+}
+
+QString streamBulkItemStatusText(const QJsonObject& item, const TorrentInfo* active)
+{
+    const QString state = item.value(QStringLiteral("itemState")).toString();
+    if (state == QLatin1String("Published")) return QStringLiteral("Published");
+    if (state == QLatin1String("Publishing")) return QStringLiteral("Publishing");
+    if (state == QLatin1String("MissingSource")) return QStringLiteral("Missing source");
+    if (state == QLatin1String("MetadataFailed")) return QStringLiteral("Metadata failed");
+    if (state == QLatin1String("PublishFailed")) return QStringLiteral("Publish failed");
+    if (state == QLatin1String("Failed")) return QStringLiteral("Failed");
+    if (state == QLatin1String("Completed")) return QStringLiteral("Completed");
+    if (state == QLatin1String("Cancelled")) return QStringLiteral("Cancelled");
+    if (state == QLatin1String("Orphaned")) return QStringLiteral("Orphaned");
+    if (active) return torrentStatusText(*active);
+    return state.isEmpty() ? QStringLiteral("Pending") : state;
+}
+
+int etaSecondsForTorrent(const TorrentInfo& t)
+{
+    if (t.dlSpeed > 0 && t.totalWanted > t.totalDone)
+        return static_cast<int>((t.totalWanted - t.totalDone) / t.dlSpeed);
+    return INT_MAX;
+}
+
+QString etaTextFromSeconds(int etaSecs)
+{
+    if (etaSecs == INT_MAX) return QStringLiteral("-");
+    const int h = etaSecs / 3600;
+    const int m = (etaSecs % 3600) / 60;
+    return h > 0 ? QStringLiteral("%1h %2m").arg(h).arg(m)
+                 : QStringLiteral("%1m %2s").arg(m).arg(etaSecs % 60);
+}
+
+QString destinationFolderForGroupItem(const QJsonObject& group, const QJsonObject& item)
+{
+    const QString destinationKey = item.value(QStringLiteral("destinationKey")).toString();
+    const QString destinationRoot = group.value(QStringLiteral("destinationRoot")).toString();
+    if (destinationKey.isEmpty())
+        return destinationRoot;
+    const QString path = QDir::isAbsolutePath(destinationKey)
+        ? destinationKey
+        : QDir(destinationRoot).filePath(destinationKey);
+    return QFileInfo(path).absolutePath();
+}
+
+QString fallbackVideosRoot(TorrentClient* client)
+{
+    if (!client) return {};
+    return client->defaultPaths().value(QStringLiteral("videos"));
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Constructor
 // ══════════════════════════════════════════════════════════════════════════════
@@ -207,6 +370,12 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     setAcceptDrops(true);
     buildUI();
     populateSourceCombo();
+    {
+        const QStringList savedGroups = QSettings()
+            .value(QStringLiteral("tankorent/expanded_stream_bulk_groups"))
+            .toStringList();
+        m_expandedGroupIds = QSet<QString>(savedGroups.cbegin(), savedGroups.cend());
+    }
 
     // A5/C: restore results sort state from QSettings. Validate the column
     // against the post-Track-C sortable set (0 Title, 1 Category, 2 Size,
@@ -257,12 +426,22 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
             }
             Toast::show(this, tr("Move failed for \"%1\": %2").arg(name, message));
         });
+    connect(m_client, &TorrentClient::groupPublishComplete, this,
+        [this](const QString& groupId) {
+            const QJsonObject group = m_client->streamBulkGroups()
+                .value(groupId).toObject();
+            const QString label = group.value(QStringLiteral("label")).toString(groupId);
+            const int episodeCount = group.value(QStringLiteral("items")).toArray().size();
+            refreshTransfers();
+            Toast::show(this, tr("%1 download complete (%2 episodes)")
+                              .arg(label).arg(episodeCount));
+        });
 
     // Double-click or Info column click opens TorrentPropertiesWidget.
     auto openPropertiesFor = [this](int row) {
-        auto* item = m_transfersTable->item(row, 0);
-        if (!item) return;
-        const QString hash = item->data(Qt::UserRole).toString();
+        const QVariantMap meta = transferRowMeta(m_transfersTable, row);
+        if (transferRowKind(meta) != RowKind::FlatTorrent) return;
+        const QString hash = meta.value(QStringLiteral("infoHash")).toString();
         if (hash.isEmpty()) return;
         auto* dlg = new TorrentPropertiesWidget(m_client, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
@@ -272,7 +451,20 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     connect(m_transfersTable, &QTableWidget::cellDoubleClicked, this, [openPropertiesFor](int row, int) {
         openPropertiesFor(row);
     });
-    connect(m_transfersTable, &QTableWidget::cellClicked, this, [openPropertiesFor](int row, int col) {
+    connect(m_transfersTable, &QTableWidget::cellClicked, this, [this, openPropertiesFor](int row, int col) {
+        const QVariantMap meta = transferRowMeta(m_transfersTable, row);
+        if (transferRowKind(meta) == RowKind::Group) {
+            const QString groupId = meta.value(QStringLiteral("groupId")).toString();
+            if (!groupId.isEmpty()) {
+                if (m_expandedGroupIds.contains(groupId))
+                    m_expandedGroupIds.remove(groupId);
+                else
+                    m_expandedGroupIds.insert(groupId);
+                saveExpandedStreamBulkGroups();
+                refreshTransfers();
+            }
+            return;
+        }
         if (col == 11) openPropertiesFor(row);  // Info column
     });
 
@@ -1339,6 +1531,10 @@ void TankorentPage::startSingleAddFlow(const QString& magnetUri,
 
     if (execResult == QDialog::Accepted) {
         auto config = dlg.config();
+        // STREAM_BULK_DOWNLOAD Phase 1: normal single-add dispatch stays
+        // ungrouped. Later bulk dispatch fills streamGroupId before calling
+        // TorrentClient::startDownload().
+        config.streamGroupId = QString();
         m_client->startDownload(hash, config);
         if (m_tabWidget) m_tabWidget->setCurrentIndex(1); // Switch to Transfers tab
         if (m_searchStatus) m_searchStatus->setText("Download Started");
@@ -1354,6 +1550,13 @@ void TankorentPage::startSingleAddFlow(const QString& magnetUri,
 // Transfers tab — auto-refresh
 // ══════════════════════════════════════════════════════════════════════════════
 
+void TankorentPage::saveExpandedStreamBulkGroups() const
+{
+    QStringList groupIds = QStringList(m_expandedGroupIds.cbegin(), m_expandedGroupIds.cend());
+    groupIds.sort();
+    QSettings().setValue(QStringLiteral("tankorent/expanded_stream_bulk_groups"), groupIds);
+}
+
 void TankorentPage::refreshTransfers()
 {
     if (!m_client) return;
@@ -1361,184 +1564,445 @@ void TankorentPage::refreshTransfers()
     m_cachedActive = m_client->listActive();
     const auto& active = m_cachedActive;
 
-    // Preserve selection (multi-select)
-    QSet<QString> selectedHashes;
-    for (auto* item : m_transfersTable->selectedItems()) {
-        if (item->column() == 0)
-            selectedHashes.insert(item->data(Qt::UserRole).toString());
-    }
+    QSet<QString> selectedKeys;
+    const auto selectedRows = m_transfersTable->selectionModel()
+        ? m_transfersTable->selectionModel()->selectedRows()
+        : QModelIndexList();
+    for (const QModelIndex& index : selectedRows)
+        selectedKeys.insert(transferRowSelectionKey(transferRowMeta(m_transfersTable, index.row())));
 
-    // Save sort state, disable during population
     if (m_sortCol < 0 && m_transfersTable->horizontalHeader()->sortIndicatorSection() >= 0) {
         m_sortCol = m_transfersTable->horizontalHeader()->sortIndicatorSection();
         m_sortOrder = m_transfersTable->horizontalHeader()->sortIndicatorOrder();
     }
+
+    QHash<QString, TorrentInfo> activeByHash;
+    QHash<QString, QList<TorrentInfo>> activeByGroup;
+    QList<QString> groupOrder;
+    QList<TorrentInfo> flatRows;
+    QSet<QString> knownActiveHashes;
+    for (const TorrentInfo& t : active) {
+        const QString hashKey = t.infoHash.toLower();
+        if (!hashKey.isEmpty()) {
+            activeByHash.insert(hashKey, t);
+            knownActiveHashes.insert(hashKey);
+        }
+        if (t.streamGroupId.isEmpty()) {
+            flatRows.append(t);
+        } else {
+            if (!activeByGroup.contains(t.streamGroupId))
+                groupOrder.append(t.streamGroupId);
+            activeByGroup[t.streamGroupId].append(t);
+        }
+    }
+    const QJsonObject groups = m_client->streamBulkGroups();
+    for (auto it = groups.begin(); it != groups.end(); ++it) {
+        if (groupOrder.contains(it.key()))
+            continue;
+        const QJsonArray items = it.value().toObject().value(QStringLiteral("items")).toArray();
+        bool shouldShowInactiveGroup = false;
+        for (const auto& value : items) {
+            const QString state = value.toObject().value(QStringLiteral("itemState")).toString();
+            if (state == QLatin1String("Orphaned") || isFailedStreamBulkItemState(state)) {
+                shouldShowInactiveGroup = true;
+                break;
+            }
+        }
+        if (shouldShowInactiveGroup)
+            groupOrder.append(it.key());
+    }
+    for (auto it = m_zeroPeerSeedSinceByHash.begin(); it != m_zeroPeerSeedSinceByHash.end(); ) {
+        if (!knownActiveHashes.contains(it.key()))
+            it = m_zeroPeerSeedSinceByHash.erase(it);
+        else
+            ++it;
+    }
+
     m_transfersTable->setSortingEnabled(false);
-    m_transfersTable->setRowCount(active.size());
+    m_transfersTable->clearContents();
+    m_transfersTable->setRowCount(0);
 
     int totalDl = 0, totalUl = 0;
     int activeCount = 0, seedingCount = 0;
+    for (const TorrentInfo& t : active) {
+        totalDl += t.dlSpeed;
+        totalUl += t.ulSpeed;
+        if (t.stateString == QLatin1String("downloading")) ++activeCount;
+        else if (t.stateString == QLatin1String("seeding")) ++seedingCount;
+    }
 
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    constexpr qint64 kGroupStallThresholdMs = 5LL * 60LL * 1000LL;
+    const bool hasGroupedRows = !groupOrder.isEmpty();
+
+    auto appendRow = [this]() {
+        const int row = m_transfersTable->rowCount();
+        m_transfersTable->insertRow(row);
+        return row;
+    };
     auto ensureItem = [this](int row, int col) -> QTableWidgetItem* {
         auto* item = m_transfersTable->item(row, col);
-        if (!item) { item = new QTableWidgetItem; m_transfersTable->setItem(row, col, item); }
+        if (!item) {
+            item = new QTableWidgetItem;
+            m_transfersTable->setItem(row, col, item);
+        }
         return item;
     };
+    auto setProgressWidget = [this, &ensureItem](int row, const QString& text, double progress) {
+        auto* item = ensureItem(row, 2);
+        item->setData(Qt::UserRole, progress);
+        // STREAM_BULK_DOWNLOAD UI fix 2026-05-10 — leave the item's display
+        // text empty when also setting a cell widget. Qt paints the cell
+        // widget OVER the item, but the QWidget host + QLabel have
+        // transparent areas; setting setText here makes the underlying item
+        // text leak through, which produced the "0/10 0/10" duplication
+        // Hemanth reported on 2026-05-10. UserRole still carries the
+        // progress value for sort/selection.
+        item->setText(QString());
+        item->setTextAlignment(Qt::AlignCenter);
 
-    for (int i = 0; i < active.size(); ++i) {
-        const auto& t = active[i];
+        auto* host = new QWidget(m_transfersTable);
+        auto* layout = new QHBoxLayout(host);
+        layout->setContentsMargins(4, 0, 4, 0);
+        layout->setSpacing(6);
+        auto* label = new QLabel(text, host);
+        label->setMinimumWidth(34);
+        label->setAlignment(Qt::AlignCenter);
+        auto* bar = new QProgressBar(host);
+        bar->setRange(0, 1000);
+        bar->setValue(qBound(0, static_cast<int>(progress * 1000.0), 1000));
+        bar->setTextVisible(false);
+        bar->setFixedHeight(6);
+        layout->addWidget(label);
+        layout->addWidget(bar, 1);
+        m_transfersTable->setCellWidget(row, 2, host);
+    };
+    auto renderTorrentRow = [&](int row, const TorrentInfo& t, bool childRow,
+                                const QJsonObject& childItem = QJsonObject(),
+                                const QString& groupId = QString()) {
+        const QVariantMap meta = childRow
+            ? transferRowMeta(RowKind::GroupChild, t.infoHash, groupId,
+                              childItem.value(QStringLiteral("itemKey")).toString())
+            : transferRowMeta(RowKind::FlatTorrent, t.infoHash);
 
-        // Col 0: Name — store infoHash in UserRole
-        auto* nameItem = ensureItem(i, 0);
-        QString displayName = t.name.isEmpty() ? t.infoHash.left(8) + "..." : t.name;
-        if (t.forceStarted) displayName = "[F] " + displayName;
+        auto* nameItem = ensureItem(row, 0);
+        QString displayName;
+        if (childRow) {
+            displayName = childItem.value(QStringLiteral("canonicalFilename")).toString();
+            if (displayName.isEmpty())
+                displayName = QFileInfo(childItem.value(QStringLiteral("destinationKey")).toString()).fileName();
+            if (displayName.isEmpty())
+                displayName = t.name.isEmpty() ? t.infoHash.left(8) + "..." : t.name;
+            displayName.prepend(QStringLiteral("    "));
+        } else {
+            displayName = t.name.isEmpty() ? t.infoHash.left(8) + "..." : t.name;
+            if (t.forceStarted) displayName.prepend(QStringLiteral("[F] "));
+        }
         nameItem->setText(displayName);
-        nameItem->setData(Qt::UserRole, t.infoHash);
+        nameItem->setData(Qt::UserRole, meta);
 
-        // Col 1: Size
-        auto* sizeItem = ensureItem(i, 1);
-        sizeItem->setText(t.totalWanted > 0 ? humanSize(t.totalWanted) : "-");
+        auto* sizeItem = ensureItem(row, 1);
+        sizeItem->setText(t.totalWanted > 0 ? humanSize(t.totalWanted) : QStringLiteral("-"));
         sizeItem->setData(Qt::UserRole, static_cast<qlonglong>(t.totalWanted));
         sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-        // Col 2: Progress — UserRole for delegate + sorting
-        auto* progItem = ensureItem(i, 2);
+        auto* progItem = ensureItem(row, 2);
         progItem->setData(Qt::UserRole, t.progress);
         progItem->setText(QString::number(t.progress * 100, 'f', 1) + "%");
         progItem->setTextAlignment(Qt::AlignCenter);
 
-        // Col 3: Status
-        auto* stateItem = ensureItem(i, 3);
+        auto* stateItem = ensureItem(row, 3);
         QString stateIcon;
-        QString stateText;
-        if (t.stateString == "downloading")       { stateIcon = ":/icons/download.svg"; stateText = "Downloading"; }
-        else if (t.stateString == "paused")       { stateIcon = ":/icons/pause.svg";    stateText = "Paused"; }
-        else if (t.stateString == "seeding")      { stateIcon = ":/icons/seed.svg";     stateText = "Seeding"; }
-        else if (t.stateString == "error")        { stateIcon = ":/icons/error.svg";    stateText = "Error"; }
-        else if (t.stateString == "metadata")     { stateIcon = ":/icons/waiting.svg";  stateText = "Resolving"; }
-        else if (t.stateString == "completed")    { stateIcon = ":/icons/check.svg";    stateText = "Completed"; }
-        else if (t.stateString == "checking")     { stateIcon = ":/icons/waiting.svg";  stateText = "Checking"; }
-        else                                      { stateIcon = ":/icons/stalled.svg";  stateText = "Stalled"; }
+        if (t.stateString == QLatin1String("downloading")) stateIcon = QStringLiteral(":/icons/download.svg");
+        else if (t.stateString == QLatin1String("paused")) stateIcon = QStringLiteral(":/icons/pause.svg");
+        else if (t.stateString == QLatin1String("seeding")) stateIcon = QStringLiteral(":/icons/seed.svg");
+        else if (t.stateString == QLatin1String("error")) stateIcon = QStringLiteral(":/icons/error.svg");
+        else if (t.stateString == QLatin1String("metadata")) stateIcon = QStringLiteral(":/icons/waiting.svg");
+        else if (t.stateString == QLatin1String("completed")) stateIcon = QStringLiteral(":/icons/check.svg");
+        else if (t.stateString == QLatin1String("checking")) stateIcon = QStringLiteral(":/icons/waiting.svg");
+        else stateIcon = QStringLiteral(":/icons/stalled.svg");
         if (!stateIcon.isEmpty())
             stateItem->setIcon(QIcon(stateIcon));
         stateItem->setToolTip(QString());
-        if (t.stateString == "error" && !t.errorMessage.isEmpty()) {
+        if (!childRow && t.stateString == QLatin1String("error") && !t.errorMessage.isEmpty())
             stateItem->setToolTip(t.errorMessage);
-            stateText = "Error: " + t.errorMessage.left(40);
-        }
-        stateItem->setText(stateText);
+        stateItem->setText(childRow ? streamBulkItemStatusText(childItem, &t) : torrentStatusText(t));
 
-        // Col 4: Seeds
-        auto* seedItem = ensureItem(i, 4);
+        auto* seedItem = ensureItem(row, 4);
         seedItem->setText(QString::number(t.seeds));
         seedItem->setData(Qt::UserRole, t.seeds);
         seedItem->setTextAlignment(Qt::AlignCenter);
-
-        // Col 5: Peers
-        auto* peerItem = ensureItem(i, 5);
+        auto* peerItem = ensureItem(row, 5);
         peerItem->setText(QString::number(t.peers));
         peerItem->setData(Qt::UserRole, t.peers);
         peerItem->setTextAlignment(Qt::AlignCenter);
 
-        // Col 6: Down Speed
-        auto* dlItem = ensureItem(i, 6);
-        QString dlText = humanSpeed(t.dlSpeed);
-        if (t.dlLimit > 0 && !dlText.isEmpty()) {
-            dlText += " [L]";
-            dlItem->setToolTip("Throttled: " + humanSpeed(t.dlLimit) + " max");
-        } else {
-            dlItem->setToolTip(QString());
-        }
-        dlItem->setText(dlText);
+        auto* dlItem = ensureItem(row, 6);
+        const QString dlText = humanSpeed(t.dlSpeed);
+        dlItem->setText(dlText + (t.dlLimit > 0 && !dlText.isEmpty() ? QStringLiteral(" [L]") : QString()));
+        dlItem->setToolTip(t.dlLimit > 0 && !dlText.isEmpty()
+            ? QStringLiteral("Throttled: %1 max").arg(humanSpeed(t.dlLimit))
+            : QString());
         dlItem->setData(Qt::UserRole, t.dlSpeed);
         dlItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-        // Col 7: Up Speed
-        auto* ulItem = ensureItem(i, 7);
+        auto* ulItem = ensureItem(row, 7);
         ulItem->setText(humanSpeed(t.ulSpeed));
         ulItem->setData(Qt::UserRole, t.ulSpeed);
         ulItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-        // Col 8: ETA
-        auto* etaItem = ensureItem(i, 8);
-        int etaSecs = INT_MAX;
-        if (t.dlSpeed > 0 && t.totalWanted > t.totalDone) {
-            etaSecs = static_cast<int>((t.totalWanted - t.totalDone) / t.dlSpeed);
-            int h = etaSecs / 3600, m = (etaSecs % 3600) / 60;
-            etaItem->setText(h > 0 ? QString("%1h %2m").arg(h).arg(m)
-                                   : QString("%1m %2s").arg(m).arg(etaSecs % 60));
-        } else {
-            etaItem->setText(t.stateString == "seeding" || t.stateString == "completed" ? "-" : "...");
-        }
+        const int etaSecs = etaSecondsForTorrent(t);
+        auto* etaItem = ensureItem(row, 8);
+        etaItem->setText(etaSecs != INT_MAX ? etaTextFromSeconds(etaSecs)
+                                            : (t.stateString == QLatin1String("seeding") ||
+                                               t.stateString == QLatin1String("completed") ? QStringLiteral("-") : QStringLiteral("...")));
         etaItem->setData(Qt::UserRole, etaSecs);
         etaItem->setTextAlignment(Qt::AlignCenter);
 
-        // Col 9: Category
-        auto* catItem = ensureItem(i, 9);
-        catItem->setText(t.category.isEmpty() ? "-" : t.category);
-
-        // Col 10: Queue
-        auto* queueItem = ensureItem(i, 10);
-        queueItem->setText(t.queuePosition >= 0 ? QString::number(t.queuePosition + 1) : "-");
+        ensureItem(row, 9)->setText(t.category.isEmpty() ? QStringLiteral("-") : t.category);
+        auto* queueItem = ensureItem(row, 10);
+        queueItem->setText(t.queuePosition >= 0 ? QString::number(t.queuePosition + 1) : QStringLiteral("-"));
         queueItem->setData(Qt::UserRole, t.queuePosition);
         queueItem->setTextAlignment(Qt::AlignCenter);
 
-        // Col 11: Info
-        auto* infoItem = ensureItem(i, 11);
+        auto* infoItem = ensureItem(row, 11);
         infoItem->setText(QString());
-        infoItem->setIcon(QIcon(":/icons/file.svg"));
-        infoItem->setToolTip("View Files");
+        infoItem->setIcon(childRow ? QIcon() : QIcon(QStringLiteral(":/icons/file.svg")));
+        infoItem->setToolTip(childRow ? QString() : QStringLiteral("View Files"));
         infoItem->setTextAlignment(Qt::AlignCenter);
+    };
 
-        // Stats
-        totalDl += t.dlSpeed;
-        totalUl += t.ulSpeed;
-        if (t.stateString == "downloading") ++activeCount;
-        else if (t.stateString == "seeding") ++seedingCount;
+    for (const QString& groupId : groupOrder) {
+        const QJsonObject group = groups.value(groupId).toObject();
+        const QJsonArray items = group.value(QStringLiteral("items")).toArray();
+        int publishedCount = 0, failedCount = 0, cancelledCount = 0, orphanCount = 0;
+        int terminalCount = 0, publishingCount = 0;
+        qint64 totalWanted = 0, totalDone = 0;
+        int groupDl = 0, groupUl = 0, groupSeeds = 0, groupPeers = 0;
+        bool anyActiveChild = false, anyPaused = false, anyDownloading = false;
+        bool allActiveDownloading = true, anyStalled = false;
+        int maxEtaSecs = 0;
+        QSet<QString> countedHashes;
+
+        for (const auto& value : items) {
+            const QJsonObject item = value.toObject();
+            const QString state = item.value(QStringLiteral("itemState")).toString();
+            if (state == QLatin1String("Published") || state == QLatin1String("Completed")) ++publishedCount;
+            if (isFailedStreamBulkItemState(state)) ++failedCount;
+            if (state == QLatin1String("Cancelled")) ++cancelledCount;
+            if (state == QLatin1String("Orphaned")) ++orphanCount;
+            if (state == QLatin1String("Publishing")) ++publishingCount;
+            if (isTerminalStreamBulkItemState(state)) ++terminalCount;
+
+            const QString hash = item.value(QStringLiteral("infoHash")).toString().toLower();
+            if (hash.isEmpty() || countedHashes.contains(hash) || isSkippedForWantedBytes(state))
+                continue;
+            auto activeIt = activeByHash.constFind(hash);
+            if (activeIt == activeByHash.cend())
+                continue;
+            countedHashes.insert(hash);
+            const TorrentInfo& t = activeIt.value();
+            anyActiveChild = true;
+            anyPaused = anyPaused || t.stateString == QLatin1String("paused");
+            anyDownloading = anyDownloading || t.stateString == QLatin1String("downloading");
+            allActiveDownloading = allActiveDownloading && t.stateString == QLatin1String("downloading");
+            if (t.stateString == QLatin1String("downloading") && t.seeds == 0 && t.peers == 0) {
+                if (!m_zeroPeerSeedSinceByHash.contains(hash))
+                    m_zeroPeerSeedSinceByHash.insert(hash, now);
+                anyStalled = anyStalled || (now - m_zeroPeerSeedSinceByHash.value(hash) >= kGroupStallThresholdMs);
+            } else {
+                m_zeroPeerSeedSinceByHash.remove(hash);
+            }
+            totalWanted += t.totalWanted;
+            totalDone += t.totalDone;
+            groupDl += t.dlSpeed;
+            groupUl += t.ulSpeed;
+            groupSeeds += t.seeds;
+            groupPeers += t.peers;
+            const int eta = etaSecondsForTorrent(t);
+            if (eta != INT_MAX)
+                maxEtaSecs = qMax(maxEtaSecs, eta);
+        }
+
+        const int totalItems = items.size();
+        const bool allTerminal = totalItems > 0 && terminalCount == totalItems;
+        const bool allCancelled = totalItems > 0 && cancelledCount == totalItems;
+        const bool allOrphaned = totalItems > 0 && orphanCount == totalItems;
+        const double progress = totalWanted > 0
+            ? qBound(0.0, static_cast<double>(totalDone) / static_cast<double>(totalWanted), 1.0)
+            : (totalItems > 0 ? static_cast<double>(terminalCount) / static_cast<double>(totalItems) : 0.0);
+
+        QString statusText;
+        if (allOrphaned) statusText = QStringLiteral("Orphaned");
+        else if (allCancelled) statusText = QStringLiteral("Cancelled");
+        else if (failedCount > 0 && allTerminal) statusText = QStringLiteral("Done - %1 failed").arg(failedCount);
+        else if (failedCount > 0) statusText = QStringLiteral("Downloading - %1 failed").arg(failedCount);
+        else if (publishingCount > 0) statusText = QStringLiteral("Publishing");
+        else if (anyActiveChild && anyPaused && !anyDownloading) statusText = QStringLiteral("Paused (group)");
+        else if (allTerminal) statusText = QStringLiteral("Done");
+        else if (anyStalled) statusText = QStringLiteral("Downloading - stalled");
+        else statusText = QStringLiteral("Downloading");
+        if (orphanCount > 0 && !allOrphaned)
+            statusText += QStringLiteral(" - %1 orphan").arg(orphanCount);
+
+        const int row = appendRow();
+        const QVariantMap meta = transferRowMeta(RowKind::Group, QString(), groupId);
+        auto* nameItem = ensureItem(row, 0);
+        // STREAM_BULK_DOWNLOAD UI fix 2026-05-10 — leave display text empty;
+        // the cell widget below paints the title + chip. Setting both made
+        // the underlying item text leak through transparent areas of the
+        // host QWidget, producing the visual where "Season 1" appeared to
+        // bleed into the STREAM chip on Hemanth's 2026-05-10 screenshot.
+        const QString groupLabel = group.value(QStringLiteral("label")).toString(groupId);
+        nameItem->setText(QString());
+        nameItem->setData(Qt::UserRole, meta);
+
+        auto* host = new QWidget(m_transfersTable);
+        auto* layout = new QHBoxLayout(host);
+        layout->setContentsMargins(4, 0, 6, 0);
+        layout->setSpacing(8);
+        auto* label = new QLabel(groupLabel, host);
+        label->setTextFormat(Qt::PlainText);
+        // Allow the title label to elide when the column is narrower than
+        // the natural text width, so the chip stays cleanly on the right
+        // instead of being shoved off-screen or visually merging with a
+        // truncated title.
+        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        label->setMinimumWidth(0);
+        if (allOrphaned)
+            label->setStyleSheet(QStringLiteral("color: #888888;"));
+        auto* chip = new QLabel(QStringLiteral("STREAM"), host);
+        chip->setObjectName(QStringLiteral("StreamBulkChip"));
+        chip->setStyleSheet(QStringLiteral(
+            "#StreamBulkChip { color: #eeeeee; border: 1px solid #666666;"
+            " border-radius: 3px; padding: 1px 5px; font-size: 9px;"
+            " font-weight: 600; letter-spacing: 0px; }"));
+        chip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        layout->addWidget(label);
+        layout->addStretch(1);
+        layout->addWidget(chip);
+        m_transfersTable->setCellWidget(row, 0, host);
+
+        auto* sizeItem = ensureItem(row, 1);
+        sizeItem->setText(totalWanted > 0 ? humanSize(totalWanted) : QStringLiteral("-"));
+        sizeItem->setData(Qt::UserRole, static_cast<qlonglong>(totalWanted));
+        sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        setProgressWidget(row, QStringLiteral("%1/%2").arg(publishedCount).arg(totalItems), progress);
+        // STREAM_BULK_DOWNLOAD UI fix 2026-05-10 — match flat-row column
+        // alignment so group rows visually align with the regular torrent
+        // rows below. Status stays default-left like flat rows; Seeds/Peers
+        // center; DL/UL right-align; ETA/Category/Queue/Info center.
+        ensureItem(row, 3)->setText(statusText);
+        auto* seedsItem = ensureItem(row, 4);
+        seedsItem->setText(QString::number(groupSeeds));
+        seedsItem->setTextAlignment(Qt::AlignCenter);
+        auto* peersItem = ensureItem(row, 5);
+        peersItem->setText(QString::number(groupPeers));
+        peersItem->setTextAlignment(Qt::AlignCenter);
+        auto* dlItem = ensureItem(row, 6);
+        dlItem->setText(humanSpeed(groupDl));
+        dlItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto* ulItem = ensureItem(row, 7);
+        ulItem->setText(humanSpeed(groupUl));
+        ulItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto* etaItem = ensureItem(row, 8);
+        etaItem->setText(anyActiveChild && allActiveDownloading && maxEtaSecs > 0
+                          ? etaTextFromSeconds(maxEtaSecs) : QStringLiteral("-"));
+        etaItem->setTextAlignment(Qt::AlignCenter);
+        auto* catItem = ensureItem(row, 9);
+        catItem->setText(QStringLiteral("videos"));
+        catItem->setTextAlignment(Qt::AlignCenter);
+        auto* queueItem = ensureItem(row, 10);
+        queueItem->setText(QStringLiteral("-"));
+        queueItem->setTextAlignment(Qt::AlignCenter);
+        auto* infoItem = ensureItem(row, 11);
+        infoItem->setText(QString());
+        infoItem->setTextAlignment(Qt::AlignCenter);
+        if (allOrphaned) {
+            for (int col = 0; col < m_transfersTable->columnCount(); ++col) {
+                if (auto* item = m_transfersTable->item(row, col))
+                    item->setForeground(QBrush(QColor(QStringLiteral("#888888"))));
+            }
+        }
+
+        if (m_expandedGroupIds.contains(groupId)) {
+            for (const auto& value : items) {
+                const QJsonObject item = value.toObject();
+                const QString hash = item.value(QStringLiteral("infoHash")).toString().toLower();
+                TorrentInfo child = activeByHash.value(hash);
+                if (child.infoHash.isEmpty()) {
+                    child.infoHash = hash;
+                    child.name = item.value(QStringLiteral("canonicalFilename")).toString();
+                    const QString state = item.value(QStringLiteral("itemState")).toString();
+                    child.progress = (state == QLatin1String("Published") ||
+                                      state == QLatin1String("Completed") ||
+                                      state == QLatin1String("Failed")) ? 1.0f : 0.0f;
+                    child.category = QStringLiteral("videos");
+                }
+                renderTorrentRow(appendRow(), child, true, item, groupId);
+            }
+        }
     }
 
-    // Re-enable sorting and restore sort state
-    m_transfersTable->setSortingEnabled(true);
-    if (m_sortCol >= 0)
+    for (const TorrentInfo& t : flatRows)
+        renderTorrentRow(appendRow(), t, false);
+
+    m_transfersTable->setSortingEnabled(!hasGroupedRows);
+    if (!hasGroupedRows && m_sortCol >= 0)
         m_transfersTable->sortByColumn(m_sortCol, m_sortOrder);
 
-    // Restore selection
     m_transfersTable->clearSelection();
     for (int i = 0; i < m_transfersTable->rowCount(); ++i) {
-        auto* item = m_transfersTable->item(i, 0);
-        if (item && selectedHashes.contains(item->data(Qt::UserRole).toString()))
+        const QString key = transferRowSelectionKey(transferRowMeta(m_transfersTable, i));
+        if (!key.isEmpty() && selectedKeys.contains(key))
             m_transfersTable->selectRow(i);
     }
 
-    // Update status labels
-    int historyCount = m_client->listHistory().size();
-    m_downloadStatus->setText(QString("Active: %1 | Seeding: %2 | History: %3")
+    const int historyCount = m_client->listHistory().size();
+    m_downloadStatus->setText(QStringLiteral("Active: %1 | Seeding: %2 | History: %3")
                                   .arg(activeCount).arg(seedingCount).arg(historyCount));
-
-    // Tab badge
-    m_tabWidget->setTabText(1, active.isEmpty() ? "Transfers" : QString("Transfers (%1)").arg(active.size()));
+    m_tabWidget->setTabText(1, active.isEmpty() ? QStringLiteral("Transfers")
+                                                : QStringLiteral("Transfers (%1)").arg(active.size()));
     if (totalDl > 0 || totalUl > 0)
-        m_backendStatus->setText(QString("DL %1  UL %2")
+        m_backendStatus->setText(QStringLiteral("DL %1  UL %2")
                                   .arg(humanSpeed(totalDl), humanSpeed(totalUl)));
     else
-        m_backendStatus->setText("");
+        m_backendStatus->setText(QString());
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Transfers context menu
-// ══════════════════════════════════════════════════════════════════════════════
 
 void TankorentPage::showTransfersContextMenu(const QPoint& pos)
 {
     if (!m_client) return;
 
-    // Collect all selected hashes
+    auto* clickedItem = m_transfersTable->itemAt(pos);
+    if (!clickedItem) return;
+    const int clickedRow = clickedItem->row();
+    const QVariantMap clickedMeta = transferRowMeta(m_transfersTable, clickedRow);
+    const RowKind clickedKind = transferRowKind(clickedMeta);
+    if (clickedKind == RowKind::Group) {
+        showGroupContextMenu(pos, clickedMeta.value(QStringLiteral("groupId")).toString());
+        return;
+    }
+    if (clickedKind == RowKind::GroupChild)
+        return;
+
     QStringList selectedHashes;
-    for (auto* item : m_transfersTable->selectedItems()) {
-        if (item->column() == 0) {
-            QString h = item->data(Qt::UserRole).toString();
-            if (!h.isEmpty()) selectedHashes.append(h);
+    const auto selectedRows = m_transfersTable->selectionModel()
+        ? m_transfersTable->selectionModel()->selectedRows()
+        : QModelIndexList();
+    for (const QModelIndex& index : selectedRows) {
+        const QVariantMap meta = transferRowMeta(m_transfersTable, index.row());
+        if (transferRowKind(meta) == RowKind::FlatTorrent) {
+            const QString h = meta.value(QStringLiteral("infoHash")).toString();
+            if (!h.isEmpty() && !selectedHashes.contains(h))
+                selectedHashes.append(h);
         }
+    }
+    if (selectedHashes.isEmpty()) {
+        const QString h = clickedMeta.value(QStringLiteral("infoHash")).toString();
+        if (!h.isEmpty())
+            selectedHashes.append(h);
     }
     if (selectedHashes.isEmpty()) return;
 
@@ -1701,6 +2165,135 @@ void TankorentPage::showTransfersContextMenu(const QPoint& pos)
     delete menu;
 }
 
+void TankorentPage::showGroupContextMenu(const QPoint& pos, const QString& groupId)
+{
+    if (!m_client || groupId.isEmpty()) return;
+
+    const QJsonObject group = m_client->streamBulkGroups().value(groupId).toObject();
+    if (group.isEmpty()) return;
+
+    const QJsonArray items = group.value(QStringLiteral("items")).toArray();
+    QStringList downloadingHashes;
+    QStringList pausedHashes;
+    QSet<QString> groupHashes;
+    int failedCount = 0;
+    int publishedCount = 0;
+    int terminalCount = 0;
+    int orphanCount = 0;
+    for (const auto& value : items) {
+        const QJsonObject item = value.toObject();
+        const QString state = item.value(QStringLiteral("itemState")).toString();
+        if (isFailedStreamBulkItemState(state))
+            ++failedCount;
+        if (state == QLatin1String("Orphaned"))
+            ++orphanCount;
+        if (state == QLatin1String("Published") || state == QLatin1String("Completed"))
+            ++publishedCount;
+        if (isTerminalStreamBulkItemState(state))
+            ++terminalCount;
+        const QString hash = item.value(QStringLiteral("infoHash")).toString();
+        if (!hash.isEmpty())
+            groupHashes.insert(hash);
+    }
+
+    for (const TorrentInfo& t : m_cachedActive) {
+        if (t.streamGroupId != groupId && !groupHashes.contains(t.infoHash))
+            continue;
+        if (t.stateString == QLatin1String("downloading") && !downloadingHashes.contains(t.infoHash))
+            downloadingHashes.append(t.infoHash);
+        if (t.stateString == QLatin1String("paused") && !pausedHashes.contains(t.infoHash))
+            pausedHashes.append(t.infoHash);
+    }
+
+    const QString label = group.value(QStringLiteral("label")).toString(groupId);
+    const bool allOrphaned = !items.isEmpty() && orphanCount == items.size();
+    QMenu* menu = ContextMenuHelper::createMenu(this);
+
+    auto* pauseAction = menu->addAction(QStringLiteral("Pause group"), this, [this, downloadingHashes]() {
+        for (const QString& hash : downloadingHashes)
+            m_client->pauseTorrent(hash);
+    });
+    pauseAction->setEnabled(!downloadingHashes.isEmpty());
+
+    auto* resumeAction = menu->addAction(QStringLiteral("Resume group"), this, [this, pausedHashes]() {
+        for (const QString& hash : pausedHashes)
+            m_client->resumeTorrent(hash);
+    });
+    resumeAction->setEnabled(!pausedHashes.isEmpty());
+
+    auto* cancelAction = ContextMenuHelper::addDangerAction(menu, QStringLiteral("Cancel group..."));
+    connect(cancelAction, &QAction::triggered, this, [this, groupId, label, items, publishedCount]() {
+        const bool allPublished = !items.isEmpty() && publishedCount == items.size();
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(QStringLiteral("Cancel stream download"));
+        box.setText(allPublished
+            ? QStringLiteral("Remove \"%1\" from Tankorent? Published files stay in your library.").arg(label)
+            : QStringLiteral("Cancel \"%1\" and clean up partial stream files?").arg(label));
+        auto* destructive = box.addButton(allPublished
+            ? QStringLiteral("Remove from list")
+            : QStringLiteral("Cancel and clean partials"), QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() != destructive)
+            return;
+        m_client->cancelStreamBulkGroup(groupId);
+        m_expandedGroupIds.remove(groupId);
+        saveExpandedStreamBulkGroups();
+        refreshTransfers();
+    });
+
+    menu->addSeparator();
+
+    if (allOrphaned) {
+        menu->addAction(QStringLiteral("Remove orphan group"), this, [this, groupId]() {
+            m_client->cancelStreamBulkGroup(groupId);
+            m_expandedGroupIds.remove(groupId);
+            saveExpandedStreamBulkGroups();
+            refreshTransfers();
+        });
+        menu->addSeparator();
+    }
+
+    if (failedCount > 0) {
+        menu->addAction(QStringLiteral("Retry failed"), this, [this, groupId]() {
+            m_client->retryStreamBulkGroupFailedItems(groupId);
+            refreshTransfers();
+        });
+        menu->addSeparator();
+    }
+
+    auto* showFolder = menu->addAction(QStringLiteral("Show in folder"), this, [this, group]() {
+        QString folder;
+        const QJsonArray groupItems = group.value(QStringLiteral("items")).toArray();
+        if (!groupItems.isEmpty())
+            folder = destinationFolderForGroupItem(group, groupItems.at(0).toObject());
+        if (folder.isEmpty())
+            folder = group.value(QStringLiteral("destinationRoot")).toString();
+        if (folder.isEmpty())
+            folder = fallbackVideosRoot(m_client);
+        if (!folder.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+    });
+    showFolder->setEnabled(!group.value(QStringLiteral("destinationRoot")).toString().isEmpty()
+                           || !fallbackVideosRoot(m_client).isEmpty());
+
+    const bool expanded = m_expandedGroupIds.contains(groupId);
+    menu->addAction(expanded ? QStringLiteral("Collapse details") : QStringLiteral("Expand details"),
+                    this, [this, groupId, expanded]() {
+        if (expanded)
+            m_expandedGroupIds.remove(groupId);
+        else
+            m_expandedGroupIds.insert(groupId);
+        saveExpandedStreamBulkGroups();
+        refreshTransfers();
+    });
+
+    Q_UNUSED(terminalCount);
+    menu->exec(m_transfersTable->viewport()->mapToGlobal(pos));
+    delete menu;
+}
+
 void TankorentPage::onSourcesClicked()
 {
     IndexerStatusPanel dlg(m_nam, this);
@@ -1733,6 +2326,7 @@ QPair<int, int> TankorentPage::addMagnetBatch(const QStringList& magnets,
         config.category        = category;
         config.destinationPath = destPath;
         config.contentLayout   = QStringLiteral("original");
+        config.streamGroupId   = QString();
         config.sequential      = false;
         config.startPaused     = !startImmediately;
         m_client->startDownload(hash, config);
@@ -1800,6 +2394,26 @@ void TankorentPage::addMagnetFromExternal(const QString& magnetUri,
                               ? displayName
                               : QStringLiteral("Magnet: %1").arg(magnetUri.left(40));
     startSingleAddFlow(magnetUri, title);
+}
+
+void TankorentPage::addMagnetGroupFromExternal(
+    const StreamBulkGroupRecord& group,
+    const tankostream::stream::BulkPackVerificationResult& verifierOutput,
+    const QString& displayLabel)
+{
+    if (!m_client)
+        return;
+
+    m_client->dispatchStreamBulkGroup(group, verifierOutput);
+    if (m_tabWidget)
+        m_tabWidget->setCurrentIndex(1);
+
+    const QString label = !displayLabel.isEmpty()
+        ? displayLabel
+        : (!group.label.isEmpty() ? group.label : group.groupId);
+    if (m_searchStatus)
+        m_searchStatus->setText(QStringLiteral("Stream download started: %1").arg(label));
+    refreshTransfers();
 }
 
 // ── Drag-drop ───────────────────────────────────────────────────────────────

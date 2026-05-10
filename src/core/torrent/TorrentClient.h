@@ -6,10 +6,14 @@
 #include <QJsonArray>
 #include <QList>
 #include <QMap>
+#include <QSet>
+#include <QStringList>
 
 class CoreBridge;
 class TorrentEngine;
+class StreamDownloadIndex;
 struct AddTorrentConfig;
+namespace tankostream::stream { struct BulkPackVerificationResult; }
 
 // ── Info struct for UI consumption ──────────────────────────────────────────
 struct TorrentInfo {
@@ -26,12 +30,52 @@ struct TorrentInfo {
     qint64  totalDone   = 0;
     qint64  totalWanted = 0;
     qint64  addedAt     = 0;
+    QString streamGroupId;
     bool    sequential     = false;
     bool    forceStarted   = false;
     int     queuePosition  = -1;
     int     dlLimit        = 0;   // 0 = unlimited, else bytes/s
     int     ulLimit        = 0;
     QString errorMessage;
+};
+
+enum class StreamBulkItemState {
+    Pending,
+    Downloading,
+    Publishing,
+    Published,
+    MissingSource,
+    MetadataFailed,
+    PublishFailed,
+    Failed,
+    Completed,
+    Cancelled,
+    Orphaned,
+};
+
+struct StreamBulkGroupItem {
+    QString itemKey;
+    QString destinationKey;
+    QString infoHash;
+    int     fileIndex = -1;
+    QString canonicalFilename;
+    StreamBulkItemState itemState = StreamBulkItemState::Pending;
+    QString lastError;
+};
+
+struct StreamBulkGroupRecord {
+    QString groupId;
+    QString groupKind = QStringLiteral("streamSeason");
+    QString label;
+    QString sourceSeriesId;
+    int     sourceSeason = -1;
+    QString destinationRoot;
+    QString stagingPath;
+    QList<StreamBulkGroupItem> items;
+    QMap<QString, QString> canonicalNames;
+    int     retryGeneration = 0;
+    qint64  createdAtMs = 0;
+    qint64  updatedAtMs = 0;
 };
 
 // ── TorrentClient ───────────────────────────────────────────────────────────
@@ -52,6 +96,7 @@ public:
     // Query
     QList<TorrentInfo> listActive() const;
     QJsonArray         listHistory() const;
+    QJsonObject        streamBulkGroups() const;
 
     // Aggregate progress [0..1] across all active torrents whose save path
     // is under `folderPath`. Weighted by torrent size so a big mostly-done
@@ -96,6 +141,43 @@ public:
     // Dedup check
     bool isDuplicate(const QString& magnetUri) const;
 
+    // STREAM_BULK_DOWNLOAD Phase 1: durable generic group-store transitions.
+    // UI/orchestrator phases call these; Phase 1 itself only persists and
+    // reconciles the store.
+    void upsertStreamBulkGroup(const StreamBulkGroupRecord& group);
+    void dispatchStreamBulkGroup(
+        const StreamBulkGroupRecord& group,
+        const tankostream::stream::BulkPackVerificationResult& verifierOutput);
+    void cancelStreamBulkGroup(const QString& groupId);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — query whether any
+    // active (non-terminal) bulk group references this imdbId. Used by
+    // Remove from Library to gate the destructive action behind a
+    // confirmation dialog. Spec §10.10.
+    bool hasActiveStreamBulkGroupsForImdb(const QString& imdbId) const;
+    QStringList streamBulkGroupIdsForImdb(const QString& imdbId) const;
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — per-episode bulk-download snapshot
+    // for the StreamDetailView's progress column. Walks m_streamBulkGroups
+    // for groups matching imdbId + season; returns a hash keyed by
+    // episode number with values {itemState string, progressPct int}.
+    // progressPct is sourced from listActive() for active torrents
+    // (Downloading), 0 for Pending (paused-queued), 100 for Published,
+    // and -1 for terminal failures. Empty hash means no bulk activity
+    // for this show+season.
+    QHash<int, QPair<QString, int>>
+        streamBulkSnapshotForImdbSeason(const QString& imdbId, int season) const;
+    void retryStreamBulkGroupFailedItems(const QString& groupId);
+    bool updateStreamBulkGroupItemState(const QString& groupId,
+                                        const QString& itemKey,
+                                        StreamBulkItemState state,
+                                        const QString& lastError = QString());
+    bool bumpStreamBulkGroupRetryGeneration(const QString& groupId);
+
+    static QString streamBulkGroupIdToFolderName(const QString& groupId);
+    static QString streamBulkFolderNameToGroupId(const QString& folderName);
+    static QString streamBulkStagingPath(const QString& videosRoot, const QString& groupId);
+
     // Release any active torrent record whose on-disk root folder matches the
     // given absolute path, leaving files in place. Used by the videos library
     // when a user-driven rename takes ownership of a download folder — the
@@ -109,11 +191,21 @@ public:
     // Default paths per category from CoreBridge
     QMap<QString, QString> defaultPaths() const;
 
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire-in for the
+    // stream-side download index. Set by MainWindow after both objects are
+    // constructed; onFileRenamed() registers per-episode entries here as the
+    // bulk publish path renames each completed file to its canonical path.
+    // Pointer is non-owning; nullptr is tolerated (defensive no-op).
+    void setStreamDownloadIndex(StreamDownloadIndex* idx) { m_streamDownloadIndex = idx; }
+
 signals:
     void torrentAdded(const QString& infoHash);
     void torrentUpdated(const QString& infoHash);
     void torrentRemoved(const QString& infoHash);
     void torrentCompleted(const QString& infoHash);
+    void groupPublishComplete(const QString& groupId);
+    void streamBulkRetrySourcePickRequested(const QString& groupId,
+                                            const QStringList& itemKeys);
 
 private slots:
     void onMetadataReady(const QString& infoHash, const QString& name,
@@ -122,20 +214,51 @@ private slots:
     void onTorrentError(const QString& infoHash, const QString& message);
     void onStorageMoved(const QString& infoHash, const QString& newPath);
     void onStorageMoveFailed(const QString& infoHash, const QString& message);
+    void onFileRenamed(const QString& infoHash, int fileIndex, const QString& newPath);
+    void onFileRenameFailed(const QString& infoHash, int fileIndex, const QString& message);
 
 private:
     void loadRecords();
     void saveRecords();
+    void loadStreamBulkGroups();
+    void saveStreamBulkGroups();
+    void reconcileStreamBulkGroups();
+    void markStreamBulkItemsForTorrent(const QString& infoHash,
+                                       StreamBulkItemState state,
+                                       const QString& lastError = QString());
+    void publishStreamBulkItemsForTorrent(const QString& infoHash);
+    void retryStreamBulkPublishing();
+    void maybeEmitStreamBulkGroupPublishComplete(const QString& groupId);
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 2 — cohort-sequential scheduler.
+    // Within a per-episode bulk group, only ONE magnet runs at a time.
+    // The remaining magnets are added to libtorrent paused (state=Pending,
+    // non-empty infoHash) and the scheduler resumes the next-in-order
+    // when the head transitions out of Downloading. cohortMaybeAdvance is
+    // idempotent and self-healing: if 0 items in the group are currently
+    // Downloading, it resumes the first Pending+infoHash item; otherwise
+    // it returns early. Pack-mode groups have all items pointing at one
+    // infoHash that starts active immediately, so they show Downloading
+    // and the method short-circuits naturally — pack mode is sequential
+    // by construction (one torrent = one slot). cohortMaybeAdvanceAll
+    // walks every group; called from reconcileStreamBulkGroups for
+    // restart resilience.
+    void cohortMaybeAdvance(const QString& groupId);
+    void cohortMaybeAdvanceAll();
     void appendHistory(const TorrentInfo& info);
     void compactHistory();
     QString extractInfoHash(const QString& magnetUri) const;
 
-    CoreBridge*    m_bridge;
-    TorrentEngine* m_engine;
+    CoreBridge*          m_bridge;
+    TorrentEngine*       m_engine;
+    StreamDownloadIndex* m_streamDownloadIndex = nullptr;  // STREAM_DOWNLOADED_LIBRARY Phase 2; non-owning
 
     // Persistent records keyed by infoHash
     QJsonObject m_records;  // { "hash": { name, savePath, category, addedAt, ... } }
+    QJsonObject m_streamBulkGroups;  // { "groupId": { group schema } }
+    QSet<QString> m_publishCompleteNotified;
 
     static constexpr const char* RECORDS_FILE = "torrents.json";
     static constexpr const char* HISTORY_FILE = "torrent_history.json";
+    static constexpr const char* STREAM_BULK_GROUPS_FILE = "stream_bulk_groups.json";
 };

@@ -2,6 +2,9 @@
 #include "TorrentEngine.h"
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
+#include "core/stream/BulkPackVerifier.h"
+#include "core/stream/StreamBulkPlan.h"
+#include "core/stream/StreamDownloadIndex.h"
 #include "ui/dialogs/AddTorrentDialog.h"  // for AddTorrentConfig
 
 #include <QRegularExpression>
@@ -9,8 +12,327 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonValue>
 #include <QStringList>
 #include <QDebug>
+
+namespace {
+
+constexpr const char* kGroupKindStreamSeason = "streamSeason";
+constexpr const char* kStatePending = "Pending";
+constexpr const char* kStateDownloading = "Downloading";
+constexpr const char* kStatePublishing = "Publishing";
+constexpr const char* kStatePublished = "Published";
+constexpr const char* kStateMissingSource = "MissingSource";
+constexpr const char* kStateMetadataFailed = "MetadataFailed";
+constexpr const char* kStatePublishFailed = "PublishFailed";
+constexpr const char* kStateFailed = "Failed";
+constexpr const char* kStateCompleted = "Completed";
+constexpr const char* kStateCancelled = "Cancelled";
+constexpr const char* kStateOrphaned = "Orphaned";
+
+QString streamBulkItemStateToString(StreamBulkItemState state)
+{
+    switch (state) {
+    case StreamBulkItemState::Pending:     return QStringLiteral("Pending");
+    case StreamBulkItemState::Downloading: return QStringLiteral("Downloading");
+    case StreamBulkItemState::Publishing:  return QStringLiteral("Publishing");
+    case StreamBulkItemState::Published:   return QStringLiteral("Published");
+    case StreamBulkItemState::MissingSource: return QStringLiteral("MissingSource");
+    case StreamBulkItemState::MetadataFailed: return QStringLiteral("MetadataFailed");
+    case StreamBulkItemState::PublishFailed: return QStringLiteral("PublishFailed");
+    case StreamBulkItemState::Failed:      return QStringLiteral("Failed");
+    case StreamBulkItemState::Completed:   return QStringLiteral("Completed");
+    case StreamBulkItemState::Cancelled:   return QStringLiteral("Cancelled");
+    case StreamBulkItemState::Orphaned:    return QStringLiteral("Orphaned");
+    }
+    return QStringLiteral("Pending");
+}
+
+StreamBulkItemState streamBulkItemStateFromString(const QString& state)
+{
+    if (state == QLatin1String(kStateDownloading)) return StreamBulkItemState::Downloading;
+    if (state == QLatin1String(kStatePublishing))  return StreamBulkItemState::Publishing;
+    if (state == QLatin1String(kStatePublished))   return StreamBulkItemState::Published;
+    if (state == QLatin1String(kStateMissingSource)) return StreamBulkItemState::MissingSource;
+    if (state == QLatin1String(kStateMetadataFailed)) return StreamBulkItemState::MetadataFailed;
+    if (state == QLatin1String(kStatePublishFailed)) return StreamBulkItemState::PublishFailed;
+    if (state == QLatin1String(kStateFailed))      return StreamBulkItemState::Failed;
+    if (state == QLatin1String(kStateCompleted)) return StreamBulkItemState::Completed;
+    if (state == QLatin1String(kStateCancelled)) return StreamBulkItemState::Cancelled;
+    if (state == QLatin1String(kStateOrphaned))  return StreamBulkItemState::Orphaned;
+    return StreamBulkItemState::Pending;
+}
+
+bool isTerminalStreamBulkState(const QString& state)
+{
+    return state == QLatin1String(kStatePublished)
+        || state == QLatin1String(kStateMissingSource)
+        || state == QLatin1String(kStateMetadataFailed)
+        || state == QLatin1String(kStatePublishFailed)
+        || state == QLatin1String(kStateFailed)
+        || state == QLatin1String(kStateCompleted)
+        || state == QLatin1String(kStateCancelled)
+        || state == QLatin1String(kStateOrphaned);
+}
+
+bool isPublishingStreamBulkState(const QString& state)
+{
+    return state == QLatin1String(kStatePublishing);
+}
+
+bool isDownloadingStreamBulkState(const QString& state)
+{
+    return state == QLatin1String(kStatePending)
+        || state == QLatin1String(kStateDownloading);
+}
+
+bool isStreamBulkSourceRetryState(const QString& state, const QString& infoHash)
+{
+    return state == QLatin1String(kStateMissingSource)
+        || state == QLatin1String(kStateMetadataFailed)
+        || (state == QLatin1String(kStateFailed) && infoHash.isEmpty())
+        || (state == QLatin1String(kStatePending) && infoHash.isEmpty());
+}
+
+bool isStreamBulkFailureState(const QString& state)
+{
+    return state == QLatin1String(kStateMissingSource)
+        || state == QLatin1String(kStateMetadataFailed)
+        || state == QLatin1String(kStatePublishFailed)
+        || state == QLatin1String(kStateFailed);
+}
+
+QJsonObject streamBulkItemToJson(const StreamBulkGroupItem& item)
+{
+    QJsonObject obj;
+    obj["itemKey"] = item.itemKey;
+    obj["destinationKey"] = item.destinationKey;
+    obj["infoHash"] = item.infoHash;
+    obj["torrentKey"] = tankostream::stream::makeTorrentKey(item.infoHash);
+    obj["fileIndex"] = item.fileIndex;
+    obj["fileKey"] = tankostream::stream::makeFileKey(item.infoHash, item.fileIndex);
+    obj["canonicalFilename"] = item.canonicalFilename;
+    obj["itemState"] = streamBulkItemStateToString(item.itemState);
+    obj["lastError"] = item.lastError;
+    return obj;
+}
+
+QJsonObject streamBulkGroupToJson(const StreamBulkGroupRecord& group)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 created = group.createdAtMs > 0 ? group.createdAtMs : now;
+    const qint64 updated = group.updatedAtMs > 0 ? group.updatedAtMs : created;
+
+    QJsonObject sourceIds;
+    sourceIds["seriesId"] = group.sourceSeriesId;
+    sourceIds["season"] = group.sourceSeason;
+
+    QJsonArray items;
+    for (const auto& item : group.items)
+        items.append(streamBulkItemToJson(item));
+
+    QJsonObject canonicalNames;
+    for (auto it = group.canonicalNames.begin(); it != group.canonicalNames.end(); ++it)
+        canonicalNames[it.key()] = it.value();
+
+    QJsonObject obj;
+    obj["groupId"] = group.groupId;
+    obj["groupKind"] = group.groupKind.isEmpty()
+        ? QStringLiteral("streamSeason")
+        : group.groupKind;
+    obj["label"] = group.label;
+    obj["sourceIds"] = sourceIds;
+    obj["destinationRoot"] = group.destinationRoot;
+    obj["stagingPath"] = group.stagingPath.isEmpty()
+        ? QJsonValue(QJsonValue::Null)
+        : QJsonValue(group.stagingPath);
+    obj["items"] = items;
+    obj["canonicalNames"] = canonicalNames;
+    obj["retryGeneration"] = group.retryGeneration;
+    obj["createdAtMs"] = created;
+    obj["updatedAtMs"] = updated;
+    return obj;
+}
+
+QJsonObject normalizeStreamBulkItem(QJsonObject item, bool* changed)
+{
+    auto setDefault = [&](const QString& key, const QJsonValue& value) {
+        if (!item.contains(key)) {
+            item.insert(key, value);
+            if (changed) *changed = true;
+        }
+    };
+
+    setDefault(QStringLiteral("itemKey"), QString());
+    setDefault(QStringLiteral("destinationKey"), QString());
+    setDefault(QStringLiteral("infoHash"), QString());
+    setDefault(QStringLiteral("fileIndex"), -1);
+    setDefault(QStringLiteral("canonicalFilename"), QString());
+    setDefault(QStringLiteral("itemState"), QString::fromLatin1(kStatePending));
+    setDefault(QStringLiteral("lastError"), QString());
+
+    const QString infoHash = item.value("infoHash").toString();
+    const int fileIndex = item.value("fileIndex").toInt(-1);
+    const QString torrentKey = tankostream::stream::makeTorrentKey(infoHash);
+    const QString fileKey = tankostream::stream::makeFileKey(infoHash, fileIndex);
+    if (item.value("torrentKey").toString() != torrentKey) {
+        item["torrentKey"] = torrentKey;
+        if (changed) *changed = true;
+    }
+    if (item.value("fileKey").toString() != fileKey) {
+        item["fileKey"] = fileKey;
+        if (changed) *changed = true;
+    }
+
+    const QString state = streamBulkItemStateToString(
+        streamBulkItemStateFromString(item.value("itemState").toString()));
+    if (item.value("itemState").toString() != state) {
+        item["itemState"] = state;
+        if (changed) *changed = true;
+    }
+
+    return item;
+}
+
+QJsonObject normalizeStreamBulkGroup(const QString& key, QJsonObject group, bool* changed)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto setDefault = [&](const QString& field, const QJsonValue& value) {
+        if (!group.contains(field)) {
+            group.insert(field, value);
+            if (changed) *changed = true;
+        }
+    };
+
+    if (group.value("groupId").toString().isEmpty()) {
+        group["groupId"] = key;
+        if (changed) *changed = true;
+    }
+    setDefault(QStringLiteral("groupKind"), QString::fromLatin1(kGroupKindStreamSeason));
+    setDefault(QStringLiteral("label"), QString());
+    if (!group.value("sourceIds").isObject()) {
+        QJsonObject sourceIds;
+        sourceIds["seriesId"] = QString();
+        sourceIds["season"] = -1;
+        group["sourceIds"] = sourceIds;
+        if (changed) *changed = true;
+    }
+    setDefault(QStringLiteral("destinationRoot"), QString());
+    if (!group.contains("stagingPath")) {
+        group["stagingPath"] = QJsonValue(QJsonValue::Null);
+        if (changed) *changed = true;
+    }
+    if (!group.value("canonicalNames").isObject()) {
+        group["canonicalNames"] = QJsonObject();
+        if (changed) *changed = true;
+    }
+    if (!group.value("items").isArray()) {
+        group["items"] = QJsonArray();
+        if (changed) *changed = true;
+    }
+    setDefault(QStringLiteral("retryGeneration"), 0);
+    setDefault(QStringLiteral("createdAtMs"), now);
+    setDefault(QStringLiteral("updatedAtMs"), group.value("createdAtMs").toVariant().toLongLong());
+
+    QJsonArray normalizedItems;
+    const QJsonArray inputItems = group.value("items").toArray();
+    for (const auto& value : inputItems)
+        normalizedItems.append(normalizeStreamBulkItem(value.toObject(), changed));
+    if (group.value("items").toArray() != normalizedItems) {
+        group["items"] = normalizedItems;
+        if (changed) *changed = true;
+    }
+
+    return group;
+}
+
+QString canonicalPathForStreamBulkItem(const QJsonObject& group, const QJsonObject& item)
+{
+    const QString destinationKey = item.value("destinationKey").toString();
+    if (!destinationKey.isEmpty() && QDir::isAbsolutePath(destinationKey))
+        return QDir::cleanPath(destinationKey);
+
+    const QString root = group.value("destinationRoot").toString();
+    if (root.isEmpty()) return {};
+
+    if (!destinationKey.isEmpty())
+        return QDir::cleanPath(QDir(root).filePath(destinationKey));
+
+    const QString filename = item.value("canonicalFilename").toString();
+    if (!filename.isEmpty())
+        return QDir::cleanPath(QDir(root).filePath(filename));
+
+    return {};
+}
+
+QString relativePublishTarget(const QString& stagingPath, const QString& canonicalPath)
+{
+    if (stagingPath.isEmpty() || canonicalPath.isEmpty())
+        return {};
+    return QDir::fromNativeSeparators(
+        QDir(stagingPath).relativeFilePath(canonicalPath));
+}
+
+QMap<int, int> priorityVectorToMap(const QVector<int>& priorities)
+{
+    QMap<int, int> mapped;
+    for (int i = 0; i < priorities.size(); ++i)
+        mapped.insert(i, priorities.at(i));
+    return mapped;
+}
+
+bool streamBulkGroupAllTerminal(const QJsonObject& group)
+{
+    const QJsonArray items = group.value("items").toArray();
+    if (items.isEmpty()) return false;
+    for (const auto& value : items) {
+        if (!isTerminalStreamBulkState(value.toObject().value("itemState").toString()))
+            return false;
+    }
+    return true;
+}
+
+bool streamBulkGroupAllPublished(const QJsonObject& group)
+{
+    const QJsonArray items = group.value("items").toArray();
+    if (items.isEmpty()) return false;
+    for (const auto& value : items) {
+        const QString state = value.toObject().value("itemState").toString();
+        if (state != QLatin1String(kStatePublished)
+            && state != QLatin1String(kStateCompleted)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QJsonObject pruneTerminalStreamBulkGroups(const QJsonObject& groups)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    constexpr qint64 kGcAgeMs = 7LL * 24LL * 60LL * 60LL * 1000LL;
+
+    QJsonObject pruned;
+    for (auto it = groups.begin(); it != groups.end(); ++it) {
+        const QJsonObject group = it.value().toObject();
+        const QJsonArray items = group.value("items").toArray();
+        bool allTerminal = !items.isEmpty();
+        for (const auto& value : items) {
+            const QString state = value.toObject().value("itemState").toString();
+            if (!isTerminalStreamBulkState(state)) {
+                allTerminal = false;
+                break;
+            }
+        }
+        const qint64 updatedAt = group.value("updatedAtMs").toVariant().toLongLong();
+        if (allTerminal && updatedAt > 0 && now - updatedAt > kGcAgeMs)
+            continue;
+        pruned.insert(it.key(), group);
+    }
+    return pruned;
+}
+
+} // namespace
 
 // ── Constructor ─────────────────────────────────────────────────────────────
 TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
@@ -28,9 +350,20 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
             this, &TorrentClient::onStorageMoved);
     connect(m_engine, &TorrentEngine::storageMoveFailed,
             this, &TorrentClient::onStorageMoveFailed);
+    connect(m_engine, &TorrentEngine::fileRenamed,
+            this, &TorrentClient::onFileRenamed);
+    connect(m_engine, &TorrentEngine::fileRenameFailed,
+            this, &TorrentClient::onFileRenameFailed);
+    connect(this, &TorrentClient::groupPublishComplete, this,
+            [this](const QString&) {
+                if (m_bridge)
+                    m_bridge->notifyRootFoldersChanged(QStringLiteral("videos"));
+            });
 
     loadRecords();
+    loadStreamBulkGroups();
     m_engine->start();
+    reconcileStreamBulkGroups();
 
     // Re-add persisted torrents from fastresume files
     bool anyChanged = false;
@@ -55,6 +388,8 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     }
     if (anyChanged)
         saveRecords();
+
+    retryStreamBulkPublishing();
 
     // Sweep orphan .fastresume files — any file in the resume directory whose
     // hash is not in m_records. These accumulate when a draft torrent (one in
@@ -94,6 +429,17 @@ void TorrentClient::loadRecords()
 {
     auto data = m_bridge->store().read(RECORDS_FILE);
     m_records = data.value("active").toObject();
+    bool changed = false;
+    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+        QJsonObject rec = it.value().toObject();
+        if (!rec.contains("streamGroupId")) {
+            rec["streamGroupId"] = QString();
+            *it = rec;
+            changed = true;
+        }
+    }
+    if (changed)
+        saveRecords();
 }
 
 void TorrentClient::saveRecords()
@@ -101,6 +447,886 @@ void TorrentClient::saveRecords()
     QJsonObject data;
     data["active"] = m_records;
     m_bridge->store().write(RECORDS_FILE, data);
+}
+
+void TorrentClient::loadStreamBulkGroups()
+{
+    auto data = m_bridge->store().read(STREAM_BULK_GROUPS_FILE);
+    m_streamBulkGroups = data.value("groups").isObject()
+        ? data.value("groups").toObject()
+        : data;
+
+    bool changed = false;
+    QJsonObject normalized;
+    for (auto it = m_streamBulkGroups.begin(); it != m_streamBulkGroups.end(); ++it) {
+        if (!it.value().isObject()) {
+            changed = true;
+            continue;
+        }
+        normalized.insert(it.key(), normalizeStreamBulkGroup(it.key(), it.value().toObject(), &changed));
+    }
+    if (normalized != m_streamBulkGroups) {
+        m_streamBulkGroups = normalized;
+        changed = true;
+    }
+    if (changed)
+        saveStreamBulkGroups();
+}
+
+void TorrentClient::saveStreamBulkGroups()
+{
+    m_streamBulkGroups = pruneTerminalStreamBulkGroups(m_streamBulkGroups);
+    QJsonObject data;
+    data["groups"] = m_streamBulkGroups;
+    m_bridge->store().write(STREAM_BULK_GROUPS_FILE, data);
+}
+
+QJsonObject TorrentClient::streamBulkGroups() const
+{
+    return m_streamBulkGroups;
+}
+
+QString TorrentClient::streamBulkGroupIdToFolderName(const QString& groupId)
+{
+    QString folderName = groupId;
+    folderName.replace(QLatin1Char(':'), QLatin1Char('-'));
+    return folderName;
+}
+
+QString TorrentClient::streamBulkFolderNameToGroupId(const QString& folderName)
+{
+    QString groupId = folderName;
+    groupId.replace(QLatin1Char('-'), QLatin1Char(':'));
+    return groupId;
+}
+
+QString TorrentClient::streamBulkStagingPath(const QString& videosRoot, const QString& groupId)
+{
+    if (videosRoot.isEmpty() || groupId.isEmpty())
+        return {};
+    return QDir::cleanPath(QDir(videosRoot).filePath(
+        QStringLiteral(".tankoban-partial/%1").arg(streamBulkGroupIdToFolderName(groupId))));
+}
+
+void TorrentClient::reconcileStreamBulkGroups()
+{
+    bool changed = false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QHash<QString, QString> activeStates;
+    for (const TorrentInfo& info : listActive())
+        activeStates.insert(info.infoHash.toLower(), info.stateString);
+    QHash<QString, QString> stagingPathByGroupId;
+    if (m_bridge) {
+        const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
+        if (!roots.isEmpty()) {
+            QDir partialDir(QDir(roots.first()).filePath(QStringLiteral(".tankoban-partial")));
+            const QFileInfoList entries = partialDir.entryInfoList(
+                QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QFileInfo& entry : entries) {
+                stagingPathByGroupId.insert(
+                    streamBulkFolderNameToGroupId(entry.fileName()),
+                    entry.absoluteFilePath());
+            }
+        }
+    }
+
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        QJsonObject group = groupIt.value().toObject();
+        QJsonArray items = group.value("items").toArray();
+        bool groupChanged = false;
+
+        if (group.value("stagingPath").toString().isEmpty() &&
+            stagingPathByGroupId.contains(groupIt.key())) {
+            group["stagingPath"] = QDir::cleanPath(stagingPathByGroupId.value(groupIt.key()));
+            groupChanged = true;
+        }
+
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            const QString state = item.value("itemState").toString();
+            if (isTerminalStreamBulkState(state))
+                continue;
+
+            const QString infoHash = item.value("infoHash").toString();
+            const QString torrentKey = infoHash.toLower();
+            const bool hasRecord = !infoHash.isEmpty() && m_records.contains(infoHash);
+            const QString canonicalPath = canonicalPathForStreamBulkItem(group, item);
+            const bool destinationExists =
+                !canonicalPath.isEmpty() && QFileInfo::exists(canonicalPath);
+
+            if (isPublishingStreamBulkState(state)) {
+                if (!hasRecord) {
+                    item["itemState"] = QString::fromLatin1(kStateOrphaned);
+                    item["lastError"] = QStringLiteral("Torrent record missing during publish");
+                    items.replace(i, item);
+                    groupChanged = true;
+                    continue;
+                }
+
+                const QJsonObject rec = m_records.value(infoHash).toObject();
+                const QString persistedState = rec.value("state").toString();
+                const QString activeState = activeStates.value(torrentKey);
+                const bool seedingLike =
+                    persistedState == QLatin1String("completed") ||
+                    persistedState == QLatin1String("seeding") ||
+                    activeState == QLatin1String("completed") ||
+                    activeState == QLatin1String("seeding");
+                if (seedingLike && destinationExists) {
+                    item["itemState"] = QString::fromLatin1(kStatePublished);
+                    item["lastError"] = QString();
+                    items.replace(i, item);
+                    groupChanged = true;
+                }
+                continue;
+            }
+
+            if (infoHash.isEmpty() || hasRecord)
+                continue;
+
+            if (destinationExists)
+                continue;
+
+            item["itemState"] = QString::fromLatin1(kStateOrphaned);
+            item["lastError"] = QStringLiteral("Torrent record missing and canonical destination not found");
+            items.replace(i, item);
+            groupChanged = true;
+        }
+
+        if (groupChanged) {
+            group["items"] = items;
+            group["updatedAtMs"] = now;
+            *groupIt = group;
+            changed = true;
+        }
+    }
+
+    if (changed)
+        saveStreamBulkGroups();
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 2 — restart-time cohort recovery.
+    // After the existing reconcile pass classifies each item against
+    // libtorrent ground truth, walk every group and ensure the cohort
+    // invariant: ≤1 Downloading item per group + first Pending+infoHash
+    // item resumed when slot is empty. Idempotent — if the cohort is
+    // already healthy, every advance call short-circuits.
+    cohortMaybeAdvanceAll();
+}
+
+void TorrentClient::upsertStreamBulkGroup(const StreamBulkGroupRecord& group)
+{
+    if (group.groupId.isEmpty()) return;
+    m_streamBulkGroups[group.groupId] = streamBulkGroupToJson(group);
+    saveStreamBulkGroups();
+}
+
+void TorrentClient::dispatchStreamBulkGroup(
+    const StreamBulkGroupRecord& group,
+    const tankostream::stream::BulkPackVerificationResult& verifierOutput)
+{
+    if (group.groupId.isEmpty() || !m_bridge)
+        return;
+
+    const QStringList videoRoots = m_bridge->rootFolders(QStringLiteral("videos"));
+    if (videoRoots.isEmpty() || videoRoots.first().isEmpty()) {
+        qWarning() << "Stream bulk dispatch failed: videos root is not configured for group"
+                   << group.groupId;
+        return;
+    }
+
+    const QString videosRoot = QDir(videoRoots.first()).absolutePath();
+    const QString stagingPath = streamBulkStagingPath(videosRoot, group.groupId);
+    if (stagingPath.isEmpty() || !QDir().mkpath(stagingPath)) {
+        qWarning() << "Stream bulk dispatch failed: cannot create staging path"
+                   << stagingPath << "for group" << group.groupId;
+        return;
+    }
+
+    const tankostream::stream::BulkSelectionPlan& plan = verifierOutput.updatedPlan;
+    QHash<QString, tankostream::stream::BulkSelectionItem> selectionByItemKey;
+    for (const auto& item : plan.items)
+        selectionByItemKey.insert(item.itemKey, item);
+
+    StreamBulkGroupRecord prepared = group;
+    prepared.stagingPath = stagingPath;
+    if (prepared.destinationRoot.isEmpty())
+        prepared.destinationRoot = videosRoot;
+    for (StreamBulkGroupItem& item : prepared.items) {
+        const auto selectionIt = selectionByItemKey.constFind(item.itemKey);
+        if (selectionIt == selectionByItemKey.cend())
+            continue;
+        if (selectionIt->reason == tankostream::stream::BulkSelectionReason::MissingNoSource) {
+            item.infoHash.clear();
+            item.fileIndex = -1;
+            item.itemState = StreamBulkItemState::MissingSource;
+            item.lastError = QStringLiteral("No source found for episode");
+            continue;
+        }
+        item.infoHash = tankostream::stream::makeTorrentKey(selectionIt->choice.infoHash);
+        item.fileIndex = selectionIt->choice.fileIndex;
+        item.itemState = StreamBulkItemState::Pending;
+        item.lastError.clear();
+    }
+
+    // Persist before the first add/start call so restart reconciliation sees
+    // the group even if dispatch is interrupted mid-loop.
+    upsertStreamBulkGroup(prepared);
+
+    auto setItemDispatchState = [&](const QString& itemKey,
+                                    const QString& infoHash,
+                                    int fileIndex,
+                                    StreamBulkItemState state,
+                                    const QString& lastError = QString()) {
+        if (!m_streamBulkGroups.contains(group.groupId) || itemKey.isEmpty())
+            return;
+        QJsonObject groupObj = m_streamBulkGroups.value(group.groupId).toObject();
+        QJsonArray items = groupObj.value("items").toArray();
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            if (item.value("itemKey").toString() != itemKey)
+                continue;
+            item["infoHash"] = infoHash;
+            item["torrentKey"] = tankostream::stream::makeTorrentKey(infoHash);
+            item["fileIndex"] = fileIndex;
+            item["fileKey"] = tankostream::stream::makeFileKey(infoHash, fileIndex);
+            item["itemState"] = streamBulkItemStateToString(state);
+            item["lastError"] = lastError;
+            items.replace(i, item);
+            groupObj["items"] = items;
+            groupObj["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+            m_streamBulkGroups[group.groupId] = groupObj;
+            return;
+        }
+    };
+
+    auto baseConfig = [&]() {
+        AddTorrentConfig config;
+        config.category = QStringLiteral("videos");
+        config.destinationPath = stagingPath;
+        config.contentLayout = QStringLiteral("original");
+        config.streamGroupId = group.groupId;
+        config.sequential = true;
+        config.startPaused = false;
+        return config;
+    };
+
+    if (plan.mode == tankostream::stream::BulkSelectionMode::Pack) {
+        tankostream::stream::BulkSelectionItem packItem;
+        bool foundPackItem = false;
+        for (const auto& item : plan.items) {
+            if (item.reason == tankostream::stream::BulkSelectionReason::PackCovered) {
+                packItem = item;
+                foundPackItem = true;
+                break;
+            }
+        }
+        if (!foundPackItem)
+            return;
+
+        const QString infoHash = tankostream::stream::makeTorrentKey(
+            resolveMetadata(packItem.choice.magnetUri));
+        if (infoHash.isEmpty()) {
+            for (const auto& item : plan.items) {
+                if (item.reason == tankostream::stream::BulkSelectionReason::PackCovered) {
+                    setItemDispatchState(
+                        item.itemKey, {}, item.choice.fileIndex,
+                        StreamBulkItemState::MetadataFailed,
+                        QStringLiteral("Pack magnet rejected by torrent engine"));
+                }
+            }
+            saveStreamBulkGroups();
+            return;
+        }
+
+        AddTorrentConfig config = baseConfig();
+        config.filePriorities = priorityVectorToMap(verifierOutput.filePriorities);
+        startDownload(infoHash, config);
+
+        for (const auto& item : plan.items) {
+            if (item.reason != tankostream::stream::BulkSelectionReason::PackCovered)
+                continue;
+            setItemDispatchState(item.itemKey, infoHash, item.choice.fileIndex,
+                                 StreamBulkItemState::Downloading);
+        }
+        saveStreamBulkGroups();
+        return;
+    }
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 2 — per-episode dispatch goes paused.
+    // All Picked magnets are added to libtorrent with startPaused=true and
+    // their item state stays at Pending. cohortMaybeAdvance below resumes
+    // the first eligible item; subsequent advance calls fire from
+    // mark/publish/onFileRenamed hook sites as the active slot frees up.
+    for (const auto& item : plan.items) {
+        if (item.reason != tankostream::stream::BulkSelectionReason::Picked)
+            continue;
+
+        const QString infoHash = tankostream::stream::makeTorrentKey(
+            resolveMetadata(item.choice.magnetUri));
+        if (infoHash.isEmpty()) {
+            setItemDispatchState(
+                item.itemKey, {}, item.choice.fileIndex,
+                StreamBulkItemState::MetadataFailed,
+                QStringLiteral("Episode magnet rejected by torrent engine"));
+            continue;
+        }
+
+        AddTorrentConfig config = baseConfig();
+        config.startPaused = true;
+        startDownload(infoHash, config);
+        setItemDispatchState(item.itemKey, infoHash, item.choice.fileIndex,
+                             StreamBulkItemState::Pending);
+    }
+    saveStreamBulkGroups();
+    cohortMaybeAdvance(group.groupId);
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — Remove from Library
+// confirmation gating. Group key format `stream:<imdbId>:s<NN>:<unix-ms>`
+// from the bulk spec gives us the prefix to filter. Reuses the existing
+// streamBulkGroupAllTerminal helper.
+bool TorrentClient::hasActiveStreamBulkGroupsForImdb(const QString& imdbId) const
+{
+    if (imdbId.isEmpty()) return false;
+    const QString prefix = QStringLiteral("stream:") + imdbId + QLatin1Char(':');
+    for (auto it = m_streamBulkGroups.constBegin();
+         it != m_streamBulkGroups.constEnd(); ++it) {
+        if (!it.key().startsWith(prefix)) continue;
+        if (!streamBulkGroupAllTerminal(it.value().toObject()))
+            return true;
+    }
+    return false;
+}
+
+QStringList TorrentClient::streamBulkGroupIdsForImdb(const QString& imdbId) const
+{
+    QStringList out;
+    if (imdbId.isEmpty()) return out;
+    const QString prefix = QStringLiteral("stream:") + imdbId + QLatin1Char(':');
+    for (auto it = m_streamBulkGroups.constBegin();
+         it != m_streamBulkGroups.constEnd(); ++it) {
+        if (it.key().startsWith(prefix))
+            out.append(it.key());
+    }
+    return out;
+}
+
+// STREAM_BULK_DOWNLOAD_V2 Phase 3 — episode-level bulk-download snapshot
+// for the StreamDetailView progress column. Group key format
+// `stream:<imdbId>:s<NN>:<unix-ms>` filters by imdbId; the group's
+// `sourceIds.season` field disambiguates the season. Per item, the
+// itemKey format `<seriesId>:S<NN>E<NN>` (per StreamBulkPlan.h
+// makeItemKey) carries the episode number after "E". progressPct comes
+// from listActive() for the matching infoHash for active torrents and
+// is bracketed for terminal states.
+QHash<int, QPair<QString, int>>
+TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season) const
+{
+    QHash<int, QPair<QString, int>> out;
+    if (imdbId.isEmpty() || season <= 0)
+        return out;
+
+    QHash<QString, int> progressByHash;  // infoHash (lowercase) -> 0..100
+    for (const TorrentInfo& info : listActive()) {
+        if (info.infoHash.isEmpty())
+            continue;
+        progressByHash.insert(info.infoHash.toLower(),
+                              static_cast<int>(qBound(0.0f, info.progress, 1.0f) * 100.0f));
+    }
+
+    const QString prefix = QStringLiteral("stream:") + imdbId + QLatin1Char(':');
+    for (auto groupIt = m_streamBulkGroups.constBegin();
+         groupIt != m_streamBulkGroups.constEnd(); ++groupIt) {
+        if (!groupIt.key().startsWith(prefix))
+            continue;
+        const QJsonObject group = groupIt.value().toObject();
+        const QJsonObject sourceIds = group.value("sourceIds").toObject();
+        if (sourceIds.value("season").toInt(-1) != season)
+            continue;
+
+        const QJsonArray items = group.value("items").toArray();
+        for (const auto& v : items) {
+            const QJsonObject item = v.toObject();
+            const QString itemKey = item.value("itemKey").toString();
+            // Parse "<imdb>:S<NN>E<NN>" — locate the trailing "E" after
+            // the "S<NN>" segment. Fallback to ":episode_num" field if
+            // present (defensive against schema drift).
+            int episodeNum = item.value("episode_num").toInt(0);
+            if (episodeNum <= 0) {
+                const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
+                if (eIdx > 0) {
+                    bool ok = false;
+                    const int parsed = itemKey.mid(eIdx + 1).toInt(&ok);
+                    if (ok)
+                        episodeNum = parsed;
+                }
+            }
+            if (episodeNum <= 0)
+                continue;
+
+            const QString state = item.value("itemState").toString();
+            int pct = -1;
+            if (state == QLatin1String(kStateDownloading)) {
+                const QString hash = item.value("infoHash").toString().toLower();
+                pct = progressByHash.value(hash, 0);
+            } else if (state == QLatin1String(kStatePending)) {
+                pct = 0;
+            } else if (state == QLatin1String(kStatePublished) ||
+                       state == QLatin1String(kStatePublishing)) {
+                pct = 100;
+            }  // failed states: pct = -1 sentinel
+
+            // If multiple groups touch the same episode (re-issued bulk),
+            // prefer the latest entry (overwrite) — group iteration order
+            // is QJsonObject insertion order which mirrors save chronology.
+            out.insert(episodeNum, qMakePair(state, pct));
+        }
+    }
+    return out;
+}
+
+void TorrentClient::cancelStreamBulkGroup(const QString& groupId)
+{
+    if (groupId.isEmpty() || !m_streamBulkGroups.contains(groupId))
+        return;
+
+    const QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    const bool allPublished = streamBulkGroupAllPublished(group);
+    const QString stagingPath = group.value("stagingPath").toString();
+    const QJsonArray items = group.value("items").toArray();
+
+    QHash<QString, bool> deleteFilesByHash;
+    bool hasPublishing = false;
+    bool allOrphaned = !items.isEmpty();
+    for (const auto& value : items) {
+        const QJsonObject item = value.toObject();
+        allOrphaned = allOrphaned &&
+            item.value("itemState").toString() == QLatin1String(kStateOrphaned);
+        const QString infoHash = item.value("infoHash").toString();
+        if (infoHash.isEmpty()) continue;
+        const QString state = item.value("itemState").toString();
+        if (isPublishingStreamBulkState(state) ||
+            state == QLatin1String(kStatePublished) ||
+            state == QLatin1String(kStateCompleted)) {
+            hasPublishing = true;
+            deleteFilesByHash.insert(infoHash, false);
+        } else if (!deleteFilesByHash.contains(infoHash)) {
+            deleteFilesByHash.insert(infoHash, !allPublished);
+        }
+    }
+
+    if (allOrphaned) {
+        m_streamBulkGroups.remove(groupId);
+        saveStreamBulkGroups();
+        return;
+    }
+
+    for (auto it = deleteFilesByHash.begin(); it != deleteFilesByHash.end(); ++it)
+        deleteTorrent(it.key(), it.value());
+
+    QJsonObject mutableGroup = m_streamBulkGroups.value(groupId).toObject();
+    QJsonArray mutableItems = mutableGroup.value("items").toArray();
+    bool changed = false;
+    for (int i = 0; i < mutableItems.size(); ++i) {
+        QJsonObject item = mutableItems.at(i).toObject();
+        const QString state = item.value("itemState").toString();
+        if (isTerminalStreamBulkState(state))
+            continue;
+        item["itemState"] = QString::fromLatin1(kStateCancelled);
+        item["lastError"] = QStringLiteral("Stream bulk group cancelled");
+        mutableItems.replace(i, item);
+        changed = true;
+    }
+    if (changed) {
+        mutableGroup["items"] = mutableItems;
+        mutableGroup["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+        m_streamBulkGroups[groupId] = mutableGroup;
+        saveStreamBulkGroups();
+    }
+
+    if (!stagingPath.isEmpty() && (allPublished || !hasPublishing))
+        QDir(stagingPath).removeRecursively();
+}
+
+bool TorrentClient::updateStreamBulkGroupItemState(const QString& groupId,
+                                                   const QString& itemKey,
+                                                   StreamBulkItemState state,
+                                                   const QString& lastError)
+{
+    if (!m_streamBulkGroups.contains(groupId) || itemKey.isEmpty())
+        return false;
+
+    QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    QJsonArray items = group.value("items").toArray();
+    bool changed = false;
+    for (int i = 0; i < items.size(); ++i) {
+        QJsonObject item = items.at(i).toObject();
+        if (item.value("itemKey").toString() != itemKey)
+            continue;
+        item["itemState"] = streamBulkItemStateToString(state);
+        item["lastError"] = lastError;
+        items.replace(i, item);
+        changed = true;
+        break;
+    }
+
+    if (!changed) return false;
+    group["items"] = items;
+    group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+    m_streamBulkGroups[groupId] = group;
+    saveStreamBulkGroups();
+    return true;
+}
+
+bool TorrentClient::bumpStreamBulkGroupRetryGeneration(const QString& groupId)
+{
+    if (!m_streamBulkGroups.contains(groupId))
+        return false;
+    QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    group["retryGeneration"] = group.value("retryGeneration").toInt(0) + 1;
+    group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+    m_streamBulkGroups[groupId] = group;
+    saveStreamBulkGroups();
+    return true;
+}
+
+void TorrentClient::retryStreamBulkGroupFailedItems(const QString& groupId)
+{
+    if (groupId.isEmpty() || !m_streamBulkGroups.contains(groupId))
+        return;
+
+    QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    QJsonArray items = group.value("items").toArray();
+    QStringList sourceRetryItemKeys;
+    bool changed = false;
+    bool recordsChanged = false;
+
+    group["retryGeneration"] = group.value("retryGeneration").toInt(0) + 1;
+
+    for (int i = 0; i < items.size(); ++i) {
+        QJsonObject item = items.at(i).toObject();
+        const QString itemKey = item.value("itemKey").toString();
+        const QString state = item.value("itemState").toString();
+        const QString infoHash = item.value("infoHash").toString();
+        const QString lastError = item.value("lastError").toString();
+
+        if (isStreamBulkSourceRetryState(state, infoHash)) {
+            item["itemState"] = QString::fromLatin1(kStatePending);
+            item["lastError"] = QString();
+            items.replace(i, item);
+            changed = true;
+            if (!itemKey.isEmpty() && !sourceRetryItemKeys.contains(itemKey))
+                sourceRetryItemKeys.push_back(itemKey);
+            continue;
+        }
+
+        if (state == QLatin1String(kStatePublishFailed)) {
+            if (infoHash.isEmpty()) {
+                item["itemState"] = QString::fromLatin1(kStateOrphaned);
+                item["lastError"] = QStringLiteral("Publish retry unavailable: torrent record missing");
+            } else {
+                item["itemState"] = QString::fromLatin1(kStatePublishing);
+                item["lastError"] = QString();
+            }
+            items.replace(i, item);
+            changed = true;
+            continue;
+        }
+
+        if (state == QLatin1String(kStateFailed) &&
+            !infoHash.isEmpty() &&
+            m_records.contains(infoHash) &&
+            lastError.startsWith(QStringLiteral("Torrent error:"), Qt::CaseInsensitive)) {
+            m_engine->resumeTorrent(infoHash);
+            QJsonObject rec = m_records.value(infoHash).toObject();
+            rec["state"] = QStringLiteral("downloading");
+            rec.remove("errorMessage");
+            m_records[infoHash] = rec;
+            recordsChanged = true;
+            item["itemState"] = QString::fromLatin1(kStateDownloading);
+            item["lastError"] = QString();
+            items.replace(i, item);
+            changed = true;
+        }
+    }
+
+    group["items"] = items;
+    group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+    m_streamBulkGroups[groupId] = group;
+    if (recordsChanged)
+        saveRecords();
+    saveStreamBulkGroups();
+
+    retryStreamBulkPublishing();
+
+    if (!sourceRetryItemKeys.isEmpty())
+        emit streamBulkRetrySourcePickRequested(groupId, sourceRetryItemKeys);
+    else if (changed)
+        maybeEmitStreamBulkGroupPublishComplete(groupId);
+}
+
+void TorrentClient::markStreamBulkItemsForTorrent(const QString& infoHash,
+                                                  StreamBulkItemState state,
+                                                  const QString& lastError)
+{
+    if (infoHash.isEmpty() || m_streamBulkGroups.isEmpty())
+        return;
+
+    bool changed = false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList affectedGroups;
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        QJsonObject group = groupIt.value().toObject();
+        QJsonArray items = group.value("items").toArray();
+        bool groupChanged = false;
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            if (item.value("infoHash").toString().compare(infoHash, Qt::CaseInsensitive) != 0)
+                continue;
+            if (isTerminalStreamBulkState(item.value("itemState").toString()))
+                continue;
+            item["itemState"] = streamBulkItemStateToString(state);
+            item["lastError"] = lastError;
+            items.replace(i, item);
+            groupChanged = true;
+        }
+        if (groupChanged) {
+            group["items"] = items;
+            group["updatedAtMs"] = now;
+            *groupIt = group;
+            affectedGroups.push_back(groupIt.key());
+            changed = true;
+        }
+    }
+
+    if (changed)
+        saveStreamBulkGroups();
+    // STREAM_BULK_DOWNLOAD_V2 Phase 2 — terminal/failure transitions free
+    // the cohort's active slot. Advance each touched group; if the slot is
+    // still occupied (e.g. by another item that was Downloading), the
+    // method short-circuits naturally.
+    for (const QString& groupId : affectedGroups)
+        cohortMaybeAdvance(groupId);
+}
+
+void TorrentClient::publishStreamBulkItemsForTorrent(const QString& infoHash)
+{
+    if (infoHash.isEmpty() || m_streamBulkGroups.isEmpty())
+        return;
+
+    bool changed = false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList affectedGroups;
+
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        QJsonObject group = groupIt.value().toObject();
+        const QString stagingPath = group.value("stagingPath").toString();
+        QJsonArray items = group.value("items").toArray();
+        bool groupChanged = false;
+
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            if (item.value("infoHash").toString().compare(infoHash, Qt::CaseInsensitive) != 0)
+                continue;
+            if (!isDownloadingStreamBulkState(item.value("itemState").toString()))
+                continue;
+
+            const QString canonicalPath = canonicalPathForStreamBulkItem(group, item);
+            if (canonicalPath.isEmpty() || stagingPath.isEmpty()) {
+                item["itemState"] = QString::fromLatin1(kStatePublishFailed);
+                item["lastError"] = QStringLiteral("Publish path unavailable");
+                items.replace(i, item);
+                groupChanged = true;
+                continue;
+            }
+
+            if (QFileInfo::exists(canonicalPath)) {
+                item["itemState"] = QString::fromLatin1(kStatePublishFailed);
+                item["lastError"] = QStringLiteral("Canonical destination already exists: %1")
+                    .arg(canonicalPath);
+                items.replace(i, item);
+                groupChanged = true;
+                continue;
+            }
+
+            QDir().mkpath(QFileInfo(canonicalPath).absolutePath());
+            const QString target = relativePublishTarget(stagingPath, canonicalPath);
+            if (target.isEmpty()) {
+                item["itemState"] = QString::fromLatin1(kStatePublishFailed);
+                item["lastError"] = QStringLiteral("Publish target unavailable");
+                items.replace(i, item);
+                groupChanged = true;
+                continue;
+            }
+
+            const int fileIndex = item.value("fileIndex").toInt(-1) >= 0
+                ? item.value("fileIndex").toInt(-1)
+                : 0;
+            item["fileIndex"] = fileIndex;
+            item["fileKey"] = tankostream::stream::makeFileKey(infoHash, fileIndex);
+            item["itemState"] = QString::fromLatin1(kStatePublishing);
+            item["lastError"] = QString();
+            items.replace(i, item);
+            groupChanged = true;
+
+            m_engine->renameFile(infoHash, fileIndex, target);
+        }
+
+        if (groupChanged) {
+            group["items"] = items;
+            group["updatedAtMs"] = now;
+            *groupIt = group;
+            affectedGroups.push_back(groupIt.key());
+            changed = true;
+        }
+    }
+
+    if (changed)
+        saveStreamBulkGroups();
+    for (const QString& groupId : affectedGroups) {
+        // STREAM_BULK_DOWNLOAD_V2 Phase 2 — Downloading → Publishing
+        // transition frees the cohort slot. Advancing here means the
+        // next per-episode magnet starts in parallel with the file
+        // rename (rename is sub-second + uses no bandwidth).
+        cohortMaybeAdvance(groupId);
+        maybeEmitStreamBulkGroupPublishComplete(groupId);
+    }
+}
+
+void TorrentClient::retryStreamBulkPublishing()
+{
+    if (m_streamBulkGroups.isEmpty())
+        return;
+
+    QHash<QString, QString> activeStates;
+    for (const TorrentInfo& info : listActive())
+        activeStates.insert(info.infoHash.toLower(), info.stateString);
+
+    auto seedingLike = [&](const QString& infoHash) {
+        if (!m_records.contains(infoHash))
+            return false;
+        const QJsonObject rec = m_records.value(infoHash).toObject();
+        const QString persisted = rec.value("state").toString();
+        const QString active = activeStates.value(infoHash.toLower());
+        return persisted == QLatin1String("completed") ||
+               persisted == QLatin1String("seeding") ||
+               active == QLatin1String("completed") ||
+               active == QLatin1String("seeding");
+    };
+
+    QSet<QString> completedHashesNeedingPublish;
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        const QJsonObject group = groupIt.value().toObject();
+        const QString stagingPath = group.value("stagingPath").toString();
+        const QJsonArray items = group.value("items").toArray();
+        for (const auto& value : items) {
+            const QJsonObject item = value.toObject();
+            const QString infoHash = item.value("infoHash").toString();
+            if (infoHash.isEmpty() || !seedingLike(infoHash))
+                continue;
+
+            const QString state = item.value("itemState").toString();
+            if (isDownloadingStreamBulkState(state)) {
+                completedHashesNeedingPublish.insert(infoHash);
+                continue;
+            }
+
+            if (!isPublishingStreamBulkState(state))
+                continue;
+            const QString canonicalPath = canonicalPathForStreamBulkItem(group, item);
+            if (canonicalPath.isEmpty())
+                continue;
+            if (!canonicalPath.isEmpty() && QFileInfo::exists(canonicalPath))
+                continue;
+            if (stagingPath.isEmpty())
+                continue;
+            QDir().mkpath(QFileInfo(canonicalPath).absolutePath());
+            const QString target = relativePublishTarget(stagingPath, canonicalPath);
+            if (target.isEmpty())
+                continue;
+            const int fileIndex = item.value("fileIndex").toInt(-1) >= 0
+                ? item.value("fileIndex").toInt(-1)
+                : 0;
+            m_engine->renameFile(infoHash, fileIndex, target);
+        }
+    }
+
+    for (const QString& infoHash : completedHashesNeedingPublish)
+        publishStreamBulkItemsForTorrent(infoHash);
+}
+
+// STREAM_BULK_DOWNLOAD_V2 Phase 2 — cohort sequential scheduler. See
+// TorrentClient.h for the full contract. Walks one group's items[] in
+// stored order (which is episode-numerical because the bulk dispatch
+// builds them in that order from BulkPlanResult.items). At most one
+// resume per call: idempotent against being fired from multiple state-
+// transition hook sites for the same triggering event.
+void TorrentClient::cohortMaybeAdvance(const QString& groupId)
+{
+    if (groupId.isEmpty() || !m_streamBulkGroups.contains(groupId))
+        return;
+
+    QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    QJsonArray items = group.value("items").toArray();
+
+    // Slot occupancy: items currently Downloading. Pending+infoHash items
+    // are paused-and-queued (cohort hasn't reached them). Publishing /
+    // Published / terminal-failure items are slot-free. Pack mode marks
+    // every item Downloading at dispatch time, so this method short-
+    // circuits naturally for pack-mode groups.
+    int downloadingCount = 0;
+    for (const auto& v : items) {
+        if (v.toObject().value("itemState").toString()
+            == QLatin1String(kStateDownloading))
+            ++downloadingCount;
+    }
+    if (downloadingCount > 0)
+        return;
+
+    for (int i = 0; i < items.size(); ++i) {
+        QJsonObject item = items.at(i).toObject();
+        const QString state = item.value("itemState").toString();
+        const QString infoHash = item.value("infoHash").toString();
+        if (state != QLatin1String(kStatePending) || infoHash.isEmpty())
+            continue;
+
+        // Resume the engine handle and flip the persisted state. The
+        // resume call is a libtorrent torrent_handle::resume() which
+        // is idempotent if the handle is already running (defensive
+        // against races with the user manually un-pausing via the
+        // Tankorent UI mid-cohort — per brief §7.g, scheduler does not
+        // re-pause user-driven changes).
+        resumeTorrent(infoHash);
+        item["itemState"] = QString::fromLatin1(kStateDownloading);
+        items.replace(i, item);
+        group["items"] = items;
+        group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+        m_streamBulkGroups[groupId] = group;
+        saveStreamBulkGroups();
+        return;  // one advance per call; subsequent advances fire from
+                 // the next state transition (publish/mark/onFileRenamed)
+    }
+}
+
+void TorrentClient::cohortMaybeAdvanceAll()
+{
+    if (m_streamBulkGroups.isEmpty())
+        return;
+    const QStringList groupIds = m_streamBulkGroups.keys();
+    for (const QString& groupId : groupIds)
+        cohortMaybeAdvance(groupId);
+}
+
+void TorrentClient::maybeEmitStreamBulkGroupPublishComplete(const QString& groupId)
+{
+    if (groupId.isEmpty() || m_publishCompleteNotified.contains(groupId))
+        return;
+    if (!m_streamBulkGroups.contains(groupId))
+        return;
+    if (!streamBulkGroupAllTerminal(m_streamBulkGroups.value(groupId).toObject()))
+        return;
+
+    m_publishCompleteNotified.insert(groupId);
+    emit groupPublishComplete(groupId);
 }
 
 // Collapse duplicate completion entries per infoHash to a single row (the
@@ -252,6 +1478,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     rec["category"]        = config.category;
     rec["savePath"]        = config.destinationPath;
     rec["contentLayout"]   = config.contentLayout;
+    rec["streamGroupId"]   = config.streamGroupId;
     rec["sequential"]      = config.sequential;
     m_records[infoHash]    = rec;
     saveRecords();
@@ -344,6 +1571,7 @@ QList<TorrentInfo> TorrentClient::listActive() const
         info.savePath    = rec["savePath"].toString();
         info.category    = rec["category"].toString();
         info.addedAt      = rec["addedAt"].toVariant().toLongLong();
+        info.streamGroupId = rec["streamGroupId"].toString();
         info.sequential   = rec["sequential"].toBool();
         info.errorMessage = rec["errorMessage"].toString();
 
@@ -407,8 +1635,15 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
 
 void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
 {
+    const bool hadRecord = m_records.contains(infoHash);
     m_engine->removeTorrent(infoHash, deleteFiles);
     m_records.remove(infoHash);
+    if (hadRecord) {
+        markStreamBulkItemsForTorrent(
+            infoHash,
+            StreamBulkItemState::Cancelled,
+            QStringLiteral("Torrent removed from Tankorent"));
+    }
     saveRecords();
     emit torrentRemoved(infoHash);
 }
@@ -567,6 +1802,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     // Update record state + capture category/savePath for the rescan notify.
     QString category;
     QString savePath;
+    QString streamGroupId;
     if (m_records.contains(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("completed");
@@ -574,9 +1810,16 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
         saveRecords();
         category = rec.value("category").toString();
         savePath = rec.value("savePath").toString();
+        streamGroupId = rec.value("streamGroupId").toString();
     }
 
+    if (!streamGroupId.isEmpty())
+        publishStreamBulkItemsForTorrent(infoHash);
+
     emit torrentCompleted(infoHash);
+
+    if (!streamGroupId.isEmpty())
+        return;
 
     // Trigger a library rescan if the completed torrent saved into a tracked
     // root for its category. Prefix-match savePath against each root
@@ -603,6 +1846,10 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
         m_records[infoHash] = rec;
         saveRecords();
     }
+    markStreamBulkItemsForTorrent(
+        infoHash,
+        StreamBulkItemState::Failed,
+        QStringLiteral("Torrent error: %1").arg(message));
     emit torrentUpdated(infoHash);
 }
 
@@ -652,4 +1899,118 @@ void TorrentClient::onStorageMoveFailed(const QString& infoHash, const QString& 
         saveRecords();
     }
     emit torrentUpdated(infoHash);
+}
+
+void TorrentClient::onFileRenamed(const QString& infoHash, int fileIndex, const QString& newPath)
+{
+    bool changed = false;
+    QStringList affectedGroups;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        QJsonObject group = groupIt.value().toObject();
+        QJsonArray items = group.value("items").toArray();
+        bool groupChanged = false;
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            if (item.value("infoHash").toString().compare(infoHash, Qt::CaseInsensitive) != 0)
+                continue;
+            if (item.value("fileIndex").toInt(-1) != fileIndex)
+                continue;
+            if (!isPublishingStreamBulkState(item.value("itemState").toString()))
+                continue;
+            item["itemState"] = QString::fromLatin1(kStatePublished);
+            item["lastError"] = QString();
+            // STREAM_BULK_DOWNLOAD_V2 Phase 2 — Publishing → Published
+            // is the terminal-success transition; if any same-cohort
+            // siblings are still Pending, cohortMaybeAdvance below will
+            // resume the next one.
+
+            // STREAM_DOWNLOADED_LIBRARY Phase 2 (2026-05-10) — register the
+            // published file in the stream-side download index. Per-file
+            // granularity: tile badge in Stream library home flips to
+            // DOWNLOADED as soon as the FIRST episode lands, not at group
+            // completion. Spec §6.1 Data Flow A. Empty registerEpisode call
+            // is no-op if downloadIndex pointer not wired (defensive).
+            if (m_streamDownloadIndex) {
+                const QString imdbId   = item.value(QStringLiteral("imdbId")).toString();
+                const int seasonNum    = item.value(QStringLiteral("streamSeason")).toInt(0);
+                const int episodeNum   = item.value(QStringLiteral("episodeNum")).toInt(0);
+                if (!imdbId.isEmpty() && seasonNum > 0 && episodeNum > 0
+                    && !newPath.isEmpty()) {
+                    const qint64 fileSize = QFileInfo(newPath).size();
+                    m_streamDownloadIndex->registerEpisode(
+                        imdbId, seasonNum, episodeNum, newPath,
+                        groupIt.key(), fileSize);
+                }
+            }
+
+            items.replace(i, item);
+            groupChanged = true;
+        }
+        if (groupChanged) {
+            group["items"] = items;
+            group["updatedAtMs"] = now;
+            *groupIt = group;
+            affectedGroups.push_back(groupIt.key());
+            changed = true;
+        }
+    }
+
+    if (changed)
+        saveStreamBulkGroups();
+    for (const QString& groupId : affectedGroups) {
+        // STREAM_BULK_DOWNLOAD_V2 Phase 2 — Publishing → Published is the
+        // terminal-success transition. Defensive double-advance: the slot
+        // was already freed when Downloading → Publishing happened in
+        // publishStreamBulkItemsForTorrent, so cohortMaybeAdvance here is
+        // usually a no-op. Kept for resilience against state-machine
+        // races (e.g. user manually paused next-in-queue after publish
+        // started, then un-paused — invariant restoration on next event).
+        cohortMaybeAdvance(groupId);
+        maybeEmitStreamBulkGroupPublishComplete(groupId);
+    }
+}
+
+void TorrentClient::onFileRenameFailed(const QString& infoHash, int fileIndex, const QString& message)
+{
+    bool changed = false;
+    QStringList affectedGroups;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    for (auto groupIt = m_streamBulkGroups.begin(); groupIt != m_streamBulkGroups.end(); ++groupIt) {
+        QJsonObject group = groupIt.value().toObject();
+        QJsonArray items = group.value("items").toArray();
+        bool groupChanged = false;
+        for (int i = 0; i < items.size(); ++i) {
+            QJsonObject item = items.at(i).toObject();
+            if (item.value("infoHash").toString().compare(infoHash, Qt::CaseInsensitive) != 0)
+                continue;
+            if (item.value("fileIndex").toInt(-1) != fileIndex)
+                continue;
+            if (!isPublishingStreamBulkState(item.value("itemState").toString()))
+                continue;
+            item["itemState"] = QString::fromLatin1(kStatePublishFailed);
+            item["lastError"] = message;
+            items.replace(i, item);
+            groupChanged = true;
+        }
+        if (groupChanged) {
+            group["items"] = items;
+            group["updatedAtMs"] = now;
+            *groupIt = group;
+            affectedGroups.push_back(groupIt.key());
+            changed = true;
+        }
+    }
+
+    if (changed)
+        saveStreamBulkGroups();
+    for (const QString& groupId : affectedGroups) {
+        // STREAM_BULK_DOWNLOAD_V2 Phase 2 — PublishFailed is terminal;
+        // cohort still advances so a single rename failure doesn't
+        // halt the rest of the download queue.
+        cohortMaybeAdvance(groupId);
+        maybeEmitStreamBulkGroupPublishComplete(groupId);
+    }
 }

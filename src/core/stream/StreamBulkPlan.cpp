@@ -1,4 +1,5 @@
 #include "core/stream/StreamBulkPlan.h"
+#include "core/stream/BulkSourceCollector.h"
 
 // STREAM_BULK_DOWNLOAD Phase 0A — pure implementation. See header for full
 // contract. This .cpp depends only on QtCore (no QFile, no QFileInfo, no
@@ -8,6 +9,7 @@
 
 #include <QChar>
 #include <QDir>
+#include <QHash>
 #include <QSet>
 
 #include <algorithm>
@@ -156,6 +158,23 @@ QString makeDestinationKey(const QString& showFolderName,
         .arg(showFolderName, seasonFolderName, canonicalFilename);
 }
 
+QString makeTorrentKey(const QString& infoHash) {
+    const QString normalized = infoHash.trimmed().toLower();
+    if (normalized.size() != 40) return {};
+    for (const QChar c : normalized) {
+        const bool isHex = (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+                        || (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
+        if (!isHex) return {};
+    }
+    return normalized;
+}
+
+QString makeFileKey(const QString& infoHash, int fileIndex) {
+    const QString torrentKey = makeTorrentKey(infoHash);
+    if (torrentKey.isEmpty()) return {};
+    return QStringLiteral("%1:%2").arg(torrentKey).arg(fileIndex);
+}
+
 // ── Naming functions ─────────────────────────────────────────────────────
 
 QString buildSeasonFolderName(int season) {
@@ -197,6 +216,362 @@ QString buildEpisodeFilename(const QString& showName,
 }
 
 // ── Plan computation ─────────────────────────────────────────────────────
+
+namespace {
+
+bool hasHdrOrDvBadge(const StreamPickerChoice& choice) {
+    for (const QString& badge : choice.badges) {
+        const QString upper = badge.toUpper();
+        if (upper.contains(QStringLiteral("HDR")) ||
+            upper.contains(QStringLiteral("DV"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isSeededMagnet(const StreamPickerChoice& choice) {
+    return choice.sourceKind == QStringLiteral("magnet") &&
+           choice.seeders > 0 &&
+           !makeTorrentKey(choice.infoHash).isEmpty();
+}
+
+bool isPackEligibleUnverified(const StreamPickerChoice& choice) {
+    return isSeededMagnet(choice) &&
+           choice.packType == QStringLiteral("season") &&
+           choice.qualitySort >= 2;
+}
+
+int qualityCascadeRank(int qualitySort) {
+    if (qualitySort == 3) return 0;
+    if (qualitySort == 4 || qualitySort == 5) return 1;
+    if (qualitySort == 2) return 2;
+    return 3;
+}
+
+bool matchesPerEpisodeTier(const StreamPickerChoice& choice, int tierRank) {
+    if (!isSeededMagnet(choice)) return false;
+    if (tierRank == 0) return choice.qualitySort == 3;
+    if (tierRank == 1) return choice.qualitySort == 4 || choice.qualitySort == 5;
+    if (tierRank == 2) return choice.qualitySort == 2;
+    return true;
+}
+
+bool bulkChoiceLess(const StreamPickerChoice& a, const StreamPickerChoice& b) {
+    if (a.seeders != b.seeders) return a.seeders > b.seeders;
+
+    const bool aHdr = hasHdrOrDvBadge(a);
+    const bool bHdr = hasHdrOrDvBadge(b);
+    if (aHdr != bHdr) return !aHdr;
+
+    const bool aKnownSize = a.sizeBytes > 0;
+    const bool bKnownSize = b.sizeBytes > 0;
+    if (aKnownSize && bKnownSize && a.sizeBytes != b.sizeBytes) {
+        return a.sizeBytes < b.sizeBytes;
+    }
+    if (aKnownSize != bKnownSize) return aKnownSize;
+    if (a.sizeBytes != b.sizeBytes) return a.sizeBytes > b.sizeBytes;
+
+    const QString aKey = makeTorrentKey(a.infoHash);
+    const QString bKey = makeTorrentKey(b.infoHash);
+    const int hashCmp = QString::compare(aKey, bKey, Qt::CaseInsensitive);
+    if (hashCmp != 0) return hashCmp < 0;
+    if (a.fileIndex != b.fileIndex) return a.fileIndex < b.fileIndex;
+    return QString::compare(a.displayTitle, b.displayTitle, Qt::CaseInsensitive) < 0;
+}
+
+bool choicesAmbiguousForBulkTie(const StreamPickerChoice& a,
+                                const StreamPickerChoice& b) {
+    return a.seeders == b.seeders &&
+           hasHdrOrDvBadge(a) == hasHdrOrDvBadge(b) &&
+           a.sizeBytes == b.sizeBytes &&
+           makeTorrentKey(a.infoHash) != makeTorrentKey(b.infoHash);
+}
+
+void appendSelectionWarning(QList<BulkSelectionWarning>& warnings,
+                            BulkSelectionWarningKind kind,
+                            const QString& detail,
+                            const QString& relatedItemKey = {}) {
+    warnings.push_back(BulkSelectionWarning{kind, detail, relatedItemKey});
+}
+
+struct PackCandidate {
+    QString torrentKey;
+    StreamPickerChoice choice;
+    QSet<int> episodeNums;
+};
+
+bool packCandidateLess(const PackCandidate& a, const PackCandidate& b) {
+    const int aRank = qualityCascadeRank(a.choice.qualitySort);
+    const int bRank = qualityCascadeRank(b.choice.qualitySort);
+    if (aRank != bRank) return aRank < bRank;
+    if (a.choice.seeders != b.choice.seeders) return a.choice.seeders > b.choice.seeders;
+
+    if (hasHdrOrDvBadge(a.choice) != hasHdrOrDvBadge(b.choice)) {
+        return !hasHdrOrDvBadge(a.choice);
+    }
+
+    const bool aKnownSize = a.choice.sizeBytes > 0;
+    const bool bKnownSize = b.choice.sizeBytes > 0;
+    if (aKnownSize && bKnownSize && a.choice.sizeBytes != b.choice.sizeBytes) {
+        return a.choice.sizeBytes < b.choice.sizeBytes;
+    }
+    if (aKnownSize != bKnownSize) return aKnownSize;
+    return QString::compare(a.torrentKey, b.torrentKey, Qt::CaseInsensitive) < 0;
+}
+
+bool packCandidatesAmbiguous(const PackCandidate& a, const PackCandidate& b) {
+    return qualityCascadeRank(a.choice.qualitySort) == qualityCascadeRank(b.choice.qualitySort) &&
+           a.choice.seeders == b.choice.seeders &&
+           hasHdrOrDvBadge(a.choice) == hasHdrOrDvBadge(b.choice) &&
+           a.choice.sizeBytes == b.choice.sizeBytes &&
+           a.torrentKey != b.torrentKey;
+}
+
+QString packDisplayLabel(const StreamPickerChoice& choice) {
+    if (!choice.packLabel.trimmed().isEmpty()) return choice.packLabel;
+    return choice.displayTitle;
+}
+
+void finalizeSelectionSummary(BulkSelectionPlan& selection,
+                              const BulkPlanResult& planResult,
+                              qint64 estimatedTotalBytes) {
+    BulkSelectionPreflightSummary summary;
+    summary.totalEpisodes = planResult.items.size();
+    summary.packMode = selection.mode == BulkSelectionMode::Pack;
+    summary.packLabel = selection.preflight.packLabel;
+    summary.estimatedTotalBytes = estimatedTotalBytes;
+
+    for (const BulkPlanItem& item : planResult.items) {
+        if (item.status == BulkPlanItemStatus::Skipped) {
+            ++summary.alreadyInLibrary;
+        }
+    }
+
+    for (const BulkSelectionItem& item : selection.items) {
+        if (item.reason == BulkSelectionReason::MissingNoSource) {
+            ++summary.missingNoSource;
+            continue;
+        }
+        if (item.reason == BulkSelectionReason::Picked ||
+            item.reason == BulkSelectionReason::PackCovered) {
+            ++summary.qualityBreakdown[item.pickQuality];
+        }
+    }
+
+    summary.toDownload = summary.totalEpisodes -
+                         summary.alreadyInLibrary -
+                         summary.missingNoSource;
+    selection.preflight = summary;
+}
+
+}  // namespace
+
+BulkSelectionPlan buildBulkSelection(const BulkPlanResult& planResult,
+                                     const BulkSourceCollectionPayload& sources) {
+    BulkSelectionPlan selection;
+    selection.mode = BulkSelectionMode::PerEpisode;
+    selection.groupShape = QStringLiteral("per-episode");
+    selection.preflight.totalEpisodes = planResult.items.size();
+
+    QList<BulkPlanItem> activeItems;
+    activeItems.reserve(planResult.items.size());
+    for (const BulkPlanItem& item : planResult.items) {
+        if (item.status != BulkPlanItemStatus::Skipped) {
+            activeItems.push_back(item);
+        }
+    }
+
+    if (activeItems.isEmpty()) {
+        finalizeSelectionSummary(selection, planResult, 0);
+        return selection;
+    }
+
+    QHash<QString, PackCandidate> packByHash;
+    bool sawPackCandidate = false;
+    for (const BulkPlanItem& item : activeItems) {
+        const int episodeNum = item.input.episode;
+        const auto resultIt = sources.byEpisode.constFind(episodeNum);
+        if (resultIt == sources.byEpisode.cend()) continue;
+
+        QSet<QString> seenForEpisode;
+        for (const StreamPickerChoice& choice : resultIt->choices) {
+            if (!isPackEligibleUnverified(choice)) continue;
+
+            const QString torrentKey = makeTorrentKey(choice.infoHash);
+            if (torrentKey.isEmpty() || seenForEpisode.contains(torrentKey)) continue;
+
+            sawPackCandidate = true;
+            seenForEpisode.insert(torrentKey);
+
+            PackCandidate candidate = packByHash.value(torrentKey);
+            if (candidate.torrentKey.isEmpty()) {
+                candidate.torrentKey = torrentKey;
+                candidate.choice = choice;
+            } else {
+                PackCandidate challenger{torrentKey, choice, candidate.episodeNums};
+                if (packCandidateLess(challenger, candidate)) {
+                    candidate.choice = choice;
+                }
+            }
+            candidate.episodeNums.insert(episodeNum);
+            packByHash.insert(torrentKey, candidate);
+        }
+    }
+
+    QList<PackCandidate> coveringPacks;
+    bool rejectedPartialPack = false;
+    const int activeEpisodeCount = activeItems.size();
+    for (const PackCandidate& candidate : packByHash) {
+        if (candidate.episodeNums.size() == activeEpisodeCount) {
+            coveringPacks.push_back(candidate);
+        } else {
+            rejectedPartialPack = true;
+        }
+    }
+
+    if (!sawPackCandidate) {
+        appendSelectionWarning(
+            selection.warnings,
+            BulkSelectionWarningKind::NoPackCandidate,
+            QStringLiteral("No season-pack magnet candidate was returned for the requested episodes"));
+    }
+
+    if (rejectedPartialPack) {
+        appendSelectionWarning(
+            selection.warnings,
+            BulkSelectionWarningKind::PackUnverified,
+            QStringLiteral("One or more season-pack candidates did not appear in every non-skipped episode source list"));
+    }
+
+    if (!coveringPacks.isEmpty()) {
+        std::sort(coveringPacks.begin(), coveringPacks.end(), packCandidateLess);
+        const PackCandidate chosenPack = coveringPacks.first();
+        if (coveringPacks.size() > 1 &&
+            packCandidatesAmbiguous(chosenPack, coveringPacks.at(1))) {
+            appendSelectionWarning(
+                selection.warnings,
+                BulkSelectionWarningKind::TieBreakAmbiguous,
+                QStringLiteral("Multiple covering season-pack candidates tied on the bulk pick policy"));
+        }
+
+        appendSelectionWarning(
+            selection.warnings,
+            BulkSelectionWarningKind::PackUnverified,
+            QStringLiteral("Chosen season pack is addon-claim covered; torrent metadata verification is pending"));
+
+        selection.mode = BulkSelectionMode::Pack;
+        selection.groupShape = QStringLiteral("pack");
+        selection.preflight.packLabel = packDisplayLabel(chosenPack.choice);
+
+        StreamPickerChoice chosenChoice = chosenPack.choice;
+        chosenChoice.infoHash = chosenPack.torrentKey;
+        chosenChoice.fileIndex = -1;
+
+        if (chosenChoice.qualitySort != 3) {
+            appendSelectionWarning(
+                selection.warnings,
+                BulkSelectionWarningKind::QualityFallbackUsed,
+                QStringLiteral("Chosen season pack is not 1080p"));
+        }
+
+        for (const BulkPlanItem& item : activeItems) {
+            selection.items.push_back(BulkSelectionItem{
+                item.itemKey,
+                item.input.episode,
+                chosenChoice,
+                chosenChoice.qualitySort,
+                chosenChoice.qualitySort != 3,
+                BulkSelectionReason::PackCovered});
+        }
+
+        finalizeSelectionSummary(selection, planResult, chosenChoice.sizeBytes);
+        return selection;
+    }
+
+    qint64 estimatedTotalBytes = 0;
+    int missingCount = 0;
+    for (const BulkPlanItem& item : activeItems) {
+        const int episodeNum = item.input.episode;
+        QList<StreamPickerChoice> choices;
+        const auto resultIt = sources.byEpisode.constFind(episodeNum);
+        if (resultIt != sources.byEpisode.cend()) {
+            choices = resultIt->choices;
+        }
+
+        StreamPickerChoice chosen;
+        bool found = false;
+        bool ambiguous = false;
+        for (int tier = 0; tier < 4 && !found; ++tier) {
+            QList<StreamPickerChoice> tierChoices;
+            for (const StreamPickerChoice& choice : choices) {
+                if (matchesPerEpisodeTier(choice, tier)) {
+                    tierChoices.push_back(choice);
+                }
+            }
+            if (tierChoices.isEmpty()) continue;
+
+            std::sort(tierChoices.begin(), tierChoices.end(), bulkChoiceLess);
+            chosen = tierChoices.first();
+            found = true;
+            if (tierChoices.size() > 1 &&
+                choicesAmbiguousForBulkTie(chosen, tierChoices.at(1))) {
+                ambiguous = true;
+            }
+        }
+
+        if (!found) {
+            ++missingCount;
+            selection.items.push_back(BulkSelectionItem{
+                item.itemKey,
+                episodeNum,
+                StreamPickerChoice{},
+                0,
+                false,
+                BulkSelectionReason::MissingNoSource});
+            continue;
+        }
+
+        chosen.infoHash = makeTorrentKey(chosen.infoHash);
+        const bool fallbackUsed = chosen.qualitySort != 3;
+        if (fallbackUsed) {
+            appendSelectionWarning(
+                selection.warnings,
+                BulkSelectionWarningKind::QualityFallbackUsed,
+                QStringLiteral("Episode %1 selected non-1080p quality %2")
+                    .arg(episodeNum)
+                    .arg(chosen.qualitySort),
+                item.itemKey);
+        }
+        if (ambiguous) {
+            appendSelectionWarning(
+                selection.warnings,
+                BulkSelectionWarningKind::TieBreakAmbiguous,
+                QStringLiteral("Episode %1 had multiple sources tied on the bulk pick policy")
+                    .arg(episodeNum),
+                item.itemKey);
+        }
+
+        estimatedTotalBytes += chosen.sizeBytes;
+        selection.items.push_back(BulkSelectionItem{
+            item.itemKey,
+            episodeNum,
+            chosen,
+            chosen.qualitySort,
+            fallbackUsed,
+            BulkSelectionReason::Picked});
+    }
+
+    if (missingCount > 0) {
+        appendSelectionWarning(
+            selection.warnings,
+            BulkSelectionWarningKind::MissingEpisodes,
+            QStringLiteral("%1 episode(s) have no seeded magnet source").arg(missingCount));
+    }
+
+    finalizeSelectionSummary(selection, planResult, estimatedTotalBytes);
+    return selection;
+}
 
 BulkPlanResult buildBulkPlan(const BulkPlanInput& input,
                              const PathExistsFn& existsFn) {
