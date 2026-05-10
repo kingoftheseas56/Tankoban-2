@@ -11,6 +11,7 @@
 #include <optional>
 
 class QNetworkAccessManager;
+class QTimer;
 
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/MetaItem.h"
@@ -19,6 +20,8 @@ class QNetworkAccessManager;
 class CoreBridge;
 class StreamLibrary;
 struct StreamLibraryEntry;
+class StreamDownloadIndex;
+class TorrentClient;
 
 namespace tankostream::stream {
 class MetaAggregator;
@@ -71,6 +74,10 @@ public:
     // combination that fires both TileStrip::tileSingleClicked and
     // tileDoubleClicked for one user double-click gesture).
     const QString& currentImdb() const { return m_currentImdb; }
+    QString currentType() const { return m_currentType; }
+    QString currentTitle() const;
+    QString currentYear() const;
+    QList<tankostream::stream::StreamEpisode> episodesForSeason(int season) const;
 
     // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — auto-add the
     // currently-shown show/movie to StreamLibrary (no-op if already present).
@@ -83,6 +90,20 @@ public:
     // preview hint is cached (defensive — showEntry stashes one on every
     // open).
     void autoAddToLibrary();
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — wires the download
+    // index in so the episode list can paint per-row "on disk" markers
+    // and onEpisodeActivated can branch to local-file playback. Optional;
+    // when null the detail view behaves exactly as before (source-pick
+    // for every episode click).
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — wires the torrent
+    // client so the Remove-from-Library path can detect active bulk
+    // groups for this show and require explicit user confirmation before
+    // canceling-and-removing. Optional; when null the dialog short-
+    // circuits and Remove proceeds as before. Spec §10.10.
+    void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
 
 signals:
     void backRequested();
@@ -101,6 +122,7 @@ signals:
     // StreamSourceList's addToTankorentRequested signal. StreamPage owns
     // the next upstream hop into MainWindow.
     void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+    void bulkDownloadRequested(int season);
 
     // Phase 2 Batch 2.4 — forwarded from StreamSourceList's Pick-different
     // button; StreamPage listens to abort the auto-launch timer.
@@ -113,6 +135,20 @@ signals:
     // and do NOT emit this signal.
     void trailerDirectPlayRequested(const QUrl& url);
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — episode click
+    // resolved to a local file. StreamPage forwards through to
+    // MainWindow::onPlayLocalFileFromStreamRequested. Spec §6.2.
+    void playLocalFileFromStreamRequested(const QString& localPath,
+                                          const QString& imdbId,
+                                          const QString& showTitle,
+                                          int season,
+                                          int episode);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click on any
+    // episode row → "Show alternate streams". StreamPage handles by
+    // re-firing the existing source-pick flow. Spec §6.3.
+    void alternateStreamRequested(int season, int episode);
+
 private:
     void buildUI();
     void onSeriesMetaReady(const QString& imdbId,
@@ -120,7 +156,23 @@ private:
     void onSeasonChanged(int comboIndex);
     void populateEpisodeTable(int season);
     void onEpisodeActivated(int row, int col);
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 — right-click → "Show alternate
+    // streams" context menu on the episode table.
+    void onEpisodeContextMenu(const QPoint& pos);
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 — repaint per-row on-disk markers.
+    // Called both at the tail of populateEpisodeTable() and in response to
+    // StreamDownloadIndex::entriesChanged so a bulk-completion lights up
+    // the rows in place.
+    void refreshEpisodeMarkers();
     void updateProgressColumn();
+    void updateBulkDownloadButton();
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — refresh the per-row download-state
+    // text in the episode table's Status column from the TorrentClient
+    // bulk-snapshot for current imdb+season. 1Hz polled via m_bulkPollTimer
+    // while the detail view is visible. Falls through to the watched-
+    // checkmark when no bulk activity for the row.
+    void refreshEpisodeBulkProgress();
 
     // Phase 3 Batch 3.1 — MetaItem arrival handler; paints hero image +
     // enriches the metadata chip row (runtime, genres) once fetchMetaItem
@@ -221,6 +273,7 @@ private:
     // YouTube-kind trailer. Direct-URL trailers play in-app via an emitted
     // signal; YouTube opens in the default browser.
     QPushButton*  m_trailerBtn    = nullptr;
+    QPushButton*  m_downloadSeasonBtn = nullptr;
     QUrl          m_currentTrailerDirectUrl;   // populated from Url/Http trailer
     QString       m_currentTrailerYouTubeId;   // populated from YouTube trailer
     QWidget*      m_seasonRow     = nullptr;
@@ -255,6 +308,23 @@ private:
     // Same NAM as the hero fetcher; download lifetimes are QPointer-guarded
     // against view destruction + imdb-mismatch stale-callback guarded.
     QString                m_episodeThumbsCacheDir;
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — non-owning pointer.
+    // Wired by StreamPage::setStreamDownloadIndex; lifetime is the
+    // MainWindow's StreamDownloadIndex member, which outlives this view.
+    StreamDownloadIndex*   m_downloadIndex = nullptr;
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — non-owning pointer
+    // to the TorrentClient (lifetime is MainWindow's). Used by
+    // onLibraryButtonClicked to gate Remove-from-Library on active bulk
+    // groups (Spec §10.10) and by refreshEpisodeBulkProgress to poll
+    // per-episode bulk-download state (V2 Phase 3).
+    TorrentClient*         m_torrentClient = nullptr;
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — 1Hz timer driving Status-column
+    // download-state repaints. Started in populateEpisodeTable when bulk
+    // activity exists for the show+season; idle otherwise.
+    QTimer*                m_bulkPollTimer = nullptr;
 
 private:
     void refreshLibraryButton();

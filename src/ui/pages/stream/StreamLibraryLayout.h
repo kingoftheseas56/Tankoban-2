@@ -7,6 +7,7 @@
 
 class CoreBridge;
 class StreamLibrary;
+class StreamDownloadIndex;
 class TileStrip;
 class TileCard;
 class QNetworkAccessManager;
@@ -21,9 +22,25 @@ public:
 
     void refresh();
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download
+    // index so tiles can render the DOWNLOADED chip and refresh on
+    // entriesChanged.
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
+
 signals:
     void showClicked(const QString& imdbId);
     void showRightClicked(const QString& imdbId, const QPoint& globalPos);
+
+protected:
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — eager disk-state
+    // validateAll on home open. Spec §10.4. See impl for rationale.
+    void showEvent(QShowEvent* event) override;
+
+private slots:
+    // STREAM_DOWNLOADED_LIBRARY Phase 3 — re-evaluate the DOWNLOADED chip
+    // visibility on every existing tile. Cheap (per-tile property lookup +
+    // findChild for the chip label).
+    void refreshTileBadges();
 
 private:
     void buildUI();
@@ -34,6 +51,7 @@ private:
 
     CoreBridge*    m_bridge;
     StreamLibrary* m_library;
+    StreamDownloadIndex* m_downloadIndex = nullptr;
     QNetworkAccessManager* m_nam;
 
     // UI

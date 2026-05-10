@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">
+  <!-- Downward arrow into tray. Gray fill matches existing icon family.
+       STREAM_DOWNLOADED_LIBRARY 2026-05-10 — placeholder; refine in design pass. -->
+  <path d="M6 1 L6 7 M3 5 L6 8 L9 5 M2 10 L10 10"
+        stroke="#cccccc" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

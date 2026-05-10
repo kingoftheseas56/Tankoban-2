@@ -1,5 +1,6 @@
 #include "StreamLibrary.h"
 #include "core/JsonStore.h"
+#include "StreamDownloadIndex.h"
 
 #include <QDateTime>
 
@@ -35,6 +36,14 @@ bool StreamLibrary::remove(const QString& imdbId)
 
     save();
     emit libraryChanged();
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — Remove from library
+    // also evicts any per-episode download entries for this show. Files on
+    // disk are NOT touched (per spec §3 P4); the eviction lets the Videos
+    // scanner re-discover them on its next debounced rescan (Phase 5).
+    if (m_downloadIndex)
+        m_downloadIndex->evictByImdb(imdbId);
+
     return true;
 }
 

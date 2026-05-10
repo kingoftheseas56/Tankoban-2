@@ -23,7 +23,13 @@ class StreamPage;
 class TankorentPage;
 class DevControlServer;
 class SidebarDrawer;
+class StreamDownloadIndex;
 class QJsonObject;
+struct StreamBulkGroupRecord;
+
+namespace tankostream::stream {
+struct BulkPackVerificationResult;
+}
 
 class MainWindow : public QMainWindow
 {
@@ -53,6 +59,12 @@ public:
     // compare-ffmpeg launcher batch files. Internal callers continue to
     // use the private overload at lines 92+. Wrapper just forwards.
     void openVideoFromCli(const QString& filePath);
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — accessor for the
+    // persistent index of bulk-downloaded episodes. Owned by MainWindow;
+    // consumed by VideosScanner (skip lookup) + StreamPage/StreamDetailView
+    // (per-episode markers + click routing) in later phases.
+    StreamDownloadIndex* streamDownloadIndex() const { return m_streamDownloadIndex; }
 
 public slots:
     // Frameless-chrome public slots — connectable from any takeover surface
@@ -123,6 +135,20 @@ private:
     // another for download in parallel).
     void onAddToTankorentRequested(const QString& magnetUri,
                                    const QString& displayName);
+    void onAddToTankorentBulkRequested(
+        const StreamBulkGroupRecord& group,
+        const tankostream::stream::BulkPackVerificationResult& verifierOutput,
+        const QString& displayLabel);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — Stream-mode playback
+    // gateway for bulk-downloaded episodes. Routes through openVideoPlayer
+    // (the same surface VideosPage uses); StreamPage has already handled the
+    // SubtitlesAggregator fan-out. Spec §6.2.
+    void onPlayLocalFileFromStreamRequested(const QString& localPath,
+                                            const QString& imdbId,
+                                            const QString& showTitle,
+                                            int season,
+                                            int episode);
 
     CoreBridge *m_bridge = nullptr;
 
@@ -157,6 +183,12 @@ private:
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).
     DevControlServer *m_devControl = nullptr;
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
+    // bulk-downloaded episodes. Constructed early in MainWindow ctor (after
+    // m_bridge is set so JsonStore is available). Phase 1 ships dead — UI
+    // wiring lands in Phase 3.
+    StreamDownloadIndex *m_streamDownloadIndex = nullptr;
 
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;

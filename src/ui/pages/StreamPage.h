@@ -6,6 +6,7 @@
 #include <QScrollArea>
 #include <QStack>
 #include <QStackedWidget>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -13,17 +14,24 @@
 #include <memory>
 #include <optional>
 
+#include "core/stream/BulkSourceCollector.h"
+#include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/pages/stream/StreamSourceChoice.h"
 
 class CoreBridge;
+class QDialog;
+class QProgressBar;
+class TorrentClient;
 class TorrentEngine;
+struct StreamBulkGroupRecord;
 // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy StreamEngine + abstract
 // IStreamEngine deleted. StreamServerEngine is the only backend.
 class StreamServerEngine;
 class StreamLibrary;
 class StreamLibraryLayout;
+class StreamDownloadIndex;
 class StreamSearchWidget;
 class StreamDetailView;
 class StreamContinueStrip;
@@ -34,6 +42,8 @@ class AddonRegistry;
 }
 
 namespace tankostream::stream {
+class BulkPackVerifier;
+struct BulkPackVerificationResult;
 class StreamHomeBoard;
 class CatalogBrowseScreen;
 class StreamAggregator;
@@ -49,10 +59,15 @@ class StreamPage : public QWidget
     Q_OBJECT
 
 public:
-    explicit StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
+    explicit StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
                         QWidget* parent = nullptr);
 
     void activate();
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download
+    // index into the home library board (chip rendering on tiles) and into
+    // StreamLibrary (so remove() evicts per-episode entries).
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
 
     // Exposed for VideosPage (HELP.md 2026-04-15 — Agent 5 folder-poster
     // fetch). Sharing the same instance avoids duplicating the addon manifest
@@ -60,6 +75,12 @@ public:
     // sibling under MainWindow's page stack — both pages share the MainWindow
     // lifetime, so this pointer is stable for the app session.
     tankostream::stream::MetaAggregator* metaAggregator() const { return m_metaAggregator; }
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 6 (2026-05-10) — exposed for the
+    // first-launch migration scanner (StreamRescueScanner). Same lifetime
+    // contract as metaAggregator(): owned by StreamPage, stable for the
+    // app session.
+    StreamLibrary* streamLibrary() const { return m_library; }
 
 signals:
     // STREAM_ADD_TO_TANKORENT (2026-05-06) — emitted when the user
@@ -70,6 +91,20 @@ signals:
     // is the load-bearing payload.
     void addToTankorentRequested(const QString& magnetUri,
                                  const QString& displayName);
+    void addToTankorentBulkRequested(
+        const StreamBulkGroupRecord& group,
+        const tankostream::stream::BulkPackVerificationResult& verifierOutput,
+        const QString& displayLabel);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — forwards a
+    // StreamDetailView click on a downloaded episode up to MainWindow. The
+    // SubtitlesAggregator + per-session bookkeeping run on this side BEFORE
+    // re-emitting; MainWindow's slot only handles VideoPlayer open. Spec §6.2.
+    void playLocalFileFromStreamRequested(const QString& localPath,
+                                          const QString& imdbId,
+                                          const QString& showTitle,
+                                          int season,
+                                          int episode);
 
 private:
     void buildUI();
@@ -157,6 +192,16 @@ private:
     // used to trigger post-exec).
     void onSourceActivated(const tankostream::stream::StreamPickerChoice& choice);
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — handler for
+    // StreamDetailView's playLocalFileFromStreamRequested. Runs the
+    // SubtitlesAggregator fan-out + any local bookkeeping, then forwards
+    // up to MainWindow via the public signal of the same name. Spec §6.2 + §10.2.
+    void onDetailPlayLocalFileFromStream(const QString& localPath,
+                                         const QString& imdbId,
+                                         const QString& showTitle,
+                                         int season,
+                                         int episode);
+
     // STREAM_ADD_TO_TANKORENT (2026-05-06) — user right-clicked a magnet
     // stream card and picked "Add torrent to Tankorent". Defensive guard
     // (sourceKind/magnetUri must be valid — UI-side menu hides for
@@ -164,6 +209,12 @@ private:
     // the addToTankorentRequested(magnetUri, displayName) signal upward
     // for MainWindow.
     void onAddToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+    void triggerBulkSeasonDownload(int season);
+    void retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys);
+    void cancelBulkSeasonDownload();
+    void onBulkSourcesCollected(const tankostream::stream::BulkSourceCollectionPayload& payload);
+    void onBulkPackVerified(const tankostream::stream::BulkPackVerificationResult& result);
+    void onBulkPackVerificationFailed(const QString& reason);
 
     // Phase 2 Batch 2.4 — auto-launch orchestration.
     void onAutoLaunchFire();
@@ -211,6 +262,7 @@ private:
     void onStreamStopped(StreamPlayerController::StopReason reason);
 
     CoreBridge*      m_bridge;
+    TorrentClient*   m_torrentClient = nullptr;
     TorrentEngine*   m_torrentEngine;
 
     StreamServerEngine* m_streamEngine = nullptr;
@@ -314,6 +366,18 @@ private:
 
     // Detail view
     StreamDetailView* m_detailView = nullptr;
+    QDialog* m_bulkProgressDialog = nullptr;
+    QLabel* m_bulkProgressLabel = nullptr;
+    QProgressBar* m_bulkProgressBar = nullptr;
+    tankostream::stream::BulkSourceCollector* m_bulkSourceCollector = nullptr;
+    tankostream::stream::BulkPackVerifier* m_bulkPackVerifier = nullptr;
+    tankostream::stream::BulkPlanInput m_bulkInput;
+    tankostream::stream::BulkPlanResult m_bulkPlanResult;
+    tankostream::stream::BulkSourceCollectionPayload m_bulkSourcePayload;
+    QString m_bulkVerificationNote;
+    QString m_bulkRetryGroupId;
+    QStringList m_bulkRetryItemKeys;
+    bool m_bulkRetryMode = false;
 
     // Player controller
     StreamPlayerController* m_playerController = nullptr;

@@ -9,6 +9,8 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QMenu>
+#include <QHash>
+#include <QSet>
 
 #include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
@@ -40,6 +42,10 @@ public:
     // authoritative.
     void addMagnetFromExternal(const QString& magnetUri,
                                const QString& displayName);
+    void addMagnetGroupFromExternal(
+        const StreamBulkGroupRecord& group,
+        const tankostream::stream::BulkPackVerificationResult& verifierOutput,
+        const QString& displayLabel);
 
 private:
     void buildUI();
@@ -65,8 +71,10 @@ private:
     void onAddTorrentClicked(int row);
     void refreshTransfers();
     void showTransfersContextMenu(const QPoint& pos);
+    void showGroupContextMenu(const QPoint& pos, const QString& groupId);
     void onSourcesClicked();
     void onAddFromUrlClicked();
+    void saveExpandedStreamBulkGroups() const;
 
     // Iterates a list of magnet URIs through isDuplicate + resolveMetadata +
     // startDownload with a minimal AddTorrentConfig. Returns {added, skipped}.
@@ -146,6 +154,8 @@ protected:
 
     // Transfers state
     QList<TorrentInfo> m_cachedActive;
+    QSet<QString> m_expandedGroupIds;
+    QHash<QString, qint64> m_zeroPeerSeedSinceByHash;
     int m_sortCol   = -1;
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 

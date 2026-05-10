@@ -7,6 +7,7 @@
 #include <QString>
 
 class JsonStore;
+class StreamDownloadIndex;
 
 struct StreamLibraryEntry {
     QString imdb;           // "tt1234567"
@@ -32,6 +33,11 @@ public:
     StreamLibraryEntry get(const QString& imdbId) const;
     QList<StreamLibraryEntry> getAll() const;
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — optional wire to the
+    // download index so remove() can evict per-episode rows for the show
+    // being removed from library. See spec §6.5 Data Flow E.
+    void setStreamDownloadIndex(StreamDownloadIndex* idx) { m_downloadIndex = idx; }
+
 signals:
     void libraryChanged();
 
@@ -45,6 +51,7 @@ private:
     JsonStore* m_store;
     mutable QMutex m_mutex;
     QHash<QString, StreamLibraryEntry> m_entries;
+    StreamDownloadIndex* m_downloadIndex = nullptr;
 
     static constexpr const char* FILENAME = "stream_library.json";
 };

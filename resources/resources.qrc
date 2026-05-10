@@ -41,6 +41,7 @@
         <file>icons/magnet.svg</file>
         <file>icons/tankoyomi.svg</file>
         <file>icons/book.svg</file>
+        <file>icons/downloaded.svg</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>
 </RCC>

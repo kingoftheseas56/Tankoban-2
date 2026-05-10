@@ -3,9 +3,13 @@
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
 #include "core/stream/MetaAggregator.h"
+#include "core/stream/BulkPackVerifier.h"
+#include "core/stream/BulkSourceCollector.h"
+#include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/AddonRegistry.h"
 #include "ui/pages/stream/AddonManagerScreen.h"
 #include "core/stream/stremio/StreamServerEngine.h"
+#include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/torrent/TorrentEngine.h"
 #include "stream/StreamLibraryLayout.h"
@@ -21,32 +25,114 @@
 #include "stream/StreamHomeBoard.h"
 #include "stream/CatalogBrowseScreen.h"
 #include "core/stream/StreamProgress.h"
+#include "core/torrent/TorrentClient.h"
 
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
+#include "ui/dialogs/StreamBulkPreflightDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
 #include <QDebug>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QFrame>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QHBoxLayout>
+#include <QFileInfo>
 #include <QMainWindow>
 #include <QProgressBar>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QSettings>
 #include <QUrl>
+#include <QDateTime>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QSet>
+#include <QVariant>
 
 #include <functional>
 #include <memory>
 
-StreamPage::StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
+namespace {
+
+int episodeNumberFromBulkItemKey(const QString& itemKey)
+{
+    static const QRegularExpression pattern(QStringLiteral("[Ss]\\d{1,2}[Ee](\\d{1,3})"));
+    const QRegularExpressionMatch match = pattern.match(itemKey);
+    return match.hasMatch() ? match.captured(1).toInt() : 0;
+}
+
+int seasonNumberFromBulkItemKey(const QString& itemKey)
+{
+    static const QRegularExpression pattern(QStringLiteral("[Ss](\\d{1,2})[Ee]\\d{1,3}"));
+    const QRegularExpressionMatch match = pattern.match(itemKey);
+    return match.hasMatch() ? match.captured(1).toInt() : 0;
+}
+
+StreamBulkItemState streamBulkItemStateFromJsonString(const QString& state)
+{
+    if (state == QLatin1String("Downloading")) return StreamBulkItemState::Downloading;
+    if (state == QLatin1String("Publishing")) return StreamBulkItemState::Publishing;
+    if (state == QLatin1String("Published")) return StreamBulkItemState::Published;
+    if (state == QLatin1String("MissingSource")) return StreamBulkItemState::MissingSource;
+    if (state == QLatin1String("MetadataFailed")) return StreamBulkItemState::MetadataFailed;
+    if (state == QLatin1String("PublishFailed")) return StreamBulkItemState::PublishFailed;
+    if (state == QLatin1String("Failed")) return StreamBulkItemState::Failed;
+    if (state == QLatin1String("Completed")) return StreamBulkItemState::Completed;
+    if (state == QLatin1String("Cancelled")) return StreamBulkItemState::Cancelled;
+    if (state == QLatin1String("Orphaned")) return StreamBulkItemState::Orphaned;
+    return StreamBulkItemState::Pending;
+}
+
+StreamBulkGroupRecord streamBulkGroupRecordFromJson(const QString& groupId,
+                                                    const QJsonObject& obj)
+{
+    StreamBulkGroupRecord group;
+    group.groupId = obj.value(QStringLiteral("groupId")).toString(groupId);
+    group.groupKind = obj.value(QStringLiteral("groupKind")).toString(QStringLiteral("streamSeason"));
+    group.label = obj.value(QStringLiteral("label")).toString(group.groupId);
+    const QJsonObject sourceIds = obj.value(QStringLiteral("sourceIds")).toObject();
+    group.sourceSeriesId = sourceIds.value(QStringLiteral("seriesId")).toString();
+    group.sourceSeason = sourceIds.value(QStringLiteral("season")).toInt(-1);
+    group.destinationRoot = obj.value(QStringLiteral("destinationRoot")).toString();
+    group.stagingPath = obj.value(QStringLiteral("stagingPath")).toString();
+    group.retryGeneration = obj.value(QStringLiteral("retryGeneration")).toInt(0);
+    group.createdAtMs = obj.value(QStringLiteral("createdAtMs")).toVariant().toLongLong();
+    group.updatedAtMs = obj.value(QStringLiteral("updatedAtMs")).toVariant().toLongLong();
+
+    const QJsonObject canonicalNames = obj.value(QStringLiteral("canonicalNames")).toObject();
+    for (auto it = canonicalNames.begin(); it != canonicalNames.end(); ++it)
+        group.canonicalNames.insert(it.key(), it.value().toString());
+
+    const QJsonArray items = obj.value(QStringLiteral("items")).toArray();
+    for (const auto& value : items) {
+        const QJsonObject itemObj = value.toObject();
+        StreamBulkGroupItem item;
+        item.itemKey = itemObj.value(QStringLiteral("itemKey")).toString();
+        item.destinationKey = itemObj.value(QStringLiteral("destinationKey")).toString();
+        item.infoHash = itemObj.value(QStringLiteral("infoHash")).toString();
+        item.fileIndex = itemObj.value(QStringLiteral("fileIndex")).toInt(-1);
+        item.canonicalFilename = itemObj.value(QStringLiteral("canonicalFilename")).toString();
+        item.itemState = streamBulkItemStateFromJsonString(
+            itemObj.value(QStringLiteral("itemState")).toString());
+        item.lastError = itemObj.value(QStringLiteral("lastError")).toString();
+        group.items.push_back(item);
+    }
+    return group;
+}
+
+} // namespace
+
+StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
                        QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
-    , m_torrentEngine(torrentEngine)
+    , m_torrentClient(torrentClient)
+    , m_torrentEngine(torrentClient ? torrentClient->engine() : nullptr)
 {
     setObjectName("stream");
 
@@ -96,12 +182,16 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentEngine* torrentEngine,
     // deleted. Stream mode is stream-server subprocess only, no env gate,
     // no fallback. Cache lives under dataDir/stream_server_cache (renamed
     // from the legacy dataDir/stream_cache path).
-    (void)torrentEngine;  // no longer needed by the engine; kept in ctor signature for now
     const QString cacheDir = bridge->dataDir() + "/stream_server_cache";
     m_streamEngine = new StreamServerEngine(cacheDir, this);
     m_streamEngine->start();
     m_streamEngine->cleanupOrphans();
     m_streamEngine->startPeriodicCleanup();
+
+    if (m_torrentClient) {
+        connect(m_torrentClient, &TorrentClient::streamBulkRetrySourcePickRequested,
+                this, &StreamPage::retryBulkSeasonDownload);
+    }
 
     // Player controller
     m_playerController = new StreamPlayerController(bridge, m_streamEngine, this);
@@ -125,6 +215,25 @@ void StreamPage::activate()
         m_libraryLayout->refresh();
 }
 
+// STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — fan out the download
+// index to both consumers: StreamLibrary (so remove() also evicts per-
+// episode rows) and StreamLibraryLayout (so tile DOWNLOADED chips render +
+// re-evaluate on entriesChanged). Wired by MainWindow after both
+// m_streamPage and m_streamDownloadIndex are constructed.
+void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
+{
+    if (m_library)
+        m_library->setStreamDownloadIndex(idx);
+    if (m_libraryLayout)
+        m_libraryLayout->setStreamDownloadIndex(idx);
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — also wire the detail
+    // view so per-row "on disk" markers + click-branch + alt-stream menu can
+    // resolve. m_detailView may be null on early invocation (buildUI hasn't
+    // run yet); MainWindow re-fires after buildPageStack so this lands.
+    if (m_detailView)
+        m_detailView->setStreamDownloadIndex(idx);
+}
+
 // ─── UI construction ─────────────────────────────────────────────────────────
 
 void StreamPage::buildUI()
@@ -144,12 +253,21 @@ void StreamPage::buildUI()
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — wire TorrentClient
+    // through to the detail view so Remove-from-Library can detect active
+    // bulk groups for the show and gate the destructive action behind a
+    // confirmation dialog. Spec §10.10.
+    if (m_torrentClient)
+        m_detailView->setTorrentClient(m_torrentClient);
+
     connect(m_detailView, &StreamDetailView::backRequested, this, &StreamPage::goBack);
     connect(m_detailView, &StreamDetailView::playRequested, this, &StreamPage::onPlayRequested);
     connect(m_detailView, &StreamDetailView::sourceActivated,
             this, &StreamPage::onSourceActivated);
     connect(m_detailView, &StreamDetailView::addToTankorentRequested,
             this, &StreamPage::onAddToTankorentRequested);
+    connect(m_detailView, &StreamDetailView::bulkDownloadRequested,
+            this, &StreamPage::triggerBulkSeasonDownload);
     // Phase 3 Batch 3.5 (deferred ship) — direct-URL trailer playback.
     // Routes through the same ad-hoc-stream pattern as Batch 4.3's URL
     // paste handler: synthesize a httpSource Stream, set m_session.pending
@@ -186,6 +304,25 @@ void StreamPage::buildUI()
     // different source manually.
     connect(m_detailView, &StreamDetailView::autoLaunchCancelRequested,
             this, &StreamPage::cancelAutoLaunch);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — downloaded-episode
+    // click. Detail view fires this AHEAD of playRequested when the
+    // StreamDownloadIndex hit AND the file exists on disk; falls through to
+    // playRequested otherwise. Spec §6.2.
+    connect(m_detailView, &StreamDetailView::playLocalFileFromStreamRequested,
+            this, &StreamPage::onDetailPlayLocalFileFromStream);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click → "Show
+    // alternate streams". Same flow as a default click on an undownloaded
+    // episode: flip right pane to loading + emit the existing playRequested
+    // so onPlayRequested runs the source-pick aggregator. Spec §6.3.
+    connect(m_detailView, &StreamDetailView::alternateStreamRequested,
+            this, [this](int season, int episode) {
+                if (!m_detailView) return;
+                m_detailView->setStreamSourcesLoading();
+                onPlayRequested(m_detailView->currentImdb(),
+                                QStringLiteral("series"), season, episode);
+            });
 
     // Auto-launch timer — single-shot, 2s window (enough for the user to
     // notice the "Resuming with last-used source" toast and cancel).
@@ -1041,6 +1178,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
     using Kind = NavEntry::Kind;
     switch (entry.kind) {
     case Kind::Browse:
+        cancelBulkSeasonDownload();
         m_mainStack->setCurrentIndex(0);
         m_searchWidget->hide();
         m_browseScroll->show();
@@ -1071,6 +1209,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
 
     case Kind::CatalogBrowse:
         if (!m_catalogBrowse) break;
+        cancelBulkSeasonDownload();
         cancelAutoLaunch();
         hideNextEpisodeOverlay();
         resetNextEpisodePrefetch();
@@ -1082,6 +1221,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
 
     case Kind::Detail:
         if (!m_detailView) break;
+        cancelBulkSeasonDownload();
         cancelAutoLaunch();
         if (entry.detailHasPreview) {
             m_detailView->showEntry(entry.detailPreview.id,
@@ -1096,6 +1236,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
 
     case Kind::AddonManager:
         if (!m_addonManager) break;
+        cancelBulkSeasonDownload();
         cancelAutoLaunch();
         hideNextEpisodeOverlay();
         resetNextEpisodePrefetch();
@@ -1105,6 +1246,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
 
     case Kind::Calendar:
         if (!m_calendarScreen || !m_calendarEngine) break;
+        cancelBulkSeasonDownload();
         cancelAutoLaunch();
         hideNextEpisodeOverlay();
         resetNextEpisodePrefetch();
@@ -1952,6 +2094,469 @@ void StreamPage::onAddToTankorentRequested(const tankostream::stream::StreamPick
     }
 
     emit addToTankorentRequested(choice.magnetUri, displayName);
+}
+
+void StreamPage::triggerBulkSeasonDownload(int season)
+{
+    using namespace tankostream::stream;
+
+    cancelBulkSeasonDownload();
+
+    if (!m_detailView || !m_bridge || !m_torrentClient)
+        return;
+    if (m_detailView->currentType() != QLatin1String("series"))
+        return;
+
+    const QList<StreamEpisode> episodes = m_detailView->episodesForSeason(season);
+    if (m_detailView->currentImdb().isEmpty() || season <= 0 || episodes.isEmpty()) {
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("No episodes available for season download"));
+        return;
+    }
+
+    const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
+    if (roots.isEmpty() || roots.first().isEmpty()) {
+        m_detailView->setStreamSourcesError(tr("Videos library root is not configured"));
+        return;
+    }
+
+    m_bulkInput = BulkPlanInput{};
+    m_bulkInput.seriesId = m_detailView->currentImdb();
+    m_bulkInput.seriesTitle = m_detailView->currentTitle();
+    if (m_bulkInput.seriesTitle.isEmpty())
+        m_bulkInput.seriesTitle = m_bulkInput.seriesId;
+    m_bulkInput.seriesYear = m_detailView->currentYear();
+    m_bulkInput.seasonNumber = season;
+    m_bulkInput.videosRootPath = roots.first();
+    for (const StreamEpisode& episode : episodes) {
+        BulkPlanEpisodeInput ep;
+        ep.season = season;
+        ep.episode = episode.episode;
+        ep.title = episode.title;
+        ep.extensionHint = QStringLiteral("mkv");
+        m_bulkInput.episodes.push_back(ep);
+    }
+
+    m_bulkPlanResult = buildBulkPlan(m_bulkInput, [](const QString& path) {
+        return QFileInfo::exists(path);
+    });
+    m_bulkSourcePayload = BulkSourceCollectionPayload{};
+    m_bulkVerificationNote.clear();
+
+    m_bulkProgressDialog = new QDialog(this);
+    m_bulkProgressDialog->setWindowTitle(tr("Preparing stream download"));
+    m_bulkProgressDialog->setModal(false);
+    auto* layout = new QVBoxLayout(m_bulkProgressDialog);
+    layout->setContentsMargins(18, 18, 18, 14);
+    layout->setSpacing(10);
+    m_bulkProgressLabel = new QLabel(tr("Resolving sources..."), m_bulkProgressDialog);
+    m_bulkProgressLabel->setTextFormat(Qt::PlainText);
+    layout->addWidget(m_bulkProgressLabel);
+    m_bulkProgressBar = new QProgressBar(m_bulkProgressDialog);
+    m_bulkProgressBar->setRange(0, 0);
+    layout->addWidget(m_bulkProgressBar);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, m_bulkProgressDialog);
+    connect(buttons, &QDialogButtonBox::rejected, this, &StreamPage::cancelBulkSeasonDownload);
+    layout->addWidget(buttons);
+    connect(m_bulkProgressDialog, &QDialog::rejected,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkProgressDialog->show();
+
+    m_bulkSourceCollector = new BulkSourceCollector(m_addonRegistry, this);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::progressTick,
+            this, [this](int resolved, int total) {
+                if (m_bulkProgressLabel) {
+                    m_bulkProgressLabel->setText(
+                        tr("Resolving sources... %1/%2").arg(resolved).arg(total));
+                }
+            });
+    connect(m_bulkSourceCollector, &BulkSourceCollector::collectionComplete,
+            this, &StreamPage::onBulkSourcesCollected);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::cancelled,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkSourceCollector->begin(m_bulkInput);
+}
+
+void StreamPage::retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys)
+{
+    using namespace tankostream::stream;
+
+    cancelBulkSeasonDownload();
+
+    if (!m_torrentClient || groupId.isEmpty() || itemKeys.isEmpty())
+        return;
+
+    const QJsonObject groupObj = m_torrentClient->streamBulkGroups().value(groupId).toObject();
+    if (groupObj.isEmpty())
+        return;
+
+    const StreamBulkGroupRecord group = streamBulkGroupRecordFromJson(groupId, groupObj);
+    QSet<QString> retryKeys;
+    for (const QString& itemKey : itemKeys)
+        retryKeys.insert(itemKey);
+
+    m_bulkRetryMode = true;
+    m_bulkRetryGroupId = groupId;
+    m_bulkRetryItemKeys = itemKeys;
+    m_bulkVerificationNote.clear();
+    m_bulkSourcePayload = BulkSourceCollectionPayload{};
+
+    m_bulkInput = BulkPlanInput{};
+    m_bulkInput.seriesId = group.sourceSeriesId;
+    m_bulkInput.seriesTitle = group.label;
+    if (m_bulkInput.seriesTitle.isEmpty())
+        m_bulkInput.seriesTitle = group.sourceSeriesId;
+    m_bulkInput.seasonNumber = group.sourceSeason;
+    m_bulkInput.videosRootPath = group.destinationRoot;
+
+    m_bulkPlanResult = BulkPlanResult{};
+    for (const StreamBulkGroupItem& groupItem : group.items) {
+        if (!retryKeys.contains(groupItem.itemKey))
+            continue;
+        const int episodeNum = episodeNumberFromBulkItemKey(groupItem.itemKey);
+        if (episodeNum <= 0)
+            continue;
+        const int seasonNum = group.sourceSeason > 0
+            ? group.sourceSeason
+            : seasonNumberFromBulkItemKey(groupItem.itemKey);
+
+        BulkPlanEpisodeInput episode;
+        episode.season = seasonNum;
+        episode.episode = episodeNum;
+        episode.extensionHint = QStringLiteral("mkv");
+        m_bulkInput.episodes.push_back(episode);
+
+        BulkPlanItem planItem;
+        planItem.input = episode;
+        planItem.canonicalFilename = groupItem.canonicalFilename;
+        planItem.canonicalRelativePath = groupItem.destinationKey;
+        planItem.canonicalAbsolutePath = group.destinationRoot.isEmpty()
+            ? QString()
+            : QDir(group.destinationRoot).filePath(groupItem.destinationKey);
+        planItem.status = BulkPlanItemStatus::PendingSource;
+        planItem.itemKey = groupItem.itemKey;
+        planItem.destinationKey = groupItem.destinationKey;
+        m_bulkPlanResult.items.push_back(planItem);
+    }
+
+    if (m_bulkInput.seasonNumber <= 0 && !m_bulkInput.episodes.isEmpty())
+        m_bulkInput.seasonNumber = m_bulkInput.episodes.first().season;
+
+    if (m_bulkInput.episodes.isEmpty() || m_bulkInput.seasonNumber <= 0) {
+        m_bulkRetryMode = false;
+        m_bulkRetryGroupId.clear();
+        m_bulkRetryItemKeys.clear();
+        return;
+    }
+
+    m_bulkProgressDialog = new QDialog(this);
+    m_bulkProgressDialog->setWindowTitle(tr("Retrying stream download"));
+    m_bulkProgressDialog->setModal(false);
+    auto* layout = new QVBoxLayout(m_bulkProgressDialog);
+    layout->setContentsMargins(18, 18, 18, 14);
+    layout->setSpacing(10);
+    m_bulkProgressLabel = new QLabel(tr("Resolving retry sources..."), m_bulkProgressDialog);
+    m_bulkProgressLabel->setTextFormat(Qt::PlainText);
+    layout->addWidget(m_bulkProgressLabel);
+    m_bulkProgressBar = new QProgressBar(m_bulkProgressDialog);
+    m_bulkProgressBar->setRange(0, 0);
+    layout->addWidget(m_bulkProgressBar);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, m_bulkProgressDialog);
+    connect(buttons, &QDialogButtonBox::rejected, this, &StreamPage::cancelBulkSeasonDownload);
+    layout->addWidget(buttons);
+    connect(m_bulkProgressDialog, &QDialog::rejected,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkProgressDialog->show();
+
+    m_bulkSourceCollector = new BulkSourceCollector(m_addonRegistry, this);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::progressTick,
+            this, [this](int resolved, int total) {
+                if (m_bulkProgressLabel) {
+                    m_bulkProgressLabel->setText(
+                        tr("Resolving retry sources... %1/%2").arg(resolved).arg(total));
+                }
+            });
+    connect(m_bulkSourceCollector, &BulkSourceCollector::collectionComplete,
+            this, &StreamPage::onBulkSourcesCollected);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::cancelled,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkSourceCollector->begin(m_bulkInput);
+}
+
+void StreamPage::cancelBulkSeasonDownload()
+{
+    if (m_bulkSourceCollector) {
+        auto* collector = m_bulkSourceCollector;
+        m_bulkSourceCollector = nullptr;
+        collector->disconnect(this);
+        collector->cancel();
+        collector->deleteLater();
+    }
+    if (m_bulkPackVerifier) {
+        auto* verifier = m_bulkPackVerifier;
+        m_bulkPackVerifier = nullptr;
+        verifier->disconnect(this);
+        verifier->cancel();
+        verifier->deleteLater();
+    }
+    if (m_bulkProgressDialog) {
+        auto* dialog = m_bulkProgressDialog;
+        m_bulkProgressDialog = nullptr;
+        m_bulkProgressLabel = nullptr;
+        m_bulkProgressBar = nullptr;
+        dialog->disconnect(this);
+        dialog->hide();
+        dialog->deleteLater();
+    }
+    m_bulkRetryMode = false;
+    m_bulkRetryGroupId.clear();
+    m_bulkRetryItemKeys.clear();
+}
+
+void StreamPage::onBulkSourcesCollected(const tankostream::stream::BulkSourceCollectionPayload& payload)
+{
+    using namespace tankostream::stream;
+
+    if (payload.cancelled) {
+        cancelBulkSeasonDownload();
+        return;
+    }
+    m_bulkSourcePayload = payload;
+    if (m_bulkSourceCollector) {
+        m_bulkSourceCollector->deleteLater();
+        m_bulkSourceCollector = nullptr;
+    }
+
+    BulkSourceCollectionPayload selectionPayload = m_bulkSourcePayload;
+    if (m_bulkRetryMode) {
+        for (auto it = selectionPayload.byEpisode.begin(); it != selectionPayload.byEpisode.end(); ++it) {
+            QList<StreamPickerChoice> filtered;
+            for (const StreamPickerChoice& choice : it->choices) {
+                if (choice.packType != QLatin1String("season"))
+                    filtered.push_back(choice);
+            }
+            it->choices = filtered;
+        }
+    }
+
+    BulkSelectionPlan selection = buildBulkSelection(m_bulkPlanResult, selectionPayload);
+    if (m_bulkRetryMode) {
+        BulkPackVerificationResult result;
+        result.updatedPlan = selection;
+        onBulkPackVerified(result);
+        return;
+    }
+
+    if (selection.mode == BulkSelectionMode::Pack && m_torrentClient) {
+        if (m_bulkProgressLabel)
+            m_bulkProgressLabel->setText(tr("Verifying pack..."));
+        m_bulkPackVerifier = new BulkPackVerifier(m_torrentClient, this);
+        connect(m_bulkPackVerifier, &BulkPackVerifier::verificationComplete,
+                this, &StreamPage::onBulkPackVerified);
+        connect(m_bulkPackVerifier, &BulkPackVerifier::verificationFailed,
+                this, &StreamPage::onBulkPackVerificationFailed);
+        connect(m_bulkPackVerifier, &BulkPackVerifier::cancelled,
+                this, &StreamPage::cancelBulkSeasonDownload);
+        m_bulkPackVerifier->begin(selection, m_bulkInput.seasonNumber);
+        return;
+    }
+
+    BulkPackVerificationResult result;
+    result.updatedPlan = selection;
+    onBulkPackVerified(result);
+}
+
+void StreamPage::onBulkPackVerificationFailed(const QString& reason)
+{
+    using namespace tankostream::stream;
+
+    if (m_bulkPackVerifier) {
+        m_bulkPackVerifier->deleteLater();
+        m_bulkPackVerifier = nullptr;
+    }
+    m_bulkVerificationNote = tr("Pack verification failed; using per-episode sources.");
+    if (!reason.isEmpty())
+        m_bulkVerificationNote += QStringLiteral(" ") + reason;
+
+    BulkSourceCollectionPayload fallbackPayload = m_bulkSourcePayload;
+    for (auto it = fallbackPayload.byEpisode.begin(); it != fallbackPayload.byEpisode.end(); ++it) {
+        QList<StreamPickerChoice> filtered;
+        for (const StreamPickerChoice& choice : it->choices) {
+            if (choice.packType != QLatin1String("season"))
+                filtered.push_back(choice);
+        }
+        it->choices = filtered;
+    }
+
+    BulkPackVerificationResult result;
+    result.updatedPlan = buildBulkSelection(m_bulkPlanResult, fallbackPayload);
+    onBulkPackVerified(result);
+}
+
+void StreamPage::onBulkPackVerified(const tankostream::stream::BulkPackVerificationResult& result)
+{
+    using namespace tankostream::stream;
+
+    if (m_bulkPackVerifier) {
+        m_bulkPackVerifier->deleteLater();
+        m_bulkPackVerifier = nullptr;
+    }
+    if (m_bulkProgressDialog) {
+        auto* dialog = m_bulkProgressDialog;
+        m_bulkProgressDialog = nullptr;
+        m_bulkProgressLabel = nullptr;
+        m_bulkProgressBar = nullptr;
+        dialog->disconnect(this);
+        dialog->hide();
+        dialog->deleteLater();
+    }
+
+    if (m_bulkRetryMode) {
+        const QString retryGroupId = m_bulkRetryGroupId;
+        const QStringList retryItemKeys = m_bulkRetryItemKeys;
+        m_bulkRetryMode = false;
+        m_bulkRetryGroupId.clear();
+        m_bulkRetryItemKeys.clear();
+
+        if (!m_torrentClient || retryGroupId.isEmpty())
+            return;
+
+        const QJsonObject groupObj = m_torrentClient->streamBulkGroups().value(retryGroupId).toObject();
+        if (groupObj.isEmpty())
+            return;
+
+        for (const BulkSelectionItem& item : result.updatedPlan.items) {
+            if (item.reason == BulkSelectionReason::MissingNoSource) {
+                m_torrentClient->updateStreamBulkGroupItemState(
+                    retryGroupId,
+                    item.itemKey,
+                    StreamBulkItemState::MissingSource,
+                    tr("No source found during retry"));
+            }
+        }
+
+        BulkPackVerificationResult retryResult = result;
+        StreamBulkGroupRecord group = streamBulkGroupRecordFromJson(
+            retryGroupId,
+            m_torrentClient->streamBulkGroups().value(retryGroupId).toObject());
+        if (!group.items.isEmpty())
+            m_torrentClient->dispatchStreamBulkGroup(group, retryResult);
+        Q_UNUSED(retryItemKeys);
+        return;
+    }
+
+    const QString displayLabel = QStringLiteral("%1 - Season %2")
+        .arg(m_bulkInput.seriesTitle)
+        .arg(m_bulkInput.seasonNumber);
+    StreamBulkPreflightDialog dialog(result.updatedPlan,
+                                     result,
+                                     m_bulkSourcePayload,
+                                     m_bulkPlanResult,
+                                     displayLabel,
+                                     m_bulkInput.videosRootPath,
+                                     m_bulkVerificationNote,
+                                     this);
+    if (dialog.exec() != QDialog::Accepted) {
+        m_bulkVerificationNote.clear();
+        return;
+    }
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 1 — picker filters the dispatch payload
+    // to only the user-ticked itemKeys. Empty selection is impossible here
+    // because the dialog disables OK when zero are selected.
+    const QSet<QString> selectedKeys = dialog.selectedItemKeys();
+
+    QHash<QString, BulkPlanItem> planItemByKey;
+    for (const BulkPlanItem& item : m_bulkPlanResult.items)
+        planItemByKey.insert(item.itemKey, item);
+
+    StreamBulkGroupRecord group;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    group.groupId = QStringLiteral("stream:%1:s%2:%3")
+        .arg(m_bulkInput.seriesId)
+        .arg(m_bulkInput.seasonNumber, 2, 10, QChar('0'))
+        .arg(now);
+    group.groupKind = QStringLiteral("streamSeason");
+    group.label = displayLabel;
+    group.sourceSeriesId = m_bulkInput.seriesId;
+    group.sourceSeason = m_bulkInput.seasonNumber;
+    group.destinationRoot = m_bulkInput.videosRootPath;
+    group.createdAtMs = now;
+    group.updatedAtMs = now;
+
+    for (const BulkSelectionItem& selectionItem : result.updatedPlan.items) {
+        if (!selectedKeys.contains(selectionItem.itemKey))
+            continue;  // Phase-1 picker dropped this episode
+        const BulkPlanItem planItem = planItemByKey.value(selectionItem.itemKey);
+        if (planItem.itemKey.isEmpty())
+            continue;
+        StreamBulkGroupItem groupItem;
+        groupItem.itemKey = planItem.itemKey;
+        groupItem.destinationKey = planItem.destinationKey;
+        groupItem.canonicalFilename = planItem.canonicalFilename;
+        if (selectionItem.reason == BulkSelectionReason::MissingNoSource) {
+            groupItem.itemState = StreamBulkItemState::MissingSource;
+            groupItem.lastError = tr("No source found for episode");
+        } else if (selectionItem.reason == BulkSelectionReason::Picked ||
+                   selectionItem.reason == BulkSelectionReason::PackCovered) {
+            groupItem.infoHash = selectionItem.choice.infoHash;
+            groupItem.fileIndex = selectionItem.choice.fileIndex;
+            groupItem.itemState = StreamBulkItemState::Pending;
+        } else {
+            continue;
+        }
+        group.items.push_back(groupItem);
+    }
+
+    if (!group.items.isEmpty())
+        emit addToTankorentBulkRequested(group, result, displayLabel);
+    m_bulkVerificationNote.clear();
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — handler for the detail
+// view's "downloaded episode click" path. Runs the SubtitlesAggregator
+// fan-out with a synthetic Stream so the popover behaves identically to
+// streamed playback (Spec §10.2), then re-emits the public signal up to
+// MainWindow which actually opens the VideoPlayer.
+//
+// NOTE on StreamProgress (Spec §10.1): the existing time_update / progress
+// flow runs through CoreBridge::saveProgress at the bridge layer. Local-file
+// playback via VideoPlayer currently writes under the `videos` domain — the
+// epKey/`stream`-domain bridging is a separable follow-up (it requires
+// teaching VideoPlayer to write per-episode stream-domain progress when
+// opened via this gateway). The Continue Watching strip already picks up
+// `stream:imdb:sNN:eMM` keys; once the bridging is wired, these sessions
+// will surface there. Phase 4 ships the open + signal + subtitles flow;
+// continue-watching surfacing for downloaded-from-stream episodes is
+// tracked as a follow-up.
+void StreamPage::onDetailPlayLocalFileFromStream(
+    const QString& localPath, const QString& imdbId,
+    const QString& showTitle, int season, int episode)
+{
+    // Spec §10.2 — synthetic Stream + SubtitlesAggregator query so OpenSubs
+    // and any other subtitle-resource addons populate the popover. videoHash
+    // is intentionally empty: we don't compute the OpenSubs SubDB hash for
+    // local files; the addon falls back to imdbId+filename matching.
+    if (m_subtitlesAggregator && !imdbId.isEmpty() && season > 0 && episode > 0) {
+        tankostream::stream::SubtitleLoadRequest req;
+        req.type = QStringLiteral("series");
+        req.id   = imdbId + QLatin1Char(':')
+                          + QString::number(season) + QLatin1Char(':')
+                          + QString::number(episode);
+
+        tankostream::addon::Stream synth;
+        const QFileInfo fi(localPath);
+        synth.behaviorHints.filename  = fi.fileName();
+        synth.behaviorHints.videoSize = fi.size();
+        synth.behaviorHints.videoHash = QString();   // omitted for local files
+        synth.name                    = showTitle;
+        req.selectedStream = synth;
+
+        m_subtitlesAggregator->load(req);
+    }
+
+    // Forward to MainWindow to actually open the local-file VideoPlayer.
+    emit playLocalFileFromStreamRequested(localPath, imdbId, showTitle, season, episode);
 }
 
 void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice& choice)

@@ -1,6 +1,7 @@
 #include "StreamLibraryLayout.h"
 
 #include "core/CoreBridge.h"
+#include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "ui/pages/TileCard.h"
@@ -13,8 +14,10 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSettings>
+#include <QShowEvent>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
 StreamLibraryLayout::StreamLibraryLayout(CoreBridge* bridge, StreamLibrary* library,
                                          QWidget* parent)
@@ -34,6 +37,54 @@ void StreamLibraryLayout::refresh()
 {
     populateTiles();
     cleanupOrphanPosters();
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download index
+// so tiles can render the DOWNLOADED chip. Subscribes to entriesChanged so
+// bulk-completion / migration / eviction events flip chip visibility on
+// already-rendered tiles without rebuilding the strip. Queued connection
+// because mutating callers (validateAll, registerEpisode) may run on a
+// worker thread.
+void StreamLibraryLayout::setStreamDownloadIndex(StreamDownloadIndex* idx)
+{
+    m_downloadIndex = idx;
+    if (m_downloadIndex) {
+        connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                this, &StreamLibraryLayout::refreshTileBadges,
+                Qt::QueuedConnection);
+        // Apply badges to any tiles already rendered before the wire landed.
+        refreshTileBadges();
+    }
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — eager disk-state
+// validation when the user opens Stream library home. Off-thread; lazy
+// on click (StreamDetailView::onEpisodeActivated) continues to be the
+// per-episode safety net. validateAll snapshots under-lock + stats off-
+// lock + evicts under-lock again (per StreamDownloadIndex's threading
+// contract). Cheap (~10s of stats) for typical libraries; off-thread
+// so home-open doesn't hitch. Spec §10.4.
+void StreamLibraryLayout::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (m_downloadIndex) {
+        StreamDownloadIndex* idx = m_downloadIndex;
+        (void) QtConcurrent::run([idx]() { idx->validateAll(); });
+    }
+}
+
+void StreamLibraryLayout::refreshTileBadges()
+{
+    if (!m_downloadIndex || !m_strip) return;
+
+    const QList<TileCard*> tiles = m_strip->findChildren<TileCard*>();
+    for (TileCard* card : tiles) {
+        const QString imdb = card->property("imdbId").toString();
+        if (imdb.isEmpty()) continue;
+        const bool downloaded = m_downloadIndex->hasAnyForImdb(imdb);
+        QLabel* chip = card->findChild<QLabel*>(QStringLiteral("DownloadedChip"));
+        if (chip) chip->setVisible(downloaded);
+    }
 }
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
@@ -245,6 +296,26 @@ void StreamLibraryLayout::populateTiles()
         // Sort properties for TileStrip::sortTiles()
         card->setProperty("sortTitle", entry.name.toLower());
         card->setProperty("sortRating", entry.imdbRating.toDouble());
+
+        // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — DOWNLOADED chip
+        // overlay. Same QSS family as Tankorent's STREAM chip — small-caps,
+        // gray-bg, no color, no emoji per feedback_no_color_no_emoji.md.
+        // Visibility flipped by refreshTileBadges() on entriesChanged.
+        auto* dlChip = new QLabel(QStringLiteral("DOWNLOADED"), card);
+        dlChip->setObjectName(QStringLiteral("DownloadedChip"));
+        dlChip->setStyleSheet(QStringLiteral(
+            "#DownloadedChip { color: #eeeeee; border: 1px solid #666666;"
+            " border-radius: 3px; padding: 1px 5px; font-size: 9px;"
+            " font-weight: 600; letter-spacing: 0px;"
+            " background-color: rgba(0, 0, 0, 160); }"));
+        dlChip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        dlChip->setVisible(m_downloadIndex && m_downloadIndex->hasAnyForImdb(entry.imdb));
+        // Position: top-right corner of the poster image. Use absolute
+        // positioning relative to the TileCard so it floats above whatever
+        // the TileCard's internal layout draws. 8/8 margin tunable post-smoke
+        // if visual offset looks wrong.
+        dlChip->move(8, 8);
+        dlChip->raise();
 
         m_strip->addTile(card);
     }

@@ -331,6 +331,8 @@ signals:
     // happens inside the emit.
     void storageMoved(const QString& infoHash, const QString& newPath);
     void storageMoveFailed(const QString& infoHash, const QString& message);
+    void fileRenamed(const QString& infoHash, int fileIndex, const QString& newPath);
+    void fileRenameFailed(const QString& infoHash, int fileIndex, const QString& message);
 
     // STREAM_ENGINE_REBUILD P2 — emitted once per libtorrent
     // piece_finished_alert from the AlertWorker thread. Consumers must

@@ -175,6 +175,20 @@ private:
                 emit m_engine->storageMoveFailed(hash,
                     QString::fromStdString(smf->message()));
             }
+            else if (auto* fra = lt::alert_cast<lt::file_renamed_alert>(a)) {
+                auto hash = TorrentEngine::hashToHex(fra->handle);
+                emit m_engine->fileRenamed(
+                    hash,
+                    static_cast<int>(fra->index),
+                    QString::fromUtf8(fra->new_name()));
+            }
+            else if (auto* frf = lt::alert_cast<lt::file_rename_failed_alert>(a)) {
+                auto hash = TorrentEngine::hashToHex(frf->handle);
+                emit m_engine->fileRenameFailed(
+                    hash,
+                    static_cast<int>(frf->index),
+                    QString::fromStdString(frf->message()));
+            }
             // STREAM_ENGINE_REBUILD P2 — pieceFinished signal surface. The
             // piece_progress alert category is enabled unconditionally below
             // (applySettings alert_mask); each piece_finished_alert becomes

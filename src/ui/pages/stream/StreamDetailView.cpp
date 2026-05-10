@@ -2,24 +2,34 @@
 
 #include "core/CoreBridge.h"
 #include "core/stream/MetaAggregator.h"
+#include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
+#include "core/torrent/TorrentClient.h"
 #include "StreamSourceList.h"
 
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QImage>
 #include <QLinearGradient>
+#include <QMenu>
+#include <QMessageBox>
+#include <QModelIndex>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
+#include <QTimer>
 #include <QPixmap>
+#include <QPoint>
 #include <QPointer>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -49,6 +59,15 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
 
     buildUI();
 
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — 1Hz poll for the per-episode
+    // download-state column. Started lazily by populateEpisodeTable when
+    // bulk activity is detected for the show+season; refreshEpisodeBulkProgress
+    // self-stops the timer when no bulk activity remains.
+    m_bulkPollTimer = new QTimer(this);
+    m_bulkPollTimer->setInterval(1000);
+    connect(m_bulkPollTimer, &QTimer::timeout,
+            this, &StreamDetailView::refreshEpisodeBulkProgress);
+
     if (m_meta) {
         connect(m_meta, &MetaAggregator::seriesMetaReady,
                 this, &StreamDetailView::onSeriesMetaReady);
@@ -69,6 +88,7 @@ void StreamDetailView::showEntry(const QString& imdbId,
     m_episodeTable->setRowCount(0);
     m_episodeTable->hide();
     m_seasonRow->hide();
+    if (m_downloadSeasonBtn) m_downloadSeasonBtn->hide();
     m_statusLabel->setText("Loading...");
     m_statusLabel->show();
 
@@ -377,7 +397,26 @@ void StreamDetailView::buildUI()
     connect(m_seasonCombo, &QComboBox::currentIndexChanged,
             this, &StreamDetailView::onSeasonChanged);
     seasonLayout->addWidget(m_seasonCombo);
+
+    m_downloadSeasonBtn = new QPushButton(tr("Download season"), m_seasonRow);
+    m_downloadSeasonBtn->setObjectName(QStringLiteral("DetailDownloadSeasonBtn"));
+    m_downloadSeasonBtn->setFixedHeight(30);
+    m_downloadSeasonBtn->setCursor(Qt::PointingHandCursor);
+    m_downloadSeasonBtn->setStyleSheet(
+        "#DetailDownloadSeasonBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0 12px; font-size: 12px; }"
+        "#DetailDownloadSeasonBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(m_downloadSeasonBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_seasonCombo) return;
+        const int season = m_seasonCombo->currentData().toInt();
+        if (m_currentType != QLatin1String("series") || m_seasons.value(season).isEmpty())
+            return;
+        emit bulkDownloadRequested(season);
+    });
     seasonLayout->addStretch();
+    seasonLayout->addWidget(m_downloadSeasonBtn);
 
     m_seasonRow->hide();
     leftCol->addWidget(m_seasonRow);
@@ -419,6 +458,13 @@ void StreamDetailView::buildUI()
 
     connect(m_episodeTable, &QTableWidget::cellClicked,
             this, &StreamDetailView::onEpisodeActivated);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click on a row
+    // opens the "Show alternate streams" menu; routes to the existing
+    // source-pick flow regardless of disk-presence. Spec §6.3.
+    m_episodeTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_episodeTable, &QWidget::customContextMenuRequested,
+            this, &StreamDetailView::onEpisodeContextMenu);
     m_episodeTable->hide();
     leftCol->addWidget(m_episodeTable, 1);
 
@@ -485,6 +531,36 @@ void StreamDetailView::hideAutoLaunchToast()
     if (m_sourcesList) m_sourcesList->hideAutoLaunchToast();
 }
 
+QString StreamDetailView::currentTitle() const
+{
+    if (m_lastPreviewHint.has_value() && !m_lastPreviewHint->name.isEmpty())
+        return m_lastPreviewHint->name;
+    return m_titleLabel ? m_titleLabel->text() : QString();
+}
+
+QString StreamDetailView::currentYear() const
+{
+    if (m_lastPreviewHint.has_value())
+        return m_lastPreviewHint->releaseInfo;
+    return {};
+}
+
+QList<StreamEpisode> StreamDetailView::episodesForSeason(int season) const
+{
+    return m_seasons.value(season);
+}
+
+void StreamDetailView::updateBulkDownloadButton()
+{
+    if (!m_downloadSeasonBtn || !m_seasonCombo)
+        return;
+    const int season = m_seasonCombo->currentData().toInt();
+    const bool visible = m_currentType == QLatin1String("series")
+        && season > 0
+        && !m_seasons.value(season).isEmpty();
+    m_downloadSeasonBtn->setVisible(visible);
+}
+
 // ─── Series metadata ─────────────────────────────────────────────────────────
 
 void StreamDetailView::onSeriesMetaReady(
@@ -500,6 +576,7 @@ void StreamDetailView::onSeriesMetaReady(
     if (m_seasons.isEmpty()) {
         m_statusLabel->setText("No episodes found");
         m_statusLabel->show();
+        updateBulkDownloadButton();
         return;
     }
 
@@ -517,6 +594,7 @@ void StreamDetailView::onSeriesMetaReady(
     m_seasonCombo->blockSignals(false);
 
     m_seasonRow->show();
+    updateBulkDownloadButton();
 
     // Batch 6.2 — Calendar navigation: if a season/episode was staged by
     // the caller, switch the combo and focus the matching episode row.
@@ -542,6 +620,7 @@ void StreamDetailView::onSeriesMetaReady(
 
     m_pendingPreselectSeason  = -1;
     m_pendingPreselectEpisode = -1;
+    updateBulkDownloadButton();
 }
 
 void StreamDetailView::onSeasonChanged(int comboIndex)
@@ -551,6 +630,7 @@ void StreamDetailView::onSeasonChanged(int comboIndex)
 
     int season = m_seasonCombo->itemData(comboIndex).toInt();
     populateEpisodeTable(season);
+    updateBulkDownloadButton();
 }
 
 void StreamDetailView::populateEpisodeTable(int season)
@@ -662,6 +742,18 @@ void StreamDetailView::populateEpisodeTable(int season)
     // already sorted numerically by parseSeriesEpisodes — the visible order
     // is the authoritative one and doesn't need runtime re-sort.
     m_episodeTable->setSortingEnabled(false);
+
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — paint per-row "on
+    // disk" icons after the rows are built. Cheap (single mutex-guarded
+    // hash lookup per row); safe pre-show.
+    refreshEpisodeMarkers();
+
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — paint per-row download-state from
+    // the TorrentClient bulk snapshot, and start the 1Hz poll timer if
+    // any bulk activity exists for this show+season. Self-stops in the
+    // slot when activity drains.
+    refreshEpisodeBulkProgress();
+
     m_episodeTable->show();
 }
 
@@ -675,12 +767,209 @@ void StreamDetailView::onEpisodeActivated(int row, int /*col*/)
     int episode = numItem->data(Qt::UserRole).toInt();
     int season  = numItem->data(Qt::UserRole + 1).toInt();
 
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — branch on disk
+    // presence. If the file is on disk + still exists, fire local-file
+    // play. Otherwise fall through to the source-pick flow. Spec §6.2.
+    if (m_downloadIndex && !m_currentImdb.isEmpty() && season > 0 && episode > 0) {
+        const auto pathOpt = m_downloadIndex->filePathFor(m_currentImdb, season, episode);
+        if (pathOpt.has_value()) {
+            if (QFileInfo::exists(*pathOpt)) {
+                emit playLocalFileFromStreamRequested(
+                    *pathOpt, m_currentImdb, currentTitle(), season, episode);
+                return;  // skip source-pick
+            } else {
+                // Lazy-stat eviction: file was deleted manually since the
+                // index was last refreshed. Evict + fall through to streams.
+                m_downloadIndex->evictByPath(
+                    StreamDownloadIndex::computeCanonicalKey(*pathOpt));
+                if (m_statusLabel)
+                    m_statusLabel->setText(tr("File missing — falling back to streams."));
+            }
+        }
+    }
+
     // Stream-picker UX rework — single-click on an episode row now means
     // "load sources for this episode". Flip the right pane to its loading
     // state immediately so the user gets instant visual feedback without
     // waiting for StreamPage's aggregator round-trip.
     setStreamSourcesLoading();
     emit playRequested(m_currentImdb, "series", season, episode);
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — wire the download index
+// in. We connect to entriesChanged so a bulk-completion (Phase 2) in another
+// pane lights up the rows here in place. QueuedConnection because the index
+// may emit from a worker thread (validateAll runs via QtConcurrent on home
+// open per spec §10.4).
+void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
+{
+    if (m_downloadIndex == idx) return;
+    if (m_downloadIndex) {
+        disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                   this, &StreamDetailView::refreshEpisodeMarkers);
+    }
+    m_downloadIndex = idx;
+    if (m_downloadIndex) {
+        connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                this, &StreamDetailView::refreshEpisodeMarkers,
+                Qt::QueuedConnection);
+        // Repaint immediately if the table already has rows from a prior
+        // showEntry call (the wiring may land late-in-MainWindow ctor).
+        refreshEpisodeMarkers();
+    }
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — repaint per-row on-disk
+// markers. The icon is mounted on the column-0 QTableWidgetItem (the "#"
+// cell), not on column 2's stacked title+overview cell-widget — col 0 is
+// a plain QTableWidgetItem (setIcon works directly), whereas col 2 is a
+// custom QWidget where icon mounting would mean rebuilding the layout.
+void StreamDetailView::refreshEpisodeMarkers()
+{
+    if (!m_episodeTable || !m_downloadIndex || m_currentImdb.isEmpty())
+        return;
+    if (m_currentType != QLatin1String("series"))
+        return;
+
+    static const QIcon dlIcon(QStringLiteral(":/icons/downloaded.svg"));
+
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        QTableWidgetItem* numItem = m_episodeTable->item(row, 0);
+        if (!numItem) continue;
+        const int episode = numItem->data(Qt::UserRole).toInt();
+        const int season  = numItem->data(Qt::UserRole + 1).toInt();
+        if (season <= 0 || episode <= 0) continue;
+
+        const auto pathOpt = m_downloadIndex->filePathFor(m_currentImdb, season, episode);
+        if (pathOpt.has_value()) {
+            numItem->setIcon(dlIcon);
+            numItem->setToolTip(tr("On disk: %1").arg(QFileInfo(*pathOpt).fileName()));
+        } else {
+            numItem->setIcon(QIcon());
+            numItem->setToolTip(QString());
+        }
+    }
+}
+
+// STREAM_BULK_DOWNLOAD_V2 Phase 3 — repaint per-row download state in the
+// Status column (col 4). Sourced from TorrentClient::streamBulkSnapshotForImdbSeason
+// which walks m_streamBulkGroups for matching imdbId+season. Per row, the
+// state string drives a short label:
+//   "Pending"      → "Queued"           (paused-queued in cohort)
+//   "Downloading"  → "<N>%"             (live progress from listActive)
+//   "Publishing"   → "Done"             (file rename in flight, sub-second)
+//   "Published"    → "✓"                (terminal success; Phase 4 also
+//                                        lights the col-0 download icon)
+//   any failed     → "Failed"           (terminal; cohort advanced past it)
+//   no row in snap → existing watched-checkmark logic (preserved)
+// The 1Hz poll timer started in populateEpisodeTable runs only while the
+// snapshot is non-empty; this slot stops the timer when bulk activity
+// drains so an idle detail view doesn't burn CPU on no-op polls.
+void StreamDetailView::refreshEpisodeBulkProgress()
+{
+    if (!m_episodeTable || !m_torrentClient || m_currentImdb.isEmpty()) {
+        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+            m_bulkPollTimer->stop();
+        return;
+    }
+    if (m_currentType != QLatin1String("series")) {
+        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+            m_bulkPollTimer->stop();
+        return;
+    }
+
+    int activeSeason = 1;
+    if (m_seasonCombo) {
+        const int idx = m_seasonCombo->currentIndex();
+        if (idx >= 0)
+            activeSeason = m_seasonCombo->itemData(idx).toInt();
+    }
+    if (activeSeason <= 0) {
+        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+            m_bulkPollTimer->stop();
+        return;
+    }
+
+    const QHash<int, QPair<QString, int>> snapshot =
+        m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, activeSeason);
+
+    if (snapshot.isEmpty()) {
+        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+            m_bulkPollTimer->stop();
+        return;
+    }
+
+    bool anyActive = false;  // any non-terminal row → keep polling
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        QTableWidgetItem* numItem = m_episodeTable->item(row, 0);
+        QTableWidgetItem* statusItem = m_episodeTable->item(row, 4);
+        if (!numItem || !statusItem) continue;
+        const int episode = numItem->data(Qt::UserRole).toInt();
+        if (episode <= 0) continue;
+
+        const auto it = snapshot.constFind(episode);
+        if (it == snapshot.cend())
+            continue;  // no bulk row → leave existing watched-checkmark intact
+
+        const QString& state = it->first;
+        const int pct = it->second;
+
+        if (state == QLatin1String("Pending")) {
+            statusItem->setText(tr("Queued"));
+            anyActive = true;
+        } else if (state == QLatin1String("Downloading")) {
+            statusItem->setText(pct > 0
+                ? QStringLiteral("%1%").arg(pct)
+                : tr("Downloading"));
+            anyActive = true;
+        } else if (state == QLatin1String("Publishing")) {
+            statusItem->setText(tr("Done"));
+            anyActive = true;
+        } else if (state == QLatin1String("Published")) {
+            statusItem->setText(QStringLiteral("✓"));
+        } else if (state == QLatin1String("Failed") ||
+                   state == QLatin1String("MissingSource") ||
+                   state == QLatin1String("MetadataFailed") ||
+                   state == QLatin1String("PublishFailed") ||
+                   state == QLatin1String("Cancelled") ||
+                   state == QLatin1String("Orphaned")) {
+            statusItem->setText(tr("Failed"));
+        }
+    }
+
+    if (anyActive) {
+        if (m_bulkPollTimer && !m_bulkPollTimer->isActive())
+            m_bulkPollTimer->start();
+    } else {
+        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+            m_bulkPollTimer->stop();
+    }
+}
+
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click context
+// menu on the episode table. Always offers "Show alternate streams" — for
+// downloaded episodes this is the explicit escape from the local-file
+// shortcut; for undownloaded episodes it's just an alternate name for the
+// default click action. StreamPage routes the signal to the same
+// source-pick flow either way. Spec §6.3.
+void StreamDetailView::onEpisodeContextMenu(const QPoint& pos)
+{
+    if (!m_episodeTable) return;
+    const QModelIndex idx = m_episodeTable->indexAt(pos);
+    if (!idx.isValid()) return;
+
+    QTableWidgetItem* numItem = m_episodeTable->item(idx.row(), 0);
+    if (!numItem) return;
+    const int episode = numItem->data(Qt::UserRole).toInt();
+    const int season  = numItem->data(Qt::UserRole + 1).toInt();
+    if (episode <= 0 || season <= 0) return;
+
+    QMenu menu(this);
+    QAction* altAct = menu.addAction(tr("Show alternate streams"));
+    QAction* picked = menu.exec(m_episodeTable->viewport()->mapToGlobal(pos));
+    if (picked == altAct) {
+        emit alternateStreamRequested(season, episode);
+    }
 }
 
 void StreamDetailView::updateProgressColumn()
@@ -747,6 +1036,37 @@ void StreamDetailView::onLibraryButtonClicked()
     if (m_currentImdb.isEmpty() || !m_library) return;
 
     if (m_library->has(m_currentImdb)) {
+        // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — bulk-in-flight
+        // confirmation. If a stream-bulk for this show is still downloading,
+        // require explicit user consent to cancel-and-remove atomically.
+        // Spec §10.10. When TorrentClient isn't wired (defensive), fall
+        // through to the unguarded Remove path (preserves prior behavior).
+        if (m_torrentClient
+            && m_torrentClient->hasActiveStreamBulkGroupsForImdb(m_currentImdb)) {
+            QMessageBox box(this);
+            box.setWindowTitle(tr("Cancel active bulk download?"));
+            box.setText(tr("This show has an active bulk download in progress.\n"
+                           "Cancel the download first, then Remove from Library?"));
+            QPushButton* doIt = box.addButton(tr("Cancel download + Remove"),
+                                              QMessageBox::DestructiveRole);
+            QPushButton* abort = box.addButton(tr("Keep downloading"),
+                                                QMessageBox::RejectRole);
+            box.setDefaultButton(abort);
+            box.exec();
+            if (box.clickedButton() != doIt)
+                return;  // user kept downloading; no Remove
+
+            // Cancel all active bulk groups for this imdb. Atomic-ish: we
+            // iterate the snapshot of group IDs taken just before the
+            // dialog fired; any group that completes between dialog-open
+            // and click is no longer "contains"-d in m_streamBulkGroups
+            // and cancelStreamBulkGroup short-circuits.
+            const QStringList ids =
+                m_torrentClient->streamBulkGroupIdsForImdb(m_currentImdb);
+            for (const QString& gid : ids)
+                m_torrentClient->cancelStreamBulkGroup(gid);
+        }
+
         m_library->remove(m_currentImdb);
     } else if (m_lastPreviewHint.has_value()) {
         // showEntry always stashes a preview — either the hint from the
