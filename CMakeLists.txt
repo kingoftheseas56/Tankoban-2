@@ -139,6 +139,8 @@ set(SOURCES
     src/core/torrent/TorrentClient.cpp
     src/ui/dialogs/AddTorrentDialog.cpp
     src/ui/dialogs/AddFromUrlDialog.cpp
+    src/ui/dialogs/StreamBulkPreflightDialog.cpp
+    src/ui/dialogs/StreamRescueProgressDialog.cpp
     src/ui/dialogs/SpeedLimitDialog.cpp
     src/ui/dialogs/SeedingRulesDialog.cpp
     src/ui/dialogs/QueueLimitsDialog.cpp
@@ -171,7 +173,11 @@ set(SOURCES
     src/core/stream/addon/AddonRegistry.cpp
     src/core/stream/CatalogAggregator.cpp
     src/core/stream/StreamAggregator.cpp
+    src/core/stream/BulkSourceCollector.cpp
+    src/core/stream/BulkPackVerifier.cpp
     src/core/stream/SubtitlesAggregator.cpp
+    src/core/stream/StreamDownloadIndex.cpp
+    src/core/stream/StreamRescueScanner.cpp
     src/core/stream/CalendarEngine.cpp
     src/core/stream/StreamBulkPlan.cpp
     src/ui/pages/StreamPage.cpp
@@ -274,6 +280,8 @@ set(HEADERS
     src/core/torrent/TorrentClient.h
     src/ui/dialogs/AddTorrentDialog.h
     src/ui/dialogs/AddFromUrlDialog.h
+    src/ui/dialogs/StreamBulkPreflightDialog.h
+    src/ui/dialogs/StreamRescueProgressDialog.h
     src/ui/dialogs/SpeedLimitDialog.h
     src/ui/dialogs/SeedingRulesDialog.h
     src/ui/dialogs/QueueLimitsDialog.h
@@ -318,7 +326,11 @@ set(HEADERS
     src/core/stream/addon/AddonRegistry.h
     src/core/stream/CatalogAggregator.h
     src/core/stream/StreamAggregator.h
+    src/core/stream/BulkSourceCollector.h
+    src/core/stream/BulkPackVerifier.h
     src/core/stream/SubtitlesAggregator.h
+    src/core/stream/StreamDownloadIndex.h
+    src/core/stream/StreamRescueScanner.h
     src/core/stream/CalendarEngine.h
     src/core/stream/StreamBulkPlan.h
     src/ui/pages/StreamPage.h
