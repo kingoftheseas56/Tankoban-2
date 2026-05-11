@@ -914,6 +914,17 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         const QString& state = it->first;
         const int pct = it->second;
 
+        // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-10 — only paint the three
+        // active in-flight states. Terminal states (Published, Failed,
+        // MissingSource, MetadataFailed, PublishFailed, Cancelled, Orphaned)
+        // intentionally fall through and leave the existing watched-checkmark
+        // text untouched. Reasoning: m_streamBulkGroups never garbage-
+        // collects historical bulk-dispatch records, so a prior Cancelled-
+        // by-user group (e.g. Daredevil S01 from earlier today) would
+        // otherwise pollute this column with stale "Failed" labels for
+        // episodes the user has long since moved past. Tankorent's group
+        // row is the canonical historical-failures surface; this column
+        // is for "what's downloading right now."
         if (state == QLatin1String("Pending")) {
             statusItem->setText(tr("Queued"));
             anyActive = true;
@@ -925,15 +936,6 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         } else if (state == QLatin1String("Publishing")) {
             statusItem->setText(tr("Done"));
             anyActive = true;
-        } else if (state == QLatin1String("Published")) {
-            statusItem->setText(QStringLiteral("✓"));
-        } else if (state == QLatin1String("Failed") ||
-                   state == QLatin1String("MissingSource") ||
-                   state == QLatin1String("MetadataFailed") ||
-                   state == QLatin1String("PublishFailed") ||
-                   state == QLatin1String("Cancelled") ||
-                   state == QLatin1String("Orphaned")) {
-            statusItem->setText(tr("Failed"));
         }
     }
 

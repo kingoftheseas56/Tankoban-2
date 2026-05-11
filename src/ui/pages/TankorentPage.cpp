@@ -1603,7 +1603,19 @@ void TankorentPage::refreshTransfers()
         bool shouldShowInactiveGroup = false;
         for (const auto& value : items) {
             const QString state = value.toObject().value(QStringLiteral("itemState")).toString();
-            if (state == QLatin1String("Orphaned") || isFailedStreamBulkItemState(state)) {
+            // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-10 — Cancelled added.
+            // Without it, all-Cancelled groups (user removed underlying
+            // torrents from Tankorent → onTorrentRemoved marks items
+            // Cancelled with lastError "Torrent removed from Tankorent")
+            // had no UI surface — group hidden, no right-click menu,
+            // no way to clear the JSON record. Hemanth flagged 2026-05-10
+            // ("why can't I remove a batch?"). Now an all-Cancelled group
+            // renders as an inactive row so the user can right-click →
+            // "Cancel group..." which the cancelStreamBulkGroup hotfix
+            // (TorrentClient.cpp) now removes from the store.
+            if (state == QLatin1String("Orphaned") ||
+                state == QLatin1String("Cancelled") ||
+                isFailedStreamBulkItemState(state)) {
                 shouldShowInactiveGroup = true;
                 break;
             }
@@ -1892,7 +1904,39 @@ void TankorentPage::refreshTransfers()
         // alignment so group rows visually align with the regular torrent
         // rows below. Status stays default-left like flat rows; Seeds/Peers
         // center; DL/UL right-align; ETA/Category/Queue/Info center.
-        ensureItem(row, 3)->setText(statusText);
+        // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — group-parent row's
+        // Status cell now carries a state icon matching the flat-row
+        // pattern at lines 1727-1741. Without the icon, the parent
+        // status text rendered visually shifted relative to the child
+        // rows' icon+text combo. Aggregate state picks the icon in the
+        // same priority order as the textual statusText resolution
+        // above so icon and text always agree:
+        // - allOrphaned → error icon
+        // - failedCount > 0 + allTerminal → error icon
+        // - any active child downloading → download icon
+        // - any stalled → stalled icon
+        // - any active child paused → pause icon
+        // - allTerminal + all published → check icon
+        // - else → waiting icon
+        auto* parentStatusItem = ensureItem(row, 3);
+        QString parentStatusIcon;
+        if (allOrphaned) {
+            parentStatusIcon = QStringLiteral(":/icons/error.svg");
+        } else if (failedCount > 0 && allTerminal) {
+            parentStatusIcon = QStringLiteral(":/icons/error.svg");
+        } else if (anyDownloading) {
+            parentStatusIcon = QStringLiteral(":/icons/download.svg");
+        } else if (anyStalled) {
+            parentStatusIcon = QStringLiteral(":/icons/stalled.svg");
+        } else if (anyActiveChild && anyPaused) {
+            parentStatusIcon = QStringLiteral(":/icons/pause.svg");
+        } else if (allTerminal && publishedCount == totalItems) {
+            parentStatusIcon = QStringLiteral(":/icons/check.svg");
+        } else {
+            parentStatusIcon = QStringLiteral(":/icons/waiting.svg");
+        }
+        parentStatusItem->setIcon(QIcon(parentStatusIcon));
+        parentStatusItem->setText(statusText);
         auto* seedsItem = ensureItem(row, 4);
         seedsItem->setText(QString::number(groupSeeds));
         seedsItem->setTextAlignment(Qt::AlignCenter);
@@ -1909,9 +1953,12 @@ void TankorentPage::refreshTransfers()
         etaItem->setText(anyActiveChild && allActiveDownloading && maxEtaSecs > 0
                           ? etaTextFromSeconds(maxEtaSecs) : QStringLiteral("-"));
         etaItem->setTextAlignment(Qt::AlignCenter);
+        // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — drop AlignCenter
+        // override to match flat-row default alignment (AlignLeft |
+        // AlignVCenter, applied implicitly by Qt). Flat-row Category
+        // column at TankorentPage.cpp:1774 uses no setTextAlignment.
         auto* catItem = ensureItem(row, 9);
         catItem->setText(QStringLiteral("videos"));
-        catItem->setTextAlignment(Qt::AlignCenter);
         auto* queueItem = ensureItem(row, 10);
         queueItem->setText(QStringLiteral("-"));
         queueItem->setTextAlignment(Qt::AlignCenter);
@@ -2206,9 +2253,9 @@ void TankorentPage::showGroupContextMenu(const QPoint& pos, const QString& group
     }
 
     const QString label = group.value(QStringLiteral("label")).toString(groupId);
-    const bool allOrphaned = !items.isEmpty() && orphanCount == items.size();
     QMenu* menu = ContextMenuHelper::createMenu(this);
 
+    // ── Active operations ──────────────────────────────────────────────
     auto* pauseAction = menu->addAction(QStringLiteral("Pause group"), this, [this, downloadingHashes]() {
         for (const QString& hash : downloadingHashes)
             m_client->pauseTorrent(hash);
@@ -2221,48 +2268,20 @@ void TankorentPage::showGroupContextMenu(const QPoint& pos, const QString& group
     });
     resumeAction->setEnabled(!pausedHashes.isEmpty());
 
-    auto* cancelAction = ContextMenuHelper::addDangerAction(menu, QStringLiteral("Cancel group..."));
-    connect(cancelAction, &QAction::triggered, this, [this, groupId, label, items, publishedCount]() {
-        const bool allPublished = !items.isEmpty() && publishedCount == items.size();
-        QMessageBox box(this);
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(QStringLiteral("Cancel stream download"));
-        box.setText(allPublished
-            ? QStringLiteral("Remove \"%1\" from Tankorent? Published files stay in your library.").arg(label)
-            : QStringLiteral("Cancel \"%1\" and clean up partial stream files?").arg(label));
-        auto* destructive = box.addButton(allPublished
-            ? QStringLiteral("Remove from list")
-            : QStringLiteral("Cancel and clean partials"), QMessageBox::DestructiveRole);
-        box.addButton(QMessageBox::Cancel);
-        box.exec();
-        if (box.clickedButton() != destructive)
-            return;
-        m_client->cancelStreamBulkGroup(groupId);
-        m_expandedGroupIds.remove(groupId);
-        saveExpandedStreamBulkGroups();
-        refreshTransfers();
-    });
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — Restart group is always
+    // available. Clears libtorrent error state on stuck items + resets
+    // non-Published items to Pending + re-engages the cohort scheduler.
+    // Published items are intentionally untouched.
+    menu->addAction(QStringLiteral("Restart group"),
+        this, [this, groupId]() {
+            m_client->restartStreamBulkGroup(groupId);
+            refreshTransfers();
+        });
 
     menu->addSeparator();
 
-    if (allOrphaned) {
-        menu->addAction(QStringLiteral("Remove orphan group"), this, [this, groupId]() {
-            m_client->cancelStreamBulkGroup(groupId);
-            m_expandedGroupIds.remove(groupId);
-            saveExpandedStreamBulkGroups();
-            refreshTransfers();
-        });
-        menu->addSeparator();
-    }
-
-    if (failedCount > 0) {
-        menu->addAction(QStringLiteral("Retry failed"), this, [this, groupId]() {
-            m_client->retryStreamBulkGroupFailedItems(groupId);
-            refreshTransfers();
-        });
-        menu->addSeparator();
-    }
-
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — show-in-folder +
+    // expand/collapse stay above the danger zone for muscle-memory.
     auto* showFolder = menu->addAction(QStringLiteral("Show in folder"), this, [this, group]() {
         QString folder;
         const QJsonArray groupItems = group.value(QStringLiteral("items")).toArray();
@@ -2289,7 +2308,45 @@ void TankorentPage::showGroupContextMenu(const QPoint& pos, const QString& group
         refreshTransfers();
     });
 
+    if (failedCount > 0) {
+        menu->addSeparator();
+        menu->addAction(QStringLiteral("Retry failed"), this, [this, groupId]() {
+            m_client->retryStreamBulkGroupFailedItems(groupId);
+            refreshTransfers();
+        });
+    }
+
+    menu->addSeparator();
+
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — danger zone mirrors the
+    // flat-row pattern at lines 2163-2174 (Remove / Remove + Delete Files).
+    // The bulk equivalents route through cancelStreamBulkGroup with an
+    // explicit deleteFiles flag instead of the prior auto-heuristic +
+    // confirmation-dialog branching at the old line 2237.
+    const int totalItems = items.size();
+    auto* removeAction = ContextMenuHelper::addDangerAction(menu, QStringLiteral("Remove"));
+    connect(removeAction, &QAction::triggered, this, [this, groupId]() {
+        m_client->cancelStreamBulkGroup(groupId, /*deleteFiles=*/false);
+        m_expandedGroupIds.remove(groupId);
+        saveExpandedStreamBulkGroups();
+        refreshTransfers();
+    });
+
+    auto* removeWithFiles = ContextMenuHelper::addDangerAction(menu, QStringLiteral("Remove + Delete Files"));
+    connect(removeWithFiles, &QAction::triggered, this, [this, groupId, totalItems]() {
+        if (ContextMenuHelper::confirmRemove(this, QStringLiteral("Delete Files"),
+                QStringLiteral("Remove stream bulk group (%1 item(s)) and delete all downloaded files?").arg(totalItems))) {
+            m_client->cancelStreamBulkGroup(groupId, /*deleteFiles=*/true);
+            m_expandedGroupIds.remove(groupId);
+            saveExpandedStreamBulkGroups();
+            refreshTransfers();
+        }
+    });
+
+    Q_UNUSED(label);
+    Q_UNUSED(publishedCount);
     Q_UNUSED(terminalCount);
+    Q_UNUSED(orphanCount);
     menu->exec(m_transfersTable->viewport()->mapToGlobal(pos));
     delete menu;
 }

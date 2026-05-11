@@ -603,6 +603,39 @@ void TorrentClient::reconcileStreamBulkGroups()
     if (changed)
         saveStreamBulkGroups();
 
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — repair stuck libtorrent
+    // handles. Pre-fix Phase 2 dispatch (the V2 Phase 2 commit) left bulk
+    // items in upload_mode at resolve_tmp/ because startDownload skipped
+    // startTorrent when startPaused=true. Items showed correct cohort
+    // states in our JSON (1 Downloading + N Pending) but ALL ran
+    // concurrently in libtorrent at the wrong save path with upload_mode
+    // set, so peer discovery was crippled. This one-shot pass calls
+    // startTorrent for every non-terminal bulk item (idempotent: moves
+    // from resolve_tmp → staging if not already there, clears
+    // upload_mode, sets auto_managed) and immediately re-pauses any
+    // item the cohort scheduler had recorded as Pending so the slot
+    // semantics hold. Fixes Hemanth's "not connecting to any peers"
+    // report 2026-05-11.
+    for (auto groupIt = m_streamBulkGroups.constBegin();
+         groupIt != m_streamBulkGroups.constEnd(); ++groupIt) {
+        const QJsonObject group = groupIt.value().toObject();
+        const QString stagingPath = group.value("stagingPath").toString();
+        if (stagingPath.isEmpty()) continue;
+        const QJsonArray groupItems = group.value("items").toArray();
+        for (const auto& v : groupItems) {
+            const QJsonObject item = v.toObject();
+            const QString infoHash = item.value("infoHash").toString();
+            if (infoHash.isEmpty()) continue;
+            const QString state = item.value("itemState").toString();
+            if (isTerminalStreamBulkState(state)) continue;
+            // startTorrent is idempotent — only moves storage if the
+            // current save path differs, always unsets upload_mode.
+            m_engine->startTorrent(infoHash, stagingPath);
+            if (state == QLatin1String(kStatePending))
+                m_engine->pauseTorrent(infoHash);
+        }
+    }
+
     // STREAM_BULK_DOWNLOAD_V2 Phase 2 — restart-time cohort recovery.
     // After the existing reconcile pass classifies each item against
     // libtorrent ground truth, walk every group and ensure the cohort
@@ -704,7 +737,22 @@ void TorrentClient::dispatchStreamBulkGroup(
         config.destinationPath = stagingPath;
         config.contentLayout = QStringLiteral("original");
         config.streamGroupId = group.groupId;
-        config.sequential = true;
+        // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — sequential=false for
+        // bulk dispatch. Hemanth flagged crawl-speeds on Daredevil S02 pack
+        // (4 KB/s with 1 peer / 0 seeds). The prior sequential=true was a
+        // streaming-mode artifact carried over from initial Phase 5 dispatch
+        // authoring: it forces strict piece-order which starves peer-piece
+        // matching in low-seed swarms (the one available peer rarely has
+        // the next-in-order piece). V2 bulk semantic is "download to library,
+        // then play" — the user opens completed files from the Stream
+        // library AFTER download finishes, NOT while in flight. Rarest-first
+        // (libtorrent default, sequential=false) matches what manual Tankorent
+        // adds (TankorentPage.cpp:2342) and TankoLibraryPage book downloads
+        // (TankoLibraryPage.cpp:1555) already use. Note: this removes the
+        // artificial throttle but doesn't change the swarm reality — a pack
+        // with 0 seeds will still be slow because the bandwidth literally
+        // isn't there.
+        config.sequential = false;
         config.startPaused = false;
         return config;
     };
@@ -886,6 +934,17 @@ TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season
 
 void TorrentClient::cancelStreamBulkGroup(const QString& groupId)
 {
+    cancelStreamBulkGroup(groupId, /*deleteFilesOverride=*/std::nullopt);
+}
+
+void TorrentClient::cancelStreamBulkGroup(const QString& groupId, bool deleteFiles)
+{
+    cancelStreamBulkGroup(groupId, std::optional<bool>(deleteFiles));
+}
+
+void TorrentClient::cancelStreamBulkGroup(const QString& groupId,
+                                          std::optional<bool> deleteFilesOverride)
+{
     if (groupId.isEmpty() || !m_streamBulkGroups.contains(groupId))
         return;
 
@@ -910,11 +969,43 @@ void TorrentClient::cancelStreamBulkGroup(const QString& groupId)
             hasPublishing = true;
             deleteFilesByHash.insert(infoHash, false);
         } else if (!deleteFilesByHash.contains(infoHash)) {
-            deleteFilesByHash.insert(infoHash, !allPublished);
+            deleteFilesByHash.insert(
+                infoHash,
+                deleteFilesOverride.has_value()
+                    ? *deleteFilesOverride
+                    : !allPublished);
         }
     }
 
     if (allOrphaned) {
+        m_streamBulkGroups.remove(groupId);
+        saveStreamBulkGroups();
+        return;
+    }
+
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-10 — extend the "remove stuck
+    // group" shortcut to all-failure-or-cancelled groups (no live torrent
+    // state to clean up, no published items to preserve). Without this,
+    // a user-cancelled-from-Tankorent group whose items all went to
+    // Cancelled state was permanently stuck in m_streamBulkGroups: line
+    // 932 below skips already-terminal items, so the function would no-op
+    // out without removing the group. Hemanth flagged 2026-05-10.
+    bool allTerminalNoSuccess = !items.isEmpty();
+    for (const auto& value : items) {
+        const QString state = value.toObject().value("itemState").toString();
+        const bool isCleanupState =
+            state == QLatin1String(kStateOrphaned) ||
+            state == QLatin1String(kStateCancelled) ||
+            state == QLatin1String(kStateFailed) ||
+            state == QLatin1String(kStateMissingSource) ||
+            state == QLatin1String(kStateMetadataFailed) ||
+            state == QLatin1String(kStatePublishFailed);
+        if (!isCleanupState) {
+            allTerminalNoSuccess = false;
+            break;
+        }
+    }
+    if (allTerminalNoSuccess) {
         m_streamBulkGroups.remove(groupId);
         saveStreamBulkGroups();
         return;
@@ -1062,6 +1153,65 @@ void TorrentClient::retryStreamBulkGroupFailedItems(const QString& groupId)
         emit streamBulkRetrySourcePickRequested(groupId, sourceRetryItemKeys);
     else if (changed)
         maybeEmitStreamBulkGroupPublishComplete(groupId);
+}
+
+// STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — recovery action for the
+// Tankorent group menu's "Restart group" entry. Distinct from
+// retryStreamBulkGroupFailedItems (which only addresses items already in
+// Failed/MissingSource/MetadataFailed/PublishFailed states): this one
+// also clears libtorrent error state on stuck-but-not-yet-failed items
+// via forceRecheck, then resets every non-Published item to Pending so
+// cohortMaybeAdvance can re-pick the head. Published + Completed items
+// are intentionally untouched — they're terminal-success and restarting
+// would erase user-visible library state.
+void TorrentClient::restartStreamBulkGroup(const QString& groupId)
+{
+    if (groupId.isEmpty() || !m_streamBulkGroups.contains(groupId))
+        return;
+
+    QJsonObject group = m_streamBulkGroups.value(groupId).toObject();
+    QJsonArray items = group.value("items").toArray();
+
+    // Snapshot active states so we can detect libtorrent-error torrents.
+    QHash<QString, QString> activeStates;
+    for (const TorrentInfo& info : listActive())
+        activeStates.insert(info.infoHash.toLower(), info.stateString);
+
+    bool changed = false;
+    for (int i = 0; i < items.size(); ++i) {
+        QJsonObject item = items.at(i).toObject();
+        const QString state = item.value("itemState").toString();
+        // Leave Published + Completed alone — they're terminal-success.
+        if (state == QLatin1String(kStatePublished) ||
+            state == QLatin1String(kStateCompleted))
+            continue;
+
+        const QString infoHash = item.value("infoHash").toString();
+        if (!infoHash.isEmpty()) {
+            const QString live = activeStates.value(infoHash.toLower());
+            if (live == QLatin1String("error"))
+                forceRecheck(infoHash);  // public wrapper — emits torrentUpdated for UI/persistence listeners
+        }
+
+        if (state != QLatin1String(kStatePending)) {
+            item["itemState"] = QString::fromLatin1(kStatePending);
+            item["lastError"] = QString();
+            items.replace(i, item);
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        group["items"] = items;
+        group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
+        m_streamBulkGroups[groupId] = group;
+        saveStreamBulkGroups();
+    }
+
+    // Re-engage the cohort scheduler. After the reset above, every
+    // non-Published item is Pending — cohortMaybeAdvance picks the
+    // first eligible and resumes it.
+    cohortMaybeAdvance(groupId);
 }
 
 void TorrentClient::markStreamBulkItemsForTorrent(const QString& infoHash,
@@ -1483,9 +1633,21 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     m_records[infoHash]    = rec;
     saveRecords();
 
-    // Start or keep paused
-    if (!config.startPaused)
-        m_engine->startTorrent(infoHash, config.destinationPath);
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — always call startTorrent
+    // regardless of startPaused, then pause immediately if requested. The
+    // prior `if (!startPaused) startTorrent` shape skipped the storage-move
+    // and upload_mode-clear when startPaused=true, leaving the torrent
+    // stuck at resolve_tmp/ in upload_mode (libtorrent state that does not
+    // meaningfully download). Per-episode bulk dispatch (cohort scheduler's
+    // Pending items) hit this trap: items were paused-at-our-layer but
+    // actively-running-in-libtorrent at the wrong save path with
+    // upload_mode set. Symptoms: barely any peers, sub-KB/s download
+    // speeds, ETA in the thousands of hours. startTorrent does the right
+    // setup (move from resolve_tmp → destination + unset upload_mode +
+    // resume); pauseTorrent then immediately suspends in the correct state.
+    m_engine->startTorrent(infoHash, config.destinationPath);
+    if (config.startPaused)
+        m_engine->pauseTorrent(infoHash);
 
     emit torrentAdded(infoHash);
 }
