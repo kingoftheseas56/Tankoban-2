@@ -202,20 +202,20 @@ bool AudioDecoder::rebuild_for_new_default(int sample_rate, int out_channels,
                                            double& actual_latency,
                                            PaStream** pa_stream_owned_inout,
                                            double elapsed_ms) {
-    // Resolve current WASAPI default. Mirrors the lazy-open path above.
+    // Resolve the live Windows default endpoint, then map it to PortAudio by
+    // IMMDevice endpoint ID. Do not use PaHostApiInfo::defaultOutputDevice here:
+    // PortAudio snapshots that value at Pa_Initialize and it stays stale after
+    // Windows hot-reroutes the default device.
     PaDeviceIndex dev_idx = paNoDevice;
-    PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
-    if (wasapi_idx >= 0) {
-        const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
-        if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
-            dev_idx = wasapi_info->defaultOutputDevice;
-        }
-    }
-    if (dev_idx == paNoDevice) dev_idx = Pa_GetDefaultOutputDevice();
-    if (dev_idx == paNoDevice) {
+    std::string resolved_name;
+    std::string endpoint_id;
+    std::string resolve_reason;
+    if (!audio_device_watcher::resolve_current_wasapi_default_device_index(
+            &dev_idx, &resolved_name, &endpoint_id, &resolve_reason)) {
         std::fprintf(stderr,
-                     "AudioDecoder: rebuild — no default output device after reroute\n");
-        return false;
+                     "AVSYNC_DIAG audio_reroute_failed +%.0fms reason='%s'\n",
+                     elapsed_ms, resolve_reason.c_str());
+        return true;
     }
 
     PaStreamParameters out_params{};
@@ -230,16 +230,20 @@ bool AudioDecoder::rebuild_for_new_default(int sample_rate, int out_channels,
                                    sample_rate, PA_BLOCK_SIZE,
                                    paClipOff, nullptr, nullptr);
     if (pa_err != paNoError) {
-        std::fprintf(stderr, "AudioDecoder: rebuild Pa_OpenStream failed: %s\n",
-                     Pa_GetErrorText(pa_err));
-        return false;
+        std::fprintf(stderr,
+                     "AVSYNC_DIAG audio_reroute_failed +%.0fms reason='Pa_OpenStream failed: %s' dev_idx=%d endpoint_id='%s' name='%s'\n",
+                     elapsed_ms, Pa_GetErrorText(pa_err), static_cast<int>(dev_idx),
+                     endpoint_id.c_str(), resolved_name.c_str());
+        return true;
     }
     pa_err = Pa_StartStream(new_stream);
     if (pa_err != paNoError) {
-        std::fprintf(stderr, "AudioDecoder: rebuild Pa_StartStream failed: %s\n",
-                     Pa_GetErrorText(pa_err));
+        std::fprintf(stderr,
+                     "AVSYNC_DIAG audio_reroute_failed +%.0fms reason='Pa_StartStream failed: %s' dev_idx=%d endpoint_id='%s' name='%s'\n",
+                     elapsed_ms, Pa_GetErrorText(pa_err), static_cast<int>(dev_idx),
+                     endpoint_id.c_str(), resolved_name.c_str());
         Pa_CloseStream(new_stream);
-        return false;
+        return true;
     }
 
     const PaStreamInfo* si = Pa_GetStreamInfo(new_stream);
@@ -268,11 +272,10 @@ bool AudioDecoder::rebuild_for_new_default(int sample_rate, int out_channels,
     actual_latency = new_latency;
     if (clock_) clock_->set_output_latency(new_latency);
 
-    const PaDeviceInfo* dev_info = Pa_GetDeviceInfo(dev_idx);
     std::fprintf(stderr,
-                 "AVSYNC_DIAG audio_reroute_complete +%.0fms dev_idx=%d latency=%.3fs name='%s'\n",
+                 "AVSYNC_DIAG audio_reroute_complete +%.0fms dev_idx=%d latency=%.3fs name='%s' endpoint_id='%s' match='%s'\n",
                  elapsed_ms, static_cast<int>(dev_idx), new_latency,
-                 dev_info && dev_info->name ? dev_info->name : "");
+                 resolved_name.c_str(), endpoint_id.c_str(), resolve_reason.c_str());
     return true;
 }
 
@@ -485,32 +488,35 @@ void AudioDecoder::audio_thread_func(
     // --- Set up resampler: any input format → float32 interleaved stereo ---
     SwrContext* swr = nullptr;
     AVChannelLayout out_layout = AV_CHANNEL_LAYOUT_STEREO;
-    ret = swr_alloc_set_opts2(
-        &swr,
-        &out_layout,                                    // out layout
-        AV_SAMPLE_FMT_FLT,                             // out format (float32 interleaved)
-        sample_rate,                                    // out sample rate (48k if prewarmed)
-        &codec_ctx->ch_layout,                          // in layout
-        codec_ctx->sample_fmt,                          // in format
-        in_sample_rate,                                 // in sample rate (file's native)
-        0, nullptr
-    );
-    if (ret < 0 || !swr) {
-        std::fprintf(stderr, "AudioDecoder: swr_alloc_set_opts2 failed\n");
+    auto init_resampler = [&](int out_rate) -> bool {
+        swr_free(&swr);
+        ret = swr_alloc_set_opts2(
+            &swr,
+            &out_layout,                                    // out layout
+            AV_SAMPLE_FMT_FLT,                             // out format (float32 interleaved)
+            out_rate,                                       // out sample rate
+            &codec_ctx->ch_layout,                          // in layout
+            codec_ctx->sample_fmt,                          // in format
+            in_sample_rate,                                 // in sample rate (file's native)
+            0, nullptr
+        );
+        if (ret < 0 || !swr) {
+            std::fprintf(stderr, "AudioDecoder: swr_alloc_set_opts2 failed\n");
+            return false;
+        }
+        ret = swr_init(swr);
+        if (ret < 0) {
+            std::fprintf(stderr, "AudioDecoder: swr_init failed\n");
+            swr_free(&swr);
+            return false;
+        }
+        return true;
+    };
+    if (!init_resampler(sample_rate)) {
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
         cleanup_http_io();
         on_event_("error", "AUDIO_DECODE_INIT_FAILED:resampler init failed");
-        running_.store(false);
-        return;
-    }
-    ret = swr_init(swr);
-    if (ret < 0) {
-        swr_free(&swr);
-        avcodec_free_context(&codec_ctx);
-        avformat_close_input(&fmt_ctx);
-        cleanup_http_io();
-        on_event_("error", "AUDIO_DECODE_INIT_FAILED:swr_init failed");
         running_.store(false);
         return;
     }
@@ -565,11 +571,22 @@ void AudioDecoder::audio_thread_func(
         // failed in main.cpp, which is rare; keeping symmetry prevents a
         // silent MME-trap if prewarming ever fails.
         PaDeviceIndex dev_idx = paNoDevice;
+        // Regression guard: initial lazy-open is on the player startup path.
+        // Keep it on PortAudio's cached WASAPI default; on some Bluetooth
+        // endpoints, doing the IMMDevice-to-PortAudio live match immediately
+        // before Pa_OpenStream can hold audio startup long enough that video
+        // waits for a clock and trips the reconnect watchdog. The live resolver
+        // is still used for reroute rebuilds, which is the bug this fix targets.
         PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
         if (wasapi_idx >= 0) {
             const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
             if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
                 dev_idx = wasapi_info->defaultOutputDevice;
+                const PaDeviceInfo* info = Pa_GetDeviceInfo(dev_idx);
+                std::fprintf(stderr,
+                             "AVSYNC_DIAG audio_lazy_cached_default +%.0fms dev_idx=%d name='%s'\n",
+                             ms_since(), static_cast<int>(dev_idx),
+                             info && info->name ? info->name : "");
             }
         }
         if (dev_idx == paNoDevice) dev_idx = Pa_GetDefaultOutputDevice();
@@ -609,6 +626,40 @@ void AudioDecoder::audio_thread_func(
             nullptr,           // blocking write, no callback
             nullptr
         );
+        if (pa_err == paInvalidSampleRate) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(output_params.device);
+            const int fallback_rate =
+                info && info->defaultSampleRate > 1.0
+                    ? static_cast<int>(std::lround(info->defaultSampleRate))
+                    : 48000;
+            if (fallback_rate > 0 && fallback_rate != sample_rate) {
+                std::fprintf(stderr,
+                             "AVSYNC_DIAG audio_sample_rate_retry +%.0fms rejected_rate=%d retry_rate=%d dev_idx=%d name='%s'\n",
+                             ms_since(), sample_rate, fallback_rate,
+                             static_cast<int>(output_params.device),
+                             info && info->name ? info->name : "");
+                sample_rate = fallback_rate;
+                if (!init_resampler(sample_rate)) {
+                    avcodec_free_context(&codec_ctx);
+                    avformat_close_input(&fmt_ctx);
+                    cleanup_http_io();
+                    on_event_("error", "AUDIO_DECODE_INIT_FAILED:resampler retry init failed");
+                    running_.store(false);
+                    return;
+                }
+                pa_stream = nullptr;
+                pa_err = Pa_OpenStream(
+                    &pa_stream,
+                    nullptr,
+                    &output_params,
+                    sample_rate,
+                    PA_BLOCK_SIZE,
+                    paClipOff,
+                    nullptr,
+                    nullptr
+                );
+            }
+        }
         if (pa_err != paNoError) {
             std::fprintf(stderr, "AudioDecoder: Pa_OpenStream failed: %s\n", Pa_GetErrorText(pa_err));
             swr_free(&swr);

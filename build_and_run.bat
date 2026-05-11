@@ -90,6 +90,9 @@ set TANKOBAN_STREAM_TELEMETRY=1
 :: hypothesis for cold-session 0%-buffering + mid-file-seek-hang classes.
 :: Delete or flip to 0 after diagnosis concludes.
 set TANKOBAN_ALERT_TRACE=1
+:: AUDIO_HOT_DEVICE_REROUTE_FIX2 diagnostic: route sidecar stderr
+:: (audio_device_watcher + AVSYNC_DIAG reroute lines) to out\sidecar_debug_live.log.
+set TANKOBAN_SIDECAR_DEBUG=1
 :: Stremio libtorrent session_params port (Experiment 1 APPROVED 2026-04-23).
 :: Activates 10 streaming-optimized libtorrent settings in TorrentEngine.cpp
 :: (commit 59cf47b). Empirical: 65% stall reduction, 89.5% cold-open improvement,

@@ -36,6 +36,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
+
+#include <portaudio.h>
 
 namespace audio_device_watcher {
 
@@ -54,5 +57,20 @@ bool init();
 // Unregister + release in reverse order of init(). Idempotent. Safe
 // to call even if init() returned false.
 void shutdown();
+
+// Resolve Windows' live eRender/eMultimedia default endpoint to a PortAudio
+// WASAPI device index. This deliberately avoids PaHostApiInfo::
+// defaultOutputDevice, which PortAudio snapshots at Pa_Initialize time and
+// can be stale after a hot default-device reroute.
+//
+// On Windows this uses IMMDeviceEnumerator::GetDefaultAudioEndpoint +
+// IMMDevice::GetId, then matches against each PortAudio WASAPI device via
+// PaWasapi_GetIMMDevice. On non-Windows, or if no exact endpoint match is
+// available, returns false and fills out_reason when provided.
+bool resolve_current_wasapi_default_device_index(
+    PaDeviceIndex* out_device,
+    std::string* out_device_name = nullptr,
+    std::string* out_endpoint_id = nullptr,
+    std::string* out_reason = nullptr);
 
 } // namespace audio_device_watcher

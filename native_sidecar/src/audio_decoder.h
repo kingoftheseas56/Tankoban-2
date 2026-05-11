@@ -91,8 +91,10 @@ private:
     // Closes any decoder-owned previous stream (via *pa_stream_owned_inout);
     // never touches a prewarmed stream (main.cpp owns those). Audio thread
     // only — relies on stream_mutex_ to keep flush_queue/seek/stop coherent.
-    // Returns false on Pa_OpenStream / Pa_StartStream failure; caller
-    // emits AUDIO_DEVICE_LOST + bails to cleanup.
+    // If live endpoint resolution or new-stream open/start fails, emits an
+    // AVSYNC_DIAG audio_reroute_failed line and leaves the existing stream
+    // active so playback keeps using the stale device until Pa_WriteStream
+    // itself reports device loss.
     bool rebuild_for_new_default(int sample_rate, int out_channels,
                                  double& actual_latency,
                                  PaStream** pa_stream_owned_inout,

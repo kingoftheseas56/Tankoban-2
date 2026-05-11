@@ -988,14 +988,20 @@ static void open_worker(Command cmd) {
         }
         adec->start(path, start_sec, audio_idx);
 
-        // Wait up to 500ms for audio clock to anchor
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (g_clock.started() || !adec->running()) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (g_pa_stream) {
+            // Wait up to 500ms for a prewarmed audio stream to anchor.
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (g_clock.started() || !adec->running()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            std::fprintf(stderr, "AVSYNC_DIAG open_audio_wait_done +%.0fms clock_started=%d\n",
+                         open_ms(), g_clock.started() ? 1 : 0);
+        } else {
+            std::fprintf(stderr,
+                         "AVSYNC_DIAG open_audio_wait_skipped +%.0fms reason='no_prewarm'\n",
+                         open_ms());
         }
-        std::fprintf(stderr, "AVSYNC_DIAG open_audio_wait_done +%.0fms clock_started=%d\n",
-                     open_ms(), g_clock.started() ? 1 : 0);
     }
 
     // Store in globals
@@ -1837,23 +1843,57 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Pa_Initialize failed: %s\n", Pa_GetErrorText(pa_err));
         // Continue anyway — video-only mode will work
     } else {
+        // AUDIO_HOT_DEVICE_REROUTE_FIX2: register before prewarm. The prewarm
+        // Pa_OpenStream can take several seconds on Bluetooth devices;
+        // registering first gives validation a definitive watcher line and
+        // lets any default switch during that slow open advance the generation
+        // counter before the prewarm bind snapshot is captured below.
+        audio_device_watcher::init();
+
+        const bool startup_prewarm_enabled = false;
+        if (!startup_prewarm_enabled) {
+            g_pa_stream = nullptr;
+            g_pa_actual_latency = 0.0;
+            g_pa_prewarm_generation =
+                audio_device_watcher::g_audio_reroute_generation.load(
+                    std::memory_order_acquire);
+            std::fprintf(stderr,
+                         "Audio pre-warm: skipped before ready (lazy-open will bind on demand, gen=%u)\n",
+                         g_pa_prewarm_generation);
+        } else {
+
         // Path A — prefer WASAPI shared over PortAudio's default host API.
         // PortAudio's Pa_GetDefaultOutputDevice() returns the device of the
         // first-registered host API, which on Windows is MME (the 1991-era
         // legacy API + a compatibility shim layer). WASAPI shared matches
         // what mpv default + VLC default use. Falls through to the system
         // default if WASAPI isn't compiled into PortAudio or has no output
-        // devices registered (rare on modern Windows). Same logic mirrored
-        // in audio_decoder.cpp for the lazy-open fallback path.
+        // devices registered (rare on modern Windows). The live Windows
+        // resolver is preferred because PaHostApiInfo::defaultOutputDevice is
+        // cached at Pa_Initialize and can be stale after a default-device move.
         PaDeviceIndex dev = paNoDevice;
-        PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
-        if (wasapi_idx >= 0) {
-            const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
-            if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
-                dev = wasapi_info->defaultOutputDevice;
+        std::string resolved_name;
+        std::string endpoint_id;
+        std::string resolve_reason;
+        if (audio_device_watcher::resolve_current_wasapi_default_device_index(
+                &dev, &resolved_name, &endpoint_id, &resolve_reason)) {
+            std::fprintf(stderr,
+                         "AVSYNC_DIAG audio_prewarm_live_default dev_idx=%d name='%s' endpoint_id='%s' match='%s'\n",
+                         static_cast<int>(dev), resolved_name.c_str(),
+                         endpoint_id.c_str(), resolve_reason.c_str());
+        } else {
+            std::fprintf(stderr,
+                         "AVSYNC_DIAG audio_prewarm_live_default_failed reason='%s' fallback='portaudio_cached_default'\n",
+                         resolve_reason.c_str());
+            PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
+            if (wasapi_idx >= 0) {
+                const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
+                if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
+                    dev = wasapi_info->defaultOutputDevice;
+                }
             }
+            if (dev == paNoDevice) dev = Pa_GetDefaultOutputDevice();
         }
-        if (dev == paNoDevice) dev = Pa_GetDefaultOutputDevice();
         if (dev != paNoDevice) {
             const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
             std::fprintf(stderr, "PortAudio: default output device: %s (%.3fs latency)\n",
@@ -1908,18 +1948,9 @@ int main(int argc, char* argv[]) {
                              Pa_GetErrorText(oerr));
                 g_pa_stream = nullptr;
             }
-        } else {
-            std::fprintf(stderr, "PortAudio: no default output device\n");
+            }
         }
     }
-
-    // AUDIO_HOT_DEVICE_REROUTE (2026-05-10) — register IMMNotificationClient
-    // so the sidecar follows Windows default-output-device changes mid-playback
-    // (BT headphones connect, USB headset plug, HDMI sink switch). Failure is
-    // non-fatal — sidecar continues without device-reroute. Registered AFTER
-    // Pa_Initialize so the audio path is fully up by the time notifications
-    // can fire; unregistered BEFORE Pa_Terminate at shutdown.
-    audio_device_watcher::init();
 
     // Start non-blocking stdout writer (prevents pipe-buffer deadlocks)
     start_stdout_writer();
