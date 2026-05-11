@@ -8,6 +8,7 @@
 #include <QMap>
 #include <QSet>
 #include <QStringList>
+#include <optional>
 
 class CoreBridge;
 class TorrentEngine;
@@ -149,6 +150,14 @@ public:
         const StreamBulkGroupRecord& group,
         const tankostream::stream::BulkPackVerificationResult& verifierOutput);
     void cancelStreamBulkGroup(const QString& groupId);
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — explicit-deleteFiles
+    // overload for the Tankorent group menu's "Remove" vs "Remove +
+    // Delete Files" actions. When deleteFilesOverride.has_value(), it
+    // takes precedence over the existing allPublished heuristic — every
+    // non-Publishing/Published torrent in the group is removed with the
+    // chosen file-deletion flag. The single-arg overload preserves the
+    // legacy auto-heuristic for any non-menu callers.
+    void cancelStreamBulkGroup(const QString& groupId, bool deleteFiles);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — query whether any
     // active (non-terminal) bulk group references this imdbId. Used by
@@ -168,6 +177,15 @@ public:
     QHash<int, QPair<QString, int>>
         streamBulkSnapshotForImdbSeason(const QString& imdbId, int season) const;
     void retryStreamBulkGroupFailedItems(const QString& groupId);
+
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — restart-group recovery
+    // action. Clears libtorrent error state on non-terminal-success items
+    // via forceRecheck, resets non-Published items to Pending, then
+    // re-engages the cohort scheduler via cohortMaybeAdvance. Published
+    // items are left alone (terminal-success; restarting would erase
+    // user-visible library state). Used by the Tankorent group context
+    // menu "Restart group" action.
+    void restartStreamBulkGroup(const QString& groupId);
     bool updateStreamBulkGroupItemState(const QString& groupId,
                                         const QString& itemKey,
                                         StreamBulkItemState state,
@@ -245,6 +263,13 @@ private:
     // restart resilience.
     void cohortMaybeAdvance(const QString& groupId);
     void cohortMaybeAdvanceAll();
+
+    // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — private 3-arg form used
+    // by both public cancelStreamBulkGroup overloads. When the override
+    // has a value, it pins every torrent's deleteFiles to that bool;
+    // otherwise the legacy allPublished heuristic decides per-torrent.
+    void cancelStreamBulkGroup(const QString& groupId,
+                               std::optional<bool> deleteFilesOverride);
     void appendHistory(const TorrentInfo& info);
     void compactHistory();
     QString extractInfoHash(const QString& magnetUri) const;
