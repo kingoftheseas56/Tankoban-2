@@ -1,6 +1,7 @@
 // src/ui/pages/tankoyomi/MangaDetailView.cpp
 #include "MangaDetailView.h"
 
+#include <QDateTime>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -8,6 +9,7 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QVBoxLayout>
 #include <QHeaderView>
 
@@ -153,16 +155,121 @@ void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
     m_loadingLabel->show();
     m_errorLabel->hide();
 
+    if (m_scraper) {
+        // Disconnect any prior receivers in case show() called twice
+        disconnect(m_scraper, &MangaScraper::chaptersReady, this, nullptr);
+        disconnect(m_scraper, &MangaScraper::errorOccurred, this, nullptr);
+
+        connect(m_scraper, &MangaScraper::chaptersReady,
+                this, &MangaDetailView::onChaptersReady,
+                Qt::UniqueConnection);
+        connect(m_scraper, &MangaScraper::errorOccurred,
+                this, &MangaDetailView::onScraperError,
+                Qt::UniqueConnection);
+
+        m_scraper->fetchChapters(result.id);
+    }
+
     QWidget::show();
 }
 
+void MangaDetailView::setScraper(MangaScraper* s) { m_scraper = s; }
+
 // ---------------------------------------------------------------------
 // C.1 slot stubs -- empty bodies satisfy MOC qt_static_metacall linkage.
-// Real implementations land in C.2 (show), C.3 (onChaptersReady +
-// onScraperError + renderChapters), C.4 (onChapterUpdated).
+// C.3 fills in onChaptersReady + onScraperError + renderChapters +
+// onChapterIconClicked. C.4 will fill onChapterUpdated.
 // ---------------------------------------------------------------------
-void MangaDetailView::onChaptersReady(const QList<ChapterInfo>& /*chapters*/) {}
-void MangaDetailView::onScraperError(const QString& /*message*/) {}
+void MangaDetailView::onChaptersReady(const QList<ChapterInfo>& chapters)
+{
+    m_chapters = chapters;
+    m_loadingLabel->hide();
+    m_chapterTable->show();
+    renderChapters();
+
+    // Update chapter-count label with downloaded count (Phase A.7)
+    int downloaded = 0;
+    if (m_downloader) {
+        downloaded = m_downloader->countDownloadedForSeries(
+            m_result.title, m_result.source);
+    }
+    m_chapterCount->setText(tr("%1 chapters · %2 downloaded")
+        .arg(chapters.size()).arg(downloaded));
+}
+
+void MangaDetailView::onScraperError(const QString& message)
+{
+    m_loadingLabel->hide();
+    m_chapterTable->hide();
+    m_errorLabel->setText(tr("Could not load chapters: %1").arg(message));
+    m_errorLabel->show();
+}
+
 void MangaDetailView::onChapterUpdated(const QString& /*seriesId*/,
                                        const QString& /*chapterId*/) {}
+
+void MangaDetailView::renderChapters()
+{
+    m_chapterTable->setRowCount(m_chapters.size());
+    for (int i = 0; i < m_chapters.size(); ++i) {
+        const ChapterInfo& ch = m_chapters[i];
+
+        auto* numItem = new QTableWidgetItem(
+            QStringLiteral("Ch %1").arg(ch.chapterNumber, 0, 'f', 1));
+        m_chapterTable->setItem(i, 0, numItem);
+
+        auto* nameItem = new QTableWidgetItem(ch.name);
+        m_chapterTable->setItem(i, 1, nameItem);
+
+        const QString dateStr = ch.dateUpload > 0
+            ? QDateTime::fromMSecsSinceEpoch(ch.dateUpload).toString("yyyy-MM-dd")
+            : QString();
+        auto* dateItem = new QTableWidgetItem(dateStr);
+        m_chapterTable->setItem(i, 2, dateItem);
+
+        // Per-chapter download indicator
+        auto* indicator = new ChapterDownloadIndicator();
+        m_chapterTable->setCellWidget(i, 3, indicator);
+
+        // Initial state — C.4 will derive from m_downloader records;
+        // for C.3 default to NotDownloaded.
+        indicator->setState(ChapterDownloadIndicator::State::NotDownloaded);
+
+        connect(indicator, &ChapterDownloadIndicator::clicked, this,
+                [this, i]() { onChapterIconClicked(i); });
+    }
+    m_chapterTable->resizeColumnToContents(0);
+    m_chapterTable->resizeColumnToContents(2);
+    m_chapterTable->resizeColumnToContents(3);
+}
+
+void MangaDetailView::onChapterIconClicked(int row)
+{
+    if (row < 0 || row >= m_chapters.size()) return;
+    if (!m_downloader || !m_destProvider) return;
+
+    const ChapterInfo& ch = m_chapters[row];
+    auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
+        m_chapterTable->cellWidget(row, 3));
+    if (!indicator) return;
+
+    using State = ChapterDownloadIndicator::State;
+    switch (indicator->state()) {
+        case State::NotDownloaded:
+        case State::Errored:
+            // Enqueue (start fresh, or retry from errored)
+            m_downloader->startDownload(m_result.title, m_result.source,
+                                         {ch}, m_destProvider(),
+                                         QStringLiteral("cbz"));
+            break;
+        case State::Queued:
+        case State::Downloading:
+            // Cancel single chapter — D.2 / F.2 wire the per-chapter cancel.
+            // For C.3, no-op (the bar/menu handle cancellation paths).
+            break;
+        case State::Downloaded:
+            // F.2 wires the Delete confirm popover; for C.3, no-op.
+            break;
+    }
+}
 
