@@ -624,29 +624,37 @@ bool MangaDownloader::isPaused() const
 
 void MangaDownloader::pauseSeries(const QString& id)
 {
+    bool changed = false;
     {
         QMutexLocker lock(&m_mutex);
         auto it = m_records.find(id);
         if (it == m_records.end()) return;
         if (it->paused) return;
         it->paused = true;
-        saveRecords();
+        changed = true;
     }
-    emit downloadUpdated(id);
+    if (changed) {
+        saveRecords();
+        emit downloadUpdated(id);
+    }
 }
 
 void MangaDownloader::resumeSeries(const QString& id)
 {
+    bool changed = false;
     {
         QMutexLocker lock(&m_mutex);
         auto it = m_records.find(id);
         if (it == m_records.end()) return;
         if (!it->paused) return;
         it->paused = false;
-        saveRecords();
+        changed = true;
     }
-    emit downloadUpdated(id);
-    processQueue();  // re-engage in case this series was the only thing blocked
+    if (changed) {
+        saveRecords();
+        emit downloadUpdated(id);
+        processQueue();  // re-engage in case this series was the only thing blocked
+    }
 }
 
 bool MangaDownloader::isSeriesPaused(const QString& id) const
