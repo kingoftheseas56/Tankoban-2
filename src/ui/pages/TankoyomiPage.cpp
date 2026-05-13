@@ -536,7 +536,52 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     m_tabWidget->addTab(m_resultsInnerStack, "Search Results");
 
     m_transfersTable = createTransfersTable();
-    m_tabWidget->addTab(m_transfersTable, "Transfers");
+
+    // Mihon-overhaul E.4 — Transfers tab body: top status row above the
+    // existing table. A container widget is needed because addTab() takes a
+    // single widget; we host the status row + table in a QVBoxLayout.
+    auto* transfersTabBody = new QWidget;
+    transfersTabBody->setObjectName("TransfersTabBody");
+    auto* transfersTabLayout = new QVBoxLayout(transfersTabBody);
+    transfersTabLayout->setContentsMargins(0, 0, 0, 0);
+    transfersTabLayout->setSpacing(8);
+
+    // Mihon-overhaul E.4 — top status row above the transfers list/table
+    auto* statusCol = new QVBoxLayout();
+    m_transfersStatusLine = new QLabel(this);
+    m_transfersStatusLine->setObjectName("TransfersStatusLine");
+    statusCol->addWidget(m_transfersStatusLine);
+
+    auto* btnRow = new QHBoxLayout();
+    m_transfersPauseAll = new QPushButton(tr("Pause all"), this);
+    m_transfersPauseAll->setObjectName("TransfersPauseAll");
+    m_transfersResumeAll = new QPushButton(tr("Resume all"), this);
+    m_transfersResumeAll->setObjectName("TransfersResumeAll");
+    m_transfersCancelAll = new QPushButton(tr("Cancel all"), this);
+    m_transfersCancelAll->setObjectName("TransfersCancelAll");
+    btnRow->addWidget(m_transfersPauseAll);
+    btnRow->addWidget(m_transfersResumeAll);
+    btnRow->addWidget(m_transfersCancelAll);
+    btnRow->addStretch();
+    statusCol->addLayout(btnRow);
+
+    connect(m_transfersPauseAll, &QPushButton::clicked, this, [this]() {
+        if (m_downloader) m_downloader->pauseAll();
+    });
+    connect(m_transfersResumeAll, &QPushButton::clicked, this, [this]() {
+        if (m_downloader) m_downloader->resumeAll();
+    });
+    connect(m_transfersCancelAll, &QPushButton::clicked, this, [this]() {
+        const auto ans = QMessageBox::question(this, tr("Cancel all?"),
+            tr("Cancel all queued and downloading chapters across every series?"),
+            QMessageBox::Yes | QMessageBox::No);
+        if (ans == QMessageBox::Yes && m_downloader) m_downloader->cancelAll();
+    });
+
+    transfersTabLayout->addLayout(statusCol);
+    transfersTabLayout->addWidget(m_transfersTable, 1);
+
+    m_tabWidget->addTab(transfersTabBody, "Transfers");
 
     parent->addWidget(m_tabWidget, 1);
 }
@@ -1040,4 +1085,12 @@ void TankoyomiPage::refreshTransfers()
     m_pauseBtn->setVisible(hasPendingWork);
     m_pauseBtn->setText(m_downloader->isPaused() ? "Resume Downloads" : "Pause Downloads");
     m_moreBtn->setVisible(hasPendingWork);
+
+    // Mihon-overhaul E.4 — rolling top status line on the Transfers tab.
+    if (m_downloader && m_transfersStatusLine) {
+        const auto counts = m_downloader->countByState();
+        m_transfersStatusLine->setText(
+            tr("%1 downloading · %2 queued · %3 done today")
+                .arg(counts.downloading).arg(counts.queued).arg(counts.doneToday));
+    }
 }

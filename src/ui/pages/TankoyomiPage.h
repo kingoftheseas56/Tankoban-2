@@ -96,6 +96,12 @@ private:
     QTableWidget*   m_transfersTable = nullptr;
     QTimer*         m_transferTimer  = nullptr;
 
+    // Mihon-overhaul E.4 — Transfers tab top status line + global controls
+    QLabel*      m_transfersStatusLine = nullptr;
+    QPushButton* m_transfersPauseAll   = nullptr;
+    QPushButton* m_transfersResumeAll  = nullptr;
+    QPushButton* m_transfersCancelAll  = nullptr;
+
     // B4: state used by updateResultsView() to pick between data view and
     // empty-state page. m_preferredDataView tracks the user's toggle choice
     // so we restore it as soon as results arrive.
