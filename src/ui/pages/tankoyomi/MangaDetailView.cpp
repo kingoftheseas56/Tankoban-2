@@ -1,8 +1,10 @@
 // src/ui/pages/tankoyomi/MangaDetailView.cpp
 #include "MangaDetailView.h"
 
+#include <QFile>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
 #include <QToolButton>
 #include <QTableWidget>
@@ -119,6 +121,39 @@ void MangaDetailView::buildUI()
     m_errorLabel->setObjectName("MangaDetailError");
     m_errorLabel->hide();
     root->addWidget(m_errorLabel);
+}
+
+void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
+{
+    m_result = result;
+    m_chapters.clear();
+    m_selectedChapterIds.clear();
+    m_chapterTable->setRowCount(0);
+
+    m_titleLabel->setText(result.title);
+    m_authorLabel->setText(result.author.isEmpty() ? tr("—") : result.author);
+
+    const QString status = result.status.isEmpty() ? tr("Unknown") : result.status;
+    const QString srcLabel = mangaSourceDisplayName(result.source);
+    m_statusLabel->setText(QStringLiteral("%1 · %2").arg(status, srcLabel));
+
+    // Cover
+    if (!coverPath.isEmpty() && QFile::exists(coverPath)) {
+        m_coverLabel->setPixmap(QPixmap(coverPath));
+    } else {
+        m_coverLabel->setText(tr("(no cover)"));
+        m_coverLabel->setAlignment(Qt::AlignCenter);
+    }
+
+    // Chapter count placeholder until scraper returns; C.3 fills in
+    m_chapterCount->setText(tr("Loading chapters..."));
+
+    // Enter Loading state
+    m_chapterTable->hide();
+    m_loadingLabel->show();
+    m_errorLabel->hide();
+
+    QWidget::show();
 }
 
 // ---------------------------------------------------------------------
