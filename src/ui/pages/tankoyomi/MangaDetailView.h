@@ -40,6 +40,12 @@ signals:
     void deleteChaptersRequested(const QString& seriesTitle,
                                   const QString& source,
                                   const QList<QString>& chapterIds);
+    void openChapterFolderRequested(const QString& seriesTitle,
+                                     const QString& source,
+                                     const QString& chapterId);
+    void showChapterFileRequested(const QString& seriesTitle,
+                                   const QString& source,
+                                   const QString& chapterId);
 
 private slots:
     void onChaptersReady(const QList<ChapterInfo>& chapters);
@@ -48,6 +54,7 @@ private slots:
     void updateMultiSelectBar();
     void downloadNextN(int n);
     void openRangeDialog();
+    void showChapterContextMenu(const QPoint& pos);
 
 private:
     void buildUI();

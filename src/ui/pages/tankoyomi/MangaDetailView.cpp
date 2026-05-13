@@ -2,8 +2,10 @@
 #include "MangaDetailView.h"
 
 #include <QAction>
+#include <QClipboard>
 #include <QDateTime>
 #include <QFile>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
@@ -177,6 +179,8 @@ void MangaDetailView::buildUI()
     m_chapterTable->setContextMenuPolicy(Qt::CustomContextMenu);  // F.2 wires
     connect(m_chapterTable, &QTableWidget::itemSelectionChanged,
             this, &MangaDetailView::updateMultiSelectBar);
+    connect(m_chapterTable, &QTableWidget::customContextMenuRequested,
+            this, &MangaDetailView::showChapterContextMenu);
     root->addWidget(m_chapterTable, 1);
 
     // -- Loading + error labels (hidden by default) -------------------
@@ -534,5 +538,111 @@ void MangaDetailView::openRangeDialog()
     m_downloader->startDownload(m_result.title, m_result.source,
                                  picks, m_destProvider(),
                                  QStringLiteral("cbz"));
+}
+
+void MangaDetailView::showChapterContextMenu(const QPoint& pos)
+{
+    const int row = m_chapterTable->rowAt(pos.y());
+    if (row < 0 || row >= m_chapters.size()) return;
+    const ChapterInfo& ch = m_chapters[row];
+
+    auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
+        m_chapterTable->cellWidget(row, 3));
+    if (!indicator) return;
+    const ChapterDownloadIndicator::State state = indicator->state();
+
+    QMenu menu(this);
+    using S = ChapterDownloadIndicator::State;
+
+    switch (state) {
+        case S::NotDownloaded:
+            menu.addAction(tr("Start download"), this, [this, ch]() {
+                if (!m_downloader || !m_destProvider) return;
+                m_downloader->startDownload(m_result.title, m_result.source,
+                    {ch}, m_destProvider(), "cbz");
+            });
+            menu.addAction(tr("Add to top of queue"), this, [this, ch]() {
+                if (!m_downloader || !m_destProvider) return;
+                // Enqueue, then bump to front via startChapterNow
+                m_downloader->startDownload(m_result.title, m_result.source,
+                    {ch}, m_destProvider(), "cbz");
+                const auto records = m_downloader->listActive();
+                for (const auto& rec : records) {
+                    if (rec.seriesTitle == m_result.title &&
+                        rec.source == m_result.source) {
+                        m_downloader->startChapterNow(rec.id, ch.id);
+                        break;
+                    }
+                }
+            });
+            break;
+
+        case S::Queued:
+        case S::Downloading:
+            menu.addAction(tr("Start now (jump queue)"), this, [this, ch]() {
+                if (!m_downloader) return;
+                const auto records = m_downloader->listActive();
+                for (const auto& rec : records) {
+                    if (rec.seriesTitle == m_result.title &&
+                        rec.source == m_result.source) {
+                        m_downloader->startChapterNow(rec.id, ch.id);
+                        break;
+                    }
+                }
+            });
+            menu.addAction(tr("Cancel chapter"), this, [ch]() {
+                // PHASE 2 FOLLOW-UP MIHON_OVERHAUL_FU.1 — per-chapter cancel
+                // engine API not in v1. Stub logs intent.
+                qDebug() << "TODO MIHON_OVERHAUL_FU.1: cancel chapter" << ch.id;
+            });
+            break;
+
+        case S::Downloaded:
+            menu.addAction(tr("Open folder"), this, [this, ch]() {
+                emit openChapterFolderRequested(m_result.title, m_result.source, ch.id);
+            });
+            menu.addAction(tr("Show file in folder"), this, [this, ch]() {
+                emit showChapterFileRequested(m_result.title, m_result.source, ch.id);
+            });
+            menu.addSeparator();
+            menu.addAction(tr("Delete from disk"), this, [this, ch]() {
+                const auto ans = QMessageBox::question(this,
+                    tr("Delete chapter?"),
+                    tr("Delete chapter \"%1\" from disk?").arg(ch.name),
+                    QMessageBox::Yes | QMessageBox::No);
+                if (ans == QMessageBox::Yes) {
+                    emit deleteChaptersRequested(m_result.title, m_result.source,
+                                                   {ch.id});
+                }
+            });
+            break;
+
+        case S::Errored:
+            menu.addAction(tr("Retry download"), this, [this, ch]() {
+                if (!m_downloader) return;
+                const auto records = m_downloader->listActive();
+                for (const auto& rec : records) {
+                    if (rec.seriesTitle == m_result.title &&
+                        rec.source == m_result.source) {
+                        m_downloader->retryFailedChapters(rec.id);
+                        break;
+                    }
+                }
+            });
+            menu.addAction(tr("Cancel"), this, [ch]() {
+                qDebug() << "TODO MIHON_OVERHAUL_FU.1: cancel errored chapter" << ch.id;
+            });
+            break;
+    }
+
+    menu.addSeparator();
+    menu.addAction(tr("Copy chapter URL"), this, [ch]() {
+        QGuiApplication::clipboard()->setText(ch.url);
+    });
+    menu.addAction(tr("Copy chapter name"), this, [ch]() {
+        QGuiApplication::clipboard()->setText(ch.name);
+    });
+
+    menu.exec(m_chapterTable->viewport()->mapToGlobal(pos));
 }
 
