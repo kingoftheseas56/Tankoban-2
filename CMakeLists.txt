@@ -139,7 +139,6 @@ set(SOURCES
     src/core/torrent/TorrentClient.cpp
     src/ui/dialogs/AddTorrentDialog.cpp
     src/ui/dialogs/AddFromUrlDialog.cpp
-    src/ui/dialogs/StreamBulkPreflightDialog.cpp
     src/ui/dialogs/StreamRescueProgressDialog.cpp
     src/ui/dialogs/SpeedLimitDialog.cpp
     src/ui/dialogs/SeedingRulesDialog.cpp
@@ -157,6 +156,7 @@ set(SOURCES
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/tankoyomi/MangaResultsGrid.cpp
+    src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
@@ -280,7 +280,6 @@ set(HEADERS
     src/core/torrent/TorrentClient.h
     src/ui/dialogs/AddTorrentDialog.h
     src/ui/dialogs/AddFromUrlDialog.h
-    src/ui/dialogs/StreamBulkPreflightDialog.h
     src/ui/dialogs/StreamRescueProgressDialog.h
     src/ui/dialogs/SpeedLimitDialog.h
     src/ui/dialogs/SeedingRulesDialog.h
@@ -302,6 +301,7 @@ set(HEADERS
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/tankoyomi/MangaResultsGrid.h
+    src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
