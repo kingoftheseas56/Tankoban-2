@@ -110,12 +110,12 @@ private:
     QMap<QString, TransferGroupCard*> m_transfersCardsById;
     QTimer*         m_transferTimer  = nullptr;
 
-    // Mihon-overhaul E.4 — Transfers tab global controls
-    // (status line dropped 2026-05-13 per Hemanth smoke feedback —
-    // redundant with search-row Active|History counter + per-card labels)
-    QPushButton* m_transfersPauseAll   = nullptr;
-    QPushButton* m_transfersResumeAll  = nullptr;
-    QPushButton* m_transfersCancelAll  = nullptr;
+    // Mihon-overhaul E.4 — Transfers tab global Pause/Resume/Cancel-all
+    // button row dropped 2026-05-13 per Hemanth smoke feedback ("remove the
+    // play and pause between transfers"). Status line also dropped same day
+    // (redundant with search-row Active|History counter + per-card labels).
+    // Per-card buttons on TransferGroupCard cover the actionable surface.
+    // Engine API (MangaDownloader::pauseAll/resumeAll/cancelAll) preserved.
 
     // B4: state used by updateResultsView() to pick between data view and
     // empty-state page. m_preferredDataView tracks the user's toggle choice

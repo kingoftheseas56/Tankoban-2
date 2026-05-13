@@ -480,52 +480,14 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     transfersTabLayout->setContentsMargins(0, 0, 0, 0);
     transfersTabLayout->setSpacing(8);
 
-    // Mihon-overhaul E.4 — global Pause-all / Resume-all / Cancel-all
-    // controls. Status-line dropped 2026-05-13 per Hemanth smoke feedback
-    // ("the 0 downloaded 0 queded etc is very poorly placed and not
-    // necessary") — redundant with search-row Active|History counter +
-    // per-card "Completed · X of Y chapters" labels.
-    auto* btnRow = new QHBoxLayout();
-    m_transfersPauseAll = new QPushButton(this);
-    m_transfersPauseAll->setObjectName("TransfersPauseAll");
-    m_transfersPauseAll->setIcon(QIcon(QStringLiteral(":/icons/pause-circle.svg")));
-    m_transfersPauseAll->setIconSize(QSize(18, 18));
-    m_transfersPauseAll->setFlat(true);
-    m_transfersPauseAll->setToolTip(tr("Pause all"));
-
-    m_transfersResumeAll = new QPushButton(this);
-    m_transfersResumeAll->setObjectName("TransfersResumeAll");
-    m_transfersResumeAll->setIcon(QIcon(QStringLiteral(":/icons/play-circle.svg")));
-    m_transfersResumeAll->setIconSize(QSize(18, 18));
-    m_transfersResumeAll->setFlat(true);
-    m_transfersResumeAll->setToolTip(tr("Resume all"));
-
-    m_transfersCancelAll = new QPushButton(this);
-    m_transfersCancelAll->setObjectName("TransfersCancelAll");
-    m_transfersCancelAll->setIcon(QIcon(QStringLiteral(":/icons/close-x.svg")));
-    m_transfersCancelAll->setIconSize(QSize(18, 18));
-    m_transfersCancelAll->setFlat(true);
-    m_transfersCancelAll->setToolTip(tr("Cancel all"));
-
-    btnRow->addWidget(m_transfersPauseAll);
-    btnRow->addWidget(m_transfersResumeAll);
-    btnRow->addWidget(m_transfersCancelAll);
-    btnRow->addStretch();
-
-    connect(m_transfersPauseAll, &QPushButton::clicked, this, [this]() {
-        if (m_downloader) m_downloader->pauseAll();
-    });
-    connect(m_transfersResumeAll, &QPushButton::clicked, this, [this]() {
-        if (m_downloader) m_downloader->resumeAll();
-    });
-    connect(m_transfersCancelAll, &QPushButton::clicked, this, [this]() {
-        const auto ans = QMessageBox::question(this, tr("Cancel all?"),
-            tr("Cancel all queued and downloading chapters across every series?"),
-            QMessageBox::Yes | QMessageBox::No);
-        if (ans == QMessageBox::Yes && m_downloader) m_downloader->cancelAll();
-    });
-
-    transfersTabLayout->addLayout(btnRow);
+    // Mihon-overhaul E.4 — global Pause-all / Resume-all / Cancel-all icon
+    // row dropped 2026-05-13 per Hemanth smoke feedback ("remove the play
+    // and pause between transfers"). Per-card Pause/Cancel buttons on
+    // TransferGroupCard cover the actionable surface; the global row was
+    // visual clutter between the tab title and card list. Engine API
+    // (MangaDownloader::pauseAll/resumeAll/cancelAll) preserved — no UI
+    // consumer for now. Status line was already dropped same day.
+    //
     // Mihon-overhaul E.5 — flat QTableWidget replaced with vertical card list.
     transfersTabLayout->addWidget(createTransfersList(), 1);
 
