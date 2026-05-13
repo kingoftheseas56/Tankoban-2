@@ -415,7 +415,6 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                 if (it != m_records.end() && it->paused && chapterIdx < it->chapters.size()) {
                     auto& ch = it->chapters[chapterIdx];
                     ch.status = QStringLiteral("queued");
-                    ch.downloadedImages = 0;
                     --m_activeDownloads;
                     perSeriesPaused = true;
                 }
