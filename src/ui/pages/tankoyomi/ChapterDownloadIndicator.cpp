@@ -2,6 +2,7 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 
 ChapterDownloadIndicator::ChapterDownloadIndicator(QWidget* parent)
     : QWidget(parent)
@@ -34,22 +35,122 @@ void ChapterDownloadIndicator::mousePressEvent(QMouseEvent* event)
 
 void ChapterDownloadIndicator::paintEvent(QPaintEvent*)
 {
-    // B.1 PLACEHOLDER -- 5 distinct fills so the state machine is visible.
-    // B.2 will replace each branch with the proper Mihon-style visual
-    // (palette()-resolved colors, no hex literals).
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const QRect r = rect().adjusted(2, 2, -2, -2);
+    const QRectF outer = QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0);
 
-    QColor fill;
+    const QColor strokeFg  = palette().color(QPalette::Text);
+    const QColor strokeDim = palette().color(QPalette::Mid);
+    const QColor bg        = palette().color(QPalette::Window);
+    const QColor errorFg   = palette().color(QPalette::BrightText);
+
     switch (m_state) {
-        case State::NotDownloaded: fill = QColor("#888888"); break;
-        case State::Queued:        fill = QColor("#bbbbbb"); break;
-        case State::Downloading:   fill = QColor("#dddddd"); break;
-        case State::Downloaded:    fill = QColor("#ffffff"); break;
-        case State::Errored:       fill = QColor("#666666"); break;
+        case State::NotDownloaded:
+            paintArrow(p, outer, strokeDim);
+            break;
+        case State::Queued:
+            paintSpinnerWithArrow(p, outer, strokeFg);
+            break;
+        case State::Downloading:
+            paintProgressArc(p, outer, strokeFg, bg, m_progress);
+            break;
+        case State::Downloaded:
+            paintCheck(p, outer, strokeFg, bg);
+            break;
+        case State::Errored:
+            paintError(p, outer, errorFg);
+            break;
     }
-    p.setPen(Qt::NoPen);
-    p.setBrush(fill);
+}
+
+void ChapterDownloadIndicator::paintArrow(QPainter& p, const QRectF& r, const QColor& c) const
+{
+    const qreal cx = r.center().x();
+    const qreal cy = r.center().y();
+    const qreal s  = r.width() * 0.50;
+
+    QPainterPath path;
+    path.moveTo(cx, cy - s/2);
+    path.lineTo(cx, cy + s/2);
+    path.moveTo(cx - s/3, cy + s/4);
+    path.lineTo(cx, cy + s/2);
+    path.lineTo(cx + s/3, cy + s/4);
+
+    QPen pen(c, 1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(path);
+}
+
+void ChapterDownloadIndicator::paintSpinnerWithArrow(QPainter& p, const QRectF& r, const QColor& c) const
+{
+    // Static dashed spinner ring (B.3 may add animation) + centered arrow
+    QPen pen(c, 1.6);
+    pen.setStyle(Qt::DashLine);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
     p.drawEllipse(r);
+    paintArrow(p, r.adjusted(r.width() * 0.20, r.width() * 0.20,
+                              -r.width() * 0.20, -r.width() * 0.20), c);
+}
+
+void ChapterDownloadIndicator::paintProgressArc(QPainter& p, const QRectF& r,
+                                                  const QColor& fg, const QColor& bg, int pct) const
+{
+    // Determinate progress arc -- stroke width = half the widget size for the
+    // ring-fill look from Mihon's ChapterDownloadIndicator.kt:158-163.
+    QPen pen(fg, r.width() * 0.50);
+    pen.setCapStyle(Qt::FlatCap);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    const int startAngle = 90 * 16;            // 12 o'clock
+    const int spanAngle  = -int(pct / 100.0 * 360 * 16);  // clockwise
+    p.drawArc(r.adjusted(pen.widthF()/2, pen.widthF()/2,
+                          -pen.widthF()/2, -pen.widthF()/2),
+              startAngle, spanAngle);
+    // Centered arrow recolors at 50% so it stays visible against the arc
+    const QColor arrowColor = (pct < 50) ? fg : bg;
+    paintArrow(p, r.adjusted(r.width() * 0.25, r.width() * 0.25,
+                              -r.width() * 0.25, -r.width() * 0.25),
+               arrowColor);
+}
+
+void ChapterDownloadIndicator::paintCheck(QPainter& p, const QRectF& r,
+                                            const QColor& fg, const QColor& bg) const
+{
+    // Filled circle with a check mark inside (the Downloaded state)
+    p.setPen(Qt::NoPen);
+    p.setBrush(fg);
+    p.drawEllipse(r);
+
+    QPen pen(bg, 2.0);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+
+    const qreal cx = r.center().x();
+    const qreal cy = r.center().y();
+    const qreal s  = r.width() * 0.30;
+    QPainterPath check;
+    check.moveTo(cx - s, cy);
+    check.lineTo(cx - s/3, cy + s * 0.7);
+    check.lineTo(cx + s, cy - s/2);
+    p.drawPath(check);
+}
+
+void ChapterDownloadIndicator::paintError(QPainter& p, const QRectF& r, const QColor& c) const
+{
+    // Outlined circle + exclamation mark
+    QPen pen(c, 1.8);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(r);
+    const qreal cx = r.center().x();
+    const qreal cy = r.center().y();
+    const qreal s  = r.width() * 0.30;
+    p.drawLine(QPointF(cx, cy - s), QPointF(cx, cy + s/3));
+    p.drawPoint(QPointF(cx, cy + s/2));
 }

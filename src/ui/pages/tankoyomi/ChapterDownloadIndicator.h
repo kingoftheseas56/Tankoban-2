@@ -1,6 +1,10 @@
 #pragma once
 
+#include <QColor>
+#include <QRectF>
 #include <QWidget>
+
+class QPainter;
 
 class ChapterDownloadIndicator : public QWidget
 {
@@ -36,4 +40,10 @@ protected:
 private:
     State m_state    = State::NotDownloaded;
     int   m_progress = 0;
+
+    void paintArrow(QPainter& p, const QRectF& r, const QColor& c) const;
+    void paintSpinnerWithArrow(QPainter& p, const QRectF& r, const QColor& c) const;
+    void paintProgressArc(QPainter& p, const QRectF& r, const QColor& fg, const QColor& bg, int pct) const;
+    void paintCheck(QPainter& p, const QRectF& r, const QColor& fg, const QColor& bg) const;
+    void paintError(QPainter& p, const QRectF& r, const QColor& c) const;
 };
