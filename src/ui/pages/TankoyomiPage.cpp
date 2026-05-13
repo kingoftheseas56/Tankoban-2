@@ -888,16 +888,72 @@ void TankoyomiPage::showResultContextMenu(int row, const QPoint& globalPos)
     if (row < 0 || row >= m_displayedResults.size()) return;
     const auto& result = m_displayedResults[row];
 
-    QMenu* menu = ContextMenuHelper::createMenu(this);
-    menu->addAction("Download...", this, [this, row]() {
+    QMenu menu(this);
+
+    menu.addAction(tr("Open detail screen"), this, [this, row]() {
         onResultDoubleClicked(row);
     });
-    menu->addSeparator();
-    menu->addAction("Copy Title", this, [result]() {
-        ContextMenuHelper::copyToClipboard(result.title);
+
+    menu.addAction(tr("Quick add all chapters"), this, [this, result]() {
+        // Find the scraper
+        MangaScraper* scraper = nullptr;
+        for (auto* s : m_scrapers) {
+            if (s->sourceId() == result.source) { scraper = s; break; }
+        }
+        if (!scraper || !m_downloader) return;
+
+        // One-shot connect to chaptersReady
+        auto conn = std::make_shared<QMetaObject::Connection>();
+        *conn = connect(scraper, &MangaScraper::chaptersReady, this,
+            [this, conn, result](const QList<ChapterInfo>& chapters) {
+                disconnect(*conn);
+                if (chapters.isEmpty()) return;
+                const QStringList roots = m_bridge->rootFolders("comics");
+                const QString dest = roots.isEmpty() ? QString() : roots.first();
+                if (dest.isEmpty()) return;
+                m_downloader->startDownload(result.title, result.source,
+                    chapters, dest, "cbz");
+                m_tabWidget->setCurrentIndex(1);   // jump to Transfers
+            });
+        scraper->fetchChapters(result.id);
     });
-    menu->exec(globalPos);
-    delete menu;
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Open source page in browser"), this, [result]() {
+        if (!result.url.isEmpty())
+            QDesktopServices::openUrl(QUrl(result.url));
+    });
+
+    // Show in library folder — only enabled if any chapter of this series is on disk
+    const int downloaded = m_downloader
+        ? m_downloader->countDownloadedForSeries(result.title, result.source)
+        : 0;
+    auto* showFolderAct = menu.addAction(tr("Show in library folder"),
+        this, [this, result]() {
+            const auto records = m_downloader->listActive();
+            for (const auto& rec : records) {
+                if (rec.seriesTitle == result.title &&
+                    rec.source == result.source &&
+                    !rec.destinationPath.isEmpty()) {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(
+                        rec.destinationPath + "/" + rec.seriesTitle));
+                    return;
+                }
+            }
+        });
+    showFolderAct->setEnabled(downloaded > 0);
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Copy title"), this, [result]() {
+        QGuiApplication::clipboard()->setText(result.title);
+    });
+    menu.addAction(tr("Copy source URL"), this, [result]() {
+        QGuiApplication::clipboard()->setText(result.url);
+    });
+
+    menu.exec(globalPos);
 }
 
 // ── Transfers refresh ───────────────────────────────────────────────────────
