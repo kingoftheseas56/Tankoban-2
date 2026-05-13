@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
 #include <QToolButton>
@@ -97,6 +98,42 @@ void MangaDetailView::buildUI()
     msLayout->addWidget(m_msDownloadBtn);
     msLayout->addWidget(m_msDeleteBtn);
     msLayout->addWidget(m_msClearBtn);
+
+    connect(m_msClearBtn, &QPushButton::clicked, this, [this]() {
+        m_chapterTable->clearSelection();
+    });
+
+    connect(m_msDownloadBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_downloader || !m_destProvider) return;
+        QList<ChapterInfo> selected;
+        for (const auto& ch : m_chapters) {
+            if (m_selectedChapterIds.contains(ch.id)) selected.append(ch);
+        }
+        if (selected.isEmpty()) return;
+        m_downloader->startDownload(m_result.title, m_result.source,
+                                     selected, m_destProvider(),
+                                     QStringLiteral("cbz"));
+        m_chapterTable->clearSelection();
+    });
+
+    connect(m_msDeleteBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_downloader) return;
+        // Confirm popover before destructive action
+        const int n = m_selectedChapterIds.size();
+        const auto ans = QMessageBox::question(this, tr("Delete chapters?"),
+            tr("Delete %1 selected chapter(s) from disk?").arg(n),
+            QMessageBox::Yes | QMessageBox::No);
+        if (ans != QMessageBox::Yes) return;
+
+        // Per spec §11 + Phase-2 follow-up MIHON_OVERHAUL_FU.2: per-chapter
+        // delete engine API not present in v1. Emit signal for TankoyomiPage
+        // to handle (currently a placeholder logging path; FU.2 will wire to
+        // a future MangaDownloader::deleteChapters(id, chapterIds) API).
+        const QList<QString> ids = m_selectedChapterIds.values();
+        emit deleteChaptersRequested(m_result.title, m_result.source, ids);
+        m_chapterTable->clearSelection();
+    });
+
     m_multiSelectBar->hide();
     root->addWidget(m_multiSelectBar);
 

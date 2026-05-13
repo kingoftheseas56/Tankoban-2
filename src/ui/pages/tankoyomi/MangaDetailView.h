@@ -37,6 +37,9 @@ signals:
     void backRequested();
     void showInFolderRequested(const QString& seriesTitle, const QString& source);
     void openInBrowserRequested(const QUrl& url);
+    void deleteChaptersRequested(const QString& seriesTitle,
+                                  const QString& source,
+                                  const QList<QString>& chapterIds);
 
 private slots:
     void onChaptersReady(const QList<ChapterInfo>& chapters);
