@@ -38,6 +38,7 @@ struct MangaDownloadRecord {
     QString destinationPath;
     QString format;           // "cbz" or "folder"
     QString status;           // "queued", "downloading", "completed", "error", "cancelled"
+    bool    paused         = false;   // per-series pause flag (v1 — Mihon-overhaul Phase A)
     float   progress       = 0.f;
     int     totalChapters  = 0;
     int     completedChapters = 0;

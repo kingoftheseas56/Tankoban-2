@@ -53,6 +53,7 @@ void MangaDownloader::loadRecords()
         rec.destinationPath = obj["destinationPath"].toString();
         rec.format          = obj["format"].toString();
         rec.status          = obj["status"].toString();
+        rec.paused          = obj.value("paused").toBool(false);
         rec.totalChapters   = obj["totalChapters"].toInt();
         rec.completedChapters = obj["completedChapters"].toInt();
         rec.startedAt       = obj["startedAt"].toVariant().toLongLong();
@@ -88,6 +89,7 @@ void MangaDownloader::saveRecords()
         obj["destinationPath"] = r.destinationPath;
         obj["format"]          = r.format;
         obj["status"]          = r.status;
+        obj["paused"]          = r.paused;
         obj["totalChapters"]   = r.totalChapters;
         obj["completedChapters"] = r.completedChapters;
         obj["startedAt"]       = r.startedAt;
