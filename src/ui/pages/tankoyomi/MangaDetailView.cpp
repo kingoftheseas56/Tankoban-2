@@ -3,7 +3,6 @@
 
 #include <QAction>
 #include <QDateTime>
-#include <QDebug>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -23,6 +22,7 @@
 #include <utility>
 
 #include "ChapterDownloadIndicator.h"
+#include "ChapterRangeDialog.h"
 #include "core/manga/MangaDownloader.h"
 #include "core/manga/MangaScraper.h"
 
@@ -511,7 +511,28 @@ void MangaDetailView::downloadNextN(int n)
 
 void MangaDetailView::openRangeDialog()
 {
-    // D.4 implements ChapterRangeDialog construction + exec. For D.3, no-op.
-    qDebug() << "MangaDetailView::openRangeDialog stub — D.4 wires the modal";
+    if (!m_downloader || !m_destProvider) return;
+
+    // Build set of chapter IDs already handled (queued/downloading/completed)
+    QSet<QString> handled;
+    const auto records = m_downloader->listActive();
+    for (const auto& rec : records) {
+        if (rec.seriesTitle != m_result.title) continue;
+        if (rec.source != m_result.source) continue;
+        for (const auto& chd : rec.chapters) {
+            if (chd.status == "queued" || chd.status == "downloading" ||
+                chd.status == "completed") {
+                handled.insert(chd.chapterId);
+            }
+        }
+    }
+
+    ChapterRangeDialog dlg(m_chapters, handled, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    const QList<ChapterInfo> picks = dlg.selectedChapters();
+    if (picks.isEmpty()) return;
+    m_downloader->startDownload(m_result.title, m_result.source,
+                                 picks, m_destProvider(),
+                                 QStringLiteral("cbz"));
 }
 

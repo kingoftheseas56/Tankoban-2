@@ -157,6 +157,7 @@ set(SOURCES
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/tankoyomi/MangaResultsGrid.cpp
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
+    src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
     src/ui/pages/tankoyomi/MangaDetailView.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
@@ -303,6 +304,7 @@ set(HEADERS
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/tankoyomi/MangaResultsGrid.h
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
+    src/ui/pages/tankoyomi/ChapterRangeDialog.h
     src/ui/pages/tankoyomi/MangaDetailView.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
