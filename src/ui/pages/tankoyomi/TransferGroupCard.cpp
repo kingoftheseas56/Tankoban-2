@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -86,7 +87,50 @@ void TransferGroupCard::setRecord(const MangaDownloadRecord& rec)
 
 void TransferGroupCard::refreshFromRecord()
 {
-    // E.2 fills (header label/progress) — E.1 stubs
+    if (!m_downloader || m_recordId.isEmpty()) return;
+    const auto records = m_downloader->listActive();
+    MangaDownloadRecord rec;
+    bool found = false;
+    for (const auto& r : records) {
+        if (r.id == m_recordId) { rec = r; found = true; break; }
+    }
+    if (!found) return;
+
+    m_titleLabel->setText(rec.seriesTitle);
+
+    // Aggregate state label
+    int downloading = 0, queued = 0, completed = 0,
+        errored = 0, cancelled = 0;
+    for (const auto& ch : rec.chapters) {
+        if      (ch.status == "downloading") ++downloading;
+        else if (ch.status == "queued")      ++queued;
+        else if (ch.status == "completed")   ++completed;
+        else if (ch.status == "error")       ++errored;
+        else if (ch.status == "cancelled")   ++cancelled;
+    }
+    const int total = rec.chapters.size();
+    QString state;
+    if (m_downloader->isSeriesPaused(m_recordId))    state = tr("Paused");
+    else if (downloading > 0)                         state = tr("Downloading");
+    else if (errored > 0 && downloading == 0)         state = tr("Errored");
+    else if (queued > 0)                              state = tr("Queued");
+    else if (completed == total)                      state = tr("Completed");
+    else if (cancelled == total)                      state = tr("Cancelled");
+    else                                              state = tr("Idle");
+
+    m_statusLabel->setText(tr("%1 · %2 of %3 chapters")
+        .arg(state).arg(completed).arg(total));
+
+    if (total > 0) {
+        m_progressBar->setValue((completed * 100) / total);
+    }
+
+    m_pauseToggle->setText(m_downloader->isSeriesPaused(m_recordId)
+        ? tr("Resume") : tr("Pause"));
+
+    // Visual muting on paused state via QSS dynamic property
+    setProperty("paused", m_downloader->isSeriesPaused(m_recordId));
+    style()->unpolish(this); style()->polish(this);
 }
 
 void TransferGroupCard::rebuildChapterList(const MangaDownloadRecord& rec)
