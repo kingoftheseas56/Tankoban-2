@@ -80,6 +80,13 @@ public:
     void resumeAll();
     bool isPaused() const;
 
+    // Per-series pause control (Mihon-overhaul Phase A.2). pauseSeries leaves
+    // an in-flight chapter to finish its current image before halting (same
+    // pattern as global pauseAll).
+    void pauseSeries(const QString& id);
+    void resumeSeries(const QString& id);
+    bool isSeriesPaused(const QString& id) const;
+
     // Queue reordering (R5).
     void moveSeriesToTop(const QString& id);
     void moveSeriesToBottom(const QString& id);
