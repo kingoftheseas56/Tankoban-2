@@ -663,6 +663,33 @@ bool MangaDownloader::isSeriesPaused(const QString& id) const
     return it != m_records.constEnd() && it->paused;
 }
 
+void MangaDownloader::restartSeries(const QString& id)
+{
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_records.find(id);
+        if (it == m_records.end()) return;
+        if (it->paused) {
+            it->paused = false;
+            changed = true;
+        }
+        for (auto& ch : it->chapters) {
+            if (ch.status == "error" || ch.status == "cancelled") {
+                ch.status = "queued";
+                ch.failedImages = 0;
+                ch.error.clear();
+                changed = true;
+            }
+        }
+    }
+    if (changed) {
+        saveRecords();
+        emit downloadUpdated(id);
+        processQueue();
+    }
+}
+
 // ── R5: queue reorder ───────────────────────────────────────────────────────
 void MangaDownloader::moveSeriesToTop(const QString& id)
 {

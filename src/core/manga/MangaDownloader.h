@@ -87,6 +87,11 @@ public:
     void resumeSeries(const QString& id);
     bool isSeriesPaused(const QString& id) const;
 
+    // Walk this series's chapter list; reset every "error" and "cancelled"
+    // chapter to "queued"; clear the paused flag; re-engage the queue.
+    // Tankorent-parity: equivalent to Tankorent's restartStreamBulkGroup.
+    void restartSeries(const QString& id);
+
     // Queue reordering (R5).
     void moveSeriesToTop(const QString& id);
     void moveSeriesToBottom(const QString& id);
