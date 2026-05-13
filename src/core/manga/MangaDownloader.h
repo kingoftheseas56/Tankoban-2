@@ -134,6 +134,11 @@ signals:
     void downloadCompleted(const QString& id);
     void pausedChanged(bool paused);
 
+    // Emitted whenever a single chapter's status field changes. Consumers
+    // (MangaDetailView, TransferGroupCard) re-render only the changed row
+    // rather than walking the full record on every series-level downloadUpdated.
+    void chapterUpdated(const QString& seriesId, const QString& chapterId);
+
 private:
     void processQueue();
     void downloadChapter(const QString& recordId, int chapterIdx);

@@ -229,6 +229,11 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
         rec.completedAt = QDateTime::currentMSecsSinceEpoch();
     }
 
+    QStringList initialChapterIds;
+    initialChapterIds.reserve(rec.chapters.size());
+    for (const auto& ch : rec.chapters)
+        initialChapterIds.append(ch.chapterId);
+
     {
         QMutexLocker lock(&m_mutex);
         m_records[id] = rec;
@@ -236,6 +241,8 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
     }
     saveRecords();
     emit downloadUpdated(id);
+    for (const QString& chapterId : initialChapterIds)
+        emit chapterUpdated(id, chapterId);
 
     processQueue();
     return id;
@@ -266,7 +273,9 @@ void MangaDownloader::processQueue()
                 ch.status = "downloading";
                 rec.status = "downloading";
                 ++m_activeDownloads;
+                const QString chapterIdLocal = ch.chapterId;
                 lock.unlock();
+                emit chapterUpdated(recId, chapterIdLocal);
                 downloadChapter(recId, i);
                 lock.relock();
             }
@@ -289,11 +298,14 @@ void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
 
     auto* scraper = m_scrapers.value(source);
     if (!scraper) {
-        QMutexLocker lock(&m_mutex);
-        m_records[recordId].chapters[chapterIdx].status = "error";
-        m_records[recordId].chapters[chapterIdx].error  = "No scraper for source: " + source;
-        --m_activeDownloads;
+        {
+            QMutexLocker lock(&m_mutex);
+            m_records[recordId].chapters[chapterIdx].status = "error";
+            m_records[recordId].chapters[chapterIdx].error  = "No scraper for source: " + source;
+            --m_activeDownloads;
+        }
         emit downloadUpdated(recordId);
+        emit chapterUpdated(recordId, chapterId);
         processQueue();
         return;
     }
@@ -313,11 +325,17 @@ void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
         [this, recordId, chapterIdx, conn, errConn](const QString& msg) {
             disconnect(*conn);
             disconnect(*errConn);
-            QMutexLocker lock(&m_mutex);
-            m_records[recordId].chapters[chapterIdx].status = "error";
-            m_records[recordId].chapters[chapterIdx].error  = msg;
-            --m_activeDownloads;
+            QString chapterIdLocal;
+            {
+                QMutexLocker lock(&m_mutex);
+                auto& ch = m_records[recordId].chapters[chapterIdx];
+                ch.status = "error";
+                ch.error  = msg;
+                chapterIdLocal = ch.chapterId;
+                --m_activeDownloads;
+            }
             emit downloadUpdated(recordId);
+            emit chapterUpdated(recordId, chapterIdLocal);
             processQueue();
         });
 
@@ -352,15 +370,23 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         QDir().mkpath(seriesDir);
         QStorageInfo probe(seriesDir);
         if (probe.isValid() && probe.bytesAvailable() < MIN_FREE_BYTES) {
-            QMutexLocker lock(&m_mutex);
-            auto it = m_records.find(recordId);
-            if (it != m_records.end() && chapterIdx < it->chapters.size()) {
-                auto& ch = it->chapters[chapterIdx];
-                ch.status = QStringLiteral("error");
-                ch.error  = QStringLiteral("Insufficient disk space — need at least 200 MB free");
+            QString chapterIdLocal;
+            bool chapterTouched = false;
+            {
+                QMutexLocker lock(&m_mutex);
+                auto it = m_records.find(recordId);
+                if (it != m_records.end() && chapterIdx < it->chapters.size()) {
+                    auto& ch = it->chapters[chapterIdx];
+                    ch.status = QStringLiteral("error");
+                    ch.error  = QStringLiteral("Insufficient disk space — need at least 200 MB free");
+                    chapterIdLocal = ch.chapterId;
+                    chapterTouched = true;
+                }
+                --m_activeDownloads;
             }
-            --m_activeDownloads;
             emit downloadUpdated(recordId);
+            if (chapterTouched)
+                emit chapterUpdated(recordId, chapterIdLocal);
             // Try the next chapter — it may be destined for a different root
             // with more space (multiple series roots = independent mounts).
             processQueue();
@@ -403,16 +429,29 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         // dialog stays at the true page count across pause/resume instead of
         // flickering to 0.
         {
-            QMutexLocker lock(&m_mutex);
-            if (m_paused) {
-                auto it = m_records.find(recordId);
-                if (it != m_records.end() && chapterIdx < it->chapters.size()) {
-                    auto& ch = it->chapters[chapterIdx];
-                    if (ch.status == QLatin1String("downloading"))
-                        ch.status = QStringLiteral("queued");
+            bool globalPaused = false;
+            QString chapterIdLocal;
+            bool chapterReverted = false;
+            {
+                QMutexLocker lock(&m_mutex);
+                if (m_paused) {
+                    globalPaused = true;
+                    auto it = m_records.find(recordId);
+                    if (it != m_records.end() && chapterIdx < it->chapters.size()) {
+                        auto& ch = it->chapters[chapterIdx];
+                        if (ch.status == QLatin1String("downloading")) {
+                            ch.status = QStringLiteral("queued");
+                            chapterReverted = true;
+                        }
+                        chapterIdLocal = ch.chapterId;
+                    }
+                    --m_activeDownloads;
                 }
-                --m_activeDownloads;
+            }
+            if (globalPaused) {
                 emit downloadUpdated(recordId);
+                if (chapterReverted)
+                    emit chapterUpdated(recordId, chapterIdLocal);
                 return;
             }
         }
@@ -423,12 +462,14 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         // first when both are true.
         {
             bool perSeriesPaused = false;
+            QString chapterIdLocal;
             {
                 QMutexLocker lock(&m_mutex);
                 auto it = m_records.find(recordId);
                 if (it != m_records.end() && it->paused && chapterIdx < it->chapters.size()) {
                     auto& ch = it->chapters[chapterIdx];
                     ch.status = QStringLiteral("queued");
+                    chapterIdLocal = ch.chapterId;
                     --m_activeDownloads;
                     perSeriesPaused = true;
                 }
@@ -436,6 +477,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             if (perSeriesPaused) {
                 saveRecords();
                 emit downloadUpdated(recordId);
+                emit chapterUpdated(recordId, chapterIdLocal);
                 return;
             }
         }
@@ -456,11 +498,16 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             }
 
             // Mark chapter complete
+            QString completedChapterId;
             {
                 QMutexLocker lock(&m_mutex);
                 auto& rec = m_records[recordId];
-                rec.chapters[chapterIdx].status      = "completed";
+                // A.7 code review M1: stamp completedAt BEFORE flipping status
+                // so any consumer reading the chapter struct off chapterUpdated
+                // observes the new timestamp atomically with the new status.
                 rec.chapters[chapterIdx].completedAt = QDateTime::currentMSecsSinceEpoch();
+                rec.chapters[chapterIdx].status      = "completed";
+                completedChapterId = rec.chapters[chapterIdx].chapterId;
                 ++rec.completedChapters;
                 rec.progress = static_cast<float>(rec.completedChapters) / rec.totalChapters;
 
@@ -474,6 +521,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             }
             saveRecords();
             emit downloadUpdated(recordId);
+            emit chapterUpdated(recordId, completedChapterId);
             processQueue();
             return;
         }
@@ -595,6 +643,7 @@ QJsonArray MangaDownloader::listHistory() const
 void MangaDownloader::pauseAll()
 {
     QList<QString> updatedIds;
+    QList<QPair<QString, QString>> updatedChapters;  // (seriesId, chapterId)
     {
         QMutexLocker lock(&m_mutex);
         if (m_paused) return;
@@ -608,6 +657,7 @@ void MangaDownloader::pauseAll()
             for (auto& ch : rec.chapters) {
                 if (ch.status == QLatin1String("downloading")) {
                     ch.status = QStringLiteral("queued");
+                    updatedChapters.append({it.key(), ch.chapterId});
                     touched = true;
                 }
             }
@@ -616,6 +666,8 @@ void MangaDownloader::pauseAll()
     }
     for (const auto& id : updatedIds)
         emit downloadUpdated(id);
+    for (const auto& pair : updatedChapters)
+        emit chapterUpdated(pair.first, pair.second);
     emit pausedChanged(true);
 }
 
@@ -681,6 +733,7 @@ bool MangaDownloader::isSeriesPaused(const QString& id) const
 void MangaDownloader::restartSeries(const QString& id)
 {
     bool changed = false;
+    QStringList affectedChapterIds;
     {
         QMutexLocker lock(&m_mutex);
         auto it = m_records.find(id);
@@ -694,6 +747,7 @@ void MangaDownloader::restartSeries(const QString& id)
                 ch.status = "queued";
                 ch.failedImages = 0;
                 ch.error.clear();
+                affectedChapterIds.append(ch.chapterId);
                 changed = true;
             }
         }
@@ -701,6 +755,8 @@ void MangaDownloader::restartSeries(const QString& id)
     if (changed) {
         saveRecords();
         emit downloadUpdated(id);
+        for (const QString& chapterId : affectedChapterIds)
+            emit chapterUpdated(id, chapterId);
         processQueue();
     }
 }
@@ -708,6 +764,7 @@ void MangaDownloader::restartSeries(const QString& id)
 void MangaDownloader::retryFailedChapters(const QString& id)
 {
     bool changed = false;
+    QStringList affectedChapterIds;
     {
         QMutexLocker lock(&m_mutex);
         auto it = m_records.find(id);
@@ -717,6 +774,7 @@ void MangaDownloader::retryFailedChapters(const QString& id)
                 ch.status = "queued";
                 ch.failedImages = 0;
                 ch.error.clear();
+                affectedChapterIds.append(ch.chapterId);
                 changed = true;
             }
         }
@@ -724,6 +782,8 @@ void MangaDownloader::retryFailedChapters(const QString& id)
     if (changed) {
         saveRecords();
         emit downloadUpdated(id);
+        for (const QString& chapterId : affectedChapterIds)
+            emit chapterUpdated(id, chapterId);
         processQueue();
     }
 }
@@ -778,7 +838,7 @@ void MangaDownloader::startChapterNow(const QString& seriesId, const QString& ch
     if (changed) {
         saveRecords();
         emit downloadUpdated(seriesId);
-        // A.8 will retrofit: emit chapterUpdated(seriesId, chapterId);
+        emit chapterUpdated(seriesId, chapterId);
         processQueue();
     }
 }
@@ -929,22 +989,28 @@ void MangaDownloader::reorderChapters(const QString& id, const QString& orderKey
 // ── Control ─────────────────────────────────────────────────────────────────
 void MangaDownloader::cancelDownload(const QString& id)
 {
+    QStringList cancelledChapterIds;
     QMutexLocker lock(&m_mutex);
     auto it = m_records.find(id);
     if (it == m_records.end()) return;
     it->status = "cancelled";
     for (auto& ch : it->chapters) {
-        if (ch.status == "queued" || ch.status == "downloading")
+        if (ch.status == "queued" || ch.status == "downloading") {
             ch.status = "cancelled";
+            cancelledChapterIds.append(ch.chapterId);
+        }
     }
     lock.unlock();
     saveRecords();
     emit downloadUpdated(id);
+    for (const QString& chapterId : cancelledChapterIds)
+        emit chapterUpdated(id, chapterId);
 }
 
 void MangaDownloader::cancelAll()
 {
     QList<QString> touchedIds;
+    QList<QPair<QString, QString>> cancelledChapters;  // (seriesId, chapterId)
     {
         QMutexLocker lock(&m_mutex);
         for (auto it = m_records.begin(); it != m_records.end(); ++it) {
@@ -955,8 +1021,10 @@ void MangaDownloader::cancelAll()
             rec.status = QStringLiteral("cancelled");
             for (auto& ch : rec.chapters) {
                 if (ch.status == QLatin1String("queued") ||
-                    ch.status == QLatin1String("downloading"))
+                    ch.status == QLatin1String("downloading")) {
                     ch.status = QStringLiteral("cancelled");
+                    cancelledChapters.append({it.key(), ch.chapterId});
+                }
             }
             touchedIds.append(it.key());
         }
@@ -965,6 +1033,8 @@ void MangaDownloader::cancelAll()
     saveRecords();
     for (const auto& id : touchedIds)
         emit downloadUpdated(id);
+    for (const auto& pair : cancelledChapters)
+        emit chapterUpdated(pair.first, pair.second);
 }
 
 void MangaDownloader::removeDownload(const QString& id)
