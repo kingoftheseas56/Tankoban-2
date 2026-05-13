@@ -115,6 +115,19 @@ void MangaDownloader::appendHistory(const MangaDownloadRecord& rec)
     entry["totalChapters"] = rec.totalChapters;
     entry["completedChapters"] = rec.completedChapters;
     entry["completedAt"]  = QDateTime::currentMSecsSinceEpoch();
+
+    // A.7: serialize per-chapter array so countDownloadedForSeries() and
+    // countByState() can walk history-archived completions. Slim shape —
+    // only the fields the queries actually read (status + completedAt).
+    QJsonArray chArr;
+    for (const auto& ch : rec.chapters) {
+        QJsonObject chObj;
+        chObj["chapterId"]   = ch.chapterId;
+        chObj["status"]      = ch.status;
+        chObj["completedAt"] = ch.completedAt;
+        chArr.append(chObj);
+    }
+    entry["chapters"] = chArr;
     arr.append(entry);
 
     // Cap at 1000
@@ -198,8 +211,9 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
         }
 
         if (already) {
-            cd.status    = "completed";
-            cd.finalPath = existingPath;
+            cd.status      = "completed";
+            cd.completedAt = QDateTime::currentMSecsSinceEpoch();
+            cd.finalPath   = existingPath;
             ++rec.completedChapters;
         }
 
@@ -445,7 +459,8 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             {
                 QMutexLocker lock(&m_mutex);
                 auto& rec = m_records[recordId];
-                rec.chapters[chapterIdx].status = "completed";
+                rec.chapters[chapterIdx].status      = "completed";
+                rec.chapters[chapterIdx].completedAt = QDateTime::currentMSecsSinceEpoch();
                 ++rec.completedChapters;
                 rec.progress = static_cast<float>(rec.completedChapters) / rec.totalChapters;
 
@@ -766,6 +781,70 @@ void MangaDownloader::startChapterNow(const QString& seriesId, const QString& ch
         // A.8 will retrofit: emit chapterUpdated(seriesId, chapterId);
         processQueue();
     }
+}
+
+// ── A.7: read-only query API ────────────────────────────────────────────────
+int MangaDownloader::countDownloadedForSeries(const QString& seriesTitle,
+                                               const QString& source) const
+{
+    QMutexLocker lock(&m_mutex);
+    int total = 0;
+
+    // Count "completed" chapters in active records matching series+source.
+    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
+        if (it->seriesTitle != seriesTitle || it->source != source) continue;
+        for (const auto& ch : it->chapters) {
+            if (ch.status == "completed") ++total;
+        }
+    }
+
+    // Also count chapters in history file (completed-then-archived series).
+    const QJsonObject histData = m_store
+        ? m_store->read(HISTORY_FILE)
+        : QJsonObject();
+    const QJsonArray hist = histData.value("entries").toArray();
+    for (const auto& v : hist) {
+        const QJsonObject rec = v.toObject();
+        if (rec.value("seriesTitle").toString() != seriesTitle) continue;
+        if (rec.value("source").toString() != source) continue;
+        const QJsonArray chapters = rec.value("chapters").toArray();
+        for (const auto& cv : chapters) {
+            if (cv.toObject().value("status").toString() == "completed") ++total;
+        }
+    }
+    return total;
+}
+
+MangaDownloader::StateCounts MangaDownloader::countByState() const
+{
+    StateCounts counts;
+    const qint64 todayStartMs = QDateTime::currentDateTime().date()
+        .startOfDay().toMSecsSinceEpoch();
+
+    QMutexLocker lock(&m_mutex);
+    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
+        for (const auto& ch : it->chapters) {
+            if (ch.status == "downloading") ++counts.downloading;
+            else if (ch.status == "queued") ++counts.queued;
+        }
+    }
+
+    // doneToday derived from history; cheaper than tracking on each completion.
+    const QJsonObject histData = m_store
+        ? m_store->read(HISTORY_FILE)
+        : QJsonObject();
+    const QJsonArray hist = histData.value("entries").toArray();
+    for (const auto& v : hist) {
+        const QJsonObject rec = v.toObject();
+        const QJsonArray chapters = rec.value("chapters").toArray();
+        for (const auto& cv : chapters) {
+            const QJsonObject ch = cv.toObject();
+            if (ch.value("status").toString() != "completed") continue;
+            const qint64 completedAt = qint64(ch.value("completedAt").toDouble());
+            if (completedAt >= todayStartMs) ++counts.doneToday;
+        }
+    }
+    return counts;
 }
 
 // ── R5: queue reorder ───────────────────────────────────────────────────────

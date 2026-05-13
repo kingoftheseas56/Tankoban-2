@@ -28,6 +28,10 @@ struct ChapterDownload {
     // sort without re-fetching. Populated at startDownload time.
     double  chapterNumber  = 0.0;
     qint64  dateUpload     = 0;   // ms epoch
+
+    // A.7: stamped at every site where status flips to "completed". Used by
+    // countByState() to compute "done today" against the history file.
+    qint64  completedAt    = 0;   // ms epoch
 };
 
 // ── Per-series download record ──────────────────────────────────────────────
@@ -100,6 +104,20 @@ public:
     // Analog of Mihon's startDownloadNow (DownloadManager.kt:107). Does not
     // touch the series's position in the global record order.
     void startChapterNow(const QString& seriesId, const QString& chapterId);
+
+    // Returns the count of "completed" chapters for a series across both the
+    // active records AND the history file. Used by detail screen header,
+    // search-result tile badge.
+    int countDownloadedForSeries(const QString& seriesTitle,
+                                  const QString& source) const;
+
+    // For the Transfers tab status line ("N downloading · M queued · K done today").
+    struct StateCounts {
+        int downloading = 0;
+        int queued      = 0;
+        int doneToday   = 0;
+    };
+    StateCounts countByState() const;
 
     // Queue reordering (R5).
     void moveSeriesToTop(const QString& id);
