@@ -30,6 +30,9 @@ public:
     // Entry point — load this manga, show loading state, fetch chapters.
     void show(const MangaResult& result, const QString& coverPath);
 
+protected:
+    void hideEvent(QHideEvent* event) override;
+
 signals:
     void backRequested();
     void showInFolderRequested(const QString& seriesTitle, const QString& source);

@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QLabel>
 #include <QPixmap>
 #include <QPushButton>
@@ -228,7 +229,22 @@ void MangaDetailView::onScraperError(const QString& message)
 void MangaDetailView::onChapterUpdated(const QString& seriesId,
                                        const QString& chapterId)
 {
-    Q_UNUSED(seriesId);
+    // Gate by the downloader's record: only act if seriesId maps to our current
+    // (m_result.title, m_result.source). Prevents foreign-series updates from
+    // poisoning the row indicator state — the downloader emits this signal
+    // globally across all tracked series.
+    if (!m_downloader) return;
+    bool isOurSeries = false;
+    const auto records = m_downloader->listActive();
+    for (const auto& rec : records) {
+        if (rec.id != seriesId) continue;
+        if (rec.seriesTitle == m_result.title && rec.source == m_result.source) {
+            isOurSeries = true;
+        }
+        break;
+    }
+    if (!isOurSeries) return;
+
     // Find the row for this chapter
     int row = -1;
     for (int i = 0; i < m_chapters.size(); ++i) {
@@ -240,8 +256,20 @@ void MangaDetailView::onChapterUpdated(const QString& seriesId,
         m_chapterTable->cellWidget(row, 3));
     if (!indicator) return;
 
-    // Derive state from downloader records
     deriveChapterState(chapterId, *indicator);
+}
+
+void MangaDetailView::hideEvent(QHideEvent* event)
+{
+    // Drop scraper subscriptions while hidden — prevents foreign-manga chapter
+    // updates from poisoning our state when another consumer (e.g. AddMangaDialog
+    // or a future detail-view for a different manga) calls fetchChapters on the
+    // same scraper instance.
+    if (m_scraper) {
+        disconnect(m_scraper, &MangaScraper::chaptersReady, this, nullptr);
+        disconnect(m_scraper, &MangaScraper::errorOccurred, this, nullptr);
+    }
+    QWidget::hideEvent(event);
 }
 
 void MangaDetailView::deriveChapterState(const QString& chapterId,
