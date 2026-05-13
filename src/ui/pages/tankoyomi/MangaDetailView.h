@@ -42,11 +42,11 @@ private slots:
     void onChaptersReady(const QList<ChapterInfo>& chapters);
     void onScraperError(const QString& message);
     void onChapterUpdated(const QString& seriesId, const QString& chapterId);
+    void updateMultiSelectBar();
 
 private:
     void buildUI();
     void renderChapters();
-    void updateMultiSelectBar();
     void onChapterIconClicked(int row);
     void deriveChapterState(const QString& chapterId,
                              ChapterDownloadIndicator& indicator) const;

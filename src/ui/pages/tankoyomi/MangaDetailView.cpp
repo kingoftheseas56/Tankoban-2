@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <QHeaderView>
 
+#include <algorithm>
 #include <utility>
 
 #include "ChapterDownloadIndicator.h"
@@ -113,6 +114,8 @@ void MangaDetailView::buildUI()
     m_chapterTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_chapterTable->setShowGrid(false);
     m_chapterTable->setContextMenuPolicy(Qt::CustomContextMenu);  // F.2 wires
+    connect(m_chapterTable, &QTableWidget::itemSelectionChanged,
+            this, &MangaDetailView::updateMultiSelectBar);
     root->addWidget(m_chapterTable, 1);
 
     // -- Loading + error labels (hidden by default) -------------------
@@ -257,6 +260,49 @@ void MangaDetailView::onChapterUpdated(const QString& seriesId,
     if (!indicator) return;
 
     deriveChapterState(chapterId, *indicator);
+}
+
+void MangaDetailView::updateMultiSelectBar()
+{
+    m_selectedChapterIds.clear();
+    QList<int> rows;
+    for (const auto& idx : m_chapterTable->selectionModel()->selectedRows()) {
+        rows.append(idx.row());
+    }
+    std::sort(rows.begin(), rows.end());
+
+    for (int r : rows) {
+        if (r >= 0 && r < m_chapters.size()) {
+            m_selectedChapterIds.insert(m_chapters[r].id);
+        }
+    }
+
+    if (rows.isEmpty()) {
+        m_multiSelectBar->hide();
+        return;
+    }
+
+    QString label;
+    // Detect contiguous range
+    bool contiguous = true;
+    for (int i = 1; i < rows.size(); ++i) {
+        if (rows[i] != rows[i-1] + 1) { contiguous = false; break; }
+    }
+    if (contiguous && rows.size() > 1) {
+        const int firstNum = int(m_chapters[rows.first()].chapterNumber);
+        const int lastNum  = int(m_chapters[rows.last()].chapterNumber);
+        label = tr("Chapters %1\xE2\x80\x93%2 (%3 chapters) selected")
+            .arg(qMin(firstNum, lastNum))
+            .arg(qMax(firstNum, lastNum))
+            .arg(rows.size());
+    } else if (rows.size() == 1) {
+        const int num = int(m_chapters[rows.first()].chapterNumber);
+        label = tr("Chapter %1 (1 chapter) selected").arg(num);
+    } else {
+        label = tr("%1 chapters selected").arg(rows.size());
+    }
+    m_multiSelectLabel->setText(label);
+    m_multiSelectBar->show();
 }
 
 void MangaDetailView::hideEvent(QHideEvent* event)
