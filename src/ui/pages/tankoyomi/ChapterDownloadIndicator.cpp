@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPropertyAnimation>
 
 ChapterDownloadIndicator::ChapterDownloadIndicator(QWidget* parent)
     : QWidget(parent)
@@ -16,6 +17,7 @@ void ChapterDownloadIndicator::setState(State s)
     if (m_state == s) return;
     m_state = s;
     if (s != State::Downloading) m_progress = 0;
+    emit stateChanged(s);
     update();
 }
 
@@ -23,7 +25,23 @@ void ChapterDownloadIndicator::setProgress(int pct)
 {
     pct = qBound(0, pct, 100);
     if (m_progress == pct) return;
+    if (!m_progressAnim) {
+        m_progressAnim = new QPropertyAnimation(this, "progress", this);
+        m_progressAnim->setDuration(300);
+        m_progressAnim->setEasingCurve(QEasingCurve::OutCubic);
+    }
+    m_progressAnim->stop();
+    m_progressAnim->setStartValue(m_progress);
+    m_progressAnim->setEndValue(pct);
+    m_progressAnim->start();
+}
+
+void ChapterDownloadIndicator::setProgressImmediate(int pct)
+{
+    pct = qBound(0, pct, 100);
+    if (m_progress == pct) return;
     m_progress = pct;
+    emit progressChanged(pct);
     if (m_state == State::Downloading) update();
 }
 
@@ -106,11 +124,14 @@ void ChapterDownloadIndicator::paintProgressArc(QPainter& p, const QRectF& r,
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
     const int startAngle = 90 * 16;            // 12 o'clock
-    const int spanAngle  = -int(pct / 100.0 * 360 * 16);  // clockwise
+    const int spanAngle  = -qRound(pct / 100.0 * 360 * 16);  // clockwise
     p.drawArc(r.adjusted(pen.widthF()/2, pen.widthF()/2,
                           -pen.widthF()/2, -pen.widthF()/2),
               startAngle, spanAngle);
-    // Centered arrow recolors at 50% so it stays visible against the arc
+    // The 50% recolor threshold assumes pen width ≈ r.width()/2 (the half-widget
+    // stroke set above). At that geometry, the arc fill begins to occlude the
+    // centered arrow at 50% sweep; flipping to bg keeps the arrow legible. If
+    // the pen width changes, this threshold needs to track it.
     const QColor arrowColor = (pct < 50) ? fg : bg;
     paintArrow(p, r.adjusted(r.width() * 0.25, r.width() * 0.25,
                               -r.width() * 0.25, -r.width() * 0.25),
