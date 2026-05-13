@@ -1,9 +1,13 @@
 #include "TransferGroupCard.h"
 
+#include <QFile>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
+#include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSize>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -56,15 +60,22 @@ void TransferGroupCard::buildUI()
     headerCol->addWidget(m_progressBar);
     headerRow->addLayout(headerCol, 1);
 
-    m_pauseToggle = new QPushButton(tr("Pause"), this);
+    m_pauseToggle = new QPushButton(this);
     m_pauseToggle->setObjectName("TransferCardPauseToggle");
+    m_pauseToggle->setIcon(QIcon(QStringLiteral(":/icons/pause-circle.svg")));
+    m_pauseToggle->setIconSize(QSize(18, 18));
+    m_pauseToggle->setFlat(true);
+    m_pauseToggle->setToolTip(tr("Pause series"));
     connect(m_pauseToggle, &QPushButton::clicked,
             this, &TransferGroupCard::onPauseToggleClicked);
     headerRow->addWidget(m_pauseToggle);
 
     m_cancelBtn = new QToolButton(this);
-    m_cancelBtn->setText(QStringLiteral("✕"));   // F.1 may replace with SVG
     m_cancelBtn->setObjectName("TransferCardCancel");
+    m_cancelBtn->setIcon(QIcon(QStringLiteral(":/icons/close-x.svg")));
+    m_cancelBtn->setIconSize(QSize(16, 16));
+    m_cancelBtn->setAutoRaise(true);
+    m_cancelBtn->setToolTip(tr("Cancel series"));
     connect(m_cancelBtn, &QToolButton::clicked,
             this, &TransferGroupCard::onCancelClicked);
     headerRow->addWidget(m_cancelBtn);
@@ -125,11 +136,14 @@ void TransferGroupCard::refreshFromRecord()
         m_progressBar->setValue((completed * 100) / total);
     }
 
-    m_pauseToggle->setText(m_downloader->isSeriesPaused(m_recordId)
-        ? tr("Resume") : tr("Pause"));
+    const bool paused = m_downloader->isSeriesPaused(m_recordId);
+    m_pauseToggle->setIcon(QIcon(paused
+        ? QStringLiteral(":/icons/play-circle.svg")
+        : QStringLiteral(":/icons/pause-circle.svg")));
+    m_pauseToggle->setToolTip(paused ? tr("Resume series") : tr("Pause series"));
 
     // Visual muting on paused state via QSS dynamic property
-    setProperty("paused", m_downloader->isSeriesPaused(m_recordId));
+    setProperty("paused", paused);
     style()->unpolish(this); style()->polish(this);
 }
 

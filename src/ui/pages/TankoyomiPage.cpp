@@ -486,12 +486,27 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     // necessary") — redundant with search-row Active|History counter +
     // per-card "Completed · X of Y chapters" labels.
     auto* btnRow = new QHBoxLayout();
-    m_transfersPauseAll = new QPushButton(tr("Pause all"), this);
+    m_transfersPauseAll = new QPushButton(this);
     m_transfersPauseAll->setObjectName("TransfersPauseAll");
-    m_transfersResumeAll = new QPushButton(tr("Resume all"), this);
+    m_transfersPauseAll->setIcon(QIcon(QStringLiteral(":/icons/pause-circle.svg")));
+    m_transfersPauseAll->setIconSize(QSize(18, 18));
+    m_transfersPauseAll->setFlat(true);
+    m_transfersPauseAll->setToolTip(tr("Pause all"));
+
+    m_transfersResumeAll = new QPushButton(this);
     m_transfersResumeAll->setObjectName("TransfersResumeAll");
-    m_transfersCancelAll = new QPushButton(tr("Cancel all"), this);
+    m_transfersResumeAll->setIcon(QIcon(QStringLiteral(":/icons/play-circle.svg")));
+    m_transfersResumeAll->setIconSize(QSize(18, 18));
+    m_transfersResumeAll->setFlat(true);
+    m_transfersResumeAll->setToolTip(tr("Resume all"));
+
+    m_transfersCancelAll = new QPushButton(this);
     m_transfersCancelAll->setObjectName("TransfersCancelAll");
+    m_transfersCancelAll->setIcon(QIcon(QStringLiteral(":/icons/close-x.svg")));
+    m_transfersCancelAll->setIconSize(QSize(18, 18));
+    m_transfersCancelAll->setFlat(true);
+    m_transfersCancelAll->setToolTip(tr("Cancel all"));
+
     btnRow->addWidget(m_transfersPauseAll);
     btnRow->addWidget(m_transfersResumeAll);
     btnRow->addWidget(m_transfersCancelAll);

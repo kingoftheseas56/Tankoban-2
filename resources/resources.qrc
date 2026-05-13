@@ -38,10 +38,18 @@
         <file>icons/chevron_right.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>icons/hamburger.svg</file>
+        <file>icons/kebab-menu.svg</file>
         <file>icons/magnet.svg</file>
         <file>icons/tankoyomi.svg</file>
         <file>icons/book.svg</file>
         <file>icons/downloaded.svg</file>
+        <file>icons/download-arrow.svg</file>
+        <file>icons/checkbox-empty.svg</file>
+        <file>icons/checkbox-checked.svg</file>
+        <file>icons/pause-circle.svg</file>
+        <file>icons/play-circle.svg</file>
+        <file>icons/retry-arrow.svg</file>
+        <file>icons/close-x.svg</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>
 </RCC>
