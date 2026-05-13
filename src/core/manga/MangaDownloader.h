@@ -96,6 +96,11 @@ public:
     // alone). For the Tankorent-parity "Retry failed chapters" menu item.
     void retryFailedChapters(const QString& id);
 
+    // Move a specific chapter to the front of its series's per-chapter queue.
+    // Analog of Mihon's startDownloadNow (DownloadManager.kt:107). Does not
+    // touch the series's position in the global record order.
+    void startChapterNow(const QString& seriesId, const QString& chapterId);
+
     // Queue reordering (R5).
     void moveSeriesToTop(const QString& id);
     void moveSeriesToBottom(const QString& id);

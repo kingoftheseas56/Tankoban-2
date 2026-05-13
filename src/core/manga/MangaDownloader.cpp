@@ -713,6 +713,55 @@ void MangaDownloader::retryFailedChapters(const QString& id)
     }
 }
 
+void MangaDownloader::startChapterNow(const QString& seriesId, const QString& chapterId)
+{
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_records.find(seriesId);
+        if (it == m_records.end()) return;
+
+        // Find the chapter
+        int chapterIdx = -1;
+        for (int i = 0; i < it->chapters.size(); ++i) {
+            if (it->chapters[i].chapterId == chapterId) {
+                chapterIdx = i;
+                break;
+            }
+        }
+        if (chapterIdx < 0) return;
+
+        // Reset to queued if it was error/cancelled (downloadedImages preserved)
+        if (it->chapters[chapterIdx].status == "error" ||
+            it->chapters[chapterIdx].status == "cancelled") {
+            it->chapters[chapterIdx].status = "queued";
+            it->chapters[chapterIdx].error.clear();
+            changed = true;
+        }
+
+        // Find first non-downloading chapter index (the target insertion slot —
+        // we never displace an in-flight downloading chapter from position 0)
+        int insertAt = 0;
+        while (insertAt < it->chapters.size() &&
+               it->chapters[insertAt].status == "downloading") {
+            ++insertAt;
+        }
+
+        // Move chapter to the insertion slot if not already there
+        if (chapterIdx != insertAt) {
+            ChapterDownload moved = it->chapters.takeAt(chapterIdx);
+            it->chapters.insert(insertAt, moved);
+            changed = true;
+        }
+    }
+    if (changed) {
+        saveRecords();
+        emit downloadUpdated(seriesId);
+        // A.8 will retrofit: emit chapterUpdated(seriesId, chapterId);
+        processQueue();
+    }
+}
+
 // ── R5: queue reorder ───────────────────────────────────────────────────────
 void MangaDownloader::moveSeriesToTop(const QString& id)
 {
