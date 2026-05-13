@@ -152,7 +152,6 @@ set(SOURCES
     src/core/book/LibGenScraper.cpp
     src/core/book/AbbScraper.cpp
     src/core/book/BookDownloader.cpp
-    src/ui/dialogs/AddMangaDialog.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/tankoyomi/MangaResultsGrid.cpp
@@ -300,7 +299,6 @@ set(HEADERS
     src/core/book/LibGenScraper.h
     src/core/book/AbbScraper.h
     src/core/book/BookDownloader.h
-    src/ui/dialogs/AddMangaDialog.h
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/tankoyomi/MangaResultsGrid.h
