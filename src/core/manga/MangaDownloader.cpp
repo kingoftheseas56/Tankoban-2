@@ -731,10 +731,16 @@ void MangaDownloader::startChapterNow(const QString& seriesId, const QString& ch
         }
         if (chapterIdx < 0) return;
 
+        // A chapter that's already running is a no-op for "start now" — and
+        // takeAt/insert on a downloading chapter would break the in-flight
+        // invariant + confuse the worker that captured chapterIdx.
+        if (it->chapters[chapterIdx].status == "downloading") return;
+
         // Reset to queued if it was error/cancelled (downloadedImages preserved)
         if (it->chapters[chapterIdx].status == "error" ||
             it->chapters[chapterIdx].status == "cancelled") {
             it->chapters[chapterIdx].status = "queued";
+            it->chapters[chapterIdx].failedImages = 0;
             it->chapters[chapterIdx].error.clear();
             changed = true;
         }
