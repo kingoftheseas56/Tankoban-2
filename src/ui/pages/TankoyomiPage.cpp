@@ -21,6 +21,7 @@
 #include <QNetworkReply>
 #include <QTimer>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QClipboard>
 #include <QColor>
 #include <QMenu>
@@ -997,12 +998,118 @@ void TankoyomiPage::refreshTransfers()
     }
 }
 
-// Mihon-overhaul E.5 — F.1 stub. F.1 fills with full Tankorent-parity menu
-// vocabulary (Move to top/bottom, Sort chapters, Cancel, Remove, Remove + Delete
-// Files, etc.) — currently a no-op so the connect()/MOC linkage is satisfied.
-void TankoyomiPage::showTransferCardContextMenu(const QPoint& globalPos, const QString& seriesId)
+// Mihon-overhaul F.1 — full Tankorent-parity menu vocabulary on the
+// TransferGroupCard right-click. Replaces E.5's empty stub.
+void TankoyomiPage::showTransferCardContextMenu(const QPoint& globalPos,
+                                                 const QString& seriesId)
 {
-    Q_UNUSED(globalPos);
-    Q_UNUSED(seriesId);
-    // F.1 implements the full Tankorent-parity menu vocabulary here.
+    if (!m_downloader || seriesId.isEmpty()) return;
+
+    QMenu menu(this);
+
+    const bool paused = m_downloader->isSeriesPaused(seriesId);
+    if (paused) {
+        menu.addAction(tr("Resume series"), this, [this, seriesId]() {
+            m_downloader->resumeSeries(seriesId);
+        });
+    } else {
+        menu.addAction(tr("Pause series"), this, [this, seriesId]() {
+            m_downloader->pauseSeries(seriesId);
+        });
+    }
+
+    menu.addAction(tr("Restart series"), this, [this, seriesId]() {
+        m_downloader->restartSeries(seriesId);
+    });
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Show in folder"), this, [this, seriesId]() {
+        // Find the record's destinationPath
+        const auto records = m_downloader->listActive();
+        for (const auto& rec : records) {
+            if (rec.id != seriesId) continue;
+            if (!rec.destinationPath.isEmpty()) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(rec.destinationPath));
+            }
+            break;
+        }
+    });
+
+    // Retry failed — only if any chapter is "error"
+    const auto records = m_downloader->listActive();
+    int errorCount = 0;
+    for (const auto& rec : records) {
+        if (rec.id != seriesId) continue;
+        for (const auto& ch : rec.chapters) {
+            if (ch.status == "error") ++errorCount;
+        }
+        break;
+    }
+    if (errorCount > 0) {
+        menu.addAction(tr("Retry failed chapters (%1)").arg(errorCount),
+            this, [this, seriesId]() {
+                m_downloader->retryFailedChapters(seriesId);
+            });
+    }
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Move to top"), this, [this, seriesId]() {
+        m_downloader->moveSeriesToTop(seriesId);
+        refreshTransfers();
+    });
+    menu.addAction(tr("Move to bottom"), this, [this, seriesId]() {
+        m_downloader->moveSeriesToBottom(seriesId);
+        refreshTransfers();
+    });
+
+    auto* sortMenu = menu.addMenu(tr("Sort chapters by"));
+    sortMenu->addAction(tr("Chapter number ascending"), this, [this, seriesId]() {
+        m_downloader->reorderChapters(seriesId, "chapter_number", true);
+    });
+    sortMenu->addAction(tr("Chapter number descending"), this, [this, seriesId]() {
+        m_downloader->reorderChapters(seriesId, "chapter_number", false);
+    });
+    sortMenu->addAction(tr("Date ascending"), this, [this, seriesId]() {
+        m_downloader->reorderChapters(seriesId, "date", true);
+    });
+    sortMenu->addAction(tr("Date descending"), this, [this, seriesId]() {
+        m_downloader->reorderChapters(seriesId, "date", false);
+    });
+
+    menu.addSeparator();
+
+    QString seriesTitle;
+    for (const auto& rec : records) {
+        if (rec.id == seriesId) { seriesTitle = rec.seriesTitle; break; }
+    }
+    menu.addAction(tr("Copy series title"), this, [seriesTitle]() {
+        QGuiApplication::clipboard()->setText(seriesTitle);
+    });
+
+    menu.addSeparator();
+
+    menu.addAction(tr("Cancel series"), this, [this, seriesId]() {
+        const auto ans = QMessageBox::question(this, tr("Cancel series?"),
+            tr("Cancel this series's queued / downloading chapters?\n"
+               "Already-downloaded files stay on disk."),
+            QMessageBox::Yes | QMessageBox::No);
+        if (ans == QMessageBox::Yes) {
+            m_downloader->cancelDownload(seriesId);
+            refreshTransfers();
+        }
+    });
+
+    menu.addAction(tr("Cancel + Delete files"), this, [this, seriesId]() {
+        const auto ans = QMessageBox::question(this, tr("Delete files?"),
+            tr("Cancel this series AND delete all of its downloaded files from disk?"),
+            QMessageBox::Yes | QMessageBox::No);
+        if (ans == QMessageBox::Yes) {
+            m_downloader->removeWithData(seriesId);
+            refreshTransfers();
+        }
+    });
+
+    menu.exec(globalPos);
 }
