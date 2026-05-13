@@ -1,11 +1,14 @@
 // src/ui/pages/tankoyomi/MangaDetailView.cpp
 #include "MangaDetailView.h"
 
+#include <QAction>
 #include <QDateTime>
+#include <QDebug>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
@@ -16,6 +19,7 @@
 #include <QHeaderView>
 
 #include <algorithm>
+#include <climits>
 #include <utility>
 
 #include "ChapterDownloadIndicator.h"
@@ -78,6 +82,26 @@ void MangaDetailView::buildUI()
     m_downloadDropdown->setText(tr("Download v"));
     m_downloadDropdown->setObjectName("MangaDetailDownloadDropdown");
     m_downloadDropdown->setPopupMode(QToolButton::InstantPopup);
+
+    auto* dlMenu = new QMenu(m_downloadDropdown);
+    QAction* allAction = dlMenu->addAction(tr("Download all"));
+    connect(allAction, &QAction::triggered, this, [this]() { downloadNextN(INT_MAX); });
+
+    auto addNextN = [this, dlMenu](int n) {
+        QAction* a = dlMenu->addAction(tr("Download next %1 not-downloaded").arg(n));
+        connect(a, &QAction::triggered, this, [this, n]() { downloadNextN(n); });
+    };
+    addNextN(5);
+    addNextN(10);
+    addNextN(25);
+
+    dlMenu->addSeparator();
+
+    QAction* customAction = dlMenu->addAction(tr("Custom range..."));
+    connect(customAction, &QAction::triggered, this, &MangaDetailView::openRangeDialog);
+
+    m_downloadDropdown->setMenu(dlMenu);
+
     actionRow->addWidget(m_downloadDropdown);
     actionRow->addStretch();
     metaCol->addLayout(actionRow);
@@ -451,5 +475,43 @@ void MangaDetailView::onChapterIconClicked(int row)
             // F.2 wires the Delete confirm popover; for C.3, no-op.
             break;
     }
+}
+
+void MangaDetailView::downloadNextN(int n)
+{
+    if (!m_downloader || !m_destProvider) return;
+
+    // Build set of chapter IDs that are NOT already downloaded/queued/downloading
+    QList<ChapterInfo> picks;
+    const auto records = m_downloader->listActive();
+    for (const auto& ch : m_chapters) {
+        bool skip = false;
+        for (const auto& rec : records) {
+            if (rec.seriesTitle != m_result.title) continue;
+            if (rec.source != m_result.source) continue;
+            for (const auto& chd : rec.chapters) {
+                if (chd.chapterId != ch.id) continue;
+                if (chd.status == "queued" || chd.status == "downloading" ||
+                    chd.status == "completed") {
+                    skip = true;
+                }
+                break;
+            }
+            if (skip) break;
+        }
+        if (!skip) picks.append(ch);
+        if (picks.size() >= n) break;
+    }
+    if (picks.isEmpty()) return;
+
+    m_downloader->startDownload(m_result.title, m_result.source,
+                                 picks, m_destProvider(),
+                                 QStringLiteral("cbz"));
+}
+
+void MangaDetailView::openRangeDialog()
+{
+    // D.4 implements ChapterRangeDialog construction + exec. For D.3, no-op.
+    qDebug() << "MangaDetailView::openRangeDialog stub — D.4 wires the modal";
 }
 

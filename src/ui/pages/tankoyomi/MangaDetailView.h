@@ -46,6 +46,8 @@ private slots:
     void onScraperError(const QString& message);
     void onChapterUpdated(const QString& seriesId, const QString& chapterId);
     void updateMultiSelectBar();
+    void downloadNextN(int n);
+    void openRangeDialog();
 
 private:
     void buildUI();
