@@ -135,8 +135,53 @@ void TransferGroupCard::refreshFromRecord()
 
 void TransferGroupCard::rebuildChapterList(const MangaDownloadRecord& rec)
 {
-    // E.3 fills — E.1 stubs
-    Q_UNUSED(rec);
+    // Clear existing rows
+    while (auto* item = m_chapterColumn->takeAt(0)) {
+        if (auto* w = item->widget()) w->deleteLater();
+        delete item;
+    }
+
+    for (const auto& ch : rec.chapters) {
+        auto* row = new QWidget(this);
+        row->setObjectName("TransferCardChapterRow");
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(8);
+
+        auto* label = new QLabel(tr("Ch %1  %2")
+            .arg(ch.chapterNumber, 0, 'f', 1).arg(ch.chapterName), row);
+        label->setObjectName("TransferCardChapterLabel");
+
+        QString statusText;
+        if      (ch.status == "downloading") statusText = tr("Downloading");
+        else if (ch.status == "queued")      statusText = tr("Queued");
+        else if (ch.status == "completed")   statusText = tr("Completed");
+        else if (ch.status == "error")       statusText = tr("Errored");
+        else if (ch.status == "cancelled")   statusText = tr("Cancelled");
+        auto* statusLbl = new QLabel(statusText, row);
+
+        auto* indicator = new ChapterDownloadIndicator(row);
+        indicator->setObjectName(QStringLiteral("TransferCardIndicator_%1")
+            .arg(ch.chapterId));
+        using S = ChapterDownloadIndicator::State;
+        if      (ch.status == "queued")      indicator->setState(S::Queued);
+        else if (ch.status == "downloading") {
+            indicator->setState(S::Downloading);
+            if (ch.totalImages > 0) {
+                indicator->setProgress((ch.downloadedImages * 100) /
+                                        ch.totalImages);
+            }
+        }
+        else if (ch.status == "completed")   indicator->setState(S::Downloaded);
+        else if (ch.status == "error")       indicator->setState(S::Errored);
+        else                                  indicator->setState(S::NotDownloaded);
+
+        rl->addWidget(label, 1);
+        rl->addWidget(statusLbl);
+        rl->addWidget(indicator);
+
+        m_chapterColumn->addWidget(row);
+    }
 }
 
 void TransferGroupCard::onPauseToggleClicked()
@@ -158,10 +203,34 @@ void TransferGroupCard::onChapterUpdated(const QString& seriesId,
                                          const QString& chapterId)
 {
     if (seriesId != m_recordId) return;
-    Q_UNUSED(chapterId);
-    // E.3 reaches into the specific chapter row and updates its indicator;
-    // for E.1 just refresh the header
-    refreshFromRecord();
+    refreshFromRecord();  // Header still needs full refresh (aggregate counts may change)
+
+    // Find the indicator for this chapter by objectName
+    auto* indicator = findChild<ChapterDownloadIndicator*>(
+        QStringLiteral("TransferCardIndicator_%1").arg(chapterId));
+    if (!indicator) return;
+
+    // Walk the live record to grab the current chapter state
+    const auto records = m_downloader->listActive();
+    for (const auto& rec : records) {
+        if (rec.id != m_recordId) continue;
+        for (const auto& ch : rec.chapters) {
+            if (ch.chapterId != chapterId) continue;
+            using S = ChapterDownloadIndicator::State;
+            if      (ch.status == "queued")      indicator->setState(S::Queued);
+            else if (ch.status == "downloading") {
+                indicator->setState(S::Downloading);
+                if (ch.totalImages > 0)
+                    indicator->setProgress((ch.downloadedImages * 100) /
+                                            ch.totalImages);
+            }
+            else if (ch.status == "completed")   indicator->setState(S::Downloaded);
+            else if (ch.status == "error")       indicator->setState(S::Errored);
+            else                                  indicator->setState(S::NotDownloaded);
+            break;
+        }
+        break;
+    }
 }
 
 void TransferGroupCard::onDownloadUpdated(const QString& seriesId)
