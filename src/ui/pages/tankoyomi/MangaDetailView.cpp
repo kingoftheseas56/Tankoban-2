@@ -13,6 +13,8 @@
 #include <QVBoxLayout>
 #include <QHeaderView>
 
+#include <utility>
+
 #include "ChapterDownloadIndicator.h"
 #include "core/manga/MangaDownloader.h"
 #include "core/manga/MangaScraper.h"
@@ -175,6 +177,24 @@ void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
 
 void MangaDetailView::setScraper(MangaScraper* s) { m_scraper = s; }
 
+void MangaDetailView::setDownloader(MangaDownloader* dl)
+{
+    if (m_downloader == dl) return;
+    if (m_downloader) {
+        disconnect(m_downloader, nullptr, this, nullptr);
+    }
+    m_downloader = dl;
+    if (m_downloader) {
+        connect(m_downloader, &MangaDownloader::chapterUpdated,
+                this, &MangaDetailView::onChapterUpdated);
+    }
+}
+
+void MangaDetailView::setBridgeDestinationProvider(std::function<QString()> destProvider)
+{
+    m_destProvider = std::move(destProvider);
+}
+
 // ---------------------------------------------------------------------
 // C.1 slot stubs -- empty bodies satisfy MOC qt_static_metacall linkage.
 // C.3 fills in onChaptersReady + onScraperError + renderChapters +
@@ -205,8 +225,58 @@ void MangaDetailView::onScraperError(const QString& message)
     m_errorLabel->show();
 }
 
-void MangaDetailView::onChapterUpdated(const QString& /*seriesId*/,
-                                       const QString& /*chapterId*/) {}
+void MangaDetailView::onChapterUpdated(const QString& seriesId,
+                                       const QString& chapterId)
+{
+    Q_UNUSED(seriesId);
+    // Find the row for this chapter
+    int row = -1;
+    for (int i = 0; i < m_chapters.size(); ++i) {
+        if (m_chapters[i].id == chapterId) { row = i; break; }
+    }
+    if (row < 0) return;
+
+    auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
+        m_chapterTable->cellWidget(row, 3));
+    if (!indicator) return;
+
+    // Derive state from downloader records
+    deriveChapterState(chapterId, *indicator);
+}
+
+void MangaDetailView::deriveChapterState(const QString& chapterId,
+                                          ChapterDownloadIndicator& indicator) const
+{
+    using State = ChapterDownloadIndicator::State;
+    State state = State::NotDownloaded;
+    int progress = 0;
+
+    if (m_downloader) {
+        const auto records = m_downloader->listActive();
+        for (const auto& rec : records) {
+            if (rec.seriesTitle != m_result.title) continue;
+            if (rec.source != m_result.source) continue;
+            for (const auto& ch : rec.chapters) {
+                if (ch.chapterId != chapterId) continue;
+                if (ch.status == "queued")           state = State::Queued;
+                else if (ch.status == "downloading") {
+                    state = State::Downloading;
+                    if (ch.totalImages > 0) {
+                        progress = (ch.downloadedImages * 100) / ch.totalImages;
+                    }
+                }
+                else if (ch.status == "completed")   state = State::Downloaded;
+                else if (ch.status == "error")       state = State::Errored;
+                else if (ch.status == "cancelled")   state = State::NotDownloaded;
+                break;
+            }
+            if (state != State::NotDownloaded) break;
+        }
+    }
+
+    indicator.setState(state);
+    if (state == State::Downloading) indicator.setProgress(progress);
+}
 
 void MangaDetailView::renderChapters()
 {
@@ -231,9 +301,8 @@ void MangaDetailView::renderChapters()
         auto* indicator = new ChapterDownloadIndicator();
         m_chapterTable->setCellWidget(i, 3, indicator);
 
-        // Initial state — C.4 will derive from m_downloader records;
-        // for C.3 default to NotDownloaded.
-        indicator->setState(ChapterDownloadIndicator::State::NotDownloaded);
+        // Initial state from downloader records (C.4)
+        deriveChapterState(ch.id, *indicator);
 
         connect(indicator, &ChapterDownloadIndicator::clicked, this,
                 [this, i]() { onChapterIconClicked(i); });

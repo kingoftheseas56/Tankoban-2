@@ -15,6 +15,7 @@ class QTableWidget;
 class QVBoxLayout;
 class MangaScraper;
 class MangaDownloader;
+class ChapterDownloadIndicator;
 
 class MangaDetailView : public QWidget
 {
@@ -44,6 +45,8 @@ private:
     void renderChapters();
     void updateMultiSelectBar();
     void onChapterIconClicked(int row);
+    void deriveChapterState(const QString& chapterId,
+                             ChapterDownloadIndicator& indicator) const;
 
     MangaResult        m_result;
     QList<ChapterInfo> m_chapters;
