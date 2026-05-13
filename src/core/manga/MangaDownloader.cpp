@@ -690,6 +690,29 @@ void MangaDownloader::restartSeries(const QString& id)
     }
 }
 
+void MangaDownloader::retryFailedChapters(const QString& id)
+{
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        auto it = m_records.find(id);
+        if (it == m_records.end()) return;
+        for (auto& ch : it->chapters) {
+            if (ch.status == "error") {
+                ch.status = "queued";
+                ch.failedImages = 0;
+                ch.error.clear();
+                changed = true;
+            }
+        }
+    }
+    if (changed) {
+        saveRecords();
+        emit downloadUpdated(id);
+        processQueue();
+    }
+}
+
 // ── R5: queue reorder ───────────────────────────────────────────────────────
 void MangaDownloader::moveSeriesToTop(const QString& id)
 {

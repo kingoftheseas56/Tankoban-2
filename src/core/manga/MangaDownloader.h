@@ -92,6 +92,10 @@ public:
     // Tankorent-parity: equivalent to Tankorent's restartStreamBulkGroup.
     void restartSeries(const QString& id);
 
+    // Like restartSeries but only resets "error" chapters (leaves "cancelled"
+    // alone). For the Tankorent-parity "Retry failed chapters" menu item.
+    void retryFailedChapters(const QString& id);
+
     // Queue reordering (R5).
     void moveSeriesToTop(const QString& id);
     void moveSeriesToBottom(const QString& id);
