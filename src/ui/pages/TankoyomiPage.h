@@ -10,6 +10,7 @@
 #include <QVBoxLayout>
 #include <QStackedWidget>
 #include <QSet>
+#include <QMap>
 
 #include "core/manga/MangaResult.h"
 
@@ -20,6 +21,8 @@ class MangaResultsGrid;
 class MangaDetailView;
 class QNetworkAccessManager;
 class QTimer;
+class QScrollArea;
+class TransferGroupCard;
 
 class TankoyomiPage : public QWidget
 {
@@ -44,7 +47,7 @@ private:
     void buildStatusRow(QVBoxLayout* parent);
     void buildMainTabs(QVBoxLayout* parent);
     QTableWidget* createResultsTable();
-    QTableWidget* createTransfersTable();
+    QWidget* createTransfersList();   // Mihon-overhaul E.5
 
     void startSearch();
     void cancelSearch();
@@ -53,6 +56,13 @@ private:
     void refreshTransfers();
     void updateResultsView();   // B4: pick data view vs empty state
     void showResultContextMenu(int row, const QPoint& globalPos);   // E2
+
+private slots:
+    // Mihon-overhaul E.5 — context-menu request from a TransferGroupCard. F.1
+    // will fill the body with the full Tankorent-parity menu vocabulary.
+    void showTransferCardContextMenu(const QPoint& globalPos, const QString& seriesId);
+
+private:
 
     CoreBridge*            m_bridge;
     QNetworkAccessManager* m_nam        = nullptr;
@@ -93,7 +103,11 @@ private:
     QPushButton*    m_emptyClearBtn  = nullptr;   // E3: clear search + return to pre-search
     QWidget*        m_loadingPage    = nullptr;   // B5: indeterminate progress page
     QLabel*         m_loadingLabel   = nullptr;
-    QTableWidget*   m_transfersTable = nullptr;
+    // Mihon-overhaul E.5 — Transfers tab vertical card list (one per active series)
+    QScrollArea*    m_transfersScroll    = nullptr;
+    QWidget*        m_transfersContainer = nullptr;
+    QVBoxLayout*    m_transfersCardList  = nullptr;
+    QMap<QString, TransferGroupCard*> m_transfersCardsById;
     QTimer*         m_transferTimer  = nullptr;
 
     // Mihon-overhaul E.4 — Transfers tab top status line + global controls

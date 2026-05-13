@@ -8,12 +8,14 @@
 #include "ui/dialogs/MangaTransferDialog.h"
 #include "ui/pages/tankoyomi/MangaDetailView.h"
 #include "ui/pages/tankoyomi/MangaResultsGrid.h"
+#include "ui/pages/tankoyomi/TransferGroupCard.h"
 #include "ui/widgets/Toast.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QHeaderView>
 #include <QProgressBar>
+#include <QScrollArea>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -185,77 +187,10 @@ TankoyomiPage::TankoyomiPage(CoreBridge* bridge, QWidget* parent)
         showResultContextMenu(row, globalPos);
     });
 
-    // Double-click a transfer → open details dialog
-    connect(m_transfersTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
-        auto* item = m_transfersTable->item(row, 0);
-        if (!item) return;
-        QString id = item->data(Qt::UserRole).toString();
-        if (id.isEmpty()) return;
-        MangaTransferDialog dlg(id, m_downloader, this);
-        dlg.exec();
-    });
-
-    // Transfers context menu
-    connect(m_transfersTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-        int row = m_transfersTable->rowAt(pos.y());
-        if (row < 0) return;
-        auto* item = m_transfersTable->item(row, 0);
-        if (!item) return;
-        QString id = item->data(Qt::UserRole).toString();
-        if (id.isEmpty()) return;
-
-        QMenu* menu = ContextMenuHelper::createMenu(this);
-
-        // R5: queue reorder actions — disabled when the row is already at the
-        // target end. Total-row count is rowCount(); the engine treats order
-        // as contiguous so the UI index matches the internal order 1:1.
-        const int totalRows = m_transfersTable->rowCount();
-        auto* moveTopAct = menu->addAction("Move to top", this, [this, id]() {
-            m_downloader->moveSeriesToTop(id);
-            refreshTransfers();
-        });
-        moveTopAct->setEnabled(row > 0);
-        auto* moveBottomAct = menu->addAction("Move to bottom", this, [this, id]() {
-            m_downloader->moveSeriesToBottom(id);
-            refreshTransfers();
-        });
-        moveBottomAct->setEnabled(row < totalRows - 1);
-
-        // R6: sort the queued chapters of this series. Doesn't touch in-flight
-        // or completed chapters.
-        auto* sortMenu = menu->addMenu("Sort chapters");
-        sortMenu->addAction("By chapter number (ascending)", this, [this, id]() {
-            m_downloader->reorderChapters(id, "chapter_number", true);
-        });
-        sortMenu->addAction("By chapter number (descending)", this, [this, id]() {
-            m_downloader->reorderChapters(id, "chapter_number", false);
-        });
-        sortMenu->addAction("By upload date (newest first)", this, [this, id]() {
-            m_downloader->reorderChapters(id, "date", false);
-        });
-        sortMenu->addAction("By upload date (oldest first)", this, [this, id]() {
-            m_downloader->reorderChapters(id, "date", true);
-        });
-        menu->addSeparator();
-
-        menu->addAction("Cancel", this, [this, id]() { m_downloader->cancelDownload(id); });
-        menu->addSeparator();
-
-        auto* removeAction = ContextMenuHelper::addDangerAction(menu, "Remove");
-        connect(removeAction, &QAction::triggered, this, [this, id]() {
-            m_downloader->removeDownload(id);
-        });
-
-        auto* removeWithFiles = ContextMenuHelper::addDangerAction(menu, "Remove + Delete Files");
-        connect(removeWithFiles, &QAction::triggered, this, [this, id]() {
-            if (ContextMenuHelper::confirmRemove(this, "Delete Files",
-                    "Remove download and delete all files?"))
-                m_downloader->removeWithData(id);
-        });
-
-        menu->exec(m_transfersTable->viewport()->mapToGlobal(pos));
-        delete menu;
-    });
+    // Mihon-overhaul E.5 — transfers tab is now a card list; per-card
+    // double-click + context-menu wiring lives on each TransferGroupCard, set up
+    // in refreshTransfers() when the card is created. The detail-dialog open and
+    // context-menu vocabulary moves to showTransferCardContextMenu (F.1 fills).
 
     // Auto-refresh transfers
     m_transferTimer = new QTimer(this);
@@ -535,8 +470,6 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
 
     m_tabWidget->addTab(m_resultsInnerStack, "Search Results");
 
-    m_transfersTable = createTransfersTable();
-
     // Mihon-overhaul E.4 — Transfers tab body: top status row above the
     // existing table. A container widget is needed because addTab() takes a
     // single widget; we host the status row + table in a QVBoxLayout.
@@ -579,7 +512,8 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     });
 
     transfersTabLayout->addLayout(statusCol);
-    transfersTabLayout->addWidget(m_transfersTable, 1);
+    // Mihon-overhaul E.5 — flat QTableWidget replaced with vertical card list.
+    transfersTabLayout->addWidget(createTransfersList(), 1);
 
     m_tabWidget->addTab(transfersTabBody, "Transfers");
 
@@ -641,67 +575,24 @@ QTableWidget* TankoyomiPage::createResultsTable()
     return table;
 }
 
-QTableWidget* TankoyomiPage::createTransfersTable()
+// Mihon-overhaul E.5 — Transfers tab vertical scroll list of TransferGroupCard
+// widgets. Replaces the flat 4-column QTableWidget. Each card is one active
+// series; refreshTransfers() inserts / updates / removes cards in place.
+QWidget* TankoyomiPage::createTransfersList()
 {
-    auto *table = new QTableWidget(0, 4);
-    table->setObjectName("MangaTransfersTable");
-    table->setMinimumHeight(220);
-    table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->verticalHeader()->setVisible(false);
-    table->verticalHeader()->setDefaultSectionSize(32);
-    table->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_transfersScroll = new QScrollArea(this);
+    m_transfersScroll->setObjectName("TransfersScroll");
+    m_transfersScroll->setWidgetResizable(true);
 
-    QStringList headers = { "Series", "Progress", "Status", "Chapters" };
-    table->setHorizontalHeaderLabels(headers);
+    m_transfersContainer = new QWidget(m_transfersScroll);
+    m_transfersContainer->setObjectName("TransfersContainer");
+    m_transfersCardList = new QVBoxLayout(m_transfersContainer);
+    m_transfersCardList->setContentsMargins(8, 8, 8, 8);
+    m_transfersCardList->setSpacing(8);
+    m_transfersCardList->addStretch();  // trailing spacer so cards stack from top
 
-    // T18 — match header alignment to cell alignment per spec CR.9.
-    auto *hdr = table->horizontalHeader();
-    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    // Per-col override: Progress (1), Status (2), Chapters (3) center on header + cells.
-    for (int col : { 1, 2, 3 }) {
-        auto* hi = table->horizontalHeaderItem(col);
-        if (!hi) {
-            hi = new QTableWidgetItem(headers[col]);
-            table->setHorizontalHeaderItem(col, hi);
-        }
-        hi->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
-    }
-
-    hdr->setMinimumSectionSize(80);
-    hdr->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int i = 1; i < 4; ++i)
-        hdr->setSectionResizeMode(i, QHeaderView::Interactive);
-    hdr->resizeSection(1, 100);
-    hdr->resizeSection(2, 120);
-    hdr->resizeSection(3, 120);
-
-    table->setStyle(QStyleFactory::create("Fusion"));
-    table->setShowGrid(false);
-    table->setAlternatingRowColors(true);
-    table->setFocusPolicy(Qt::NoFocus);
-
-    QPalette pal = table->palette();
-    pal.setColor(QPalette::Base,            QColor(0x11, 0x11, 0x11));
-    pal.setColor(QPalette::AlternateBase,   QColor(0x18, 0x18, 0x18));
-    pal.setColor(QPalette::Text,            QColor(0xee, 0xee, 0xee));
-    pal.setColor(QPalette::Highlight,       QColor(192, 200, 212, 36));
-    pal.setColor(QPalette::HighlightedText, QColor(0xee, 0xee, 0xee));
-    table->setPalette(pal);
-
-    table->setStyleSheet(QStringLiteral(
-        "#MangaTransfersTable { border: none; outline: none; font-size: 13px; }"
-        "#MangaTransfersTable::item { padding: 0 8px; }"
-        "#MangaTransfersTable::item:hover { background: rgba(255,255,255,0.04); }"
-        "#MangaTransfersTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
-        "#MangaTransfersTable QHeaderView::section {"
-        "  background: #1a1a1a; color: #888; border: none;"
-        "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
-        "  padding: 6px 8px; font-size: 11px; font-weight: 600; }"
-    ));
-
-    return table;
+    m_transfersScroll->setWidget(m_transfersContainer);
+    return m_transfersScroll;
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
@@ -1009,52 +900,58 @@ void TankoyomiPage::showResultContextMenu(int row, const QPoint& globalPos)
 }
 
 // ── Transfers refresh ───────────────────────────────────────────────────────
+// Mihon-overhaul E.5 — drives the vertical card list. Walks the downloader's
+// listActive() and reconciles m_transfersCardsById: remove cards whose series
+// vanished, create+wire new cards for new series, otherwise just push the
+// fresh record into the existing card so it refreshes its inner state.
 void TankoyomiPage::refreshTransfers()
 {
-    auto active = m_downloader->listActive();
+    if (!m_downloader || !m_transfersCardList) return;
 
-    m_transfersTable->setRowCount(active.size());
-    int activeCount = 0;
+    const auto records = m_downloader->listActive();
+    QSet<QString> liveIds;
+    for (const auto& rec : records) liveIds.insert(rec.id);
 
-    for (int i = 0; i < active.size(); ++i) {
-        const auto& r = active[i];
-
-        auto* nameItem = m_transfersTable->item(i, 0);
-        if (!nameItem) { nameItem = new QTableWidgetItem; m_transfersTable->setItem(i, 0, nameItem); }
-        nameItem->setText(r.seriesTitle);
-        nameItem->setData(Qt::UserRole, r.id);
-        // T18 — explicit alignment per spec CR.9: Series column left+vcenter.
-        nameItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-
-        auto* progItem = m_transfersTable->item(i, 1);
-        if (!progItem) { progItem = new QTableWidgetItem; m_transfersTable->setItem(i, 1, progItem); }
-        progItem->setText(QString::number(r.progress * 100, 'f', 0) + "%");
-        // T18 — Progress centered per spec CR.9.
-        progItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
-
-        auto* stateItem = m_transfersTable->item(i, 2);
-        if (!stateItem) { stateItem = new QTableWidgetItem; m_transfersTable->setItem(i, 2, stateItem); }
-        stateItem->setText(chapterStatusText(r.status));
-        // T18 — Status centered per spec CR.9.
-        stateItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
-
-        auto* chapItem = m_transfersTable->item(i, 3);
-        if (!chapItem) { chapItem = new QTableWidgetItem; m_transfersTable->setItem(i, 3, chapItem); }
-        chapItem->setText(QString("%1/%2").arg(r.completedChapters).arg(r.totalChapters));
-        // T18 — Chapters centered per spec CR.9.
-        chapItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
-
-        if (r.status == "downloading") ++activeCount;
+    // Remove cards whose series no longer exists
+    for (auto it = m_transfersCardsById.begin();
+         it != m_transfersCardsById.end(); ) {
+        if (!liveIds.contains(it.key())) {
+            it.value()->deleteLater();
+            it = m_transfersCardsById.erase(it);
+        } else {
+            ++it;
+        }
     }
 
-    auto history = m_downloader->listHistory();
-    m_downloadStatus->setText(QString("Active: %1 | History: %2").arg(activeCount).arg(history.size()));
+    // Insert / refresh cards for live records
+    int insertPos = 0;
+    int activeCount = 0;
+    int pendingChapters = 0;
+    int pendingSeries   = 0;
+    for (const auto& rec : records) {
+        TransferGroupCard* card = m_transfersCardsById.value(rec.id, nullptr);
+        if (!card) {
+            card = new TransferGroupCard(m_downloader, m_transfersContainer);
+            connect(card, &TransferGroupCard::cancelSeriesRequested,
+                    this, [this](const QString& id) {
+                        const auto ans = QMessageBox::question(this,
+                            tr("Cancel series?"),
+                            tr("Cancel this series's queued / downloading chapters?"),
+                            QMessageBox::Yes | QMessageBox::No);
+                        if (ans == QMessageBox::Yes)
+                            m_downloader->cancelDownload(id);
+                    });
+            connect(card, &TransferGroupCard::contextMenuRequested,
+                    this, &TankoyomiPage::showTransferCardContextMenu);
+            m_transfersCardList->insertWidget(insertPos, card);
+            m_transfersCardsById.insert(rec.id, card);
+        }
+        card->setRecord(rec);
+        ++insertPos;
 
-    // A5: count pending chapters and the series that still have any pending work.
-    // Used for both the tab badge and the Pause/Overflow visibility check.
-    int  pendingChapters = 0;
-    int  pendingSeries   = 0;
-    for (const auto& rec : active) {
+        if (rec.status == "downloading") ++activeCount;
+
+        // A5: tally pending chapters / series for badge + global-controls toggles.
         int chaptersHere = 0;
         for (const auto& ch : rec.chapters) {
             if (ch.status == "queued" || ch.status == "downloading")
@@ -1065,19 +962,24 @@ void TankoyomiPage::refreshTransfers()
             ++pendingSeries;
         }
     }
+
+    const auto history = m_downloader->listHistory();
+    m_downloadStatus->setText(QString("Active: %1 | History: %2")
+                                  .arg(activeCount).arg(history.size()));
+
     const bool hasPendingWork = pendingChapters > 0;
 
     // Tab badge — show total active records (including finished/errored ones the
     // user hasn't dismissed), plus a pending-chapter count when work remains.
     QString tabLabel;
-    if (active.isEmpty()) {
+    if (records.isEmpty()) {
         tabLabel = "Transfers";
     } else if (pendingChapters > 0) {
         tabLabel = QString("Transfers · %1 series · %2 chapters pending")
                        .arg(pendingSeries)
                        .arg(pendingChapters);
     } else {
-        tabLabel = QString("Transfers (%1)").arg(active.size());
+        tabLabel = QString("Transfers (%1)").arg(records.size());
     }
     m_tabWidget->setTabText(1, tabLabel);
 
@@ -1086,11 +988,21 @@ void TankoyomiPage::refreshTransfers()
     m_pauseBtn->setText(m_downloader->isPaused() ? "Resume Downloads" : "Pause Downloads");
     m_moreBtn->setVisible(hasPendingWork);
 
-    // Mihon-overhaul E.4 — rolling top status line on the Transfers tab.
-    if (m_downloader && m_transfersStatusLine) {
+    // Update top status line (E.4)
+    if (m_transfersStatusLine) {
         const auto counts = m_downloader->countByState();
         m_transfersStatusLine->setText(
             tr("%1 downloading · %2 queued · %3 done today")
                 .arg(counts.downloading).arg(counts.queued).arg(counts.doneToday));
     }
+}
+
+// Mihon-overhaul E.5 — F.1 stub. F.1 fills with full Tankorent-parity menu
+// vocabulary (Move to top/bottom, Sort chapters, Cancel, Remove, Remove + Delete
+// Files, etc.) — currently a no-op so the connect()/MOC linkage is satisfied.
+void TankoyomiPage::showTransferCardContextMenu(const QPoint& globalPos, const QString& seriesId)
+{
+    Q_UNUSED(globalPos);
+    Q_UNUSED(seriesId);
+    // F.1 implements the full Tankorent-parity menu vocabulary here.
 }
