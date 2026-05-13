@@ -240,6 +240,9 @@ void MangaDownloader::processQueue()
         if (it == m_records.end()) continue;
         auto& rec = it.value();
         if (rec.status == "cancelled") continue;
+        // Mihon-overhaul A.3 — skip records whose owner has paused the series.
+        // Global m_paused is checked elsewhere; this is the per-series gate.
+        if (rec.paused) continue;
 
         for (int i = 0; i < rec.chapters.size(); ++i) {
             if (m_activeDownloads >= MAX_CONCURRENT_CHAPTERS) return;
@@ -395,6 +398,30 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                         ch.status = QStringLiteral("queued");
                 }
                 --m_activeDownloads;
+                emit downloadUpdated(recordId);
+                return;
+            }
+        }
+
+        // Mihon-overhaul A.3 — if the series flipped to paused mid-flight, revert
+        // the running chapter to "queued" so resumeSeries() picks it back up.
+        // Mirrors the global m_paused checkpoint above; the global guard fires
+        // first when both are true.
+        {
+            bool perSeriesPaused = false;
+            {
+                QMutexLocker lock(&m_mutex);
+                auto it = m_records.find(recordId);
+                if (it != m_records.end() && it->paused && chapterIdx < it->chapters.size()) {
+                    auto& ch = it->chapters[chapterIdx];
+                    ch.status = QStringLiteral("queued");
+                    ch.downloadedImages = 0;
+                    --m_activeDownloads;
+                    perSeriesPaused = true;
+                }
+            }
+            if (perSeriesPaused) {
+                saveRecords();
                 emit downloadUpdated(recordId);
                 return;
             }
