@@ -480,12 +480,11 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     transfersTabLayout->setContentsMargins(0, 0, 0, 0);
     transfersTabLayout->setSpacing(8);
 
-    // Mihon-overhaul E.4 — top status row above the transfers list/table
-    auto* statusCol = new QVBoxLayout();
-    m_transfersStatusLine = new QLabel(this);
-    m_transfersStatusLine->setObjectName("TransfersStatusLine");
-    statusCol->addWidget(m_transfersStatusLine);
-
+    // Mihon-overhaul E.4 — global Pause-all / Resume-all / Cancel-all
+    // controls. Status-line dropped 2026-05-13 per Hemanth smoke feedback
+    // ("the 0 downloaded 0 queded etc is very poorly placed and not
+    // necessary") — redundant with search-row Active|History counter +
+    // per-card "Completed · X of Y chapters" labels.
     auto* btnRow = new QHBoxLayout();
     m_transfersPauseAll = new QPushButton(tr("Pause all"), this);
     m_transfersPauseAll->setObjectName("TransfersPauseAll");
@@ -497,7 +496,6 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
     btnRow->addWidget(m_transfersResumeAll);
     btnRow->addWidget(m_transfersCancelAll);
     btnRow->addStretch();
-    statusCol->addLayout(btnRow);
 
     connect(m_transfersPauseAll, &QPushButton::clicked, this, [this]() {
         if (m_downloader) m_downloader->pauseAll();
@@ -512,7 +510,7 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
         if (ans == QMessageBox::Yes && m_downloader) m_downloader->cancelAll();
     });
 
-    transfersTabLayout->addLayout(statusCol);
+    transfersTabLayout->addLayout(btnRow);
     // Mihon-overhaul E.5 — flat QTableWidget replaced with vertical card list.
     transfersTabLayout->addWidget(createTransfersList(), 1);
 
@@ -1045,13 +1043,10 @@ void TankoyomiPage::refreshTransfers()
     m_pauseBtn->setText(m_downloader->isPaused() ? "Resume Downloads" : "Pause Downloads");
     m_moreBtn->setVisible(hasPendingWork);
 
-    // Update top status line (E.4)
-    if (m_transfersStatusLine) {
-        const auto counts = m_downloader->countByState();
-        m_transfersStatusLine->setText(
-            tr("%1 downloading · %2 queued · %3 done today")
-                .arg(counts.downloading).arg(counts.queued).arg(counts.doneToday));
-    }
+    // E.4 top status line removed 2026-05-13 (Hemanth smoke feedback —
+    // redundant with the search-row Active|History counter + per-card
+    // "Completed · X of Y chapters" labels). countByState() remains in
+    // the MangaDownloader API for any future caller.
 }
 
 // Mihon-overhaul F.1 — full Tankorent-parity menu vocabulary on the

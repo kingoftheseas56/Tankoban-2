@@ -110,8 +110,9 @@ private:
     QMap<QString, TransferGroupCard*> m_transfersCardsById;
     QTimer*         m_transferTimer  = nullptr;
 
-    // Mihon-overhaul E.4 — Transfers tab top status line + global controls
-    QLabel*      m_transfersStatusLine = nullptr;
+    // Mihon-overhaul E.4 — Transfers tab global controls
+    // (status line dropped 2026-05-13 per Hemanth smoke feedback —
+    // redundant with search-row Active|History counter + per-card labels)
     QPushButton* m_transfersPauseAll   = nullptr;
     QPushButton* m_transfersResumeAll  = nullptr;
     QPushButton* m_transfersCancelAll  = nullptr;
