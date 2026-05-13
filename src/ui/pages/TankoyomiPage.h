@@ -17,6 +17,7 @@ class CoreBridge;
 class MangaScraper;
 class MangaDownloader;
 class MangaResultsGrid;
+class MangaDetailView;
 class QNetworkAccessManager;
 class QTimer;
 
@@ -78,7 +79,12 @@ private:
 
     // Main area
     QTabWidget*     m_tabWidget      = nullptr;
-    QStackedWidget* m_resultsStack   = nullptr;   // B3: list/grid/empty/loading pages
+    // Mihon-overhaul C.5 — Results tab's inner stack:
+    //   index 0 = m_searchResultsStack (existing list/grid/empty/loading pages)
+    //   index 1 = m_detailView (MangaDetailView)
+    QStackedWidget*   m_resultsInnerStack = nullptr;
+    QStackedWidget*   m_searchResultsStack = nullptr; // renamed from m_resultsStack
+    MangaDetailView*  m_detailView         = nullptr;
     QTableWidget*   m_resultsTable   = nullptr;
     MangaResultsGrid* m_resultsGrid  = nullptr;   // B3
     QWidget*        m_emptyPage      = nullptr;   // B4/E3: empty-state container

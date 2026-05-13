@@ -5,8 +5,8 @@
 #include "core/manga/WeebCentralScraper.h"
 #include "core/manga/ReadComicsScraper.h"
 #include "core/manga/MangaDownloader.h"
-#include "ui/dialogs/AddMangaDialog.h"
 #include "ui/dialogs/MangaTransferDialog.h"
+#include "ui/pages/tankoyomi/MangaDetailView.h"
 #include "ui/pages/tankoyomi/MangaResultsGrid.h"
 #include "ui/widgets/Toast.h"
 
@@ -20,12 +20,15 @@
 #include <QTimer>
 #include <QApplication>
 #include <QClipboard>
+#include <QColor>
 #include <QMenu>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QMessageBox>
 #include <QPalette>
 #include <QStyleFactory>
+#include <QIcon>
+#include <QSize>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -38,6 +41,41 @@
 
 #include "ui/ContextMenuHelper.h"
 
+namespace {
+inline QColor fgMutedColor()
+{
+    QColor c = QApplication::palette().color(QPalette::Text);
+    c.setAlpha(140);
+    return c;
+}
+
+// T17 — map raw MangaDownloader chapter-state enum strings to Title Case
+// display strings. Applied at transfer-row render boundary. Audited
+// MangaDownloader source 2026-05-13 to enumerate vocabulary.
+// Confirmed states: queued, downloading, completed, error, cancelled.
+// Defensive coverage added for paused/complete/waiting/resolving aliases.
+inline QString chapterStatusText(const QString& rawState)
+{
+    if (rawState == QLatin1String("queued"))      return QStringLiteral("Queued");
+    if (rawState == QLatin1String("downloading")) return QStringLiteral("Downloading");
+    if (rawState == QLatin1String("paused"))      return QStringLiteral("Paused");
+    if (rawState == QLatin1String("complete"))    return QStringLiteral("Complete");
+    if (rawState == QLatin1String("completed"))   return QStringLiteral("Complete");
+    if (rawState == QLatin1String("failed"))      return QStringLiteral("Failed");
+    if (rawState == QLatin1String("cancelled"))   return QStringLiteral("Cancelled");
+    if (rawState == QLatin1String("error"))       return QStringLiteral("Error");
+    if (rawState == QLatin1String("waiting"))     return QStringLiteral("Waiting");
+    if (rawState == QLatin1String("resolving"))   return QStringLiteral("Resolving");
+    // Fallback: capitalize first letter for any state missed in the audit.
+    if (rawState.isEmpty()) return rawState;
+    QString out = rawState;
+    out[0] = out[0].toUpper();
+    return out;
+}
+}
+
+
+
 // ── Constructor ─────────────────────────────────────────────────────────────
 TankoyomiPage::TankoyomiPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent), m_bridge(bridge)
@@ -48,6 +86,7 @@ TankoyomiPage::TankoyomiPage(CoreBridge* bridge, QWidget* parent)
     qRegisterMetaType<QList<ChapterInfo>>();
 
     m_nam = new QNetworkAccessManager(this);
+    setObjectName(QStringLiteral("TankoyomiPage"));
 
     // B1: manga poster cache directory
     m_posterCacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
@@ -228,8 +267,8 @@ TankoyomiPage::TankoyomiPage(CoreBridge* bridge, QWidget* parent)
 void TankoyomiPage::buildUI()
 {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(8, 8, 8, 0);
-    root->setSpacing(6);
+    root->setContentsMargins(12, 12, 12, 12);
+    root->setSpacing(10);
 
     buildSearchControls(root);
     buildStatusRow(root);
@@ -240,35 +279,35 @@ void TankoyomiPage::buildSearchControls(QVBoxLayout* parent)
 {
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(8);
+    row->setSpacing(10);
 
     m_queryEdit = new QLineEdit;
     m_queryEdit->setPlaceholderText("Search manga & comics...");
-    m_queryEdit->setFixedHeight(30);
+    m_queryEdit->setFixedHeight(36);
     connect(m_queryEdit, &QLineEdit::returnPressed, this, &TankoyomiPage::startSearch);
     row->addWidget(m_queryEdit, 3);
 
     m_sourceCombo = new QComboBox;
-    m_sourceCombo->setFixedHeight(30);
+    m_sourceCombo->setFixedHeight(36);
     m_sourceCombo->setMinimumWidth(160);
     m_sourceCombo->addItem("All Sources", "all");
     row->addWidget(m_sourceCombo, 1);
 
     m_searchBtn = new QPushButton("Search");
-    m_searchBtn->setFixedHeight(30);
+    m_searchBtn->setFixedHeight(36);
     m_searchBtn->setCursor(Qt::PointingHandCursor);
     connect(m_searchBtn, &QPushButton::clicked, this, &TankoyomiPage::startSearch);
     row->addWidget(m_searchBtn);
 
     m_cancelBtn = new QPushButton("Cancel");
-    m_cancelBtn->setFixedHeight(30);
+    m_cancelBtn->setFixedHeight(36);
     m_cancelBtn->setCursor(Qt::PointingHandCursor);
     m_cancelBtn->setVisible(false);
     connect(m_cancelBtn, &QPushButton::clicked, this, &TankoyomiPage::cancelSearch);
     row->addWidget(m_cancelBtn);
 
     m_refreshBtn = new QPushButton("Refresh");
-    m_refreshBtn->setFixedHeight(30);
+    m_refreshBtn->setFixedHeight(36);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QPushButton::clicked, this, &TankoyomiPage::refreshTransfers);
     row->addWidget(m_refreshBtn);
@@ -280,7 +319,7 @@ void TankoyomiPage::buildSearchControls(QVBoxLayout* parent)
     // order is arrival-interleave, not quality-ranked, so "Relevance" misleads.
     // Key stays "relevance" so previously-saved QSettings still restore.
     m_sortCombo = new QComboBox;
-    m_sortCombo->setFixedHeight(30);
+    m_sortCombo->setFixedHeight(36);
     m_sortCombo->setMinimumWidth(120);
     m_sortCombo->setCursor(Qt::PointingHandCursor);
     m_sortCombo->setToolTip("Sort search results");
@@ -303,7 +342,7 @@ void TankoyomiPage::buildSearchControls(QVBoxLayout* parent)
     // reads as an action). B4: flipping only swaps which data page would be
     // shown — if results are empty, the empty state stays visible.
     m_viewToggleBtn = new QPushButton;
-    m_viewToggleBtn->setFixedHeight(30);
+    m_viewToggleBtn->setFixedHeight(36);
     m_viewToggleBtn->setCursor(Qt::PointingHandCursor);
     m_viewToggleBtn->setToolTip("Toggle between list and grid view");
     connect(m_viewToggleBtn, &QPushButton::clicked, this, [this]() {
@@ -318,7 +357,7 @@ void TankoyomiPage::buildSearchControls(QVBoxLayout* parent)
     // A2: Pause/Resume the download engine. Hidden when there are no active
     // downloads; label flips on MangaDownloader::pausedChanged.
     m_pauseBtn = new QPushButton("Pause Downloads");
-    m_pauseBtn->setFixedHeight(30);
+    m_pauseBtn->setFixedHeight(36);
     m_pauseBtn->setCursor(Qt::PointingHandCursor);
     m_pauseBtn->setVisible(false);
     connect(m_pauseBtn, &QPushButton::clicked, this, [this]() {
@@ -331,8 +370,10 @@ void TankoyomiPage::buildSearchControls(QVBoxLayout* parent)
 
     // A3: overflow menu (Cancel All, future global actions). Hidden in lockstep
     // with the Pause button.
-    m_moreBtn = new QPushButton(QStringLiteral("\u22EE"));   // vertical ellipsis
-    m_moreBtn->setFixedSize(30, 30);
+    m_moreBtn = new QPushButton;
+    m_moreBtn->setIcon(QIcon(QStringLiteral(":/icons/kebab-menu.svg")));
+    m_moreBtn->setIconSize(QSize(16, 16));
+    m_moreBtn->setFixedSize(36, 36);
     m_moreBtn->setCursor(Qt::PointingHandCursor);
     m_moreBtn->setToolTip("More download actions");
     m_moreBtn->setVisible(false);
@@ -363,14 +404,14 @@ void TankoyomiPage::buildStatusRow(QVBoxLayout* parent)
 {
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(8);
+    row->setSpacing(10);
 
     m_searchStatus = new QLabel("Ready");
-    m_searchStatus->setStyleSheet("color: #a1a1aa; font-size: 11px;");
+    m_searchStatus->setStyleSheet("color: #a1a1aa; font-size: 13px;");
     row->addWidget(m_searchStatus, 2);
 
     m_downloadStatus = new QLabel("Active: 0 | History: 0");
-    m_downloadStatus->setStyleSheet("color: #a1a1aa; font-size: 11px;");
+    m_downloadStatus->setStyleSheet("color: #a1a1aa; font-size: 13px;");
     row->addWidget(m_downloadStatus, 1);
 
     parent->addLayout(row);
@@ -402,7 +443,7 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
         m_emptyLabel->setAlignment(Qt::AlignCenter);
         m_emptyLabel->setWordWrap(true);
         m_emptyLabel->setStyleSheet(
-            "#TankoyomiEmptyState { color: #a1a1aa; font-size: 14px; }");
+            "#TankoyomiEmptyState { color: #a1a1aa; font-size: 15px; }");
         v->addWidget(m_emptyLabel);
 
         auto* btnRow = new QHBoxLayout;
@@ -410,7 +451,7 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
         btnRow->setAlignment(Qt::AlignCenter);
 
         m_emptyRetryBtn = new QPushButton("Retry");
-        m_emptyRetryBtn->setFixedHeight(28);
+        m_emptyRetryBtn->setFixedHeight(32);
         m_emptyRetryBtn->setCursor(Qt::PointingHandCursor);
         m_emptyRetryBtn->hide();
         connect(m_emptyRetryBtn, &QPushButton::clicked, this, [this]() {
@@ -422,7 +463,7 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
         btnRow->addWidget(m_emptyRetryBtn);
 
         m_emptyClearBtn = new QPushButton("Clear search");
-        m_emptyClearBtn->setFixedHeight(28);
+        m_emptyClearBtn->setFixedHeight(32);
         m_emptyClearBtn->setCursor(Qt::PointingHandCursor);
         m_emptyClearBtn->hide();
         connect(m_emptyClearBtn, &QPushButton::clicked, this, [this]() {
@@ -446,7 +487,7 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
 
         m_loadingLabel = new QLabel("Searching...");
         m_loadingLabel->setAlignment(Qt::AlignCenter);
-        m_loadingLabel->setStyleSheet("color: #cbd5e1; font-size: 14px;");
+        m_loadingLabel->setStyleSheet("color: #cbd5e1; font-size: 15px;");
         v->addWidget(m_loadingLabel);
 
         auto* bar = new QProgressBar;
@@ -454,25 +495,45 @@ void TankoyomiPage::buildMainTabs(QVBoxLayout* parent)
         bar->setTextVisible(false);
         bar->setFixedWidth(220);
         bar->setFixedHeight(4);
-        bar->setStyleSheet(
-            "QProgressBar { background: rgba(255,255,255,0.08); border: none; "
-            "  border-radius: 2px; }"
-            "QProgressBar::chunk { background: #60a5fa; border-radius: 2px; }");
+        {
+            const QColor accent = QApplication::palette().color(QPalette::Highlight);
+            bar->setStyleSheet(QStringLiteral(
+                "QProgressBar { background: rgba(255,255,255,0.08); border: none; "
+                "  border-radius: 2px; }"
+                "QProgressBar::chunk { background: %1; border-radius: 2px; }")
+                .arg(accent.name()));
+        }
         v->addWidget(bar, 0, Qt::AlignCenter);
     }
 
-    m_resultsStack = new QStackedWidget;
-    m_resultsStack->addWidget(m_resultsTable);  // index 0: list
-    m_resultsStack->addWidget(m_resultsGrid);   // index 1: grid
-    m_resultsStack->addWidget(m_emptyPage);     // index 2: empty state
-    m_resultsStack->addWidget(m_loadingPage);   // index 3: loading
+    m_searchResultsStack = new QStackedWidget;
+    m_searchResultsStack->addWidget(m_resultsTable);  // index 0: list
+    m_searchResultsStack->addWidget(m_resultsGrid);   // index 1: grid
+    m_searchResultsStack->addWidget(m_emptyPage);     // index 2: empty state
+    m_searchResultsStack->addWidget(m_loadingPage);   // index 3: loading
 
     const QString savedMode = QSettings().value("tankoyomi/resultsView", "grid").toString();
     m_preferredDataView = (savedMode == "list") ? 0 : 1;
     // Start on empty state until a search runs.
-    m_resultsStack->setCurrentIndex(2);
+    m_searchResultsStack->setCurrentIndex(2);
 
-    m_tabWidget->addTab(m_resultsStack, "Search Results");
+    // Mihon-overhaul C.5 — inner stack wraps search results + detail view.
+    //   index 0 = m_searchResultsStack (list/grid/empty/loading)
+    //   index 1 = m_detailView (MangaDetailView)
+    m_resultsInnerStack = new QStackedWidget;
+    m_resultsInnerStack->addWidget(m_searchResultsStack);
+
+    m_detailView = new MangaDetailView(this);
+    m_detailView->setDownloader(m_downloader);
+    m_detailView->setBridgeDestinationProvider([this]() {
+        const QStringList roots = m_bridge->rootFolders("comics");
+        return roots.isEmpty() ? QString() : roots.first();
+    });
+    connect(m_detailView, &MangaDetailView::backRequested,
+            this, [this]() { m_resultsInnerStack->setCurrentIndex(0); });
+    m_resultsInnerStack->addWidget(m_detailView);
+
+    m_tabWidget->addTab(m_resultsInnerStack, "Search Results");
 
     m_transfersTable = createTransfersTable();
     m_tabWidget->addTab(m_transfersTable, "Transfers");
@@ -489,12 +550,16 @@ QTableWidget* TankoyomiPage::createResultsTable()
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->verticalHeader()->setVisible(false);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
 
     QStringList headers = { "Title", "Author", "Source", "Status", "Type" };
     table->setHorizontalHeaderLabels(headers);
 
+    // T18 — match header alignment to cell alignment per spec CR.9.
+    // All 5 result columns are text fields; default left+vcenter on both.
     auto *hdr = table->horizontalHeader();
+    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     hdr->setMinimumSectionSize(80);
     hdr->setSectionResizeMode(0, QHeaderView::Stretch);
     for (int i = 1; i < 5; ++i)
@@ -518,13 +583,14 @@ QTableWidget* TankoyomiPage::createResultsTable()
     table->setPalette(pal);
 
     table->setStyleSheet(QStringLiteral(
-        "#MangaResultsTable { border: none; outline: none; font-size: 12px; }"
+        "#MangaResultsTable { border: none; outline: none; font-size: 13px; }"
         "#MangaResultsTable::item { padding: 0 8px; }"
+        "#MangaResultsTable::item:hover { background: rgba(255,255,255,0.04); }"
         "#MangaResultsTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
         "#MangaResultsTable QHeaderView::section {"
         "  background: #1a1a1a; color: #888; border: none;"
         "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
-        "  padding: 4px 8px; font-size: 11px; }"
+        "  padding: 6px 8px; font-size: 11px; font-weight: 600; }"
     ));
 
     return table;
@@ -539,13 +605,25 @@ QTableWidget* TankoyomiPage::createTransfersTable()
     table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->verticalHeader()->setVisible(false);
-    table->verticalHeader()->setDefaultSectionSize(26);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
 
     QStringList headers = { "Series", "Progress", "Status", "Chapters" };
     table->setHorizontalHeaderLabels(headers);
 
+    // T18 — match header alignment to cell alignment per spec CR.9.
     auto *hdr = table->horizontalHeader();
+    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Per-col override: Progress (1), Status (2), Chapters (3) center on header + cells.
+    for (int col : { 1, 2, 3 }) {
+        auto* hi = table->horizontalHeaderItem(col);
+        if (!hi) {
+            hi = new QTableWidgetItem(headers[col]);
+            table->setHorizontalHeaderItem(col, hi);
+        }
+        hi->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+    }
+
     hdr->setMinimumSectionSize(80);
     hdr->setSectionResizeMode(0, QHeaderView::Stretch);
     for (int i = 1; i < 4; ++i)
@@ -568,13 +646,14 @@ QTableWidget* TankoyomiPage::createTransfersTable()
     table->setPalette(pal);
 
     table->setStyleSheet(QStringLiteral(
-        "#MangaTransfersTable { border: none; outline: none; font-size: 12px; }"
+        "#MangaTransfersTable { border: none; outline: none; font-size: 13px; }"
         "#MangaTransfersTable::item { padding: 0 8px; }"
+        "#MangaTransfersTable::item:hover { background: rgba(255,255,255,0.04); }"
         "#MangaTransfersTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
         "#MangaTransfersTable QHeaderView::section {"
         "  background: #1a1a1a; color: #888; border: none;"
         "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
-        "  padding: 4px 8px; font-size: 11px; }"
+        "  padding: 6px 8px; font-size: 11px; font-weight: 600; }"
     ));
 
     return table;
@@ -704,6 +783,8 @@ void TankoyomiPage::renderResults()
         auto* titleItem = new QTableWidgetItem(r.title);
         titleItem->setData(Qt::UserRole, r.source);       // source ID
         titleItem->setData(Qt::UserRole + 1, r.id);       // series ID
+        // T18 — explicit alignment on Title column per spec CR.9.
+        titleItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         m_resultsTable->setItem(i, 0, titleItem);
 
         m_resultsTable->setItem(i, 1, new QTableWidgetItem(r.author));
@@ -760,14 +841,14 @@ void TankoyomiPage::renderResults()
 // ── B4/B5: pick data view vs empty state vs loading ─────────────────────────
 void TankoyomiPage::updateResultsView()
 {
-    if (!m_resultsStack) return;
+    if (!m_searchResultsStack) return;
 
     // B5: a search is in flight — show loading page regardless of stale results.
     if (m_pendingSearches > 0) {
         m_loadingLabel->setText(m_lastQuery.isEmpty()
             ? "Searching..."
             : QString("Searching for \"%1\"...").arg(m_lastQuery));
-        m_resultsStack->setCurrentIndex(3);
+        m_searchResultsStack->setCurrentIndex(3);
         return;
     }
 
@@ -779,9 +860,9 @@ void TankoyomiPage::updateResultsView()
         // E3: Retry + Clear only make sense once the user has run a search.
         if (m_emptyRetryBtn) m_emptyRetryBtn->setVisible(postSearch);
         if (m_emptyClearBtn) m_emptyClearBtn->setVisible(postSearch);
-        m_resultsStack->setCurrentIndex(2);
+        m_searchResultsStack->setCurrentIndex(2);
     } else {
-        m_resultsStack->setCurrentIndex(m_preferredDataView);
+        m_searchResultsStack->setCurrentIndex(m_preferredDataView);
     }
 }
 
@@ -842,70 +923,26 @@ QString TankoyomiPage::ensureCover(const QString& source, const QString& id,
     return path;
 }
 
-// ── Result double-click → chapter picker ────────────────────────────────────
+// ── Result double-click → embedded detail screen ────────────────────────────
 void TankoyomiPage::onResultDoubleClicked(int row)
 {
     if (row < 0 || row >= m_displayedResults.size()) return;
     const auto& result = m_displayedResults[row];
 
-    // Get default comics path
-    QStringList comicRoots = m_bridge->rootFolders("comics");
-    QString defaultDest = comicRoots.isEmpty() ? QString() : comicRoots.first();
-
-    AddMangaDialog dlg(result.title, result.source, defaultDest, this);
-
-    // C3: push metadata + cover (path comes from B1's cache; file may appear
-    // asynchronously, so also re-push on coverReady while the dialog is open).
-    dlg.setMangaMetadata(result);
-    if (!result.thumbnailUrl.isEmpty()) {
-        const QString coverPath = ensureCover(result.source, result.id, result.thumbnailUrl);
-        dlg.setCoverPath(coverPath);
-        auto coverConn = connect(this, &TankoyomiPage::coverReady, &dlg,
-            [&dlg, rid = result.id, rsrc = result.source]
-            (const QString& src, const QString& id, const QString& path) {
-                if (src == rsrc && id == rid) dlg.setCoverPath(path);
-            });
-        connect(&dlg, &QDialog::destroyed, this, [this, coverConn]() {
-            disconnect(coverConn);
-        });
-    }
-
-    // Find the right scraper
+    // Find the right scraper for this source
     MangaScraper* scraper = nullptr;
     for (auto* s : m_scrapers) {
         if (s->sourceId() == result.source) { scraper = s; break; }
     }
     if (!scraper) return;
 
-    // Fetch chapters and populate dialog
-    auto conn = std::make_shared<QMetaObject::Connection>();
-    auto errConn = std::make_shared<QMetaObject::Connection>();
-
-    *conn = connect(scraper, &MangaScraper::chaptersReady, &dlg,
-        [&dlg, conn, errConn](const QList<ChapterInfo>& chapters) {
-            disconnect(*conn);
-            disconnect(*errConn);
-            dlg.populateChapters(chapters);
-        });
-
-    *errConn = connect(scraper, &MangaScraper::errorOccurred, &dlg,
-        [&dlg, conn, errConn](const QString& msg) {
-            disconnect(*conn);
-            disconnect(*errConn);
-            dlg.showError(msg);
-        });
-
-    scraper->fetchChapters(result.id);
-
-    if (dlg.exec() == QDialog::Accepted) {
-        auto chapters = dlg.selectedChapters();
-        if (chapters.isEmpty()) return;
-
-        m_downloader->startDownload(result.title, result.source,
-                                     chapters, dlg.destinationPath(), dlg.format());
-        m_tabWidget->setCurrentIndex(1);  // Switch to Transfers
-        m_searchStatus->setText("Download Started");
-    }
+    // Mihon-overhaul C.5 — embedded detail screen replaces AddMangaDialog
+    m_detailView->setScraper(scraper);
+    const QString coverPath = result.thumbnailUrl.isEmpty()
+        ? QString()
+        : ensureCover(result.source, result.id, result.thumbnailUrl);
+    m_detailView->show(result, coverPath);
+    m_resultsInnerStack->setCurrentIndex(1);
 }
 
 // ── E2: shared results context menu (table + grid) ──────────────────────────
@@ -941,20 +978,26 @@ void TankoyomiPage::refreshTransfers()
         if (!nameItem) { nameItem = new QTableWidgetItem; m_transfersTable->setItem(i, 0, nameItem); }
         nameItem->setText(r.seriesTitle);
         nameItem->setData(Qt::UserRole, r.id);
+        // T18 — explicit alignment per spec CR.9: Series column left+vcenter.
+        nameItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
         auto* progItem = m_transfersTable->item(i, 1);
         if (!progItem) { progItem = new QTableWidgetItem; m_transfersTable->setItem(i, 1, progItem); }
         progItem->setText(QString::number(r.progress * 100, 'f', 0) + "%");
-        progItem->setTextAlignment(Qt::AlignCenter);
+        // T18 — Progress centered per spec CR.9.
+        progItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
 
         auto* stateItem = m_transfersTable->item(i, 2);
         if (!stateItem) { stateItem = new QTableWidgetItem; m_transfersTable->setItem(i, 2, stateItem); }
-        stateItem->setText(r.status);
+        stateItem->setText(chapterStatusText(r.status));
+        // T18 — Status centered per spec CR.9.
+        stateItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
 
         auto* chapItem = m_transfersTable->item(i, 3);
         if (!chapItem) { chapItem = new QTableWidgetItem; m_transfersTable->setItem(i, 3, chapItem); }
         chapItem->setText(QString("%1/%2").arg(r.completedChapters).arg(r.totalChapters));
-        chapItem->setTextAlignment(Qt::AlignCenter);
+        // T18 — Chapters centered per spec CR.9.
+        chapItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
 
         if (r.status == "downloading") ++activeCount;
     }
