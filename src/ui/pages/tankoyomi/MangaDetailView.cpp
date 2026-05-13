@@ -4,6 +4,7 @@
 #include <QAction>
 #include <QClipboard>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -16,6 +17,7 @@
 #include <QToolButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QHeaderView>
 
@@ -52,6 +54,51 @@ void MangaDetailView::buildUI()
     m_overflowBtn->setText(QString::fromUtf8("\xE2\x8B\xAF"));  // U+22EF horizontal ellipsis; F.4 replaces with SVG
     m_overflowBtn->setObjectName("MangaDetailOverflow");
     m_overflowBtn->setPopupMode(QToolButton::InstantPopup);
+
+    auto* overflowMenu = new QMenu(m_overflowBtn);
+
+    auto* refreshAct = overflowMenu->addAction(tr("Refresh chapter list"));
+    connect(refreshAct, &QAction::triggered, this, [this]() {
+        if (m_scraper && !m_result.id.isEmpty()) {
+            m_loadingLabel->show();
+            m_chapterTable->hide();
+            m_errorLabel->hide();
+            m_scraper->fetchChapters(m_result.id);
+        }
+    });
+
+    auto* browserAct = overflowMenu->addAction(tr("Open source page in browser"));
+    connect(browserAct, &QAction::triggered, this, [this]() {
+        if (!m_result.url.isEmpty())
+            QDesktopServices::openUrl(QUrl(m_result.url));
+    });
+
+    auto* showFolderAct = overflowMenu->addAction(tr("Show series folder"));
+    connect(showFolderAct, &QAction::triggered, this, [this]() {
+        emit showInFolderRequested(m_result.title, m_result.source);
+    });
+
+    overflowMenu->addSeparator();
+
+    auto* copyTitleAct = overflowMenu->addAction(tr("Copy series title"));
+    connect(copyTitleAct, &QAction::triggered, this, [this]() {
+        QGuiApplication::clipboard()->setText(m_result.title);
+    });
+    auto* copyUrlAct = overflowMenu->addAction(tr("Copy source URL"));
+    connect(copyUrlAct, &QAction::triggered, this, [this]() {
+        QGuiApplication::clipboard()->setText(m_result.url);
+    });
+
+    m_overflowBtn->setMenu(overflowMenu);
+
+    // Enable/disable "Show series folder" based on whether any chapter is downloaded
+    connect(overflowMenu, &QMenu::aboutToShow, this, [this, showFolderAct]() {
+        const int n = m_downloader
+            ? m_downloader->countDownloadedForSeries(m_result.title, m_result.source)
+            : 0;
+        showFolderAct->setEnabled(n > 0);
+    });
+
     topRow->addWidget(m_backBtn);
     topRow->addWidget(m_titleLabel, 1);
     topRow->addWidget(m_overflowBtn);
