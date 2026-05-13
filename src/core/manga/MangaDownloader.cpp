@@ -51,6 +51,7 @@ void MangaDownloader::loadRecords()
         rec.seriesTitle     = obj["seriesTitle"].toString();
         rec.source          = obj["source"].toString();
         rec.destinationPath = obj["destinationPath"].toString();
+        rec.coverPath       = obj.value("coverPath").toString();
         rec.format          = obj["format"].toString();
         rec.status          = obj["status"].toString();
         rec.paused          = obj.value("paused").toBool(false);
@@ -87,6 +88,7 @@ void MangaDownloader::saveRecords()
         obj["seriesTitle"]     = r.seriesTitle;
         obj["source"]          = r.source;
         obj["destinationPath"] = r.destinationPath;
+        obj["coverPath"]       = r.coverPath;
         obj["format"]          = r.format;
         obj["status"]          = r.status;
         obj["paused"]          = r.paused;
@@ -141,7 +143,8 @@ void MangaDownloader::appendHistory(const MangaDownloadRecord& rec)
 // ── Start download ──────────────────────────────────────────────────────────
 QString MangaDownloader::startDownload(const QString& seriesTitle, const QString& source,
                                         const QList<ChapterInfo>& chapters,
-                                        const QString& destinationPath, const QString& format)
+                                        const QString& destinationPath, const QString& format,
+                                        const QString& coverPath)
 {
     // Generate ID from title + source + timestamp
     QByteArray raw = (seriesTitle + source + QString::number(QDateTime::currentMSecsSinceEpoch())).toUtf8();
@@ -152,6 +155,7 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
     rec.seriesTitle     = seriesTitle;
     rec.source          = source;
     rec.destinationPath = destinationPath;
+    rec.coverPath       = coverPath;
     rec.format          = format;
     rec.status          = "queued";
     rec.totalChapters   = chapters.size();

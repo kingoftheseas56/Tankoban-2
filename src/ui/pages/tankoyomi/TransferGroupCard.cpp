@@ -109,6 +109,19 @@ void TransferGroupCard::refreshFromRecord()
 
     m_titleLabel->setText(rec.seriesTitle);
 
+    // Hemanth-smoke-fix-3 (2026-05-13): render cover when the record
+    // carries a coverPath. Legacy records without the field (created
+    // before the pipeline shipped) load with empty coverPath and fall
+    // through to the empty-fallback branch — no cover rendered, but no
+    // crash either (graceful degradation).
+    if (!rec.coverPath.isEmpty() && QFile::exists(rec.coverPath)) {
+        m_coverLabel->setPixmap(QPixmap(rec.coverPath));
+        m_coverLabel->setText({});
+    } else {
+        m_coverLabel->setPixmap(QPixmap());
+        m_coverLabel->setText({});
+    }
+
     // Aggregate state label
     int downloading = 0, queued = 0, completed = 0,
         errored = 0, cancelled = 0;

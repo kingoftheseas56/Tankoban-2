@@ -40,6 +40,7 @@ struct MangaDownloadRecord {
     QString seriesTitle;
     QString source;           // "weebcentral" or "readcomicsonline"
     QString destinationPath;
+    QString coverPath;        // local cached cover image path (v1 Mihon overhaul follow-up)
     QString format;           // "cbz" or "folder"
     QString status;           // "queued", "downloading", "completed", "error", "cancelled"
     bool    paused         = false;   // per-series pause flag (v1 — Mihon-overhaul Phase A)
@@ -65,7 +66,8 @@ public:
     // Start a new series download
     QString startDownload(const QString& seriesTitle, const QString& source,
                           const QList<ChapterInfo>& chapters,
-                          const QString& destinationPath, const QString& format);
+                          const QString& destinationPath, const QString& format,
+                          const QString& coverPath = QString());
 
     // Query
     QList<MangaDownloadRecord> listActive() const;

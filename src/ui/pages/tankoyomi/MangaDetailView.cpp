@@ -185,7 +185,7 @@ void MangaDetailView::buildUI()
         if (selected.isEmpty()) return;
         m_downloader->startDownload(m_result.title, m_result.source,
                                      selected, m_destProvider(),
-                                     QStringLiteral("cbz"));
+                                     QStringLiteral("cbz"), m_coverPath);
         m_chapterTable->clearSelection();
     });
 
@@ -246,6 +246,7 @@ void MangaDetailView::buildUI()
 void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
 {
     m_result = result;
+    m_coverPath = coverPath;
     m_chapters.clear();
     m_selectedChapterIds.clear();
     m_chapterTable->setRowCount(0);
@@ -515,7 +516,7 @@ void MangaDetailView::onChapterIconClicked(int row)
             // Enqueue (start fresh, or retry from errored)
             m_downloader->startDownload(m_result.title, m_result.source,
                                          {ch}, m_destProvider(),
-                                         QStringLiteral("cbz"));
+                                         QStringLiteral("cbz"), m_coverPath);
             break;
         case State::Queued:
         case State::Downloading:
@@ -557,7 +558,7 @@ void MangaDetailView::downloadNextN(int n)
 
     m_downloader->startDownload(m_result.title, m_result.source,
                                  picks, m_destProvider(),
-                                 QStringLiteral("cbz"));
+                                 QStringLiteral("cbz"), m_coverPath);
 }
 
 void MangaDetailView::openRangeDialog()
@@ -584,7 +585,7 @@ void MangaDetailView::openRangeDialog()
     if (picks.isEmpty()) return;
     m_downloader->startDownload(m_result.title, m_result.source,
                                  picks, m_destProvider(),
-                                 QStringLiteral("cbz"));
+                                 QStringLiteral("cbz"), m_coverPath);
 }
 
 void MangaDetailView::showChapterContextMenu(const QPoint& pos)
@@ -606,13 +607,13 @@ void MangaDetailView::showChapterContextMenu(const QPoint& pos)
             menu.addAction(tr("Start download"), this, [this, ch]() {
                 if (!m_downloader || !m_destProvider) return;
                 m_downloader->startDownload(m_result.title, m_result.source,
-                    {ch}, m_destProvider(), "cbz");
+                    {ch}, m_destProvider(), "cbz", m_coverPath);
             });
             menu.addAction(tr("Add to top of queue"), this, [this, ch]() {
                 if (!m_downloader || !m_destProvider) return;
                 // Enqueue, then bump to front via startChapterNow
                 m_downloader->startDownload(m_result.title, m_result.source,
-                    {ch}, m_destProvider(), "cbz");
+                    {ch}, m_destProvider(), "cbz", m_coverPath);
                 const auto records = m_downloader->listActive();
                 for (const auto& rec : records) {
                     if (rec.seriesTitle == m_result.title &&

@@ -64,6 +64,7 @@ private:
                              ChapterDownloadIndicator& indicator) const;
 
     MangaResult        m_result;
+    QString            m_coverPath;   // local cached cover path (Hemanth-smoke-fix-3 2026-05-13)
     QList<ChapterInfo> m_chapters;
     QSet<QString>      m_selectedChapterIds;
 

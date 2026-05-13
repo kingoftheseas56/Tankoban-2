@@ -915,17 +915,28 @@ void TankoyomiPage::showResultContextMenu(int row, const QPoint& globalPos)
         }
         if (!scraper || !m_downloader) return;
 
+        // Hemanth-smoke-fix-3 (2026-05-13): resolve the cover BEFORE the
+        // chaptersReady lambda so it's threaded into startDownload and
+        // persisted on the MangaDownloadRecord for TransferGroupCard to
+        // render. ensureCover returns the destination path whether or
+        // not the file already exists on disk (async fetch finishes
+        // in the background; TransferGroupCard QFile::exists guard
+        // handles the not-yet-arrived case gracefully).
+        const QString coverPath = result.thumbnailUrl.isEmpty()
+            ? QString()
+            : ensureCover(result.source, result.id, result.thumbnailUrl);
+
         // One-shot connect to chaptersReady
         auto conn = std::make_shared<QMetaObject::Connection>();
         *conn = connect(scraper, &MangaScraper::chaptersReady, this,
-            [this, conn, result](const QList<ChapterInfo>& chapters) {
+            [this, conn, result, coverPath](const QList<ChapterInfo>& chapters) {
                 disconnect(*conn);
                 if (chapters.isEmpty()) return;
                 const QStringList roots = m_bridge->rootFolders("comics");
                 const QString dest = roots.isEmpty() ? QString() : roots.first();
                 if (dest.isEmpty()) return;
                 m_downloader->startDownload(result.title, result.source,
-                    chapters, dest, "cbz");
+                    chapters, dest, "cbz", coverPath);
                 m_tabWidget->setCurrentIndex(1);   // jump to Transfers
             });
         scraper->fetchChapters(result.id);
