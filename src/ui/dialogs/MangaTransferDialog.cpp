@@ -35,7 +35,12 @@ public:
     void paint(QPainter* p, const QStyleOptionViewItem& opt,
                const QModelIndex& idx) const override
     {
-        QStyledItemDelegate::paint(p, opt, idx);
+        // Strip State_HasFocus so the native style can't paint the cyan-blue
+        // cell focus rect over our status icon (paired with Theme.cpp's
+        // NoFocusFrameStyle proxy — belt and braces).
+        QStyleOptionViewItem o = opt;
+        o.state &= ~QStyle::State_HasFocus;
+        QStyledItemDelegate::paint(p, o, idx);
 
         const QString status = idx.data(Qt::UserRole).toString();
         if (status.isEmpty()) return;

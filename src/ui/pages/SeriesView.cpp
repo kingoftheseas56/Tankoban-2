@@ -33,8 +33,12 @@ enum Col { ColNum = 0, ColVolume, ColPages, ColSize, ColRead, ColModified, ColCo
 void ProgressIconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
                                   const QModelIndex& index) const
 {
-    // Draw selection/hover background
-    QStyledItemDelegate::paint(painter, option, QModelIndex());
+    // Draw selection/hover background. Strip State_HasFocus so the native
+    // style can't paint the cyan-blue cell focus rect over our progress icon
+    // (paired with Theme.cpp's NoFocusFrameStyle proxy — belt and braces).
+    QStyleOptionViewItem opt = option;
+    opt.state &= ~QStyle::State_HasFocus;
+    QStyledItemDelegate::paint(painter, opt, QModelIndex());
 
     int state = index.data(ProgressStateRole).toInt(); // 0=none, 1=in-progress, 2=finished
     int pct   = index.data(ProgressPctRole).toInt();

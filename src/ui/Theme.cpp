@@ -8,9 +8,12 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
+#include <QProxyStyle>
 #include <QSettings>
 #include <QString>
 #include <QStringLiteral>
+#include <QStyleFactory>
+#include <QStyleOption>
 #include <QSvgRenderer>
 
 namespace Theme {
@@ -38,6 +41,38 @@ ModeBlobs    s_currentBlobs = {};
 // if a future runtime override path needs to invalidate; not exposed yet.
 
 QHash<Mode, QString> s_qssCache;
+
+// Global focus-rect kill + Win11 accent-leak kill.
+//
+// First attempt 2026-05-12 ~9:35pm wrapped the application's *current* style
+// (the Qt6 `windows11` style on Win11). That style paints cyan-blue accent
+// borders around selected/focused widgets internally, in code paths that
+// don't go through QStyle::PE_FrameFocusRect — they go through
+// QWindows11Style::drawControl(CE_ItemViewItem) and friends, and through
+// direct system-accent injection into QPalette::Highlight regardless of
+// what app.setPalette(...) sets. Proxying just PE_FrameFocusRect didn't
+// reach any of that, so the cyan stayed.
+//
+// Fix 2026-05-12 ~9:50pm: wrap **Fusion** instead. Fusion respects
+// QPalette literally and never injects the OS system accent. Our QSS
+// covers most surfaces already (every button, scrollbar, header, item-view
+// background is QSS-styled), so the visual delta from swapping the base
+// style is small — mostly QMenu and QComboBox-popup look more uniform.
+// PE_FrameFocusRect suppression is preserved for belt-and-braces on the
+// few item-view paths Fusion still paints natively.
+class NoFocusFrameStyle : public QProxyStyle
+{
+public:
+    using QProxyStyle::QProxyStyle;
+    void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
+                       QPainter* painter, const QWidget* widget = nullptr) const override
+    {
+        if (element == QStyle::PE_FrameFocusRect) return;
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
+    }
+};
+
+bool s_proxyStyleInstalled = false;
 
 // ── Dark baseline palette ────────────────────────────────────────────────────
 // Byte-for-byte equal to today's hardcoded values in noirStylesheet() +
@@ -521,6 +556,16 @@ QTableWidget, QListWidget, QTreeWidget {
     outline: 0;
 }
 
+/* Defense-in-depth against the Windows 11 native focus rect leaking
+   cyan-blue bars at cell boundaries. Primary kill is NoFocusFrameStyle
+   (proxy-style suppression of PE_FrameFocusRect); these QSS rules catch
+   any style path that ignores the proxy. */
+QAbstractItemView { outline: 0; }
+QAbstractItemView::item:focus { outline: 0; border: 0; }
+QTableWidget::item:focus,
+QListWidget::item:focus,
+QTreeWidget::item:focus { outline: 0; border: 0; }
+
 QHeaderView::section {
     background: rgba(__INK_RGB__,0.06);
     color: __TEXT__;
@@ -899,6 +944,19 @@ QToolTip {
 
 void applyTheme(QApplication& app, Mode mode)
 {
+    // Install the Fusion-wrapping proxy style once. QStyleFactory::create
+    // returns a Fusion instance; QProxyStyle takes ownership of it as the
+    // wrapped base. setStyle then takes ownership of the proxy itself.
+    // Fusion is the load-bearing pick here — wrapping the Win11 default
+    // leaked OS-accent cyan through internal CE_ItemViewItem paint paths
+    // and QPalette::Highlight injection that QProxyStyle can't reach.
+    // Guarded so theme switches don't stack proxies.
+    if (!s_proxyStyleInstalled) {
+        QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"));
+        app.setStyle(new NoFocusFrameStyle(fusion));
+        s_proxyStyleInstalled = true;
+    }
+
     if (s_initialized && mode == s_currentMode && s_qssCache.contains(mode)) {
         return;  // No-op switch — same mode + QSS already applied.
     }

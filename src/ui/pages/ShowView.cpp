@@ -39,7 +39,12 @@ enum Col { ColNum = 0, ColEpisode, ColSize, ColDuration, ColProgress, ColModifie
 void ShowProgressIconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
                                      const QModelIndex& index) const
 {
-    QStyledItemDelegate::paint(painter, option, index);
+    // Strip State_HasFocus so the native style can't paint the cyan-blue
+    // cell focus rect over our progress icon (paired with Theme.cpp's
+    // NoFocusFrameStyle proxy — belt and braces).
+    QStyleOptionViewItem opt = option;
+    opt.state &= ~QStyle::State_HasFocus;
+    QStyledItemDelegate::paint(painter, opt, index);
 
     int state = index.data(Qt::UserRole).toInt(); // 0=none, 1=in-progress, 2=finished
     if (state == 0) {
