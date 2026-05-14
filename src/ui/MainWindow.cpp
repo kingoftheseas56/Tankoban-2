@@ -734,6 +734,11 @@ void MainWindow::buildPageStack()
     auto *tankoyomiPage = new TankoyomiPage(m_bridge);
     tankoyomiPage->setObjectName(PAGE_TANKOYOMI);
     m_pageStack->addWidget(tankoyomiPage);
+    // GLOBAL_NAV_HISTORY Task 13 — wire manga tile click → NavHistory entry.
+    connect(tankoyomiPage, &TankoyomiPage::navigationRequested,
+            this, [this]() {
+                if (m_navHistory) m_navHistory->recordNavEvent("tankoyomi");
+            });
     dbg("4g2-tankoyomipage-created");
 
     auto *tankoLibraryPage = new TankoLibraryPage(m_bridge, torrentClient);

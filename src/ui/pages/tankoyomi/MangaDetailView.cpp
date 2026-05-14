@@ -679,6 +679,31 @@ void MangaDetailView::openRangeDialog()
                                  QStringLiteral("cbz"), m_coverPath);
 }
 
+// ── GLOBAL_NAV_HISTORY Task 13 — state snapshot / restore ───────────────────
+QJsonObject MangaDetailView::snapshotState() const
+{
+    QJsonObject blob;
+    // Record enough to identify the manga for future restoration. The full
+    // MangaResult struct can't be reconstructed from just id+source without a
+    // network fetch, so restoreFromSnapshot returns false (v1 limitation).
+    blob[QStringLiteral("mangaId")]   = m_result.id;
+    blob[QStringLiteral("source")]    = m_result.source;
+    blob[QStringLiteral("title")]     = m_result.title;
+    blob[QStringLiteral("coverPath")] = m_coverPath;
+    return blob;
+}
+
+bool MangaDetailView::restoreFromSnapshot(const QJsonObject& blob)
+{
+    // v1: always return false. Restoring the detail view requires a full
+    // MangaResult struct + a live scraper fetch for the chapter list. That's
+    // a network round-trip we can't do synchronously inside restoreNavState.
+    // NavHistory drops the entry and the user lands on search-results instead.
+    // Future improvement: add a scraper-cache lookup and call show() when hit.
+    Q_UNUSED(blob)
+    return false;
+}
+
 void MangaDetailView::showChapterContextMenu(const QPoint& pos)
 {
     const int row = m_chapterTable->rowAt(pos.y());

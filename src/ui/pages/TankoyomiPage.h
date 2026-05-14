@@ -11,8 +11,10 @@
 #include <QStackedWidget>
 #include <QSet>
 #include <QMap>
+#include <QJsonObject>
 
 #include "core/manga/MangaResult.h"
+#include "../INavStateProvider.h"
 
 class CoreBridge;
 class MangaScraper;
@@ -24,7 +26,7 @@ class QTimer;
 class QScrollArea;
 class TransferGroupCard;
 
-class TankoyomiPage : public QWidget
+class TankoyomiPage : public QWidget, public INavStateProvider
 {
     Q_OBJECT
 
@@ -36,10 +38,19 @@ public:
     // Returns the final cache path whether or not the file already exists.
     QString ensureCover(const QString& source, const QString& id, const QString& thumbUrl);
 
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 13)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("tankoyomi"); }
+
 signals:
     // Emitted when a cover has just been written to disk (or was already there).
     // Consumers (B2 grid, C3 detail panel) connect to update their tiles.
     void coverReady(const QString& source, const QString& id, const QString& path);
+
+    // Emitted on user-initiated search-results -> detail transition (manga tile click).
+    // MainWindow's slot calls NavHistory::recordNavEvent("tankoyomi").
+    void navigationRequested();
 
 private:
     void buildUI();

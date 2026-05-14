@@ -41,6 +41,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QScrollBar>
 
 #include "ui/ContextMenuHelper.h"
 
@@ -848,6 +849,11 @@ void TankoyomiPage::onResultDoubleClicked(int row)
     }
     if (!scraper) return;
 
+    // GLOBAL_NAV_HISTORY Task 13 — record this library→detail transition BEFORE
+    // flipping the stack. NavHistory::captureNavState() reads the search-results
+    // view state (query + sourceFilter + scroll) while we are still on index 0.
+    emit navigationRequested();
+
     // Mihon-overhaul C.5 — embedded detail screen replaces AddMangaDialog
     m_detailView->setScraper(scraper);
     const QString coverPath = result.thumbnailUrl.isEmpty()
@@ -1151,4 +1157,94 @@ void TankoyomiPage::showTransferCardContextMenu(const QPoint& globalPos,
     });
 
     menu.exec(globalPos);
+}
+
+// ── GLOBAL_NAV_HISTORY Task 13 — INavStateProvider impl ─────────────────────
+// Dual-view shape: blob["view"] = "search" | "detail".
+//
+// Search view captures: query + sourceFilter + scrollY (grid scroll).
+// The grid uses a QTableWidget internally; we reach it via findChild<>.
+//
+// Detail view delegates to m_detailView->snapshotState(). restoreFromSnapshot
+// returns false (v1 — requires a live network fetch; see MangaDetailView.cpp),
+// so NavHistory drops the detail entry and the user lands on the prior page.
+//
+QJsonObject TankoyomiPage::captureNavState() const
+{
+    QJsonObject blob;
+    const bool inDetail = m_resultsInnerStack
+                          && m_detailView
+                          && m_resultsInnerStack->currentWidget() == m_detailView;
+
+    blob[QStringLiteral("view")] = inDetail
+        ? QStringLiteral("detail")
+        : QStringLiteral("search");
+
+    if (inDetail) {
+        blob[QStringLiteral("mangaState")] = m_detailView->snapshotState();
+    } else {
+        // Search-results view state
+        if (m_queryEdit)
+            blob[QStringLiteral("query")] = m_queryEdit->text();
+        if (m_sourceCombo)
+            blob[QStringLiteral("sourceFilter")] = m_sourceCombo->currentData().toString();
+
+        // Grid scroll — the MangaResultsGrid wraps an internal QTableWidget;
+        // reach it via findChild so we don't need to know the internal member name.
+        if (m_resultsGrid) {
+            if (auto* tbl = m_resultsGrid->findChild<QTableWidget*>()) {
+                if (auto* vsb = tbl->verticalScrollBar())
+                    blob[QStringLiteral("scrollY")] = vsb->value();
+            }
+        }
+    }
+    return blob;
+}
+
+bool TankoyomiPage::restoreNavState(const QJsonObject& blob)
+{
+    const QString view = blob.value(QStringLiteral("view")).toString();
+
+    if (view == QLatin1String("detail")) {
+        // v1: detail restore always fails — MangaDetailView::restoreFromSnapshot
+        // returns false because we can't rebuild a MangaResult from just an id
+        // without a network round-trip. NavHistory will drop the entry and walk
+        // back to the search-results entry that preceded it.
+        if (!m_detailView) return false;
+        return m_detailView->restoreFromSnapshot(
+            blob.value(QStringLiteral("mangaState")).toObject());
+    }
+
+    // Search-results view restore
+    if (m_resultsInnerStack)
+        m_resultsInnerStack->setCurrentIndex(0);   // ensure search-results visible
+
+    if (m_queryEdit) {
+        const bool blocked = m_queryEdit->blockSignals(true);
+        m_queryEdit->setText(blob.value(QStringLiteral("query")).toString());
+        m_queryEdit->blockSignals(blocked);
+    }
+
+    if (m_sourceCombo) {
+        const QString savedSource = blob.value(QStringLiteral("sourceFilter")).toString();
+        const int idx = m_sourceCombo->findData(savedSource);
+        if (idx >= 0) {
+            const bool blocked = m_sourceCombo->blockSignals(true);
+            m_sourceCombo->setCurrentIndex(idx);
+            m_sourceCombo->blockSignals(blocked);
+        }
+    }
+
+    // Restore grid scroll position
+    if (m_resultsGrid) {
+        const int scrollY = blob.value(QStringLiteral("scrollY")).toInt(0);
+        if (scrollY > 0) {
+            if (auto* tbl = m_resultsGrid->findChild<QTableWidget*>()) {
+                if (auto* vsb = tbl->verticalScrollBar())
+                    vsb->setValue(scrollY);
+            }
+        }
+    }
+
+    return true;
 }

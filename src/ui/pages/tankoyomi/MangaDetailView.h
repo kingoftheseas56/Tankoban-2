@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QSet>
+#include <QJsonObject>
 
 #include <functional>
 
@@ -29,6 +30,18 @@ public:
 
     // Entry point — load this manga, show loading state, fetch chapters.
     void show(const MangaResult& result, const QString& coverPath);
+
+    // GLOBAL_NAV_HISTORY Task 13 — state snapshot/restore helpers.
+    // snapshotState() writes mangaId + source + coverPath into a blob.
+    // restoreFromSnapshot() returns false if the blob is empty or mangaId is
+    // missing — the scraper fetch path requires a full MangaResult struct that
+    // cannot be reconstructed from just an id without a network round-trip
+    // (which is out of scope for INavStateProvider v1). v1 behaviour: detail
+    // restore always returns false so NavHistory drops the entry and the user
+    // lands on the search-results view instead. Improves in a future iteration
+    // once a scraper-cache lookup path is available.
+    QJsonObject snapshotState() const;
+    bool restoreFromSnapshot(const QJsonObject& blob);
 
 protected:
     void hideEvent(QHideEvent* event) override;
