@@ -423,6 +423,16 @@ private:
     void updateEpisodeButtons();
     void showControls();
     void hideControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — single mouse-activity surface.
+    // Mirrors ComicReader::handleCursorActivity. Called from both
+    // VideoPlayer::mouseMoveEvent (mouse over bare margins) and the
+    // FrameCanvas::mouseActivityAt slot (mouse over the native canvas
+    // child whose mouse events never bubble). Gates HUD reveal behind
+    // a bottom-zone hover check (kHudHotZonePx) so keyboard, pause,
+    // seek, fullscreen-toggle, and every other non-mouse path stays
+    // out of the HUD's show path. Cursor visibility is now driven by
+    // m_cursorIdleTimer here, decoupled from HUD visibility.
+    void handleCursorActivity(const QPoint& posInPlayer);
     // Subtitle baseline lift in physical pixels (~6% of canvas height,
     // Netflix/YouTube safe-zone). Floor for setSubtitleLift in both
     // showControls + hideControls so subs never sit flush against the
@@ -765,6 +775,17 @@ private:
     // Auto-hide
     QTimer m_hideTimer;
     QTimer m_seekThrottle;
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — cursor-idle timer, independent
+    // of HUD lifecycle. ComicReader pattern: cursor stays visible on any
+    // mouse motion (even outside the hot zone) and auto-blanks after 3s
+    // idle. Without this decoupling, the user can't see their cursor to
+    // aim at the bottom hot zone — HUD-bound cursor visibility would
+    // leave the cursor blank from the moment the HUD hides.
+    QTimer m_cursorIdleTimer;
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — 600ms edge-cooldown that
+    // prevents show/hide thrashing when the cursor grazes the hot zone
+    // repeatedly (also mirrored from ComicReader).
+    bool m_edgeCooldown = false;
 
     // Batch 4.1 (Player Polish Phase 4) — audio-speed drift-correction
     // forwarder. Polls SyncClock::getClockVelocity() every 500ms and

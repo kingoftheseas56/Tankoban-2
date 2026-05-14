@@ -191,6 +191,26 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     m_hideTimer.setInterval(3000);
     connect(&m_hideTimer, &QTimer::timeout, this, &VideoPlayer::hideControls);
 
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — cursor-idle timer, decoupled
+    // from HUD lifecycle. Without this, hideControls used to blank the
+    // cursor 1:1 with HUD hide — meaning the moment the HUD vanished,
+    // the cursor vanished too, and the user could no longer see where
+    // to aim to bring the HUD back. ComicReader splits these: cursor
+    // re-appears on any mouse activity (handleCursorActivity), then
+    // auto-blanks after 3s of no movement (this timer). HUD's own
+    // 3s timer (m_hideTimer above) runs in parallel.
+    m_cursorIdleTimer.setSingleShot(true);
+    m_cursorIdleTimer.setInterval(3000);
+    connect(&m_cursorIdleTimer, &QTimer::timeout, this, [this]() {
+        // Don't blank the cursor if it's parked on the HUD or chrome —
+        // user is interacting; cursor must stay visible.
+        if (m_controlBar && m_controlBar->isVisible() && m_controlBar->underMouse())
+            return;
+        if (m_chromeOverlay && m_chromeOverlay->isVisible() && m_chromeOverlay->underMouse())
+            return;
+        if (m_canvas) m_canvas->setCursor(Qt::BlankCursor);
+    });
+
     m_seekThrottle.setSingleShot(true);
     m_seekThrottle.setInterval(250);
     connect(&m_seekThrottle, &QTimer::timeout, this, [this]() {
@@ -456,8 +476,9 @@ void VideoPlayer::openFile(const QString& filePath,
         debugLog("[VideoPlayer] starting sidecar...");
         m_backend->start();
     }
-
-    showControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls() here. File-
+    // open is a state change, not a mouse-hover event; HUD must stay
+    // hidden until the user moves the cursor into the bottom zone.
 }
 
 void VideoPlayer::dismissOtherPopovers(QWidget* keep)
@@ -1265,7 +1286,8 @@ void VideoPlayer::onEndOfFile()
 
     m_paused = true;
     updatePlayPauseIcon();
-    showControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls() on playback
+    // end. HUD reveal is strictly hover-zone-driven now.
 }
 
 void VideoPlayer::onError(const QString& message)
@@ -1396,12 +1418,14 @@ void VideoPlayer::buildUI()
     // match. Y parameter is now unused at the consumer side (kept in
     // the signal for future needs like cursor-locality-aware effects).
     connect(m_canvas, &FrameCanvas::mouseActivityAt, this, [this](int /*y*/) {
-        // VIDEO_CURSOR_AUTOHIDE 2026-04-24 (hemanth): cursor lifecycle is
-        // bound to HUD lifecycle via showControls/hideControls on m_canvas.
-        // Prior setCursor/Qt::ArrowCursor + m_cursorTimer plumbing targeted
-        // VideoPlayer's Qt logical cursor scope which doesn't reach
-        // FrameCanvas's WA_NativeWindow HWND — blank-cursor never landed.
-        showControls();
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 (hemanth): route canvas mouse
+        // activity through the gated handler so the HUD only reveals when
+        // the cursor is near the bottom of the viewport. Reverts the
+        // 2026-04-22 mouse-anywhere convention back to bottom-zone-only
+        // per Hemanth's directive. Cursor lifecycle (visible on movement,
+        // auto-blank after 3s idle) now lives in handleCursorActivity +
+        // m_cursorIdleTimer, decoupled from HUD show/hide.
+        handleCursorActivity(mapFromGlobal(QCursor::pos()));
     });
     connect(m_canvas, &FrameCanvas::canvasPixelSizeSettled, this,
         [this](int, int) {
@@ -1566,7 +1590,9 @@ void VideoPlayer::buildUI()
         double curSec = m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0;
         m_backend->sendSeek(qMax(0.0, curSec - 10.0));
         m_centerFlash->flash(SVG_SEEK_BACK);
-        showControls();
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls(). The
+        // user clicked a HUD button so the HUD is already visible; the
+        // hover-stay-open path keeps it up via m_hideTimer.
     });
 
     m_seekBar = new SeekSlider(Qt::Horizontal, m_controlBar);
@@ -1678,7 +1704,9 @@ void VideoPlayer::buildUI()
         double curSec = m_durationSec > 0 ? m_seekBar->value() / 10000.0 * m_durationSec : 0;
         m_backend->sendSeek(curSec + 10.0);
         m_centerFlash->flash(SVG_SEEK_FWD);
-        showControls();
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls(). Same
+        // reason as seekBack: the HUD is already up since the user
+        // clicked a HUD button.
     });
 
     m_durLabel = new QLabel("0:00", m_controlBar);
@@ -2166,14 +2194,19 @@ void VideoPlayer::togglePause()
         m_backend->sendPause();
         m_centerFlash->flash(SVG_PAUSE);
     }
-    showControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls() on pause/
+    // resume toggle (space key OR HUD button). HUD reveal is strictly
+    // hover-zone-driven now per Hemanth's spec: "even when the video is
+    // paused, the bottom hud shouldn't be triggered". Center-flash icon
+    // gives the user the visual confirmation that the action registered.
 }
 
 void VideoPlayer::toggleFullscreen()
 {
     m_fullscreen = !m_fullscreen;
     emit fullscreenRequested(m_fullscreen);
-    showControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls() on fullscreen
+    // toggle. State change ≠ mouse hover near bottom.
 }
 
 void VideoPlayer::toggleMute()
@@ -2776,7 +2809,9 @@ void VideoPlayer::togglePictureInPicture()
             top->show();
         }
         m_inPip = false;
-        showControls();
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — no showControls() on PiP
+        // exit. Toast confirms the action; HUD waits for hover-zone
+        // entry per Hemanth's strict spec.
         m_toastHud->showToast("Exited Picture-in-Picture");
         return;
     }
@@ -2868,7 +2903,11 @@ void VideoPlayer::togglePlaylistDrawer()
     // swallows presses on the tracked anchor).
     m_playlistDrawer->toggle(m_playlistChip);
     if (m_playlistDrawer->isOpen()) {
-        showControls();
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — the chip the user clicked
+        // lives in the HUD, so the HUD is already visible by definition;
+        // no need to re-trigger showControls(). Pin the auto-hide timer
+        // off while the drawer is open so the bar doesn't fade out from
+        // under a drawer interaction.
         m_hideTimer.stop();
     }
 }
@@ -3042,12 +3081,69 @@ void VideoPlayer::hideControls()
     // file-supplied styles even though our injected SRT header was fine).
     if (m_canvas) {
         m_canvas->setSubtitleLift(subtitleBaselineLiftPx());
-        // VIDEO_CURSOR_AUTOHIDE 2026-04-24 (hemanth): blank the cursor on
-        // the canvas HWND when HUD hides. Reference players (mpv / VLC /
-        // PotPlayer) all hide cursor + HUD as a single idle gesture
-        // regardless of pause state — matches the paused-guard removal
-        // applied to hideControls itself this same day.
-        m_canvas->setCursor(Qt::BlankCursor);
+        // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — cursor blanking moved out
+        // of hideControls and into m_cursorIdleTimer. With hover-bottom-
+        // only HUD reveal, the cursor MUST stay visible after the HUD
+        // hides so the user can see where to aim to bring the HUD back.
+        // Cursor now auto-blanks on its own 3s idle timer, independent
+        // of HUD lifecycle. The prior 1:1 cursor-binds-to-HUD model
+        // (Hemanth-driven 2026-04-24) made sense only while the HUD
+        // appeared on any mouse motion.
+    }
+}
+
+// VIDEO_HUD_HOVER_BOTTOM 2026-05-11 — single mouse-activity surface for
+// both the bottom-zone HUD-reveal gate AND the cursor-idle bookkeeping.
+// Called from VideoPlayer::mouseMoveEvent (mouse over bare margins) and
+// from the FrameCanvas::mouseActivityAt slot (mouse over the native
+// canvas child whose mouse events never bubble to the parent). Mirrors
+// ComicReader::handleCursorActivity verbatim — same two-timer pattern,
+// same 600ms edge cooldown, same hover-stay-open semantics.
+//
+// Hemanth-locked spec 2026-05-11: HUD MUST NOT appear on pause/play,
+// space, arrows, seek, fullscreen toggle, mute, brightness, subtitle
+// toggle, or any other keyboard/state-change path. The ONLY HUD
+// reveal trigger is mouse hover near the bottom of the viewport.
+// All non-mouse showControls call sites have been removed accordingly.
+void VideoPlayer::handleCursorActivity(const QPoint& posInPlayer)
+{
+    // Hot zone height — bottom 120px of the viewport (≈11% of a 1080p
+    // window; covers the 78px-tall control bar plus grace margin so the
+    // HUD doesn't dodge the cursor as it arrives). Tunable; ComicReader
+    // uses 60px but its toolbar is taller proportionally to its window.
+    constexpr int kHudHotZonePx = 120;
+
+    // Cursor lifecycle — show on any movement, regardless of zone.
+    // Mirrors ComicReader's setCursor(ArrowCursor) on every poll. We
+    // target the canvas HWND directly because the FrameCanvas
+    // WA_NativeWindow child doesn't inherit Qt's logical cursor scope
+    // (Hemanth-driven VIDEO_CURSOR_AUTOHIDE 2026-04-24).
+    if (m_canvas) m_canvas->unsetCursor();
+
+    if (!m_controlBar->isVisible()) {
+        // HUD hidden: start the cursor-idle timer so the cursor blanks
+        // after 3s if the user stops moving.
+        m_cursorIdleTimer.start();
+    } else {
+        // HUD visible: cursor stays visible (the timer's underMouse
+        // guards would no-op anyway, but stopping it explicitly keeps
+        // the intent legible). Re-arm the HUD's own 3s auto-hide so
+        // continuous movement near the controls keeps the bar up.
+        m_cursorIdleTimer.stop();
+        m_hideTimer.start();
+    }
+
+    // HUD reveal gate — only mouse hover near the bottom edge triggers
+    // a show. The cooldown debounces rapid in-and-out grazes so the
+    // bar doesn't strobe; ComicReader uses the same 600ms window.
+    const int bottomDist = height() - posInPlayer.y();
+    if (bottomDist <= kHudHotZonePx
+        && !m_controlBar->isVisible()
+        && !m_edgeCooldown)
+    {
+        m_edgeCooldown = true;
+        showControls();
+        QTimer::singleShot(600, this, [this]() { m_edgeCooldown = false; });
     }
 }
 
@@ -3751,17 +3847,14 @@ void VideoPlayer::mouseMoveEvent(QMouseEvent* event)
     }
 
     QWidget::mouseMoveEvent(event);
-    // VIDEO_PLAYER_UI_POLISH Phase 1 2026-04-22: reveal HUD on any mouse
-    // motion, matching VLC / mpv / PotPlayer convention. Prior code gated
-    // reveal to the bottom 120 px which made the player feel hesitant
-    // because moving into the lower player area (bottom third) wouldn't
-    // surface the bar. Twin of the FrameCanvas mouseActivityAt lambda
-    // above — both paths must behave the same since the native D3D11
-    // canvas child doesn't bubble mouse events.
-    // VIDEO_CURSOR_AUTOHIDE 2026-04-24: cursor unblank handled inside
-    // showControls (m_canvas->unsetCursor) — removed dead setCursor on
-    // VideoPlayer that never reached the canvas HWND.
-    showControls();
+    // VIDEO_HUD_HOVER_BOTTOM 2026-05-11 (hemanth: "only when the mouse
+    // cursor hovers around the bottom part"): the 2026-04-22 mouse-
+    // anywhere reveal is reverted. HUD now appears only when the cursor
+    // enters the bottom hot zone (gated inside handleCursorActivity).
+    // Twin of the FrameCanvas::mouseActivityAt lambda above — both
+    // paths route through the same handler since the D3D11 native
+    // canvas child doesn't bubble mouse events to this widget.
+    handleCursorActivity(event->pos());
 }
 
 void VideoPlayer::mouseDoubleClickEvent(QMouseEvent* event)
