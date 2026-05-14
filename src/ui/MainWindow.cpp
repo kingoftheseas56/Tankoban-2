@@ -1663,9 +1663,12 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 
     return QMainWindow::nativeEvent(eventType, message, result);
 }
+#endif
 
 // GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
 // Qt::BackButton = mouse button 4 (XButton1); Qt::ForwardButton = mouse button 5 (XButton2).
+// Defined outside the #ifdef Q_OS_WIN above; the declaration in MainWindow.h
+// is unconditional, so this body must compile on all platforms.
 void MainWindow::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::BackButton) {
         onBackChevronClicked();
@@ -1679,4 +1682,3 @@ void MainWindow::mousePressEvent(QMouseEvent* event) {
     }
     QMainWindow::mousePressEvent(event);
 }
-#endif
