@@ -6,6 +6,7 @@
 
 #include "core/book/BookResult.h"
 #include "tankolibrary/TransfersView.h"
+#include "../INavStateProvider.h"
 
 class CoreBridge;
 class BookScraper;
@@ -28,7 +29,7 @@ class QNetworkReply;
 // with TANKOLIBRARY_ABB_FIX_TODO M1 2026-04-22). AA stays compiled but
 // disabled at construction-time per captcha findings. Future: LibGen +
 // AA on Books tab, ABB only on Audiobooks tab.
-class TankoLibraryPage : public QWidget
+class TankoLibraryPage : public QWidget, public INavStateProvider
 {
     Q_OBJECT
 
@@ -40,6 +41,11 @@ public:
     explicit TankoLibraryPage(CoreBridge* bridge,
                               TorrentClient* client = nullptr,
                               QWidget* parent = nullptr);
+
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 12)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("tankolibrary"); }
 
 private:
     // Media-type tab (TANKOLIBRARY_ABB_FIX_TODO M1). Books = EPUB/PDF/MOBI

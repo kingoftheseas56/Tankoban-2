@@ -38,6 +38,8 @@
 #include <QFrame>
 #include <QStackedWidget>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QTableWidget>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -2030,4 +2032,71 @@ void TankoLibraryPage::updateInnerResultsView()
         return;
     }
     m_resultsInnerStack->setCurrentIndex(0);   // data view (grid)
+}
+
+// ── INavStateProvider (GLOBAL_NAV_HISTORY Task 12) ────────────────────────
+
+QJsonObject TankoLibraryPage::captureNavState() const
+{
+    QJsonObject blob;
+
+    // Search query text
+    if (m_queryEdit)
+        blob["query"] = m_queryEdit->text();
+
+    // Media tab: 0 = Books, 1 = Audiobooks
+    blob["mediaTab"] = (m_mediaTab == MediaTab::Books) ? 0 : 1;
+
+    // Inner tab pill: 0 = Search Results, 1 = Transfers
+    if (m_resultsInnerStack)
+        blob["innerTab"] = m_resultsInnerStack->currentIndex();
+
+    // Grid scroll position — BookResultsGrid owns its QTableWidget privately;
+    // reach its vertical scroll bar via findChild so we don't need to expose
+    // a new public accessor on BookResultsGrid (Agent 4B's file).
+    if (m_grid) {
+        if (auto* table = m_grid->findChild<QTableWidget*>()) {
+            if (auto* vsb = table->verticalScrollBar())
+                blob["gridScrollY"] = vsb->value();
+        }
+    }
+
+    return blob;
+}
+
+bool TankoLibraryPage::restoreNavState(const QJsonObject& blob)
+{
+    // Apply in order: query → mediaTab → innerTab → scroll.
+
+    if (m_queryEdit) {
+        const QString query = blob.value("query").toString();
+        if (m_queryEdit->text() != query) {
+            m_queryEdit->blockSignals(true);
+            m_queryEdit->setText(query);
+            m_queryEdit->blockSignals(false);
+        }
+    }
+
+    // Media tab — call setMediaTab so pill visuals + filter visibility update
+    // correctly. setMediaTab is idempotent when the tab is already active.
+    const int mediaTabIdx = blob.value("mediaTab").toInt(0);
+    setMediaTab(mediaTabIdx == 1 ? MediaTab::Audiobooks : MediaTab::Books);
+
+    // Inner tab pill (Search Results vs Transfers)
+    if (m_resultsInnerStack) {
+        const int innerIdx = blob.value("innerTab").toInt(0);
+        if (innerIdx >= 0 && innerIdx < m_resultsInnerStack->count())
+            m_resultsInnerStack->setCurrentIndex(innerIdx);
+    }
+
+    // Grid scroll position
+    if (m_grid) {
+        if (auto* table = m_grid->findChild<QTableWidget*>()) {
+            if (auto* vsb = table->verticalScrollBar())
+                vsb->setValue(blob.value("gridScrollY").toInt(0));
+        }
+    }
+
+    return true;  // TankoLibraryPage has no stale-target case — search
+                  // results are transient; restoring positions is safe.
 }
