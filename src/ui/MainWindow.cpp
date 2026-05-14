@@ -39,6 +39,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QIcon>
+#include <QDialog>
 #include <QEvent>
 #include <QMouseEvent>
 #include <QWindowStateChangeEvent>
@@ -340,6 +341,9 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
             this, &MainWindow::onBackAvailabilityChanged);
     connect(m_navHistory, &NavHistory::forwardAvailableChanged,
             this, &MainWindow::onForwardAvailabilityChanged);
+
+    // GLOBAL_NAV_HISTORY Task 7: gray chevrons while a modal dialog is up.
+    qApp->installEventFilter(this);
 }
 
 // ── Resize ──────────────────────────────────────────────────────────────────
@@ -854,6 +858,8 @@ bool MainWindow::isReaderOrPlayerActive() const {
 }
 
 void MainWindow::onBackChevronClicked() {
+    // Spec §3.12: no-op while modal dialog is open.
+    if (QApplication::activeModalWidget()) return;
     // Spec §3.10: Back closes the reader/player if one is active.
     // Reader/player are not history entries — they're modal overlays.
     if (isReaderOrPlayerActive()) {
@@ -874,6 +880,8 @@ void MainWindow::onBackChevronClicked() {
 }
 
 void MainWindow::onForwardChevronClicked() {
+    // Spec §3.12: no-op while modal dialog is open.
+    if (QApplication::activeModalWidget()) return;
     // Spec §3.10: Forward is a no-op while a reader/player is open.
     if (isReaderOrPlayerActive()) return;
     if (m_navHistory) m_navHistory->forward();
@@ -1716,6 +1724,28 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
+
+// GLOBAL_NAV_HISTORY Task 7 — gray chevrons while a modal dialog is on screen.
+// Watch every QDialog show/hide app-wide and re-evaluate chevron enabled state
+// combining NavHistory canGoBack/canGoForward, overlay-active (Task 6), and
+// Qt-application modal-active check (spec §3.12).
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Show || event->type() == QEvent::Hide) {
+        if (qobject_cast<QDialog*>(watched)) {
+            const bool inModal  = (QApplication::activeModalWidget() != nullptr);
+            const bool inOverlay = isReaderOrPlayerActive();
+            if (m_backBtn) {
+                const bool nav = m_navHistory && m_navHistory->canGoBack();
+                m_backBtn->setEnabled(nav && !inModal && !inOverlay);
+            }
+            if (m_forwardBtn) {
+                const bool nav = m_navHistory && m_navHistory->canGoForward();
+                m_forwardBtn->setEnabled(nav && !inModal && !inOverlay);
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
 
 // GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
 // Qt::BackButton = mouse button 4 (XButton1); Qt::ForwardButton = mouse button 5 (XButton2).

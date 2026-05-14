@@ -83,6 +83,8 @@ protected:
     void changeEvent(QEvent *event) override;
     // GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
     void mousePressEvent(QMouseEvent* event) override;
+    // GLOBAL_NAV_HISTORY Task 7 — gray chevrons while a modal dialog is open.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
