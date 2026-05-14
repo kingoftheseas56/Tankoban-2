@@ -29,6 +29,7 @@ void BookResultsGrid::buildUI()
     root->setSpacing(0);
 
     m_table = new QTableWidget(this);
+    m_table->setObjectName(QStringLiteral("BookResultsTable"));  // T27/T29 — for QSS density + hover
     m_table->setColumnCount(8);
     m_table->setHorizontalHeaderLabels(
         { "", "Title", "Author", "Format", "Year", "Size", "Language", "Source" });
@@ -48,6 +49,18 @@ void BookResultsGrid::buildUI()
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setAlternatingRowColors(true);
     m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    // T27/T29 — Density polish: row hover state + cell padding
+    m_table->setStyleSheet(
+        "#BookResultsTable { font-size: 12px; }"
+        "#BookResultsTable::item { padding: 8px 8px; }"
+        "#BookResultsTable::item:hover { background: rgba(255,255,255,0.04); }"
+        "#BookResultsTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
+        "#BookResultsTable QHeaderView::section {"
+        "  background: #1a1a1a; color: #888; border: none;"
+        "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
+        "  padding: 8px 8px; font-size: 11px; font-weight: 600; }"
+    );
 
     connect(m_table, &QTableWidget::cellDoubleClicked,
             this, &BookResultsGrid::onCellDoubleClicked);
