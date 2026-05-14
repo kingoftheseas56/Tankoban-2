@@ -25,6 +25,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QScrollBar>
+#include <QTimer>
 #include <algorithm>
 
 static const QStringList VIDEO_EXTS = {
@@ -1046,9 +1047,19 @@ bool ShowView::restoreFromSnapshot(const QJsonObject& blob)
         navigateTo(rel);
 
     // Restore scroll position after the table is repopulated.
-    if (m_table) {
-        if (auto* vsb = m_table->verticalScrollBar())
-            vsb->setValue(blob.value("scrollY").toInt(0));
+    // GLOBAL_NAV_HISTORY Task 10 review fix: populateTable mutates row count
+    // synchronously but the scrollbar's maximum is only refreshed on Qt's
+    // next event-loop tick (layout commits asynchronously). Calling
+    // vsb->setValue immediately would silently clamp to the stale-zero max.
+    // Defer one tick so the value sticks.
+    const int scrollY = blob.value("scrollY").toInt(0);
+    if (m_table && scrollY > 0) {
+        QTimer::singleShot(0, this, [this, scrollY]() {
+            if (m_table) {
+                if (auto* vsb = m_table->verticalScrollBar())
+                    vsb->setValue(scrollY);
+            }
+        });
     }
     return true;
 }
