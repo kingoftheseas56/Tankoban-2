@@ -30,6 +30,16 @@
 #include "core/manga/MangaDownloader.h"
 #include "core/manga/MangaScraper.h"
 
+namespace {
+// Mirror of StreamDetailView.cpp:53-60 column-constants pattern. Tankoyomi's
+// 2-column model: title (stretch) + action (fixed). Hemanth flagged the
+// # and Date columns as dead in post-overhaul smoke; the per-chapter
+// download indicator is already the only meaningful action surface.
+constexpr int kColTitle    = 0;
+constexpr int kColAction   = 1;
+constexpr int kColumnCount = 2;
+}  // namespace
+
 MangaDetailView::MangaDetailView(QWidget* parent) : QWidget(parent)
 {
     setObjectName("MangaDetailView");
@@ -230,20 +240,33 @@ void MangaDetailView::buildUI()
     m_multiSelectBar->hide();
     root->addWidget(m_multiSelectBar);
 
-    // -- Chapter table ------------------------------------------------
-    m_chapterTable = new QTableWidget(0, 4, this);
+    // -- Chapter table (2-col model mirror of StreamDetailView) -------
+    m_chapterTable = new QTableWidget(0, kColumnCount, this);
     m_chapterTable->setObjectName("MangaDetailChapterTable");
-    m_chapterTable->setHorizontalHeaderLabels(
-        {tr("#"), tr("Chapter"), tr("Date"), tr("")});
-    m_chapterTable->horizontalHeader()->setStretchLastSection(false);
-    m_chapterTable->horizontalHeader()->setSectionResizeMode(
-        1, QHeaderView::Stretch);
+    m_chapterTable->setHorizontalHeaderLabels({
+        tr("Chapter"),
+        QString(),                       // action — no header text
+    });
+    m_chapterTable->horizontalHeader()->setSectionResizeMode(kColTitle,  QHeaderView::Stretch);
+    m_chapterTable->horizontalHeader()->setSectionResizeMode(kColAction, QHeaderView::Fixed);
+    m_chapterTable->setColumnWidth(kColAction, 36);
+    m_chapterTable->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_chapterTable->verticalHeader()->setDefaultSectionSize(56);
     m_chapterTable->verticalHeader()->hide();
     m_chapterTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_chapterTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_chapterTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_chapterTable->setShowGrid(false);
+    m_chapterTable->setAlternatingRowColors(true);
+    m_chapterTable->setSortingEnabled(false);
     m_chapterTable->setContextMenuPolicy(Qt::CustomContextMenu);  // F.2 wires
+    m_chapterTable->setStyleSheet(
+        "QTableWidget { background: transparent; border: none; color: #ccc;"
+        "  alternate-background-color: rgba(255,255,255,0.03); }"
+        "QTableWidget::item { padding: 4px; }"
+        "QTableWidget::item:selected { background: rgba(255,255,255,0.08); }"
+        "QHeaderView::section { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.5);"
+        "  border: none; font-size: 11px; padding: 4px; }");
     connect(m_chapterTable, &QTableWidget::itemSelectionChanged,
             this, &MangaDetailView::updateMultiSelectBar);
     connect(m_chapterTable, &QTableWidget::customContextMenuRequested,
