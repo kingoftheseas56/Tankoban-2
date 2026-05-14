@@ -1,4 +1,4 @@
-#include "TankorentPage.h"
+﻿#include "TankorentPage.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
 #include "core/TorrentIndexer.h"
@@ -22,6 +22,7 @@
 #include "ui/pages/tankorent/TorrentPropertiesWidget.h"
 #include "ui/widgets/Toast.h"
 
+#include <QPainter>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QSettings>
@@ -44,6 +45,7 @@
 #include <QUrl>
 #include <QMessageBox>
 #include <QProgressBar>
+#include <QStackedWidget>
 #include <QHash>
 #include <QSet>
 #include <QJsonArray>
@@ -64,6 +66,26 @@
 // Per-site category options — faithfully ported from _SITE_CATEGORY_OPTIONS
 // Each entry: { display_text, value }
 // ══════════════════════════════════════════════════════════════════════════════
+
+// T3 — defensive fall-through for muted-secondary-text color. If Theme.cpp ever
+// adds a __FG_MUTED__ token + palette.fgMuted field, swap this for a Theme-token
+// read. Reads QApplication::palette() Text color at ~55% opacity, which
+// approximates the muted-secondary color across every palette without needing
+// Agent 5 coordination today.
+static inline QColor fgMutedColor()
+{
+    QColor c = QApplication::palette().color(QPalette::Text);
+    c.setAlpha(140);
+    return c;
+}
+
+// T11 — three-segment title data stored in Qt::UserRole+1 on the Title cell.
+struct TitleSegments {
+    QString source;
+    QString title;
+    QString quality;
+};
+Q_DECLARE_METATYPE(TitleSegments)
 
 struct CategoryOption { const char* label; const char* value; };
 
@@ -196,6 +218,43 @@ static const CategoryOption* categoryOptionsForSite(const QString& siteKey)
     if (siteKey == "1337x")        return X1337X_CATEGORIES;
     if (siteKey == "torrentscsv")  return TORRENTSCSV_CATEGORIES;
     return nullptr;
+}
+
+// T8 — Reverse-lookup: given a sourceKey + raw category ID emitted by the
+// indexer (e.g. "1_2" from nyaa or "200" from piratebay), return the
+// human-friendly label from the source's CategoryOption array (e.g.
+// "Anime - English-translated", "Video"). Returns empty QString if no
+// match — caller falls back to the result's own category string or em-dash.
+static QString categoryDisplayName(const QString& sourceKey, const QString& rawId)
+{
+    if (rawId.isEmpty()) return QString();
+    const CategoryOption* opts = categoryOptionsForSite(sourceKey);
+    if (!opts) return QString();
+    for (int i = 0; opts[i].label != nullptr; ++i) {
+        if (rawId == QLatin1String(opts[i].value))
+            return QString::fromLatin1(opts[i].label);
+    }
+    return QString();
+}
+
+// T9-followup 2026-05-13 — Title-case the media-category routing key for UI
+// display. Data layer stores "videos" / "books" / "audiobooks" / "comics"
+// lowercase (used as key into TorrentClient::defaultPaths() lookup);
+// the UI should always show Title Case per spec CR.8. Applied at the
+// renderTorrentRow Category cell — covers flat torrents + bulk-group
+// child rows alike. Bulk-group parent rows hardcode "Videos" directly
+// (TankorentPage.cpp:2014 from T9). Returns em-dash for empty input.
+static QString prettyCategoryName(const QString& raw)
+{
+    if (raw.isEmpty())                             return QStringLiteral("-");
+    if (raw == QLatin1String("videos"))            return QStringLiteral("Videos");
+    if (raw == QLatin1String("books"))             return QStringLiteral("Books");
+    if (raw == QLatin1String("audiobooks"))        return QStringLiteral("Audiobooks");
+    if (raw == QLatin1String("comics"))            return QStringLiteral("Comics");
+    // Fallback for any other category string: capitalize first letter.
+    QString out = raw;
+    out[0] = out[0].toUpper();
+    return out;
 }
 
 enum class RowKind {
@@ -357,6 +416,94 @@ QString fallbackVideosRoot(TorrentClient* client)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// T11 — TitleCellDelegate implementation
+// ══════════════════════════════════════════════════════════════════════════════
+
+TitleCellDelegate::TitleCellDelegate(QObject* parent)
+    : QStyledItemDelegate(parent) {}
+
+void TitleCellDelegate::paint(QPainter* painter,
+                              const QStyleOptionViewItem& option,
+                              const QModelIndex& index) const
+{
+    // Let the base style paint background (selection / hover / alternating)
+    // but suppress the default text — we'll draw three colored segments below.
+    //
+    // Calling QStyledItemDelegate::paint(painter, opt, index) here looks
+    // right but is the classic re-init trap: the base method runs
+    // initStyleOption(&opt, index) again internally, repopulating opt.text
+    // from Qt::DisplayRole and undoing our clear(). The style then paints
+    // the full DisplayRole title underneath our segmented draw, producing
+    // a horizontally-offset double-text "ghosting" effect (visible on
+    // every Title row in the screenshot 2026-05-13 ~6:00pm).
+    // Fix: go straight to QStyle::drawControl(CE_ItemViewItem, &opt, ...)
+    // so the style sees our cleared opt.text directly.
+    QStyleOptionViewItem opt = option;
+    initStyleOption(&opt, index);
+    opt.text.clear();
+    const QWidget* w = option.widget;
+    QStyle* s = w ? w->style() : QApplication::style();
+    s->drawControl(QStyle::CE_ItemViewItem, &opt, painter, w);
+
+    const QVariant data = index.data(Qt::UserRole + 1);
+    if (!data.canConvert<TitleSegments>()) {
+        // Fallback: paint default text if metadata missing.
+        painter->save();
+        painter->setPen(option.palette.color(QPalette::Text));
+        painter->drawText(option.rect.adjusted(8, 0, -8, 0),
+                          Qt::AlignVCenter | Qt::AlignLeft,
+                          index.data(Qt::DisplayRole).toString());
+        painter->restore();
+        return;
+    }
+
+    const TitleSegments seg = data.value<TitleSegments>();
+    painter->save();
+
+    const QFontMetrics fm(option.font);
+    const QString sep = QStringLiteral("  ·  ");
+
+    int x = option.rect.left() + 8;
+    const int y = option.rect.center().y() + fm.ascent() / 2 - 1;
+    const int rightLimit = option.rect.right() - 8;
+
+    const QColor fgMain = option.palette.color(QPalette::Text);
+    QColor fgDim = fgMain;
+    fgDim.setAlpha(140);
+
+    auto drawSeg = [&](const QString& text, const QColor& col) {
+        if (text.isEmpty() || x >= rightLimit) return;
+        painter->setPen(col);
+        const int avail = rightLimit - x;
+        const QString elided = fm.elidedText(text, Qt::ElideRight, avail);
+        painter->drawText(x, y, elided);
+        x += fm.horizontalAdvance(elided);
+    };
+
+    if (!seg.source.isEmpty()) {
+        drawSeg(seg.source, fgDim);
+        drawSeg(sep, fgDim);
+    }
+    drawSeg(seg.title, fgMain);
+    if (!seg.quality.isEmpty()) {
+        drawSeg(sep, fgDim);
+        drawSeg(seg.quality, fgDim);
+    }
+
+    painter->restore();
+}
+
+QSize TitleCellDelegate::sizeHint(const QStyleOptionViewItem& option,
+                                  const QModelIndex& index) const
+{
+    // Hardcoded row height per feedback_qt_sizehintforrow_unreliable_pre_show.md.
+    // Table also calls setDefaultSectionSize(32); this is the per-row fallback.
+    QSize s = QStyledItemDelegate::sizeHint(option, index);
+    s.setHeight(32);
+    return s;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Constructor
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -367,8 +514,10 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     qRegisterMetaType<QList<TorrentResult>>();
 
     m_nam = new QNetworkAccessManager(this);
+    setObjectName(QStringLiteral("TankorentPage"));
     setAcceptDrops(true);
     buildUI();
+    m_resultsTable->setItemDelegateForColumn(0, new TitleCellDelegate(this));
     populateSourceCombo();
     {
         const QStringList savedGroups = QSettings()
@@ -378,17 +527,25 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     }
 
     // A5/C: restore results sort state from QSettings. Validate the column
-    // against the post-Track-C sortable set (0 Title, 1 Category, 2 Size,
-    // 4 Seeders, 5 Leechers); fall back to default (Seeders desc, col 4) on
-    // missing, out-of-range, or stale-from-pre-C values (e.g. saved 6 was
-    // Leechers pre-C, now Link — invalid).
+    // against the post-T7 sortable set (0 Title, 1 Category, 2 Size,
+    // 3 Seeders, 4 Leechers); fall back to default (Seeders desc, col 3) on
+    // missing, out-of-range, or stale-from-pre-T7 values.
     {
         QSettings s;
         const int   savedCol   = s.value("tankorent/sortCol",   m_resultsSortCol).toInt();
         const int   savedOrder = s.value("tankorent/sortOrder", static_cast<int>(m_resultsSortOrder)).toInt();
-        const bool  validCol   = (savedCol == 0 || savedCol == 1 || savedCol == 2 ||
-                                  savedCol == 4 || savedCol == 5);
-        if (validCol) m_resultsSortCol = savedCol;
+        // T7 — Valid sortable cols after Files drop: 0 Title, 1 Category, 2 Size,
+        // 3 Seeders, 4 Leechers. (5 Link non-sortable.) Migrate stale pre-T7
+        // indices: pre-Files (3) -> Seeders (3); pre-Seeders (4) -> 3;
+        // pre-Leechers (5) -> 4; pre-Link (6) -> default fallback.
+        int migratedCol = savedCol;
+        if (savedCol == 3) migratedCol = 3;
+        else if (savedCol == 4) migratedCol = 3;
+        else if (savedCol == 5) migratedCol = 4;
+        else if (savedCol == 6) migratedCol = m_resultsSortCol;   // Link non-sortable
+        const bool  validCol = (migratedCol == 0 || migratedCol == 1 || migratedCol == 2 ||
+                                migratedCol == 3 || migratedCol == 4);
+        if (validCol) m_resultsSortCol = migratedCol;
         m_resultsSortOrder = (savedOrder == Qt::AscendingOrder)
                                  ? Qt::AscendingOrder : Qt::DescendingOrder;
         if (m_resultsTable && m_resultsTable->horizontalHeader())
@@ -481,8 +638,8 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
 void TankorentPage::buildUI()
 {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(8, 8, 8, 0);
-    root->setSpacing(6);
+    root->setContentsMargins(12, 12, 12, 12);
+    root->setSpacing(10);
 
     buildSearchControls(root);
     buildStatusRow(root);
@@ -497,24 +654,24 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     // 2026-04-20 UX ask).
     auto *queryRow = new QHBoxLayout;
     queryRow->setContentsMargins(0, 0, 0, 0);
-    queryRow->setSpacing(8);
+    queryRow->setSpacing(10);
 
     m_queryEdit = new QLineEdit;
     m_queryEdit->setPlaceholderText("Search torrents...");
-    m_queryEdit->setFixedHeight(30);
+    m_queryEdit->setFixedHeight(36);
     m_queryEdit->setMinimumWidth(320);
     connect(m_queryEdit, &QLineEdit::returnPressed, this, &TankorentPage::startSearch);
     queryRow->addWidget(m_queryEdit, 1);
 
     m_searchBtn = new QPushButton("Search");
-    m_searchBtn->setFixedHeight(30);
+    m_searchBtn->setFixedHeight(36);
     m_searchBtn->setMinimumWidth(90);
     m_searchBtn->setCursor(Qt::PointingHandCursor);
     connect(m_searchBtn, &QPushButton::clicked, this, &TankorentPage::startSearch);
     queryRow->addWidget(m_searchBtn);
 
     m_cancelBtn = new QPushButton("Cancel");
-    m_cancelBtn->setFixedHeight(30);
+    m_cancelBtn->setFixedHeight(36);
     m_cancelBtn->setMinimumWidth(90);
     m_cancelBtn->setCursor(Qt::PointingHandCursor);
     m_cancelBtn->setVisible(false);
@@ -526,10 +683,10 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     // Row 2 — filter combos + global actions.
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(8);
+    row->setSpacing(10);
 
     m_searchTypeCombo = new QComboBox;
-    m_searchTypeCombo->setFixedHeight(30);
+    m_searchTypeCombo->setFixedHeight(36);
     m_searchTypeCombo->setMinimumWidth(130);
     m_searchTypeCombo->addItem("Videos",     "videos");
     m_searchTypeCombo->addItem("Books",      "books");
@@ -538,7 +695,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     row->addWidget(m_searchTypeCombo, 1);
 
     m_sourceCombo = new QComboBox;
-    m_sourceCombo->setFixedHeight(30);
+    m_sourceCombo->setFixedHeight(36);
     m_sourceCombo->setMinimumWidth(140);
     connect(m_sourceCombo, &QComboBox::currentIndexChanged, this, [this]() {
         reloadCategoryOptions();
@@ -546,7 +703,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     row->addWidget(m_sourceCombo, 1);
 
     m_categoryCombo = new QComboBox;
-    m_categoryCombo->setFixedHeight(30);
+    m_categoryCombo->setFixedHeight(36);
     m_categoryCombo->setMinimumWidth(180);
     m_categoryCombo->addItem("All categories", "");
     m_categoryCombo->setEnabled(false);
@@ -555,7 +712,7 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     // E1: client-side seeder filter. Applied in renderResults between dedup
     // and the soft cap. Persisted to QSettings tankorent/filter.
     m_filterCombo = new QComboBox;
-    m_filterCombo->setFixedHeight(30);
+    m_filterCombo->setFixedHeight(36);
     m_filterCombo->setMinimumWidth(130);
     m_filterCombo->setToolTip("Filter results by seeder count");
     m_filterCombo->addItem("All",            "all");
@@ -578,25 +735,25 @@ void TankorentPage::buildSearchControls(QVBoxLayout* parent)
     row->addStretch(1);
 
     m_refreshBtn = new QPushButton("Refresh");
-    m_refreshBtn->setFixedHeight(30);
+    m_refreshBtn->setFixedHeight(36);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QPushButton::clicked, this, &TankorentPage::refreshTransfers);
     row->addWidget(m_refreshBtn);
 
     m_sourcesBtn = new QPushButton("Sources");
-    m_sourcesBtn->setFixedHeight(30);
+    m_sourcesBtn->setFixedHeight(36);
     m_sourcesBtn->setCursor(Qt::PointingHandCursor);
     connect(m_sourcesBtn, &QPushButton::clicked, this, &TankorentPage::onSourcesClicked);
     row->addWidget(m_sourcesBtn);
 
     m_addUrlBtn = new QPushButton("Add URL");
-    m_addUrlBtn->setFixedHeight(30);
+    m_addUrlBtn->setFixedHeight(36);
     m_addUrlBtn->setCursor(Qt::PointingHandCursor);
     connect(m_addUrlBtn, &QPushButton::clicked, this, &TankorentPage::onAddFromUrlClicked);
     row->addWidget(m_addUrlBtn);
 
     m_moreBtn = new QPushButton("More");
-    m_moreBtn->setFixedHeight(30);
+    m_moreBtn->setFixedHeight(36);
     m_moreBtn->setCursor(Qt::PointingHandCursor);
     connect(m_moreBtn, &QPushButton::clicked, this, [this]() {
         QMenu* menu = ContextMenuHelper::createMenu(this);
@@ -642,15 +799,15 @@ void TankorentPage::buildStatusRow(QVBoxLayout* parent)
     row->setSpacing(8);
 
     m_searchStatus = new QLabel("Ready");
-    m_searchStatus->setStyleSheet("color: #a1a1aa; font-size: 11px;");
+    m_searchStatus->setStyleSheet("color: #a1a1aa; font-size: 13px;");
     row->addWidget(m_searchStatus, 2);
 
     m_downloadStatus = new QLabel("Active: 0 | History: 0");
-    m_downloadStatus->setStyleSheet("color: #a1a1aa; font-size: 11px;");
+    m_downloadStatus->setStyleSheet("color: #a1a1aa; font-size: 13px;");
     row->addWidget(m_downloadStatus, 1);
 
     m_backendStatus = new QLabel;
-    m_backendStatus->setStyleSheet("color: #a1a1aa; font-size: 11px;");
+    m_backendStatus->setStyleSheet("color: #a1a1aa; font-size: 13px;");
     row->addWidget(m_backendStatus);
 
     parent->addLayout(row);
@@ -662,7 +819,7 @@ void TankorentPage::buildMainTabs(QVBoxLayout* parent)
     // both Search Results and Transfers (cleaner than embedding inside the tab
     // and then juggling visibility per tab). Hidden when no results.
     m_resultsCountLabel = new QLabel;
-    m_resultsCountLabel->setStyleSheet("color: #a1a1aa; font-size: 11px; padding: 4px 0;");
+    m_resultsCountLabel->setStyleSheet("color: #a1a1aa; font-size: 13px; padding: 4px 0;");
     m_resultsCountLabel->setOpenExternalLinks(false);
     m_resultsCountLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
     m_resultsCountLabel->hide();
@@ -675,7 +832,89 @@ void TankorentPage::buildMainTabs(QVBoxLayout* parent)
     m_tabWidget = new QTabWidget;
 
     m_resultsTable = createResultsTable();
-    m_tabWidget->addTab(m_resultsTable, "Search Results");
+
+    // T15 — empty state page
+    m_emptyPage = new QWidget;
+    {
+        auto* v = new QVBoxLayout(m_emptyPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_emptyLabel = new QLabel(
+            QStringLiteral("Type a query and hit Enter \xe2\x80\x94 e.g. \"the boys 1080p\" or \"sapiens 2014\""),
+            m_emptyPage);
+        m_emptyLabel->setAlignment(Qt::AlignCenter);
+        m_emptyLabel->setWordWrap(true);
+        m_emptyLabel->setStyleSheet("color: #a1a1aa; font-size: 15px;");
+        v->addWidget(m_emptyLabel);
+    }
+
+    // T15 — loading state page
+    m_loadingPage = new QWidget;
+    {
+        auto* v = new QVBoxLayout(m_loadingPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_loadingLabel = new QLabel(QStringLiteral("Searching..."), m_loadingPage);
+        m_loadingLabel->setAlignment(Qt::AlignCenter);
+        m_loadingLabel->setStyleSheet("color: #cbd5e1; font-size: 15px;");
+        v->addWidget(m_loadingLabel);
+        auto* bar = new QProgressBar(m_loadingPage);
+        bar->setRange(0, 0);
+        bar->setTextVisible(false);
+        bar->setFixedWidth(220);
+        bar->setFixedHeight(4);
+        const QColor accent = QApplication::palette().color(QPalette::Highlight);
+        bar->setStyleSheet(QStringLiteral(
+            "QProgressBar { background: rgba(255,255,255,0.08); border: none; "
+            "border-radius: 2px; }"
+            "QProgressBar::chunk { background: %1; border-radius: 2px; }").arg(accent.name()));
+        v->addWidget(bar, 0, Qt::AlignCenter);
+    }
+
+    // T15 — no-results state page
+    m_noResultsPage = new QWidget;
+    {
+        auto* v = new QVBoxLayout(m_noResultsPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_noResultsLabel = new QLabel(m_noResultsPage);
+        m_noResultsLabel->setAlignment(Qt::AlignCenter);
+        m_noResultsLabel->setWordWrap(true);
+        m_noResultsLabel->setStyleSheet("color: #a1a1aa; font-size: 15px;");
+        v->addWidget(m_noResultsLabel);
+        auto* btnRow = new QHBoxLayout;
+        btnRow->setSpacing(10);
+        btnRow->setAlignment(Qt::AlignCenter);
+        m_noResultsRetry = new QPushButton(QStringLiteral("Retry"), m_noResultsPage);
+        m_noResultsRetry->setFixedHeight(32);
+        m_noResultsRetry->setCursor(Qt::PointingHandCursor);
+        connect(m_noResultsRetry, &QPushButton::clicked, this, [this]() {
+            if (!m_lastQuery.isEmpty()) {
+                m_queryEdit->setText(m_lastQuery);
+                startSearch();
+            }
+        });
+        btnRow->addWidget(m_noResultsRetry);
+        m_noResultsClear = new QPushButton(QStringLiteral("Clear"), m_noResultsPage);
+        m_noResultsClear->setFixedHeight(32);
+        m_noResultsClear->setCursor(Qt::PointingHandCursor);
+        connect(m_noResultsClear, &QPushButton::clicked, this, [this]() {
+            m_queryEdit->clear();
+            m_lastQuery.clear();
+            m_queryEdit->setFocus();
+            updateResultsView();
+        });
+        btnRow->addWidget(m_noResultsClear);
+        v->addLayout(btnRow);
+    }
+
+    m_resultsStack = new QStackedWidget;
+    m_resultsStack->addWidget(m_resultsTable);   // index 0: data view
+    m_resultsStack->addWidget(m_emptyPage);      // index 1
+    m_resultsStack->addWidget(m_loadingPage);    // index 2
+    m_resultsStack->addWidget(m_noResultsPage);  // index 3
+    m_resultsStack->setCurrentIndex(1);          // start on empty
+    m_tabWidget->addTab(m_resultsStack, "Search Results");
 
     m_transfersTable = createTransfersTable();
     m_tabWidget->addTab(m_transfersTable, "Transfers");
@@ -685,7 +924,7 @@ void TankorentPage::buildMainTabs(QVBoxLayout* parent)
 
 QTableWidget* TankorentPage::createResultsTable()
 {
-    auto *table = new QTableWidget(0, 7);
+    auto *table = new QTableWidget(0, 6);
     table->setObjectName("SearchResultsTable");
     table->setMinimumHeight(280);
 
@@ -693,27 +932,39 @@ QTableWidget* TankorentPage::createResultsTable()
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->verticalHeader()->setVisible(false);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(table, &QTableWidget::customContextMenuRequested, this, &TankorentPage::showResultsContextMenu);
 
     // C2: Source column is gone — the source is now a "[name]" badge prefixed
     // to the Title cell. C1: Action column ("+") replaced by a Link column
     // hosting download + magnet QToolButtons.
-    QStringList headers = { "Title", "Category", "Size", "Files", "Seeders", "Leechers", "Link" };
+    QStringList headers = { "Title", "Category", "Size", "Seeders", "Leechers", "Link" };
     table->setHorizontalHeaderLabels(headers);
 
     auto *hdr = table->horizontalHeader();
     hdr->setMinimumSectionSize(60);
+
+    // T13 — match header alignment to cell-data alignment per column.
+    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    for (int col : { 2, 3, 4, 5 }) {
+        auto* hi = table->horizontalHeaderItem(col);
+        if (!hi) {
+            hi = new QTableWidgetItem(headers[col]);
+            table->setHorizontalHeaderItem(col, hi);
+        }
+        hi->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+    }
+
     hdr->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int i = 1; i < 7; ++i)
+    for (int i = 1; i < 6; ++i)
         hdr->setSectionResizeMode(i, QHeaderView::Interactive);
 
-    hdr->resizeSection(1, 130);   // Category
+    hdr->resizeSection(1, 140);   // Category
     hdr->resizeSection(2, 110);   // Size
-    hdr->resizeSection(3, 90);    // Files
-    hdr->resizeSection(4, 90);    // Seeders
-    hdr->resizeSection(5, 90);    // Leechers
-    hdr->resizeSection(6, 80);    // Link (two icon buttons)
+    hdr->resizeSection(3, 90);    // Seeders
+    hdr->resizeSection(4, 90);    // Leechers
+    hdr->resizeSection(5, 80);    // Link (two icon buttons)
 
     // A1: click-to-sort. Manual — we sort m_displayedResults ourselves so the
     // model stays the source of truth. setSortingEnabled(true) would let Qt
@@ -775,13 +1026,14 @@ QTableWidget* TankorentPage::createResultsTable()
     table->setPalette(palR);
 
     table->setStyleSheet(QStringLiteral(
-        "#SearchResultsTable { border: none; outline: none; font-size: 12px; }"
+        "#SearchResultsTable { border: none; outline: none; font-size: 13px; }"
         "#SearchResultsTable::item { padding: 0 8px; }"
+        "#SearchResultsTable::item:hover { background: rgba(255,255,255,0.04); }"
         "#SearchResultsTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
         "#SearchResultsTable QHeaderView::section {"
         "  background: #1a1a1a; color: #888; border: none;"
         "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
-        "  padding: 4px 8px; font-size: 11px; }"
+        "  padding: 6px 8px; font-size: 11px; font-weight: 600; }"
     ));
 
     return table;
@@ -796,7 +1048,7 @@ QTableWidget* TankorentPage::createTransfersTable()
     table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->verticalHeader()->setVisible(false);
-    table->verticalHeader()->setDefaultSectionSize(26);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     table->setSortingEnabled(true);
 
@@ -806,6 +1058,26 @@ QTableWidget* TankorentPage::createTransfersTable()
 
     auto *hdr = table->horizontalHeader();
     hdr->setMinimumSectionSize(40);
+
+    // T13 — match header alignment to cell-data alignment per column.
+    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    for (int col : { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 }) {
+        auto* hi = table->horizontalHeaderItem(col);
+        if (!hi) {
+            hi = new QTableWidgetItem(headers[col]);
+            table->setHorizontalHeaderItem(col, hi);
+        }
+        Qt::Alignment a;
+        if (col == 1 || col == 6 || col == 7) {
+            a = Qt::AlignRight | Qt::AlignVCenter;   // Size, DownSpeed, UpSpeed
+        } else if (col == 9) {
+            a = Qt::AlignLeft | Qt::AlignVCenter;    // Category (text)
+        } else {
+            a = Qt::AlignCenter | Qt::AlignVCenter;  // Progress, Status, Seeds, Peers, ETA, Queue, Info
+        }
+        hi->setTextAlignment(a);
+    }
+
     hdr->setSectionResizeMode(0, QHeaderView::Stretch);
     for (int i = 1; i < 12; ++i)
         hdr->setSectionResizeMode(i, QHeaderView::Interactive);
@@ -836,13 +1108,14 @@ QTableWidget* TankorentPage::createTransfersTable()
     table->setPalette(palT);
 
     table->setStyleSheet(QStringLiteral(
-        "#TransfersTable { border: none; outline: none; font-size: 12px; }"
+        "#TransfersTable { border: none; outline: none; font-size: 13px; }"
         "#TransfersTable::item { padding: 0 8px; }"
+        "#TransfersTable::item:hover { background: rgba(255,255,255,0.04); }"
         "#TransfersTable::item:selected { background: rgba(192,200,212,36); color: #eeeeee; }"
         "#TransfersTable QHeaderView::section {"
         "  background: #1a1a1a; color: #888; border: none;"
         "  border-right: 1px solid #222; border-bottom: 1px solid #222;"
-        "  padding: 4px 8px; font-size: 11px; }"
+        "  padding: 6px 8px; font-size: 11px; font-weight: 600; }"
     ));
 
     return table;
@@ -997,6 +1270,8 @@ void TankorentPage::startSearch()
     m_searchBtn->setVisible(false);
     m_cancelBtn->setVisible(true);
     m_searchStatus->setText("Searching...");
+    m_lastQuery = query;
+    updateResultsView();
 }
 
 void TankorentPage::cancelSearch()
@@ -1032,6 +1307,7 @@ void TankorentPage::onSearchFinished(const QList<TorrentResult>& results)
         m_searchBtn->setVisible(true);
         m_cancelBtn->setVisible(false);
     }
+    updateResultsView();
 }
 
 void TankorentPage::onSearchError(const QString& error)
@@ -1052,6 +1328,7 @@ void TankorentPage::onSearchError(const QString& error)
             m_searchStatus->setText(QStringLiteral("%1 Results (Some Sources Failed)").arg(m_allResults.size()));
         }
     }
+    updateResultsView();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1138,10 +1415,11 @@ void TankorentPage::renderResults()
             const int srcCount = sources.size();
             QString text;
             if (!m_showAll && totalDeduped > kSoftCapRows) {
+                const auto linkColor = QApplication::palette().color(QPalette::Link).name();
                 text = QStringLiteral(
                     "Showing %1 of %2 results from %3 source%4 \u2014 "
-                    "<a href=\"show\" style=\"color:#60a5fa;text-decoration:none;\">Show all</a>")
-                    .arg(kSoftCapRows).arg(totalDeduped).arg(srcCount)
+                    "<a href=\"show\" style=\"color:%5;text-decoration:none;\">Show all</a>")
+                    .arg(kSoftCapRows).arg(totalDeduped).arg(srcCount).arg(linkColor)
                     .arg(srcCount == 1 ? "" : "s");
             } else {
                 text = QStringLiteral("Showing %1 result%2 from %3 source%4")
@@ -1160,42 +1438,69 @@ void TankorentPage::renderResults()
 
         // C2: Title with [source] badge prefix + quality tags suffix.
         // C3: full title in the tooltip so elision can't hide information.
-        const QString tags    = qualityTagSuffix(r.title);
-        const QString badged  = r.sourceName.isEmpty()
-            ? r.title
-            : QStringLiteral("[%1]  %2").arg(r.sourceName, r.title);
-        const QString display = tags.isEmpty() ? badged : badged + "  " + tags;
-        auto *titleItem = new QTableWidgetItem(display);
-        titleItem->setToolTip(r.title);   // C3
+        // T11 — split into three segments for the custom delegate.
+        const QString tags = qualityTagSuffix(r.title);
+        TitleSegments seg;
+        seg.source = r.sourceName;
+        seg.title  = r.title;
+        // qualityTagSuffix returns "[1080p]  [HEVC]  [BluRay]" with brackets — strip
+        // for the delegate's middle-dot join.
+        QString cleanQuality = tags;
+        cleanQuality.remove(QLatin1Char('['));
+        cleanQuality.remove(QLatin1Char(']'));
+        cleanQuality = cleanQuality.simplified();
+        seg.quality = cleanQuality;
+
+        auto *titleItem = new QTableWidgetItem;
+        // Fallback DisplayRole carries " · " concat for any non-delegate path.
+        const QString fallbackDisplay = seg.source.isEmpty()
+            ? (seg.quality.isEmpty() ? seg.title : seg.title + QStringLiteral(" · ") + seg.quality)
+            : (seg.quality.isEmpty()
+                ? seg.source + QStringLiteral(" · ") + seg.title
+                : seg.source + QStringLiteral(" · ") + seg.title + QStringLiteral(" · ") + seg.quality);
+        titleItem->setData(Qt::DisplayRole, fallbackDisplay);
+        titleItem->setData(Qt::UserRole + 1, QVariant::fromValue(seg));
+        titleItem->setToolTip(r.title);
         m_resultsTable->setItem(i, 0, titleItem);
 
-        // Category
-        m_resultsTable->setItem(i, 1, new QTableWidgetItem(
-            r.category.isEmpty() ? r.categoryId : r.category));
+        // Category — T8: prefer human-friendly name resolved from per-source map.
+        // Falls back to r.category if scraper already gave us a friendly string,
+        // else em-dash for "unknown".
+        QString categoryText = categoryDisplayName(r.sourceKey, r.categoryId);
+        if (categoryText.isEmpty()) categoryText = r.category;
+        if (categoryText.isEmpty()) categoryText = QStringLiteral("—");  // em-dash U+2014
+        m_resultsTable->setItem(i, 1, new QTableWidgetItem(categoryText));
 
-        // Size
-        m_resultsTable->setItem(i, 2, new QTableWidgetItem(humanSize(r.sizeBytes)));
+        // Size — T13 alignment match.
+        auto* sizeItem = new QTableWidgetItem(humanSize(r.sizeBytes));
+        sizeItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+        m_resultsTable->setItem(i, 2, sizeItem);
 
-        // Files
-        auto *filesItem = new QTableWidgetItem("-");
-        filesItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 3, filesItem);
-
-        // Seeders — plain integer; row tint (B2) carries the trust signal.
+        // Seeders — T10 trust signal via weight + foreground (no row tint, no color).
+        //   Healthy (>=50 seeders): bold count.
+        //   Dead    (<5 seeders):   dim gray foreground (fgMutedColor helper from T3).
+        //   Mid-range (5-49):       normal weight, normal foreground.
         auto *seedItem = new QTableWidgetItem(QString::number(r.seeders));
         seedItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 4, seedItem);
+        if (r.seeders >= 50) {
+            QFont f = seedItem->font();
+            f.setBold(true);
+            seedItem->setFont(f);
+        } else if (r.seeders < 5) {
+            seedItem->setForeground(QBrush(fgMutedColor()));
+        }
+        m_resultsTable->setItem(i, 3, seedItem);
 
         // Leechers
         auto *leechItem = new QTableWidgetItem(QString::number(r.leechers));
         leechItem->setTextAlignment(Qt::AlignCenter);
-        m_resultsTable->setItem(i, 5, leechItem);
+        m_resultsTable->setItem(i, 4, leechItem);
 
         // C1: Link column with download + magnet QToolButtons.
         // The download button funnels through onAddTorrentClicked (same path
         // the old "+" Action column used). Magnet copies the URI to clipboard.
         // Backing item is empty so row-tint stamping below still applies.
-        m_resultsTable->setItem(i, 6, new QTableWidgetItem(QString()));
+        m_resultsTable->setItem(i, 5, new QTableWidgetItem(QString()));
         auto *linkCell = new QWidget;
         auto *linkLay  = new QHBoxLayout(linkCell);
         linkLay->setContentsMargins(2, 0, 2, 0);
@@ -1203,7 +1508,8 @@ void TankorentPage::renderResults()
         linkLay->setAlignment(Qt::AlignCenter);
 
         auto *dlBtn = new QToolButton(linkCell);
-        dlBtn->setText(QStringLiteral("\u2193"));   // ↓
+        dlBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+        dlBtn->setIconSize(QSize(16, 16));
         dlBtn->setToolTip("Add torrent");
         dlBtn->setCursor(Qt::PointingHandCursor);
         dlBtn->setAutoRaise(true);
@@ -1213,7 +1519,8 @@ void TankorentPage::renderResults()
         linkLay->addWidget(dlBtn);
 
         auto *magBtn = new QToolButton(linkCell);
-        magBtn->setText(QStringLiteral("M"));
+        magBtn->setIcon(QIcon(QStringLiteral(":/icons/magnet.svg")));
+        magBtn->setIconSize(QSize(16, 16));
         magBtn->setToolTip("Copy magnet link");
         magBtn->setCursor(Qt::PointingHandCursor);
         magBtn->setAutoRaise(true);
@@ -1223,28 +1530,8 @@ void TankorentPage::renderResults()
         });
         linkLay->addWidget(magBtn);
 
-        m_resultsTable->setCellWidget(i, 6, linkCell);
+        m_resultsTable->setCellWidget(i, 5, linkCell);
 
-        // B2 + F1: Nyaa-style row tint, alternating alpha by row parity so the
-        // table's striping survives under the tint (otherwise a band of all-
-        // healthy or all-poor rows reads as one solid block). Two brushes per
-        // tier: the lower-alpha for odd rows lines up visually with the
-        // table's regular alternating Base color.
-        static const QBrush kHealthyOdd (QColor(76, 175, 80, 26));   // ~0.10 alpha
-        static const QBrush kHealthyEven(QColor(76, 175, 80, 44));   // ~0.17 alpha
-        static const QBrush kPoorOdd    (QColor(239, 68, 68, 26));
-        static const QBrush kPoorEven   (QColor(239, 68, 68, 44));
-        const QString cls = trustClass(r);
-        if (cls != QLatin1String("normal")) {
-            const bool even = (i % 2 == 0);
-            const QBrush& tint = (cls == QLatin1String("healthy"))
-                                   ? (even ? kHealthyEven : kHealthyOdd)
-                                   : (even ? kPoorEven    : kPoorOdd);
-            for (int c = 0; c < 7; ++c) {
-                if (auto* cell = m_resultsTable->item(i, c))
-                    cell->setBackground(tint);
-            }
-        }
     }
 
     m_tabWidget->setCurrentIndex(0);
@@ -1260,8 +1547,8 @@ bool TankorentPage::compareResults(int col, Qt::SortOrder order,
     auto cmpThen = [order](bool less) {
         return order == Qt::AscendingOrder ? less : !less;
     };
-    // Post-Track-C layout: 0 Title, 1 Category, 2 Size, 3 Files,
-    // 4 Seeders, 5 Leechers, 6 Link.
+    // Post-T7 layout: 0 Title, 1 Category, 2 Size, 3 Seeders, 4 Leechers,
+    // 5 Link. Files col removed.
     switch (col) {
     case 0: // Title
         return cmpThen(a.title.compare(b.title, Qt::CaseInsensitive) < 0);
@@ -1269,21 +1556,47 @@ bool TankorentPage::compareResults(int col, Qt::SortOrder order,
         return cmpThen(a.category.compare(b.category, Qt::CaseInsensitive) < 0);
     case 2: // Size
         return cmpThen(a.sizeBytes < b.sizeBytes);
-    case 4: // Seeders
+    case 3: // Seeders
         return cmpThen(a.seeders < b.seeders);
-    case 5: // Leechers
+    case 4: // Leechers
         return cmpThen(a.leechers < b.leechers);
     default:
-        // Cols 3 (Files) and 6 (Link) have no sortable backing field.
+        // Col 5 (Link) has no sortable backing field.
         return false;   // stable_sort keeps original order
     }
+}
+
+// T15 — flip the inner Search Results stack between data view / empty / loading / no-results.
+void TankorentPage::updateResultsView()
+{
+    if (!m_resultsStack) return;
+    if (m_pendingSearches > 0) {
+        m_resultsStack->setCurrentIndex(2);   // loading
+        if (m_loadingLabel)
+            m_loadingLabel->setText(QStringLiteral("Searching %1 source%2...")
+                                    .arg(m_activeIndexers.size())
+                                    .arg(m_activeIndexers.size() == 1 ? "" : "s"));
+        return;
+    }
+    if (m_allResults.isEmpty()) {
+        if (m_lastQuery.isEmpty()) {
+            m_resultsStack->setCurrentIndex(1);   // pre-search empty
+        } else {
+            m_resultsStack->setCurrentIndex(3);   // no-results
+            if (m_noResultsLabel)
+                m_noResultsLabel->setText(QStringLiteral("No results for \"%1\". Try a different query or open Sources to enable more.")
+                                          .arg(m_lastQuery));
+        }
+        return;
+    }
+    m_resultsStack->setCurrentIndex(0);   // data view (table)
 }
 
 void TankorentPage::onResultsHeaderClicked(int col)
 {
     // Non-sortable columns: ignore. Header indicator stays where it was.
-    // Post-Track-C: 3 Files, 6 Link.
-    if (col == 3 || col == 6) return;
+    // Post-T7: only 5 Link is non-sortable.
+    if (col == 5) return;
 
     if (col == m_resultsSortCol) {
         // Same column: flip direction.
@@ -1293,7 +1606,7 @@ void TankorentPage::onResultsHeaderClicked(int col)
         // New column: pick the column-default direction. Numeric cols default
         // descending (high seeders / large sizes first); strings ascending.
         m_resultsSortCol = col;
-        const bool numeric = (col == 2 || col == 4 || col == 5);
+        const bool numeric = (col == 2 || col == 3 || col == 4);
         m_resultsSortOrder = numeric ? Qt::DescendingOrder : Qt::AscendingOrder;
     }
 
@@ -1582,6 +1895,15 @@ void TankorentPage::refreshTransfers()
     QList<TorrentInfo> flatRows;
     QSet<QString> knownActiveHashes;
     for (const TorrentInfo& t : active) {
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — stream-originated transfers are
+        // managed by the Stream-mode UI (StreamDetailView inline + Stream
+        // Downloads page). Skip rendering entirely here; the underlying
+        // libtorrent records and stream_bulk_groups.json state stay intact.
+        // Tankorent now hosts ONLY non-stream torrents (manual magnet adds,
+        // manual torrent search). Spec §7.6.
+        if (!t.streamGroupId.isEmpty())
+            continue;
+
         const QString hashKey = t.infoHash.toLower();
         if (!hashKey.isEmpty()) {
             activeByHash.insert(hashKey, t);
@@ -1597,6 +1919,9 @@ void TankorentPage::refreshTransfers()
     }
     const QJsonObject groups = m_client->streamBulkGroups();
     for (auto it = groups.begin(); it != groups.end(); ++it) {
+        // Skip stream-group rows (they render in Stream Downloads page now).
+        if (it.key().startsWith(QStringLiteral("stream:")))
+            continue;
         if (groupOrder.contains(it.key()))
             continue;
         const QJsonArray items = it.value().toObject().value(QStringLiteral("items")).toArray();
@@ -1637,6 +1962,10 @@ void TankorentPage::refreshTransfers()
     int totalDl = 0, totalUl = 0;
     int activeCount = 0, seedingCount = 0;
     for (const TorrentInfo& t : active) {
+        // Exclude stream-grouped torrents from aggregate counters; they are
+        // accounted for in the Stream Downloads page, not Tankorent. Spec §7.6.
+        if (!t.streamGroupId.isEmpty())
+            continue;
         totalDl += t.dlSpeed;
         totalUl += t.ulSpeed;
         if (t.stateString == QLatin1String("downloading")) ++activeCount;
@@ -1739,6 +2068,7 @@ void TankorentPage::refreshTransfers()
         if (!childRow && t.stateString == QLatin1String("error") && !t.errorMessage.isEmpty())
             stateItem->setToolTip(t.errorMessage);
         stateItem->setText(childRow ? streamBulkItemStatusText(childItem, &t) : torrentStatusText(t));
+        stateItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
 
         auto* seedItem = ensureItem(row, 4);
         seedItem->setText(QString::number(t.seeds));
@@ -1771,7 +2101,9 @@ void TankorentPage::refreshTransfers()
         etaItem->setData(Qt::UserRole, etaSecs);
         etaItem->setTextAlignment(Qt::AlignCenter);
 
-        ensureItem(row, 9)->setText(t.category.isEmpty() ? QStringLiteral("-") : t.category);
+        auto* catItem9 = ensureItem(row, 9);
+        catItem9->setText(prettyCategoryName(t.category));
+        catItem9->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         auto* queueItem = ensureItem(row, 10);
         queueItem->setText(t.queuePosition >= 0 ? QString::number(t.queuePosition + 1) : QStringLiteral("-"));
         queueItem->setData(Qt::UserRole, t.queuePosition);
@@ -1937,6 +2269,7 @@ void TankorentPage::refreshTransfers()
         }
         parentStatusItem->setIcon(QIcon(parentStatusIcon));
         parentStatusItem->setText(statusText);
+        parentStatusItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
         auto* seedsItem = ensureItem(row, 4);
         seedsItem->setText(QString::number(groupSeeds));
         seedsItem->setTextAlignment(Qt::AlignCenter);
@@ -1953,12 +2286,9 @@ void TankorentPage::refreshTransfers()
         etaItem->setText(anyActiveChild && allActiveDownloading && maxEtaSecs > 0
                           ? etaTextFromSeconds(maxEtaSecs) : QStringLiteral("-"));
         etaItem->setTextAlignment(Qt::AlignCenter);
-        // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — drop AlignCenter
-        // override to match flat-row default alignment (AlignLeft |
-        // AlignVCenter, applied implicitly by Qt). Flat-row Category
-        // column at TankorentPage.cpp:1774 uses no setTextAlignment.
         auto* catItem = ensureItem(row, 9);
-        catItem->setText(QStringLiteral("videos"));
+        catItem->setText(QStringLiteral("Videos"));
+        catItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         auto* queueItem = ensureItem(row, 10);
         queueItem->setText(QStringLiteral("-"));
         queueItem->setTextAlignment(Qt::AlignCenter);
@@ -2581,3 +2911,5 @@ void TankorentPage::keyPressEvent(QKeyEvent* event)
     }
     QWidget::keyPressEvent(event);
 }
+
+
