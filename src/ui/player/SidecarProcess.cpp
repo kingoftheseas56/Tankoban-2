@@ -767,13 +767,50 @@ void SidecarProcess::onProcessFinished(int exitCode, QProcess::ExitStatus status
 // callers (Agent 4's Batch 5.3 subtitle menu) don't notice.
 
 namespace {
-bool isSubtitleExtension(const QString& path) {
+// SUB_URL_DENYLIST_FIX 2026-05-13 — pre-fix this was `isSubtitleExtension`,
+// an allowlist of srt/vtt/ass/ssa/sub that the sendSetSubtitleUrl
+// precheck used to reject any URL not matching. That was too strict for
+// the real subtitle-addon ecosystem: OpenSubtitles v3 / Subscene-style
+// REST endpoints commonly serve subtitles from URLs that have no
+// extension, an unknown extension (.cgi/.aspx/.bin), or hide the format
+// in a query param. Hemanth report 2026-05-13: "unsupported subtitle
+// extension in url:http... I get every time I try to load the other
+// subs from the addon". Inverted to a denylist of obvious-non-subtitle
+// extensions (media / images / archives / docs / executables). The
+// download path's existing default (empty ext → temp file gets .srt
+// extension, line ~919-923) handles the unknown-extension case fine,
+// and the sidecar's libass-backed parser distinguishes SRT vs ASS by
+// content sniffing regardless of the staging filename.
+bool hasObviouslyNonSubtitleExtension(const QString& path) {
     const QString ext = QFileInfo(path).suffix().toLower();
-    return ext == QStringLiteral("srt")
-        || ext == QStringLiteral("vtt")
-        || ext == QStringLiteral("ass")
-        || ext == QStringLiteral("ssa")
-        || ext == QStringLiteral("sub");
+    if (ext.isEmpty()) return false;
+    static const QSet<QString> kNonSubtitle = {
+        // Video
+        QStringLiteral("mkv"),  QStringLiteral("mp4"),  QStringLiteral("avi"),
+        QStringLiteral("mov"),  QStringLiteral("wmv"),  QStringLiteral("flv"),
+        QStringLiteral("webm"), QStringLiteral("m4v"),  QStringLiteral("mpg"),
+        QStringLiteral("mpeg"), QStringLiteral("ts"),   QStringLiteral("m2ts"),
+        QStringLiteral("mts"),  QStringLiteral("vob"),  QStringLiteral("ogv"),
+        QStringLiteral("3gp"),
+        // Audio
+        QStringLiteral("mp3"),  QStringLiteral("aac"),  QStringLiteral("flac"),
+        QStringLiteral("wav"),  QStringLiteral("ogg"),  QStringLiteral("opus"),
+        QStringLiteral("m4a"),  QStringLiteral("wma"),
+        // Image
+        QStringLiteral("jpg"),  QStringLiteral("jpeg"), QStringLiteral("png"),
+        QStringLiteral("gif"),  QStringLiteral("webp"), QStringLiteral("bmp"),
+        QStringLiteral("tiff"), QStringLiteral("svg"),
+        // Archive
+        QStringLiteral("zip"),  QStringLiteral("rar"),  QStringLiteral("7z"),
+        QStringLiteral("tar"),  QStringLiteral("gz"),   QStringLiteral("bz2"),
+        // Document / page
+        QStringLiteral("pdf"),  QStringLiteral("html"), QStringLiteral("htm"),
+        QStringLiteral("xml"),  QStringLiteral("css"),  QStringLiteral("js"),
+        // Executable / package
+        QStringLiteral("exe"),  QStringLiteral("dll"),  QStringLiteral("app"),
+        QStringLiteral("apk"),  QStringLiteral("deb"),  QStringLiteral("rpm"),
+    };
+    return kNonSubtitle.contains(ext);
 }
 
 QString bestTrackTitle(const QJsonObject& t) {
@@ -878,9 +915,16 @@ int SidecarProcess::sendSetSubtitleUrl(const QUrl& url, int offsetPx, int delayM
         emit subtitleUrlLoaded(url, QString(), false);
         return 0;
     }
-    if (!isSubtitleExtension(url.path())) {
-        emit errorOccurred(QStringLiteral("Unsupported subtitle extension in URL: %1")
-                               .arg(url.toString()));
+    if (hasObviouslyNonSubtitleExtension(url.path())) {
+        // SUB_URL_DENYLIST_FIX 2026-05-13 — only reject URLs whose
+        // path clearly points to a non-subtitle resource (mkv / jpg
+        // / pdf / etc.). Extension-less + unknown-extension URLs are
+        // passed through to the download path, which already defaults
+        // to .srt staging and lets the sidecar parser content-sniff.
+        const QString badExt = QFileInfo(url.path()).suffix().toLower();
+        emit errorOccurred(QStringLiteral("URL appears to point to a non-subtitle file "
+                                          "(extension .%1): %2")
+                               .arg(badExt, url.toString()));
         emit subtitleUrlLoaded(url, QString(), false);
         return 0;
     }
