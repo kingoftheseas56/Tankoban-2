@@ -44,6 +44,9 @@ void NavHistory::recordNavEvent(const QString& targetPageId) {
     if (m_cursor >= 0 && m_cursor < m_stack.size() - 1) {
         m_stack.resize(m_cursor + 1);
     }
+    // Invariant after step 2: m_stack.size() == m_cursor + 1 (or 0 when empty).
+    // Since m_cursor < kMaxEntries by induction, step 3 fires at most once.
+    Q_ASSERT(m_stack.size() <= kMaxEntries);
 
     // Step 3: evict oldest if at capacity.
     while (m_stack.size() >= kMaxEntries) {
@@ -93,6 +96,8 @@ void NavHistory::forward() {
         m_cursor++;
         const NavHistoryEntry& target = m_stack[m_cursor];
         emit entryRequested(target);
+        // Skip-stale walk happens via MainWindow's entryRequested slot, NOT
+        // here. Mirror of the back() pattern above.
         break;
     }
     notifyAvailability();
