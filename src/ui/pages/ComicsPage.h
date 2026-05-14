@@ -8,6 +8,7 @@
 #include <QSlider>
 #include <QTimer>
 #include <QSettings>
+#include "../INavStateProvider.h"
 class QPushButton;
 class CoreBridge;
 class FadingStackedWidget;
@@ -18,7 +19,7 @@ class LibraryScanner;
 class SeriesView;
 struct SeriesInfo;
 
-class ComicsPage : public QWidget {
+class ComicsPage : public QWidget, public INavStateProvider {
     Q_OBJECT
 public:
     explicit ComicsPage(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -26,6 +27,11 @@ public:
 
     void activate();
     void triggerScan();
+
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 8)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("comics"); }
 
     // Public so MainWindow::closeComicReader can refresh the continue
     // strip the moment the reader returns to the library — mirrors the

@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QMetaObject>
 #include <QSettings>
 #include <QInputDialog>
@@ -873,3 +874,62 @@ void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, cons
     }
     menu->deleteLater();
 }
+
+// ── INavStateProvider (GLOBAL_NAV_HISTORY Task 8) ─────────────────────────
+
+QJsonObject ComicsPage::captureNavState() const
+{
+    QJsonObject blob;
+
+    // Search text
+    if (m_searchBar)
+        blob["search"] = m_searchBar->text();
+
+    // Sort selection
+    if (m_sortCombo)
+        blob["sort"] = m_sortCombo->currentData().toString();
+
+    // Scroll position — scroll area is a child named "ComicsGridScroll"
+    if (auto* scroll = findChild<QScrollArea*>("ComicsGridScroll")) {
+        if (auto* vsb = scroll->verticalScrollBar())
+            blob["scrollY"] = vsb->value();
+    }
+
+    return blob;
+}
+
+bool ComicsPage::restoreNavState(const QJsonObject& blob)
+{
+    // Apply in order: search → sort (changes visible list + order),
+    // then scroll (lands user back at the same position).
+
+    if (m_searchBar) {
+        const QString search = blob.value("search").toString();
+        if (m_searchBar->text() != search) {
+            m_searchBar->blockSignals(true);
+            m_searchBar->setText(search);
+            m_searchBar->blockSignals(false);
+            applySearch();
+        }
+    }
+
+    if (m_sortCombo) {
+        const QString sort = blob.value("sort").toString();
+        if (!sort.isEmpty()) {
+            for (int i = 0; i < m_sortCombo->count(); ++i) {
+                if (m_sortCombo->itemData(i).toString() == sort) {
+                    m_sortCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (auto* scroll = findChild<QScrollArea*>("ComicsGridScroll")) {
+        if (auto* vsb = scroll->verticalScrollBar())
+            vsb->setValue(blob.value("scrollY").toInt(0));
+    }
+
+    return true;  // ComicsPage has no stale-target case
+}
+
