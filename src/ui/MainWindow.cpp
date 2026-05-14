@@ -844,11 +844,38 @@ void MainWindow::activatePage(const QString &pageId)
 
 // ── Global Nav (GLOBAL_NAV_HISTORY Task 4) ──────────────────────────────────
 
+bool MainWindow::isReaderOrPlayerActive() const {
+    // Reader/player widgets are kept around between opens; "active"
+    // means visible on top of m_pageStack.
+    if (m_comicReader && m_comicReader->isVisible()) return true;
+    if (m_bookReader  && m_bookReader->isVisible())  return true;
+    if (m_videoPlayer && m_videoPlayer->isVisible()) return true;
+    return false;
+}
+
 void MainWindow::onBackChevronClicked() {
+    // Spec §3.10: Back closes the reader/player if one is active.
+    // Reader/player are not history entries — they're modal overlays.
+    if (isReaderOrPlayerActive()) {
+        if (m_comicReader && m_comicReader->isVisible()) {
+            closeComicReader();
+            return;
+        }
+        if (m_bookReader && m_bookReader->isVisible()) {
+            closeBookReader();
+            return;
+        }
+        if (m_videoPlayer && m_videoPlayer->isVisible()) {
+            closeVideoPlayer();
+            return;
+        }
+    }
     if (m_navHistory) m_navHistory->back();
 }
 
 void MainWindow::onForwardChevronClicked() {
+    // Spec §3.10: Forward is a no-op while a reader/player is open.
+    if (isReaderOrPlayerActive()) return;
     if (m_navHistory) m_navHistory->forward();
 }
 
@@ -1061,6 +1088,10 @@ void MainWindow::openComicReader(const QString& cbzPath, const QStringList& seri
     // Open book after widget is visible and has real geometry
     m_comicReader->openBook(cbzPath, seriesCbzList, seriesName);
     m_comicReader->setFocus();
+    // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the reader;
+    // Forward disabled while overlay is up. Restored in closeComicReader.
+    if (m_backBtn)    m_backBtn->setEnabled(true);
+    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
 }
 
 void MainWindow::closeComicReader()
@@ -1076,6 +1107,10 @@ void MainWindow::closeComicReader()
         else
             showNormal();
     }
+    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
+    // now that the overlay is gone.
+    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
+    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
 }
 
 // ── Book reader ──────────────────────────────────────────────────────────────
@@ -1086,11 +1121,19 @@ void MainWindow::openBookReader(const QString& filePath)
     m_bookReader->show();
     m_bookReader->raise();
     m_bookReader->setFocus();
+    // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the reader;
+    // Forward disabled while overlay is up. Restored in closeBookReader.
+    if (m_backBtn)    m_backBtn->setEnabled(true);
+    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
 }
 
 void MainWindow::closeBookReader()
 {
     m_bookReader->hide();
+    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
+    // now that the overlay is gone.
+    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
+    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
 }
 
 // ── Video player ─────────────────────────────────────────────────────────────
@@ -1115,6 +1158,10 @@ void MainWindow::openVideoPlayer(const QString& filePath)
     m_videoPlayer->show();
     m_videoPlayer->raise();
     m_videoPlayer->setFocus();
+    // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the player;
+    // Forward disabled while overlay is up. Restored in closeVideoPlayer.
+    if (m_backBtn)    m_backBtn->setEnabled(true);
+    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — Stream-mode playback
@@ -1296,6 +1343,11 @@ void MainWindow::closeVideoPlayer()
     // Refresh continue strip after playback ends
     if (auto *videos = m_pageStack->findChild<VideosPage*>())
         videos->refreshContinueOnly();
+
+    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
+    // now that the overlay is gone.
+    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
+    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
 }
 
 // ── Bring to front (single-instance raise) ──────────────────────────────────

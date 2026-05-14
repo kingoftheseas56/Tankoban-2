@@ -97,6 +97,11 @@ private:
     // central nav pills geometrically centered in the window.
     void mirrorTopBarSlotWidths();
 
+    // True when ComicReader / BookReader / VideoPlayer is open on top
+    // of the page stack. Used by onBack/ForwardChevronClicked to route
+    // Back -> close-the-overlay instead of pop-the-history-stack.
+    bool isReaderOrPlayerActive() const;
+
     // Find the INavStateProvider for a page by its objectName / pageId.
     // Returns nullptr if the page doesn't exist or doesn't implement
     // the interface (most pages until Tasks 8-14 land).
