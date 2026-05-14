@@ -10,13 +10,16 @@
 #include "core/torrent/TorrentClient.h"
 #include "ui/dialogs/AddTorrentDialog.h"   // AddTorrentConfig struct
 
+#include <QApplication>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
+#include <QPalette>
 #include <QProgressBar>
 #include <QRegularExpression>
 #include <QSettings>
@@ -46,6 +49,18 @@
 
 namespace {
 
+// T3 — defensive fall-through for muted-secondary-text color. If Theme.cpp ever
+// adds a __FG_MUTED__ token + palette.fgMuted field, swap this for a Theme-token
+// read. Reads QApplication::palette() Text color at ~55% opacity, which
+// approximates the muted-secondary color across every palette without needing
+// Agent 5 coordination today.
+inline QColor fgMutedColor()
+{
+    QColor c = QApplication::palette().color(QPalette::Text);
+    c.setAlpha(140);
+    return c;
+}
+
 // Small helpers to keep buildDetailPage() readable.
 
 QLabel* makeTitleLabel(QWidget* parent)
@@ -64,9 +79,10 @@ QLabel* makeAuthorLabel(QWidget* parent)
     auto* l = new QLabel(parent);
     l->setWordWrap(true);
     l->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    const QColor accent = QApplication::palette().color(QPalette::Highlight);
     l->setStyleSheet(QStringLiteral(
-        "font-size: 14px; color: #c7a76b;"
-        " background: transparent; border: none;"));
+        "font-size: 14px; color: %1;"
+        " background: transparent; border: none;").arg(accent.name()));
     return l;
 }
 
@@ -216,6 +232,7 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
     qRegisterMetaType<QList<BookResult>>();
 
     m_nam = new QNetworkAccessManager(this);
+    setObjectName(QStringLiteral("TankoLibraryPage"));
 
     // Track B decision 2026-04-22: AA was wired in M2.3 (search path works
     // captcha-free) but its /books/ detail + /ads.php download paths are
@@ -254,6 +271,7 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
                     m_cancelBtn->setVisible(false);
                 }
                 refreshSearchStatus();
+                updateInnerResultsView();
             });
 
         connect(s, &BookScraper::errorOccurred, this,
@@ -269,6 +287,7 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
                     m_cancelBtn->setVisible(false);
                 }
                 refreshSearchStatus();
+                updateInnerResultsView();
             });
 
         // M2.4 — scraper resolve signals route into the download flow, NOT
@@ -359,11 +378,11 @@ void TankoLibraryPage::buildMediaTabRow(QBoxLayout* parent)
 
     const QString kTabActiveCss = QStringLiteral(
         "QPushButton { color: #e6e6e6; background: #2a2a2a; border: 1px solid #444;"
-        " padding: 6px 18px; font-size: 13px; font-weight: 500; border-radius: 4px; }"
+        " padding: 8px 18px; font-size: 13px; font-weight: 600; border-radius: 4px; }"
         "QPushButton:hover { background: #333; }");
     const QString kTabInactiveCss = QStringLiteral(
         "QPushButton { color: #888; background: transparent; border: 1px solid transparent;"
-        " padding: 6px 18px; font-size: 13px; border-radius: 4px; }"
+        " padding: 8px 18px; font-size: 13px; border-radius: 4px; }"
         "QPushButton:hover { color: #ccc; }");
 
     m_mediaTabBooksBtn = new QPushButton(QStringLiteral("Books"), m_resultsPage);
@@ -419,6 +438,7 @@ void TankoLibraryPage::setMediaTab(MediaTab tab)
     m_searchCountBySource.clear();
     m_searchErrorBySource.clear();
     if (m_grid) m_grid->clearResults();
+    updateInnerResultsView();
 
     // Persist across sessions so the user returns to their last tab.
     QSettings().setValue(QStringLiteral("tankolibrary/media_tab"),
@@ -426,6 +446,7 @@ void TankoLibraryPage::setMediaTab(MediaTab tab)
 
     updateMediaTabVisuals();
     applyMediaTabFilterVisibility();
+    updateFiltersDotIndicator();
 
     if (m_statusLbl) {
         m_statusLbl->setText((tab == MediaTab::Books)
@@ -469,6 +490,99 @@ void TankoLibraryPage::applyMediaTabFilterVisibility()
     if (m_audioFormatCombo) m_audioFormatCombo->setVisible(!booksTab);
 }
 
+// ── T22 — Filters popover ────────────────────────────────────────────────
+
+void TankoLibraryPage::buildFiltersPopover()
+{
+    m_filtersPopover = new QWidget(this, Qt::Popup);
+    m_filtersPopover->setObjectName(QStringLiteral("TankoLibraryFiltersPopover"));
+    m_filtersPopover->setStyleSheet(QStringLiteral(
+        "#TankoLibraryFiltersPopover { background: #2a2a2a; border: 1px solid #444; "
+        "border-radius: 4px; }"));
+
+    auto* v = new QVBoxLayout(m_filtersPopover);
+    v->setContentsMargins(12, 12, 12, 12);
+    v->setSpacing(8);
+
+    // Format section header
+    auto* formatLbl = new QLabel(QStringLiteral("Format"), m_filtersPopover);
+    formatLbl->setStyleSheet(QStringLiteral("color: #888; font-size: 12px; font-weight: 600;"));
+    v->addWidget(formatLbl);
+
+    // Format checkboxes (Books tab)
+    auto buildChk = [&](const QString& label, const QString& key, bool defaultOn) {
+        auto* chk = new QCheckBox(label, m_filtersPopover);
+        chk->setCursor(Qt::PointingHandCursor);
+        chk->setChecked(QSettings().value(QStringLiteral("tankolibrary/%1").arg(key), defaultOn).toBool());
+        connect(chk, &QCheckBox::toggled, this, &TankoLibraryPage::onFormatFilterToggled);
+        v->addWidget(chk);
+        return chk;
+    };
+    m_epubChk = buildChk(QStringLiteral("EPUB"), QStringLiteral("format_epub"), true);
+    m_pdfChk  = buildChk(QStringLiteral("PDF"),  QStringLiteral("format_pdf"),  false);
+    m_mobiChk = buildChk(QStringLiteral("MOBI"), QStringLiteral("format_mobi"), false);
+
+    v->addSpacing(8);
+
+    // Language section
+    auto* langLbl = new QLabel(QStringLiteral("Language"), m_filtersPopover);
+    langLbl->setStyleSheet(QStringLiteral("color: #888; font-size: 12px; font-weight: 600;"));
+    v->addWidget(langLbl);
+
+    m_englishOnlyCheckbox = new QCheckBox(QStringLiteral("English only"), m_filtersPopover);
+    m_englishOnlyCheckbox->setCursor(Qt::PointingHandCursor);
+    m_englishOnlyCheckbox->setChecked(QSettings().value(QStringLiteral("tankolibrary/english_only"), true).toBool());
+    connect(m_englishOnlyCheckbox, &QCheckBox::toggled, this, &TankoLibraryPage::onEnglishOnlyToggled);
+    v->addWidget(m_englishOnlyCheckbox);
+
+    v->addSpacing(8);
+
+    // Audiobook format section (visible on Audiobooks tab; applyMediaTabFilterVisibility hides on Books)
+    auto* audioLbl = new QLabel(QStringLiteral("Audiobook format"), m_filtersPopover);
+    audioLbl->setStyleSheet(QStringLiteral("color: #888; font-size: 12px; font-weight: 600;"));
+    v->addWidget(audioLbl);
+
+    m_audioFormatCombo = new QComboBox(m_filtersPopover);
+    m_audioFormatCombo->setCursor(Qt::PointingHandCursor);
+    m_audioFormatCombo->addItem(QStringLiteral("All formats"));
+    m_audioFormatCombo->addItem(QStringLiteral("M4B only"));
+    m_audioFormatCombo->addItem(QStringLiteral("MP3 only"));
+    m_audioFormatCombo->setCurrentIndex(QSettings().value(QStringLiteral("tankolibrary/audio_format"), 0).toInt());
+    connect(m_audioFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TankoLibraryPage::onAudioFormatChanged);
+    v->addWidget(m_audioFormatCombo);
+}
+
+void TankoLibraryPage::showFiltersPopover()
+{
+    if (!m_filtersPopover) buildFiltersPopover();
+    applyMediaTabFilterVisibility();
+    const QPoint anchor = m_filtersBtn->mapToGlobal(QPoint(0, m_filtersBtn->height() + 4));
+    m_filtersPopover->move(anchor);
+    m_filtersPopover->show();
+}
+
+bool TankoLibraryPage::anyFilterActive() const
+{
+    const bool booksTab = (m_mediaTab == MediaTab::Books);
+    if (booksTab) {
+        if (m_epubChk && !m_epubChk->isChecked()) return true;     // default ON
+        if (m_pdfChk && m_pdfChk->isChecked()) return true;        // default OFF
+        if (m_mobiChk && m_mobiChk->isChecked()) return true;      // default OFF
+        if (m_englishOnlyCheckbox && !m_englishOnlyCheckbox->isChecked()) return true;
+    } else {
+        if (m_englishOnlyCheckbox && !m_englishOnlyCheckbox->isChecked()) return true;
+        if (m_audioFormatCombo && m_audioFormatCombo->currentIndex() != 0) return true;
+    }
+    return false;
+}
+
+void TankoLibraryPage::updateFiltersDotIndicator()
+{
+    if (m_filtersDotIndicator)
+        m_filtersDotIndicator->setVisible(anyFilterActive());
+}
+
 // ── UI builders ─────────────────────────────────────────────────────────────
 
 void TankoLibraryPage::buildUI()
@@ -494,7 +608,7 @@ void TankoLibraryPage::buildResultsPage()
     m_resultsPage = new QWidget(this);
     auto* outer = new QVBoxLayout(m_resultsPage);
     outer->setContentsMargins(12, 12, 12, 12);
-    outer->setSpacing(8);
+    outer->setSpacing(10);
 
     // Media-tab pills row (M1 ABB TODO) — two pill buttons "Books" +
     // "Audiobooks" styled as a mutually-exclusive toggle group. Sits at
@@ -507,6 +621,7 @@ void TankoLibraryPage::buildResultsPage()
     searchRow->setSpacing(8);
 
     m_queryEdit = new QLineEdit(m_resultsPage);
+    m_queryEdit->setFixedHeight(36);
     m_queryEdit->setPlaceholderText(QStringLiteral(
         "Search books - e.g. \"sapiens\" or \"orwell 1984\""));
     m_queryEdit->setMinimumWidth(320);
@@ -514,12 +629,14 @@ void TankoLibraryPage::buildResultsPage()
     searchRow->addWidget(m_queryEdit, 1);
 
     m_searchBtn = new QPushButton(QStringLiteral("Search"), m_resultsPage);
+    m_searchBtn->setFixedHeight(36);
     m_searchBtn->setMinimumWidth(90);
     m_searchBtn->setCursor(Qt::PointingHandCursor);
     connect(m_searchBtn, &QPushButton::clicked, this, &TankoLibraryPage::startSearch);
     searchRow->addWidget(m_searchBtn);
 
     m_cancelBtn = new QPushButton(QStringLiteral("Cancel"), m_resultsPage);
+    m_cancelBtn->setFixedHeight(36);
     m_cancelBtn->setMinimumWidth(90);
     m_cancelBtn->setCursor(Qt::PointingHandCursor);
     m_cancelBtn->setVisible(false);
@@ -547,41 +664,31 @@ void TankoLibraryPage::buildResultsPage()
         }
     }
 
-    auto buildFormatChk = [&](const QString& label, const QString& key, bool defaultOn) {
-        auto* chk = new QCheckBox(label, m_resultsPage);
-        chk->setCursor(Qt::PointingHandCursor);
-        chk->setChecked(QSettings().value(QStringLiteral("tankolibrary/%1").arg(key), defaultOn).toBool());
-        connect(chk, &QCheckBox::toggled,
-                this, &TankoLibraryPage::onFormatFilterToggled);
-        searchRow->addWidget(chk);
-        return chk;
-    };
-    m_epubChk = buildFormatChk(QStringLiteral("EPUB"), QStringLiteral("format_epub"), true);
-    m_pdfChk  = buildFormatChk(QStringLiteral("PDF"),  QStringLiteral("format_pdf"),  false);
-    m_mobiChk = buildFormatChk(QStringLiteral("MOBI"), QStringLiteral("format_mobi"), false);
-    m_epubChk->setToolTip(QStringLiteral("Show EPUB books"));
-    m_pdfChk->setToolTip(QStringLiteral("Show PDF books"));
-    m_mobiChk->setToolTip(QStringLiteral("Show MOBI books"));
+    // T22/T23 — Filters button (replaces inline format checkboxes + English-only + audio-format combo).
+    m_filtersBtn = new QPushButton(QStringLiteral("Filters ▾"), m_resultsPage);
+    m_filtersBtn->setFixedHeight(36);
+    m_filtersBtn->setCursor(Qt::PointingHandCursor);
+    m_filtersBtn->setToolTip(QStringLiteral("Open filter popover (format, language, audio format)"));
+    connect(m_filtersBtn, &QPushButton::clicked, this, &TankoLibraryPage::showFiltersPopover);
+    searchRow->addWidget(m_filtersBtn);
+    buildFiltersPopover();   // constructs m_epubChk, m_pdfChk, m_mobiChk, m_englishOnlyCheckbox, m_audioFormatCombo inside the popover
 
-    // Track B — "English only" client-side language filter. Default ON per
-    // Hemanth's preference. Persisted to QSettings. Filter operates over
-    // cached m_results — no re-network on toggle. Books with empty/unknown
-    // language are excluded when ON (conservative default).
-    m_englishOnlyCheckbox = new QCheckBox(QStringLiteral("English only"), m_resultsPage);
-    m_englishOnlyCheckbox->setCursor(Qt::PointingHandCursor);
-    m_englishOnlyCheckbox->setToolTip(QStringLiteral(
-        "Show only English — uncheck to see books in other languages"));
-    const bool englishOnlyDefault = QSettings()
-        .value(QStringLiteral("tankolibrary/english_only"), true).toBool();
-    m_englishOnlyCheckbox->setChecked(englishOnlyDefault);
-    connect(m_englishOnlyCheckbox, &QCheckBox::toggled,
-            this, &TankoLibraryPage::onEnglishOnlyToggled);
-    searchRow->addWidget(m_englishOnlyCheckbox);
+    // Dot indicator overlay (top-right of Filters button) — shown when any filter is non-default.
+    m_filtersDotIndicator = new QLabel(m_filtersBtn);
+    m_filtersDotIndicator->setFixedSize(8, 8);
+    {
+        const QColor accent = QApplication::palette().color(QPalette::Highlight);
+        m_filtersDotIndicator->setStyleSheet(QStringLiteral(
+            "background: %1; border-radius: 4px;").arg(accent.name()));
+    }
+    m_filtersDotIndicator->move(m_filtersBtn->sizeHint().width() - 14, 6);
+    m_filtersDotIndicator->hide();
 
     // Track B closeout — sort combo. Operates over cached m_results; no
     // re-network. Index 0 = server-order ("Relevance"); 1/2 = year desc/asc;
     // 3/4 = size desc/asc. QSettings-persisted.
     m_sortCombo = new QComboBox(m_resultsPage);
+    m_sortCombo->setFixedHeight(36);
     m_sortCombo->setCursor(Qt::PointingHandCursor);
     m_sortCombo->setToolTip(QStringLiteral("Sort results (client-side, no re-network)"));
     m_sortCombo->addItem(QStringLiteral("Relevance"));
@@ -595,28 +702,11 @@ void TankoLibraryPage::buildResultsPage()
             this, &TankoLibraryPage::onSortChanged);
     searchRow->addWidget(m_sortCombo);
 
-    // TANKOLIBRARY_ABB Track B1 — Audiobooks-tab format filter (client-side
-    // over cached m_results; no re-network on toggle). Index 0 = All,
-    // 1 = M4B only, 2 = MP3 only. `applyMediaTabFilterVisibility` hides
-    // this on Books tab so the filter vocabulary stays format-appropriate.
-    m_audioFormatCombo = new QComboBox(m_resultsPage);
-    m_audioFormatCombo->setCursor(Qt::PointingHandCursor);
-    m_audioFormatCombo->setToolTip(QStringLiteral(
-        "Audiobook format filter (client-side, no re-network)"));
-    m_audioFormatCombo->addItem(QStringLiteral("All formats"));
-    m_audioFormatCombo->addItem(QStringLiteral("M4B only"));
-    m_audioFormatCombo->addItem(QStringLiteral("MP3 only"));
-    m_audioFormatCombo->setCurrentIndex(
-        QSettings().value(QStringLiteral("tankolibrary/audio_format"), 0).toInt());
-    connect(m_audioFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &TankoLibraryPage::onAudioFormatChanged);
-    searchRow->addWidget(m_audioFormatCombo);
-
     outer->addLayout(searchRow);
 
     m_statusLbl = new QLabel(QStringLiteral("Ready. Type a query and hit Enter."), m_resultsPage);
     m_statusLbl->setStyleSheet(QStringLiteral(
-        "color: #888; font-size: 12px; background: transparent; border: none;"));
+        "color: #888; font-size: 13px; background: transparent; border: none;"));
     outer->addWidget(m_statusLbl);
 
     // Track B closeout — Tankoyomi-parity tab-pill row: "Search Results" +
@@ -629,11 +719,11 @@ void TankoLibraryPage::buildResultsPage()
 
     const QString kTabActiveCss = QStringLiteral(
         "QPushButton { color: #e6e6e6; background: #2a2a2a; border: 1px solid #444;"
-        " padding: 4px 14px; font-size: 13px; border-radius: 4px; }"
+        " padding: 8px 16px; font-size: 13px; border-radius: 4px; }"
         "QPushButton:hover { background: #333; }");
     const QString kTabInactiveCss = QStringLiteral(
         "QPushButton { color: #888; background: transparent; border: 1px solid transparent;"
-        " padding: 4px 14px; font-size: 13px; border-radius: 4px; }"
+        " padding: 8px 16px; font-size: 13px; border-radius: 4px; }"
         "QPushButton:hover { color: #ccc; }");
 
     m_searchResultsTab = new QPushButton(QStringLiteral("Search Results"), m_resultsPage);
@@ -658,7 +748,7 @@ void TankoLibraryPage::buildResultsPage()
 
     m_transfersCounter = new QLabel(QStringLiteral("Active: 0 | History: 0"), m_resultsPage);
     m_transfersCounter->setStyleSheet(QStringLiteral(
-        "color: #888; font-size: 12px; background: transparent; border: none;"));
+        "color: #888; font-size: 13px; background: transparent; border: none;"));
     tabRow->addWidget(m_transfersCounter);
 
     outer->addLayout(tabRow);
@@ -667,9 +757,89 @@ void TankoLibraryPage::buildResultsPage()
     m_transfersView = new TransfersView(m_resultsPage);
 
     m_resultsInnerStack = new QStackedWidget(m_resultsPage);
-    m_resultsInnerStack->addWidget(m_grid);           // index 0
-    m_resultsInnerStack->addWidget(m_transfersView);  // index 1
-    m_resultsInnerStack->setCurrentIndex(0);
+    m_resultsInnerStack->addWidget(m_grid);           // index 0: data view
+    m_resultsInnerStack->addWidget(m_transfersView);  // index 1: transfers view
+
+    // T25 — empty pre-search page (index 2)
+    m_emptyPage = new QWidget(m_resultsPage);
+    {
+        auto* v = new QVBoxLayout(m_emptyPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_emptyLabel = new QLabel(m_emptyPage);
+        m_emptyLabel->setAlignment(Qt::AlignCenter);
+        m_emptyLabel->setWordWrap(true);
+        m_emptyLabel->setStyleSheet("color: #a1a1aa; font-size: 15px;");
+        m_emptyLabel->setText(m_mediaTab == MediaTab::Books
+            ? QStringLiteral("Type a query and hit Enter — e.g. \"sapiens\" or \"orwell 1984\"")
+            : QStringLiteral("Type a query and hit Enter — e.g. \"stormlight archive\" or \"dune\""));
+        v->addWidget(m_emptyLabel);
+    }
+    m_resultsInnerStack->addWidget(m_emptyPage);   // index 2
+
+    // T25 — loading page (index 3)
+    m_loadingPage = new QWidget(m_resultsPage);
+    {
+        auto* v = new QVBoxLayout(m_loadingPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_loadingLabel = new QLabel(QStringLiteral("Searching..."), m_loadingPage);
+        m_loadingLabel->setAlignment(Qt::AlignCenter);
+        m_loadingLabel->setStyleSheet("color: #cbd5e1; font-size: 15px;");
+        v->addWidget(m_loadingLabel);
+        auto* bar = new QProgressBar(m_loadingPage);
+        bar->setRange(0, 0);
+        bar->setTextVisible(false);
+        bar->setFixedWidth(220);
+        bar->setFixedHeight(4);
+        const QColor accent = QApplication::palette().color(QPalette::Highlight);
+        bar->setStyleSheet(QStringLiteral(
+            "QProgressBar { background: rgba(255,255,255,0.08); border: none; "
+            "border-radius: 2px; }"
+            "QProgressBar::chunk { background: %1; border-radius: 2px; }").arg(accent.name()));
+        v->addWidget(bar, 0, Qt::AlignCenter);
+    }
+    m_resultsInnerStack->addWidget(m_loadingPage);   // index 3
+
+    // T25 — no-results page (index 4)
+    m_noResultsPage = new QWidget(m_resultsPage);
+    {
+        auto* v = new QVBoxLayout(m_noResultsPage);
+        v->setAlignment(Qt::AlignCenter);
+        v->setSpacing(16);
+        m_noResultsLabel = new QLabel(m_noResultsPage);
+        m_noResultsLabel->setAlignment(Qt::AlignCenter);
+        m_noResultsLabel->setWordWrap(true);
+        m_noResultsLabel->setStyleSheet("color: #a1a1aa; font-size: 15px;");
+        v->addWidget(m_noResultsLabel);
+        auto* btnRow = new QHBoxLayout;
+        btnRow->setSpacing(10);
+        btnRow->setAlignment(Qt::AlignCenter);
+        m_noResultsRetry = new QPushButton(QStringLiteral("Retry"), m_noResultsPage);
+        m_noResultsRetry->setFixedHeight(32);
+        m_noResultsRetry->setCursor(Qt::PointingHandCursor);
+        connect(m_noResultsRetry, &QPushButton::clicked, this, [this]() {
+            if (!m_lastQuery.isEmpty()) {
+                m_queryEdit->setText(m_lastQuery);
+                startSearch();
+            }
+        });
+        btnRow->addWidget(m_noResultsRetry);
+        m_noResultsClear = new QPushButton(QStringLiteral("Clear"), m_noResultsPage);
+        m_noResultsClear->setFixedHeight(32);
+        m_noResultsClear->setCursor(Qt::PointingHandCursor);
+        connect(m_noResultsClear, &QPushButton::clicked, this, [this]() {
+            m_queryEdit->clear();
+            m_lastQuery.clear();
+            m_queryEdit->setFocus();
+            updateInnerResultsView();
+        });
+        btnRow->addWidget(m_noResultsClear);
+        v->addLayout(btnRow);
+    }
+    m_resultsInnerStack->addWidget(m_noResultsPage);   // index 4
+
+    m_resultsInnerStack->setCurrentIndex(2);   // start on empty (was 0 = grid)
     outer->addWidget(m_resultsInnerStack, 1);
 
     // Initial media-tab state (M1 ABB TODO). Restore persisted selection
@@ -683,6 +853,7 @@ void TankoLibraryPage::buildResultsPage()
     m_mediaTab = (persistedTab == 1) ? MediaTab::Audiobooks : MediaTab::Books;
     updateMediaTabVisuals();
     applyMediaTabFilterVisibility();
+    updateFiltersDotIndicator();
     if (m_mediaTab == MediaTab::Audiobooks && m_queryEdit) {
         m_queryEdit->setPlaceholderText(QStringLiteral(
             "Search audiobooks - e.g. \"stormlight archive\" or \"dune\""));
@@ -701,10 +872,13 @@ void TankoLibraryPage::buildDetailPage()
     m_detailBackBtn = new QPushButton(QStringLiteral("←  Back to results"), m_detailPage);
     m_detailBackBtn->setCursor(Qt::PointingHandCursor);
     m_detailBackBtn->setFixedHeight(28);
-    m_detailBackBtn->setStyleSheet(QStringLiteral(
-        "QPushButton { color: #c7a76b; background: transparent; border: none;"
-        " font-size: 13px; padding: 2px 8px; }"
-        "QPushButton:hover { text-decoration: underline; }"));
+    {
+        const QColor accent = QApplication::palette().color(QPalette::Highlight);
+        m_detailBackBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { color: %1; background: transparent; border: none;"
+            " font-size: 13px; padding: 2px 8px; }"
+            "QPushButton:hover { text-decoration: underline; }").arg(accent.name()));
+    }
     connect(m_detailBackBtn, &QPushButton::clicked, this, &TankoLibraryPage::showResultsPage);
     backRow->addWidget(m_detailBackBtn);
     backRow->addStretch(1);
@@ -783,17 +957,20 @@ void TankoLibraryPage::buildDetailPage()
         m_downloadButton = new QPushButton(QStringLiteral("Download"), m_detailPage);
         m_downloadButton->setEnabled(false);
         m_downloadButton->setMinimumWidth(120);
-        m_downloadButton->setStyleSheet(QStringLiteral(
-            "QPushButton {"
-            "  padding: 6px 14px;"
-            "  background: #2a2a2a; color: #ddd;"
-            "  border: 1px solid #555; border-radius: 3px;"
-            "  font-weight: 500;"
-            "}"
-            "QPushButton:hover:!disabled { background: #333; border-color: #888; }"
-            "QPushButton:pressed:!disabled { background: #222; }"
-            "QPushButton:disabled { color: #666; background: #1e1e1e; border-color: #2c2c2c; }"
-        ));
+        {
+            const QColor accent = QApplication::palette().color(QPalette::Highlight);
+            m_downloadButton->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "  padding: 8px 14px;"
+                "  background: #2a2a2a; color: #ddd;"
+                "  border: 1px solid #555; border-radius: 3px;"
+                "  font-weight: 600;"
+                "}"
+                "QPushButton:hover:!disabled { background: #333; border-color: %1; }"
+                "QPushButton:pressed:!disabled { background: #222; }"
+                "QPushButton:disabled { color: #666; background: #1e1e1e; border-color: #2c2c2c; }"
+            ).arg(accent.name()));
+        }
         connect(m_downloadButton, &QPushButton::clicked,
                 this, &TankoLibraryPage::onDownloadClicked);
 
@@ -802,13 +979,15 @@ void TankoLibraryPage::buildDetailPage()
         m_downloadProgress->setFixedHeight(14);
         m_downloadProgress->setTextVisible(false);
         m_downloadProgress->setVisible(false);
-        m_downloadProgress->setStyleSheet(QStringLiteral(
-            "QProgressBar {"
-            "  background: #1a1a1a;"
-            "  border: 1px solid #333; border-radius: 2px;"
-            "}"
-            "QProgressBar::chunk { background: #c7a76b; }"
-        ));
+        {
+            const QColor accent = QApplication::palette().color(QPalette::Highlight);
+            m_downloadProgress->setStyleSheet(QStringLiteral(
+                "QProgressBar {"
+                "  background: #1a1a1a;"
+                "  border: 1px solid #333; border-radius: 2px;"
+                "}"
+                "QProgressBar::chunk { background: %1; }").arg(accent.name()));
+        }
 
         row->addWidget(m_downloadButton);
         row->addSpacing(12);
@@ -847,6 +1026,9 @@ void TankoLibraryPage::startSearch()
     m_results.clear();
     m_statusLbl->setText(QStringLiteral("Searching..."));
 
+    m_lastQuery = query;
+    updateInnerResultsView();
+
     // Dispatch only to the active media-tab's scraper list. Inactive-tab
     // scrapers don't participate in this search cycle (preserves honest
     // per-source status line — "Searching... (AudioBookBay: searching...)"
@@ -864,6 +1046,7 @@ void TankoLibraryPage::cancelSearch()
     m_searchBtn->setVisible(true);
     m_cancelBtn->setVisible(false);
     m_statusLbl->setText(QStringLiteral("Cancelled."));
+    updateInnerResultsView();
 }
 
 void TankoLibraryPage::refreshSearchStatus()
@@ -919,6 +1102,7 @@ void TankoLibraryPage::onFormatFilterToggled(bool /*checked*/)
     if (m_mobiChk) s.setValue(QStringLiteral("tankolibrary/format_mobi"), m_mobiChk->isChecked());
     applyClientFilter();
     refreshSearchStatus();
+    updateFiltersDotIndicator();
 }
 
 void TankoLibraryPage::onEnglishOnlyToggled(bool checked)
@@ -926,6 +1110,7 @@ void TankoLibraryPage::onEnglishOnlyToggled(bool checked)
     QSettings().setValue(QStringLiteral("tankolibrary/english_only"), checked);
     applyClientFilter();
     refreshSearchStatus();
+    updateFiltersDotIndicator();
 }
 
 void TankoLibraryPage::onAudioFormatChanged(int idx)
@@ -933,6 +1118,7 @@ void TankoLibraryPage::onAudioFormatChanged(int idx)
     QSettings().setValue(QStringLiteral("tankolibrary/audio_format"), idx);
     applyClientFilter();
     refreshSearchStatus();
+    updateFiltersDotIndicator();
 }
 
 void TankoLibraryPage::onSortChanged(int idx)
@@ -1312,8 +1498,10 @@ void TankoLibraryPage::onDetailReady(const BookResult& detail)
 void TankoLibraryPage::onDetailError(const QString& message)
 {
     // Keep the instant-paint snapshot visible; just show the error inline.
-    m_detailStatus->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #c07; background: transparent; border: none;"));
+    const auto errorColor = QApplication::palette().color(QPalette::HighlightedText).name();
+    m_detailStatus->setStyleSheet(QString(QStringLiteral(
+        "font-size: 12px; color: %1; background: transparent; border: none;"))
+        .arg(errorColor));
     m_detailStatus->setText(QString(QStringLiteral("Could not load full detail: %1"))
                             .arg(message));
 }
@@ -1406,6 +1594,7 @@ void TankoLibraryPage::resetDownloadUiToIdle()
 
 void TankoLibraryPage::onDownloadClicked()
 {
+    const auto errorColor = QApplication::palette().color(QPalette::HighlightedText).name();
     // Cancel-during-download: the same button becomes a cancel affordance
     // while the downloader is streaming. Clicking it aborts + cleans up.
     if (m_downloadStage == DownloadStage::Downloading) {
@@ -1420,16 +1609,18 @@ void TankoLibraryPage::onDownloadClicked()
         ? m_selectedResult.md5
         : m_selectedResult.sourceId;
     if (resolveId.isEmpty()) {
-        m_detailStatus->setStyleSheet(QStringLiteral(
-            "font-size: 12px; color: #c07; background: transparent; border: none;"));
+        m_detailStatus->setStyleSheet(QString(QStringLiteral(
+            "font-size: 12px; color: %1; background: transparent; border: none;"))
+            .arg(errorColor));
         m_detailStatus->setText(QStringLiteral("No book selected."));
         return;
     }
 
     BookScraper* scraper = scraperFor(m_selectedResult.source);
     if (!scraper) {
-        m_detailStatus->setStyleSheet(QStringLiteral(
-            "font-size: 12px; color: #c07; background: transparent; border: none;"));
+        m_detailStatus->setStyleSheet(QString(QStringLiteral(
+            "font-size: 12px; color: %1; background: transparent; border: none;"))
+            .arg(errorColor));
         m_detailStatus->setText(QString(QStringLiteral(
             "No scraper registered for source '%1'.")).arg(m_selectedResult.source));
         return;
@@ -1449,8 +1640,9 @@ void TankoLibraryPage::onDownloadClicked()
     const bool useAudiobooksRoot = !audiobookRoots.isEmpty();
     const QStringList activeRoots = useAudiobooksRoot ? audiobookRoots : bookRoots;
     if (activeRoots.isEmpty()) {
-        m_detailStatus->setStyleSheet(QStringLiteral(
-            "font-size: 12px; color: #c07; background: transparent; border: none;"));
+        m_detailStatus->setStyleSheet(QString(QStringLiteral(
+            "font-size: 12px; color: %1; background: transparent; border: none;"))
+            .arg(errorColor));
         m_detailStatus->setText(isAbbSource
             ? QStringLiteral("No books or audiobooks library path configured. "
                              "Set one in Settings → Libraries first.")
@@ -1564,8 +1756,10 @@ void TankoLibraryPage::onScraperUrlsReady(const QString& md5, const QStringList&
         m_downloadButton->setEnabled(true);
         m_downloadButton->setText(QStringLiteral("Download"));
         m_downloadProgress->setVisible(false);
-        m_detailStatus->setStyleSheet(QStringLiteral(
-            "font-size: 12px; color: #7bc47b; background: transparent; border: none;"));
+        const auto successColor = QApplication::palette().color(QPalette::Link).name();
+        m_detailStatus->setStyleSheet(QString(QStringLiteral(
+            "font-size: 12px; color: %1; background: transparent; border: none;"))
+            .arg(successColor));
         m_detailStatus->setText(QStringLiteral(
             "Torrent added — track progress in Tankorent → Transfers tab."));
         qInfo() << "[TankoLibraryPage] ABB magnet added to TorrentClient, hash=" << hash;
@@ -1644,8 +1838,10 @@ void TankoLibraryPage::onScraperResolveFailed(const QString& md5, const QString&
     if (md5 != m_selectedResult.md5) return;
     if (m_downloadStage != DownloadStage::Resolving) return;
 
-    m_detailStatus->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #c07; background: transparent; border: none;"));
+    const auto errorColor = QApplication::palette().color(QPalette::HighlightedText).name();
+    m_detailStatus->setStyleSheet(QString(QStringLiteral(
+        "font-size: 12px; color: %1; background: transparent; border: none;"))
+        .arg(errorColor));
     m_detailStatus->setText(QString(QStringLiteral(
         "Download failed (resolve): %1")).arg(reason));
     resetDownloadUiToIdle();
@@ -1708,8 +1904,10 @@ void TankoLibraryPage::onDownloaderComplete(const QString& md5,
     if (md5 != m_selectedResult.md5) return;
 
     const QString basename = QFileInfo(filePath).fileName();
-    m_detailStatus->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #8c8; background: transparent; border: none;"));
+    const auto successColor = QApplication::palette().color(QPalette::Link).name();
+    m_detailStatus->setStyleSheet(QString(QStringLiteral(
+        "font-size: 12px; color: %1; background: transparent; border: none;"))
+        .arg(successColor));
     m_detailStatus->setText(QString(QStringLiteral("Downloaded: %1")).arg(basename));
 
     resetDownloadUiToIdle();
@@ -1727,8 +1925,10 @@ void TankoLibraryPage::onDownloaderFailed(const QString& md5,
 
     if (md5 != m_selectedResult.md5) return;
 
-    m_detailStatus->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #c07; background: transparent; border: none;"));
+    const auto errorColor = QApplication::palette().color(QPalette::HighlightedText).name();
+    m_detailStatus->setStyleSheet(QString(QStringLiteral(
+        "font-size: 12px; color: %1; background: transparent; border: none;"))
+        .arg(errorColor));
     m_detailStatus->setText(QString(QStringLiteral("Download failed: %1")).arg(reason));
 
     resetDownloadUiToIdle();
@@ -1802,4 +2002,32 @@ void TankoLibraryPage::refreshTransfersView()
 {
     if (!m_transfersView) return;
     m_transfersView->setRecords(m_transfers);
+}
+
+// T25 — flip the inner results stack between data view / transfers / empty / loading / no-results.
+void TankoLibraryPage::updateInnerResultsView()
+{
+    if (!m_resultsInnerStack) return;
+    if (m_searchInFlight) {
+        m_resultsInnerStack->setCurrentIndex(3);   // loading
+        return;
+    }
+    if (m_results.isEmpty()) {
+        if (m_lastQuery.isEmpty()) {
+            // Pre-search empty; refresh per-tab hint.
+            if (m_emptyLabel) {
+                m_emptyLabel->setText(m_mediaTab == MediaTab::Books
+                    ? QStringLiteral("Type a query and hit Enter — e.g. \"sapiens\" or \"orwell 1984\"")
+                    : QStringLiteral("Type a query and hit Enter — e.g. \"stormlight archive\" or \"dune\""));
+            }
+            m_resultsInnerStack->setCurrentIndex(2);
+        } else {
+            // Zero-results after a search.
+            if (m_noResultsLabel)
+                m_noResultsLabel->setText(QStringLiteral("No results for \"%1\".").arg(m_lastQuery));
+            m_resultsInnerStack->setCurrentIndex(4);
+        }
+        return;
+    }
+    m_resultsInnerStack->setCurrentIndex(0);   // data view (grid)
 }
