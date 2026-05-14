@@ -10,6 +10,7 @@
 #include <QSettings>
 #include "../INavStateProvider.h"
 class QPushButton;
+class QScrollArea;
 class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
@@ -59,6 +60,10 @@ private:
 
     CoreBridge*             m_bridge = nullptr;
     FadingStackedWidget*    m_stack = nullptr;
+    // GLOBAL_NAV_HISTORY Task 8 review fix: cache the grid QScrollArea
+    // pointer so capture/restore don't pay an O(n) findChild walk on
+    // every Back/Forward.
+    QScrollArea*            m_gridScroll = nullptr;
     QWidget*         m_continueSection = nullptr;
     TileStrip*       m_continueStrip = nullptr;
     TileStrip*       m_tileStrip = nullptr;

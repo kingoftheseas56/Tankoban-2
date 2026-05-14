@@ -81,6 +81,7 @@ void ComicsPage::buildUI()
 
     // ── Grid view (index 0) — wrapped in scroll area ──
     auto* gridScroll = new QScrollArea();
+    m_gridScroll = gridScroll;  // GLOBAL_NAV_HISTORY Task 8 review fix
     gridScroll->setObjectName("ComicsGridScroll");
     gridScroll->setFrameShape(QFrame::NoFrame);
     gridScroll->setWidgetResizable(true);
@@ -889,9 +890,10 @@ QJsonObject ComicsPage::captureNavState() const
     if (m_sortCombo)
         blob["sort"] = m_sortCombo->currentData().toString();
 
-    // Scroll position — scroll area is a child named "ComicsGridScroll"
-    if (auto* scroll = findChild<QScrollArea*>("ComicsGridScroll")) {
-        if (auto* vsb = scroll->verticalScrollBar())
+    // Scroll position — use cached m_gridScroll pointer (review fix —
+    // avoids O(n) findChild walk on every Back/Forward).
+    if (m_gridScroll) {
+        if (auto* vsb = m_gridScroll->verticalScrollBar())
             blob["scrollY"] = vsb->value();
     }
 
@@ -925,8 +927,8 @@ bool ComicsPage::restoreNavState(const QJsonObject& blob)
         }
     }
 
-    if (auto* scroll = findChild<QScrollArea*>("ComicsGridScroll")) {
-        if (auto* vsb = scroll->verticalScrollBar())
+    if (m_gridScroll) {
+        if (auto* vsb = m_gridScroll->verticalScrollBar())
             vsb->setValue(blob.value("scrollY").toInt(0));
     }
 
