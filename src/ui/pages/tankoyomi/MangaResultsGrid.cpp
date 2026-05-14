@@ -25,6 +25,12 @@ MangaResultsGrid::MangaResultsGrid(QWidget* parent)
 
     m_strip = new TileStrip;
     m_strip->setMode("grid");
+    // T28 — Density polish: apply QSS styling to tile cards for hover state + font sizing
+    m_strip->setStyleSheet(
+        "MangaResultTile { border: 1px solid rgba(255,255,255,0.08); }"
+        "MangaResultTile:hover { border: 1px solid rgba(255,255,255,0.18); }"
+        "#TileTitle { font-size: 12px; }"
+    );
     m_scroll->setWidget(m_strip);
 
     root->addWidget(m_scroll);
@@ -63,6 +69,7 @@ void MangaResultsGrid::setResults(const QList<MangaResult>& results)
 
         // Thumb is loaded later via onCoverReady — initial card is placeholder.
         auto* card = new TileCard(QString(), r.title, subtitle);
+        card->setObjectName(QStringLiteral("MangaResultTile"));  // T28 — for QSS hover + density targeting
 
         card->setProperty("mangaSource", r.source);
         card->setProperty("mangaId",     r.id);
