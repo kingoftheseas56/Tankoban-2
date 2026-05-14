@@ -426,7 +426,7 @@ void MangaDetailView::onChapterUpdated(const QString& seriesId,
     if (row < 0) return;
 
     auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
-        m_chapterTable->cellWidget(row, 3));
+        m_chapterTable->cellWidget(row, kColAction));
     if (!indicator) return;
 
     deriveChapterState(chapterId, *indicator);
@@ -528,32 +528,50 @@ void MangaDetailView::renderChapters()
     for (int i = 0; i < m_chapters.size(); ++i) {
         const ChapterInfo& ch = m_chapters[i];
 
-        auto* numItem = new QTableWidgetItem(
-            QStringLiteral("Ch %1").arg(ch.chapterNumber, 0, 'f', 1));
-        m_chapterTable->setItem(i, 0, numItem);
+        // kColTitle — stacked title + optional inline date subtitle.
+        // Mirror of StreamDetailView.cpp:920-950 title-cell shape.
+        auto* titleCell = new QWidget(m_chapterTable);
+        auto* titleLayout = new QVBoxLayout(titleCell);
+        titleLayout->setContentsMargins(8, 6, 8, 6);
+        titleLayout->setSpacing(2);
 
-        auto* nameItem = new QTableWidgetItem(ch.name);
-        m_chapterTable->setItem(i, 1, nameItem);
+        auto* nameLabel = new QLabel(ch.name, titleCell);
+        nameLabel->setWordWrap(false);
+        nameLabel->setStyleSheet(
+            "color: #e0e0e0; font-size: 12px; font-weight: 500; background: transparent;");
+        nameLabel->setTextFormat(Qt::PlainText);
+        titleLayout->addWidget(nameLabel);
 
-        const QString dateStr = ch.dateUpload > 0
-            ? QDateTime::fromMSecsSinceEpoch(ch.dateUpload).toString("yyyy-MM-dd")
-            : QString();
-        auto* dateItem = new QTableWidgetItem(dateStr);
-        m_chapterTable->setItem(i, 2, dateItem);
+        if (ch.dateUpload > 0) {
+            const QString dateStr =
+                QDateTime::fromMSecsSinceEpoch(ch.dateUpload).toString("yyyy-MM-dd");
+            auto* dateLabel = new QLabel(dateStr, titleCell);
+            dateLabel->setStyleSheet(
+                "color: rgba(255,255,255,0.45); font-size: 10px; background: transparent;");
+            dateLabel->setTextFormat(Qt::PlainText);
+            titleLayout->addWidget(dateLabel);
+        } else {
+            titleLayout->addStretch();
+        }
+        m_chapterTable->setCellWidget(i, kColTitle, titleCell);
 
-        // Per-chapter download indicator
-        auto* indicator = new ChapterDownloadIndicator();
-        m_chapterTable->setCellWidget(i, 3, indicator);
+        // Hidden QTableWidgetItem so selection / shift-click multi-select
+        // mechanics still work — cellWidget() alone doesn't satisfy the
+        // selection model. UserRole carries the chapter id for
+        // context-menu lookup (mirror of StreamDetailView.cpp:891).
+        auto* titleItem = new QTableWidgetItem();
+        titleItem->setData(Qt::UserRole, ch.id);
+        m_chapterTable->setItem(i, kColTitle, titleItem);
 
-        // Initial state from downloader records (C.4)
+        // kColAction — ChapterDownloadIndicator (B.1–B.3, 5-state animated).
+        auto* indicator = new ChapterDownloadIndicator(m_chapterTable);
+        m_chapterTable->setCellWidget(i, kColAction, indicator);
+
         deriveChapterState(ch.id, *indicator);
 
         connect(indicator, &ChapterDownloadIndicator::clicked, this,
                 [this, i]() { onChapterIconClicked(i); });
     }
-    m_chapterTable->resizeColumnToContents(0);
-    m_chapterTable->resizeColumnToContents(2);
-    m_chapterTable->resizeColumnToContents(3);
 }
 
 void MangaDetailView::onChapterIconClicked(int row)
@@ -563,7 +581,7 @@ void MangaDetailView::onChapterIconClicked(int row)
 
     const ChapterInfo& ch = m_chapters[row];
     auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
-        m_chapterTable->cellWidget(row, 3));
+        m_chapterTable->cellWidget(row, kColAction));
     if (!indicator) return;
 
     using State = ChapterDownloadIndicator::State;
@@ -652,7 +670,7 @@ void MangaDetailView::showChapterContextMenu(const QPoint& pos)
     const ChapterInfo& ch = m_chapters[row];
 
     auto* indicator = qobject_cast<ChapterDownloadIndicator*>(
-        m_chapterTable->cellWidget(row, 3));
+        m_chapterTable->cellWidget(row, kColAction));
     if (!indicator) return;
     const ChapterDownloadIndicator::State state = indicator->state();
 
