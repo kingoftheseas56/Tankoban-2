@@ -2,24 +2,6 @@
 #include "MangaScraper.h"
 #include "core/JsonStore.h"
 
-namespace {
-// TANKOYOMI_SERIES_PAGE_FIX freeze diagnostic 2026-05-14: shares the
-// same out/freeze_debug.log with MangaDetailView. Flushes after every
-// write so events survive AppHangB1 process kill.
-void engineDbg(const QString& msg)
-{
-    static QFile f("out/freeze_debug.log");
-    if (!f.isOpen()) {
-        f.open(QIODevice::WriteOnly | QIODevice::Append);
-    }
-    if (f.isOpen()) {
-        const qint64 ms = QDateTime::currentMSecsSinceEpoch();
-        f.write(QStringLiteral("%1 ENG %2\n").arg(ms).arg(msg).toUtf8());
-        f.flush();
-    }
-}
-}  // namespace
-
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -273,10 +255,9 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
 // ── Process queue ───────────────────────────────────────────────────────────
 void MangaDownloader::processQueue()
 {
-    engineDbg(QStringLiteral("processQueue entry active=%1").arg(m_activeDownloads));
     QMutexLocker lock(&m_mutex);
-    if (m_paused) { engineDbg("processQueue exit paused"); return; }
-    if (m_activeDownloads >= MAX_CONCURRENT_CHAPTERS) { engineDbg("processQueue exit at-max"); return; }
+    if (m_paused) return;
+    if (m_activeDownloads >= MAX_CONCURRENT_CHAPTERS) return;
 
     // R5: iterate in m_recordOrder so reordering actually influences scheduling.
     for (const QString& recId : m_recordOrder) {
@@ -297,22 +278,18 @@ void MangaDownloader::processQueue()
                 rec.status = "downloading";
                 ++m_activeDownloads;
                 const QString chapterIdLocal = ch.chapterId;
-                engineDbg(QStringLiteral("processQueue starting rec=%1 idx=%2 ch=%3").arg(recId).arg(i).arg(chapterIdLocal));
                 lock.unlock();
                 emit chapterUpdated(recId, chapterIdLocal);
                 downloadChapter(recId, i);
-                engineDbg(QStringLiteral("processQueue <- downloadChapter idx=%1").arg(i));
                 lock.relock();
             }
         }
     }
-    engineDbg("processQueue exit (normal)");
 }
 
 // ── Download a single chapter ───────────────────────────────────────────────
 void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
 {
-    engineDbg(QStringLiteral("downloadChapter entry idx=%1").arg(chapterIdx));
     QString source;
     QString chapterId;
     {
@@ -365,18 +342,13 @@ void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
             emit chapterUpdated(recordId, chapterIdLocal);
             processQueue();
         });
-
-    engineDbg(QStringLiteral("downloadChapter -> fetchPages source=%1 chid=%2").arg(source, chapterId));
     scraper->fetchPages(chapterId);
-    engineDbg(QStringLiteral("downloadChapter <- fetchPages returned (async)"));
 }
 
 void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                                       const QList<PageInfo>& pages)
 {
-    engineDbg(QStringLiteral("downloadImages entry idx=%1 pages=%2").arg(chapterIdx).arg(pages.size()));
     QString seriesDir, chapterName, format, source;
-    engineDbg("downloadImages -> snapshot fields");
     {
         QMutexLocker lock(&m_mutex);
         auto& rec = m_records[recordId];
@@ -387,8 +359,6 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         format      = rec.format;
         source      = rec.source;
     }
-
-    engineDbg("downloadImages <- snapshot; sanitizing");
     // Sanitize directory names
     QString safe = chapterName;
     safe.replace(QRegularExpression(R"([<>:"/\\|?*])"), "_");
@@ -399,11 +369,8 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
     // yet and QStorageInfo on a missing path walks up until it finds a mount.
     constexpr qint64 MIN_FREE_BYTES = 200LL * 1024 * 1024;
     {
-        engineDbg("downloadImages -> mkpath seriesDir");
         QDir().mkpath(seriesDir);
-        engineDbg("downloadImages -> QStorageInfo probe");
         QStorageInfo probe(seriesDir);
-        engineDbg("downloadImages <- QStorageInfo probe");
         if (probe.isValid() && probe.bytesAvailable() < MIN_FREE_BYTES) {
             QString chapterIdLocal;
             bool chapterTouched = false;
@@ -428,17 +395,13 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             return;
         }
     }
-
-    engineDbg("downloadImages -> mkpath chapterDir");
     QDir().mkpath(chapterDir);
-    engineDbg("downloadImages <- mkpath chapterDir");
 
     // R4: sync the on-disk image count into downloadedImages in one pass so
     // the Transfers dialog reflects actual progress across pause/resume and
     // across cold restarts of a partially-downloaded chapter. Done once here
     // to avoid the skip-if-exists branch re-incrementing on every recursion.
     {
-        engineDbg(QStringLiteral("downloadImages R4 sync start (%1 pages)").arg(pages.size()));
         int onDisk = 0;
         for (int i = 0; i < pages.size(); ++i) {
             QString ext = QFileInfo(QUrl(pages[i].imageUrl).path()).suffix();
@@ -448,12 +411,12 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             if (QFileInfo::exists(p) && QFileInfo(p).size() > 0)
                 ++onDisk;
         }
-        engineDbg(QStringLiteral("downloadImages R4 sync done onDisk=%1").arg(onDisk));
-        QMutexLocker lock(&m_mutex);
-        auto& ch = m_records[recordId].chapters[chapterIdx];
-        ch.downloadedImages = onDisk;
+        {
+            QMutexLocker lock(&m_mutex);
+            auto& ch = m_records[recordId].chapters[chapterIdx];
+            ch.downloadedImages = onDisk;
+        }
         emit downloadUpdated(recordId);
-        engineDbg("downloadImages R4 emit done");
     }
 
     // Download images sequentially. Second arg is the current attempt count
@@ -461,7 +424,6 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
     // backoff 2s/4s/8s matching Mihon's Downloader.kt:504-512).
     auto downloadNext = std::make_shared<std::function<void(int, int)>>();
     *downloadNext = [this, recordId, chapterIdx, pages, chapterDir, format, source, downloadNext](int pageIdx, int attempt) {
-        engineDbg(QStringLiteral("downloadNext entry pageIdx=%1 attempt=%2").arg(pageIdx).arg(attempt));
         // Pause gate — fires from both the "skip-if-exists" and the network-finished
         // recursion paths. pauseAll() already reverts status; we leave the image
         // counters alone (R4) — on resume, the skip-if-exists branch at the
@@ -524,16 +486,12 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         }
 
         if (pageIdx >= pages.size()) {
-            engineDbg(QStringLiteral("downloadNext chapter-complete idx=%1 format=%2").arg(chapterIdx).arg(format));
             // All images downloaded — pack if CBZ
             if (format == "cbz") {
                 QString cbzPath = chapterDir + ".cbz";
-                engineDbg(QStringLiteral("downloadNext -> packCbz %1").arg(cbzPath));
                 packCbz(chapterDir, cbzPath);
-                engineDbg("downloadNext <- packCbz returned");
                 // Remove source folder
                 QDir(chapterDir).removeRecursively();
-                engineDbg("downloadNext <- removeRecursively returned");
 
                 QMutexLocker lock(&m_mutex);
                 m_records[recordId].chapters[chapterIdx].finalPath = cbzPath;
@@ -544,6 +502,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
 
             // Mark chapter complete
             QString completedChapterId;
+            bool seriesCompleted = false;
             {
                 QMutexLocker lock(&m_mutex);
                 auto& rec = m_records[recordId];
@@ -560,18 +519,17 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                     rec.status = "completed";
                     rec.completedAt = QDateTime::currentMSecsSinceEpoch();
                     appendHistory(rec);
-                    emit downloadCompleted(recordId);
+                    seriesCompleted = true;
                 }
                 --m_activeDownloads;
             }
-            engineDbg("downloadNext -> saveRecords");
+            if (seriesCompleted) {
+                emit downloadCompleted(recordId);
+            }
             saveRecords();
-            engineDbg("downloadNext <- saveRecords");
             emit downloadUpdated(recordId);
             emit chapterUpdated(recordId, completedChapterId);
-            engineDbg("downloadNext -> processQueue (recursive)");
             processQueue();
-            engineDbg("downloadNext <- processQueue returned");
             return;
         }
 
@@ -591,13 +549,11 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         // the event loop pumps between iterations and Windows doesn't fire
         // AppHangB1 after the 5-second non-responsive watchdog.
         if (QFileInfo::exists(filePath) && QFileInfo(filePath).size() > 0) {
-            engineDbg(QStringLiteral("downloadNext skip-if-exists pageIdx=%1 (deferred)").arg(pageIdx));
             QTimer::singleShot(0, this, [downloadNext, pageIdx]() {
                 (*downloadNext)(pageIdx + 1, 0);
             });
             return;
         }
-        engineDbg(QStringLiteral("downloadNext -> QNAM->get pageIdx=%1").arg(pageIdx));
 
         QNetworkRequest req(QUrl(page.imageUrl));
         req.setRawHeader("User-Agent",
@@ -619,8 +575,10 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                         f.write(reply->readAll());
                         f.close();
                     }
-                    QMutexLocker lock(&m_mutex);
-                    ++m_records[recordId].chapters[chapterIdx].downloadedImages;
+                    {
+                        QMutexLocker lock(&m_mutex);
+                        ++m_records[recordId].chapters[chapterIdx].downloadedImages;
+                    }
                     emit downloadUpdated(recordId);
                     (*downloadNext)(pageIdx + 1, 0);
                     return;
@@ -648,10 +606,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                 (*downloadNext)(pageIdx + 1, 0);
             });
     };
-
-    engineDbg("downloadImages -> first (*downloadNext)(0,0)");
     (*downloadNext)(0, 0);
-    engineDbg("downloadImages <- first (*downloadNext) returned");
 }
 
 // ── CBZ packing ─────────────────────────────────────────────────────────────

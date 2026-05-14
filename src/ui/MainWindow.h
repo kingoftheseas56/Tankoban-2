@@ -25,6 +25,7 @@ class DevControlServer;
 class SidebarDrawer;
 class StreamDownloadIndex;
 class NavHistory;
+class INavStateProvider;
 class QJsonObject;
 struct StreamBulkGroupRecord;
 struct NavHistoryEntry;
@@ -93,6 +94,11 @@ private:
     // (e.g. Organise button shown/hidden on page activation) to keep the
     // central nav pills geometrically centered in the window.
     void mirrorTopBarSlotWidths();
+
+    // Find the INavStateProvider for a page by its objectName / pageId.
+    // Returns nullptr if the page doesn't exist or doesn't implement
+    // the interface (most pages until Tasks 8-14 land).
+    INavStateProvider* providerForPage(const QString& pageId) const;
 
     // FRAMELESS_CHROME_FULLSCREEN_EXIT_FIX 2026-05-04 — re-apply the
     // Win32 frameless-style hack (keep WS_CAPTION etc + SWP_FRAMECHANGED

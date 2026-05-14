@@ -584,7 +584,29 @@ void MainWindow::mirrorTopBarSlotWidths()
 {
     if (!m_topBarLeftSlot || !m_topBarRightSlot)
         return;
-    m_topBarLeftSlot->setFixedWidth(m_topBarRightSlot->sizeHint().width());
+    // Both slots take the WIDER of the two sizeHints, so the central nav
+    // pills stay geometrically centered even after either side grows.
+    // GLOBAL_NAV_HISTORY Task 4 (2026-05-14) grew the left slot by ~76px
+    // when the Back / Forward chevrons landed, which previously would
+    // have clipped them under the right-mirror-only rule.
+    const int leftHint  = m_topBarLeftSlot->sizeHint().width();
+    const int rightHint = m_topBarRightSlot->sizeHint().width();
+    const int target    = qMax(leftHint, rightHint);
+    m_topBarLeftSlot->setFixedWidth(target);
+    m_topBarRightSlot->setFixedWidth(target);
+}
+
+// ── Provider lookup helper ───────────────────────────────────────────────────
+INavStateProvider* MainWindow::providerForPage(const QString& pageId) const
+{
+    if (!m_pageStack) return nullptr;
+    for (int i = 0; i < m_pageStack->count(); ++i) {
+        QWidget* w = m_pageStack->widget(i);
+        if (w && w->objectName() == pageId) {
+            return dynamic_cast<INavStateProvider*>(w);
+        }
+    }
+    return nullptr;
 }
 
 // ── Page stack ──────────────────────────────────────────────────────────────
@@ -796,15 +818,8 @@ void MainWindow::activatePage(const QString &pageId)
     // the nav event. If this call originated from a Back/Forward restore
     // (m_inNavRestore = true), only update the active provider; do NOT push a
     // new history entry (would loop infinitely).
-    if (m_navHistory && m_pageStack) {
-        INavStateProvider* provider = nullptr;
-        for (int i = 0; i < m_pageStack->count(); ++i) {
-            QWidget* w = m_pageStack->widget(i);
-            if (w && w->objectName() == pageId) {
-                provider = dynamic_cast<INavStateProvider*>(w);
-                break;
-            }
-        }
+    if (m_navHistory) {
+        INavStateProvider* provider = providerForPage(pageId);
         m_navHistory->setActiveProvider(pageId, provider);
         if (!m_inNavRestore) {
             m_navHistory->recordNavEvent(pageId);
@@ -838,16 +853,7 @@ void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
     // After activatePage, look for an INavStateProvider on the target page
     // and call restoreNavState. Pages that don't implement INavStateProvider
     // (Tasks 8-14 will add hooks) are simply skipped here.
-    INavStateProvider* provider = nullptr;
-    if (m_pageStack) {
-        for (int i = 0; i < m_pageStack->count(); ++i) {
-            QWidget* w = m_pageStack->widget(i);
-            if (w && w->objectName() == entry.pageId) {
-                provider = dynamic_cast<INavStateProvider*>(w);
-                break;
-            }
-        }
-    }
+    INavStateProvider* provider = providerForPage(entry.pageId);
     if (provider) {
         provider->restoreNavState(entry.stateBlob);
         // Stale-skip recursion deferred: if restoreNavState returns false,
