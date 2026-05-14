@@ -1288,7 +1288,10 @@ void StreamPage::restorePlayerExitView()
         showEntryRaw(entry);
         return;
     }
-    showBrowse();
+    // System-initiated fallback when no pre-player snapshot exists.
+    // Pass emitNav=false so the global Back/Forward stack doesn't
+    // record a spurious Browse entry the user didn't navigate to.
+    showBrowse(/*emitNav=*/false);
 }
 
 // GLOBAL_NAV_HISTORY Task 14 (2026-05-14) — INavStateProvider hooks.
@@ -1379,17 +1382,18 @@ bool StreamPage::restoreNavState(const QJsonObject& blob)
     return true;
 }
 
-void StreamPage::showBrowse()
+void StreamPage::showBrowse(bool emitNav)
 {
     // STREAM_NAV_BACK_STACK 2026-05-06 â€” Library is the stack bottom.
     // showBrowse explicitly resets the stack to a clean Browse-only
     // state. Called on Stream-mode entry, on legitimate library-home
     // navigation (e.g. nav-bar Library button), and as the legacy
     // fallback when no pre-player snapshot exists.
-    // GLOBAL_NAV_HISTORY Task 14 — emit on every Library-home transition
-    // (user-initiated reset OR text-clear-from-search OR no-snapshot
-    // player-exit fallback) so the global stack records the move.
-    emit navigationRequested();
+    // GLOBAL_NAV_HISTORY Task 14 — emit on USER-initiated Library-home
+    // transitions (default emitNav=true). System-initiated callers
+    // (restorePlayerExitView fallback, etc.) pass emitNav=false so the
+    // global stack doesn't record a spurious nav the user didn't make.
+    if (emitNav) emit navigationRequested();
     m_navStack.clear();
     NavEntry e;
     e.kind = NavEntry::Kind::Browse;

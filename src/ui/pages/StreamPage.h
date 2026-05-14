@@ -171,7 +171,11 @@ private:
     void hideSearchHistoryDropdown();
     void positionSearchHistoryDropdown();
     bool eventFilter(QObject* obj, QEvent* event) override;
-    void showBrowse();
+    // GLOBAL_NAV_HISTORY Task 14 review fix: emitNav=false on the
+    // system-initiated player-exit-fallback path so the global stack
+    // doesn't get a spurious entry. User-initiated callers (nav-bar
+    // Library button, search-clear) pass the default true.
+    void showBrowse(bool emitNav = true);
     void showAddonManager();
     void showCalendar();  // Batch 6.2
     void showCatalogBrowse(const QString& addonId, const QString& type,
