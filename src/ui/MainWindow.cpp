@@ -888,11 +888,22 @@ void MainWindow::onForwardChevronClicked() {
 }
 
 void MainWindow::onBackAvailabilityChanged(bool available) {
-    if (m_backBtn) m_backBtn->setEnabled(available);
+    // GLOBAL_NAV_HISTORY Task 7 fix: gate on modal + overlay state too,
+    // so a mid-modal NavHistory signal doesn't re-enable the chevron.
+    // Mirror of the eventFilter recompute logic.
+    if (m_backBtn) {
+        const bool inModal = (QApplication::activeModalWidget() != nullptr);
+        const bool inOverlay = isReaderOrPlayerActive();
+        m_backBtn->setEnabled(available && !inModal && !inOverlay);
+    }
 }
 
 void MainWindow::onForwardAvailabilityChanged(bool available) {
-    if (m_forwardBtn) m_forwardBtn->setEnabled(available);
+    if (m_forwardBtn) {
+        const bool inModal = (QApplication::activeModalWidget() != nullptr);
+        const bool inOverlay = isReaderOrPlayerActive();
+        m_forwardBtn->setEnabled(available && !inModal && !inOverlay);
+    }
 }
 
 void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
