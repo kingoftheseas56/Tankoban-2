@@ -37,15 +37,19 @@ QString formatProgress(const TransferRecord& r)
     return QString();
 }
 
+// CR.8 — Title Case status text, stripped of emoji prefixes.
+// Enum vocabulary: Queued / Downloading / Done / Failed.
+// "Done" surface label is "Complete" to match cross-page convention (Tankoyomi parity).
 QString formatStatus(const TransferRecord& r)
 {
     switch (r.state) {
-    case TransferRecord::State::Queued:      return QStringLiteral("queued");
-    case TransferRecord::State::Downloading: return QStringLiteral("downloading");
-    case TransferRecord::State::Done:
-        return QStringLiteral("✓ done — %1").arg(r.filePath);
+    case TransferRecord::State::Queued:      return QStringLiteral("Queued");
+    case TransferRecord::State::Downloading: return QStringLiteral("Downloading");
+    case TransferRecord::State::Done:        return QStringLiteral("Complete");
     case TransferRecord::State::Failed:
-        return QStringLiteral("✗ %1").arg(r.errorReason);
+        return r.errorReason.isEmpty()
+            ? QStringLiteral("Failed")
+            : QStringLiteral("Failed — %1").arg(r.errorReason);
     }
     return QString();
 }
@@ -76,15 +80,57 @@ void TransfersView::buildUI()
     root->setSpacing(0);
 
     m_table = new QTableWidget(this);
+    m_table->setObjectName(QStringLiteral("transfersTable"));
     m_table->setColumnCount(3);
-    m_table->setHorizontalHeaderLabels({ "Title", "Progress", "Status" });
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+    const QStringList headers = { "Title", "Progress", "Status" };
+    m_table->setHorizontalHeaderLabels(headers);
+
+    // CR.9 — header alignment: default Left+VCenter; Progress column centered.
+    QHeaderView* hdr = m_table->horizontalHeader();
+    hdr->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Column 1 (Progress) is numeric/percentage — center it.
+    {
+        auto* hi = m_table->horizontalHeaderItem(1);
+        if (!hi) {
+            hi = new QTableWidgetItem(headers[1]);
+            m_table->setHorizontalHeaderItem(1, hi);
+        }
+        hi->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+    }
+
+    hdr->setSectionResizeMode(0, QHeaderView::Stretch);
+    hdr->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    hdr->setSectionResizeMode(2, QHeaderView::Stretch);
+
     m_table->verticalHeader()->setVisible(false);
+    // CR.1 — density lift: 32 px row height.
+    m_table->verticalHeader()->setDefaultSectionSize(32);
+
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setAlternatingRowColors(true);
+
+    // CR.5 (hover), CR.7 (header weight + padding), density (cell font 13).
+    m_table->setStyleSheet(QStringLiteral(
+        "QTableWidget#transfersTable {"
+        "  font-size: 13px;"
+        "}"
+        "QTableWidget#transfersTable::item {"
+        "  padding: 0 8px;"
+        "}"
+        "QTableWidget#transfersTable::item:hover {"
+        "  background: rgba(255,255,255,0.04);"
+        "}"
+        "QHeaderView::section {"
+        "  font-size: 13px;"
+        "  font-weight: 600;"
+        "  padding: 6px 8px;"
+        "  border: none;"
+        "  border-bottom: 1px solid rgba(255,255,255,0.08);"
+        "}"
+    ));
+
     root->addWidget(m_table);
 }
 
@@ -101,6 +147,11 @@ void TransfersView::setRecords(const QList<TransferRecord>& records)
         auto* titleItem    = new QTableWidgetItem(r.title.isEmpty() ? r.md5 : r.title);
         auto* progressItem = new QTableWidgetItem(formatProgress(r));
         auto* statusItem   = new QTableWidgetItem(formatStatus(r));
+
+        // CR.9 — cell alignment matches header: Title+Status Left, Progress Center.
+        titleItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        progressItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+        statusItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
         const QColor c = colorForState(r.state);
         if (c.isValid()) statusItem->setForeground(c);

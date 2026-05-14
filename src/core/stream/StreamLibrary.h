@@ -8,6 +8,7 @@
 
 class JsonStore;
 class StreamDownloadIndex;
+class TorrentClient;
 
 struct StreamLibraryEntry {
     QString imdb;           // "tt1234567"
@@ -38,6 +39,14 @@ public:
     // being removed from library. See spec §6.5 Data Flow E.
     void setStreamDownloadIndex(StreamDownloadIndex* idx) { m_downloadIndex = idx; }
 
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 7 — optional wire
+    // to the torrent client so remove() can cancel any active stream-bulk
+    // cohort for the show being removed (cancelStreamBulkGroup with
+    // deleteFiles=true). Closes spec §9.3 — engine-level guarantee that
+    // Remove-from-Library leaves no orphaned cohorts. Independent of any
+    // UI-level confirmation; this is the belt-and-suspenders cleanup.
+    void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
+
 signals:
     void libraryChanged();
 
@@ -52,6 +61,7 @@ private:
     mutable QMutex m_mutex;
     QHash<QString, StreamLibraryEntry> m_entries;
     StreamDownloadIndex* m_downloadIndex = nullptr;
+    TorrentClient* m_torrentClient = nullptr;
 
     static constexpr const char* FILENAME = "stream_library.json";
 };

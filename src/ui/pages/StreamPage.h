@@ -91,7 +91,10 @@ signals:
     // is the load-bearing payload.
     void addToTankorentRequested(const QString& magnetUri,
                                  const QString& displayName);
-    void addToTankorentBulkRequested(
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — renamed from addToTankorentBulkRequested.
+    // Routes to MainWindow's onAddToTankorentBulkRequested slot which dispatches
+    // WITHOUT a page-switch (no longer activates the Tankorent tab).
+    void streamBulkDispatchRequested(
         const StreamBulkGroupRecord& group,
         const tankostream::stream::BulkPackVerificationResult& verifierOutput,
         const QString& displayLabel);
@@ -210,6 +213,18 @@ private:
     // for MainWindow.
     void onAddToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
     void triggerBulkSeasonDownload(int season);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — episode/season/selected-set dispatch
+    // wired from StreamDetailView. Bypasses the V2 Phase 1 preflight dialog.
+    void onSeasonDownloadRequested(int season);
+    void onSelectedEpisodesDownloadRequested(int season, const QList<int>& episodes);
+    void onSingleEpisodeDownloadRequested(int season, int episode);
+
+    // Internal helper used by the three slots above. episodeFilter non-empty
+    // restricts the dispatch to those episode numbers only (whole-season when empty).
+    void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
+                                     const QList<int>& episodeFilter);
+
     void retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys);
     void cancelBulkSeasonDownload();
     void onBulkSourcesCollected(const tankostream::stream::BulkSourceCollectionPayload& payload);

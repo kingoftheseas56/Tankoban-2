@@ -376,6 +376,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
 {
     engineDbg(QStringLiteral("downloadImages entry idx=%1 pages=%2").arg(chapterIdx).arg(pages.size()));
     QString seriesDir, chapterName, format, source;
+    engineDbg("downloadImages -> snapshot fields");
     {
         QMutexLocker lock(&m_mutex);
         auto& rec = m_records[recordId];
@@ -387,6 +388,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         source      = rec.source;
     }
 
+    engineDbg("downloadImages <- snapshot; sanitizing");
     // Sanitize directory names
     QString safe = chapterName;
     safe.replace(QRegularExpression(R"([<>:"/\\|?*])"), "_");
@@ -397,8 +399,11 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
     // yet and QStorageInfo on a missing path walks up until it finds a mount.
     constexpr qint64 MIN_FREE_BYTES = 200LL * 1024 * 1024;
     {
+        engineDbg("downloadImages -> mkpath seriesDir");
         QDir().mkpath(seriesDir);
+        engineDbg("downloadImages -> QStorageInfo probe");
         QStorageInfo probe(seriesDir);
+        engineDbg("downloadImages <- QStorageInfo probe");
         if (probe.isValid() && probe.bytesAvailable() < MIN_FREE_BYTES) {
             QString chapterIdLocal;
             bool chapterTouched = false;
@@ -424,13 +429,16 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         }
     }
 
+    engineDbg("downloadImages -> mkpath chapterDir");
     QDir().mkpath(chapterDir);
+    engineDbg("downloadImages <- mkpath chapterDir");
 
     // R4: sync the on-disk image count into downloadedImages in one pass so
     // the Transfers dialog reflects actual progress across pause/resume and
     // across cold restarts of a partially-downloaded chapter. Done once here
     // to avoid the skip-if-exists branch re-incrementing on every recursion.
     {
+        engineDbg(QStringLiteral("downloadImages R4 sync start (%1 pages)").arg(pages.size()));
         int onDisk = 0;
         for (int i = 0; i < pages.size(); ++i) {
             QString ext = QFileInfo(QUrl(pages[i].imageUrl).path()).suffix();
@@ -440,10 +448,12 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             if (QFileInfo::exists(p) && QFileInfo(p).size() > 0)
                 ++onDisk;
         }
+        engineDbg(QStringLiteral("downloadImages R4 sync done onDisk=%1").arg(onDisk));
         QMutexLocker lock(&m_mutex);
         auto& ch = m_records[recordId].chapters[chapterIdx];
         ch.downloadedImages = onDisk;
         emit downloadUpdated(recordId);
+        engineDbg("downloadImages R4 emit done");
     }
 
     // Download images sequentially. Second arg is the current attempt count
@@ -639,7 +649,9 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             });
     };
 
+    engineDbg("downloadImages -> first (*downloadNext)(0,0)");
     (*downloadNext)(0, 0);
+    engineDbg("downloadImages <- first (*downloadNext) returned");
 }
 
 // ── CBZ packing ─────────────────────────────────────────────────────────────

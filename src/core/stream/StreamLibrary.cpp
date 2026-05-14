@@ -1,8 +1,10 @@
 #include "StreamLibrary.h"
 #include "core/JsonStore.h"
 #include "StreamDownloadIndex.h"
+#include "core/torrent/TorrentClient.h"
 
 #include <QDateTime>
+#include <QJsonObject>
 
 StreamLibrary::StreamLibrary(JsonStore* store, QObject* parent)
     : QObject(parent)
@@ -38,11 +40,26 @@ bool StreamLibrary::remove(const QString& imdbId)
     emit libraryChanged();
 
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — Remove from library
-    // also evicts any per-episode download entries for this show. Files on
-    // disk are NOT touched (per spec §3 P4); the eviction lets the Videos
-    // scanner re-discover them on its next debounced rescan (Phase 5).
+    // also evicts any per-episode download entries for this show.
     if (m_downloadIndex)
         m_downloadIndex->evictByImdb(imdbId);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 7 — engine-level
+    // cancel-on-Remove. Walks every active "stream:<imdb>:*" cohort and
+    // cancels with deleteFiles=true so the show's removal also drops any
+    // in-flight downloaded bytes from disk. Closes spec §9.3. The UI layer
+    // is responsible for the user-facing confirmation dialog BEFORE
+    // calling remove(); this is the engine-level guarantee that any
+    // caller (UI, scripted, future API) gets the file-delete behavior
+    // consistently.
+    if (m_torrentClient && m_torrentClient->imdbHasActiveCohort(imdbId)) {
+        const QString prefix = QStringLiteral("stream:") + imdbId + QLatin1Char(':');
+        const QJsonObject snap = m_torrentClient->streamBulkGroupsSnapshot();
+        for (auto it = snap.constBegin(); it != snap.constEnd(); ++it) {
+            if (!it.key().startsWith(prefix)) continue;
+            m_torrentClient->cancelStreamBulkGroup(it.key(), /*deleteFiles=*/true);
+        }
+    }
 
     return true;
 }

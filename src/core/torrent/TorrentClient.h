@@ -52,6 +52,7 @@ enum class StreamBulkItemState {
     Completed,
     Cancelled,
     Orphaned,
+    Paused,
 };
 
 struct StreamBulkGroupItem {
@@ -158,6 +159,13 @@ public:
     // chosen file-deletion flag. The single-arg overload preserves the
     // legacy auto-heuristic for any non-menu callers.
     void cancelStreamBulkGroup(const QString& groupId, bool deleteFiles);
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — per-item cancel + delete.
+    // Removes the libtorrent record (with delete_files=deleteFile),
+    // marks the cohort item Cancelled, evicts the StreamDownloadIndex
+    // entry if Published. Emits streamBulkGroupsChanged.
+    void cancelStreamBulkItem(const QString& groupId,
+                              const QString& itemKey,
+                              bool deleteFile);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — query whether any
     // active (non-terminal) bulk group references this imdbId. Used by
@@ -176,7 +184,25 @@ public:
     // for this show+season.
     QHash<int, QPair<QString, int>>
         streamBulkSnapshotForImdbSeason(const QString& imdbId, int season) const;
-    void retryStreamBulkGroupFailedItems(const QString& groupId);
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — full snapshot of m_streamBulkGroups
+    // for cross-show consumers (StreamDownloadsPage). Returns a deep copy so
+    // the caller can iterate without holding the mutex.
+    QJsonObject streamBulkGroupsSnapshot() const;
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — true iff any group keyed
+    // "stream:<imdbId>:*" has any non-terminal item (Pending, Downloading,
+    // Publishing, or Paused). Drives the DOWNLOADING tile chip on Stream
+    // library home. Paused counts as non-terminal so the chip stays visible
+    // while a cohort is user-paused.
+    bool imdbHasActiveCohort(const QString& imdbId) const;
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — flip a cohort item's state
+    // between Paused and Downloading. Caller is responsible for the
+    // libtorrent pauseTorrent/resumeTorrent call that mirrors this.
+    void setStreamBulkItemPaused(const QString& infoHash, bool paused);
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — per-item retry filter. If itemKey
+    // is empty, retries all failed items in the group (existing v1 behavior).
+    // If non-empty, retries ONLY the matching item.
+    void retryStreamBulkGroupFailedItems(const QString& groupId,
+                                         const QString& itemKey = QString());
 
     // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — restart-group recovery
     // action. Clears libtorrent error state on non-terminal-success items
@@ -214,7 +240,7 @@ public:
     // constructed; onFileRenamed() registers per-episode entries here as the
     // bulk publish path renames each completed file to its canonical path.
     // Pointer is non-owning; nullptr is tolerated (defensive no-op).
-    void setStreamDownloadIndex(StreamDownloadIndex* idx) { m_streamDownloadIndex = idx; }
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
 
 signals:
     void torrentAdded(const QString& infoHash);
@@ -222,6 +248,14 @@ signals:
     void torrentRemoved(const QString& infoHash);
     void torrentCompleted(const QString& infoHash);
     void groupPublishComplete(const QString& groupId);
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — emitted on any cohort-item state
+    // transition (Pending→Downloading→Publishing→Published, or any failure-
+    // state edge, or user-paused transition). Subscribers (StreamLibraryLayout
+    // tile chips, StreamDownloadsPage cards, StreamDetailView rows) repaint
+    // their derived state. groupId identifies which group changed; subscribers
+    // who care about a specific imdb walk groups themselves via
+    // imdbHasActiveCohort or streamBulkGroupsSnapshot.
+    void streamBulkGroupsChanged(const QString& groupId);
     void streamBulkRetrySourcePickRequested(const QString& groupId,
                                             const QStringList& itemKeys);
 
@@ -247,6 +281,12 @@ private:
     void publishStreamBulkItemsForTorrent(const QString& infoHash);
     void retryStreamBulkPublishing();
     void maybeEmitStreamBulkGroupPublishComplete(const QString& groupId);
+    // STREAM_BULK_DOWNLOAD_V2 backfill — one-shot at index-wire time. Walks
+    // every Published item in m_streamBulkGroups and registers it into
+    // m_streamDownloadIndex if not already present. Repairs items that
+    // published in a prior Tankoban session BEFORE the on-publish
+    // registerEpisode fallback chain at line ~2270 shipped.
+    void backfillStreamDownloadIndex();
 
     // STREAM_BULK_DOWNLOAD_V2 Phase 2 — cohort-sequential scheduler.
     // Within a per-episode bulk group, only ONE magnet runs at a time.

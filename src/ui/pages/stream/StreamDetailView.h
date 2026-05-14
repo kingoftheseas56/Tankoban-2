@@ -2,8 +2,11 @@
 
 #include <QWidget>
 #include <QComboBox>
+#include <QHash>
 #include <QLabel>
+#include <QPair>
 #include <QPushButton>
+#include <QSet>
 #include <QTableWidget>
 #include <QMap>
 #include <QList>
@@ -103,7 +106,10 @@ public:
     // groups for this show and require explicit user confirmation before
     // canceling-and-removing. Optional; when null the dialog short-
     // circuits and Remove proceeds as before. Spec §10.10.
-    void setTorrentClient(TorrentClient* client) { m_torrentClient = client; }
+    // Task 12: also subscribes to streamBulkGroupsChanged so action icons
+    // repaint immediately on any cohort state change (not only on the 1Hz
+    // poll tick).
+    void setTorrentClient(TorrentClient* client);
 
 signals:
     void backRequested();
@@ -135,6 +141,18 @@ signals:
     // and do NOT emit this signal.
     void trailerDirectPlayRequested(const QUrl& url);
 
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — single-episode dispatch ask.
+    // Routed to StreamPage in Task 15.
+    void singleEpisodeDownloadRequested(int season, int episode);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — lateral paths to StreamPage.
+    // seasonDownloadRequested fires when the season-header button is clicked
+    // in the "no active cohort" state (Idle → Download Season).
+    // selectedEpisodesDownloadRequested fires when the user clicks
+    // "Download Selected (N)" after checking individual episode rows.
+    void seasonDownloadRequested(int season);
+    void selectedEpisodesDownloadRequested(int season, const QList<int>& episodes);
+
     // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — episode click
     // resolved to a local file. StreamPage forwards through to
     // MainWindow::onPlayLocalFileFromStreamRequested. Spec §6.2.
@@ -154,8 +172,35 @@ private:
     void onSeriesMetaReady(const QString& imdbId,
                            const QMap<int, QList<tankostream::stream::StreamEpisode>>& seasons);
     void onSeasonChanged(int comboIndex);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — season-header morphing button.
+    void onDownloadSeasonClicked();
+    void onDownloadSelectedClicked();
+    void onSeasonHeaderRightClick(const QPoint& pos);
+    // Repaints the morphing button label/icon based on cohort state for
+    // the active season. Called whenever the cohort state changes.
+    void refreshSeasonHeaderButton();
     void populateEpisodeTable(int season);
     void onEpisodeActivated(int row, int col);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — action-icon click dispatch.
+    // Resolves current row state and routes to download / pause /
+    // resume / retry / (Published) open actions menu. Spec §7.1 row
+    // state map. Post-NETFLIX_OVERHAUL P3 revision (2026-05-12): the
+    // optional globalAnchorPos is used by the Published branch to
+    // anchor the actions menu; non-Published branches ignore it.
+    void onActionIconClicked(int episode, const QPoint& globalAnchorPos = QPoint());
+
+    // Post-NETFLIX_OVERHAUL P3 revision (2026-05-12) — builds + pops
+    // the row's actions menu (Remove/Cancel + Show alternate streams).
+    // Shared by onActionIconClicked's Published branch and
+    // onEpisodeContextMenu so right-click and left-click converge on
+    // one builder. Cancel label morphs to Remove for Published rows.
+    void showRowActionsMenu(int season, int episode, const QPoint& globalAnchorPos);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — helpers used by onActionIconClicked.
+    QString findInfoHashForEpisode(int season, int episode) const;
+    QString findGroupIdForCohort(int season) const;
     // STREAM_DOWNLOADED_LIBRARY Phase 4 — right-click → "Show alternate
     // streams" context menu on the episode table.
     void onEpisodeContextMenu(const QPoint& pos);
@@ -167,12 +212,24 @@ private:
     void updateProgressColumn();
     void updateBulkDownloadButton();
 
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — updates m_downloadSelectedBtn
+    // visibility + label based on m_selectedEpisodes.size(). Called
+    // whenever a checkbox toggles or the season changes.
+    void updateDownloadSelectedButton();
+
     // STREAM_BULK_DOWNLOAD_V2 Phase 3 — refresh the per-row download-state
     // text in the episode table's Status column from the TorrentClient
     // bulk-snapshot for current imdb+season. 1Hz polled via m_bulkPollTimer
     // while the detail view is visible. Falls through to the watched-
     // checkmark when no bulk activity for the row.
     void refreshEpisodeBulkProgress();
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 12 — paint helper. Combines
+    // Layer 3 index hit + Layer 2 cohort state into the right action-icon
+    // glyph for a single row. Called from refreshEpisodeBulkProgress on
+    // every tick and from populateEpisodeTable for the initial paint pass.
+    void repaintActionIconForRow(int row, int episode, int season,
+                                  const QHash<int, QPair<QString, int>>& cohortSnap);
 
     // Phase 3 Batch 3.1 — MetaItem arrival handler; paints hero image +
     // enriches the metadata chip row (runtime, genres) once fetchMetaItem
@@ -273,6 +330,18 @@ private:
     // YouTube-kind trailer. Direct-URL trailers play in-app via an emitted
     // signal; YouTube opens in the default browser.
     QPushButton*  m_trailerBtn    = nullptr;
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — inline trigger UX.
+    // Per-(show, season) selection state. Reset whenever the season-combo
+    // changes (showEntry / setSeason path). NOT persisted; per-launch only.
+    QSet<int> m_selectedEpisodes;
+
+    // Season-header morphing primary button: state-driven label & icon.
+    // (already declared — m_downloadSeasonBtn above)
+
+    // Season-header secondary button: visible only when m_selectedEpisodes
+    // is non-empty. Label "Download Selected (N)".
+    QPushButton*  m_downloadSelectedBtn = nullptr;
+
     QPushButton*  m_downloadSeasonBtn = nullptr;
     QUrl          m_currentTrailerDirectUrl;   // populated from Url/Http trailer
     QString       m_currentTrailerYouTubeId;   // populated from YouTube trailer

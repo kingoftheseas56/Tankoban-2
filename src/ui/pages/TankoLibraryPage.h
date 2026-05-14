@@ -59,6 +59,12 @@ private:
     void updateMediaTabVisuals();
     void applyMediaTabFilterVisibility();
 
+    // T22 — Filters popover helpers.
+    void buildFiltersPopover();
+    void showFiltersPopover();
+    void updateFiltersDotIndicator();
+    bool anyFilterActive() const;
+
     // Returns the scraper list for the currently-active media tab.
     const QList<BookScraper*>& activeScrapers() const;
 
@@ -109,6 +115,8 @@ private:
     void refreshTransfersView();
     TransferRecord* findTransferRecord(const QString& md5);
 
+    void updateInnerResultsView();   // T25 — flip inner stack between grid / transfers / empty / loading / no-results
+
     CoreBridge*            m_bridge        = nullptr;
     TorrentClient*         m_torrentClient = nullptr;  // M2 ABB: magnet handoff
     QNetworkAccessManager* m_nam           = nullptr;
@@ -148,6 +156,11 @@ private:
     QComboBox*   m_audioFormatCombo    = nullptr;
     QLabel*      m_statusLbl           = nullptr;
 
+    // T22 — Filters popover replaces inline checkboxes in search row.
+    QPushButton* m_filtersBtn          = nullptr;
+    QWidget*     m_filtersPopover      = nullptr;
+    QLabel*      m_filtersDotIndicator = nullptr;
+
     // Results area (lives inside m_resultsPage)
     BookResultsGrid* m_grid = nullptr;
 
@@ -183,6 +196,17 @@ private:
     QLabel*               m_transfersCounter  = nullptr;   // "Active: X | History: Y"
     TransfersView*        m_transfersView     = nullptr;
     QList<TransferRecord> m_transfers;
+
+    // T25 — empty/loading/zero-results state pages for the inner results stack.
+    QWidget*     m_emptyPage      = nullptr;
+    QLabel*      m_emptyLabel     = nullptr;
+    QWidget*     m_loadingPage    = nullptr;
+    QLabel*      m_loadingLabel   = nullptr;
+    QWidget*     m_noResultsPage  = nullptr;
+    QLabel*      m_noResultsLabel = nullptr;
+    QPushButton* m_noResultsRetry = nullptr;
+    QPushButton* m_noResultsClear = nullptr;
+    QString      m_lastQuery;
 
     QList<BookResult>       m_results;
     BookResult              m_selectedResult;    // M2.1 — search-row snapshot for instant-paint

@@ -135,7 +135,10 @@ private:
     // another for download in parallel).
     void onAddToTankorentRequested(const QString& magnetUri,
                                    const QString& displayName);
-    void onAddToTankorentBulkRequested(
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 6 — renamed from
+    // onAddToTankorentBulkRequested. No page-switch; user stays on the
+    // page they were on (typically StreamDetailView).
+    void onStreamBulkDispatchRequested(
         const StreamBulkGroupRecord& group,
         const tankostream::stream::BulkPackVerificationResult& verifierOutput,
         const QString& displayLabel);
@@ -189,6 +192,16 @@ private:
     // m_bridge is set so JsonStore is available). Phase 1 ships dead — UI
     // wiring lands in Phase 3.
     StreamDownloadIndex *m_streamDownloadIndex = nullptr;
+
+    // CW_NAMESPACE_BOUNDARY 2026-05-13 — tracks the progressUpdated
+    // lambda subscription that onPlayLocalFileFromStreamRequested
+    // installs to redirect downloaded-stream playback progress writes
+    // from the "videos" domain (Video-mode CW) to the "stream" domain
+    // (Stream-mode CW). openVideoPlayer (the library-videos path)
+    // tears this conn down to ensure plain library playback uses the
+    // default LibraryVideos persistence mode.
+    QMetaObject::Connection m_streamPlaybackProgressConn;
+    void migrateLegacyStreamProgressEntries();
 
     // System tray
     QSystemTrayIcon *m_trayIcon = nullptr;

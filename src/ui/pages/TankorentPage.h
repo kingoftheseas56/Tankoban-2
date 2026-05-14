@@ -11,6 +11,8 @@
 #include <QMenu>
 #include <QHash>
 #include <QSet>
+#include <QStackedWidget>
+#include <QStyledItemDelegate>
 
 #include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
@@ -52,6 +54,7 @@ private:
     void buildSearchControls(QVBoxLayout* parent);
     void buildStatusRow(QVBoxLayout* parent);
     void buildMainTabs(QVBoxLayout* parent);
+    void updateResultsView();   // T15 — flip stack between table / empty / loading / no-results
     QTableWidget* createResultsTable();
     QTableWidget* createTransfersTable();
 
@@ -152,6 +155,18 @@ protected:
     QTableWidget* m_resultsTable   = nullptr;
     QTableWidget* m_transfersTable = nullptr;
 
+    // T15 — empty/loading/zero-results state pages for Search Results tab.
+    QStackedWidget* m_resultsStack    = nullptr;   // wraps existing m_resultsTable + state pages
+    QWidget*        m_emptyPage       = nullptr;
+    QLabel*         m_emptyLabel      = nullptr;
+    QWidget*        m_loadingPage     = nullptr;
+    QLabel*         m_loadingLabel    = nullptr;
+    QWidget*        m_noResultsPage   = nullptr;
+    QLabel*         m_noResultsLabel  = nullptr;
+    QPushButton*    m_noResultsRetry  = nullptr;
+    QPushButton*    m_noResultsClear  = nullptr;
+    QString         m_lastQuery;
+
     // Transfers state
     QList<TorrentInfo> m_cachedActive;
     QSet<QString> m_expandedGroupIds;
@@ -160,11 +175,25 @@ protected:
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 
     // A1/C: results table sort state. Default = Seeders desc — col index is
-    // 4 in the post-Track-C layout (0 Title, 1 Category, 2 Size, 3 Files,
-    // 4 Seeders, 5 Leechers, 6 Link).
-    int           m_resultsSortCol   = 4;
+    // 3 in the post-T7 layout (0 Title, 1 Category, 2 Size, 3 Seeders,
+    // 4 Leechers, 5 Link). Files col removed in T7.
+    int           m_resultsSortCol   = 3;
     Qt::SortOrder m_resultsSortOrder = Qt::DescendingOrder;
 
     // Speed formatting helper
     static QString humanSpeed(int bytesPerSec);
+};
+
+// T11 — paint Title cell with three segments at different palette weights:
+//   "<source>  ·  <title>  ·  <quality>"
+// Source + quality rendered in palette fg at reduced opacity; title in
+// palette fg full opacity. Registered on column 0 of the results table.
+class TitleCellDelegate : public QStyledItemDelegate
+{
+public:
+    explicit TitleCellDelegate(QObject* parent = nullptr);
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override;
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override;
 };
