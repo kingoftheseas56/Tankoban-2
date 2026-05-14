@@ -94,7 +94,11 @@ QList<ChapterInfo> ReadComicsScraper::parseChaptersHtml(const QString& html, con
             .arg(QRegularExpression::escape(slug)),
         QRegularExpression::DotMatchesEverythingOption);
 
-    static QRegularExpression numRe(R"(#?(\d+(?:\.\d+)?))");
+    // Must match the explicit "#N" form. Optional-# version matched the
+    // year inside the series title prefix (e.g. "Descender (2015-) #32"
+    // matched 2015). When no "#N" is present, line 114's URL-issue
+    // fallback applies.
+    static QRegularExpression numRe(R"(#(\d+(?:\.\d+)?))");
 
     auto matches = chRe.globalMatch(html);
     while (matches.hasNext()) {
