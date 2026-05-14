@@ -16,6 +16,7 @@
 
 #include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
+#include "../INavStateProvider.h"
 
 class CoreBridge;
 class TorrentIndexer;
@@ -25,7 +26,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QKeyEvent;
 
-class TankorentPage : public QWidget
+class TankorentPage : public QWidget, public INavStateProvider
 {
     Q_OBJECT
 
@@ -48,6 +49,11 @@ public:
         const StreamBulkGroupRecord& group,
         const tankostream::stream::BulkPackVerificationResult& verifierOutput,
         const QString& displayLabel);
+
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 11)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("tankorent"); }
 
 private:
     void buildUI();

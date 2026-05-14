@@ -56,6 +56,7 @@
 #include <QDropEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QScrollBar>
 #include <QTextEdit>
 #include <QFileInfo>
 #include <algorithm>
@@ -2910,6 +2911,118 @@ void TankorentPage::keyPressEvent(QKeyEvent* event)
         }
     }
     QWidget::keyPressEvent(event);
+}
+
+// ── INavStateProvider (GLOBAL_NAV_HISTORY Task 11) ────────────────────────
+
+QJsonObject TankorentPage::captureNavState() const
+{
+    QJsonObject blob;
+
+    // Search query text
+    if (m_queryEdit)
+        blob["query"] = m_queryEdit->text();
+
+    // Media-type combo (videos / books / audiobooks / comics)
+    if (m_searchTypeCombo)
+        blob["searchType"] = m_searchTypeCombo->currentData().toString();
+
+    // Source combo (Nyaa / PirateBay / etc.)
+    if (m_sourceCombo)
+        blob["source"] = m_sourceCombo->currentData().toString();
+
+    // Category combo — value string is site-specific (e.g. "1_2" for Nyaa)
+    if (m_categoryCombo)
+        blob["category"] = m_categoryCombo->currentData().toString();
+
+    // Seeder filter (all / active / high)
+    if (m_filterCombo)
+        blob["filter"] = m_filterCombo->currentData().toString();
+
+    // Active tab index (0 = Search Results, 1 = Transfers)
+    if (m_tabWidget)
+        blob["tab"] = m_tabWidget->currentIndex();
+
+    // Results table scroll position — QTableWidget owns its own scroll bars;
+    // no wrapping QScrollArea exists so read verticalScrollBar() directly.
+    // Cached pointer avoids O(n) findChild on every Back/Forward.
+    if (m_resultsTable) {
+        if (auto* vsb = m_resultsTable->verticalScrollBar())
+            blob["resultsScrollY"] = vsb->value();
+    }
+
+    return blob;
+}
+
+bool TankorentPage::restoreNavState(const QJsonObject& blob)
+{
+    // Apply in order: query → combos → tab → scroll.
+
+    if (m_queryEdit) {
+        const QString query = blob.value("query").toString();
+        if (m_queryEdit->text() != query) {
+            m_queryEdit->blockSignals(true);
+            m_queryEdit->setText(query);
+            m_queryEdit->blockSignals(false);
+        }
+    }
+
+    if (m_searchTypeCombo) {
+        const QString searchType = blob.value("searchType").toString();
+        if (!searchType.isEmpty()) {
+            for (int i = 0; i < m_searchTypeCombo->count(); ++i) {
+                if (m_searchTypeCombo->itemData(i).toString() == searchType) {
+                    m_searchTypeCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (m_sourceCombo) {
+        const QString source = blob.value("source").toString();
+        if (!source.isEmpty()) {
+            for (int i = 0; i < m_sourceCombo->count(); ++i) {
+                if (m_sourceCombo->itemData(i).toString() == source) {
+                    m_sourceCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (m_categoryCombo) {
+        const QString category = blob.value("category").toString();
+        for (int i = 0; i < m_categoryCombo->count(); ++i) {
+            if (m_categoryCombo->itemData(i).toString() == category) {
+                m_categoryCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+
+    if (m_filterCombo) {
+        const QString filter = blob.value("filter").toString();
+        if (!filter.isEmpty()) {
+            const int idx = m_filterCombo->findData(filter);
+            if (idx >= 0)
+                m_filterCombo->setCurrentIndex(idx);
+        }
+    }
+
+    if (m_tabWidget) {
+        const int tab = blob.value("tab").toInt(0);
+        if (tab >= 0 && tab < m_tabWidget->count())
+            m_tabWidget->setCurrentIndex(tab);
+    }
+
+    if (m_resultsTable) {
+        if (auto* vsb = m_resultsTable->verticalScrollBar())
+            vsb->setValue(blob.value("resultsScrollY").toInt(0));
+    }
+
+    return true;  // TankorentPage has no stale-target case — the page
+                  // renders whatever is in the active torrent list.
 }
 
 
