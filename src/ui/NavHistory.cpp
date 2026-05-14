@@ -2,7 +2,9 @@
 
 #include "INavStateProvider.h"
 
-NavHistory::NavHistory(QObject* parent) : QObject(parent) {}
+NavHistory::NavHistory(QObject* parent) : QObject(parent) {
+    // Task 3: loadFromDisk();
+}
 NavHistory::~NavHistory() = default;
 
 void NavHistory::setActiveProvider(const QString& pageId, INavStateProvider* provider) {

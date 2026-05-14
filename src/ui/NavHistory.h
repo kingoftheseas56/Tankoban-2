@@ -20,7 +20,7 @@
 
 class INavStateProvider;
 
-struct NavEntry {
+struct NavHistoryEntry {
     QString pageId;          // e.g. "videos", "stream", "tankoyomi"
     QJsonObject stateBlob;   // opaque to NavHistory; page-defined schema
     qint64 timestampMs = 0;  // QDateTime::currentMSecsSinceEpoch() at push
@@ -64,7 +64,7 @@ signals:
     // Emitted when back() / forward() shifts the cursor.
     // MainWindow listens and activates the target page + hands the
     // blob to the page's restoreNavState.
-    void entryRequested(const NavEntry& entry);
+    void entryRequested(const NavHistoryEntry& entry);
 
     // Emitted whenever back/forward availability changes.
     void backAvailableChanged(bool available);
@@ -74,8 +74,9 @@ private:
     // Disk paths.
     QString persistencePath() const;
     void loadFromDisk();
+    void notifyAvailability();
 
-    QVector<NavEntry> m_stack;
+    QVector<NavHistoryEntry> m_stack;
     int m_cursor = -1;  // -1 = empty stack; otherwise index of current entry
 
     QString m_activePageId;
@@ -83,5 +84,4 @@ private:
 
     bool m_lastBackAvailable = false;
     bool m_lastForwardAvailable = false;
-    void notifyAvailability();
 };
