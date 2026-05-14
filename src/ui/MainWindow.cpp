@@ -40,6 +40,7 @@
 #include <QJsonObject>
 #include <QIcon>
 #include <QEvent>
+#include <QMouseEvent>
 #include <QWindowStateChangeEvent>
 
 #ifdef Q_OS_WIN
@@ -772,6 +773,20 @@ void MainWindow::bindShortcuts()
         else
             showFullScreen();
     });
+
+    // GLOBAL_NAV_HISTORY Task 5 — Global Back / Forward keyboard shortcuts
+    // (spec §3.5). Qt::ApplicationShortcut context so they fire from any
+    // focused widget. Plain LeftArrow / RightArrow are consumed by text
+    // inputs for cursor movement; Alt+arrow is free.
+    auto* backShortcut = new QShortcut(QKeySequence("Alt+Left"), this);
+    backShortcut->setContext(Qt::ApplicationShortcut);
+    connect(backShortcut, &QShortcut::activated,
+            this, &MainWindow::onBackChevronClicked);
+
+    auto* forwardShortcut = new QShortcut(QKeySequence("Alt+Right"), this);
+    forwardShortcut->setContext(Qt::ApplicationShortcut);
+    connect(forwardShortcut, &QShortcut::activated,
+            this, &MainWindow::onForwardChevronClicked);
 }
 
 // ── Page activation ─────────────────────────────────────────────────────────
@@ -1647,5 +1662,21 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     }
 
     return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+// GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
+// Qt::BackButton = mouse button 4 (XButton1); Qt::ForwardButton = mouse button 5 (XButton2).
+void MainWindow::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::BackButton) {
+        onBackChevronClicked();
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::ForwardButton) {
+        onForwardChevronClicked();
+        event->accept();
+        return;
+    }
+    QMainWindow::mousePressEvent(event);
 }
 #endif

@@ -81,6 +81,8 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     // Frameless-chrome support (FRAMELESS_CHROME_FIX 2026-05-01).
     void changeEvent(QEvent *event) override;
+    // GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
+    void mousePressEvent(QMouseEvent* event) override;
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
