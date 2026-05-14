@@ -1,5 +1,5 @@
 # Agent Governance
-<!-- governance-version: gov-v3 -->
+<!-- governance-version: gov-v4 -->
 
 This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
 
@@ -355,6 +355,8 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
     Relates to Rule 17 (Tankoban/ffmpeg_sidecar cleanup at smoke close) — LOCK release and Rule 17 cleanup typically happen together, but they are distinct actions: cleanup terminates processes; LOCK release clears the lane for the next agent.
 
     (Added 2026-04-22. First live use: Agent 0's UIA inspection recon — see `agents/audits/uia_inspection_2026-04-22.md`.)
+
+20. **Codex review of Agent-1 vision-md docs (gov-v4, scoped to the COMICS_TANKOYOMI_STREAM_MERGER arc).** Any vision / scope / architectural design doc that Agent 1 produces for the Comics-mode + Tankoyomi + Stream merger arc must be reviewed by Codex (Agent 7) before `/superpowers:writing-plans` fires. Codex's job is to verify the doc matches Hemanth's stated vision (Comics absorbs Tankoyomi; Stream-as-blueprint; series view inside the Comics library; Netflix-style in-library downloads; Tankoyomi-sourced badge). Codex review lands as an audit file at `agents/audits/codex_vision_review_<arc-tag>_<date>.md` per the existing Trigger C precedent (Rule N/A — see "Agent 7 triggers" section above). Agent 1 may not fire `/superpowers:writing-plans` until Codex's audit is green or Codex's flags are resolved. This rule scopes to Agent 1 + this merger arc only; it is NOT a brotherhood-wide doctrine and does NOT alter the existing optional-Trigger-C audit pattern for other domains. (Added 2026-05-14. Authored after Hemanth flagged "a lot of gaps with our mainline agent's brainstorms and superpower plans" as the motivating concern. Extends — does not replace — the Trigger C audit pattern by making it MANDATORY for one named arc instead of optional.)
 
 ---
 
