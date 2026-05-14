@@ -1,4 +1,4 @@
-#include "StreamPage.h"
+﻿#include "StreamPage.h"
 
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
@@ -30,7 +30,6 @@
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
-#include "ui/dialogs/StreamBulkPreflightDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
 #include <QDebug>
@@ -142,10 +141,10 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
     m_metaAggregator = new tankostream::stream::MetaAggregator(m_addonRegistry, this);
     m_subtitlesAggregator = new tankostream::stream::SubtitlesAggregator(m_addonRegistry, this);
 
-    // Phase 4 Batch 4.1 — drive the search-bar spinner off the aggregator's
+    // Phase 4 Batch 4.1 â€” drive the search-bar spinner off the aggregator's
     // catalog signals. StreamSearchWidget is the primary result consumer;
     // these connects only toggle the busy UI state. Lambdas capture `this`
-    // safely — StreamPage owns m_metaAggregator so lifetimes are coupled.
+    // safely â€” StreamPage owns m_metaAggregator so lifetimes are coupled.
     connect(m_metaAggregator, &tankostream::stream::MetaAggregator::catalogResults,
             this, [this](const QList<tankostream::addon::MetaItemPreview>&) {
                 setSearchBusy(false);
@@ -155,7 +154,7 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
                 setSearchBusy(false);
             });
 
-    // Batch 5.3 — route subtitle aggregator results to the VideoPlayer's
+    // Batch 5.3 â€” route subtitle aggregator results to the VideoPlayer's
     // SubtitlePopover (merged subtitle UI; previously a separate
     // SubtitleMenu drawer pre-VIDEO_HUD_MINIMALIST 2026-04-25). Player
     // is created by MainWindow and reachable via findChild; connection
@@ -171,14 +170,14 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
         });
     m_library   = new StreamLibrary(&bridge->store(), this);
 
-    // Batch 6.1 — Calendar backend. Needs AddonRegistry (meta fan-out) +
+    // Batch 6.1 â€” Calendar backend. Needs AddonRegistry (meta fan-out) +
     // StreamLibrary (series source) + dataDir (cache path). No UI hookup
     // in 6.1; Batch 6.2 wires CalendarScreen to this engine's signals and
     // triggers loadUpcoming() on the calendar entry button.
     m_calendarEngine = new tankostream::stream::CalendarEngine(
         m_addonRegistry, m_library, bridge->dataDir(), this);
 
-    // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy libtorrent engine
+    // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) â€” legacy libtorrent engine
     // deleted. Stream mode is stream-server subprocess only, no env gate,
     // no fallback. Cache lives under dataDir/stream_server_cache (renamed
     // from the legacy dataDir/stream_cache path).
@@ -215,7 +214,7 @@ void StreamPage::activate()
         m_libraryLayout->refresh();
 }
 
-// STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — fan out the download
+// STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) â€” fan out the download
 // index to both consumers: StreamLibrary (so remove() also evicts per-
 // episode rows) and StreamLibraryLayout (so tile DOWNLOADED chips render +
 // re-evaluate on entriesChanged). Wired by MainWindow after both
@@ -224,9 +223,13 @@ void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
 {
     if (m_library)
         m_library->setStreamDownloadIndex(idx);
-    if (m_libraryLayout)
+    if (m_libraryLayout) {
         m_libraryLayout->setStreamDownloadIndex(idx);
-    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — also wire the detail
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — wire TorrentClient alongside
+        // so the DOWNLOADING chip can reflect in-flight cohort state.
+        m_libraryLayout->setTorrentClient(m_torrentClient);
+    }
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) â€” also wire the detail
     // view so per-row "on disk" markers + click-branch + alt-stream menu can
     // resolve. m_detailView may be null on early invocation (buildUI hasn't
     // run yet); MainWindow re-fires after buildPageStack so this lands.
@@ -234,7 +237,7 @@ void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
         m_detailView->setStreamDownloadIndex(idx);
 }
 
-// ─── UI construction ─────────────────────────────────────────────────────────
+// â”€â”€â”€ UI construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 void StreamPage::buildUI()
 {
@@ -253,10 +256,10 @@ void StreamPage::buildUI()
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
 
-    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — wire TorrentClient
+    // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) â€” wire TorrentClient
     // through to the detail view so Remove-from-Library can detect active
     // bulk groups for the show and gate the destructive action behind a
-    // confirmation dialog. Spec §10.10.
+    // confirmation dialog. Spec Â§10.10.
     if (m_torrentClient)
         m_detailView->setTorrentClient(m_torrentClient);
 
@@ -268,7 +271,15 @@ void StreamPage::buildUI()
             this, &StreamPage::onAddToTankorentRequested);
     connect(m_detailView, &StreamDetailView::bulkDownloadRequested,
             this, &StreamPage::triggerBulkSeasonDownload);
-    // Phase 3 Batch 3.5 (deferred ship) — direct-URL trailer playback.
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — direct-dispatch from episode/season/
+    // selected-set download signals. Bypasses the preflight dialog.
+    connect(m_detailView, &StreamDetailView::seasonDownloadRequested,
+            this, &StreamPage::onSeasonDownloadRequested);
+    connect(m_detailView, &StreamDetailView::selectedEpisodesDownloadRequested,
+            this, &StreamPage::onSelectedEpisodesDownloadRequested);
+    connect(m_detailView, &StreamDetailView::singleEpisodeDownloadRequested,
+            this, &StreamPage::onSingleEpisodeDownloadRequested);
+    // Phase 3 Batch 3.5 (deferred ship) â€” direct-URL trailer playback.
     // Routes through the same ad-hoc-stream pattern as Batch 4.3's URL
     // paste handler: synthesize a httpSource Stream, set m_session.pending
     // with an "adhoc-trailer:" imdbId prefix (namespaced so progress
@@ -299,23 +310,23 @@ void StreamPage::buildUI()
                 m_playerController->startStream(p.imdbId, p.mediaType,
                                                 p.season, p.episode, stream);
             });
-    // Phase 2 Batch 2.4 — Pick-different button in the toast; aborts the
+    // Phase 2 Batch 2.4 â€” Pick-different button in the toast; aborts the
     // auto-launch timer and leaves the picker open so the user can pick a
     // different source manually.
     connect(m_detailView, &StreamDetailView::autoLaunchCancelRequested,
             this, &StreamPage::cancelAutoLaunch);
 
-    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — downloaded-episode
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) â€” downloaded-episode
     // click. Detail view fires this AHEAD of playRequested when the
     // StreamDownloadIndex hit AND the file exists on disk; falls through to
-    // playRequested otherwise. Spec §6.2.
+    // playRequested otherwise. Spec Â§6.2.
     connect(m_detailView, &StreamDetailView::playLocalFileFromStreamRequested,
             this, &StreamPage::onDetailPlayLocalFileFromStream);
 
-    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click → "Show
+    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) â€” right-click â†’ "Show
     // alternate streams". Same flow as a default click on an undownloaded
     // episode: flip right pane to loading + emit the existing playRequested
-    // so onPlayRequested runs the source-pick aggregator. Spec §6.3.
+    // so onPlayRequested runs the source-pick aggregator. Spec Â§6.3.
     connect(m_detailView, &StreamDetailView::alternateStreamRequested,
             this, [this](int season, int episode) {
                 if (!m_detailView) return;
@@ -324,7 +335,7 @@ void StreamPage::buildUI()
                                 QStringLiteral("series"), season, episode);
             });
 
-    // Auto-launch timer — single-shot, 2s window (enough for the user to
+    // Auto-launch timer â€” single-shot, 2s window (enough for the user to
     // notice the "Resuming with last-used source" toast and cancel).
     m_autoLaunchTimer = new QTimer(this);
     m_autoLaunchTimer->setSingleShot(true);
@@ -332,14 +343,14 @@ void StreamPage::buildUI()
     connect(m_autoLaunchTimer, &QTimer::timeout,
             this, &StreamPage::onAutoLaunchFire);
 
-    // Wire library grid single+double-click → show detail. Explicit lambda
-    // because showDetail is overloaded — pointer-to-member would be ambiguous
+    // Wire library grid single+double-click â†’ show detail. Explicit lambda
+    // because showDetail is overloaded â€” pointer-to-member would be ambiguous
     // between the (QString) and (MetaItemPreview) overloads.
     connect(m_libraryLayout, &StreamLibraryLayout::showClicked, this,
         [this](const QString& imdbId) { showDetail(imdbId); });
 
-    // Player layer — buffer overlay only (VideoPlayer handles its own controls)
-    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — promoted to member
+    // Player layer â€” buffer overlay only (VideoPlayer handles its own controls)
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) â€” promoted to member
     // so onNextEpisodeCancel can restore m_nextEpisodeOverlay's parent
     // after the mid-playback reparent to VideoPlayer.
     m_playerLayer = new QWidget(this);
@@ -375,7 +386,7 @@ void StreamPage::buildUI()
 
     playerLayerLayout->addWidget(m_bufferOverlay);
 
-    // Phase 2 Batch 2.5 — next-episode overlay lives on the same player
+    // Phase 2 Batch 2.5 â€” next-episode overlay lives on the same player
     // layer as the buffer overlay. Hidden by default; becomes visible after
     // the user closes a series episode whose playback crossed 95% AND a
     // next-episode pre-fetch completed with a matched source. 10s countdown
@@ -434,7 +445,7 @@ void StreamPage::buildUI()
     m_nextEpisodeOverlay->hide();
     playerLayerLayout->addWidget(m_nextEpisodeOverlay, 0, Qt::AlignCenter);
 
-    // Countdown timer — 1s tick. Decrements m_nextEpisodeCountdownSec; fires
+    // Countdown timer â€” 1s tick. Decrements m_nextEpisodeCountdownSec; fires
     // Play Now at zero.
     m_nextEpisodeCountdownTimer = new QTimer(this);
     m_nextEpisodeCountdownTimer->setInterval(1000);
@@ -461,7 +472,7 @@ void StreamPage::buildUI()
         [this](const tankostream::addon::MetaItemPreview& preview) {
             showDetail(preview);
         });
-    // Stream library UX rework 2026-04-15 — StreamHomeBoard no longer emits
+    // Stream library UX rework 2026-04-15 â€” StreamHomeBoard no longer emits
     // browseCatalogRequested (featured rows deleted). Users reach the
     // catalog browser via the Catalog button in the search bar instead.
 
@@ -469,7 +480,7 @@ void StreamPage::buildUI()
     m_calendarScreen = new tankostream::stream::CalendarScreen(this);
     m_mainStack->addWidget(m_calendarScreen); // index 5: calendar
 
-    // Engine → screen dataflow. Prefer grouped signal (pre-bucketed + date
+    // Engine â†’ screen dataflow. Prefer grouped signal (pre-bucketed + date
     // math already done engine-side); the flat signal fires too but the
     // screen's setItems regroups harmlessly if grouped hasn't arrived yet.
     connect(m_calendarEngine, &tankostream::stream::CalendarEngine::calendarGroupedReady,
@@ -477,7 +488,7 @@ void StreamPage::buildUI()
     connect(m_calendarEngine, &tankostream::stream::CalendarEngine::calendarError,
             m_calendarScreen, &tankostream::stream::CalendarScreen::setError);
 
-    // Screen → navigation.
+    // Screen â†’ navigation.
     connect(m_calendarScreen, &tankostream::stream::CalendarScreen::backRequested,
             this, &StreamPage::goBack);
     connect(m_calendarScreen, &tankostream::stream::CalendarScreen::refreshRequested,
@@ -523,7 +534,7 @@ void StreamPage::buildSearchBar()
     m_searchInput->setClearButtonEnabled(true);
     layout->addWidget(m_searchInput, 1);
 
-    // Phase 4 Batch 4.1 — indeterminate spinner. Busy mode QProgressBar
+    // Phase 4 Batch 4.1 â€” indeterminate spinner. Busy mode QProgressBar
     // (range 0..0) animates natively; 16x16 sits between input + Search btn.
     auto* busy = new QProgressBar(m_searchBarFrame);
     busy->setRange(0, 0);
@@ -550,7 +561,7 @@ void StreamPage::buildSearchBar()
     m_addonsBtn->setToolTip("Manage installed addons");
     layout->addWidget(m_addonsBtn);
 
-    // Batch 6.2 — Calendar entry button. Placed after Addons; opens the
+    // Batch 6.2 â€” Calendar entry button. Placed after Addons; opens the
     // calendar stack layer and triggers an engine load on each click
     // (CalendarEngine has its own 12h TTL cache + signature guard so
     // repeated clicks don't re-fan-out unnecessarily).
@@ -561,7 +572,7 @@ void StreamPage::buildSearchBar()
     m_calendarBtn->setToolTip("Upcoming episodes from your library");
     layout->addWidget(m_calendarBtn);
 
-    // Stream library UX rework 2026-04-15 — Catalog button replaces the
+    // Stream library UX rework 2026-04-15 â€” Catalog button replaces the
     // deleted home-board featured rows. Opens the existing
     // CatalogBrowseScreen; the screen's own addon/catalog combos handle
     // selection (persists across sessions).
@@ -584,7 +595,7 @@ void StreamPage::buildSearchBar()
             this, &StreamPage::onCatalogBtnClicked);
 
     // Live-search debounce REMOVED 2026-04-25 per Hemanth: even at 800 ms
-    // (raised from 300 → 800 ms on 2026-04-20 for the same reason) the
+    // (raised from 300 â†’ 800 ms on 2026-04-20 for the same reason) the
     // search fired during natural mid-typing pauses while Hemanth was
     // still composing his query. Search now only fires on Enter / Search
     // button / history-row click. textChanged is still wired so paste-kind
@@ -593,7 +604,7 @@ void StreamPage::buildSearchBar()
     connect(m_searchInput, &QLineEdit::textChanged,
             this, &StreamPage::onSearchTextChanged);
 
-    // Phase 4 Batch 4.2 — search history. Load persisted list, build
+    // Phase 4 Batch 4.2 â€” search history. Load persisted list, build
     // dropdown frame, install event filter on input for focus tracking.
     loadSearchHistory();
     buildSearchHistoryDropdown();
@@ -620,7 +631,7 @@ void StreamPage::buildBrowseLayer()
     m_scrollLayout->addWidget(m_searchBarFrame);
 
     // Home board: continue-watching strip + N catalog rows (Phase 3 Batch 3.2).
-    // Phase 2 Batch 2.2 — m_metaAggregator plumbed through so the
+    // Phase 2 Batch 2.2 â€” m_metaAggregator plumbed through so the
     // StreamContinueStrip can resolve next-unwatched episodes for series
     // whose most-recent progress entry is finished.
     m_homeBoard = new tankostream::stream::StreamHomeBoard(
@@ -635,14 +646,14 @@ void StreamPage::buildBrowseLayer()
             // under the inline-source-pane UX we have to navigate to the
             // detail view so the right-pane source list is visible when the
             // streams populate. Without this, clicking continue-watching
-            // fires onPlayRequested → loads streams → populates m_detailView
-            // which is not currently shown → user sees nothing.
+            // fires onPlayRequested â†’ loads streams â†’ populates m_detailView
+            // which is not currently shown â†’ user sees nothing.
             if (m_detailView && m_detailView->currentImdb() != imdbId) {
                 m_detailView->showEntry(imdbId, season, episode);
             }
             m_mainStack->setCurrentIndex(1);
             // For movies, showEntry's movie-branch already emits playRequested
-            // back into us — skip to avoid double-loading streams. For series,
+            // back into us â€” skip to avoid double-loading streams. For series,
             // showEntry waits on episode-click, so we explicitly fire with the
             // specific episode context from the continue-strip click.
             if (mediaType != QLatin1String("movie")) {
@@ -650,7 +661,7 @@ void StreamPage::buildBrowseLayer()
             }
         });
 
-    // Stream library UX rework 2026-04-15 — StreamHomeBoard no longer emits
+    // Stream library UX rework 2026-04-15 â€” StreamHomeBoard no longer emits
     // metaActivated (featured-row tile clicks deleted). The only entry
     // points into showDetail for non-library titles are now:
     //   - StreamSearchWidget::metaActivated (search results)
@@ -676,7 +687,7 @@ void StreamPage::buildBrowseLayer()
 
     connect(m_searchWidget, &StreamSearchWidget::backRequested, this, &StreamPage::goBack);
     connect(m_searchWidget, &StreamSearchWidget::libraryChanged, m_libraryLayout, &StreamLibraryLayout::refresh);
-    // Phase 1 Batch 1.2 — search-tile click opens the detail view with the
+    // Phase 1 Batch 1.2 â€” search-tile click opens the detail view with the
     // result's MetaItemPreview. Previously the click toggled library add/
     // remove; that moved into the detail view's Add-to-Library button.
     connect(m_searchWidget, &StreamSearchWidget::metaActivated, this,
@@ -685,7 +696,7 @@ void StreamPage::buildBrowseLayer()
         });
 }
 
-// ─── Search ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Search â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 void StreamPage::onSearchSubmit()
 {
@@ -695,7 +706,7 @@ void StreamPage::onSearchSubmit()
 
     hideSearchHistoryDropdown();
 
-    // Phase 4 Batch 4.3 — route URL-paste kinds to their action instead
+    // Phase 4 Batch 4.3 â€” route URL-paste kinds to their action instead
     // of the search path. PasteKind is refreshed on every textChanged,
     // so by the time Enter / Search button fires it reflects the full
     // current input. Fresh re-detect here as a defensive sync in case
@@ -708,7 +719,7 @@ void StreamPage::onSearchSubmit()
 
     pushSearchHistory(query);
 
-    // STREAM_NAV_BACK_STACK 2026-05-06 — push a Search entry onto the
+    // STREAM_NAV_BACK_STACK 2026-05-06 â€” push a Search entry onto the
     // nav stack so Back from a Detail view (entered via search-result
     // click) returns to Search. Re-submitting from an existing Search
     // overwrites the current entry's query (no duplicate stack layer)
@@ -727,10 +738,10 @@ void StreamPage::onSearchSubmit()
     m_searchWidget->search(query);
 }
 
-// Phase 4 Batch 4.1 — search input observer + spinner handlers.
+// Phase 4 Batch 4.1 â€” search input observer + spinner handlers.
 //
 // Live-search debounce was removed 2026-04-25 per Hemanth. This handler now
-// only updates UI affordances tied to the input's current text — it never
+// only updates UI affordances tied to the input's current text â€” it never
 // kicks off a search. Search execution is gated entirely on Enter, the
 // Search button, or a history-row click (all routed through onSearchSubmit).
 
@@ -738,7 +749,7 @@ void StreamPage::onSearchTextChanged(const QString& text)
 {
     const QString trimmed = text.trimmed();
 
-    // Phase 4 Batch 4.3 — re-detect paste kind on every keystroke. The
+    // Phase 4 Batch 4.3 â€” re-detect paste kind on every keystroke. The
     // Search button label reflects the intended action; Enter uses it.
     const PasteKind newKind = detectPasteKind(trimmed);
     if (newKind != m_pasteKind) {
@@ -759,7 +770,7 @@ void StreamPage::onSearchTextChanged(const QString& text)
         return;
     }
 
-    // Any non-empty text hides the history dropdown (Batch 4.2) — the user
+    // Any non-empty text hides the history dropdown (Batch 4.2) â€” the user
     // is typing a new query, not browsing history.
     hideSearchHistoryDropdown();
 }
@@ -770,14 +781,14 @@ void StreamPage::setSearchBusy(bool busy)
     m_searchBusy->setVisible(busy);
 }
 
-// ─── Phase 4 Batch 4.3 — URL / magnet paste handling ─────────────────────────
+// â”€â”€â”€ Phase 4 Batch 4.3 â€” URL / magnet paste handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 StreamPage::PasteKind StreamPage::detectPasteKind(const QString& input) const
 {
     const QString s = input.trimmed();
     if (s.isEmpty()) return PasteKind::None;
 
-    // Magnet URI — regex anchored per RFC 2056 style: magnet:?xt=urn:btih:HASH
+    // Magnet URI â€” regex anchored per RFC 2056 style: magnet:?xt=urn:btih:HASH
     static const QRegularExpression kMagnetRe(
         QStringLiteral("^magnet:\\?xt=urn:btih:[A-Za-z0-9]{32,}"),
         QRegularExpression::CaseInsensitiveOption);
@@ -787,7 +798,7 @@ StreamPage::PasteKind StreamPage::detectPasteKind(const QString& input) const
     if (s.startsWith(QStringLiteral("stremio://"), Qt::CaseInsensitive))
         return PasteKind::AddonManifest;
 
-    // HTTP / HTTPS — branch further by path shape.
+    // HTTP / HTTPS â€” branch further by path shape.
     const QUrl url = QUrl::fromUserInput(s);
     if (!url.isValid() || url.scheme().isEmpty()) return PasteKind::None;
     const QString scheme = url.scheme().toLower();
@@ -813,10 +824,10 @@ StreamPage::PasteKind StreamPage::detectPasteKind(const QString& input) const
         if (path.endsWith(ext)) return PasteKind::DirectVideo;
     }
 
-    // Plain HTTP without a recognized path shape — ambiguous between
+    // Plain HTTP without a recognized path shape â€” ambiguous between
     // "arbitrary search query that happens to look like a URL" and
     // "an unknown addon / media endpoint". Per the TODO's "only if the
-    // full value is parseable as a URL — regex guarded" — we stay
+    // full value is parseable as a URL â€” regex guarded" â€” we stay
     // conservative and treat unrecognized HTTP as a text search.
     return PasteKind::None;
 }
@@ -847,8 +858,8 @@ void StreamPage::handlePasteAction(PasteKind kind, const QString& input)
     switch (kind) {
         case PasteKind::AddonManifest: {
             // Pre-fill the URL into AddAddonDialog and exec(). Reusing the
-            // dialog's existing install flow — install signals still fire
-            // through AddonRegistry as in the regular "Addons → Add" path.
+            // dialog's existing install flow â€” install signals still fire
+            // through AddonRegistry as in the regular "Addons â†’ Add" path.
             if (!m_addonRegistry) return;
             AddAddonDialog dlg(m_addonRegistry, this);
             dlg.setPrefilledUrl(s);
@@ -870,7 +881,7 @@ void StreamPage::handlePasteAction(PasteKind kind, const QString& input)
             tankostream::addon::Stream stream;
             if (kind == PasteKind::Magnet) {
                 // Extract the info-hash from the magnet URI. QUrl parses
-                // "magnet:?xt=urn:btih:HASH" into the query — we walk it.
+                // "magnet:?xt=urn:btih:HASH" into the query â€” we walk it.
                 const QUrl magnetUrl(s);
                 QString hash;
                 const auto queryItems =
@@ -918,7 +929,7 @@ void StreamPage::handlePasteAction(PasteKind kind, const QString& input)
     }
 }
 
-// ─── Phase 4 Batch 4.2 — search history ─────────────────────────────────────
+// â”€â”€â”€ Phase 4 Batch 4.2 â€” search history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 void StreamPage::loadSearchHistory()
 {
@@ -962,7 +973,7 @@ void StreamPage::clearSearchHistory()
     if (m_searchHistory.isEmpty()) return;
     m_searchHistory.clear();
     saveSearchHistory();
-    // Empty history → dropdown self-hides on next show, so just hide now.
+    // Empty history â†’ dropdown self-hides on next show, so just hide now.
     hideSearchHistoryDropdown();
 }
 
@@ -985,7 +996,7 @@ void StreamPage::buildSearchHistoryDropdown()
     listLayout->setSpacing(0);
     outer->addWidget(m_searchHistoryList);
 
-    // Delayed-hide timer — gives click-on-row events time to register
+    // Delayed-hide timer â€” gives click-on-row events time to register
     // before focus-out hides the dropdown.
     m_searchHistoryHideTimer = new QTimer(this);
     m_searchHistoryHideTimer->setSingleShot(true);
@@ -1000,7 +1011,7 @@ void StreamPage::positionSearchHistoryDropdown()
     if (!m_searchHistoryDropdown || !m_searchInput) return;
     // Map the input's top-left in StreamPage coords, then position the
     // dropdown directly below. Width matches input; height is content-driven
-    // with a reasonable max (10 rows × ~28px ≈ 280 + padding).
+    // with a reasonable max (10 rows Ã— ~28px â‰ˆ 280 + padding).
     const QPoint topLeft =
         m_searchInput->mapTo(this, QPoint(0, m_searchInput->height() + 2));
     m_searchHistoryDropdown->setGeometry(
@@ -1022,7 +1033,7 @@ void StreamPage::showSearchHistoryDropdown()
     }
 
     if (m_searchHistory.isEmpty()) {
-        // No history yet — hide instead of showing an empty frame.
+        // No history yet â€” hide instead of showing an empty frame.
         m_searchHistoryDropdown->hide();
         return;
     }
@@ -1065,7 +1076,7 @@ void StreamPage::showSearchHistoryDropdown()
         });
         rowLayout->addWidget(queryBtn, 1);
 
-        auto* removeBtn = new QPushButton(QStringLiteral("\u00D7"), row);   // ×
+        auto* removeBtn = new QPushButton(QStringLiteral("\u00D7"), row);   // Ã—
         removeBtn->setCursor(Qt::PointingHandCursor);
         removeBtn->setStyleSheet(kRemoveBtnStyle);
         removeBtn->setFocusPolicy(Qt::NoFocus);
@@ -1078,9 +1089,9 @@ void StreamPage::showSearchHistoryDropdown()
         layout->addWidget(row);
     }
 
-    // Footer: "× Clear search history" wipes the entire list. Single visible
+    // Footer: "Ã— Clear search history" wipes the entire list. Single visible
     // affordance per Hemanth's 2026-04-25 ask ("there isn't an option to
-    // clear search history"). Per-entry × on each row above is preserved.
+    // clear search history"). Per-entry Ã— on each row above is preserved.
     // Hairline divider above so the footer reads as a separate action,
     // not an additional history item.
     auto* divider = new QFrame(m_searchHistoryList);
@@ -1115,13 +1126,13 @@ bool StreamPage::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj == m_searchInput) {
         if (event->type() == QEvent::FocusIn) {
-            // Show history only if input is empty — otherwise we'd obscure
+            // Show history only if input is empty â€” otherwise we'd obscure
             // the user's live typing with irrelevant past queries.
             if (m_searchInput->text().trimmed().isEmpty()) {
                 showSearchHistoryDropdown();
             }
         } else if (event->type() == QEvent::FocusOut) {
-            // Delayed hide — if focus moved to a dropdown row's button,
+            // Delayed hide â€” if focus moved to a dropdown row's button,
             // the click handler runs first via the 150ms timer.
             if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->start();
         }
@@ -1129,22 +1140,22 @@ bool StreamPage::eventFilter(QObject* obj, QEvent* event)
     return QWidget::eventFilter(obj, event);
 }
 
-// STREAM_NAV_BACK_STACK 2026-05-06 — depth-first back navigation.
+// STREAM_NAV_BACK_STACK 2026-05-06 â€” depth-first back navigation.
 // Pop one entry off m_navStack; re-show the previous entry without
-// pushing. Stack-bottom (Library) is a no-op re-show — currently
+// pushing. Stack-bottom (Library) is a no-op re-show â€” currently
 // stays on Library; future enhancement could propagate up to
 // MainWindow if cross-mode back is wanted.
 void StreamPage::goBack()
 {
     if (m_navStack.size() <= 1) {
-        // STREAM_CATALOG_BACK_NAVSTACK_SEED_FIX 2026-05-06 — Hemanth-reported
+        // STREAM_CATALOG_BACK_NAVSTACK_SEED_FIX 2026-05-06 â€” Hemanth-reported
         // "the back button besides catalog is not working now": when user
-        // opens Tankoban → Stream tab → clicks Catalog without ever pushing
+        // opens Tankoban â†’ Stream tab â†’ clicks Catalog without ever pushing
         // Browse first (the ctor doesn't seed it; only show*() slots push),
         // navStack ends up [CatalogBrowse] only. Original guard only caught
         // the empty-stack case, so size=1 with non-Browse top was a no-op
         // (re-showed the same view, looked like Back was broken). Fix:
-        // unconditional normalize to Browse on top-of-stack escape — clears
+        // unconditional normalize to Browse on top-of-stack escape â€” clears
         // whatever's there and seeds Browse fresh.
         m_navStack.clear();
         NavEntry e;
@@ -1157,7 +1168,7 @@ void StreamPage::goBack()
     showEntryRaw(m_navStack.top());
 }
 
-// STREAM_NAV_BACK_STACK 2026-05-06 — restore the search overlay visual
+// STREAM_NAV_BACK_STACK 2026-05-06 â€” restore the search overlay visual
 // state without re-running the network fetch. m_searchWidget caches its
 // query + results widgets across hide/show cycles, so a simple
 // hide-browse + show-search is sufficient. Used by showEntryRaw on
@@ -1169,7 +1180,7 @@ void StreamPage::showSearchResults()
     m_searchWidget->show();
 }
 
-// STREAM_NAV_BACK_STACK 2026-05-06 — internal view-swap helper. Does
+// STREAM_NAV_BACK_STACK 2026-05-06 â€” internal view-swap helper. Does
 // the visual transition implied by NavEntry::kind WITHOUT pushing onto
 // m_navStack. show* slots push then call this; goBack pops then calls
 // this; the player-exit restore path calls this directly.
@@ -1182,14 +1193,14 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
         m_mainStack->setCurrentIndex(0);
         m_searchWidget->hide();
         m_browseScroll->show();
-        // Phase 4 Batch 4.1 — defensive spinner reset when navigating
+        // Phase 4 Batch 4.1 â€” defensive spinner reset when navigating
         // away from search (covers the "user hit Back / Esc while a
-        // search was in flight" case — the later catalogResults lands
+        // search was in flight" case â€” the later catalogResults lands
         // but the UI is already elsewhere).
         setSearchBusy(false);
-        // Phase 4 Batch 4.2 — defensive history-dropdown dismissal.
+        // Phase 4 Batch 4.2 â€” defensive history-dropdown dismissal.
         hideSearchHistoryDropdown();
-        // 2026-04-15 — cancel any pending seek-pre-gate retry. User
+        // 2026-04-15 â€” cancel any pending seek-pre-gate retry. User
         // navigated away; no more launchPlayer should fire.
         m_session.seekRetry.reset();
         // Invalidate any in-flight play context so a late streamsReady
@@ -1197,7 +1208,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
         // playback for the title the user just backed away from.
         m_session.pending.valid = false;
         cancelAutoLaunch();
-        // Phase 2 Batch 2.5 — if a next-episode overlay was pending,
+        // Phase 2 Batch 2.5 â€” if a next-episode overlay was pending,
         // clear it; user explicitly navigated away.
         hideNextEpisodeOverlay();
         resetNextEpisodePrefetch();
@@ -1261,7 +1272,7 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
     }
 }
 
-// STREAM_NAV_BACK_STACK 2026-05-06 — restore pre-player view if snapshot
+// STREAM_NAV_BACK_STACK 2026-05-06 â€” restore pre-player view if snapshot
 // was captured at launch; otherwise fall back to library (legacy
 // default). Called from onStreamStopped UserEnd, the defensive 3s
 // post-close timer, and onNextEpisodeCancel case (a).
@@ -1278,7 +1289,7 @@ void StreamPage::restorePlayerExitView()
 
 void StreamPage::showBrowse()
 {
-    // STREAM_NAV_BACK_STACK 2026-05-06 — Library is the stack bottom.
+    // STREAM_NAV_BACK_STACK 2026-05-06 â€” Library is the stack bottom.
     // showBrowse explicitly resets the stack to a clean Browse-only
     // state. Called on Stream-mode entry, on legitimate library-home
     // navigation (e.g. nav-bar Library button), and as the legacy
@@ -1313,9 +1324,9 @@ void StreamPage::showCatalogBrowse(const QString& addonId, const QString& type,
 
 void StreamPage::onCatalogBtnClicked()
 {
-    // Stream library UX rework 2026-04-15 — open catalog browse with no
+    // Stream library UX rework 2026-04-15 â€” open catalog browse with no
     // preselection. CatalogBrowseScreen::open with empty args calls
-    // selectAddon/selectCatalog with empty strings — the for-loop lookups
+    // selectAddon/selectCatalog with empty strings â€” the for-loop lookups
     // find no match, so the combos stay at index 0 (first addon, first
     // catalog) after rebuildSelectors populates them. reload() then kicks
     // a fetch for that default pair. On subsequent clicks, the screen
@@ -1337,7 +1348,7 @@ void StreamPage::showDetail(const QString& imdbId)
 {
     // Idempotent: the library/home-board wires BOTH tileSingleClicked and
     // tileDoubleClicked to this slot, and Qt delivers BOTH for a double-click
-    // gesture (first mousePress → single-click, then the second press becomes
+    // gesture (first mousePress â†’ single-click, then the second press becomes
     // a dedicated double-click event). The second call would otherwise reset
     // the detail state + re-fire the meta fetch just as the first call's
     // response lands AND would push a duplicate Detail entry onto m_navStack.
@@ -1358,7 +1369,7 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
                             int preselectEpisode)
 {
     // Phase 1 Batch 1.1: catalog/home/search tile path. Same idempotency
-    // guard as the imdbId overload — repeat clicks on the same tile don't
+    // guard as the imdbId overload â€” repeat clicks on the same tile don't
     // re-fire state resets. The preview is passed through as `previewHint`
     // so the detail view paints title/year/poster/description from the
     // tile's metadata without needing the title to be in the library.
@@ -1390,7 +1401,7 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
     // user clicks a card. Replaces what the dialog used to keep alive
     // between exec() and accept(). 'valid' guards against late streamsReady
     // arrivals after the user backed out of the detail view. Phase 1 Batch
-    // 1.3 — beginSession stamps the new generation + clears prior session
+    // 1.3 â€” beginSession stamps the new generation + clears prior session
     // state (stopping the countdown timer + disconnecting aggregators) in
     // one boundary, so a detail re-entry mid-prefetch doesn't leak stale
     // async closures into the new session.
@@ -1398,7 +1409,7 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
                  PendingPlay{imdbId, mediaType, season, episode, epKey, true},
                  QStringLiteral("onPlayRequested"));
 
-    // Check if we have a saved choice for this episode — if so, build the
+    // Check if we have a saved choice for this episode â€” if so, build the
     // picker-key shape so the StreamSourceList can highlight the matching
     // card on populate. (Auto-launch on saved choice lands in Batch 2.4; for
     // now the highlight is a one-click visual hint.)
@@ -1417,7 +1428,7 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
                        + QString::number(fileIndex);
     }
 
-    // Phase 2 Batch 2.3 — if per-episode is empty and this is a series, fall
+    // Phase 2 Batch 2.3 â€” if per-episode is empty and this is a series, fall
     // through to the series-level bingeGroup match. Resolved inside the
     // streamsReady lambda because we need the incoming stream list to find
     // the matching card.
@@ -1430,7 +1441,7 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
         seriesUpdatedAt  = seriesChoice.value("updatedAt").toInteger(0);
     }
 
-    // Phase 2 Batch 2.4 — auto-launch eligibility: either the per-episode
+    // Phase 2 Batch 2.4 â€” auto-launch eligibility: either the per-episode
     // saved choice OR the per-series saved choice must be within 10 minutes
     // of the last-watched stamp. The streamsReady lambda uses this to decide
     // whether to fire the resume toast + arm m_autoLaunchTimer.
@@ -1443,13 +1454,13 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
                                        && (nowMs - seriesUpdatedAt) < kAutoLaunchWindowMs;
     const bool   autoLaunchEligible = perEpisodeRecent || perSeriesRecent;
 
-    // Reset any in-flight auto-launch before we kick off the new resolve —
+    // Reset any in-flight auto-launch before we kick off the new resolve â€”
     // a second onPlayRequested (user clicks another episode mid-countdown)
     // must replace, not stack.
     cancelAutoLaunch();
 
     // Fetch streams via StreamAggregator, then push into the right pane of
-    // StreamDetailView. No modal — the cards live inside the detail view
+    // StreamDetailView. No modal â€” the cards live inside the detail view
     // and the user clicks one to play (handled by onSourceActivated).
     disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
                this, nullptr);
@@ -1490,16 +1501,16 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
                 m_detailView->setStreamSources(choices, highlightKey);
             }
 
-            // Phase 2 Batch 2.4 — auto-launch DISABLED 2026-04-16 per
+            // Phase 2 Batch 2.4 â€” auto-launch DISABLED 2026-04-16 per
             // Hemanth UX call (Phase 1 telemetry session, post One Piece
-            // pack regression). The 2-second countdown was too aggressive —
+            // pack regression). The 2-second countdown was too aggressive â€”
             // entering Sources view would fire playback before the user
             // could meaningfully pick a different source. Manual source
             // selection (user clicks a card) still works via the existing
             // setStreamSources path above. The 10-minute eligibility gate +
             // m_autoLaunchTimer infrastructure are preserved in case future
             // UX iteration wants a longer countdown variant; one-line
-            // re-enable point is the `if (false &&` guard below — flip to
+            // re-enable point is the `if (false &&` guard below â€” flip to
             // restore (with a kAutoLaunchCountdownMs bump in the timer
             // setInterval at the top of buildUI before re-enabling).
             //
@@ -1536,7 +1547,7 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
     m_streamAggregator->load(req);
 }
 
-// Phase 2 Batch 2.4 — auto-launch orchestration.
+// Phase 2 Batch 2.4 â€” auto-launch orchestration.
 
 void StreamPage::onAutoLaunchFire()
 {
@@ -1544,7 +1555,7 @@ void StreamPage::onAutoLaunchFire()
     if (!m_autoLaunchChoice.has_value()) return;
     const auto choice = *m_autoLaunchChoice;
     m_autoLaunchChoice.reset();
-    // Same entry point user-click takes — keeps persistence + handoff
+    // Same entry point user-click takes â€” keeps persistence + handoff
     // behavior identical between manual and auto-launch flows.
     onSourceActivated(choice);
 }
@@ -1556,12 +1567,12 @@ void StreamPage::cancelAutoLaunch()
     if (m_detailView) m_detailView->hideAutoLaunchToast();
 }
 
-// Phase 2 Batch 2.5 — next-episode pre-fetch + overlay orchestration.
+// Phase 2 Batch 2.5 â€” next-episode pre-fetch + overlay orchestration.
 
 void StreamPage::startNextEpisodePrefetch(const QString& imdbId,
                                            int currentSeason, int currentEpisode)
 {
-    // Skip movies — no next episode concept.
+    // Skip movies â€” no next episode concept.
     if (currentSeason <= 0 || currentEpisode <= 0) return;
     if (!m_metaAggregator || !m_streamAggregator) return;
 
@@ -1617,7 +1628,7 @@ void StreamPage::startNextEpisodePrefetch(const QString& imdbId,
             prefetch.epKey    = StreamProgress::episodeKey(imdbId, next.first, next.second);
             m_session.nextPrefetch    = prefetch;
 
-            // Reuse m_streamAggregator — the current episode's streamsReady
+            // Reuse m_streamAggregator â€” the current episode's streamsReady
             // has already fired (we're at 95%), so nothing in-flight. Its
             // load() resets internal state cleanly.
             disconnect(m_streamAggregator,
@@ -1683,9 +1694,9 @@ void StreamPage::onNextEpisodePrefetchStreams(
     }
     m_session.nextPrefetch->streamsLoaded = true;
 
-    // Phase 2 Batch 2.6 — Shift+N path: if the user fired the shortcut
+    // Phase 2 Batch 2.6 â€” Shift+N path: if the user fired the shortcut
     // while prefetch was still resolving, auto-play the moment a match
-    // lands (no overlay, no countdown). No match → silent no-op per
+    // lands (no overlay, no countdown). No match â†’ silent no-op per
     // TODO "No-op if no next episode".
     if (m_session.nextShortcutPending) {
         m_session.nextShortcutPending = false;
@@ -1695,7 +1706,7 @@ void StreamPage::onNextEpisodePrefetchStreams(
         return;
     }
 
-    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — if we reached a
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) â€” if we reached a
     // matched choice during normal playback (not the Shift+N shortcut),
     // surface the overlay NOW as a floating layer over the still-playing
     // video. Stremio / Netflix UX: user sees "Up next" popup during the
@@ -1703,7 +1714,7 @@ void StreamPage::onNextEpisodePrefetchStreams(
     // async prefetch took), can Play Now to skip credits, let the 10s
     // countdown expire to auto-advance, or Cancel to finish the episode
     // naturally. Previous behavior only showed the overlay on
-    // closeRequested — too late for binge-watch ergonomics.
+    // closeRequested â€” too late for binge-watch ergonomics.
     if (m_session.nextPrefetch->matchedChoice.has_value()) {
         showNextEpisodeOverlayInPlayer();
     }
@@ -1713,7 +1724,7 @@ void StreamPage::showNextEpisodeOverlay()
 {
     if (!m_nextEpisodeOverlay || !m_session.nextPrefetch.has_value()) return;
 
-    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — defensive reparent
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) â€” defensive reparent
     // back to m_playerLayer in case the mid-playback path earlier in
     // this session parented the overlay onto VideoPlayer. The legacy
     // close-path fires with the player hidden, so a widget parented to
@@ -1762,16 +1773,16 @@ void StreamPage::hideNextEpisodeOverlay()
     if (m_nextEpisodeOverlay) m_nextEpisodeOverlay->hide();
 }
 
-// STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — mid-playback sibling of
+// STREAM_AUTO_NEXT Stremio-parity (2026-04-21) â€” mid-playback sibling of
 // showNextEpisodeOverlay. Reparents the same overlay widget onto the
 // floating VideoPlayer (found via mainWin->findChild<VideoPlayer*>, same
 // pattern as the progressUpdated-lambda setup at line ~1743) so the
 // overlay paints OVER still-playing video rather than waiting for
 // closeRequested to swap the player away first. Position: bottom-right
-// of the player's rect with 40px horizontal + 80px vertical margins —
+// of the player's rect with 40px horizontal + 80px vertical margins â€”
 // matches Stremio/Netflix binge-overlay placement (doesn't block content
 // center where the climax of a scene usually plays). Countdown starts
-// fresh at 10s each invocation — safe to re-enter if called twice
+// fresh at 10s each invocation â€” safe to re-enter if called twice
 // before dismiss (mutates text in place via setText).
 void StreamPage::showNextEpisodeOverlayInPlayer()
 {
@@ -1794,7 +1805,7 @@ void StreamPage::showNextEpisodeOverlayInPlayer()
         player->width()  - m_nextEpisodeOverlay->width()  - kRightMarginPx,
         player->height() - m_nextEpisodeOverlay->height() - kBottomMarginPx);
 
-    // Text identical to showNextEpisodeOverlay — same "Up next: SeriesName · SxxExx"
+    // Text identical to showNextEpisodeOverlay â€” same "Up next: SeriesName Â· SxxExx"
     // + "Playing in Ns..." format. Kept duplicated here rather than
     // refactored into a helper so the code path stays readable and each
     // overlay-surface gets to independently tune its own text / layout
@@ -1806,7 +1817,7 @@ void StreamPage::showNextEpisodeOverlayInPlayer()
         ? QStringLiteral("S%1E%2")
               .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
               .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'))
-        : seriesName + QStringLiteral(" · ")
+        : seriesName + QStringLiteral(" Â· ")
               + QStringLiteral("S%1E%2")
                     .arg(m_session.nextPrefetch->season, 2, 10, QChar('0'))
                     .arg(m_session.nextPrefetch->episode, 2, 10, QChar('0'));
@@ -1821,7 +1832,7 @@ void StreamPage::showNextEpisodeOverlayInPlayer()
             tr("Playing in %1s...").arg(m_nextEpisodeCountdownSec));
     }
 
-    // Do NOT hide m_bufferOverlay or switch m_mainStack — the player
+    // Do NOT hide m_bufferOverlay or switch m_mainStack â€” the player
     // window is already visible (floating above the stack's current
     // page). We only show our overlay on top.
     m_nextEpisodeOverlay->show();
@@ -1857,9 +1868,9 @@ void StreamPage::onNextEpisodePlayNow()
     hideNextEpisodeOverlay();
 
     // Populate m_session.pending so onSourceActivated knows which episode
-    // this is — same shape onPlayRequested would have produced, minus the
+    // this is â€” same shape onPlayRequested would have produced, minus the
     // streams fan-out round-trip (we already have the matched choice).
-    // Batch 1.3 — route through beginSession so the new episode's session
+    // Batch 1.3 â€” route through beginSession so the new episode's session
     // gets a fresh generation + prior session's async closures are aborted
     // at the boundary instead of firing against the new epKey.
     PendingPlay p;
@@ -1875,14 +1886,14 @@ void StreamPage::onNextEpisodePlayNow()
     // prefetch when it approaches its own end.
     resetNextEpisodePrefetch();
 
-    // Drive through the canonical source-activation path — same persistence,
+    // Drive through the canonical source-activation path â€” same persistence,
     // subtitle fan-out, and player handoff the user-click flow uses.
     onSourceActivated(choice);
 }
 
 void StreamPage::onNextEpisodeCancel()
 {
-    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) — two contexts now call
+    // STREAM_AUTO_NEXT Stremio-parity (2026-04-21) â€” two contexts now call
     // Cancel:
     //   (a) Legacy close-path: overlay appeared AFTER closeRequested; the
     //       stream was already stopped; Cancel should return to browse.
@@ -1904,7 +1915,7 @@ void StreamPage::onNextEpisodeCancel()
         // close-path later tries to showNextEpisodeOverlay for a future
         // session, the widget tree is consistent. resetNextEpisodePrefetch
         // above already cleared matchedChoice so overlayEligible will be
-        // false on close for this session anyway — this is belt-and-
+        // false on close for this session anyway â€” this is belt-and-
         // braces cleanup against future session state. Widget is hidden
         // (via hideNextEpisodeOverlay above) so layout recalc is cheap.
         if (m_nextEpisodeOverlay && m_playerLayer) {
@@ -1926,7 +1937,7 @@ void StreamPage::resetNextEpisodePrefetch()
     m_session.nearEndCrossed = false;
     m_session.nextShortcutPending = false;
     // Drop any in-flight prefetch connections from MetaAggregator /
-    // StreamAggregator — we reset them on each prefetch start anyway, but
+    // StreamAggregator â€” we reset them on each prefetch start anyway, but
     // safer to clear when fully canceling so stale lambdas don't accumulate.
     if (m_metaAggregator) {
         disconnect(m_metaAggregator,
@@ -1940,19 +1951,19 @@ void StreamPage::resetNextEpisodePrefetch()
     }
 }
 
-// STREAM_LIFECYCLE_FIX Phase 1 Batches 1.1 + 1.2 + 1.3 — PlaybackSession
+// STREAM_LIFECYCLE_FIX Phase 1 Batches 1.1 + 1.2 + 1.3 â€” PlaybackSession
 // foundation + full migration. 1.1 introduced the struct + generation
 // counter + beginSession/resetSession API. 1.2 migrated `_currentEpKey` +
 // m_pendingPlay + m_lastDeadlineUpdateMs. 1.3 migrated m_session.nextPrefetch +
 // m_session.nearEndCrossed + m_session.nextShortcutPending + m_seekRetryState (raw QObject*
-// identity-token pattern replaced with generation-check — first real
+// identity-token pattern replaced with generation-check â€” first real
 // consumer of currentGeneration()/isCurrentGeneration()). 1.3 also fleshed
 // SeekRetryState, added reason param + wrap-guard + begin-log on
 // beginSession, and wired beginSession into the 4 session-start sites
 // (trailer paste, magnet paste, onPlayRequested, onNextEpisodePlayNow).
 // Phase 1 CLOSED at 1.3. Prototype credit:
 // agents/prototypes/stream_lifecycle/Batch1.1_PlaybackSession_struct_API.cpp
-// (Agent 7, Codex) — shape adopted as-is modulo file-style conventions.
+// (Agent 7, Codex) â€” shape adopted as-is modulo file-style conventions.
 
 quint64 StreamPage::currentGeneration() const
 {
@@ -1973,7 +1984,7 @@ quint64 StreamPage::beginSession(const QString& epKey, const PendingPlay& pendin
 
     // Defensive wrap guard (prototype shape). quint64 doesn't wrap in
     // practical lifetime, but if m_nextGeneration ever landed at 0 we'd
-    // stamp m_session.generation = 0 which is the "no-session" sentinel —
+    // stamp m_session.generation = 0 which is the "no-session" sentinel â€”
     // breaking isValid() / isCurrentGeneration() contract silently.
     if (m_nextGeneration == 0) m_nextGeneration = 1;
 
@@ -1991,7 +2002,7 @@ void StreamPage::resetSession(const QString& reason)
 {
     // Same teardown shape as resetNextEpisodePrefetch (countdown timer stop +
     // prefetch aggregator disconnect) plus a full state clear. Kept as a pure
-    // boundary: no showBrowse(), no signal emits, no player touches — callers
+    // boundary: no showBrowse(), no signal emits, no player touches â€” callers
     // decide what UI follows. Matches audit advisory #1's "single boundary"
     // shape so every scattered inline reset can funnel here.
     if (m_nextEpisodeCountdownTimer) m_nextEpisodeCountdownTimer->stop();
@@ -2013,19 +2024,19 @@ void StreamPage::resetSession(const QString& reason)
 
 void StreamPage::onStreamNextEpisodeShortcut()
 {
-    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.1 — audit P2-3 close. Pre-4.1 guard
+    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.1 â€” audit P2-3 close. Pre-4.1 guard
     // used `m_session.pending.valid` which onSourceActivated clears before
-    // playback starts (pending is consumed as the session installs) — making
+    // playback starts (pending is consumed as the session installs) â€” making
     // Shift+N a silent no-op during actual playback. Correct identity signals:
-    //   (a) m_session.isValid() — active session (generation != 0 AND
+    //   (a) m_session.isValid() â€” active session (generation != 0 AND
     //       epKey non-empty). Holds true from beginSession through
     //       resetSession/next beginSession, spans the entire playback.
-    //   (b) pending.mediaType == "series" — filter out movies / trailers /
+    //   (b) pending.mediaType == "series" â€” filter out movies / trailers /
     //       adhoc URLs where "next episode" has no meaning.
-    //   (c) m_playerController->isActive() — sanity check; even if m_session
+    //   (c) m_playerController->isActive() â€” sanity check; even if m_session
     //       reports valid, the player may be between states (buffering, seek
     //       retry). isActive gates us to "playback path committed."
-    // Unblocks STREAM_UX_PARITY Batch 2.6 (Shift+N player shortcut) — previously
+    // Unblocks STREAM_UX_PARITY Batch 2.6 (Shift+N player shortcut) â€” previously
     // would land on this silent-no-op guard. Post-4.1, Shift+N fires the
     // next-episode flow as intended.
     if (!m_session.isValid()) return;
@@ -2042,16 +2053,16 @@ void StreamPage::onStreamNextEpisodeShortcut()
         return;
     }
 
-    // Prefetch already in flight from near-end trigger — mark shortcut
+    // Prefetch already in flight from near-end trigger â€” mark shortcut
     // pending so onNextEpisodePrefetchStreams auto-plays once match lands.
     if (m_session.nextPrefetch.has_value() && !m_session.nextPrefetch->streamsLoaded) {
         m_session.nextShortcutPending = true;
         return;
     }
 
-    // Cold path — no prefetch yet. Kick one off for the current episode
+    // Cold path â€” no prefetch yet. Kick one off for the current episode
     // and arm the shortcut-pending flag. startNextEpisodePrefetch reuses
-    // the series-meta → next-unwatched resolve path from Batch 2.5;
+    // the series-meta â†’ next-unwatched resolve path from Batch 2.5;
     // if the series has no next unwatched episode, matchedChoice never
     // lands and the shortcut falls through to no-op silently.
     m_session.nextShortcutPending = true;
@@ -2077,7 +2088,7 @@ void StreamPage::onAddToTankorentRequested(const tankostream::stream::StreamPick
 
     // Display name. STREAM_SOURCE_CARD_TITLE_FIX 2026-05-06 repurposed
     // displayTitle to carry the release name (was: addon name). It is
-    // now the right primary identifier here — no longer needs the
+    // now the right primary identifier here â€” no longer needs the
     // displayFilename fallback (field removed). Session-pending fallback
     // synthesizes a "<imdbId> S<NN>E<NN>" identifier when extractReleaseName
     // bottomed out at "(unnamed release)" but we have episode context.
@@ -2119,6 +2130,16 @@ void StreamPage::triggerBulkSeasonDownload(int season)
         m_detailView->setStreamSourcesError(tr("Videos library root is not configured"));
         return;
     }
+
+    // DOWNLOAD_AUTO_LIBRARY_ADD 2026-05-13 — Hemanth report "adding an
+    // episode to download isn't automatically adding the show to the
+    // library". The existing auto-add hook fires from the progressUpdated
+    // lambda (StreamPage.cpp:2988) only on the FIRST successful playback
+    // tick — i.e., download-without-play didn't pin the show. Stremio
+    // behavior pins on any user gesture that implies intent to consume
+    // (play OR download). Fire here too. autoAddToLibrary is idempotent
+    // (m_library->has() short-circuit + add-only, never toggles off).
+    m_detailView->autoAddToLibrary();
 
     m_bulkInput = BulkPlanInput{};
     m_bulkInput.seriesId = m_detailView->currentImdb();
@@ -2177,6 +2198,134 @@ void StreamPage::triggerBulkSeasonDownload(int season)
     m_bulkSourceCollector->begin(m_bulkInput);
 }
 
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL — three new slots wired from StreamDetailView's
+// seasonDownloadRequested / selectedEpisodesDownloadRequested / singleEpisodeDownloadRequested
+// signals. All three funnel into triggerBulkSelectedEpisodes which builds the episode
+// list then runs the normal BulkSourceCollector path.
+
+void StreamPage::onSeasonDownloadRequested(int season)
+{
+    if (!m_detailView) return;
+    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, QList<int>{});
+}
+
+void StreamPage::onSelectedEpisodesDownloadRequested(int season, const QList<int>& episodes)
+{
+    if (!m_detailView) return;
+    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, episodes);
+}
+
+void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
+{
+    if (!m_detailView) return;
+    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, QList<int>{episode});
+}
+
+// triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch
+// slots. When episodeFilter is non-empty only those episode numbers are included
+// in the m_bulkInput; empty filter = whole season (identical to the legacy
+// triggerBulkSeasonDownload path). Uses the same BulkSourceCollector orchestration.
+void StreamPage::triggerBulkSelectedEpisodes(const QString& imdbId, int season,
+                                              const QList<int>& episodeFilter)
+{
+    using namespace tankostream::stream;
+
+    cancelBulkSeasonDownload();
+
+    if (!m_detailView || !m_bridge || !m_torrentClient)
+        return;
+    if (m_detailView->currentType() != QLatin1String("series"))
+        return;
+
+    const QList<StreamEpisode> allEpisodes = m_detailView->episodesForSeason(season);
+    if (imdbId.isEmpty() || season <= 0 || allEpisodes.isEmpty()) {
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("No episodes available for season download"));
+        return;
+    }
+
+    const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
+    if (roots.isEmpty() || roots.first().isEmpty()) {
+        m_detailView->setStreamSourcesError(tr("Videos library root is not configured"));
+        return;
+    }
+
+    // DOWNLOAD_AUTO_LIBRARY_ADD 2026-05-13 — see triggerBulkSeasonDownload
+    // for rationale. Same call here covers the per-row [↓] action-icon
+    // single-episode dispatch path + the "Download Selected (N)" + the
+    // P3-shipped onSeasonDownloadRequested signal. autoAddToLibrary is
+    // idempotent.
+    m_detailView->autoAddToLibrary();
+
+    m_bulkInput = BulkPlanInput{};
+    m_bulkInput.seriesId = imdbId;
+    m_bulkInput.seriesTitle = m_detailView->currentTitle();
+    if (m_bulkInput.seriesTitle.isEmpty())
+        m_bulkInput.seriesTitle = imdbId;
+    m_bulkInput.seriesYear = m_detailView->currentYear();
+    m_bulkInput.seasonNumber = season;
+    m_bulkInput.videosRootPath = roots.first();
+
+    // Build the episode list — apply filter if non-empty
+    QSet<int> filterSet;
+    for (int ep : episodeFilter)
+        filterSet.insert(ep);
+
+    for (const StreamEpisode& episode : allEpisodes) {
+        if (!filterSet.isEmpty() && !filterSet.contains(episode.episode))
+            continue;
+        BulkPlanEpisodeInput ep;
+        ep.season = season;
+        ep.episode = episode.episode;
+        ep.title = episode.title;
+        ep.extensionHint = QStringLiteral("mkv");
+        m_bulkInput.episodes.push_back(ep);
+    }
+
+    if (m_bulkInput.episodes.isEmpty()) {
+        m_detailView->setStreamSourcesError(tr("No matching episodes for download"));
+        return;
+    }
+
+    m_bulkPlanResult = buildBulkPlan(m_bulkInput, [](const QString& path) {
+        return QFileInfo::exists(path);
+    });
+    m_bulkSourcePayload = BulkSourceCollectionPayload{};
+    m_bulkVerificationNote.clear();
+
+    m_bulkProgressDialog = new QDialog(this);
+    m_bulkProgressDialog->setWindowTitle(tr("Preparing stream download"));
+    m_bulkProgressDialog->setModal(false);
+    auto* layout = new QVBoxLayout(m_bulkProgressDialog);
+    layout->setContentsMargins(18, 18, 18, 14);
+    layout->setSpacing(10);
+    m_bulkProgressLabel = new QLabel(tr("Resolving sources..."), m_bulkProgressDialog);
+    m_bulkProgressLabel->setTextFormat(Qt::PlainText);
+    layout->addWidget(m_bulkProgressLabel);
+    m_bulkProgressBar = new QProgressBar(m_bulkProgressDialog);
+    m_bulkProgressBar->setRange(0, 0);
+    layout->addWidget(m_bulkProgressBar);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, m_bulkProgressDialog);
+    connect(buttons, &QDialogButtonBox::rejected, this, &StreamPage::cancelBulkSeasonDownload);
+    layout->addWidget(buttons);
+    connect(m_bulkProgressDialog, &QDialog::rejected,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkProgressDialog->show();
+
+    m_bulkSourceCollector = new BulkSourceCollector(m_addonRegistry, this);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::progressTick,
+            this, [this](int resolved, int total) {
+                if (m_bulkProgressLabel) {
+                    m_bulkProgressLabel->setText(
+                        tr("Resolving sources... %1/%2").arg(resolved).arg(total));
+                }
+            });
+    connect(m_bulkSourceCollector, &BulkSourceCollector::collectionComplete,
+            this, &StreamPage::onBulkSourcesCollected);
+    connect(m_bulkSourceCollector, &BulkSourceCollector::cancelled,
+            this, &StreamPage::cancelBulkSeasonDownload);
+    m_bulkSourceCollector->begin(m_bulkInput);
+}
 void StreamPage::retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys)
 {
     using namespace tankostream::stream;
@@ -2448,23 +2597,12 @@ void StreamPage::onBulkPackVerified(const tankostream::stream::BulkPackVerificat
     const QString displayLabel = QStringLiteral("%1 - Season %2")
         .arg(m_bulkInput.seriesTitle)
         .arg(m_bulkInput.seasonNumber);
-    StreamBulkPreflightDialog dialog(result.updatedPlan,
-                                     result,
-                                     m_bulkSourcePayload,
-                                     m_bulkPlanResult,
-                                     displayLabel,
-                                     m_bulkInput.videosRootPath,
-                                     m_bulkVerificationNote,
-                                     this);
-    if (dialog.exec() != QDialog::Accepted) {
-        m_bulkVerificationNote.clear();
-        return;
-    }
-
-    // STREAM_BULK_DOWNLOAD_V2 Phase 1 — picker filters the dispatch payload
-    // to only the user-ticked itemKeys. Empty selection is impossible here
-    // because the dialog disables OK when zero are selected.
-    const QSet<QString> selectedKeys = dialog.selectedItemKeys();
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — no preflight dialog.
+    // Direct dispatch path (Spec §1 "no popup, no modal, no dialog").
+    // All items from the verified selection plan are included; no picker filter.
+    qInfo("STREAM_BULK direct dispatch: group=%s:%d items=%d",
+          qUtf8Printable(m_bulkInput.seriesId), m_bulkInput.seasonNumber,
+          (int)result.updatedPlan.items.size());
 
     QHash<QString, BulkPlanItem> planItemByKey;
     for (const BulkPlanItem& item : m_bulkPlanResult.items)
@@ -2485,8 +2623,6 @@ void StreamPage::onBulkPackVerified(const tankostream::stream::BulkPackVerificat
     group.updatedAtMs = now;
 
     for (const BulkSelectionItem& selectionItem : result.updatedPlan.items) {
-        if (!selectedKeys.contains(selectionItem.itemKey))
-            continue;  // Phase-1 picker dropped this episode
         const BulkPlanItem planItem = planItemByKey.value(selectionItem.itemKey);
         if (planItem.itemKey.isEmpty())
             continue;
@@ -2509,19 +2645,19 @@ void StreamPage::onBulkPackVerified(const tankostream::stream::BulkPackVerificat
     }
 
     if (!group.items.isEmpty())
-        emit addToTankorentBulkRequested(group, result, displayLabel);
+        emit streamBulkDispatchRequested(group, result, displayLabel);
     m_bulkVerificationNote.clear();
 }
 
-// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — handler for the detail
+// STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) â€” handler for the detail
 // view's "downloaded episode click" path. Runs the SubtitlesAggregator
 // fan-out with a synthetic Stream so the popover behaves identically to
-// streamed playback (Spec §10.2), then re-emits the public signal up to
+// streamed playback (Spec Â§10.2), then re-emits the public signal up to
 // MainWindow which actually opens the VideoPlayer.
 //
-// NOTE on StreamProgress (Spec §10.1): the existing time_update / progress
+// NOTE on StreamProgress (Spec Â§10.1): the existing time_update / progress
 // flow runs through CoreBridge::saveProgress at the bridge layer. Local-file
-// playback via VideoPlayer currently writes under the `videos` domain — the
+// playback via VideoPlayer currently writes under the `videos` domain â€” the
 // epKey/`stream`-domain bridging is a separable follow-up (it requires
 // teaching VideoPlayer to write per-episode stream-domain progress when
 // opened via this gateway). The Continue Watching strip already picks up
@@ -2533,7 +2669,7 @@ void StreamPage::onDetailPlayLocalFileFromStream(
     const QString& localPath, const QString& imdbId,
     const QString& showTitle, int season, int episode)
 {
-    // Spec §10.2 — synthetic Stream + SubtitlesAggregator query so OpenSubs
+    // Spec Â§10.2 â€” synthetic Stream + SubtitlesAggregator query so OpenSubs
     // and any other subtitle-resource addons populate the popover. videoHash
     // is intentionally empty: we don't compute the OpenSubs SubDB hash for
     // local files; the addon falls back to imdbId+filename matching.
@@ -2563,10 +2699,10 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
 {
     if (!m_session.pending.valid) return;   // late click after the user backed out
 
-    // Phase 2 Batch 2.4 — if the user clicked a source card manually during
+    // Phase 2 Batch 2.4 â€” if the user clicked a source card manually during
     // the auto-launch window, cancel the pending timer + hide the toast.
     // onAutoLaunchFire calls back into us for the automated path, but by the
-    // time we're here the timer should already be stopped — this is the
+    // time we're here the timer should already be stopped â€” this is the
     // user-click entry.
     if (m_autoLaunchTimer && m_autoLaunchTimer->isActive()) {
         cancelAutoLaunch();
@@ -2575,18 +2711,18 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     const PendingPlay ctx = m_session.pending;
     m_session.pending.valid = false;
 
-    // STREAM_NAV_BACK_STACK 2026-05-07 — Hemanth follow-up: closing the
+    // STREAM_NAV_BACK_STACK 2026-05-07 â€” Hemanth follow-up: closing the
     // player from a Season 2 episode was restoring the Detail view back
     // to Season 1 because the NavEntry.detailPreselectSeason was frozen
     // at the initial showDetail() call (typically -1 for "no
-    // preselection" → defaults to season 1). The user-driven season
+    // preselection" â†’ defaults to season 1). The user-driven season
     // combo change inside StreamDetailView never propagated to the
     // stack entry. Update the top Detail entry's preselects here, where
     // we have the actually-playing season/episode in `ctx`. By the time
     // launchPlayer's m_beforePlayerEntry snapshot fires, the top of
     // m_navStack already reflects what they were watching, so close +
     // restore lands on the correct season. Non-series media (movies,
-    // ad-hoc trailers) skip the update — ctx.season/episode are 0/0
+    // ad-hoc trailers) skip the update â€” ctx.season/episode are 0/0
     // there and we don't want to clobber the entry's defaults.
     if (!m_navStack.isEmpty()
      && m_navStack.top().kind == NavEntry::Kind::Detail
@@ -2597,21 +2733,21 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
         m_navStack.top().detailPreselectEpisode = ctx.episode;
     }
 
-    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.2 — audit P2-2 close. Pre-4.2 code
+    // STREAM_LIFECYCLE_FIX Phase 4 Batch 4.2 â€” audit P2-2 close. Pre-4.2 code
     // reset only m_session.nearEndCrossed + m_session.nextPrefetch inline,
     // skipping m_session.nextShortcutPending + the MetaAggregator/StreamAggregator
     // disconnect logic. resetNextEpisodePrefetch() is the canonical cleanup
-    // that Phase 1 Batch 1.3 migrated to route through m_session — using it
+    // that Phase 1 Batch 1.3 migrated to route through m_session â€” using it
     // here ensures all three prefetch-related session fields clear uniformly
     // AND in-flight aggregator connections from the prior episode's prefetch
     // get dropped (preventing a stale streamsReady lambda from landing against
     // the NEW episode's prefetch slot with the old episode's stream list).
-    // Note: resetSession() would be over-broad — it also clears m_session.epKey
+    // Note: resetSession() would be over-broad â€” it also clears m_session.epKey
     // and pending, which onSourceActivated is about to re-install via ctx. The
     // narrower resetNextEpisodePrefetch is the right choice.
     resetNextEpisodePrefetch();
 
-    // Save choice for re-use — extended payload with addon + source-kind fields.
+    // Save choice for re-use â€” extended payload with addon + source-kind fields.
     // Same persistence shape the dialog used to write so loadChoice in
     // future onPlayRequested calls keeps working.
     QJsonObject saved;
@@ -2629,17 +2765,17 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     saved["trackerSource"] = choice.stream.behaviorHints.other
                                  .value("trackerSource").toString();
     saved["bingeGroup"]    = choice.stream.behaviorHints.bingeGroup;
-    // Phase 2 Batch 2.4 — stamp the "last-used" timestamp so the auto-launch
+    // Phase 2 Batch 2.4 â€” stamp the "last-used" timestamp so the auto-launch
     // 10-minute gate has a read source for both per-episode and per-series
     // resume paths.
     saved["updatedAt"]     = QDateTime::currentMSecsSinceEpoch();
     StreamChoices::saveChoice(ctx.epKey, saved);
 
-    // Phase 2 Batch 2.3 — series-level source memory. When the addon
+    // Phase 2 Batch 2.3 â€” series-level source memory. When the addon
     // declares `behaviorHints.bingeGroup` on this stream, persist a parallel
     // per-series entry so the next episode's picker can default-highlight a
     // matching source from the same release group. Movies don't need this
-    // layer — per-movie saveChoice covers single-title state already.
+    // layer â€” per-movie saveChoice covers single-title state already.
     if (ctx.mediaType == QLatin1String("series")
         && !choice.stream.behaviorHints.bingeGroup.isEmpty()) {
         StreamChoices::saveSeriesChoice(ctx.imdbId, saved);
@@ -2651,7 +2787,7 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     m_bufferLabel->setText("Connecting...");
     m_bufferOverlay->show();
 
-    // Batch 5.3 — fan out a subtitle request for the selected stream in
+    // Batch 5.3 â€” fan out a subtitle request for the selected stream in
     // parallel with playback prep. Result lands in the SubtitlePopover
     // via the subtitlesReady connection wired in the ctor.
     tankostream::stream::SubtitleLoadRequest subReq;
@@ -2672,7 +2808,7 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
         ctx.imdbId, ctx.mediaType, ctx.season, ctx.episode, choice.stream);
 }
 
-// ─── Player controller signals ───────────────────────────────────────────────
+// â”€â”€â”€ Player controller signals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 void StreamPage::onBufferUpdate(const QString& statusText, double /*percent*/)
 {
@@ -2684,7 +2820,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     m_bufferOverlay->hide();
 
     // Find the VideoPlayer in the widget hierarchy (created by MainWindow)
-    // and open the stream URL as a file — the sidecar handles HTTP URLs
+    // and open the stream URL as a file â€” the sidecar handles HTTP URLs
     auto* mainWin = window();
     if (!mainWin) return;
 
@@ -2699,37 +2835,37 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Capture current stream info for progress saving
     QString imdbId = m_playerController->property("_imdbId").toString();
     // Use the controller's stored state instead
-    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 — wire stream-engine stall
-    // signals to VideoPlayer → sidecar IPC. Disconnect existing bindings
+    // STREAM_AV_SUB_SYNC_AFTER_STALL 2026-04-21 â€” wire stream-engine stall
+    // signals to VideoPlayer â†’ sidecar IPC. Disconnect existing bindings
     // first so a previous session's player instance doesn't double-fire.
     // Direct-connect from StreamEngine to player (both live across sessions
-    // so no lifetime concerns — StreamEngine is owned by StreamPage,
+    // so no lifetime concerns â€” StreamEngine is owned by StreamPage,
     // VideoPlayer is owned by MainWindow, both outlive this lambda).
-    // Hash-filter: only forward signals for the currently-active stream —
+    // Hash-filter: only forward signals for the currently-active stream â€”
     // StreamEngine may have multiple sessions in m_streams; we only care
     // about the one our VideoPlayer is playing.
     //
-    // STREAM_STALL_RECOVERY_UX 2026-04-22 — also drive UI state (setStream
+    // STREAM_STALL_RECOVERY_UX 2026-04-22 â€” also drive UI state (setStream
     // Stalled + setStreamStallInfo) from the edge signal here, not only
     // from the polling path in progressUpdated below. Direction C smoke
     // at 14:48 proved the polling path is structurally dead during stalls:
     // onStreamStallEdgeFromEngine(true) forwards to sidecar sendStallPause,
     // which halts the audio decoder (audio_decoder.cpp:104) which freezes
-    // AVSyncClock, which suppresses the sidecar's time_update IPC —
+    // AVSyncClock, which suppresses the sidecar's time_update IPC â€”
     // so onTimeUpdate never fires, progressUpdated never emits, the
     // polling lambda never runs, statsSnapshot is never consulted, and
     // the LoadingOverlay never shows. Edge signal is the ONLY reliable
     // trigger during a stall. piece + peerHaveCount come on the signal
-    // already — previously discarded as `/*piece*/`, now forwarded so
-    // the overlay's "Buffering — waiting for piece N (K peers have it)"
+    // already â€” previously discarded as `/*piece*/`, now forwarded so
+    // the overlay's "Buffering â€” waiting for piece N (K peers have it)"
     // text is honest on the first transition without needing a second
     // polling tick. Polling path in progressUpdated stays as belt-and-
     // braces for any future path that fires setStreamStalled without
     // the edge signal (pre-metadata stalls, edge-signal lost to overflow,
-    // etc.) — setStreamStalled's transition-only dedup makes the
+    // etc.) â€” setStreamStalled's transition-only dedup makes the
     // redundancy free.
     if (m_streamEngine) {
-        // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) — lambda bodies shared
+        // STREAM_SERVER_PIVOT Phase 1 (2026-04-24) â€” lambda bodies shared
         // across both engine backends. Qt's disconnect/connect function-
         // pointer form needs the concrete Q_OBJECT type; we branch by
         // dynamic_cast and reuse the same lambdas for both concrete types.
@@ -2759,16 +2895,16 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             if (!player) return;
             // Dismiss overlay first so it disappears before the
             // sidecar resume un-freezes the clock (user sees the
-            // overlay clear, then audio resumes — matches the
+            // overlay clear, then audio resumes â€” matches the
             // setStreamStalled(true) ordering on entry).
             player->setStreamStalled(false);
             player->onStreamStallEdgeFromEngine(false);
         };
 
-        // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — single-backend world;
+        // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) â€” single-backend world;
         // dual-engine dynamic_cast branch collapsed. StreamServerEngine
         // doesn't emit stallDetected/stallRecovered today (Phase 2B deferred
-        // Item 6), so these connects are dormant — the player's own stall
+        // Item 6), so these connects are dormant â€” the player's own stall
         // detection (VideoPlayer::onStreamStallEdgeFromEngine callers) still
         // works via other paths. Connect anyway for forward-compat when
         // stall signals are derived from dlSpeed=0.
@@ -2780,18 +2916,18 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
     connect(player, &VideoPlayer::progressUpdated, this,
         [this, player](const QString& /*path*/, double posSec, double durSec) {
-            // STREAM_STALL_UX_FIX Batch 1 — push the stream-engine stall flag
+            // STREAM_STALL_UX_FIX Batch 1 â€” push the stream-engine stall flag
             // into VideoPlayer each tick (~1 Hz). Pulled from statsSnapshot
             // (sentinel-safe on unknown hash). Kept outside the 2s deadline-
             // retarget gate so HUD transitions follow the 2s stall watchdog
             // cadence with only ~1s progressUpdated aliasing, not +2s extra.
-            // No-op in non-stream playback (infoHash empty → setStreamStalled
+            // No-op in non-stream playback (infoHash empty â†’ setStreamStalled
             // never gets called; VideoPlayer defaults m_streamStalled=false).
             //
-            // Batch 2 — when stalled, also push stallPiece + stallPeerHaveCount
+            // Batch 2 â€” when stalled, also push stallPiece + stallPeerHaveCount
             // so LoadingOverlay's stall-diagnostic text carries "waiting for
             // piece N (K peers have it)". setStreamStalled(true) shows the
-            // overlay on the false→true transition; setStreamStallInfo runs
+            // overlay on the falseâ†’true transition; setStreamStallInfo runs
             // every stalled tick to refresh the numbers if stallPiece advances
             // or peer count changes.
             {
@@ -2808,7 +2944,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 }
             }
 
-            // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — diagnostic
+            // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 â€” diagnostic
             // trace baked in via DebugLogBuffer so `tankoctl logs` surfaces
             // every progressUpdated tick during stream playback. Hemanth-driven
             // smoke captures the actual posSec/durSec values for RC validation
@@ -2824,7 +2960,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
             if (epKey.isEmpty()) {
                 dlog.info("stream",
-                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip — empty epKey"));
+                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip â€” empty epKey"));
                 return;
             }
 
@@ -2832,18 +2968,18 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             // Was: `if (posSec < 5.0 || durSec <= 0.0) return;`
             // HTTP-URL streams via stream-server commonly land durSec=0 because
             // the sidecar's demuxer discards FROM_BITRATE estimates as
-            // unreliable (see VideoPlayer.cpp:1122-1126 — same anti-lie
-            // contract that motivates "—:—" duration in the HUD). Saving with
+            // unreliable (see VideoPlayer.cpp:1122-1126 â€” same anti-lie
+            // contract that motivates "â€”:â€”" duration in the HUD). Saving with
             // durSec=0 is downstream-safe: StreamProgress::percent guards
             // div-by-0 (returns 0.0); StreamContinueStrip::refresh filters
             // only on `pos < MIN_POSITION_SEC` (StreamContinueStrip.cpp:106);
             // isFinished returns false when percent < 90%. Drop the durSec
             // gate so Continue Watching gets entries even when the addon
-            // doesn't expose duration. The 5s posSec floor is preserved —
+            // doesn't expose duration. The 5s posSec floor is preserved â€”
             // probe/initial-0 ticks still get filtered.
             if (posSec < 5.0) {
                 dlog.info("stream",
-                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip — posSec under 5s gate (posSec=%1)")
+                    QStringLiteral("[STREAM_PROGRESS_TRACE] skip â€” posSec under 5s gate (posSec=%1)")
                         .arg(posSec, 0, 'f', 2));
                 return;
             }
@@ -2858,11 +2994,11 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
             // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE Bug 2 fix: auto-add to
             // StreamLibrary on the FIRST successful save in this session.
-            // Stremio behavior — opening + playing a stream implicitly pins
+            // Stremio behavior â€” opening + playing a stream implicitly pins
             // it. Idempotent (StreamDetailView::autoAddToLibrary checks
             // m_library->has(imdbId) before add). Once-per-session gate via
             // m_session.autoLibraryAdded so we don't churn add() every tick.
-            // Coupled with Bug 1 — even after the gate-relax fix, Continue
+            // Coupled with Bug 1 â€” even after the gate-relax fix, Continue
             // Watching's StreamContinueStrip filters at line 121 with
             // `!m_library->has(imdbId)`; library auto-add is the second piece
             // that makes the just-watched tile appear in the strip on close.
@@ -2873,7 +3009,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                     QStringLiteral("[STREAM_PROGRESS_TRACE] auto-library-add fired (first save in session)"));
             }
 
-            // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 — sliding-window deadline
+            // STREAM_PLAYBACK_FIX Phase 2 Batch 2.3 â€” sliding-window deadline
             // retargeting. Rate-limited to once per 2s so libtorrent's
             // deadline table doesn't churn on every progress tick.
             // StreamEngine handles the byte-offset math + piece lookup; we
@@ -2887,12 +3023,12 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 if (!infoHash.isEmpty() && m_streamEngine) {
                     m_streamEngine->updatePlaybackWindow(infoHash, posSec, durSec);
                 }
-                // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — playback-phase
+                // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 â€” playback-phase
                 // buffered-range emit. Same 2s cadence as updatePlaybackWindow
                 // (both driven off the progressUpdated tick, rate-gated by
                 // m_session.lastDeadlineUpdateMs). StreamPlayerController's
                 // own pollStreamStatus timer has stopped post-readyToStart,
-                // so this is the sole refresh source during playback — keeps
+                // so this is the sole refresh source during playback â€” keeps
                 // SeekSlider's buffered overlay current as pieces arrive
                 // mid-stream. Equality-dedup inside pollBufferedRangesOnce
                 // short-circuits when no new pieces have completed.
@@ -2901,7 +3037,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 }
             }
 
-            // Phase 2 Batch 2.5 — near-end detection: at 95% OR within 60s
+            // Phase 2 Batch 2.5 â€” near-end detection: at 95% OR within 60s
             // of duration, kick off pre-fetch of the next unwatched episode.
             // `m_session.nearEndCrossed` guards the fire-once semantic; reset in
             // onSourceActivated when a new playback starts.
@@ -2912,7 +3048,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                     m_session.nearEndCrossed = true;
                     // Parse epKey to extract (imdbId, season, episode). Format:
                     //   "stream:ttXXXXXXX:s{n}:e{m}"   (series)
-                    //   "stream:ttXXXXXXX"              (movie — no next)
+                    //   "stream:ttXXXXXXX"              (movie â€” no next)
                     const QStringList parts = epKey.split(':');
                     if (parts.size() >= 4 && parts[0] == QLatin1String("stream")) {
                         const QString imdbId = parts[1];
@@ -2924,12 +3060,12 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             }
         });
 
-    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 — parallel nearEndCrossed
+    // STREAM_AUTO_NEXT_ESTIMATE_FIX 2026-04-21 â€” parallel nearEndCrossed
     // trigger driven by the sidecar's byte-position watchdog instead of
     // the pct/remaining duration check above. Required for bitrate-estimate
     // sources (HUD tilde-prefix) where AVFormatContext::duration is ~2x
     // inflated and the `pct >= 0.95 || remaining <= 60` check at line ~1989
-    // is structurally unreachable. Both triggers coexist — whichever fires
+    // is structurally unreachable. Both triggers coexist â€” whichever fires
     // first wins; the `m_session.nearEndCrossed` guard prevents double-fire.
     // Honest-duration sources now fire AUTO_NEXT ~30 s earlier (90 s bytes
     // before EOF vs 60 s remaining) which is a free prefetch-budget bonus.
@@ -2953,14 +3089,14 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                 Qt::UniqueConnection);
     }
 
-    // On player close → stop stream, clear progress key, refresh continue strip.
+    // On player close â†’ stop stream, clear progress key, refresh continue strip.
     // Also reset persistence mode so next Videos-mode playback writes to the
     // "videos" store as expected (pairs with the None set before openFile).
-    // Phase 2 Batch 2.5 — if the user crossed the 95% near-end threshold AND
+    // Phase 2 Batch 2.5 â€” if the user crossed the 95% near-end threshold AND
     // the pre-fetch landed a matched next-episode source, show the next-
     // episode overlay instead of returning to browse. User can accept
     // (Play Now / countdown) to binge OR Cancel to end the session.
-    // Phase 2 Batch 2.6 — Shift+N manual next-episode shortcut. Replaces
+    // Phase 2 Batch 2.6 â€” Shift+N manual next-episode shortcut. Replaces
     // any stale connection from a prior stream session so the handler
     // fires exactly once per key press.
     disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
@@ -2972,7 +3108,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
         m_session.epKey.clear();
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
-        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — disable buffered-range
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 â€” disable buffered-range
         // overlay + drop the per-session signal connection before persistence
         // mode flips back. Ordering: setStreamMode(false) first defangs any
         // emit-in-flight from a final StreamPlayerController poll tick
@@ -2985,7 +3121,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
                    player, &VideoPlayer::onBufferedRangesChanged);
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
 
-        // Phase 2 Batch 2.5 — overlay must be shown BEFORE stopStream. The
+        // Phase 2 Batch 2.5 â€” overlay must be shown BEFORE stopStream. The
         // streamStopped signal fires synchronously via direct-connect to
         // onStreamStopped, which calls showBrowse unless the overlay is
         // already visible. Reversing the order would race-condition the
@@ -2997,10 +3133,10 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             player->hide();
             showNextEpisodeOverlay();
         }
-        // STREAM_PLAYER_CLOSE_FIX 2026-04-25 — explicit stopPlayback mirroring
+        // STREAM_PLAYER_CLOSE_FIX 2026-04-25 â€” explicit stopPlayback mirroring
         // MainWindow::closeVideoPlayer (MainWindow.cpp:557). Without this,
         // m_playerController->stopStream() below only removes the engine-side
-        // torrent — the sidecar process keeps running with already-buffered
+        // torrent â€” the sidecar process keeps running with already-buffered
         // HTTP bytes, so audio + video continue playing until the buffer
         // drains (multiple seconds on HD content). stopPlayback fires
         // sendStop + sendShutdown to the sidecar so it gracefully closes
@@ -3014,26 +3150,26 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     });
 
     // Stream-mode playback: suppress VideoPlayer's internal "videos"-domain
-    // bridge reads/writes. Progress still flows via the progressUpdated →
-    // saveProgress("stream", epKey, state) lambda above. Fixes the stream →
+    // bridge reads/writes. Progress still flows via the progressUpdated â†’
+    // saveProgress("stream", epKey, state) lambda above. Fixes the stream â†’
     // videos continue-watching leak routed by Agent 0 at chat.md:9661.
     player->setPersistenceMode(VideoPlayer::PersistenceMode::None);
 
-    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — enable buffered-range
+    // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 â€” enable buffered-range
     // overlay rendering for this stream session. Pairs with setStreamMode
     // (false) in the closeRequested handler below, mirroring the
     // setPersistenceMode bookend discipline. Per-session connect + emit
-    // flow: StreamPlayerController::bufferedRangesChanged → VideoPlayer::
-    // onBufferedRangesChanged → SeekSlider::setBufferedRanges paint.
+    // flow: StreamPlayerController::bufferedRangesChanged â†’ VideoPlayer::
+    // onBufferedRangesChanged â†’ SeekSlider::setBufferedRanges paint.
     // UniqueConnection defends against re-wire if a prior session's
-    // connection wasn't disconnected (belt-and-suspenders — closeRequested
+    // connection wasn't disconnected (belt-and-suspenders â€” closeRequested
     // below clears via disconnect, but stream-failure paths are varied).
     player->setStreamMode(true);
     connect(m_playerController, &StreamPlayerController::bufferedRangesChanged,
             player, &VideoPlayer::onBufferedRangesChanged,
             Qt::UniqueConnection);
 
-    // Phase 1 Batch 1.3 (STREAM_UX_PARITY) — read the stream-domain saved
+    // Phase 1 Batch 1.3 (STREAM_UX_PARITY) â€” read the stream-domain saved
     // progress for this episode/movie and pass it to openFile so playback
     // resumes at the saved offset. PersistenceMode::None suppresses the
     // player's own "videos"-domain resume lookup; caller-supplied seconds
@@ -3053,7 +3189,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
         }
     }
 
-    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 — seek/resume target pre-gate.
+    // STREAM_PLAYBACK_FIX Phase 2 Batch 2.4 â€” seek/resume target pre-gate.
     //
     // Without pre-fetch: handing a resume offset of e.g. 47:00 on a
     // half-watched title causes ffmpeg to issue an HTTP range request
@@ -3066,12 +3202,12 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // on the target window via StreamEngine::prepareSeekTarget and poll
     // contiguous-bytes availability every 300ms. Launch the player only
     // when the first 3 MB around the target are contiguous OR after a
-    // 9s cap (at which point we proceed anyway — the in-player buffering
+    // 9s cap (at which point we proceed anyway â€” the in-player buffering
     // path from Batch 1.2 handles residual delay gracefully).
     //
-    // Zero-resume path (streamResumeSec == 0.0) bypasses the pre-gate —
+    // Zero-resume path (streamResumeSec == 0.0) bypasses the pre-gate â€”
     // the Batch 2.2 head deadline already covers byte-offset 0.
-    // 2026-04-15 fix-up — always cancel any outstanding seek-retry state
+    // 2026-04-15 fix-up â€” always cancel any outstanding seek-retry state
     // at the top of onReadyToPlay. Every path below either launches the
     // player synchronously (and the orphan retry must not fire after) or
     // sets up a fresh retry state. One-shot invalidation here covers all
@@ -3084,17 +3220,17 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // Stream-mode HUD title: pass the resolved filename (or direct-URL
     // Stream.name fallback) into VideoPlayer so the bottom bar shows
     // the real title instead of the last URL path segment (which is
-    // just the file-index digit — "0", "3" — from
+    // just the file-index digit â€” "0", "3" â€” from
     // http://127.0.0.1:PORT/stream/{hash}/{idx}). Cached on the
     // controller side per-session; empty until metadata lands on the
-    // magnet path (harmless — updateTitleElision overwrites on the
+    // magnet path (harmless â€” updateTitleElision overwrites on the
     // next open).
     const QString streamHudTitle = m_playerController
                                        ? m_playerController->currentFileName()
                                        : QString();
     auto launchPlayer = [this, player, httpUrl, streamResumeSec, mainWin,
                          streamHudTitle]() {
-        // STREAM_NAV_BACK_STACK 2026-05-06 — snapshot the current top-of-
+        // STREAM_NAV_BACK_STACK 2026-05-06 â€” snapshot the current top-of-
         // stack view so onStreamStopped UserEnd / the defensive 3s timer /
         // onNextEpisodeCancel case (a) can all restore it after teardown
         // instead of yanking the user to library home (Hemanth-reported
@@ -3112,7 +3248,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             player->setGeometry(mainWin->rect());
         player->show();
         player->raise();
-        // STREAM_PLAYER_FOCUS_FIX 2026-04-25 — explicit setFocus mirroring
+        // STREAM_PLAYER_FOCUS_FIX 2026-04-25 â€” explicit setFocus mirroring
         // MainWindow::openVideoPlayer (MainWindow.cpp:551). Without this, the
         // player widget shows + raises but keyboard focus stays on whichever
         // tile / search input had it before, so Space (toggle_pause) and
@@ -3143,7 +3279,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
     // Need to wait. Keep the buffer overlay on the player layer visible
     // with a "Seeking..." status while we poll. Cap at 9s total (30
-    // iterations × 300ms) then fall through.
+    // iterations Ã— 300ms) then fall through.
     m_bufferOverlay->show();
     m_mainStack->setCurrentIndex(2);
     const int hh = static_cast<int>(streamResumeSec) / 3600;
@@ -3156,7 +3292,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
             : QStringLiteral("Seeking to %1:%2...")
                   .arg(mm).arg(ss, 2, 10, QChar('0')));
 
-    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 — seek-retry orphan guard now
+    // STREAM_LIFECYCLE_FIX Phase 1 Batch 1.3 â€” seek-retry orphan guard now
     // uses PlaybackSession generation instead of raw-QObject* identity.
     // Pre-1.3: a prior onReadyToPlay session created `new QObject(this)`,
     // stored the address in m_seekRetryState, and the retry closure
@@ -3166,8 +3302,8 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
     // attempt counter. The retry closure captures currentGeneration() at
     // setup; `isCurrentGeneration(retryGen)` aborts silently on any
     // session turnover. Closes the same class as the original fix
-    // (orphan retries post close/re-open → double openFile → sidecar
-    // boot race) via a more honest identity model — generation turns over
+    // (orphan retries post close/re-open â†’ double openFile â†’ sidecar
+    // boot race) via a more honest identity model â€” generation turns over
     // atomically at resetSession boundary regardless of same-URL vs
     // different-URL re-entry, whereas the raw pointer only turned over
     // when onReadyToPlay itself was re-entered.
@@ -3183,7 +3319,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
         // Generation check: if a newer session took over (user closed +
         // re-opened, or source-switched mid-buffer), abort silently. New
         // session owns launching. When retryGen == 0 (seek-retry armed
-        // without an active session — theoretically impossible once
+        // without an active session â€” theoretically impossible once
         // beginSession is wired into every session-start site, but defensive
         // against a path that armed seek-retry without beginSession), the
         // isCurrentGeneration check returns false and we abort.
@@ -3201,7 +3337,7 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 
         int& attempts = m_session.seekRetry->attempts;
         if (attempts >= 30) {
-            // 9s cap — launch anyway; Batch 1.2 HTTP retry handles rest.
+            // 9s cap â€” launch anyway; Batch 1.2 HTTP retry handles rest.
             m_session.seekRetry.reset();
             launchPlayer();
             return;
@@ -3222,20 +3358,20 @@ void StreamPage::onReadyToPlay(const QString& httpUrl)
 void StreamPage::onStreamFailed(const QString& message)
 {
     m_session.epKey.clear();
-    cancelAutoLaunch();   // Phase 2 Batch 2.4 — clear any pending resume UI.
-    hideNextEpisodeOverlay();   // Phase 2 Batch 2.5 — clear next-ep state.
+    cancelAutoLaunch();   // Phase 2 Batch 2.4 â€” clear any pending resume UI.
+    hideNextEpisodeOverlay();   // Phase 2 Batch 2.5 â€” clear next-ep state.
     resetNextEpisodePrefetch();
-    // 2026-04-15 — cancel any pending seek-pre-gate retry on failure.
+    // 2026-04-15 â€” cancel any pending seek-pre-gate retry on failure.
     m_session.seekRetry.reset();
     // Disconnect any lingering progress connection + reset persistence mode
-    // defensively — if setPersistenceMode(None) fired in onReadyToPlay but
+    // defensively â€” if setPersistenceMode(None) fired in onReadyToPlay but
     // playback never started cleanly, the next Videos-mode open would
     // otherwise inherit None and silently skip its own progress write.
     if (auto* player = window() ? window()->findChild<VideoPlayer*>() : nullptr) {
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
-        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — mirror the close
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 â€” mirror the close
         // path's stream-mode teardown here on failure so a later library
         // open doesn't inherit stale setStreamMode(true) state.
         player->setStreamMode(false);
@@ -3244,15 +3380,15 @@ void StreamPage::onStreamFailed(const QString& message)
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
     }
     m_bufferLabel->setText("Stream failed: " + message);
-    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.2 — generation-check + user-navigation
+    // STREAM_LIFECYCLE_FIX Phase 3 Batch 3.2 â€” generation-check + user-navigation
     // guard on the 3s auto-navigate timer. Audit P1-2 scenario: failure at T,
     // user nav to AddonManager at T+0.5s, T+3s fires, isActive() still false,
     // showBrowse() yanks user back off AddonManager. Triple-gate the fire:
-    //   (a) isCurrentGeneration — aborts if a new session started after
+    //   (a) isCurrentGeneration â€” aborts if a new session started after
     //       failure (user clicked a different tile, Shift+N, etc.). First
     //       real consumer of the Batch 1.3 generation-check pattern in the
     //       failure path specifically.
-    //   (b) still-on-player-layer — mainStack index 2 is the only layer
+    //   (b) still-on-player-layer â€” mainStack index 2 is the only layer
     //       where the failure label is visible. If user navigated to
     //       detail(1) / browse(0) / addon(3) / other(4+) the failure
     //       countdown is no longer user-visible and we must not yank them.
@@ -3260,7 +3396,7 @@ void StreamPage::onStreamFailed(const QString& message)
     //       would invert intent (return for every non-browse layer, including
     //       the player layer we want to navigate FROM). Taking `!= 2` as the
     //       correct check per my read of the user-facing UX.
-    //   (c) !isActive — preserved from pre-3.2 for belt-and-suspenders. If
+    //   (c) !isActive â€” preserved from pre-3.2 for belt-and-suspenders. If
     //       (a) and (b) both pass but a new playback is somehow active,
     //       showBrowse would interrupt it. Unlikely post-(a) but cheap.
     const quint64 gen = currentGeneration();
@@ -3268,7 +3404,7 @@ void StreamPage::onStreamFailed(const QString& message)
         if (!isCurrentGeneration(gen)) return;
         constexpr int kPlayerLayerIndex = 2;
         if (m_mainStack->currentIndex() != kPlayerLayerIndex) return;
-        // STREAM_NAV_BACK_STACK 2026-05-06 — restore pre-player view if
+        // STREAM_NAV_BACK_STACK 2026-05-06 â€” restore pre-player view if
         // we have a snapshot (typical post-failure recovery path); fall
         // back to library if no snapshot was captured (defensive).
         if (!m_playerController->isActive()) restorePlayerExitView();
@@ -3280,7 +3416,7 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
     using StopReason = StreamPlayerController::StopReason;
     auto* player = window() ? window()->findChild<VideoPlayer*>() : nullptr;
 
-    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 — source-switch reentrancy split.
+    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 â€” source-switch reentrancy split.
     // Replacement = startStream()'s first-line defensive stop, fired because
     // a NEW session is about to begin. Audit P0-1 root cause: pre-2.2 this
     // handler ran the full UserEnd teardown (clear epKey + hide buffer +
@@ -3292,7 +3428,7 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
     // Post-2.2: Replacement skips all teardown + navigation. Only disconnects
     // the OLD player signal receivers on `this`; the new session's
     // onReadyToPlay reconnects fresh per-session handlers. m_session is left
-    // alone — beginSession at the new session's entry already clobbered it.
+    // alone â€” beginSession at the new session's entry already clobbered it.
     if (reason == StopReason::Replacement) {
         if (player) {
             disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
@@ -3304,25 +3440,25 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
 
     // Failure arrives in parallel with streamFailed(msg) when Batch 2.2 wires
     // stopStream(StopReason::Failure) at controller failure sites. onStreamFailed
-    // drives the full failure UX — sets "Stream failed: msg" on the buffer
+    // drives the full failure UX â€” sets "Stream failed: msg" on the buffer
     // overlay label, starts a 3s timer, then navigates to browse. Running the
     // UserEnd teardown below would hide the buffer overlay (and therefore the
     // failure label) before onStreamFailed can fire, collapsing the 3s error
     // display window. Early-return here; onStreamFailed owns the UX.
     // Observability side effect: the [stream-session] log in stopStream already
-    // captured the failure boundary — this signal is the hook for future
+    // captured the failure boundary â€” this signal is the hook for future
     // Phase 3 failure-flow consolidation.
     if (reason == StopReason::Failure) {
         return;
     }
 
-    // UserEnd — normal end-of-session teardown.
+    // UserEnd â€” normal end-of-session teardown.
     m_session.epKey.clear();
     if (player) {
         disconnect(player, &VideoPlayer::progressUpdated, this, nullptr);
         disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
         disconnect(player, &VideoPlayer::streamNextEpisodeRequested, this, nullptr);
-        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — mirror stream-mode
+        // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 â€” mirror stream-mode
         // teardown here for the UserEnd path that arrives via direct
         // stopStream(UserEnd) rather than through the closeRequested
         // lambda (e.g. esc-key-to-stop scenarios post-STREAM_LIFECYCLE_FIX).
@@ -3332,15 +3468,15 @@ void StreamPage::onStreamStopped(StreamPlayerController::StopReason reason)
         player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
     }
     m_bufferOverlay->hide();
-    // Phase 2 Batch 2.5 — if the next-episode overlay is visible (player
+    // Phase 2 Batch 2.5 â€” if the next-episode overlay is visible (player
     // closed at near-end with a matched prefetch), keep the user on the
     // player layer so they can see the countdown + Play Now/Cancel buttons.
     // showBrowse would navigate to index 0 and orphan the overlay.
     if (m_nextEpisodeOverlay && m_nextEpisodeOverlay->isVisible()) {
         return;
     }
-    // STREAM_NAV_BACK_STACK 2026-05-06 — load-bearing for Hemanth's bug.
-    // Was: showBrowse() — yanked the user to library on every player
+    // STREAM_NAV_BACK_STACK 2026-05-06 â€” load-bearing for Hemanth's bug.
+    // Was: showBrowse() â€” yanked the user to library on every player
     // close. Now: restore the pre-player view from the launchPlayer
     // snapshot so the user lands on their originating Detail / Catalog
     // / Search page. Falls back to showBrowse only when no snapshot

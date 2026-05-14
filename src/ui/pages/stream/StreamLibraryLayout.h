@@ -8,6 +8,7 @@
 class CoreBridge;
 class StreamLibrary;
 class StreamDownloadIndex;
+class TorrentClient;
 class TileStrip;
 class TileCard;
 class QNetworkAccessManager;
@@ -26,6 +27,11 @@ public:
     // index so tiles can render the DOWNLOADED chip and refresh on
     // entriesChanged.
     void setStreamDownloadIndex(StreamDownloadIndex* idx);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — wire TorrentClient so the
+    // DOWNLOADING chip can query imdbHasActiveCohort and refresh on
+    // streamBulkGroupsChanged.
+    void setTorrentClient(TorrentClient* client);
 
 signals:
     void showClicked(const QString& imdbId);
@@ -52,6 +58,7 @@ private:
     CoreBridge*    m_bridge;
     StreamLibrary* m_library;
     StreamDownloadIndex* m_downloadIndex = nullptr;
+    TorrentClient*       m_torrentClient = nullptr;
     QNetworkAccessManager* m_nam;
 
     // UI

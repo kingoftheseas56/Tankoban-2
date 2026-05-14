@@ -2,6 +2,7 @@
 
 #include "core/CoreBridge.h"
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/torrent/TorrentClient.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "ui/pages/TileCard.h"
@@ -57,6 +58,22 @@ void StreamLibraryLayout::setStreamDownloadIndex(StreamDownloadIndex* idx)
     }
 }
 
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL — wire TorrentClient so the
+// DOWNLOADING chip can query imdbHasActiveCohort and refresh on
+// streamBulkGroupsChanged. Pattern mirrors setStreamDownloadIndex.
+void StreamLibraryLayout::setTorrentClient(TorrentClient* client)
+{
+    if (m_torrentClient == client) return;
+    if (m_torrentClient) disconnect(m_torrentClient, nullptr, this, nullptr);
+    m_torrentClient = client;
+    if (m_torrentClient) {
+        connect(m_torrentClient, &TorrentClient::streamBulkGroupsChanged,
+                this, [this](const QString&) { refreshTileBadges(); },
+                Qt::QueuedConnection);
+    }
+    refreshTileBadges();
+}
+
 // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — eager disk-state
 // validation when the user opens Stream library home. Off-thread; lazy
 // on click (StreamDetailView::onEpisodeActivated) continues to be the
@@ -75,15 +92,20 @@ void StreamLibraryLayout::showEvent(QShowEvent* event)
 
 void StreamLibraryLayout::refreshTileBadges()
 {
-    if (!m_downloadIndex || !m_strip) return;
+    if (!m_strip) return;
 
     const QList<TileCard*> tiles = m_strip->findChildren<TileCard*>();
     for (TileCard* card : tiles) {
         const QString imdb = card->property("imdbId").toString();
         if (imdb.isEmpty()) continue;
-        const bool downloaded = m_downloadIndex->hasAnyForImdb(imdb);
-        QLabel* chip = card->findChild<QLabel*>(QStringLiteral("DownloadedChip"));
-        if (chip) chip->setVisible(downloaded);
+        const bool downloaded =
+            m_downloadIndex && m_downloadIndex->hasAnyForImdb(imdb);
+        const bool downloading =
+            m_torrentClient && m_torrentClient->imdbHasActiveCohort(imdb);
+        QLabel* dlChip = card->findChild<QLabel*>(QStringLiteral("DownloadedChip"));
+        QLabel* dlActiveChip = card->findChild<QLabel*>(QStringLiteral("DownloadingChip"));
+        if (dlActiveChip) dlActiveChip->setVisible(downloading);
+        if (dlChip)       dlChip->setVisible(downloaded && !downloading);
     }
 }
 
@@ -298,24 +320,57 @@ void StreamLibraryLayout::populateTiles()
         card->setProperty("sortRating", entry.imdbRating.toDouble());
 
         // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — DOWNLOADED chip
-        // overlay. Same QSS family as Tankorent's STREAM chip — small-caps,
-        // gray-bg, no color, no emoji per feedback_no_color_no_emoji.md.
+        // overlay. Tidied 2026-05-12 per Hemanth feedback "asymmetrical
+        // downloaded badge, please make it tidy". Changes: dropped the 1px
+        // gray border (read as a hairline on the dark poster), bumped
+        // border-radius from 3 → 4 to match the poster's corner curvature,
+        // padding to symmetric 3px vertical × 7px horizontal (prior 1×5
+        // made it look horizontally stretched + vertically pinched), and
+        // nudged the chip inward from (8,8) → (10,10) so its left edge
+        // doesn't collide with the poster's top-left rounded corner.
         // Visibility flipped by refreshTileBadges() on entriesChanged.
         auto* dlChip = new QLabel(QStringLiteral("DOWNLOADED"), card);
         dlChip->setObjectName(QStringLiteral("DownloadedChip"));
         dlChip->setStyleSheet(QStringLiteral(
-            "#DownloadedChip { color: #eeeeee; border: 1px solid #666666;"
-            " border-radius: 3px; padding: 1px 5px; font-size: 9px;"
-            " font-weight: 600; letter-spacing: 0px;"
-            " background-color: rgba(0, 0, 0, 160); }"));
+            "#DownloadedChip { color: #eeeeee; border: none;"
+            " border-radius: 4px; padding: 3px 7px; font-size: 9px;"
+            " font-weight: 600; letter-spacing: 0.4px;"
+            " background-color: rgba(0, 0, 0, 190); }"));
         dlChip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 post-smoke — call
+        // adjustSize() after setStyleSheet() so the chip's geometry shrinks
+        // to (text-width + QSS-padding) instead of Qt's default sizeHint
+        // which caches before the stylesheet's padding contribution is
+        // accounted for. Without this, the background-color rect renders
+        // wider than the text + asymmetric (Hemanth's "lots of open space
+        // after the text" observation).
+        dlChip->adjustSize();
         dlChip->setVisible(m_downloadIndex && m_downloadIndex->hasAnyForImdb(entry.imdb));
-        // Position: top-right corner of the poster image. Use absolute
-        // positioning relative to the TileCard so it floats above whatever
-        // the TileCard's internal layout draws. 8/8 margin tunable post-smoke
-        // if visual offset looks wrong.
-        dlChip->move(8, 8);
+        dlChip->move(10, 10);
         dlChip->raise();
+
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — DOWNLOADING chip. Same QSS family
+        // as DOWNLOADED. In-flight wins: when imdbHasActiveCohort returns true,
+        // only DOWNLOADING renders; DOWNLOADED is hidden until the cohort
+        // terminates. Spec §7.2.
+        auto* dlActiveChip = new QLabel(QStringLiteral("DOWNLOADING"), card);
+        dlActiveChip->setObjectName(QStringLiteral("DownloadingChip"));
+        dlActiveChip->setStyleSheet(QStringLiteral(
+            "#DownloadingChip { color: #eeeeee; border: none;"
+            " border-radius: 4px; padding: 3px 7px; font-size: 9px;"
+            " font-weight: 600; letter-spacing: 0.4px;"
+            " background-color: rgba(0, 0, 0, 190); }"));
+        dlActiveChip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        dlActiveChip->adjustSize();   // see chip-asymmetry note above
+        const bool downloading =
+            m_torrentClient && m_torrentClient->imdbHasActiveCohort(entry.imdb);
+        dlActiveChip->setVisible(downloading);
+        dlActiveChip->move(10, 10);  // same corner as DOWNLOADED chip
+        dlActiveChip->raise();
+        // In-flight wins — hide DOWNLOADED when DOWNLOADING shows.
+        if (downloading) {
+            dlChip->setVisible(false);
+        }
 
         m_strip->addTile(card);
     }
