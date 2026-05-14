@@ -8,6 +8,10 @@
 #include "core/torrent/TorrentClient.h"
 #include "StreamSourceList.h"
 
+#include <QCheckBox>
+#include <QCursor>
+#include <QSettings>
+#include <QToolButton>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -29,7 +33,10 @@
 #include <QPixmap>
 #include <QPoint>
 #include <QPointer>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QPushButton>
+#include <QSize>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -37,6 +44,86 @@
 using tankostream::addon::MetaItem;
 using tankostream::stream::MetaAggregator;
 using tankostream::stream::StreamEpisode;
+
+namespace {
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL — episode-table columns. Prepended
+// checkbox at col 0; appended action icon at col last. Existing columns
+// shift +1. All previous references to literal column indices (0..4)
+// must use these constants instead. Spec §7.1.
+constexpr int kColCheckbox  = 0;
+constexpr int kColEpisode   = 1;   // was col 0 (#)
+constexpr int kColThumb     = 2;   // was col 1
+constexpr int kColTitle     = 3;   // was col 2
+constexpr int kColProgress  = 4;   // was col 3
+constexpr int kColStatus    = 5;   // was col 4
+constexpr int kColAction    = 6;   // NEW
+constexpr int kColumnCount  = 7;
+
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL — derived row state for paint pass.
+// Resolves to a single enum value covering both Layer 3 (download index)
+// and Layer 2 (cohort snapshot) sources. Spec §7.1 state map.
+enum class RowState {
+    Idle,           // not downloaded, no cohort entry
+    Queued,         // cohort item state = Pending, no infoHash yet
+    Downloading,
+    Publishing,
+    Published,      // downloaded; auto-play on click
+    Paused,
+    Failed,
+};
+
+struct RowStateInput {
+    bool   downloadIndexHit  = false;
+    bool   cohortHit         = false;
+    QString cohortState;
+};
+
+RowState resolveRowState(const RowStateInput& in)
+{
+    if (in.downloadIndexHit) return RowState::Published;
+    if (!in.cohortHit)       return RowState::Idle;
+    if (in.cohortState == QLatin1String("Paused"))      return RowState::Paused;
+    if (in.cohortState == QLatin1String("Downloading")) return RowState::Downloading;
+    if (in.cohortState == QLatin1String("Publishing"))  return RowState::Publishing;
+    if (in.cohortState == QLatin1String("Pending"))     return RowState::Queued;
+    return RowState::Failed;
+}
+
+struct ActionIconSpec {
+    QString iconResource;
+    QString tooltip;
+    bool    enabled = true;
+};
+
+ActionIconSpec actionIconForState(RowState st)
+{
+    switch (st) {
+    case RowState::Idle:        return { QStringLiteral(":/icons/download-arrow.svg"), QObject::tr("Download episode"), true };
+    case RowState::Queued:      return { QStringLiteral(":/icons/download-arrow.svg"), QObject::tr("Queued — waiting for cohort head"), false };
+    case RowState::Downloading: return { QStringLiteral(":/icons/pause-circle.svg"),   QObject::tr("Pause download"), true };
+    case RowState::Publishing:  return { QStringLiteral(":/icons/pause-circle.svg"),   QObject::tr("Publishing"), false };
+    case RowState::Published:   return { QStringLiteral(":/icons/check.svg"),          QObject::tr("Downloaded — options"), true };
+    case RowState::Paused:      return { QStringLiteral(":/icons/play-circle.svg"),    QObject::tr("Continue download"), true };
+    case RowState::Failed:      return { QStringLiteral(":/icons/retry-arrow.svg"),    QObject::tr("Retry"), true };
+    }
+    return { QStringLiteral(":/icons/download-arrow.svg"), QString(), true };
+}
+
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — file-local terminal-state
+// predicate for cohort state strings. Mirrors the set used by
+// TorrentClient::cancelStreamBulkGroup's cleanup check but avoids
+// header-coupling the full predicate into this translation unit.
+bool isTerminalCohortState(const QString& state)
+{
+    static const QSet<QString> kTerminal = {
+        QStringLiteral("Published"),      QStringLiteral("Completed"),
+        QStringLiteral("Cancelled"),      QStringLiteral("MissingSource"),
+        QStringLiteral("MetadataFailed"), QStringLiteral("PublishFailed"),
+        QStringLiteral("Failed"),         QStringLiteral("Orphaned"),
+    };
+    return kTerminal.contains(state);
+}
+}  // namespace
 
 StreamDetailView::StreamDetailView(CoreBridge* bridge,
                                    MetaAggregator* meta,
@@ -91,6 +178,9 @@ void StreamDetailView::showEntry(const QString& imdbId,
     if (m_downloadSeasonBtn) m_downloadSeasonBtn->hide();
     m_statusLabel->setText("Loading...");
     m_statusLabel->show();
+
+    m_selectedEpisodes.clear();
+    updateDownloadSelectedButton();
 
     // Resolve the display source for the header paint. Preview hint wins
     // when provided (non-library catalog/home/search tiles); library lookup
@@ -398,24 +488,50 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::onSeasonChanged);
     seasonLayout->addWidget(m_seasonCombo);
 
-    m_downloadSeasonBtn = new QPushButton(tr("Download season"), m_seasonRow);
+    m_downloadSeasonBtn = new QPushButton(tr("Download Season"), m_seasonRow);
     m_downloadSeasonBtn->setObjectName(QStringLiteral("DetailDownloadSeasonBtn"));
     m_downloadSeasonBtn->setFixedHeight(30);
     m_downloadSeasonBtn->setCursor(Qt::PointingHandCursor);
+    m_downloadSeasonBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+    m_downloadSeasonBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_downloadSeasonBtn->setStyleSheet(
         "#DetailDownloadSeasonBtn { background: rgba(255,255,255,0.08);"
         "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
         "  color: #ddd; padding: 0 12px; font-size: 12px; }"
         "#DetailDownloadSeasonBtn:hover { background: rgba(255,255,255,0.12);"
         "  border-color: rgba(255,255,255,0.22); }");
-    connect(m_downloadSeasonBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_seasonCombo) return;
-        const int season = m_seasonCombo->currentData().toInt();
-        if (m_currentType != QLatin1String("series") || m_seasons.value(season).isEmpty())
-            return;
-        emit bulkDownloadRequested(season);
-    });
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — replace the prior
+    // bulkDownloadRequested-lambda with the morphing-button slot.
+    connect(m_downloadSeasonBtn, &QPushButton::clicked,
+            this, &StreamDetailView::onDownloadSeasonClicked);
+    connect(m_downloadSeasonBtn, &QPushButton::customContextMenuRequested,
+            this, &StreamDetailView::onSeasonHeaderRightClick);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — "Download Selected (N)"
+    // secondary button; visible only when m_selectedEpisodes is non-empty.
+    m_downloadSelectedBtn = new QPushButton(this);
+    m_downloadSelectedBtn->setCursor(Qt::PointingHandCursor);
+    m_downloadSelectedBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+    m_downloadSelectedBtn->setVisible(false);
+    m_downloadSelectedBtn->setFixedHeight(30);
+    m_downloadSelectedBtn->setObjectName(QStringLiteral("DetailDownloadSelectedBtn"));
+    m_downloadSelectedBtn->setStyleSheet(
+        "#DetailDownloadSelectedBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0 12px; font-size: 12px; }"
+        "#DetailDownloadSelectedBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(m_downloadSelectedBtn, &QPushButton::clicked,
+            this, &StreamDetailView::onDownloadSelectedClicked);
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — right-click on the season
+    // combo also opens the "Cancel Season" context menu.
+    m_seasonCombo->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_seasonCombo, &QComboBox::customContextMenuRequested,
+            this, &StreamDetailView::onSeasonHeaderRightClick);
+
     seasonLayout->addStretch();
+    seasonLayout->addWidget(m_downloadSelectedBtn);
     seasonLayout->addWidget(m_downloadSeasonBtn);
 
     m_seasonRow->hide();
@@ -426,20 +542,32 @@ void StreamDetailView::buildUI()
     // loads its sources on showEntry and the user clicks a source card
     // directly (no middle-column button).
     m_episodeTable = new QTableWidget(this);
-    // Phase 3 Batch 3.4 — 5-column layout with left-side thumbnail + stacked
-    // title/overview cell:
-    //   [0 #] [1 Thumb 64x36] [2 Title+Overview stacked] [3 Progress] [4 ✓]
-    m_episodeTable->setColumnCount(5);
-    m_episodeTable->setHorizontalHeaderLabels({"#", "", "Title", "Progress", "Status"});
-    m_episodeTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
-    m_episodeTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
-    m_episodeTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    m_episodeTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
-    m_episodeTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
-    m_episodeTable->setColumnWidth(0, 36);
-    m_episodeTable->setColumnWidth(1, 76);   // 64px thumb + 12px padding
-    m_episodeTable->setColumnWidth(3, 80);
-    m_episodeTable->setColumnWidth(4, 60);
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — 7-column layout. Prepended checkbox
+    // at col 0; appended action icon at col 6. Existing columns shift +1.
+    //   [0 ☐] [1 #] [2 Thumb 64x36] [3 Title+Overview stacked] [4 Progress] [5 Status] [6 ⋮]
+    m_episodeTable->setColumnCount(kColumnCount);
+    m_episodeTable->setHorizontalHeaderLabels({
+        QString(),                   // checkbox — no header text
+        QStringLiteral("#"),
+        QString(),                   // thumbnail — no header text
+        tr("Title"),
+        tr("Progress"),
+        tr("Status"),
+        QString(),                   // action — no header text
+    });
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColCheckbox,  QHeaderView::Fixed);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColEpisode,   QHeaderView::Fixed);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColThumb,     QHeaderView::Fixed);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColTitle,     QHeaderView::Stretch);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColProgress,  QHeaderView::Fixed);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColStatus,    QHeaderView::Fixed);
+    m_episodeTable->horizontalHeader()->setSectionResizeMode(kColAction,    QHeaderView::Fixed);
+    m_episodeTable->setColumnWidth(kColCheckbox, 32);
+    m_episodeTable->setColumnWidth(kColEpisode,  36);
+    m_episodeTable->setColumnWidth(kColThumb,    76);   // 64px thumb + 12px padding
+    m_episodeTable->setColumnWidth(kColProgress, 80);
+    m_episodeTable->setColumnWidth(kColStatus,   60);
+    m_episodeTable->setColumnWidth(kColAction,   36);
     m_episodeTable->verticalHeader()->setDefaultSectionSize(64);
     m_episodeTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_episodeTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -561,6 +689,19 @@ void StreamDetailView::updateBulkDownloadButton()
     m_downloadSeasonBtn->setVisible(visible);
 }
 
+void StreamDetailView::updateDownloadSelectedButton()
+{
+    if (!m_downloadSelectedBtn)
+        return;
+    const int n = m_selectedEpisodes.size();
+    if (n == 0) {
+        m_downloadSelectedBtn->setVisible(false);
+    } else {
+        m_downloadSelectedBtn->setVisible(true);
+        m_downloadSelectedBtn->setText(tr("Download Selected (%1)").arg(n));
+    }
+}
+
 // ─── Series metadata ─────────────────────────────────────────────────────────
 
 void StreamDetailView::onSeriesMetaReady(
@@ -585,9 +726,26 @@ void StreamDetailView::onSeriesMetaReady(
     m_seasonCombo->clear();
     int preselectComboIdx = -1;
     int idx = 0;
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 post-smoke v2 — read
+    // last-viewed season from QSettings (set by onSeasonChanged below).
+    // Explicit preselect (from a calendar/back-stack/etc. nav) wins over
+    // the remembered last-viewed; the persisted value is the fallback
+    // for the library-tile → detail-view default path.
+    int rememberedSeason = -1;
+    {
+        QSettings s;
+        const QString key = QStringLiteral("stream/lastSeason/") + m_currentImdb;
+        const QVariant v = s.value(key);
+        if (v.isValid()) rememberedSeason = v.toInt();
+    }
     for (auto it = m_seasons.begin(); it != m_seasons.end(); ++it) {
         m_seasonCombo->addItem("Season " + QString::number(it.key()), it.key());
         if (m_pendingPreselectSeason >= 0 && it.key() == m_pendingPreselectSeason)
+            preselectComboIdx = idx;
+        else if (m_pendingPreselectSeason < 0
+                 && preselectComboIdx < 0
+                 && rememberedSeason > 0
+                 && it.key() == rememberedSeason)
             preselectComboIdx = idx;
         ++idx;
     }
@@ -606,7 +764,7 @@ void StreamDetailView::onSeriesMetaReady(
 
         if (m_pendingPreselectEpisode >= 0) {
             for (int r = 0; r < m_episodeTable->rowCount(); ++r) {
-                auto* cell = m_episodeTable->item(r, 0);
+                auto* cell = m_episodeTable->item(r, kColEpisode);
                 if (cell && cell->data(Qt::UserRole).toInt() == m_pendingPreselectEpisode) {
                     m_episodeTable->selectRow(r);
                     m_episodeTable->scrollToItem(cell, QAbstractItemView::PositionAtCenter);
@@ -628,9 +786,23 @@ void StreamDetailView::onSeasonChanged(int comboIndex)
     if (comboIndex < 0 || comboIndex >= m_seasonCombo->count())
         return;
 
+    m_selectedEpisodes.clear();
+    updateDownloadSelectedButton();
+
     int season = m_seasonCombo->itemData(comboIndex).toInt();
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 post-smoke v2 —
+    // persist per-show last-viewed season so the next time the user
+    // opens this show, the same season auto-loads instead of always
+    // defaulting to the first season.
+    if (!m_currentImdb.isEmpty() && season > 0) {
+        QSettings s;
+        s.setValue(QStringLiteral("stream/lastSeason/") + m_currentImdb, season);
+    }
     populateEpisodeTable(season);
     updateBulkDownloadButton();
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — re-evaluate the
+    // season-header morphing button for the newly-selected season.
+    refreshSeasonHeaderButton();
 }
 
 void StreamDetailView::populateEpisodeTable(int season)
@@ -647,13 +819,78 @@ void StreamDetailView::populateEpisodeTable(int season)
         m_episodeTable->insertRow(row);
         m_episodeTable->setRowHeight(row, 64);
 
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — col 0 checkbox cell. State synced
+        // to m_selectedEpisodes via stateChanged slot below. Default unchecked
+        // unless m_selectedEpisodes already holds this episode (i.e., the
+        // season was just re-populated and selection survives).
+        auto* cbHolder = new QWidget(m_episodeTable);
+        auto* cbLayout = new QHBoxLayout(cbHolder);
+        cbLayout->setContentsMargins(8, 0, 8, 0);
+        cbLayout->setAlignment(Qt::AlignCenter);
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 post-smoke v2 —
+        // QToolButton with swappable SVG icon replaces QCheckBox. Two
+        // prior attempts (QSS border on indicator, QSS image: url on
+        // indicator) both rendered as a partial "[" bracket because
+        // Win11's native QStyle::PE_IndicatorCheckBox primitive clips
+        // QCheckBox::indicator geometry to its own intrinsic size,
+        // ignoring the QSS width/height directive. QToolButton bypasses
+        // PE_IndicatorCheckBox entirely — Qt just draws the icon we
+        // provide at the fixed size we set. Tankoban discipline:
+        // grayscale, no color, no emoji.
+        auto* checkbox = new QToolButton(cbHolder);
+        checkbox->setCheckable(true);
+        checkbox->setFixedSize(18, 18);
+        checkbox->setIconSize(QSize(14, 14));
+        checkbox->setAutoRaise(true);
+        checkbox->setCursor(Qt::PointingHandCursor);
+        checkbox->setStyleSheet(QStringLiteral(
+            "QToolButton { border: none; background: transparent; padding: 0; }"
+            "QToolButton:hover { background: rgba(255,255,255,0.06); border-radius: 2px; }"));
+        const bool initiallyChecked = m_selectedEpisodes.contains(ep.episode);
+        checkbox->setChecked(initiallyChecked);
+        checkbox->setIcon(QIcon(initiallyChecked
+            ? QStringLiteral(":/icons/checkbox-checked.svg")
+            : QStringLiteral(":/icons/checkbox-empty.svg")));
+        checkbox->setProperty("episodeNum", ep.episode);
+        connect(checkbox, &QToolButton::toggled, this,
+                [this, checkbox, episode = ep.episode](bool checked) {
+                    checkbox->setIcon(QIcon(checked
+                        ? QStringLiteral(":/icons/checkbox-checked.svg")
+                        : QStringLiteral(":/icons/checkbox-empty.svg")));
+                    if (checked) m_selectedEpisodes.insert(episode);
+                    else         m_selectedEpisodes.remove(episode);
+                    updateDownloadSelectedButton();
+                });
+        cbLayout->addWidget(checkbox);
+        m_episodeTable->setCellWidget(row, kColCheckbox, cbHolder);
+
+        // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — col 6 action-icon cell.
+        // Initial glyph chosen by resolveRowState; updated in
+        // refreshEpisodeMarkers + refreshEpisodeBulkProgress on subsequent
+        // ticks (Task 12). Click routes through onActionIconClicked.
+        auto* iconHolder = new QWidget(m_episodeTable);
+        auto* iconLayout = new QHBoxLayout(iconHolder);
+        iconLayout->setContentsMargins(4, 0, 4, 0);
+        iconLayout->setAlignment(Qt::AlignCenter);
+        auto* btn = new QPushButton(iconHolder);
+        btn->setFlat(true);
+        btn->setFixedSize(24, 24);
+        btn->setIconSize(QSize(16, 16));
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setProperty("episodeNum", ep.episode);
+        connect(btn, &QPushButton::clicked, this, [this, btn, episode = ep.episode]() {
+            onActionIconClicked(episode, btn->mapToGlobal(btn->rect().center()));
+        });
+        iconLayout->addWidget(btn);
+        m_episodeTable->setCellWidget(row, kColAction, iconHolder);
+
         // Column 0 — episode number (also the carrier of UserRole data for
         // the Calendar preselect lookup + onEpisodeActivated dispatch).
         auto* numItem = new QTableWidgetItem(QString::number(ep.episode));
         numItem->setTextAlignment(Qt::AlignCenter);
         numItem->setData(Qt::UserRole, ep.episode);
         numItem->setData(Qt::UserRole + 1, season);
-        m_episodeTable->setItem(row, 0, numItem);
+        m_episodeTable->setItem(row, kColEpisode, numItem);
 
         // Column 1 — thumbnail (64x36). QLabel as cell widget: disk-cache
         // hit paints synchronously; miss kicks an async download via NAM.
@@ -677,7 +914,7 @@ void StreamDetailView::populateEpisodeTable(int season)
             fetchEpisodeThumbnail(m_currentImdb, season, ep.episode,
                                   ep.thumbnail, thumbLabel);
         }
-        m_episodeTable->setCellWidget(row, 1, thumbHolder);
+        m_episodeTable->setCellWidget(row, kColThumb, thumbHolder);
 
         // Column 2 — stacked title (primary) + overview (italic gray, 2-line
         // clamp). QLabel with Qt::TextWordWrap + fixed line count achieves
@@ -710,7 +947,7 @@ void StreamDetailView::populateEpisodeTable(int season)
         } else {
             titleLayout->addStretch();
         }
-        m_episodeTable->setCellWidget(row, 2, titleCell);
+        m_episodeTable->setCellWidget(row, kColTitle, titleCell);
 
         // Column 3 — progress %.
         const QString epKey = StreamProgress::episodeKey(m_currentImdb, season, ep.episode);
@@ -726,14 +963,14 @@ void StreamDetailView::populateEpisodeTable(int season)
             progItem->setText(QString::number(static_cast<int>(pct)) + "%");
         else
             progItem->setText("-");
-        m_episodeTable->setItem(row, 3, progItem);
+        m_episodeTable->setItem(row, kColProgress, progItem);
 
         // Column 4 — status checkmark.
         auto* statusItem = new QTableWidgetItem();
         statusItem->setTextAlignment(Qt::AlignCenter);
         if (finished)
             statusItem->setText("\u2713");
-        m_episodeTable->setItem(row, 4, statusItem);
+        m_episodeTable->setItem(row, kColStatus, statusItem);
     }
 
     // Phase 3 Batch 3.4 — sorting disabled. Cell widgets in cols 1/2 (thumb,
@@ -748,11 +985,29 @@ void StreamDetailView::populateEpisodeTable(int season)
     // hash lookup per row); safe pre-show.
     refreshEpisodeMarkers();
 
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 12 — initial paint pass for
+    // action icons. Subsequent ticks via refreshEpisodeBulkProgress /
+    // streamBulkGroupsChanged signal.
+    const auto initialSnap = m_torrentClient
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString, int>>();
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        QTableWidgetItem* numItem = m_episodeTable->item(row, kColEpisode);
+        if (!numItem) continue;
+        const int ep = numItem->data(Qt::UserRole).toInt();
+        if (ep <= 0) continue;
+        repaintActionIconForRow(row, ep, season, initialSnap);
+    }
+
     // STREAM_BULK_DOWNLOAD_V2 Phase 3 — paint per-row download-state from
     // the TorrentClient bulk snapshot, and start the 1Hz poll timer if
     // any bulk activity exists for this show+season. Self-stops in the
     // slot when activity drains.
     refreshEpisodeBulkProgress();
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — initial paint of the
+    // season-header morphing button for the newly-populated season.
+    refreshSeasonHeaderButton();
 
     m_episodeTable->show();
 }
@@ -761,7 +1016,7 @@ void StreamDetailView::populateEpisodeTable(int season)
 
 void StreamDetailView::onEpisodeActivated(int row, int /*col*/)
 {
-    auto* numItem = m_episodeTable->item(row, 0);
+    auto* numItem = m_episodeTable->item(row, kColEpisode);
     if (!numItem) return;
 
     int episode = numItem->data(Qt::UserRole).toInt();
@@ -826,28 +1081,19 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
 // custom QWidget where icon mounting would mean rebuilding the layout.
 void StreamDetailView::refreshEpisodeMarkers()
 {
-    if (!m_episodeTable || !m_downloadIndex || m_currentImdb.isEmpty())
-        return;
-    if (m_currentType != QLatin1String("series"))
-        return;
-
-    static const QIcon dlIcon(QStringLiteral(":/icons/downloaded.svg"));
-
+    // Post-NETFLIX_OVERHAUL P3 revision (Hemanth, 2026-05-12): the
+    // downloaded-row indicator moved entirely to the right-side action
+    // icon (kColAction). The # column is just the episode number now.
+    // Function body retained as a no-op so existing entriesChanged /
+    // libraryChanged signal subscriptions keep their connect target,
+    // and so any stale icon/tooltip from prior wakes gets cleared on
+    // first refresh after upgrade.
+    if (!m_episodeTable) return;
     for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
-        QTableWidgetItem* numItem = m_episodeTable->item(row, 0);
+        QTableWidgetItem* numItem = m_episodeTable->item(row, kColEpisode);
         if (!numItem) continue;
-        const int episode = numItem->data(Qt::UserRole).toInt();
-        const int season  = numItem->data(Qt::UserRole + 1).toInt();
-        if (season <= 0 || episode <= 0) continue;
-
-        const auto pathOpt = m_downloadIndex->filePathFor(m_currentImdb, season, episode);
-        if (pathOpt.has_value()) {
-            numItem->setIcon(dlIcon);
-            numItem->setToolTip(tr("On disk: %1").arg(QFileInfo(*pathOpt).fileName()));
-        } else {
-            numItem->setIcon(QIcon());
-            numItem->setToolTip(QString());
-        }
+        if (!numItem->icon().isNull()) numItem->setIcon(QIcon());
+        if (!numItem->toolTip().isEmpty()) numItem->setToolTip(QString());
     }
 }
 
@@ -901,8 +1147,8 @@ void StreamDetailView::refreshEpisodeBulkProgress()
 
     bool anyActive = false;  // any non-terminal row → keep polling
     for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
-        QTableWidgetItem* numItem = m_episodeTable->item(row, 0);
-        QTableWidgetItem* statusItem = m_episodeTable->item(row, 4);
+        QTableWidgetItem* numItem = m_episodeTable->item(row, kColEpisode);
+        QTableWidgetItem* statusItem = m_episodeTable->item(row, kColStatus);
         if (!numItem || !statusItem) continue;
         const int episode = numItem->data(Qt::UserRole).toInt();
         if (episode <= 0) continue;
@@ -937,6 +1183,12 @@ void StreamDetailView::refreshEpisodeBulkProgress()
             statusItem->setText(tr("Done"));
             anyActive = true;
         }
+
+        // Task 12 — repaint the action-icon button for this row to reflect
+        // the latest cohort state (pause-icon while Downloading, retry-icon
+        // on Failed, etc.). Called on every tick so the glyph stays in sync
+        // without requiring a full table rebuild.
+        repaintActionIconForRow(row, episode, activeSeason, snapshot);
     }
 
     if (anyActive) {
@@ -946,6 +1198,10 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         if (m_bulkPollTimer && m_bulkPollTimer->isActive())
             m_bulkPollTimer->stop();
     }
+
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — keep the season-header
+    // morphing button in sync with the cohort state that was just read.
+    refreshSeasonHeaderButton();
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click context
@@ -959,17 +1215,77 @@ void StreamDetailView::onEpisodeContextMenu(const QPoint& pos)
     if (!m_episodeTable) return;
     const QModelIndex idx = m_episodeTable->indexAt(pos);
     if (!idx.isValid()) return;
-
-    QTableWidgetItem* numItem = m_episodeTable->item(idx.row(), 0);
+    QTableWidgetItem* numItem = m_episodeTable->item(idx.row(), kColEpisode);
     if (!numItem) return;
     const int episode = numItem->data(Qt::UserRole).toInt();
     const int season  = numItem->data(Qt::UserRole + 1).toInt();
     if (episode <= 0 || season <= 0) return;
+    showRowActionsMenu(season, episode, m_episodeTable->viewport()->mapToGlobal(pos));
+}
+
+// Post-NETFLIX_OVERHAUL P3 revision (Hemanth 2026-05-12) — shared menu
+// builder for the per-row actions. Called from onEpisodeContextMenu
+// (right-click; Layer 3 Rule D path preserved) and from
+// onActionIconClicked's Published branch (left-click on the tick).
+// Cancel label morphs to Remove for Published — Cancel only makes
+// sense while downloading; Remove deletes the file from disk and
+// evicts the index entry. Engine path is the same per-item
+// cancelStreamBulkItem(deleteFile=true); no new engine API.
+void StreamDetailView::showRowActionsMenu(int season, int episode,
+                                          const QPoint& globalAnchorPos)
+{
+    if (season <= 0 || episode <= 0 || m_currentImdb.isEmpty()) return;
+
+    // Resolve state for the Cancel/Remove gate + label morph.
+    RowStateInput in;
+    if (m_downloadIndex) {
+        in.downloadIndexHit =
+            m_downloadIndex->filePathFor(m_currentImdb, season, episode).has_value();
+    }
+    if (m_torrentClient) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+        auto it = snap.constFind(episode);
+        if (it != snap.cend()) {
+            in.cohortHit = true;
+            in.cohortState = it->first;
+        }
+    }
+    const RowState st = resolveRowState(in);
 
     QMenu menu(this);
+    QAction* cancelOrRemoveAct = nullptr;
+    if (st == RowState::Downloading || st == RowState::Publishing ||
+        st == RowState::Paused      || st == RowState::Published  ||
+        st == RowState::Queued) {
+        cancelOrRemoveAct = menu.addAction(
+            st == RowState::Published ? tr("Remove") : tr("Cancel"));
+    }
     QAction* altAct = menu.addAction(tr("Show alternate streams"));
-    QAction* picked = menu.exec(m_episodeTable->viewport()->mapToGlobal(pos));
-    if (picked == altAct) {
+
+    QAction* chosen = menu.exec(globalAnchorPos);
+    if (chosen == cancelOrRemoveAct && cancelOrRemoveAct) {
+        // Confirmation only for destructive states.
+        if (st == RowState::Published) {
+            const auto reply = QMessageBox::question(this, tr("Remove download?"),
+                tr("Remove this download? The file will be deleted from disk.\n"
+                   "This cannot be undone."),
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply != QMessageBox::Yes) return;
+        } else if (st == RowState::Paused) {
+            const auto reply = QMessageBox::question(this, tr("Cancel episode?"),
+                tr("Delete this episode's file from disk? This cannot be undone."),
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply != QMessageBox::Yes) return;
+        }
+        const QString groupId = findGroupIdForCohort(season);
+        const QString itemKey = QStringLiteral("%1:S%2E%3")
+            .arg(m_currentImdb)
+            .arg(season, 2, 10, QLatin1Char('0'))
+            .arg(episode, 2, 10, QLatin1Char('0'));
+        if (!groupId.isEmpty() && m_torrentClient) {
+            m_torrentClient->cancelStreamBulkItem(groupId, itemKey, /*deleteFile=*/true);
+        }
+    } else if (chosen == altAct) {
         emit alternateStreamRequested(season, episode);
     }
 }
@@ -981,6 +1297,333 @@ void StreamDetailView::updateProgressColumn()
 
     int season = m_seasonCombo->currentData().toInt();
     populateEpisodeTable(season);
+}
+
+// ─── STREAM_DOWNLOADS_NETFLIX_OVERHAUL — action-icon helpers + slot ──────────
+
+void StreamDetailView::setTorrentClient(TorrentClient* client)
+{
+    m_torrentClient = client;
+
+    // Task 12 — subscribe to cohort-state changes so action icons repaint
+    // immediately on every group mutation (pause/resume/retry/cancel/complete)
+    // rather than waiting up to 1s for the next poll tick.
+    if (m_torrentClient) {
+        connect(m_torrentClient, &TorrentClient::streamBulkGroupsChanged,
+                this, [this](const QString& /*groupId*/) {
+                    refreshEpisodeBulkProgress();
+                }, Qt::QueuedConnection);
+    }
+}
+
+void StreamDetailView::repaintActionIconForRow(int row,
+                                                int episode,
+                                                int season,
+                                                const QHash<int, QPair<QString, int>>& cohortSnap)
+{
+    auto* holder = qobject_cast<QWidget*>(m_episodeTable->cellWidget(row, kColAction));
+    if (!holder) return;
+    auto* btn = holder->findChild<QPushButton*>();
+    if (!btn) return;
+
+    RowStateInput in;
+    if (m_downloadIndex) {
+        in.downloadIndexHit =
+            m_downloadIndex->filePathFor(m_currentImdb, season, episode).has_value();
+    }
+    auto it = cohortSnap.constFind(episode);
+    if (it != cohortSnap.cend()) {
+        in.cohortHit = true;
+        in.cohortState = it->first;
+    }
+    const RowState st = resolveRowState(in);
+    const ActionIconSpec spec = actionIconForState(st);
+
+    btn->setIcon(QIcon(spec.iconResource));
+    btn->setToolTip(spec.tooltip);
+    btn->setEnabled(spec.enabled);
+}
+
+QString StreamDetailView::findInfoHashForEpisode(int season, int episode) const
+{
+    if (!m_torrentClient || m_currentImdb.isEmpty())
+        return {};
+    const QString prefix =
+        QStringLiteral("stream:") + m_currentImdb + QLatin1Char(':');
+    const QJsonObject groups = m_torrentClient->streamBulkGroupsSnapshot();
+    for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
+        if (!it.key().startsWith(prefix)) continue;
+        const QJsonObject g = it.value().toObject();
+        if (g.value(QStringLiteral("sourceIds")).toObject()
+              .value(QStringLiteral("season")).toInt(-1) != season) {
+            continue;
+        }
+        for (const auto& v : g.value(QStringLiteral("items")).toArray()) {
+            const QJsonObject item = v.toObject();
+            const QString itemKey = item.value(QStringLiteral("itemKey")).toString();
+            const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
+            if (eIdx <= 0) continue;
+            if (itemKey.mid(eIdx + 1).toInt() != episode) continue;
+            return item.value(QStringLiteral("infoHash")).toString();
+        }
+    }
+    return {};
+}
+
+QString StreamDetailView::findGroupIdForCohort(int season) const
+{
+    if (!m_torrentClient || m_currentImdb.isEmpty())
+        return {};
+    const QString prefix =
+        QStringLiteral("stream:") + m_currentImdb + QLatin1Char(':');
+    const QJsonObject groups = m_torrentClient->streamBulkGroupsSnapshot();
+    for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
+        if (!it.key().startsWith(prefix)) continue;
+        const QJsonObject g = it.value().toObject();
+        if (g.value(QStringLiteral("sourceIds")).toObject()
+              .value(QStringLiteral("season")).toInt(-1) != season) {
+            continue;
+        }
+        return it.key();
+    }
+    return {};
+}
+
+void StreamDetailView::onActionIconClicked(int episode, const QPoint& globalAnchorPos)
+{
+    if (m_currentImdb.isEmpty() || episode <= 0) return;
+
+    int activeSeason = 1;
+    if (m_seasonCombo) {
+        const int idx = m_seasonCombo->currentIndex();
+        if (idx >= 0)
+            activeSeason = m_seasonCombo->itemData(idx).toInt();
+    }
+    if (activeSeason <= 0) return;
+
+    RowStateInput in;
+    if (m_downloadIndex) {
+        in.downloadIndexHit =
+            m_downloadIndex->filePathFor(m_currentImdb, activeSeason, episode).has_value();
+    }
+    if (m_torrentClient) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, activeSeason);
+        const auto it = snap.constFind(episode);
+        if (it != snap.cend()) {
+            in.cohortHit = true;
+            in.cohortState = it->first;
+        }
+    }
+    const RowState st = resolveRowState(in);
+
+    switch (st) {
+    case RowState::Idle:
+        emit singleEpisodeDownloadRequested(activeSeason, episode);
+        break;
+    case RowState::Queued:
+        break;
+    case RowState::Downloading: {
+        const QString infoHash = findInfoHashForEpisode(activeSeason, episode);
+        if (!infoHash.isEmpty() && m_torrentClient) {
+            m_torrentClient->pauseTorrent(infoHash);
+            m_torrentClient->setStreamBulkItemPaused(infoHash, /*paused=*/true);
+        }
+        break;
+    }
+    case RowState::Paused: {
+        const QString infoHash = findInfoHashForEpisode(activeSeason, episode);
+        if (!infoHash.isEmpty() && m_torrentClient) {
+            m_torrentClient->resumeTorrent(infoHash);
+            m_torrentClient->setStreamBulkItemPaused(infoHash, /*paused=*/false);
+        }
+        break;
+    }
+    case RowState::Failed: {
+        // RETRY_AFTER_REMOVE_FIX 2026-05-13 — the Failed bucket includes
+        // Cancelled (user-Remove'd) per resolveRowState's terminal-state
+        // fallthrough. But TorrentClient::retryStreamBulkGroupFailedItems
+        // uses isStreamBulkSourceRetryState as its gate, which accepts
+        // MissingSource / MetadataFailed / Failed-with-empty-infoHash /
+        // Pending-with-empty-infoHash but NOT Cancelled (by design —
+        // Cancelled is a user-driven terminal state, not a recovery one).
+        // For Cancelled items the retry call ends up being a no-op
+        // (loop iteration matches no branch; only retryGeneration bumps).
+        // Hemanth report 2026-05-13: "the retry button after removing a
+        // download doesn't work". Discriminate Cancelled here and route
+        // through singleEpisodeDownloadRequested instead — same path as
+        // Idle click — so Remove→Retry yields a fresh dispatch. Other
+        // terminal failures keep the source-pick-rerun semantics.
+        QString cohortState;
+        if (m_torrentClient) {
+            const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(
+                m_currentImdb, activeSeason);
+            const auto sit = snap.constFind(episode);
+            if (sit != snap.cend()) cohortState = sit->first;
+        }
+        if (cohortState == QLatin1String("Cancelled")) {
+            emit singleEpisodeDownloadRequested(activeSeason, episode);
+            break;
+        }
+        const QString groupId = findGroupIdForCohort(activeSeason);
+        const QString itemKey = QStringLiteral("%1:S%2E%3")
+            .arg(m_currentImdb)
+            .arg(activeSeason, 2, 10, QLatin1Char('0'))
+            .arg(episode, 2, 10, QLatin1Char('0'));
+        if (!groupId.isEmpty() && m_torrentClient) {
+            m_torrentClient->retryStreamBulkGroupFailedItems(groupId, itemKey);
+        }
+        break;
+    }
+    case RowState::Published: {
+        // Post-NETFLIX_OVERHAUL P3 revision (Hemanth 2026-05-12) — the
+        // tick is both the indicator AND the click-target. Tapping it
+        // opens the same actions menu the right-click builds (Remove
+        // + Show alternate streams). globalAnchorPos comes from the
+        // QPushButton's center via the connect lambda in
+        // populateEpisodeTable; falls back to cursor pos for the
+        // pathological case where the caller didn't supply one.
+        const QPoint anchor = globalAnchorPos.isNull()
+            ? QCursor::pos() : globalAnchorPos;
+        showRowActionsMenu(activeSeason, episode, anchor);
+        break;
+    }
+    case RowState::Publishing:
+        break;
+    }
+}
+
+// ─── STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — season-header morphing slots ─
+
+void StreamDetailView::onDownloadSeasonClicked()
+{
+    if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series"))
+        return;
+    int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+    if (season <= 0) return;
+
+    if (!m_torrentClient) {
+        emit seasonDownloadRequested(season);
+        return;
+    }
+    const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+    bool anyActive = false;
+    bool allPaused = !snap.isEmpty();
+    for (auto it = snap.cbegin(); it != snap.cend(); ++it) {
+        const QString& s = it->first;
+        if (!isTerminalCohortState(s)) {
+            anyActive = true;
+            if (s != QLatin1String("Paused")) allPaused = false;
+        } else {
+            allPaused = false;
+        }
+    }
+    const QString groupId = findGroupIdForCohort(season);
+
+    if (allPaused && !groupId.isEmpty()) {
+        // All non-terminal items are Paused → Continue Season.
+        for (auto it = snap.cbegin(); it != snap.cend(); ++it) {
+            if (it->first != QLatin1String("Paused")) continue;
+            const QString ih = findInfoHashForEpisode(season, it.key());
+            if (ih.isEmpty()) continue;
+            m_torrentClient->resumeTorrent(ih);
+            m_torrentClient->setStreamBulkItemPaused(ih, /*paused=*/false);
+        }
+    } else if (anyActive && !groupId.isEmpty()) {
+        // Some items still actively Downloading → Pause Season.
+        for (auto it = snap.cbegin(); it != snap.cend(); ++it) {
+            if (it->first != QLatin1String("Downloading")) continue;
+            const QString ih = findInfoHashForEpisode(season, it.key());
+            if (ih.isEmpty()) continue;
+            m_torrentClient->pauseTorrent(ih);
+            m_torrentClient->setStreamBulkItemPaused(ih, /*paused=*/true);
+        }
+    } else {
+        // Idle (no cohort, or all terminal) → Download Season.
+        emit seasonDownloadRequested(season);
+    }
+}
+
+void StreamDetailView::onDownloadSelectedClicked()
+{
+    if (m_currentImdb.isEmpty()) return;
+    int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+    if (season <= 0) return;
+    QList<int> eps(m_selectedEpisodes.cbegin(), m_selectedEpisodes.cend());
+    std::sort(eps.begin(), eps.end());
+    if (eps.isEmpty()) return;
+    emit selectedEpisodesDownloadRequested(season, eps);
+    m_selectedEpisodes.clear();
+    updateDownloadSelectedButton();
+    // Uncheck all checkboxes in the current table (QToolButton from
+    // post-smoke v2 — see populateEpisodeTable for rationale).
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        auto* holder = qobject_cast<QWidget*>(m_episodeTable->cellWidget(row, kColCheckbox));
+        if (!holder) continue;
+        auto* cb = holder->findChild<QToolButton*>();
+        if (cb) cb->setChecked(false);
+    }
+}
+
+void StreamDetailView::onSeasonHeaderRightClick(const QPoint& pos)
+{
+    int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+    if (season <= 0 || m_currentImdb.isEmpty()) return;
+    QWidget* origin = qobject_cast<QWidget*>(sender());
+    if (!origin) return;
+
+    QMenu menu(this);
+    QAction* cancelAct = menu.addAction(tr("Cancel Season"));
+    QAction* chosen = menu.exec(origin->mapToGlobal(pos));
+    if (chosen == cancelAct) {
+        const QString groupId = findGroupIdForCohort(season);
+        if (groupId.isEmpty()) return;
+        const auto reply = QMessageBox::question(this, tr("Cancel Season?"),
+            tr("Cancel and delete all files for this season? "
+               "This cannot be undone."),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes && m_torrentClient) {
+            m_torrentClient->cancelStreamBulkGroup(groupId, /*deleteFiles=*/true);
+        }
+    }
+}
+
+void StreamDetailView::refreshSeasonHeaderButton()
+{
+    if (!m_downloadSeasonBtn) return;
+    if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series")) {
+        m_downloadSeasonBtn->setVisible(false);
+        return;
+    }
+    int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+    if (season <= 0 || !m_torrentClient) {
+        m_downloadSeasonBtn->setText(tr("Download Season"));
+        m_downloadSeasonBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+        m_downloadSeasonBtn->setVisible(true);
+        return;
+    }
+    const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+    bool anyActive = false;
+    bool allPaused = !snap.isEmpty();
+    for (auto it = snap.cbegin(); it != snap.cend(); ++it) {
+        const QString& s = it->first;
+        if (!isTerminalCohortState(s)) {
+            anyActive = true;
+            if (s != QLatin1String("Paused")) allPaused = false;
+        } else {
+            allPaused = false;
+        }
+    }
+    if (allPaused) {
+        m_downloadSeasonBtn->setText(tr("Continue Season"));
+        m_downloadSeasonBtn->setIcon(QIcon(QStringLiteral(":/icons/play-circle.svg")));
+    } else if (anyActive) {
+        m_downloadSeasonBtn->setText(tr("Pause Season"));
+        m_downloadSeasonBtn->setIcon(QIcon(QStringLiteral(":/icons/pause-circle.svg")));
+    } else {
+        m_downloadSeasonBtn->setText(tr("Download Season"));
+        m_downloadSeasonBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+    }
+    m_downloadSeasonBtn->setVisible(true);
 }
 
 // ─── Library toggle (Phase 1 Batch 1.2) ─────────────────────────────────────
@@ -1045,11 +1688,18 @@ void StreamDetailView::onLibraryButtonClicked()
         // through to the unguarded Remove path (preserves prior behavior).
         if (m_torrentClient
             && m_torrentClient->hasActiveStreamBulkGroupsForImdb(m_currentImdb)) {
+            // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 7 — dialog
+            // text updated to surface the file-deletion side effect (spec
+            // §9.3 + §P8 cancel-deletes-files). The actual delete-with-
+            // cancel happens both here (visible-to-the-user immediate
+            // path) AND inside StreamLibrary::remove (engine-level
+            // belt-and-suspenders for any caller that bypasses this UI).
             QMessageBox box(this);
             box.setWindowTitle(tr("Cancel active bulk download?"));
             box.setText(tr("This show has an active bulk download in progress.\n"
-                           "Cancel the download first, then Remove from Library?"));
-            QPushButton* doIt = box.addButton(tr("Cancel download + Remove"),
+                           "Cancel the download and delete partial files, then\n"
+                           "Remove from Library? This cannot be undone."));
+            QPushButton* doIt = box.addButton(tr("Cancel + Remove"),
                                               QMessageBox::DestructiveRole);
             QPushButton* abort = box.addButton(tr("Keep downloading"),
                                                 QMessageBox::RejectRole);
@@ -1058,15 +1708,15 @@ void StreamDetailView::onLibraryButtonClicked()
             if (box.clickedButton() != doIt)
                 return;  // user kept downloading; no Remove
 
-            // Cancel all active bulk groups for this imdb. Atomic-ish: we
-            // iterate the snapshot of group IDs taken just before the
-            // dialog fired; any group that completes between dialog-open
-            // and click is no longer "contains"-d in m_streamBulkGroups
-            // and cancelStreamBulkGroup short-circuits.
+            // Cancel all active bulk groups for this imdb WITH file-delete.
+            // Atomic-ish: iterate the snapshot of group IDs taken just
+            // before the dialog fired; any group that completes between
+            // dialog-open and click is no longer "contains"-d in
+            // m_streamBulkGroups and cancelStreamBulkGroup short-circuits.
             const QStringList ids =
                 m_torrentClient->streamBulkGroupIdsForImdb(m_currentImdb);
             for (const QString& gid : ids)
-                m_torrentClient->cancelStreamBulkGroup(gid);
+                m_torrentClient->cancelStreamBulkGroup(gid, /*deleteFiles=*/true);
         }
 
         m_library->remove(m_currentImdb);
