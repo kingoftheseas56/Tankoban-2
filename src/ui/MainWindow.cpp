@@ -12,7 +12,9 @@
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
 #include "core/torrent/TorrentClient.h"
+#include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/stream/StreamProgress.h"
 #include "core/stream/StreamRescueScanner.h"
 #include "readers/ComicReader.h"
 #include "readers/BookReader.h"
@@ -100,6 +102,32 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     buildTopBar();
     contentLayout->addWidget(m_topBar);
 
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
+    // bulk-downloaded episodes. Constructed BEFORE buildPageStack() so the
+    // setStreamDownloadIndex(m_streamDownloadIndex) wirings inside that
+    // method (TorrentClient at line ~571, StreamPage at ~584, VideosPage
+    // at ~591) all see a non-null pointer and propagate it down. Prior
+    // construction order placed this AFTER buildPageStack, leaving the
+    // pointer nullptr at the moment the wirings ran — silently skipping
+    // them via the `if (m_streamDownloadIndex)` guards and breaking the
+    // on-publish registerEpisode path for every bulk-downloaded episode.
+    // Bug surfaced 2026-05-12 when Hemanth's Daredevil S02 E5-E8 finished
+    // downloading + published correctly to disk yet StreamDetailView
+    // showed them as not-downloaded (no Status marker, click opened
+    // sources panel instead of auto-playing local file).
+    m_streamDownloadIndex = new StreamDownloadIndex(&m_bridge->store(), this);
+    DebugLogBuffer::instance().info(QStringLiteral("boot"),
+        QStringLiteral("stream-download-index-created"));
+
+    // CW_NAMESPACE_BOUNDARY 2026-05-13 — one-shot migration. Walks
+    // video_progress.json and evicts/re-domains entries whose `path`
+    // is registered in StreamDownloadIndex (i.e., downloaded streams
+    // wrongly persisted in the "videos" namespace by the pre-fix
+    // launch path). Runs synchronously after the index has loaded
+    // its on-disk state, before buildPageStack so VideosPage's
+    // refreshContinueStrip never sees the legacy pollution.
+    migrateLegacyStreamProgressEntries();
+
     buildPageStack();
     contentLayout->addWidget(m_pageStack, 1);
     DebugLogBuffer::instance().info("mainwindow", "5a-pagestack-added");
@@ -174,14 +202,6 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
                 showNormal();
         }
     });
-
-    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
-    // bulk-downloaded episodes. Constructed after CoreBridge is set so
-    // JsonStore is available; consumed by VideosScanner / StreamPage in
-    // later phases. Dead-code-wired in Phase 1.
-    m_streamDownloadIndex = new StreamDownloadIndex(&m_bridge->store(), this);
-    DebugLogBuffer::instance().info(QStringLiteral("boot"),
-        QStringLiteral("stream-download-index-created"));
 
     // Video player overlay (hidden by default)
     DebugLogBuffer::instance().info("mainwindow", "5e-before-videoplayer");
@@ -583,6 +603,15 @@ void MainWindow::buildPageStack()
     if (m_streamPage && m_streamDownloadIndex)
         m_streamPage->setStreamDownloadIndex(m_streamDownloadIndex);
 
+    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 7 — wire the
+    // TorrentClient into StreamLibrary so remove(imdb) can engine-cancel
+    // any active cohort for the show before clearing the entry. Closes
+    // spec §9.3. UI-level confirmation prompts live at the remove() call
+    // site; this is the engine guarantee that any caller gets the
+    // cancel-with-delete behavior consistently.
+    if (m_streamPage && m_streamPage->streamLibrary())
+        m_streamPage->streamLibrary()->setTorrentClient(torrentClient);
+
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 5 — wire the download index
     // into VideosPage so the Videos scanner skips Stream-owned files (spec
     // §3 P1 + §6.4 + §8) and the page rescans (debounced 500ms) when the
@@ -613,8 +642,8 @@ void MainWindow::buildPageStack()
     // coordination convention).
     connect(m_streamPage, &StreamPage::addToTankorentRequested,
             this, &MainWindow::onAddToTankorentRequested);
-    connect(m_streamPage, &StreamPage::addToTankorentBulkRequested,
-            this, &MainWindow::onAddToTankorentBulkRequested);
+    connect(m_streamPage, &StreamPage::streamBulkDispatchRequested,
+            this, &MainWindow::onStreamBulkDispatchRequested);
     // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — downloaded-episode
     // click. StreamPage has already kicked the SubtitlesAggregator fan-out
     // by the time this fires; MainWindow's slot handles the VideoPlayer open.
@@ -744,28 +773,30 @@ void MainWindow::onAddToTankorentRequested(const QString& magnetUri,
     m_tankorentPage->addMagnetFromExternal(magnetUri, displayName);
 }
 
-void MainWindow::onAddToTankorentBulkRequested(
+// STREAM_DOWNLOADS_NETFLIX_OVERHAUL 2026-05-12 Phase 6 — renamed from
+// onAddToTankorentBulkRequested. The slot name now reflects what it
+// actually does: dispatch a stream bulk group to the engine via the
+// existing TankorentPage::addMagnetGroupFromExternal pass-through. There
+// is no page-switch (preserves the V2 Phase 1 stay-on-current-page
+// behavior); Tankorent's UI no longer renders these groups (filter in
+// TankorentPage::refreshTransfers from Phase 2 Task 8). The single-add
+// path onAddToTankorentRequested keeps the activate-to-Tankorent
+// behavior because that flow IS a distinct user gesture (manual
+// right-click "Add torrent to Tankorent" on a single stream source).
+void MainWindow::onStreamBulkDispatchRequested(
     const StreamBulkGroupRecord& group,
     const tankostream::stream::BulkPackVerificationResult& verifierOutput,
     const QString& displayLabel)
 {
     if (group.groupId.isEmpty()) {
-        qWarning() << "MainWindow::onAddToTankorentBulkRequested: empty group id, ignoring";
+        qWarning() << "MainWindow::onStreamBulkDispatchRequested: empty group id, ignoring";
         return;
     }
     if (!m_tankorentPage) {
-        qWarning() << "MainWindow::onAddToTankorentBulkRequested: m_tankorentPage null";
+        qWarning() << "MainWindow::onStreamBulkDispatchRequested: m_tankorentPage null";
         return;
     }
 
-    // STREAM_BULK_DOWNLOAD_V2 Phase 1 — bulk dispatch deliberately stays on
-    // the current Stream page (per Hemanth ask 2026-05-10: "rather than
-    // taking me to Tankorent to show me the downloads, the show page in
-    // stream mode itself can have a download progress column"). The
-    // Tankorent grouped row is still created — manual navigation to
-    // Tankorent surfaces it as before. Single-add path at
-    // onAddToTankorentRequested keeps the original activate-to-Tankorent
-    // behavior because that flow is a distinct user gesture.
     m_tankorentPage->addMagnetGroupFromExternal(group, verifierOutput, displayLabel);
 }
 
@@ -926,6 +957,20 @@ void MainWindow::closeBookReader()
 // ── Video player ─────────────────────────────────────────────────────────────
 void MainWindow::openVideoPlayer(const QString& filePath)
 {
+    // CW_NAMESPACE_BOUNDARY 2026-05-13 — this is the library-videos
+    // entry point. Tear down any stream-mode progress wiring left
+    // over from a prior downloaded-stream playback and reset
+    // persistence to LibraryVideos so progress lands in the "videos"
+    // domain as expected. onPlayLocalFileFromStreamRequested rewires
+    // both these knobs AFTER calling openVideoPlayer for the
+    // downloaded-stream case.
+    if (m_streamPlaybackProgressConn) {
+        QObject::disconnect(m_streamPlaybackProgressConn);
+        m_streamPlaybackProgressConn = QMetaObject::Connection{};
+    }
+    if (m_videoPlayer)
+        m_videoPlayer->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
+
     m_videoPlayer->openFile(filePath);
     m_videoPlayer->setGeometry(centralWidget()->rect());
     m_videoPlayer->show();
@@ -948,10 +993,7 @@ void MainWindow::onPlayLocalFileFromStreamRequested(
     const QString& localPath, const QString& imdbId,
     const QString& showTitle, int season, int episode)
 {
-    Q_UNUSED(imdbId);
     Q_UNUSED(showTitle);
-    Q_UNUSED(season);
-    Q_UNUSED(episode);
 
     if (localPath.isEmpty() || !QFileInfo::exists(localPath)) {
         DebugLogBuffer::instance().warning(
@@ -961,7 +1003,52 @@ void MainWindow::onPlayLocalFileFromStreamRequested(
         return;
     }
 
+    // CW_NAMESPACE_BOUNDARY 2026-05-13 — downloaded-stream playback
+    // must NOT pollute Video-mode CW. Pre-fix: imdbId/season/episode
+    // were Q_UNUSED'd and the player ran in default
+    // PersistenceMode::LibraryVideos; the file exists on disk so
+    // videoIdForFile() resolved and VideoPlayer::saveProgress
+    // (line ~3193) wrote to the "videos" domain on every tick,
+    // causing the show to appear in Video-mode Continue Watching.
+    // Stream-side saveProgress("stream", epKey, ...) never fired
+    // because StreamPage::onReadyToPlay (which installs that
+    // subscriber for HTTP playback) is bypassed by the Layer 3
+    // Rule C auto-play path.
+    //
+    // Two-step rewire below — order matters because openVideoPlayer
+    // resets both knobs to library-videos defaults.
+    //
+    //   (1) openVideoPlayer first — this disconnects any prior
+    //       stream-progress conn and sets PersistenceMode to
+    //       LibraryVideos.
+    //   (2) Override PersistenceMode to None — suppresses the
+    //       "videos" write at VideoPlayer.cpp:3193.
+    //   (3) Connect progressUpdated to a lambda that writes to
+    //       "stream" with the same epKey + makeWatchState pipeline
+    //       StreamPage's HTTP flow uses (StreamPage.cpp:2972).
+    //       Lambda captures bridge + epKey by value; the stored
+    //       QMetaObject::Connection is torn down on the next library
+    //       playback or downloaded-stream playback via the
+    //       openVideoPlayer reset.
     openVideoPlayer(localPath);
+
+    m_videoPlayer->setPersistenceMode(VideoPlayer::PersistenceMode::None);
+
+    const bool isSeries = (season > 0 && episode > 0);
+    const QString epKey = isSeries
+        ? StreamProgress::episodeKey(imdbId, season, episode)
+        : StreamProgress::movieKey(imdbId);
+    CoreBridge* bridge = m_bridge;
+    m_streamPlaybackProgressConn = connect(
+        m_videoPlayer, &VideoPlayer::progressUpdated, this,
+        [bridge, epKey](const QString& /*path*/, double posSec, double durSec) {
+            if (!bridge || epKey.isEmpty()) return;
+            if (posSec < 5.0) return;   // mirrors StreamPage 5s floor
+            const bool finished = (durSec > 0 && posSec / durSec >= 0.9);
+            const QJsonObject state =
+                StreamProgress::makeWatchState(posSec, durSec, finished);
+            bridge->saveProgress(QStringLiteral("stream"), epKey, state);
+        });
 
     // VideoPlayer currently has no public setVideoTitle()/setTitle() entry
     // point — its m_titleLabel + m_fullTitle are private and populated from
@@ -971,6 +1058,77 @@ void MainWindow::onPlayLocalFileFromStreamRequested(
     // already a sensible display string post-Phase-3 canonical-naming.
     // TODO STREAM_DOWNLOADED_LIBRARY follow-up: add VideoPlayer::setVideoTitle
     // and route the rich title here. Out of scope for Phase 4.
+}
+
+// CW_NAMESPACE_BOUNDARY 2026-05-13 — one-shot migration sweep called
+// once at startup right after m_streamDownloadIndex is constructed.
+// Pre-fix, onPlayLocalFileFromStreamRequested left the player in
+// PersistenceMode::LibraryVideos so downloaded-stream playback
+// persisted progress in video_progress.json under a file-path hash.
+// Those entries leaked into Video-mode Continue Watching. The forward
+// fix above prevents new writes; this sweep evicts the legacy ones
+// and seeds the stream namespace with their position state so
+// Stream-mode CW picks up where the user left off.
+void MainWindow::migrateLegacyStreamProgressEntries()
+{
+    if (!m_bridge || !m_streamDownloadIndex) return;
+
+    const QJsonObject allVideos = m_bridge->allProgress(QStringLiteral("videos"));
+    if (allVideos.isEmpty()) return;
+
+    // canonicalKey → Entry, built from the index for O(1) path lookup.
+    const auto entries = m_streamDownloadIndex->all();
+    if (entries.isEmpty()) return;
+    QHash<QString, StreamDownloadIndex::Entry> byKey;
+    byKey.reserve(entries.size());
+    for (const auto& e : entries) {
+        byKey.insert(StreamDownloadIndex::computeCanonicalKey(e.canonicalPath), e);
+    }
+
+    int migrated = 0;
+    int evictedNoSeed = 0;
+    for (auto it = allVideos.constBegin(); it != allVideos.constEnd(); ++it) {
+        const QJsonObject prog = it.value().toObject();
+        const QString path = prog.value(QStringLiteral("path")).toString();
+        if (path.isEmpty()) continue;
+        const QString canon = StreamDownloadIndex::computeCanonicalKey(path);
+        const auto idx = byKey.constFind(canon);
+        if (idx == byKey.constEnd()) continue;   // not a downloaded stream
+
+        const QString epKey = idx->type == QLatin1String("movie")
+            ? StreamProgress::movieKey(idx->imdbId)
+            : StreamProgress::episodeKey(idx->imdbId, idx->season, idx->episode);
+
+        const QJsonObject existingStream =
+            m_bridge->progress(QStringLiteral("stream"), epKey);
+        const qint64 videosUpdatedAt =
+            prog.value(QStringLiteral("updatedAt")).toVariant().toLongLong();
+        const qint64 streamUpdatedAt =
+            existingStream.value(QStringLiteral("updatedAt")).toVariant().toLongLong();
+
+        if (videosUpdatedAt > streamUpdatedAt) {
+            const double posSec  = prog.value(QStringLiteral("positionSec")).toDouble(0.0);
+            const double durSec  = prog.value(QStringLiteral("durationSec")).toDouble(0.0);
+            const bool finished  = prog.value(QStringLiteral("finished")).toBool(false);
+            const QJsonObject seed =
+                StreamProgress::makeWatchState(posSec, durSec, finished);
+            m_bridge->saveProgress(QStringLiteral("stream"), epKey, seed);
+            ++migrated;
+        } else {
+            ++evictedNoSeed;
+        }
+        m_bridge->clearProgress(QStringLiteral("videos"), it.key());
+    }
+
+    if (migrated > 0 || evictedNoSeed > 0) {
+        DebugLogBuffer::instance().info(
+            QStringLiteral("stream"),
+            QStringLiteral("CW_NAMESPACE_BOUNDARY migration"),
+            QJsonObject{
+                {QStringLiteral("migratedToStream"), migrated},
+                {QStringLiteral("evictedNoSeed"),    evictedNoSeed},
+            });
+    }
 }
 
 // FFMPEG_KEEP_OR_REMOVE_DECISION 2026-05-04 — public wrapper for the
