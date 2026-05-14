@@ -140,9 +140,17 @@ void MangaDetailView::buildUI()
     // Action row (Download dropdown + ellipsis) -- D.3 fills the dropdown menu
     auto* actionRow = new QHBoxLayout();
     m_downloadDropdown = new QToolButton(this);
-    m_downloadDropdown->setText(tr("Download v"));
+    m_downloadDropdown->setText(QString::fromUtf8("Download \xE2\x96\xBE"));   // U+25BE ▾
     m_downloadDropdown->setObjectName("MangaDetailDownloadDropdown");
     m_downloadDropdown->setPopupMode(QToolButton::InstantPopup);
+    m_downloadDropdown->setCursor(Qt::PointingHandCursor);
+    m_downloadDropdown->setStyleSheet(
+        "#MangaDetailDownloadDropdown {"
+        "  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);"
+        "  border-radius: 6px; color: #e0e0e0; font-size: 12px; padding: 6px 14px; }"
+        "#MangaDetailDownloadDropdown:hover { background: rgba(255,255,255,0.14);"
+        "  border-color: rgba(255,255,255,0.28); }"
+        "#MangaDetailDownloadDropdown::menu-indicator { image: none; width: 0px; }");
 
     auto* dlMenu = new QMenu(m_downloadDropdown);
     QAction* allAction = dlMenu->addAction(tr("Download all"));
