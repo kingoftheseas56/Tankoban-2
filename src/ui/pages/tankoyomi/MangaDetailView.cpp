@@ -44,8 +44,14 @@ void MangaDetailView::buildUI()
 
     // -- Top bar: back button + title + overflow ----------------------
     auto* topRow = new QHBoxLayout();
-    m_backBtn = new QPushButton(tr("< back"), this);
-    m_backBtn->setObjectName("MangaDetailBackBtn");
+    m_backBtn = new QPushButton(QString::fromUtf8("\xE2\x86\x90 Back"), this);
+    m_backBtn->setObjectName("SidebarAction");
+    m_backBtn->setFixedHeight(30);
+    m_backBtn->setCursor(Qt::PointingHandCursor);
+    m_backBtn->setStyleSheet(
+        "#SidebarAction { background: transparent; border: none; color: rgba(255,255,255,0.7);"
+        "  font-size: 13px; padding: 0 8px; }"
+        "#SidebarAction:hover { color: #fff; }");
     connect(m_backBtn, &QPushButton::clicked,
             this, &MangaDetailView::backRequested);
     m_titleLabel = new QLabel(this);
