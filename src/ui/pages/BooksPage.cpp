@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QMetaObject>
 #include <QSettings>
 #include <QInputDialog>
@@ -80,6 +81,7 @@ void BooksPage::buildUI()
 
     // Scrollable content area
     auto* scroll = new QScrollArea(gridPage);
+    m_gridScroll = scroll;  // GLOBAL_NAV_HISTORY Task 9
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
     scroll->setStyleSheet("background: transparent;");
@@ -928,4 +930,49 @@ void BooksPage::refreshContinueStrip()
     }
 
     m_continueSection->show();
+}
+
+// ── INavStateProvider (GLOBAL_NAV_HISTORY Task 9) ────────────────────────────
+
+QJsonObject BooksPage::captureNavState() const
+{
+    QJsonObject blob;
+    if (m_searchBar)
+        blob["search"] = m_searchBar->text();
+    if (m_sortCombo)
+        blob["sort"] = m_sortCombo->currentData().toString();
+    if (m_gridScroll) {
+        if (auto* vsb = m_gridScroll->verticalScrollBar())
+            blob["scrollY"] = vsb->value();
+    }
+    return blob;
+}
+
+bool BooksPage::restoreNavState(const QJsonObject& blob)
+{
+    if (m_searchBar) {
+        const QString search = blob.value("search").toString();
+        if (m_searchBar->text() != search) {
+            m_searchBar->blockSignals(true);
+            m_searchBar->setText(search);
+            m_searchBar->blockSignals(false);
+            applySearch();
+        }
+    }
+    if (m_sortCombo) {
+        const QString sort = blob.value("sort").toString();
+        if (!sort.isEmpty()) {
+            for (int i = 0; i < m_sortCombo->count(); ++i) {
+                if (m_sortCombo->itemData(i).toString() == sort) {
+                    m_sortCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+    if (m_gridScroll) {
+        if (auto* vsb = m_gridScroll->verticalScrollBar())
+            vsb->setValue(blob.value("scrollY").toInt(0));
+    }
+    return true;
 }

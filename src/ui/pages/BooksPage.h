@@ -9,6 +9,8 @@
 #include <QTimer>
 #include <QSettings>
 #include <QPushButton>
+#include "../INavStateProvider.h"
+class QScrollArea;
 class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
@@ -17,7 +19,7 @@ class BooksScanner;
 class BookSeriesView;
 struct BookSeriesInfo;
 
-class BooksPage : public QWidget {
+class BooksPage : public QWidget, public INavStateProvider {
     Q_OBJECT
 public:
     explicit BooksPage(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -25,6 +27,11 @@ public:
 
     void activate();
     void triggerScan();
+
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 9)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("books"); }
 
 signals:
     void openBook(const QString& filePath);
@@ -83,4 +90,9 @@ private:
     bool           m_scanning = false;
     // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer-not-drop rescan flag.
     bool           m_rescanPending = false;
+
+    // GLOBAL_NAV_HISTORY Task 9: cache the grid QScrollArea pointer so
+    // capture/restore don't pay an O(n) findChild walk on every Back/Forward.
+    // Mirrors ComicsPage::m_gridScroll (Task 8 caching fix, commit 66b7e34).
+    QScrollArea*   m_gridScroll = nullptr;
 };
