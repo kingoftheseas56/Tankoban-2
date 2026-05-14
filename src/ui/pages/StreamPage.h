@@ -17,6 +17,7 @@
 #include "core/stream/BulkSourceCollector.h"
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
+#include "ui/INavStateProvider.h"
 #include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/pages/stream/StreamSourceChoice.h"
 
@@ -54,7 +55,7 @@ class CalendarScreen;
 struct StreamPickerChoice;
 }
 
-class StreamPage : public QWidget
+class StreamPage : public QWidget, public INavStateProvider
 {
     Q_OBJECT
 
@@ -63,6 +64,18 @@ public:
                         QWidget* parent = nullptr);
 
     void activate();
+
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 14) — global NavHistory hooks.
+    // captureNavState reads the top of the in-page m_navStack and emits a
+    // view-discriminator + per-kind context blob. restoreNavState
+    // reconstitutes the NavEntry and calls showEntryRaw (no m_navStack
+    // push — the global stack is the source of truth for cross-page Back).
+    // Sub-views with rich, fetch-dependent state (e.g. Detail's selected
+    // season) are restored to their last-known preselects but a fresh
+    // meta fetch may overwrite UI state asynchronously — acceptable v1.
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("stream"); }
 
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download
     // index into the home library board (chip rendering on tiles) and into
@@ -108,6 +121,14 @@ signals:
                                           const QString& showTitle,
                                           int season,
                                           int episode);
+
+    // GLOBAL_NAV_HISTORY Task 14 (2026-05-14) — fired before each user-
+    // initiated in-page transition (Browse / Search / Detail / Catalog /
+    // AddonManager / Calendar) so the global NavHistory controller in
+    // MainWindow can record an entry. The page's internal m_navStack is
+    // preserved as render-side state (drives in-page child-screen Back
+    // buttons + m_beforePlayerEntry snapshot for player-close restore).
+    void navigationRequested();
 
 private:
     void buildUI();

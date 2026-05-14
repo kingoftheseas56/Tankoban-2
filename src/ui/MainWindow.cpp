@@ -730,6 +730,14 @@ void MainWindow::buildPageStack()
     // by the time this fires; MainWindow's slot handles the VideoPlayer open.
     connect(m_streamPage, &StreamPage::playLocalFileFromStreamRequested,
             this, &MainWindow::onPlayLocalFileFromStreamRequested);
+    // GLOBAL_NAV_HISTORY Task 14 — record an entry on every user-initiated
+    // in-page Stream transition (Browse / Search / Detail / Catalog /
+    // AddonManager / Calendar) so the global Back/Forward chevrons span
+    // sub-views inside Stream as well as cross-page hops.
+    connect(m_streamPage, &StreamPage::navigationRequested,
+            this, [this]() {
+                if (m_navHistory) m_navHistory->recordNavEvent("stream");
+            });
 
     auto *tankoyomiPage = new TankoyomiPage(m_bridge);
     tankoyomiPage->setObjectName(PAGE_TANKOYOMI);

@@ -727,6 +727,10 @@ void StreamPage::onSearchSubmit()
     if (!m_navStack.isEmpty() && m_navStack.top().kind == NavEntry::Kind::Search) {
         m_navStack.top().searchQuery = query;
     } else {
+        // GLOBAL_NAV_HISTORY Task 14 — emit before in-page stack flip so
+        // NavHistory snapshots the outgoing view (Browse/Detail/etc.) via
+        // captureNavState while the in-page stack still reflects it.
+        emit navigationRequested();
         NavEntry e;
         e.kind = NavEntry::Kind::Search;
         e.searchQuery = query;
@@ -1287,6 +1291,94 @@ void StreamPage::restorePlayerExitView()
     showBrowse();
 }
 
+// GLOBAL_NAV_HISTORY Task 14 (2026-05-14) — INavStateProvider hooks.
+// captureNavState reads the top of the in-page m_navStack (the same data
+// the in-page child-screen Back buttons consume via goBack) and emits an
+// opaque-to-NavHistory JSON blob. restoreNavState reverses the
+// translation and dispatches via showEntryRaw — no m_navStack push, so
+// global Back/Forward never grows the in-page stack twice.
+QJsonObject StreamPage::captureNavState() const
+{
+    QJsonObject blob;
+    if (m_navStack.isEmpty()) {
+        blob["view"] = "browse";
+        return blob;
+    }
+    const NavEntry& top = m_navStack.top();
+    using Kind = NavEntry::Kind;
+    switch (top.kind) {
+    case Kind::Browse:
+        blob["view"] = "browse";
+        break;
+    case Kind::CatalogBrowse:
+        blob["view"] = "catalogBrowse";
+        blob["catalogAddonId"] = top.catalogAddonId;
+        blob["catalogType"]    = top.catalogType;
+        blob["catalogId"]      = top.catalogId;
+        blob["catalogTitle"]   = top.catalogTitle;
+        break;
+    case Kind::Detail:
+        blob["view"] = "detail";
+        blob["detailImdbId"]           = top.detailImdbId;
+        blob["detailPreselectSeason"]  = top.detailPreselectSeason;
+        blob["detailPreselectEpisode"] = top.detailPreselectEpisode;
+        // detailHasPreview + detailPreview omitted — the preview struct
+        // is not JSON-serializable in v1 and showDetail(imdbId) is a
+        // valid fallback when only the imdb id survives.
+        break;
+    case Kind::AddonManager:
+        blob["view"] = "addonManager";
+        break;
+    case Kind::Calendar:
+        blob["view"] = "calendar";
+        break;
+    case Kind::Search:
+        blob["view"] = "search";
+        blob["searchQuery"] = top.searchQuery;
+        break;
+    }
+    return blob;
+}
+
+bool StreamPage::restoreNavState(const QJsonObject& blob)
+{
+    const QString view = blob.value("view").toString();
+    NavEntry entry;
+    using Kind = NavEntry::Kind;
+    if (view == "browse" || view.isEmpty()) {
+        entry.kind = Kind::Browse;
+    } else if (view == "catalogBrowse") {
+        if (!m_catalogBrowse) return false;
+        entry.kind = Kind::CatalogBrowse;
+        entry.catalogAddonId = blob.value("catalogAddonId").toString();
+        entry.catalogType    = blob.value("catalogType").toString();
+        entry.catalogId      = blob.value("catalogId").toString();
+        entry.catalogTitle   = blob.value("catalogTitle").toString();
+    } else if (view == "detail") {
+        if (!m_detailView) return false;
+        const QString imdb = blob.value("detailImdbId").toString();
+        if (imdb.isEmpty()) return false;
+        entry.kind = Kind::Detail;
+        entry.detailImdbId = imdb;
+        entry.detailHasPreview = false;
+        entry.detailPreselectSeason  = blob.value("detailPreselectSeason").toInt(-1);
+        entry.detailPreselectEpisode = blob.value("detailPreselectEpisode").toInt(-1);
+    } else if (view == "addonManager") {
+        if (!m_addonManager) return false;
+        entry.kind = Kind::AddonManager;
+    } else if (view == "calendar") {
+        if (!m_calendarScreen || !m_calendarEngine) return false;
+        entry.kind = Kind::Calendar;
+    } else if (view == "search") {
+        entry.kind = Kind::Search;
+        entry.searchQuery = blob.value("searchQuery").toString();
+    } else {
+        return false;
+    }
+    showEntryRaw(entry);
+    return true;
+}
+
 void StreamPage::showBrowse()
 {
     // STREAM_NAV_BACK_STACK 2026-05-06 â€” Library is the stack bottom.
@@ -1294,6 +1386,10 @@ void StreamPage::showBrowse()
     // state. Called on Stream-mode entry, on legitimate library-home
     // navigation (e.g. nav-bar Library button), and as the legacy
     // fallback when no pre-player snapshot exists.
+    // GLOBAL_NAV_HISTORY Task 14 — emit on every Library-home transition
+    // (user-initiated reset OR text-clear-from-search OR no-snapshot
+    // player-exit fallback) so the global stack records the move.
+    emit navigationRequested();
     m_navStack.clear();
     NavEntry e;
     e.kind = NavEntry::Kind::Browse;
@@ -1303,6 +1399,8 @@ void StreamPage::showBrowse()
 
 void StreamPage::showAddonManager()
 {
+    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
+    emit navigationRequested();
     NavEntry e;
     e.kind = NavEntry::Kind::AddonManager;
     m_navStack.push(e);
@@ -1312,6 +1410,8 @@ void StreamPage::showAddonManager()
 void StreamPage::showCatalogBrowse(const QString& addonId, const QString& type,
                                    const QString& catalogId, const QString& title)
 {
+    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
+    emit navigationRequested();
     NavEntry e;
     e.kind = NavEntry::Kind::CatalogBrowse;
     e.catalogAddonId = addonId;
@@ -1338,6 +1438,8 @@ void StreamPage::onCatalogBtnClicked()
 void StreamPage::showCalendar()
 {
     if (!m_calendarScreen || !m_calendarEngine) return;
+    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
+    emit navigationRequested();
     NavEntry e;
     e.kind = NavEntry::Kind::Calendar;
     m_navStack.push(e);
@@ -1356,6 +1458,10 @@ void StreamPage::showDetail(const QString& imdbId)
         && m_detailView->currentImdb() == imdbId) {
         return;
     }
+    // GLOBAL_NAV_HISTORY Task 14 — emit AFTER idempotency guard, BEFORE
+    // in-page push, so repeat-clicks on the same Detail tile don't grow
+    // the global stack either.
+    emit navigationRequested();
     NavEntry e;
     e.kind = NavEntry::Kind::Detail;
     e.detailImdbId = imdbId;
@@ -1378,6 +1484,9 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
         && m_detailView->currentImdb() == preview.id) {
         return;
     }
+    // GLOBAL_NAV_HISTORY Task 14 — emit AFTER idempotency guard, BEFORE
+    // in-page push.
+    emit navigationRequested();
     NavEntry e;
     e.kind = NavEntry::Kind::Detail;
     e.detailImdbId = preview.id;
