@@ -1,6 +1,6 @@
 # Tankoyomi Mihon Overhaul Implementation Plan
 
-> **⚠ SUPERSEDED 2026-05-14** by the COMICS_TANKOYOMI_STREAM_MERGER vision (Tankoyomi dissolves into Comics mode; Stream-show-view-style series page lives inside the Comics library; Netflix-style in-library downloads). Tankoyomi ownership transferred from Agent 4B to Agent 1 the same day. Plan kept for historical context — the Mihon-style detail screen patterns landed here may inform the merger arc's vision-md but are not the canonical path forward. See `CLAUDE.md` dashboard stanza + `agents/GOVERNANCE.md` Rule on Codex-reviews-Agent-1-vision-md.
+> **⚠ SUPERSEDED 2026-05-14** by the COMICS_TANKOYOMI_STREAM_MERGER vision (Tankoyomi dissolves into Comics mode; Stream-show-view-style series page lives inside the Comics library; Netflix-style in-library downloads). Tankoyomi ownership transferred from Agent 4B to Agent 1 the same day. Plan kept for historical context — the Mihon-style detail screen patterns landed here may inform the merger arc's brainstorm-md but are not the canonical path forward. See `CLAUDE.md` dashboard stanza + `agents/GOVERNANCE.md` Rule 20 (gov-v4, revised same-day 2026-05-14: Codex reviews AND EXPANDS Agent 1's brainstorm-md in place; co-authorship, not audit; one pass total).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

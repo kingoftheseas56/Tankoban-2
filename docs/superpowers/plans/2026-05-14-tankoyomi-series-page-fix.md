@@ -1,6 +1,6 @@
 # Tankoyomi Series Page UI Fix Plan
 
-> **⚠ SUPERSEDED 2026-05-14** by the COMICS_TANKOYOMI_STREAM_MERGER vision. Tankoyomi dissolves into Comics mode; the series page becomes a Stream-show-view-style surface inside the Comics library, not a stand-alone Tankoyomi screen. Tankoyomi ownership transferred from Agent 4B to Agent 1 the same day. Plan kept for historical context — the alignment + glyph + author-placeholder fixes shipped here may inform the merger arc's vision-md. See `CLAUDE.md` dashboard stanza + `agents/GOVERNANCE.md` Rule on Codex-reviews-Agent-1-vision-md.
+> **⚠ SUPERSEDED 2026-05-14** by the COMICS_TANKOYOMI_STREAM_MERGER vision. Tankoyomi dissolves into Comics mode; the series page becomes a Stream-show-view-style surface inside the Comics library, not a stand-alone Tankoyomi screen. Tankoyomi ownership transferred from Agent 4B to Agent 1 the same day. Plan kept for historical context — the alignment + glyph + author-placeholder fixes shipped here may inform the merger arc's brainstorm-md. See `CLAUDE.md` dashboard stanza + `agents/GOVERNANCE.md` Rule 20 (gov-v4, revised same-day 2026-05-14: Codex reviews AND EXPANDS Agent 1's brainstorm-md in place; co-authorship, not audit; one pass total).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
