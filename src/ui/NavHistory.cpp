@@ -1,11 +1,22 @@
 #include "NavHistory.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QSaveFile>
+#include <QStandardPaths>
 
 #include "INavStateProvider.h"
 
 NavHistory::NavHistory(QObject* parent) : QObject(parent) {
-    // Task 3: loadFromDisk();
+    loadFromDisk();
+    // Note: do NOT emit availability signals from the ctor — listeners
+    // aren't connected yet. notifyAvailability is called after the first
+    // recordNavEvent or after explicit notifyAvailability() from
+    // MainWindow's setup code.
 }
 NavHistory::~NavHistory() = default;
 
@@ -105,6 +116,80 @@ void NavHistory::forward() {
 
 bool NavHistory::canGoBack() const { return m_cursor > 0; }
 bool NavHistory::canGoForward() const { return m_cursor >= 0 && m_cursor < m_stack.size() - 1; }
-void NavHistory::flushToDisk() { /* Task 3 */ }
-QString NavHistory::persistencePath() const { return {}; /* Task 3 */ }
-void NavHistory::loadFromDisk() { /* Task 3 */ }
+QString NavHistory::persistencePath() const {
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty()) return {};
+    QDir().mkpath(dir);
+    return dir + "/nav_history.json";
+}
+
+void NavHistory::loadFromDisk() {
+    const QString path = persistencePath();
+    if (path.isEmpty()) return;
+
+    QFile f(path);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly)) return;
+    const QByteArray data = f.readAll();
+    f.close();
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+
+    const QJsonObject root = doc.object();
+    if (root.value("schemaVersion").toInt(0) != kSchemaVersion) return;
+
+    const QJsonArray entries = root.value("entries").toArray();
+    m_stack.clear();
+    m_stack.reserve(entries.size());
+    for (const QJsonValue& v : entries) {
+        if (!v.isObject()) continue;
+        const QJsonObject e = v.toObject();
+        NavHistoryEntry entry;
+        entry.pageId = e.value("pageId").toString();
+        entry.stateBlob = e.value("stateBlob").toObject();
+        entry.timestampMs = static_cast<qint64>(e.value("timestampMs").toDouble(0));
+        if (entry.pageId.isEmpty()) continue;  // skip malformed
+        m_stack.append(entry);
+    }
+
+    // Trim to cap if a future version had a higher one.
+    while (m_stack.size() > kMaxEntries) m_stack.removeFirst();
+
+    const int savedCursor = root.value("cursor").toInt(-1);
+    if (savedCursor >= 0 && savedCursor < m_stack.size()) {
+        m_cursor = savedCursor;
+    } else if (!m_stack.isEmpty()) {
+        m_cursor = m_stack.size() - 1;  // land at the newest entry
+    } else {
+        m_cursor = -1;
+    }
+}
+
+void NavHistory::flushToDisk() {
+    // Snapshot the current page's latest state so the persisted entry
+    // reflects what the user was looking at right before quit.
+    captureCurrent();
+
+    const QString path = persistencePath();
+    if (path.isEmpty()) return;
+
+    QJsonArray entries;
+    for (const NavHistoryEntry& e : m_stack) {
+        QJsonObject obj;
+        obj["pageId"] = e.pageId;
+        obj["stateBlob"] = e.stateBlob;
+        obj["timestampMs"] = static_cast<double>(e.timestampMs);
+        entries.append(obj);
+    }
+
+    QJsonObject root;
+    root["schemaVersion"] = kSchemaVersion;
+    root["cursor"] = m_cursor;
+    root["entries"] = entries;
+
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    f.commit();
+}
