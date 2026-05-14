@@ -14,8 +14,10 @@
 #include <functional>
 #include "core/VideosScanner.h"
 #include "core/library/VideoCategory.h"
+#include "../INavStateProvider.h"
 class QPushButton;
 class QNetworkAccessManager;
+class QScrollArea;
 class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
@@ -26,7 +28,7 @@ class ShowView;
 class StreamDownloadIndex;
 namespace tankostream { namespace stream { class MetaAggregator; } }
 
-class VideosPage : public QWidget {
+class VideosPage : public QWidget, public INavStateProvider {
     Q_OBJECT
 public:
     explicit VideosPage(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -63,9 +65,17 @@ public:
     // Returns library tile state for the `get_videos` command. Pure read.
     QJsonObject devSnapshot(int limit = 50) const;
 
+    // INavStateProvider (GLOBAL_NAV_HISTORY Task 10)
+    QJsonObject captureNavState() const override;
+    bool restoreNavState(const QJsonObject& blob) override;
+    QString navStateLabel() const override { return QStringLiteral("videos"); }
+
 signals:
     void playVideo(const QString& filePath);
     void categoryAssignmentsChanged();
+    // Emitted just before a library→detail transition so MainWindow's
+    // NavHistory can capture current library state and push a fresh entry.
+    void navigationRequested();
 
 private slots:
     void onShowFound(const ShowInfo& show);
@@ -186,4 +196,8 @@ private:
     // setter to coalesce bursts of entriesChanged signals into one triggerScan.
     StreamDownloadIndex*   m_downloadIndex = nullptr;
     QTimer*                m_streamDownloadDebounce = nullptr;
+
+    // GLOBAL_NAV_HISTORY Task 10: cache the grid QScrollArea pointer so
+    // captureNavState/restoreNavState don't pay an O(n) findChild walk.
+    QScrollArea*           m_gridScroll = nullptr;
 };

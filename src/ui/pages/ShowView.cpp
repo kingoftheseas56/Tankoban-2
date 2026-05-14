@@ -24,6 +24,7 @@
 #include <QShortcut>
 #include <QMessageBox>
 #include <QMenu>
+#include <QScrollBar>
 #include <algorithm>
 
 static const QStringList VIDEO_EXTS = {
@@ -1009,4 +1010,45 @@ QJsonObject ShowView::devSnapshot() const
     snap["episodes"] = episodes;
 
     return snap;
+}
+
+// ── GLOBAL_NAV_HISTORY Task 10 — nav-state snapshot/restore ─────────────────
+
+QJsonObject ShowView::snapshotState() const
+{
+    QJsonObject blob;
+    blob["showRootPath"] = m_showRootPath;
+    blob["showRootName"] = m_showRootName;
+    blob["currentRel"]   = m_currentRel;
+    blob["isLoose"]      = m_isLoose;
+    if (m_table) {
+        if (auto* vsb = m_table->verticalScrollBar())
+            blob["scrollY"] = vsb->value();
+    }
+    return blob;
+}
+
+bool ShowView::restoreFromSnapshot(const QJsonObject& blob)
+{
+    const QString rootPath = blob.value("showRootPath").toString();
+    if (rootPath.isEmpty() || !QDir(rootPath).exists())
+        return false;  // stale entry — folder deleted; NavHistory will drop it
+
+    const QString rootName = blob.value("showRootName").toString();
+    const bool isLoose     = blob.value("isLoose").toBool(false);
+
+    // showFolder resets m_currentRel + nav history to root.
+    showFolder(rootPath, rootName, QString(), isLoose);
+
+    // Restore subfolder position (navigateTo is our own private method).
+    const QString rel = blob.value("currentRel").toString();
+    if (!rel.isEmpty())
+        navigateTo(rel);
+
+    // Restore scroll position after the table is repopulated.
+    if (m_table) {
+        if (auto* vsb = m_table->verticalScrollBar())
+            vsb->setValue(blob.value("scrollY").toInt(0));
+    }
+    return true;
 }

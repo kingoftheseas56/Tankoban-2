@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QMetaObject>
 #include <QSettings>
 #include <QCryptographicHash>
@@ -156,6 +157,7 @@ void VideosPage::buildUI()
 
     // ── Grid view (index 0) — wrapped in scroll area ──
     auto* gridScroll = new QScrollArea();
+    m_gridScroll = gridScroll;  // GLOBAL_NAV_HISTORY Task 10
     gridScroll->setObjectName("VideosGridScroll");
     gridScroll->setFrameShape(QFrame::NoFrame);
     gridScroll->setWidgetResizable(true);
@@ -348,6 +350,7 @@ void VideosPage::buildUI()
     m_listView = new LibraryListView(gridPage);
     m_listView->hide();
     connect(m_listView, &LibraryListView::itemActivated, this, [this](const QString& path) {
+        emit navigationRequested();  // GLOBAL_NAV_HISTORY Task 10: capture library state before transition
         m_showView->setFileDurations(m_showDurations.value(path));
         m_showView->showFolder(path, QFileInfo(path).fileName(), posterPathFor(path));
         m_stack->setCurrentIndexAnimated(1);
@@ -512,6 +515,7 @@ void VideosPage::buildUI()
             emit playVideo(filePath);
         } else if (chosen == openShowAct) {
             QString showName = ScannerUtils::cleanMediaFolderTitle(QDir(showPath).dirName());
+            emit navigationRequested();  // GLOBAL_NAV_HISTORY Task 10
             m_showView->setFileDurations(m_showDurations.value(showPath));
             m_showView->showFolder(showPath, showName, posterPathFor(showPath));
             m_stack->setCurrentIndexAnimated(1);
@@ -1184,6 +1188,7 @@ void VideosPage::onScanFinished(const QList<ShowInfo>& allShows)
 
 void VideosPage::onTileClicked(const QString& showPath, const QString& showName)
 {
+    emit navigationRequested();  // GLOBAL_NAV_HISTORY Task 10: capture library state before transition
     m_showView->setFileDurations(m_showDurations.value(showPath));
     m_showView->showFolder(showPath, showName, posterPathFor(showPath));
     m_stack->setCurrentIndexAnimated(1);
@@ -1310,6 +1315,7 @@ void VideosPage::executePendingClick()
     if (m_pendingIsPlay) {
         emit playVideo(m_pendingClickPath);
     } else {
+        emit navigationRequested();  // GLOBAL_NAV_HISTORY Task 10: capture library state before transition
         m_showView->setFileDurations(m_showDurations.value(m_pendingClickPath));
         m_showView->showFolder(m_pendingClickPath, m_pendingClickName,
                                posterPathFor(m_pendingClickPath), m_pendingIsLoose);
@@ -1651,3 +1657,70 @@ QJsonObject VideosPage::devSnapshot(int limit) const
     return snap;
 }
 
+// ── INavStateProvider (GLOBAL_NAV_HISTORY Task 10) ───────────────────────────
+
+QJsonObject VideosPage::captureNavState() const
+{
+    QJsonObject blob;
+    // Determine which sub-view is active: stack index 1 = ShowView detail.
+    const bool inDetail = m_stack && m_showView
+                          && m_stack->currentIndex() == 1;
+    blob["view"] = inDetail ? QStringLiteral("detail") : QStringLiteral("library");
+
+    if (inDetail) {
+        blob["showState"] = m_showView->snapshotState();
+    } else {
+        // Library view — capture search, sort, and scroll position.
+        if (m_searchBar)
+            blob["search"] = m_searchBar->text();
+        if (m_sortCombo)
+            blob["sort"] = m_sortCombo->currentData().toString();
+        if (m_gridScroll) {
+            if (auto* vsb = m_gridScroll->verticalScrollBar())
+                blob["scrollY"] = vsb->value();
+        }
+    }
+    return blob;
+}
+
+bool VideosPage::restoreNavState(const QJsonObject& blob)
+{
+    const QString view = blob.value("view").toString();
+
+    if (view == QLatin1String("detail")) {
+        if (!m_showView) return false;
+        const bool ok = m_showView->restoreFromSnapshot(blob.value("showState").toObject());
+        if (!ok) return false;
+        if (m_stack) m_stack->setCurrentIndexAnimated(1);
+        return true;
+    }
+
+    // Library view — restore scroll to grid (index 0).
+    if (m_stack) m_stack->setCurrentIndexAnimated(0);
+
+    if (m_searchBar) {
+        const QString search = blob.value("search").toString();
+        if (m_searchBar->text() != search) {
+            m_searchBar->blockSignals(true);
+            m_searchBar->setText(search);
+            m_searchBar->blockSignals(false);
+            applySearch();
+        }
+    }
+    if (m_sortCombo) {
+        const QString sort = blob.value("sort").toString();
+        if (!sort.isEmpty()) {
+            for (int i = 0; i < m_sortCombo->count(); ++i) {
+                if (m_sortCombo->itemData(i).toString() == sort) {
+                    m_sortCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+    if (m_gridScroll) {
+        if (auto* vsb = m_gridScroll->verticalScrollBar())
+            vsb->setValue(blob.value("scrollY").toInt(0));
+    }
+    return true;
+}

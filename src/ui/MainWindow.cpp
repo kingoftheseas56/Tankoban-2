@@ -634,6 +634,11 @@ void MainWindow::buildPageStack()
 
     m_videosPage = new VideosPage(m_bridge);
     m_pageStack->addWidget(m_videosPage);
+    // GLOBAL_NAV_HISTORY Task 10: capture library state before library→detail transition.
+    connect(m_videosPage, &VideosPage::navigationRequested,
+            this, [this]() {
+                if (m_navHistory) m_navHistory->recordNavEvent("videos");
+            });
     dbg("4d-videospage-created");
 
     m_organisePage = new OrganisePage(m_bridge);

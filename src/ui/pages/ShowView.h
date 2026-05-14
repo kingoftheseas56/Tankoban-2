@@ -44,6 +44,14 @@ public:
     // activeShow object. Pure read; reads m_table rows + nav state.
     QJsonObject devSnapshot() const;
 
+    // GLOBAL_NAV_HISTORY Task 10 — state snapshot/restore for
+    // VideosPage::captureNavState / restoreNavState delegation.
+    QJsonObject snapshotState() const;
+    // Re-opens the show by root path. Returns false if the folder no longer
+    // exists on disk (stale NavHistory entry — caller drops the entry).
+    // Restores current subfolder navigation and table scroll position.
+    bool restoreFromSnapshot(const QJsonObject& blob);
+
 signals:
     void backRequested();
     void episodeSelected(const QString& filePath);
