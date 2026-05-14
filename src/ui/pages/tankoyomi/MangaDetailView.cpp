@@ -39,21 +39,6 @@ constexpr int kColTitle    = 0;
 constexpr int kColAction   = 1;
 constexpr int kColumnCount = 2;
 
-// TANKOYOMI_SERIES_PAGE_FIX freeze diagnostic 2026-05-14: file-based
-// logger that flushes after every write so events survive AppHangB1
-// process kill. Remove after root cause is identified.
-void freezeDbg(const QString& msg)
-{
-    static QFile f("out/freeze_debug.log");
-    if (!f.isOpen()) {
-        f.open(QIODevice::WriteOnly | QIODevice::Append);
-    }
-    if (f.isOpen()) {
-        const qint64 ms = QDateTime::currentMSecsSinceEpoch();
-        f.write(QStringLiteral("%1 %2\n").arg(ms).arg(msg).toUtf8());
-        f.flush();
-    }
-}
 }  // namespace
 
 MangaDetailView::MangaDetailView(QWidget* parent) : QWidget(parent)
@@ -170,27 +155,24 @@ void MangaDetailView::buildUI()
     m_downloadDropdown->setObjectName("MangaDetailDownloadDropdown");
     m_downloadDropdown->setPopupMode(QToolButton::InstantPopup);
     m_downloadDropdown->setCursor(Qt::PointingHandCursor);
-    // TANKOYOMI_SERIES_PAGE_FIX freeze-revert 2026-05-14: setStyleSheet on
-    // a QToolButton with InstantPopup + setMenu was triggering AppHangB1
-    // on click (Windows watchdog kill after 5s UI-thread stall). Reverting
-    // to Qt-default styling; cosmetic parity loss but click flow works.
+    m_downloadDropdown->setStyleSheet(
+        "#MangaDetailDownloadDropdown {"
+        "  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);"
+        "  border-radius: 6px; color: #e0e0e0; font-size: 12px; padding: 6px 14px; }"
+        "#MangaDetailDownloadDropdown:hover { background: rgba(255,255,255,0.14);"
+        "  border-color: rgba(255,255,255,0.28); }"
+        "#MangaDetailDownloadDropdown::menu-indicator { image: none; width: 0px; }");
 
     auto* dlMenu = new QMenu(m_downloadDropdown);
-    connect(dlMenu, &QMenu::aboutToShow, this, []() { freezeDbg("dlMenu::aboutToShow"); });
-    connect(dlMenu, &QMenu::aboutToHide, this, []() { freezeDbg("dlMenu::aboutToHide"); });
     QAction* allAction = dlMenu->addAction(tr("Download all"));
     connect(allAction, &QAction::triggered, this, [this]() {
-        freezeDbg("dlMenu action: Download all -> downloadNextN(INT_MAX)");
         downloadNextN(INT_MAX);
-        freezeDbg("dlMenu action: Download all RETURNED");
     });
 
     auto addNextN = [this, dlMenu](int n) {
         QAction* a = dlMenu->addAction(tr("Download next %1 not-downloaded").arg(n));
         connect(a, &QAction::triggered, this, [this, n]() {
-            freezeDbg(QStringLiteral("dlMenu action: Download next %1 -> downloadNextN").arg(n));
             downloadNextN(n);
-            freezeDbg(QStringLiteral("dlMenu action: Download next %1 RETURNED").arg(n));
         });
     };
     addNextN(5);
@@ -201,9 +183,7 @@ void MangaDetailView::buildUI()
 
     QAction* customAction = dlMenu->addAction(tr("Custom range..."));
     connect(customAction, &QAction::triggered, this, [this]() {
-        freezeDbg("dlMenu action: Custom range -> openRangeDialog");
         openRangeDialog();
-        freezeDbg("dlMenu action: Custom range RETURNED");
     });
 
     m_downloadDropdown->setMenu(dlMenu);
@@ -393,13 +373,10 @@ void MangaDetailView::setBridgeDestinationProvider(std::function<QString()> dest
 // ---------------------------------------------------------------------
 void MangaDetailView::onChaptersReady(const QList<ChapterInfo>& chapters)
 {
-    freezeDbg(QStringLiteral("onChaptersReady entry n=%1").arg(chapters.size()));
     m_chapters = chapters;
     m_loadingLabel->hide();
     m_chapterTable->show();
-    freezeDbg("onChaptersReady -> renderChapters");
     renderChapters();
-    freezeDbg("onChaptersReady <- renderChapters returned");
 
     // Rebuild inline meta line with real chapter count + downloaded count.
     int downloaded = 0;
@@ -419,7 +396,6 @@ void MangaDetailView::onChaptersReady(const QList<ChapterInfo>& chapters)
         parts.append(tr("%1 downloaded").arg(downloaded));
     }
     m_metaLine->setText(parts.join(QStringLiteral(" · ")));
-    freezeDbg("onChaptersReady exit");
 }
 
 void MangaDetailView::onScraperError(const QString& message)
@@ -555,7 +531,6 @@ void MangaDetailView::deriveChapterState(const QString& chapterId,
 
 void MangaDetailView::renderChapters()
 {
-    freezeDbg(QStringLiteral("renderChapters entry n=%1").arg(m_chapters.size()));
     m_chapterTable->setRowCount(m_chapters.size());
     for (int i = 0; i < m_chapters.size(); ++i) {
         const ChapterInfo& ch = m_chapters[i];
@@ -604,7 +579,6 @@ void MangaDetailView::renderChapters()
         connect(indicator, &ChapterDownloadIndicator::clicked, this,
                 [this, i]() { onChapterIconClicked(i); });
     }
-    freezeDbg("renderChapters exit");
 }
 
 void MangaDetailView::onChapterIconClicked(int row)
@@ -639,17 +613,13 @@ void MangaDetailView::onChapterIconClicked(int row)
 
 void MangaDetailView::downloadNextN(int n)
 {
-    freezeDbg(QStringLiteral("downloadNextN entry n=%1").arg(n));
     if (!m_downloader || !m_destProvider) {
-        freezeDbg("downloadNextN early-return null downloader/destProvider");
         return;
     }
 
     // Build set of chapter IDs that are NOT already downloaded/queued/downloading
     QList<ChapterInfo> picks;
-    freezeDbg("downloadNextN -> listActive()");
     const auto records = m_downloader->listActive();
-    freezeDbg(QStringLiteral("downloadNextN <- listActive() n=%1").arg(records.size()));
     for (const auto& ch : m_chapters) {
         bool skip = false;
         for (const auto& rec : records) {
@@ -669,30 +639,22 @@ void MangaDetailView::downloadNextN(int n)
         if (picks.size() >= n) break;
     }
     if (picks.isEmpty()) {
-        freezeDbg("downloadNextN exit (no picks)");
         return;
     }
-
-    freezeDbg(QStringLiteral("downloadNextN -> startDownload picks=%1").arg(picks.size()));
     m_downloader->startDownload(m_result.title, m_result.source,
                                  picks, m_destProvider(),
                                  QStringLiteral("cbz"), m_coverPath);
-    freezeDbg("downloadNextN <- startDownload returned");
 }
 
 void MangaDetailView::openRangeDialog()
 {
-    freezeDbg("openRangeDialog entry");
     if (!m_downloader || !m_destProvider) {
-        freezeDbg("openRangeDialog early-return null downloader/destProvider");
         return;
     }
 
     // Build set of chapter IDs already handled (queued/downloading/completed)
     QSet<QString> handled;
-    freezeDbg("openRangeDialog -> listActive()");
     const auto records = m_downloader->listActive();
-    freezeDbg(QStringLiteral("openRangeDialog <- listActive() n=%1").arg(records.size()));
     for (const auto& rec : records) {
         if (rec.seriesTitle != m_result.title) continue;
         if (rec.source != m_result.source) continue;
@@ -703,27 +665,18 @@ void MangaDetailView::openRangeDialog()
             }
         }
     }
-
-    freezeDbg(QStringLiteral("openRangeDialog handled=%1 m_chapters=%2 -> ctor")
-        .arg(handled.size()).arg(m_chapters.size()));
     ChapterRangeDialog dlg(m_chapters, handled, this);
-    freezeDbg("openRangeDialog <- ctor; -> exec");
     const int rc = dlg.exec();
-    freezeDbg(QStringLiteral("openRangeDialog <- exec rc=%1").arg(rc));
     if (rc != QDialog::Accepted) {
-        freezeDbg("openRangeDialog exit (not accepted)");
         return;
     }
     const QList<ChapterInfo> picks = dlg.selectedChapters();
     if (picks.isEmpty()) {
-        freezeDbg("openRangeDialog exit (no picks)");
         return;
     }
-    freezeDbg(QStringLiteral("openRangeDialog -> startDownload picks=%1").arg(picks.size()));
     m_downloader->startDownload(m_result.title, m_result.source,
                                  picks, m_destProvider(),
                                  QStringLiteral("cbz"), m_coverPath);
-    freezeDbg("openRangeDialog <- startDownload returned");
 }
 
 void MangaDetailView::showChapterContextMenu(const QPoint& pos)

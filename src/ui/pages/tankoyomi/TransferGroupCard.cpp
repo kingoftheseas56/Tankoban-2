@@ -179,13 +179,7 @@ void TransferGroupCard::rebuildChapterList(const MangaDownloadRecord& rec)
             .arg(ch.chapterNumber, 0, 'f', 1).arg(ch.chapterName), row);
         label->setObjectName("TransferCardChapterLabel");
 
-        QString statusText;
-        if      (ch.status == "downloading") statusText = tr("Downloading");
-        else if (ch.status == "queued")      statusText = tr("Queued");
-        else if (ch.status == "completed")   statusText = tr("Completed");
-        else if (ch.status == "error")       statusText = tr("Errored");
-        else if (ch.status == "cancelled")   statusText = tr("Cancelled");
-        auto* statusLbl = new QLabel(statusText, row);
+        label->setTextFormat(Qt::PlainText);
 
         auto* indicator = new ChapterDownloadIndicator(row);
         indicator->setObjectName(QStringLiteral("TransferCardIndicator_%1")
@@ -204,7 +198,6 @@ void TransferGroupCard::rebuildChapterList(const MangaDownloadRecord& rec)
         else                                  indicator->setState(S::NotDownloaded);
 
         rl->addWidget(label, 1);
-        rl->addWidget(statusLbl);
         rl->addWidget(indicator);
 
         m_chapterColumn->addWidget(row);
