@@ -3670,3 +3670,90 @@ READY TO COMMIT - [Agent 5, GLOBAL_NAV_HISTORY Task 13 TankoyomiPage + MangaDeta
 
 NOTE - Agent 5 -> Agent 4 2026-05-14 ~6:00pm. Starting GLOBAL_NAV_HISTORY Task 14 — StreamPage INavStateProvider refactor. Plan: keep NavEntry struct + showEntryRaw + m_beforePlayerEntry; remove m_navStack pushes (replace with emit navigationRequested); remove StreamPage::goBack if exists (or redirect callers to showEntryRaw). Engine code (StreamLibrary, BulkPlan, TorrentClient) untouched. P6 NavEntry::Detail flow + Phase 10 behaviors preserved. Will RTC when done. If you spot a concern with the approach, post before I land.
 
+READY TO COMMIT - [Agent 5, GLOBAL_NAV_HISTORY Task 14 + review fix 2026-05-14 ~6:15pm. StreamPage INavStateProvider refactor (heaviest slice of arc). StreamPage.h: multi-inherits INavStateProvider; navigationRequested signal; 3 virtual overrides (navStateLabel returns "stream"); showBrowse gained `bool emitNav = true` default parameter (review-fix). StreamPage.cpp: captureNavState maps NavEntry::Kind from top of m_navStack to JSON discriminator (browse/catalogBrowse/detail/addonManager/calendar/search). restoreNavState translates blob back to NavEntry + calls showEntryRaw — does NOT push to m_navStack (avoids double-tracking with global stack). 7 user-initiated transition sites now emit navigationRequested BEFORE m_navStack.push: showBrowse / showAddonManager / showCatalogBrowse / showCalendar / showDetail(imdbId) / showDetail(preview) / onSearchSubmit new-search branch. Idempotency guards preserved on showDetail. m_beforePlayerEntry path untouched. restorePlayerExitView fallback now passes emitNav=false to showBrowse (review fix — prevents spurious global entry on system-initiated player-exit recovery). goBack KEPT as private helper for 5 child-screen backRequested signals (in-page back distinct from global Back chevron). m_navStack KEPT as internal state cache (Option A per task brief). Engine files (StreamLibrary, StreamBulkPlan, TorrentClient, StreamServerEngine, src/core/stream/*) zero diff. P6 NavEntry::Detail flow + STREAM_DOWNLOADS_NETFLIX_OVERHAUL Phase 10 behaviors preserved. MainWindow.cpp: single connect() in buildPageStack wires StreamPage::navigationRequested -> NavHistory::recordNavEvent("stream"). Commit 4b216e2 + review fix 9cb843f. BUILD OK both. Smoke deferred to Hemanth visual.] | Skills invoked: [/superpowers:executing-plans, /superpowers:subagent-driven-development, /superpowers:requesting-code-review, /superpowers:verification-before-completion, /build-verify, /simplify] | files: src/ui/pages/StreamPage.h, src/ui/pages/StreamPage.cpp, src/ui/MainWindow.cpp, agents/chat.md
+
+GLOBAL_NAV_HISTORY ARC COMPLETE pending Hemanth visual smoke — Agent 5 — 2026-05-14 ~6:20pm.
+
+All 14 tasks shipped over 27 commits (since sweep marker 7a0bd80). Spec at docs/superpowers/specs/2026-05-14-global-nav-history-design.md + plan at docs/superpowers/plans/2026-05-14-global-nav-history.md (both still untracked per Phase 1 "doc-only" rule).
+
+Substrate (Tasks 1-7):
+  - NavHistory class + INavStateProvider interface
+  - cursor + push/back/forward + capture logic
+  - persistence (load on ctor + flush on closeEvent; %APPDATA%/Tankoban/nav_history.json, schemaVersion=1)
+  - topbar chevrons + click wiring (placement: [hamburger][<][>][Brand])
+  - Alt+Left / Alt+Right keyboard shortcuts
+  - Mouse buttons 4/5 (Qt::BackButton/ForwardButton)
+  - Reader/player Back closes the overlay (ComicReader, BookReader, VideoPlayer)
+  - Modal dialog gating (chevrons gray while QDialog active; Back/Forward become no-ops)
+
+Per-page hooks (Tasks 8-13):
+  - ComicsPage (search + sort + scroll)
+  - BooksPage (search + sort + scroll)
+  - VideosPage + ShowView dual-view (library: search/sort/scroll; detail: showRootPath + currentRel + isLoose + scroll)
+  - TankorentPage (query + searchType + source + category + filter + tab + scroll)
+  - TankoLibraryPage (query + mediaTab + innerTab + scroll)
+  - TankoyomiPage + MangaDetailView dual-view (library: query/sourceFilter/scroll; detail: v1 always-false restore — fallback to search-results)
+
+StreamPage refactor (Task 14):
+  - INavStateProvider hook + navigationRequested signal
+  - 7 emit sites at user-initiated push points
+  - m_navStack + showEntryRaw + m_beforePlayerEntry + goBack ALL preserved as internal machinery
+  - All P6 + Phase 10 behaviors preserved
+
+Cross-agent NOTEs posted to chat.md before each domain-crossing edit:
+  - Agent 4B (originally; now Agent 1 per BROTHERHOOD_RESTRUCTURE 1466a79) for Tasks 11/12/13
+  - Agent 4 for Task 14
+  - Agent 4B for engineDbg removal hotfix in Task 4 review-fix (acknowledged in 32123e7)
+
+Build GREEN throughout. Working tree clean of src/ M files.
+
+KNOWN v1 LIMITATIONS (deferred enhancements, all per spec):
+  1. Stale-skip recursion in NavHistory::back/forward not implemented — failed restore leaves user on the failed page rather than walking to the next valid entry. NavHistory::back/forward each shift one entry and emit; MainWindow::onNavEntryRequested calls restoreNavState but does not recurse on failure. Phase 4 hook candidate if you observe getting stuck on stale entries.
+  2. MangaDetailView::restoreFromSnapshot always returns false (requires async scraper fetch). NavHistory drops the detail entry; user lands on the search-results page that preceded it. Snapshot still captures mangaId+source+title+coverPath so a future iteration can implement cache-lookup restoration.
+  3. BookSeriesView dual-view not captured — clicking a book series + navigating away + Back lands on BooksPage library, not on the series. ComicsPage's SeriesView likewise. Plan-level gap; out of scope for this arc.
+  4. StreamPage detailPreview (MetaItemPreview) not JSON-serialized — cross-page Back into Detail uses showDetail(imdbId) which fires fresh meta fetch. UI flicker possible during async fetch.
+
+HEMANTH VISUAL SMOKE SPEC:
+
+1. Launch via build_and_run.bat. Verify topbar left cluster reads [hamburger][<][>][Brand "Tankoban"]. Both chevrons start grayed.
+
+2. Click around the sidebar (Comics / Books / Videos / Stream / Tankorent / Tankoyomi / TankoLibrary). After ≥2 page-switches the Back chevron should enable. Click it; expect the previous page restored.
+
+3. Test keyboard: Alt+Left / Alt+Right. Should mirror chevron behavior.
+
+4. Test mouse thumb buttons 4 / 5 if your hardware has them.
+
+5. Restore depth (browser-style):
+   - Open Comics, scroll halfway, type something in search.
+   - Click another page (e.g., Books).
+   - Hit Back. Expect Comics restored to same scroll + search.
+   - Same flow for Books, Videos library, Tankorent, TankoLibrary, Tankoyomi search.
+
+6. Detail-view restore (Videos + Stream only):
+   - Open Videos, click a show tile, switch a season tab.
+   - Click another page.
+   - Hit Back. Expect Videos show-detail restored at the same season + scroll.
+   - Same for Stream: open a show detail, Back to library, Forward to detail — show context preserved.
+
+7. Reader/Player overlay:
+   - Open a Comics tile, hit Back. Expect ComicReader to close + Comics library restored.
+   - Same for Books + Videos.
+   - Forward chevron should be DISABLED while reader/player is open.
+
+8. Modal dialog:
+   - Open Tankorent, click Add Torrent (or any modal dialog).
+   - Verify chevrons gray. Alt+Left / mouse 4 should do nothing.
+   - Esc closes modal. Chevrons re-enable.
+
+9. Persistence:
+   - Navigate Comics -> Stream -> Tankoyomi (or any 3-page sequence).
+   - Close Tankoban via the close-X.
+   - Relaunch via build_and_run.bat.
+   - Hit Back chevron. Expect to walk back through the previous session's stack.
+
+10. Stack cap (optional):
+    - Rapid-fire ≥101 nav events.
+    - Confirm Back chevron still works but oldest entries fall off the end.
+
+If anything regresses or feels wrong, flag it. /commit-sweep is a no-op for this arc (all 14 tasks already committed) but Agent 0's pending RTCs (BROTHERHOOD_RESTRUCTURE + RULE_20) are still pending sweep.
+
