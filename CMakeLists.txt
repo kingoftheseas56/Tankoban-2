@@ -54,6 +54,7 @@ set(SOURCES
     src/core/PosterCache.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
+    src/ui/NavHistory.cpp
     src/ui/Theme.cpp
     src/ui/GlassBackground.cpp
     src/ui/RootFoldersOverlay.cpp
@@ -213,7 +214,9 @@ set(HEADERS
     src/core/PosterFetcher.h
     src/core/PosterCache.h
     src/core/ArchiveReader.h
+    src/ui/INavStateProvider.h
     src/ui/MainWindow.h
+    src/ui/NavHistory.h
     src/ui/GlassBackground.h
     src/ui/RootFoldersOverlay.h
     src/ui/ContextMenuHelper.h
