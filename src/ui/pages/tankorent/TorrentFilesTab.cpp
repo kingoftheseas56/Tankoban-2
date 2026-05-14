@@ -20,6 +20,7 @@
 #include <QUrl>
 #include <QInputDialog>
 #include <QMessageBox>
+#include <QRegularExpression>
 
 namespace {
 
@@ -132,6 +133,7 @@ void TorrentFilesTab::setInfoHash(const QString& infoHash)
     m_infoHash = infoHash;
     m_tree->clear();
     m_rows.clear();
+    m_folders.clear();
 
     if (!m_client || infoHash.isEmpty())
         return;
@@ -147,35 +149,68 @@ void TorrentFilesTab::populateTree(const QString& /*rootName*/)
 {
     const QJsonArray files = m_client->engine()->torrentFiles(m_infoHash);
 
-    // Build directory tree. Keys are directory paths; values are parent items.
-    QMap<QString, QTreeWidgetItem*> dirItems;
+    // Per-leaf raw progress captured during Pass 1, consumed by the Pass 2
+    // folder aggregate loop. Avoids round-tripping through the formatted
+    // QString in the Progress column (which is one-decimal-rounded and
+    // would silently break if the leaf-percent format ever changed).
+    QHash<int, double> leafProgress;
 
+    // Pass 1: emit folder rows + leaf rows, walking each file path
+    // component-by-component to build a true multi-level QTreeWidget tree.
+    //
+    // libtorrent's file_storage::file_path(i) returns paths separated by
+    // TORRENT_SEPARATOR, which is '\\' on Windows and '/' elsewhere
+    // (libtorrent-source/src/file_storage.cpp:58-62). Split on BOTH to be
+    // host-portable AND robust to any libtorrent normalization change —
+    // the prior assumption "always POSIX" was wrong on Windows and caused
+    // every multi-level torrent to render as a single flat list.
+    static const QRegularExpression kPathSep(QStringLiteral(R"([\\/])"));
     for (const auto& v : files) {
         const QJsonObject obj = v.toObject();
         const int     idx      = obj.value("index").toInt();
         const QString fullPath = obj.value("name").toString();
         const qint64  sz       = obj.value("size").toVariant().toLongLong();
         const double  progress = obj.value("progress").toDouble();
+        leafProgress.insert(idx, progress);
         const int     prio     = obj.value("priority").toInt(kPrioNormal);
 
-        const int sep = fullPath.lastIndexOf('/');
-        const QString dir  = sep > 0 ? fullPath.left(sep) : QString();
-        const QString name = sep > 0 ? fullPath.mid(sep + 1) : fullPath;
+        const QStringList parts = fullPath.split(kPathSep, Qt::SkipEmptyParts);
+        if (parts.isEmpty()) continue;  // defensive — empty paths shouldn't reach us
 
+        // Walk all but the last component, creating/looking-up folder items
+        // along the way. The last component is the leaf file.
         QTreeWidgetItem* parent = nullptr;
-        if (!dir.isEmpty()) {
-            if (!dirItems.contains(dir)) {
-                auto* d = new QTreeWidgetItem(m_tree);
-                d->setText(0, dir);
-                d->setData(0, ROLE_FILE_INDEX, -1);
-                d->setExpanded(true);
-                dirItems[dir] = d;
+        QString          cumulative;
+        for (int p = 0; p < parts.size() - 1; ++p) {
+            const QString& segment = parts[p];
+            cumulative = cumulative.isEmpty() ? segment : cumulative + '/' + segment;
+
+            auto fit = m_folders.find(cumulative);
+            if (fit == m_folders.end()) {
+                auto* folderItem = parent
+                    ? new QTreeWidgetItem(parent)
+                    : new QTreeWidgetItem(m_tree);
+                folderItem->setText(0, segment);          // leaf folder name only
+                folderItem->setData(0, ROLE_FILE_INDEX, -1);
+                folderItem->setExpanded(true);
+
+                FolderRow fr;
+                fr.pathKey = cumulative;
+                fr.item    = folderItem;
+                fit = m_folders.insert(cumulative, fr);
             }
-            parent = dirItems[dir];
+            // Accumulate this file's size into every ancestor folder.
+            fit->totalSize += sz;
+            fit->descendantFileIndexes.append(idx);
+            parent = fit->item;
         }
 
-        auto* item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_tree);
-        item->setText(0, name);
+        // Emit the leaf row.
+        const QString leafName = parts.last();
+        auto* item = parent
+            ? new QTreeWidgetItem(parent)
+            : new QTreeWidgetItem(m_tree);
+        item->setText(0, leafName);
         item->setData(0, ROLE_FILE_INDEX, idx);
         item->setText(1, humanSize(sz));
         item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
@@ -199,6 +234,29 @@ void TorrentFilesTab::populateTree(const QString& /*rootName*/)
         row.combo    = combo;
         m_rows.insert(idx, row);
     }
+
+    // Pass 2: paint the aggregate Size + initial Progress text on each
+    // folder row. Progress is recomputed live in refresh(); Size is static
+    // for the lifetime of this populate (file sizes don't change).
+    for (auto it = m_folders.begin(); it != m_folders.end(); ++it) {
+        it->item->setText(1, humanSize(it->totalSize));
+        it->item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+
+        // Initial aggregate progress: size-weighted average across all
+        // descendant leaves whose JSON we already saw above.
+        double weightedSum = 0.0;
+        qint64 totalBytes  = 0;
+        for (int leafIdx : std::as_const(it->descendantFileIndexes)) {
+            auto rowIt = m_rows.constFind(leafIdx);
+            if (rowIt == m_rows.constEnd()) continue;
+            const double pct = leafProgress.value(leafIdx, 0.0);
+            weightedSum += pct * static_cast<double>(rowIt->size);
+            totalBytes  += rowIt->size;
+        }
+        const double folderPct = totalBytes > 0 ? (weightedSum / totalBytes) * 100.0 : 0.0;
+        it->item->setText(2, QString::number(folderPct, 'f', 1) + "%");
+        it->item->setTextAlignment(2, Qt::AlignCenter);
+    }
 }
 
 // ── Live refresh ────────────────────────────────────────────────────────────
@@ -208,13 +266,36 @@ void TorrentFilesTab::refresh()
     if (m_infoHash.isEmpty() || !m_client) return;
 
     const QJsonArray files = m_client->engine()->torrentFiles(m_infoHash);
+
+    // Stash live per-leaf progress so the folder pass below has fresh values
+    // without a second engine query.
+    QHash<int, double> progressByIdx;
+    progressByIdx.reserve(files.size());
+
     for (const auto& v : files) {
         const QJsonObject obj = v.toObject();
-        const int idx = obj.value("index").toInt();
+        const int    idx      = obj.value("index").toInt();
+        const double progress = obj.value("progress").toDouble();
+        progressByIdx.insert(idx, progress);
+
         auto it = m_rows.find(idx);
         if (it == m_rows.end()) continue;
-        const double progress = obj.value("progress").toDouble();
         it->item->setText(2, QString::number(progress * 100.0, 'f', 1) + "%");
+    }
+
+    // Folder rows: size-weighted average of descendant-leaf progress.
+    for (auto fit = m_folders.begin(); fit != m_folders.end(); ++fit) {
+        double weightedSum = 0.0;
+        qint64 totalBytes  = 0;
+        for (int leafIdx : std::as_const(fit->descendantFileIndexes)) {
+            auto rowIt = m_rows.constFind(leafIdx);
+            if (rowIt == m_rows.constEnd()) continue;
+            const double pct = progressByIdx.value(leafIdx, 0.0);
+            weightedSum += pct * static_cast<double>(rowIt->size);
+            totalBytes  += rowIt->size;
+        }
+        const double folderPct = totalBytes > 0 ? (weightedSum / totalBytes) * 100.0 : 0.0;
+        fit->item->setText(2, QString::number(folderPct, 'f', 1) + "%");
     }
 }
 
@@ -275,15 +356,7 @@ void TorrentFilesTab::onTreeContextMenu(const QPoint& pos)
             if (rowIt != m_rows.end() && rowIt->combo)
                 rowIt->combo->setCurrentIndex(comboIdx);
         } else {
-            // Apply to every descendant leaf
-            for (int i = 0; i < item->childCount(); ++i) {
-                QTreeWidgetItem* child = item->child(i);
-                const int childIdx = child->data(0, ROLE_FILE_INDEX).toInt();
-                if (childIdx < 0) continue;
-                auto rowIt = m_rows.find(childIdx);
-                if (rowIt != m_rows.end() && rowIt->combo)
-                    rowIt->combo->setCurrentIndex(comboIdx);
-            }
+            cascadePriorityToDescendants(item, comboIdx);
         }
         writePrioritiesToEngine();
     };
@@ -335,4 +408,24 @@ void TorrentFilesTab::onTreeContextMenu(const QPoint& pos)
     }
 
     menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+void TorrentFilesTab::cascadePriorityToDescendants(QTreeWidgetItem* root, int comboIdx)
+{
+    if (!root) return;
+
+    // Depth-first walk. For each leaf hit, drive its combo to the new index
+    // — that fires the existing currentIndexChanged signal which calls
+    // writePrioritiesToEngine() once at the end via setCurrentIndex below.
+    const int childCount = root->childCount();
+    if (childCount == 0) {
+        const int idx = root->data(0, ROLE_FILE_INDEX).toInt();
+        if (idx < 0) return;            // empty folder, shouldn't happen
+        auto rowIt = m_rows.find(idx);
+        if (rowIt != m_rows.end() && rowIt->combo)
+            rowIt->combo->setCurrentIndex(comboIdx);
+        return;
+    }
+    for (int i = 0; i < childCount; ++i)
+        cascadePriorityToDescendants(root->child(i), comboIdx);
 }
