@@ -56,6 +56,8 @@ void MangaDetailView::buildUI()
             this, &MangaDetailView::backRequested);
     m_titleLabel = new QLabel(this);
     m_titleLabel->setObjectName("MangaDetailTitle");
+    m_titleLabel->setWordWrap(true);
+    m_titleLabel->setStyleSheet("color: #e0e0e0; font-size: 16px; font-weight: bold;");
     m_overflowBtn = new QToolButton(this);
     m_overflowBtn->setText(QString::fromUtf8("\xE2\x8B\xAF"));  // U+22EF horizontal ellipsis; F.4 replaces with SVG
     m_overflowBtn->setObjectName("MangaDetailOverflow");
@@ -119,16 +121,20 @@ void MangaDetailView::buildUI()
     heroRow->addWidget(m_coverLabel);
 
     auto* metaCol = new QVBoxLayout();
-    metaCol->setSpacing(4);
-    m_authorLabel = new QLabel(this);
-    m_authorLabel->setObjectName("MangaDetailAuthor");
-    m_statusLabel = new QLabel(this);
-    m_statusLabel->setObjectName("MangaDetailStatus");
-    m_chapterCount = new QLabel(this);
-    m_chapterCount->setObjectName("MangaDetailChapterCount");
-    metaCol->addWidget(m_authorLabel);
-    metaCol->addWidget(m_statusLabel);
-    metaCol->addWidget(m_chapterCount);
+    metaCol->setSpacing(6);
+
+    m_metaLine = new QLabel(this);
+    m_metaLine->setObjectName("MangaDetailMetaLine");
+    m_metaLine->setWordWrap(true);
+    m_metaLine->setStyleSheet(
+        "QLabel#MangaDetailMetaLine {"
+        "  background: transparent;"
+        "  border: none;"
+        "  color: rgba(255,255,255,0.62);"
+        "  font-size: 12px;"
+        "  font-weight: 400;"
+        "}");
+    metaCol->addWidget(m_metaLine);
     metaCol->addStretch();
 
     // Action row (Download dropdown + ellipsis) -- D.3 fills the dropdown menu
@@ -258,11 +264,18 @@ void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
     m_chapterTable->setRowCount(0);
 
     m_titleLabel->setText(result.title);
-    m_authorLabel->setText(result.author.isEmpty() ? tr("—") : result.author);
 
+    // Inline dot-separated meta: [author · ]status · source · placeholder.
+    // onChaptersReady rewrites this once the scraper returns.
+    QStringList parts;
+    if (!result.author.isEmpty()) {
+        parts.append(result.author);
+    }
     const QString status = result.status.isEmpty() ? tr("Unknown") : result.status;
-    const QString srcLabel = mangaSourceDisplayName(result.source);
-    m_statusLabel->setText(QStringLiteral("%1 · %2").arg(status, srcLabel));
+    parts.append(status);
+    parts.append(mangaSourceDisplayName(result.source));
+    parts.append(tr("Loading chapters..."));
+    m_metaLine->setText(parts.join(QStringLiteral(" · ")));
 
     // Cover
     if (!coverPath.isEmpty() && QFile::exists(coverPath)) {
@@ -271,9 +284,6 @@ void MangaDetailView::show(const MangaResult& result, const QString& coverPath)
         m_coverLabel->setText(tr("(no cover)"));
         m_coverLabel->setAlignment(Qt::AlignCenter);
     }
-
-    // Chapter count placeholder until scraper returns; C.3 fills in
-    m_chapterCount->setText(tr("Loading chapters..."));
 
     // Enter Loading state
     m_chapterTable->hide();
@@ -330,14 +340,24 @@ void MangaDetailView::onChaptersReady(const QList<ChapterInfo>& chapters)
     m_chapterTable->show();
     renderChapters();
 
-    // Update chapter-count label with downloaded count (Phase A.7)
+    // Rebuild inline meta line with real chapter count + downloaded count.
     int downloaded = 0;
     if (m_downloader) {
         downloaded = m_downloader->countDownloadedForSeries(
             m_result.title, m_result.source);
     }
-    m_chapterCount->setText(tr("%1 chapters · %2 downloaded")
-        .arg(chapters.size()).arg(downloaded));
+    QStringList parts;
+    if (!m_result.author.isEmpty()) {
+        parts.append(m_result.author);
+    }
+    const QString status = m_result.status.isEmpty() ? tr("Unknown") : m_result.status;
+    parts.append(status);
+    parts.append(mangaSourceDisplayName(m_result.source));
+    parts.append(tr("%1 chapters").arg(chapters.size()));
+    if (downloaded > 0) {
+        parts.append(tr("%1 downloaded").arg(downloaded));
+    }
+    m_metaLine->setText(parts.join(QStringLiteral(" · ")));
 }
 
 void MangaDetailView::onScraperError(const QString& message)

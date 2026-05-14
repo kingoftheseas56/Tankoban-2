@@ -76,9 +76,7 @@ private:
     QPushButton*   m_backBtn          = nullptr;
     QLabel*        m_titleLabel       = nullptr;
     QLabel*        m_coverLabel       = nullptr;
-    QLabel*        m_authorLabel      = nullptr;
-    QLabel*        m_statusLabel      = nullptr;
-    QLabel*        m_chapterCount     = nullptr;
+    QLabel*        m_metaLine         = nullptr;
     QToolButton*   m_downloadDropdown = nullptr;
     QToolButton*   m_overflowBtn      = nullptr;
     QWidget*       m_multiSelectBar   = nullptr;
