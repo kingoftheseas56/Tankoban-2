@@ -2,6 +2,24 @@
 #include "MangaScraper.h"
 #include "core/JsonStore.h"
 
+namespace {
+// TANKOYOMI_SERIES_PAGE_FIX freeze diagnostic 2026-05-14: shares the
+// same out/freeze_debug.log with MangaDetailView. Flushes after every
+// write so events survive AppHangB1 process kill.
+void engineDbg(const QString& msg)
+{
+    static QFile f("out/freeze_debug.log");
+    if (!f.isOpen()) {
+        f.open(QIODevice::WriteOnly | QIODevice::Append);
+    }
+    if (f.isOpen()) {
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch();
+        f.write(QStringLiteral("%1 ENG %2\n").arg(ms).arg(msg).toUtf8());
+        f.flush();
+    }
+}
+}  // namespace
+
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -255,9 +273,10 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
 // ── Process queue ───────────────────────────────────────────────────────────
 void MangaDownloader::processQueue()
 {
+    engineDbg(QStringLiteral("processQueue entry active=%1").arg(m_activeDownloads));
     QMutexLocker lock(&m_mutex);
-    if (m_paused) return;
-    if (m_activeDownloads >= MAX_CONCURRENT_CHAPTERS) return;
+    if (m_paused) { engineDbg("processQueue exit paused"); return; }
+    if (m_activeDownloads >= MAX_CONCURRENT_CHAPTERS) { engineDbg("processQueue exit at-max"); return; }
 
     // R5: iterate in m_recordOrder so reordering actually influences scheduling.
     for (const QString& recId : m_recordOrder) {
@@ -278,18 +297,22 @@ void MangaDownloader::processQueue()
                 rec.status = "downloading";
                 ++m_activeDownloads;
                 const QString chapterIdLocal = ch.chapterId;
+                engineDbg(QStringLiteral("processQueue starting rec=%1 idx=%2 ch=%3").arg(recId).arg(i).arg(chapterIdLocal));
                 lock.unlock();
                 emit chapterUpdated(recId, chapterIdLocal);
                 downloadChapter(recId, i);
+                engineDbg(QStringLiteral("processQueue <- downloadChapter idx=%1").arg(i));
                 lock.relock();
             }
         }
     }
+    engineDbg("processQueue exit (normal)");
 }
 
 // ── Download a single chapter ───────────────────────────────────────────────
 void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
 {
+    engineDbg(QStringLiteral("downloadChapter entry idx=%1").arg(chapterIdx));
     QString source;
     QString chapterId;
     {
@@ -343,12 +366,15 @@ void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
             processQueue();
         });
 
+    engineDbg(QStringLiteral("downloadChapter -> fetchPages source=%1 chid=%2").arg(source, chapterId));
     scraper->fetchPages(chapterId);
+    engineDbg(QStringLiteral("downloadChapter <- fetchPages returned (async)"));
 }
 
 void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                                       const QList<PageInfo>& pages)
 {
+    engineDbg(QStringLiteral("downloadImages entry idx=%1 pages=%2").arg(chapterIdx).arg(pages.size()));
     QString seriesDir, chapterName, format, source;
     {
         QMutexLocker lock(&m_mutex);
@@ -425,6 +451,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
     // backoff 2s/4s/8s matching Mihon's Downloader.kt:504-512).
     auto downloadNext = std::make_shared<std::function<void(int, int)>>();
     *downloadNext = [this, recordId, chapterIdx, pages, chapterDir, format, source, downloadNext](int pageIdx, int attempt) {
+        engineDbg(QStringLiteral("downloadNext entry pageIdx=%1 attempt=%2").arg(pageIdx).arg(attempt));
         // Pause gate — fires from both the "skip-if-exists" and the network-finished
         // recursion paths. pauseAll() already reverts status; we leave the image
         // counters alone (R4) — on resume, the skip-if-exists branch at the
@@ -487,12 +514,16 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         }
 
         if (pageIdx >= pages.size()) {
+            engineDbg(QStringLiteral("downloadNext chapter-complete idx=%1 format=%2").arg(chapterIdx).arg(format));
             // All images downloaded — pack if CBZ
             if (format == "cbz") {
                 QString cbzPath = chapterDir + ".cbz";
+                engineDbg(QStringLiteral("downloadNext -> packCbz %1").arg(cbzPath));
                 packCbz(chapterDir, cbzPath);
+                engineDbg("downloadNext <- packCbz returned");
                 // Remove source folder
                 QDir(chapterDir).removeRecursively();
+                engineDbg("downloadNext <- removeRecursively returned");
 
                 QMutexLocker lock(&m_mutex);
                 m_records[recordId].chapters[chapterIdx].finalPath = cbzPath;
@@ -523,10 +554,14 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                 }
                 --m_activeDownloads;
             }
+            engineDbg("downloadNext -> saveRecords");
             saveRecords();
+            engineDbg("downloadNext <- saveRecords");
             emit downloadUpdated(recordId);
             emit chapterUpdated(recordId, completedChapterId);
+            engineDbg("downloadNext -> processQueue (recursive)");
             processQueue();
+            engineDbg("downloadNext <- processQueue returned");
             return;
         }
 
@@ -539,10 +574,20 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         // Skip if already exists — the at-top-of-function sync already set
         // downloadedImages to reflect this file, so we just recurse without
         // incrementing (R4: avoid double-count on resume).
+        //
+        // TANKOYOMI_FREEZE_FIX 2026-05-14: was a direct recursive call which
+        // starved the UI thread when many pages already existed on disk
+        // (partial prior download). Defer via QTimer::singleShot(0,...) so
+        // the event loop pumps between iterations and Windows doesn't fire
+        // AppHangB1 after the 5-second non-responsive watchdog.
         if (QFileInfo::exists(filePath) && QFileInfo(filePath).size() > 0) {
-            (*downloadNext)(pageIdx + 1, 0);
+            engineDbg(QStringLiteral("downloadNext skip-if-exists pageIdx=%1 (deferred)").arg(pageIdx));
+            QTimer::singleShot(0, this, [downloadNext, pageIdx]() {
+                (*downloadNext)(pageIdx + 1, 0);
+            });
             return;
         }
+        engineDbg(QStringLiteral("downloadNext -> QNAM->get pageIdx=%1").arg(pageIdx));
 
         QNetworkRequest req(QUrl(page.imageUrl));
         req.setRawHeader("User-Agent",
