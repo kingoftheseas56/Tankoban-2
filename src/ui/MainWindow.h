@@ -24,8 +24,10 @@ class TankorentPage;
 class DevControlServer;
 class SidebarDrawer;
 class StreamDownloadIndex;
+class NavHistory;
 class QJsonObject;
 struct StreamBulkGroupRecord;
+struct NavHistoryEntry;
 
 namespace tankostream::stream {
 struct BulkPackVerificationResult;
@@ -103,6 +105,14 @@ private:
     void applyFramelessWin32Style();
 
     void activatePage(const QString &pageId);
+
+    // Global Nav slots
+    void onBackChevronClicked();
+    void onForwardChevronClicked();
+    void onNavEntryRequested(const NavHistoryEntry& entry);
+    void onBackAvailabilityChanged(bool available);
+    void onForwardAvailabilityChanged(bool available);
+
     void showRootFolders();
     void hideRootFolders();
 
@@ -218,6 +228,16 @@ private:
     QLabel        *m_brandLabel  = nullptr;
     QButtonGroup  *m_navGroup    = nullptr;
     QPushButton   *m_hamburgerBtn = nullptr;
+
+    // Global Back / Forward navigation (spec docs/superpowers/specs/2026-05-14-global-nav-history-design.md)
+    NavHistory   *m_navHistory  = nullptr;
+    QPushButton  *m_backBtn     = nullptr;
+    QPushButton  *m_forwardBtn  = nullptr;
+
+    // Guard flag: true while onNavEntryRequested is processing a Back/Forward
+    // restore. Prevents activatePage from pushing a new history entry on
+    // the restoration path (would create an infinite loop).
+    bool m_inNavRestore = false;
 
     // SOURCES_SIDEBAR — slide-in left drawer holding Tankorent / Tankoyomi /
     // TankoLibrary list buttons. Toggled by m_hamburgerBtn. Replaces the prior

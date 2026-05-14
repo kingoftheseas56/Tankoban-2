@@ -23,6 +23,8 @@
 #include "core/DebugLogBuffer.h"
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
+#include "NavHistory.h"
+#include "INavStateProvider.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -327,6 +329,16 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // (changeEvent below) — fixes the brief OS-title-bar flash Hemanth
     // observed when exiting fullscreen on the mpv video player.
     applyFramelessWin32Style();
+
+    // GLOBAL_NAV_HISTORY Task 4 — instantiate NavHistory after page stack is
+    // live (buildPageStack + activatePage(PAGE_COMICS) already ran above).
+    m_navHistory = new NavHistory(this);
+    connect(m_navHistory, &NavHistory::entryRequested,
+            this, &MainWindow::onNavEntryRequested);
+    connect(m_navHistory, &NavHistory::backAvailableChanged,
+            this, &MainWindow::onBackAvailabilityChanged);
+    connect(m_navHistory, &NavHistory::forwardAvailableChanged,
+            this, &MainWindow::onForwardAvailabilityChanged);
 }
 
 // ── Resize ──────────────────────────────────────────────────────────────────
@@ -389,6 +401,43 @@ void MainWindow::buildTopBar()
     m_hamburgerBtn->setFocusPolicy(Qt::NoFocus);
     leftLayout->addWidget(m_hamburgerBtn, 0, Qt::AlignVCenter);
     leftLayout->addSpacing(8);
+
+    // Global Back chevron (spec: docs/superpowers/specs/2026-05-14-global-nav-history-design.md §6)
+    m_backBtn = new QPushButton(leftSlot);
+    m_backBtn->setObjectName("TopBarBackBtn");
+    m_backBtn->setFixedSize(28, 24);
+    m_backBtn->setCursor(Qt::PointingHandCursor);
+    m_backBtn->setIcon(QIcon(":/icons/chevron_left.svg"));
+    m_backBtn->setIconSize(QSize(16, 16));
+    m_backBtn->setToolTip("Back (Alt+Left)");
+    m_backBtn->setAccessibleName("Back");
+    m_backBtn->setAccessibleDescription("Navigate to the previous page. Keyboard: Alt+LeftArrow.");
+    m_backBtn->setFocusPolicy(Qt::NoFocus);
+    m_backBtn->setEnabled(false);  // initial: stack empty
+    leftLayout->addWidget(m_backBtn, 0, Qt::AlignVCenter);
+    connect(m_backBtn, &QPushButton::clicked,
+            this, &MainWindow::onBackChevronClicked);
+
+    // Global Forward chevron
+    m_forwardBtn = new QPushButton(leftSlot);
+    m_forwardBtn->setObjectName("TopBarForwardBtn");
+    m_forwardBtn->setFixedSize(28, 24);
+    m_forwardBtn->setCursor(Qt::PointingHandCursor);
+    m_forwardBtn->setIcon(QIcon(":/icons/chevron_right.svg"));
+    m_forwardBtn->setIconSize(QSize(16, 16));
+    m_forwardBtn->setToolTip("Forward (Alt+Right)");
+    m_forwardBtn->setAccessibleName("Forward");
+    m_forwardBtn->setAccessibleDescription("Navigate to the next page. Keyboard: Alt+RightArrow.");
+    m_forwardBtn->setFocusPolicy(Qt::NoFocus);
+    m_forwardBtn->setEnabled(false);
+    leftLayout->addWidget(m_forwardBtn, 0, Qt::AlignVCenter);
+    connect(m_forwardBtn, &QPushButton::clicked,
+            this, &MainWindow::onForwardChevronClicked);
+
+    // Visual separator: bump the gap between Forward and Brand from
+    // the default 6px iconBtn spacing to ~12px to read as "nav cluster"
+    // vs "brand identity".
+    leftLayout->addSpacing(6);
 
     m_brandLabel = new QLabel("Tankoban", leftSlot);
     m_brandLabel->setObjectName("Brand");
@@ -742,6 +791,70 @@ void MainWindow::activatePage(const QString &pageId)
             break;
         }
     }
+
+    // GLOBAL_NAV_HISTORY Task 4 — register the new active provider + record
+    // the nav event. If this call originated from a Back/Forward restore
+    // (m_inNavRestore = true), only update the active provider; do NOT push a
+    // new history entry (would loop infinitely).
+    if (m_navHistory && m_pageStack) {
+        INavStateProvider* provider = nullptr;
+        for (int i = 0; i < m_pageStack->count(); ++i) {
+            QWidget* w = m_pageStack->widget(i);
+            if (w && w->objectName() == pageId) {
+                provider = dynamic_cast<INavStateProvider*>(w);
+                break;
+            }
+        }
+        m_navHistory->setActiveProvider(pageId, provider);
+        if (!m_inNavRestore) {
+            m_navHistory->recordNavEvent(pageId);
+        }
+    }
+}
+
+// ── Global Nav (GLOBAL_NAV_HISTORY Task 4) ──────────────────────────────────
+
+void MainWindow::onBackChevronClicked() {
+    if (m_navHistory) m_navHistory->back();
+}
+
+void MainWindow::onForwardChevronClicked() {
+    if (m_navHistory) m_navHistory->forward();
+}
+
+void MainWindow::onBackAvailabilityChanged(bool available) {
+    if (m_backBtn) m_backBtn->setEnabled(available);
+}
+
+void MainWindow::onForwardAvailabilityChanged(bool available) {
+    if (m_forwardBtn) m_forwardBtn->setEnabled(available);
+}
+
+void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
+    // Set guard so activatePage knows we're in a restore, not a fresh nav.
+    m_inNavRestore = true;
+    activatePage(entry.pageId);
+
+    // After activatePage, look for an INavStateProvider on the target page
+    // and call restoreNavState. Pages that don't implement INavStateProvider
+    // (Tasks 8-14 will add hooks) are simply skipped here.
+    INavStateProvider* provider = nullptr;
+    if (m_pageStack) {
+        for (int i = 0; i < m_pageStack->count(); ++i) {
+            QWidget* w = m_pageStack->widget(i);
+            if (w && w->objectName() == entry.pageId) {
+                provider = dynamic_cast<INavStateProvider*>(w);
+                break;
+            }
+        }
+    }
+    if (provider) {
+        provider->restoreNavState(entry.stateBlob);
+        // Stale-skip recursion deferred: if restoreNavState returns false,
+        // future enhancement will call back() / forward() again to walk past.
+        // For now, the page is left in its post-failed-restore state.
+    }
+    m_inNavRestore = false;
 }
 
 // ── STREAM_ADD_TO_TANKORENT cross-page hand-off ─────────────────────────────
@@ -893,6 +1006,11 @@ void MainWindow::quitFromTray()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // GLOBAL_NAV_HISTORY Task 4 — flush nav history to disk before anything
+    // else (stopPlayback + tray teardown below may exit the function via
+    // QApplication::quit; we need the write to always fire first).
+    if (m_navHistory) m_navHistory->flushToDisk();
+
     // Stop video playback immediately so sidecar audio dies before destructors run
     if (m_videoPlayer)
         m_videoPlayer->stopPlayback();
