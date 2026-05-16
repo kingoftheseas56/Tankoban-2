@@ -6,6 +6,7 @@
 #include <memory>
 
 class JsonStore;
+class UnifiedProgressStore;
 
 class CoreBridge : public QObject {
     Q_OBJECT
@@ -47,4 +48,5 @@ private:
     QString stateFile(const QString& domain) const;
 
     std::unique_ptr<JsonStore> m_store;
+    std::unique_ptr<UnifiedProgressStore> m_unifiedProgress;
 };
