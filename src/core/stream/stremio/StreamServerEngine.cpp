@@ -88,8 +88,8 @@ void StreamServerEngine::writeTelemetry(const QString& event,
 {
     // Mirrors StreamEngine::writeTelemetry signature + line shape exactly so
     // existing parsers + scripts/runtime-health.ps1 keep working. Env gate
-    // (TANKOBAN_STREAM_TELEMETRY=1) lives inside appendStreamTelemetryLine —
-    // no-op when disabled.
+    // (TANKOBAN_THEATRE_TELEMETRY=1, with old STREAM name as fallback) lives
+    // inside appendStreamTelemetryLine; no-op when disabled.
     const QString line = QStringLiteral("[")
         + QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)
         + QStringLiteral("] event=") + event

@@ -4,7 +4,7 @@
 // Usage:
 //   tankoctl ping
 //   tankoctl get-state
-//   tankoctl open-page <comics|books|videos|stream|sources>
+//   tankoctl open-page <comics|books|videos|stream|theatre|sources>
 //   tankoctl scan-videos
 //   tankoctl get-videos [limit]
 //   tankoctl play-file <path>
@@ -42,7 +42,7 @@ void printUsage(QTextStream& err)
         << "\n"
         << "  ping                     liveness probe (returns schema + commands)\n"
         << "  get-state                MainWindow snapshot\n"
-        << "  open-page <pageId>       activate page (comics/books/videos/stream/sources)\n"
+        << "  open-page <pageId>       activate page (comics/books/videos/stream/theatre/sources)\n"
         << "  scan-videos              trigger VideosPage rescan\n"
         << "  get-videos [limit]       VideosPage snapshot (default limit 50)\n"
         << "  play-file <path>         open VideoPlayer on path\n"
@@ -115,7 +115,10 @@ int main(int argc, char** argv)
             err << "open-page requires <pageId>\n";
             return 64;
         }
-        payload["pageId"] = a[2];
+        QString pageArg = a[2];
+        if (pageArg == QLatin1String("theatre"))
+            pageArg = QStringLiteral("stream");
+        payload["pageId"] = pageArg;
     } else if (sub == QLatin1String("play-file")) {
         if (a.size() < 3) {
             err << "play-file requires <path>\n";

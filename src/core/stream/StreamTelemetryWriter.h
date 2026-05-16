@@ -15,7 +15,12 @@
 
 inline bool streamTelemetryEnabled()
 {
-    static const bool enabled = qgetenv("TANKOBAN_STREAM_TELEMETRY") == "1";
+    static const bool enabled = [] {
+        QByteArray envVal = qgetenv("TANKOBAN_THEATRE_TELEMETRY");
+        if (envVal.isEmpty())
+            envVal = qgetenv("TANKOBAN_STREAM_TELEMETRY");
+        return envVal == "1";
+    }();
     return enabled;
 }
 
