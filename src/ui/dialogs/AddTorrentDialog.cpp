@@ -60,6 +60,18 @@ AddTorrentDialog::AddTorrentDialog(const QString& torrentName,
     m_downloadBtn->setEnabled(false);
 }
 
+AddTorrentDialog::AddTorrentDialog(const QString& torrentName,
+                                   const QString& infoHash,
+                                   const QMap<QString, QString>& defaultPaths,
+                                   const QString& preFilledImdbId,
+                                   int preFilledSeason,
+                                   QWidget* parent)
+    : AddTorrentDialog(torrentName, infoHash, defaultPaths, parent)
+{
+    m_preFilledImdbId = preFilledImdbId;
+    m_preFilledSeason = preFilledSeason;
+}
+
 // ── Build UI ────────────────────────────────────────────────────────────────
 void AddTorrentDialog::buildUI()
 {
@@ -669,6 +681,9 @@ AddTorrentConfig AddTorrentDialog::config() const
             cfg.selectedIndices.append(fileIdx);
     }
     std::sort(cfg.selectedIndices.begin(), cfg.selectedIndices.end());
+
+    cfg.imdbId = m_preFilledImdbId;
+    cfg.season = m_preFilledSeason;
 
     return cfg;
 }

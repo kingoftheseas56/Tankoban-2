@@ -22,6 +22,12 @@ struct AddTorrentConfig {
     bool    startPaused  = false;
     QVector<int>   selectedIndices;   // file indices with priority > 0
     QMap<int, int> filePriorities;    // fileIndex → priority (0/1/6/7)
+
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: identity capture from show-first
+    // picker flow. Empty when the dialog was invoked from non-show paths
+    // (repurposed "Direct torrent search" or external callers).
+    QString imdbId;       // "tt0141842" or empty
+    int     season = 0;   // 1-based season; 0 = unbound (multi-season pack or non-show)
 };
 
 // ── AddTorrentDialog ────────────────────────────────────────────────────────
@@ -33,6 +39,16 @@ public:
     explicit AddTorrentDialog(const QString& torrentName,
                               const QString& infoHash,
                               const QMap<QString, QString>& defaultPaths,
+                              QWidget* parent = nullptr);
+
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: constructor variant used by the
+    // show-first TorrentPackPicker flow. Pre-fills imdbId + season so the dialog
+    // roundtrips them into config().
+    explicit AddTorrentDialog(const QString& torrentName,
+                              const QString& infoHash,
+                              const QMap<QString, QString>& defaultPaths,
+                              const QString& preFilledImdbId,
+                              int preFilledSeason,
                               QWidget* parent = nullptr);
 
     // Call when metadata arrives from engine
@@ -87,6 +103,10 @@ private:
     bool                 m_metadataReady   = false;
     qint64               m_totalSize       = 0;
     QMap<QTreeWidgetItem*, int> m_fileIndices;  // tree item → file index (leaves only)
+
+    // TANKORENT_STREAM_INTEGRATION: identity from show-first picker
+    QString m_preFilledImdbId;
+    int     m_preFilledSeason = 0;
 
     static constexpr int PRIORITY_SKIP    = 0;
     static constexpr int PRIORITY_NORMAL  = 1;
