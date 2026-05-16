@@ -11,6 +11,7 @@
 #include <QTimer>
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "core/manga/ComicsPrePivotMigrator.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
@@ -200,6 +201,20 @@ int main(int argc, char *argv[])
     QDir().mkpath(premiumStagingRoot);
     QDir().mkpath(premiumQuarantineRoot);
     dbg("4c-premium-dirs-bootstrapped");
+
+    {
+        // QDir::cleanPath normalizes the parent-traversal so the backup dir
+        // resolves to a canonical path rather than a `.../data/..` literal in
+        // logs and any future Settings "Open backup folder" affordance.
+        tankoban::manga::ComicsPrePivotMigrator migrator(
+            QDir::cleanPath(bridge.dataDir() + QStringLiteral("/..")));
+        const bool migratedNow = migrator.migrate();
+        DebugLogBuffer::instance().info(QStringLiteral("ComicsPrePivotMigrator"),
+            migratedNow
+                ? QStringLiteral("pre-pivot library migrated to backup; volume mode active")
+                : QStringLiteral("already migrated or fresh install; no-op"),
+            QJsonObject{{QStringLiteral("backupDir"), migrator.backupDir()}});
+    }
 
     MainWindow window(&bridge);
     dbg("5-mainwindow-created");
