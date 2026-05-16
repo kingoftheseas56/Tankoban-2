@@ -25,7 +25,7 @@ class StreamDownloadIndex : public QObject
 public:
     struct Entry {
         QString imdbId;        // "tt6741278"
-        QString type;          // "series" (movies excluded in v1 per spec §3 P5)
+        QString type;          // "series" or "movie" (movies use season=0, episode=0)
         int     season = 0;
         int     episode = 0;
         QString canonicalPath; // display-form absolute path
@@ -37,7 +37,7 @@ public:
     explicit StreamDownloadIndex(JsonStore* store, QObject* parent = nullptr);
 
     // ── Thread safety contract ──────────────────────────────────────────────
-    // All mutating methods (registerEpisode/evictByImdb/evictByPath/validateAll)
+    // All mutating methods (registerEpisode/registerMovie/evictByImdb/evictByPath/validateAll)
     // execute synchronously on the calling thread. They acquire m_mutex around
     // the in-memory map mutations, then call save() and emit entriesChanged()
     // OFF the lock. JsonStore::write is internally thread-safe (its writer
@@ -58,6 +58,8 @@ public:
     void registerEpisode(const QString& imdbId, int season, int episode,
                          const QString& canonicalPath, const QString& sourceGroupId,
                          qint64 fileSizeBytes);
+    void registerMovie(const QString& imdbId, const QString& canonicalPath,
+                       const QString& sourceGroupId, qint64 fileSizeBytes);
     void evictByImdb(const QString& imdbId);
     void evictByPath(const QString& canonicalKey);
     void validateAll();
@@ -65,6 +67,7 @@ public:
     // Read API — mutex-guarded. Safe from any thread.
     bool isStreamOwned(const QString& canonicalKey) const;
     std::optional<QString> filePathFor(const QString& imdbId, int season, int episode) const;
+    std::optional<QString> filePathForMovie(const QString& imdbId) const;
     bool hasAnyForImdb(const QString& imdbId) const;
     QList<Entry> entriesForImdb(const QString& imdbId) const;
     QList<Entry> all() const;

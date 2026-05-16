@@ -2,6 +2,7 @@
 
 #include "core/JsonStore.h"
 #include "core/DebugLogBuffer.h"
+#include "core/stream/QualityScorer.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -151,13 +152,20 @@ void StreamDownloadIndex::registerEpisode(const QString& imdbId, int season, int
     {
         QMutexLocker lock(&m_mutex);
 
-        // If a prior entry occupied this episode at a different path, evict it
-        // first so by-episode never points at a stale path.
+        // Highest-quality-wins dedup for duplicate episode bindings. Ties
+        // keep the first registered path so equal-quality redownloads do not
+        // churn the show-view binding.
         QString displacedImdbId;
         auto epIt = m_byEpisode.constFind(epKey);
-        if (epIt != m_byEpisode.constEnd() && epIt.value() != key) {
+        if (epIt != m_byEpisode.constEnd()) {
             auto displacedIt = m_byPath.constFind(epIt.value());
             if (displacedIt != m_byPath.constEnd()) {
+                const int existingScore = tankostream::stream::QualityScorer::qualityScore(
+                    QFileInfo(displacedIt.value().canonicalPath).fileName());
+                const int newScore = tankostream::stream::QualityScorer::qualityScore(
+                    QFileInfo(canonicalPath).fileName());
+                if (newScore <= existingScore)
+                    return;
                 displacedImdbId = displacedIt.value().imdbId;
             }
             m_byPath.remove(epIt.value());
@@ -184,6 +192,30 @@ void StreamDownloadIndex::registerEpisode(const QString& imdbId, int season, int
 
     save();
     emit entriesChanged();
+}
+
+void StreamDownloadIndex::registerMovie(const QString& imdbId,
+                                        const QString& canonicalPath,
+                                        const QString& sourceGroupId,
+                                        qint64 fileSizeBytes)
+{
+    registerEpisode(imdbId, 0, 0, canonicalPath, sourceGroupId, fileSizeBytes);
+
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        const QString key = computeCanonicalKey(canonicalPath);
+        auto it = m_byPath.find(key);
+        if (it != m_byPath.end() && it->type != QStringLiteral("movie")) {
+            it->type = QStringLiteral("movie");
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        save();
+        emit entriesChanged();
+    }
 }
 
 void StreamDownloadIndex::evictByImdb(const QString& imdbId)
@@ -303,6 +335,11 @@ std::optional<QString> StreamDownloadIndex::filePathFor(const QString& imdbId,
     if (pIt == m_byPath.constEnd())
         return std::nullopt;
     return pIt.value().canonicalPath;
+}
+
+std::optional<QString> StreamDownloadIndex::filePathForMovie(const QString& imdbId) const
+{
+    return filePathFor(imdbId, 0, 0);
 }
 
 bool StreamDownloadIndex::hasAnyForImdb(const QString& imdbId) const
