@@ -4,8 +4,13 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QNetworkAccessManager>
+#include <QPointer>
 #include <QRegularExpression>
+#include <QSet>
+#include <QSettings>
 #include <QStringList>
+#include <QTimer>
 
 #include <memory>
 
@@ -13,6 +18,16 @@
 #include "addon/AddonTransport.h"
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
+
+// THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1) - includes for the
+// indexer fan-out wrapped by searchPacks. Mirrors the set used by
+// TorrentPackPicker::launchSearches.
+#include "core/TorrentIndexer.h"
+#include "core/indexers/EztvIndexer.h"
+#include "core/indexers/ExtTorrentsIndexer.h"
+#include "core/indexers/PirateBayIndexer.h"
+#include "core/indexers/X1337xIndexer.h"
+#include "core/indexers/YtsIndexer.h"
 
 using tankostream::addon::AddonDescriptor;
 using tankostream::addon::AddonRegistry;
@@ -633,6 +648,164 @@ void StreamAggregator::reset()
     m_seenIdentityKeys.clear();
     m_streams.clear();
     m_pendingResponses = 0;
+}
+
+// THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1) - per-call pack-search
+// state. Owned by std::shared_ptr so multiple concurrent searches don't
+// collide and so a still-pending search can outlive the searchPacks()
+// return. Post-review (C1) fix: shared_ptr ownership replaces raw new/delete
+// so slow indexer callbacks arriving after the 30s timeout no longer
+// UB-read freed memory; they keep ctx alive via captured shared_ptr and
+// hit the ctx->emitted early-out instead.
+struct StreamAggregator::PackSearchContext
+{
+    QString imdbId;
+    int     season = 0;
+    int     outstanding = 0;
+    QList<TorrentResult> results;
+    QSet<QString>        seenInfoHashes;
+    QTimer* timeout = nullptr;
+    bool    emitted = false;
+};
+
+namespace {
+
+constexpr int kPackSearchTimeoutMs = 30 * 1000;
+constexpr int kPackSearchPerIndexerLimit = 25;
+
+bool packSearchIndexerEnabled(const QString& id)
+{
+    QSettings settings;
+    return settings.value(
+        QStringLiteral("tankorent/indexers/%1/enabled").arg(id), true).toBool();
+}
+
+}  // namespace
+
+void StreamAggregator::searchPacks(const QString& imdbId,
+                                   const QString& showName,
+                                   int season)
+{
+    if (!m_packNam) {
+        m_packNam = new QNetworkAccessManager(this);
+    }
+
+    QStringList queries;
+    if (season > 0) {
+        queries << QStringLiteral("%1 S%2")
+                       .arg(showName)
+                       .arg(season, 2, 10, QLatin1Char('0'));
+        queries << QStringLiteral("%1 Season %2").arg(showName).arg(season);
+    } else {
+        queries << QStringLiteral("%1 Complete").arg(showName);
+        queries << QStringLiteral("%1 Complete Series").arg(showName);
+    }
+
+    // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1 post-review fix) -
+    // shared_ptr ownership so a slow indexer responding after the 30s timeout
+    // can no-op cleanly on the ctx->emitted early-out instead of UB-reading
+    // freed memory. Every lambda below captures ctx BY VALUE (shared_ptr copy
+    // bumps refcount); the context dies when the last lambda is destroyed.
+    auto ctx = std::make_shared<PackSearchContext>();
+    ctx->imdbId = imdbId;
+    ctx->season = season;
+
+    QPointer<StreamAggregator> self(this);
+
+    // Explicit-only capture (post-review I1 fix): ctx is a shared_ptr by value,
+    // self is a QPointer by value, this is needed for connect()'s receiver
+    // argument and for indexer instantiation. No `&` capture - searchPacks's
+    // stack frame is gone by the time async indexer callbacks fire.
+    auto dispatch = [ctx, self, this](const QString& id, TorrentIndexer* indexer,
+                                      const QString& query) {
+        if (!packSearchIndexerEnabled(id)) {
+            indexer->deleteLater();
+            return;
+        }
+        ++ctx->outstanding;
+        QPointer<TorrentIndexer> idxPtr(indexer);
+        connect(indexer, &TorrentIndexer::searchFinished, this,
+                [self, ctx, idxPtr](const QList<TorrentResult>& results) {
+                    if (!self || ctx->emitted) {
+                        if (idxPtr) idxPtr->deleteLater();
+                        return;
+                    }
+                    for (const TorrentResult& r : results) {
+                        const QString key = r.infoHash.isEmpty()
+                            ? QStringLiteral("magnet::") + r.magnetUri
+                            : r.infoHash;
+                        if (ctx->seenInfoHashes.contains(key))
+                            continue;
+                        ctx->seenInfoHashes.insert(key);
+                        ctx->results.append(r);
+                    }
+                    if (idxPtr) idxPtr->deleteLater();
+                    if (--ctx->outstanding <= 0) {
+                        self->finalizePackSearch(ctx);
+                    }
+                });
+        connect(indexer, &TorrentIndexer::searchError, this,
+                [self, ctx, idxPtr](const QString&) {
+                    if (!self || ctx->emitted) {
+                        if (idxPtr) idxPtr->deleteLater();
+                        return;
+                    }
+                    if (idxPtr) idxPtr->deleteLater();
+                    if (--ctx->outstanding <= 0) {
+                        self->finalizePackSearch(ctx);
+                    }
+                });
+        indexer->search(query, kPackSearchPerIndexerLimit);
+    };
+
+    for (const QString& query : queries) {
+        dispatch(QStringLiteral("piratebay"),
+                 new PirateBayIndexer(m_packNam, this), query);
+        dispatch(QStringLiteral("1337x"),
+                 new X1337xIndexer(m_packNam, this), query);
+        dispatch(QStringLiteral("yts"),
+                 new YtsIndexer(m_packNam, this), query);
+        dispatch(QStringLiteral("eztv"),
+                 new EztvIndexer(m_packNam, this), query);
+        dispatch(QStringLiteral("exttorrents"),
+                 new ExtTorrentsIndexer(m_packNam, this), query);
+    }
+
+    if (ctx->outstanding == 0) {
+        // No enabled indexers; emit empty result on the next event-loop tick
+        // so listeners that connect() right after this call still receive it.
+        QTimer::singleShot(0, this, [self, ctx]() {
+            if (self) self->finalizePackSearch(ctx);
+            // shared_ptr drops automatically if !self; no manual delete needed.
+        });
+        return;
+    }
+
+    ctx->timeout = new QTimer(this);
+    ctx->timeout->setSingleShot(true);
+    connect(ctx->timeout, &QTimer::timeout, this, [self, ctx]() {
+        if (self && !ctx->emitted) {
+            self->finalizePackSearch(ctx);
+        }
+    });
+    ctx->timeout->start(kPackSearchTimeoutMs);
+}
+
+void StreamAggregator::finalizePackSearch(std::shared_ptr<PackSearchContext> ctx)
+{
+    if (!ctx || ctx->emitted) {
+        return;
+    }
+    ctx->emitted = true;
+    if (ctx->timeout) {
+        ctx->timeout->stop();
+        ctx->timeout->deleteLater();
+        ctx->timeout = nullptr;
+    }
+    emit packsAvailable(ctx->imdbId, ctx->season, ctx->results);
+    // No manual delete: shared_ptr destroys the context when the last lambda
+    // (and this local) goes out of scope. Stale post-timeout callbacks keep
+    // ctx alive but hit the ctx->emitted early-out cleanly.
 }
 
 }
