@@ -31,6 +31,15 @@ public:
     void setSelected(bool selected);
     void setFocused(bool focused);
 
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 — paint-time
+    // provenance + downloading chips. setProvenance("tankoyomi") paints a
+    // [Tankoyomi] chip at the top-left of the cover; setDownloadingChip(true)
+    // paints a [DOWNLOADING] chip at the top-right. Both rerun applyBadges
+    // when state changes; default state ("" / false) is a no-op for callers
+    // who don't care (non-Comics pages).
+    void setProvenance(const QString& provenance);
+    void setDownloadingChip(bool show);
+
     // Inline title rename — shows a QLineEdit in place of the title label,
     // Enter/focus-out commits, Escape cancels. Emits renameCompleted.
     void beginRename();
@@ -89,4 +98,9 @@ private:
     bool    m_focused  = false;
     bool    m_hovered  = false;
     bool    m_flashing = false;
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 — provenance
+    // + downloading chip state. Painted in applyBadges; default-empty means
+    // no extra paint cost on non-Comics pages.
+    QString m_provenance;
+    bool    m_downloadingChip = false;
 };

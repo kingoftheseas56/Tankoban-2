@@ -238,6 +238,23 @@ void TileCard::setIsFolder(bool isFolder)
     applyBadges();
 }
 
+// COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 — provenance +
+// downloading chip painter slots. Re-runs applyBadges so the chip overlay
+// repaints on the next composited frame.
+void TileCard::setProvenance(const QString& p)
+{
+    if (m_provenance == p) return;
+    m_provenance = p;
+    applyBadges();
+}
+
+void TileCard::setDownloadingChip(bool s)
+{
+    if (m_downloadingChip == s) return;
+    m_downloadingChip = s;
+    applyBadges();
+}
+
 /* ── applyBadges ─────────────────────────────────────────── */
 
 void TileCard::applyBadges()
@@ -327,6 +344,74 @@ void TileCard::applyBadges()
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0x94, 0xa3, 0xb8));
         p.drawEllipse(dotX, dotY, 10, 10);
+    }
+
+    // ── COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 ──
+    // Provenance chip (top-left) — only rendered for Tankoyomi-origin
+    // tiles. Folder-origin tiles stay un-chipped so the existing
+    // folder icon + new dot keep their composed appearance.
+    //
+    // TANKOYOMI_PREMIUM Phase 8 -- provenance "tankoyomi_premium" paints
+    // BOTH the existing [Tankoyomi] chip and a second [Premium] chip
+    // immediately to its right, tinted with Theme::current().accent so it
+    // tracks the active theme (Dark gold / Nord blue / etc.). Both chips
+    // share the same chip-row geometry so they never collide with the
+    // top-right downloading chip.
+    const bool premiumChip =
+        (m_provenance == QStringLiteral("tankoyomi_premium"));
+    if (m_provenance == QStringLiteral("tankoyomi") || premiumChip) {
+        const QString text = QStringLiteral("Tankoyomi");
+        QFont cf;
+        cf.setPixelSize(10);
+        cf.setWeight(QFont::DemiBold);
+        p.setFont(cf);
+        QFontMetrics cfm(cf);
+        const int textW = cfm.horizontalAdvance(text);
+        const int chipW = textW + 10;
+        const int chipH = cfm.height() + 2;
+        const int chipX = margin;
+        const int chipY = margin;
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 140));
+        p.drawRoundedRect(chipX, chipY, chipW, chipH, chipH / 2, chipH / 2);
+        p.setPen(QColor(0xf0, 0xf0, 0xf0));
+        p.drawText(QRect(chipX, chipY, chipW, chipH), Qt::AlignCenter, text);
+
+        if (premiumChip) {
+            const QString pText = QStringLiteral("Premium");
+            const int pTextW = cfm.horizontalAdvance(pText);
+            const int pChipW = pTextW + 10;
+            const int pChipH = chipH;
+            const int pChipX = chipX + chipW + 4;  // 4px gap between chips
+            const int pChipY = chipY;
+            const QColor accent(Theme::current().accent);
+            p.setPen(Qt::NoPen);
+            p.setBrush(accent.isValid() ? accent : QColor(0xc7, 0xa7, 0x6b));
+            p.drawRoundedRect(pChipX, pChipY, pChipW, pChipH, pChipH / 2, pChipH / 2);
+            p.setPen(QColor(0xff, 0xff, 0xff));
+            p.drawText(QRect(pChipX, pChipY, pChipW, pChipH), Qt::AlignCenter, pText);
+        }
+    }
+
+    // Downloading chip (top-right). Drawn over the cover so it remains
+    // visible even when a count/page pill renders at the bottom.
+    if (m_downloadingChip) {
+        const QString text = QStringLiteral("DOWNLOADING");
+        QFont cf;
+        cf.setPixelSize(10);
+        cf.setWeight(QFont::DemiBold);
+        p.setFont(cf);
+        QFontMetrics cfm(cf);
+        const int textW = cfm.horizontalAdvance(text);
+        const int chipW = textW + 10;
+        const int chipH = cfm.height() + 2;
+        const int chipX = w - chipW - margin;
+        const int chipY = margin;
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 140));
+        p.drawRoundedRect(chipX, chipY, chipW, chipH, chipH / 2, chipH / 2);
+        p.setPen(QColor(0xf0, 0xf0, 0xf0));
+        p.drawText(QRect(chipX, chipY, chipW, chipH), Qt::AlignCenter, text);
     }
 
     p.end();

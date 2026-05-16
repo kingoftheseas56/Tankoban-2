@@ -161,13 +161,30 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
     rec.totalChapters   = chapters.size();
     rec.startedAt       = QDateTime::currentMSecsSinceEpoch();
 
+    struct CompletedChapterEvent {
+        QString chapterId;
+        QString finalPath;
+        qint64 fileSize = 0;
+    };
+    QList<CompletedChapterEvent> completedOnStart;
+
     // R3 (hotfix 2026-04-14): pre-filter chapters already on disk. Matches
     // Mihon's `findChapterDir(...) == null` filter. Original implementation
     // did N x QFileInfo::exists() + size() (or QDir::entryList per chapter)
     // on the main thread — froze the UI for several seconds on a 1000+
     // chapter selection. Replaced with a single directory enumeration of
     // the series dir + O(1) set lookups per chapter.
-    const QString seriesDir = destinationPath + "/" + seriesTitle;
+    //
+    // 2026-05-15 P0-S2b' (re-smoke fix): seriesDir is destinationPath
+    // verbatim — callers now pass the library record's canonicalSeriesPath
+    // directly (which already encodes the per-series folder via
+    // rootFolder + "/" + seriesFolderName, including collision-disambiguated
+    // names like "Berserk (WeebCentral)"). Pre-fix synthesised
+    // destinationPath + "/" + seriesTitle and produced either a double
+    // segment in happy-path-rooted callers (the smoke evidence's
+    // `.../Berserk/Berserk/...`) or a divergent path in collision cases.
+    // Mirrored at :369 + :1124 below.
+    const QString seriesDir = destinationPath;
     static const QRegularExpression unsafe(R"([<>:"/\\|?*])");
 
     QSet<QString> existingFiles;     // CBZ format
@@ -203,8 +220,19 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
         if (format == "cbz") {
             const QString fileName = safe + ".cbz";
             if (existingFiles.contains(fileName)) {
-                already      = true;
-                existingPath = seriesDir + "/" + fileName;
+                // 2026-05-15 EMPTY_CBZ_BUG_FIX — only treat existing cbz as
+                // "already downloaded" if it has plausible content. An empty
+                // ZIP (EOCD-only) is 22 bytes; a single-page real cbz is
+                // always orders of magnitude larger. Pre-fix any matching-name
+                // file blocked re-download regardless of size, leaving any
+                // 22-byte stub (from a prior interrupted download) permanently
+                // un-recoverable. Threshold of 1024 bytes catches the empty
+                // case with margin and never rejects a real chapter cbz.
+                const QString fullPath = seriesDir + "/" + fileName;
+                if (QFileInfo(fullPath).size() > 1024) {
+                    already      = true;
+                    existingPath = fullPath;
+                }
             }
         } else if (existingDirs.contains(safe)) {
             // Lost the "non-empty" check vs the old per-chapter walk, but
@@ -219,6 +247,7 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
             cd.completedAt = QDateTime::currentMSecsSinceEpoch();
             cd.finalPath   = existingPath;
             ++rec.completedChapters;
+            completedOnStart.append({cd.chapterId, existingPath, QFileInfo(existingPath).size()});
         }
 
         rec.chapters.append(cd);
@@ -247,6 +276,10 @@ QString MangaDownloader::startDownload(const QString& seriesTitle, const QString
     emit downloadUpdated(id);
     for (const QString& chapterId : initialChapterIds)
         emit chapterUpdated(id, chapterId);
+    for (const auto& completed : completedOnStart) {
+        emit chapterCompleted(source, seriesTitle, completed.chapterId,
+                              completed.finalPath, completed.fileSize);
+    }
 
     processQueue();
     return id;
@@ -348,13 +381,45 @@ void MangaDownloader::downloadChapter(const QString& recordId, int chapterIdx)
 void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                                       const QList<PageInfo>& pages)
 {
+    // 2026-05-15 EMPTY_CBZ_BUG_FIX — guard against scraper returning zero pages.
+    // Without this guard the function falls through to the "all images
+    // downloaded" branch at :511 with pageIdx (0) >= pages.size() (0) true,
+    // packCbz writes a 22-byte EOCD-only ZIP from the empty chapterDir, the
+    // chapter is marked completed, chapterCompleted fires, MangaDownloadIndex
+    // registers the stub. Symptom: reader opens, ArchiveReader correctly
+    // reports zero entries, UI shows "No pages". Original trigger observed
+    // during Phase 4b rapid kill+rebuild cycles for the P0-S2b' fix — the
+    // mid-flight HTTP reply finished with empty body, parsePagesHtml matched
+    // zero planeptune images, pagesReady fired with empty list. Whether the
+    // upstream is transient or deterministic, treating empty pages as a hard
+    // error here keeps the chapter re-downloadable and prevents the stub
+    // from poisoning the on-disk + index state.
+    if (pages.isEmpty()) {
+        QString chapterIdLocal;
+        {
+            QMutexLocker lock(&m_mutex);
+            auto& ch = m_records[recordId].chapters[chapterIdx];
+            ch.status = QStringLiteral("error");
+            ch.error  = QStringLiteral(
+                "Scraper returned zero pages — chapter not packed. "
+                "Retry the download.");
+            chapterIdLocal = ch.chapterId;
+            --m_activeDownloads;
+        }
+        emit downloadUpdated(recordId);
+        emit chapterUpdated(recordId, chapterIdLocal);
+        processQueue();
+        return;
+    }
+
     QString seriesDir, chapterName, format, source;
     {
         QMutexLocker lock(&m_mutex);
         auto& rec = m_records[recordId];
         auto& ch  = rec.chapters[chapterIdx];
         ch.totalImages = pages.size();
-        seriesDir   = rec.destinationPath + "/" + rec.seriesTitle;
+        // 2026-05-15 P0-S2b' — see :177 explanation.
+        seriesDir   = rec.destinationPath;
         chapterName = ch.chapterName;
         format      = rec.format;
         source      = rec.source;
@@ -502,6 +567,8 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
 
             // Mark chapter complete
             QString completedChapterId;
+            QString completedFinalPath;
+            qint64 completedFileSize = 0;
             bool seriesCompleted = false;
             {
                 QMutexLocker lock(&m_mutex);
@@ -512,6 +579,8 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
                 rec.chapters[chapterIdx].completedAt = QDateTime::currentMSecsSinceEpoch();
                 rec.chapters[chapterIdx].status      = "completed";
                 completedChapterId = rec.chapters[chapterIdx].chapterId;
+                completedFinalPath = rec.chapters[chapterIdx].finalPath;
+                completedFileSize  = QFileInfo(completedFinalPath).size();
                 ++rec.completedChapters;
                 rec.progress = static_cast<float>(rec.completedChapters) / rec.totalChapters;
 
@@ -529,6 +598,16 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             saveRecords();
             emit downloadUpdated(recordId);
             emit chapterUpdated(recordId, completedChapterId);
+            QString completedSource;
+            QString completedSeriesTitle;
+            {
+                QMutexLocker lock(&m_mutex);
+                const auto rec = m_records.value(recordId);
+                completedSource = rec.source;
+                completedSeriesTitle = rec.seriesTitle;
+            }
+            emit chapterCompleted(completedSource, completedSeriesTitle, completedChapterId,
+                                  completedFinalPath, completedFileSize);
             processQueue();
             return;
         }
@@ -653,6 +732,21 @@ QJsonArray MangaDownloader::listHistory() const
 {
     auto data = m_store->read(HISTORY_FILE);
     return data.value("entries").toArray();
+}
+
+// COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 32 — lookup helper
+// for the merged Comics surface. Returns the active record (if any) matching
+// (source, seriesTitle); empty MangaDownloadRecord otherwise.
+MangaDownloadRecord MangaDownloader::recordForSeries(const QString& source,
+                                                      const QString& seriesTitle) const
+{
+    QMutexLocker lk(&m_mutex);
+    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
+        const auto& r = it.value();
+        if (r.source == source && r.seriesTitle == seriesTitle)
+            return r;
+    }
+    return MangaDownloadRecord{};
 }
 
 // ── Pause / resume ──────────────────────────────────────────────────────────
@@ -1079,9 +1173,11 @@ void MangaDownloader::removeWithData(const QString& id)
     }
 
     // Delete the series folder
+    // 2026-05-15 P0-S2b' — destinationPath is the series folder verbatim
+    // (per :177 + :369 fix). Drop the seriesTitle concat. We still gate on
+    // !seriesTitle.isEmpty() as a sanity check that the record was well-formed.
     if (!destPath.isEmpty() && !seriesTitle.isEmpty()) {
-        QString seriesDir = destPath + "/" + seriesTitle;
-        QDir(seriesDir).removeRecursively();
+        QDir(destPath).removeRecursively();
     }
 
     saveRecords();

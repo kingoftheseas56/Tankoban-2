@@ -113,6 +113,16 @@ public:
     int countDownloadedForSeries(const QString& seriesTitle,
                                   const QString& source) const;
 
+    // Returns the active record for (source, seriesTitle), if any. Matches
+    // by title because MangaDownloadRecord currently doesn't carry the
+    // scraper-id; callers from the comics-merger arc look up the canonical
+    // title via ComicsTankoyomiLibrary before calling. If title collisions in
+    // a single source become a real problem, a future phase can extend the
+    // struct with a sourceSeriesId field. Returns a default-constructed
+    // MangaDownloadRecord (id.isEmpty() == true) when no match.
+    MangaDownloadRecord recordForSeries(const QString& source,
+                                         const QString& seriesTitle) const;
+
     // For the Transfers tab status line ("N downloading · M queued · K done today").
     struct StateCounts {
         int downloading = 0;
@@ -137,9 +147,16 @@ signals:
     void pausedChanged(bool paused);
 
     // Emitted whenever a single chapter's status field changes. Consumers
-    // (MangaDetailView, TransferGroupCard) re-render only the changed row
-    // rather than walking the full record on every series-level downloadUpdated.
+    // (ComicsTankoyomiDetailView) re-render only the changed row rather than
+    // walking the full record on every series-level downloadUpdated.
     void chapterUpdated(const QString& seriesId, const QString& chapterId);
+
+    // ComicsPage owns the chapterCompleted -> MangaDownloadIndex::registerChapter
+    // binding. MangaDownloader never depends on MangaDownloadIndex directly; it
+    // only reports completed chapter paths to the page-level adapter.
+    void chapterCompleted(const QString& source, const QString& seriesTitle,
+                          const QString& chapterId, const QString& finalPath,
+                          qint64 fileSize);
 
 private:
     void processQueue();

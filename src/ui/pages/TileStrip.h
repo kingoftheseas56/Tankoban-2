@@ -28,6 +28,12 @@ public:
     TileCard* tileAt(const QPoint& pos) const;
     TileCard* tileAtIndex(int index) const;
 
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 — exposes
+    // the internal m_tiles list so ComicsPage::refreshTileChips can iterate
+    // Tankoyomi-origin tiles + drive the DOWNLOADING chip from MangaDownloader
+    // subscription. Returns a const reference; callers must not mutate.
+    const QList<TileCard*>& tiles() const { return m_tiles; }
+
     // Selection
     void clearSelection();
     void selectAll();
