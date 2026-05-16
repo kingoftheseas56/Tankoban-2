@@ -210,11 +210,9 @@ void SidebarDrawer::buildUi()
     };
 
     m_btnTankorent     = makeItem(tr("Tankorent"),    QStringLiteral(":/icons/magnet.svg"),   QStringLiteral("tankorent"));
-    m_btnTankoyomi     = makeItem(tr("Tankoyomi"),    QStringLiteral(":/icons/tankoyomi.svg"), QStringLiteral("tankoyomi"));
     m_btnTankoLibrary  = makeItem(tr("TankoLibrary"), QStringLiteral(":/icons/book.svg"),     QStringLiteral("tankolibrary"));
 
     layout->addWidget(m_btnTankorent);
-    layout->addWidget(m_btnTankoyomi);
     layout->addWidget(m_btnTankoLibrary);
 
     layout->addStretch(1);
@@ -320,7 +318,6 @@ void SidebarDrawer::setActiveSource(const QString& pageId)
 {
     m_activePageId = pageId;
     styleItem(m_btnTankorent,     QStringLiteral("tankorent"));
-    styleItem(m_btnTankoyomi,     QStringLiteral("tankoyomi"));
     styleItem(m_btnTankoLibrary,  QStringLiteral("tankolibrary"));
 }
 

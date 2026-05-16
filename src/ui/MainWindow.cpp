@@ -8,7 +8,6 @@
 #include "pages/OrganisePage.h"
 #include "pages/StreamPage.h"
 #include "pages/TankorentPage.h"
-#include "pages/TankoyomiPage.h"
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
 #include "core/torrent/TorrentClient.h"
@@ -58,7 +57,6 @@ static constexpr const char *PAGE_STREAM       = "stream";
 // SOURCES_SIDEBAR 2026-05-05 — PAGE_SOURCES removed; replaced by three peer
 // pages reachable via the slide-in left sidebar drawer.
 static constexpr const char *PAGE_TANKORENT    = "tankorent";
-static constexpr const char *PAGE_TANKOYOMI    = "tankoyomi";
 static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -393,7 +391,7 @@ void MainWindow::buildTopBar()
     leftLayout->setSpacing(0);
 
     // SOURCES_SIDEBAR 2026-05-05 — hamburger button before brand label.
-    // Toggles the left slide-in drawer holding Tankorent / Tankoyomi /
+    // Toggles the left slide-in drawer holding Tankorent /
     // TankoLibrary. Sized to match IconButton precedent (28x24); not
     // checkable, not part of m_navGroup (it's a toggle, not a content-mode peer).
     m_hamburgerBtn = new QPushButton(leftSlot);
@@ -466,10 +464,13 @@ void MainWindow::buildTopBar()
     const NavDef navDefs[] = {
         { PAGE_COMICS,  "Comics"  },
         { PAGE_BOOKS,   "Books"   },
-        { PAGE_VIDEOS,  "Videos"  },
-        { PAGE_STREAM,  "Stream"  },
-        // SOURCES_SIDEBAR 2026-05-05 — Sources entry removed; the three sub-pages
-        // (Tankorent / Tankoyomi / TankoLibrary) are now reachable via the
+        // TANKORENT_STREAM_INTEGRATION 2026-05-15 — Videos sidebar entry
+        // removed; VideosPage stays linked for VideosScanner reuse by the
+        // Theatre Local files row (Task E4). Ctrl+3 keybind preserved as a
+        // power-user escape hatch.
+        { PAGE_STREAM,  "Theatre" },
+        // SOURCES_SIDEBAR 2026-05-05 — Sources entry removed; the two sub-pages
+        // (Tankorent / TankoLibrary) are now reachable via the
         // hamburger-toggled left drawer.
     };
 
@@ -711,6 +712,13 @@ void MainWindow::buildPageStack()
     // folder + re-downloads, producing the "multiplying folders" symptom.
     m_videosPage->setTorrentClient(torrentClient);
 
+    // TANKOYOMI_PREMIUM Phase 3 (2026-05-15) — same pattern as VideosPage
+    // above: hand ComicsPage the shared TorrentClient so its internal
+    // TorrentVolumeProvider can reach TorrentEngine for premium-volume
+    // downloads. ComicsPage caches both ledger + provider; signals fire on
+    // metadataReady / pieceFinished / torrentError via queued connections.
+    comicsPage->setTorrentClient(torrentClient);
+
     m_tankorentPage = new TankorentPage(m_bridge, torrentClient);
     m_tankorentPage->setObjectName(PAGE_TANKORENT);
     m_pageStack->addWidget(m_tankorentPage);
@@ -738,16 +746,6 @@ void MainWindow::buildPageStack()
             this, [this]() {
                 if (m_navHistory) m_navHistory->recordNavEvent("stream");
             });
-
-    auto *tankoyomiPage = new TankoyomiPage(m_bridge);
-    tankoyomiPage->setObjectName(PAGE_TANKOYOMI);
-    m_pageStack->addWidget(tankoyomiPage);
-    // GLOBAL_NAV_HISTORY Task 13 — wire manga tile click → NavHistory entry.
-    connect(tankoyomiPage, &TankoyomiPage::navigationRequested,
-            this, [this]() {
-                if (m_navHistory) m_navHistory->recordNavEvent("tankoyomi");
-            });
-    dbg("4g2-tankoyomipage-created");
 
     auto *tankoLibraryPage = new TankoLibraryPage(m_bridge, torrentClient);
     tankoLibraryPage->setObjectName(PAGE_TANKOLIBRARY);
@@ -1005,7 +1003,7 @@ QString MainWindow::domainForPage(const QString& pageId) const
     if (pageId == PAGE_BOOKS)   return "books";
     if (pageId == PAGE_VIDEOS)  return "videos";
     if (pageId == PAGE_ORGANISE) return "videos";
-    if (pageId == PAGE_TANKORENT || pageId == PAGE_TANKOYOMI || pageId == PAGE_TANKOLIBRARY)
+    if (pageId == PAGE_TANKORENT || pageId == PAGE_TANKOLIBRARY)
         return "sources";
     return "";
 }
@@ -1176,6 +1174,13 @@ void MainWindow::closeBookReader()
 // ── Video player ─────────────────────────────────────────────────────────────
 void MainWindow::openVideoPlayer(const QString& filePath)
 {
+    openVideoPlayerWithOptions(filePath, 0.0, {});
+}
+
+void MainWindow::openVideoPlayerWithOptions(const QString& filePath,
+                                            double startPositionSec,
+                                            const QString& displayTitle)
+{
     // CW_NAMESPACE_BOUNDARY 2026-05-13 — this is the library-videos
     // entry point. Tear down any stream-mode progress wiring left
     // over from a prior downloaded-stream playback and reset
@@ -1190,7 +1195,7 @@ void MainWindow::openVideoPlayer(const QString& filePath)
     if (m_videoPlayer)
         m_videoPlayer->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
 
-    m_videoPlayer->openFile(filePath);
+    m_videoPlayer->openFile(filePath, {}, 0, startPositionSec, displayTitle);
     m_videoPlayer->setGeometry(centralWidget()->rect());
     m_videoPlayer->show();
     m_videoPlayer->raise();
@@ -1216,8 +1221,6 @@ void MainWindow::onPlayLocalFileFromStreamRequested(
     const QString& localPath, const QString& imdbId,
     const QString& showTitle, int season, int episode)
 {
-    Q_UNUSED(showTitle);
-
     if (localPath.isEmpty() || !QFileInfo::exists(localPath)) {
         DebugLogBuffer::instance().warning(
             QStringLiteral("stream"),
@@ -1253,23 +1256,39 @@ void MainWindow::onPlayLocalFileFromStreamRequested(
     //       QMetaObject::Connection is torn down on the next library
     //       playback or downloaded-stream playback via the
     //       openVideoPlayer reset.
-    openVideoPlayer(localPath);
-
-    m_videoPlayer->setPersistenceMode(VideoPlayer::PersistenceMode::None);
-
     const bool isSeries = (season > 0 && episode > 0);
     const QString epKey = isSeries
         ? StreamProgress::episodeKey(imdbId, season, episode)
         : StreamProgress::movieKey(imdbId);
+
+    double streamResumeSec = 0.0;
+    if (m_bridge && !epKey.isEmpty()) {
+        const QJsonObject prog = m_bridge->progress(QStringLiteral("stream"), epKey);
+        const double savedPos = prog.value(QStringLiteral("positionSec")).toDouble(0.0);
+        const double savedDur = prog.value(QStringLiteral("durationSec")).toDouble(0.0);
+        if (savedPos > 2.0 && savedDur > 0.0 && savedPos < savedDur * 0.95)
+            streamResumeSec = savedPos;
+    }
+
+    const QString displayTitle = isSeries
+        ? QStringLiteral("%1 S%2E%3")
+            .arg(showTitle)
+            .arg(season, 2, 10, QLatin1Char('0'))
+            .arg(episode, 2, 10, QLatin1Char('0'))
+        : showTitle;
+    openVideoPlayerWithOptions(localPath, streamResumeSec, displayTitle);
+
+    m_videoPlayer->setPersistenceMode(VideoPlayer::PersistenceMode::None);
+
     CoreBridge* bridge = m_bridge;
     m_streamPlaybackProgressConn = connect(
         m_videoPlayer, &VideoPlayer::progressUpdated, this,
-        [bridge, epKey](const QString& /*path*/, double posSec, double durSec) {
+        [bridge, epKey](const QString& path, double posSec, double durSec) {
             if (!bridge || epKey.isEmpty()) return;
             if (posSec < 5.0) return;   // mirrors StreamPage 5s floor
             const bool finished = (durSec > 0 && posSec / durSec >= 0.9);
-            const QJsonObject state =
-                StreamProgress::makeWatchState(posSec, durSec, finished);
+            QJsonObject state = StreamProgress::makeWatchState(posSec, durSec, finished);
+            state[QStringLiteral("path")] = path;
             bridge->saveProgress(QStringLiteral("stream"), epKey, state);
         });
 
@@ -1488,7 +1507,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("open_page")) {
         const QString pageId = payload.value("pageId").toString();
         const QStringList valid{"comics","books","videos","organise","stream",
-                                "tankorent","tankoyomi","tankolibrary"};
+                                "tankorent","tankolibrary"};
         if (!valid.contains(pageId)) {
             return err("UNKNOWN_PAGE",
                 QStringLiteral("pageId '%1' not in [%2]")

@@ -1,4 +1,8 @@
 #include <QApplication>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QIcon>
 #include <QScreen>
 #include <QLocalServer>
@@ -91,6 +95,46 @@ static void applyWindowsDarkTitleBar(QWidget *window)
 }
 #endif
 
+// COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 P8 — one-time backup of
+// legacy Tankoyomi state per Codex §21.5. Runs once on first launch
+// after the merger ships; flagged by a marker file so it doesn't re-run.
+static void runOneTimeTankoyomiBackup(const QString& dataDir)
+{
+    const QString marker = QDir(dataDir).filePath(".comics_merger_migration_done");
+    if (QFileInfo::exists(marker)) return;
+
+    // Code-quality review Critical: NEVER remove src without a confirmed-
+    // successful copy. Pre-fix: QFile::remove(src) ran unconditionally — a
+    // failed copy (disk full, perms, AV-quarantined file) OR a second-run
+    // crash recovery (marker absent, dst already exists from a prior run)
+    // both led to wiping the user's last intact data. Fix gates remove on
+    // a verified copy and preserves src whenever the backup couldn't be
+    // proven good.
+    auto backupOne = [&](const QString& filename) {
+        const QString src = QDir(dataDir).filePath(filename);
+        const QString dst = QDir(dataDir).filePath(filename + ".pre-merger-backup");
+        if (!QFileInfo::exists(src)) return;           // nothing to back up
+        if (QFileInfo::exists(dst)) return;            // already backed up; preserve src
+        if (!QFile::copy(src, dst)) {
+            qWarning() << "[runOneTimeTankoyomiBackup] copy failed"
+                       << src << "->" << dst << "(src preserved)";
+            return;
+        }
+        if (!QFile::remove(src))
+            qWarning() << "[runOneTimeTankoyomiBackup] remove failed" << src;
+    };
+    backupOne("manga_downloads.json");
+    backupOne("manga_history.json");
+
+    QFile m(marker);
+    if (!m.open(QIODevice::WriteOnly)) {
+        qWarning() << "[runOneTimeTankoyomiBackup] marker write failed" << marker
+                   << "(migration will re-run, but backup guards make it idempotent)";
+        return;
+    }
+    m.write("1");
+}
+
 int main(int argc, char *argv[])
 {
 #ifdef Q_OS_WIN
@@ -139,6 +183,23 @@ int main(int argc, char *argv[])
     dbg("3-datadir-resolved");
     CoreBridge bridge(dataDir);
     dbg("4-corebridge-created");
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 P8 — one-time backup
+    // of legacy Tankoyomi state before the merged Comics surface
+    // takes ownership. Idempotent via marker file.
+    runOneTimeTankoyomiBackup(bridge.dataDir());
+    dbg("4b-tankoyomi-backup-checked");
+
+    // TANKOYOMI_PREMIUM Phase 3 -- persistent staging + quarantine roots.
+    // Staging is keyed by infoHash; quarantine holds archives that failed
+    // PremiumArchiveValidator (Phase 4) so the curator can inspect them.
+    // Created early so TorrentVolumeProvider (instantiated inside ComicsPage)
+    // can rely on the directory existing at construction time.
+    const QString premiumStagingRoot    = bridge.dataDir() + QStringLiteral("/manga_premium_staging");
+    const QString premiumQuarantineRoot = bridge.dataDir() + QStringLiteral("/manga_premium_quarantine");
+    QDir().mkpath(premiumStagingRoot);
+    QDir().mkpath(premiumQuarantineRoot);
+    dbg("4c-premium-dirs-bootstrapped");
 
     MainWindow window(&bridge);
     dbg("5-mainwindow-created");

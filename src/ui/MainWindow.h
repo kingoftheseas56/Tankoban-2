@@ -141,6 +141,9 @@ private:
 
     // Video player
     void openVideoPlayer(const QString& filePath);
+    void openVideoPlayerWithOptions(const QString& filePath,
+                                    double startPositionSec,
+                                    const QString& displayTitle);
     void closeVideoPlayer();
 
     // System tray
@@ -254,9 +257,9 @@ private:
     // the restoration path (would create an infinite loop).
     bool m_inNavRestore = false;
 
-    // SOURCES_SIDEBAR — slide-in left drawer holding Tankorent / Tankoyomi /
+    // SOURCES_SIDEBAR — slide-in left drawer holding Tankorent /
     // TankoLibrary list buttons. Toggled by m_hamburgerBtn. Replaces the prior
-    // PAGE_SOURCES topbar entry; the three sub-pages are now peer pages in
+    // PAGE_SOURCES topbar entry; the sub-pages are now peer pages in
     // m_pageStack.
     SidebarDrawer *m_sidebar     = nullptr;
 

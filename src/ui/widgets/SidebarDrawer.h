@@ -24,7 +24,7 @@ public:
     void toggle();
     bool isOpen() const { return m_open; }
 
-    // pageId in {"tankorent","tankoyomi","tankolibrary"}; empty string clears.
+    // pageId in {"tankorent","tankolibrary"}; empty string clears.
     void setActiveSource(const QString& pageId);
 
 signals:
@@ -48,7 +48,6 @@ private:
     QGraphicsOpacityEffect* m_backdropOpacity = nullptr;
 
     QPushButton* m_btnTankorent = nullptr;
-    QPushButton* m_btnTankoyomi = nullptr;
     QPushButton* m_btnTankoLibrary = nullptr;
 
     QString m_activePageId;
