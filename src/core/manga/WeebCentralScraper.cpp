@@ -1,8 +1,10 @@
 #include "WeebCentralScraper.h"
 
+#include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
@@ -223,16 +225,72 @@ QList<ChapterInfo> WeebCentralScraper::parseChaptersHtml(const QString& html, co
 
     static QRegularExpression numRe(R"((\d+(?:\.\d+)?))", QRegularExpression::NoPatternOption);
 
+    // Smoke 2026-05-15 P0-S2a: pre-fix the strip-tags regex `<[^>]*>` removed
+    // tag delimiters but left ALL text nodes between tags intact. The chapter
+    // anchor on weebcentral contains nested <span>name</span>, "Last Read"
+    // badge text, an <svg> icon with embedded <style> CSS, and a <time> ISO
+    // timestamp. All of those concatenated into ch.name, then leaked into
+    // MangaDownloader's filename construction and produced the 0-byte
+    // unreadable `Prologue 1\n...{ fill_ #d3d629; }...2024-09-07T17_04_15Z.cbz`
+    // observed during smoke. Post-fix order-of-ops (per dotAll chapterRe):
+    // (1) capture <time>...</time> ISO date into ch.dateUpload as ms-epoch;
+    // (2) strip <svg> + <style> + <time> blocks entirely (kill the CSS + date
+    // sources); (3) drop "Last Read" badge literal; (4) strip remaining tag
+    // delimiters; (5) QString::simplified() to collapse whitespace + trim.
+    static QRegularExpression svgBlockRe(
+        QStringLiteral(R"RX(<svg\b[^>]*>.*?</svg>)RX"),
+        QRegularExpression::DotMatchesEverythingOption
+            | QRegularExpression::CaseInsensitiveOption);
+    static QRegularExpression styleBlockRe(
+        QStringLiteral(R"RX(<style\b[^>]*>.*?</style>)RX"),
+        QRegularExpression::DotMatchesEverythingOption
+            | QRegularExpression::CaseInsensitiveOption);
+    // Capture group 1 = the `datetime` attribute value (always 3-digit
+    // millisecond precision on weebcentral, e.g. "2025-09-11T15:08:10.666Z")
+    // rather than the visible inner text (which is 6-digit microsecond
+    // precision e.g. "2025-09-11T15:08:10.666085Z" — exceeds Qt's
+    // Qt::ISODateWithMs parser's 3-digit ceiling and would silently parse
+    // as invalid, leaving dateUpload=0 for every chapter). The full
+    // <time>...</time> match still gets removed wholesale from the chapter
+    // name by `rawInner.remove(timeBlockRe)` since remove() takes the
+    // entire regex match, not just the capture group.
+    static QRegularExpression timeBlockRe(
+        QStringLiteral(R"RX(<time\b[^>]*\bdatetime="([^"]+)"[^>]*>.*?</time>)RX"),
+        QRegularExpression::DotMatchesEverythingOption
+            | QRegularExpression::CaseInsensitiveOption);
+    static QRegularExpression chapterTagStripRe(QStringLiteral(R"RX(<[^>]*>)RX"));
+
     auto matches = chapterRe.globalMatch(html);
     while (matches.hasNext()) {
         auto m = matches.next();
         ChapterInfo ch;
         ch.id     = m.captured(1);
         ch.url    = "/chapters/" + ch.id;
-        ch.name   = m.captured(2).trimmed();
-        ch.name.remove(QRegularExpression("<[^>]*>"));
-        ch.name   = ch.name.trimmed();
         ch.source = source;
+
+        QString rawInner = m.captured(2);
+
+        // (1) Pull ISO date from <time>...</time> inner text into dateUpload.
+        const auto timeMatch = timeBlockRe.match(rawInner);
+        if (timeMatch.hasMatch()) {
+            const QString isoText = timeMatch.captured(1).trimmed();
+            const QDateTime dt = QDateTime::fromString(isoText, Qt::ISODateWithMs);
+            if (dt.isValid()) ch.dateUpload = dt.toMSecsSinceEpoch();
+        }
+
+        // (2) Kill <svg> / <style> / <time> blocks with their inner content.
+        rawInner.remove(svgBlockRe);
+        rawInner.remove(styleBlockRe);
+        rawInner.remove(timeBlockRe);
+
+        // (3) Drop the "Last Read" badge label.
+        rawInner.remove(QLatin1String("Last Read"));
+
+        // (4) Strip remaining tag delimiters.
+        rawInner.remove(chapterTagStripRe);
+
+        // (5) Collapse whitespace + trim in one shot.
+        ch.name = rawInner.simplified();
 
         // Extract chapter number from name
         auto nm = numRe.match(ch.name);
@@ -292,4 +350,99 @@ QList<PageInfo> WeebCentralScraper::parsePagesHtml(const QString& html)
     }
 
     return pages;
+}
+
+// ── Detail (v1 merger) ──────────────────────────────────────────────────────
+void WeebCentralScraper::fetchDetail(const MangaResult& preview)
+{
+    // preview.url is the relative "/series/{ULID}/{slug}" path captured by
+    // parseSearchHtml's hrefRe (capture group 1 strips any absolute prefix).
+    // Resolve against BASE so QNetworkRequest sees a fully-qualified https
+    // URL — pre-fix this passed a schemeless QUrl and tripped Qt's
+    // "Protocol \"\" is unknown" error on every detail open
+    // (smoke 2026-05-15 P0-S1).
+    const QUrl full = preview.url.startsWith(QLatin1String("http"))
+                          ? QUrl(preview.url)
+                          : QUrl(BASE).resolved(QUrl(preview.url));
+    QNetworkRequest req = makeRequest(full, /*isHtmx=*/false);
+    auto* reply = m_nam->get(req);
+    QPointer<WeebCentralScraper> self(this);
+    connect(reply, &QNetworkReply::finished, this, [reply, self, preview]() {
+        reply->deleteLater();
+        if (!self) return;
+        if (reply->error() != QNetworkReply::NoError) {
+            emit self->errorOccurred(QString("weebcentral fetchDetail: %1")
+                                     .arg(reply->errorString()));
+            return;
+        }
+        const QString html = QString::fromUtf8(reply->readAll());
+
+        static QRegularExpression stripTagsRe(R"re(<[^>]*>)re");
+        auto stripTags = [](QString s) {
+            s.remove(stripTagsRe);
+            return s.trimmed();
+        };
+
+        MangaSeriesDetail detail;
+        detail.preview     = preview;
+        detail.sourceUrl   = preview.url;
+
+        // Live-HTML-validated selectors (Playwright pre-flight 2026-05-15
+        // ~10:48am against https://weebcentral.com/series/01J76XY7EF75DJNQCV04HTPDZK/Berserk).
+        // The prior pinned-at-plan-author-time selectors (which the file
+        // formerly flagged as TODO(smoke-verify)) all missed: synopsis used
+        // a non-existent `<li class="description">`, genres used a
+        // non-existent `/genres/` href shape (WeebCentral uses Tags(s) via
+        // `?included_tag=NAME`), Year used a non-existent "Year" label
+        // (WeebCentral uses "Released:"), Hero used a non-existent `hero`
+        // class. Only Status happened to match by structural coincidence.
+        //
+        // Synopsis: <strong>Description</strong><p class="...">TEXT</p>
+        static QRegularExpression kSynopsis(
+            R"RX(<strong>Description</strong>\s*<p[^>]*>([\s\S]*?)</p>)RX");
+        auto sm = kSynopsis.match(html);
+        if (sm.hasMatch()) detail.synopsis = stripTags(sm.captured(1));
+
+        // Genres: WeebCentral exposes them as "Tags" via <a href="...?included_tag=NAME">NAME</a>.
+        // Project them into MangaSeriesDetail::genres so downstream UI doesn't
+        // need to know the source's local naming.
+        static QRegularExpression kGenre(
+            R"RX(<a[^>]+href="[^"]*\?included_tag=[^"]*"[^>]*>([^<]+)</a>)RX");
+        auto gi = kGenre.globalMatch(html);
+        while (gi.hasNext()) {
+            const auto m = gi.next();
+            detail.genres.append(m.captured(1).trimmed());
+        }
+
+        // Year: <strong>Released:</strong> <span>YYYY</span>. The "Released"
+        // label is WeebCentral's term for first-publication year.
+        static QRegularExpression kYear(
+            R"RX(Released:[^<]*</strong>\s*<span>(\d{4})</span>)RX");
+        auto ym = kYear.match(html);
+        if (ym.hasMatch()) detail.year = ym.captured(1);
+
+        // Status: <strong>Status:</strong> <a ...>Ongoing</a> — the existing
+        // loose `Status[^<]*<[^>]*>\s*<[^>]*>([^<]+)<` shape coincidentally
+        // walks `Status: ` → `</strong>` → whitespace → `<a ...>` → `Ongoing<`
+        // correctly. Kept as-is per Playwright validation.
+        static QRegularExpression kStatus(
+            R"RX(Status[^<]*<[^>]*>\s*<[^>]*>([^<]+)<)RX");
+        auto stm = kStatus.match(html);
+        if (stm.hasMatch()) detail.status = stm.captured(1).trimmed();
+
+        // Hero cover: first <img src="...temp.compsci88.com/cover/..."> on
+        // the page is the series cover by document order (the page renders
+        // its own cover first, then thumbnail strips for related series).
+        // No `hero` class exists in WeebCentral's markup, so anchor on the
+        // host+path pattern. Fall back to preview.thumbnailUrl on miss.
+        static QRegularExpression kHero(
+            R"RX(<img[^>]+src="([^"]*compsci88\.com/cover/[^"]+)")RX");
+        auto hm = kHero.match(html);
+        detail.heroCoverUrl = hm.hasMatch() ? hm.captured(1) : preview.thumbnailUrl;
+
+        // cachedChapters NOT populated here — WeebCentral chapter list is its own
+        // endpoint (the existing fetchChapters call). Leave empty.
+
+        emit self->detailReady(detail);
+    });
 }

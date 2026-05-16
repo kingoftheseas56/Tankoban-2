@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
@@ -178,4 +179,65 @@ QList<PageInfo> ReadComicsScraper::parsePagesHtml(const QString& html, const QSt
     }
 
     return pages;
+}
+
+// ── Detail (v1 merger) ──────────────────────────────────────────────────────
+void ReadComicsScraper::fetchDetail(const MangaResult& preview)
+{
+    // preview.url is stored relative ("/comic/<slug>" — see search() line ~55).
+    // Reconstruct against BASE so we hit the actual host.
+    const QString fullUrl = preview.url.startsWith(QLatin1String("http"))
+                                ? preview.url
+                                : (BASE + preview.url);
+    auto* reply = m_nam->get(makeRequest(QUrl(fullUrl)));
+    QPointer<ReadComicsScraper> self(this);
+    connect(reply, &QNetworkReply::finished, this, [reply, self, preview]() {
+        reply->deleteLater();
+        if (!self) return;
+        if (reply->error() != QNetworkReply::NoError) {
+            emit self->errorOccurred(QString("readcomicsonline fetchDetail: %1")
+                                     .arg(reply->errorString()));
+            return;
+        }
+        const QString html = QString::fromUtf8(reply->readAll());
+
+        MangaSeriesDetail detail;
+        detail.preview   = preview;
+        detail.sourceUrl = preview.url;
+
+        // TODO(smoke-verify): Selectors below pinned at plan-author time, not yet curl-verified
+        // against a live ReadComicsOnline detail page. Tune during Phase 6/7 smoke.
+
+        // Synopsis: ReadComicsOnline tends to wrap the summary in a div with class
+        // "manga-excerpt" or "summary". Curl one detail URL during impl and pin
+        // the actual selector.
+        static QRegularExpression kSummary(
+            R"RX(<div[^>]+class="[^"]*(?:manga-excerpt|summary)[^"]*"[^>]*>([\s\S]*?)</div>)RX");
+        auto sm = kSummary.match(html);
+        if (sm.hasMatch()) detail.synopsis = sm.captured(1).trimmed();
+
+        // Genres: anchor tags into /category/<slug>/.
+        static QRegularExpression kGenre(
+            R"RX(<a[^>]+href="[^"]*category/[^"]+"[^>]*>([^<]+)</a>)RX");
+        auto gi = kGenre.globalMatch(html);
+        while (gi.hasNext()) detail.genres.append(gi.next().captured(1).trimmed());
+
+        // Year: "Date of Release" or similar dt/dd pair.
+        static QRegularExpression kYear(
+            R"RX(Date of Release[\s\S]*?(\d{4}))RX");
+        auto ym = kYear.match(html);
+        if (ym.hasMatch()) detail.year = ym.captured(1);
+
+        // Status: "Status" dt/dd pair.
+        static QRegularExpression kStatus(
+            R"RX(Status[\s\S]*?<(?:dd|span)[^>]*>([^<]+)<)RX");
+        auto stm = kStatus.match(html);
+        if (stm.hasMatch()) detail.status = stm.captured(1).trimmed();
+
+        detail.heroCoverUrl = preview.thumbnailUrl; // ReadComicsOnline detail
+                                                    // page doesn't expose a
+                                                    // distinct hero size today.
+
+        emit self->detailReady(detail);
+    });
 }

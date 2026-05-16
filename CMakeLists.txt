@@ -87,7 +87,6 @@ set(SOURCES
     src/ui/readers/ThumbnailGenerator.cpp
     src/core/EpubParser.cpp
     src/ui/pages/TankorentPage.cpp
-    src/ui/pages/TankoyomiPage.cpp
     src/ui/pages/IndexerStatusPanel.cpp
     src/ui/pages/tankorent/TorrentPropertiesWidget.cpp
     src/ui/pages/tankorent/TorrentFilesTab.cpp
@@ -147,7 +146,19 @@ set(SOURCES
     src/ui/dialogs/HistoryDialog.cpp
     src/core/manga/WeebCentralScraper.cpp
     src/core/manga/ReadComicsScraper.cpp
+    src/core/manga/MangaSeriesDetail.cpp
+    src/core/manga/MangaSourceRegistry.cpp
+    src/core/manga/ComicsLibraryRecord.cpp
+    src/core/manga/ComicsTankoyomiLibrary.cpp
+    src/core/manga/MangaPosterCache.cpp
     src/core/manga/MangaDownloader.cpp
+    src/core/manga/MangaDownloadIndex.cpp
+    src/core/manga/PremiumCatalog.cpp
+    src/core/manga/TorrentRequestLedger.cpp
+    src/core/manga/TorrentVolumeProvider.cpp
+    src/core/manga/MangaTransferCoordinator.cpp
+    src/core/manga/PremiumArchiveValidator.cpp
+    src/core/manga/PremiumCoverExtractor.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -155,11 +166,11 @@ set(SOURCES
     src/core/book/BookDownloader.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
-    src/ui/pages/tankoyomi/MangaResultsGrid.cpp
+    src/ui/pages/comics/SidecarMeta.cpp
+    src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
+    src/ui/pages/comics/ComicsTankoyomiDetailView.cpp
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
     src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
-    src/ui/pages/tankoyomi/TransferGroupCard.cpp
-    src/ui/pages/tankoyomi/MangaDetailView.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
@@ -180,6 +191,8 @@ set(SOURCES
     src/core/stream/BulkPackVerifier.cpp
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/StreamDownloadIndex.cpp
+    src/core/stream/QualityScorer.cpp
+    src/core/stream/UnifiedProgressStore.cpp
     src/core/stream/StreamRescueScanner.cpp
     src/core/stream/CalendarEngine.cpp
     src/core/stream/StreamBulkPlan.cpp
@@ -187,6 +200,7 @@ set(SOURCES
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
+    src/ui/pages/stream/TorrentPackPicker.cpp
     src/ui/pages/stream/StreamSourceChoice.cpp
     src/ui/pages/stream/StreamSourceCard.cpp
     src/ui/pages/stream/StreamSourceList.cpp
@@ -236,6 +250,7 @@ set(HEADERS
     src/ui/pages/TileStrip.h
     src/ui/pages/ShowView.h
     src/ui/readers/ComicReader.h
+    src/ui/readers/comic_progress_key.h
     src/ui/readers/BookReader.h
     src/ui/readers/BookBridge.h
     src/core/tts/EdgeTtsClient.h
@@ -246,7 +261,6 @@ set(HEADERS
     src/ui/readers/ThumbnailGenerator.h
     src/core/EpubParser.h
     src/ui/pages/TankorentPage.h
-    src/ui/pages/TankoyomiPage.h
     src/ui/pages/IndexerStatusPanel.h
     src/ui/pages/tankorent/TorrentPropertiesWidget.h
     src/ui/pages/tankorent/TorrentFilesTab.h
@@ -292,9 +306,23 @@ set(HEADERS
     src/ui/dialogs/HistoryDialog.h
     src/core/manga/MangaResult.h
     src/core/manga/MangaScraper.h
+    src/core/manga/MangaSeriesDetail.h
+    src/core/manga/MangaSourceRegistry.h
+    src/core/manga/ComicsLibraryRecord.h
+    src/core/manga/ComicsTankoyomiLibrary.h
+    src/core/manga/MangaPosterCache.h
     src/core/manga/WeebCentralScraper.h
     src/core/manga/ReadComicsScraper.h
     src/core/manga/MangaDownloader.h
+    src/core/manga/MangaDownloadIndex.h
+    src/core/manga/PremiumCatalog.h
+    src/core/manga/PremiumCatalogSchema.h
+    src/core/manga/TorrentRequestLedger.h
+    src/core/manga/TorrentVolumeProvider.h
+    src/core/manga/MangaTransferCoordinator.h
+    src/core/manga/PremiumArchiveValidator.h
+    src/core/manga/PremiumCoverExtractor.h
+    src/core/manga/CanonicalChapterKey.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -304,11 +332,11 @@ set(HEADERS
     src/core/book/BookDownloader.h
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
-    src/ui/pages/tankoyomi/MangaResultsGrid.h
+    src/ui/pages/comics/SidecarMeta.h
+    src/ui/pages/comics/ComicsTankoyomiSearchWidget.h
+    src/ui/pages/comics/ComicsTankoyomiDetailView.h
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
     src/ui/pages/tankoyomi/ChapterRangeDialog.h
-    src/ui/pages/tankoyomi/TransferGroupCard.h
-    src/ui/pages/tankoyomi/MangaDetailView.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
@@ -337,6 +365,8 @@ set(HEADERS
     src/core/stream/BulkPackVerifier.h
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/StreamDownloadIndex.h
+    src/core/stream/QualityScorer.h
+    src/core/stream/UnifiedProgressStore.h
     src/core/stream/StreamRescueScanner.h
     src/core/stream/CalendarEngine.h
     src/core/stream/StreamBulkPlan.h
@@ -344,6 +374,7 @@ set(HEADERS
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
+    src/ui/pages/stream/TorrentPackPicker.h
     src/ui/pages/stream/StreamSourceChoice.h
     src/ui/pages/stream/StreamSourceCard.h
     src/ui/pages/stream/StreamSourceList.h
@@ -640,3 +671,41 @@ target_precompile_headers(Tankoban PRIVATE
 add_executable(tankoctl tools/tankoctl.cpp)
 set_target_properties(tankoctl PROPERTIES WIN32_EXECUTABLE OFF)
 target_link_libraries(tankoctl PRIVATE Qt6::Core Qt6::Network)
+
+# ── Unit tests (opt-in; TANKOBAN_BUILD_TESTS=ON) ─────────────────────────────
+# Pure-logic unit tests built with GoogleTest via FetchContent.
+# Run with: cmake -DTANKOBAN_BUILD_TESTS=ON; cmake --build out --target tankoban_tests
+#           cd out && ctest --output-on-failure -R tankoban_tests
+option(TANKOBAN_BUILD_TESTS "Build tankoban_tests unit test binary" OFF)
+
+if(TANKOBAN_BUILD_TESTS)
+    enable_testing()
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    # Prevent GoogleTest from overriding our compiler/linker settings on Windows
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    add_executable(tankoban_tests
+        tests/core/stream/test_quality_scorer.cpp
+        tests/core/stream/test_stream_download_index_dedup.cpp
+        tests/core/stream/test_unified_progress_store.cpp
+        src/core/DebugLogBuffer.cpp
+        src/core/JsonStore.cpp
+        src/core/stream/QualityScorer.cpp
+        src/core/stream/StreamDownloadIndex.cpp
+        src/core/stream/UnifiedProgressStore.cpp
+    )
+    target_include_directories(tankoban_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_link_libraries(tankoban_tests PRIVATE
+        GTest::gtest_main
+        Qt6::Core
+    )
+    include(GoogleTest)
+    gtest_discover_tests(tankoban_tests)
+endif()

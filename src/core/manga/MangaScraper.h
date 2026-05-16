@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MangaResult.h"
+#include "MangaSeriesDetail.h"
 #include <QObject>
 #include <QList>
 
@@ -21,11 +22,22 @@ public:
     virtual void fetchChapters(const QString& seriesId) = 0;
     virtual void fetchPages(const QString& chapterId) = 0;
 
+    // NEW (v1 merger): fetch detail-page hero metadata (synopsis,
+    // genres, year, status, hero cover URL) given a search-time
+    // preview. Result delivered via detailReady(). Concrete scrapers
+    // SHOULD also populate cachedChapters if their detail page
+    // already returns the chapter list, so the detail view can
+    // skip a separate fetchChapters() round-trip.
+    virtual void fetchDetail(const MangaResult& preview) = 0;
+
 signals:
     void searchFinished(const QList<MangaResult>& results);
     void chaptersReady(const QList<ChapterInfo>& chapters);
     void pagesReady(const QList<PageInfo>& pages);
     void errorOccurred(const QString& message);
+
+    // NEW (v1 merger): emitted when fetchDetail completes.
+    void detailReady(const MangaSeriesDetail& detail);
 
 protected:
     QNetworkAccessManager* m_nam;

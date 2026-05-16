@@ -16,6 +16,7 @@ public:
     void search(const QString& query, int limit = 60) override;
     void fetchChapters(const QString& seriesId) override;
     void fetchPages(const QString& chapterId) override;
+    void fetchDetail(const MangaResult& preview) override;
 
 private:
     static QList<MangaResult> parseSearchHtml(const QString& html);
