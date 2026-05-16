@@ -8,7 +8,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Dependency hint paths (pre-built libraries under C:/tools)
 # ---------------------------------------------------------------------------
 set(FFMPEG_ROOT "C:/tools/ffmpeg-master-latest-win64-gpl-shared" CACHE PATH "FFmpeg install prefix")
-set(PORTAUDIO_ROOT "C:/tools/portaudio" CACHE PATH "PortAudio install prefix")
 set(GTEST_ROOT "C:/tools/googletest" CACHE PATH "GoogleTest install prefix")
 set(UCHARDET_ROOT "C:/tools/uchardet" CACHE PATH "uchardet install prefix")
 set(FREETYPE_ROOT "C:/tools/freetype" CACHE PATH "FreeType install prefix")
@@ -39,10 +38,11 @@ find_path(AVFILTER_INCLUDE_DIR libavfilter/avfilter.h HINTS "${FFMPEG_ROOT}/incl
 find_library(AVFILTER_LIBRARY avfilter HINTS "${FFMPEG_ROOT}/lib")
 
 # ---------------------------------------------------------------------------
-# PortAudio (linked in 8N.3 for audio output)
+# Audio output: WASAPI direct via wasapi_output.cpp (WASAPI_DIRECT_AUDIO arc
+# closed 2026-05-15). PortAudio was decommissioned in Task 7 — the sidecar
+# now links the WASAPI/IMMDevice headers directly via ole32 below. No
+# external audio library dependency remains.
 # ---------------------------------------------------------------------------
-find_path(PORTAUDIO_INCLUDE_DIR portaudio.h HINTS "${PORTAUDIO_ROOT}/include")
-find_library(PORTAUDIO_LIBRARY portaudio HINTS "${PORTAUDIO_ROOT}/lib")
 
 # ---------------------------------------------------------------------------
 # uchardet (encoding detection for subtitle files)
@@ -113,7 +113,7 @@ add_executable(ffmpeg_sidecar
     src/stream_prefetch.cpp
     src/video_decoder.cpp
     src/audio_decoder.cpp
-    src/audio_device_watcher.cpp
+    src/wasapi_output.cpp
     src/av_sync_clock.cpp
     src/encoding_detect.cpp
     src/subtitle_renderer.cpp
@@ -139,7 +139,6 @@ target_include_directories(ffmpeg_sidecar PRIVATE
     "${SWSCALE_INCLUDE_DIR}"
     "${SWRESAMPLE_INCLUDE_DIR}"
     "${AVFILTER_INCLUDE_DIR}"
-    "${PORTAUDIO_INCLUDE_DIR}"
     "${UCHARDET_INCLUDE_DIR}"
     "${FREETYPE_INCLUDE_DIR}"
     "${FRIBIDI_INCLUDE_DIR}"
@@ -163,7 +162,6 @@ target_link_libraries(ffmpeg_sidecar PRIVATE
     "${SWSCALE_LIBRARY}"
     "${SWRESAMPLE_LIBRARY}"
     "${AVFILTER_LIBRARY}"
-    "${PORTAUDIO_LIBRARY}"
     "${UCHARDET_LIBRARY}"
     "${LIBASS_LIBRARY}"
     "${FREETYPE_LIBRARY}"
@@ -189,8 +187,16 @@ if(WIN32)
     # ole32 added 2026-05-10 for AUDIO_HOT_DEVICE_REROUTE — sidecar needs
     # CoInitializeEx + CoCreateInstance + CoUninitialize to register an
     # IMMNotificationClient that listens for default-output-device changes
-    # (audio_device_watcher.cpp).
-    target_link_libraries(ffmpeg_sidecar PRIVATE ws2_32 dwrite gdi32 shlwapi dbghelp d3d11 dxgi winmm avrt ole32)
+    # (now in wasapi_output.cpp after WASAPI_DIRECT_AUDIO Task 7 retired
+    # the standalone audio_device_watcher TU).
+    #
+    # ksuser added 2026-05-15 (WASAPI_DIRECT_AUDIO Task 7 foldin) so the
+    # canonical KSDATAFORMAT_SUBTYPE_IEEE_FLOAT GUID resolves at link time.
+    # MinGW's ksmedia.h declares it extern but the definition lives in
+    # ksuser. If a future toolchain lacks ksuser.a, the recovery is to restore the
+    # Task-2-era local DEFINE_GUID workaround inside wasapi_output.cpp
+    # (add `#include <initguid.h>` and `DEFINE_GUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71)` at the top of the .cpp). See the WASAPI_DIRECT_AUDIO Task 7 RTC for the prior shape.
+    target_link_libraries(ffmpeg_sidecar PRIVATE ws2_32 dwrite gdi32 shlwapi dbghelp d3d11 dxgi winmm avrt ole32 ksuser)
 endif()
 
 # Ensure console app (stdin/stdout needed for JSON protocol)
