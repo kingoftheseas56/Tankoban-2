@@ -25,6 +25,7 @@ public:
         QString sourceId;
         QString seriesId;
         QString chapterId;          // first chapter that registered the entry; legacy single-chapter path
+        int     volumeNumber = 0;   // 1..N for volume cbz registrations; 0 for legacy chapter rows
         QString canonicalPath;
         qint64  addedAt        = 0;
         qint64  fileSizeBytes  = 0;
@@ -89,6 +90,20 @@ public:
                                         const QString& chapterId) const;
     bool hasAnyForSeries(const QString& sourceId, const QString& seriesId) const;
     QList<Entry> entriesForSeries(const QString& sourceId, const QString& seriesId) const;
+    std::optional<Entry> entryForSeriesAndVolume(const QString& sourceId,
+                                                 const QString& seriesId,
+                                                 int volumeNumber) const;
+
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- one Entry per distinct
+    // (sourceId, seriesId) pair. Used by ComicsPage landing to render the
+    // DOWNLOADED-series tile grid (one tile per series, regardless of how
+    // many volumes/chapters the series has on disk). The chosen Entry is
+    // the first one encountered in m_byPath iteration order for that
+    // series-key bucket -- callers MUST treat ".chapterId" / ".canonicalPath"
+    // as REPRESENTATIVE (any one of the series' downloads); for the
+    // ComicsPage landing tile that's sufficient because the tile click
+    // routes through anilistId-keyed ComicsSeriesView, not the cbz file.
+    QList<Entry> entriesForAllSeries() const;
 
     // Static helpers.
     static QString computeCanonicalKey(const QString& anyPath);

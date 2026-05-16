@@ -77,6 +77,7 @@ void MangaDownloadIndex::load()
         e.sourceId      = obj.value(QStringLiteral("sourceId")).toString();
         e.seriesId      = obj.value(QStringLiteral("seriesId")).toString();
         e.chapterId     = obj.value(QStringLiteral("chapterId")).toString();
+        e.volumeNumber  = obj.value(QStringLiteral("volumeNumber")).toInt(0);
         e.canonicalPath = obj.value(QStringLiteral("canonicalPath")).toString();
         e.addedAt       = obj.value(QStringLiteral("addedAt")).toInteger(0);
         e.fileSizeBytes = obj.value(QStringLiteral("fileSizeBytes")).toInteger(0);
@@ -141,6 +142,7 @@ void MangaDownloadIndex::save()
             obj[QStringLiteral("sourceId")]      = e.sourceId;
             obj[QStringLiteral("seriesId")]      = e.seriesId;
             obj[QStringLiteral("chapterId")]     = e.chapterId;
+            obj[QStringLiteral("volumeNumber")]  = e.volumeNumber;
             obj[QStringLiteral("canonicalPath")] = e.canonicalPath;
             obj[QStringLiteral("addedAt")]       = static_cast<qint64>(e.addedAt);
             obj[QStringLiteral("fileSizeBytes")] = static_cast<qint64>(e.fileSizeBytes);
@@ -279,12 +281,14 @@ void MangaDownloadIndex::registerVolume(const QString&     sourceId,
             e.sourceId           = sourceId;
             e.seriesId           = seriesId;
             e.chapterId          = chapterIds.isEmpty() ? QString() : chapterIds.first();
+            e.volumeNumber       = volumeNumber;
             e.canonicalPath      = canonicalPath;
             e.addedAt            = QDateTime::currentMSecsSinceEpoch();
             e.fileSizeBytes      = fileSizeBytes;
             e.servedChapterKeys  = newKeys;
             m_byPath.insert(canonicalKey, e);
         } else {
+            it->volumeNumber = volumeNumber;
             for (const auto& k : newKeys) it->servedChapterKeys.insert(k);
             if (fileSizeBytes > it->fileSizeBytes) it->fileSizeBytes = fileSizeBytes;
         }
@@ -458,6 +462,54 @@ QList<MangaDownloadIndex::Entry> MangaDownloadIndex::entriesForSeries(
     for (const Entry& e : m_byPath) {
         if (e.sourceId == sourceId && e.seriesId == seriesId)
             out.append(e);
+    }
+    return out;
+}
+
+std::optional<MangaDownloadIndex::Entry> MangaDownloadIndex::entryForSeriesAndVolume(
+    const QString& sourceId, const QString& seriesId, int volumeNumber) const
+{
+    if (sourceId.isEmpty() || seriesId.isEmpty() || volumeNumber <= 0) {
+        return std::nullopt;
+    }
+    QMutexLocker lock(&m_mutex);
+    for (const Entry& e : m_byPath) {
+        if (e.sourceId == sourceId &&
+            e.seriesId == seriesId &&
+            e.volumeNumber == volumeNumber) {
+            return e;
+        }
+    }
+    return std::nullopt;
+}
+
+QList<MangaDownloadIndex::Entry> MangaDownloadIndex::entriesForAllSeries() const
+{
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- one representative
+    // Entry per (sourceId, seriesId) bucket. Walks m_seriesHasAny so the
+    // set of returned series-keys exactly matches the series-has-any
+    // predicate (no risk of stale m_byPath rows leaking through), then
+    // finds the first m_byPath entry whose sourceId+seriesId matches.
+    // QHash iteration order is unspecified, but the contract here is
+    // "one tile per series" -- which row wins is unobservable to the
+    // caller (the tile renders title from the catalog/cache lookup, not
+    // from the entry directly).
+    QList<Entry> out;
+    QMutexLocker lock(&m_mutex);
+    QSet<QString> seen;
+    for (const QString& seriesKey : m_seriesHasAny) {
+        const int sep = seriesKey.indexOf(QLatin1Char(':'));
+        if (sep <= 0) continue;
+        const QString sourceId = seriesKey.left(sep);
+        const QString seriesId = seriesKey.mid(sep + 1);
+        if (seen.contains(seriesKey)) continue;
+        for (const Entry& e : m_byPath) {
+            if (e.sourceId == sourceId && e.seriesId == seriesId) {
+                out.append(e);
+                seen.insert(seriesKey);
+                break;
+            }
+        }
     }
     return out;
 }

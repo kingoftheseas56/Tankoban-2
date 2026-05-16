@@ -8,6 +8,7 @@
 #include <QSlider>
 #include <QTimer>
 #include <QSettings>
+#include <QMap>
 #include "../INavStateProvider.h"
 class QPushButton;
 class QScrollArea;
@@ -20,17 +21,29 @@ class LibraryScanner;
 class SeriesView;
 class ComicsTankoyomiLibrary;
 class ComicsTankoyomiSearchWidget;
-class ComicsTankoyomiDetailView;
 class MangaSourceRegistry;
 class MangaDownloader;
 class MangaDownloadIndex;        // Phase 5 creates the type; Phase 4 stores nullptr
 class TorrentClient;
-namespace tankoban::manga::premium {
-    class PremiumCatalog;
-    class TorrentRequestLedger;
-    class TorrentVolumeProvider;
-    class MangaTransferCoordinator;
-    struct PremiumCatalogEntry;
+namespace tankoban::manga {
+    class NyaaRuntimeSource;
+    class WeebCentralVolumePacker;
+    namespace anilist {
+        class AniListClient;
+        class AniListCache;
+        struct MediaPreview;
+    }
+    namespace premium {
+        class PremiumCatalog;
+        class TorrentRequestLedger;
+        class TorrentVolumeProvider;
+        class MangaTransferCoordinator;
+        struct PremiumCatalogEntry;
+    }
+    namespace comics {
+        class ComicsSeriesView;
+        struct UnifiedSourceRow;
+    }
 }
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
@@ -74,13 +87,33 @@ private slots:
     void onScanFinished(const QList<SeriesInfo>& allSeries);
     void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 18 — state machine for
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 18 -- state machine for
     // the search-takeover surface. Library is the default grid + Continue
     // strip; SearchResults flips the stack to ComicsTankoyomiSearchWidget;
-    // TankoyomiDetail is reserved for Phase 4 (detail-view wiring).
+    // TankoyomiDetail flips to ComicsSeriesView (TANKOYOMI_VOLUME_PIVOT
+    // Phase 9 -- replaces the legacy ComicsTankoyomiDetailView).
     void showLibraryMode();
     void showSearchMode(const QString& query);
-    void onSearchResultActivated(const MangaResult& preview);
+    // Phase 9: signature changed from MangaResult to MediaPreview.
+    void onSearchResultActivated(const tankoban::manga::anilist::MediaPreview& preview);
+    // Phase 9: routes ComicsSeriesView::downloadDispatchRequested to either
+    // TorrentVolumeProvider (Catalog / NyaaRuntime) or
+    // WeebCentralVolumePacker (WeebCentralPacker).
+    void onDownloadDispatchRequested(const tankoban::manga::comics::UnifiedSourceRow& row,
+                                     const QString& seriesTitle,
+                                     int            anilistSeriesId,
+                                     int            volumeNumber,
+                                     const QStringList& chapterIds);
+    void onProviderVolumeCompleted(const QString& seriesId,
+                                   int volumeNumber,
+                                   const QString& cbzPath,
+                                   int fallbackSourceKind);
+    void onProviderVolumeFailed(const QString& seriesId,
+                                int volumeNumber,
+                                const QString& errorCode,
+                                const QString& errorMessage,
+                                int fallbackSourceKind);
+    void onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPath);
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 — Back from
     // Tankoyomi detail returns to library mode in Phase 4. Phase 9
     // refines (Back-from-search-detail returns to search results).
@@ -128,6 +161,35 @@ private:
     // onTankoyomiLibraryChanged() and after onScanFinished().
     void rebuildTiles();
 
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- rebuild the new
+    // DOWNLOADED + BOOKMARKED tile sections from
+    // MangaDownloadIndex::entriesForAllSeries() + AniListCache::bookmarkedPreviews().
+    // Called from onScanFinished, onTankoyomiLibraryChanged, and whenever
+    // either the download index or the bookmark set changes.
+    void refreshLibraryStrips();
+
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- resolve anilistId for
+    // a MangaDownloadIndex Entry. Catalog rows ("tankoyomi_premium:<seriesId>")
+    // look up PremiumCatalog::entryById to extract entry.anilistId; runtime
+    // rows ("anilist_<N>" suffix) parse the numeric suffix. Returns 0 when
+    // no anilistId can be resolved -- caller falls back to a non-anilist
+    // tile (still renders title + a generic cover, click is a no-op).
+    int anilistIdForDownloadEntry(const QString& sourceId,
+                                  const QString& seriesId) const;
+
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- fire-and-forget async
+    // poster fetch. Mirrors ComicsTankoyomiSearchWidget's NAM-direct path
+    // (see search widget ~line 180). Writes to <appDataDir>/anilist_posters/
+    // and updates the card via TileCard::setThumbPath on completion.
+    // No-op when coverUrl is empty or the disk path already exists.
+    void fetchPosterForTile(TileCard* card, int anilistId, const QString& coverUrl);
+
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- click handler for
+    // anilist-keyed library tiles (downloaded + bookmarked). Resolves the
+    // MediaPreview from AniListCache (synthesising a minimal preview when
+    // the cache has no entry yet) and routes to ComicsSeriesView.
+    void openSeriesByAnilistId(int anilistId, const QString& fallbackTitle);
+
     // Shared projection used by both onScanFinished (first-scan path)
     // and rebuildTiles (full-rebuild path). Keeps the two sites in sync.
     static SeriesInfo seriesInfoFromRecord(const ComicsLibraryRecord& r);
@@ -149,6 +211,23 @@ private:
     // Per Codex section 22 "adopt, do not migrate" -- no file move/rename.
     QString findFolderImportedSeriesPathForTitle(const QString& title) const;
     static QString normalizeTitleForMatch(const QString& title);
+
+    enum class PendingVolumeSourceKind {
+        Catalog = 0,
+        NyaaRuntime = 1,
+        WeebCentralPacker = 2
+    };
+    struct PendingVolumeDispatch {
+        PendingVolumeSourceKind kind = PendingVolumeSourceKind::Catalog;
+        int anilistId = 0;
+        QStringList chapterIds;
+    };
+    static QString pendingVolumeKey(const QString& seriesId, int volumeNumber);
+    void rememberPendingVolumeDispatch(const QString& seriesId,
+                                       int volumeNumber,
+                                       PendingVolumeSourceKind kind,
+                                       int anilistId,
+                                       const QStringList& chapterIds);
 
     // TANKOYOMI_CONTINUE_READING 2026-05-15 — just-in-time population of
     // m_progressKeyMap when a Tankoyomi-origin chapter is about to be
@@ -181,7 +260,19 @@ private:
     QScrollArea*            m_gridScroll = nullptr;
     QWidget*         m_continueSection = nullptr;
     TileStrip*       m_continueStrip = nullptr;
-    TileStrip*       m_tileStrip = nullptr;
+    // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- the legacy m_tileStrip
+    // (which painted "SERIES" tiles from m_tyLibrary->all() + m_folderSeries)
+    // is repurposed as the DOWNLOADED-section tile container: one tile per
+    // (sourceId, seriesId) bucket via MangaDownloadIndex::entriesForAllSeries.
+    // A second strip + section wrapper renders BOOKMARKED previews from
+    // AniListCache::bookmarkedPreviews(). Section labels live in
+    // m_downloadedLabel / m_bookmarkedLabel so refreshLibraryStrips() can
+    // hide/show sections per current data.
+    TileStrip*       m_tileStrip = nullptr;          // DOWNLOADED strip
+    QLabel*          m_downloadedLabel = nullptr;
+    QWidget*         m_bookmarkedSection = nullptr;
+    QLabel*          m_bookmarkedLabel = nullptr;
+    TileStrip*       m_bookmarkedStrip = nullptr;
     LibraryListView* m_listView = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLineEdit*       m_searchBar = nullptr;
@@ -219,23 +310,36 @@ private:
     MangaSourceRegistry*         m_sourceRegistry  = nullptr;
     QNetworkAccessManager*       m_nam             = nullptr;
 
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 — Phase 4 detail
-    // view + manga downloader. m_tyDetailView lives at m_stack index 3
-    // (post grid 0 + seriesView 1 + searchTakeover 2). Single downloader
-    // owned by this page (Phase 8 retired the prior TankoyomiPage duplicate).
-    // m_mangaDownloadIndex is instantiated in Phase 5 alongside the detail
-    // view's chapter-marker wiring.
-    ComicsTankoyomiDetailView*   m_tyDetailView       = nullptr;
+    // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- legacy
+    // ComicsTankoyomiDetailView REMOVED in favor of ComicsSeriesView
+    // (m_tyVolumeSeriesView below). Single downloader owned by this page
+    // (Phase 8 retired the prior TankoyomiPage duplicate). m_mangaDownloadIndex
+    // is instantiated for Tankoyomi-chapter chip-state tracking.
     MangaDownloader*             m_mangaDownloader    = nullptr;
     MangaDownloadIndex*          m_mangaDownloadIndex = nullptr;
     tankoban::manga::premium::PremiumCatalog* m_premiumCatalog = nullptr;
     tankoban::manga::premium::TorrentRequestLedger*  m_premiumLedger   = nullptr;
     tankoban::manga::premium::TorrentVolumeProvider* m_premiumProvider = nullptr;
     // TANKOYOMI_PREMIUM Phase 9 -- thin facade over MangaDownloader +
-    // TorrentVolumeProvider for one shared "Transfers paused" state. UI
-    // affordance binding lands in Phase 11+; v1 is infrastructure only.
+    // TorrentVolumeProvider for one shared "Transfers paused" state.
     tankoban::manga::premium::MangaTransferCoordinator* m_transferCoordinator = nullptr;
     TorrentClient*                                   m_torrentClient   = nullptr;
+
+    // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- new ComicsSeriesView
+    // (volume-pivot detail view) at m_stack index 3. Named with a "_ty"
+    // prefix to disambiguate from the existing m_seriesView above
+    // (SeriesView*, folder-imported series). AniList client + cache are
+    // owned by this page; nyaa runtime + WeebCentralPacker handle
+    // off-catalog volume packs routed via downloadDispatchRequested.
+    tankoban::manga::anilist::AniListClient* m_anilistClient = nullptr;
+    tankoban::manga::anilist::AniListCache*  m_anilistCache  = nullptr;
+    tankoban::manga::NyaaRuntimeSource*      m_nyaaRuntime   = nullptr;
+    tankoban::manga::WeebCentralVolumePacker* m_weebCentralPacker = nullptr;
+    tankoban::manga::comics::ComicsSeriesView* m_tyVolumeSeriesView = nullptr;
+    QMap<QString, PendingVolumeDispatch> m_pendingVolumeDispatches;
+    // Last anilistId surfaced via showSeries(); used by captureNavState.
+    int m_currentDetailAnilistId = 0;
+    QString m_currentDetailSeriesTitle;
 
     enum class Mode { Library, SearchResults, TankoyomiDetail };
     Mode m_mode = Mode::Library;
