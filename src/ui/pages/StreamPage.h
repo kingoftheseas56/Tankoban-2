@@ -62,6 +62,11 @@ class CalendarScreen;
 struct StreamPickerChoice;
 }
 
+namespace tankoban::stream::theatre {
+class TheatreDownloadPanel;
+class UnifiedPackSearchEngine;
+}
+
 class StreamPage : public QWidget, public INavStateProvider
 {
     Q_OBJECT
@@ -424,6 +429,11 @@ private:
 
     // Detail view
     StreamDetailView* m_detailView = nullptr;
+    QWidget* m_detailRightPaneStack = nullptr;
+    QWidget* m_detailSourcesPanel = nullptr;
+    StreamDownloadIndex* m_streamDownloadIndex = nullptr;
+    tankoban::stream::theatre::TheatreDownloadPanel* m_theatreDownloadPanel = nullptr;
+    tankoban::stream::theatre::UnifiedPackSearchEngine* m_unifiedPackSearchEngine = nullptr;
     QDialog* m_bulkProgressDialog = nullptr;
     QLabel* m_bulkProgressLabel = nullptr;
     QProgressBar* m_bulkProgressBar = nullptr;

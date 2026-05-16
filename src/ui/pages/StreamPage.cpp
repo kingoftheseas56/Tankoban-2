@@ -6,6 +6,7 @@
 #include "core/stream/BulkPackVerifier.h"
 #include "core/stream/BulkSourceCollector.h"
 #include "core/stream/StreamBulkPlan.h"
+#include "core/stream/UnifiedPackSearchEngine.h"
 #include "core/stream/addon/AddonRegistry.h"
 #include "ui/pages/stream/AddonManagerScreen.h"
 #include "core/stream/stremio/StreamServerEngine.h"
@@ -24,6 +25,7 @@
 #include "stream/StreamContinueStrip.h"
 #include "stream/StreamHomeBoard.h"
 #include "stream/CatalogBrowseScreen.h"
+#include "stream/TheatreDownloadPanel.h"
 #include "core/stream/StreamProgress.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/VideosScanner.h"
@@ -33,22 +35,28 @@
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
+#include "ui/dialogs/AddTorrentDialog.h"
 #include "core/stream/addon/StreamSource.h"
 
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QEasingCurve>
 #include <QFrame>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QHBoxLayout>
 #include <QFileInfo>
+#include <QGraphicsOpacityEffect>
 #include <QMainWindow>
+#include <QParallelAnimationGroup>
 #include <QProgressBar>
+#include <QPropertyAnimation>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QSettings>
+#include <QStackedLayout>
 #include <QUrl>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -128,6 +136,120 @@ StreamBulkGroupRecord streamBulkGroupRecordFromJson(const QString& groupId,
         group.items.push_back(item);
     }
     return group;
+}
+
+constexpr int kTheatrePaneExitDx = 24;
+constexpr int kTheatrePaneEntryDx = 32;
+constexpr int kTheatrePaneAnimMs = 180;
+const char* kTheatrePaneAnimationName = "TheatrePaneAnimation";
+const char* kTheatrePaneBasePosProperty = "theatrePaneBasePos";
+
+QGraphicsOpacityEffect* ensureTheatrePaneOpacity(QWidget* widget)
+{
+    if (!widget)
+        return nullptr;
+    if (auto* effect = qobject_cast<QGraphicsOpacityEffect*>(widget->graphicsEffect()))
+        return effect;
+
+    auto* effect = new QGraphicsOpacityEffect(widget);
+    effect->setOpacity(1.0);
+    widget->setGraphicsEffect(effect);
+    return effect;
+}
+
+void stopTheatrePaneAnimation(QWidget* widget)
+{
+    if (!widget)
+        return;
+    if (auto* animation = widget->findChild<QParallelAnimationGroup*>(
+            QString::fromLatin1(kTheatrePaneAnimationName))) {
+        animation->stop();
+        animation->deleteLater();
+    }
+}
+
+void slideOutToRight(QWidget* widget)
+{
+    if (!widget || !widget->isVisible())
+        return;
+
+    stopTheatrePaneAnimation(widget);
+    const QPoint basePos =
+        widget->property(kTheatrePaneBasePosProperty).isValid()
+            ? widget->property(kTheatrePaneBasePosProperty).toPoint()
+            : widget->pos();
+    widget->setProperty(kTheatrePaneBasePosProperty, basePos);
+    const QPoint startPos = widget->pos();
+    auto* opacity = ensureTheatrePaneOpacity(widget);
+    if (!opacity)
+        return;
+
+    auto* group = new QParallelAnimationGroup(widget);
+    group->setObjectName(QString::fromLatin1(kTheatrePaneAnimationName));
+
+    auto* posAnim = new QPropertyAnimation(widget, "pos", group);
+    posAnim->setDuration(kTheatrePaneAnimMs);
+    posAnim->setEasingCurve(QEasingCurve::InCubic);
+    posAnim->setStartValue(startPos);
+    posAnim->setEndValue(startPos + QPoint(kTheatrePaneExitDx, 0));
+
+    auto* fadeAnim = new QPropertyAnimation(opacity, "opacity", group);
+    fadeAnim->setDuration(kTheatrePaneAnimMs);
+    fadeAnim->setEasingCurve(QEasingCurve::InCubic);
+    fadeAnim->setStartValue(opacity->opacity());
+    fadeAnim->setEndValue(0.0);
+
+    QObject::connect(group, &QParallelAnimationGroup::finished, widget,
+                     [widget, opacity, basePos]() {
+                         widget->hide();
+                         widget->move(basePos);
+                         opacity->setOpacity(1.0);
+                     });
+    group->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void slideInFromRight(QWidget* widget)
+{
+    if (!widget)
+        return;
+
+    stopTheatrePaneAnimation(widget);
+    const QPoint endPos =
+        widget->property(kTheatrePaneBasePosProperty).isValid()
+            ? widget->property(kTheatrePaneBasePosProperty).toPoint()
+            : widget->pos();
+    widget->setProperty(kTheatrePaneBasePosProperty, endPos);
+    const QPoint startPos = endPos + QPoint(kTheatrePaneEntryDx, 0);
+    auto* opacity = ensureTheatrePaneOpacity(widget);
+    if (!opacity)
+        return;
+
+    widget->move(startPos);
+    opacity->setOpacity(0.0);
+    widget->show();
+    widget->raise();
+
+    auto* group = new QParallelAnimationGroup(widget);
+    group->setObjectName(QString::fromLatin1(kTheatrePaneAnimationName));
+
+    auto* posAnim = new QPropertyAnimation(widget, "pos", group);
+    posAnim->setDuration(kTheatrePaneAnimMs);
+    posAnim->setEasingCurve(QEasingCurve::OutCubic);
+    posAnim->setStartValue(startPos);
+    posAnim->setEndValue(endPos);
+
+    auto* fadeAnim = new QPropertyAnimation(opacity, "opacity", group);
+    fadeAnim->setDuration(kTheatrePaneAnimMs);
+    fadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+    fadeAnim->setStartValue(0.0);
+    fadeAnim->setEndValue(1.0);
+
+    QObject::connect(group, &QParallelAnimationGroup::finished, widget,
+                     [widget, opacity, endPos]() {
+                         widget->move(endPos);
+                         opacity->setOpacity(1.0);
+                     });
+    group->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 } // namespace
@@ -228,6 +350,7 @@ void StreamPage::activate()
 // m_streamPage and m_streamDownloadIndex are constructed.
 void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
 {
+    m_streamDownloadIndex = idx;
     if (m_library)
         m_library->setStreamDownloadIndex(idx);
     if (m_libraryLayout) {
@@ -242,6 +365,8 @@ void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
     // run yet); MainWindow re-fires after buildPageStack so this lands.
     if (m_detailView)
         m_detailView->setStreamDownloadIndex(idx);
+    if (m_theatreDownloadPanel)
+        m_theatreDownloadPanel->setStreamDownloadIndex(idx);
     // TANKORENT_STREAM_INTEGRATION E4 2026-05-15 — propagate the index to
     // the Local files scanner so it filters Stream-owned files out of the
     // Local files row (spec §3 P1: a file that already surfaces via a
@@ -276,6 +401,24 @@ void StreamPage::buildUI()
     if (m_torrentClient)
         m_detailView->setTorrentClient(m_torrentClient);
 
+    m_detailRightPaneStack = m_detailView->rightPaneStack();
+    m_detailSourcesPanel = m_detailView->sourcesPanel();
+    m_unifiedPackSearchEngine =
+        new tankoban::stream::theatre::UnifiedPackSearchEngine(m_streamAggregator, this);
+    if (m_detailRightPaneStack) {
+        m_theatreDownloadPanel =
+            new tankoban::stream::theatre::TheatreDownloadPanel(m_detailRightPaneStack);
+        m_theatreDownloadPanel->setSearchEngine(m_unifiedPackSearchEngine);
+        m_theatreDownloadPanel->setStreamDownloadIndex(m_streamDownloadIndex);
+        m_theatreDownloadPanel->setTorrentClient(m_torrentClient);
+        m_theatreDownloadPanel->hide();
+
+        if (auto* rightStack =
+                qobject_cast<QStackedLayout*>(m_detailRightPaneStack->layout())) {
+            rightStack->addWidget(m_theatreDownloadPanel);
+        }
+    }
+
     connect(m_detailView, &StreamDetailView::backRequested, this, &StreamPage::goBack);
     connect(m_detailView, &StreamDetailView::playRequested, this, &StreamPage::onPlayRequested);
     connect(m_detailView, &StreamDetailView::sourceActivated,
@@ -292,6 +435,45 @@ void StreamPage::buildUI()
             this, &StreamPage::onSelectedEpisodesDownloadRequested);
     connect(m_detailView, &StreamDetailView::singleEpisodeDownloadRequested,
             this, &StreamPage::onSingleEpisodeDownloadRequested);
+    connect(m_detailView, &StreamDetailView::theatreDownloadRequested,
+            this, [this](const QString& imdbId,
+                         const QString& showName,
+                         int season,
+                         const QString& mediaType) {
+                if (!m_theatreDownloadPanel)
+                    return;
+                m_theatreDownloadPanel->openFor(imdbId, showName, season, mediaType);
+                if (m_detailSourcesPanel)
+                    slideOutToRight(m_detailSourcesPanel);
+                slideInFromRight(m_theatreDownloadPanel);
+            });
+    if (m_theatreDownloadPanel) {
+        connect(m_theatreDownloadPanel,
+                &tankoban::stream::theatre::TheatreDownloadPanel::dismissRequested,
+                this, [this]() {
+                    if (m_theatreDownloadPanel)
+                        slideOutToRight(m_theatreDownloadPanel);
+                    if (m_detailSourcesPanel)
+                        slideInFromRight(m_detailSourcesPanel);
+                });
+        connect(m_theatreDownloadPanel,
+                &tankoban::stream::theatre::TheatreDownloadPanel::downloadRequested,
+                this, [this](const QString& imdbId,
+                             int season,
+                             const QString& magnetUri,
+                             const QString& infoHash,
+                             const AddTorrentConfig& config) {
+                    Q_UNUSED(imdbId);
+                    Q_UNUSED(season);
+                    Q_UNUSED(magnetUri);
+                    if (m_torrentClient && !infoHash.isEmpty())
+                        m_torrentClient->startDownload(infoHash, config);
+                    if (m_theatreDownloadPanel)
+                        slideOutToRight(m_theatreDownloadPanel);
+                    if (m_detailSourcesPanel)
+                        slideInFromRight(m_detailSourcesPanel);
+                });
+    }
     // Phase 3 Batch 3.5 (deferred ship) â€” direct-URL trailer playback.
     // Routes through the same ad-hoc-stream pattern as Batch 4.3's URL
     // paste handler: synthesize a httpSource Stream, set m_session.pending
