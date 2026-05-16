@@ -7,6 +7,10 @@ out_test/
 out_probe/
 out_old*/
 
+# Brainstorm-skill visual-companion mockups (per-session HTML files for the
+# in-browser brainstorm preview). Persist locally for reference but not tracked.
+.superpowers/
+
 # Sidecar build artifacts (post-migration 2026-04-15). Sources are tracked
 # under native_sidecar/; the build tree produced by build.ps1 is not.
 native_sidecar/build/
