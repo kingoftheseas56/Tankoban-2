@@ -59,12 +59,6 @@ foreach ($dll in $ffmpegDlls) {
     }
 }
 
-# Copy PortAudio DLL
-$portaudioDll = "C:\tools\portaudio\bin\libportaudio.dll"
-if (Test-Path $portaudioDll) {
-    Copy-Item $portaudioDll "$installDir\libportaudio.dll" -Force
-}
-
 # Copy subtitle renderer chain (libass + text-shaping deps). Sidecar fails
 # with STATUS_DLL_NOT_FOUND (0xC0000135) at launch without these.
 $toolDllRoots = @(
@@ -94,7 +88,7 @@ foreach ($entry in $toolDllRoots) {
 
 Write-Host ""
 Write-Host "Build complete: $installDir\ffmpeg_sidecar.exe"
-Write-Host "Core DLLs: $($runtimeDlls + $ffmpegDlls + @('libportaudio.dll') -join ', ')"
+Write-Host "Core DLLs: $($runtimeDlls + $ffmpegDlls -join ', ')"
 if ($copiedExtras.Count -gt 0) {
     Write-Host "Subtitle/render DLLs: $(($copiedExtras | Sort-Object -Unique) -join ', ')"
 }
