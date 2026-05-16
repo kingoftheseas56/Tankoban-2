@@ -1762,6 +1762,139 @@ void TorrentClient::publishStreamBulkItemsForTorrent(const QString& infoHash)
     }
 }
 
+void TorrentClient::publishTankorentItemsForTorrent(const QString& infoHash)
+{
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: bind every recognizable episode
+    // file in a Tankorent single-add torrent to StreamDownloadIndex. The
+    // record's imdbId + season were captured at download-init time by the
+    // show-first picker (Task A2). For multi-season packs (season == 0),
+    // BulkPackVerifier detects each file's season from its filename.
+
+    if (!m_streamDownloadIndex) {
+        qWarning() << "publishTankorentItemsForTorrent: no StreamDownloadIndex bound; skipping";
+        return;
+    }
+    if (!m_records.contains(infoHash)) {
+        qWarning() << "publishTankorentItemsForTorrent: no record for" << infoHash;
+        return;
+    }
+
+    const QJsonObject record = m_records.value(infoHash).toObject();
+    const QString imdbId = record.value(QStringLiteral("imdbId")).toString();
+    if (imdbId.isEmpty())
+        return;  // not a show-bound download; no identity to attach
+
+    const int configSeason = record.value(QStringLiteral("season")).toInt(0);
+
+    const QString savePath = record.value(QStringLiteral("savePath")).toString();
+    if (savePath.isEmpty()) {
+        qWarning() << "publishTankorentItemsForTorrent: empty savePath for" << infoHash;
+        return;
+    }
+
+    const QJsonArray files = m_engine ? m_engine->torrentFiles(infoHash) : QJsonArray{};
+    if (files.isEmpty()) {
+        qWarning() << "publishTankorentItemsForTorrent: no files in torrent" << infoHash;
+        return;
+    }
+
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: probe ceiling for multi-season
+    // packs. 50 covers The Simpsons (36), SNL (50+), Top Gear UK (33), Survivor
+    // (45+); long-running shows exceeding 50 seasons are vanishingly rare.
+    constexpr int kMaxSeasonProbe = 50;
+
+    const QString sourceGroupId = QStringLiteral("tankorent:") + infoHash;
+    int registeredCount = 0;
+
+    for (int fileIdx = 0; fileIdx < files.size(); ++fileIdx) {
+        QJsonObject file = files.at(fileIdx).toObject();
+        // Defensive: mirror BulkPackVerifier's own internal backfill pattern
+        // at BulkPackVerifier.cpp:189-190 — ensure "index" is present before
+        // the verifier reads it (the verifier bails on index < 0).
+        if (!file.contains(QStringLiteral("index"))) {
+            file.insert(QStringLiteral("index"), fileIdx);
+        }
+
+        // BulkPackVerifier uses "name" (relative path) + "size" + "index" from
+        // the file object — exactly what TorrentEngine::torrentFiles provides.
+        int detectedSeason = configSeason;
+        int episodeNum = 0;
+        int matchedFileIdx = 0;
+
+        if (configSeason > 0) {
+            const bool ok = tankostream::stream::BulkPackVerifier::matchEpisodeFileForSeason(
+                file, configSeason, &episodeNum, &matchedFileIdx);
+            if (!ok || episodeNum <= 0)
+                continue;
+        } else {
+            // Multi-season pack: probe seasons 1..kMaxSeasonProbe until one matches.
+            for (int probeSeason = 1; probeSeason <= kMaxSeasonProbe; ++probeSeason) {
+                if (tankostream::stream::BulkPackVerifier::matchEpisodeFileForSeason(
+                        file, probeSeason, &episodeNum, &matchedFileIdx)
+                    && episodeNum > 0) {
+                    detectedSeason = probeSeason;
+                    break;
+                }
+            }
+            if (episodeNum <= 0)
+                continue;
+        }
+
+        // Reconstruct absolute path: savePath + relative name from libtorrent.
+        const QString relName = file.value(QStringLiteral("name")).toString();
+        if (relName.isEmpty())
+            continue;
+        const QString absPath = QDir(savePath).absoluteFilePath(relName);
+        const qint64 fileSize = file.value(QStringLiteral("size")).toVariant().toLongLong();
+
+        m_streamDownloadIndex->registerEpisode(
+            imdbId,
+            detectedSeason,
+            episodeNum,
+            absPath,
+            sourceGroupId,
+            fileSize
+        );
+        ++registeredCount;
+    }
+
+    if (registeredCount == 0) {
+        qint64 largestSize = 0;
+        QString largestRelName;
+        for (const QJsonValue& value : files) {
+            const QJsonObject file = value.toObject();
+            const QString relName = file.value(QStringLiteral("name")).toString();
+            const QString lowerName = relName.toLower();
+            if (!(lowerName.endsWith(QStringLiteral(".mkv"))
+                  || lowerName.endsWith(QStringLiteral(".mp4"))
+                  || lowerName.endsWith(QStringLiteral(".webm"))
+                  || lowerName.endsWith(QStringLiteral(".m4v"))
+                  || lowerName.endsWith(QStringLiteral(".avi")))) {
+                continue;
+            }
+
+            const qint64 size = file.value(QStringLiteral("size")).toVariant().toLongLong();
+            if (size > largestSize) {
+                largestSize = size;
+                largestRelName = relName;
+            }
+        }
+
+        if (largestSize > 0 && !largestRelName.isEmpty()) {
+            m_streamDownloadIndex->registerMovie(
+                imdbId,
+                QDir(savePath).absoluteFilePath(largestRelName),
+                sourceGroupId,
+                largestSize);
+            registeredCount = 1;
+        }
+    }
+
+    qDebug() << "publishTankorentItemsForTorrent:" << infoHash
+             << "registered" << registeredCount << "of" << files.size() << "files"
+             << "as imdbId=" << imdbId;
+}
+
 void TorrentClient::retryStreamBulkPublishing()
 {
     if (m_streamBulkGroups.isEmpty())
@@ -2057,6 +2190,11 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     rec["contentLayout"]   = config.contentLayout;
     rec["streamGroupId"]   = config.streamGroupId;
     rec["sequential"]      = config.sequential;
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: identity capture for single-add
+    // Tankorent downloads originating from the show-first picker. Empty/0 for
+    // non-Cinemeta downloads (repurposed direct torrent search).
+    rec["imdbId"]          = config.imdbId;
+    rec["season"]          = config.season;
     m_records[infoHash]    = rec;
     saveRecords();
 
@@ -2417,13 +2555,30 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
         streamGroupId = rec.value("streamGroupId").toString();
     }
 
-    if (!streamGroupId.isEmpty())
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: route to the right publisher
+    // based on the source of this download.
+    //   - bulk-cohort (streamGroupId set): existing Stream auto-download flow
+    //   - Tankorent single-add with show identity (imdbId set, no streamGroupId):
+    //         new show-first picker flow — register per-episode via Task A4
+    //   - everything else (direct torrent search, no identity): fall through to
+    //         the existing library-rescan path; file lands in Theatre's Local
+    //         files section automatically.
+    const bool hasBulkGroup = !streamGroupId.isEmpty();
+    QString recordImdbId;
+    if (m_records.contains(infoHash)) {
+        recordImdbId = m_records[infoHash].toObject().value(QStringLiteral("imdbId")).toString();
+    }
+    const bool hasTankorentBinding = !hasBulkGroup && !recordImdbId.isEmpty();
+
+    if (hasBulkGroup) {
         publishStreamBulkItemsForTorrent(infoHash);
+    } else if (hasTankorentBinding) {
+        publishTankorentItemsForTorrent(infoHash);
+    }
 
     emit torrentCompleted(infoHash);
 
-    if (!streamGroupId.isEmpty())
-        return;
+    if (hasBulkGroup || hasTankorentBinding) return;
 
     // Trigger a library rescan if the completed torrent saved into a tracked
     // root for its category. Prefix-match savePath against each root
