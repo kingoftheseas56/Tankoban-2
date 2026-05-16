@@ -5,11 +5,30 @@
 #include "core/CoreBridge.h"
 #include "core/LibraryScanner.h"
 #include "core/ScannerUtils.h"
+#include "core/manga/ComicsTankoyomiLibrary.h"
+#include "core/manga/MangaDownloadIndex.h"
+#include "core/manga/MangaDownloader.h"
+#include "core/manga/PremiumCatalog.h"
+#include "core/manga/TorrentRequestLedger.h"
+#include "core/manga/TorrentVolumeProvider.h"
+#include "core/manga/MangaTransferCoordinator.h"
+#include "core/manga/MangaResult.h"
+#include "core/manga/MangaScraper.h"
+#include "core/manga/MangaSourceRegistry.h"
+#include "core/torrent/TorrentClient.h"
+#include "core/torrent/TorrentEngine.h"
+#include "comics/ComicsTankoyomiSearchWidget.h"
+#include "comics/ComicsTankoyomiDetailView.h"
 
 #include "ui/ContextMenuHelper.h"
+#include "ui/readers/comic_progress_key.h"
 #include "ui/widgets/FadingStackedWidget.h"
 #include "ui/widgets/LibraryListView.h"
+#include "ui/widgets/Toast.h"
+#include <QNetworkAccessManager>
+#include <QCoreApplication>
 #include <QPushButton>
+#include <QDebug>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -22,9 +41,12 @@
 #include <QDir>
 #include <QDateTime>
 #include <QJsonObject>
+#include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QCollator>
 #include <QShortcut>
+#include <QShowEvent>
 #include <QMessageBox>
 
 // P4-3: COMIC_EXTS covers all reader-supported archive formats. Engine
@@ -41,9 +63,134 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
 
     buildUI();
 
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 — Tankoyomi-origin record
+    // store. Must exist before the scanner so the initial scan can be
+    // primed with the current claimed-path set (suppresses double-tiling
+    // of folders already owned by a Tankoyomi record).
+    m_tyLibrary = new ComicsTankoyomiLibrary(&m_bridge->store(), this);
+    connect(m_tyLibrary, &ComicsTankoyomiLibrary::libraryChanged,
+            this, &ComicsPage::onTankoyomiLibraryChanged);
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 18+20 — search-takeover
+    // widget + scraper registry. Lives at m_stack index 2 (post grid+series).
+    // Each scraper's errorOccurred fires a Toast with the source's display
+    // name; the search widget itself only updates its status line.
+    m_nam = new QNetworkAccessManager(this);
+    m_sourceRegistry = new MangaSourceRegistry(m_nam, this);
+    m_searchTakeover = new ComicsTankoyomiSearchWidget(m_sourceRegistry, m_nam, this);
+    m_stack->addWidget(m_searchTakeover);
+
+    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::backRequested,
+            this, &ComicsPage::showLibraryMode);
+    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::seriesActivated,
+            this, &ComicsPage::onSearchResultActivated);
+
+    // Task 20: per-source error surfacing — Toast with the source's
+    // display name. Anchor on the top-level window so the toast floats
+    // over the whole app, not just our tab.
+    for (auto* s : m_sourceRegistry->scrapers()) {
+        connect(s, &MangaScraper::errorOccurred, this, [this, s](const QString& msg) {
+            Q_UNUSED(msg);
+            QWidget* anchor = window() ? window() : this;
+            Toast::show(anchor, QStringLiteral("%1 didn't respond").arg(s->sourceName()));
+        });
+    }
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 — manga downloader +
+    // Tankoyomi-origin detail view. Single downloader owned by this page;
+    // the old TankoyomiPage duplicate was retired in Phase 8. Detail view
+    // lives at m_stack index 3 (after grid + seriesView + searchTakeover).
+    m_mangaDownloader = new MangaDownloader(&m_bridge->store(), this);
+    for (auto* s : m_sourceRegistry->scrapers()) {
+        m_mangaDownloader->setScraper(s->sourceId(), s);
+    }
+
+    // TANKOYOMI_PREMIUM Phase 1 -- bring the Premium catalog loader up at
+    // construction time. It walks resources/manga_premium_catalogs/*.json,
+    // runs strict per-field validation, and exposes a read-only lookup
+    // surface. No UI consumes it yet; later phases drive search dedup +
+    // detail-view badging off this.
+    const QString catalogsDir = QCoreApplication::applicationDirPath()
+                              + QStringLiteral("/resources/manga_premium_catalogs");
+    m_premiumCatalog = new tankoban::manga::premium::PremiumCatalog(catalogsDir, this);
+
+    // TANKOYOMI_PREMIUM Phase 8 -- inject the loaded catalog into the search
+    // widget. Routing decisions (Premium vs Manga/Comics) and synthetic
+    // catalog-only tile injection both no-op silently if the catalog failed
+    // to load (m_premiumCatalog is still non-null here -- it just has zero
+    // entries on load failure -- but the isPremiumSeries() / allEntries()
+    // calls are zero-cost in that case).
+    m_searchTakeover->setPremiumCatalog(m_premiumCatalog);
+
+    // TANKOYOMI_PREMIUM Phase 3 -- persistent request ledger lives next to
+    // CoreBridge's dataDir tree (main.cpp already mkpath'd manga_premium_*
+    // siblings). Ledger is engine-independent so it's safe to spin up here;
+    // the TorrentVolumeProvider waits for setTorrentClient() before it gets
+    // built (MainWindow calls setTorrentClient post-TorrentClient ctor).
+    const QString premiumLedgerPath = m_bridge->dataDir()
+                                    + QStringLiteral("/manga_premium_requests.json");
+    m_premiumLedger = new tankoban::manga::premium::TorrentRequestLedger(premiumLedgerPath, this);
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 34 — drive the
+    // DOWNLOADING chip on Tankoyomi-origin tiles from the downloader's
+    // state stream. downloadUpdated fires on per-chapter progress;
+    // downloadCompleted fires once at the end of a series. Both routes
+    // call the same refresh — chip flips Off only when status escapes
+    // {queued, downloading} (i.e. completed/cancelled/error).
+    connect(m_mangaDownloader, &MangaDownloader::downloadUpdated,
+            this, [this](const QString&) { refreshTileChips(); });
+    connect(m_mangaDownloader, &MangaDownloader::downloadCompleted,
+            this, [this](const QString&) { refreshTileChips(); });
+    connect(m_mangaDownloader, &MangaDownloader::chapterCompleted,
+            this, &ComicsPage::onChapterCompleted);
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 — instantiate
+    // the on-disk chapter index BEFORE the detail view so the view receives
+    // a non-null pointer. Same JsonStore as everything else on this page
+    // (CoreBridge::store()) — index persists at <appDataDir>/manga_downloads_index.json.
+    m_mangaDownloadIndex = new MangaDownloadIndex(&m_bridge->store(), this);
+
+    m_tyDetailView = new ComicsTankoyomiDetailView(
+        m_bridge, m_sourceRegistry, m_tyLibrary, m_mangaDownloader,
+        m_mangaDownloadIndex,
+        m_nam, this);
+    // TANKOYOMI_PREMIUM Phase 6 -- inject the Premium catalog so the detail
+    // view can flip into volume-row mode on catalog-backed titles.
+    m_tyDetailView->setPremiumCatalog(m_premiumCatalog);
+    // TANKOYOMI_PREMIUM Phase 9 -- adopt-existing-folder lookup. When the
+    // user clicks Add-to-Library on a Premium-catalog title and exactly one
+    // folder-imported series already exists with a matching normalized
+    // title, the detail view reuses that folder's path instead of
+    // computing a fresh disambiguated folder. ComicsPage is the only place
+    // that can walk m_folderSeries, so the callback is injected here.
+    m_tyDetailView->setAdoptLookup([this](const QString& title) {
+        return findFolderImportedSeriesPathForTitle(title);
+    });
+    m_stack->addWidget(m_tyDetailView);
+
+    connect(m_tyDetailView, &ComicsTankoyomiDetailView::backRequested,
+            this, &ComicsPage::onDetailBack);
+    connect(m_tyDetailView, &ComicsTankoyomiDetailView::openComicRequested,
+            this,
+            [this](const QString& cbzPath, const QStringList& cbzList, const QString& seriesName) {
+        // TANKOYOMI_CONTINUE_READING 2026-05-15 — register the Tankoyomi
+        // cbz in m_progressKeyMap before forwarding to MainWindow. Must
+        // happen synchronously here (same-thread direct connection) so
+        // that by the time ComicReader::saveProgress writes the first
+        // progress entry, refreshContinueStrip can resolve the SHA1 key.
+        ensureTankoyomiChapterInMap(cbzPath);
+        emit openComic(cbzPath, cbzList, seriesName);
+    });
+    connect(m_mangaDownloadIndex, &MangaDownloadIndex::entriesChanged,
+            m_tyDetailView, &ComicsTankoyomiDetailView::refreshDownloadMarkers);
+
     // Background scanner thread
     m_scanThread = new QThread(this);
     m_scanner = new LibraryScanner(m_bridge->dataDir() + "/thumbs");
+    // Prime the scanner with claimed paths BEFORE moveToThread so the very
+    // first scan respects Tankoyomi-origin ownership. Direct call is safe
+    // here because the scanner still lives on the GUI thread.
+    m_scanner->setClaimedPaths(m_tyLibrary->claimedCanonicalPaths());
     m_scanner->moveToThread(m_scanThread);
 
     connect(m_scanner, &LibraryScanner::seriesFound,
@@ -56,10 +203,36 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
 
     m_scanThread->start();
 
-    // Re-scan when root folders change
+    // Re-scan when root folders change.
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 P7 Task 43 — root-change
+    // fallback (safe-fallback v1 per Codex §14). Order matters here:
+    //   1. Push fresh claimed-paths to the scanner FIRST (queued — the
+    //      scanner lives on a worker thread post-moveToThread; a direct
+    //      call would race the in-flight walk). Posting before
+    //      triggerScan keeps the scanner event-queue FIFO ordered:
+    //      claimed-paths land before the scan walk that should respect
+    //      them. Mirrors onTankoyomiLibraryChanged pattern.
+    //   2. triggerScan() walks the new roots; folder-origin tiles
+    //      re-render via the scan's terminal rebuildTiles inside
+    //      onScanFinished. Calling rebuildTiles here too would paint
+    //      orphans from the pre-change cached m_folderSeries (folder
+    //      slice from the prior scan) until the scan completes — code
+    //      review I1.
+    //   3. validateAll re-checks every chapter's on-disk presence so
+    //      chips flip back to NotDownloaded for files no longer
+    //      reachable under any current root.
+    //   4. refreshTileChips re-derives DOWNLOADING badges from the
+    //      downloader state, independent of the scan.
     connect(m_bridge, &CoreBridge::rootFoldersChanged, this, [this](const QString& domain) {
-        if (domain == "comics")
+        if (domain == "comics") {
+            if (m_scanner) {
+                QMetaObject::invokeMethod(m_scanner, "setClaimedPaths", Qt::QueuedConnection,
+                                          Q_ARG(QStringList, m_tyLibrary->claimedCanonicalPaths()));
+            }
             triggerScan();
+            if (m_mangaDownloadIndex) m_mangaDownloadIndex->validateAll();
+            refreshTileChips();
+        }
     });
 }
 
@@ -69,6 +242,121 @@ ComicsPage::~ComicsPage()
     m_scanThread->wait();
     // REPO_HYGIENE Phase 4 P4.2: m_scanner auto-deleted via deleteLater on
     // thread::finished. No manual delete.
+}
+
+void ComicsPage::setTorrentClient(TorrentClient* client)
+{
+    // TANKOYOMI_PREMIUM Phase 3 -- MainWindow wires this AFTER both ComicsPage
+    // and TorrentClient exist (MainWindow.cpp construction order: pages first,
+    // then TorrentClient hoisted to MainWindow scope). Idempotent: a second
+    // call with a different client is a no-op for now (no documented re-wire
+    // scenario in v1).
+    if (m_torrentClient == client) return;
+    if (m_premiumProvider) return;   // already wired; ignore re-wires for v1
+    m_torrentClient = client;
+    if (!client) return;
+    TorrentEngine* engine = client->engine();
+    if (!engine) return;
+    if (!m_premiumCatalog || !m_premiumLedger) return;
+
+    const QString premiumStagingRoot = m_bridge->dataDir()
+                                     + QStringLiteral("/manga_premium_staging");
+    // TANKOYOMI_PREMIUM Phase 10 -- shared cover-thumbnail output dir. Lives
+    // under appDataDir alongside the staging tree; manga_posters is shared
+    // with the existing series-level poster cache directory convention.
+    const QString premiumCoversDir = m_bridge->dataDir()
+                                   + QStringLiteral("/manga_posters");
+    QDir().mkpath(premiumCoversDir);
+    m_premiumProvider = new tankoban::manga::premium::TorrentVolumeProvider(
+        /*engine=*/engine,
+        /*catalog=*/m_premiumCatalog,
+        /*ledger=*/m_premiumLedger,
+        /*index=*/m_mangaDownloadIndex,
+        /*stagingRoot=*/premiumStagingRoot,
+        /*coversDir=*/premiumCoversDir,
+        /*parent=*/this);
+
+    // TANKOYOMI_PREMIUM Phase 9 -- thin facade over MangaDownloader +
+    // TorrentVolumeProvider so a single "Transfers paused" affordance can
+    // fan out to both backends. Constructed AFTER m_premiumProvider is
+    // non-null (here). NO UI affordance gets bound yet; Phase 11+ surfaces
+    // the "Pause all transfers" button.
+    if (!m_transferCoordinator) {
+        m_transferCoordinator = new tankoban::manga::premium::MangaTransferCoordinator(
+            m_mangaDownloader, m_premiumProvider, this);
+    }
+
+    // TANKOYOMI_PREMIUM Phase 7 Task 7.2 -- replace the Phase 3 qDebug stubs
+    // with real consumers in the detail view. All connections are
+    // QueuedConnection because TorrentVolumeProvider emits from the engine's
+    // alert worker thread (per Codex section 18 + the provider header).
+    using P = tankoban::manga::premium::TorrentVolumeProvider;
+    connect(m_premiumProvider, &P::volumeProgress,
+            m_tyDetailView, &ComicsTankoyomiDetailView::onPremiumVolumeProgress,
+            Qt::QueuedConnection);
+    // Drop the cbzPath arg -- the detail view doesn't need it (the path is
+    // re-resolved through MangaDownloadIndex on read).
+    connect(m_premiumProvider, &P::volumeCompleted,
+            m_tyDetailView, [this](const QString& s, int v, const QString& p){
+                Q_UNUSED(p);
+                m_tyDetailView->onPremiumVolumeCompleted(s, v);
+            },
+            Qt::QueuedConnection);
+    connect(m_premiumProvider, &P::volumeFailed,
+            m_tyDetailView, &ComicsTankoyomiDetailView::onPremiumVolumeFailed,
+            Qt::QueuedConnection);
+    connect(m_premiumProvider, &P::swarmStatus,
+            m_tyDetailView, &ComicsTankoyomiDetailView::onPremiumSwarmStatus,
+            Qt::QueuedConnection);
+    // TANKOYOMI_PREMIUM Phase 10 -- per-volume cover thumbnail; emitted AFTER
+    // volumeCompleted by the provider (cover extraction does NOT gate
+    // completion per Codex section 21). Queued connection because the
+    // extractor signals via QMetaObject::invokeMethod on the provider.
+    connect(m_premiumProvider, &P::volumeCoverReady,
+            m_tyDetailView, &ComicsTankoyomiDetailView::setPremiumVolumeCover,
+            Qt::QueuedConnection);
+
+    // Phase 7 Task 7.2 -- volume-download button click. Detail view emits the
+    // (seriesId, volumeNumber) pair; we resolve the catalog entry + matching
+    // PremiumVolumeEntry, derive a canonical destination folder, then dispatch
+    // to TorrentVolumeProvider::requestVolume.
+    connect(m_tyDetailView, &ComicsTankoyomiDetailView::premiumVolumeDownloadRequested,
+            this, [this](const QString& seriesId, int volumeNumber){
+                if (!m_premiumCatalog || !m_premiumProvider) return;
+                const auto entry = m_premiumCatalog->entryById(seriesId);
+                if (!entry) return;
+                const tankoban::manga::premium::PremiumVolumeEntry* volEntry = nullptr;
+                for (const auto& vv : entry->volumes) {
+                    if (vv.vol == volumeNumber) { volEntry = &vv; break; }
+                }
+                if (!volEntry) return;
+                const QString destinationPath = canonicalSeriesPathForPremium(*entry);
+                if (destinationPath.isEmpty()) {
+                    qDebug().noquote()
+                        << QStringLiteral("[Premium] requestVolume aborted -- no comics root configured")
+                        << seriesId << QStringLiteral("v%1").arg(volumeNumber);
+                    return;
+                }
+                m_premiumProvider->requestVolume(*entry, *volEntry, destinationPath);
+            });
+
+    // Crash-resume entry point. Replay AFTER engine + catalog are alive.
+    // TorrentEngine is built inside TorrentClient's ctor and starts on
+    // construction; calling replayLedger immediately is fine (any
+    // not-yet-discovered peers will be picked up by addMagnet's tracker
+    // bootstrap as usual).
+    m_premiumProvider->replayLedger();
+}
+
+void ComicsPage::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 — re-validate
+    // every chapter entry in the on-disk index against the actual filesystem.
+    // External deletions (Finder/Explorer, antivirus, "Delete files" confirms)
+    // emit entriesChanged via evictByChapter, which surfaces as updated chip
+    // state next time the chapter list is repainted.
+    if (m_mangaDownloadIndex) m_mangaDownloadIndex->validateAll();
 }
 
 void ComicsPage::buildUI()
@@ -97,7 +385,10 @@ void ComicsPage::buildUI()
 
     // ── 1. Search bar (full width, top) ──
     m_searchBar = new QLineEdit(gridPage);
-    m_searchBar->setPlaceholderText("Search series and volumes\u2026");
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 \u2014 repurposed from
+    // local library filter to Tankoyomi-search entry point. Press Enter
+    // to fan-out across scrapers and flip into the search-takeover view.
+    m_searchBar->setPlaceholderText("Search Tankoyomi");
     m_searchBar->setClearButtonEnabled(true);
     m_searchBar->setObjectName("LibrarySearch");
     m_searchBar->setFixedHeight(36);
@@ -110,19 +401,27 @@ void ComicsPage::buildUI()
     searchLayout->addWidget(m_searchBar);
     gridLayout->addLayout(searchLayout);
 
-    m_searchBar->setToolTip("Separate words to match all\n"
-                            "(e.g. 'one piece' matches series or volumes containing both words)");
+    m_searchBar->setToolTip("Press Enter to search Tankoyomi sources");
 
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 — search bar
+    // repurpose. textChanged still updates the activeSearch style hint
+    // so the input still highlights while typing, but the debounce timer
+    // no longer drives applySearch (that hook is preserved for the
+    // GLOBAL_NAV_HISTORY restore + hide-series flows). Enter flips into
+    // the search-takeover surface via showSearchMode().
     m_searchTimer = new QTimer(this);
     m_searchTimer->setSingleShot(true);
     m_searchTimer->setInterval(250);
     connect(m_searchBar, &QLineEdit::textChanged, this, [this]() {
-        m_searchTimer->start();
         m_searchBar->setProperty("activeSearch", !m_searchBar->text().trimmed().isEmpty());
         m_searchBar->style()->unpolish(m_searchBar);
         m_searchBar->style()->polish(m_searchBar);
     });
-    connect(m_searchTimer, &QTimer::timeout, this, &ComicsPage::applySearch);
+    connect(m_searchBar, &QLineEdit::returnPressed, this, [this]() {
+        const QString q = m_searchBar->text().trimmed();
+        if (q.isEmpty()) return;
+        showSearchMode(q);
+    });
 
     // Ctrl+F focuses search bar
     auto* searchShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_F), this);
@@ -233,9 +532,8 @@ void ComicsPage::buildUI()
                 cbzList.append(dir.absoluteFilePath(f));
             emit openComic(filePath, cbzList, seriesName);
         } else if (openSeriesAct && chosen == openSeriesAct) {
-            m_seriesView->showSeries(seriesPath, seriesName,
-                                     card->property("coverPath").toString());
-            m_stack->setCurrentIndex(1);
+            openSeriesByPath(seriesPath, seriesName,
+                             card->property("coverPath").toString());
         } else if (chosen == markAct && m_bridge) {
             QJsonObject prog = m_bridge->progress("comics", progKey);
             prog["finished"] = !isFinished;
@@ -355,8 +653,7 @@ void ComicsPage::buildUI()
         // Find series name from path
         QDir dir(path);
         QString name = dir.dirName();
-        m_seriesView->showSeries(path, name);
-        m_stack->setCurrentIndexAnimated(1);
+        openSeriesByPath(path, name);
     });
     gridLayout->addWidget(m_listView, 1);
 
@@ -376,10 +673,9 @@ void ComicsPage::buildUI()
     // Double-click opens SeriesView
     connect(m_tileStrip, &TileStrip::tileDoubleClicked, this, [this](TileCard* card) {
         if (!card) return;
-        m_seriesView->showSeries(card->property("seriesPath").toString(),
-                                 card->property("seriesName").toString(),
-                                 card->property("coverPath").toString());
-        m_stack->setCurrentIndexAnimated(1);
+        openSeriesByPath(card->property("seriesPath").toString(),
+                         card->property("seriesName").toString(),
+                         card->property("coverPath").toString());
     });
 
     // Ctrl+A select all tiles
@@ -486,6 +782,24 @@ void ComicsPage::addSeriesTile(const SeriesInfo& series)
     card->setProperty("coverPath", series.coverThumbPath);
     card->setProperty("fileCount", series.fileCount);
     card->setProperty("newestMtime", series.newestMtimeMs);
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 33 — real
+    // setProvenance call replaces the Phase 2 setProperty shim. Folder-
+    // origin tiles get "folder" (no chip paints); Tankoyomi-origin tiles
+    // get "tankoyomi" (paints the top-left [Tankoyomi] chip).
+    const QString provenance = series.provenance.isEmpty()
+        ? QStringLiteral("folder") : series.provenance;
+    card->setProvenance(provenance);
+
+    // Phase 5 Task 34: seriesKey for the DOWNLOADING-chip subscription path.
+    // Looked up post-creation via ComicsTankoyomiLibrary::getByCanonicalPath
+    // since folder-origin SeriesInfo doesn't carry source/seriesId; only set
+    // on Tankoyomi-origin tiles (folder tiles don't have a downloader query).
+    if (provenance == QStringLiteral("tankoyomi") && m_tyLibrary) {
+        if (const auto rec = m_tyLibrary->getByCanonicalPath(series.seriesPath)) {
+            card->setProperty("seriesKey",
+                              rec->sourceId + QStringLiteral(":") + rec->seriesId);
+        }
+    }
     connect(card, &TileCard::clicked, this, &ComicsPage::onCardClicked);
 
     card->setIsFolder(true);
@@ -561,17 +875,30 @@ void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
         QTimer::singleShot(0, this, [this]() { triggerScan(); });
     }
 
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 — cache folder-origin
+    // SeriesInfo for rebuildTiles(). The scanner already excluded
+    // claimed paths, so allSeries is the folder-origin slice only.
+    m_folderSeries = allSeries;
+
+    // Cache Tankoyomi-origin slice once: m_tyLibrary->all() takes the
+    // library mutex + copies every record. Reuse the snapshot below.
+    const auto tyRecords = m_tyLibrary->all();
+
     if (wasRescan) {
         // Atomic swap: clear old tiles, rebuild from complete list
-        m_tileStrip->clear();
-        m_listView->clear();
-        m_progressKeyMap.clear();
-
-        for (const auto& series : allSeries)
-            addSeriesTile(series);
+        // (folder-origin + Tankoyomi-origin merged via rebuildTiles,
+        // which clears m_listView + m_progressKeyMap internally).
+        rebuildTiles();
+    } else {
+        // First scan: tiles were emitted incrementally via onSeriesFound.
+        // Append the Tankoyomi-origin slice now that the folder slice is
+        // complete. rebuildTiles() would also work but would double-add
+        // the folder rows that onSeriesFound already inserted.
+        for (const auto& r : tyRecords) addSeriesTile(seriesInfoFromRecord(r));
     }
 
-    if (allSeries.isEmpty()) {
+    const bool empty = m_folderSeries.isEmpty() && tyRecords.isEmpty();
+    if (empty) {
         m_tileStrip->hide();
         m_statusLabel->setObjectName("LibraryEmptyLabel");
         m_statusLabel->setAlignment(Qt::AlignCenter);
@@ -586,15 +913,328 @@ void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
     refreshContinueStrip();
 }
 
+void ComicsPage::onTankoyomiLibraryChanged()
+{
+    // Push refreshed claim set to the scanner (queued — scanner runs on
+    // worker thread). Doesn't trigger a rescan: the folder-origin slice
+    // is already in m_folderSeries; subsequent rescans pick up the new
+    // claims automatically.
+    if (m_scanner) {
+        QMetaObject::invokeMethod(m_scanner, "setClaimedPaths", Qt::QueuedConnection,
+                                  Q_ARG(QStringList, m_tyLibrary->claimedCanonicalPaths()));
+    }
+    rebuildTiles();
+}
+
+void ComicsPage::rebuildTiles()
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 — assemble merged tile
+    // set from (a) cached folder-origin SeriesInfo (scanner already
+    // suppressed claimed paths) and (b) Tankoyomi-origin records from
+    // m_tyLibrary. Folder rows render with no provenance badge;
+    // Tankoyomi rows render with the [Tankoyomi] chip (TileCard
+    // property-shim until Phase 5 Task 33 adds setProvenance).
+    m_tileStrip->clear();
+    m_listView->clear();
+    m_progressKeyMap.clear();
+
+    for (const auto& s : m_folderSeries) addSeriesTile(s);
+
+    for (const auto& r : m_tyLibrary->all()) addSeriesTile(seriesInfoFromRecord(r));
+}
+
+void ComicsPage::refreshTileChips()
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 34 — for each
+    // tile with a seriesKey (set in addSeriesTile only on Tankoyomi-origin
+    // tiles), look up the active record in MangaDownloader and flip the
+    // DOWNLOADING chip on if status ∈ {queued, downloading}, off otherwise.
+    if (!m_tileStrip || !m_tyLibrary || !m_mangaDownloader) return;
+    for (auto* card : m_tileStrip->tiles()) {
+        if (!card) continue;
+        const QString key = card->property("seriesKey").toString();
+        if (key.isEmpty()) {
+            card->setDownloadingChip(false);
+            continue;
+        }
+        const int sep = key.indexOf(QLatin1Char(':'));
+        if (sep <= 0) {
+            card->setDownloadingChip(false);
+            continue;
+        }
+        const QString sourceId = key.left(sep);
+        const QString seriesId = key.mid(sep + 1);
+        const auto libRec = m_tyLibrary->get(sourceId, seriesId);
+        if (libRec.title.isEmpty()) {
+            card->setDownloadingChip(false);
+            continue;
+        }
+        const auto dlRec = m_mangaDownloader->recordForSeries(sourceId, libRec.title);
+        const bool active = !dlRec.id.isEmpty() &&
+                            (dlRec.status == QStringLiteral("queued") ||
+                             dlRec.status == QStringLiteral("downloading"));
+        card->setDownloadingChip(active);
+    }
+}
+
+SeriesInfo ComicsPage::seriesInfoFromRecord(const ComicsLibraryRecord& r)
+{
+    // Tankoyomi-origin record → SeriesInfo projection. Shared between
+    // onScanFinished (first-scan path) and rebuildTiles. Phase 3+ will
+    // extend with fileCount/files once chapter discovery wires up;
+    // until then those default to empty/zero from SeriesInfo's defaults.
+    SeriesInfo s;
+    s.seriesName     = r.title;
+    s.seriesPath     = r.canonicalSeriesPath;
+    s.coverThumbPath = r.coverPath;
+    s.newestMtimeMs  = r.lastValidatedAt;
+    s.provenance     = QStringLiteral("tankoyomi");
+    return s;
+}
+
+QString ComicsPage::canonicalSeriesPathForPremium(
+    const tankoban::manga::premium::PremiumCatalogEntry& entry) const
+{
+    // TANKOYOMI_PREMIUM Phase 7 Task 7.2 -- prefer an existing Tankoyomi
+    // library record whose title matches the catalog entry (the merger arc
+    // establishes that canonicalSeriesPath with collision disambiguation).
+    // Otherwise fall back to <comics-root-0>/<sanitised-title>. The sanitise
+    // step is kept local rather than reaching across files to the detail
+    // view's file-local sanitiseFilename free function.
+    if (m_tyLibrary) {
+        const auto records = m_tyLibrary->all();
+        for (const auto& r : records) {
+            if (r.title.compare(entry.title, Qt::CaseInsensitive) == 0) {
+                return r.canonicalSeriesPath;
+            }
+        }
+    }
+    const QStringList roots = m_bridge
+        ? m_bridge->rootFolders(QStringLiteral("comics"))
+        : QStringList{};
+    if (roots.isEmpty()) return QString();
+    const QString root = roots.first();
+    if (root.isEmpty()) return QString();
+    QString safe = entry.title;
+    static const QString kBad = QStringLiteral("<>:\"/\\|?*");
+    for (QChar c : kBad) safe.replace(c, QChar('_'));
+    safe = safe.trimmed();
+    return root + QChar('/') + safe;
+}
+
+QString ComicsPage::normalizeTitleForMatch(const QString& title)
+{
+    // TANKOYOMI_PREMIUM Phase 9 -- lowercase + strip whitespace + non-word
+    // chars + underscores. Folds "Berserk", "Berserk!", " Berserk " into
+    // one bucket; does NOT fold typo variants like "Bersek". Used by the
+    // adopt-existing-folder lookup to match Premium-catalog titles against
+    // pre-existing folder-imported series.
+    static const QRegularExpression re(QStringLiteral("[\\s\\W_]+"));
+    QString s = title.toLower().trimmed();
+    s.remove(re);
+    return s;
+}
+
+QString ComicsPage::findFolderImportedSeriesPathForTitle(const QString& title) const
+{
+    // TANKOYOMI_PREMIUM Phase 9 -- exactly-one-match contract. m_folderSeries
+    // is folder-imported by construction (Tankoyomi-origin entries live in
+    // m_tyLibrary, not here). Ambiguous (zero or many) returns empty so the
+    // caller falls back to new-folder-creation. Per Codex section 22:
+    // adopt, do not migrate.
+    const QString needle = normalizeTitleForMatch(title);
+    if (needle.isEmpty()) return QString();
+    QStringList matches;
+    for (const auto& s : m_folderSeries) {
+        if (normalizeTitleForMatch(s.seriesName) == needle) {
+            matches.append(s.seriesPath);
+        }
+    }
+    if (matches.size() == 1) return matches.first();
+    return QString();
+}
+
+void ComicsPage::ensureTankoyomiChapterInMap(const QString& cbzPath)
+{
+    // TANKOYOMI_CONTINUE_READING 2026-05-15 — bridge between today's
+    // two-origin Continue-Reading model (folder-imported scanner walk +
+    // Tankoyomi library records) and a future Tankoyomi-exclusive model.
+    //
+    // m_progressKeyMap normally gets populated only on a full library
+    // rescan (via addSeriesTile walking each series' cbz files). A
+    // chapter downloaded mid-session sits in canonicalSeriesPath on
+    // disk but its progress key is unknown to refreshContinueStrip
+    // until the next scan. This helper registers the path right before
+    // the user reads it (called from the openComicRequested slot), so
+    // ComicReader's saveProgress writes under a key the strip can
+    // resolve at its very next refresh.
+    //
+    // Forward-compat: if Comics mode pivots to Tankoyomi-exclusive and
+    // refreshContinueStrip is refactored to join MangaDownloadIndex ↔
+    // JsonStoreBridge directly (no intermediate map), this helper +
+    // m_progressKeyMap both become deletable.
+
+    if (cbzPath.isEmpty() || !m_tyLibrary) return;
+
+    const QString progressKey = comicProgressKeyForPath(cbzPath);
+    if (m_progressKeyMap.contains(progressKey)) return;
+
+    const QString parentDir = QFileInfo(cbzPath).absolutePath();
+    const auto rec = m_tyLibrary->getByCanonicalPath(parentDir);
+    if (!rec) return;  // not a Tankoyomi-claimed cbz — folder-imported
+                       // path handled at scan-time by addSeriesTile.
+
+    m_progressKeyMap[progressKey] = {cbzPath, rec->canonicalSeriesPath, rec->coverPath};
+}
+
+ComicsPage::ContinueLabels ComicsPage::continueLabelsForRecord(
+    const ComicsLibraryRecord& rec, const QString& cbzPath, int page, int pageCount)
+{
+    // TANKOYOMI_CONTINUE_READING 2026-05-15 — Title = series name (rec.title).
+    // Subtitle = "<ChapterName> • Page X/Y". Chapter name comes from the
+    // cbz filename (e.g. "Prologue 1.cbz" → "Prologue 1"), which is the
+    // sanitised chapter name MangaDownloader writes to disk at write-time.
+    // For chapter names containing characters in `[<>:"/\\|?*]` (sanitised
+    // to `_`), this gives a near-display-quality result; the rare case
+    // where the original name is meaningfully nicer (e.g. "Ep. 5: Crisis"
+    // vs on-disk "Ep. 5_ Crisis") is acceptable display loss for v1.
+    const QString chapterName = QFileInfo(cbzPath).completeBaseName();
+    const QString pageLabel = pageCount > 0
+        ? QStringLiteral("Page %1/%2").arg(page + 1).arg(pageCount)
+        : QStringLiteral("Page %1").arg(page + 1);
+    return {
+        rec.title,
+        chapterName.isEmpty() ? pageLabel
+                              : QStringLiteral("%1 • %2").arg(chapterName, pageLabel)
+    };
+}
+
 void ComicsPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
 {
-    m_seriesView->showSeries(seriesPath, seriesName);
+    openSeriesByPath(seriesPath, seriesName);
+}
+
+void ComicsPage::openSeriesByPath(const QString& seriesPath, const QString& seriesName,
+                                  const QString& coverPath)
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 27 — provenance route.
+    // Tankoyomi-origin tile (canonical path matches a library record) →
+    // open the new detail view; folder-origin tile → today's SeriesView.
+    // Uses ComicsTankoyomiLibrary::getByCanonicalPath (O(1) hash lookup via
+    // the internal m_canonicalToKey map) instead of the previous all()
+    // linear scan — matters at 100+ records (code-quality review I3).
+    if (m_tyLibrary) {
+        if (const auto rec = m_tyLibrary->getByCanonicalPath(seriesPath)) {
+            // Phase 9 Task 52 — tile-click is always a Library→Detail
+            // transition (Tankoyomi tiles live inside the merged library
+            // grid). Record origin so onDetailBack routes to library.
+            m_enteredDetailFrom = Mode::Library;
+            m_mode = Mode::TankoyomiDetail;
+            m_tyDetailView->showEntry(rec->detailCache.preview);
+            m_stack->setCurrentWidget(m_tyDetailView);
+            return;
+        }
+    }
+    m_seriesView->showSeries(seriesPath, seriesName, coverPath);
     m_stack->setCurrentIndexAnimated(1);
+}
+
+void ComicsPage::onChapterCompleted(const QString& source, const QString& seriesTitle,
+                                    const QString& chapterId, const QString& finalPath,
+                                    qint64 fileSize)
+{
+    if (!m_tyLibrary || !m_mangaDownloadIndex) return;
+    if (source.isEmpty() || seriesTitle.isEmpty() || chapterId.isEmpty() || finalPath.isEmpty())
+        return;
+
+    const QString completedPath = QDir::cleanPath(QFileInfo(finalPath).absoluteFilePath());
+    QList<ComicsLibraryRecord> matches;
+    for (const auto& rec : m_tyLibrary->all()) {
+        if (rec.sourceId == source && rec.title == seriesTitle)
+            matches.append(rec);
+    }
+
+    if (matches.size() > 1) {
+        QList<ComicsLibraryRecord> pathMatches;
+        for (const auto& rec : matches) {
+            if (rec.canonicalSeriesPath.isEmpty()) continue;
+            const QString root = QDir::cleanPath(QFileInfo(rec.canonicalSeriesPath).absoluteFilePath());
+            if (completedPath == root || completedPath.startsWith(root + QLatin1Char('/')))
+                pathMatches.append(rec);
+        }
+        matches = pathMatches;
+    }
+
+    if (matches.size() != 1) {
+        qWarning() << "[ComicsPage] skipped MangaDownloadIndex registration"
+                   << "source" << source << "title" << seriesTitle
+                   << "chapter" << chapterId << "matches" << matches.size();
+        return;
+    }
+
+    const auto& rec = matches.first();
+    m_mangaDownloadIndex->registerChapter(rec.sourceId, rec.seriesId,
+                                          chapterId, completedPath, fileSize);
+    refreshTileChips();
 }
 
 void ComicsPage::showGrid()
 {
     m_stack->setCurrentIndexAnimated(0);
+}
+
+// ── COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 18 ─────────────────────
+// Mode-transition slots for the search-takeover state machine. Library
+// mode is the default grid + Continue strip (m_stack index 0).
+// SearchResults flips to the takeover widget; onSearchResultActivated is
+// a Phase-3 qDebug stub awaiting Phase-4 detail wiring.
+
+void ComicsPage::showLibraryMode()
+{
+    m_mode = Mode::Library;
+    m_stack->setCurrentIndexAnimated(0);
+    if (m_searchTakeover) m_searchTakeover->clearResults();
+}
+
+void ComicsPage::showSearchMode(const QString& query)
+{
+    m_mode = Mode::SearchResults;
+    m_searchTakeover->search(query);
+    m_stack->setCurrentWidget(m_searchTakeover);
+}
+
+void ComicsPage::onSearchResultActivated(const MangaResult& preview)
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 — Phase 3 qDebug
+    // stub replaced with the real detail-view open. Phase 9 Task 52 —
+    // record the SearchResults origin BEFORE flipping mode so onDetailBack
+    // can route Back back to the search-takeover (not the library grid).
+    m_enteredDetailFrom = Mode::SearchResults;
+    m_mode = Mode::TankoyomiDetail;
+    m_tyDetailView->showEntry(preview);
+    m_stack->setCurrentWidget(m_tyDetailView);
+}
+
+void ComicsPage::onDetailBack()
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 52 — Back
+    // from detail routes by the origin recorded at entry. Search→Detail→
+    // Back lands on the search-takeover (m_searchTakeover at m_stack idx 2);
+    // Library→Detail→Back lands on the merged library grid.
+    if (m_enteredDetailFrom == Mode::SearchResults && m_searchTakeover) {
+        m_mode = Mode::SearchResults;
+        m_stack->setCurrentWidget(m_searchTakeover);
+    } else {
+        showLibraryMode();
+    }
+    // Code-quality review I3: defensive reset. Today every detail-entry
+    // site (onSearchResultActivated, onTileClicked Tankoyomi branch)
+    // overwrites m_enteredDetailFrom, so a stale value can't leak forward.
+    // Reset on exit forecloses the trap if a future entry site lands
+    // (deep-link, notification handler, continue-strip click) and forgets
+    // to set the origin — the field defaults to Library and Back goes to
+    // library, the safe fallback.
+    m_enteredDetailFrom = Mode::Library;
 }
 
 void ComicsPage::toggleViewMode()
@@ -670,12 +1310,85 @@ void ComicsPage::refreshContinueStrip()
         qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();
         int pageCount = prog.value("pageCount").toInt(0);
 
-        QString title = ScannerUtils::cleanMediaFolderTitle(QFileInfo(ref->filePath).completeBaseName());
-        QString subtitle = pageCount > 0
-            ? QString("Page %1/%2").arg(page + 1).arg(pageCount)
-            : QString("Page %1").arg(page + 1);
+        // TANKOYOMI_CONTINUE_READING 2026-05-15 — Tankoyomi-origin entries get
+        // `<ChapterName> • Page X/Y` subtitle with title = series name. Folder-
+        // imported keeps the historical `Page X/Y` shape with title = file basename.
+        // The chip badge for Tankoyomi is rendered later (line ~1075) via the same
+        // m_tyLibrary->getByCanonicalPath lookup; this branch only handles labels.
+        const auto recOpt = m_tyLibrary
+                                 ? m_tyLibrary->getByCanonicalPath(ref->seriesPath)
+                                 : std::nullopt;
+        QString title;
+        QString subtitle;
+        if (recOpt) {
+            const auto labels = continueLabelsForRecord(*recOpt, ref->filePath, page, pageCount);
+            title = labels.title;
+            subtitle = labels.subtitle;
+        } else {
+            title = ScannerUtils::cleanMediaFolderTitle(QFileInfo(ref->filePath).completeBaseName());
+            subtitle = pageCount > 0
+                ? QString("Page %1/%2").arg(page + 1).arg(pageCount)
+                : QString("Page %1").arg(page + 1);
+        }
 
-        items.append({updatedAt, ref->filePath, ref->seriesPath, title, subtitle, ref->coverPath});
+        // TANKOYOMI_PREMIUM Phase 7 Task 7.4 (Codex section 22 + 23) -- when
+        // the user's last-read chapter is inside a downloaded Premium volume,
+        // prefer the Premium cbz path over the loose WeebCentral cbz. NO-OP
+        // in current v1 state because no Premium volume has been downloaded
+        // yet (catalog curation lands in Phase 11); the code path lights up
+        // automatically when real Premium downloads exist.
+        QString preferredFilePath = ref->filePath;
+        if (m_premiumCatalog && m_mangaDownloadIndex && recOpt) {
+            const QString seriesTitle = recOpt->title;
+            if (!seriesTitle.isEmpty()) {
+                const auto entryOpt = m_premiumCatalog->entryForTitle(seriesTitle);
+                if (entryOpt
+                    && m_mangaDownloadIndex->hasAnyForSeries(
+                           QStringLiteral("tankoyomi_premium"),
+                           entryOpt->seriesId))
+                {
+                    // PHASE 11+ TODO: trailing-numeric extraction has a known
+                    // false-positive case. Basename "Issue 5 Part 2" matches
+                    // "2" via the current regex, but the user is reading
+                    // chapter 5 -- would mis-route them to whichever Premium
+                    // volume contains chapter 2 (if any). Acceptable in v1
+                    // because no Premium volumes exist yet (catalog curation
+                    // lands in Phase 11), so the swap is a provable NO-OP.
+                    // When Phase 11 ships, REVISIT this before users hit it:
+                    // either (a) tighten the regex to require a leading
+                    // "Chapter "/"Ch."/"c" prefix, or (b) persist the chapter
+                    // number explicitly from MangaDownloader's chapterCompleted
+                    // signal so the filename round-trip is eliminated entirely.
+                    const QString chapName =
+                        QFileInfo(ref->filePath).completeBaseName();
+                    static const QRegularExpression numRe(
+                        QStringLiteral("(\\d+(?:\\.\\d+)?)\\s*$"));
+                    const auto m = numRe.match(chapName);
+                    const QString readChapter =
+                        m.hasMatch() ? m.captured(1) : QString();
+                    if (!readChapter.isEmpty()) {
+                        for (const auto& v : entryOpt->volumes) {
+                            bool inThisVolume = false;
+                            for (const auto& ch : v.chapters) {
+                                if (ch.chapterNumber == readChapter) {
+                                    inThisVolume = true;
+                                    break;
+                                }
+                            }
+                            if (!inThisVolume) continue;
+                            const auto pathOpt =
+                                m_mangaDownloadIndex->filePathFor(
+                                    QStringLiteral("tankoyomi_premium"),
+                                    entryOpt->seriesId, readChapter);
+                            if (pathOpt) preferredFilePath = *pathOpt;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        items.append({updatedAt, preferredFilePath, ref->seriesPath, title, subtitle, ref->coverPath});
     }
 
     if (items.isEmpty()) {
@@ -709,6 +1422,9 @@ void ComicsPage::refreshContinueStrip()
         card->setProperty("seriesPath", item.seriesPath);
         card->setProperty("seriesName", ScannerUtils::cleanMediaFolderTitle(
             QDir(item.seriesPath).dirName()));
+        card->setProperty("coverPath", item.coverPath);
+        if (m_tyLibrary && m_tyLibrary->getByCanonicalPath(item.seriesPath))
+            card->setProvenance(QStringLiteral("tankoyomi"));
         connect(card, &TileCard::clicked, this, [this, card]() {
             QString path = card->property("filePath").toString();
             QString seriesPath = card->property("seriesPath").toString();
@@ -735,10 +1451,9 @@ void ComicsPage::onCardClicked()
 {
     auto* card = qobject_cast<TileCard*>(sender());
     if (!card) return;
-    m_seriesView->showSeries(card->property("seriesPath").toString(),
-                             card->property("seriesName").toString(),
-                             card->property("coverPath").toString());
-    m_stack->setCurrentIndexAnimated(1);
+    openSeriesByPath(card->property("seriesPath").toString(),
+                     card->property("seriesName").toString(),
+                     card->property("coverPath").toString());
 }
 
 void ComicsPage::onTileContextMenu(const QPoint& pos)
@@ -781,8 +1496,7 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
 
     auto* chosen = menu->exec(m_tileStrip->mapToGlobal(pos));
     if (chosen == openAct) {
-        m_seriesView->showSeries(seriesPath, seriesName, coverPath);
-        m_stack->setCurrentIndexAnimated(1);
+        openSeriesByPath(seriesPath, seriesName, coverPath);
     } else if (chosen == markAct) {
         bool setFinished = !allFinished;
         for (const auto& f : cbzFiles) {
@@ -848,10 +1562,9 @@ void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, cons
     auto* chosen = menu->exec(globalPos);
     if (chosen == openFirstAct) {
         auto* first = selected.first();
-        m_seriesView->showSeries(first->property("seriesPath").toString(),
-                                 first->property("seriesName").toString(),
-                                 first->property("coverPath").toString());
-        m_stack->setCurrentIndexAnimated(1);
+        openSeriesByPath(first->property("seriesPath").toString(),
+                         first->property("seriesName").toString(),
+                         first->property("coverPath").toString());
     } else if (chosen == markReadAct || chosen == markUnreadAct) {
         bool setFinished = (chosen == markReadAct);
         QJsonObject allProg = m_bridge->allProgress("comics");
@@ -880,21 +1593,41 @@ void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, cons
 
 QJsonObject ComicsPage::captureNavState() const
 {
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 50 —
+    // 3-mode discriminator. Replaces Agent 5's GLOBAL_NAV_HISTORY Task 8
+    // library-only capture so Back/Forward navigate correctly into
+    // search-results and tankoyomi-detail surfaces too.
     QJsonObject blob;
+    blob["mode"] = (m_mode == Mode::Library          ? "library" :
+                    m_mode == Mode::SearchResults    ? "searchResults" :
+                                                       "tankoyomiDetail");
 
-    // Search text
-    if (m_searchBar)
-        blob["search"] = m_searchBar->text();
+    if (m_mode == Mode::Library) {
+        // Preserve sort (Agent 5 Phase 8 ship) — independent of search-bar
+        // text. Brief CRITICAL fix #1: plan template dropped this on
+        // Back/Forward; we keep it for library-mode parity.
+        if (m_sortCombo)
+            blob["sort"] = m_sortCombo->currentData().toString();
+        if (m_gridScroll) {
+            if (auto* vsb = m_gridScroll->verticalScrollBar())
+                blob["scrollY"] = vsb->value();
+        }
+        return blob;
+    }
 
-    // Sort selection
-    if (m_sortCombo)
-        blob["sort"] = m_sortCombo->currentData().toString();
+    if (m_mode == Mode::SearchResults) {
+        if (m_searchBar)
+            blob["query"] = m_searchBar->text();
+        return blob;
+    }
 
-    // Scroll position — use cached m_gridScroll pointer (review fix —
-    // avoids O(n) findChild walk on every Back/Forward).
-    if (m_gridScroll) {
-        if (auto* vsb = m_gridScroll->verticalScrollBar())
-            blob["scrollY"] = vsb->value();
+    if (m_mode == Mode::TankoyomiDetail && m_tyDetailView) {
+        const auto& p = m_tyDetailView->currentPreview();
+        blob["sourceId"]    = p.source;
+        blob["seriesId"]    = p.id;
+        blob["enteredFrom"] = (m_enteredDetailFrom == Mode::SearchResults
+                                ? "search" : "library");
+        return blob;
     }
 
     return blob;
@@ -902,36 +1635,86 @@ QJsonObject ComicsPage::captureNavState() const
 
 bool ComicsPage::restoreNavState(const QJsonObject& blob)
 {
-    // Apply in order: search → sort (changes visible list + order),
-    // then scroll (lands user back at the same position).
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 51 —
+    // 3-mode router. Brief CRITICAL fix #3: old blobs persisted by
+    // Agent 5's Phase 8 ship have NO "mode" field (just search/sort/
+    // scrollY). Treat empty-mode as "library" so existing NavHistory
+    // entries keep working after the merger ships.
+    QString mode = blob.value("mode").toString();
+    if (mode.isEmpty()) mode = "library";
 
-    if (m_searchBar) {
-        const QString search = blob.value("search").toString();
-        if (m_searchBar->text() != search) {
-            m_searchBar->blockSignals(true);
-            m_searchBar->setText(search);
-            m_searchBar->blockSignals(false);
-            applySearch();
-        }
-    }
-
-    if (m_sortCombo) {
-        const QString sort = blob.value("sort").toString();
-        if (!sort.isEmpty()) {
-            for (int i = 0; i < m_sortCombo->count(); ++i) {
-                if (m_sortCombo->itemData(i).toString() == sort) {
-                    m_sortCombo->setCurrentIndex(i);
-                    break;
+    if (mode == "library") {
+        showLibraryMode();
+        if (m_sortCombo) {
+            const QString sort = blob.value("sort").toString();
+            if (!sort.isEmpty()) {
+                for (int i = 0; i < m_sortCombo->count(); ++i) {
+                    if (m_sortCombo->itemData(i).toString() == sort) {
+                        m_sortCombo->setCurrentIndex(i);
+                        break;
+                    }
                 }
             }
         }
+        if (m_gridScroll) {
+            if (auto* vsb = m_gridScroll->verticalScrollBar())
+                vsb->setValue(blob.value("scrollY").toInt(0));
+        }
+        return true;
     }
 
-    if (m_gridScroll) {
-        if (auto* vsb = m_gridScroll->verticalScrollBar())
-            vsb->setValue(blob.value("scrollY").toInt(0));
+    if (mode == "searchResults") {
+        const QString q = blob.value("query").toString();
+        // Code-quality review I1: NO blockSignals around setText. The only
+        // textChanged subscriber is the activeSearch QSS style toggle (see
+        // search-bar ctor wire), which must reflect "bar has text" after a
+        // Back-restore. Blocking it leaves the activeSearch chip stale
+        // until the next keystroke.
+        if (m_searchBar) m_searchBar->setText(q);
+        showSearchMode(q);
+        return true;
     }
 
-    return true;  // ComicsPage has no stale-target case
+    if (mode == "tankoyomiDetail" && m_tyLibrary && m_tyDetailView) {
+        const QString sid      = blob.value("sourceId").toString();
+        const QString seriesId = blob.value("seriesId").toString();
+        if (!sid.isEmpty() && !seriesId.isEmpty()
+            && m_tyLibrary->contains(sid, seriesId)) {
+            const auto rec = m_tyLibrary->get(sid, seriesId);
+            m_enteredDetailFrom = (blob.value("enteredFrom").toString() == "search"
+                                    ? Mode::SearchResults : Mode::Library);
+            m_mode = Mode::TankoyomiDetail;
+            // Code-quality review I2: if the record was Add'd from search
+            // but fetchDetail never landed (user Back'd before the network
+            // call returned), rec.detailCache.preview is a default-
+            // constructed MangaResult with empty source/id — feeding that
+            // to showEntry strands the user on "(Unknown source)" hero.
+            // Synthesize a minimal MangaResult from the validated (sid,
+            // seriesId) and let showEntry's library/sidecar/preview cache
+            // chain rehydrate it via the normal path.
+            MangaResult preview = rec.detailCache.preview;
+            if (preview.source.isEmpty() || preview.id.isEmpty()) {
+                preview = MangaResult{};
+                preview.source = sid;
+                preview.id     = seriesId;
+                preview.title  = rec.title;
+            }
+            m_tyDetailView->showEntry(preview);
+            m_stack->setCurrentWidget(m_tyDetailView);
+            return true;
+        }
+        // Brief CRITICAL fix #2: cache miss — fall back inline to whichever
+        // mode entered originally. Plan template recursed with literal
+        // "search" which would NOT match the "searchResults" discriminator
+        // and silently return false. Inline routing avoids that trap.
+        const QString enteredFrom = blob.value("enteredFrom").toString();
+        if (enteredFrom == "search") {
+            showSearchMode(QString());  // empty query — user can re-type
+            return true;
+        }
+        showLibraryMode();
+        return true;
+    }
+
+    return false;
 }
-

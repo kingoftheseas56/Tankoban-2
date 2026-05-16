@@ -45,6 +45,19 @@ LibraryScanner::LibraryScanner(const QString& thumbsDir, QObject* parent)
     QDir().mkpath(m_thumbsDir);
 }
 
+void LibraryScanner::setClaimedPaths(const QStringList& paths)
+{
+    QSet<QString> norm;
+    for (const auto& p : paths) {
+        #ifdef Q_OS_WIN
+        norm.insert(p.toLower());
+        #else
+        norm.insert(p);
+        #endif
+    }
+    m_claimedPaths = norm;
+}
+
 void LibraryScanner::scan(const QStringList& rootFolders)
 {
     // P4-2: enumerate all comic formats — CBZ + CBR + RAR. Engine
@@ -70,6 +83,21 @@ void LibraryScanner::scan(const QStringList& rootFolders)
         // root folder for stray archives sitting directly at the root.
         if (seriesPath.endsWith("::LOOSE"))
             continue;
+
+        // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 — skip folders that
+        // are already claimed by a Tankoyomi-origin record. ComicsPage
+        // emits a Tankoyomi-origin tile for the canonical path; the
+        // folder-origin tile would otherwise double-render the series.
+        if (!m_claimedPaths.isEmpty()) {
+            const QString canonical = QDir(seriesPath).absolutePath();
+            #ifdef Q_OS_WIN
+            const QString cmp = canonical.toLower();
+            #else
+            const QString cmp = canonical;
+            #endif
+            if (m_claimedPaths.contains(cmp))
+                continue;
+        }
 
         SeriesInfo info;
         info.seriesName = ScannerUtils::cleanMediaFolderTitle(QDir(seriesPath).dirName());
