@@ -1,4 +1,5 @@
 #include "ComicReader.h"
+#include "comic_progress_key.h"
 #include "ScrollStripCanvas.h"
 #include "SmoothScrollArea.h"
 #include "DecodeTask.h"
@@ -1670,7 +1671,10 @@ void ComicReader::updatePageLabel()
 
 QString ComicReader::itemIdForPath(const QString& path) const
 {
-    return QString(QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+    // TANKOYOMI_CONTINUE_READING 2026-05-15 — delegated to shared helper so
+    // ComicsPage::ensureTankoyomiChapterInMap (just-in-time map population
+    // before reader open) writes under an identical key.
+    return comicProgressKeyForPath(path);
 }
 
 void ComicReader::saveCurrentProgress()
