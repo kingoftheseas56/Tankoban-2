@@ -1,5 +1,5 @@
 #include "audio_decoder.h"
-#include "audio_device_watcher.h"
+#include "wasapi_output.h"
 #include "av_sync_clock.h"
 #include "d3d11_presenter.h"
 #include "demuxer.h"
@@ -23,8 +23,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-
-#include <portaudio.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -130,21 +128,17 @@ static std::string g_audio_host_api_name;
 // from ~20ms to ~1ms, eliminating residual stutter from CPU spikes.
 static std::atomic<bool> g_zero_copy_active{false};
 
-// Pre-warmed PortAudio stream. Opened once at sidecar startup so the
-// 5+ second cold-start (especially Bluetooth devices like AirPods) doesn't
-// freeze the user's first video for several seconds. AudioDecoder uses this
-// stream and routes file audio through swresample to its fixed format.
-static PaStream* g_pa_stream = nullptr;
-static double    g_pa_actual_latency = 0.0;
-// AUDIO_HOT_DEVICE_REROUTE — snapshot of audio_device_watcher::g_audio_reroute_generation
-// captured at the moment g_pa_stream was bound to its WASAPI default. If the
-// live counter has advanced past this value at handle_open time, the prewarm
-// stream is bound to a now-non-default device — close it and let the audio
-// thread lazy-open on the new default. Same value also passed into AudioDecoder
-// as bind_generation so its first poll has a correct baseline.
-static uint32_t  g_pa_prewarm_generation = 0;
-static constexpr int PREWARM_SAMPLE_RATE = 48000;
-static constexpr int PREWARM_CHANNELS    = 2;
+// WASAPI_DIRECT_AUDIO 2026-05-15 — the shared WasapiOutput is owned by main()
+// as a std::unique_ptr<WasapiOutput> (variable name: wasapi). g_wasapi is a
+// non-owning raw alias published once at sidecar boot so worker-thread call
+// sites (open_worker, handle_set_tracks_worker) can pass it into the
+// AudioDecoder ctor without reaching across stack frames. Lifetime is
+// bounded by main()'s scope — workers are drained by teardown_decode()
+// before main returns, so the alias is always live when read. Device-change
+// handling (BT connect, USB plug, taskbar toggle) is internalized in
+// WasapiOutput via IMMNotificationClient + reactivate_locked(); main.cpp
+// no longer tracks prewarm globals or staleness generations.
+static WasapiOutput* g_wasapi = nullptr;
 
 static constexpr int DECODE_RING_SLOT_COUNT = 4;
 
@@ -249,36 +243,6 @@ static void join_open_thread() {
 // ---------------------------------------------------------------------------
 // Teardown — stop audio + video + clean SHM
 // ---------------------------------------------------------------------------
-
-// AUDIO_HOT_DEVICE_REROUTE — close the prewarmed PA stream if it's bound to
-// a device that's no longer the system default. Called at the top of
-// handle_open and at the top of the set_tracks audio-rebuild block, i.e.
-// every site that's about to construct a new AudioDecoder. After a close,
-// the next AudioDecoder receives nullptr for prewarmed_stream_ and lazy-
-// opens on the new default — a one-time ~5s cost on first play after a
-// reroute that fired while no decoder was running. Acceptable per the
-// AUDIO_HOT_DEVICE_REROUTE brief §3.4 (a) + (c).
-//
-// Always advances g_pa_prewarm_generation to the current value so that
-// the NEXT prewarm (if we ever re-prewarm) starts with a clean baseline.
-// Today we never re-prewarm — only main(): startup does — so this branch
-// just keeps the bookkeeping honest in case future code adds re-prewarm.
-static void invalidate_prewarm_if_stale() {
-    const uint32_t cur = audio_device_watcher::g_audio_reroute_generation.load(
-        std::memory_order_acquire);
-    if (cur != g_pa_prewarm_generation) {
-        if (g_pa_stream) {
-            std::fprintf(stderr,
-                         "audio: prewarm stale across reroute (gen %u -> %u); closing\n",
-                         g_pa_prewarm_generation, cur);
-            Pa_StopStream(g_pa_stream);
-            Pa_CloseStream(g_pa_stream);
-            g_pa_stream = nullptr;
-            g_pa_actual_latency = 0.0;
-        }
-        g_pa_prewarm_generation = cur;
-    }
-}
 
 static void teardown_decode() {
     join_open_thread();
@@ -977,8 +941,7 @@ static void open_worker(Command cmd) {
     if (has_audio) {
         std::fprintf(stderr, "AVSYNC_DIAG open_audio_start +%.0fms\n", open_ms());
         adec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, afilt,
-                                g_pa_stream, g_pa_actual_latency,
-                                g_pa_prewarm_generation);
+                                g_wasapi);
         int audio_idx = -1;
         if (!probe->audio.empty()) {
             // REPO_HYGIENE Phase 4 P4.7 (2026-04-26) — guarded parse.
@@ -988,8 +951,9 @@ static void open_worker(Command cmd) {
         }
         adec->start(path, start_sec, audio_idx);
 
-        if (g_pa_stream) {
-            // Wait up to 500ms for a prewarmed audio stream to anchor.
+        if (g_wasapi && g_wasapi->is_active()) {
+            // Wait up to 500ms for the shared WasapiOutput to anchor the clock
+            // via the audio decoder's first PTS update.
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
             while (std::chrono::steady_clock::now() < deadline) {
                 if (g_clock.started() || !adec->running()) break;
@@ -999,7 +963,7 @@ static void open_worker(Command cmd) {
                          open_ms(), g_clock.started() ? 1 : 0);
         } else {
             std::fprintf(stderr,
-                         "AVSYNC_DIAG open_audio_wait_skipped +%.0fms reason='no_prewarm'\n",
+                         "AVSYNC_DIAG open_audio_wait_skipped +%.0fms reason='wasapi_silent_mode'\n",
                          open_ms());
         }
     }
@@ -1099,12 +1063,10 @@ static void handle_open(const Command& cmd) {
     }
     join_open_thread();
 
-    // AUDIO_HOT_DEVICE_REROUTE — close prewarm if it's bound to an
-    // old default that the user has since migrated away from. Done
-    // BEFORE open_worker runs so the AudioDecoder constructed inside
-    // it sees either a fresh prewarm or nullptr (=> lazy-open path
-    // on the current WASAPI default).
-    invalidate_prewarm_if_stale();
+    // WASAPI_DIRECT_AUDIO 2026-05-15 — staleness across reroute is internalized
+    // in WasapiOutput via IMMNotificationClient + reactivate_locked(). The
+    // shared output stays bound across opens; no main()-side invalidation
+    // needed before the AudioDecoder constructed in open_worker.
 
     // Ack immediately on the main thread (keeps stdin loop responsive)
     write_ack(cmd.seq, cmd.sessionId);
@@ -1431,10 +1393,8 @@ static void set_tracks_worker(Command cmd) {
             delete g_audio_dec;
             g_audio_dec = nullptr;
 
-            // AUDIO_HOT_DEVICE_REROUTE — same staleness check as
-            // handle_open. set_tracks creates a new AudioDecoder, so
-            // it shares handle_open's exposure to a stale prewarm.
-            invalidate_prewarm_if_stale();
+            // WASAPI_DIRECT_AUDIO 2026-05-15 — no main()-side staleness check;
+            // WasapiOutput owns reactivation across device transitions.
 
             // Capture position, then force-anchor the clock at that position.
             // seek_anchor re-establishes started_=true at the exact PTS so the
@@ -1458,8 +1418,7 @@ static void set_tracks_worker(Command cmd) {
                 }
             };
             g_audio_dec = new AudioDecoder(&g_clock, &g_volume, on_audio_event, g_audio_filter,
-                                           g_pa_stream, g_pa_actual_latency,
-                                           g_pa_prewarm_generation);
+                                           g_wasapi);
             g_audio_dec->start(g_current_path, pos_sec, audio_idx);
             g_active_audio_id = new_audio_id;
 
@@ -1713,7 +1672,7 @@ static void handle_set_zero_copy_active(const Command& cmd) {
 
 // ---------------------------------------------------------------------------
 // set_audio_delay handler — user-adjustable A/V offset for hidden device latency
-// (Bluetooth/HDMI/etc. that PortAudio's outputLatency doesn't account for).
+// (Bluetooth/HDMI/etc. that WasapiOutput::current_latency_sec doesn't capture).
 // Positive ms = delay audio (video waits longer); negative = pull audio earlier.
 // ---------------------------------------------------------------------------
 
@@ -1837,120 +1796,18 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr, "Windows: timer resolution set to 1ms\n");
 #endif
 
-    // Initialize PortAudio
-    PaError pa_err = Pa_Initialize();
-    if (pa_err != paNoError) {
-        std::fprintf(stderr, "Pa_Initialize failed: %s\n", Pa_GetErrorText(pa_err));
-        // Continue anyway — video-only mode will work
-    } else {
-        // AUDIO_HOT_DEVICE_REROUTE_FIX2: register before prewarm. The prewarm
-        // Pa_OpenStream can take several seconds on Bluetooth devices;
-        // registering first gives validation a definitive watcher line and
-        // lets any default switch during that slow open advance the generation
-        // counter before the prewarm bind snapshot is captured below.
-        audio_device_watcher::init();
-
-        const bool startup_prewarm_enabled = false;
-        if (!startup_prewarm_enabled) {
-            g_pa_stream = nullptr;
-            g_pa_actual_latency = 0.0;
-            g_pa_prewarm_generation =
-                audio_device_watcher::g_audio_reroute_generation.load(
-                    std::memory_order_acquire);
-            std::fprintf(stderr,
-                         "Audio pre-warm: skipped before ready (lazy-open will bind on demand, gen=%u)\n",
-                         g_pa_prewarm_generation);
-        } else {
-
-        // Path A — prefer WASAPI shared over PortAudio's default host API.
-        // PortAudio's Pa_GetDefaultOutputDevice() returns the device of the
-        // first-registered host API, which on Windows is MME (the 1991-era
-        // legacy API + a compatibility shim layer). WASAPI shared matches
-        // what mpv default + VLC default use. Falls through to the system
-        // default if WASAPI isn't compiled into PortAudio or has no output
-        // devices registered (rare on modern Windows). The live Windows
-        // resolver is preferred because PaHostApiInfo::defaultOutputDevice is
-        // cached at Pa_Initialize and can be stale after a default-device move.
-        PaDeviceIndex dev = paNoDevice;
-        std::string resolved_name;
-        std::string endpoint_id;
-        std::string resolve_reason;
-        if (audio_device_watcher::resolve_current_wasapi_default_device_index(
-                &dev, &resolved_name, &endpoint_id, &resolve_reason)) {
-            std::fprintf(stderr,
-                         "AVSYNC_DIAG audio_prewarm_live_default dev_idx=%d name='%s' endpoint_id='%s' match='%s'\n",
-                         static_cast<int>(dev), resolved_name.c_str(),
-                         endpoint_id.c_str(), resolve_reason.c_str());
-        } else {
-            std::fprintf(stderr,
-                         "AVSYNC_DIAG audio_prewarm_live_default_failed reason='%s' fallback='portaudio_cached_default'\n",
-                         resolve_reason.c_str());
-            PaHostApiIndex wasapi_idx = Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
-            if (wasapi_idx >= 0) {
-                const PaHostApiInfo* wasapi_info = Pa_GetHostApiInfo(wasapi_idx);
-                if (wasapi_info && wasapi_info->defaultOutputDevice != paNoDevice) {
-                    dev = wasapi_info->defaultOutputDevice;
-                }
-            }
-            if (dev == paNoDevice) dev = Pa_GetDefaultOutputDevice();
-        }
-        if (dev != paNoDevice) {
-            const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
-            std::fprintf(stderr, "PortAudio: default output device: %s (%.3fs latency)\n",
-                         info ? info->name : "unknown",
-                         info ? info->defaultLowOutputLatency : 0.0);
-            // Capture device fingerprint for media_info emission
-            if (info) {
-                g_audio_device_name = info->name;
-                const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
-                g_audio_host_api_name = api ? api->name : "";
-                // Print to stderr so it lands in sidecar_debug_live.log — the JSON
-                // media_info event reaches stdout but never the debug log.
-                std::fprintf(stderr, "PortAudio: host API: %s\n",
-                             api ? api->name : "unknown");
-            }
-
-            // Pre-warm: open + start a PortAudio stream now so the slow
-            // device init (5+ seconds for Bluetooth) happens at sidecar
-            // startup, not when the user clicks their first video. The
-            // stream stays open for the sidecar's lifetime; AudioDecoder
-            // writes into it and uses swresample to convert any source
-            // audio to PREWARM_SAMPLE_RATE/PREWARM_CHANNELS.
-            PaStreamParameters out_params{};
-            out_params.device = dev;
-            out_params.channelCount = PREWARM_CHANNELS;
-            out_params.sampleFormat = paFloat32;
-            out_params.suggestedLatency = info ? info->defaultLowOutputLatency : 0.3;
-            out_params.hostApiSpecificStreamInfo = nullptr;
-            // AUDIO_HOT_DEVICE_REROUTE — capture the reroute generation
-            // BEFORE Pa_OpenStream binds to a device. audio_device_watcher
-            // hasn't been registered yet at this point in main() (init()
-            // runs after this prewarm block; see below), so the value is
-            // 0 unless a reroute somehow already fired — in any case we
-            // want this snapshot to be the baseline that AudioDecoder
-            // gets passed as bind_generation for its first reroute poll.
-            const uint32_t prewarm_pre_open_gen =
-                audio_device_watcher::g_audio_reroute_generation.load(
-                    std::memory_order_acquire);
-            PaError oerr = Pa_OpenStream(&g_pa_stream, nullptr, &out_params,
-                                          PREWARM_SAMPLE_RATE, 1024,
-                                          paClipOff, nullptr, nullptr);
-            if (oerr == paNoError) {
-                Pa_StartStream(g_pa_stream);
-                const PaStreamInfo* si = Pa_GetStreamInfo(g_pa_stream);
-                g_pa_actual_latency = si ? si->outputLatency : 0.32;
-                g_pa_prewarm_generation = prewarm_pre_open_gen;
-                std::fprintf(stderr, "Audio pre-warm: opened %dHz %dch (latency=%.3fs gen=%u)\n",
-                             PREWARM_SAMPLE_RATE, PREWARM_CHANNELS,
-                             g_pa_actual_latency, g_pa_prewarm_generation);
-            } else {
-                std::fprintf(stderr, "Audio pre-warm failed: %s — falling back to lazy open\n",
-                             Pa_GetErrorText(oerr));
-                g_pa_stream = nullptr;
-            }
-            }
-        }
+    // WASAPI_DIRECT_AUDIO 2026-05-15 — one shared audio output for the
+    // sidecar process. Opens against the current default device at sidecar
+    // boot (paying the 5-second BT cold-start NOW, not on first video play).
+    // Survives every video open until sidecar shutdown. Default-device
+    // changes mid-process trigger internal reactivation; the decoder
+    // borrowing this pointer never has to know.
+    auto wasapi = std::make_unique<WasapiOutput>();
+    if (!wasapi->open(48000, 2)) {
+        std::fprintf(stderr,
+                     "main: WasapiOutput::open failed at sidecar start — running in silent mode\n");
     }
+    g_wasapi = wasapi.get();
 
     // Start non-blocking stdout writer (prevents pipe-buffer deadlocks)
     start_stdout_writer();
@@ -2001,12 +1858,13 @@ int main(int argc, char* argv[]) {
             write_event("closed", sid, seq);
             stop_stdout_writer();
             std::fprintf(stderr, "Shutdown received -- exiting\n");
-            // AUDIO_HOT_DEVICE_REROUTE — unregister IMMNotificationClient
-            // BEFORE Pa_Terminate so any in-flight notification finishes
-            // running before PortAudio releases device handles. Idempotent
-            // and safe even if init() returned false.
-            audio_device_watcher::shutdown();
-            Pa_Terminate();
+            // WASAPI_DIRECT_AUDIO 2026-05-15 — wasapi.reset() unregisters the
+            // IMMNotificationClient, releases IAudioClient + IAudioRenderClient,
+            // and CoUninitializes the main thread's COM apartment in the
+            // correct order. Null out the raw alias first so any racing
+            // background callback can't deref freed memory.
+            g_wasapi = nullptr;
+            wasapi.reset();
 #ifdef _WIN32
             timeEndPeriod(1);
 #endif
@@ -2115,11 +1973,12 @@ int main(int argc, char* argv[]) {
     teardown_decode();
     stop_stdout_writer();
     std::fprintf(stderr, "stdin closed -- exiting\n");
-    // AUDIO_HOT_DEVICE_REROUTE — unregister BEFORE PA stream close +
-    // Pa_Terminate so any in-flight notification can complete safely.
-    audio_device_watcher::shutdown();
-    if (g_pa_stream) { Pa_StopStream(g_pa_stream); Pa_CloseStream(g_pa_stream); g_pa_stream = nullptr; }
-    Pa_Terminate();
+    // WASAPI_DIRECT_AUDIO 2026-05-15 — wasapi.reset() tears down the
+    // IMMNotificationClient + COM apartment + audio client in the correct
+    // order. Null the raw alias first so any background callback racing
+    // with shutdown sees nullptr rather than a stale pointer.
+    g_wasapi = nullptr;
+    wasapi.reset();
 #ifdef _WIN32
     timeEndPeriod(1);
 #endif
