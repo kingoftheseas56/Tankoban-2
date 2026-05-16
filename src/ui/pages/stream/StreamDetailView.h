@@ -14,6 +14,7 @@
 #include <optional>
 
 class QNetworkAccessManager;
+class QStackedLayout;
 class QTimer;
 
 #include "core/stream/MetaAggregator.h"
@@ -111,6 +112,11 @@ public:
     // poll tick).
     void setTorrentClient(TorrentClient* client);
 
+    // THEATRE_DOWNLOAD_OVERHAUL Phase E: the detail view owns the right pane.
+    // StreamPage mounts TheatreDownloadPanel into this host beside Sources.
+    QWidget* rightPaneStack() const { return m_rightPaneStack; }
+    QWidget* sourcesPanel() const { return m_sourcesPanel; }
+
 signals:
     void backRequested();
 
@@ -152,6 +158,13 @@ signals:
     // "Download Selected (N)" after checking individual episode rows.
     void seasonDownloadRequested(int season);
     void selectedEpisodesDownloadRequested(int season, const QList<int>& episodes);
+
+    // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 - unified Download button. Host
+    // (StreamPage) opens TheatreDownloadPanel with this context.
+    void theatreDownloadRequested(const QString& imdbId,
+                                  const QString& showName,
+                                  int season,
+                                  const QString& mediaType);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — episode click
     // resolved to a local file. StreamPage forwards through to
@@ -210,7 +223,6 @@ private:
     // the rows in place.
     void refreshEpisodeMarkers();
     void refreshMovieLocalChip();
-    void onDownloadViaTankorentClicked(int season);
     void updateProgressColumn();
     void updateBulkDownloadButton();
 
@@ -333,21 +345,20 @@ private:
     // signal; YouTube opens in the default browser.
     QPushButton*  m_trailerBtn    = nullptr;
     QWidget*      m_movieActionRow = nullptr;
-    QPushButton*  m_movieTankorentBtn = nullptr;
+    QPushButton*  m_movieDownloadBtn = nullptr;
     QLabel*       m_movieLocalChip = nullptr;
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — inline trigger UX.
     // Per-(show, season) selection state. Reset whenever the season-combo
     // changes (showEntry / setSeason path). NOT persisted; per-launch only.
     QSet<int> m_selectedEpisodes;
 
-    // Season-header morphing primary button: state-driven label & icon.
-    // (already declared — m_downloadSeasonBtn above)
+    // Season-header Theatre download entrypoint.
+    QPushButton*  m_downloadBtn = nullptr;
 
     // Season-header secondary button: visible only when m_selectedEpisodes
     // is non-empty. Label "Download Selected (N)".
     QPushButton*  m_downloadSelectedBtn = nullptr;
 
-    QPushButton*  m_downloadSeasonBtn = nullptr;
     QUrl          m_currentTrailerDirectUrl;   // populated from Url/Http trailer
     QString       m_currentTrailerYouTubeId;   // populated from YouTube trailer
     QWidget*      m_seasonRow     = nullptr;
@@ -356,6 +367,8 @@ private:
     QLabel*       m_statusLabel   = nullptr;
 
     // UI — right column (stream-picker UX rework)
+    QWidget*                               m_rightPaneStack = nullptr;
+    QWidget*                               m_sourcesPanel   = nullptr;
     QLabel*                                m_sourcesHeader = nullptr;
     tankostream::stream::StreamSourceList* m_sourcesList   = nullptr;
 
