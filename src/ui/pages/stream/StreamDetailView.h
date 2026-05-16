@@ -209,6 +209,8 @@ private:
     // StreamDownloadIndex::entriesChanged so a bulk-completion lights up
     // the rows in place.
     void refreshEpisodeMarkers();
+    void refreshMovieLocalChip();
+    void onDownloadViaTankorentClicked(int season);
     void updateProgressColumn();
     void updateBulkDownloadButton();
 
@@ -330,6 +332,9 @@ private:
     // YouTube-kind trailer. Direct-URL trailers play in-app via an emitted
     // signal; YouTube opens in the default browser.
     QPushButton*  m_trailerBtn    = nullptr;
+    QWidget*      m_movieActionRow = nullptr;
+    QPushButton*  m_movieTankorentBtn = nullptr;
+    QLabel*       m_movieLocalChip = nullptr;
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — inline trigger UX.
     // Per-(show, season) selection state. Reset whenever the season-combo
     // changes (showEntry / setSeason path). NOT persisted; per-launch only.

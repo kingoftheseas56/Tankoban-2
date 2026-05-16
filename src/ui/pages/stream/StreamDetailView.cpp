@@ -6,10 +6,14 @@
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "core/torrent/TorrentClient.h"
+#include "core/torrent/TorrentEngine.h"
+#include "ui/dialogs/AddTorrentDialog.h"
+#include "ui/pages/stream/TorrentPackPicker.h"
 #include "StreamSourceList.h"
 
 #include <QCheckBox>
 #include <QCursor>
+#include <QDebug>
 #include <QSettings>
 #include <QToolButton>
 #include <QDesktopServices>
@@ -175,6 +179,8 @@ void StreamDetailView::showEntry(const QString& imdbId,
     m_episodeTable->setRowCount(0);
     m_episodeTable->hide();
     m_seasonRow->hide();
+    if (m_movieActionRow) m_movieActionRow->hide();
+    if (m_movieLocalChip) m_movieLocalChip->hide();
     if (m_downloadSeasonBtn) m_downloadSeasonBtn->hide();
     m_statusLabel->setText("Loading...");
     m_statusLabel->show();
@@ -272,6 +278,8 @@ void StreamDetailView::showEntry(const QString& imdbId,
 
     if (displayType == "movie") {
         m_statusLabel->hide();
+        if (m_movieActionRow) m_movieActionRow->show();
+        refreshMovieLocalChip();
         // Stream-picker UX rework — for movies, auto-trigger the source load
         // on detail open (matches Stremio). StreamPage listens on
         // playRequested, runs StreamAggregator::load, and backfills the
@@ -464,6 +472,42 @@ void StreamDetailView::buildUI()
     m_castDirectorLabel->hide();
     leftCol->addWidget(m_castDirectorLabel);
 
+    m_movieActionRow = new QWidget(this);
+    auto* movieActionLayout = new QHBoxLayout(m_movieActionRow);
+    movieActionLayout->setContentsMargins(0, 4, 0, 4);
+    movieActionLayout->setSpacing(8);
+
+    m_movieTankorentBtn = new QPushButton(tr("Download via Tankorent"), m_movieActionRow);
+    m_movieTankorentBtn->setObjectName(QStringLiteral("DetailMovieTankorentBtn"));
+    m_movieTankorentBtn->setFixedHeight(30);
+    m_movieTankorentBtn->setCursor(Qt::PointingHandCursor);
+    m_movieTankorentBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+    m_movieTankorentBtn->setStyleSheet(
+        "#DetailMovieTankorentBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0 12px; font-size: 12px; }"
+        "#DetailMovieTankorentBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(m_movieTankorentBtn, &QPushButton::clicked, this, [this]() {
+        onDownloadViaTankorentClicked(0);
+    });
+    movieActionLayout->addWidget(m_movieTankorentBtn);
+
+    m_movieLocalChip = new QLabel(tr("LOCAL"), m_movieActionRow);
+    m_movieLocalChip->setObjectName(QStringLiteral("DetailMovieLocalChip"));
+    m_movieLocalChip->setFixedHeight(20);
+    m_movieLocalChip->setAlignment(Qt::AlignCenter);
+    m_movieLocalChip->setStyleSheet(
+        "#DetailMovieLocalChip { background: rgba(255,255,255,0.10);"
+        "  border: 1px solid rgba(255,255,255,0.22); border-radius: 2px;"
+        "  color: #e6e6e6; padding: 1px 6px; font-size: 9px;"
+        "  font-weight: 600; }");
+    m_movieLocalChip->hide();
+    movieActionLayout->addWidget(m_movieLocalChip);
+    movieActionLayout->addStretch();
+    m_movieActionRow->hide();
+    leftCol->addWidget(m_movieActionRow);
+
     // Season selector row (hidden for movies)
     m_seasonRow = new QWidget(this);
     auto* seasonLayout = new QHBoxLayout(m_seasonRow);
@@ -507,6 +551,29 @@ void StreamDetailView::buildUI()
     connect(m_downloadSeasonBtn, &QPushButton::customContextMenuRequested,
             this, &StreamDetailView::onSeasonHeaderRightClick);
 
+    // TANKORENT_STREAM_INTEGRATION E1 2026-05-15 — "Download via Tankorent"
+    // season-side companion to the bulk-cohort "Download Season" button.
+    // Routes to onDownloadViaTankorentClicked with the currently-selected
+    // season from m_seasonCombo; opens TorrentPackPicker → AddTorrentDialog
+    // → TorrentClient::startDownload for show-bound Tankorent downloads.
+    // Visibility tracks m_seasonRow (hidden for movies; H2 owns the movie
+    // path via m_movieTankorentBtn on the movieActionRow).
+    auto* seasonTankorentBtn = new QPushButton(tr("Download via Tankorent"), m_seasonRow);
+    seasonTankorentBtn->setObjectName(QStringLiteral("DetailSeasonTankorentBtn"));
+    seasonTankorentBtn->setFixedHeight(30);
+    seasonTankorentBtn->setCursor(Qt::PointingHandCursor);
+    seasonTankorentBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
+    seasonTankorentBtn->setStyleSheet(
+        "#DetailSeasonTankorentBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0 12px; font-size: 12px; }"
+        "#DetailSeasonTankorentBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(seasonTankorentBtn, &QPushButton::clicked, this, [this]() {
+        const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+        onDownloadViaTankorentClicked(season);
+    });
+
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — "Download Selected (N)"
     // secondary button; visible only when m_selectedEpisodes is non-empty.
     m_downloadSelectedBtn = new QPushButton(this);
@@ -532,6 +599,7 @@ void StreamDetailView::buildUI()
 
     seasonLayout->addStretch();
     seasonLayout->addWidget(m_downloadSelectedBtn);
+    seasonLayout->addWidget(seasonTankorentBtn);
     seasonLayout->addWidget(m_downloadSeasonBtn);
 
     m_seasonRow->hide();
@@ -1062,16 +1130,24 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
     if (m_downloadIndex) {
         disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                    this, &StreamDetailView::refreshEpisodeMarkers);
+        disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                   this, &StreamDetailView::refreshMovieLocalChip);
     }
     m_downloadIndex = idx;
     if (m_downloadIndex) {
         connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                 this, &StreamDetailView::refreshEpisodeMarkers,
                 Qt::QueuedConnection);
+        connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                this, &StreamDetailView::refreshMovieLocalChip,
+                Qt::QueuedConnection);
         // Repaint immediately if the table already has rows from a prior
         // showEntry call (the wiring may land late-in-MainWindow ctor).
         refreshEpisodeMarkers();
+        refreshMovieLocalChip();
     }
+    if (!m_downloadIndex)
+        refreshMovieLocalChip();
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — repaint per-row on-disk
@@ -1095,6 +1171,24 @@ void StreamDetailView::refreshEpisodeMarkers()
         if (!numItem->icon().isNull()) numItem->setIcon(QIcon());
         if (!numItem->toolTip().isEmpty()) numItem->setToolTip(QString());
     }
+}
+
+void StreamDetailView::refreshMovieLocalChip()
+{
+    if (!m_movieActionRow || !m_movieLocalChip)
+        return;
+
+    const bool isMovie = m_currentType == QLatin1String("movie")
+        && !m_currentImdb.isEmpty();
+    m_movieActionRow->setVisible(isMovie);
+    if (!isMovie) {
+        m_movieLocalChip->hide();
+        return;
+    }
+
+    const bool hasLocal = m_downloadIndex
+        && m_downloadIndex->filePathForMovie(m_currentImdb).has_value();
+    m_movieLocalChip->setVisible(hasLocal);
 }
 
 // STREAM_BULK_DOWNLOAD_V2 Phase 3 — repaint per-row download state in the
@@ -1562,6 +1656,86 @@ void StreamDetailView::onDownloadSelectedClicked()
         auto* cb = holder->findChild<QToolButton*>();
         if (cb) cb->setChecked(false);
     }
+}
+
+void StreamDetailView::onDownloadViaTankorentClicked(int season)
+{
+    // TANKORENT_STREAM_INTEGRATION E1 2026-05-15 — shared series + movie
+    // entrypoint. season > 0 = specific season; season == 0 = movie OR whole-
+    // show pack (sentinel handled by TorrentPackPicker's "Complete" /
+    // "Complete Series" query variations).
+    //
+    // Flow:
+    //   1. Open TorrentPackPicker — fans out indexer searches with show
+    //      identity in context, sorts by combined quality x seeders.
+    //   2. On packChosen: open AddTorrentDialog with imdbId+season prefilled
+    //      (Phase A1 ctor variant) so TorrentClient::startDownload's record
+    //      captures identity, which onTorrentFinished routes through
+    //      publishTankorentItemsForTorrent → StreamDownloadIndex (Phase A4/A5).
+    //   3. On accept: startDownload; on reject: deleteTorrent(hash, false)
+    //      to drop the draft.
+    if (m_currentImdb.isEmpty() || !m_torrentClient) {
+        qWarning() << "onDownloadViaTankorentClicked: no imdb or torrent client; aborting";
+        return;
+    }
+
+    const QString showName = m_titleLabel ? m_titleLabel->text() : QString();
+
+    TorrentPackPicker picker(m_currentImdb, showName, season, this);
+    connect(&picker, &TorrentPackPicker::packChosen, this,
+            [this](const TorrentResult& pack, const QString& imdbId, int seasonArg) {
+        const QString magnetUri = pack.magnetUri;
+        if (magnetUri.isEmpty()) {
+            qWarning() << "packChosen: empty magnetUri; aborting";
+            return;
+        }
+
+        if (m_torrentClient->isDuplicate(magnetUri)) {
+            qWarning() << "packChosen: duplicate (already in records);" << pack.title;
+            return;
+        }
+
+        const auto defaultPaths = m_torrentClient->defaultPaths();
+        AddTorrentDialog dlg(pack.title, QString(), defaultPaths,
+                             imdbId, seasonArg, this);
+
+        const QString hash = m_torrentClient->resolveMetadata(magnetUri);
+        if (hash.isEmpty()) {
+            qWarning() << "packChosen: resolveMetadata returned empty hash";
+            return;
+        }
+
+        // Mirror TankorentPage::startSingleAddFlow: connect metadataReady to
+        // populate the dialog's file tree, with a 30-second timeout.
+        auto conn = connect(m_torrentClient->engine(), &TorrentEngine::metadataReady,
+            &dlg, [&dlg, hash](const QString& h, const QString& name,
+                               qint64 size, const QJsonArray& files) {
+                if (h == hash)
+                    dlg.populateFiles(name, size, files);
+            });
+
+        QTimer::singleShot(30000, &dlg, [&dlg]() {
+            if (!dlg.isVisible()) return;
+            dlg.showMetadataError(tr("Metadata resolution timed out — no peers found"));
+        });
+
+        const int execResult = dlg.exec();
+        disconnect(conn);
+
+        if (execResult == QDialog::Accepted) {
+            auto config = dlg.config();
+            // Tankorent show-bound downloads are ungrouped (no bulk stream
+            // cohort); identity rides via config.imdbId + config.season
+            // captured in the AddTorrentConfig via the Phase A1 ctor variant.
+            config.streamGroupId = QString();
+            m_torrentClient->startDownload(hash, config);
+        } else {
+            // User cancelled — clean up the draft torrent so the engine
+            // doesn't carry an unstarted record.
+            m_torrentClient->deleteTorrent(hash, false);
+        }
+    });
+    picker.exec();
 }
 
 void StreamDetailView::onSeasonHeaderRightClick(const QPoint& pos)
