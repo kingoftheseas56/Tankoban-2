@@ -8,6 +8,7 @@
 #include <QList>
 #include <QString>
 #include <optional>
+#include <utility>
 
 namespace tankoban::manga::premium {
 
@@ -52,6 +53,20 @@ public:
     // Returns the entry by seriesId (exact match, case-sensitive). Used by
     // TorrentVolumeProvider when re-attaching from the request ledger.
     std::optional<PremiumCatalogEntry> entryById(const QString& seriesId) const;
+
+    // Returns the volume entry for the given seriesId + volumeNumber, if
+    // present in the catalog. Used by Sources panel callers keyed by
+    // seriesId slug (e.g. TorrentVolumeProvider's catalog hook).
+    std::optional<PremiumVolumeEntry> entryForSeriesAndVolume(
+        const QString& seriesId, int volumeNumber) const;
+
+    // Returns BOTH the parent series entry AND the matching volume entry
+    // for the given anilistId + volumeNumber, if present. Used by
+    // ComicsSourcesPanel which is keyed by AniList id (from MediaPreview)
+    // rather than catalog seriesId slug. Linear scan over m_byId; the
+    // catalog is small (tens of series in v1), so this is fine.
+    std::optional<std::pair<PremiumCatalogEntry, PremiumVolumeEntry>>
+    entryForAnilistIdAndVolume(int anilistId, int volumeNumber) const;
 
     // All loaded entries. Iteration order is loader-determined (file order +
     // entry order within file). Not stable across reloads.

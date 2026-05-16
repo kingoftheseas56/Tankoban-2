@@ -341,6 +341,39 @@ PremiumCatalog::entryById(const QString& seriesId) const
     return it.value();
 }
 
+std::optional<PremiumVolumeEntry>
+PremiumCatalog::entryForSeriesAndVolume(const QString& seriesId,
+                                        int            volumeNumber) const
+{
+    const auto entryOpt = entryById(seriesId);
+    if (!entryOpt.has_value()) return std::nullopt;
+    for (const auto& v : entryOpt->volumes) {
+        if (v.vol == volumeNumber) return v;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::pair<PremiumCatalogEntry, PremiumVolumeEntry>>
+PremiumCatalog::entryForAnilistIdAndVolume(int anilistId,
+                                            int volumeNumber) const
+{
+    if (anilistId <= 0) return std::nullopt;
+    // Iterate m_byId values; the catalog is small (tens of entries in v1).
+    for (auto it = m_byId.constBegin(); it != m_byId.constEnd(); ++it) {
+        const auto& entry = it.value();
+        if (entry.anilistId != anilistId) continue;
+        for (const auto& v : entry.volumes) {
+            if (v.vol == volumeNumber) {
+                return std::make_pair(entry, v);
+            }
+        }
+        // anilistId matched but no volume row -- return nullopt rather than
+        // continue scanning (anilistId is unique across the catalog).
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 QList<PremiumCatalogEntry> PremiumCatalog::allEntries() const
 {
     return m_orderedEntries;
