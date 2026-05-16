@@ -279,6 +279,12 @@ private:
                                        StreamBulkItemState state,
                                        const QString& lastError = QString());
     void publishStreamBulkItemsForTorrent(const QString& infoHash);
+    // TANKORENT_STREAM_INTEGRATION 2026-05-15: registers each downloaded video
+    // file in a Tankorent single-add torrent into StreamDownloadIndex, using
+    // the imdbId+season persisted in m_records (Task A2) and BulkPackVerifier's
+    // filename regex to detect per-file (season, episode). Called from
+    // onTorrentFinished when streamGroupId is empty AND record["imdbId"] is set.
+    void publishTankorentItemsForTorrent(const QString& infoHash);
     void retryStreamBulkPublishing();
     void maybeEmitStreamBulkGroupPublishComplete(const QString& groupId);
     // STREAM_BULK_DOWNLOAD_V2 backfill — one-shot at index-wire time. Walks
