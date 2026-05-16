@@ -144,6 +144,8 @@ private:
     QString stagingPathFor(const QString& infoHash) const;
 
     void ensureTorrentAdded(const Inflight& iff);
+    void resolveUnresolvedFileIndices(const QString& infoHash,
+                                      const QJsonArray& files);
     void applyUnionPriorities(const QString& infoHash);
     bool checkFileCompletion(const QString& infoHash, const Inflight& iff);
     void finalizeCompletion(Inflight iff);

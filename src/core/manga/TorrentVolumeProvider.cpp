@@ -16,8 +16,12 @@
 #include <QFileInfo>
 #include <QDateTime>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStringList>
 #include <algorithm>
+#include <optional>
 
 namespace tankoban::manga::premium {
 
@@ -29,6 +33,81 @@ constexpr const char* kLogSource  = "TorrentVolumeProvider";
 // three previous hardcoded literals (review issue Important #4); future
 // non-Premium catalog sources would extend by adding sibling constants.
 constexpr const char* kCatalogIdTankoyomiPremium = "tankoyomi_premium";
+
+struct MetadataCbzCandidate {
+    int index = -1;
+    QString path;
+    qint64 sizeBytes = 0;
+};
+
+QString metadataFilePath(const QJsonObject& obj)
+{
+    QString path = obj.value(QStringLiteral("name")).toString();
+    if (path.isEmpty()) path = obj.value(QStringLiteral("path")).toString();
+    return path;
+}
+
+QList<MetadataCbzCandidate> cbzCandidatesFromMetadata(const QJsonArray& files)
+{
+    QList<MetadataCbzCandidate> out;
+    for (int i = 0; i < files.size(); ++i) {
+        const QJsonObject obj = files.at(i).toObject();
+        const QString path = metadataFilePath(obj);
+        if (!path.endsWith(QStringLiteral(".cbz"), Qt::CaseInsensitive)) continue;
+
+        MetadataCbzCandidate c;
+        c.index = obj.value(QStringLiteral("index")).toInt(i);
+        c.path = path;
+        c.sizeBytes = static_cast<qint64>(obj.value(QStringLiteral("size")).toDouble(0));
+        if (c.index >= 0) out.append(c);
+    }
+    return out;
+}
+
+QJsonArray candidatePathList(const QList<MetadataCbzCandidate>& candidates)
+{
+    QJsonArray out;
+    for (const auto& c : candidates) out.append(c.path);
+    return out;
+}
+
+bool volumeTokenMatches(const QString& fileName, int volumeNumber)
+{
+    if (volumeNumber <= 0) return false;
+    const QString n = QString::number(volumeNumber);
+    const QRegularExpression re(
+        QStringLiteral("(?:^|[^A-Za-z0-9])(?:v|vol(?:ume)?)\\.?\\s*0*%1(?:[^0-9]|$)")
+            .arg(QRegularExpression::escape(n)),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(fileName).hasMatch();
+}
+
+std::optional<MetadataCbzCandidate> chooseMetadataCbz(
+    const QList<MetadataCbzCandidate>& candidates,
+    const QString& cbzFileName,
+    int volumeNumber)
+{
+    if (candidates.isEmpty()) return std::nullopt;
+    if (candidates.size() == 1) return candidates.first();
+
+    const QString wantedBase = QFileInfo(cbzFileName).fileName();
+    if (!wantedBase.isEmpty()) {
+        for (const auto& c : candidates) {
+            if (QFileInfo(c.path).fileName().compare(wantedBase, Qt::CaseInsensitive) == 0) {
+                return c;
+            }
+        }
+    }
+
+    QList<MetadataCbzCandidate> fuzzy;
+    for (const auto& c : candidates) {
+        if (volumeTokenMatches(QFileInfo(c.path).fileName(), volumeNumber)) {
+            fuzzy.append(c);
+        }
+    }
+    if (fuzzy.size() == 1) return fuzzy.first();
+    return std::nullopt;
+}
 } // anonymous namespace
 
 TorrentVolumeProvider::TorrentVolumeProvider(TorrentEngine*        engine,
@@ -187,7 +266,6 @@ void TorrentVolumeProvider::onMetadataReady(const QString& infoHash,
 {
     Q_UNUSED(name)
     Q_UNUSED(totalSize)
-    Q_UNUSED(files)
     auto it = m_byInfoHash.find(infoHash.toLower());
     if (it == m_byInfoHash.end() || it->isEmpty()) return;
 
@@ -224,6 +302,10 @@ void TorrentVolumeProvider::onMetadataReady(const QString& infoHash,
         return;
     }
 
+    resolveUnresolvedFileIndices(infoHash.toLower(), files);
+    it = m_byInfoHash.find(infoHash.toLower());
+    if (it == m_byInfoHash.end() || it->isEmpty()) return;
+
     applyUnionPriorities(infoHash.toLower());
 
     // Clear upload-only mode now that priorities pin to-download to the
@@ -236,6 +318,102 @@ void TorrentVolumeProvider::onMetadataReady(const QString& infoHash,
         iff.startedAfterMeta = true;
         m_ledger->updateStatus(iff.requestKey, TorrentRequest::Status::Downloading);
     }
+}
+
+void TorrentVolumeProvider::resolveUnresolvedFileIndices(const QString& infoHash,
+                                                         const QJsonArray& files)
+{
+    auto it = m_byInfoHash.find(infoHash);
+    if (it == m_byInfoHash.end() || it->isEmpty()) return;
+
+    const auto candidates = cbzCandidatesFromMetadata(files);
+    QList<Inflight> kept;
+    kept.reserve(it->size());
+
+    for (Inflight iff : *it) {
+        if (iff.fileIndex >= 0) {
+            kept.append(iff);
+            continue;
+        }
+
+        const auto chosen = chooseMetadataCbz(candidates, iff.cbzFileName, iff.volumeNumber);
+        if (!chosen.has_value()) {
+            QJsonObject details;
+            details[QStringLiteral("infoHash")] = infoHash;
+            details[QStringLiteral("seriesId")] = iff.seriesId;
+            details[QStringLiteral("volumeNumber")] = iff.volumeNumber;
+            details[QStringLiteral("wanted")] = iff.cbzFileName;
+            details[QStringLiteral("candidates")] = candidatePathList(candidates);
+            DebugLogBuffer::instance().warning(QString::fromLatin1(kLogSource),
+                QStringLiteral("metadata file match failed"), details);
+            m_ledger->updateStatus(iff.requestKey, TorrentRequest::Status::Failed,
+                                   QStringLiteral("metadata_file_match_failed"),
+                                   QStringLiteral("could not match volume to a .cbz file in torrent metadata"));
+            emit volumeFailed(iff.seriesId, iff.volumeNumber,
+                              QStringLiteral("metadata_file_match_failed"),
+                              QStringLiteral("could not match volume to a .cbz file in torrent metadata"));
+            continue;
+        }
+
+        const qint64 fileSize = chosen->sizeBytes;
+        const auto pieceRange = m_engine->pieceRangeForFileOffset(infoHash, chosen->index,
+                                                                  0, fileSize);
+        if (fileSize <= 0 || pieceRange.first < 0 || pieceRange.second < pieceRange.first) {
+            QJsonObject details;
+            details[QStringLiteral("infoHash")] = infoHash;
+            details[QStringLiteral("seriesId")] = iff.seriesId;
+            details[QStringLiteral("volumeNumber")] = iff.volumeNumber;
+            details[QStringLiteral("fileIndex")] = chosen->index;
+            details[QStringLiteral("fileSizeBytes")] = fileSize;
+            DebugLogBuffer::instance().warning(QString::fromLatin1(kLogSource),
+                QStringLiteral("metadata file range resolve failed"), details);
+            m_ledger->updateStatus(iff.requestKey, TorrentRequest::Status::Failed,
+                                   QStringLiteral("metadata_file_range_failed"),
+                                   QStringLiteral("could not compute piece range for matched .cbz"));
+            emit volumeFailed(iff.seriesId, iff.volumeNumber,
+                              QStringLiteral("metadata_file_range_failed"),
+                              QStringLiteral("could not compute piece range for matched .cbz"));
+            continue;
+        }
+
+        iff.fileIndex = chosen->index;
+        iff.cbzFileName = chosen->path;
+        iff.fileSizeBytes = fileSize;
+        iff.pieceStart = pieceRange.first;
+        iff.pieceEnd = pieceRange.second;
+
+        if (auto row = m_ledger->find(iff.requestKey)) {
+            TorrentRequest updated = *row;
+            updated.fileIndex = iff.fileIndex;
+            updated.cbzFileName = iff.cbzFileName;
+            updated.fileSizeBytes = iff.fileSizeBytes;
+            updated.pieceStart = iff.pieceStart;
+            updated.pieceEnd = iff.pieceEnd;
+            updated.updatedAtMsEpoch = QDateTime::currentMSecsSinceEpoch();
+            m_ledger->upsert(updated);
+        }
+
+        QJsonObject details;
+        details[QStringLiteral("infoHash")] = infoHash;
+        details[QStringLiteral("seriesId")] = iff.seriesId;
+        details[QStringLiteral("volumeNumber")] = iff.volumeNumber;
+        details[QStringLiteral("fileIndex")] = iff.fileIndex;
+        details[QStringLiteral("filePath")] = iff.cbzFileName;
+        details[QStringLiteral("fileSizeBytes")] = iff.fileSizeBytes;
+        details[QStringLiteral("pieceStart")] = iff.pieceStart;
+        details[QStringLiteral("pieceEnd")] = iff.pieceEnd;
+        DebugLogBuffer::instance().info(QString::fromLatin1(kLogSource),
+            QStringLiteral("metadata file match resolved"), details);
+
+        kept.append(iff);
+    }
+
+    if (kept.isEmpty()) {
+        m_engine->removeTorrent(infoHash, /*deleteFiles=*/false);
+        m_byInfoHash.erase(it);
+        return;
+    }
+    *it = kept;
 }
 
 void TorrentVolumeProvider::applyUnionPriorities(const QString& infoHash)
