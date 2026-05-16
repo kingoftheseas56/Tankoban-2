@@ -1,0 +1,10 @@
+# tools/premium_catalog_helper/requirements.txt
+# Python 3.11+ required.
+# libtorrent: official pre-built wheels are unreliable on Windows; the helper
+# resolves metadata via the standard library bencode + magnet xt= parsing and
+# does NOT actually join the swarm. If you want full piece-range capture for
+# a torrent whose .torrent file is not available, install libtorrent locally
+# via vcpkg or a conda env and pass --torrent-file <path>.
+#
+# The helper is stdlib-only: bencode decoder/encoder, sha1 infoHash, piece
+# offset math, argparse CLI - all built-in. No `pip install` needed.

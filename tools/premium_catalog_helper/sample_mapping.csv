@@ -1,0 +1,8 @@
+# tools/premium_catalog_helper/sample_mapping.csv
+# Format: vol,chapter_num,chapter_title
+# Comments allowed via leading '#'. Quote fields with commas or quotes.
+1,1,"The Black Swordsman"
+1,2,"The Brand"
+1,3,"The Guardians of Desire (1)"
+2,4,"The Guardians of Desire (2)"
+2,5,"The Guardians of Desire (3)"
