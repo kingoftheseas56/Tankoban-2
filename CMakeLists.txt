@@ -159,6 +159,12 @@ set(SOURCES
     src/core/manga/MangaTransferCoordinator.cpp
     src/core/manga/PremiumArchiveValidator.cpp
     src/core/manga/PremiumCoverExtractor.cpp
+    src/core/manga/NyaaRuntimeSource.cpp
+    src/core/manga/WeebCentralVolumePacker.cpp
+    src/core/manga/ComicsPrePivotMigrator.cpp
+    src/core/manga/anilist/AniListClient.cpp
+    src/core/manga/anilist/AniListCache.cpp
+    src/core/manga/anilist/AniListVolumeMapper.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -168,7 +174,8 @@ set(SOURCES
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
-    src/ui/pages/comics/ComicsTankoyomiDetailView.cpp
+    src/ui/pages/comics/ComicsSeriesView.cpp
+    src/ui/pages/comics/ComicsSourcesPanel.cpp
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
     src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
     src/ui/pages/TankoLibraryPage.cpp
@@ -196,11 +203,17 @@ set(SOURCES
     src/core/stream/StreamRescueScanner.cpp
     src/core/stream/CalendarEngine.cpp
     src/core/stream/StreamBulkPlan.cpp
+    src/core/stream/PackClassifier.cpp
+    src/core/stream/UnifiedPackSearchEngine.cpp
+    src/core/stream/TitleMetadataEstimator.cpp
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
     src/ui/pages/stream/TorrentPackPicker.cpp
+    src/ui/pages/stream/TheatreDownloadPanel.cpp
+    src/ui/pages/stream/PackListItem.cpp
+    src/ui/pages/stream/EpisodeTile.cpp
     src/ui/pages/stream/StreamSourceChoice.cpp
     src/ui/pages/stream/StreamSourceCard.cpp
     src/ui/pages/stream/StreamSourceList.cpp
@@ -322,7 +335,14 @@ set(HEADERS
     src/core/manga/MangaTransferCoordinator.h
     src/core/manga/PremiumArchiveValidator.h
     src/core/manga/PremiumCoverExtractor.h
+    src/core/manga/NyaaRuntimeSource.h
+    src/core/manga/WeebCentralVolumePacker.h
+    src/core/manga/ComicsPrePivotMigrator.h
     src/core/manga/CanonicalChapterKey.h
+    src/core/manga/anilist/AniListTypes.h
+    src/core/manga/anilist/AniListClient.h
+    src/core/manga/anilist/AniListCache.h
+    src/core/manga/anilist/AniListVolumeMapper.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -334,7 +354,8 @@ set(HEADERS
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/comics/SidecarMeta.h
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.h
-    src/ui/pages/comics/ComicsTankoyomiDetailView.h
+    src/ui/pages/comics/ComicsSeriesView.h
+    src/ui/pages/comics/ComicsSourcesPanel.h
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
     src/ui/pages/tankoyomi/ChapterRangeDialog.h
     src/ui/pages/TankoLibraryPage.h
@@ -370,11 +391,17 @@ set(HEADERS
     src/core/stream/StreamRescueScanner.h
     src/core/stream/CalendarEngine.h
     src/core/stream/StreamBulkPlan.h
+    src/core/stream/PackClassifier.h
+    src/core/stream/UnifiedPackSearchEngine.h
+    src/core/stream/TitleMetadataEstimator.h
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
     src/ui/pages/stream/TorrentPackPicker.h
+    src/ui/pages/stream/TheatreDownloadPanel.h
+    src/ui/pages/stream/PackListItem.h
+    src/ui/pages/stream/EpisodeTile.h
     src/ui/pages/stream/StreamSourceChoice.h
     src/ui/pages/stream/StreamSourceCard.h
     src/ui/pages/stream/StreamSourceList.h
@@ -639,6 +666,20 @@ if(WIN32)
 
 endif()
 
+# ── TANKOYOMI_VOLUME_PIVOT Phase 4: deploy uploader-trust JSON for NyaaRuntimeSource ──
+# NyaaRuntimeSource loads this file at construction to populate tier1/tier2/blocked
+# uploader sets used for ranking nyaa.si RSS search results. Shipped read-only
+# alongside the exe under resources/manga_uploader_trust.json.
+add_custom_command(TARGET Tankoban POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:Tankoban>/resources"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/resources/manga_uploader_trust.json"
+        "$<TARGET_FILE_DIR:Tankoban>/resources/manga_uploader_trust.json"
+    COMMENT "Copying manga_uploader_trust.json (NyaaRuntimeSource Phase 4) to build output"
+    VERBATIM
+)
+
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────
 target_precompile_headers(Tankoban PRIVATE
     <QWidget>
@@ -693,11 +734,17 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_quality_scorer.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_unified_progress_store.cpp
+        tests/core/stream/test_pack_classifier.cpp
+        tests/core/stream/test_title_metadata_estimator.cpp
+        tests/core/manga/AniListVolumeMapperTest.cpp
         src/core/DebugLogBuffer.cpp
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
         src/core/stream/StreamDownloadIndex.cpp
         src/core/stream/UnifiedProgressStore.cpp
+        src/core/stream/PackClassifier.cpp
+        src/core/stream/TitleMetadataEstimator.cpp
+        src/core/manga/anilist/AniListVolumeMapper.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
