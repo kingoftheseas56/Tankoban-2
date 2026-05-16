@@ -516,6 +516,7 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
 
     m_nam = new QNetworkAccessManager(this);
     setObjectName(QStringLiteral("TankorentPage"));
+    setWindowTitle(tr("Direct torrent search"));
     setAcceptDrops(true);
     buildUI();
     m_resultsTable->setItemDelegateForColumn(0, new TitleCellDelegate(this));
@@ -841,7 +842,9 @@ void TankorentPage::buildMainTabs(QVBoxLayout* parent)
         v->setAlignment(Qt::AlignCenter);
         v->setSpacing(16);
         m_emptyLabel = new QLabel(
-            QStringLiteral("Type a query and hit Enter \xe2\x80\x94 e.g. \"the boys 1080p\" or \"sapiens 2014\""),
+            tr("Direct torrent search - for content that isn't a Cinemeta show "
+               "(sports, software, random downloads). To download shows by series "
+               "+ season, use Theatre's show-view 'Download via Tankorent' button."),
             m_emptyPage);
         m_emptyLabel->setAlignment(Qt::AlignCenter);
         m_emptyLabel->setWordWrap(true);
@@ -3024,5 +3027,4 @@ bool TankorentPage::restoreNavState(const QJsonObject& blob)
     return true;  // TankorentPage has no stale-target case — the page
                   // renders whatever is in the active torrent list.
 }
-
 
