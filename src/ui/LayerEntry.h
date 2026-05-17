@@ -15,6 +15,10 @@ namespace tankoban::ui {
 // stateBlob is opaque to the controller -- the emitting page is
 // responsible for round-trip serialization in its restoreLayer slot.
 struct LayerEntry {
+    // Mode this entry belongs to. Redundant with the PerModeNavController
+    // map key (QHash<pageId, QStack<LayerEntry>>) but kept on the struct
+    // so signal payloads are self-contained -- MainWindow lambdas + the
+    // restore slot dispatch from e.pageId without querying controller state.
     QString     pageId;       // "comics" / "stream" / "books" / etc.
     QString     kind;         // page-local layer kind: "library", "searchResults", "seriesView", "detail", "catalogBrowse", "addonManager", "calendar", "search"
     QString     label;        // human-readable tooltip text, e.g. "Search Results"
