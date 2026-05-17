@@ -1,5 +1,14 @@
 #include "PerModeNavController.h"
 
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- static-init metatype register.
+// For Qt6 direct connections + QSignalSpy, Q_DECLARE_METATYPE in LayerEntry.h
+// already covers the QMetaType::fromType<T>() path that signal payloads use,
+// making this call effectively dead code today. Kept intentionally as
+// defensive future-proofing: if any future task switches a controller signal
+// to Qt::QueuedConnection (cross-thread / cross-event-loop dispatch), the
+// string-keyed qRegisterMetaType becomes load-bearing -- removing it would
+// produce a silent runtime failure at the connect() site. Per Task 4 code-
+// quality review (2026-05-17), the redundancy is acknowledged + accepted.
 namespace {
 struct LayerEntryMetaRegister {
     LayerEntryMetaRegister() { qRegisterMetaType<tankoban::ui::LayerEntry>("tankoban::ui::LayerEntry"); }
