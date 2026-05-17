@@ -754,9 +754,11 @@ if(TANKOBAN_BUILD_TESTS)
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
+    find_package(Qt6 REQUIRED COMPONENTS Test)
     target_link_libraries(tankoban_tests PRIVATE
         GTest::gtest_main
         Qt6::Core
+        Qt6::Test
     )
     include(GoogleTest)
     gtest_discover_tests(tankoban_tests)

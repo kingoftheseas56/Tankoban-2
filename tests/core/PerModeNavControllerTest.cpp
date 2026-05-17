@@ -2,6 +2,7 @@
 #include "ui/PerModeNavController.h"
 #include "ui/LayerEntry.h"
 
+#include <QSignalSpy>
 #include <gtest/gtest.h>
 
 using namespace tankoban::ui;
@@ -57,4 +58,39 @@ TEST(PerModeNavController, PopRemovesTop) {
     c.pushLayer("comics", {"comics", "seriesView","DN",      {}});
     c.popLayer("comics");
     EXPECT_FALSE(c.canGoBack("comics"));   // only library left
+}
+
+TEST(PerModeNavController, GoBackEmitsRestoreForBehindEntry) {
+    PerModeNavController c;
+    c.setActiveMode("comics");
+    LayerEntry root{"comics", "library", "Library", {}};
+    LayerEntry deeper{"comics", "seriesView", "Death Note", {}};
+    c.pushLayer("comics", root);
+    c.pushLayer("comics", deeper);
+
+    QSignalSpy spy(&c, &PerModeNavController::layerRestoreRequested);
+    c.goBack("comics");
+    ASSERT_EQ(spy.count(), 1);
+    const auto args = spy.takeFirst();
+    const LayerEntry restored = args.at(0).value<LayerEntry>();
+    EXPECT_EQ(restored.kind,  QString("library"));
+    EXPECT_EQ(restored.label, QString("Library"));
+}
+
+TEST(PerModeNavController, GoBackNoOpWhenStackTooShort) {
+    PerModeNavController c;
+    c.setActiveMode("comics");
+    c.pushLayer("comics", {"comics", "library", "Library", {}});
+    QSignalSpy spy(&c, &PerModeNavController::layerRestoreRequested);
+    c.goBack("comics");
+    EXPECT_EQ(spy.count(), 0);  // can't go back from single-entry stack
+}
+
+TEST(PerModeNavController, GoBackRemovesTopAndUpdatesAvailability) {
+    PerModeNavController c;
+    c.setActiveMode("comics");
+    c.pushLayer("comics", {"comics", "library", "Library", {}});
+    c.pushLayer("comics", {"comics", "seriesView", "DN", {}});
+    c.goBack("comics");
+    EXPECT_FALSE(c.canGoBack("comics"));  // only library remains, can't go back further
 }

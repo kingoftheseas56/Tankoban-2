@@ -1,5 +1,11 @@
 #include "PerModeNavController.h"
 
+namespace {
+struct LayerEntryMetaRegister {
+    LayerEntryMetaRegister() { qRegisterMetaType<tankoban::ui::LayerEntry>("tankoban::ui::LayerEntry"); }
+} sLayerEntryMetaRegister;
+}
+
 namespace tankoban::ui {
 
 PerModeNavController::PerModeNavController(QObject* parent) : QObject(parent) {}
@@ -34,8 +40,13 @@ bool PerModeNavController::canGoBack(const QString& pageId) const {
     return it != m_stacks.end() && it->size() >= 2;
 }
 
-void PerModeNavController::goBack(const QString&) {
-    // skeleton -- filled in Task 4
+void PerModeNavController::goBack(const QString& pageId) {
+    auto it = m_stacks.find(pageId);
+    if (it == m_stacks.end() || it->size() < 2) return;
+    it->pop();                                 // remove current top
+    const LayerEntry target = it->top();       // entry behind is now top
+    emit layerRestoreRequested(target);
+    if (pageId == m_activeMode) emitBackAvailability();
 }
 
 void PerModeNavController::resetMode(const QString& pageId) {
