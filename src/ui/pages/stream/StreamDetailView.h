@@ -79,6 +79,13 @@ public:
     // tileDoubleClicked for one user double-click gesture).
     const QString& currentImdb() const { return m_currentImdb; }
     QString currentType() const { return m_currentType; }
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - exposes active
+    // season from m_seasonCombo for StreamPage's onDirectDownloadRequested
+    // slot. Returns 0 for movies / unpopulated combo (consistent with
+    // existing season=0 convention for non-series content).
+    int currentSeason() const {
+        return m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+    }
     QString currentTitle() const;
     QString currentYear() const;
     QList<tankostream::stream::StreamEpisode> episodesForSeason(int season) const;
@@ -134,6 +141,20 @@ signals:
     // StreamSourceList's addToTankorentRequested signal. StreamPage owns
     // the next upstream hop into MainWindow.
     void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
+
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - re-emitted from
+    // StreamSourceList's directDownloadRequested. StreamPage handles it via
+    // onDirectDownloadRequested which dispatches the right-clicked stream
+    // directly to TorrentClient (Theatre library route).
+    void directDownloadRequested(const tankostream::stream::StreamPickerChoice& choice);
+
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix 2026-05-17 -
+    // emitted from showEntry() when the user navigates from one show to a
+    // DIFFERENT show (m_currentImdb changing). StreamPage handles this by
+    // dismissing the TheatreDownloadPanel if it's open + sliding the Sources
+    // sidebar back in. Without this, the panel persisted with stale prior-
+    // show packs when the user navigated between shows.
+    void entryContextChanging();
     void bulkDownloadRequested(int season);
 
     // Phase 2 Batch 2.4 — forwarded from StreamSourceList's Pick-different
@@ -165,6 +186,16 @@ signals:
                                   const QString& showName,
                                   int season,
                                   const QString& mediaType);
+
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie-row primary
+    // Download fast-path. Host (StreamPage) auto-picks the top-seeded torrent
+    // from already-loaded movie streams and dispatches via TorrentClient
+    // directly. Does NOT open TheatreDownloadPanel (movies use the existing
+    // Sources right-side panel as the "alternate streams" picker instead).
+    void theatreTopSeededDownloadRequested(const QString& imdbId,
+                                            const QString& showName,
+                                            const QString& infoHash,
+                                            const QString& magnetUri);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — episode click
     // resolved to a local file. StreamPage forwards through to
@@ -352,12 +383,27 @@ private:
     // changes (showEntry / setSeason path). NOT persisted; per-launch only.
     QSet<int> m_selectedEpisodes;
 
-    // Season-header Theatre download entrypoint.
+    // Season-header primary fast-path Download button. THEATRE_DOWNLOAD_OVERHAUL
+    // E1 UX refinement 2026-05-17 — click auto-dispatches the per-episode
+    // highest-seeded torrent for the active season (restores the pre-E1
+    // fast path that Codex's unified-button E1 had replaced with a panel
+    // open). The 10% pack-based flow lives on the adjacent m_packOptionsBtn.
     QPushButton*  m_downloadBtn = nullptr;
+
+    // Season-header secondary Layers-3 icon-only button adjacent to
+    // m_downloadBtn. Opens the TheatreDownloadPanel via the existing
+    // theatreDownloadRequested signal for pack-based advanced selection.
+    QPushButton*  m_packOptionsBtn = nullptr;
 
     // Season-header secondary button: visible only when m_selectedEpisodes
     // is non-empty. Label "Download Selected (N)".
     QPushButton*  m_downloadSelectedBtn = nullptr;
+
+    // THEATRE_DOWNLOAD_OVERHAUL E1 UX refinement 2026-05-17 — last source
+    // choice list passed to setStreamSources(). Cached so the movie-row
+    // Download button can auto-dispatch the top-seeded magnet without
+    // round-tripping through the host. Cleared on showEntry().
+    QList<tankostream::stream::StreamPickerChoice> m_lastChoices;
 
     QUrl          m_currentTrailerDirectUrl;   // populated from Url/Http trailer
     QString       m_currentTrailerYouTubeId;   // populated from YouTube trailer

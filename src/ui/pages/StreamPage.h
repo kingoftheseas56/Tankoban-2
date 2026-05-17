@@ -280,6 +280,15 @@ private:
     void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
                                      const QList<int>& episodeFilter);
 
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix v2 2026-05-17 -
+    // imperative dismiss called at every navigation transition site (showEntry
+    // call sites + goBack + showBrowse) so the panel never carries prior-show
+    // results across show transitions OR show-view exits. The earlier signal-
+    // based fix via entryContextChanging missed paths and/or had timing issues
+    // that left the panel visible with stale packs. This call is idempotent +
+    // safe to invoke when the panel is already hidden.
+    void dismissTheatreDownloadPanelIfOpen();
+
     void retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys);
     void cancelBulkSeasonDownload();
     void onBulkSourcesCollected(const tankostream::stream::BulkSourceCollectionPayload& payload);

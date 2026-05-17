@@ -36,6 +36,12 @@ signals:
     // sources Tankorent can't act on.
     void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
 
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - direct dispatch of
+    // the right-clicked stream via TorrentClient::startDownload (Theatre
+    // library route). Contrast with addToTankorentRequested which routes the
+    // stream into the Tankorent-tab download manager. Parallel signal chain.
+    void directDownloadRequested(const tankostream::stream::StreamPickerChoice& choice);
+
 protected:
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;

@@ -264,6 +264,14 @@ void StreamSourceCard::contextMenuEvent(QContextMenuEvent* event)
     }
 
     QMenu menu(this);
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - Theatre-native
+    // "Download" item dispatches the right-clicked stream directly to
+    // TorrentClient (Theatre library), in contrast to "Add torrent to
+    // Tankorent" which routes into the Tankorent tab download manager.
+    auto* downloadAction = menu.addAction(tr("Download"));
+    connect(downloadAction, &QAction::triggered, this, [this]() {
+        emit directDownloadRequested(m_choice);
+    });
     auto* addAction = menu.addAction(tr("Add torrent to Tankorent"));
     connect(addAction, &QAction::triggered, this, [this]() {
         emit addToTankorentRequested(m_choice);

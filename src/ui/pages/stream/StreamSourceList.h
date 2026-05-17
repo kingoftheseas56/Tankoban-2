@@ -52,6 +52,11 @@ signals:
     // upstream hop.
     void addToTankorentRequested(const tankostream::stream::StreamPickerChoice& choice);
 
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - parallel forward
+    // of each card's directDownloadRequested. StreamDetailView re-emits to
+    // StreamPage which dispatches via TorrentClient::startDownload.
+    void directDownloadRequested(const tankostream::stream::StreamPickerChoice& choice);
+
 private:
     void buildUI();
     void clearCards();

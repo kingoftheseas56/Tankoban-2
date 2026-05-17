@@ -6,6 +6,7 @@
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "core/torrent/TorrentClient.h"
+#include "ui/dialogs/AddTorrentDialog.h"
 #include "StreamSourceList.h"
 
 #include <QCheckBox>
@@ -169,6 +170,16 @@ void StreamDetailView::showEntry(const QString& imdbId,
                                  int            preselectEpisode,
                                  const std::optional<tankostream::addon::MetaItemPreview>& previewHint)
 {
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix 2026-05-17 -
+    // signal a show-context transition BEFORE mutating m_currentImdb so
+    // StreamPage can dismiss the TheatreDownloadPanel (which is StreamPage-
+    // owned and otherwise has no way to know the show changed under it).
+    // Guarded on m_currentImdb being non-empty AND different from the
+    // incoming imdb so same-show re-renders (e.g. season-combo changes
+    // routed through showEntry) do not spuriously close the panel.
+    if (!m_currentImdb.isEmpty() && m_currentImdb != imdbId)
+        emit entryContextChanging();
+
     m_currentImdb = imdbId;
     m_pendingPreselectSeason  = preselectSeason;
     m_pendingPreselectEpisode = preselectEpisode;
@@ -179,6 +190,8 @@ void StreamDetailView::showEntry(const QString& imdbId,
     if (m_movieActionRow) m_movieActionRow->hide();
     if (m_movieLocalChip) m_movieLocalChip->hide();
     if (m_downloadBtn) m_downloadBtn->hide();
+    if (m_packOptionsBtn) m_packOptionsBtn->hide();
+    m_lastChoices.clear();
     m_statusLabel->setText("Loading...");
     m_statusLabel->show();
 
@@ -487,10 +500,32 @@ void StreamDetailView::buildUI()
         "  border-color: rgba(255,255,255,0.22); }");
     connect(m_movieDownloadBtn, &QPushButton::clicked, this, [this]() {
         if (m_currentImdb.isEmpty()) return;
-        emit theatreDownloadRequested(m_currentImdb,
-                                      currentTitle(),
-                                      0,
-                                      QStringLiteral("movie"));
+        if (m_lastChoices.isEmpty()) {
+            qWarning() << "StreamDetailView::movieDownloadBtn click: no loaded choices for"
+                       << m_currentImdb << "- ignoring click";
+            return;
+        }
+        // m_lastChoices is pre-sorted by buildPickerChoices: magnets-with-seeders
+        // first (descending by seeder count). The first magnet-kind entry is the
+        // top-seeded auto-pick. See StreamSourceChoice.h:62-65 for sort contract.
+        QString topHash;
+        QString topMagnet;
+        for (const auto& choice : m_lastChoices) {
+            if (choice.sourceKind == QLatin1String("magnet")) {
+                topHash = choice.infoHash;
+                topMagnet = choice.magnetUri;
+                break;
+            }
+        }
+        if (topHash.isEmpty() && topMagnet.isEmpty()) {
+            qWarning() << "StreamDetailView::movieDownloadBtn click: no magnet sources for"
+                       << m_currentImdb << "- ignoring click";
+            return;
+        }
+        emit theatreTopSeededDownloadRequested(m_currentImdb,
+                                                currentTitle(),
+                                                topHash,
+                                                topMagnet);
     });
     movieActionLayout->addWidget(m_movieDownloadBtn);
 
@@ -545,14 +580,8 @@ void StreamDetailView::buildUI()
         "#DetailDownloadBtn:hover { background: rgba(255,255,255,0.12);"
         "  border-color: rgba(255,255,255,0.22); }");
     // THEATRE_DOWNLOAD_OVERHAUL Phase E: unified show/movie Download entry.
-    connect(m_downloadBtn, &QPushButton::clicked, this, [this]() {
-        const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
-        if (m_currentImdb.isEmpty() || season <= 0) return;
-        emit theatreDownloadRequested(m_currentImdb,
-                                      currentTitle(),
-                                      season,
-                                      m_currentType);
-    });
+    connect(m_downloadBtn, &QPushButton::clicked,
+            this, &StreamDetailView::onDownloadSeasonClicked);
 
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — "Download Selected (N)"
     // secondary button; visible only when m_selectedEpisodes is non-empty.
@@ -580,6 +609,35 @@ void StreamDetailView::buildUI()
     seasonLayout->addStretch();
     seasonLayout->addWidget(m_downloadSelectedBtn);
     seasonLayout->addWidget(m_downloadBtn);
+
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - Layers-3 secondary
+    // button next to primary Download. Opens TheatreDownloadPanel for the
+    // pack-based selection flow (Season Packs / Multi-Season / Complete Series).
+    // Tooltip "Pack downloads" - icon-only, no text label.
+    m_packOptionsBtn = new QPushButton(m_seasonRow);
+    m_packOptionsBtn->setObjectName(QStringLiteral("DetailPackOptionsBtn"));
+    m_packOptionsBtn->setFixedHeight(30);
+    m_packOptionsBtn->setFixedWidth(36);
+    m_packOptionsBtn->setCursor(Qt::PointingHandCursor);
+    m_packOptionsBtn->setIcon(QIcon(QStringLiteral(":/icons/layers-3.svg")));
+    m_packOptionsBtn->setIconSize(QSize(18, 18));
+    m_packOptionsBtn->setToolTip(tr("Pack downloads"));
+    m_packOptionsBtn->setStyleSheet(
+        "#DetailPackOptionsBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0; }"
+        "#DetailPackOptionsBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(m_packOptionsBtn, &QPushButton::clicked, this, [this]() {
+        if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series"))
+            return;
+        const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+        emit theatreDownloadRequested(m_currentImdb,
+                                       currentTitle(),
+                                       season,
+                                       m_currentType);
+    });
+    seasonLayout->addWidget(m_packOptionsBtn);
 
     m_seasonRow->hide();
     leftCol->addWidget(m_seasonRow);
@@ -674,6 +732,8 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::sourceActivated);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::addToTankorentRequested,
             this, &StreamDetailView::addToTankorentRequested);
+    connect(m_sourcesList, &tankostream::stream::StreamSourceList::directDownloadRequested,
+            this, &StreamDetailView::directDownloadRequested);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::autoLaunchCancelRequested,
             this, &StreamDetailView::autoLaunchCancelRequested);
     rightCol->addWidget(m_sourcesList, 1);
@@ -693,6 +753,11 @@ void StreamDetailView::setStreamSources(
     const QList<tankostream::stream::StreamPickerChoice>& choices,
     const QString&                                        savedChoiceKey)
 {
+    // THEATRE_DOWNLOAD_OVERHAUL E1 UX refinement 2026-05-17 — cache the
+    // sorted choice list so the movie-row Download button can pick the
+    // top-seeded magnet without re-running the aggregator. buildPickerChoices
+    // already sorts magnets-with-seeders first (StreamSourceChoice.h:62-65).
+    m_lastChoices = choices;
     if (m_sourcesList) m_sourcesList->setSources(choices, savedChoiceKey);
 }
 
@@ -744,6 +809,7 @@ void StreamDetailView::updateBulkDownloadButton()
         && season > 0
         && !m_seasons.value(season).isEmpty();
     m_downloadBtn->setVisible(visible);
+    if (m_packOptionsBtn) m_packOptionsBtn->setVisible(visible);
 }
 
 void StreamDetailView::updateDownloadSelectedButton()
@@ -1676,12 +1742,14 @@ void StreamDetailView::refreshSeasonHeaderButton()
     if (!m_downloadBtn) return;
     if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series")) {
         m_downloadBtn->setVisible(false);
+        if (m_packOptionsBtn) m_packOptionsBtn->setVisible(false);
         return;
     }
     int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
     m_downloadBtn->setText(tr("Download"));
     m_downloadBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
     m_downloadBtn->setVisible(season > 0);
+    if (m_packOptionsBtn) m_packOptionsBtn->setVisible(season > 0);
 }
 
 // ─── Library toggle (Phase 1 Batch 1.2) ─────────────────────────────────────

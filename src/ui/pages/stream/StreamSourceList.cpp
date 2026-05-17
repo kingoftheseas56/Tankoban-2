@@ -187,6 +187,8 @@ void StreamSourceList::setSources(const QList<StreamPickerChoice>& choices,
                 this, &StreamSourceList::sourceActivated);
         connect(card, &StreamSourceCard::addToTankorentRequested,
                 this, &StreamSourceList::addToTankorentRequested);
+        connect(card, &StreamSourceCard::directDownloadRequested,
+                this, &StreamSourceList::directDownloadRequested);
 
         const int insertPos = qMax(0, m_cardsLayout->count() - 1);
         m_cardsLayout->insertWidget(insertPos, card);
