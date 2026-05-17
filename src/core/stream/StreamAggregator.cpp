@@ -23,6 +23,7 @@
 // indexer fan-out wrapped by searchPacks. Mirrors the set used by
 // TorrentPackPicker::launchSearches.
 #include "core/TorrentIndexer.h"
+#include "core/indexers/NyaaIndexer.h"
 #include "core/indexers/EztvIndexer.h"
 #include "core/indexers/ExtTorrentsIndexer.h"
 #include "core/indexers/PirateBayIndexer.h"
@@ -684,7 +685,8 @@ bool packSearchIndexerEnabled(const QString& id)
 
 void StreamAggregator::searchPacks(const QString& imdbId,
                                    const QString& showName,
-                                   int season)
+                                   int season,
+                                   const QString& sourceFilter)
 {
     if (!m_packNam) {
         m_packNam = new QNetworkAccessManager(this);
@@ -758,17 +760,32 @@ void StreamAggregator::searchPacks(const QString& imdbId,
         indexer->search(query, kPackSearchPerIndexerLimit);
     };
 
+    // THEATRE_SOURCE_PICKER 2026-05-17: gate each indexer by sourceFilter.
+    // "all" (default) preserves the existing fan-out shape. A specific id
+    // skips siblings, letting the Theatre source-combo UI route to a single
+    // indexer (e.g. "nyaa" for anime).
+    auto wants = [&](const QString& id) {
+        return sourceFilter == QStringLiteral("all") || sourceFilter == id;
+    };
     for (const QString& query : queries) {
-        dispatch(QStringLiteral("piratebay"),
-                 new PirateBayIndexer(m_packNam, this), query);
-        dispatch(QStringLiteral("1337x"),
-                 new X1337xIndexer(m_packNam, this), query);
-        dispatch(QStringLiteral("yts"),
-                 new YtsIndexer(m_packNam, this), query);
-        dispatch(QStringLiteral("eztv"),
-                 new EztvIndexer(m_packNam, this), query);
-        dispatch(QStringLiteral("exttorrents"),
-                 new ExtTorrentsIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("nyaa")))
+            dispatch(QStringLiteral("nyaa"),
+                     new NyaaIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("piratebay")))
+            dispatch(QStringLiteral("piratebay"),
+                     new PirateBayIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("1337x")))
+            dispatch(QStringLiteral("1337x"),
+                     new X1337xIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("yts")))
+            dispatch(QStringLiteral("yts"),
+                     new YtsIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("eztv")))
+            dispatch(QStringLiteral("eztv"),
+                     new EztvIndexer(m_packNam, this), query);
+        if (wants(QStringLiteral("exttorrents")))
+            dispatch(QStringLiteral("exttorrents"),
+                     new ExtTorrentsIndexer(m_packNam, this), query);
     }
 
     if (ctx->outstanding == 0) {

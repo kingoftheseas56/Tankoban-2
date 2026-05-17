@@ -1185,7 +1185,7 @@ void TankorentPage::reloadCategoryOptions()
 // instantiation block below — listing it here makes the flip a one-liner
 // once its Cloudflare path lands.
 static const QHash<QString, QSet<QString>> kMediaTypeIndexers = {
-    { "videos",     { "yts", "eztv", "piratebay", "1337x", "exttorrents" } },
+    { "videos",     { "nyaa", "yts", "eztv", "piratebay", "1337x", "exttorrents" } },
     { "books",      { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
     { "audiobooks", { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
     { "comics",     { "nyaa", "piratebay", "1337x" } },
