@@ -11,12 +11,16 @@ void PerModeNavController::setActiveMode(const QString& pageId) {
     emitBackAvailability();
 }
 
-void PerModeNavController::pushLayer(const QString&, const LayerEntry&) {
-    // skeleton -- filled in Task 3
+void PerModeNavController::pushLayer(const QString& pageId, const LayerEntry& entry) {
+    m_stacks[pageId].push(entry);
+    if (pageId == m_activeMode) emitBackAvailability();
 }
 
-void PerModeNavController::popLayer(const QString&) {
-    // skeleton -- filled in Task 3
+void PerModeNavController::popLayer(const QString& pageId) {
+    auto it = m_stacks.find(pageId);
+    if (it == m_stacks.end() || it->isEmpty()) return;
+    it->pop();
+    if (pageId == m_activeMode) emitBackAvailability();
 }
 
 LayerEntry PerModeNavController::peekBack(const QString& pageId) const {
