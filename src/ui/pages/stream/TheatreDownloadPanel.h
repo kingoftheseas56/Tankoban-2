@@ -20,6 +20,7 @@
 #include <QStringList>
 #include <QWidget>
 
+class QComboBox;
 class QJsonArray;
 class QLabel;
 class QListWidget;
@@ -80,11 +81,14 @@ private slots:
     void onFilterChipClicked();
     void onMetadataReady(const QString& infoHash, const QString& name,
                          qint64 totalSize, const QJsonArray& files);
+    void onSourceComboChanged(int index);
 
 private:
     void buildUI();
     void buildPackListState();
     void buildScopePickerState();
+    void loadPersistedSource();
+    void savePersistedSource();
     void transitionTo(State newState);
     void rerenderPackList();
     void rerenderScopePicker();
@@ -133,7 +137,6 @@ private:
     QList<EnrichedPack> m_packs;
     QList<EnrichedPack> m_filteredPacks;  // post-filter view
     QString m_typeFilter   = QStringLiteral("All");
-    QString m_sourceFilter = QStringLiteral("All sources");
     bool    m_widenedAutoFallback = false;
 
     // ScopePicker state.
@@ -149,6 +152,8 @@ private:
     QWidget*        m_scopePickerPage = nullptr;
 
     QLabel*         m_packHeading = nullptr;
+    QComboBox*      m_sourceCombo = nullptr;
+    QString         m_sourceFilter = QStringLiteral("all");
     QWidget*        m_filterChipRow = nullptr;
     QLabel*         m_statusLine = nullptr;
     QProgressBar*   m_loadingBar = nullptr;

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 
+#include <QComboBox>
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -24,7 +25,10 @@
 #include <QListWidgetItem>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSet>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -36,7 +40,6 @@ namespace {
 constexpr const char* kPropDimension = "filterDimension";
 constexpr const char* kPropValue     = "filterValue";
 constexpr const char* kDimType       = "type";
-constexpr const char* kDimSource     = "source";
 
 // THEATRE_DOWNLOAD_OVERHAUL Task D2 (2026-05-16): pack (season, episode) into
 // the QMap<quint32, bool> m_tileChecked key. Mirrors the keying scheme
@@ -140,7 +143,7 @@ void TheatreDownloadPanel::openFor(const QString& imdbId,
 
     transitionTo(State::PackList);
     if (m_searchEngine)
-        m_searchEngine->search(imdbId, showName, season);
+        m_searchEngine->search(imdbId, showName, season, m_sourceFilter);
 }
 
 void TheatreDownloadPanel::reset() {
@@ -190,6 +193,65 @@ void TheatreDownloadPanel::buildPackListState() {
         "font-size: 14px; font-weight: 600; color: #f3f4f6;");
     col->addWidget(m_packHeading);
 
+    // THEATRE_SOURCE_PICKER 2026-05-17 - source-selection dropdown.
+    // Mirrors the standalone Tankorent tab's source combo
+    // (TankorentPage.cpp:1136-1143). "All Sources" default fans out to
+    // all 6 Tankorent indexers; explicit source pick gates dispatch in
+    // StreamAggregator::searchPacks. Distinct from the source-FILTER
+    // chip row removed by the chip-simplification arc earlier today:
+    // that was a post-search result filter; this is a pre-search
+    // dispatch gate.
+    {
+        auto* sourceRow = new QWidget(m_packListPage);
+        sourceRow->setObjectName(QStringLiteral("TheatreDownloadSourceRow"));
+        auto* sourceLayout = new QHBoxLayout(sourceRow);
+        sourceLayout->setContentsMargins(0, 0, 0, 0);
+        sourceLayout->setSpacing(8);
+
+        auto* label = new QLabel(QStringLiteral("Source"), sourceRow);
+        label->setObjectName(QStringLiteral("TheatreDownloadSourceLabel"));
+        label->setStyleSheet(
+            "color: rgba(255,255,255,0.65); font-size: 12px;");
+        sourceLayout->addWidget(label);
+
+        m_sourceCombo = new QComboBox(sourceRow);
+        m_sourceCombo->setObjectName(QStringLiteral("TheatreDownloadSourceCombo"));
+        m_sourceCombo->setFixedHeight(28);
+        m_sourceCombo->setMinimumWidth(160);
+        // Option list matches TankorentPage.cpp:1136-1143 minus
+        // torrents-csv (books-only; preserved off the Theatre surface
+        // to mirror existing parity).
+        m_sourceCombo->addItem(QStringLiteral("All Sources"),  QStringLiteral("all"));
+        m_sourceCombo->addItem(QStringLiteral("Nyaa"),         QStringLiteral("nyaa"));
+        m_sourceCombo->addItem(QStringLiteral("PirateBay"),    QStringLiteral("piratebay"));
+        m_sourceCombo->addItem(QStringLiteral("1337x"),        QStringLiteral("1337x"));
+        m_sourceCombo->addItem(QStringLiteral("YTS"),          QStringLiteral("yts"));
+        m_sourceCombo->addItem(QStringLiteral("EZTV"),         QStringLiteral("eztv"));
+        m_sourceCombo->addItem(QStringLiteral("ExtraTorrents"), QStringLiteral("exttorrents"));
+        m_sourceCombo->setStyleSheet(
+            "QComboBox#TheatreDownloadSourceCombo {"
+            " background: rgba(255,255,255,0.04);"
+            " color: #f3f4f6;"
+            " border: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 4px;"
+            " padding: 2px 8px;"
+            "}"
+            "QComboBox#TheatreDownloadSourceCombo:hover {"
+            " background: rgba(255,255,255,0.07);"
+            "}"
+            "QComboBox#TheatreDownloadSourceCombo::drop-down {"
+            " border: none;"
+            "}");
+        sourceLayout->addWidget(m_sourceCombo);
+        sourceLayout->addStretch(1);
+
+        col->addWidget(sourceRow);
+        connect(m_sourceCombo,
+                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, &TheatreDownloadPanel::onSourceComboChanged);
+        loadPersistedSource();
+    }
+
     m_filterChipRow = new QWidget(m_packListPage);
     m_filterChipRow->setObjectName(QStringLiteral("TheatreDownloadFilterChipRow"));
     auto* chipLayout = new QHBoxLayout(m_filterChipRow);
@@ -197,17 +259,23 @@ void TheatreDownloadPanel::buildPackListState() {
     chipLayout->setSpacing(6);
     col->addWidget(m_filterChipRow);
 
-    // THEATRE_DOWNLOAD_OVERHAUL Task C3 (2026-05-16): populate filter chip row
-    // with two single-select dimension groups (Type + Source) per Codex
-    // expansion 5.2.B. 10px visual gap separates the two groups.
+    // THEATRE_DOWNLOAD_OVERHAUL Task C3 (2026-05-16) + chip-simplification
+    // (2026-05-17): populate filter chip row with the Type single-select
+    // chip group (originally per Codex expansion 5.2.B). Source dimension
+    // dropped 2026-05-17 - see comment below the typeOptions list.
     {
-        // Type filter group: All / Complete Series / Multi-Season / Season Pack / Single Episode.
+        // THEATRE_DOWNLOAD_OVERHAUL chip-simplification 2026-05-17 - "Single
+        // Episode" chip dropped. The primary Download button (post-E1 fast-
+        // path restore) already handles per-episode highest-seeded dispatch
+        // via onDownloadSeasonClicked / theatreTopSeededDownloadRequested.
+        // Surfacing a Single-Episode chip in the pack panel duplicates that
+        // entry point + adds visual noise. Per-episode flow lives on the
+        // primary button; pack flow lives here.
         const QStringList typeOptions = {
             QStringLiteral("All"),
             QStringLiteral("Complete Series"),
             QStringLiteral("Multi-Season"),
             QStringLiteral("Season Pack"),
-            QStringLiteral("Single Episode"),
         };
         for (const QString& opt : typeOptions) {
             auto* chip = makeFilterChip(opt, opt == m_typeFilter, m_filterChipRow);
@@ -217,22 +285,14 @@ void TheatreDownloadPanel::buildPackListState() {
             chipLayout->addWidget(chip);
         }
 
-        chipLayout->addSpacing(10);  // visual separator between dimension groups
-
-        // Source filter group: All sources / Stremio / Indexers.
-        const QStringList sourceOptions = {
-            QStringLiteral("All sources"),
-            QStringLiteral("Stremio"),
-            QStringLiteral("Indexers"),
-        };
-        for (const QString& opt : sourceOptions) {
-            auto* chip = makeFilterChip(opt, opt == m_sourceFilter, m_filterChipRow);
-            chip->setProperty(kPropDimension, kDimSource);
-            chip->setProperty(kPropValue, opt);
-            connect(chip, &QPushButton::clicked, this, &TheatreDownloadPanel::onFilterChipClicked);
-            chipLayout->addWidget(chip);
-        }
-
+        // THEATRE_DOWNLOAD_OVERHAUL chip-simplification 2026-05-17 - source
+        // chip row removed. Stremio results now live exclusively in the
+        // Sources sidebar; the pack panel is dedicated to Tankorent's custom
+        // indexer scraper (PirateBay/1337x/YTS/EZTV/ExtTorrents fan-out).
+        // With Stremio gone, the source-axis filter has only one option
+        // (Indexers = everything in the panel) - a single-option filter
+        // adds no value. Source chip row dropped; type chip row stretches
+        // to fill the chip-row width.
         chipLayout->addStretch();
     }
 
@@ -299,13 +359,28 @@ void TheatreDownloadPanel::buildScopePickerState() {
         "font-size: 10px; color: rgba(255,255,255,0.48);");
     col->addWidget(m_scopeStatusLine);
 
-    m_scopeTileContainer = new QWidget(m_scopePickerPage);
+    m_scopeTileContainer = new QWidget();
     m_scopeTileContainer->setObjectName(QStringLiteral("TheatreScopeTileContainer"));
     auto* tileLayout = new QVBoxLayout(m_scopeTileContainer);
     tileLayout->setContentsMargins(0, 0, 0, 0);
     tileLayout->setSpacing(4);
-    col->addWidget(m_scopeTileContainer, /*stretch=*/1);
+    tileLayout->addStretch();
     // Tile widgets get populated in Task D1+D2.
+
+    // THEATRE_DOWNLOAD_OVERHAUL action-row-clipping fix 2026-05-17 - wrap tile
+    // container in QScrollArea so a long episode list (e.g. Invincible S1 has
+    // 8+ episodes which exceed the visible panel height) does not push the
+    // action row (Cancel + Download) below the panel boundary and clip it.
+    // Tile list scrolls internally; action row stays anchored at the bottom
+    // of the panel. setWidgetResizable(true) makes the inner widget track the
+    // scroll area's width so the tiles do not horizontally clip.
+    auto* tileScroll = new QScrollArea(m_scopePickerPage);
+    tileScroll->setObjectName(QStringLiteral("TheatreScopeTileScroll"));
+    tileScroll->setWidgetResizable(true);
+    tileScroll->setFrameShape(QFrame::NoFrame);
+    tileScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tileScroll->setWidget(m_scopeTileContainer);
+    col->addWidget(tileScroll, /*stretch=*/1);
 
     auto* btnRow = new QHBoxLayout();
     btnRow->addStretch();
@@ -313,6 +388,16 @@ void TheatreDownloadPanel::buildScopePickerState() {
     m_scopeCancelBtn->setObjectName(QStringLiteral("TheatreScopeCancelBtn"));
     m_scopeCancelBtn->setFixedHeight(30);
     m_scopeCancelBtn->setCursor(Qt::PointingHandCursor);
+    // THEATRE_DOWNLOAD_OVERHAUL action-row-visibility fix 2026-05-17 - explicit
+    // grayscale QSS so the Cancel button is legible on the dark panel
+    // background. Without this, default QPushButton style renders nearly
+    // invisible against the rgba(255,255,255,0.04) panel backdrop.
+    m_scopeCancelBtn->setStyleSheet(
+        "#TheatreScopeCancelBtn { background: transparent;"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0 14px; font-size: 12px; }"
+        "#TheatreScopeCancelBtn:hover { background: rgba(255,255,255,0.06);"
+        "  border-color: rgba(255,255,255,0.22); }");
     connect(m_scopeCancelBtn, &QPushButton::clicked, this, [this]() {
         reset();
         emit dismissRequested();
@@ -324,6 +409,18 @@ void TheatreDownloadPanel::buildScopePickerState() {
     m_scopeDownloadBtn->setFixedHeight(30);
     m_scopeDownloadBtn->setCursor(Qt::PointingHandCursor);
     m_scopeDownloadBtn->setEnabled(false);
+    // THEATRE_DOWNLOAD_OVERHAUL action-row-visibility fix 2026-05-17 - explicit
+    // primary-action QSS for the Download button (slightly stronger bg than
+    // Cancel, bolder text). Disabled-state QSS dims the text + border so the
+    // user can tell when no episodes are selected.
+    m_scopeDownloadBtn->setStyleSheet(
+        "#TheatreScopeDownloadBtn { background: rgba(255,255,255,0.10);"
+        "  border: 1px solid rgba(255,255,255,0.18); border-radius: 6px;"
+        "  color: #f3f4f6; padding: 0 14px; font-size: 12px; font-weight: 600; }"
+        "#TheatreScopeDownloadBtn:hover { background: rgba(255,255,255,0.14);"
+        "  border-color: rgba(255,255,255,0.26); }"
+        "#TheatreScopeDownloadBtn:disabled { color: rgba(255,255,255,0.30);"
+        "  border-color: rgba(255,255,255,0.08); }");
     connect(m_scopeDownloadBtn, &QPushButton::clicked,
             this, &TheatreDownloadPanel::onDownloadClicked);
     btnRow->addWidget(m_scopeDownloadBtn);
@@ -593,8 +690,6 @@ void TheatreDownloadPanel::onFilterChipClicked() {
     const QString val = sender->property(kPropValue).toString();
     if (dim == QLatin1String(kDimType))
         m_typeFilter = val;
-    else if (dim == QLatin1String(kDimSource))
-        m_sourceFilter = val;
 
     // Single-select within dimension: uncheck other chips in same dimension.
     if (m_filterChipRow) {
@@ -614,8 +709,10 @@ void TheatreDownloadPanel::rerenderPackList() {
     if (!m_packList) return;
     m_packList->clear();
 
-    // THEATRE_DOWNLOAD_OVERHAUL Task C3 (2026-05-16): apply both filter
-    // dimensions (Type + Source) before the score-descending sort.
+    // THEATRE_DOWNLOAD_OVERHAUL Task C3 (2026-05-16) + chip-simplification
+    // (2026-05-17): apply the Type filter dimension (Source dimension
+    // dropped 2026-05-17, see comment block inside the loop) before the
+    // score-descending sort.
     m_filteredPacks.clear();
     for (const auto& p : m_packs) {
         // Type filter: compare classification label against m_typeFilter.
@@ -624,12 +721,9 @@ void TheatreDownloadPanel::rerenderPackList() {
             if (labelForType(p.classification.type) != m_typeFilter)
                 continue;
         }
-        // Source filter: "All sources" matches everything; "Stremio" only
-        // matches PackSource::Stremio; "Indexers" only matches PackSource::Tankorent.
-        if (m_sourceFilter == QLatin1String("Stremio") && p.source != PackSource::Stremio)
-            continue;
-        if (m_sourceFilter == QLatin1String("Indexers") && p.source != PackSource::Tankorent)
-            continue;
+        // THEATRE_DOWNLOAD_OVERHAUL chip-simplification 2026-05-17 - source
+        // filter dropped. Panel is Tankorent-only after Task 2's engine strip;
+        // all packs have p.source == PackSource::Tankorent. No filtering needed.
 
         // Auto-fallback filter (C5): when widened, only show packs that
         // actually include the originally-requested season. Complete Series
@@ -670,8 +764,7 @@ void TheatreDownloadPanel::rerenderPackList() {
     // "N of M match" so late callbacks don't visually conflict with a filter
     // already in effect (per code-review I1, 2026-05-16).
     if (m_statusLine && !m_packs.isEmpty()) {
-        const bool hasFilter = (m_typeFilter != QLatin1String("All"))
-                            || (m_sourceFilter != QLatin1String("All sources"));
+        const bool hasFilter = (m_typeFilter != QLatin1String("All"));
         if (hasFilter) {
             m_statusLine->setText(tr("%1 of %2 packs match")
                                        .arg(m_filteredPacks.size())
@@ -948,7 +1041,43 @@ void TheatreDownloadPanel::autoFallbackToShowWide() {
     }
     if (m_loadingBar) m_loadingBar->show();
     if (m_searchEngine)
-        m_searchEngine->search(m_imdbId, m_showName, /*season=*/0);
+        m_searchEngine->search(m_imdbId, m_showName, /*season=*/0, m_sourceFilter);
+}
+
+void TheatreDownloadPanel::onSourceComboChanged(int /*index*/) {
+    if (!m_sourceCombo) return;
+    m_sourceFilter = m_sourceCombo->currentData().toString();
+    if (m_sourceFilter.isEmpty())
+        m_sourceFilter = QStringLiteral("all");
+    savePersistedSource();
+    // Note: we do NOT re-fire the in-flight search here. Source change
+    // takes effect on the NEXT search() call (i.e. when the panel is
+    // dismissed + re-opened, or when the engine is invoked again).
+    // Re-firing mid-render would orphan an in-flight Tankorent fan-out
+    // and complicate the stale-callback guards in
+    // UnifiedPackSearchEngine::onTankorentPacksAvailable.
+}
+
+void TheatreDownloadPanel::loadPersistedSource() {
+    if (!m_sourceCombo) return;
+    QSettings settings;
+    const QString saved = settings.value(
+        QStringLiteral("theatre/pack_panel/source"),
+        QStringLiteral("all")).toString();
+    m_sourceFilter = saved;
+    const int idx = m_sourceCombo->findData(saved);
+    if (idx >= 0) {
+        // setCurrentIndex emits currentIndexChanged - block during
+        // initial load so we don't re-save the value we just read.
+        const QSignalBlocker blocker(m_sourceCombo);
+        m_sourceCombo->setCurrentIndex(idx);
+    }
+}
+
+void TheatreDownloadPanel::savePersistedSource() {
+    QSettings settings;
+    settings.setValue(QStringLiteral("theatre/pack_panel/source"),
+                      m_sourceFilter);
 }
 
 }  // namespace tankoban::stream::theatre
