@@ -64,6 +64,7 @@
 #include <QLabel>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QScopedValueRollback>
 #include <QSet>
 #include <QVariant>
 
@@ -71,6 +72,29 @@
 #include <memory>
 
 namespace {
+
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
+// the Stream page. All emit sites call makeStreamLayer so the pageId is
+// always "stream" and the struct fields are assembled consistently.
+// Field names mirror captureNavState() (lines ~1578-1618) so restoreLayer
+// can consume the same blob shape.
+QString streamLayerLabelFor(const tankoban::ui::LayerEntry& e)
+{
+    if (e.kind == QLatin1String("browse"))        return QStringLiteral("Theatre Home");
+    if (e.kind == QLatin1String("catalogBrowse")) return e.stateBlob.value(QStringLiteral("catalogTitle")).toString();
+    if (e.kind == QLatin1String("detail"))        return e.stateBlob.value(QStringLiteral("detailImdbId")).toString();
+    if (e.kind == QLatin1String("addonManager"))  return QStringLiteral("Addons");
+    if (e.kind == QLatin1String("calendar"))      return QStringLiteral("Calendar");
+    if (e.kind == QLatin1String("search"))        return QStringLiteral("Search");
+    return QStringLiteral("Theatre");
+}
+
+tankoban::ui::LayerEntry makeStreamLayer(const QString& kind, const QJsonObject& blob = {})
+{
+    tankoban::ui::LayerEntry e{QStringLiteral("stream"), kind, QString(), blob};
+    e.label = streamLayerLabelFor(e);
+    return e;
+}
 
 int episodeNumberFromBulkItemKey(const QString& itemKey)
 {
@@ -447,6 +471,10 @@ void StreamPage::buildUI()
                     slideOutToRight(m_detailSourcesPanel);
                 slideInFromRight(m_theatreDownloadPanel);
             });
+    connect(m_detailView, &StreamDetailView::theatreTopSeededDownloadRequested,
+            this, &StreamPage::onTheatreTopSeededDownloadRequested);
+    connect(m_detailView, &StreamDetailView::directDownloadRequested,
+            this, &StreamPage::onDirectDownloadRequested);
     if (m_theatreDownloadPanel) {
         connect(m_theatreDownloadPanel,
                 &tankoban::stream::theatre::TheatreDownloadPanel::dismissRequested,
@@ -1002,6 +1030,13 @@ void StreamPage::onSearchSubmit()
         // NavHistory snapshots the outgoing view (Browse/Detail/etc.) via
         // captureNavState while the in-page stack still reflects it.
         emit navigationRequested();
+        // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit: record
+        // the Search layer in the per-mode controller.
+        if (!m_inLayerRestore) {
+            QJsonObject blob;
+            blob[QStringLiteral("searchQuery")] = query;
+            emit enteredLayer(makeStreamLayer(QStringLiteral("search"), blob));
+        }
         NavEntry e;
         e.kind = NavEntry::Kind::Search;
         e.searchQuery = query;
@@ -1422,6 +1457,7 @@ bool StreamPage::eventFilter(QObject* obj, QEvent* event)
 // MainWindow if cross-mode back is wanted.
 void StreamPage::goBack()
 {
+    if (!m_inLayerRestore) emit exitedLayer();
     if (m_navStack.size() <= 1) {
         // STREAM_CATALOG_BACK_NAVSTACK_SEED_FIX 2026-05-06 â€” Hemanth-reported
         // "the back button besides catalog is not working now": when user
@@ -1653,6 +1689,61 @@ bool StreamPage::restoreNavState(const QJsonObject& blob)
     return true;
 }
 
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- restore target layer without
+// emitting enteredLayer/exitedLayer (called by MainWindow::onLayerRestoreRequested
+// when the controller fires layerRestoreRequested for pageId="stream"). Uses
+// QScopedValueRollback to suppress the enteredLayer guard on every show* path
+// reached via showEntryRaw during the restore.
+void StreamPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+{
+    QScopedValueRollback<bool> rollback(m_inLayerRestore, true);
+    NavEntry entry;
+    using Kind = NavEntry::Kind;
+    const QString kind = target.kind;
+    const QJsonObject blob = target.stateBlob;
+    if (kind == "browse") {
+        entry.kind = Kind::Browse;
+    } else if (kind == "catalogBrowse") {
+        if (!m_catalogBrowse) return;
+        entry.kind = Kind::CatalogBrowse;
+        entry.catalogAddonId = blob.value("catalogAddonId").toString();
+        entry.catalogType    = blob.value("catalogType").toString();
+        entry.catalogId      = blob.value("catalogId").toString();
+        entry.catalogTitle   = blob.value("catalogTitle").toString();
+    } else if (kind == "detail") {
+        if (!m_detailView) return;
+        const QString imdb = blob.value("detailImdbId").toString();
+        if (imdb.isEmpty()) return;
+        entry.kind = Kind::Detail;
+        entry.detailImdbId = imdb;
+        entry.detailHasPreview = false;
+        entry.detailPreselectSeason  = blob.value("detailPreselectSeason").toInt(-1);
+        entry.detailPreselectEpisode = blob.value("detailPreselectEpisode").toInt(-1);
+    } else if (kind == "addonManager") {
+        if (!m_addonManager) return;
+        entry.kind = Kind::AddonManager;
+    } else if (kind == "calendar") {
+        if (!m_calendarScreen || !m_calendarEngine) return;
+        entry.kind = Kind::Calendar;
+    } else if (kind == "search") {
+        entry.kind = Kind::Search;
+        entry.searchQuery = blob.value("searchQuery").toString();
+    } else {
+        return;
+    }
+    showEntryRaw(entry);
+}
+
+void StreamPage::resetToRoot()
+{
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public forwarder
+    // invoked by MainWindow::resetActivePageToRoot when the user clicks
+    // the Theatre topbar pill while already on this page. emitNav=true so
+    // the pill-reset records a NavHistory entry (consistent with cross-mode
+    // pill clicks); Phase 1+ may refine to a stack-clearing semantic.
+    showBrowse(/*emitNav=*/true);
+}
+
 void StreamPage::showBrowse(bool emitNav)
 {
     // STREAM_NAV_BACK_STACK 2026-05-06 â€” Library is the stack bottom.
@@ -1664,7 +1755,13 @@ void StreamPage::showBrowse(bool emitNav)
     // transitions (default emitNav=true). System-initiated callers
     // (restorePlayerExitView fallback, etc.) pass emitNav=false so the
     // global stack doesn't record a spurious nav the user didn't make.
-    if (emitNav) emit navigationRequested();
+    if (emitNav) {
+        emit navigationRequested();
+        // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit: record
+        // the Browse (Theatre Home) layer in the per-mode controller.
+        if (!m_inLayerRestore)
+            emit enteredLayer(makeStreamLayer(QStringLiteral("browse")));
+    }
     m_navStack.clear();
     NavEntry e;
     e.kind = NavEntry::Kind::Browse;
@@ -1676,6 +1773,9 @@ void StreamPage::showAddonManager()
 {
     // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
     emit navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
+    if (!m_inLayerRestore)
+        emit enteredLayer(makeStreamLayer(QStringLiteral("addonManager")));
     NavEntry e;
     e.kind = NavEntry::Kind::AddonManager;
     m_navStack.push(e);
@@ -1687,6 +1787,15 @@ void StreamPage::showCatalogBrowse(const QString& addonId, const QString& type,
 {
     // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
     emit navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
+    if (!m_inLayerRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("catalogAddonId")] = addonId;
+        blob[QStringLiteral("catalogType")]    = type;
+        blob[QStringLiteral("catalogId")]      = catalogId;
+        blob[QStringLiteral("catalogTitle")]   = title;
+        emit enteredLayer(makeStreamLayer(QStringLiteral("catalogBrowse"), blob));
+    }
     NavEntry e;
     e.kind = NavEntry::Kind::CatalogBrowse;
     e.catalogAddonId = addonId;
@@ -1715,6 +1824,9 @@ void StreamPage::showCalendar()
     if (!m_calendarScreen || !m_calendarEngine) return;
     // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
     emit navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
+    if (!m_inLayerRestore)
+        emit enteredLayer(makeStreamLayer(QStringLiteral("calendar")));
     NavEntry e;
     e.kind = NavEntry::Kind::Calendar;
     m_navStack.push(e);
@@ -1737,6 +1849,14 @@ void StreamPage::showDetail(const QString& imdbId)
     // in-page push, so repeat-clicks on the same Detail tile don't grow
     // the global stack either.
     emit navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
+    if (!m_inLayerRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("detailImdbId")]           = imdbId;
+        blob[QStringLiteral("detailPreselectSeason")]  = -1;
+        blob[QStringLiteral("detailPreselectEpisode")] = -1;
+        emit enteredLayer(makeStreamLayer(QStringLiteral("detail"), blob));
+    }
     NavEntry e;
     e.kind = NavEntry::Kind::Detail;
     e.detailImdbId = imdbId;
@@ -1762,6 +1882,14 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
     // GLOBAL_NAV_HISTORY Task 14 — emit AFTER idempotency guard, BEFORE
     // in-page push.
     emit navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
+    if (!m_inLayerRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("detailImdbId")]           = preview.id;
+        blob[QStringLiteral("detailPreselectSeason")]  = preselectSeason;
+        blob[QStringLiteral("detailPreselectEpisode")] = preselectEpisode;
+        emit enteredLayer(makeStreamLayer(QStringLiteral("detail"), blob));
+    }
     NavEntry e;
     e.kind = NavEntry::Kind::Detail;
     e.detailImdbId = preview.id;
@@ -2603,6 +2731,99 @@ void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
 {
     if (!m_detailView) return;
     triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, QList<int>{episode});
+}
+
+// THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie auto-dispatch fast
+// path. Picking already done emitter-side in StreamDetailView (top-seeded
+// magnet selected from m_lastChoices, which is pre-sorted by buildPickerChoices
+// per StreamSourceChoice.h:62-65). This slot is trivial dispatch glue:
+// resolveMetadata fallback if infoHash didn't come through, then a direct
+// TorrentClient::startDownload with the movie-appropriate config (season=0,
+// no streamGroupId, original layout). Bypasses TheatreDownloadPanel entirely.
+void StreamPage::onTheatreTopSeededDownloadRequested(const QString& imdbId,
+                                                      const QString& showName,
+                                                      const QString& infoHash,
+                                                      const QString& magnetUri)
+{
+    Q_UNUSED(showName);
+    if (!m_torrentClient || imdbId.isEmpty()) return;
+
+    QString hash = infoHash;
+    if (hash.isEmpty() && !magnetUri.isEmpty()) {
+        hash = m_torrentClient->resolveMetadata(magnetUri);
+    }
+    if (hash.isEmpty()) {
+        qWarning() << "StreamPage::onTheatreTopSeededDownloadRequested:"
+                   << "no dispatchable hash for" << imdbId << "- aborting";
+        return;
+    }
+
+    AddTorrentConfig config;
+    config.category        = QStringLiteral("videos");
+    config.destinationPath = m_torrentClient->defaultPaths().value("videos");
+    config.contentLayout   = QStringLiteral("original");
+    config.streamGroupId   = QString();
+    config.sequential      = false;
+    config.startPaused     = false;
+    config.imdbId          = imdbId;
+    config.season          = 0;
+
+    m_torrentClient->startDownload(hash, config);
+}
+
+void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPickerChoice& choice)
+{
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - dispatch a specific
+    // right-clicked Sources-panel stream into the Theatre library via
+    // TorrentClient::startDownload directly. Companion to the auto-pick
+    // top-seeded fast-path; here the user has chosen WHICH stream they want.
+    if (!m_torrentClient) return;
+    if (choice.sourceKind != QLatin1String("magnet")) return;
+    if (choice.infoHash.isEmpty() && choice.magnetUri.isEmpty()) return;
+
+    QString hash = choice.infoHash;
+    if (hash.isEmpty() && !choice.magnetUri.isEmpty()) {
+        hash = m_torrentClient->resolveMetadata(choice.magnetUri);
+    }
+    if (hash.isEmpty()) {
+        qWarning() << "StreamPage::onDirectDownloadRequested:"
+                   << "no dispatchable hash - aborting";
+        return;
+    }
+
+    // C1 fix (code-quality review 2026-05-17): Sources panel populates for
+    // series episodes too (StreamDetailView.cpp:1163-1164), not only movies.
+    // Branch on currentType() so series-episode right-click + Download
+    // registers with the correct season identity (else download routes as
+    // season=0 movie and the episode chip never lights up on completion).
+    // I1 fix: empty imdbId silently breaks downstream registration - guard.
+    if (!m_detailView) {
+        qWarning() << "StreamPage::onDirectDownloadRequested:"
+                   << "no detail view context - aborting";
+        return;
+    }
+    const QString imdbId = m_detailView->currentImdb();
+    if (imdbId.isEmpty()) {
+        qWarning() << "StreamPage::onDirectDownloadRequested:"
+                   << "empty imdbId from detail view - aborting";
+        return;
+    }
+    const QString type = m_detailView->currentType();
+    const int season = (type == QLatin1String("series"))
+        ? m_detailView->currentSeason()
+        : 0;
+
+    AddTorrentConfig config;
+    config.category        = QStringLiteral("videos");
+    config.destinationPath = m_torrentClient->defaultPaths().value("videos");
+    config.contentLayout   = QStringLiteral("original");
+    config.streamGroupId   = QString();
+    config.sequential      = false;
+    config.startPaused     = false;
+    config.imdbId          = imdbId;
+    config.season          = season;
+
+    m_torrentClient->startDownload(hash, config);
 }
 
 // triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch

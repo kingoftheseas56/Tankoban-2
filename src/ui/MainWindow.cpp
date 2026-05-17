@@ -391,6 +391,16 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
                                      QStringLiteral("Library"),
                                      {}});
     }
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Task 9: seed the initial
+    // layer for Stream so the first deep transition (e.g. clicking a Detail
+    // tile) has a "browse" entry beneath it and canGoBack returns true.
+    if (m_activePageId == QStringLiteral("stream") && m_navController) {
+        m_navController->pushLayer(QStringLiteral("stream"),
+            tankoban::ui::LayerEntry{QStringLiteral("stream"),
+                                     QStringLiteral("browse"),
+                                     QStringLiteral("Theatre Home"),
+                                     {}});
+    }
 
     // GLOBAL_NAV_HISTORY Task 7: gray chevrons while a modal dialog is up.
     qApp->installEventFilter(this);
@@ -842,6 +852,15 @@ void MainWindow::buildPageStack()
             this, [this]() {
                 if (m_navHistory) m_navHistory->recordNavEvent("stream");
             });
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- per-mode controller wiring
+    // for Stream. Mirror of the Comics wiring above (Task 8 pattern).
+    connect(m_streamPage, &StreamPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(m_streamPage, &StreamPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("stream"));
+    });
 
     auto *tankoLibraryPage = new TankoLibraryPage(m_bridge, torrentClient);
     tankoLibraryPage->setObjectName(PAGE_TANKOLIBRARY);
@@ -1087,7 +1106,12 @@ void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target)
             comics->restoreLayer(target);
         return;
     }
-    // Other pages: Tasks 9-10.
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Task 9: Stream page restore.
+    if (target.pageId == QStringLiteral("stream") && m_streamPage) {
+        m_streamPage->restoreLayer(target);
+        return;
+    }
+    // Other pages: Tasks 10+.
 }
 
 void MainWindow::onBackDestinationLabelChanged(const QString& label) {

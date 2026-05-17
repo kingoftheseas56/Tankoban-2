@@ -18,6 +18,7 @@
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/INavStateProvider.h"
+#include "ui/LayerEntry.h"
 #include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/pages/stream/StreamSourceChoice.h"
 
@@ -76,6 +77,15 @@ public:
                         QWidget* parent = nullptr);
 
     void activate();
+
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public entry point
+    // for MainWindow::resetActivePageToRoot. Standing Tankoban contract:
+    // clicking the Theatre topbar pill from any deep Stream sub-view
+    // (Catalog browse, Detail, AddonManager, Calendar, Search) returns to
+    // the library-home Browse root. Thin forwarder to the private showBrowse
+    // which resets m_navStack to [Browse] and emits navigationRequested.
+    // Phase 1+ may promote this to a shared IPageRoot interface.
+    void resetToRoot();
 
     // INavStateProvider (GLOBAL_NAV_HISTORY Task 14) — global NavHistory hooks.
     // captureNavState reads the top of the in-page m_navStack and emits a
@@ -141,6 +151,27 @@ signals:
     // preserved as render-side state (drives in-page child-screen Back
     // buttons + m_beforePlayerEntry snapshot for player-close restore).
     void navigationRequested();
+
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emitted BEFORE every
+    // user-initiated in-page layer transition. The emitted LayerEntry
+    // captures the INCOMING state so the controller can restore it on
+    // Back. MainWindow connects this to PerModeNavController::pushLayer.
+    // Suppressed during restoreLayer via m_inLayerRestore. Coexists with
+    // the old navigationRequested signal (deleted in Task 12 alongside
+    // NavHistory).
+    void enteredLayer(const tankoban::ui::LayerEntry& entry);
+    // Emitted when the user closes a deep layer via an in-page affordance
+    // (goBack from Detail / Search / Catalog / AddonManager / Calendar).
+    // The controller pops via this signal so the back-stack stays
+    // consistent with the in-page state machine.
+    void exitedLayer();
+
+public slots:
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- re-render the targeted
+    // layer in-place WITHOUT emitting enteredLayer. Called by MainWindow
+    // when PerModeNavController::layerRestoreRequested fires for
+    // pageId="stream". Coexists with restoreNavState (deleted in Task 12).
+    void restoreLayer(const tankoban::ui::LayerEntry& target);
 
 private:
     void buildUI();
@@ -256,6 +287,21 @@ private:
     void onSeasonDownloadRequested(int season);
     void onSelectedEpisodesDownloadRequested(int season, const QList<int>& episodes);
     void onSingleEpisodeDownloadRequested(int season, int episode);
+
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie auto-dispatch
+    // fast-path. Receives the pre-picked top-seeded magnet from StreamDetailView
+    // and dispatches via TorrentClient::startDownload directly. Bypasses
+    // TheatreDownloadPanel entirely.
+    void onTheatreTopSeededDownloadRequested(const QString& imdbId,
+                                              const QString& showName,
+                                              const QString& infoHash,
+                                              const QString& magnetUri);
+
+    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - direct dispatch of
+    // a specific right-clicked Sources-panel stream into the Theatre library.
+    // Companion to onTheatreTopSeededDownloadRequested but takes a specific
+    // user-selected stream instead of the auto-picked top-seeded.
+    void onDirectDownloadRequested(const tankostream::stream::StreamPickerChoice& choice);
 
     // Internal helper used by the three slots above. episodeFilter non-empty
     // restricts the dispatch to those episode numbers only (whole-season when empty).
@@ -610,6 +656,13 @@ private:
         QString searchQuery;
     };
     QStack<NavEntry> m_navStack;
+
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — raised via
+    // QScopedValueRollback in restoreLayer to suppress enteredLayer /
+    // exitedLayer re-emission on every show* path during a controller-
+    // driven Back restore. The existing navigationRequested suppression
+    // model (showEntryRaw bypass) remains unchanged.
+    bool m_inLayerRestore = false;
 
     // STREAM_NAV_BACK_STACK 2026-05-06 — view that was top-of-stack at
     // the moment the player overlay was launched. closeRequested handler
