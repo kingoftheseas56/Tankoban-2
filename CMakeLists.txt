@@ -54,6 +54,7 @@ set(SOURCES
     src/core/PosterCache.cpp
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
+    src/ui/PerModeNavController.cpp
     src/ui/NavHistory.cpp
     src/ui/Theme.cpp
     src/ui/GlassBackground.cpp
@@ -244,6 +245,7 @@ set(HEADERS
     src/ui/INavStateProvider.h
     src/ui/MainWindow.h
     src/ui/LayerEntry.h
+    src/ui/PerModeNavController.h
     src/ui/NavHistory.h
     src/ui/GlassBackground.h
     src/ui/RootFoldersOverlay.h
@@ -738,6 +740,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
+        tests/core/PerModeNavControllerTest.cpp
         src/core/DebugLogBuffer.cpp
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
@@ -746,6 +749,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/PackClassifier.cpp
         src/core/stream/TitleMetadataEstimator.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
+        src/ui/PerModeNavController.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
