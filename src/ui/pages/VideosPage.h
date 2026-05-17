@@ -15,6 +15,7 @@
 #include "core/VideosScanner.h"
 #include "core/library/VideoCategory.h"
 #include "../INavStateProvider.h"
+#include "../LayerEntry.h"
 class QPushButton;
 class QNetworkAccessManager;
 class QScrollArea;
@@ -76,6 +77,15 @@ signals:
     // Emitted just before a library→detail transition so MainWindow's
     // NavHistory can capture current library state and push a fresh entry.
     void navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal participation
+    // in the per-mode back stack. VideosPage emits the initial root layer
+    // at bootstrap; deeper sub-views (Organise sub-page) are reached via
+    // cross-mode pill activation, not via layer push.
+    void enteredLayer(const tankoban::ui::LayerEntry& entry);
+    void exitedLayer();
+
+public slots:
+    void restoreLayer(const tankoban::ui::LayerEntry& target);
 
 private slots:
     void onShowFound(const ShowInfo& show);

@@ -1724,3 +1724,12 @@ bool VideosPage::restoreNavState(const QJsonObject& blob)
     }
     return true;
 }
+
+void VideosPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+{
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. VideosPage
+    // has no deep state participating in the per-mode back stack today; its
+    // ShowView sub-view is reached via cross-mode pill activation, not a
+    // layer push. Phase 1+ may extend.
+    Q_UNUSED(target);
+}

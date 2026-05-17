@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QPushButton>
 #include "../INavStateProvider.h"
+#include "../LayerEntry.h"
 class QScrollArea;
 class CoreBridge;
 class FadingStackedWidget;
@@ -35,6 +36,20 @@ public:
 
 signals:
     void openBook(const QString& filePath);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal participation in
+    // the per-mode back stack. This page has no internal deep state today
+    // (no library<->detail or search<->result transitions), so it only
+    // emits the initial root layer at activate time. Phase 1+ may extend
+    // when this page grows sub-views. Coexists with the legacy
+    // INavStateProvider model deleted in Task 12.
+    void enteredLayer(const tankoban::ui::LayerEntry& entry);
+    void exitedLayer();
+
+public slots:
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. This
+    // page has no deep state today so there's nothing to restore beyond
+    // ensuring the page is on its landing view (which it always is).
+    void restoreLayer(const tankoban::ui::LayerEntry& target);
 
 private slots:
     void onBookSeriesFound(const BookSeriesInfo& series);

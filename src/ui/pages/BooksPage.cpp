@@ -976,3 +976,10 @@ bool BooksPage::restoreNavState(const QJsonObject& blob)
     }
     return true;
 }
+
+void BooksPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+{
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. BooksPage
+    // has no deep state today; the page is always on its landing view.
+    Q_UNUSED(target);
+}

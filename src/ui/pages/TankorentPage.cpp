@@ -3028,3 +3028,11 @@ bool TankorentPage::restoreNavState(const QJsonObject& blob)
                   // renders whatever is in the active torrent list.
 }
 
+void TankorentPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+{
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. TankorentPage
+    // has no deep state participating in the per-mode back stack today; search
+    // + results live on the same surface. Phase 1+ may extend.
+    Q_UNUSED(target);
+}
+

@@ -401,6 +401,31 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
                                      QStringLiteral("Theatre Home"),
                                      {}});
     }
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Task 10: Books / Videos /
+    // Tankorent initial-root bootstrap. Each pushes one root layer so the
+    // mode's stack starts with [root] rather than empty; any future deep
+    // view that emits enteredLayer lands on top with canGoBack true.
+    if (m_activePageId == QStringLiteral("books") && m_navController) {
+        m_navController->pushLayer(QStringLiteral("books"),
+            tankoban::ui::LayerEntry{QStringLiteral("books"),
+                                     QStringLiteral("library"),
+                                     QStringLiteral("Books"),
+                                     {}});
+    }
+    if (m_activePageId == QStringLiteral("videos") && m_navController) {
+        m_navController->pushLayer(QStringLiteral("videos"),
+            tankoban::ui::LayerEntry{QStringLiteral("videos"),
+                                     QStringLiteral("library"),
+                                     QStringLiteral("Videos"),
+                                     {}});
+    }
+    if (m_activePageId == QStringLiteral("tankorent") && m_navController) {
+        m_navController->pushLayer(QStringLiteral("tankorent"),
+            tankoban::ui::LayerEntry{QStringLiteral("tankorent"),
+                                     QStringLiteral("home"),
+                                     QStringLiteral("Tankorent"),
+                                     {}});
+    }
 
     // GLOBAL_NAV_HISTORY Task 7: gray chevrons while a modal dialog is up.
     qApp->installEventFilter(this);
@@ -737,10 +762,28 @@ void MainWindow::buildPageStack()
 
     auto *booksPage = new BooksPage(m_bridge);
     m_pageStack->addWidget(booksPage);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal layer wiring for
+    // Books (no internal deep state today).
+    connect(booksPage, &BooksPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(booksPage, &BooksPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("books"));
+    });
     dbg("4c-bookspage-created");
 
     m_videosPage = new VideosPage(m_bridge);
     m_pageStack->addWidget(m_videosPage);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal layer wiring for
+    // Videos. ShowView sub-page reached via cross-mode pill, not layer push.
+    connect(m_videosPage, &VideosPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(m_videosPage, &VideosPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("videos"));
+    });
     // GLOBAL_NAV_HISTORY Task 10: capture library state before library→detail transition.
     connect(m_videosPage, &VideosPage::navigationRequested,
             this, [this]() {
@@ -828,6 +871,15 @@ void MainWindow::buildPageStack()
     m_tankorentPage = new TankorentPage(m_bridge, torrentClient);
     m_tankorentPage->setObjectName(PAGE_TANKORENT);
     m_pageStack->addWidget(m_tankorentPage);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal layer wiring for
+    // Tankorent (search + results on same surface, no deep layers today).
+    connect(m_tankorentPage, &TankorentPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(m_tankorentPage, &TankorentPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("tankorent"));
+    });
     dbg("4g-tankorentpage-created");
 
     // STREAM_ADD_TO_TANKORENT (2026-05-06) — cross-page magnet hand-off.
@@ -1111,7 +1163,22 @@ void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target)
         m_streamPage->restoreLayer(target);
         return;
     }
-    // Other pages: Tasks 10+.
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Task 10: Books / Videos /
+    // Tankorent. Each restoreLayer is a no-op today (no deep state); the
+    // dispatch exists so future deep-view additions can plug in without
+    // touching MainWindow.
+    if (target.pageId == QStringLiteral("books") && m_pageStack) {
+        if (auto* p = m_pageStack->findChild<BooksPage*>()) p->restoreLayer(target);
+        return;
+    }
+    if (target.pageId == QStringLiteral("videos") && m_videosPage) {
+        m_videosPage->restoreLayer(target);
+        return;
+    }
+    if (target.pageId == QStringLiteral("tankorent") && m_tankorentPage) {
+        m_tankorentPage->restoreLayer(target);
+        return;
+    }
 }
 
 void MainWindow::onBackDestinationLabelChanged(const QString& label) {
