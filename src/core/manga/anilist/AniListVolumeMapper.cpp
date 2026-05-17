@@ -143,4 +143,25 @@ QList<VolumeRow> AniListVolumeMapper::map(const MediaDetail& detail)
     return out;
 }
 
+QList<VolumeRow> AniListVolumeMapper::map(const MediaDetail& detail,
+                                          int overrideVolumeCount,
+                                          int overrideChapterCount)
+{
+    if (detail.totalVolumes > 0 && detail.totalChapters > 0) {
+        return map(detail);
+    }
+    if (overrideVolumeCount <= 0 && overrideChapterCount <= 0) {
+        return map(detail);
+    }
+
+    MediaDetail patched = detail;
+    if (patched.totalVolumes <= 0 && overrideVolumeCount > 0) {
+        patched.totalVolumes = overrideVolumeCount;
+    }
+    if (patched.totalChapters <= 0 && overrideChapterCount > 0) {
+        patched.totalChapters = overrideChapterCount;
+    }
+    return map(patched);
+}
+
 } // namespace tankoban::manga::anilist

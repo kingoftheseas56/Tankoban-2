@@ -34,6 +34,9 @@ class AniListVolumeMapper
 {
 public:
     static QList<VolumeRow> map(const MediaDetail& detail);
+    static QList<VolumeRow> map(const MediaDetail& detail,
+                                int overrideVolumeCount,
+                                int overrideChapterCount);
 
     // Exposed for unit tests: extract the numeric prefix from a chapter
     // number string. "12" -> 12; "12.5" -> 12; "Prologue 1" -> 1; ""

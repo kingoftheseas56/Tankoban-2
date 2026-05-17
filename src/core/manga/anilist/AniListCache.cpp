@@ -122,6 +122,11 @@ QString AniListCache::seriesFilePath(int anilistId) const
     return m_cacheDir + QStringLiteral("/series_%1.json").arg(anilistId);
 }
 
+QString AniListCache::mangaUpdatesSidecarFilePath(int anilistId) const
+{
+    return m_cacheDir + QStringLiteral("/mangaupdates_%1.json").arg(anilistId);
+}
+
 QString AniListCache::bookmarksFilePath() const
 {
     return m_cacheDir + QStringLiteral("/_bookmarks.json");
@@ -159,6 +164,38 @@ void AniListCache::loadFromDisk()
         if (d.preview.anilistId > 0) {
             m_byId.insert(d.preview.anilistId, d);
         }
+    }
+
+    const auto sidecars = dir.entryList(QStringList{ QStringLiteral("mangaupdates_*.json") },
+                                        QDir::Files);
+    for (const auto& filename : sidecars) {
+        const QString idText = filename.mid(13, filename.size() - 13 - 5);
+        bool ok = false;
+        const int anilistId = idText.toInt(&ok);
+        if (!ok || anilistId <= 0) continue;
+
+        QFile f(dir.absoluteFilePath(filename));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        QJsonParseError err{};
+        const auto doc = QJsonDocument::fromJson(f.readAll(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) continue;
+
+        const auto o = doc.object();
+        tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo info;
+        info.seriesId = static_cast<qint64>(
+            o.value(QStringLiteral("seriesId")).toVariant().toLongLong());
+        info.title = o.value(QStringLiteral("title")).toString();
+        info.rawStatus = o.value(QStringLiteral("rawStatus")).toString();
+        info.volumeCount = o.value(QStringLiteral("volumeCount")).toInt();
+        info.latestChapter = o.value(QStringLiteral("latestChapter")).toInt();
+        info.completed = o.value(QStringLiteral("completed")).toBool();
+        info.description = o.value(QStringLiteral("description")).toString();
+        info.imageUrl = o.value(QStringLiteral("imageUrl")).toString();
+        info.lastUpdated = QDateTime::fromString(
+            o.value(QStringLiteral("lastUpdated")).toString(), Qt::ISODate);
+        info.fetchedAtMs = static_cast<qint64>(
+            o.value(QStringLiteral("fetchedAtMs")).toVariant().toLongLong());
+        m_mangaUpdatesByAnilistId.insert(anilistId, info);
     }
 }
 
@@ -266,6 +303,45 @@ bool AniListCache::isFresh(int anilistId, qint64 maxAgeMs) const
     if (it == m_byId.constEnd()) return false;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     return (now - it->fetchedAtMs) < maxAgeMs;
+}
+
+std::optional<tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo>
+AniListCache::getMangaUpdatesSidecar(int anilistId) const
+{
+    QMutexLocker lk(&m_mutex);
+    const auto it = m_mangaUpdatesByAnilistId.constFind(anilistId);
+    if (it == m_mangaUpdatesByAnilistId.constEnd()) return std::nullopt;
+    return it.value();
+}
+
+void AniListCache::putMangaUpdatesSidecar(
+    int anilistId,
+    const tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo& info)
+{
+    if (anilistId <= 0) return;
+    {
+        QMutexLocker lk(&m_mutex);
+        m_mangaUpdatesByAnilistId.insert(anilistId, info);
+    }
+
+    QJsonObject o;
+    o.insert(QStringLiteral("seriesId"), QString::number(info.seriesId));
+    o.insert(QStringLiteral("title"), info.title);
+    o.insert(QStringLiteral("rawStatus"), info.rawStatus);
+    o.insert(QStringLiteral("volumeCount"), info.volumeCount);
+    o.insert(QStringLiteral("latestChapter"), info.latestChapter);
+    o.insert(QStringLiteral("completed"), info.completed);
+    o.insert(QStringLiteral("description"), info.description);
+    o.insert(QStringLiteral("imageUrl"), info.imageUrl);
+    o.insert(QStringLiteral("lastUpdated"), info.lastUpdated.toString(Qt::ISODate));
+    o.insert(QStringLiteral("fetchedAtMs"), QString::number(info.fetchedAtMs));
+
+    QSaveFile f(mangaUpdatesSidecarFilePath(anilistId));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(QJsonDocument(o).toJson(QJsonDocument::Indented));
+        f.commit();
+    }
+    emit cacheChanged(anilistId);
 }
 
 } // namespace tankoban::manga::anilist

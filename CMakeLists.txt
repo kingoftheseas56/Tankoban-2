@@ -165,6 +165,10 @@ set(SOURCES
     src/core/manga/anilist/AniListClient.cpp
     src/core/manga/anilist/AniListCache.cpp
     src/core/manga/anilist/AniListVolumeMapper.cpp
+    src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
+    src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
+    src/core/manga/mangaupdates/MangaUpdatesClient.cpp
+    src/core/manga/mangaupdates/VolumeMetadataResolver.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -343,6 +347,11 @@ set(HEADERS
     src/core/manga/anilist/AniListClient.h
     src/core/manga/anilist/AniListCache.h
     src/core/manga/anilist/AniListVolumeMapper.h
+    src/core/manga/mangaupdates/MangaUpdatesTypes.h
+    src/core/manga/mangaupdates/MangaUpdatesStatusParser.h
+    src/core/manga/mangaupdates/MangaUpdatesDisambiguator.h
+    src/core/manga/mangaupdates/MangaUpdatesClient.h
+    src/core/manga/mangaupdates/VolumeMetadataResolver.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -737,6 +746,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
+        tests/core/manga/MangaUpdatesStatusParserTest.cpp
+        tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/PerModeNavControllerTest.cpp
         src/core/DebugLogBuffer.cpp
         src/core/JsonStore.cpp
@@ -746,6 +757,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/PackClassifier.cpp
         src/core/stream/TitleMetadataEstimator.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
+        src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
+        src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
         src/ui/PerModeNavController.cpp
     )
     target_include_directories(tankoban_tests PRIVATE

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AniListTypes.h"
+#include "core/manga/mangaupdates/MangaUpdatesTypes.h"
 
 #include <QHash>
 #include <QMutex>
@@ -37,6 +38,11 @@ public:
     void put(const MediaDetail& detail);
     void addBookmark(int anilistId);
     void removeBookmark(int anilistId);
+    std::optional<tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo>
+        getMangaUpdatesSidecar(int anilistId) const;
+    void putMangaUpdatesSidecar(
+        int anilistId,
+        const tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo& info);
 
     // Returns true if a cached entry exists AND its fetchedAtMs is within
     // `maxAgeMs` of now. Used by the series view to decide whether to
@@ -52,12 +58,15 @@ private:
     void saveSeriesToDisk(const MediaDetail& d) const;
     void saveBookmarksToDisk() const;
     QString seriesFilePath(int anilistId) const;
+    QString mangaUpdatesSidecarFilePath(int anilistId) const;
     QString bookmarksFilePath() const;
     QString indexFilePath() const;
 
     const QString m_cacheDir;
     mutable QMutex m_mutex;
     QHash<int, MediaDetail> m_byId;
+    QHash<int, tankoban::manga::mangaupdates::MangaUpdatesSeriesInfo>
+        m_mangaUpdatesByAnilistId;
     QSet<int>               m_bookmarks;
 };
 

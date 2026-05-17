@@ -46,7 +46,7 @@ Always cross-check the uploader's profile on nyaa.si before downloading; flagged
 For each volume, transcribe the chapter list. Sources, in order of trust:
 
 1. The back-of-volume table of contents (gold standard but you need the physical or digital book).
-2. AniList volumes endpoint (e.g. https://anilist.co/manga/30005/Death-Note -- look for the per-volume chapter breakdown if available).
+2. AniList volumes endpoint (e.g. https://anilist.co/manga/30021/Death-Note -- look for the per-volume chapter breakdown if available).
 3. mangaupdates.com series page.
 4. mangareader.to volume index pages.
 
@@ -107,7 +107,7 @@ Open `<series_id>.draft.json` in an editor:
 
 The helper does not (and cannot) auto-source these:
 
-- `anilistId` -- look up on anilist.co (the URL slug after /manga/ is the ID, e.g. `30005` for Death Note).
+- `anilistId` -- verify against the AniList GraphQL response before commit. Query `Media(search: "<title>", type: MANGA) { id }` and use the returned `id`; do not rely on stale URL examples or helper defaults. Death Note is `30021`.
 - `alternateTitles` -- common dedup variants. For Japanese works, add the JP capitalization variant (e.g. `["DEATH NOTE", "Desu Noto"]`).
 - `coverPageHint` (per volume, optional) -- if the cbz's first image is a back-cover or credit page rather than the front cover, override here with the entryName preference.
 - `pageCount` (per volume, optional) -- if known. Otherwise 0 means runtime probe.

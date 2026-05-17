@@ -10,6 +10,7 @@
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QColor>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFont>
 #include <QHBoxLayout>
@@ -19,6 +20,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QPixmapCache>
 #include <QPointer>
@@ -176,6 +178,7 @@ ComicsSeriesView::ComicsSeriesView(anilist::AniListClient*  client,
     }
 
     if (m_libraryButton) {
+        m_libraryButton->installEventFilter(this);
         connect(m_libraryButton, &QPushButton::clicked,
                 this, &ComicsSeriesView::onLibraryButtonClicked);
     }
@@ -274,6 +277,8 @@ void ComicsSeriesView::buildUi()
 
     m_libraryButton = new QPushButton(this);
     m_libraryButton->setObjectName(QStringLiteral("ComicsSeriesLibraryButton"));
+    m_libraryButton->setAccessibleName(QStringLiteral("ComicsSeriesLibraryButton"));
+    m_libraryButton->setAccessibleDescription(QStringLiteral("Add or remove this series from the Comics library."));
     m_libraryButton->setFixedHeight(32);
     m_libraryButton->setCursor(Qt::PointingHandCursor);
     m_libraryButton->setStyleSheet(QStringLiteral(
@@ -486,15 +491,27 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
     }
     m_metaLine->setText(buildDetailMetaLine(detail));
 
-    // Repopulate the volumes table from the mapper output.
-    const QList<anilist::VolumeRow> rows = anilist::AniListVolumeMapper::map(detail);
+    populateVolumeRows(anilist::AniListVolumeMapper::map(detail), &detail);
 
+    // PHASE 12: async-load banner. Prefer preview.bannerUrl; fall back to
+    // coverFullUrl (stretched) when the AniList Media has no banner.
+    const QString bannerUrl = !detail.preview.bannerUrl.isEmpty()
+        ? detail.preview.bannerUrl
+        : detail.preview.coverFullUrl;
+    if (!bannerUrl.isEmpty()) {
+        loadBannerUrl(bannerUrl);
+    }
+}
+
+void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
+                                          const anilist::MediaDetail* detail)
+{
     // PHASE 8: cache the mapped rows so onVolumeCellClicked can hand the
     // full VolumeRow to the sources panel without rerunning the mapper.
     m_currentVolumeRows = rows;
     // Also stash the canonical title for the panel populate() call.
-    if (!detail.preview.title.isEmpty()) {
-        m_currentSeriesTitle = detail.preview.title;
+    if (detail && !detail->preview.title.isEmpty()) {
+        m_currentSeriesTitle = detail->preview.title;
     }
 
     m_volumesTable->setRowCount(rows.size());
@@ -526,9 +543,11 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
         //            once Phase 10 extractor fires (provider/packer signal).
         auto* coverItem = new QTableWidgetItem();
         m_volumesTable->setItem(i, 1, coverItem);
-        const QString coverUrl = !row.art.thumbnailUrl.isEmpty()
-            ? row.art.thumbnailUrl
-            : detail.preview.coverThumbUrl;
+        const QString coverUrl = detail
+            ? (!row.art.thumbnailUrl.isEmpty()
+                ? row.art.thumbnailUrl
+                : detail->preview.coverThumbUrl)
+            : QString();
         if (!coverUrl.isEmpty()) {
             loadCoverUrlForVolume(coverUrl, row.volumeNumber);
         }
@@ -588,15 +607,15 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
             setVolumeDownloadState(row.volumeNumber, downloaded->canonicalPath, true);
         }
     }
+}
 
-    // PHASE 12: async-load banner. Prefer preview.bannerUrl; fall back to
-    // coverFullUrl (stretched) when the AniList Media has no banner.
-    const QString bannerUrl = !detail.preview.bannerUrl.isEmpty()
-        ? detail.preview.bannerUrl
-        : detail.preview.coverFullUrl;
-    if (!bannerUrl.isEmpty()) {
-        loadBannerUrl(bannerUrl);
+void ComicsSeriesView::setVolumeRows(const QList<anilist::VolumeRow>& rows)
+{
+    std::optional<anilist::MediaDetail> detail;
+    if (m_cache && m_currentAnilistId > 0) {
+        detail = m_cache->get(m_currentAnilistId);
     }
+    populateVolumeRows(rows, detail ? &(*detail) : nullptr);
 }
 
 void ComicsSeriesView::renderEmpty(const QString& reason)
@@ -630,6 +649,32 @@ void ComicsSeriesView::onLibraryButtonClicked()
         m_cache->addBookmark(m_currentAnilistId);
     }
     refreshLibraryButton();
+}
+
+bool ComicsSeriesView::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_libraryButton && m_libraryButton) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                m_libraryButtonSawPress = true;
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                const bool sawPress = m_libraryButtonSawPress;
+                m_libraryButtonSawPress = false;
+                if (!sawPress
+                    && m_libraryButton->isEnabled()
+                    && m_libraryButton->rect().contains(mouse->position().toPoint())) {
+                    m_libraryButton->click();
+                    event->accept();
+                    return true;
+                }
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 // -----------------------------------------------------------------------

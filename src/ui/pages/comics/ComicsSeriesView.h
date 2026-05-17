@@ -82,6 +82,7 @@ public:
     // series not currently displayed) are ignored.
     void setVolumeCoverFromDisk(const QString& seriesId, int volumeNumber,
                                 const QString& coverPath);
+    void setVolumeRows(const QList<anilist::VolumeRow>& rows);
     int currentAnilistId() const { return m_currentAnilistId; }
 
 public slots:
@@ -112,6 +113,7 @@ protected:
     // rather than docking it as a top pane. All child widgets sit on
     // transparent backgrounds + render over the wallpaper.
     void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onSeriesSucceeded(int requestId, const tankoban::manga::anilist::MediaDetail& detail);
@@ -125,6 +127,8 @@ private:
     void buildUi();
     void renderDetail(const anilist::MediaDetail& detail);
     void renderEmpty(const QString& reason = {});
+    void populateVolumeRows(const QList<anilist::VolumeRow>& rows,
+                            const anilist::MediaDetail* detail);
     void refreshLibraryButton();
 
     // PHASE 12: async-load a cover URL into a target volume row's Cover cell.
@@ -160,6 +164,7 @@ private:
     int m_pendingSeriesReqId = -1;
     int m_currentAnilistId   = 0;
     int m_nextRequestId      = 1;
+    bool m_libraryButtonSawPress = false;
 };
 
 } // namespace tankoban::manga::comics

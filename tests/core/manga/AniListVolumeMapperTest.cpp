@@ -134,3 +134,27 @@ TEST(AniListVolumeMapperTest, OngoingWithNoBoundVolumesProducesOnlyVolX)
     EXPECT_TRUE(rows[0].isVolumeX);
     EXPECT_EQ(rows[0].chapterCount, 12);
 }
+
+TEST(AniListVolumeMapperTest, OverrideHydratesNullOngoingFromMangaUpdates)
+{
+    MediaDetail detail = makeDetail(QStringLiteral("One Piece"), 0, 0,
+                                    QStringLiteral("RELEASING"), {});
+
+    const auto rows = AniListVolumeMapper::map(detail, 114, 1182);
+
+    ASSERT_GE(rows.size(), 114);
+    EXPECT_EQ(rows[0].volumeNumber, 1);
+    EXPECT_EQ(rows[113].volumeNumber, 114);
+    EXPECT_TRUE(rows.last().isVolumeX);
+}
+
+TEST(AniListVolumeMapperTest, OverrideIgnoredWhenAniListAuthoritative)
+{
+    MediaDetail detail = makeDetail(QStringLiteral("Death Note"), 12, 108,
+                                    QStringLiteral("FINISHED"), {});
+
+    const auto rows = AniListVolumeMapper::map(detail, 99, 99);
+
+    ASSERT_EQ(rows.size(), 12);
+    EXPECT_EQ(rows.last().volumeNumber, 12);
+}

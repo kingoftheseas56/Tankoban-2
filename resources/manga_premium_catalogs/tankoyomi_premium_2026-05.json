@@ -2,7 +2,7 @@
   "id": "tankoyomi_premium_2026-05",
   "name": "Tankoyomi Premium (May 2026)",
   "version": "1.0.0",
-  "description": "Hand-curated trusted-uploader nyaa torrent catalog for high-fidelity Premium downloads. v1 ships one worked-example entry (Death Note, KG Manga digital edition); 29 more series are pending curator-driven sessions per tools/premium_catalog_helper/CURATION_HANDOFF.md. Death Note vols 4-12 chapter titles are placeholders (Chapter N) pending canonical-title backfill from AniList anilistId=30005; vols 1-3 carry verifiable VIZ Digital titles.",
+  "description": "Hand-curated trusted-uploader nyaa torrent catalog for high-fidelity Premium downloads. v1 ships one worked-example entry (Death Note, KG Manga digital edition); 29 more series are pending curator-driven sessions per tools/premium_catalog_helper/CURATION_HANDOFF.md. Death Note vols 4-12 chapter titles are placeholders (Chapter N) pending canonical-title backfill from AniList anilistId=30021; vols 1-3 carry verifiable VIZ Digital titles.",
   "contact": "agent-1@tankoban.local",
   "behaviorHints": { "p2p": true, "adult": false },
   "series": [
@@ -10,7 +10,7 @@
       "seriesId": "death_note",
       "title": "Death Note",
       "alternateTitles": ["DEATH NOTE", "Desu Noto"],
-      "anilistId": 30005,
+      "anilistId": 30021,
       "status": "completed",
       "magnetUri": "magnet:?xt=urn:btih:06f8ace5d411f31fedada07da833d99d00f040c7&dn=Death%20Note%20v01-12%20%282005-2007%29%20%28Digital%29%20%28KG%20Manga%29",
       "expectedInfoHash": "06f8ace5d411f31fedada07da833d99d00f040c7",

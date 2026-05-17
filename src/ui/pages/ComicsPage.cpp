@@ -20,6 +20,9 @@
 #include "core/manga/anilist/AniListCache.h"
 #include "core/manga/anilist/AniListClient.h"
 #include "core/manga/anilist/AniListTypes.h"
+#include "core/manga/anilist/AniListVolumeMapper.h"
+#include "core/manga/mangaupdates/MangaUpdatesClient.h"
+#include "core/manga/mangaupdates/VolumeMetadataResolver.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/torrent/TorrentEngine.h"
 #include "comics/ComicsTankoyomiSearchWidget.h"
@@ -114,6 +117,16 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     m_anilistClient = new tankoban::manga::anilist::AniListClient(m_nam, this);
     m_anilistCache  = new tankoban::manga::anilist::AniListCache(
                           m_bridge->dataDir() + QStringLiteral("/anilist_cache"), this);
+    m_mangaUpdatesClient = new tankoban::manga::mangaupdates::MangaUpdatesClient(
+        m_anilistClient ? m_anilistClient->networkManager() : nullptr, this);
+    m_volumeResolver = new tankoban::manga::mangaupdates::VolumeMetadataResolver(
+        m_mangaUpdatesClient, m_anilistCache, this);
+    connect(m_volumeResolver,
+            &tankoban::manga::mangaupdates::VolumeMetadataResolver::resolved,
+            this, &ComicsPage::onVolumeMetadataResolved);
+    connect(m_volumeResolver,
+            &tankoban::manga::mangaupdates::VolumeMetadataResolver::unresolved,
+            this, &ComicsPage::onVolumeMetadataUnresolved);
     const QString trustJsonPath = QCoreApplication::applicationDirPath()
                                 + QStringLiteral("/resources/manga_uploader_trust.json");
     m_nyaaRuntime = new tankoban::manga::NyaaRuntimeSource(m_nam, trustJsonPath, this);
@@ -258,6 +271,23 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::openVolume,
             this, &ComicsPage::onComicsSeriesOpenVolume);
+    connect(m_anilistClient,
+            &tankoban::manga::anilist::AniListClient::seriesSucceeded,
+            this, [this](int, const tankoban::manga::anilist::MediaDetail& detail) {
+        if (!m_volumeResolver || !m_tyVolumeSeriesView) return;
+        if (m_tyVolumeSeriesView->currentAnilistId() != detail.preview.anilistId) return;
+
+        const bool isOngoing = detail.preview.status == QStringLiteral("RELEASING") ||
+                               detail.preview.status == QStringLiteral("HIATUS");
+        const bool nullTotals = detail.totalVolumes <= 0 || detail.totalChapters <= 0;
+        if (isOngoing && nullTotals) {
+            // PHASE 2+: persist AniList staff/authors into MediaPreview so
+            // MangaUpdatesDisambiguator can use author signal. v1 falls
+            // back to exact title + start year.
+            m_volumeResolver->resolveForAnilist(
+                detail.preview.anilistId, detail.preview, QStringList{});
+        }
+    }, Qt::QueuedConnection);
 
     // Background scanner thread
     m_scanThread = new QThread(this);
@@ -619,16 +649,20 @@ void ComicsPage::buildUI()
         menu->deleteLater();
     });
 
-    // ── 3. "DOWNLOADED" header row: label + sort + density ──
+    // ── 3. "LIBRARY" header row: label + sort + density ──
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- section relabel from
     // "SERIES" (folder-import + Tankoyomi-library merge) to "DOWNLOADED"
     // (one tile per series in MangaDownloadIndex::entriesForAllSeries).
+    // 2026-05-17 -- merged with BOOKMARKED into a single "LIBRARY" section
+    // per Theatre's "Shows & Movies" mirror; both source feeds flow into
+    // m_tileStrip alongside the existing dedup. m_downloadedLabel variable
+    // name preserved for code-stability; only the display text changed.
     auto* seriesRow = new QWidget(gridPage);
     auto* seriesLayout = new QHBoxLayout(seriesRow);
     seriesLayout->setContentsMargins(0, 0, 0, 0);
     seriesLayout->setSpacing(8);
 
-    m_downloadedLabel = new QLabel("DOWNLOADED", seriesRow);
+    m_downloadedLabel = new QLabel("LIBRARY", seriesRow);
     m_downloadedLabel->setObjectName("LibraryHeading");
     seriesLayout->addWidget(m_downloadedLabel);
     seriesLayout->addStretch();
@@ -1495,14 +1529,22 @@ void ComicsPage::refreshLibraryStrips()
                     [this, anilistId, title]() {
                 openSeriesByAnilistId(anilistId, title);
             });
-            m_bookmarkedStrip->addTile(card);
+            // 2026-05-17 LIBRARY merge -- bookmarked tiles land in the same
+            // m_tileStrip as downloaded tiles. m_bookmarkedStrip is kept in
+            // the layout (always hidden) for backward-compat; cleanup of the
+            // dead widget is a future polish item.
+            m_tileStrip->addTile(card);
             fetchPosterForTile(card, p.anilistId, p.coverThumbUrl);
             ++bookmarkedCount;
         }
     }
 
-    // ── Section visibility ──
-    if (hasDownloaded) {
+    // ── Section visibility (2026-05-17 LIBRARY merge) ──
+    // Theatre mirror: one combined LIBRARY strip; show whenever EITHER
+    // downloaded OR bookmarked has at least one tile. m_bookmarkedSection
+    // is always hidden post-merge.
+    const bool hasAnyLibraryTile = hasDownloaded || bookmarkedCount > 0;
+    if (hasAnyLibraryTile) {
         m_tileStrip->show();
         if (m_downloadedLabel) m_downloadedLabel->show();
         m_tileStrip->sortTiles(m_sortCombo->currentData().toString());
@@ -1510,11 +1552,7 @@ void ComicsPage::refreshLibraryStrips()
         m_tileStrip->hide();
         if (m_downloadedLabel) m_downloadedLabel->hide();
     }
-    if (bookmarkedCount > 0) {
-        if (m_bookmarkedSection) m_bookmarkedSection->show();
-    } else {
-        if (m_bookmarkedSection) m_bookmarkedSection->hide();
-    }
+    if (m_bookmarkedSection) m_bookmarkedSection->hide();
 
     // Empty-state: only show the global empty label when BOTH sections are
     // empty AND no Continue-Reading items light up.
@@ -1720,6 +1758,26 @@ void ComicsPage::onDetailBack()
     m_currentDetailSeriesTitle.clear();
     if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->clearView();
     m_enteredDetailFrom = Mode::Library;
+}
+
+void ComicsPage::onVolumeMetadataResolved(int anilistId, int volumeCount, int chapterCount)
+{
+    if (!m_anilistCache || !m_tyVolumeSeriesView) return;
+    if (m_tyVolumeSeriesView->currentAnilistId() != anilistId) return;
+
+    const auto detail = m_anilistCache->get(anilistId);
+    if (!detail.has_value()) return;
+
+    const auto rows = tankoban::manga::anilist::AniListVolumeMapper::map(
+        *detail, volumeCount, chapterCount);
+    m_tyVolumeSeriesView->setVolumeRows(rows);
+}
+
+void ComicsPage::onVolumeMetadataUnresolved(int anilistId, const QString& reason)
+{
+    qDebug().noquote() << QStringLiteral("[mangaupdates] anilist %1 unresolved: %2")
+                              .arg(anilistId)
+                              .arg(reason);
 }
 
 void ComicsPage::onDownloadDispatchRequested(

@@ -33,6 +33,10 @@ namespace tankoban::manga {
         class AniListCache;
         struct MediaPreview;
     }
+    namespace mangaupdates {
+        class MangaUpdatesClient;
+        class VolumeMetadataResolver;
+    }
     namespace premium {
         class PremiumCatalog;
         class TorrentRequestLedger;
@@ -138,6 +142,8 @@ private slots:
                                 const QString& errorMessage,
                                 int fallbackSourceKind);
     void onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPath);
+    void onVolumeMetadataResolved(int anilistId, int volumeCount, int chapterCount);
+    void onVolumeMetadataUnresolved(int anilistId, const QString& reason);
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 — Back from
     // Tankoyomi detail returns to library mode in Phase 4. Phase 9
     // refines (Back-from-search-detail returns to search results).
@@ -357,6 +363,8 @@ private:
     // off-catalog volume packs routed via downloadDispatchRequested.
     tankoban::manga::anilist::AniListClient* m_anilistClient = nullptr;
     tankoban::manga::anilist::AniListCache*  m_anilistCache  = nullptr;
+    tankoban::manga::mangaupdates::MangaUpdatesClient* m_mangaUpdatesClient = nullptr;
+    tankoban::manga::mangaupdates::VolumeMetadataResolver* m_volumeResolver = nullptr;
     tankoban::manga::NyaaRuntimeSource*      m_nyaaRuntime   = nullptr;
     tankoban::manga::WeebCentralVolumePacker* m_weebCentralPacker = nullptr;
     tankoban::manga::comics::ComicsSeriesView* m_tyVolumeSeriesView = nullptr;
