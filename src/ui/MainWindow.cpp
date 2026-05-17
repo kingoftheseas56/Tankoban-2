@@ -379,6 +379,18 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     if (!m_activePageId.isEmpty()) {
         m_navController->setActiveMode(m_activePageId);
     }
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- seed the initial layer
+    // for Comics so that the FIRST deep transition (e.g. clicking a
+    // BOOKMARKED tile) has a "library" entry beneath it and canGoBack
+    // returns true. Without this push the stack starts empty and the
+    // chevron stays gray after the first enteredLayer emit.
+    if (m_activePageId == QStringLiteral("comics") && m_navController) {
+        m_navController->pushLayer(QStringLiteral("comics"),
+            tankoban::ui::LayerEntry{QStringLiteral("comics"),
+                                     QStringLiteral("library"),
+                                     QStringLiteral("Library"),
+                                     {}});
+    }
 
     // GLOBAL_NAV_HISTORY Task 7: gray chevrons while a modal dialog is up.
     qApp->installEventFilter(this);
@@ -700,6 +712,17 @@ void MainWindow::buildPageStack()
             this, [this]() {
                 if (m_navHistory) m_navHistory->recordNavEvent("comics");
             });
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- ComicsPage emits a full
+    // LayerEntry per in-page transition. The controller pushes onto the
+    // "comics" stack; the topbar Back chevron then has a destination to
+    // walk to. Cross-mode pill clicks reset the comics stack to [].
+    connect(comicsPage, &ComicsPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(comicsPage, &ComicsPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("comics"));
+    });
     dbg("4b-comicspage-created");
 
     auto *booksPage = new BooksPage(m_bridge);
@@ -1056,10 +1079,15 @@ void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
 
 void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target) {
     // Dispatch the restore back to the originating page. Each page is
-    // responsible for honoring the target in its own restoreLayer slot
-    // (wired in the per-page tasks 8-11). For now, no page has the slot
-    // yet -- this connection is a placeholder.
-    Q_UNUSED(target);
+    // responsible for honoring the target in its own restoreLayer slot.
+    // Comics is wired in Task 8; other pages (stream, books, videos,
+    // tankorent) are handled in Tasks 9-10.
+    if (target.pageId == QStringLiteral("comics")) {
+        if (auto* comics = m_pageStack->findChild<ComicsPage*>())
+            comics->restoreLayer(target);
+        return;
+    }
+    // Other pages: Tasks 9-10.
 }
 
 void MainWindow::onBackDestinationLabelChanged(const QString& label) {

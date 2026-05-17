@@ -38,6 +38,7 @@
 #include <QPointer>
 #include <QCoreApplication>
 #include <QPushButton>
+#include <QScopedValueRollback>
 #include <QDebug>
 
 #include <QVBoxLayout>
@@ -64,6 +65,21 @@
 static const QStringList COMIC_EXTS = {"*.cbz", "*.cbr", "*.rar"};
 static constexpr const char* TANKOYOMI_PREMIUM_SOURCE_ID = "tankoyomi_premium";
 static constexpr const char* WEEBCENTRAL_PACKER_SOURCE_ID = "weebcentral";
+
+namespace {
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
+// the Comics page. All emit sites call this helper so the pageId is always
+// "comics" and the struct fields are assembled consistently.
+tankoban::ui::LayerEntry makeComicsLayer(const QString& kind, const QString& label,
+                                         const QJsonObject& blob = {}) {
+    return tankoban::ui::LayerEntry{
+        QStringLiteral("comics"),
+        kind,
+        label,
+        blob
+    };
+}
+} // namespace
 
 ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -1345,6 +1361,26 @@ void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTit
         }
     }
 
+    // PHASE 0 NAV CONTRACT RESTORE follow-up 2026-05-17 (Agent 5) — emit
+    // BEFORE the in-page state change so MainWindow's recordNavEvent("comics")
+    // connection captures the OLD Library state into the current NavHistory
+    // entry and pushes a fresh TankoyomiDetail entry for the target. Without
+    // this emit, the BOOKMARKED + DOWNLOADED tile-click paths (the two
+    // callers of this method, added in TANKOYOMI_VOLUME_PIVOT Phase 10) land
+    // the user in a deep series view with no back-stack entry, leaving the
+    // topbar Back chevron disabled (canGoBack returns false). The first
+    // Phase 0 pass missed this path -- it only emitted in the Phase 9 paths
+    // (showSearchMode, onSearchResultActivated, openSeriesByPath). Guarded
+    // against m_inNavRestore so restoreNavState's tankoyomiDetail branch
+    // (lines 2341-2342) does not re-emit during back-restore replay.
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("anilistId")]   = anilistId;
+        blob[QStringLiteral("seriesTitle")] = preview.title;
+        blob[QStringLiteral("enteredFrom")] = QStringLiteral("library");
+        emit navigationRequested();  // Phase 0 legacy -- kept until Task 12
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), preview.title, blob));
+    }
     m_enteredDetailFrom        = Mode::Library;
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = anilistId;
@@ -1514,6 +1550,20 @@ void ComicsPage::openSeriesByPath(const QString& seriesPath, const QString& seri
     // tiles around anilistId, at which point this branch lights back up.
     // Folder-origin tiles fall through to the existing SeriesView path.
     Q_UNUSED(seriesName);
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit BEFORE the
+    // in-page stack flip so MainWindow's NavHistory captures the OLD library
+    // state into the current entry, then pushes a fresh entry for the folder
+    // series layer. captureNavState reads m_mode (which stays Library on this
+    // legacy path); pressing the topbar Back chevron correctly restores the
+    // library-grid state.
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("seriesPath")] = seriesPath;
+        blob[QStringLiteral("seriesName")] = seriesName;
+        blob[QStringLiteral("coverPath")]  = coverPath;
+        emit navigationRequested();  // Phase 0 legacy -- kept until Task 12
+        emit enteredLayer(makeComicsLayer(QStringLiteral("folderSeriesView"), seriesName, blob));
+    }
     m_seriesView->showSeries(seriesPath, seriesName, coverPath);
     m_stack->setCurrentIndexAnimated(1);
 }
@@ -1568,8 +1618,34 @@ void ComicsPage::showGrid()
 // SearchResults flips to the takeover widget; onSearchResultActivated is
 // a Phase-3 qDebug stub awaiting Phase-4 detail wiring.
 
+void ComicsPage::resetToRoot()
+{
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public forwarder
+    // invoked by MainWindow::resetActivePageToRoot when the user clicks
+    // the Comics topbar pill while already on this page. showLibraryMode
+    // is internally guarded against same-mode re-entry, so calling this
+    // while already on the library grid is a structural no-op.
+    showLibraryMode();
+}
+
 void ComicsPage::showLibraryMode()
 {
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit before the
+    // in-page transition so MainWindow's NavHistory records the Library
+    // landing as its own entry whenever we arrive from a deeper layer
+    // (search results, tankoyomi detail). Suppressed when (a) already on
+    // Library (no-op transition, no history pollution) or (b) called from
+    // restoreNavState via the m_inNavRestore guard.
+    if (!m_inNavRestore && m_mode != Mode::Library) {
+        QJsonObject blob;
+        if (m_sortCombo) blob[QStringLiteral("sort")] = m_sortCombo->currentData().toString();
+        if (m_gridScroll) {
+            if (auto* vsb = m_gridScroll->verticalScrollBar())
+                blob[QStringLiteral("scrollY")] = vsb->value();
+        }
+        emit navigationRequested();  // Phase 0 legacy -- kept until Task 12
+        emit enteredLayer(makeComicsLayer(QStringLiteral("library"), QStringLiteral("Library"), blob));
+    }
     m_mode = Mode::Library;
     m_stack->setCurrentIndexAnimated(0);
     if (m_searchTakeover) m_searchTakeover->clearResults();
@@ -1577,6 +1653,17 @@ void ComicsPage::showLibraryMode()
 
 void ComicsPage::showSearchMode(const QString& query)
 {
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit before the
+    // in-page transition so the SearchResults layer is recorded in
+    // NavHistory. Guarded against same-mode re-entry (typing a new query
+    // while already in search results is a refinement, not a navigation)
+    // and the restoreNavState replay path.
+    if (!m_inNavRestore && m_mode != Mode::SearchResults) {
+        QJsonObject blob;
+        blob[QStringLiteral("query")] = query;
+        emit navigationRequested();  // Phase 0 legacy -- kept until Task 12
+        emit enteredLayer(makeComicsLayer(QStringLiteral("searchResults"), QStringLiteral("Search Results"), blob));
+    }
     m_mode = Mode::SearchResults;
     m_searchTakeover->search(query);
     m_stack->setCurrentWidget(m_searchTakeover);
@@ -1587,6 +1674,19 @@ void ComicsPage::onSearchResultActivated(const tankoban::manga::anilist::MediaPr
     // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- search-result click
     // routes into the new ComicsSeriesView. Origin is recorded so Back
     // returns to the search-takeover (Phase 9 Task 52 carry-over).
+    //
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit BEFORE the
+    // in-page state change so NavHistory captures the SearchResults state
+    // (mode=searchResults + query) into the current entry and pushes a
+    // fresh tankoyomiDetail entry for the target.
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("anilistId")]   = preview.anilistId;
+        blob[QStringLiteral("seriesTitle")] = preview.title;
+        blob[QStringLiteral("enteredFrom")] = QStringLiteral("search");
+        emit navigationRequested();  // Phase 0 legacy -- kept until Task 12
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), preview.title, blob));
+    }
     m_enteredDetailFrom = Mode::SearchResults;
     m_mode = Mode::TankoyomiDetail;
     m_currentDetailAnilistId    = preview.anilistId;
@@ -1609,7 +1709,20 @@ void ComicsPage::onDetailBack()
     // back button in its scoped stub per Phase 7 comments). This slot
     // remains the central exit point and is invoked by Escape-shortcut +
     // future deep-link recovery paths. Direct invocation lands here.
+    //
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emit exitedLayer so the
+    // controller pops the detail entry from its stack, keeping the
+    // back-stack consistent with the in-page state machine. Emitted
+    // before the mode flip so the controller state matches what is about
+    // to become visible.
+    if (!m_inNavRestore) emit exitedLayer();
     if (m_enteredDetailFrom == Mode::SearchResults && m_searchTakeover) {
+        // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — the
+        // Detail->Search hop bypasses showSearchMode (no re-search needed),
+        // so the navigationRequested emit lives directly on this branch.
+        // The Detail->Library branch below funnels through showLibraryMode
+        // which emits on its own.
+        if (!m_inNavRestore) emit navigationRequested();
         m_mode = Mode::SearchResults;
         m_stack->setCurrentWidget(m_searchTakeover);
     } else {
@@ -2224,6 +2337,15 @@ QJsonObject ComicsPage::captureNavState() const
 
 bool ComicsPage::restoreNavState(const QJsonObject& blob)
 {
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — raise the
+    // m_inNavRestore guard for the duration of the restore. Every
+    // showLibraryMode / showSearchMode / direct mode flip below is a
+    // replay of a previously-recorded transition, not a fresh navigation,
+    // and must NOT re-emit navigationRequested (which would push a
+    // duplicate entry through MainWindow's recordNavEvent connection).
+    // QScopedValueRollback resets the flag on every return path.
+    QScopedValueRollback<bool> rollback(m_inNavRestore, true);
+
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 51 —
     // 3-mode router. Brief CRITICAL fix #3: old blobs persisted by
     // Agent 5's Phase 8 ship have NO "mode" field (just search/sort/
@@ -2297,4 +2419,72 @@ bool ComicsPage::restoreNavState(const QJsonObject& blob)
     }
 
     return false;
+}
+
+// ── PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) ─────────────────────────────
+// restoreLayer: re-render the targeted layer WITHOUT emitting enteredLayer.
+// Called by MainWindow::onLayerRestoreRequested when the controller fires
+// layerRestoreRequested for pageId="comics". Dispatches on target.kind and
+// replays the layer state using the same private helpers as restoreNavState
+// (which remains alive until Task 12). The QScopedValueRollback on
+// m_inNavRestore suppresses re-emission on every code path below.
+void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+{
+    QScopedValueRollback<bool> rollback(m_inNavRestore, true);
+    const QString kind     = target.kind;
+    const QJsonObject blob = target.stateBlob;
+
+    if (kind == QStringLiteral("library")) {
+        showLibraryMode();
+        if (m_sortCombo) {
+            const QString sort = blob.value(QStringLiteral("sort")).toString();
+            if (!sort.isEmpty()) {
+                for (int i = 0; i < m_sortCombo->count(); ++i) {
+                    if (m_sortCombo->itemData(i).toString() == sort) {
+                        m_sortCombo->setCurrentIndex(i);
+                        break;
+                    }
+                }
+            }
+        }
+        if (m_gridScroll) {
+            if (auto* vsb = m_gridScroll->verticalScrollBar())
+                vsb->setValue(blob.value(QStringLiteral("scrollY")).toInt(0));
+        }
+        return;
+    }
+
+    if (kind == QStringLiteral("searchResults")) {
+        const QString q = blob.value(QStringLiteral("query")).toString();
+        if (m_searchBar) m_searchBar->setText(q);
+        showSearchMode(q);
+        return;
+    }
+
+    if (kind == QStringLiteral("seriesView") && m_tyVolumeSeriesView) {
+        const int anilistId        = blob.value(QStringLiteral("anilistId")).toInt(0);
+        const QString seriesTitle  = blob.value(QStringLiteral("seriesTitle")).toString();
+        if (anilistId > 0) {
+            m_enteredDetailFrom = (blob.value(QStringLiteral("enteredFrom")).toString() == QStringLiteral("search")
+                                    ? Mode::SearchResults : Mode::Library);
+            m_mode = Mode::TankoyomiDetail;
+            tankoban::manga::anilist::MediaPreview preview;
+            preview.anilistId = anilistId;
+            preview.title     = seriesTitle;
+            m_currentDetailAnilistId   = anilistId;
+            m_currentDetailSeriesTitle = seriesTitle;
+            m_tyVolumeSeriesView->showSeries(preview);
+            m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+            return;
+        }
+    }
+
+    if (kind == QStringLiteral("folderSeriesView") && m_seriesView) {
+        const QString seriesPath = blob.value(QStringLiteral("seriesPath")).toString();
+        const QString seriesName = blob.value(QStringLiteral("seriesName")).toString();
+        const QString coverPath  = blob.value(QStringLiteral("coverPath")).toString();
+        m_seriesView->showSeries(seriesPath, seriesName, coverPath);
+        m_stack->setCurrentIndexAnimated(1);
+        return;
+    }
 }

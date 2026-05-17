@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QMap>
 #include "../INavStateProvider.h"
+#include "../LayerEntry.h"
 class QPushButton;
 class QScrollArea;
 class CoreBridge;
@@ -59,6 +60,15 @@ public:
     void activate();
     void triggerScan();
 
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public entry point
+    // for MainWindow::resetActivePageToRoot. Standing Tankoban contract:
+    // clicking the Comics topbar pill from any deep sub-view (search results,
+    // tankoyomi-detail series view, folder series view) returns the user to
+    // the library-grid root. Thin forwarder to the private showLibraryMode
+    // slot so MainWindow doesn't need friend access. Phase 1+ may promote
+    // this to a shared IPageRoot interface for polymorphic dispatch.
+    void resetToRoot();
+
     // TANKOYOMI_PREMIUM Phase 3 -- MainWindow constructs TorrentClient AFTER
     // ComicsPage (line ordering: pages first, then TorrentClient hoisted at
     // MainWindow scope post-SOURCES_SIDEBAR). Mirrors VideosPage's
@@ -81,6 +91,35 @@ public:
 
 signals:
     void openComic(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emitted BEFORE any
+    // user-initiated in-page mode transition (Library<->SearchResults<->
+    // TankoyomiDetail and library-tile->folder series view). MainWindow's
+    // recordNavEvent("comics") connection captures the OLD state into the
+    // current NavHistory entry and pushes a fresh one for the target, so the
+    // global Back / Forward chevrons span Comics sub-views. Suppressed during
+    // restoreNavState via m_inNavRestore — mirrors Stream / Videos pattern.
+    void navigationRequested();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emitted BEFORE every
+    // user-initiated in-page layer transition (Library <-> SearchResults
+    // <-> TankoyomiDetail and library-tile->folder series view). The
+    // emitted LayerEntry captures the OUTGOING state so the controller
+    // can restore it on Back. MainWindow connects this to
+    // PerModeNavController::pushLayer. Suppressed during restoreLayer via
+    // m_inNavRestore. Coexists with the old navigationRequested signal
+    // (deleted in Task 12 alongside NavHistory).
+    void enteredLayer(const tankoban::ui::LayerEntry& entry);
+    // Emitted when the user closes a deep layer via an in-page affordance
+    // (Esc from series view, in-page back button on a search-takeover).
+    // The controller pops via this signal so the back-stack stays consistent
+    // with the in-page state machine.
+    void exitedLayer();
+
+public slots:
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- re-render the targeted
+    // layer in-place WITHOUT emitting enteredLayer. Called by MainWindow
+    // when PerModeNavController::layerRestoreRequested fires for
+    // pageId="comics". Coexists with restoreNavState (deleted in Task 12).
+    void restoreLayer(const tankoban::ui::LayerEntry& target);
 
 private slots:
     void onSeriesFound(const SeriesInfo& series);
@@ -349,4 +388,11 @@ private:
     // search results vs back to library) and the "enteredFrom" hint
     // captured in the tankoyomiDetail nav-state blob.
     Mode m_enteredDetailFrom = Mode::Library;
+
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — restoreNavState
+    // raises this flag so the mode-flipper slots it invokes (showLibraryMode,
+    // showSearchMode, etc.) skip their navigationRequested emit. Without this
+    // guard a Back-restore would re-record the restored target, polluting the
+    // global NavHistory. Mirrors StreamPage's emitNav=false branch.
+    bool m_inNavRestore = false;
 };
