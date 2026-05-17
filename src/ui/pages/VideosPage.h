@@ -14,7 +14,6 @@
 #include <functional>
 #include "core/VideosScanner.h"
 #include "core/library/VideoCategory.h"
-#include "../INavStateProvider.h"
 #include "../LayerEntry.h"
 class QPushButton;
 class QNetworkAccessManager;
@@ -29,7 +28,7 @@ class ShowView;
 class StreamDownloadIndex;
 namespace tankostream { namespace stream { class MetaAggregator; } }
 
-class VideosPage : public QWidget, public INavStateProvider {
+class VideosPage : public QWidget {
     Q_OBJECT
 public:
     explicit VideosPage(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -66,21 +65,9 @@ public:
     // Returns library tile state for the `get_videos` command. Pure read.
     QJsonObject devSnapshot(int limit = 50) const;
 
-    // INavStateProvider (GLOBAL_NAV_HISTORY Task 10)
-    QJsonObject captureNavState() const override;
-    bool restoreNavState(const QJsonObject& blob) override;
-    QString navStateLabel() const override { return QStringLiteral("videos"); }
-
 signals:
     void playVideo(const QString& filePath);
     void categoryAssignmentsChanged();
-    // Emitted just before a library→detail transition so MainWindow's
-    // NavHistory can capture current library state and push a fresh entry.
-    void navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal participation
-    // in the per-mode back stack. VideosPage emits the initial root layer
-    // at bootstrap; deeper sub-views (Organise sub-page) are reached via
-    // cross-mode pill activation, not via layer push.
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     void exitedLayer();
 
@@ -207,7 +194,5 @@ private:
     StreamDownloadIndex*   m_downloadIndex = nullptr;
     QTimer*                m_streamDownloadDebounce = nullptr;
 
-    // GLOBAL_NAV_HISTORY Task 10: cache the grid QScrollArea pointer so
-    // captureNavState/restoreNavState don't pay an O(n) findChild walk.
     QScrollArea*           m_gridScroll = nullptr;
 };

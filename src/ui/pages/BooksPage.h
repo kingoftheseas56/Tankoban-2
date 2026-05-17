@@ -9,7 +9,6 @@
 #include <QTimer>
 #include <QSettings>
 #include <QPushButton>
-#include "../INavStateProvider.h"
 #include "../LayerEntry.h"
 class QScrollArea;
 class CoreBridge;
@@ -20,7 +19,7 @@ class BooksScanner;
 class BookSeriesView;
 struct BookSeriesInfo;
 
-class BooksPage : public QWidget, public INavStateProvider {
+class BooksPage : public QWidget {
     Q_OBJECT
 public:
     explicit BooksPage(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -29,19 +28,8 @@ public:
     void activate();
     void triggerScan();
 
-    // INavStateProvider (GLOBAL_NAV_HISTORY Task 9)
-    QJsonObject captureNavState() const override;
-    bool restoreNavState(const QJsonObject& blob) override;
-    QString navStateLabel() const override { return QStringLiteral("books"); }
-
 signals:
     void openBook(const QString& filePath);
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal participation in
-    // the per-mode back stack. This page has no internal deep state today
-    // (no library<->detail or search<->result transitions), so it only
-    // emits the initial root layer at activate time. Phase 1+ may extend
-    // when this page grows sub-views. Coexists with the legacy
-    // INavStateProvider model deleted in Task 12.
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     void exitedLayer();
 

@@ -22,8 +22,6 @@
 #include "core/DebugLogBuffer.h"
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
-#include "NavHistory.h"
-#include "INavStateProvider.h"
 #include "PerModeNavController.h"
 #include "LayerEntry.h"
 
@@ -332,42 +330,7 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // observed when exiting fullscreen on the mpv video player.
     applyFramelessWin32Style();
 
-    // GLOBAL_NAV_HISTORY Task 4 — instantiate NavHistory after page stack is
-    // live (buildPageStack + activatePage(PAGE_COMICS) already ran above).
-    m_navHistory = new NavHistory(this);
-    connect(m_navHistory, &NavHistory::entryRequested,
-            this, &MainWindow::onNavEntryRequested);
-    connect(m_navHistory, &NavHistory::backAvailableChanged,
-            this, &MainWindow::onBackAvailabilityChanged);
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Forward chevron removed
-    // per spec B1. The NavHistory::forwardAvailableChanged signal still
-    // exists (NavHistory itself deleted in Task 12) but has nothing to drive
-    // now that m_forwardBtn is gone.
-
-    // PHASE 0c HOTFIX 2026-05-17 (Agent 5) — bootstrap the active provider +
-    // record the initial nav entry now that m_navHistory exists. The
-    // activatePage(PAGE_COMICS) call at line 264 above ran while m_navHistory
-    // was still null, so the initial root entry was silently dropped. Without
-    // this bootstrap the back stack starts at cursor=-1 and the FIRST
-    // in-page deep transition (e.g. clicking a BOOKMARKED tile) only pushes
-    // a single entry (cursor=0), which canGoBack rejects as "no layer
-    // behind". With the bootstrap, stack starts at [{comics, root}, cursor=0]
-    // and the first deep transition pushes [{comics, library_blob}, {comics,
-    // deep}, cursor=1] -- canGoBack returns true and the topbar Back
-    // chevron correctly enables. Throwaway: Phase 1's PerModeNavController
-    // owns its own bootstrap.
-    if (!m_activePageId.isEmpty()) {
-        INavStateProvider* initProvider = providerForPage(m_activePageId);
-        m_navHistory->setActiveProvider(m_activePageId, initProvider);
-        m_navHistory->recordNavEvent(m_activePageId);
-    }
-
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- new per-mode controller
-    // lives alongside the old NavHistory during the migration. The topbar
-    // Back chevron will be re-wired in Task 7 to read from the controller
-    // instead of NavHistory; each page emits enteredLayer/exitedLayer in
-    // Tasks 8-11. NavHistory + its Phase 0c hotfix get deleted entirely
-    // in Task 12 once every page is migrated.
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- per-mode back-stack controller.
     m_navController = new tankoban::ui::PerModeNavController(this);
     connect(m_navController, &tankoban::ui::PerModeNavController::layerRestoreRequested,
             this, &MainWindow::onLayerRestoreRequested);
@@ -707,19 +670,6 @@ void MainWindow::mirrorTopBarSlotWidths()
     m_topBarRightSlot->setFixedWidth(target);
 }
 
-// ── Provider lookup helper ───────────────────────────────────────────────────
-INavStateProvider* MainWindow::providerForPage(const QString& pageId) const
-{
-    if (!m_pageStack) return nullptr;
-    for (int i = 0; i < m_pageStack->count(); ++i) {
-        QWidget* w = m_pageStack->widget(i);
-        if (w && w->objectName() == pageId) {
-            return dynamic_cast<INavStateProvider*>(w);
-        }
-    }
-    return nullptr;
-}
-
 // ── Page stack ──────────────────────────────────────────────────────────────
 void MainWindow::buildPageStack()
 {
@@ -732,16 +682,6 @@ void MainWindow::buildPageStack()
 
     auto *comicsPage = new ComicsPage(m_bridge);
     m_pageStack->addWidget(comicsPage);
-    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — wire ComicsPage's
-    // new navigationRequested signal into NavHistory so the global Back /
-    // Forward chevrons span Comics sub-views (library <-> search results
-    // <-> tankoyomi-detail <-> folder series view). Mirror of the
-    // Stream/Videos wiring patterns below. Without this connect the back
-    // chevron stays disabled inside every Comics deep state.
-    connect(comicsPage, &ComicsPage::navigationRequested,
-            this, [this]() {
-                if (m_navHistory) m_navHistory->recordNavEvent("comics");
-            });
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- ComicsPage emits a full
     // LayerEntry per in-page transition. The controller pushes onto the
     // "comics" stack; the topbar Back chevron then has a destination to
@@ -779,11 +719,6 @@ void MainWindow::buildPageStack()
     connect(m_videosPage, &VideosPage::exitedLayer, this, [this]() {
         if (m_navController) m_navController->popLayer(QStringLiteral("videos"));
     });
-    // GLOBAL_NAV_HISTORY Task 10: capture library state before library→detail transition.
-    connect(m_videosPage, &VideosPage::navigationRequested,
-            this, [this]() {
-                if (m_navHistory) m_navHistory->recordNavEvent("videos");
-            });
     dbg("4d-videospage-created");
 
     m_organisePage = new OrganisePage(m_bridge);
@@ -891,14 +826,6 @@ void MainWindow::buildPageStack()
     // by the time this fires; MainWindow's slot handles the VideoPlayer open.
     connect(m_streamPage, &StreamPage::playLocalFileFromStreamRequested,
             this, &MainWindow::onPlayLocalFileFromStreamRequested);
-    // GLOBAL_NAV_HISTORY Task 14 — record an entry on every user-initiated
-    // in-page Stream transition (Browse / Search / Detail / Catalog /
-    // AddonManager / Calendar) so the global Back/Forward chevrons span
-    // sub-views inside Stream as well as cross-page hops.
-    connect(m_streamPage, &StreamPage::navigationRequested,
-            this, [this]() {
-                if (m_navHistory) m_navHistory->recordNavEvent("stream");
-            });
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- per-mode controller wiring
     // for Stream. Mirror of the Comics wiring above (Task 8 pattern).
     connect(m_streamPage, &StreamPage::enteredLayer, this,
@@ -1011,17 +938,6 @@ void MainWindow::activatePage(const QString &pageId)
         }
     }
 
-    // GLOBAL_NAV_HISTORY Task 4 — register the new active provider + record
-    // the nav event. If this call originated from a Back/Forward restore
-    // (m_inNavRestore = true), only update the active provider; do NOT push a
-    // new history entry (would loop infinitely).
-    if (m_navHistory) {
-        INavStateProvider* provider = providerForPage(pageId);
-        m_navHistory->setActiveProvider(pageId, provider);
-        if (!m_inNavRestore) {
-            m_navHistory->recordNavEvent(pageId);
-        }
-    }
 }
 
 // ── PHASE 0 NAV CONTRACT RESTORE (Agent 5, 2026-05-17) ─────────────────────
@@ -1040,19 +956,10 @@ void MainWindow::resetActivePageToRoot() {
     QWidget* cur = m_pageStack->currentWidget();
     if (!cur) return;
     if (auto* comics = qobject_cast<ComicsPage*>(cur)) {
-        // resetToRoot forwards to showLibraryMode which emits
-        // navigationRequested when the active mode is NOT already Library;
-        // that emit goes through MainWindow's recordNavEvent("comics")
-        // connection, so the global Back stack records the pill-reset as
-        // a fresh nav (consistent with cross-mode pill clicks which also
-        // record). Phase 1+ may refine this to a stack-reset semantic.
         comics->resetToRoot();
         return;
     }
     if (auto* stream = qobject_cast<StreamPage*>(cur)) {
-        // resetToRoot forwards to showBrowse(emitNav=true) which resets
-        // the in-page m_navStack to [Browse] and emits navigationRequested,
-        // which our existing recordNavEvent("stream") connection picks up.
         stream->resetToRoot();
         return;
     }
@@ -1090,8 +997,6 @@ void MainWindow::onBackChevronClicked() {
             return;
         }
     }
-    // PHASE 1 NAV REDESIGN -- consult the per-mode controller. The old
-    // NavHistory.back() is dead code for the UI from this commit onward.
     if (m_navController) m_navController->goBack(m_activePageId);
 }
 
@@ -1101,9 +1006,6 @@ void MainWindow::onBackChevronClicked() {
 // mousePressEvent below. No code path reaches forward semantics.
 
 void MainWindow::onBackAvailabilityChanged(bool available) {
-    // GLOBAL_NAV_HISTORY Task 7 fix: gate on modal + overlay state too,
-    // so a mid-modal NavHistory signal doesn't re-enable the chevron.
-    // Mirror of the eventFilter recompute logic.
     if (m_backBtn) {
         const bool inModal = (QApplication::activeModalWidget() != nullptr);
         const bool inOverlay = isReaderOrPlayerActive();
@@ -1113,24 +1015,6 @@ void MainWindow::onBackAvailabilityChanged(bool available) {
 
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- onForwardAvailabilityChanged
 // removed. Forward chevron no longer exists; nothing to drive.
-
-void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
-    // Set guard so activatePage knows we're in a restore, not a fresh nav.
-    m_inNavRestore = true;
-    activatePage(entry.pageId);
-
-    // After activatePage, look for an INavStateProvider on the target page
-    // and call restoreNavState. Pages that don't implement INavStateProvider
-    // (Tasks 8-14 will add hooks) are simply skipped here.
-    INavStateProvider* provider = providerForPage(entry.pageId);
-    if (provider) {
-        provider->restoreNavState(entry.stateBlob);
-        // Stale-skip recursion deferred: if restoreNavState returns false,
-        // future enhancement will call back() / forward() again to walk past.
-        // For now, the page is left in its post-failed-restore state.
-    }
-    m_inNavRestore = false;
-}
 
 // ── PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- PerModeNavController slots ──
 
@@ -1325,11 +1209,6 @@ void MainWindow::quitFromTray()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // GLOBAL_NAV_HISTORY Task 4 — flush nav history to disk before anything
-    // else (stopPlayback + tray teardown below may exit the function via
-    // QApplication::quit; we need the write to always fire first).
-    if (m_navHistory) m_navHistory->flushToDisk();
-
     // Stop video playback immediately so sidecar audio dies before destructors run
     if (m_videoPlayer)
         m_videoPlayer->stopPlayback();
@@ -1378,10 +1257,9 @@ void MainWindow::closeComicReader()
         else
             showNormal();
     }
-    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
-    // now that the overlay is gone.
-    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
+    // Restore chevron state now that the overlay is gone.
+    if (m_backBtn && m_navController)
+        m_backBtn->setEnabled(m_navController->canGoBack(m_activePageId));
 }
 
 // ── Book reader ──────────────────────────────────────────────────────────────
@@ -1401,10 +1279,9 @@ void MainWindow::openBookReader(const QString& filePath)
 void MainWindow::closeBookReader()
 {
     m_bookReader->hide();
-    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
-    // now that the overlay is gone.
-    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
+    // Restore chevron state now that the overlay is gone.
+    if (m_backBtn && m_navController)
+        m_backBtn->setEnabled(m_navController->canGoBack(m_activePageId));
 }
 
 // ── Video player ─────────────────────────────────────────────────────────────
@@ -1636,10 +1513,9 @@ void MainWindow::closeVideoPlayer()
     if (auto *videos = m_pageStack->findChild<VideosPage*>())
         videos->refreshContinueOnly();
 
-    // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
-    // now that the overlay is gone.
-    if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
+    // Restore chevron state now that the overlay is gone.
+    if (m_backBtn && m_navController)
+        m_backBtn->setEnabled(m_navController->canGoBack(m_activePageId));
 }
 
 // ── Bring to front (single-instance raise) ──────────────────────────────────
@@ -2009,20 +1885,17 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 }
 #endif
 
-// GLOBAL_NAV_HISTORY Task 7 — gray chevrons while a modal dialog is on screen.
-// Watch every QDialog show/hide app-wide and re-evaluate chevron enabled state
-// combining NavHistory canGoBack/canGoForward, overlay-active (Task 6), and
-// Qt-application modal-active check (spec §3.12).
+// Gray chevrons while a modal dialog is on screen (spec §3.12).
+// Watch every QDialog show/hide app-wide and re-evaluate chevron enabled state.
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Show || event->type() == QEvent::Hide) {
         if (qobject_cast<QDialog*>(watched)) {
-            const bool inModal  = (QApplication::activeModalWidget() != nullptr);
+            const bool inModal   = (QApplication::activeModalWidget() != nullptr);
             const bool inOverlay = isReaderOrPlayerActive();
-            if (m_backBtn) {
-                const bool nav = m_navHistory && m_navHistory->canGoBack();
+            if (m_backBtn && m_navController) {
+                const bool nav = m_navController->canGoBack(m_activePageId);
                 m_backBtn->setEnabled(nav && !inModal && !inOverlay);
             }
-            // PHASE 1 NAV REDESIGN -- m_forwardBtn removed.
         }
     }
     return QMainWindow::eventFilter(watched, event);

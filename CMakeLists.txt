@@ -55,7 +55,6 @@ set(SOURCES
     src/core/ArchiveReader.cpp
     src/ui/MainWindow.cpp
     src/ui/PerModeNavController.cpp
-    src/ui/NavHistory.cpp
     src/ui/Theme.cpp
     src/ui/GlassBackground.cpp
     src/ui/RootFoldersOverlay.cpp
@@ -242,11 +241,9 @@ set(HEADERS
     src/core/PosterFetcher.h
     src/core/PosterCache.h
     src/core/ArchiveReader.h
-    src/ui/INavStateProvider.h
     src/ui/MainWindow.h
     src/ui/LayerEntry.h
     src/ui/PerModeNavController.h
-    src/ui/NavHistory.h
     src/ui/GlassBackground.h
     src/ui/RootFoldersOverlay.h
     src/ui/ContextMenuHelper.h
@@ -761,5 +758,20 @@ if(TANKOBAN_BUILD_TESTS)
         Qt6::Test
     )
     include(GoogleTest)
+    # TANKOBAN_TESTS_QT_PATH_FIX 2026-05-17 — gtest_discover_tests runs the
+    # test binary at build time (POST_BUILD) to enumerate cases. tankoban_tests
+    # links Qt6Test.lib (test utilities) but Qt6Test.dll is NOT part of the
+    # standard windeployqt deployment for Tankoban.exe (the main app doesn't
+    # link Qt6Test), so it's absent from out/ when discovery fires — loader
+    # fails with 0xc0000135 STATUS_DLL_NOT_FOUND, which halts ninja.
+    # Fix: copy Qt6Test.dll next to the test binary as a POST_BUILD step
+    # BEFORE gtest_discover_tests' own POST_BUILD discovery step runs.
+    # POST_BUILD commands on the same target execute in declaration order.
+    add_custom_command(TARGET tankoban_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:Qt6::Test>"
+            "$<TARGET_FILE_DIR:tankoban_tests>"
+        COMMENT "Deploying Qt6Test.dll alongside tankoban_tests.exe for discovery + ctest runtime"
+    )
     gtest_discover_tests(tankoban_tests)
 endif()

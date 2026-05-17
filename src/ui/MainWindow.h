@@ -24,13 +24,10 @@ class TankorentPage;
 class DevControlServer;
 class SidebarDrawer;
 class StreamDownloadIndex;
-class NavHistory;
-class INavStateProvider;
 namespace tankoban::ui { class PerModeNavController; }
 namespace tankoban::ui { struct LayerEntry; }
 class QJsonObject;
 struct StreamBulkGroupRecord;
-struct NavHistoryEntry;
 
 namespace tankostream::stream {
 struct BulkPackVerificationResult;
@@ -106,11 +103,6 @@ private:
     // Back -> close-the-overlay instead of pop-the-history-stack.
     bool isReaderOrPlayerActive() const;
 
-    // Find the INavStateProvider for a page by its objectName / pageId.
-    // Returns nullptr if the page doesn't exist or doesn't implement
-    // the interface (most pages until Tasks 8-14 land).
-    INavStateProvider* providerForPage(const QString& pageId) const;
-
     // FRAMELESS_CHROME_FULLSCREEN_EXIT_FIX 2026-05-04 — re-apply the
     // Win32 frameless-style hack (keep WS_CAPTION etc + SWP_FRAMECHANGED
     // to re-fire WM_NCCALCSIZE) whenever the window state changes in a
@@ -137,10 +129,6 @@ private:
 
     // Global Nav slots
     void onBackChevronClicked();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- onForwardChevronClicked +
-    // onForwardAvailabilityChanged removed. Forward chevron physically gone
-    // per spec B1/B2; Alt+Right + mouse-thumb-5 also unbound.
-    void onNavEntryRequested(const NavHistoryEntry& entry);
     void onBackAvailabilityChanged(bool available);
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- new per-mode controller slots
     void onLayerRestoreRequested(const tankoban::ui::LayerEntry& target);
@@ -265,16 +253,10 @@ private:
     QButtonGroup  *m_navGroup    = nullptr;
     QPushButton   *m_hamburgerBtn = nullptr;
 
-    // Global Back / Forward navigation (spec docs/superpowers/specs/2026-05-14-global-nav-history-design.md)
-    NavHistory   *m_navHistory  = nullptr;
+    // Global Back navigation (PHASE 1 NAV REDESIGN 2026-05-17)
     tankoban::ui::PerModeNavController *m_navController = nullptr;
     QPushButton  *m_backBtn     = nullptr;
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- m_forwardBtn removed.
-
-    // Guard flag: true while onNavEntryRequested is processing a Back/Forward
-    // restore. Prevents activatePage from pushing a new history entry on
-    // the restoration path (would create an infinite loop).
-    bool m_inNavRestore = false;
 
     // SOURCES_SIDEBAR — slide-in left drawer holding Tankorent /
     // TankoLibrary list buttons. Toggled by m_hamburgerBtn. Replaces the prior

@@ -16,7 +16,6 @@
 
 #include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
-#include "../INavStateProvider.h"
 #include "../LayerEntry.h"
 
 class CoreBridge;
@@ -27,7 +26,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QKeyEvent;
 
-class TankorentPage : public QWidget, public INavStateProvider
+class TankorentPage : public QWidget
 {
     Q_OBJECT
 
@@ -51,16 +50,7 @@ public:
         const tankostream::stream::BulkPackVerificationResult& verifierOutput,
         const QString& displayLabel);
 
-    // INavStateProvider (GLOBAL_NAV_HISTORY Task 11)
-    QJsonObject captureNavState() const override;
-    bool restoreNavState(const QJsonObject& blob) override;
-    QString navStateLabel() const override { return QStringLiteral("tankorent"); }
-
 signals:
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal participation in
-    // the per-mode back stack. TankorentPage has no internal deep state today
-    // (search + results live on the same surface); only the initial root
-    // layer is emitted at bootstrap. Phase 1+ may extend if sub-views land.
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     void exitedLayer();
 

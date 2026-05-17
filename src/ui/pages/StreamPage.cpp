@@ -76,8 +76,7 @@ namespace {
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
 // the Stream page. All emit sites call makeStreamLayer so the pageId is
 // always "stream" and the struct fields are assembled consistently.
-// Field names mirror captureNavState() (lines ~1578-1618) so restoreLayer
-// can consume the same blob shape.
+// Field names are consumed by restoreLayer.
 QString streamLayerLabelFor(const tankoban::ui::LayerEntry& e)
 {
     if (e.kind == QLatin1String("browse"))        return QStringLiteral("Theatre Home");
@@ -1026,12 +1025,7 @@ void StreamPage::onSearchSubmit()
     if (!m_navStack.isEmpty() && m_navStack.top().kind == NavEntry::Kind::Search) {
         m_navStack.top().searchQuery = query;
     } else {
-        // GLOBAL_NAV_HISTORY Task 14 — emit before in-page stack flip so
-        // NavHistory snapshots the outgoing view (Browse/Detail/etc.) via
-        // captureNavState while the in-page stack still reflects it.
-        emit navigationRequested();
-        // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit: record
-        // the Search layer in the per-mode controller.
+        // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — record the Search layer.
         if (!m_inLayerRestore) {
             QJsonObject blob;
             blob[QStringLiteral("searchQuery")] = query;
@@ -1601,94 +1595,6 @@ void StreamPage::restorePlayerExitView()
     showBrowse(/*emitNav=*/false);
 }
 
-// GLOBAL_NAV_HISTORY Task 14 (2026-05-14) — INavStateProvider hooks.
-// captureNavState reads the top of the in-page m_navStack (the same data
-// the in-page child-screen Back buttons consume via goBack) and emits an
-// opaque-to-NavHistory JSON blob. restoreNavState reverses the
-// translation and dispatches via showEntryRaw — no m_navStack push, so
-// global Back/Forward never grows the in-page stack twice.
-QJsonObject StreamPage::captureNavState() const
-{
-    QJsonObject blob;
-    if (m_navStack.isEmpty()) {
-        blob["view"] = "browse";
-        return blob;
-    }
-    const NavEntry& top = m_navStack.top();
-    using Kind = NavEntry::Kind;
-    switch (top.kind) {
-    case Kind::Browse:
-        blob["view"] = "browse";
-        break;
-    case Kind::CatalogBrowse:
-        blob["view"] = "catalogBrowse";
-        blob["catalogAddonId"] = top.catalogAddonId;
-        blob["catalogType"]    = top.catalogType;
-        blob["catalogId"]      = top.catalogId;
-        blob["catalogTitle"]   = top.catalogTitle;
-        break;
-    case Kind::Detail:
-        blob["view"] = "detail";
-        blob["detailImdbId"]           = top.detailImdbId;
-        blob["detailPreselectSeason"]  = top.detailPreselectSeason;
-        blob["detailPreselectEpisode"] = top.detailPreselectEpisode;
-        // detailHasPreview + detailPreview omitted — the preview struct
-        // is not JSON-serializable in v1 and showDetail(imdbId) is a
-        // valid fallback when only the imdb id survives.
-        break;
-    case Kind::AddonManager:
-        blob["view"] = "addonManager";
-        break;
-    case Kind::Calendar:
-        blob["view"] = "calendar";
-        break;
-    case Kind::Search:
-        blob["view"] = "search";
-        blob["searchQuery"] = top.searchQuery;
-        break;
-    }
-    return blob;
-}
-
-bool StreamPage::restoreNavState(const QJsonObject& blob)
-{
-    const QString view = blob.value("view").toString();
-    NavEntry entry;
-    using Kind = NavEntry::Kind;
-    if (view == "browse" || view.isEmpty()) {
-        entry.kind = Kind::Browse;
-    } else if (view == "catalogBrowse") {
-        if (!m_catalogBrowse) return false;
-        entry.kind = Kind::CatalogBrowse;
-        entry.catalogAddonId = blob.value("catalogAddonId").toString();
-        entry.catalogType    = blob.value("catalogType").toString();
-        entry.catalogId      = blob.value("catalogId").toString();
-        entry.catalogTitle   = blob.value("catalogTitle").toString();
-    } else if (view == "detail") {
-        if (!m_detailView) return false;
-        const QString imdb = blob.value("detailImdbId").toString();
-        if (imdb.isEmpty()) return false;
-        entry.kind = Kind::Detail;
-        entry.detailImdbId = imdb;
-        entry.detailHasPreview = false;
-        entry.detailPreselectSeason  = blob.value("detailPreselectSeason").toInt(-1);
-        entry.detailPreselectEpisode = blob.value("detailPreselectEpisode").toInt(-1);
-    } else if (view == "addonManager") {
-        if (!m_addonManager) return false;
-        entry.kind = Kind::AddonManager;
-    } else if (view == "calendar") {
-        if (!m_calendarScreen || !m_calendarEngine) return false;
-        entry.kind = Kind::Calendar;
-    } else if (view == "search") {
-        entry.kind = Kind::Search;
-        entry.searchQuery = blob.value("searchQuery").toString();
-    } else {
-        return false;
-    }
-    showEntryRaw(entry);
-    return true;
-}
-
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- restore target layer without
 // emitting enteredLayer/exitedLayer (called by MainWindow::onLayerRestoreRequested
 // when the controller fires layerRestoreRequested for pageId="stream"). Uses
@@ -1756,9 +1662,6 @@ void StreamPage::showBrowse(bool emitNav)
     // (restorePlayerExitView fallback, etc.) pass emitNav=false so the
     // global stack doesn't record a spurious nav the user didn't make.
     if (emitNav) {
-        emit navigationRequested();
-        // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit: record
-        // the Browse (Theatre Home) layer in the per-mode controller.
         if (!m_inLayerRestore)
             emit enteredLayer(makeStreamLayer(QStringLiteral("browse")));
     }
@@ -1771,9 +1674,6 @@ void StreamPage::showBrowse(bool emitNav)
 
 void StreamPage::showAddonManager()
 {
-    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
-    emit navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
     if (!m_inLayerRestore)
         emit enteredLayer(makeStreamLayer(QStringLiteral("addonManager")));
     NavEntry e;
@@ -1785,9 +1685,6 @@ void StreamPage::showAddonManager()
 void StreamPage::showCatalogBrowse(const QString& addonId, const QString& type,
                                    const QString& catalogId, const QString& title)
 {
-    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
-    emit navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
     if (!m_inLayerRestore) {
         QJsonObject blob;
         blob[QStringLiteral("catalogAddonId")] = addonId;
@@ -1822,9 +1719,6 @@ void StreamPage::onCatalogBtnClicked()
 void StreamPage::showCalendar()
 {
     if (!m_calendarScreen || !m_calendarEngine) return;
-    // GLOBAL_NAV_HISTORY Task 14 — emit before in-page push.
-    emit navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
     if (!m_inLayerRestore)
         emit enteredLayer(makeStreamLayer(QStringLiteral("calendar")));
     NavEntry e;
@@ -1845,11 +1739,6 @@ void StreamPage::showDetail(const QString& imdbId)
         && m_detailView->currentImdb() == imdbId) {
         return;
     }
-    // GLOBAL_NAV_HISTORY Task 14 — emit AFTER idempotency guard, BEFORE
-    // in-page push, so repeat-clicks on the same Detail tile don't grow
-    // the global stack either.
-    emit navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
     if (!m_inLayerRestore) {
         QJsonObject blob;
         blob[QStringLiteral("detailImdbId")]           = imdbId;
@@ -1879,10 +1768,6 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
         && m_detailView->currentImdb() == preview.id) {
         return;
     }
-    // GLOBAL_NAV_HISTORY Task 14 — emit AFTER idempotency guard, BEFORE
-    // in-page push.
-    emit navigationRequested();
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) — dual-emit.
     if (!m_inLayerRestore) {
         QJsonObject blob;
         blob[QStringLiteral("detailImdbId")]           = preview.id;

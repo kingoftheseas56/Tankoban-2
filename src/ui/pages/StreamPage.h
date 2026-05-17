@@ -17,7 +17,6 @@
 #include "core/stream/BulkSourceCollector.h"
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
-#include "ui/INavStateProvider.h"
 #include "ui/LayerEntry.h"
 #include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/pages/stream/StreamSourceChoice.h"
@@ -68,7 +67,7 @@ class TheatreDownloadPanel;
 class UnifiedPackSearchEngine;
 }
 
-class StreamPage : public QWidget, public INavStateProvider
+class StreamPage : public QWidget
 {
     Q_OBJECT
 
@@ -78,26 +77,9 @@ public:
 
     void activate();
 
-    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public entry point
-    // for MainWindow::resetActivePageToRoot. Standing Tankoban contract:
-    // clicking the Theatre topbar pill from any deep Stream sub-view
-    // (Catalog browse, Detail, AddonManager, Calendar, Search) returns to
-    // the library-home Browse root. Thin forwarder to the private showBrowse
-    // which resets m_navStack to [Browse] and emits navigationRequested.
-    // Phase 1+ may promote this to a shared IPageRoot interface.
+    // Public entry point for MainWindow::resetActivePageToRoot. Clicking the
+    // Theatre topbar pill from any deep sub-view returns to Browse root.
     void resetToRoot();
-
-    // INavStateProvider (GLOBAL_NAV_HISTORY Task 14) — global NavHistory hooks.
-    // captureNavState reads the top of the in-page m_navStack and emits a
-    // view-discriminator + per-kind context blob. restoreNavState
-    // reconstitutes the NavEntry and calls showEntryRaw (no m_navStack
-    // push — the global stack is the source of truth for cross-page Back).
-    // Sub-views with rich, fetch-dependent state (e.g. Detail's selected
-    // season) are restored to their last-known preselects but a fresh
-    // meta fetch may overwrite UI state asynchronously — acceptable v1.
-    QJsonObject captureNavState() const override;
-    bool restoreNavState(const QJsonObject& blob) override;
-    QString navStateLabel() const override { return QStringLiteral("stream"); }
 
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download
     // index into the home library board (chip rendering on tiles) and into
@@ -144,21 +126,11 @@ signals:
                                           int season,
                                           int episode);
 
-    // GLOBAL_NAV_HISTORY Task 14 (2026-05-14) — fired before each user-
-    // initiated in-page transition (Browse / Search / Detail / Catalog /
-    // AddonManager / Calendar) so the global NavHistory controller in
-    // MainWindow can record an entry. The page's internal m_navStack is
-    // preserved as render-side state (drives in-page child-screen Back
-    // buttons + m_beforePlayerEntry snapshot for player-close restore).
-    void navigationRequested();
-
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emitted BEFORE every
     // user-initiated in-page layer transition. The emitted LayerEntry
     // captures the INCOMING state so the controller can restore it on
     // Back. MainWindow connects this to PerModeNavController::pushLayer.
-    // Suppressed during restoreLayer via m_inLayerRestore. Coexists with
-    // the old navigationRequested signal (deleted in Task 12 alongside
-    // NavHistory).
+    // Suppressed during restoreLayer via m_inLayerRestore.
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     // Emitted when the user closes a deep layer via an in-page affordance
     // (goBack from Detail / Search / Catalog / AddonManager / Calendar).
@@ -170,7 +142,7 @@ public slots:
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- re-render the targeted
     // layer in-place WITHOUT emitting enteredLayer. Called by MainWindow
     // when PerModeNavController::layerRestoreRequested fires for
-    // pageId="stream". Coexists with restoreNavState (deleted in Task 12).
+    // pageId="stream".
     void restoreLayer(const tankoban::ui::LayerEntry& target);
 
 private:
