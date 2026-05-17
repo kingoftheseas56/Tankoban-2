@@ -26,6 +26,8 @@ class SidebarDrawer;
 class StreamDownloadIndex;
 class NavHistory;
 class INavStateProvider;
+namespace tankoban::ui { class PerModeNavController; }
+namespace tankoban::ui { struct LayerEntry; }
 class QJsonObject;
 struct StreamBulkGroupRecord;
 struct NavHistoryEntry;
@@ -121,12 +123,27 @@ private:
 
     void activatePage(const QString &pageId);
 
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — standing Tankoban
+    // contract: topbar mode pills are end-all-be-all hard resets. Clicking
+    // the active mode's pill while in any deep sub-view forces a return to
+    // that mode's root home. activatePage early-returns on same-page, so
+    // pill-clicks route through this method instead of activatePage when
+    // the target is already active. Cross-mode pill clicks continue to use
+    // activatePage's normal page-swap path. Dispatches polymorphically to
+    // the active page's known root-reset entry point (ComicsPage::
+    // showLibraryMode, StreamPage::showBrowse, ...); pages without an
+    // internal deep state are a no-op here (already at root).
+    void resetActivePageToRoot();
+
     // Global Nav slots
     void onBackChevronClicked();
     void onForwardChevronClicked();
     void onNavEntryRequested(const NavHistoryEntry& entry);
     void onBackAvailabilityChanged(bool available);
     void onForwardAvailabilityChanged(bool available);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- new per-mode controller slots
+    void onLayerRestoreRequested(const tankoban::ui::LayerEntry& target);
+    void onBackDestinationLabelChanged(const QString& label);
 
     void showRootFolders();
     void hideRootFolders();
@@ -249,6 +266,7 @@ private:
 
     // Global Back / Forward navigation (spec docs/superpowers/specs/2026-05-14-global-nav-history-design.md)
     NavHistory   *m_navHistory  = nullptr;
+    tankoban::ui::PerModeNavController *m_navController = nullptr;
     QPushButton  *m_backBtn     = nullptr;
     QPushButton  *m_forwardBtn  = nullptr;
 

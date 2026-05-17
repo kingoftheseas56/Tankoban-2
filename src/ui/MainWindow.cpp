@@ -24,6 +24,8 @@
 #include "devtools/DevControlServer.h"
 #include "NavHistory.h"
 #include "INavStateProvider.h"
+#include "PerModeNavController.h"
+#include "LayerEntry.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -340,6 +342,44 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     connect(m_navHistory, &NavHistory::forwardAvailableChanged,
             this, &MainWindow::onForwardAvailabilityChanged);
 
+    // PHASE 0c HOTFIX 2026-05-17 (Agent 5) — bootstrap the active provider +
+    // record the initial nav entry now that m_navHistory exists. The
+    // activatePage(PAGE_COMICS) call at line 264 above ran while m_navHistory
+    // was still null, so the initial root entry was silently dropped. Without
+    // this bootstrap the back stack starts at cursor=-1 and the FIRST
+    // in-page deep transition (e.g. clicking a BOOKMARKED tile) only pushes
+    // a single entry (cursor=0), which canGoBack rejects as "no layer
+    // behind". With the bootstrap, stack starts at [{comics, root}, cursor=0]
+    // and the first deep transition pushes [{comics, library_blob}, {comics,
+    // deep}, cursor=1] -- canGoBack returns true and the topbar Back
+    // chevron correctly enables. Throwaway: Phase 1's PerModeNavController
+    // owns its own bootstrap.
+    if (!m_activePageId.isEmpty()) {
+        INavStateProvider* initProvider = providerForPage(m_activePageId);
+        m_navHistory->setActiveProvider(m_activePageId, initProvider);
+        m_navHistory->recordNavEvent(m_activePageId);
+    }
+
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- new per-mode controller
+    // lives alongside the old NavHistory during the migration. The topbar
+    // Back chevron will be re-wired in Task 7 to read from the controller
+    // instead of NavHistory; each page emits enteredLayer/exitedLayer in
+    // Tasks 8-11. NavHistory + its Phase 0c hotfix get deleted entirely
+    // in Task 12 once every page is migrated.
+    m_navController = new tankoban::ui::PerModeNavController(this);
+    connect(m_navController, &tankoban::ui::PerModeNavController::layerRestoreRequested,
+            this, &MainWindow::onLayerRestoreRequested);
+    connect(m_navController, &tankoban::ui::PerModeNavController::backAvailableChanged,
+            this, &MainWindow::onBackAvailabilityChanged);
+    connect(m_navController, &tankoban::ui::PerModeNavController::backDestinationLabelChanged,
+            this, &MainWindow::onBackDestinationLabelChanged);
+
+    // Bootstrap: tell the controller the current active mode so its
+    // emitBackAvailability fires correctly on first signal-driver attach.
+    if (!m_activePageId.isEmpty()) {
+        m_navController->setActiveMode(m_activePageId);
+    }
+
     // GLOBAL_NAV_HISTORY Task 7: gray chevrons while a modal dialog is up.
     qApp->installEventFilter(this);
 }
@@ -485,7 +525,23 @@ void MainWindow::buildTopBar()
 
         QString pageId = def.id;
         connect(btn, &QPushButton::clicked, this, [this, pageId]() {
-            activatePage(pageId);
+            // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — standing
+            // Tankoban contract (Tankoban Max -> Tankoban Max Butterfly ->
+            // Tankoban QT Groundworks -> Tankoban 2): mode pills are
+            // end-all-be-all hard resets. activatePage early-returns on
+            // pageId == m_activePageId, which silently swallows pill
+            // clicks while the user is in a deep sub-view (Comics search
+            // results, Comics series view, Stream detail, ...). Route the
+            // same-page case through resetActivePageToRoot so the pill
+            // ALWAYS returns the user to that mode's root home. The
+            // cross-mode case falls through to activatePage's normal
+            // page-swap path (whose own activate() handlers reset by
+            // construction for pages that need it).
+            if (pageId == m_activePageId) {
+                resetActivePageToRoot();
+            } else {
+                activatePage(pageId);
+            }
         });
 
         m_navButtons.append({ pageId, btn });
@@ -627,6 +683,16 @@ void MainWindow::buildPageStack()
 
     auto *comicsPage = new ComicsPage(m_bridge);
     m_pageStack->addWidget(comicsPage);
+    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — wire ComicsPage's
+    // new navigationRequested signal into NavHistory so the global Back /
+    // Forward chevrons span Comics sub-views (library <-> search results
+    // <-> tankoyomi-detail <-> folder series view). Mirror of the
+    // Stream/Videos wiring patterns below. Without this connect the back
+    // chevron stays disabled inside every Comics deep state.
+    connect(comicsPage, &ComicsPage::navigationRequested,
+            this, [this]() {
+                if (m_navHistory) m_navHistory->recordNavEvent("comics");
+            });
     dbg("4b-comicspage-created");
 
     auto *booksPage = new BooksPage(m_bridge);
@@ -862,6 +928,42 @@ void MainWindow::activatePage(const QString &pageId)
     }
 }
 
+// ── PHASE 0 NAV CONTRACT RESTORE (Agent 5, 2026-05-17) ─────────────────────
+// Standing Tankoban contract: topbar mode pills are end-all-be-all hard
+// resets. activatePage early-returns when pageId == m_activePageId, which
+// silently swallows pill clicks while the user is in a deep sub-view
+// (Comics search results, Comics series view, Stream detail, etc.). The
+// pill click handler routes the same-page case through this method so the
+// user always lands back on the mode root. Cross-mode pill clicks keep
+// using activatePage's normal page-swap path. Polymorphic dispatch by
+// page type — pages without an internal deep state are a no-op here
+// (already on root). Phase 1+ may extend this when additional pages grow
+// sub-stacks.
+void MainWindow::resetActivePageToRoot() {
+    if (!m_pageStack) return;
+    QWidget* cur = m_pageStack->currentWidget();
+    if (!cur) return;
+    if (auto* comics = qobject_cast<ComicsPage*>(cur)) {
+        // resetToRoot forwards to showLibraryMode which emits
+        // navigationRequested when the active mode is NOT already Library;
+        // that emit goes through MainWindow's recordNavEvent("comics")
+        // connection, so the global Back stack records the pill-reset as
+        // a fresh nav (consistent with cross-mode pill clicks which also
+        // record). Phase 1+ may refine this to a stack-reset semantic.
+        comics->resetToRoot();
+        return;
+    }
+    if (auto* stream = qobject_cast<StreamPage*>(cur)) {
+        // resetToRoot forwards to showBrowse(emitNav=true) which resets
+        // the in-page m_navStack to [Browse] and emits navigationRequested,
+        // which our existing recordNavEvent("stream") connection picks up.
+        stream->resetToRoot();
+        return;
+    }
+    // BooksPage / VideosPage / OrganisePage / TankorentPage / TankoLibraryPage:
+    // no internal deep state today; pill-reset is a structural no-op.
+}
+
 // ── Global Nav (GLOBAL_NAV_HISTORY Task 4) ──────────────────────────────────
 
 bool MainWindow::isReaderOrPlayerActive() const {
@@ -938,6 +1040,25 @@ void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
         // For now, the page is left in its post-failed-restore state.
     }
     m_inNavRestore = false;
+}
+
+// ── PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- PerModeNavController slots ──
+
+void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target) {
+    // Dispatch the restore back to the originating page. Each page is
+    // responsible for honoring the target in its own restoreLayer slot
+    // (wired in the per-page tasks 8-11). For now, no page has the slot
+    // yet -- this connection is a placeholder.
+    Q_UNUSED(target);
+}
+
+void MainWindow::onBackDestinationLabelChanged(const QString& label) {
+    if (!m_backBtn) return;
+    if (label.isEmpty()) {
+        m_backBtn->setToolTip(QStringLiteral("Back (Alt+Left)"));
+    } else {
+        m_backBtn->setToolTip(QStringLiteral("Back to %1 (Alt+Left)").arg(label));
+    }
 }
 
 // ── STREAM_ADD_TO_TANKORENT cross-page hand-off ─────────────────────────────
