@@ -537,6 +537,13 @@ void MainWindow::buildTopBar()
             // cross-mode case falls through to activatePage's normal
             // page-swap path (whose own activate() handlers reset by
             // construction for pages that need it).
+            // PHASE 1 NAV REDESIGN 2026-05-17 -- mode pill is end-all-be-all hard
+            // reset. resetMode wipes the target mode's per-mode stack to [] BEFORE
+            // we decide whether to dispatch to resetActivePageToRoot (same-page) or
+            // activatePage (cross-mode). Both branches benefit: same-page in-mode
+            // resets clear any stale layer entries; cross-mode jumps start the new
+            // mode from a clean stack.
+            if (m_navController) m_navController->resetMode(pageId);
             if (pageId == m_activePageId) {
                 resetActivePageToRoot();
             } else {
@@ -882,6 +889,7 @@ void MainWindow::activatePage(const QString &pageId)
         return;
 
     m_activePageId = pageId;
+    if (m_navController) m_navController->setActiveMode(pageId);
 
     for (auto &nav : m_navButtons) {
         nav.button->setChecked(nav.pageId == pageId);
@@ -994,7 +1002,9 @@ void MainWindow::onBackChevronClicked() {
             return;
         }
     }
-    if (m_navHistory) m_navHistory->back();
+    // PHASE 1 NAV REDESIGN -- consult the per-mode controller. The old
+    // NavHistory.back() is dead code for the UI from this commit onward.
+    if (m_navController) m_navController->goBack(m_activePageId);
 }
 
 void MainWindow::onForwardChevronClicked() {
