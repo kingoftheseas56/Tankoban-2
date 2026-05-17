@@ -243,6 +243,7 @@ set(HEADERS
     src/core/ArchiveReader.h
     src/ui/INavStateProvider.h
     src/ui/MainWindow.h
+    src/ui/LayerEntry.h
     src/ui/NavHistory.h
     src/ui/GlassBackground.h
     src/ui/RootFoldersOverlay.h
