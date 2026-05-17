@@ -339,8 +339,10 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
             this, &MainWindow::onNavEntryRequested);
     connect(m_navHistory, &NavHistory::backAvailableChanged,
             this, &MainWindow::onBackAvailabilityChanged);
-    connect(m_navHistory, &NavHistory::forwardAvailableChanged,
-            this, &MainWindow::onForwardAvailabilityChanged);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Forward chevron removed
+    // per spec B1. The NavHistory::forwardAvailableChanged signal still
+    // exists (NavHistory itself deleted in Task 12) but has nothing to drive
+    // now that m_forwardBtn is gone.
 
     // PHASE 0c HOTFIX 2026-05-17 (Agent 5) — bootstrap the active provider +
     // record the initial nav entry now that m_navHistory exists. The
@@ -509,20 +511,13 @@ void MainWindow::buildTopBar()
             this, &MainWindow::onBackChevronClicked);
 
     // Global Forward chevron
-    m_forwardBtn = new QPushButton(leftSlot);
-    m_forwardBtn->setObjectName("TopBarForwardBtn");
-    m_forwardBtn->setFixedSize(28, 24);
-    m_forwardBtn->setCursor(Qt::PointingHandCursor);
-    m_forwardBtn->setIcon(QIcon(":/icons/chevron_right.svg"));
-    m_forwardBtn->setIconSize(QSize(16, 16));
-    m_forwardBtn->setToolTip("Forward (Alt+Right)");
-    m_forwardBtn->setAccessibleName("Forward");
-    m_forwardBtn->setAccessibleDescription("Navigate to the next page. Keyboard: Alt+RightArrow.");
-    m_forwardBtn->setFocusPolicy(Qt::NoFocus);
-    m_forwardBtn->setEnabled(false);
-    leftLayout->addWidget(m_forwardBtn, 0, Qt::AlignVCenter);
-    connect(m_forwardBtn, &QPushButton::clicked,
-            this, &MainWindow::onForwardChevronClicked);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Forward chevron physically
+    // removed per spec piece B + matrix invariant. Hemanth verbatim: "nah
+    // fuck the front button, remove it. doesn't serve purpose with our new
+    // navigation style." Brand label shifts left ~42px to close the gap
+    // (spec B1, "Back chevron stays put, space collapses"). The Alt+Right
+    // shortcut + Qt::ForwardButton mouse handler are also removed below
+    // (spec B2 / B3 / B4 -- all unbound, no remap).
 
     // Visual separator: bump the gap between Forward and Brand from
     // the default 6px iconBtn spacing to ~12px to read as "nav cluster"
@@ -970,10 +965,9 @@ void MainWindow::bindShortcuts()
     connect(backShortcut, &QShortcut::activated,
             this, &MainWindow::onBackChevronClicked);
 
-    auto* forwardShortcut = new QShortcut(QKeySequence("Alt+Right"), this);
-    forwardShortcut->setContext(Qt::ApplicationShortcut);
-    connect(forwardShortcut, &QShortcut::activated,
-            this, &MainWindow::onForwardChevronClicked);
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Alt+Right shortcut
+    // unbound per spec B2 ("Unbind cleanly -- does nothing"). Forward
+    // chevron is physically gone; no remap to any other action.
 }
 
 // ── Page activation ─────────────────────────────────────────────────────────
@@ -1101,13 +1095,10 @@ void MainWindow::onBackChevronClicked() {
     if (m_navController) m_navController->goBack(m_activePageId);
 }
 
-void MainWindow::onForwardChevronClicked() {
-    // Spec §3.12: no-op while modal dialog is open.
-    if (QApplication::activeModalWidget()) return;
-    // Spec §3.10: Forward is a no-op while a reader/player is open.
-    if (isReaderOrPlayerActive()) return;
-    if (m_navHistory) m_navHistory->forward();
-}
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- onForwardChevronClicked
+// removed. The Forward chevron is gone, the Alt+Right shortcut is unbound,
+// and Qt::ForwardButton (mouse btn 5) input is silently swallowed in
+// mousePressEvent below. No code path reaches forward semantics.
 
 void MainWindow::onBackAvailabilityChanged(bool available) {
     // GLOBAL_NAV_HISTORY Task 7 fix: gate on modal + overlay state too,
@@ -1120,13 +1111,8 @@ void MainWindow::onBackAvailabilityChanged(bool available) {
     }
 }
 
-void MainWindow::onForwardAvailabilityChanged(bool available) {
-    if (m_forwardBtn) {
-        const bool inModal = (QApplication::activeModalWidget() != nullptr);
-        const bool inOverlay = isReaderOrPlayerActive();
-        m_forwardBtn->setEnabled(available && !inModal && !inOverlay);
-    }
-}
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- onForwardAvailabilityChanged
+// removed. Forward chevron no longer exists; nothing to drive.
 
 void MainWindow::onNavEntryRequested(const NavHistoryEntry& entry) {
     // Set guard so activatePage knows we're in a restore, not a fresh nav.
@@ -1376,7 +1362,7 @@ void MainWindow::openComicReader(const QString& cbzPath, const QStringList& seri
     // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the reader;
     // Forward disabled while overlay is up. Restored in closeComicReader.
     if (m_backBtn)    m_backBtn->setEnabled(true);
-    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 void MainWindow::closeComicReader()
@@ -1395,7 +1381,7 @@ void MainWindow::closeComicReader()
     // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
     // now that the overlay is gone.
     if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 // ── Book reader ──────────────────────────────────────────────────────────────
@@ -1409,7 +1395,7 @@ void MainWindow::openBookReader(const QString& filePath)
     // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the reader;
     // Forward disabled while overlay is up. Restored in closeBookReader.
     if (m_backBtn)    m_backBtn->setEnabled(true);
-    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 void MainWindow::closeBookReader()
@@ -1418,7 +1404,7 @@ void MainWindow::closeBookReader()
     // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
     // now that the overlay is gone.
     if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 // ── Video player ─────────────────────────────────────────────────────────────
@@ -1453,7 +1439,7 @@ void MainWindow::openVideoPlayerWithOptions(const QString& filePath,
     // GLOBAL_NAV_HISTORY Task 6: Back stays enabled to close the player;
     // Forward disabled while overlay is up. Restored in closeVideoPlayer.
     if (m_backBtn)    m_backBtn->setEnabled(true);
-    if (m_forwardBtn) m_forwardBtn->setEnabled(false);
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — Stream-mode playback
@@ -1653,7 +1639,7 @@ void MainWindow::closeVideoPlayer()
     // GLOBAL_NAV_HISTORY Task 6: restore chevron state from NavHistory
     // now that the overlay is gone.
     if (m_navHistory && m_backBtn)    m_backBtn->setEnabled(m_navHistory->canGoBack());
-    if (m_navHistory && m_forwardBtn) m_forwardBtn->setEnabled(m_navHistory->canGoForward());
+    // PHASE 1 NAV REDESIGN -- m_forwardBtn removed; no-op.
 }
 
 // ── Bring to front (single-instance raise) ──────────────────────────────────
@@ -2036,27 +2022,20 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
                 const bool nav = m_navHistory && m_navHistory->canGoBack();
                 m_backBtn->setEnabled(nav && !inModal && !inOverlay);
             }
-            if (m_forwardBtn) {
-                const bool nav = m_navHistory && m_navHistory->canGoForward();
-                m_forwardBtn->setEnabled(nav && !inModal && !inOverlay);
-            }
+            // PHASE 1 NAV REDESIGN -- m_forwardBtn removed.
         }
     }
     return QMainWindow::eventFilter(watched, event);
 }
 
-// GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
-// Qt::BackButton = mouse button 4 (XButton1); Qt::ForwardButton = mouse button 5 (XButton2).
-// Defined outside the #ifdef Q_OS_WIN above; the declaration in MainWindow.h
-// is unconditional, so this body must compile on all platforms.
+// PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- mouse thumb buttons.
+// Per spec B3/B4: both Qt::BackButton (mouse btn 4) and Qt::ForwardButton
+// (mouse btn 5) are inert. We accept the events to swallow them (so the
+// OS doesn't propagate to any default Back/Forward handler) but do NOT
+// trigger any nav action. Hemanth's hardware doesn't have these buttons;
+// this is purely defensive for users on power-mice.
 void MainWindow::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::BackButton) {
-        onBackChevronClicked();
-        event->accept();
-        return;
-    }
-    if (event->button() == Qt::ForwardButton) {
-        onForwardChevronClicked();
+    if (event->button() == Qt::BackButton || event->button() == Qt::ForwardButton) {
         event->accept();
         return;
     }

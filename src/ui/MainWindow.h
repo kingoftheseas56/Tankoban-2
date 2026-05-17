@@ -137,10 +137,11 @@ private:
 
     // Global Nav slots
     void onBackChevronClicked();
-    void onForwardChevronClicked();
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- onForwardChevronClicked +
+    // onForwardAvailabilityChanged removed. Forward chevron physically gone
+    // per spec B1/B2; Alt+Right + mouse-thumb-5 also unbound.
     void onNavEntryRequested(const NavHistoryEntry& entry);
     void onBackAvailabilityChanged(bool available);
-    void onForwardAvailabilityChanged(bool available);
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- new per-mode controller slots
     void onLayerRestoreRequested(const tankoban::ui::LayerEntry& target);
     void onBackDestinationLabelChanged(const QString& label);
@@ -268,7 +269,7 @@ private:
     NavHistory   *m_navHistory  = nullptr;
     tankoban::ui::PerModeNavController *m_navController = nullptr;
     QPushButton  *m_backBtn     = nullptr;
-    QPushButton  *m_forwardBtn  = nullptr;
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- m_forwardBtn removed.
 
     // Guard flag: true while onNavEntryRequested is processing a Back/Forward
     // restore. Prevents activatePage from pushing a new history entry on
