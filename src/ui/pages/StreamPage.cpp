@@ -474,6 +474,13 @@ void StreamPage::buildUI()
             this, &StreamPage::onTheatreTopSeededDownloadRequested);
     connect(m_detailView, &StreamDetailView::directDownloadRequested,
             this, &StreamPage::onDirectDownloadRequested);
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix 2026-05-17 -
+    // when StreamDetailView transitions to a different show, dismiss the
+    // TheatreDownloadPanel via the imperative helper. v2: simplified to match
+    // dismissRequested pattern + delegates to dismissTheatreDownloadPanelIfOpen
+    // which is also called at every other navigation transition site.
+    connect(m_detailView, &StreamDetailView::entryContextChanging,
+            this, [this]() { dismissTheatreDownloadPanelIfOpen(); });
     if (m_theatreDownloadPanel) {
         connect(m_theatreDownloadPanel,
                 &tankoban::stream::theatre::TheatreDownloadPanel::dismissRequested,
@@ -723,6 +730,10 @@ void StreamPage::buildUI()
     connect(m_calendarScreen, &tankostream::stream::CalendarScreen::seriesEpisodeActivated,
             this, [this](const QString& imdbId, int season, int episode) {
                 if (!m_detailView) return;
+                // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 -
+                // dismiss panel BEFORE showEntry so prior-show packs do not
+                // persist on the new show's detail view.
+                dismissTheatreDownloadPanelIfOpen();
                 // Route into the detail view with preselection staged. Detail
                 // view consumes once in onSeriesMetaReady and clears, so a
                 // subsequent showDetail click without preselection won't
@@ -871,6 +882,9 @@ void StreamPage::buildBrowseLayer()
             // fires onPlayRequested â†’ loads streams â†’ populates m_detailView
             // which is not currently shown â†’ user sees nothing.
             if (m_detailView && m_detailView->currentImdb() != imdbId) {
+                // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 -
+                // dismiss panel on show transition (currentImdb != imdbId).
+                dismissTheatreDownloadPanelIfOpen();
                 m_detailView->showEntry(imdbId, season, episode);
             }
             m_mainStack->setCurrentIndex(1);
@@ -916,6 +930,19 @@ void StreamPage::buildBrowseLayer()
     localFilesLabel->setObjectName(QStringLiteral("LibraryHeading"));
     localFilesLayout->addWidget(localFilesLabel);
     m_localFilesStrip = new TileStrip(m_localFilesSection);
+    // LOCAL_FILES_TILE_SIZE_FIX 2026-05-17 (Agent 5) -- match the SHOWS &
+    // MOVIES strip's density so the Local files row tiles render at the
+    // same size as the library tiles above. StreamLibraryLayout reads the
+    // same "grid_cover_size_stream" QSetting (default 1 = mid-density) and
+    // calls setDensity on its own m_strip; without this matching call the
+    // Local files strip falls back to TileStrip's larger default size and
+    // visually dwarfs the posters above. Hemanth verbatim: "I would like
+    // that discrepancy to be gone my brother 5."
+    {
+        const int savedDensity = QSettings("Tankoban", "Tankoban")
+            .value(QStringLiteral("grid_cover_size_stream"), 1).toInt();
+        m_localFilesStrip->setDensity(qBound(0, savedDensity, 2));
+    }
     localFilesLayout->addWidget(m_localFilesStrip);
     m_localFilesSection->hide();  // Reveal once scanner returns non-empty.
     m_scrollLayout->addWidget(m_localFilesSection);
@@ -1451,6 +1478,11 @@ bool StreamPage::eventFilter(QObject* obj, QEvent* event)
 // MainWindow if cross-mode back is wanted.
 void StreamPage::goBack()
 {
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 - dismiss panel
+    // when user exits the current detail view via Back so it does not
+    // persist across the navigation transition (panel is StreamPage-owned
+    // so detail-view teardown alone does not affect it).
+    dismissTheatreDownloadPanelIfOpen();
     if (!m_inLayerRestore) emit exitedLayer();
     if (m_navStack.size() <= 1) {
         // STREAM_CATALOG_BACK_NAVSTACK_SEED_FIX 2026-05-06 â€” Hemanth-reported
@@ -1539,6 +1571,10 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
         if (!m_detailView) break;
         cancelBulkSeasonDownload();
         cancelAutoLaunch();
+        // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 - dismiss
+        // panel on restoreLayer Detail-case so a prior show's pack list does
+        // not carry across nav-history restoration.
+        dismissTheatreDownloadPanelIfOpen();
         if (entry.detailHasPreview) {
             m_detailView->showEntry(entry.detailPreview.id,
                                     entry.detailPreselectSeason,
@@ -1652,6 +1688,10 @@ void StreamPage::resetToRoot()
 
 void StreamPage::showBrowse(bool emitNav)
 {
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 - dismiss panel
+    // when returning to the library home (any showBrowse path) so the panel
+    // never persists outside of a detail-view context.
+    dismissTheatreDownloadPanelIfOpen();
     // STREAM_NAV_BACK_STACK 2026-05-06 â€” Library is the stack bottom.
     // showBrowse explicitly resets the stack to a clean Browse-only
     // state. Called on Stream-mode entry, on legitimate library-home
@@ -2654,6 +2694,33 @@ void StreamPage::onTheatreTopSeededDownloadRequested(const QString& imdbId,
     config.season          = 0;
 
     m_torrentClient->startDownload(hash, config);
+}
+
+void StreamPage::dismissTheatreDownloadPanelIfOpen()
+{
+    // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix v2 2026-05-17 -
+    // imperative helper called at every StreamPage navigation transition
+    // site (4 showEntry call sites + goBack + showBrowse + the
+    // entryContextChanging signal slot). Idempotent + safe when panel is
+    // already hidden. Combines:
+    //   (a) panel->reset() - clears m_packs / m_filteredPacks / m_tileChecked /
+    //       m_pendingMetadataHash / m_realFiles / derive-scope cache + resets
+    //       internal QStackedWidget to PackList state. Without reset, a later
+    //       openFor() on a different show could flash stale data on first
+    //       paint before the new search returns.
+    //   (b) slideOutToRight(panel) - the visible dismiss animation (only fires
+    //       if panel is visible per slideOutToRight's internal isVisible guard).
+    //   (c) slideInFromRight(sources) - bring the Sources sidebar back into
+    //       the right-pane slot to replace the dismissed panel.
+    //
+    // Called instead of the prior signal-based slot's logic which proved
+    // insufficient against Hemanth's 2026-05-17 smoke (stale panel persisted
+    // across show-view transitions even after MOC regen + relaunch).
+    if (!m_theatreDownloadPanel) return;
+    m_theatreDownloadPanel->reset();
+    slideOutToRight(m_theatreDownloadPanel);
+    if (m_detailSourcesPanel)
+        slideInFromRight(m_detailSourcesPanel);
 }
 
 void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPickerChoice& choice)
