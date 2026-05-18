@@ -33,6 +33,16 @@
             "type": "command",
             "command": "bash .claude/scripts/pre-rtc-checker.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/smoke-evidence-rename.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/skill-provenance-detect.sh",
+            "timeout": 3
           }
         ]
       }
