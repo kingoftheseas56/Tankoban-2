@@ -64,3 +64,21 @@ chat_diff*.txt
 
 # Compile artifacts from one-off probes outside the CMake build tree
 *.obj
+
+# build_check.bat manual-redirect dumps at repo root. The standard log lives
+# under %BUILD_DIR%\_build_check.log (already gitignored via _*.log), but
+# agents sometimes redirect via shell to repo-root files like
+# build_check_out.txt or build_check_phase1_post_fixes.txt — those are
+# per-debug artifacts and not for tracking.
+build_check_*.txt
+build_out.txt
+
+# Sidecar debug log snapshots — sidecar_debug_live.log.pretask7 style
+# suffixed copies agents make when capturing log state. The .log itself
+# is already covered via *.log; this catches the snapshot suffixes.
+sidecar_debug_live.log.*
+
+# Playwright MCP cache (added 2026-05-15 with the playwright server in
+# .mcp.json). First @playwright/mcp@latest invocation downloads Chromium
+# here. Per-machine cache, not for tracking.
+.playwright-mcp/
