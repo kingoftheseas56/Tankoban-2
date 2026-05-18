@@ -68,6 +68,12 @@ public:
     std::optional<std::pair<PremiumCatalogEntry, PremiumVolumeEntry>>
     entryForAnilistIdAndVolume(int anilistId, int volumeNumber) const;
 
+    // Returns true if any catalog entry has this anilistId (> 0).
+    // Used by VolumeCoverResolver to short-circuit BookWalker fetches for
+    // Premium series (spec Decision #5: curated Premium covers take precedence;
+    // BookWalker is not consulted for Premium series).
+    bool hasPremiumEntry(int anilistId) const;
+
     // All loaded entries. Iteration order is loader-determined (file order +
     // entry order within file). Not stable across reloads.
     QList<PremiumCatalogEntry> allEntries() const;

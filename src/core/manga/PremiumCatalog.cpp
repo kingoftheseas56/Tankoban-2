@@ -374,6 +374,15 @@ PremiumCatalog::entryForAnilistIdAndVolume(int anilistId,
     return std::nullopt;
 }
 
+bool PremiumCatalog::hasPremiumEntry(int anilistId) const
+{
+    if (anilistId <= 0) return false;
+    for (auto it = m_byId.constBegin(); it != m_byId.constEnd(); ++it) {
+        if (it->anilistId == anilistId) return true;
+    }
+    return false;
+}
+
 QList<PremiumCatalogEntry> PremiumCatalog::allEntries() const
 {
     return m_orderedEntries;
