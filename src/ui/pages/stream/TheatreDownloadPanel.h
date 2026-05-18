@@ -87,8 +87,6 @@ private:
     void buildUI();
     void buildPackListState();
     void buildScopePickerState();
-    void loadPersistedSource();
-    void savePersistedSource();
     void transitionTo(State newState);
     void rerenderPackList();
     void rerenderScopePicker();

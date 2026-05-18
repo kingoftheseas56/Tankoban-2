@@ -27,7 +27,6 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
-#include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -159,6 +158,14 @@ void TheatreDownloadPanel::reset() {
     // cache on full reset.
     m_derivedScopeCacheKey.clear();
     m_derivedScopeCache = DerivedScope();
+    // THEATRE_SOURCE_PICKER 2026-05-17 (Hemanth feedback): source-pick is
+    // per-show contextual, not a persistent preference. Reset combo + filter
+    // to "All Sources" on dismiss so the next show starts fresh.
+    m_sourceFilter = QStringLiteral("all");
+    if (m_sourceCombo) {
+        const QSignalBlocker blocker(m_sourceCombo);
+        m_sourceCombo->setCurrentIndex(0);
+    }
     if (m_packList) m_packList->clear();
     if (m_statusLine) m_statusLine->clear();
     transitionTo(State::PackList);
@@ -249,7 +256,6 @@ void TheatreDownloadPanel::buildPackListState() {
         connect(m_sourceCombo,
                 QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, &TheatreDownloadPanel::onSourceComboChanged);
-        loadPersistedSource();
     }
 
     m_filterChipRow = new QWidget(m_packListPage);
@@ -451,8 +457,24 @@ void TheatreDownloadPanel::onSearchComplete(const QString& imdbId, int season,
         autoFallbackToShowWide();
         return;
     }
-    if (m_statusLine)
-        m_statusLine->setText(tr("%1 packs found").arg(m_filteredPacks.size()));
+    if (m_statusLine) {
+        // THEATRE_SOURCE_PICKER 2026-05-18 (smoke finding): when a type filter
+        // is active and packs were received, show "X of Y match" so the user
+        // can tell results exist but are filter-hidden. Mirrors the same
+        // conditional in rerenderPackList() so the search-complete + chip-
+        // click paths render identically. The naked "0 packs found" pre-fix
+        // misled Hemanth's 2026-05-17 smoke into thinking Nyaa was unreachable
+        // when really it returned 50+ single-episode results that the
+        // "Complete Series" filter classified out.
+        const bool hasFilter = (m_typeFilter != QLatin1String("All"));
+        if (hasFilter && !m_packs.isEmpty()) {
+            m_statusLine->setText(tr("%1 of %2 packs match")
+                                       .arg(m_filteredPacks.size())
+                                       .arg(m_packs.size()));
+        } else {
+            m_statusLine->setText(tr("%1 packs found").arg(m_filteredPacks.size()));
+        }
+    }
 }
 
 void TheatreDownloadPanel::onPackRowSelected(int row) {
@@ -1049,35 +1071,10 @@ void TheatreDownloadPanel::onSourceComboChanged(int /*index*/) {
     m_sourceFilter = m_sourceCombo->currentData().toString();
     if (m_sourceFilter.isEmpty())
         m_sourceFilter = QStringLiteral("all");
-    savePersistedSource();
-    // Note: we do NOT re-fire the in-flight search here. Source change
-    // takes effect on the NEXT search() call (i.e. when the panel is
-    // dismissed + re-opened, or when the engine is invoked again).
-    // Re-firing mid-render would orphan an in-flight Tankorent fan-out
-    // and complicate the stale-callback guards in
+    // Source change takes effect on the NEXT search() call (panel
+    // dismiss + reopen). Re-firing mid-render would orphan an in-flight
+    // Tankorent fan-out + complicate the stale-callback guards in
     // UnifiedPackSearchEngine::onTankorentPacksAvailable.
-}
-
-void TheatreDownloadPanel::loadPersistedSource() {
-    if (!m_sourceCombo) return;
-    QSettings settings;
-    const QString saved = settings.value(
-        QStringLiteral("theatre/pack_panel/source"),
-        QStringLiteral("all")).toString();
-    m_sourceFilter = saved;
-    const int idx = m_sourceCombo->findData(saved);
-    if (idx >= 0) {
-        // setCurrentIndex emits currentIndexChanged - block during
-        // initial load so we don't re-save the value we just read.
-        const QSignalBlocker blocker(m_sourceCombo);
-        m_sourceCombo->setCurrentIndex(idx);
-    }
-}
-
-void TheatreDownloadPanel::savePersistedSource() {
-    QSettings settings;
-    settings.setValue(QStringLiteral("theatre/pack_panel/source"),
-                      m_sourceFilter);
 }
 
 }  // namespace tankoban::stream::theatre
