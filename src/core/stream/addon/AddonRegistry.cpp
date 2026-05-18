@@ -272,6 +272,11 @@ AddonDescriptor descriptorFromJson(const QJsonObject& obj)
     return descriptor;
 }
 
+bool sameHost(const QUrl& a, const QUrl& b)
+{
+    return a.host().compare(b.host(), Qt::CaseInsensitive) == 0;
+}
+
 }
 
 AddonRegistry::AddonRegistry(const QString& dataDir,
@@ -325,6 +330,10 @@ void AddonRegistry::installByUrl(const QUrl& transportUrlInput)
 
     for (const AddonDescriptor& existing : m_addons) {
         if (sameUrl(existing.transportUrl, transportUrl)) {
+            if (existing.flags.protectedAddon) {
+                emit installSucceeded(existing);
+                return;
+            }
             emit installFailed(transportUrl, QStringLiteral("Addon already installed"));
             return;
         }
@@ -388,8 +397,20 @@ void AddonRegistry::onManifestReady(const AddonDescriptor& fetched)
 
     const int byId = indexOfId(normalized.manifest.id);
     if (byId >= 0 && m_addons[byId].flags.protectedAddon) {
-        emit installFailed(installUrl,
-                           QStringLiteral("An official addon with this id is already installed"));
+        // Same official addon, same host: treat a personalized manifest URL
+        // as a reconfigure operation and keep the protected/official flags.
+        if (!sameHost(m_addons[byId].transportUrl, normalized.transportUrl)) {
+            emit installFailed(installUrl,
+                               QStringLiteral("An official addon with this id is already installed"));
+            return;
+        }
+
+        const AddonDescriptorFlags preserve = m_addons[byId].flags;
+        m_addons[byId] = normalized;
+        m_addons[byId].flags = preserve;
+        save();
+        emit addonsChanged();
+        emit installSucceeded(m_addons[byId]);
         return;
     }
 

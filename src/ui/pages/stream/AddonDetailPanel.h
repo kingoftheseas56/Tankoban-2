@@ -38,6 +38,8 @@ private slots:
     // in the default browser via QDesktopServices. Button is visible only
     // when manifest.behaviorHints.configurable is true.
     void onConfigureClicked();
+    void onReconfigureInstallSucceeded(const tankostream::addon::AddonDescriptor& descriptor);
+    void onReconfigureInstallFailed(const QUrl& inputUrl, const QString& message);
 
 private:
     void buildUI();
@@ -68,6 +70,8 @@ private:
     // true. Grayscale styling per feedback_no_color_no_emoji.
     QPushButton* m_configureBtn = nullptr;
     QLabel* m_protectedNote = nullptr;
+
+    QUrl m_pendingReconfigureUrl;
 
     QHash<QString, QPixmap> m_logoCache;
 };

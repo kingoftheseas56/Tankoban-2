@@ -4,8 +4,10 @@
 #include <QDesktopServices>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLayoutItem>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -42,6 +44,42 @@ QWidget* makeCapabilityChip(const QString& text, QWidget* parent)
     return chip;
 }
 
+bool isKnownProtectedConfigurableHost(const QUrl& url)
+{
+    const QString host = url.host().toLower();
+    return host == QStringLiteral("torrentio.strem.fun")
+        || host == QStringLiteral("opensubtitles-v3.strem.io");
+}
+
+bool canOpenConfigurePage(const AddonDescriptor& descriptor)
+{
+    return descriptor.manifest.behaviorHints.configurable
+        || (descriptor.flags.protectedAddon
+            && isKnownProtectedConfigurableHost(descriptor.transportUrl));
+}
+
+QUrl configureUrlFor(const AddonDescriptor& descriptor)
+{
+    if (descriptor.flags.protectedAddon
+        && isKnownProtectedConfigurableHost(descriptor.transportUrl)) {
+        QUrl root = descriptor.transportUrl;
+        root.setPath(QStringLiteral("/configure"));
+        root.setQuery(QString());
+        root.setFragment(QString());
+        return root;
+    }
+
+    QString base = descriptor.transportUrl.toString();
+    const QString kManifestSuffix = QStringLiteral("/manifest.json");
+    if (base.endsWith(kManifestSuffix, Qt::CaseInsensitive)) {
+        base.chop(kManifestSuffix.length());
+    }
+    while (base.endsWith(QLatin1Char('/'))) {
+        base.chop(1);
+    }
+    return QUrl(base + QStringLiteral("/configure"));
+}
+
 }
 
 AddonDetailPanel::AddonDetailPanel(AddonRegistry* registry, QWidget* parent)
@@ -59,6 +97,12 @@ AddonDetailPanel::AddonDetailPanel(AddonRegistry* registry, QWidget* parent)
         "  border-radius: 8px;"
         "}"));
     buildUI();
+    if (m_registry) {
+        connect(m_registry, &AddonRegistry::installSucceeded,
+                this, &AddonDetailPanel::onReconfigureInstallSucceeded);
+        connect(m_registry, &AddonRegistry::installFailed,
+                this, &AddonDetailPanel::onReconfigureInstallFailed);
+    }
     setDescriptor(std::nullopt);
 }
 
@@ -91,11 +135,16 @@ void AddonDetailPanel::setDescriptor(const std::optional<AddonDescriptor>& descr
     m_officialBadge->setVisible(d.flags.official);
     m_uninstallBtn->setVisible(!d.flags.protectedAddon);
     m_protectedNote->setVisible(d.flags.protectedAddon);
-    // STREAM_UX_PARITY Phase 5 Batch 5.1 — surface the Configure button
-    // only for addons that advertise configurability. Hidden otherwise to
-    // keep the detail pane sparse for the common case.
-    if (m_configureBtn)
-        m_configureBtn->setVisible(d.manifest.behaviorHints.configurable);
+    // Surface Configure for manifest-declared addons and Reconfigure for
+    // protected defaults whose host is known to serve a /configure page.
+    if (m_configureBtn) {
+        const bool showConfigure = canOpenConfigurePage(d);
+        m_configureBtn->setVisible(showConfigure);
+        m_configureBtn->setText((d.flags.protectedAddon
+                                 && isKnownProtectedConfigurableHost(d.transportUrl))
+                                    ? QStringLiteral("Reconfigure")
+                                    : QStringLiteral("Configure"));
+    }
 
     m_logo->setPixmap({});
     m_logo->setText(d.manifest.name.isEmpty()
@@ -144,31 +193,80 @@ void AddonDetailPanel::onUninstallClicked()
 void AddonDetailPanel::onConfigureClicked()
 {
     if (!m_current.has_value()) return;
-    if (!m_current->manifest.behaviorHints.configurable) return;
+    if (!canOpenConfigurePage(*m_current)) return;
 
-    // STREAM_UX_PARITY Phase 5 Batch 5.1 — Stremio addon convention:
-    // "{transportUrl}/configure" is an HTML form the addon serves. User
-    // completes it in their browser; depending on the addon, either the
-    // addon persists its state server-side OR it issues a new manifest
-    // URL with configuration embedded (Base64-in-path pattern). Batch
-    // 5.2 handles the install-flow variant (configurationRequired=true).
-    //
-    // The transport URL in our descriptor may be the manifest.json path
-    // itself (`https://host/manifest.json`). The addon-SDK convention is
-    // to serve `/configure` as a sibling of `/manifest.json`. We strip
-    // the trailing `/manifest.json` (if present) and append `/configure`
-    // to produce the expected form URL.
-    QString base = m_current->transportUrl.toString();
-    const QString kManifestSuffix = QStringLiteral("/manifest.json");
-    if (base.endsWith(kManifestSuffix, Qt::CaseInsensitive)) {
-        base.chop(kManifestSuffix.length());
-    }
-    // Remove any trailing slash so we don't emit "//configure".
-    while (base.endsWith(QLatin1Char('/'))) base.chop(1);
-    const QUrl configureUrl(base + QStringLiteral("/configure"));
+    // Stremio addon convention: /configure is an HTML form served by the
+    // addon. Protected bare seeds like Torrentio may hide configurability
+    // in the seed manifest, so allowlisted hosts use their root /configure.
+    const QUrl configureUrl = configureUrlFor(*m_current);
     if (!configureUrl.isValid()) return;
 
-    QDesktopServices::openUrl(configureUrl);
+    if (!QDesktopServices::openUrl(configureUrl)) {
+        QMessageBox::warning(this,
+                             QStringLiteral("Configure addon"),
+                             QStringLiteral("Could not open the configure page."));
+        return;
+    }
+
+    if (!m_current->flags.protectedAddon
+        || !isKnownProtectedConfigurableHost(m_current->transportUrl)) {
+        return;
+    }
+
+    bool ok = false;
+    const QString configuredUrl = QInputDialog::getText(
+        this,
+        QStringLiteral("Reconfigure addon"),
+        QStringLiteral("Paste the configured manifest URL from your browser:"),
+        QLineEdit::Normal,
+        QString(),
+        &ok).trimmed();
+    if (!ok || configuredUrl.isEmpty() || !m_registry) {
+        return;
+    }
+
+    const QUrl url(configuredUrl);
+    if (!url.isValid() || url.scheme().isEmpty()) {
+        QMessageBox::warning(this,
+                             QStringLiteral("Reconfigure addon"),
+                             QStringLiteral("Enter a valid absolute URL (https://...)."));
+        return;
+    }
+
+    m_pendingReconfigureUrl = url;
+    m_registry->installByUrl(url);
+}
+
+void AddonDetailPanel::onReconfigureInstallSucceeded(const AddonDescriptor& descriptor)
+{
+    if (m_pendingReconfigureUrl.isEmpty()) {
+        return;
+    }
+    m_pendingReconfigureUrl = QUrl();
+
+    const QString name = descriptor.manifest.name.isEmpty()
+        ? QStringLiteral("Addon")
+        : descriptor.manifest.name;
+    QMessageBox::information(this,
+                             QStringLiteral("Addon reconfigured"),
+                             name + QStringLiteral(" was updated."));
+}
+
+void AddonDetailPanel::onReconfigureInstallFailed(const QUrl& inputUrl,
+                                                  const QString& message)
+{
+    if (m_pendingReconfigureUrl.isEmpty()) {
+        return;
+    }
+    Q_UNUSED(inputUrl);
+    m_pendingReconfigureUrl = QUrl();
+
+    QMessageBox::warning(this,
+                         QStringLiteral("Reconfigure addon"),
+                         QStringLiteral("Error: ")
+                             + (message.isEmpty()
+                                    ? QStringLiteral("Install failed")
+                                    : message));
 }
 
 void AddonDetailPanel::buildUI()
