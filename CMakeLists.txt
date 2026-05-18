@@ -174,6 +174,7 @@ set(SOURCES
     src/core/manga/bookwalker/BookWalkerCache.cpp
     src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
     src/core/manga/bookwalker/VolumeCoverAlignment.cpp
+    src/core/manga/bookwalker/VolumeCoverResolver.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -753,6 +754,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_quality_scorer.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_stream_pack_parser.cpp
+        tests/core/stream/test_stream_download_index_state.cpp
         tests/core/stream/test_unified_progress_store.cpp
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
