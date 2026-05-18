@@ -35,6 +35,7 @@
 #include <QPixmap>
 #include <QPoint>
 #include <QPointer>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPushButton>
 #include <QSize>
@@ -189,6 +190,7 @@ void StreamDetailView::showEntry(const QString& imdbId,
     m_seasonRow->hide();
     if (m_movieActionRow) m_movieActionRow->hide();
     if (m_movieLocalChip) m_movieLocalChip->hide();
+    if (m_movieDownloadChip) m_movieDownloadChip->hide();
     if (m_downloadBtn) m_downloadBtn->hide();
     if (m_packOptionsBtn) m_packOptionsBtn->hide();
     m_lastChoices.clear();
@@ -290,6 +292,7 @@ void StreamDetailView::showEntry(const QString& imdbId,
         m_statusLabel->hide();
         if (m_movieActionRow) m_movieActionRow->show();
         refreshMovieLocalChip();
+        refreshMovieDownloadState();
         // Stream-picker UX rework — for movies, auto-trigger the source load
         // on detail open (matches Stremio). StreamPage listens on
         // playRequested, runs StreamAggregator::load, and backfills the
@@ -498,6 +501,7 @@ void StreamDetailView::buildUI()
         "  color: #ddd; padding: 0 12px; font-size: 12px; }"
         "#DetailMovieDownloadBtn:hover { background: rgba(255,255,255,0.12);"
         "  border-color: rgba(255,255,255,0.22); }");
+    m_movieDownloadBtn->setEnabled(false);
     connect(m_movieDownloadBtn, &QPushButton::clicked, this, [this]() {
         if (m_currentImdb.isEmpty()) return;
         if (m_lastChoices.isEmpty()) {
@@ -526,6 +530,15 @@ void StreamDetailView::buildUI()
                                                 currentTitle(),
                                                 topHash,
                                                 topMagnet);
+        // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task B - record dispatch timestamp +
+        // force-start the bulk-progress poll timer. The 1Hz poll will catch the
+        // snapshot update naturally once the cross-thread torrent client
+        // registers the new group. refreshEpisodeBulkProgress honors a
+        // grace window so it does NOT stop the timer on empty-snapshot reads
+        // while a dispatch is still being processed. Replaces the
+        // THREE_SMALL_FIXES 2026-05-18 Task 3 singleShot(0) kick which fired
+        // too early + actively stopped the timer (Hemanth's 2026-05-18 smoke).
+        startBulkProgressGraceWindow();
     });
     movieActionLayout->addWidget(m_movieDownloadBtn);
 
@@ -540,6 +553,18 @@ void StreamDetailView::buildUI()
         "  font-weight: 600; }");
     m_movieLocalChip->hide();
     movieActionLayout->addWidget(m_movieLocalChip);
+
+    m_movieDownloadChip = new QLabel(tr("DOWNLOADING"), m_movieActionRow);
+    m_movieDownloadChip->setObjectName(QStringLiteral("DetailMovieDownloadChip"));
+    m_movieDownloadChip->setFixedHeight(20);
+    m_movieDownloadChip->setAlignment(Qt::AlignCenter);
+    m_movieDownloadChip->setStyleSheet(
+        "#DetailMovieDownloadChip { background: rgba(255,255,255,0.10);"
+        "  border: 1px solid rgba(255,255,255,0.22); border-radius: 2px;"
+        "  color: #e6e6e6; padding: 1px 6px; font-size: 9px;"
+        "  font-weight: 600; }");
+    m_movieDownloadChip->hide();
+    movieActionLayout->addWidget(m_movieDownloadChip);
     movieActionLayout->addStretch();
     m_movieActionRow->hide();
     leftCol->addWidget(m_movieActionRow);
@@ -707,6 +732,18 @@ void StreamDetailView::buildUI()
     m_statusLabel->setStyleSheet("color: rgba(255,255,255,0.4); font-size: 11px; padding: 20px;");
     leftCol->addWidget(m_statusLabel);
 
+    // MOVIE_DETAIL_LEFT_COL_TIDY_FIX 2026-05-18 (Agent 5) -- terminate the
+    // left column with a stretch so leftover vertical space (forced on us
+    // by the tall right-pane Sources list) lands at the bottom instead of
+    // being distributed across the title / meta / synopsis / cast / Download
+    // labels. Without this, movie mode (where m_episodeTable is hidden and
+    // its stretch=1 doesn't apply) gives every wordWrap QLabel a Preferred
+    // policy that grows to soak up extra height -- producing the ~150px
+    // gaps Hemanth flagged on the Fight Club detail view. Series mode
+    // unaffected: m_episodeTable's stretch=1 outranks this spacer's
+    // stretch=0 in the Expanding-policy fight for leftover space.
+    leftCol->addStretch();
+
     contentRow->addLayout(leftCol, 3);
 
     // Right column: Sources pane. TheatreDownloadPanel is mounted beside it.
@@ -747,6 +784,8 @@ void StreamDetailView::buildUI()
 void StreamDetailView::setStreamSourcesLoading()
 {
     if (m_sourcesList) m_sourcesList->setLoading();
+    if (m_movieDownloadBtn) m_movieDownloadBtn->setEnabled(false);
+    refreshMovieDownloadState();
 }
 
 void StreamDetailView::setStreamSources(
@@ -759,16 +798,37 @@ void StreamDetailView::setStreamSources(
     // already sorts magnets-with-seeders first (StreamSourceChoice.h:62-65).
     m_lastChoices = choices;
     if (m_sourcesList) m_sourcesList->setSources(choices, savedChoiceKey);
+    // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task A - enable the movie Download
+    // button only when at least one magnet source is present. Pre-fix the
+    // button was clickable from the moment the movie-action-row showed,
+    // silently no-op-ing when m_lastChoices was empty (Hemanth's 2026-05-18
+    // smoke). Walking the choices for a magnet matches the click handler's
+    // own filter at line 513-519.
+    if (m_movieDownloadBtn) {
+        bool hasMagnet = false;
+        for (const auto& choice : m_lastChoices) {
+            if (choice.sourceKind == QLatin1String("magnet")) {
+                hasMagnet = true;
+                break;
+            }
+        }
+        m_movieDownloadBtn->setEnabled(hasMagnet);
+    }
+    refreshMovieDownloadState();
 }
 
 void StreamDetailView::setStreamSourcesError(const QString& message)
 {
     if (m_sourcesList) m_sourcesList->setError(message);
+    if (m_movieDownloadBtn) m_movieDownloadBtn->setEnabled(false);
+    refreshMovieDownloadState();
 }
 
 void StreamDetailView::setStreamSourcesPlaceholder(const QString& message)
 {
     if (m_sourcesList) m_sourcesList->setPlaceholder(message);
+    if (m_movieDownloadBtn) m_movieDownloadBtn->setEnabled(false);
+    refreshMovieDownloadState();
 }
 
 void StreamDetailView::showAutoLaunchToast(const QString& label)
@@ -798,6 +858,63 @@ QString StreamDetailView::currentYear() const
 QList<StreamEpisode> StreamDetailView::episodesForSeason(int season) const
 {
     return m_seasons.value(season);
+}
+
+QJsonObject StreamDetailView::devSnapshot() const
+{
+    QJsonObject snap;
+    snap[QStringLiteral("currentImdb")] = m_currentImdb;
+    snap[QStringLiteral("currentType")] = m_currentType;
+    snap[QStringLiteral("currentTitle")] = currentTitle();
+    snap[QStringLiteral("currentYear")] = currentYear();
+    snap[QStringLiteral("currentSeason")] = currentSeason();
+    snap[QStringLiteral("selectedEpisodes")] = m_selectedEpisodes.size();
+    snap[QStringLiteral("movieDownloadButtonEnabled")] =
+        m_movieDownloadBtn && m_movieDownloadBtn->isEnabled();
+    snap[QStringLiteral("movieDownloadChipVisible")] =
+        m_movieDownloadChip && m_movieDownloadChip->isVisible();
+
+    QJsonArray rows;
+    if (m_episodeTable) {
+        const int season = currentSeason();
+        const auto cohortSnap = (m_torrentClient && !m_currentImdb.isEmpty() && season > 0)
+            ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+            : QHash<int, QPair<QString, int>>();
+        for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+            auto* epItem = m_episodeTable->item(row, kColEpisode);
+            if (!epItem)
+                continue;
+            const int ep = epItem->data(Qt::UserRole).toInt();
+            QJsonObject r;
+            r[QStringLiteral("ep")] = ep;
+            r[QStringLiteral("season")] = epItem->data(Qt::UserRole + 1).toInt();
+            r[QStringLiteral("status")] =
+                m_episodeTable->item(row, kColStatus)
+                    ? m_episodeTable->item(row, kColStatus)->text()
+                    : QString();
+            r[QStringLiteral("progress")] =
+                m_episodeTable->item(row, kColProgress)
+                    ? m_episodeTable->item(row, kColProgress)->text()
+                    : QString();
+            r[QStringLiteral("hasDownloadIcon")] =
+                m_episodeTable->cellWidget(row, kColAction) != nullptr;
+            r[QStringLiteral("selected")] = m_selectedEpisodes.contains(ep);
+            const auto cohortIt = cohortSnap.constFind(ep);
+            if (cohortIt != cohortSnap.constEnd()) {
+                r[QStringLiteral("bulkState")] = cohortIt->first;
+                r[QStringLiteral("bulkProgressPct")] = cohortIt->second;
+            }
+            rows.append(r);
+        }
+    }
+    snap[QStringLiteral("episodeRows")] = rows;
+
+    QJsonObject sources;
+    sources[QStringLiteral("visible")] = m_sourcesPanel && m_sourcesPanel->isVisible();
+    sources[QStringLiteral("sourceCount")] = m_lastChoices.size();
+    sources[QStringLiteral("header")] = m_sourcesHeader ? m_sourcesHeader->text() : QString();
+    snap[QStringLiteral("sourcesPanel")] = sources;
+    return snap;
 }
 
 void StreamDetailView::updateBulkDownloadButton()
@@ -1187,6 +1304,8 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
                    this, &StreamDetailView::refreshEpisodeMarkers);
         disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                    this, &StreamDetailView::refreshMovieLocalChip);
+        disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                   this, &StreamDetailView::refreshMovieDownloadState);
     }
     m_downloadIndex = idx;
     if (m_downloadIndex) {
@@ -1196,13 +1315,19 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
         connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                 this, &StreamDetailView::refreshMovieLocalChip,
                 Qt::QueuedConnection);
+        connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
+                this, &StreamDetailView::refreshMovieDownloadState,
+                Qt::QueuedConnection);
         // Repaint immediately if the table already has rows from a prior
         // showEntry call (the wiring may land late-in-MainWindow ctor).
         refreshEpisodeMarkers();
         refreshMovieLocalChip();
+        refreshMovieDownloadState();
     }
-    if (!m_downloadIndex)
+    if (!m_downloadIndex) {
         refreshMovieLocalChip();
+        refreshMovieDownloadState();
+    }
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — repaint per-row on-disk
@@ -1244,6 +1369,46 @@ void StreamDetailView::refreshMovieLocalChip()
     const bool hasLocal = m_downloadIndex
         && m_downloadIndex->filePathForMovie(m_currentImdb).has_value();
     m_movieLocalChip->setVisible(hasLocal);
+}
+
+void StreamDetailView::refreshMovieDownloadState()
+{
+    if (!m_movieDownloadBtn || !m_movieDownloadChip)
+        return;
+
+    const bool isMovie = m_currentType == QLatin1String("movie")
+        && !m_currentImdb.isEmpty();
+    if (!isMovie) {
+        m_movieDownloadChip->hide();
+        m_movieDownloadBtn->setText(tr("Download"));
+        return;
+    }
+
+    const QPair<QString, int> snapshot = m_torrentClient
+        ? m_torrentClient->streamMovieDownloadSnapshot(m_currentImdb)
+        : QPair<QString, int>();
+    if (!snapshot.first.isEmpty()) {
+        const QString pctText = snapshot.second > 0
+            ? QStringLiteral(" %1%").arg(snapshot.second)
+            : QString();
+        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING%1").arg(pctText));
+        m_movieDownloadChip->show();
+        m_movieDownloadBtn->setText(tr("Downloading%1").arg(pctText));
+        m_movieDownloadBtn->setEnabled(false);
+        return;
+    }
+
+    m_movieDownloadChip->hide();
+    m_movieDownloadBtn->setText(tr("Download"));
+
+    bool hasMagnet = false;
+    for (const auto& choice : m_lastChoices) {
+        if (choice.sourceKind == QLatin1String("magnet")) {
+            hasMagnet = true;
+            break;
+        }
+    }
+    m_movieDownloadBtn->setEnabled(hasMagnet);
 }
 
 // STREAM_BULK_DOWNLOAD_V2 Phase 3 — repaint per-row download state in the
@@ -1289,7 +1454,18 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, activeSeason);
 
     if (snapshot.isEmpty()) {
-        if (m_bulkPollTimer && m_bulkPollTimer->isActive())
+        // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task B - don't stop the poll
+        // timer if a dispatch happened recently. The cross-thread torrent
+        // client may take up to ~few seconds to register the new bulk group;
+        // stopping here would mean the row never updates without nav-away+back
+        // (Hemanth's 2026-05-18 smoke). 30s grace window covers slow pack
+        // verification and worker-thread registration while still letting
+        // idle detail views drain.
+        constexpr qint64 kDispatchGraceMs = 30000;
+        const bool recentDispatch = m_lastBulkDispatchTime.isValid()
+            && m_lastBulkDispatchTime.msecsTo(QDateTime::currentDateTime())
+                 < kDispatchGraceMs;
+        if (!recentDispatch && m_bulkPollTimer && m_bulkPollTimer->isActive())
             m_bulkPollTimer->stop();
         return;
     }
@@ -1351,6 +1527,13 @@ void StreamDetailView::refreshEpisodeBulkProgress()
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — keep the season-header
     // morphing button in sync with the cohort state that was just read.
     refreshSeasonHeaderButton();
+}
+
+void StreamDetailView::startBulkProgressGraceWindow()
+{
+    m_lastBulkDispatchTime = QDateTime::currentDateTime();
+    if (m_bulkPollTimer && !m_bulkPollTimer->isActive())
+        m_bulkPollTimer->start();
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — right-click context
@@ -1461,8 +1644,26 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
         connect(m_torrentClient, &TorrentClient::streamBulkGroupsChanged,
                 this, [this](const QString& /*groupId*/) {
                     refreshEpisodeBulkProgress();
+                    refreshMovieDownloadState();
+                }, Qt::QueuedConnection);
+        connect(m_torrentClient, &TorrentClient::torrentAdded,
+                this, [this](const QString& /*infoHash*/) {
+                    refreshMovieDownloadState();
+                }, Qt::QueuedConnection);
+        connect(m_torrentClient, &TorrentClient::torrentUpdated,
+                this, [this](const QString& /*infoHash*/) {
+                    refreshMovieDownloadState();
+                }, Qt::QueuedConnection);
+        connect(m_torrentClient, &TorrentClient::torrentRemoved,
+                this, [this](const QString& /*infoHash*/) {
+                    refreshMovieDownloadState();
+                }, Qt::QueuedConnection);
+        connect(m_torrentClient, &TorrentClient::torrentCompleted,
+                this, [this](const QString& /*infoHash*/) {
+                    refreshMovieDownloadState();
                 }, Qt::QueuedConnection);
     }
+    refreshMovieDownloadState();
 }
 
 void StreamDetailView::repaintActionIconForRow(int row,
@@ -1567,6 +1768,7 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& globalAnch
 
     switch (st) {
     case RowState::Idle:
+        startBulkProgressGraceWindow();
         emit singleEpisodeDownloadRequested(activeSeason, episode);
         break;
     case RowState::Queued:
@@ -1610,6 +1812,7 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& globalAnch
             if (sit != snap.cend()) cohortState = sit->first;
         }
         if (cohortState == QLatin1String("Cancelled")) {
+            startBulkProgressGraceWindow();
             emit singleEpisodeDownloadRequested(activeSeason, episode);
             break;
         }
@@ -1651,6 +1854,7 @@ void StreamDetailView::onDownloadSeasonClicked()
     if (season <= 0) return;
 
     if (!m_torrentClient) {
+        startBulkProgressGraceWindow();
         emit seasonDownloadRequested(season);
         return;
     }
@@ -1700,6 +1904,7 @@ void StreamDetailView::onDownloadSelectedClicked()
     QList<int> eps(m_selectedEpisodes.cbegin(), m_selectedEpisodes.cend());
     std::sort(eps.begin(), eps.end());
     if (eps.isEmpty()) return;
+    startBulkProgressGraceWindow();
     emit selectedEpisodesDownloadRequested(season, eps);
     m_selectedEpisodes.clear();
     updateDownloadSelectedButton();
@@ -1902,6 +2107,32 @@ void StreamDetailView::onMetaItemReady(const MetaItem& item)
     const QString rating = p.imdbRating;
     const QString type   = p.type;
     applyChips(year, p.runtime, p.genres, rating, type);
+
+    // Movie-action-row resilience (2026-05-18 - Smoke Test 3a fix per Task 1
+    // of docs/superpowers/plans/2026-05-18-three-small-fixes.md). showEntry's
+    // type-resolution at line 209-238 falls back to m_library->get(imdbId)
+    // when previewHint is absent OR carries an empty type - for a movie that
+    // is NOT yet in the library, that fallback returns an empty entry, so
+    // m_currentType ends up empty and the `if (displayType == "movie")`
+    // branch (line 289) never fires -> m_movieActionRow stays hidden and the
+    // Download button is invisible. Backfill from the full MetaItem here:
+    // when we now learn the type is "movie" and the movie-action-row hasn't
+    // been shown yet, promote into the movie branch behavior - show the row,
+    // refresh the LOCAL chip, and kick the stream-source load so the auto-
+    // Download / source list lands the same as the in-library path.
+    if (!type.isEmpty() && type != m_currentType) {
+        m_currentType = type;
+        if (type == QLatin1String("movie")) {
+            m_statusLabel->hide();
+            if (m_movieActionRow) m_movieActionRow->show();
+            refreshMovieLocalChip();
+            refreshMovieDownloadState();
+            if (m_lastChoices.isEmpty()) {
+                setStreamSourcesLoading();
+                emit playRequested(m_currentImdb, QStringLiteral("movie"), 0, 0);
+            }
+        }
+    }
 
     // Phase 3 Batch 3.3 — description may arrive richer via the full-meta
     // fetch than what the partial preview carried. Overwrite only if the
