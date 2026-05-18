@@ -28,13 +28,14 @@ public:
     void set_rate(double rate);
     void reset();
 
-    // Set PortAudio output latency so the clock accounts for the delay
-    // between writing audio and it reaching the speakers.
+    // Set the audio device output latency (from WasapiOutput::current_latency_sec())
+    // so the clock accounts for the delay between writing audio and it reaching
+    // the speakers.
     void set_output_latency(double seconds);
 
     // Set additional user-configurable audio delay in milliseconds.
     // Positive values delay audio (compensate for hidden Bluetooth/HDMI latency
-    // that PortAudio's outputLatency doesn't account for).
+    // that the device's reported output latency doesn't account for).
     // Negative values pull audio earlier (rare).
     // Applied as an offset in position_us() — takes effect immediately,
     // no re-anchor needed.
