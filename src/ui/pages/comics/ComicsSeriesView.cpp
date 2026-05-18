@@ -147,7 +147,8 @@ QString formatChapterRange(const anilist::VolumeRow& row)
 }
 
 QJsonObject volumeRowJson(const anilist::VolumeRow& row, int rowIndex,
-                          bool selected, const QString& cbzPath)
+                          bool selected, const QString& cbzPath,
+                          const QString& coverUrl)
 {
     QJsonObject obj;
     obj[QStringLiteral("row")] = rowIndex;
@@ -160,6 +161,7 @@ QJsonObject volumeRowJson(const anilist::VolumeRow& row, int rowIndex,
     obj[QStringLiteral("downloaded")] = !cbzPath.isEmpty();
     obj[QStringLiteral("selected")] = selected;
     obj[QStringLiteral("cbzPath")] = cbzPath;
+    obj[QStringLiteral("coverUrl")] = coverUrl;
 
     QJsonArray chapters;
     for (const QString& chapter : row.chapterNumbers)
@@ -661,6 +663,7 @@ void ComicsSeriesView::clearView()
     // flicker on every re-open; Hemanth flagged it as "the poster keeps
     // loading every time we reopen the series view."
     m_currentResolvingAnilistId = 0;
+    m_lastAppliedCoverUrlByVolume.clear();
     hideLoadingOverlay();  // stops the safety timer before clearing rows
     m_volumesTable->setRowCount(0);
     if (m_sourcesPanel) m_sourcesPanel->clear();
@@ -1186,6 +1189,11 @@ void ComicsSeriesView::paintVolumeCoversAsFallback()
 
 void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumber)
 {
+    // Task 15: record the URL (including empty) before any guard so the smoke
+    // matrix can see what source each volume row was asked to paint.
+    if (volumeNumber > 0)
+        m_lastAppliedCoverUrlByVolume[volumeNumber] = url;
+
     if (url.isEmpty() || volumeNumber == 0) return;
 
     QPixmap cached;
@@ -1524,8 +1532,10 @@ QJsonObject ComicsSeriesView::devSnapshot() const
             if (auto* item = m_volumesTable->item(i, kColIndex))
                 cbzPath = item->data(Qt::UserRole + 1).toString();
         }
+        const int volNum = m_currentVolumeRows.at(i).volumeNumber;
+        const QString coverUrl = m_lastAppliedCoverUrlByVolume.value(volNum);
         rows.append(volumeRowJson(m_currentVolumeRows.at(i), i,
-                                  m_selectedRows.contains(i), cbzPath));
+                                  m_selectedRows.contains(i), cbzPath, coverUrl));
     }
     snap[QStringLiteral("volumes")] = rows;
     snap[QStringLiteral("sourcesPanel")] = devSourcesSnapshot();
