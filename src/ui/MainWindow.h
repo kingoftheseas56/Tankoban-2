@@ -21,6 +21,7 @@ class VideosPage;
 class OrganisePage;
 class StreamPage;
 class TankorentPage;
+class TorrentClient;
 class DevControlServer;
 class SidebarDrawer;
 class StreamDownloadIndex;
@@ -216,6 +217,7 @@ private:
     // m_pageStack on each invocation.
     StreamPage    *m_streamPage    = nullptr;
     TankorentPage *m_tankorentPage = nullptr;
+    TorrentClient *m_torrentClient = nullptr;
 
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).

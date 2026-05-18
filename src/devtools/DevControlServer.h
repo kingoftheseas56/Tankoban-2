@@ -20,7 +20,7 @@ class MainWindow;
 //   reply    = {"type": "reply", "seq": <int>, ...}
 //   error    = {"type": "error", "seq": <int>, "code": "<UPPER_SNAKE>", "message": "<human>"}
 //
-// Schema version returned in `ping` response: "tankoban.dev.v1".
+// Schema version returned in `ping` response: "tankoban.dev.v1.2".
 // Additive changes within v1.x are non-breaking; removals/renames bump to v2.
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated

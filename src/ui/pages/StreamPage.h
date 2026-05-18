@@ -6,6 +6,7 @@
 #include <QScrollArea>
 #include <QStack>
 #include <QStackedWidget>
+#include <QJsonObject>
 #include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -98,6 +99,13 @@ public:
     // contract as metaAggregator(): owned by StreamPage, stable for the
     // app session.
     StreamLibrary* streamLibrary() const { return m_library; }
+
+    QJsonObject devSnapshot() const;
+    QJsonObject devSearch(const QString& query,
+                          const QString& typeFilter,
+                          int timeoutMs);
+    QJsonObject devDispatchEpisode(const QString& imdbId, int season, int episode);
+    QJsonObject devDispatchSeason(const QString& imdbId, int season);
 
 signals:
     // STREAM_ADD_TO_TANKORENT (2026-05-06) — emitted when the user
@@ -279,6 +287,8 @@ private:
     // restricts the dispatch to those episode numbers only (whole-season when empty).
     void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
                                      const QList<int>& episodeFilter);
+    QJsonObject devDispatchEpisodes(const QString& imdbId, int season,
+                                    const QList<int>& episodeFilter);
 
     // THEATRE_DOWNLOAD_OVERHAUL stale-panel-on-show-change fix v2 2026-05-17 -
     // imperative dismiss called at every navigation transition site (showEntry

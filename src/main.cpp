@@ -11,6 +11,7 @@
 #include <QTimer>
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "core/JsonlEventLog.h"
 #include "core/manga/ComicsPrePivotMigrator.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
@@ -159,6 +160,7 @@ int main(int argc, char *argv[])
 #endif
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
+    JsonlEventLog::installQtMessageHandler();
 
     const QStringList cliArgs = QCoreApplication::arguments();
 

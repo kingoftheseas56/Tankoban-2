@@ -2,8 +2,10 @@
 
 #include <QWidget>
 #include <QComboBox>
+#include <QDateTime>
 #include <QHash>
 #include <QLabel>
+#include <QJsonObject>
 #include <QPair>
 #include <QPushButton>
 #include <QSet>
@@ -89,6 +91,7 @@ public:
     QString currentTitle() const;
     QString currentYear() const;
     QList<tankostream::stream::StreamEpisode> episodesForSeason(int season) const;
+    QJsonObject devSnapshot() const;
 
     // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — auto-add the
     // currently-shown show/movie to StreamLibrary (no-op if already present).
@@ -254,6 +257,7 @@ private:
     // the rows in place.
     void refreshEpisodeMarkers();
     void refreshMovieLocalChip();
+    void refreshMovieDownloadState();
     void updateProgressColumn();
     void updateBulkDownloadButton();
 
@@ -261,6 +265,11 @@ private:
     // visibility + label based on m_selectedEpisodes.size(). Called
     // whenever a checkbox toggles or the season changes.
     void updateDownloadSelectedButton();
+
+    // Stream async-race follow-up 2026-05-18: mark the exact user action
+    // that is about to create a bulk cohort. The earlier stamp lived on a
+    // panel-open button, which could expire before the real dispatch.
+    void startBulkProgressGraceWindow();
 
     // STREAM_BULK_DOWNLOAD_V2 Phase 3 — refresh the per-row download-state
     // text in the episode table's Status column from the TorrentClient
@@ -378,6 +387,7 @@ private:
     QWidget*      m_movieActionRow = nullptr;
     QPushButton*  m_movieDownloadBtn = nullptr;
     QLabel*       m_movieLocalChip = nullptr;
+    QLabel*       m_movieDownloadChip = nullptr;
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — inline trigger UX.
     // Per-(show, season) selection state. Reset whenever the season-combo
     // changes (showEntry / setSeason path). NOT persisted; per-launch only.
@@ -458,6 +468,14 @@ private:
     // download-state repaints. Started in populateEpisodeTable when bulk
     // activity exists for the show+season; idle otherwise.
     QTimer*                m_bulkPollTimer = nullptr;
+
+    // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task B - stamped when a download
+    // dispatch fires (movie or season-header pack). refreshEpisodeBulkProgress
+    // checks this to avoid stopping the poll timer during the cross-thread
+    // window where the torrent client hasn't yet registered the new bulk
+    // group in its snapshot. Default-constructed (invalid) until first
+    // dispatch.
+    QDateTime              m_lastBulkDispatchTime;
 
 private:
     void refreshLibraryButton();

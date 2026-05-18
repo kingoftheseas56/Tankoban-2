@@ -1,5 +1,6 @@
 #include "StreamLibrary.h"
 #include "core/JsonStore.h"
+#include "core/JsonlEventLog.h"
 #include "StreamDownloadIndex.h"
 #include "core/torrent/TorrentClient.h"
 
@@ -26,6 +27,14 @@ void StreamLibrary::add(const StreamLibraryEntry& entry)
     lock.unlock();
 
     save();
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("library.entry_added"),
+        QStringLiteral("add"),
+        QJsonObject{{QStringLiteral("imdb"), e.imdb},
+                    {QStringLiteral("name"), e.name},
+                    {QStringLiteral("type"), e.type},
+                    {QStringLiteral("year"), e.year},
+                    {QStringLiteral("addedAt"), static_cast<double>(e.addedAt)}});
     emit libraryChanged();
 }
 
@@ -37,6 +46,10 @@ bool StreamLibrary::remove(const QString& imdbId)
     lock.unlock();
 
     save();
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("library.entry_removed"),
+        QStringLiteral("remove"),
+        QJsonObject{{QStringLiteral("imdb"), imdbId}});
     emit libraryChanged();
 
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — Remove from library

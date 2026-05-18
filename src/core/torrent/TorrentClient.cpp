@@ -1,6 +1,7 @@
 #include "TorrentClient.h"
 #include "TorrentEngine.h"
 #include "core/CoreBridge.h"
+#include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
 #include "core/stream/BulkPackVerifier.h"
 #include "core/stream/StreamBulkPlan.h"
@@ -701,8 +702,19 @@ void TorrentClient::reconcileStreamBulkGroups()
 void TorrentClient::upsertStreamBulkGroup(const StreamBulkGroupRecord& group)
 {
     if (group.groupId.isEmpty()) return;
+    const bool existed = m_streamBulkGroups.contains(group.groupId);
     m_streamBulkGroups[group.groupId] = streamBulkGroupToJson(group);
     saveStreamBulkGroups();
+    if (!existed) {
+        JsonlEventLog::instance().emitEvent(
+            QStringLiteral("bulk.group_created"),
+            QStringLiteral("upsert"),
+            QJsonObject{{QStringLiteral("groupId"), group.groupId},
+                        {QStringLiteral("imdb"), group.sourceSeriesId},
+                        {QStringLiteral("kind"), group.groupKind},
+                        {QStringLiteral("destinationRoot"), group.destinationRoot},
+                        {QStringLiteral("items"), group.items.size()}});
+    }
 }
 
 void TorrentClient::dispatchStreamBulkGroup(
@@ -756,6 +768,7 @@ void TorrentClient::dispatchStreamBulkGroup(
     // Persist before the first add/start call so restart reconciliation sees
     // the group even if dispatch is interrupted mid-loop.
     upsertStreamBulkGroup(prepared);
+    emit streamBulkGroupsChanged(group.groupId);
 
     auto setItemDispatchState = [&](const QString& itemKey,
                                     const QString& infoHash,
@@ -835,6 +848,7 @@ void TorrentClient::dispatchStreamBulkGroup(
                 }
             }
             saveStreamBulkGroups();
+            emit streamBulkGroupsChanged(group.groupId);
             return;
         }
 
@@ -849,6 +863,7 @@ void TorrentClient::dispatchStreamBulkGroup(
                                  StreamBulkItemState::Downloading);
         }
         saveStreamBulkGroups();
+        emit streamBulkGroupsChanged(group.groupId);
         return;
     }
 
@@ -878,6 +893,7 @@ void TorrentClient::dispatchStreamBulkGroup(
                              StreamBulkItemState::Pending);
     }
     saveStreamBulkGroups();
+    emit streamBulkGroupsChanged(group.groupId);
     cohortMaybeAdvance(group.groupId);
 }
 
@@ -1218,6 +1234,13 @@ bool TorrentClient::updateStreamBulkGroupItemState(const QString& groupId,
     group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
     m_streamBulkGroups[groupId] = group;
     saveStreamBulkGroups();
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("bulk.item_state_changed"),
+        QStringLiteral("update_item_state"),
+        QJsonObject{{QStringLiteral("groupId"), groupId},
+                    {QStringLiteral("itemKey"), itemKey},
+                    {QStringLiteral("state"), streamBulkItemStateToString(state)},
+                    {QStringLiteral("lastError"), lastError}});
     return true;
 }
 
@@ -2197,6 +2220,14 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     rec["season"]          = config.season;
     m_records[infoHash]    = rec;
     saveRecords();
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("torrent.added"),
+        QStringLiteral("start_download"),
+        QJsonObject{{QStringLiteral("hash"), infoHash},
+                    {QStringLiteral("imdbId"), config.imdbId},
+                    {QStringLiteral("season"), config.season},
+                    {QStringLiteral("streamGroupId"), config.streamGroupId},
+                    {QStringLiteral("savePath"), config.destinationPath}});
 
     // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — always call startTorrent
     // regardless of startPaused, then pause immediately if requested. The
@@ -2277,6 +2308,58 @@ float TorrentClient::downloadProgress(const QString& folderPath) const
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
+QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& imdbId) const
+{
+    if (imdbId.isEmpty())
+        return {};
+
+    QMap<QString, TorrentStatus> statusMap;
+    for (const auto& s : m_engine->allStatuses())
+        statusMap[s.infoHash] = s;
+
+    QString bestState;
+    int bestPct = 0;
+    qint64 bestAddedAt = -1;
+
+    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
+        const QString hash = it.key();
+        const QJsonObject rec = it.value().toObject();
+        if (rec.value(QStringLiteral("imdbId")).toString() != imdbId)
+            continue;
+        if (rec.value(QStringLiteral("season")).toInt(-1) != 0)
+            continue;
+        if (!rec.value(QStringLiteral("streamGroupId")).toString().isEmpty())
+            continue;
+
+        QString state = rec.value(QStringLiteral("state")).toString();
+        float progress = state == QLatin1String("completed") ? 1.0f : 0.0f;
+        if (statusMap.contains(hash)) {
+            const TorrentStatus& st = statusMap.value(hash);
+            state = st.stateString;
+            progress = st.progress;
+        }
+
+        const QString normalized = state.toLower();
+        if (normalized == QLatin1String("completed")
+            || normalized == QLatin1String("seeding")
+            || normalized == QLatin1String("error")) {
+            continue;
+        }
+
+        const qint64 addedAt = rec.value(QStringLiteral("addedAt")).toVariant().toLongLong();
+        if (addedAt < bestAddedAt)
+            continue;
+
+        bestAddedAt = addedAt;
+        bestState = state.isEmpty() ? QStringLiteral("downloading") : state;
+        bestPct = static_cast<int>(qBound(0.0f, progress, 1.0f) * 100.0f);
+    }
+
+    if (bestState.isEmpty())
+        return {};
+    return qMakePair(bestState, bestPct);
+}
+
 QList<TorrentInfo> TorrentClient::listActive() const
 {
     QList<TorrentInfo> result;
@@ -2328,6 +2411,101 @@ QList<TorrentInfo> TorrentClient::listActive() const
     return result;
 }
 
+QJsonArray TorrentClient::devTorrentsSnapshot(bool activeOnly) const
+{
+    QMap<QString, TorrentStatus> statusMap;
+    for (const TorrentStatus& s : m_engine->allStatuses())
+        statusMap.insert(s.infoHash, s);
+
+    QJsonArray out;
+    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
+        const QString hash = it.key();
+        const QJsonObject rec = it.value().toObject();
+        const auto statusIt = statusMap.constFind(hash);
+        const bool hasLiveStatus = statusIt != statusMap.constEnd();
+        const QString state = hasLiveStatus
+            ? statusIt->stateString
+            : rec.value(QStringLiteral("state")).toString();
+
+        const bool terminal =
+            state == QLatin1String("completed") || state == QLatin1String("seeding");
+        if (activeOnly && (!hasLiveStatus || terminal))
+            continue;
+
+        QJsonObject o;
+        o[QStringLiteral("hash")] = hash;
+        o[QStringLiteral("name")] = rec.value(QStringLiteral("name")).toString();
+        o[QStringLiteral("state")] = state;
+        o[QStringLiteral("imdbId")] = rec.value(QStringLiteral("imdbId")).toString();
+        o[QStringLiteral("season")] = rec.value(QStringLiteral("season")).toInt(0);
+        o[QStringLiteral("streamGroupId")] =
+            rec.value(QStringLiteral("streamGroupId")).toString();
+        o[QStringLiteral("savePath")] = rec.value(QStringLiteral("savePath")).toString();
+
+        if (hasLiveStatus) {
+            const TorrentStatus& s = statusIt.value();
+            o[QStringLiteral("name")] =
+                o.value(QStringLiteral("name")).toString().isEmpty()
+                    ? s.name
+                    : o.value(QStringLiteral("name")).toString();
+            o[QStringLiteral("progressPct")] =
+                static_cast<int>(qBound(0.0f, s.progress, 1.0f) * 100.0f);
+            o[QStringLiteral("downRate")] = s.downloadRate;
+            o[QStringLiteral("upRate")] = s.uploadRate;
+            o[QStringLiteral("peers")] = s.numPeers;
+        } else {
+            o[QStringLiteral("progressPct")] = 0;
+            o[QStringLiteral("downRate")] = 0;
+            o[QStringLiteral("upRate")] = 0;
+            o[QStringLiteral("peers")] = 0;
+        }
+        out.append(o);
+    }
+    return out;
+}
+
+QJsonArray TorrentClient::devBulkGroupsSnapshot() const
+{
+    static const QRegularExpression episodeRe(QStringLiteral("[Ee](\\d{1,3})"));
+
+    QJsonArray groups;
+    for (auto it = m_streamBulkGroups.constBegin();
+         it != m_streamBulkGroups.constEnd(); ++it) {
+        const QJsonObject src = it.value().toObject();
+        const QJsonObject sourceIds = src.value(QStringLiteral("sourceIds")).toObject();
+
+        QJsonObject group;
+        group[QStringLiteral("groupId")] =
+            src.value(QStringLiteral("groupId")).toString(it.key());
+        group[QStringLiteral("imdb")] = sourceIds.value(QStringLiteral("seriesId")).toString();
+        group[QStringLiteral("kind")] =
+            src.value(QStringLiteral("groupKind")).toString(QStringLiteral("streamSeason"));
+        group[QStringLiteral("destinationRoot")] =
+            src.value(QStringLiteral("destinationRoot")).toString();
+
+        QJsonArray items;
+        const QJsonArray srcItems = src.value(QStringLiteral("items")).toArray();
+        for (const QJsonValue& value : srcItems) {
+            const QJsonObject srcItem = value.toObject();
+            const QString itemKey = srcItem.value(QStringLiteral("itemKey")).toString();
+            QJsonObject item;
+            item[QStringLiteral("itemKey")] = itemKey;
+            const QRegularExpressionMatch m = episodeRe.match(itemKey);
+            item[QStringLiteral("episode")] = m.hasMatch() ? m.captured(1).toInt() : 0;
+            item[QStringLiteral("state")] =
+                srcItem.value(QStringLiteral("itemState")).toString();
+            item[QStringLiteral("infoHash")] =
+                srcItem.value(QStringLiteral("infoHash")).toString();
+            item[QStringLiteral("canonicalFilename")] =
+                srcItem.value(QStringLiteral("canonicalFilename")).toString();
+            items.append(item);
+        }
+        group[QStringLiteral("items")] = items;
+        groups.append(group);
+    }
+    return groups;
+}
+
 QJsonArray TorrentClient::listHistory() const
 {
     auto data = m_bridge->store().read(HISTORY_FILE);
@@ -2344,6 +2522,10 @@ void TorrentClient::pauseTorrent(const QString& infoHash)
         m_records[infoHash] = rec;
         saveRecords();
     }
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("torrent.state_changed"),
+        QStringLiteral("paused"),
+        QJsonObject{{QStringLiteral("hash"), infoHash}});
     emit torrentUpdated(infoHash);
 }
 
@@ -2357,12 +2539,17 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
         m_records[infoHash] = rec;
         saveRecords();
     }
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("torrent.state_changed"),
+        QStringLiteral("downloading"),
+        QJsonObject{{QStringLiteral("hash"), infoHash}});
     emit torrentUpdated(infoHash);
 }
 
 void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
 {
     const bool hadRecord = m_records.contains(infoHash);
+    const QJsonObject rec = hadRecord ? m_records.value(infoHash).toObject() : QJsonObject{};
     m_engine->removeTorrent(infoHash, deleteFiles);
     m_records.remove(infoHash);
     if (hadRecord) {
@@ -2372,6 +2559,13 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
             QStringLiteral("Torrent removed from Tankorent"));
     }
     saveRecords();
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("torrent.removed"),
+        QStringLiteral("delete_torrent"),
+        QJsonObject{{QStringLiteral("hash"), infoHash},
+                    {QStringLiteral("deleteFiles"), deleteFiles},
+                    {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
+                    {QStringLiteral("streamGroupId"), rec.value(QStringLiteral("streamGroupId")).toString()}});
     emit torrentRemoved(infoHash);
 }
 
@@ -2553,6 +2747,20 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
         category = rec.value("category").toString();
         savePath = rec.value("savePath").toString();
         streamGroupId = rec.value("streamGroupId").toString();
+        JsonlEventLog::instance().emitEvent(
+            QStringLiteral("torrent.state_changed"),
+            QStringLiteral("completed"),
+            QJsonObject{{QStringLiteral("hash"), infoHash},
+                        {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
+                        {QStringLiteral("season"), rec.value(QStringLiteral("season")).toInt(0)},
+                        {QStringLiteral("streamGroupId"), streamGroupId},
+                        {QStringLiteral("savePath"), savePath}});
+        JsonlEventLog::instance().emitEvent(
+            QStringLiteral("download.file_completed"),
+            QStringLiteral("torrent_finished"),
+            QJsonObject{{QStringLiteral("hash"), infoHash},
+                        {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
+                        {QStringLiteral("streamGroupId"), streamGroupId}});
     }
 
     // TANKORENT_STREAM_INTEGRATION 2026-05-15: route to the right publisher

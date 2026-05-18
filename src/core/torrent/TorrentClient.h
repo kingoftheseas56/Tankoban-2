@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QList>
 #include <QMap>
+#include <QPair>
 #include <QSet>
 #include <QStringList>
 #include <optional>
@@ -99,6 +100,8 @@ public:
     QList<TorrentInfo> listActive() const;
     QJsonArray         listHistory() const;
     QJsonObject        streamBulkGroups() const;
+    QJsonArray         devTorrentsSnapshot(bool activeOnly) const;
+    QJsonArray         devBulkGroupsSnapshot() const;
 
     // Aggregate progress [0..1] across all active torrents whose save path
     // is under `folderPath`. Weighted by torrent size so a big mostly-done
@@ -106,6 +109,11 @@ public:
     // when no matching active torrents. Case-insensitive prefix match on
     // Windows-style paths.
     float downloadProgress(const QString& folderPath) const;
+
+    // Direct Theatre movie downloads are single torrent records with imdbId
+    // and season=0, not stream-bulk groups. Returns {state, pct}; empty state
+    // means no active movie download should be shown in the detail view.
+    QPair<QString, int> streamMovieDownloadSnapshot(const QString& imdbId) const;
 
     // Control
     void pauseTorrent(const QString& infoHash);

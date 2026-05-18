@@ -45,6 +45,7 @@
 #include <QEasingCurve>
 #include <QFrame>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFocusEvent>
 #include <QHBoxLayout>
 #include <QFileInfo>
@@ -396,6 +397,116 @@ void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
     // show-view binding does not also appear as a bare folder tile).
     if (m_localFilesScanner)
         m_localFilesScanner->setStreamDownloadIndex(idx);
+}
+
+QJsonObject StreamPage::devSnapshot() const
+{
+    QJsonObject snap;
+    QString layer = QStringLiteral("unknown");
+    const int idx = m_mainStack ? m_mainStack->currentIndex() : -1;
+    if (m_searchWidget && m_searchWidget->isVisible())
+        layer = QStringLiteral("search");
+    else if (idx == 0)
+        layer = QStringLiteral("browse");
+    else if (idx == 1)
+        layer = QStringLiteral("detail");
+    else if (idx == 2)
+        layer = QStringLiteral("player");
+    else if (idx == 3)
+        layer = QStringLiteral("addons");
+    else if (idx == 4)
+        layer = QStringLiteral("catalog");
+    else if (idx == 5)
+        layer = QStringLiteral("calendar");
+
+    snap[QStringLiteral("layer")] = layer;
+    snap[QStringLiteral("searchQuery")] = m_searchInput ? m_searchInput->text() : QString();
+    snap[QStringLiteral("searchBusy")] = m_searchBusy && m_searchBusy->isVisible();
+
+    QJsonArray nav;
+    for (const NavEntry& entry : m_navStack) {
+        QJsonObject o;
+        switch (entry.kind) {
+        case NavEntry::Kind::Browse:        o[QStringLiteral("kind")] = QStringLiteral("browse"); break;
+        case NavEntry::Kind::CatalogBrowse: o[QStringLiteral("kind")] = QStringLiteral("catalogBrowse"); break;
+        case NavEntry::Kind::Detail:        o[QStringLiteral("kind")] = QStringLiteral("detail"); break;
+        case NavEntry::Kind::AddonManager:  o[QStringLiteral("kind")] = QStringLiteral("addonManager"); break;
+        case NavEntry::Kind::Calendar:      o[QStringLiteral("kind")] = QStringLiteral("calendar"); break;
+        case NavEntry::Kind::Search:        o[QStringLiteral("kind")] = QStringLiteral("search"); break;
+        }
+        o[QStringLiteral("detailImdbId")] = entry.detailImdbId;
+        o[QStringLiteral("searchQuery")] = entry.searchQuery;
+        nav.append(o);
+    }
+    snap[QStringLiteral("navStack")] = nav;
+
+    if (m_detailView)
+        snap[QStringLiteral("detail")] = m_detailView->devSnapshot();
+    return snap;
+}
+
+QJsonObject StreamPage::devSearch(const QString& query,
+                                  const QString& typeFilter,
+                                  int timeoutMs)
+{
+    QJsonObject out;
+    if (!m_metaAggregator || query.trimmed().isEmpty()) {
+        out[QStringLiteral("status")] = QStringLiteral("bad_request");
+        return out;
+    }
+
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+
+    QList<tankostream::addon::MetaItemPreview> results;
+    QString error;
+    bool timedOut = false;
+    connect(&timer, &QTimer::timeout, &loop, [&]() {
+        timedOut = true;
+        loop.quit();
+    });
+
+    m_metaAggregator->searchByTitle(
+        query.trimmed(), typeFilter,
+        [&](const QList<tankostream::addon::MetaItemPreview>& found,
+            const QString& err) {
+            results = found;
+            error = err;
+            loop.quit();
+        });
+    timer.start(qBound(1000, timeoutMs, 15000));
+    loop.exec();
+
+    QJsonArray arr;
+    for (const auto& item : results) {
+        if (!typeFilter.isEmpty() && item.type != typeFilter)
+            continue;
+        QJsonObject o;
+        o[QStringLiteral("imdb")] = item.id;
+        o[QStringLiteral("name")] = item.name;
+        o[QStringLiteral("year")] = item.releaseInfo;
+        o[QStringLiteral("type")] = item.type;
+        o[QStringLiteral("poster")] = item.poster.toString();
+        arr.append(o);
+    }
+
+    out[QStringLiteral("status")] = timedOut ? QStringLiteral("timeout")
+                                             : QStringLiteral("ok");
+    out[QStringLiteral("timedOut")] = timedOut;
+    out[QStringLiteral("error")] = error;
+    out[QStringLiteral("results")] = arr;
+    return out;
+}
+
+QJsonObject StreamPage::devDispatchEpisode(const QString& imdbId, int season, int episode)
+{
+    return devDispatchEpisodes(imdbId, season, QList<int>{episode});
+}
+
+QJsonObject StreamPage::devDispatchSeason(const QString& imdbId, int season)
+{
+    return devDispatchEpisodes(imdbId, season, QList<int>{});
 }
 
 // â”€â”€â”€ UI construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -925,7 +1036,12 @@ void StreamPage::buildBrowseLayer()
     m_localFilesSection = new QWidget(m_scrollHome);
     auto* localFilesLayout = new QVBoxLayout(m_localFilesSection);
     localFilesLayout->setContentsMargins(0, 0, 0, 0);
-    localFilesLayout->setSpacing(4);
+    // LOCAL_FILES_HEADER_SPACING_FIX 2026-05-18 (Agent 5) -- match the gap
+    // StreamLibraryLayout puts between "SHOWS & MOVIES" header and its tile
+    // strip (its root QVBoxLayout setSpacing(24) at StreamLibraryLayout.cpp:126).
+    // Was 4px which hugged the "Local files" label to the folder tiles below it
+    // while the headers above breathed at 24px.
+    localFilesLayout->setSpacing(24);
     auto* localFilesLabel = new QLabel(tr("Local files"), m_localFilesSection);
     localFilesLabel->setObjectName(QStringLiteral("LibraryHeading"));
     localFilesLayout->addWidget(localFilesLabel);
@@ -1513,6 +1629,7 @@ void StreamPage::goBack()
 // invoking m_searchWidget->search() to actually run a fresh query.
 void StreamPage::showSearchResults()
 {
+    m_mainStack->setCurrentIndex(0);
     m_browseScroll->hide();
     m_searchWidget->show();
 }
@@ -2694,6 +2811,11 @@ void StreamPage::onTheatreTopSeededDownloadRequested(const QString& imdbId,
     config.season          = 0;
 
     m_torrentClient->startDownload(hash, config);
+    if (m_detailView && m_detailView->currentImdb() == imdbId) {
+        m_detailView->autoAddToLibrary();
+        m_detailView->showAutoLaunchToast(
+            tr("Movie added - downloading top-seeded source"));
+    }
 }
 
 void StreamPage::dismissTheatreDownloadPanelIfOpen()
@@ -2882,6 +3004,232 @@ void StreamPage::triggerBulkSelectedEpisodes(const QString& imdbId, int season,
     connect(m_bulkSourceCollector, &BulkSourceCollector::cancelled,
             this, &StreamPage::cancelBulkSeasonDownload);
     m_bulkSourceCollector->begin(m_bulkInput);
+}
+
+QJsonObject StreamPage::devDispatchEpisodes(const QString& imdbId, int season,
+                                            const QList<int>& episodeFilter)
+{
+    using namespace tankostream::stream;
+
+    auto fail = [](const QString& message) {
+        QJsonObject out;
+        out[QStringLiteral("status")] = QStringLiteral("error");
+        out[QStringLiteral("message")] = message;
+        return out;
+    };
+
+    if (!m_torrentClient || !m_bridge || !m_addonRegistry || !m_metaAggregator)
+        return fail(QStringLiteral("stream services not initialized"));
+    if (imdbId.isEmpty() || season <= 0)
+        return fail(QStringLiteral("imdbId and positive season are required"));
+
+    QMap<int, QList<StreamEpisode>> seasons;
+    if (m_detailView && m_detailView->currentImdb() == imdbId) {
+        const QList<StreamEpisode> active = m_detailView->episodesForSeason(season);
+        if (!active.isEmpty())
+            seasons.insert(season, active);
+    }
+
+    if (seasons.value(season).isEmpty()) {
+        QEventLoop metaLoop;
+        QTimer metaTimer;
+        metaTimer.setSingleShot(true);
+        bool metaTimedOut = false;
+        QString metaError;
+        QMetaObject::Connection readyConn;
+        QMetaObject::Connection errConn;
+        readyConn = connect(m_metaAggregator, &MetaAggregator::seriesMetaReady,
+            this, [&](const QString& readyImdb,
+                      const QMap<int, QList<StreamEpisode>>& readySeasons) {
+                if (readyImdb != imdbId)
+                    return;
+                seasons = readySeasons;
+                metaLoop.quit();
+            });
+        errConn = connect(m_metaAggregator, &MetaAggregator::seriesMetaError,
+            this, [&](const QString& errorImdb, const QString& message) {
+                if (errorImdb != imdbId)
+                    return;
+                metaError = message;
+                metaLoop.quit();
+            });
+        connect(&metaTimer, &QTimer::timeout, &metaLoop, [&]() {
+            metaTimedOut = true;
+            metaLoop.quit();
+        });
+        m_metaAggregator->fetchSeriesMeta(imdbId);
+        metaTimer.start(15000);
+        metaLoop.exec();
+        disconnect(readyConn);
+        disconnect(errConn);
+
+        if (metaTimedOut)
+            return fail(QStringLiteral("series metadata timeout"));
+        if (!metaError.isEmpty())
+            return fail(metaError);
+    }
+
+    const QList<StreamEpisode> allEpisodes = seasons.value(season);
+    if (allEpisodes.isEmpty())
+        return fail(QStringLiteral("no episodes available for requested season"));
+
+    const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
+    if (roots.isEmpty() || roots.first().isEmpty())
+        return fail(QStringLiteral("videos library root is not configured"));
+
+    StreamLibraryEntry libraryEntry = m_library ? m_library->get(imdbId) : StreamLibraryEntry{};
+    BulkPlanInput input;
+    input.seriesId = imdbId;
+    input.seriesTitle = libraryEntry.name.isEmpty() ? imdbId : libraryEntry.name;
+    input.seriesYear = libraryEntry.year;
+    input.seasonNumber = season;
+    input.videosRootPath = roots.first();
+
+    QSet<int> filter;
+    for (int ep : episodeFilter)
+        filter.insert(ep);
+    for (const StreamEpisode& ep : allEpisodes) {
+        if (!filter.isEmpty() && !filter.contains(ep.episode))
+            continue;
+        BulkPlanEpisodeInput row;
+        row.season = season;
+        row.episode = ep.episode;
+        row.title = ep.title;
+        row.extensionHint = QStringLiteral("mkv");
+        input.episodes.push_back(row);
+    }
+    if (input.episodes.isEmpty())
+        return fail(QStringLiteral("no matching episodes for requested dispatch"));
+
+    BulkPlanResult plan = buildBulkPlan(input, [](const QString& path) {
+        return QFileInfo::exists(path);
+    });
+
+    BulkSourceCollectionPayload payload;
+    bool collectorTimedOut = false;
+    {
+        QEventLoop loop;
+        QTimer timer;
+        timer.setSingleShot(true);
+        auto* collector = new BulkSourceCollector(m_addonRegistry, this);
+        connect(collector, &BulkSourceCollector::collectionComplete,
+                &loop, [&](const BulkSourceCollectionPayload& p) {
+            payload = p;
+            loop.quit();
+        });
+        connect(collector, &BulkSourceCollector::cancelled, &loop, [&]() {
+            payload.cancelled = true;
+            loop.quit();
+        });
+        connect(&timer, &QTimer::timeout, &loop, [&]() {
+            collectorTimedOut = true;
+            collector->cancel();
+            loop.quit();
+        });
+        collector->begin(input);
+        timer.start(55000);
+        loop.exec();
+        collector->disconnect();
+        collector->deleteLater();
+    }
+
+    if (collectorTimedOut)
+        return fail(QStringLiteral("source collection timeout"));
+    if (payload.cancelled)
+        return fail(QStringLiteral("source collection cancelled"));
+
+    BulkSelectionPlan selection = buildBulkSelection(plan, payload);
+    BulkPackVerificationResult verifierOutput;
+    verifierOutput.updatedPlan = selection;
+
+    if (selection.mode == BulkSelectionMode::Pack) {
+        QEventLoop loop;
+        QTimer timer;
+        timer.setSingleShot(true);
+        bool finished = false;
+        auto* verifier = new BulkPackVerifier(m_torrentClient, this);
+        connect(verifier, &BulkPackVerifier::verificationComplete,
+                &loop, [&](const BulkPackVerificationResult& result) {
+            verifierOutput = result;
+            finished = true;
+            loop.quit();
+        });
+        connect(verifier, &BulkPackVerifier::verificationFailed,
+                &loop, [&](const QString& reason) {
+            Q_UNUSED(reason);
+            finished = true;
+            loop.quit();
+        });
+        connect(&timer, &QTimer::timeout, &loop, [&]() {
+            verifier->cancel();
+            loop.quit();
+        });
+        verifier->begin(selection, input.seasonNumber);
+        timer.start(15000);
+        loop.exec();
+        verifier->disconnect();
+        verifier->deleteLater();
+        if (!finished)
+            return fail(QStringLiteral("pack verification timeout"));
+    }
+
+    QHash<QString, BulkPlanItem> planByKey;
+    for (const BulkPlanItem& item : plan.items)
+        planByKey.insert(item.itemKey, item);
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    StreamBulkGroupRecord group;
+    group.groupId = QStringLiteral("stream:%1:s%2:%3")
+        .arg(input.seriesId)
+        .arg(input.seasonNumber, 2, 10, QChar('0'))
+        .arg(now);
+    group.groupKind = QStringLiteral("streamSeason");
+    group.label = QStringLiteral("%1 - Season %2")
+        .arg(input.seriesTitle)
+        .arg(input.seasonNumber);
+    group.sourceSeriesId = input.seriesId;
+    group.sourceSeason = input.seasonNumber;
+    group.destinationRoot = input.videosRootPath;
+    group.createdAtMs = now;
+    group.updatedAtMs = now;
+
+    QString firstInfoHash;
+    for (const BulkSelectionItem& selected : verifierOutput.updatedPlan.items) {
+        const BulkPlanItem planItem = planByKey.value(selected.itemKey);
+        if (planItem.itemKey.isEmpty())
+            continue;
+        StreamBulkGroupItem item;
+        item.itemKey = planItem.itemKey;
+        item.destinationKey = planItem.destinationKey;
+        item.canonicalFilename = planItem.canonicalFilename;
+        if (selected.reason == BulkSelectionReason::MissingNoSource) {
+            item.itemState = StreamBulkItemState::MissingSource;
+            item.lastError = tr("No source found for episode");
+        } else {
+            item.infoHash = selected.choice.infoHash;
+            item.fileIndex = selected.choice.fileIndex;
+            item.itemState = StreamBulkItemState::Pending;
+            if (firstInfoHash.isEmpty())
+                firstInfoHash = item.infoHash;
+        }
+        group.items.push_back(item);
+    }
+
+    if (group.items.isEmpty())
+        return fail(QStringLiteral("selection produced no dispatchable items"));
+
+    m_torrentClient->dispatchStreamBulkGroup(group, verifierOutput);
+
+    QJsonObject out;
+    out[QStringLiteral("status")] = QStringLiteral("dispatched");
+    out[QStringLiteral("groupId")] = group.groupId;
+    out[QStringLiteral("infoHash")] = firstInfoHash;
+    out[QStringLiteral("items")] = group.items.size();
+    out[QStringLiteral("mode")] =
+        verifierOutput.updatedPlan.mode == BulkSelectionMode::Pack
+            ? QStringLiteral("pack")
+            : QStringLiteral("per-episode");
+    return out;
 }
 void StreamPage::retryBulkSeasonDownload(const QString& groupId, const QStringList& itemKeys)
 {

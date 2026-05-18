@@ -2,6 +2,7 @@
 
 #include "core/JsonStore.h"
 #include "core/DebugLogBuffer.h"
+#include "core/JsonlEventLog.h"
 #include "core/stream/QualityScorer.h"
 
 #include <QDateTime>
@@ -189,6 +190,15 @@ void StreamDownloadIndex::registerEpisode(const QString& imdbId, int season, int
                     {QStringLiteral("episode"), episode},
                     {QStringLiteral("path"), canonicalPath},
                     {QStringLiteral("groupId"), sourceGroupId}});
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("download.indexed"),
+        QStringLiteral("register_episode"),
+        QJsonObject{{QStringLiteral("imdb"), imdbId},
+                    {QStringLiteral("season"), season},
+                    {QStringLiteral("episode"), episode},
+                    {QStringLiteral("canonicalPath"), canonicalPath},
+                    {QStringLiteral("sourceGroupId"), sourceGroupId},
+                    {QStringLiteral("fileSizeBytes"), static_cast<double>(fileSizeBytes)}});
 
     save();
     emit entriesChanged();

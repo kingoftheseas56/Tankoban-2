@@ -20,6 +20,7 @@
 #include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
 #include "PerModeNavController.h"
@@ -741,6 +742,7 @@ void MainWindow::buildPageStack()
     // TorrentClient (shared by StreamPage, VideosPage, TankorentPage,
     // TankoLibraryPage). Hoisted at MainWindow scope post-SOURCES_SIDEBAR.
     auto *torrentClient = new TorrentClient(m_bridge, this);
+    m_torrentClient = torrentClient;
     dbg("4e-torrentclient-created");
 
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire the stream-side
@@ -903,7 +905,19 @@ void MainWindow::activatePage(const QString &pageId)
     if (pageId == m_activePageId)
         return;
 
+    const QString previousPageId = m_activePageId;
+    if (!previousPageId.isEmpty()) {
+        JsonlEventLog::instance().emitEvent(
+            QStringLiteral("ui.layer_exited"),
+            QStringLiteral("page_deactivated"),
+            QJsonObject{{QStringLiteral("pageId"), previousPageId}});
+    }
     m_activePageId = pageId;
+    JsonlEventLog::instance().emitEvent(
+        QStringLiteral("ui.layer_entered"),
+        QStringLiteral("page_activated"),
+        QJsonObject{{QStringLiteral("pageId"), pageId},
+                    {QStringLiteral("previousPageId"), previousPageId}});
     if (m_navController) m_navController->setActiveMode(pageId);
 
     for (auto &nav : m_navButtons) {
@@ -1600,13 +1614,23 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         e["message"] = msg;
         return e;
     };
+    auto comicsPage = [this]() -> ComicsPage* {
+        return m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr;
+    };
 
     if (cmd == QLatin1String("ping")) {
         QJsonArray cmds{ "ping","get_state","open_page","scan_videos",
                          "get_videos","play_file","close_player",
-                         "get_player","logs" };
+                         "get_player","logs","get_torrents","get_library",
+                         "get_downloads","get_bulk_groups","search",
+                         "dispatch_episode","dispatch_season","dump_ui",
+                         "comics_get_state","comics_get_library",
+                         "comics_get_series","comics_select_volume",
+                         "comics_open_series","comics_open_chapter",
+                         "comics_search_tankoyomi","comics_get_downloads",
+                         "comics_dispatch_volume","comics_get_sources" };
         return reply({
-            {"schema",     "tankoban.dev.v1"},
+            {"schema",     "tankoban.dev.v1.2"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -1665,6 +1689,212 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         if (!m_videoPlayer || !m_videoPlayer->isVisible())
             return reply({{"snapshot", QJsonValue::Null}});
         return reply({{"snapshot", m_videoPlayer->devSnapshot()}});
+    }
+
+    if (cmd == QLatin1String("get_torrents")) {
+        if (!m_torrentClient)
+            return err("INTERNAL", "TorrentClient not initialized");
+        const bool activeOnly = payload.value("activeOnly").toBool(true);
+        return reply({{"torrents", m_torrentClient->devTorrentsSnapshot(activeOnly)}});
+    }
+
+    if (cmd == QLatin1String("get_library")) {
+        if (!m_streamPage || !m_streamPage->streamLibrary())
+            return err("INTERNAL", "StreamLibrary not initialized");
+        QJsonArray entries;
+        for (const StreamLibraryEntry& e : m_streamPage->streamLibrary()->getAll()) {
+            QJsonObject obj;
+            obj["imdb"] = e.imdb;
+            obj["name"] = e.name;
+            obj["type"] = e.type;
+            obj["year"] = e.year;
+            obj["description"] = e.description;
+            obj["addedAt"] = static_cast<double>(e.addedAt);
+
+            QJsonArray playable;
+            if (m_streamDownloadIndex) {
+                for (const auto& d : m_streamDownloadIndex->entriesForImdb(e.imdb)) {
+                    QJsonObject p;
+                    p["s"] = d.season;
+                    p["e"] = d.episode;
+                    p["path"] = d.canonicalPath;
+                    playable.append(p);
+                }
+            }
+            obj["playableEpisodes"] = playable;
+            entries.append(obj);
+        }
+        return reply({{"entries", entries}});
+    }
+
+    if (cmd == QLatin1String("get_downloads")) {
+        QJsonArray entries;
+        if (m_streamDownloadIndex) {
+            for (const auto& d : m_streamDownloadIndex->all()) {
+                QJsonObject obj;
+                obj["imdb"] = d.imdbId;
+                obj["season"] = d.season;
+                obj["episode"] = d.episode;
+                obj["canonicalPath"] = d.canonicalPath;
+                obj["fileSizeBytes"] = static_cast<double>(d.fileSizeBytes);
+                obj["sourceGroupId"] = d.sourceGroupId;
+                obj["addedAt"] = static_cast<double>(d.addedAt);
+                entries.append(obj);
+            }
+        }
+        return reply({{"entries", entries}});
+    }
+
+    if (cmd == QLatin1String("get_bulk_groups")) {
+        if (!m_torrentClient)
+            return err("INTERNAL", "TorrentClient not initialized");
+        return reply({{"groups", m_torrentClient->devBulkGroupsSnapshot()}});
+    }
+
+    if (cmd == QLatin1String("search")) {
+        if (!m_streamPage)
+            return err("INTERNAL", "StreamPage not initialized");
+        const QString query = payload.value("query").toString();
+        if (query.trimmed().isEmpty())
+            return err("BAD_REQUEST", "payload.query required");
+        const QString type = payload.value("type").toString();
+        if (!type.isEmpty() && type != QLatin1String("movie") && type != QLatin1String("series"))
+            return err("BAD_REQUEST", "payload.type must be movie or series");
+        return reply(m_streamPage->devSearch(query, type, 15000));
+    }
+
+    if (cmd == QLatin1String("dispatch_episode")) {
+        if (!m_streamPage)
+            return err("INTERNAL", "StreamPage not initialized");
+        const QString imdb = payload.value("imdbId").toString();
+        const int season = payload.value("season").toInt();
+        const int episode = payload.value("episode").toInt();
+        if (imdb.isEmpty() || season <= 0 || episode <= 0)
+            return err("BAD_REQUEST", "imdbId, positive season, and positive episode required");
+        return reply(m_streamPage->devDispatchEpisode(imdb, season, episode));
+    }
+
+    if (cmd == QLatin1String("dispatch_season")) {
+        if (!m_streamPage)
+            return err("INTERNAL", "StreamPage not initialized");
+        const QString imdb = payload.value("imdbId").toString();
+        const int season = payload.value("season").toInt();
+        if (imdb.isEmpty() || season <= 0)
+            return err("BAD_REQUEST", "imdbId and positive season required");
+        return reply(m_streamPage->devDispatchSeason(imdb, season));
+    }
+
+    if (cmd == QLatin1String("comics_get_state")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        return reply({{"snapshot", comics->devSnapshot()}});
+    }
+
+    if (cmd == QLatin1String("comics_get_library")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        return reply(comics->devLibrarySnapshot());
+    }
+
+    if (cmd == QLatin1String("comics_get_series")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        return reply(comics->devSeriesSnapshot());
+    }
+
+    if (cmd == QLatin1String("comics_select_volume")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        if (!payload.contains(QStringLiteral("row")))
+            return err("BAD_REQUEST", "payload.row required");
+        return reply(comics->devSelectVolume(payload.value("row").toInt(-1)));
+    }
+
+    if (cmd == QLatin1String("comics_open_series")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const QString seriesId = payload.value("seriesId").toString();
+        if (seriesId.isEmpty())
+            return err("BAD_REQUEST", "payload.seriesId required");
+        activatePage(QStringLiteral("comics"));
+        return reply(comics->devOpenSeries(seriesId));
+    }
+
+    if (cmd == QLatin1String("comics_open_chapter")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const QString seriesId = payload.value("seriesId").toString();
+        const int volume = payload.value("volume").toInt();
+        const int chapter = payload.value("chapter").toInt();
+        if (seriesId.isEmpty() || volume <= 0 || chapter <= 0)
+            return err("BAD_REQUEST", "seriesId, positive volume, and positive chapter required");
+        activatePage(QStringLiteral("comics"));
+        return reply(comics->devOpenChapter(seriesId, volume, chapter));
+    }
+
+    if (cmd == QLatin1String("comics_search_tankoyomi")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const QString query = payload.value("query").toString();
+        if (query.trimmed().isEmpty())
+            return err("BAD_REQUEST", "payload.query required");
+        activatePage(QStringLiteral("comics"));
+        return reply(comics->devSearchTankoyomi(query, payload.value("timeout").toInt(15000)));
+    }
+
+    if (cmd == QLatin1String("comics_get_downloads")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        return reply(comics->devDownloadsSnapshot());
+    }
+
+    if (cmd == QLatin1String("comics_dispatch_volume")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const QString seriesId = payload.value("seriesId").toString();
+        const int volume = payload.value("volume").toInt();
+        if (seriesId.isEmpty() || volume <= 0)
+            return err("BAD_REQUEST", "seriesId and positive volume required");
+        activatePage(QStringLiteral("comics"));
+        return reply(comics->devDispatchVolume(
+            seriesId, volume, payload.value("source").toString()));
+    }
+
+    if (cmd == QLatin1String("comics_get_sources")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        return reply(comics->devSourcesSnapshot());
+    }
+
+    if (cmd == QLatin1String("dump_ui")) {
+        const QString pageId = payload.value("pageId").toString(m_activePageId);
+        if (pageId == QLatin1String("comics")) {
+            auto* comics = comicsPage();
+            if (!comics)
+                return err("INTERNAL", "ComicsPage not initialized");
+            return reply({{"pageId", pageId}, {"snapshot", comics->devSnapshot()}});
+        }
+        if (pageId == QLatin1String("stream")) {
+            if (!m_streamPage)
+                return err("INTERNAL", "StreamPage not initialized");
+            return reply({{"pageId", pageId}, {"snapshot", m_streamPage->devSnapshot()}});
+        }
+        if (pageId == QLatin1String("videos")) {
+            if (!m_videosPage)
+                return err("INTERNAL", "VideosPage not initialized");
+            return reply({{"pageId", pageId}, {"snapshot", m_videosPage->devSnapshot(50)}});
+        }
+        return reply({{"pageId", pageId}, {"snapshot", devSnapshot()}});
     }
 
     if (cmd == QLatin1String("logs")) {
