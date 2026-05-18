@@ -99,6 +99,7 @@ Full rationale + NOT-adopted list: memory `feedback_plugin_skills_adopted.md`.
 These fire often enough that every active agent meets them most wakes. The new RTC contract (contracts-v3) requires these to be named in the `Skills invoked: [...]` field on non-trivial RTCs (≥1 src/ file or ≥30 LOC) — see `agents/CONTRACTS.md` § Skill Provenance in RTCs.
 
 - **`/brief`** — every wake start. SessionStart hook prints a pre-digest; `/brief` is the full state read.
+- **`/session-recap`** — every wake END for non-trivial sessions (≥1 RTC posted, ≥1 commit landed, ≥1 substantive decision, ≥30 min agent-time). Mirror of `/brief`: `/brief` is what you READ at wake start, `/session-recap` is what you WRITE before signing off. Output lands at `~/.claude/recaps/<agent-slug>/brother-<agent-slug>-<YYYY-MM-DD>-<codename>.md` (off-tree, per-machine). Hemanth pastes the file path into the next-wake prompt for the same agent. Skip for purely-conversational sessions. (Added 2026-05-18 per Hemanth direct ask — convention doc at `~/.claude/recaps/README.md`.)
 - **`/superpowers:verification-before-completion`** — every RTC, every agent. Evidence-before-assertions checklist. The single load-bearing skill of the brotherhood.
 - **`/simplify`** — every non-trivial diff. Reuse + efficiency review (fixes issues found).
 - **`/build-verify`** — whenever `src/` or `native_sidecar/src/` touched. Runs `build_check.bat` or sidecar build; tail-captures last 30 lines on failure.
