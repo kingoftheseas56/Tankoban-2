@@ -134,13 +134,85 @@ while IFS= read -r LINE; do
     fi
 done <<< "$ADDED_RTCS"
 
-# -------- Step 3: emit nag warning if any --------
-if [ "$NAG_COUNT" -gt 0 ]; then
+# -------- Step 2.5: scaffold corrected RTC + detect stale file references --------
+# Per Codex audit finding #1: emit a complete corrected RTC line per nag-eligible
+# RTC, so the agent can copy-paste rather than re-typing the field structure.
+# Also flag files: paths that are clean against HEAD or missing entirely.
+
+SCAFFOLD_LINES=""
+STALE_LINES=""
+while IFS= read -r LINE; do
+    [ -z "$LINE" ] && continue
+    TAG="$(echo "$LINE" | sed -nE 's/^READY TO COMMIT [—-] \[([^]]+)\]:.*/\1/p')"
+    [ -z "$TAG" ] && continue
+
+    FILES_RAW="$(echo "$LINE" | sed -nE 's/.*\| files:\s*(.+)$/\1/p')"
+    [ -z "$FILES_RAW" ] && continue
+
+    # Stale-file detection (Codex finding: warn on missing or clean files).
+    OLD_IFS="$IFS"
+    IFS=','
+    for F in $FILES_RAW; do
+        F_TRIMMED="$(echo "$F" | xargs)"
+        F_PATH="$(echo "$F_TRIMMED" | sed -E 's/\s*\([A-Z]+\)\s*$//')"
+        [ -z "$F_PATH" ] && continue
+        if [ ! -e "$F_PATH" ]; then
+            STALE_LINES="${STALE_LINES}  - [${TAG}]: missing file ${F_PATH}\n"
+        elif [ -f "$F_PATH" ] && ! git diff --quiet HEAD -- "$F_PATH" 2>/dev/null; then
+            : # File has diff -- OK
+        elif [ -f "$F_PATH" ]; then
+            STALE_LINES="${STALE_LINES}  - [${TAG}]: file ${F_PATH} clean vs HEAD (already committed?)\n"
+        fi
+    done
+    IFS="$OLD_IFS"
+
+    # Skill-provenance scaffold for non-trivial + missing field.
+    SKILLS_PRESENT=0
+    echo "$LINE" | grep -qE '\| Skills invoked:\s*\[/' && SKILLS_PRESENT=1
+    if [ "$SKILLS_PRESENT" -eq 0 ]; then
+        # Detect candidate skills from this session's tool log (best-effort).
+        DETECTED="$(bash "$REPO_ROOT/.claude/scripts/skill-provenance-detect.sh" --candidates-only 2>/dev/null || echo "")"
+        [ -z "$DETECTED" ] && DETECTED="/build-verify, /superpowers:verification-before-completion"
+
+        # Build the scaffolded replacement.
+        MESSAGE_BODY="$(echo "$LINE" | sed -nE 's/^READY TO COMMIT [—-] \[[^]]+\]:\s+(.+?)\s+\| files:.*/\1/p')"
+        SCAFFOLD_LINES="${SCAFFOLD_LINES}  Scaffolded for [${TAG}]:\n    READY TO COMMIT - [${TAG}]: ${MESSAGE_BODY} | Skills invoked: [${DETECTED}] | files: ${FILES_RAW}\n\n"
+    fi
+done <<< "$ADDED_RTCS"
+
+# -------- Step 3: emit nag warning + scaffold + stale-file info if any --------
+if [ "$NAG_COUNT" -gt 0 ] || [ -n "$STALE_LINES" ]; then
     cat <<EOF
 <system-reminder>
-[pre-rtc-checker, contracts-v3 nag-only mode] $NAG_COUNT non-trivial RTC(s) in working-tree chat.md missing 'Skills invoked: [/skill1, /skill2, ...]' field:
+[pre-rtc-checker, contracts-v3 nag-only mode] Working-tree chat.md needs attention.
+EOF
+
+    if [ "$NAG_COUNT" -gt 0 ]; then
+        cat <<EOF
+
+$NAG_COUNT non-trivial RTC(s) missing 'Skills invoked: [/skill1, /skill2, ...]' field:
 $(printf "%b" "$NAG_LINES")
-Required for non-trivial RTCs (≥1 file under src/ or native_sidecar/src/, OR ≥30 LOC). See agents/CONTRACTS.md § Skill Provenance in RTCs for the format. Trivial RTCs (doc-only, governance-only, single-line) may omit. Nag-only first 30 days; promote-to-block deferred per SKILL_DISCIPLINE_FIX_TODO §5 question 3.
+EOF
+    fi
+
+    if [ -n "$SCAFFOLD_LINES" ]; then
+        cat <<EOF
+
+Suggested scaffolded replacements (detected from session telemetry; verify before pasting):
+$(printf "%b" "$SCAFFOLD_LINES")
+EOF
+    fi
+
+    if [ -n "$STALE_LINES" ]; then
+        cat <<EOF
+
+Stale file references in RTCs (file missing or clean against HEAD):
+$(printf "%b" "$STALE_LINES")
+EOF
+    fi
+
+    cat <<EOF
+See agents/CONTRACTS.md § Skill Provenance in RTCs for the format. Nag-only first 30 days.
 </system-reminder>
 EOF
 fi
