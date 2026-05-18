@@ -40,6 +40,7 @@ find_package(Qt6GuiPrivate QUIET)
 set(SOURCES
     src/main.cpp
     src/core/DebugLogBuffer.cpp
+    src/core/JsonlEventLog.cpp
     src/devtools/DevControlServer.cpp
     src/core/JsonStore.cpp
     src/core/CoreBridge.cpp
@@ -169,6 +170,7 @@ set(SOURCES
     src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
     src/core/manga/mangaupdates/MangaUpdatesClient.cpp
     src/core/manga/mangaupdates/VolumeMetadataResolver.cpp
+    src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -201,6 +203,7 @@ set(SOURCES
     src/core/stream/StreamAggregator.cpp
     src/core/stream/BulkSourceCollector.cpp
     src/core/stream/BulkPackVerifier.cpp
+    src/core/stream/StreamPackParser.cpp
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/StreamDownloadIndex.cpp
     src/core/stream/QualityScorer.cpp
@@ -233,6 +236,7 @@ set(SOURCES
 
 set(HEADERS
     src/core/DebugLogBuffer.h
+    src/core/JsonlEventLog.h
     src/devtools/DevControlServer.h
     src/core/JsonStore.h
     src/core/CoreBridge.h
@@ -395,6 +399,7 @@ set(HEADERS
     src/core/stream/StreamAggregator.h
     src/core/stream/BulkSourceCollector.h
     src/core/stream/BulkPackVerifier.h
+    src/core/stream/StreamPackParser.h
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/StreamDownloadIndex.h
     src/core/stream/QualityScorer.h
@@ -744,27 +749,35 @@ if(TANKOBAN_BUILD_TESTS)
     add_executable(tankoban_tests
         tests/core/stream/test_quality_scorer.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
+        tests/core/stream/test_stream_pack_parser.cpp
         tests/core/stream/test_unified_progress_store.cpp
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
+        tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp
         tests/core/PerModeNavControllerTest.cpp
         src/core/DebugLogBuffer.cpp
+        src/core/JsonlEventLog.cpp
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
         src/core/stream/StreamDownloadIndex.cpp
         src/core/stream/UnifiedProgressStore.cpp
         src/core/stream/PackClassifier.cpp
+        src/core/stream/StreamPackParser.cpp
         src/core/stream/TitleMetadataEstimator.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
         src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
         src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
+        src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
         src/ui/PerModeNavController.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(tankoban_tests PRIVATE
+        TANKOBAN_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
     )
     find_package(Qt6 REQUIRED COMPONENTS Test)
     target_link_libraries(tankoban_tests PRIVATE
