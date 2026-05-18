@@ -30,11 +30,15 @@ fi
 
 # Chat.md size
 CHAT_LINES=0
+CHAT_BYTES=0
 CHAT_WARN=""
 if [ -f agents/chat.md ]; then
     CHAT_LINES="$(wc -l < agents/chat.md 2>/dev/null || echo 0)"
+    CHAT_BYTES="$(stat -c%s agents/chat.md 2>/dev/null || stat -f%z agents/chat.md 2>/dev/null || echo 0)"
     if [ "$CHAT_LINES" -gt 3000 ] 2>/dev/null; then
-        CHAT_WARN=" [ROTATION DUE — run /rotate-chat]"
+        CHAT_WARN=" [ROTATION DUE: ${CHAT_LINES} lines — run /rotate-chat]"
+    elif [ "$CHAT_BYTES" -gt 307200 ] 2>/dev/null; then
+        CHAT_WARN=" [ROTATION DUE: ${CHAT_BYTES}b — run /rotate-chat]"
     fi
 fi
 
@@ -54,6 +58,22 @@ if [ -f agents/STATUS.md ]; then
     done < <(grep '^Last session:' agents/STATUS.md 2>/dev/null)
 fi
 [ -z "$STALE_AGENTS" ] && STALE_AGENTS=" none"
+
+# Dashboard drift detection (Phase A.4 extension).
+# Check CLAUDE.md "As of:" line vs last src/ commit; flag if mismatched.
+DASH_DRIFT=""
+if [ -f CLAUDE.md ]; then
+    AS_OF_DATE="$(grep -oE '\*\*As of:\*\* [0-9]{4}-[0-9]{2}-[0-9]{2}' CLAUDE.md | head -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')"
+    if [ -n "$AS_OF_DATE" ]; then
+        AS_OF_EPOCH="$(date -d "$AS_OF_DATE" +%s 2>/dev/null || echo 0)"
+        LAST_SRC_COMMIT_DATE="$(git log -1 --format=%cs -- src/ 2>/dev/null)"
+        LAST_SRC_EPOCH="$(date -d "$LAST_SRC_COMMIT_DATE" +%s 2>/dev/null || echo 0)"
+        if [ "$AS_OF_EPOCH" -gt 0 ] && [ "$LAST_SRC_EPOCH" -gt "$AS_OF_EPOCH" ]; then
+            DAYS_DRIFT=$(( (LAST_SRC_EPOCH - AS_OF_EPOCH) / 86400 ))
+            DASH_DRIFT=" CLAUDE.md As-of:${AS_OF_DATE} but last src/ commit:${LAST_SRC_COMMIT_DATE} (${DAYS_DRIFT}d drift)"
+        fi
+    fi
+fi
 
 # Memory-degraded sentinel (Phase 5 of SKILL_DISCIPLINE_FIX_TODO).
 # Probes claude-mem health; if degraded, demotes /mem-search rule + shows banner.
@@ -81,7 +101,7 @@ if [ "$MEMORY_DEGRADED" -eq 1 ]; then
     MEMORY_BANNER="
 === MEMORY DEGRADED ===
 ${MEMORY_STATUS}
-Skill-discipline rules referencing /mem-search are auto-relaxed for this session.
+$(echo "$MEMORY_STATUS" | grep -q 'MEMORY.md=' && echo 'Run /memory-trim to propose archive candidates before next sweep.' || echo 'Skill-discipline rules referencing /mem-search are auto-relaxed for this session.')
 "
 fi
 
@@ -93,6 +113,7 @@ Tankoban 2 brotherhood pre-digest (auto, $(date +%Y-%m-%d)):
 - HELP: ${HELP_STATUS}
 - chat.md: ${CHAT_LINES} lines${CHAT_WARN}
 - STATUS sections >7d stale:${STALE_AGENTS}
+- Dashboard drift:${DASH_DRIFT:- none}
 ${MEMORY_BANNER}
 
 === REQUIRED SKILL TRIGGERS (invoke at each trigger; CLAUDE.md "Required Skills & Protocols" for full list of 21) ===
