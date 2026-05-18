@@ -27,8 +27,8 @@
 #include <QWidget>
 
 class QLabel;
-class QListWidget;
-class QListWidgetItem;
+class QScrollArea;
+class QTimer;
 class QVBoxLayout;
 
 namespace tankoban::manga {
@@ -41,6 +41,8 @@ class TorrentVolumeProvider;
 } // namespace tankoban::manga
 
 namespace tankoban::manga::comics {
+
+class ComicsSourceCard;
 
 // One source row, generic across the three provider types. Stored verbatim
 // inside m_rows; the panel re-renders m_list contents from m_rows on every
@@ -97,17 +99,29 @@ signals:
 private slots:
     void onNyaaResults(int reqId, const QList<NyaaSourceCandidate>& results);
     void onNyaaFailed(int reqId, const QString& reason);
-    void onRowActivated(QListWidgetItem* item);
 
 private:
     void appendRow(const UnifiedSourceRow& row);
-    void renderEmpty();
-    void renderRanked();
+    void clearCards();
+    void setPlaceholder();
+    void setLoading();
+    void setSources(const QList<UnifiedSourceRow>& rows, bool nyaaStillInFlight);
+    void setEmpty();
+    void sortRows();
+    void armAutoPickIfEligible();
+    void cancelAutoPick();
+    void emitTopRowDownload();
+    void emitRowDownload(const UnifiedSourceRow& row);
 
     premium::PremiumCatalog*      m_catalog  = nullptr;  // non-owning
     NyaaRuntimeSource*            m_nyaa     = nullptr;  // non-owning
-    QListWidget*                  m_list     = nullptr;
-    QLabel*                       m_emptyLabel = nullptr;
+    QLabel*                       m_headerLabel = nullptr;
+    QScrollArea*                  m_scroll = nullptr;
+    QWidget*                      m_cardsContainer = nullptr;
+    QVBoxLayout*                  m_cardsLayout = nullptr;
+    QLabel*                       m_statusLabel = nullptr;
+    QLabel*                       m_statusSubLabel = nullptr;
+    QTimer*                       m_autoPickTimer = nullptr;
 
     QString                       m_currentSeriesTitle;
     int                           m_currentAnilistId  = 0;
@@ -115,8 +129,11 @@ private:
     QStringList                   m_currentChapterIds;
     int                           m_pendingNyaaReqId  = -1;
     int                           m_nextNyaaReqId     = 1;
+    bool                          m_autoPickArmed = false;
+    bool                          m_autoPickSuppressed = false;
 
     QList<UnifiedSourceRow>       m_rows;
+    QList<ComicsSourceCard*>      m_cards;
 };
 
 } // namespace tankoban::manga::comics

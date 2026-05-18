@@ -179,6 +179,7 @@ set(SOURCES
     src/ui/pages/comics/SidecarMeta.cpp
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
     src/ui/pages/comics/ComicsSeriesView.cpp
+    src/ui/pages/comics/ComicsSourceCard.cpp
     src/ui/pages/comics/ComicsSourcesPanel.cpp
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
     src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
@@ -364,6 +365,7 @@ set(HEADERS
     src/ui/pages/comics/SidecarMeta.h
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.h
     src/ui/pages/comics/ComicsSeriesView.h
+    src/ui/pages/comics/ComicsSourceCard.h
     src/ui/pages/comics/ComicsSourcesPanel.h
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
     src/ui/pages/tankoyomi/ChapterRangeDialog.h

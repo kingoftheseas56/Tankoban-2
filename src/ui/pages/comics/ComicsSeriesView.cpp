@@ -237,6 +237,12 @@ void ComicsSeriesView::buildUi()
         "QTableWidget#ComicsSeriesVolumesTable::item:alternate {"
         "  background-color: rgba(255, 255, 255, 0.03);"
         "}"
+        // COMICS_SOURCES_SIDEBAR Task 5: Option B from the plan. If smoke
+        // shows Qt6 row-height jitter from item borders, replace this with
+        // the documented QStyledItemDelegate left-stripe fallback.
+        "QTableWidget#ComicsSeriesVolumesTable::item:selected {"
+        "  border-left: 3px solid rgba(212,165,116,0.80);"
+        "}"
         "QTableWidget#ComicsSeriesVolumesTable QHeaderView::section {"
         "  background-color: rgba(20, 20, 24, 0.95);"
         "  color: rgba(255, 255, 255, 0.65);"

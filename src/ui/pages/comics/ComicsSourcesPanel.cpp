@@ -1,16 +1,16 @@
 // src/ui/pages/comics/ComicsSourcesPanel.cpp
 #include "ComicsSourcesPanel.h"
 
+#include "ComicsSourceCard.h"
 #include "core/manga/PremiumCatalog.h"
 #include "core/manga/PremiumCatalogSchema.h"
 
-#include <QAbstractItemView>
-#include <QFont>
+#include <QFrame>
 #include <QLabel>
-#include <QListWidget>
-#include <QListWidgetItem>
-#include <QStackedLayout>
-#include <QVariant>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTimer>
+#include <QVBoxLayout>
 #include <Qt>
 
 #include <algorithm>
@@ -19,59 +19,12 @@ namespace tankoban::manga::comics {
 
 namespace {
 
-// Format byte count to a compact "1.4 GiB" / "245 MiB" string. Mirrors the
-// existing Stream blueprint source-row formatting (binary units). Returns
-// empty string for zero/unknown -- caller hides the row's size field.
-QString formatSize(qint64 bytes)
+QString wcSubtitle(const QStringList& chapterIds)
 {
-    if (bytes <= 0) return QString();
-    constexpr qint64 KiB = 1024;
-    constexpr qint64 MiB = 1024 * KiB;
-    constexpr qint64 GiB = 1024 * MiB;
-    if (bytes >= GiB) {
-        return QString::number(static_cast<double>(bytes) / GiB, 'f', 2) + QStringLiteral(" GiB");
+    if (chapterIds.isEmpty()) {
+        return QStringLiteral("chapters unavailable");
     }
-    if (bytes >= MiB) {
-        return QString::number(static_cast<double>(bytes) / MiB, 'f', 1) + QStringLiteral(" MiB");
-    }
-    if (bytes >= KiB) {
-        return QString::number(static_cast<double>(bytes) / KiB, 'f', 1) + QStringLiteral(" KiB");
-    }
-    return QString::number(bytes) + QStringLiteral(" B");
-}
-
-// Build the user-facing label for a UnifiedSourceRow. The list widget uses
-// QListWidgetItem text directly; no custom delegate in v1.
-QString rowLabel(const UnifiedSourceRow& row)
-{
-    QString tierTag;
-    switch (row.kind) {
-    case UnifiedSourceRow::Kind::Catalog:           tierTag = QStringLiteral("[Catalog]"); break;
-    case UnifiedSourceRow::Kind::NyaaRuntime:
-        tierTag = (row.tier == 1) ? QStringLiteral("[Tier 1]") : QStringLiteral("[Tier 2]");
-        break;
-    case UnifiedSourceRow::Kind::WeebCentralPacker: tierTag = QStringLiteral("[WeebCentral]"); break;
-    }
-
-    QString seedersField;
-    if (row.kind == UnifiedSourceRow::Kind::WeebCentralPacker) {
-        seedersField = QStringLiteral("synthesized");
-    } else if (row.seeders >= 0) {
-        seedersField = QString::number(row.seeders) + QStringLiteral(" seeders");
-    }
-
-    const QString sizeField = formatSize(row.sizeBytes);
-
-    QStringList tail;
-    if (!row.uploaderHint.isEmpty()) tail << row.uploaderHint;
-    if (!seedersField.isEmpty())     tail << seedersField;
-    if (!sizeField.isEmpty())        tail << sizeField;
-
-    QString label = tierTag + QStringLiteral("  ") + row.title;
-    if (!tail.isEmpty()) {
-        label += QStringLiteral("\n      ") + tail.join(QStringLiteral("  -  "));
-    }
-    return label;
+    return QStringLiteral("%1 chapters - vol pack on demand").arg(chapterIds.size());
 }
 
 } // namespace
@@ -85,46 +38,66 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
 {
     setObjectName(QStringLiteral("ComicsSourcesPanel"));
     setMinimumWidth(220);
+    setAttribute(Qt::WA_StyledBackground, true);
 
-    // Stacked layout: empty-label on top when m_rows is empty, list widget
-    // when ranked rows exist. Cleaner than show/hide juggling on two widgets
-    // sharing a single QVBoxLayout slot.
-    auto* stack = new QStackedLayout(this);
-    stack->setContentsMargins(0, 0, 0, 0);
+    setStyleSheet(QStringLiteral(
+        "#ComicsSourcesPanel { background: transparent; }"
+        "#ComicsSourcesPanelHeader { color: rgba(255,255,255,0.82);"
+        " font-size: 12px; font-weight: 600; background: transparent; }"
+        "#ComicsSourcesPanelScroll { background: transparent; border: none; }"
+        "#ComicsSourcesPanelScroll > QWidget > QWidget { background: transparent; }"
+        "#ComicsSourcesStatus { color: rgba(255,255,255,0.68);"
+        " font-size: 12px; font-weight: 600; background: transparent; }"
+        "#ComicsSourcesStatusSub { color: rgba(255,255,255,0.48);"
+        " font-size: 11px; background: transparent; }"
+        "QScrollBar:vertical { background: transparent; width: 8px; margin: 4px 0; }"
+        "QScrollBar::handle:vertical { background: rgba(255,255,255,0.15);"
+        " border-radius: 4px; min-height: 20px; }"
+        "QScrollBar::handle:vertical:hover { background: rgba(255,255,255,0.25); }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
 
-    m_emptyLabel = new QLabel(tr("Select a volume to see sources"), this);
-    m_emptyLabel->setObjectName(QStringLiteral("ComicsSourcesEmptyLabel"));
-    {
-        QFont f = m_emptyLabel->font();
-        f.setPointSize(11);
-        m_emptyLabel->setFont(f);
-    }
-    m_emptyLabel->setStyleSheet(QStringLiteral("color: #888;"));
-    m_emptyLabel->setAlignment(Qt::AlignCenter);
-    m_emptyLabel->setWordWrap(true);
-    stack->addWidget(m_emptyLabel);
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(12, 12, 12, 12);
+    root->setSpacing(8);
 
-    m_list = new QListWidget(this);
-    m_list->setObjectName(QStringLiteral("ComicsSourcesList"));
-    m_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_list->setUniformItemSizes(false);
-    m_list->setWordWrap(true);
-    stack->addWidget(m_list);
+    m_headerLabel = new QLabel(tr("Sources"), this);
+    m_headerLabel->setObjectName(QStringLiteral("ComicsSourcesPanelHeader"));
+    root->addWidget(m_headerLabel);
 
-    stack->setCurrentWidget(m_emptyLabel);
+    m_scroll = new QScrollArea(this);
+    m_scroll->setObjectName(QStringLiteral("ComicsSourcesPanelScroll"));
+    m_scroll->setWidgetResizable(true);
+    m_scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    // Activate on double-click OR enter key OR single-click (treat as
-    // "user picked this row + wants to download"). Stremio source-tab UX
-    // uses single-click commit; mirror that here for parity.
-    connect(m_list, &QListWidget::itemClicked,
-            this,    &ComicsSourcesPanel::onRowActivated);
-    connect(m_list, &QListWidget::itemActivated,
-            this,    &ComicsSourcesPanel::onRowActivated);
+    m_cardsContainer = new QWidget(m_scroll);
+    m_cardsContainer->setObjectName(QStringLiteral("ComicsSourcesCardsContainer"));
+    m_cardsLayout = new QVBoxLayout(m_cardsContainer);
+    m_cardsLayout->setContentsMargins(2, 2, 8, 2);
+    m_cardsLayout->setSpacing(8);
+    m_cardsLayout->addStretch(1);
+    m_scroll->setWidget(m_cardsContainer);
+
+    root->addWidget(m_scroll, 1);
+
+    m_statusLabel = new QLabel(this);
+    m_statusLabel->setObjectName(QStringLiteral("ComicsSourcesStatus"));
+    m_statusLabel->setAlignment(Qt::AlignCenter);
+    m_statusLabel->setWordWrap(true);
+    root->addWidget(m_statusLabel, 0, Qt::AlignCenter);
+
+    m_statusSubLabel = new QLabel(this);
+    m_statusSubLabel->setObjectName(QStringLiteral("ComicsSourcesStatusSub"));
+    m_statusSubLabel->setAlignment(Qt::AlignCenter);
+    m_statusSubLabel->setWordWrap(true);
+    root->addWidget(m_statusSubLabel, 0, Qt::AlignCenter);
+
+    m_autoPickTimer = new QTimer(this);
+    m_autoPickTimer->setSingleShot(true);
+    connect(m_autoPickTimer, &QTimer::timeout,
+            this, &ComicsSourcesPanel::emitTopRowDownload);
 
     if (m_nyaa) {
-        // QueuedConnection: the nyaa source emits from the NAM finished
-        // slot which lands on the network thread under Qt6 default; the
-        // panel touches m_list / m_rows which are UI-thread state.
         connect(m_nyaa, &NyaaRuntimeSource::searchSucceeded,
                 this,    &ComicsSourcesPanel::onNyaaResults,
                 Qt::QueuedConnection);
@@ -132,18 +105,24 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
                 this,    &ComicsSourcesPanel::onNyaaFailed,
                 Qt::QueuedConnection);
     }
+
+    setPlaceholder();
 }
 
 void ComicsSourcesPanel::clear()
 {
+    cancelAutoPick();
+    m_autoPickSuppressed = false;
     m_rows.clear();
-    m_list->clear();
-    m_pendingNyaaReqId   = -1;
+    m_pendingNyaaReqId = -1;
     m_currentSeriesTitle.clear();
-    m_currentAnilistId   = 0;
-    m_currentVolNumber   = 0;
+    m_currentAnilistId = 0;
+    m_currentVolNumber = 0;
     m_currentChapterIds.clear();
-    renderEmpty();
+    if (m_headerLabel) {
+        m_headerLabel->setText(tr("Sources"));
+    }
+    setPlaceholder();
 }
 
 void ComicsSourcesPanel::populate(const QString& seriesTitle,
@@ -151,86 +130,86 @@ void ComicsSourcesPanel::populate(const QString& seriesTitle,
                                   const anilist::VolumeRow& vol,
                                   const QStringList& chapterIds)
 {
-    // Drop any prior state before starting the new lookup. A pending nyaa
-    // reqId from the previous populate() is implicitly stale; onNyaaResults
-    // discards it via the m_pendingNyaaReqId mismatch guard.
-    clear();
+    cancelAutoPick();
+    m_autoPickSuppressed = false;
+    m_rows.clear();
 
     m_currentSeriesTitle = seriesTitle;
-    m_currentAnilistId   = anilistSeriesId;
-    m_currentVolNumber   = vol.volumeNumber;
-    m_currentChapterIds  = chapterIds;
+    m_currentAnilistId = anilistSeriesId;
+    m_currentVolNumber = vol.volumeNumber;
+    m_currentChapterIds = chapterIds;
 
-    // --- (1) Catalog hit, if any -----------------------------------------
-    // PHASE 8 plan adaptation: populate() only carries anilistSeriesId (int);
-    // PremiumCatalog stores both seriesId (string slug) AND anilistId (int)
-    // per PremiumCatalogSchema.h. Use the anilistId-keyed helper here so the
-    // panel does not have to round-trip through a separate slug-lookup.
+    if (m_headerLabel) {
+        m_headerLabel->setText(vol.volumeNumber > 0
+            ? tr("Volume %1").arg(vol.volumeNumber)
+            : tr("Sources"));
+    }
+
+    if (vol.volumeNumber <= 0) {
+        m_pendingNyaaReqId = -1;
+        setPlaceholder();
+        return;
+    }
+
     if (m_catalog && anilistSeriesId > 0) {
         const auto entryOpt = m_catalog->entryForAnilistIdAndVolume(
             anilistSeriesId, vol.volumeNumber);
         if (entryOpt.has_value()) {
+            const auto& entry = entryOpt->first;
             const auto& volEntry = entryOpt->second;
-            const auto& entry    = entryOpt->first;
 
             UnifiedSourceRow row;
-            row.kind         = UnifiedSourceRow::Kind::Catalog;
-            row.tier         = 1;
-            row.title        = QStringLiteral("%1 - Volume %2")
-                                   .arg(entry.releaseEdition.isEmpty()
-                                            ? entry.title
-                                            : entry.releaseEdition)
-                                   .arg(volEntry.vol);
+            row.kind = UnifiedSourceRow::Kind::Catalog;
+            row.tier = 1;
+            row.title = volEntry.cbzFileName.isEmpty()
+                ? QStringLiteral("%1 - Volume %2")
+                      .arg(entry.releaseEdition.isEmpty() ? entry.title : entry.releaseEdition)
+                      .arg(volEntry.vol)
+                : volEntry.cbzFileName;
             row.uploaderHint = entry.trustedUploader.isEmpty()
-                                   ? entry.releaseEdition
-                                   : entry.trustedUploader;
-            row.seeders      = 0; // PHASE 13: live nyaa probe could fill this
-            row.sizeBytes    = volEntry.fileSizeBytes; // catalog ships fileSizeBytes per vol
-            row.magnetUri    = entry.magnetUri;
-            row.infoHash     = entry.expectedInfoHash;
+                ? entry.releaseEdition
+                : entry.trustedUploader;
+            row.seeders = 0;
+            row.sizeBytes = volEntry.fileSizeBytes;
+            row.magnetUri = entry.magnetUri;
+            row.infoHash = entry.expectedInfoHash;
             appendRow(row);
         }
     }
 
-    // --- (2) Fire async nyaa runtime search ------------------------------
-    // Always fire when m_nyaa is wired; results land on onNyaaResults via
-    // QueuedConnection. Filtered to the current pending reqId so a late
-    // result from a prior volume's search gets dropped on the floor.
-    if (m_nyaa) {
-        m_pendingNyaaReqId = m_nextNyaaReqId++;
-        m_nyaa->search(seriesTitle, vol.volumeNumber, m_pendingNyaaReqId);
-    }
-
-    // --- (3) WeebCentralPacker fallback ----------------------------------
-    // Synthesizable when chapterIds is non-empty (Phase 5 packer requires
-    // at least one chapter to fetch). For volumes with no chapter mapping
-    // (e.g. AniList "Volume X" sentinel with no bound chapters), skip the
-    // WC row entirely -- there is nothing to pack.
     if (!chapterIds.isEmpty()) {
         UnifiedSourceRow wcRow;
-        wcRow.kind         = UnifiedSourceRow::Kind::WeebCentralPacker;
-        wcRow.tier         = 99;
-        wcRow.title        = QStringLiteral("WeebCentral (synthesized) - %1 ch")
-                                 .arg(chapterIds.size());
-        wcRow.uploaderHint = QStringLiteral("WeebCentral");
-        wcRow.seeders      = -1;
-        wcRow.sizeBytes    = 0;
+        wcRow.kind = UnifiedSourceRow::Kind::WeebCentralPacker;
+        wcRow.tier = 99;
+        wcRow.title = QStringLiteral("WeebCentral pack");
+        wcRow.uploaderHint = wcSubtitle(chapterIds);
+        wcRow.seeders = -1;
+        wcRow.sizeBytes = 0;
         appendRow(wcRow);
     }
 
-    // Render whatever we have so far. onNyaaResults will re-render once
-    // nyaa results land.
-    if (m_rows.isEmpty()) {
-        renderEmpty();
+    const bool nyaaInFlight = (m_nyaa != nullptr);
+    if (m_nyaa) {
+        m_pendingNyaaReqId = m_nextNyaaReqId++;
+        m_nyaa->search(seriesTitle, vol.volumeNumber, m_pendingNyaaReqId);
     } else {
-        renderRanked();
+        m_pendingNyaaReqId = -1;
+    }
+
+    if (m_rows.isEmpty()) {
+        if (nyaaInFlight) {
+            setLoading();
+        } else {
+            setEmpty();
+        }
+    } else {
+        setSources(m_rows, nyaaInFlight);
     }
 }
 
 void ComicsSourcesPanel::onNyaaResults(int reqId,
                                        const QList<NyaaSourceCandidate>& results)
 {
-    // Stale-result guard: drop anything not from the current populate().
     if (reqId != m_pendingNyaaReqId) {
         return;
     }
@@ -238,21 +217,21 @@ void ComicsSourcesPanel::onNyaaResults(int reqId,
 
     for (const auto& cand : results) {
         UnifiedSourceRow row;
-        row.kind         = UnifiedSourceRow::Kind::NyaaRuntime;
-        row.tier         = cand.tier;
-        row.title        = cand.title;
+        row.kind = UnifiedSourceRow::Kind::NyaaRuntime;
+        row.tier = cand.tier > 0 ? cand.tier : 2;
+        row.title = cand.title;
         row.uploaderHint = cand.uploader;
-        row.seeders      = cand.seeders;
-        row.sizeBytes    = cand.sizeBytes;
-        row.magnetUri    = cand.magnetUri;
-        row.infoHash     = cand.infoHash;
+        row.seeders = cand.seeders;
+        row.sizeBytes = cand.sizeBytes;
+        row.magnetUri = cand.magnetUri;
+        row.infoHash = cand.infoHash;
         appendRow(row);
     }
 
     if (m_rows.isEmpty()) {
-        renderEmpty();
+        setEmpty();
     } else {
-        renderRanked();
+        setSources(m_rows, /*nyaaStillInFlight=*/false);
     }
 }
 
@@ -266,34 +245,11 @@ void ComicsSourcesPanel::onNyaaFailed(int reqId, const QString& reason)
     qWarning("ComicsSourcesPanel: nyaa search failed (reqId=%d) reason=%s",
              reqId, reason.toUtf8().constData());
 
-    // Leave catalog + WC rows in place if they were appended. If both are
-    // absent (no catalog hit + no chapterIds), surface empty state.
     if (m_rows.isEmpty()) {
-        renderEmpty();
+        setEmpty();
     } else {
-        renderRanked();
+        setSources(m_rows, /*nyaaStillInFlight=*/false);
     }
-}
-
-void ComicsSourcesPanel::onRowActivated(QListWidgetItem* item)
-{
-    if (!item) return;
-
-    // The list item stores an int index into m_rows via UserRole. Cheaper
-    // and safer than registering UnifiedSourceRow with the QMetaType system
-    // for QVariant round-tripping.
-    bool ok = false;
-    const int idx = item->data(Qt::UserRole).toInt(&ok);
-    if (!ok || idx < 0 || idx >= m_rows.size()) {
-        return;
-    }
-    const UnifiedSourceRow row = m_rows.at(idx);
-
-    emit downloadRequested(row,
-                           m_currentSeriesTitle,
-                           m_currentAnilistId,
-                           m_currentVolNumber,
-                           m_currentChapterIds);
 }
 
 void ComicsSourcesPanel::appendRow(const UnifiedSourceRow& row)
@@ -301,37 +257,190 @@ void ComicsSourcesPanel::appendRow(const UnifiedSourceRow& row)
     m_rows.append(row);
 }
 
-void ComicsSourcesPanel::renderEmpty()
+void ComicsSourcesPanel::clearCards()
 {
-    m_list->clear();
-    // Flip the stacked layout back to the empty label. We use the parent
-    // QStackedLayout (set in the ctor) for the actual swap.
-    if (auto* stack = qobject_cast<QStackedLayout*>(layout())) {
-        stack->setCurrentWidget(m_emptyLabel);
+    if (!m_cardsLayout) return;
+    for (ComicsSourceCard* card : m_cards) {
+        m_cardsLayout->removeWidget(card);
+        card->deleteLater();
+    }
+    m_cards.clear();
+}
+
+void ComicsSourcesPanel::setPlaceholder()
+{
+    clearCards();
+    if (m_statusLabel) {
+        m_statusLabel->setText(tr("Select a volume to see sources"));
+        m_statusLabel->show();
+    }
+    if (m_statusSubLabel) {
+        m_statusSubLabel->clear();
+        m_statusSubLabel->hide();
+    }
+    if (m_scroll) {
+        m_scroll->hide();
     }
 }
 
-void ComicsSourcesPanel::renderRanked()
+void ComicsSourcesPanel::setLoading()
 {
-    // Stable sort by (tier asc, then seeders desc within tier). Catalog
-    // rows insert FIRST among tier=1 entries because of insertion order
-    // (catalog appended in populate() before any nyaa result lands); the
-    // stable sort preserves that ordering boost when tiers tie.
+    clearCards();
+    if (m_statusLabel) {
+        m_statusLabel->clear();
+        m_statusLabel->hide();
+    }
+    if (m_statusSubLabel) {
+        m_statusSubLabel->clear();
+        m_statusSubLabel->hide();
+    }
+    if (m_scroll) {
+        m_scroll->show();
+    }
+    for (int i = 0; i < 2; ++i) {
+        auto* skeleton = new ComicsSourceCard(true, m_cardsContainer);
+        const int insertPos = qMax(0, m_cardsLayout->count() - 1);
+        m_cardsLayout->insertWidget(insertPos, skeleton);
+        m_cards.push_back(skeleton);
+    }
+}
+
+void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
+                                    bool nyaaStillInFlight)
+{
+    m_rows = rows;
+    sortRows();
+    clearCards();
+
+    if (m_rows.isEmpty()) {
+        if (nyaaStillInFlight) {
+            setLoading();
+        } else {
+            setEmpty();
+        }
+        return;
+    }
+
+    if (m_statusLabel) {
+        m_statusLabel->clear();
+        m_statusLabel->hide();
+    }
+    if (m_statusSubLabel) {
+        m_statusSubLabel->clear();
+        m_statusSubLabel->hide();
+    }
+    if (m_scroll) {
+        m_scroll->show();
+    }
+
+    for (const UnifiedSourceRow& row : std::as_const(m_rows)) {
+        auto* card = new ComicsSourceCard(row, m_cardsContainer);
+        connect(card, &ComicsSourceCard::clicked,
+                this, [this](const UnifiedSourceRow& clickedRow) {
+            m_autoPickSuppressed = true;
+            cancelAutoPick();
+            emitRowDownload(clickedRow);
+        });
+        const int insertPos = qMax(0, m_cardsLayout->count() - 1);
+        m_cardsLayout->insertWidget(insertPos, card);
+        m_cards.push_back(card);
+    }
+
+    if (nyaaStillInFlight) {
+        for (int i = 0; i < 2; ++i) {
+            auto* skeleton = new ComicsSourceCard(true, m_cardsContainer);
+            const int insertPos = qMax(0, m_cardsLayout->count() - 1);
+            m_cardsLayout->insertWidget(insertPos, skeleton);
+            m_cards.push_back(skeleton);
+        }
+    }
+
+    if (m_scroll && m_scroll->verticalScrollBar()) {
+        m_scroll->verticalScrollBar()->setValue(0);
+    }
+    armAutoPickIfEligible();
+}
+
+void ComicsSourcesPanel::setEmpty()
+{
+    clearCards();
+    if (m_statusLabel) {
+        m_statusLabel->setText(tr("No sources found for this volume"));
+        m_statusLabel->show();
+    }
+    if (m_statusSubLabel) {
+        m_statusSubLabel->setText(tr("Try a different volume or check back as indexers refresh."));
+        m_statusSubLabel->show();
+    }
+    if (m_scroll) {
+        m_scroll->hide();
+    }
+}
+
+void ComicsSourcesPanel::sortRows()
+{
     std::stable_sort(m_rows.begin(), m_rows.end(),
                      [](const UnifiedSourceRow& a, const UnifiedSourceRow& b) {
                          if (a.tier != b.tier) return a.tier < b.tier;
                          return a.seeders > b.seeders;
                      });
+}
 
-    m_list->clear();
-    for (int i = 0; i < m_rows.size(); ++i) {
-        auto* item = new QListWidgetItem(rowLabel(m_rows.at(i)), m_list);
-        item->setData(Qt::UserRole, i);
+void ComicsSourcesPanel::armAutoPickIfEligible()
+{
+    if (m_autoPickSuppressed || m_autoPickArmed || m_rows.isEmpty() || m_cards.isEmpty()) {
+        return;
     }
 
-    if (auto* stack = qobject_cast<QStackedLayout*>(layout())) {
-        stack->setCurrentWidget(m_list);
+    const UnifiedSourceRow& row = m_rows.first();
+    if (row.kind != UnifiedSourceRow::Kind::Catalog
+        || row.tier != 1
+        || row.magnetUri.isEmpty()) {
+        return;
     }
+
+    m_autoPickArmed = true;
+    if (auto* firstCard = m_cards.first()) {
+        if (!firstCard->isSkeleton()) {
+            firstCard->setSelected(true);
+        }
+    }
+    if (m_autoPickTimer) {
+        m_autoPickTimer->start(300);
+    }
+}
+
+void ComicsSourcesPanel::cancelAutoPick()
+{
+    if (m_autoPickTimer) {
+        m_autoPickTimer->stop();
+    }
+    m_autoPickArmed = false;
+}
+
+void ComicsSourcesPanel::emitTopRowDownload()
+{
+    if (!m_autoPickArmed || m_rows.isEmpty()) {
+        return;
+    }
+
+    const UnifiedSourceRow row = m_rows.first();
+    cancelAutoPick();
+    if (row.kind != UnifiedSourceRow::Kind::Catalog
+        || row.tier != 1
+        || row.magnetUri.isEmpty()) {
+        return;
+    }
+    emitRowDownload(row);
+}
+
+void ComicsSourcesPanel::emitRowDownload(const UnifiedSourceRow& row)
+{
+    emit downloadRequested(row,
+                           m_currentSeriesTitle,
+                           m_currentAnilistId,
+                           m_currentVolNumber,
+                           m_currentChapterIds);
 }
 
 } // namespace tankoban::manga::comics
