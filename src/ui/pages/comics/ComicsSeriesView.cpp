@@ -902,7 +902,16 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                 : detail->preview.coverThumbUrl)
             : QString();
         if (!coverUrl.isEmpty()) {
-            loadCoverUrlForVolume(coverUrl, row.volumeNumber);
+            // Race-condition guard: VolumeCoverResolver (BookWalker arc) may emit
+            // resolved() with BookWalker CDN URLs BEFORE populateVolumeRows fires
+            // (e.g. when MangaUpdates sidecar is warm but AniList detail fetch lags).
+            // If a BookWalker URL has already been applied for this volume, don't
+            // overwrite it with the AniList fallback per-vol thumbnail. The resolver's
+            // BookWalker URLs are publisher-canonical and strictly preferred.
+            const QString existing = m_lastAppliedCoverUrlByVolume.value(row.volumeNumber);
+            if (!existing.contains(QStringLiteral("rimg.bookwalker.jp"))) {
+                loadCoverUrlForVolume(coverUrl, row.volumeNumber);
+            }
         }
 
         // Col 3 -- title cellWidget. STREAM_PORT Bug-5 fix 2026-05-18:
