@@ -54,16 +54,36 @@ QString BookWalkerSeriesPageParser::pickSeriesIdByTitle(const QList<BookWalkerSe
         QStringLiteral(R"([\((\x{FF08}][^\))\x{FF09}]*[\))\x{FF09}])"),
         QRegularExpression::UseUnicodePropertiesOption);
 
+    if (hits.isEmpty()) return QString();
+
     const QString needle = targetJapaneseTitle.trimmed();
+    if (needle.isEmpty()) return QString();
+
+    // Pass 1: exact match (case-insensitive) after stripping parenthetical suffix.
     for (const auto& h : hits) {
         QString normalized = h.title;
         normalized.replace(stripParens, QString());
         normalized = normalized.trimmed();
-        if (normalized == needle) {
+        if (normalized.compare(needle, Qt::CaseInsensitive) == 0) {
             return h.seriesId;
         }
     }
-    return QString();
+
+    // Pass 2: starts-with match (case-insensitive). Handles "DEATH NOTE
+    // モノクロ版" vs query "Death Note" — BookWalker editions append suffix
+    // words without parentheses.
+    for (const auto& h : hits) {
+        const QString normalized = h.title.trimmed();
+        if (normalized.length() >= needle.length() &&
+            normalized.left(needle.length()).compare(needle, Qt::CaseInsensitive) == 0) {
+            return h.seriesId;
+        }
+    }
+
+    // Pass 3 (best-effort fallback): take the first hit. BookWalker ranks by
+    // relevance for exact-query searches; the first result is usually the
+    // canonical entry for the series. Better than emitting no result at all.
+    return hits.first().seriesId;
 }
 
 } // namespace tankoban::manga::bookwalker

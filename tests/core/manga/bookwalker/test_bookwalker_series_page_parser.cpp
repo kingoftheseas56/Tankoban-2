@@ -79,10 +79,32 @@ TEST(BookWalkerSeriesPageParser, PicksSeriesIdByExactTitleAfterStrippingParens) 
     EXPECT_EQ(id, QStringLiteral("16664"));
 }
 
-TEST(BookWalkerSeriesPageParser, ReturnsEmptyIdOnNoExactMatch) {
+TEST(BookWalkerSeriesPageParser, ReturnsFirstHitWhenNoExactMatch) {
+    // Pass 3 fallback: when neither exact nor starts-with matches, take the
+    // first hit (BookWalker relevance is usually right). Old behavior returned
+    // empty; new behavior is best-effort.
     QList<BookWalkerSearchHit> hits = {
         {QStringLiteral("175790"), QString::fromUtf8("\xe6\x9a\xb4\xe9\xa3\x9f\xe3\x81\xae\xe3\x83\x99\xe3\x83\xab\xe3\x82\xbb\xe3\x83\xab\xe3\x82\xaf")}, // 暴食のベルセルク
     };
+    QString id = BookWalkerSeriesPageParser::pickSeriesIdByTitle(
+        hits, QString::fromUtf8("\xe3\x83\x99\xe3\x83\xab\xe3\x82\xbb\xe3\x83\xab\xe3\x82\xaf")); // ベルセルク
+    EXPECT_EQ(id, QStringLiteral("175790"));
+}
+
+TEST(BookWalkerSeriesPageParser, PicksByStartsWithForLatinTitleWithSuffix) {
+    // Death Note case: AniList native title is "DEATH NOTE" (latin); BookWalker
+    // ships editions like "DEATH NOTE モノクロ版" with non-paren edition suffix.
+    QList<BookWalkerSearchHit> hits = {
+        {QStringLiteral("1234"), QStringLiteral("DEATH NOTE \xe3\x83\xa2\xe3\x83\x8e\xe3\x82\xaf\xe3\x83\xad\xe7\x89\x88")}, // DEATH NOTE モノクロ版
+        {QStringLiteral("5678"), QStringLiteral("DEATH NOTE Another Note")},
+    };
+    QString id = BookWalkerSeriesPageParser::pickSeriesIdByTitle(
+        hits, QStringLiteral("Death Note"));
+    EXPECT_EQ(id, QStringLiteral("1234"));  // first starts-with case-insensitive
+}
+
+TEST(BookWalkerSeriesPageParser, ReturnsEmptyIdOnEmptyHits) {
+    QList<BookWalkerSearchHit> hits;
     QString id = BookWalkerSeriesPageParser::pickSeriesIdByTitle(
         hits, QString::fromUtf8("\xe3\x83\x99\xe3\x83\xab\xe3\x82\xbb\xe3\x83\xab\xe3\x82\xaf")); // ベルセルク
     EXPECT_TRUE(id.isEmpty());

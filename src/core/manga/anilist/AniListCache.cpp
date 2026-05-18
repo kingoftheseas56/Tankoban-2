@@ -365,6 +365,14 @@ QString AniListCache::japaneseTitleFor(int anilistId) const
             }
         }
     }
+    // Fall-through: no CJK/Hiragana/Katakana found. Some manga have latin-script
+    // official Japanese titles (Death Note, One Piece, Bleach, etc. — Shueisha
+    // properties that publish under the english title verbatim in Japan). Return
+    // the first non-empty alternateTitle so BookWalker search has something to
+    // query with rather than short-circuiting to unresolved("no-japanese-title").
+    for (const QString& alt : it->preview.alternateTitles) {
+        if (!alt.isEmpty()) return alt;
+    }
     return QString();
 }
 
