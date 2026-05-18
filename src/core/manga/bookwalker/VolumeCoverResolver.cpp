@@ -10,6 +10,7 @@
 #include "core/manga/anilist/AniListCache.h"
 
 #include <QDateTime>
+#include <QtGlobal>
 
 namespace tankoban::manga::bookwalker {
 
@@ -35,7 +36,12 @@ VolumeCoverResolver::VolumeCoverResolver(
     }
 }
 
-VolumeCoverResolver::~VolumeCoverResolver() = default;
+VolumeCoverResolver::~VolumeCoverResolver()
+{
+    if (m_bwClient) {
+        disconnect(m_bwClient.data(), nullptr, this, nullptr);
+    }
+}
 
 int VolumeCoverResolver::nextRequestId() { return m_nextRequestId++; }
 
@@ -67,7 +73,11 @@ void VolumeCoverResolver::resolveForAnilist(int anilistId)
     // Spec Decision #5: BookWalker is never consulted for Premium series;
     // curated Premium covers are handled by PremiumCoverExtractor upstream.
     if (m_premium && m_premium->hasPremiumEntry(anilistId)) {
-        emit unresolved(anilistId, QStringLiteral("premium-short-circuit"));
+        // Premium-curated covers come via PremiumCoverExtractor in the existing pipeline.
+        // BookWalker explicitly does not run for Premium series (spec Decision #5).
+        // Emit `skipped` (not `unresolved`) so the caller can route to its Premium path
+        // without conflating with BookWalker-failure fallback.
+        emit skipped(anilistId, QStringLiteral("premium-short-circuit"));
         return;
     }
 
@@ -175,7 +185,9 @@ void VolumeCoverResolver::onCoversSucceeded(int requestId,
         e.url    = k.value();
         rec.volumes.append(e);
     }
-    (void)BookWalkerCache::store(p.anilistId, rec);
+    if (!BookWalkerCache::store(p.anilistId, rec)) {
+        qWarning("VolumeCoverResolver: failed to persist BookWalker cache for anilistId=%d", p.anilistId);
+    }
 
     // Step 10: Emit.
     emit resolved(p.anilistId, aligned);

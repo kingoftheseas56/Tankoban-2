@@ -45,6 +45,7 @@ public:
 signals:
     void resolved(int anilistId, const QMap<int, QString>& volumeToCoverUrl);
     void unresolved(int anilistId, const QString& reason);
+    void skipped(int anilistId, const QString& reason);  // Premium short-circuit: caller routes to Premium pipeline, not fallback
 
 private slots:
     void onSearchSucceeded(int requestId, const QList<BookWalkerSearchHit>& hits);
