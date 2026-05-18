@@ -611,6 +611,7 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     if (m_coverResolver) {
         m_coverResolver->resolveForAnilist(preview.anilistId);
     } else {
+        qWarning("ComicsSeriesView: no cover resolver set; falling back to AniList art");
         paintVolumeCoversAsFallback();
         hideLoadingOverlay();
     }
@@ -659,6 +660,8 @@ void ComicsSeriesView::clearView()
     // previous Task-7 clear()+hide() guard caused a noticeable rescale
     // flicker on every re-open; Hemanth flagged it as "the poster keeps
     // loading every time we reopen the series view."
+    m_currentResolvingAnilistId = 0;
+    hideLoadingOverlay();  // stops the safety timer before clearing rows
     m_volumesTable->setRowCount(0);
     if (m_sourcesPanel) m_sourcesPanel->clear();
     refreshLibraryButton();
