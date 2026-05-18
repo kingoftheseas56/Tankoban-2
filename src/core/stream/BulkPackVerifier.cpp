@@ -16,18 +16,6 @@ namespace tankostream::stream {
 
 namespace {
 
-constexpr qint64 kMinEpisodeVideoBytes = 100ll * 1024ll * 1024ll;
-constexpr qint64 kLargeUnclassifiedVideoBytes = 500ll * 1024ll * 1024ll;
-
-bool isWhitelistedVideoExtension(const QString& suffix)
-{
-    const QString ext = suffix.trimmed().toLower();
-    return ext == QStringLiteral("mkv") ||
-           ext == QStringLiteral("mp4") ||
-           ext == QStringLiteral("webm") ||
-           ext == QStringLiteral("m4v");
-}
-
 QString packDiagnosticLabel(const BulkSelectionPlan& plan)
 {
     if (!plan.preflight.packLabel.trimmed().isEmpty())
@@ -120,48 +108,6 @@ void BulkPackVerifier::begin(const BulkSelectionPlan& plan, int seasonNumber)
 void BulkPackVerifier::cancel()
 {
     cancelInternal(true);
-}
-
-bool BulkPackVerifier::matchEpisodeFileForSeason(const QJsonObject& file,
-                                                 int seasonNumber,
-                                                 int* episodeNum,
-                                                 int* fileIndex,
-                                                 QString* unclassifiedVideoFile)
-{
-    if (episodeNum) *episodeNum = 0;
-    if (fileIndex) *fileIndex = -1;
-    if (unclassifiedVideoFile) unclassifiedVideoFile->clear();
-
-    const QString path = file.value(QStringLiteral("name")).toString();
-    const qint64 fileSize = file.value(QStringLiteral("size")).toVariant().toLongLong();
-    const int index = file.value(QStringLiteral("index")).toInt(-1);
-    const QFileInfo info(path);
-
-    if (!isWhitelistedVideoExtension(info.suffix()))
-        return false;
-
-    if (fileSize < kMinEpisodeVideoBytes)
-        return false;
-
-    static const QRegularExpression kEpisodePattern(
-        QStringLiteral("[._\\s]?[Ss](\\d{1,2})[._\\s]?[Ee](\\d{1,3})"),
-        QRegularExpression::CaseInsensitiveOption);
-
-    const QRegularExpressionMatch match = kEpisodePattern.match(info.completeBaseName());
-    if (!match.hasMatch()) {
-        if (fileSize > kLargeUnclassifiedVideoBytes && unclassifiedVideoFile)
-            *unclassifiedVideoFile = path;
-        return false;
-    }
-
-    const int parsedSeason = match.captured(1).toInt();
-    const int parsedEpisode = match.captured(2).toInt();
-    if (parsedSeason != seasonNumber)
-        return false;
-
-    if (episodeNum) *episodeNum = parsedEpisode;
-    if (fileIndex) *fileIndex = index;
-    return index >= 0 && parsedEpisode > 0;
 }
 
 BulkPackVerificationResult BulkPackVerifier::verifyFiles(
