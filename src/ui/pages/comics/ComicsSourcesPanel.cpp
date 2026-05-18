@@ -140,6 +140,18 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
     m_statusSubLabel->setContentsMargins(8, 0, 8, 8);
     root->addWidget(m_statusSubLabel);
 
+    // STREAM_PORT Bug-3 fix 2026-05-19: pin "Sources" header to top.
+    // When the scroll area is hidden (placeholder / empty state) its
+    // stretch-1 slot collapses to zero but the QScrollArea's default
+    // Expanding size-policy can still cause Qt to distribute remaining
+    // vertical space above the status labels, visually centering the
+    // header+status block instead of anchoring the header at the top.
+    // A trailing addStretch() consumes all leftover space after the
+    // status labels, keeping the header pinned at position 0 in every
+    // state.  The populated state is unaffected: m_scroll is shown with
+    // stretch-1 and fills the space; this trailing stretch gets none.
+    root->addStretch(1);
+
     m_autoPickTimer = new QTimer(this);
     m_autoPickTimer->setSingleShot(true);
     connect(m_autoPickTimer, &QTimer::timeout,
