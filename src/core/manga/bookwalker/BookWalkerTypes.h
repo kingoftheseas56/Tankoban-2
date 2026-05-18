@@ -1,8 +1,8 @@
 #pragma once
 
+#include <QDateTime>
 #include <QList>
 #include <QString>
-#include <QDateTime>
 
 namespace tankoban::manga::bookwalker {
 
@@ -18,7 +18,7 @@ struct BookWalkerCoverEntry {
 
 struct BookWalkerCacheRecord {
     int schemaVersion = 1;
-    QDateTime fetchedAt;
+    QDateTime fetchedAt{};
     int canonicalCount = 0;
     QString bookwalkerSeriesId;
     QList<BookWalkerCoverEntry> volumes;
