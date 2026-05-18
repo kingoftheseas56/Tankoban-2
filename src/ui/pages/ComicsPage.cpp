@@ -54,6 +54,8 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDateTime>
+#include <QEventLoop>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
 #include <QFileInfo>
@@ -81,6 +83,47 @@ tankoban::ui::LayerEntry makeComicsLayer(const QString& kind, const QString& lab
         label,
         blob
     };
+}
+
+int parseAnilistSeriesId(const QString& raw)
+{
+    QString s = raw.trimmed();
+    if (s.startsWith(QStringLiteral("anilist_")))
+        s = s.mid(QStringLiteral("anilist_").size());
+    bool ok = false;
+    const int id = s.toInt(&ok);
+    return ok ? id : 0;
+}
+
+QJsonObject mangaDownloadEntryJson(const MangaDownloadIndex::Entry& e)
+{
+    QJsonObject obj;
+    obj[QStringLiteral("sourceId")] = e.sourceId;
+    obj[QStringLiteral("seriesId")] = e.seriesId;
+    obj[QStringLiteral("chapterId")] = e.chapterId;
+    obj[QStringLiteral("volume")] = e.volumeNumber;
+    obj[QStringLiteral("canonicalPath")] = e.canonicalPath;
+    obj[QStringLiteral("fileSizeBytes")] = static_cast<double>(e.fileSizeBytes);
+    obj[QStringLiteral("addedAt")] = static_cast<double>(e.addedAt);
+
+    QJsonArray served;
+    for (const QString& key : e.servedChapterKeys)
+        served.append(key);
+    obj[QStringLiteral("servedChapterKeys")] = served;
+    return obj;
+}
+
+QJsonObject mediaPreviewJson(const tankoban::manga::anilist::MediaPreview& p)
+{
+    QJsonObject obj;
+    obj[QStringLiteral("anilistId")] = p.anilistId;
+    obj[QStringLiteral("title")] = p.title;
+    obj[QStringLiteral("year")] = p.yearStarted;
+    obj[QStringLiteral("format")] = p.format;
+    obj[QStringLiteral("status")] = p.status;
+    obj[QStringLiteral("poster")] = p.coverThumbUrl;
+    obj[QStringLiteral("banner")] = p.bannerUrl;
+    return obj;
 }
 } // namespace
 
@@ -271,6 +314,16 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::openVolume,
             this, &ComicsPage::onComicsSeriesOpenVolume);
+    // STREAM_PORT 2026-05-18 Bug-1 fix: wire the new in-view "<- Back" button
+    // (added by Task 1) to the existing onDetailBack slot. The slot was
+    // shipped 2026-05-16 with a comment ("the new ComicsSeriesView does not
+    // currently emit a Back signal... future deep-link recovery paths land
+    // here") that was waiting on exactly this wire. Stream-blueprint parity:
+    // StreamPage.cpp:445 connects StreamDetailView::backRequested -> goBack
+    // the same way.
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::backRequested,
+            this, &ComicsPage::onDetailBack);
     connect(m_anilistClient,
             &tankoban::manga::anilist::AniListClient::seriesSucceeded,
             this, [this](int, const tankoban::manga::anilist::MediaDetail& detail) {
@@ -1736,11 +1789,15 @@ void ComicsPage::onDetailBack()
     // Back lands on the search-takeover; Library->Detail->Back lands on
     // the merged library grid.
     //
-    // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- the new
-    // ComicsSeriesView does not currently emit a Back signal (it has no
-    // back button in its scoped stub per Phase 7 comments). This slot
-    // remains the central exit point and is invoked by Escape-shortcut +
-    // future deep-link recovery paths. Direct invocation lands here.
+    // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- this slot is the
+    // central exit point for "back from detail" and is invoked by:
+    //   * the Escape shortcut (ComicsPage.cpp:533)
+    //   * STREAM_PORT Bug-1 fix 2026-05-18: ComicsSeriesView::backRequested
+    //     signal (the in-view "<- Back" button shipped by Task 1)
+    //   * future deep-link recovery paths
+    // The topbar Back chevron uses the separate global-nav-controller path
+    // (enteredLayer/restoreLayer plumbing) which lands at restoreLayer()
+    // below, not here.
     //
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emit exitedLayer so the
     // controller pops the detail entry from its stack, keeping the
@@ -2397,4 +2454,312 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
         m_stack->setCurrentIndexAnimated(1);
         return;
     }
+}
+
+// -----------------------------------------------------------------------
+// dev-control bridge
+// -----------------------------------------------------------------------
+
+QJsonObject ComicsPage::devSnapshot() const
+{
+    QJsonObject snap;
+    QString layer = QStringLiteral("library");
+    switch (m_mode) {
+    case Mode::Library: layer = QStringLiteral("library"); break;
+    case Mode::SearchResults: layer = QStringLiteral("search-results"); break;
+    case Mode::TankoyomiDetail: layer = QStringLiteral("series-view"); break;
+    }
+    if (m_stack && m_stack->currentWidget() == m_seriesView)
+        layer = QStringLiteral("folder-series-view");
+
+    snap[QStringLiteral("layer")] = layer;
+    snap[QStringLiteral("stackIndex")] = m_stack ? m_stack->currentIndex() : -1;
+    snap[QStringLiteral("searchQuery")] = m_searchBar ? m_searchBar->text() : QString();
+    snap[QStringLiteral("gridMode")] = m_gridMode;
+    snap[QStringLiteral("hasScanned")] = m_hasScanned;
+    snap[QStringLiteral("scanning")] = m_scanning;
+    snap[QStringLiteral("folderSeriesCount")] = m_folderSeries.size();
+    snap[QStringLiteral("currentAnilistId")] = m_currentDetailAnilistId;
+    snap[QStringLiteral("currentSeriesTitle")] = m_currentDetailSeriesTitle;
+    snap[QStringLiteral("tyLibraryCount")] = m_tyLibrary ? m_tyLibrary->all().size() : 0;
+    snap[QStringLiteral("downloadedSeriesCount")] =
+        m_mangaDownloadIndex ? m_mangaDownloadIndex->entriesForAllSeries().size() : 0;
+    snap[QStringLiteral("bookmarkedCount")] =
+        m_anilistCache ? m_anilistCache->bookmarkedPreviews().size() : 0;
+    if (m_tyVolumeSeriesView)
+        snap[QStringLiteral("seriesView")] = m_tyVolumeSeriesView->devSnapshot();
+    return snap;
+}
+
+QJsonObject ComicsPage::devLibrarySnapshot() const
+{
+    QJsonObject out;
+    QJsonArray entries;
+
+    for (const SeriesInfo& s : m_folderSeries) {
+        QJsonObject obj;
+        obj[QStringLiteral("origin")] = QStringLiteral("folder");
+        obj[QStringLiteral("title")] = s.seriesName;
+        obj[QStringLiteral("seriesPath")] = s.seriesPath;
+        obj[QStringLiteral("coverPath")] = s.coverThumbPath;
+        obj[QStringLiteral("fileCount")] = s.fileCount;
+        obj[QStringLiteral("newestMtimeMs")] = static_cast<double>(s.newestMtimeMs);
+        entries.append(obj);
+    }
+
+    if (m_tyLibrary) {
+        for (const ComicsLibraryRecord& r : m_tyLibrary->all()) {
+            QJsonObject obj;
+            obj[QStringLiteral("origin")] = r.origin.isEmpty()
+                ? QStringLiteral("tankoyomi")
+                : r.origin;
+            obj[QStringLiteral("sourceId")] = r.sourceId;
+            obj[QStringLiteral("seriesId")] = r.seriesId;
+            obj[QStringLiteral("title")] = r.title;
+            obj[QStringLiteral("rootFolder")] = r.rootFolder;
+            obj[QStringLiteral("seriesFolderName")] = r.seriesFolderName;
+            obj[QStringLiteral("canonicalSeriesPath")] = r.canonicalSeriesPath;
+            obj[QStringLiteral("coverPath")] = r.coverPath;
+            obj[QStringLiteral("addedAt")] = static_cast<double>(r.addedAt);
+            obj[QStringLiteral("lastValidatedAt")] = static_cast<double>(r.lastValidatedAt);
+            entries.append(obj);
+        }
+    }
+
+    if (m_anilistCache) {
+        for (const auto& p : m_anilistCache->bookmarkedPreviews()) {
+            QJsonObject obj = mediaPreviewJson(p);
+            obj[QStringLiteral("origin")] = QStringLiteral("bookmark");
+            obj[QStringLiteral("sourceId")] = QStringLiteral("anilist");
+            obj[QStringLiteral("seriesId")] = QString::number(p.anilistId);
+            obj[QStringLiteral("title")] = p.title;
+            entries.append(obj);
+        }
+    }
+
+    out[QStringLiteral("entries")] = entries;
+    out[QStringLiteral("count")] = entries.size();
+    return out;
+}
+
+QJsonObject ComicsPage::devSeriesSnapshot() const
+{
+    if (!m_tyVolumeSeriesView ||
+        m_stack->currentWidget() != m_tyVolumeSeriesView ||
+        m_mode != Mode::TankoyomiDetail) {
+        return QJsonObject{{QStringLiteral("series"), QJsonValue::Null}};
+    }
+    return QJsonObject{{QStringLiteral("series"), m_tyVolumeSeriesView->devSnapshot()}};
+}
+
+QJsonObject ComicsPage::devSelectVolume(int row)
+{
+    if (!m_tyVolumeSeriesView ||
+        m_stack->currentWidget() != m_tyVolumeSeriesView ||
+        m_mode != Mode::TankoyomiDetail) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("no active ComicsSeriesView")}};
+    }
+    return m_tyVolumeSeriesView->devSelectVolume(row);
+}
+
+QJsonObject ComicsPage::devOpenSeries(const QString& seriesId)
+{
+    const int anilistId = parseAnilistSeriesId(seriesId);
+    if (anilistId <= 0) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("seriesId must be an AniList id or anilist_<id>")}};
+    }
+
+    QString title = QStringLiteral("anilist_%1").arg(anilistId);
+    if (m_anilistCache) {
+        if (auto detail = m_anilistCache->get(anilistId))
+            title = detail->preview.title.isEmpty() ? title : detail->preview.title;
+    }
+    openSeriesByAnilistId(anilistId, title);
+    return QJsonObject{{QStringLiteral("status"), QStringLiteral("ok")},
+                       {QStringLiteral("anilistId"), anilistId},
+                       {QStringLiteral("title"), title},
+                       {QStringLiteral("snapshot"), devSnapshot()}};
+}
+
+QJsonObject ComicsPage::devOpenChapter(const QString& seriesId,
+                                       int volumeNumber,
+                                       int chapterNumber)
+{
+    Q_UNUSED(chapterNumber);
+    const int anilistId = parseAnilistSeriesId(seriesId);
+    if (anilistId <= 0 || volumeNumber <= 0) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("seriesId and positive volume required")}};
+    }
+
+    std::optional<MangaDownloadIndex::Entry> entry;
+    if (m_mangaDownloadIndex && m_premiumCatalog) {
+        if (auto hit = m_premiumCatalog->entryForAnilistIdAndVolume(anilistId, volumeNumber)) {
+            entry = m_mangaDownloadIndex->entryForSeriesAndVolume(
+                QString::fromLatin1(TANKOYOMI_PREMIUM_SOURCE_ID),
+                hit->first.seriesId,
+                volumeNumber);
+        }
+    }
+    if (!entry && m_mangaDownloadIndex) {
+        const QString fallbackSeriesId = QStringLiteral("anilist_%1").arg(anilistId);
+        entry = m_mangaDownloadIndex->entryForSeriesAndVolume(
+            QString::fromLatin1(TANKOYOMI_PREMIUM_SOURCE_ID), fallbackSeriesId, volumeNumber);
+        if (!entry) {
+            entry = m_mangaDownloadIndex->entryForSeriesAndVolume(
+                QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID), fallbackSeriesId, volumeNumber);
+        }
+    }
+    if (!entry || entry->canonicalPath.isEmpty()) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("downloaded volume not found")}};
+    }
+
+    if (m_currentDetailAnilistId != anilistId)
+        devOpenSeries(QString::number(anilistId));
+    onComicsSeriesOpenVolume(volumeNumber, entry->canonicalPath);
+    return QJsonObject{{QStringLiteral("status"), QStringLiteral("ok")},
+                       {QStringLiteral("anilistId"), anilistId},
+                       {QStringLiteral("volume"), volumeNumber},
+                       {QStringLiteral("chapter"), chapterNumber},
+                       {QStringLiteral("path"), entry->canonicalPath}};
+}
+
+QJsonObject ComicsPage::devSearchTankoyomi(const QString& query, int timeoutMs)
+{
+    QJsonObject out;
+    if (!m_anilistClient || query.trimmed().isEmpty()) {
+        out[QStringLiteral("status")] = QStringLiteral("bad_request");
+        return out;
+    }
+
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QList<tankoban::manga::anilist::MediaPreview> results;
+    QString error;
+    bool timedOut = false;
+    const int requestId =
+        static_cast<int>((QDateTime::currentMSecsSinceEpoch() % 1000000000) + 1000);
+
+    QMetaObject::Connection okConn;
+    QMetaObject::Connection failConn;
+    okConn = connect(m_anilistClient,
+        &tankoban::manga::anilist::AniListClient::searchSucceeded,
+        &loop,
+        [&](int reqId, const QList<tankoban::manga::anilist::MediaPreview>& found) {
+            if (reqId != requestId) return;
+            results = found;
+            loop.quit();
+        });
+    failConn = connect(m_anilistClient,
+        &tankoban::manga::anilist::AniListClient::searchFailed,
+        &loop,
+        [&](int reqId, const QString& reason) {
+            if (reqId != requestId) return;
+            error = reason;
+            loop.quit();
+        });
+    connect(&timer, &QTimer::timeout, &loop, [&]() {
+        timedOut = true;
+        loop.quit();
+    });
+
+    m_anilistClient->searchByTitle(query.trimmed(), requestId);
+    timer.start(qBound(1000, timeoutMs, 15000));
+    loop.exec();
+    disconnect(okConn);
+    disconnect(failConn);
+
+    QJsonArray arr;
+    for (const auto& p : results)
+        arr.append(mediaPreviewJson(p));
+    out[QStringLiteral("status")] = timedOut ? QStringLiteral("timeout") : QStringLiteral("ok");
+    out[QStringLiteral("timedOut")] = timedOut;
+    out[QStringLiteral("error")] = error;
+    out[QStringLiteral("results")] = arr;
+    return out;
+}
+
+QJsonObject ComicsPage::devDownloadsSnapshot() const
+{
+    QJsonObject out;
+    QJsonArray indexed;
+    QSet<QString> seenPaths;
+    if (m_mangaDownloadIndex) {
+        for (const auto& representative : m_mangaDownloadIndex->entriesForAllSeries()) {
+            for (const auto& e : m_mangaDownloadIndex->entriesForSeries(
+                     representative.sourceId, representative.seriesId)) {
+                const QString key = MangaDownloadIndex::computeCanonicalKey(e.canonicalPath);
+                if (seenPaths.contains(key)) continue;
+                seenPaths.insert(key);
+                indexed.append(mangaDownloadEntryJson(e));
+            }
+        }
+    }
+    out[QStringLiteral("indexed")] = indexed;
+
+    QJsonArray active;
+    if (m_mangaDownloader) {
+        for (const MangaDownloadRecord& rec : m_mangaDownloader->listActive()) {
+            QJsonObject obj;
+            obj[QStringLiteral("id")] = rec.id;
+            obj[QStringLiteral("seriesTitle")] = rec.seriesTitle;
+            obj[QStringLiteral("source")] = rec.source;
+            obj[QStringLiteral("destinationPath")] = rec.destinationPath;
+            obj[QStringLiteral("status")] = rec.status;
+            obj[QStringLiteral("paused")] = rec.paused;
+            obj[QStringLiteral("progress")] = rec.progress;
+            obj[QStringLiteral("totalChapters")] = rec.totalChapters;
+            obj[QStringLiteral("completedChapters")] = rec.completedChapters;
+            active.append(obj);
+        }
+    }
+    out[QStringLiteral("active")] = active;
+
+    QJsonArray pending;
+    for (auto it = m_pendingVolumeDispatches.constBegin();
+         it != m_pendingVolumeDispatches.constEnd(); ++it) {
+        QJsonObject obj;
+        obj[QStringLiteral("key")] = it.key();
+        obj[QStringLiteral("kind")] = static_cast<int>(it->kind);
+        obj[QStringLiteral("anilistId")] = it->anilistId;
+        QJsonArray chapters;
+        for (const QString& chapter : it->chapterIds)
+            chapters.append(chapter);
+        obj[QStringLiteral("chapterIds")] = chapters;
+        pending.append(obj);
+    }
+    out[QStringLiteral("pendingVolumeDispatches")] = pending;
+    return out;
+}
+
+QJsonObject ComicsPage::devDispatchVolume(const QString& seriesId,
+                                          int volumeNumber,
+                                          const QString& source)
+{
+    const int anilistId = parseAnilistSeriesId(seriesId);
+    if (anilistId <= 0 || volumeNumber <= 0) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("seriesId and positive volume required")}};
+    }
+    if (!m_tyVolumeSeriesView ||
+        m_tyVolumeSeriesView->currentAnilistId() != anilistId ||
+        m_stack->currentWidget() != m_tyVolumeSeriesView) {
+        devOpenSeries(QString::number(anilistId));
+    }
+    if (!m_tyVolumeSeriesView || m_tyVolumeSeriesView->currentAnilistId() != anilistId) {
+        return QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("message"), QStringLiteral("series view not ready")}};
+    }
+    return m_tyVolumeSeriesView->devDispatchVolume(volumeNumber, source);
+}
+
+QJsonObject ComicsPage::devSourcesSnapshot() const
+{
+    if (!m_tyVolumeSeriesView)
+        return QJsonObject{{QStringLiteral("sources"), QJsonValue::Null}};
+    return QJsonObject{{QStringLiteral("sources"), m_tyVolumeSeriesView->devSourcesSnapshot()}};
 }

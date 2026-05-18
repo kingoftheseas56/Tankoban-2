@@ -22,6 +22,7 @@
 #include "core/manga/anilist/AniListTypes.h"
 
 #include <QList>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -83,6 +84,9 @@ public:
                   int            anilistSeriesId,
                   const anilist::VolumeRow& vol,
                   const QStringList& chapterIds);
+
+    QJsonObject devSnapshot() const;
+    bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);
 
 signals:
     // Fired when user clicks a row in the source list. Caller dispatches to

@@ -87,6 +87,17 @@ public:
     // 2026-05-03 — Hemanth verbatim "I want it instantaneous."
     void refreshContinueStrip();
 
+    QJsonObject devSnapshot() const;
+    QJsonObject devLibrarySnapshot() const;
+    QJsonObject devSeriesSnapshot() const;
+    QJsonObject devSelectVolume(int row);
+    QJsonObject devOpenSeries(const QString& seriesId);
+    QJsonObject devOpenChapter(const QString& seriesId, int volumeNumber, int chapterNumber);
+    QJsonObject devSearchTankoyomi(const QString& query, int timeoutMs);
+    QJsonObject devDownloadsSnapshot() const;
+    QJsonObject devDispatchVolume(const QString& seriesId, int volumeNumber, const QString& source);
+    QJsonObject devSourcesSnapshot() const;
+
 signals:
     void openComic(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- emitted BEFORE every
