@@ -24,11 +24,11 @@
 #include "core/manga/anilist/AniListTypes.h"
 
 #include <QHash>
+#include <QJsonObject>
 #include <QPixmap>
+#include <QSet>
 #include <QStringList>
 #include <QWidget>
-
-class QPaintEvent;
 
 class QLabel;
 class QNetworkAccessManager;
@@ -85,6 +85,11 @@ public:
     void setVolumeRows(const QList<anilist::VolumeRow>& rows);
     int currentAnilistId() const { return m_currentAnilistId; }
 
+    QJsonObject devSnapshot() const;
+    QJsonObject devSelectVolume(int row);
+    QJsonObject devSourcesSnapshot() const;
+    QJsonObject devDispatchVolume(int volumeNumber, const QString& source);
+
 public slots:
     void setVolumeDownloadState(int volumeNumber, const QString& cbzPath,
                                 bool downloaded);
@@ -107,21 +112,52 @@ signals:
                                    int            volumeNumber,
                                    const QStringList& chapterIds);
 
+    // STREAM_PORT 2026-05-18 Task 1: emitted when the Back button in the
+    // action row is clicked. Renamed 2026-05-18 ~5:35pm IST after first-
+    // smoke regression: original name `navigationRequested` collided with
+    // ComicsPage's existing same-named signal (page-level push-onto-history
+    // emitter), semantically opposite intent. Stream-blueprint parity name:
+    // matches StreamDetailView::backRequested at StreamDetailView.h:128.
+    // ComicsPage wires this to onDetailBack (which exists since 2026-05-16
+    // and was already used by the Esc shortcut + future deep-link recovery
+    // -- the comment at ComicsPage.cpp:1739-1743 was literally waiting for
+    // this signal to come from the new view).
+    void backRequested();
+
+    // STREAM_PORT 2026-05-18 Task 5: multi-volume bulk dispatch.
+    // ComicsPage v1.x will route this through the default provider
+    // (catalog if present, otherwise Tankoyomi) once bulk routing is wired.
+    // Option A chosen: bulk path has no per-source-picked context (unlike the
+    // single-volume downloadDispatchRequested which carries a UnifiedSourceRow),
+    // so a separate signal avoids fabricating a dummy UnifiedSourceRow.
+    // NOTE v1: ComicsPage does NOT yet wire this receiver -- the emit is a
+    // no-op in v1. ComicsPage v1.x adds bulk routing alongside the unified
+    // download-dispatch refactor.
+    void bulkDownloadRequested(int anilistId,
+                               const QList<anilist::VolumeRow>& volumes);
+
 protected:
-    // Bug-1 (Stremio-style background) -- paint the AniList banner as a
-    // full-viewport wallpaper with a vertical legibility gradient on top,
-    // rather than docking it as a top pane. All child widgets sit on
-    // transparent backgrounds + render over the wallpaper.
-    void paintEvent(QPaintEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onSeriesSucceeded(int requestId, const tankoban::manga::anilist::MediaDetail& detail);
     void onSeriesFailed(int requestId, const QString& reason);
 
-    // PHASE 8: volume-row click handler -- populates the sources panel.
+    // PHASE 8: volume-row click handler -- opens cbz if downloaded.
+    // F1 (2026-05-18): mouse-only path now; Sources populate lives on
+    // onVolumeCurrentChanged so keyboard arrow nav drives the panel too.
     void onVolumeCellClicked(int row, int column);
+    void onVolumeCurrentChanged(int currentRow, int currentColumn,
+                                int previousRow, int previousColumn);
     void onLibraryButtonClicked();
+
+    // STREAM_PORT 2026-05-18 Task 3: toggle between clamped and expanded
+    // synopsis text. Mirrors StreamDetailView::onDescShowMoreClicked.
+    void onDescShowMoreClicked();
+
+    // STREAM_PORT 2026-05-18 Task 5: checkbox + bulk-download slots.
+    void onVolumeCheckboxToggled(int row, bool checked);
+    void onDownloadSelectedClicked();
 
 private:
     void buildUi();
@@ -131,13 +167,21 @@ private:
                             const anilist::MediaDetail* detail);
     void refreshLibraryButton();
 
+    // F1 (2026-05-18): shared by onVolumeCellClicked (mouse) +
+    // onVolumeCurrentChanged (mouse + keyboard); pushes the row's mapped
+    // sources into m_sourcesPanel.
+    void populateSourcesForRow(int row);
+
     // PHASE 12: async-load a cover URL into a target volume row's Cover cell.
     // Uses QPixmapCache keyed by URL; cache hits paint synchronously.
     // volumeNumber identifies the target row; -1 means the banner.
     void loadCoverUrlForVolume(const QString& url, int volumeNumber);
     void loadBannerUrl(const QString& url);
+    // STREAM_PORT 2026-05-18 Task 1: paint a pixmap onto m_heroBannerLabel,
+    // scaled to fit the 140px band via KeepAspectRatioByExpanding. Called
+    // from loadBannerUrl on cache-hit OR async-fetch completion.
+    void applyBannerPixmap(const QPixmap& pm);
     void applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm);
-    void setRowOpenIndicator(int tableRow, bool downloaded);
 
     anilist::AniListClient*  m_client  = nullptr;  // non-owning
     anilist::AniListCache*   m_cache   = nullptr;  // non-owning
@@ -145,10 +189,13 @@ private:
     NyaaRuntimeSource*       m_nyaa    = nullptr;  // non-owning; PHASE 8
     MangaDownloadIndex*      m_downloadIndex = nullptr; // non-owning; Phase B.3
 
-    // Bug-1 (Stremio-style background): the banner is no longer a widget in
-    // the layout -- it's a QPixmap painted in paintEvent across the full
-    // widget rect with a vertical gradient overlay for text legibility.
-    QPixmap               m_bannerPixmap;
+    // STREAM_PORT 2026-05-18 Task 1: hero banner is now a docked QLabel at
+    // 140px height instead of a full-viewport paintEvent wallpaper. Banner
+    // image is loaded asynchronously via loadBannerUrl() and rendered as a
+    // scaled pixmap on the label. Matches StreamDetailView::m_heroLabel
+    // (StreamDetailView.cpp:397-406) pattern.
+    QLabel*               m_heroBannerLabel = nullptr;
+    QPushButton*          m_backButton      = nullptr;
     QLabel*               m_title         = nullptr;
     QLabel*               m_metaLine      = nullptr;
     QLabel*               m_synopsis      = nullptr;
@@ -156,10 +203,30 @@ private:
     QTableWidget*         m_volumesTable  = nullptr;
     ComicsSourcesPanel*   m_sourcesPanel  = nullptr;  // PHASE 8: replaces the placeholder QLabel
 
+    // STREAM_PORT 2026-05-18 Task 3: description clamp + show-more toggle.
+    // Mirrors StreamDetailView.cpp:460-472 pattern.
+    QPushButton*  m_descShowMoreBtn = nullptr;
+    bool          m_descExpanded    = false;
+    int           m_descClampLines  = 3;
+
+    // STREAM_PORT 2026-05-18 Task 5: per-row multi-select state.
+    // m_selectedRows holds the rows currently checked; m_downloadSelectedBtn
+    // shows "Download Selected (N)" when N >= 1, hidden otherwise. Click
+    // emits bulkDownloadRequested once with the full selection list. Mirrors
+    // StreamDetailView::m_downloadSelectedBtn pattern at line 599.
+    QSet<int>      m_selectedRows;
+    QPushButton*   m_downloadSelectedBtn = nullptr;
+
     // Cached during renderDetail so onVolumeCellClicked can pass the
     // VolumeRow to the sources panel without re-running the mapper.
     QList<anilist::VolumeRow> m_currentVolumeRows;
     QString                   m_currentSeriesTitle;
+
+    // STREAM_PORT 2026-05-18 Task 6: index of the first volume the user
+    // hasn't started reading (proxy: first row whose stashed cbz path is
+    // empty). -1 if all rows downloaded OR no rows. Set by
+    // populateVolumeRows after the per-row loop completes.
+    int            m_nextUnreadRow = -1;
 
     int m_pendingSeriesReqId = -1;
     int m_currentAnilistId   = 0;
