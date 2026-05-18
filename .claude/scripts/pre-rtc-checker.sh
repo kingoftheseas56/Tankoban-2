@@ -158,10 +158,19 @@ while IFS= read -r LINE; do
         [ -z "$F_PATH" ] && continue
         if [ ! -e "$F_PATH" ]; then
             STALE_LINES="${STALE_LINES}  - [${TAG}]: missing file ${F_PATH}\n"
-        elif [ -f "$F_PATH" ] && ! git diff --quiet HEAD -- "$F_PATH" 2>/dev/null; then
-            : # File has diff -- OK
         elif [ -f "$F_PATH" ]; then
-            STALE_LINES="${STALE_LINES}  - [${TAG}]: file ${F_PATH} clean vs HEAD (already committed?)\n"
+            git diff --quiet HEAD -- "$F_PATH" >/dev/null 2>&1
+            case $? in
+                0) # File clean against HEAD — warn (I-2: softened phrasing)
+                    STALE_LINES="${STALE_LINES}  - [${TAG}]: file ${F_PATH} clean vs HEAD (verify — may be stale if file was committed mid-session)\n"
+                    ;;
+                1) # File has diff against HEAD — OK, no warning
+                    :
+                    ;;
+                *) # git error (128, etc.) — skip the warning rather than misclassify
+                    :
+                    ;;
+            esac
         fi
     done
     IFS="$OLD_IFS"
@@ -217,7 +226,7 @@ while IFS= read -r LINE; do
         [ -z "$DETECTED" ] && DETECTED="/build-verify, /superpowers:verification-before-completion"
 
         # Build the scaffolded replacement.
-        MESSAGE_BODY="$(echo "$LINE" | sed -nE 's/^READY TO COMMIT [—-] \[[^]]+\]:\s+(.+?)\s+\| files:.*/\1/p')"
+        MESSAGE_BODY="$(echo "$LINE" | sed -nE 's/^READY TO COMMIT [—-] \[[^]]+\]:[[:space:]]+([^|]+)[[:space:]]+\| files:.*/\1/p')"
         SCAFFOLD_LINES="${SCAFFOLD_LINES}  Scaffolded for [${TAG}]:\n    READY TO COMMIT - [${TAG}]: ${MESSAGE_BODY} | Skills invoked: [${DETECTED}] | files: ${FILES_RAW}\n\n"
     fi
 done <<< "$ADDED_RTCS"
