@@ -68,6 +68,24 @@ For each parsed line, in order:
      using a heredoc if the message is multi-line. The full RTC body (including `Skills invoked:` field) goes in the message — preserve verbatim, do not strip the field.
 5. **Halt-and-report** on commit failure (pre-commit hook reject, etc.): stop processing further lines, report the failure with the failing tag + message, leave subsequent lines pending. NEVER `--amend`, NEVER `--no-verify`.
 
+### Step 3.5: Race-condition detection (re-snapshot chat.md before marker)
+
+Before staging the marker commit, re-read agents/chat.md and diff against the parse-time blob to detect RTCs that arrived MID-SWEEP from a concurrent agent post (the BulkPackVerifier-class race orphan from 2026-05-18):
+
+```
+git diff "$SWEEP_BLOB" -- agents/chat.md > /tmp/chat-final-diff-$$.txt
+```
+
+Extract any `^+READY TO COMMIT [—-]` lines from the final diff. Compare against the list of lines processed in Step 3 (by tag + message).
+
+If any `READY TO COMMIT` line exists in the final diff but was NOT processed in Step 3:
+1. Log a `race_orphan_count` increment per missed line
+2. Add the missed lines to the final report (Step 5) under "Race-orphan RTCs detected (not committed; manual lift required)"
+3. Do NOT auto-retry — the marker still lands, but Agent 0 reviews the orphan list and lifts them manually under correct attribution post-sweep
+4. The orphan RTC's `files:` paths are NOT staged or committed by this sweep
+
+Race orphans are normal under concurrent multi-agent workloads. The warn-and-halt pattern lets Agent 0 catch them within the same wake; the alternative (auto-retry with a second parse pass) was deferred per spec §Technical decisions #2 in `docs/superpowers/specs/2026-05-19-brotherhood-skill-augmentation-design.md`.
+
 ### Step 4: Sweep marker commit
 
 After per-line commits, if N > 0 successful commits landed:
@@ -92,10 +110,13 @@ Commit sweep complete.
 - Skipped (stale — file missing or clean): <list with reason>
 - Failed (commit hook rejection): <list with reason>
 - Non-trivial RTCs missing Skills invoked field: <count> [<tag list if >0>]
+- Race-orphan RTCs (added mid-sweep, not committed): <count> [<tag list if >0>]
 - Marker commit: <SHA or "skipped (N=0)">
 ```
 
 The `Non-trivial RTCs missing Skills invoked field` line is telemetry — it does NOT affect commit success/failure. Hemanth + Agent 0 read this number across sweeps to track contracts-v3 compliance for the Phase 4 hook nag→block decision (30-day evaluation window from Phase 4 ship). 0 is the goal; non-zero means agents are forgetting the field on non-trivial work.
+
+The `Race-orphan RTCs` line is the SKILL_AUGMENTATION_ARC Phase B.4 fix landed 2026-05-19. When this number is >0, Agent 0 reads the listed tags, checks the working-tree state of their `files:` paths, and commits them manually under correct attribution (typically `[Agent N, ...]` where N is the originating agent named in the RTC's tag, not Agent 0). Race orphans arise when a concurrent agent posts a new RTC to chat.md after the sweeper has already parsed Step 2 but before Step 4 stages the marker — the marker captures the new RTC's text in chat.md but the per-line commit never fires for it.
 
 ## --dry-run mode
 
