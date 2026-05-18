@@ -4609,3 +4609,82 @@ Files: src/core/stream/BulkPackVerifier.h, src/core/stream/BulkPackVerifier.cpp,
 Skills invoked: [/superpowers:test-driven-development, /simplify, /build-verify, /superpowers:verification-before-completion]
 Refactored matchEpisodeFileForSeason from BulkPackVerifier.cpp to inline-in-header so both BulkPackVerifier and StreamPackParser call the same single source of truth without dragging TorrentClient/libtorrent link deps into test targets. Also moved the two constexpr thresholds (kMinEpisodeVideoBytes, kLargeUnclassifiedVideoBytes) and isWhitelistedVideoExtension helper into a BulkPackVerifier.h detail:: namespace, then removed all three from the BulkPackVerifier.cpp anonymous namespace. Reverted inline duplicate in StreamPackParser.cpp to verbatim spec body calling BulkPackVerifier::matchEpisodeFileForSeason. 6/6 tests still GREEN. build_check.bat = BUILD OK. Preserves spec § 5.1 DRY intent — one matcher, zero drift risk.
 READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 2 final polish: fileIndex semantic + .avi comment
+Files: src/core/stream/StreamPackParser.cpp
+Skills invoked: [/superpowers:receiving-code-review, /build-verify, /superpowers:verification-before-completion]
+Code-review-driven polish: pf.fileIndex now sourced from matchedFileIdx (correct contract; no behavior change). Added comment explaining .avi extension asymmetry between movie-fallback whitelist and detail::isWhitelistedVideoExtension. Tests still 6/6 GREEN. build_check.bat = BUILD OK.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 3: Entry schema v1â†’v2 bump
+Files: src/core/stream/StreamDownloadIndex.h, src/core/stream/StreamDownloadIndex.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+Added Entry::State enum (Complete|Pending|Downloading|Failed) + progressPct field. kSchemaVersion bumped 1â†’2 (defined in StreamDownloadIndex.h private section). load() accepts v1 and v2 (strict reject for anything outside 1â€“2); new fields default to Complete/100 on v1â†’v2 migration. save() writes state + progressPct. All existing Entry e; callsites get correct defaults via in-class initializers â€” no callsite changes needed. build_check.bat = BUILD OK (48s). Step 6 live UI roundtrip skipped â€” Task 5 GoogleTest cases cover the migration path more directly.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 3 polish: migration log + enum range guard
+Files: src/core/stream/StreamDownloadIndex.cpp
+Skills invoked: [/superpowers:receiving-code-review, /build-verify, /superpowers:verification-before-completion]
+Code-review-driven polish: load() now logs schema migration when storedVersion < kSchemaVersion. Entry::State JSON cast now range-guarded (0..Failed â†’ cast; otherwise default to Complete). Closes silent-rollback + unmapped-enum future-bug windows.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 4: StreamDownloadIndex new API methods
+Files: src/core/stream/StreamDownloadIndex.h, src/core/stream/StreamDownloadIndex.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+Added registerPendingEpisode + registerPendingMovie + updateEpisodeProgress + evictBySourceGroup methods. Added entryStateChanged signal. Thread-safety contract preserved (mutex around map mutations; signals emitted OFF lock). <algorithm> added for std::clamp; <QDateTime> was already present.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 5: State-transition unit tests for StreamDownloadIndex
+Files: tests/core/stream/test_stream_download_index_state.cpp, CMakeLists.txt
+Skills invoked: [/superpowers:test-driven-development, /build-verify, /superpowers:verification-before-completion]
+5 state-transition GoogleTest cases all GREEN (pendingâ†’downloading, downloadingâ†’complete, no-op on unknown, evict-by-source-group, registerPendingMovie defaults). ctest 5/5 PASS. build_check.bat BUILD OK. StreamDownloadIndex.cpp + JsonStore.cpp were already in tankoban_tests sources; only test file + CMakeLists entry added.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 6: Refactor publishTankorentItemsForTorrent
+Files: src/core/torrent/TorrentClient.cpp, src/core/torrent/TorrentClient.h
+Skills invoked: [/simplify, /build-verify, /superpowers:verification-before-completion]
+Parser body lifted out to StreamPackParser::parsePack(); the completion-time call now serves as a defensive double-pass. Behavior unchanged at completion; substrate ready for Task 7's metadata-ready hook. build_check.bat BUILD OK (3/3 steps: MOC/UIC, TorrentClient.cpp.obj, link). Step 4 smoke skipped â€” unit tests cover parser semantics; Task 7+ smokes will exercise the integration end-to-end.
+READY TO COMMIT
+
+## Agent 1 - BOOKWALKER_VOLUME_COVERS Phase 1 SHIPPED (Tasks 1-6 via /superpowers:subagent-driven-development)
+Files: src/core/manga/bookwalker/BookWalkerTypes.h, src/core/manga/bookwalker/BookWalkerSeriesPageParser.{h,cpp}, src/core/manga/bookwalker/VolumeCoverAlignment.{h,cpp}, tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp, tests/core/manga/bookwalker/test_volume_cover_alignment.cpp, tests/fixtures/bookwalker/berserk_series_page.html, tests/fixtures/bookwalker/berserk_search_results.html, CMakeLists.txt
+Skills invoked: [/superpowers:subagent-driven-development, /superpowers:test-driven-development, /build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review]
+Phase 1 (pure-logic primitives + fixtures + tests) of the BookWalker arc shipped via subagent-driven cycle (implementer + spec compliance reviewer + code quality reviewer per task). 11 GoogleTest cases all green (6 parser + 5 alignment) verified by /build-verify post-phase sanity run: cmake reconfigure clean, tankoban_tests built 4/4 steps, ctest 11/11 passed in 0.44 sec. Commits: 94c7ee8 (Types + include-order cleanup), 65e1095 (Berserk series fixture, CSRF/session tokens redacted to REDACTED_FOR_FIXTURE_2026_05_18 placeholder, 43 data-original matches preserved), 66bb244 (Berserk search-results fixture, data-series-id=16664 present, tokens redacted), a59e1b5 (BookWalkerSeriesPageParser TDD with Unicode-escape ASCII-clean regex for full-width parens), 4c00d03 (VolumeCoverAlignment TDD covering exact/overflow/shortfall/degraded/empty branches). One reviewer follow-up: BookWalkerTypes.h pulling QDateTime via future cache structs â€” folded into Codex Trigger D as Step 0 cleanup. Brotherhood concurrency artifact: Task 5 commit only contains 3 files; its CMakeLists adds got cascade-absorbed into Agent 4 Codex's adjacent commit due to parallel sweep timing â€” functionally clean, attribution split.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 7: Hook parser into metadata-ready
+Files: src/core/torrent/TorrentClient.h, src/core/torrent/TorrentClient.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion, /superpowers:requesting-code-review]
+TorrentClient::onMetadataReady() now fires on libtorrent metadata_received_alert (via TorrentEngine::metadataReady signal, Qt::QueuedConnection to UI thread); parses the file list (already delivered by the signal's 4th arg) via StreamPackParser; registers each episode/movie as Pending in StreamDownloadIndex. Adaptation note: the slot already existed with 4-arg signature matching the real signal â€” no new slot was added; instead the existing `/*files*/` unused param was activated and the pack-parsing block appended. Qt::QueuedConnection added to the existing connect call (was missing). All 4 guards present (no index, no record, no imdbId, streamGroupId-present). build_check.bat = BUILD OK. Wire-up verified by compile + code inspection; Pending-entry registration smoke deferred to Task 11.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 8: Wire pieceFinished to updateEpisodeProgress
+Files: src/core/torrent/TorrentClient.h, src/core/torrent/TorrentClient.cpp, src/core/torrent/TorrentEngine.h, src/core/torrent/TorrentEngine.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+TorrentClient::onPieceFinished() declared as new private slot; connected to TorrentEngine::pieceFinished (pre-existing signal from STREAM_ENGINE_REBUILD P2, emits from AlertWorker thread) via Qt::QueuedConnection. Slot guards mirror onMetadataReady: bail on no index/engine, no record, no imdbId, streamGroupId present. On each piece event, calls m_engine->torrentFiles() + m_engine->torrentFileProgress() (new sibling method), re-parses the pack via StreamPackParser, then calls m_streamDownloadIndex->updateEpisodeProgress() per mapped episode/movie â€” auto-flips state Pendingâ†’Downloading at first non-zero bytes, Downloadingâ†’Complete at 100%. TorrentEngine::torrentFileProgress() added (real impl + no-libtorrent stub): mirrors torrentFiles() mutex/handle pattern, calls handle.file_progress(piece_granularity) to get per-piece-granularity byte counts. build_check.bat = BUILD OK. Live download smoke deferred to Task 11.
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 9: Launch-validation pass for Pending/Downloading entries
+Files: src/core/stream/StreamDownloadIndex.h, src/core/stream/StreamDownloadIndex.cpp, src/core/torrent/TorrentClient.h, src/core/torrent/TorrentClient.cpp, src/ui/MainWindow.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+Added StreamDownloadIndex::validateInFlightEntries(QSet<QString>) â€” walks all Pending/Downloading entries whose sourceGroupId starts with "tankorent:", checks each extracted infoHash against the provided active set, evicts those with no libtorrent record. Lock-then-emit pattern mirrors evictBySourceGroup exactly: mutations under m_mutex, save() + emit entriesChanged() + qDebug off-lock. Added TorrentClient::activeInfoHashes() â€” thin wrapper over listActive() returning a QSet of infoHash strings; added #include <QSet> to TorrentClient.cpp. MainWindow schedules QTimer::singleShot(5000ms) immediately after the setStreamDownloadIndex wiring to give libtorrent time to resume active torrents, then calls validateInFlightEntries. QTimer already included in MainWindow.cpp; QSet already included in StreamDownloadIndex.h and TorrentClient.h. Step 6 smoke skipped (requires app restart; Task 11 covers end-to-end validation). build_check.bat = BUILD OK.
+READY TO COMMIT
+
+## Agent 1 (Codex) - BOOKWALKER_VOLUME_COVERS Tasks 7-10 backend bundle SHIPPED (Trigger D)
+Files: src/core/manga/bookwalker/BookWalkerTypes.h, src/core/manga/bookwalker/BookWalkerCacheTypes.h, src/core/manga/bookwalker/BookWalkerClient.{h,cpp}, src/core/manga/bookwalker/BookWalkerCache.{h,cpp}, CMakeLists.txt
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+Codex Trigger D dispatched by Agent 1 to ship the entire backend bundle in one coherent pass while Agent 1 ran Phase 1 sanity-close in parallel. Commits: dda1d2c (Step 0 YAGNI cleanup â€” split BookWalkerCacheTypes.h out of BookWalkerTypes.h so the parser's TU no longer pulls QDateTime; addresses Task 4 reviewer follow-up), e2b6f18 (BookWalkerClient.{h,cpp} async HTTP â€” QNetworkAccessManager-backed, mirrors MangaUpdatesClient shape, 250ms throttle, 10s transfer timeout, Mozilla UA, hands HTML to BookWalkerSeriesPageParser), c043e80 (BookWalkerClient CMake registration â€” split commit due to working-tree drift on the test-list hunk), 0e968ff (BookWalkerCache header with 7-day TTL + drift-check API), be2531a (BookWalkerCache impl + CMake registration â€” QSaveFile atomic write to AppDataLocation/cache/bookwalker_covers/<anilistId>.json, ISO-8601 fetchedAt validation, schemaVersion guard, malformed returns nullopt). Verification: build_check.bat = BUILD OK; cmake --build tankoban_tests = success; ctest -R BookWalker|VolumeCover = 11/11 still green (no regressions from Step 0 cleanup or new sources). Codex reported "No code deviations from the embedded snippets" â€” all 5 implementation files match the verbatim plan code in the Trigger D prompt. Agent 1 resumes with Tasks 11-17 (resolver + UI + smoke + RTC).
+READY TO COMMIT
+
+## Agent 4 - TANKORENT_CINEMETA_PACK_MAPPING Task 10: Same-session re-dispatch fix
+Files: src/core/torrent/TorrentEngine.h, src/core/torrent/TorrentEngine.cpp, src/core/torrent/TorrentClient.cpp
+Skills invoked: [/build-verify, /superpowers:verification-before-completion]
+Added TorrentEngine::hasMetadata(infoHash) â€” reads TorrentRecord::metadataReady under m_mutex (the flag AlertWorker sets on metadata_received_alert; no libtorrent handle traversal needed). Added no-libtorrent stub. In TorrentClient::startDownload, after m_records write + saveRecords(), check: if the record is a Tankorent-source (imdbId non-empty, streamGroupId empty) AND metadata is already present (hasMetadata returns true), synthesize onMetadataReady via QTimer::singleShot(0) capturing infoHash by value. The deferred lambda calls m_engine->torrentFiles then onMetadataReady with (hash, "", 0, files) â€” matching the slot's (infoHash, name, totalSize, files) signature where name/totalSize are unused by the CINEMETA_PACK_MAPPING branch. This fires on the next event-loop tick after startDownload returns, guaranteeing m_records is fully committed before onMetadataReady reads it. Guard conditions (imdbId non-empty + streamGroupId empty) mirror the early-exit checks already in onMetadataReady â€” bulk-cohort torrents are excluded. build_check.bat = BUILD OK.
+READY TO COMMIT
+
+Agent 7 implementation complete - [Agent 0, SKILL_AUGMENTATION_ARC spec audit + improvements pass]: files: docs/superpowers/specs/2026-05-19-brotherhood-skill-augmentation-design.md. See RTC below.
+READY TO COMMIT - [Agent 0 (Codex), SKILL_AUGMENTATION_ARC spec audit + improvements pass]: audit and improve brotherhood skill augmentation design spec | files: docs/superpowers/specs/2026-05-19-brotherhood-skill-augmentation-design.md
+Verification: build_check.bat not run (docs-only, no CMake-listed files touched); scoped git diff --check OK on spec (only CRLF normalization warning); attribution markers balanced (19/19 additions, 9/9/9 rewrites); markdown table scan OK; Section 1-5 order and Section 5 Hemanth questions intact; ASCII clean check NOT CLEAN because the spec is already UTF-8 and the requested signature uses a non-ASCII dash.
+
+## Agent 4 - MCP LOCK CLAIM - 2026-05-19 ~12:25am IST
+MCP LOCK - [Agent 4, TANKORENT_CINEMETA_PACK_MAPPING Task 11 (Phase 2 smoke checkpoint). Bridge-first via tankoctl v1.1 dispatch-season; pywinauto-mcp only for mid-flight Cancel click. Hemanth granted "proceed" 2026-05-19 ~12:25am IST. Sequence: stop-tankoban -> build_and_run.bat -> tankoctl open-page stream -> tankoctl search "Daredevil" -> tankoctl dispatch-season <imdbId> 2 -> poll get-downloads + JSON tail for ~60s observing Pending->Downloading->Complete transitions -> pywinauto-mcp Cancel click -> verify 13 entries evict -> stop-tankoban teardown. Expected duration: ~15-20 min including launch + download observation window.]

@@ -12,6 +12,26 @@
 
 ---
 
+<!-- Codex-added 2026-05-19: Required review ledger so Agent 0 can separate applied edits from lower-confidence notes. -->
+## Codex Review Findings
+
+Codex changed the spec in place where the finding was concrete.
+
+1. **Changed in place:** added missing Track B command families for books, player, sources, library, synthetic UI, stream, and comics. These map to real current surfaces such as `BooksPage`, `BookReader`, `VideoPlayer`, `SidecarProcess`, `TorrentClient`, `TankoLibraryPage`, `StreamPage`, and `ComicsPage`.
+2. **Changed in place:** corrected the Books reader file path. The current app uses `src/ui/readers/BookReader.{h,cpp}`, not `src/ui/pages/books/BookReader.{h,cpp}`.
+3. **Changed in place:** tightened hook implementation notes. Current `.claude/settings.json` only wires SessionStart, UserPromptSubmit, and Stop hooks; any PreToolUse design needs a fallback path and MultiEdit coverage.
+4. **Changed in place:** split Phase E into early skill integration and final bridge documentation. This avoids waiting on all bridge layers before useful skill shortlist updates can land.
+5. **Changed in place:** made the background indicators more measurable. Each indicator now has a concrete data source.
+6. **Changed in place:** added anti-patterns and standing contracts around generic state writes, synthetic UI, bridge-vs-pixels, attribution, and command help.
+7. **Did not touch:** Hemanth's Strategic Intent, the Success Criterion, the three Hemanth §5 questions, and the approved Section 1-5 ordering.
+
+Findings-only for Agent 0 to decide:
+
+1. **Possible skill merge:** `/audit-skeleton` may be too thin as a standalone skill. It might belong as a mode inside `/fix-todo-new` or `/codex-trigger-d`, but I did not merge it because audit authoring has a distinct audience and output path.
+2. **Possible skill overlap:** `/codex-trigger-d` and `/summon-from-todo-phase` both draft prompts. They should share a helper pattern, but they should not merge unless real usage shows agents confuse them.
+3. **Possible command pruning:** the Track B command count rises after the gap fills. The writing-plans pass should prune exact duplicates, but it should not remove lifecycle and introspection commands just to preserve the old ~95 estimate.
+<!-- /Codex-added -->
+
 ## Strategic Intent
 
 Hemanth's directive (2026-05-18): *"I want you to use superpowers: brainstorm, planning, execution to comprehensively come up with new skills that would genuinely help our boys and implement them into our system."*
@@ -27,7 +47,11 @@ Two design constraints from the brainstorm:
 **Two parallel tracks:**
 
 1. **Track A — Workflow skills**: ships 6 hooks + 10 universal skills + 2 specialist skills + 1 optional skill + sweeper race-fix. Agent 0 inline authoring (markdown files in `.claude/commands/` + bash/PowerShell helper scripts in `.claude/scripts/`).
-2. **Track B — Dev-bridge expansion**: ships 4 new bridge layers (v1.3-v1.6) + 2 cross-cutting layers (v1.7 synthetic UI + v1.8 system state) + deeper v1.1/v1.2 coverage, totaling ~95 new tankoctl commands. Codex Trigger D commissions, one per agent domain.
+<!-- Codex-rewrote 2026-05-19: Track B command count changed after command-surface gap fill. -->
+~~2. **Track B — Dev-bridge expansion**: ships 4 new bridge layers (v1.3-v1.6) + 2 cross-cutting layers (v1.7 synthetic UI + v1.8 system state) + deeper v1.1/v1.2 coverage, totaling ~95 new tankoctl commands. Codex Trigger D commissions, one per agent domain.~~
+<!-- /Codex-rewrote-original -->
+2. **Track B — Dev-bridge expansion**: ships 4 new bridge layers (v1.3-v1.6) + 2 cross-cutting layers (v1.7 synthetic UI + v1.8 system state) + deeper v1.1/v1.2 coverage. Baseline is ~95 commands; after Codex's gap fill the planning target is closer to ~120-135 commands before final pruning. Codex Trigger D commissions, one per agent domain.
+<!-- /Codex-rewrote -->
 
 **Phase shape** (rough — full sequencing in plan):
 - Phase A: Hooks first (lowest cognitive load lands first)
@@ -112,11 +136,19 @@ Four buckets of help, plus 2 specialist skills and 1 optional skill.
 
 Six hooks. Agent 0 sees these in his SessionStart brief; other agents don't see them unless they trigger one. Three EXTEND existing infrastructure; two are NEW; one is a small extension of existing repo-health logic.
 
-1. **Pre-RTC field scaffolding** — PreToolUse hook on `agents/chat.md` Edit. Scaffolds missing contracts-v3 fields BEFORE the RTC is committed; warns on stale file references. Extends `.claude/scripts/pre-rtc-checker.sh`.
+<!-- Codex-rewrote 2026-05-19: Current hook surface is Stop-based, so PreToolUse needs explicit fallback and MultiEdit coverage. -->
+~~1. **Pre-RTC field scaffolding** — PreToolUse hook on `agents/chat.md` Edit. Scaffolds missing contracts-v3 fields BEFORE the RTC is committed; warns on stale file references. Extends `.claude/scripts/pre-rtc-checker.sh`.~~
+<!-- /Codex-rewrote-original -->
+1. **Pre-RTC field scaffolding** — covers `agents/chat.md` Edit/MultiEdit append paths and keeps the existing Stop-hook fallback. Scaffolds or prints a corrected contracts-v3 RTC line before the agent finishes, then the Stop hook verifies the final chat.md diff against HEAD. Extends `.claude/scripts/pre-rtc-checker.sh`.
+<!-- /Codex-rewrote -->
 2. **Smoke-evidence auto-naming** — PreToolUse hook on Write/Edit of files in `agents/audits/smoke_evidence/`. Enforces `<UPPERCASE_FINDING>_<HHMMSS>.png` pattern; redirects bad paths; captures matching sidecar log + telemetry snapshot. NEW script at `.claude/scripts/smoke-evidence-rename.sh`.
 3. **MEMORY.md size watch** — SessionStart hook. If MEMORY.md > 24.4KB, prepends `/memory-trim` to Agent 0's brief. Extends `.claude/scripts/memory-health.sh`.
 4. **Dashboard drift flag** — SessionStart hook. Scans STATUS.md timestamps + CLAUDE.md decay markers; prints drift in the brief. Extends `.claude/scripts/session-brief.sh`.
-5. **Skill-provenance auto-detect** — PreToolUse hook on `agents/chat.md` Edit. Reads session tool-use telemetry, auto-fills `Skills invoked: [...]` field in any RTC line being committed. NEW script at `.claude/scripts/skill-provenance-detect.sh`.
+<!-- Codex-rewrote 2026-05-19: Auto-fill depends on telemetry availability and must degrade to warn-only. -->
+~~5. **Skill-provenance auto-detect** — PreToolUse hook on `agents/chat.md` Edit. Reads session tool-use telemetry, auto-fills `Skills invoked: [...]` field in any RTC line being committed. NEW script at `.claude/scripts/skill-provenance-detect.sh`.~~
+<!-- /Codex-rewrote-original -->
+5. **Skill-provenance auto-detect** — reads session skill telemetry and fills `Skills invoked: [...]` when the edit path can safely do so. If telemetry is missing, stale, or unavailable for Codex, it warns and leaves the agent-authored field intact. NEW script at `.claude/scripts/skill-provenance-detect.sh`.
+<!-- /Codex-rewrote -->
 6. **Chat.md rotation watch** — SessionStart hook. If chat.md > 3000 lines or > 300KB, prepends `/rotate-chat` to Agent 0's brief. Extends `.claude/scripts/session-brief.sh`.
 
 All hooks wire via `.claude/settings.json` in the existing hooks section.
@@ -180,6 +212,13 @@ The 2 cross-cutting commissions (v1.7 + v1.8) wait for at least 2 domain layers 
 - Retire any obsolete sections; merge orphan memory pointers
 - Write `project_brotherhood_skill_augmentation_arc.md` memory documenting what shipped + how to extend
 
+<!-- Codex-added 2026-05-19: Phase E can start for skills before every bridge layer lands, but bridge docs wait for the final schema. -->
+Phase E should split in the writing plan:
+
+1. **Phase E1 — skill surface integration.** Update STATUS.md shortlists and CLAUDE.md skill tiers after Phase B + C land. This does not need to wait for every bridge command.
+2. **Phase E2 — bridge surface integration.** Update CLAUDE.md tankoctl quick reference, project memory, and schema history only after the last Phase D bridge layer lands and the final command count is known.
+<!-- /Codex-added -->
+
 ### Rough wake budget
 
 1. **Phase A — 1 wake.** All 6 hooks ship in one wake; verify each independently.
@@ -205,11 +244,19 @@ After 2-3 wakes post-arc completion, the brotherhood should feel less janky. Spe
 
 ### Background indicators (Agent 0 tracks; Hemanth doesn't need to)
 
-1. **Orphan-cleanup commits per Agent 0 sweep** — pre-arc baseline: 3-5/sweep this week. Target post-arc: <1/sweep.
+<!-- Codex-rewrote 2026-05-19: Each indicator needs an explicit data source so the 30-day pass can measure it. -->
+~~1. **Orphan-cleanup commits per Agent 0 sweep** — pre-arc baseline: 3-5/sweep this week. Target post-arc: <1/sweep.
 2. **MEMORY.md size at session start** — pre-arc: 27.4KB (over 24.4KB limit). Target: <24.4KB sustained without manual intervention.
 3. **`Skills invoked: []` empty/missing in non-trivial RTCs** — pre-arc: allowed via self-attest. Target: 0 (hook auto-fills).
 4. **Agent 2/3/4B/5 smokes shipped without Hemanth opening app** — pre-arc: rare. Target: regular.
-5. **MCP collision events in chat.md** — pre-arc: honor-system, collisions happen. Target: 0 (lock skill enforces).
+5. **MCP collision events in chat.md** — pre-arc: honor-system, collisions happen. Target: 0 (lock skill enforces).~~
+<!-- /Codex-rewrote-original -->
+1. **Orphan-cleanup commits per Agent 0 sweep** — source: commit-sweeper summary plus marker-commit diff. Pre-arc baseline: 3-5/sweep this week. Target post-arc: <1/sweep.
+2. **MEMORY.md size at session start** — source: SessionStart `memory-health.sh` byte count. Pre-arc: 27.4KB (over 24.4KB limit). Target: <24.4KB sustained without manual intervention.
+3. **`Skills invoked: []` empty/missing in non-trivial RTCs** — source: `.claude/telemetry/skill-discipline.jsonl` plus chat.md RTC grep. Target: 0 missing fields, with Codex platform gaps tagged separately.
+4. **Agent 2/3/4B/5 smokes shipped without Hemanth opening app** — source: RTC lines and evidence-md files containing `tankoctl`, pywinauto, or `/smoke-package` evidence without a Hemanth-click ask in the same chat window. Target: regular, measured as count per agent per sweep.
+5. **MCP collision events in chat.md** — source: unmatched or overlapping `MCP LOCK` / `MCP LOCK RELEASED` windows in chat.md. Target: 0 fresh overlaps.
+<!-- /Codex-rewrote -->
 
 ### Re-measurement gate
 
@@ -228,6 +275,13 @@ Specific risks to monitor:
 3. **Dispatcher complexity** — `MainWindow::handleDevCommand()` is already a long if/else chain (~270 lines at v1.2). Adding 95 more commands risks readability. Mitigation: refactor to per-domain `dispatchCommand()` delegates in the per-domain page classes (additive; existing v1.0-v1.2 commands stay where they are; v1.3+ go through delegates).
 4. **Codex commissioning concurrency** — 4 simultaneous Codex Trigger D commissions on a shared `MainWindow.cpp` could collide. Mitigation: Agent 0 pre-allocates dispatcher namespaces before commissioning; commissions only add to their pre-allocated region.
 
+<!-- Codex-added 2026-05-19: Additional risks surfaced by hook and bridge implementation audit. -->
+5. **Hook false confidence** — a PreToolUse hook can miss MultiEdit, append-only shell edits, or a failed edit. Mitigation: keep the Stop-hook diff check as the source-of-truth verifier even after PreToolUse scaffolding lands.
+6. **Generic state-write damage** — `settings-set` and `jsonstore-set` can bypass higher-level invariants. Mitigation: default these commands to read-only plus allowlisted write keys; destructive writes require a dev-only flag and clear audit output.
+7. **Bridge-state blind spot** — tankoctl state can say a signal fired while the screen is still visually wrong. Mitigation: visual-quality checks still use screenshot or Hemanth judgment; bridge state does not replace painted-pixel evidence.
+8. **Telemetry privacy and rot** — session skill telemetry can become stale or leak old-session data into a new RTC. Mitigation: every telemetry row carries session id, timestamp, agent tag, and source command; provenance hooks ignore rows outside the current session window.
+<!-- /Codex-added -->
+
 ---
 
 ## Detailed catalog — Track A workflow skills (implementation detail)
@@ -243,12 +297,27 @@ Specific risks to monitor:
 - Files: `.claude/scripts/pre-rtc-checker.sh`, `.claude/settings.json`
 - Telemetry: `.claude/telemetry/pre-rtc.jsonl` append-only log
 
+<!-- Codex-added 2026-05-19: Current hooks are Stop-based; implementation needs a bridge from design intent to actual hook behavior. -->
+Implementation constraints:
+- Keep the existing Stop hook as the final verifier. It already diffs `agents/chat.md` against HEAD and is resilient to Edit, MultiEdit, shell append, and failed edits.
+- If PreToolUse is added, it must handle both Edit and MultiEdit payloads. It must not assume every chat.md change goes through a single Edit call.
+- Auto-fill should be best-effort. If telemetry cannot identify the session's skills, print the corrected RTC candidate and warn. Do not block the agent.
+- The hook must parse both ASCII `READY TO COMMIT -` and legacy dash variants, but any new line it emits must use ASCII ` - ` per Rule 16.
+<!-- /Codex-added -->
+
 **2. Smoke-evidence auto-naming** (NEW `.claude/scripts/smoke-evidence-rename.sh`)
 - Trigger: PreToolUse hook on Write/Edit targeting `agents/audits/smoke_evidence/*`
 - Behavior:
   - Validates filename matches `<UPPERCASE_FINDING>_<HHMMSS>.<ext>` pattern; suggests rename if not
   - On screenshot save: also captures sidecar_debug_live.log tail (last 200 lines) + telemetry snapshot + writes stub `evidence_<NAME>_<HHMMSS>.md` if it doesn't exist
 - Files: `.claude/scripts/smoke-evidence-rename.sh`, `.claude/settings.json`
+
+<!-- Codex-added 2026-05-19: Evidence hooks need post-write reconciliation because PreToolUse cannot prove the file landed. -->
+Post-write reconciliation:
+- Add a PostToolUse or Stop-time verifier for evidence files. It checks that the screenshot/log/stub trio exists after the write.
+- If the original screenshot write failed, the hook records a warning in telemetry and does not create a misleading evidence stub.
+- `/smoke-package` remains the preferred path for new evidence directories; this hook is the guardrail for manual saves.
+<!-- /Codex-added -->
 
 **3. MEMORY.md size watch** (extends `.claude/scripts/memory-health.sh`)
 - Trigger: SessionStart hook
@@ -271,6 +340,13 @@ Specific risks to monitor:
   - When chat.md edit adds an RTC line, auto-fill `Skills invoked: [<list>]` if missing
   - If self-attested list is wrong, warn (don't override — agent picks)
 - Files: `.claude/scripts/skill-provenance-detect.sh`, `.claude/telemetry/skill-invocations.jsonl`
+
+<!-- Codex-added 2026-05-19: Provenance telemetry needs a schema or it cannot be trusted in the 30-day pass. -->
+Telemetry contract:
+- Every row includes `ts`, `sessionId`, `agent`, `skill`, `source`, and `cwd`.
+- Codex rows use `source=codex-text` when a skill name is listed in the prompt or RTC rather than fired by Claude Code's Skill tool.
+- The detector ignores telemetry older than the current session start unless the agent explicitly passes a resume-session id.
+<!-- /Codex-added -->
 
 **6. Chat.md rotation watch** (extends `.claude/scripts/session-brief.sh`)
 - Trigger: SessionStart hook
@@ -296,6 +372,12 @@ Specific risks to monitor:
   - On `release`: append `MCP LOCK RELEASED — <agent> — <timestamp>` to chat.md
   - `--peek` flag: report current lock state without changing
 - File: `.claude/commands/mcp-lock.md`
+
+<!-- Codex-added 2026-05-19: Rule 16 requires ASCII anchors for hook-parsed chat lines. -->
+Implementation correction:
+- New lock lines must use ASCII protocol text: `MCP LOCK - [Agent N, task]: ...` and `MCP LOCK RELEASED - [Agent N, task]: ...`.
+- The parser may accept older em-dash variants, but the command should never emit them.
+<!-- /Codex-added -->
 
 **`/smoke-package <finding-name>`** — evidence bundle scaffolding (50-80 lines)
 - Behavior:
@@ -338,6 +420,12 @@ Specific risks to monitor:
 - Behavior: scaffold finding-ranked table + severity column + repro steps + §5 ratification + standard footer; output to `agents/audits/<topic>_<date>.md`
 - File: `.claude/commands/audit-skeleton.md`
 
+<!-- Codex-added 2026-05-19: Keep the skill useful while respecting Hemanth's no-table preference. -->
+Implementation correction:
+- Do not scaffold a markdown table by default. Use numbered findings with severity labels. Tables are allowed only when a dense numeric comparison genuinely needs columns.
+- Include mandatory observation vs hypothesis separation for Agent 7-style audits.
+<!-- /Codex-added -->
+
 **`/handoff-brief <agent-N>`** — mid-wake handoff (50-80 lines)
 - Inputs: target agent identifier
 - Behavior: capture current session state (active TODOs, files dirty, pending RTCs, last 3 chat.md posts, current MCP lock state) into a brief block; output as pastable text for the receiving agent's prompt
@@ -379,11 +467,19 @@ Specific risks to monitor:
 
 All command names below are CLI subcommand form (kebab-case). Wire protocol uses snake_case (handled by tankoctl translation layer).
 
-Total: ~95 new commands across 6 schema layers.
+<!-- Codex-rewrote 2026-05-19: Detailed catalog also needs the revised command-count range. -->
+~~Total: ~95 new commands across 6 schema layers.~~
+<!-- /Codex-rewrote-original -->
+Total planning range: ~120-135 new commands across 6 schema layers after the Codex gap-fill candidates. The writing-plans pass should recount after pruning exact duplicates.
+<!-- /Codex-rewrote -->
 
 ### v1.3 — Books-side power-up (Agent 2)
 
-**Files:** `src/devtools/DevControlServer.h` (schema bump), `src/ui/MainWindow.{h,cpp}` (dispatcher), `src/ui/pages/BooksPage.{h,cpp}` (per-page snapshot + commands), `src/ui/pages/books/BookReader.{h,cpp}` (reader state), `src/core/tts/EdgeTtsClient.*` (TTS bridge), `tools/tankoctl.cpp` (CLI surface).
+<!-- Codex-rewrote 2026-05-19: Corrected current BookReader path verified against src/ui/readers/BookReader.{h,cpp}. -->
+~~**Files:** `src/devtools/DevControlServer.h` (schema bump), `src/ui/MainWindow.{h,cpp}` (dispatcher), `src/ui/pages/BooksPage.{h,cpp}` (per-page snapshot + commands), `src/ui/pages/books/BookReader.{h,cpp}` (reader state), `src/core/tts/EdgeTtsClient.*` (TTS bridge), `tools/tankoctl.cpp` (CLI surface).~~
+<!-- /Codex-rewrote-original -->
+**Files:** `src/devtools/DevControlServer.h` (schema bump), `src/ui/MainWindow.{h,cpp}` (dispatcher), `src/ui/pages/BooksPage.{h,cpp}` (per-page snapshot + commands), `src/ui/pages/BookSeriesView.{h,cpp}` (series/detail snapshot), `src/ui/readers/BookReader.{h,cpp}` (reader state), `src/ui/readers/BookBridge.{h,cpp}` if reader JS state is exposed there, `src/core/tts/EdgeTtsClient.*` + `src/core/tts/EdgeTtsWorker.*` (TTS bridge), `tools/tankoctl.cpp` (CLI surface).
+<!-- /Codex-rewrote -->
 
 Commands (~15):
 - `books-get-state` — current book + page + progress + reader open?
@@ -399,6 +495,16 @@ Commands (~15):
 - `books-tts-set-voice <voice>` / `books-tts-set-speed <speed>`
 - `books-get-listen-state` — Listen button state, queued audio
 - `dump-ui books` — full books page UI snapshot
+
+<!-- Codex-added 2026-05-19: BooksPage and BookSeriesView have search/sort/density/series state that the baseline list missed. -->
+Additional books commands to carry into planning:
+- `books-refresh-library` — trigger `BooksPage::triggerScan()` and report scan state.
+- `books-search-library <query>` / `books-clear-search` — drive the existing BooksPage search bar behavior.
+- `books-open-series <series-path-or-title>` — open `BookSeriesView` without a UI click.
+- `books-get-series-state` — current BookSeriesView title, file rows, continue bar, sort key.
+- `books-set-sort <key>` / `books-set-density <value>` — expose existing sort combo and density slider.
+- `books-tts-stop` / `books-tts-cancel-stream <id>` — cover the TTS lifecycle path exposed by `EdgeTtsWorker::cancelStream`, not just play/pause/resume.
+<!-- /Codex-added -->
 
 ### v1.4 — Player-side deeper (Agent 3)
 
@@ -424,9 +530,25 @@ Commands (~20, on top of existing v1.0 player commands):
 - `subs-get-active-track` / `subs-get-positioning` / `subs-get-fonts-loaded`
 - `osd-get-state` — overlay state
 
+<!-- Codex-added 2026-05-19: Player lifecycle and HUD controls exist today but were missing from the deeper player catalog. -->
+Additional player commands to carry into planning:
+- `player-pause` / `player-resume` / `player-toggle-play` — direct lifecycle controls over current playback.
+- `player-seek <seconds>` / `player-frame-step <forward|back>` — use existing sidecar seek and frame-step commands.
+- `player-stop` — stop playback without closing the player window.
+- `player-set-mute <true|false>` / `player-get-volume-state` — expose mute and volume together.
+- `player-set-aspect <mode>` / `player-set-crop <mode>` — inspect and drive the current aspect/crop state already included in `VideoPlayer::devSnapshot()`.
+- `player-get-loading-overlay` / `player-get-buffering-state` — snapshot LoadingOverlay and stream-stall state for mechanical smokes.
+- `player-get-keybindings` — expose active player shortcuts and custom keybinding state.
+- `sidecar-get-ipc-latency` — expose `SidecarProcess` IPC latency counters now written to `out/ipc_latency.log`.
+<!-- /Codex-added -->
+
 ### v1.5 — Sources-side (Agent 4B)
 
-**Files:** `src/devtools/DevControlServer.h`, `src/ui/MainWindow.{h,cpp}`, `src/ui/pages/TankorentPage.{h,cpp}`, `src/ui/pages/TankoLibraryPage.{h,cpp}`, `src/core/IndexerHealth.*` (if exists, or create), `tools/tankoctl.cpp`.
+<!-- Codex-rewrote 2026-05-19: IndexerHealth is currently an enum in TorrentIndexer, not a standalone file. -->
+~~**Files:** `src/devtools/DevControlServer.h`, `src/ui/MainWindow.{h,cpp}`, `src/ui/pages/TankorentPage.{h,cpp}`, `src/ui/pages/TankoLibraryPage.{h,cpp}`, `src/core/IndexerHealth.*` (if exists, or create), `tools/tankoctl.cpp`.~~
+<!-- /Codex-rewrote-original -->
+**Files:** `src/devtools/DevControlServer.h`, `src/ui/MainWindow.{h,cpp}`, `src/ui/pages/TankorentPage.{h,cpp}`, `src/ui/pages/TankoLibraryPage.{h,cpp}`, `src/core/TorrentIndexer.{h,cpp}` for current health state, create `src/core/IndexerHealth.*` only if the plan deliberately centralizes cross-source health, `src/core/torrent/TorrentClient.{h,cpp}`, `src/core/book/BookDownloader.{h,cpp}`, `tools/tankoctl.cpp`.
+<!-- /Codex-rewrote -->
 
 Commands (~10):
 - `sources-search-tankorent <query>` — fire a Tankorent search
@@ -437,6 +559,17 @@ Commands (~10):
 - `sources-force-indexer-refresh <indexer-id>`
 - `sources-get-tankorent-state` / `sources-get-tankolibrary-state`
 - `dump-ui sources` / `dump-ui tankorent` / `dump-ui tankolibrary`
+
+<!-- Codex-added 2026-05-19: Sources has real torrent, filter, detail, and transfer lifecycle APIs that were not represented. -->
+Additional sources commands to carry into planning:
+- `sources-add-magnet <uri>` / `sources-add-url <url>` — route through the existing Tankorent add paths.
+- `sources-pause-torrent <infoHash>` / `sources-resume-torrent <infoHash>` / `sources-remove-torrent <infoHash>` — expose `TorrentClient` lifecycle controls.
+- `sources-set-speed-limits <infoHash|global> <down> <up>` / `sources-set-queue-limits <downloads> <uploads> <active>` — cover the existing speed and queue settings dialogs programmatically.
+- `sources-get-tankolibrary-results` — current TankoLibrary result rows, media tab, filters, sort, and selected detail.
+- `sources-open-tankolibrary-detail <result-id>` / `sources-download-tankolibrary-selected` — drive the existing detail/download flow without a click.
+- `sources-cancel-search` — call the existing Tankorent/TankoLibrary cancel paths.
+- `sources-set-tankolibrary-filters <json>` — expose media tab, English-only, audio format, and sort settings already persisted through QSettings.
+<!-- /Codex-added -->
 
 ### v1.6 — Library-side (Agent 5)
 
@@ -454,6 +587,15 @@ Commands (~10):
 - `library-get-active-mode-pill` — which top-bar mode is active
 - `dump-ui library`
 
+<!-- Codex-added 2026-05-19: Library smokes need scan, root-folder, and layer state, not only strip/theme state. -->
+Additional library commands to carry into planning:
+- `library-trigger-scan <mode>` / `library-get-scan-state <mode>` — expose scanning state for books, comics, videos, and stream-local files.
+- `library-get-root-folders <mode>` — inspect the root folder list through CoreBridge.
+- `library-get-active-layer <mode>` / `library-reset-mode <mode>` — verify the standing topbar-pill reset contract.
+- `library-set-sort <mode> <key>` / `library-get-sort <mode>` — expose per-mode sort keys.
+- `library-get-selected-items <mode>` — report current tile/list selection for context-menu smokes.
+<!-- /Codex-added -->
+
 ### v1.7 — Synthetic UI interaction (CROSS-CUTTING)
 
 **Files:** `src/devtools/DevControlServer.h`, `src/devtools/UiInteractionDispatcher.{h,cpp}` (NEW class — handles QObject lookup by objectName + QMetaObject::invokeMethod-based event dispatch), `src/ui/MainWindow.{h,cpp}` (registers dispatcher), `tools/tankoctl.cpp`.
@@ -467,6 +609,15 @@ Commands (~8):
 - `ui-active-layer` — returns current view stack (e.g. `comics/library → series-view`)
 - `ui-simulate-scroll <objectName> <delta>` — fires QWheelEvent
 - `ui-simulate-mouse <objectName> <event-type> [x] [y]` — fires QMouseEvent (press/release/move)
+
+<!-- Codex-added 2026-05-19: Synthetic UI needs discovery, waiting, and common widget-specific actions or agents still fall back to pixels. -->
+Additional synthetic UI commands to carry into planning:
+- `ui-list-widgets [filter]` — discover objectName, className, visibility, enabled state, and geometry before acting.
+- `ui-wait-for <objectName|condition> <timeout-ms>` — wait for async UI state without polling pywinauto.
+- `ui-set-checkbox <objectName> <true|false>` / `ui-set-combo <objectName> <value>` — drive common widgets semantically.
+- `ui-select-table-row <objectName> <row>` — cover the table/list row path that caused recent source-row click drift.
+- `ui-dry-run <command...>` — resolve target and report planned event without firing it.
+<!-- /Codex-added -->
 
 ### v1.8 — System state + introspection (CROSS-CUTTING)
 
@@ -518,6 +669,14 @@ Fault injection:
 - `dev-inject-error <code>` — inject known error conditions
 - `dev-toggle-feature <flag>` — feature flag toggle
 
+<!-- Codex-added 2026-05-19: Several v1.8 commands require instrumentation before they can be honest. -->
+Instrumentation prerequisites:
+- `network-list-requests` and `network-get-active` need a shared QNetworkAccessManager observer. They are not free reads today.
+- `perf-get-frame-times`, `perf-get-cpu-usage`, and `perf-get-gpu-usage` need explicit counters. Return `unsupported` until instrumentation lands; do not fake values from process uptime.
+- `cache-get-stats` can start with layers that expose real counts (`PosterCache`, Edge TTS LRU, VideosScanner duration cache, AniList/MangaUpdates/BookWalker disk caches). Hit-rate fields should be omitted until the layer records hits and misses.
+- `settings-set`, `jsonstore-set`, `cache-clear`, `network-throttle-set`, `network-block-host`, and fault injection commands are write-capable. They must be behind dev-control plus a second write-enable flag.
+<!-- /Codex-added -->
+
 ### Deeper v1.1 stream-side (Agent 4)
 
 Additive to existing v1.1 commands:
@@ -527,6 +686,13 @@ Additive to existing v1.1 commands:
 - `stream-get-continue-watching` — Stream CR strip state
 - `stream-clear-search` — reset search overlay
 
+<!-- Codex-added 2026-05-19: Stream download lifecycle has active pause/resume/cancel APIs beyond the first deeper list. -->
+Additional stream commands to carry into planning:
+- `stream-get-source-panel-state` — active source list, selected source, auto-launch toast, and error/empty state.
+- `stream-select-source <index|source-id>` — drive source selection without a pixel click.
+- `stream-cancel-bulk-group <groupId>` / `stream-cancel-bulk-item <groupId> <episode>` — expose current `TorrentClient` bulk cancellation paths.
+<!-- /Codex-added -->
+
 ### Deeper v1.2 comics-side (Agent 1)
 
 Additive to existing v1.2 commands:
@@ -535,6 +701,23 @@ Additive to existing v1.2 commands:
 - `comics-pause-download` / `comics-cancel-download <id>`
 - `comics-get-sources-panel-state` — expanded? selected? ranked rows?
 - `comics-get-addons` — which addons feed comics
+
+<!-- Codex-added 2026-05-19: Comics downloader already exposes pause/resume/cancel-all semantics that should be bridgeable. -->
+Additional comics commands to carry into planning:
+- `comics-resume-download <id>` / `comics-pause-all-downloads` / `comics-resume-all-downloads` / `comics-cancel-all-downloads` — expose `MangaDownloader` lifecycle controls.
+- `comics-get-bookmarks` / `comics-toggle-bookmark <seriesId>` — inspect and drive AniList bookmark state used by library strips.
+<!-- /Codex-added -->
+
+<!-- Codex-added 2026-05-19: Cross-track dependency map prevents hooks and skills from accidentally waiting on bridge layers they do not need. -->
+### Cross-track dependencies to preserve in the writing plan
+
+1. **`/rtc` and skill-provenance hooks depend on telemetry, not tankoctl.** They can ship in Phase A/B without waiting for Track B.
+2. **`/smoke-package` can ship before v1.7.** It can use filesystem log capture and pywinauto screenshots first. v1.7 later improves widget actions, not evidence directory creation.
+3. **`/mcp-lock` does not depend on the bridge.** It reads and appends chat.md lock lines.
+4. **Bridge command help depends on every layer.** Final `tankoctl help` grouping and CLAUDE.md quick-reference updates wait until the final Phase D command list is frozen.
+5. **Skill shortlist updates do not depend on every bridge layer.** Shortlists can land after the skill markdown exists, then get a second bridge-reference update in Phase E2.
+6. **Synthetic UI v1.7 should test against at least one table/list-heavy domain.** Comics sources panel or TankoLibrary results are better tests than a simple QPushButton click.
+<!-- /Codex-added -->
 
 ---
 
@@ -576,7 +759,21 @@ Per Rule 14, the following are Agent-0 technical calls — no Hemanth ratificati
 
 7. **Don't introduce Tier 1 mandatory skills in this arc.** Even if a skill seems load-bearing, it stays Tier 2 until the 30-day re-measurement gives empirical evidence of universal-adoption.
 
-8. **Don't extend the bridge with breaking changes.** Schema versioning rule: additive within v1.x = non-breaking; removals/renames bump to v2. The 95 new commands are ALL additive.
+<!-- Codex-rewrote 2026-05-19: Command count changed after gap fill; invariant is additive behavior, not the old number. -->
+~~8. **Don't extend the bridge with breaking changes.** Schema versioning rule: additive within v1.x = non-breaking; removals/renames bump to v2. The 95 new commands are ALL additive.~~
+<!-- /Codex-rewrote-original -->
+8. **Don't extend the bridge with breaking changes.** Schema versioning rule: additive within v1.x = non-breaking; removals/renames bump to v2. The new commands stay additive even if the final count changes during planning.
+<!-- /Codex-rewrote -->
+
+<!-- Codex-added 2026-05-19: Additional anti-patterns from command-surface and hook audit. -->
+9. **Don't let generic write commands bypass app invariants.** `settings-set`, `jsonstore-set`, cache clears, network blocks, and fault injection are dangerous if they skip the same validation the UI uses. Default to read-only; allowlist writes.
+
+10. **Don't use synthetic UI as visual proof.** v1.7 can prove a widget received an event. It cannot prove the screen looks right. Visual smokes still need screenshots or Hemanth's eyes.
+
+11. **Don't ship commands without CLI help and ping discovery.** Every new tankoctl command must appear in `ping.commands` and `tankoctl help` in the same commit as the server implementation.
+
+12. **Don't let provenance hooks rewrite history.** Hooks may append, scaffold, or warn. They must not edit earlier chat.md lines or mutate unrelated RTCs.
+<!-- /Codex-added -->
 
 ---
 
@@ -590,13 +787,26 @@ Per Rule 14, the following are Agent-0 technical calls — no Hemanth ratificati
 - **Tier defaults** per CLAUDE.md "Required Skills & Protocols" 2026-04-25 framing: Tier 1 mandatory ~6 skills, Tier 2 conditional, Tier 3 milestone-only
 - **30-day re-measurement** per `feedback_skill_discipline_remeasurement.md`: telemetry-driven tier promotion decisions
 
+<!-- Codex-added 2026-05-19: Contracts missing from the baseline spec but needed for execution. -->
+- **Attribution convention** for Codex Trigger D: RTC tag uses `[Agent N (Codex), <work>]`, not `[Agent 7]`, when a domain agent commissions the work.
+- **Rule 20 attribution markers** for in-place Codex spec edits: every added or rewritten block uses balanced HTML comments with date and rationale.
+- **Command discovery contract:** each bridge commission updates `DevControlServer::kSchemaVersion`, `ping.commands`, `tankoctl help`, and the dev-control memory ship history when the layer lands.
+- **Write-capable bridge command contract:** state-mutating introspection commands are dev-only, write-flag gated, logged to `out/events.jsonl` or equivalent, and return the old value plus new value where practical.
+- **Skill naming contract:** use `superpowers:<skill>` when referencing superpowers plugin skills in prompts or docs, per `feedback_always_prefix_superpowers.md`.
+- **ASCII protocol anchors:** new RTC, MCP LOCK, REQUEST, schema, and commit-sweeper trigger lines use ASCII delimiters.
+<!-- /Codex-added -->
+
 ---
 
 ## Open carry-forward notes
 
 - `/session-recap` slash command (just shipped 2026-05-18) is the END-of-wake counterpart to `/handoff-brief` (MID-wake). They share telemetry capture pattern; refactor for shared utility script can land in Phase E.
 - The `commit-sweeper.md` sub-agent at `.claude/agents/commit-sweeper.md` is in scope for the race-fix; no other behavior changes.
-- Dispatcher delegation refactor (anti-pattern #4) is itself a small sub-phase inside Phase D before v1.3 commissioning. Ratify this as part of §5 Q1.
+<!-- Codex-rewrote 2026-05-19: Dispatcher refactor is a technical decision, not Hemanth §5 Q1, which is about memory-trim behavior. -->
+~~- Dispatcher delegation refactor (anti-pattern #4) is itself a small sub-phase inside Phase D before v1.3 commissioning. Ratify this as part of §5 Q1.~~
+<!-- /Codex-rewrote-original -->
+- Dispatcher delegation refactor (anti-pattern #4) is itself a small sub-phase inside Phase D before v1.3 commissioning. It is covered by Technical decision #4; no Hemanth ratification question is needed.
+<!-- /Codex-rewrote -->
 
 ---
 
@@ -605,3 +815,5 @@ Per Rule 14, the following are Agent-0 technical calls — no Hemanth ratificati
 When Hemanth ratifies this spec, the next step is `/superpowers:writing-plans` → produces `docs/superpowers/plans/<DATE>-brotherhood-skill-augmentation.md` with task-level breakdown (numbered tasks across the 5 phases, dependencies between tasks, per-task acceptance criteria, smoke matrix for each phase exit).
 
 The plan-writing happens on a future wake. This wake closes after Hemanth approves the spec.
+
+<!-- Codex audit pass complete 2026-05-19 — 19 additions, 9 rewrites, 3 findings-only -->
