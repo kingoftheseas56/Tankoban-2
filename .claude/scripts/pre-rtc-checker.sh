@@ -169,7 +169,49 @@ while IFS= read -r LINE; do
     # Skill-provenance scaffold for non-trivial + missing field.
     SKILLS_PRESENT=0
     echo "$LINE" | grep -qE '\| Skills invoked:\s*\[/' && SKILLS_PRESENT=1
-    if [ "$SKILLS_PRESENT" -eq 0 ]; then
+
+    # Non-trivial classification (mirrors first loop logic exactly).
+    SRC_TOUCHED2=0
+    LOC_CHANGED2=0
+    OLD_IFS2="$IFS"
+    IFS=','
+    for F in $FILES_RAW; do
+        F_TRIMMED="$(echo "$F" | xargs)"
+        F_PATH="$(echo "$F_TRIMMED" | sed -E 's/\s*\([A-Z]+\)\s*$//')"
+        [ -z "$F_PATH" ] && continue
+        case "$F_PATH" in
+            src/*|native_sidecar/src/*)
+                SRC_TOUCHED2=1
+                ;;
+        esac
+    done
+    IFS="$OLD_IFS2"
+    if [ "$SRC_TOUCHED2" -eq 0 ]; then
+        OLD_IFS2="$IFS"
+        IFS=','
+        FILE_ARGS2=""
+        for F in $FILES_RAW; do
+            F_TRIMMED="$(echo "$F" | xargs)"
+            F_PATH="$(echo "$F_TRIMMED" | sed -E 's/\s*\([A-Z]+\)\s*$//')"
+            [ -z "$F_PATH" ] && continue
+            [ -f "$F_PATH" ] && FILE_ARGS2="$FILE_ARGS2 $F_PATH"
+        done
+        IFS="$OLD_IFS2"
+        if [ -n "$FILE_ARGS2" ]; then
+            STATS2="$(git diff --shortstat HEAD -- $FILE_ARGS2 2>/dev/null || echo "")"
+            INS2="$(echo "$STATS2" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' | head -1)"
+            DEL2="$(echo "$STATS2" | grep -oE '[0-9]+ deletion'  | grep -oE '[0-9]+' | head -1)"
+            INS2="${INS2:-0}"
+            DEL2="${DEL2:-0}"
+            LOC_CHANGED2=$((INS2 + DEL2))
+        fi
+    fi
+    NON_TRIVIAL2=0
+    if [ "$SRC_TOUCHED2" -eq 1 ] || [ "$LOC_CHANGED2" -ge 30 ]; then
+        NON_TRIVIAL2=1
+    fi
+
+    if [ "$SKILLS_PRESENT" -eq 0 ] && [ "$NON_TRIVIAL2" -eq 1 ]; then
         # Detect candidate skills from this session's tool log (best-effort).
         DETECTED="$(bash "$REPO_ROOT/.claude/scripts/skill-provenance-detect.sh" --candidates-only 2>/dev/null || echo "")"
         [ -z "$DETECTED" ] && DETECTED="/build-verify, /superpowers:verification-before-completion"
@@ -181,7 +223,7 @@ while IFS= read -r LINE; do
 done <<< "$ADDED_RTCS"
 
 # -------- Step 3: emit nag warning + scaffold + stale-file info if any --------
-if [ "$NAG_COUNT" -gt 0 ] || [ -n "$STALE_LINES" ]; then
+if [ "$NAG_COUNT" -gt 0 ] || [ -n "$SCAFFOLD_LINES" ] || [ -n "$STALE_LINES" ]; then
     cat <<EOF
 <system-reminder>
 [pre-rtc-checker, contracts-v3 nag-only mode] Working-tree chat.md needs attention.
@@ -212,7 +254,7 @@ EOF
     fi
 
     cat <<EOF
-See agents/CONTRACTS.md § Skill Provenance in RTCs for the format. Nag-only first 30 days.
+Required for non-trivial RTCs (≥1 file under src/ or native_sidecar/src/, OR ≥30 LOC). See agents/CONTRACTS.md § Skill Provenance in RTCs for the format. Trivial RTCs (doc-only, governance-only, single-line) may omit. Nag-only first 30 days; promote-to-block deferred per SKILL_DISCIPLINE_FIX_TODO §5 question 3.
 </system-reminder>
 EOF
 fi
