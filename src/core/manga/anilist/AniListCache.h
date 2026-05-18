@@ -49,6 +49,15 @@ public:
     // fire a background refetch.
     bool isFresh(int anilistId, qint64 maxAgeMs) const;
 
+    // Returns the Japanese (native) title for anilistId from the cached
+    // MediaPreview.alternateTitles list, or empty if uncached or not found.
+    // Scans alternateTitles for the first string that contains CJK Unified
+    // Ideographs, Hiragana, or Katakana -- the ordering in alternateTitles
+    // is english/romaji/native/userPreferred (see AniListClient.cpp
+    // collectAlternateTitles), so this reliably isolates the native JP title.
+    // Used by VolumeCoverResolver before hitting BookWalker JP search.
+    QString japaneseTitleFor(int anilistId) const;
+
 signals:
     void cacheChanged(int anilistId);
     void bookmarksChanged();

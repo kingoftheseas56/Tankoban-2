@@ -344,4 +344,28 @@ void AniListCache::putMangaUpdatesSidecar(
     emit cacheChanged(anilistId);
 }
 
+QString AniListCache::japaneseTitleFor(int anilistId) const
+{
+    // Scan alternateTitles for the first entry containing CJK Unified
+    // Ideographs (U+4E00..U+9FFF), Hiragana (U+3040..U+309F), or
+    // Katakana (U+30A0..U+30FF). The native (Japanese) title is stored
+    // in alternateTitles by AniListClient::collectAlternateTitles and is
+    // typically the third entry (after english and romaji), but we detect
+    // by script rather than by position to be robust.
+    QMutexLocker lk(&m_mutex);
+    const auto it = m_byId.constFind(anilistId);
+    if (it == m_byId.constEnd()) return QString();
+    for (const QString& alt : it->preview.alternateTitles) {
+        for (const QChar& ch : alt) {
+            const ushort u = ch.unicode();
+            if ((u >= 0x4E00 && u <= 0x9FFF) ||  // CJK Unified Ideographs
+                (u >= 0x3040 && u <= 0x309F) ||  // Hiragana
+                (u >= 0x30A0 && u <= 0x30FF)) {  // Katakana
+                return alt;
+            }
+        }
+    }
+    return QString();
+}
+
 } // namespace tankoban::manga::anilist
