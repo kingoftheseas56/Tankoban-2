@@ -53,19 +53,47 @@ if echo "$CORPUS_RAW" | grep -qE '^\[\]$|"text":"\[\]"'; then
     CORPUS_EMPTY=1
 fi
 
-# Decision: degraded if observations=0 OR corpora empty.
+# -------- Decision logic (claude-mem health + MEMORY.md size) --------
+
+CLAUDE_MEM_DEGRADED=0
+CLAUDE_MEM_REASON=""
 if [ "$OBS_COUNT" -eq 0 ] || [ "$CORPUS_EMPTY" -eq 1 ]; then
-    REASON=""
+    CLAUDE_MEM_DEGRADED=1
     if [ "$OBS_COUNT" -eq 0 ]; then
-        REASON="${REASON}observations:0 "
+        CLAUDE_MEM_REASON="${CLAUDE_MEM_REASON}observations:0 "
     fi
     if [ "$CORPUS_EMPTY" -eq 1 ]; then
-        REASON="${REASON}corpora:empty "
+        CLAUDE_MEM_REASON="${CLAUDE_MEM_REASON}corpora:empty "
     fi
-    echo "DEGRADED: ${REASON}(sessions:${SESS_COUNT} — pipeline stores prompts but not memory)"
+fi
+
+# MEMORY.md size check (Phase A.3 extension).
+MEM_FILE="$HOME/.claude/projects/c--Users-Suprabha-Desktop-Tankoban-2/memory/MEMORY.md"
+MEM_BYTES=0
+if [ -f "$MEM_FILE" ]; then
+    MEM_BYTES="$(stat -c%s "$MEM_FILE" 2>/dev/null || stat -f%z "$MEM_FILE" 2>/dev/null || echo 0)"
+fi
+MEM_DEGRADED=0
+MEM_REASON=""
+if [ "$MEM_BYTES" -gt 32768 ] 2>/dev/null; then
+    MEM_DEGRADED=1
+    MEM_REASON="MEMORY.md=${MEM_BYTES}b (>32KB RED — run /memory-trim NOW)"
+elif [ "$MEM_BYTES" -gt 24986 ] 2>/dev/null; then
+    MEM_DEGRADED=1
+    MEM_REASON="MEMORY.md=${MEM_BYTES}b (>24.4KB cap — run /memory-trim)"
+fi
+
+# Emit single status line covering both axes.
+if [ "$CLAUDE_MEM_DEGRADED" -eq 1 ] && [ "$MEM_DEGRADED" -eq 1 ]; then
+    echo "DEGRADED: ${CLAUDE_MEM_REASON}+ ${MEM_REASON} (sessions:${SESS_COUNT})"
+    exit 1
+elif [ "$CLAUDE_MEM_DEGRADED" -eq 1 ]; then
+    echo "DEGRADED: ${CLAUDE_MEM_REASON}(sessions:${SESS_COUNT} — pipeline stores prompts but not memory)"
+    exit 1
+elif [ "$MEM_DEGRADED" -eq 1 ]; then
+    echo "DEGRADED: ${MEM_REASON} (claude-mem:healthy observations:${OBS_COUNT})"
     exit 1
 fi
 
-# Healthy: observations > 0 AND corpora present.
-echo "HEALTHY: observations:${OBS_COUNT} sessions:${SESS_COUNT} (corpora present)"
+echo "HEALTHY: observations:${OBS_COUNT} sessions:${SESS_COUNT} MEMORY.md:${MEM_BYTES}b (corpora present)"
 exit 0
