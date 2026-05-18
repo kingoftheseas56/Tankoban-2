@@ -6,6 +6,8 @@
 #include "core/manga/PremiumCatalogSchema.h"
 
 #include <QFrame>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -27,6 +29,30 @@ QString wcSubtitle(const QStringList& chapterIds)
     return QStringLiteral("%1 chapters - vol pack on demand").arg(chapterIds.size());
 }
 
+QString sourceKindString(UnifiedSourceRow::Kind kind)
+{
+    switch (kind) {
+    case UnifiedSourceRow::Kind::Catalog: return QStringLiteral("catalog");
+    case UnifiedSourceRow::Kind::NyaaRuntime: return QStringLiteral("nyaa");
+    case UnifiedSourceRow::Kind::WeebCentralPacker: return QStringLiteral("weebcentral");
+    }
+    return QStringLiteral("unknown");
+}
+
+QJsonObject sourceRowJson(const UnifiedSourceRow& row)
+{
+    QJsonObject obj;
+    obj[QStringLiteral("kind")] = sourceKindString(row.kind);
+    obj[QStringLiteral("tier")] = row.tier;
+    obj[QStringLiteral("title")] = row.title;
+    obj[QStringLiteral("uploaderHint")] = row.uploaderHint;
+    obj[QStringLiteral("seeders")] = row.seeders;
+    obj[QStringLiteral("sizeBytes")] = static_cast<double>(row.sizeBytes);
+    obj[QStringLiteral("magnetUri")] = row.magnetUri;
+    obj[QStringLiteral("infoHash")] = row.infoHash;
+    return obj;
+}
+
 } // namespace
 
 ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
@@ -46,9 +72,16 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
         " font-size: 12px; font-weight: 600; background: transparent; }"
         "#ComicsSourcesPanelScroll { background: transparent; border: none; }"
         "#ComicsSourcesPanelScroll > QWidget > QWidget { background: transparent; }"
-        "#ComicsSourcesStatus { color: rgba(255,255,255,0.68);"
-        " font-size: 12px; font-weight: 600; background: transparent; }"
-        "#ComicsSourcesStatusSub { color: rgba(255,255,255,0.48);"
+        // STREAM_PORT Bug-2 fix 2026-05-18: drop font-weight 600 + soften
+        // colour to match StreamSourceList::m_statusLabel inline style at
+        // src/ui/pages/stream/StreamSourceList.cpp:133-134 (color: #9ca3af,
+        // normal weight). Hemanth's verbatim: the prior bold + bright
+        // status text "looks incredibly ugly... very different from
+        // theatre/stream mode." Stream parity = muted gray, normal weight,
+        // 12px.
+        "#ComicsSourcesStatus { color: #9ca3af;"
+        " font-size: 12px; background: transparent; }"
+        "#ComicsSourcesStatusSub { color: rgba(255,255,255,0.40);"
         " font-size: 11px; background: transparent; }"
         "QScrollBar:vertical { background: transparent; width: 8px; margin: 4px 0; }"
         "QScrollBar::handle:vertical { background: rgba(255,255,255,0.15);"
@@ -80,17 +113,32 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
 
     root->addWidget(m_scroll, 1);
 
+    // STREAM_PORT Bug-2 fix 2026-05-18: port StreamSourceList's status-label
+    // pattern exactly (StreamSourceList.cpp:96-101). Three precise changes:
+    //   1) Add `setContentsMargins(8, 16, 8, 16)` (was none) -- the 16px top
+    //      margin gives breathing room below the (now-hidden) scroll area
+    //      so the status text doesn't collide with the header.
+    //   2) Drop the `Qt::AlignCenter` flag from `addWidget(...)` -- Stream
+    //      lets the layout position the label naturally. The label's own
+    //      `setAlignment(Qt::AlignCenter)` centers the text inside the
+    //      label's allocated cell, but the layout-cell flag was forcing an
+    //      additional vertical-center treatment that fought the panel's
+    //      Expanding size policy and created the "text floating mid-panel"
+    //      ugliness Hemanth flagged.
+    //   3) Same treatment for m_statusSubLabel.
     m_statusLabel = new QLabel(this);
     m_statusLabel->setObjectName(QStringLiteral("ComicsSourcesStatus"));
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setWordWrap(true);
-    root->addWidget(m_statusLabel, 0, Qt::AlignCenter);
+    m_statusLabel->setContentsMargins(8, 16, 8, 16);
+    root->addWidget(m_statusLabel);
 
     m_statusSubLabel = new QLabel(this);
     m_statusSubLabel->setObjectName(QStringLiteral("ComicsSourcesStatusSub"));
     m_statusSubLabel->setAlignment(Qt::AlignCenter);
     m_statusSubLabel->setWordWrap(true);
-    root->addWidget(m_statusSubLabel, 0, Qt::AlignCenter);
+    m_statusSubLabel->setContentsMargins(8, 0, 8, 8);
+    root->addWidget(m_statusSubLabel);
 
     m_autoPickTimer = new QTimer(this);
     m_autoPickTimer->setSingleShot(true);
@@ -205,6 +253,69 @@ void ComicsSourcesPanel::populate(const QString& seriesTitle,
     } else {
         setSources(m_rows, nyaaInFlight);
     }
+}
+
+QJsonObject ComicsSourcesPanel::devSnapshot() const
+{
+    QJsonObject snap;
+    snap[QStringLiteral("visible")] = isVisible();
+    snap[QStringLiteral("seriesTitle")] = m_currentSeriesTitle;
+    snap[QStringLiteral("anilistId")] = m_currentAnilistId;
+    snap[QStringLiteral("volume")] = m_currentVolNumber;
+    snap[QStringLiteral("sourceCount")] = m_rows.size();
+    snap[QStringLiteral("nyaaInFlight")] = m_pendingNyaaReqId >= 0;
+    snap[QStringLiteral("autoPickArmed")] = m_autoPickArmed;
+    snap[QStringLiteral("statusText")] = m_statusLabel ? m_statusLabel->text() : QString();
+    snap[QStringLiteral("statusSubText")] = m_statusSubLabel ? m_statusSubLabel->text() : QString();
+
+    QJsonArray chapters;
+    for (const QString& id : m_currentChapterIds)
+        chapters.append(id);
+    snap[QStringLiteral("chapterIds")] = chapters;
+
+    QJsonArray rows;
+    for (const UnifiedSourceRow& row : m_rows)
+        rows.append(sourceRowJson(row));
+    snap[QStringLiteral("sources")] = rows;
+    return snap;
+}
+
+bool ComicsSourcesPanel::devDispatchSource(const QString& source, QString* errorMessage)
+{
+    if (m_rows.isEmpty()) {
+        if (errorMessage) *errorMessage = QStringLiteral("no sources available");
+        return false;
+    }
+
+    const QString normalized = source.trimmed().toLower();
+    int rowIndex = 0;
+    bool ok = false;
+    if (!normalized.isEmpty()) {
+        const int parsed = normalized.toInt(&ok);
+        if (ok) {
+            rowIndex = parsed;
+        } else {
+            rowIndex = -1;
+            for (int i = 0; i < m_rows.size(); ++i) {
+                const UnifiedSourceRow& row = m_rows.at(i);
+                if (sourceKindString(row.kind) == normalized ||
+                    row.title.toLower().contains(normalized)) {
+                    rowIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (rowIndex < 0 || rowIndex >= m_rows.size()) {
+        if (errorMessage) *errorMessage = QStringLiteral("source not found");
+        return false;
+    }
+
+    m_autoPickSuppressed = true;
+    cancelAutoPick();
+    emitRowDownload(m_rows.at(rowIndex));
+    return true;
 }
 
 void ComicsSourcesPanel::onNyaaResults(int reqId,
