@@ -171,6 +171,7 @@ set(SOURCES
     src/core/manga/mangaupdates/MangaUpdatesClient.cpp
     src/core/manga/mangaupdates/VolumeMetadataResolver.cpp
     src/core/manga/bookwalker/BookWalkerClient.cpp
+    src/core/manga/bookwalker/BookWalkerCache.cpp
     src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
     src/core/manga/bookwalker/VolumeCoverAlignment.cpp
     src/core/book/AnnaArchiveScraper.cpp
