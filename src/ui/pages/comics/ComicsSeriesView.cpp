@@ -1207,17 +1207,29 @@ void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumbe
 
     QPointer<ComicsSeriesView> self(this);
     const int snapshotAnilistId = m_currentAnilistId;
-    QNetworkReply* reply = nam->get(QNetworkRequest(QUrl(url)));
+    const QUrl coverUrl(url);
+    QNetworkRequest req(coverUrl);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+    QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
             [self, reply, url, volumeNumber, snapshotAnilistId]() {
         reply->deleteLater();
         if (!self) return;
         // Stale-series guard: discard if user navigated away during the fetch.
         if (self->m_currentAnilistId != snapshotAnilistId) return;
-        if (reply->error() != QNetworkReply::NoError) return;
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("loadCoverUrlForVolume: fetch failed url=%s vol=%d error=%s",
+                     qUtf8Printable(url), volumeNumber, qUtf8Printable(reply->errorString()));
+            return;
+        }
         const QByteArray data = reply->readAll();
         QPixmap pm;
-        if (!pm.loadFromData(data)) return;
+        if (!pm.loadFromData(data)) {
+            qWarning("loadCoverUrlForVolume: pixmap decode failed url=%s vol=%d bytes=%lld",
+                     qUtf8Printable(url), volumeNumber, static_cast<long long>(data.size()));
+            return;
+        }
         QPixmapCache::insert(url, pm);
         self->applyPixmapToVolumeRow(volumeNumber, pm);
     });
@@ -1243,16 +1255,28 @@ void ComicsSeriesView::loadBannerUrl(const QString& url)
 
     QPointer<ComicsSeriesView> self(this);
     const int snapshotAnilistId = m_currentAnilistId;
-    QNetworkReply* reply = nam->get(QNetworkRequest(QUrl(url)));
+    const QUrl bannerUrl(url);
+    QNetworkRequest req(bannerUrl);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+    QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
             [self, reply, url, snapshotAnilistId]() {
         reply->deleteLater();
         if (!self) return;
         if (self->m_currentAnilistId != snapshotAnilistId) return;
-        if (reply->error() != QNetworkReply::NoError) return;
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("loadBannerUrl: fetch failed url=%s error=%s",
+                     qUtf8Printable(url), qUtf8Printable(reply->errorString()));
+            return;
+        }
         const QByteArray data = reply->readAll();
         QPixmap pm;
-        if (!pm.loadFromData(data)) return;
+        if (!pm.loadFromData(data)) {
+            qWarning("loadBannerUrl: pixmap decode failed url=%s bytes=%lld",
+                     qUtf8Printable(url), static_cast<long long>(data.size()));
+            return;
+        }
         QPixmapCache::insert(url, pm);
         self->applyBannerPixmap(pm);
     });
@@ -1277,7 +1301,11 @@ void ComicsSeriesView::applyBannerPixmap(const QPixmap& pm)
 
 void ComicsSeriesView::applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm)
 {
-    if (!m_volumesTable || pm.isNull()) return;
+    if (!m_volumesTable || pm.isNull()) {
+        qWarning("applyPixmapToVolumeRow: precondition fail vol=%d table=%p null=%d",
+                 volumeNumber, static_cast<void*>(m_volumesTable), pm.isNull());
+        return;
+    }
     // STREAM_PORT Bug-4 round-3 fix 2026-05-18: writes to the cellWidget
     // QLabel#ComicsSeriesVolumeRowThumb (was QTableWidgetItem.setIcon via
     // DecorationRole). Same 48x64 KeepAspectRatio scale; same per-row
@@ -1285,16 +1313,24 @@ void ComicsSeriesView::applyPixmapToVolumeRow(int volumeNumber, const QPixmap& p
     // table-wide setIconSize that was clipping the col-0 QToolButton icon.
     for (int i = 0; i < m_currentVolumeRows.size() && i < m_volumesTable->rowCount(); ++i) {
         if (m_currentVolumeRows.at(i).volumeNumber == volumeNumber) {
-            if (auto* coverLabel = qobject_cast<QLabel*>(m_volumesTable->cellWidget(i, kColThumb))) {
-                const QSize thumb(48, 64);
-                const QPixmap scaled = pm.scaled(thumb, Qt::KeepAspectRatio,
-                                                 Qt::SmoothTransformation);
-                coverLabel->setPixmap(scaled);
+            auto* coverLabel = qobject_cast<QLabel*>(m_volumesTable->cellWidget(i, kColThumb));
+            if (!coverLabel) {
+                qWarning("applyPixmapToVolumeRow: cellWidget for vol=%d row=%d col=%d is not QLabel (got %p)",
+                         volumeNumber, i, kColThumb,
+                         static_cast<void*>(m_volumesTable->cellWidget(i, kColThumb)));
+                return;
             }
-            // First match wins (volumeNumber is unique within m_currentVolumeRows).
-            break;
+            const QSize thumb(48, 64);
+            const QPixmap scaled = pm.scaled(thumb, Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation);
+            coverLabel->setPixmap(scaled);
+            return;
         }
     }
+    qWarning("applyPixmapToVolumeRow: no row matched volumeNumber=%d (m_currentVolumeRows.size=%lld rowCount=%d)",
+             volumeNumber,
+             static_cast<long long>(m_currentVolumeRows.size()),
+             m_volumesTable->rowCount());
 }
 
 void ComicsSeriesView::setVolumeCoverFromDisk(const QString& seriesId, int volumeNumber,
