@@ -6,6 +6,8 @@
 #include "core/manga/anilist/AniListVolumeMapper.h"
 #include "core/manga/MangaDownloadIndex.h"
 #include "core/manga/PremiumCatalog.h"
+#include "core/manga/bookwalker/VolumeCoverResolver.h"
+#include "ui/widgets/ComicsSeriesViewLoadingOverlay.h"
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -34,6 +36,7 @@
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -537,6 +540,18 @@ void ComicsSeriesView::buildUi()
     contentRow->addWidget(m_sourcesPanel, /*stretch*/ 1);
 
     outer->addLayout(contentRow, /*stretch*/ 1);
+
+    // Task 14: loading overlay covers the entire widget during BookWalker
+    // resolution; starts hidden. Safety timer forces fallback after 10s.
+    m_loadingOverlay = new tankoban::ui::widgets::ComicsSeriesViewLoadingOverlay(this);
+    m_loadingOverlay->setMessage(tr("Loading covers..."));
+    m_loadingOverlay->hide();
+
+    m_loadingSafetyTimer = new QTimer(this);
+    m_loadingSafetyTimer->setSingleShot(true);
+    m_loadingSafetyTimer->setInterval(10000);
+    connect(m_loadingSafetyTimer, &QTimer::timeout,
+            this, &ComicsSeriesView::onCoverResolverSafetyTimeout);
 }
 
 void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
@@ -585,6 +600,20 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     // visible if the new URL is not yet cached).
     m_volumesTable->setRowCount(0);
     refreshLibraryButton();
+
+    // Task 14: kick off BookWalker per-volume cover resolution. Overlay shown
+    // here; hidden on resolver signal or safety timeout. populateVolumeRows
+    // (called after cache/detail fetch) builds the rows first; resolver
+    // callbacks then paint per-volume covers over the AniList thumbs.
+    m_currentResolvingAnilistId = preview.anilistId;
+    showLoadingOverlay();
+    if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
+    if (m_coverResolver) {
+        m_coverResolver->resolveForAnilist(preview.anilistId);
+    } else {
+        paintVolumeCoversAsFallback();
+        hideLoadingOverlay();
+    }
 
     // PHASE 12: kick off banner async-load from preview (renderDetail will
     // re-fire with detail.preview.bannerUrl after the cache hit / refetch
@@ -1059,6 +1088,98 @@ bool ComicsSeriesView::eventFilter(QObject* watched, QEvent* event)
 // loadCoverUrlForVolume; cache misses fire a GET and paint in the
 // finished-lambda when the reply lands.
 // -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// Task 14: BookWalker per-volume cover resolver integration
+// -----------------------------------------------------------------------
+
+void ComicsSeriesView::setVolumeCoverResolver(
+        tankoban::manga::bookwalker::VolumeCoverResolver* resolver)
+{
+    if (m_coverResolver)
+        disconnect(m_coverResolver.data(), nullptr, this, nullptr);
+    m_coverResolver = resolver;
+    if (m_coverResolver) {
+        connect(m_coverResolver.data(),
+                &tankoban::manga::bookwalker::VolumeCoverResolver::resolved,
+                this, &ComicsSeriesView::onCoverResolverResolved);
+        connect(m_coverResolver.data(),
+                &tankoban::manga::bookwalker::VolumeCoverResolver::unresolved,
+                this, &ComicsSeriesView::onCoverResolverUnresolved);
+        connect(m_coverResolver.data(),
+                &tankoban::manga::bookwalker::VolumeCoverResolver::skipped,
+                this, &ComicsSeriesView::onCoverResolverSkipped);
+    }
+}
+
+void ComicsSeriesView::showLoadingOverlay()
+{
+    if (!m_loadingOverlay) return;
+    m_loadingOverlay->setGeometry(rect());
+    m_loadingOverlay->raise();
+    m_loadingOverlay->show();
+}
+
+void ComicsSeriesView::hideLoadingOverlay()
+{
+    if (m_loadingOverlay) m_loadingOverlay->hide();
+    if (m_loadingSafetyTimer) m_loadingSafetyTimer->stop();
+}
+
+void ComicsSeriesView::onCoverResolverResolved(int anilistId,
+                                               const QMap<int, QString>& volumeToCoverUrl)
+{
+    if (anilistId != m_currentResolvingAnilistId) return;
+    paintVolumeCovers(volumeToCoverUrl);
+    hideLoadingOverlay();
+}
+
+void ComicsSeriesView::onCoverResolverUnresolved(int anilistId, const QString& /*reason*/)
+{
+    if (anilistId != m_currentResolvingAnilistId) return;
+    paintVolumeCoversAsFallback();
+    hideLoadingOverlay();
+}
+
+void ComicsSeriesView::onCoverResolverSkipped(int anilistId, const QString& /*reason*/)
+{
+    if (anilistId != m_currentResolvingAnilistId) return;
+    // Premium short-circuit: PremiumCoverExtractor handles cover paint via the
+    // existing pipeline. Just hide the overlay; do not call the paint helpers.
+    hideLoadingOverlay();
+}
+
+void ComicsSeriesView::onCoverResolverSafetyTimeout()
+{
+    // Resolver took > 10s -- paint fallback and clear the overlay so the
+    // user isn't left staring at a spinner indefinitely.
+    paintVolumeCoversAsFallback();
+    hideLoadingOverlay();
+}
+
+void ComicsSeriesView::paintVolumeCovers(const QMap<int, QString>& volumeToCoverUrl)
+{
+    // volumeToCoverUrl is keyed by 1-based volumeNumber; m_currentVolumeRows
+    // stores the actual row order. Walk via applyPixmapToVolumeRow which
+    // already handles the volumeNumber -> row lookup + QLabel painting.
+    for (auto it = volumeToCoverUrl.constBegin(); it != volumeToCoverUrl.constEnd(); ++it) {
+        if (!it.value().isEmpty())
+            loadCoverUrlForVolume(it.value(), it.key());
+    }
+}
+
+void ComicsSeriesView::paintVolumeCoversAsFallback()
+{
+    // Fall back to the per-volume AniList art (row.art.thumbnailUrl).
+    // loadCoverUrlForVolume guards against empty URLs; it also hits
+    // QPixmapCache first so repeated calls on already-loaded rows are free.
+    // This is a no-op when m_currentVolumeRows is empty (rows not yet built
+    // by populateVolumeRows) -- that path already loads AniList art itself.
+    for (const auto& row : m_currentVolumeRows) {
+        if (!row.art.thumbnailUrl.isEmpty())
+            loadCoverUrlForVolume(row.art.thumbnailUrl, row.volumeNumber);
+    }
+}
 
 void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumber)
 {

@@ -23,6 +23,8 @@
 #include "core/manga/anilist/AniListVolumeMapper.h"
 #include "core/manga/mangaupdates/MangaUpdatesClient.h"
 #include "core/manga/mangaupdates/VolumeMetadataResolver.h"
+#include "core/manga/bookwalker/BookWalkerClient.h"
+#include "core/manga/bookwalker/VolumeCoverResolver.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/torrent/TorrentEngine.h"
 #include "comics/ComicsTankoyomiSearchWidget.h"
@@ -324,6 +326,20 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::backRequested,
             this, &ComicsPage::onDetailBack);
+
+    // Task 14: BookWalker per-volume cover resolver. BookWalkerClient owns
+    // its own network work via m_nam (same NAM as the rest of ComicsPage).
+    // VolumeCoverResolver is non-owning of its dependencies; all three
+    // (bwClient, m_anilistCache, m_premiumCatalog) outlive it since they
+    // are children of ComicsPage. setVolumeCoverResolver is non-owning too.
+    {
+        auto* bwClient = new tankoban::manga::bookwalker::BookWalkerClient(
+            m_nam, this);
+        auto* coverResolver = new tankoban::manga::bookwalker::VolumeCoverResolver(
+            bwClient, m_anilistCache, m_premiumCatalog, this);
+        m_tyVolumeSeriesView->setVolumeCoverResolver(coverResolver);
+    }
+
     connect(m_anilistClient,
             &tankoban::manga::anilist::AniListClient::seriesSucceeded,
             this, [this](int, const tankoban::manga::anilist::MediaDetail& detail) {

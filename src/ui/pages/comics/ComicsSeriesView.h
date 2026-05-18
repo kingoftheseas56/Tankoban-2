@@ -25,7 +25,9 @@
 
 #include <QHash>
 #include <QJsonObject>
+#include <QMap>
 #include <QPixmap>
+#include <QPointer>
 #include <QSet>
 #include <QStringList>
 #include <QWidget>
@@ -35,8 +37,12 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QPushButton;
 class QTableWidget;
+class QTimer;
 class QVBoxLayout;
 class MangaDownloadIndex;
+
+namespace tankoban::manga::bookwalker { class VolumeCoverResolver; }
+namespace tankoban::ui::widgets { class ComicsSeriesViewLoadingOverlay; }
 
 namespace tankoban::manga {
 class NyaaRuntimeSource;
@@ -83,6 +89,10 @@ public:
     void setVolumeCoverFromDisk(const QString& seriesId, int volumeNumber,
                                 const QString& coverPath);
     void setVolumeRows(const QList<anilist::VolumeRow>& rows);
+
+    // Task 14: inject the BookWalker per-volume cover resolver. Non-owning.
+    // May be called before or after showSeries(); re-wires signals on each call.
+    void setVolumeCoverResolver(tankoban::manga::bookwalker::VolumeCoverResolver* resolver);
     int currentAnilistId() const { return m_currentAnilistId; }
 
     QJsonObject devSnapshot() const;
@@ -159,6 +169,12 @@ private slots:
     void onVolumeCheckboxToggled(int row, bool checked);
     void onDownloadSelectedClicked();
 
+    // Task 14: BookWalker cover resolver signal handlers.
+    void onCoverResolverResolved(int anilistId, const QMap<int, QString>& volumeToCoverUrl);
+    void onCoverResolverUnresolved(int anilistId, const QString& reason);
+    void onCoverResolverSkipped(int anilistId, const QString& reason);
+    void onCoverResolverSafetyTimeout();
+
 private:
     void buildUi();
     void renderDetail(const anilist::MediaDetail& detail);
@@ -182,6 +198,12 @@ private:
     // from loadBannerUrl on cache-hit OR async-fetch completion.
     void applyBannerPixmap(const QPixmap& pm);
     void applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm);
+
+    // Task 14: BookWalker cover overlay helpers.
+    void showLoadingOverlay();
+    void hideLoadingOverlay();
+    void paintVolumeCovers(const QMap<int, QString>& volumeToCoverUrl);
+    void paintVolumeCoversAsFallback();
 
     anilist::AniListClient*  m_client  = nullptr;  // non-owning
     anilist::AniListCache*   m_cache   = nullptr;  // non-owning
@@ -232,6 +254,12 @@ private:
     int m_currentAnilistId   = 0;
     int m_nextRequestId      = 1;
     bool m_libraryButtonSawPress = false;
+
+    // Task 14: BookWalker per-volume cover resolver + loading overlay.
+    QPointer<tankoban::manga::bookwalker::VolumeCoverResolver> m_coverResolver;
+    tankoban::ui::widgets::ComicsSeriesViewLoadingOverlay* m_loadingOverlay  = nullptr;
+    QTimer*                                                m_loadingSafetyTimer = nullptr;
+    int                                                    m_currentResolvingAnilistId = 0;
 };
 
 } // namespace tankoban::manga::comics
