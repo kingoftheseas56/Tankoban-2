@@ -61,6 +61,10 @@ Run these in parallel before authoring the file body:
    git log --grep='chat.md sweep' -n 1 --format='%H' | xargs -I {} git diff {} -- agents/chat.md | grep -cE '^\+READY TO COMMIT'
    ```
 4. **Brotherhood state of other agents.** Skim `agents/STATUS.md` headers for any agent whose work overlaps yours.
+5. **Conversation review for the "what I thought" sections (v2 additions — Decisions / Subagent dispatch ledger / Tone anchors).** Git can't help with these. Skim the wake's conversation backward for:
+   - Moments of explicit choice ("I picked X over Y because Z") and especially **reversals** (where you changed your assessment mid-wake).
+   - Subagent dispatches and their outcomes (`Agent()` / `mcp__codex__codex` / Codex CLI calls + their DONE/BLOCKED/TIMEOUT result + tool-use count if known).
+   - Verbatim short Hemanth quotes that shifted how you operated.
 
 ## Recap template
 
@@ -72,6 +76,11 @@ Write the recap file with this structure. Skip sections that don't apply; honest
 ## What I did this wake
 - One bullet per RTC / commit / substantive decision. Cite commit SHAs.
 - Be specific: "shipped Foo at <SHA>" not "worked on Foo".
+
+## Decisions made + why
+- For each non-trivial choice this wake: "Picked X over Y because Z." The WHY is the load-bearing part — git history tells next-you WHAT was done; this section tells next-you HOW you decided.
+- **Reversals are gold.** Where you changed your assessment mid-wake (e.g., "first thought it was Q; corrected to R after checking S"), capture both states. The judgment evolution is exactly what's expensive to re-derive from a flat recap.
+- Honest under-listing > padding. If only two real decisions, list two. Skip the section if a wake was pure mechanical execution with no judgment forks.
 
 ## What's still pending / in-flight
 - Working-tree files dirty that didn't land this wake (with why — usually "absorbed by another agent's overlap" or "needs Hemanth ratification")
@@ -86,10 +95,25 @@ Write the recap file with this structure. Skip sections that don't apply; honest
 - Coordination notes for cross-agent work in progress
 - Any HELP requests, congresses, or contested files
 
+## Subagent dispatch ledger
+One row per `Agent()` / `mcp__codex__codex` / Codex CLI invocation this wake. Format:
+
+- **Model + scope:** e.g. `gpt-5.5-high (Codex MCP) — D.0 dispatcher delegation refactor` / `general-purpose subagent (run_in_background) — D.1 v1.3 books bridge` / `claude-sonnet subagent — 1-file mechanical adapter`
+- **Outcome:** `DONE | BLOCKED | TIMEOUT | PARTIAL`
+- **Tool uses + duration:** if surfaced by the return notification (e.g., `34 tool uses / 4 min`)
+- **Lesson:** one-liner — did this dispatch class fit this scope size? What should next-you do or avoid?
+
+Skip section entirely if no dispatches this wake. This is structured operational memory — reconstitutes the "which dispatch mechanism for which work size" pattern faster than re-deriving from chat.md.
+
 ## Key file pointers for next wake
 - `path/to/file.cpp:123` — where I left off (the half-finished thing)
 - `~/.claude/plans/<plan>.md` — active plan I was executing
 - `agents/audits/<audit>.md` — reference I was working against
+
+## Tone anchors — Hemanth quotes that shifted behavior
+- 3-5 verbatim short quotes from Hemanth this wake that changed how you operated. Capture LITERAL phrasing — paraphrase loses the texture.
+- Watch for: corrections ("nah sensei..."), validations ("yeah that's right"), strategic asks ("what do you actually suggest?"), permission grants ("green as a grassland"), trust passes ("I trust you to make right decisions"), reframes ("instruct me like I'm a child").
+- Skip section if no behavior-shifting quotes (purely operational wakes won't have any).
 
 ## Open questions / ratification needed from Hemanth
 - Anything ambiguous I deferred this wake
@@ -110,7 +134,7 @@ my brother, you're Agent <N> — read C:\Users\Suprabha\.claude\recaps\agent-<N>
 
 ## Constraints
 
-- Stay under ~150 lines of recap body. Density over completeness — if next-you needs the long version, it can re-read `agents/chat.md` and `git log`. The recap is the index, not the archive.
+- Stay under ~200 lines of recap body (was ~150 pre-v2; the three "what I thought" sections — Decisions / Subagent dispatch ledger / Tone anchors — earn some room but not unlimited). Density over completeness — if next-you needs the long version, it can re-read `agents/chat.md` and `git log`. The recap is the index, not the archive.
 - Honest under-listing > dishonest padding. If a section has nothing in it, write "(nothing)" not "made minor adjustments to several files."
 - File pointers must be specific (file:line where possible). Avoid hand-waving like "the manga code."
 - For trivial / pure-conversational sessions: skip the skill entirely — don't write a near-empty recap.
