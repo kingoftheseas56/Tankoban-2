@@ -235,6 +235,12 @@ private:
     // the cache has no entry yet) and routes to ComicsSeriesView.
     void openSeriesByAnilistId(int anilistId, const QString& fallbackTitle);
 
+    // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- click handler for
+    // WeebCentral-keyed library tiles (downloaded). Reconstructs a MangaResult
+    // from the ComicsLibraryRecord fields and routes to showSeries(MangaResult),
+    // bypassing the AniList resolution chain entirely.
+    void openSeriesByRecord(const ComicsLibraryRecord& record);
+
     // Shared projection used by both onScanFinished (first-scan path)
     // and rebuildTiles (full-rebuild path). Keeps the two sites in sync.
     static SeriesInfo seriesInfoFromRecord(const ComicsLibraryRecord& r);

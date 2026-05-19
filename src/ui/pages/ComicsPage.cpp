@@ -1508,6 +1508,43 @@ void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTit
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
+void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
+{
+    // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- library-tile click
+    // for WeebCentral-keyed downloaded series. Reconstructs a MangaResult
+    // from the record (sourceId+seriesId identity, local cover) and routes
+    // into ComicsSeriesView::showSeries(MangaResult), skipping the AniList
+    // resolution chain entirely.
+    if (!m_tyVolumeSeriesView) return;
+
+    MangaResult result;
+    result.id           = record.seriesId;
+    result.url          = QString();   // not stored in library record
+    result.title        = record.title;
+    result.author       = record.detailCache.author;
+    result.thumbnailUrl = record.coverPath.isEmpty()
+                          ? QString()
+                          : QStringLiteral("file:///") + record.coverPath;
+    result.source       = record.sourceId;
+    result.status       = record.detailCache.status;
+    result.type         = QStringLiteral("manga");
+
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("sourceId")]    = record.sourceId;
+        blob[QStringLiteral("seriesId")]    = record.seriesId;
+        blob[QStringLiteral("seriesTitle")] = record.title;
+        blob[QStringLiteral("enteredFrom")] = QStringLiteral("library");
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), record.title, blob));
+    }
+    m_enteredDetailFrom        = Mode::Library;
+    m_mode                     = Mode::TankoyomiDetail;
+    m_currentDetailAnilistId   = 0;   // WeebCentral record has no AniList integer id
+    m_currentDetailSeriesTitle = record.title;
+    m_tyVolumeSeriesView->showSeries(result);
+    m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+}
+
 void ComicsPage::refreshLibraryStrips()
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- rebuild DOWNLOADED +
@@ -1568,21 +1605,17 @@ void ComicsPage::refreshLibraryStrips()
                               e.sourceId + QStringLiteral(":") + e.seriesId);
             card->setProperty("seriesName", displayTitle);
             connect(card, &TileCard::clicked, this,
-                    [this, anilistId, displayTitle, e]() {
-                if (anilistId > 0) {
-                    openSeriesByAnilistId(anilistId, displayTitle);
-                    return;
-                }
-                // No anilistId resolvable: legacy fallback -- if we have a
-                // Tankoyomi-library record, open as a folder via the
-                // SeriesView. Otherwise the tile is non-routable.
-                if (m_tyLibrary) {
-                    const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
-                    if (!rec.canonicalSeriesPath.isEmpty()) {
-                        openSeriesByPath(rec.canonicalSeriesPath, rec.title,
-                                         rec.coverPath);
-                    }
-                }
+                    [this, e]() {
+                // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- always
+                // route downloaded tiles through openSeriesByRecord so the
+                // WeebCentral (sourceId+seriesId) identity drives the series
+                // view, bypassing the AniList resolution chain. If no library
+                // record exists for this entry (defensive: index out of sync),
+                // the tile is silently non-routable.
+                if (!m_tyLibrary) return;
+                const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
+                if (rec.seriesId.isEmpty()) return;
+                openSeriesByRecord(rec);
             });
             m_tileStrip->addTile(card);
 
@@ -2478,6 +2511,36 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
             m_tyVolumeSeriesView->showSeries(preview);
             m_stack->setCurrentWidget(m_tyVolumeSeriesView);
             return;
+        }
+        // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- restore path for
+        // nav-blobs written by openSeriesByRecord (sourceId+seriesId identity,
+        // no anilistId). Reconstruct MangaResult from library record and
+        // re-open via showSeries(MangaResult).
+        const QString sourceId = blob.value(QStringLiteral("sourceId")).toString();
+        const QString seriesId = blob.value(QStringLiteral("seriesId")).toString();
+        if (!seriesId.isEmpty() && m_tyLibrary) {
+            const auto rec = m_tyLibrary->get(sourceId, seriesId);
+            if (!rec.seriesId.isEmpty()) {
+                m_enteredDetailFrom = (blob.value(QStringLiteral("enteredFrom")).toString() == QStringLiteral("search")
+                                        ? Mode::SearchResults : Mode::Library);
+                m_mode = Mode::TankoyomiDetail;
+                m_currentDetailAnilistId   = 0;
+                m_currentDetailSeriesTitle = rec.title;
+                MangaResult result;
+                result.id           = rec.seriesId;
+                result.url          = QString();
+                result.title        = rec.title;
+                result.author       = rec.detailCache.author;
+                result.thumbnailUrl = rec.coverPath.isEmpty()
+                                      ? QString()
+                                      : QStringLiteral("file:///") + rec.coverPath;
+                result.source       = rec.sourceId;
+                result.status       = rec.detailCache.status;
+                result.type         = QStringLiteral("manga");
+                m_tyVolumeSeriesView->showSeries(result);
+                m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+                return;
+            }
         }
     }
 
