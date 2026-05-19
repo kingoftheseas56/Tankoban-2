@@ -170,9 +170,12 @@ private slots:
     void onDownloadSelectedClicked();
 
     // Task 14: BookWalker cover resolver signal handlers.
-    void onCoverResolverResolved(int anilistId, const QMap<int, QString>& volumeToCoverUrl);
-    void onCoverResolverUnresolved(int anilistId, const QString& reason);
-    void onCoverResolverSkipped(int anilistId, const QString& reason);
+    // TASK_8_NOTE: signatures updated to seriesKey (QString) from anilistId (int)
+    // per WEEBCENTRAL_IDENTITY_PIVOT Tasks 6+7. Bodies are stubs pending Task 8
+    // wire-up (m_currentResolvingAnilistId guard replaced by seriesKey guard in Task 8).
+    void onCoverResolverResolved(const QString& seriesKey, const QMap<int, QString>& volumeToCoverUrl);
+    void onCoverResolverUnresolved(const QString& seriesKey, const QString& reason);
+    void onCoverResolverSkipped(const QString& seriesKey, const QString& reason);
     void onCoverResolverSafetyTimeout();
 
 private:

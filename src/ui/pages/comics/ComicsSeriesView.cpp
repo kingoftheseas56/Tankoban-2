@@ -611,7 +611,13 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     showLoadingOverlay();
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
     if (m_coverResolver) {
-        m_coverResolver->resolveForAnilist(preview.anilistId);
+        // TASK_8_PENDING: replace with resolveForSeries(seriesKey, englishTitle)
+        // once ComicsSeriesView receives the seriesKey from showSeries(). For now
+        // the resolver is not invoked; fallback paint runs immediately below.
+        // m_coverResolver->resolveForSeries(seriesKey, preview.title);
+        qWarning("ComicsSeriesView: resolveForSeries pending Task 8 wire-up; falling back to AniList art");
+        paintVolumeCoversAsFallback();
+        hideLoadingOverlay();
     } else {
         qWarning("ComicsSeriesView: no cover resolver set; falling back to AniList art");
         paintVolumeCoversAsFallback();
@@ -1141,24 +1147,32 @@ void ComicsSeriesView::hideLoadingOverlay()
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->stop();
 }
 
-void ComicsSeriesView::onCoverResolverResolved(int anilistId,
+// TASK_8_NOTE: slot signatures updated from (int anilistId, ...) to
+// (const QString& seriesKey, ...) per WEEBCENTRAL_IDENTITY_PIVOT Tasks 6+7.
+// The guard comparison (seriesKey vs m_currentResolvingAnilistId) is a stub:
+// Task 8 will add a m_currentResolvingSeriesKey member and compare against it.
+// For now the slots are no-ops since resolveForSeries is not yet invoked from
+// showSeries (see TASK_8_PENDING comment above). The bodies are safe dead code.
+void ComicsSeriesView::onCoverResolverResolved(const QString& /*seriesKey*/,
                                                const QMap<int, QString>& volumeToCoverUrl)
 {
-    if (anilistId != m_currentResolvingAnilistId) return;
+    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
     paintVolumeCovers(volumeToCoverUrl);
     hideLoadingOverlay();
 }
 
-void ComicsSeriesView::onCoverResolverUnresolved(int anilistId, const QString& /*reason*/)
+void ComicsSeriesView::onCoverResolverUnresolved(const QString& /*seriesKey*/,
+                                                 const QString& /*reason*/)
 {
-    if (anilistId != m_currentResolvingAnilistId) return;
+    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
     paintVolumeCoversAsFallback();
     hideLoadingOverlay();
 }
 
-void ComicsSeriesView::onCoverResolverSkipped(int anilistId, const QString& /*reason*/)
+void ComicsSeriesView::onCoverResolverSkipped(const QString& /*seriesKey*/,
+                                              const QString& /*reason*/)
 {
-    if (anilistId != m_currentResolvingAnilistId) return;
+    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
     // Premium short-circuit: PremiumCoverExtractor handles cover paint via the
     // existing pipeline. Just hide the overlay; do not call the paint helpers.
     hideLoadingOverlay();

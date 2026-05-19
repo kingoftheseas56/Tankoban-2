@@ -7,7 +7,8 @@
 #include "VolumeCoverAlignment.h"
 
 #include "core/manga/PremiumCatalog.h"
-#include "core/manga/anilist/AniListCache.h"
+#include "core/manga/mangaupdates/JapaneseTitlePicker.h"
+#include "core/manga/mangaupdates/VolumeMetadataResolver.h"
 
 #include <QDateTime>
 #include <QtGlobal>
@@ -16,168 +17,174 @@ namespace tankoban::manga::bookwalker {
 
 VolumeCoverResolver::VolumeCoverResolver(
         BookWalkerClient* bwClient,
-        tankoban::manga::anilist::AniListCache* anilistCache,
+        tankoban::manga::mangaupdates::VolumeMetadataResolver* muResolver,
         tankoban::manga::premium::PremiumCatalog* premium,
         QObject* parent)
-    : QObject(parent)
-    , m_bwClient(bwClient)
-    , m_anilistCache(anilistCache)
-    , m_premium(premium)
+    : QObject(parent), m_bwClient(bwClient), m_muResolver(muResolver), m_premium(premium)
 {
+    if (m_muResolver) {
+        connect(m_muResolver.data(),
+                &tankoban::manga::mangaupdates::VolumeMetadataResolver::resolvedBySeriesKey,
+                this, &VolumeCoverResolver::onMuResolvedBySeriesKey);
+        connect(m_muResolver.data(),
+                &tankoban::manga::mangaupdates::VolumeMetadataResolver::unresolvedBySeriesKey,
+                this, &VolumeCoverResolver::onMuUnresolvedBySeriesKey);
+    }
     if (m_bwClient) {
         connect(m_bwClient.data(), &BookWalkerClient::searchSucceeded,
-                this, &VolumeCoverResolver::onSearchSucceeded);
+                this, &VolumeCoverResolver::onBwSearchSucceeded);
         connect(m_bwClient.data(), &BookWalkerClient::searchFailed,
-                this, &VolumeCoverResolver::onSearchFailed);
+                this, &VolumeCoverResolver::onBwSearchFailed);
         connect(m_bwClient.data(), &BookWalkerClient::coversSucceeded,
-                this, &VolumeCoverResolver::onCoversSucceeded);
+                this, &VolumeCoverResolver::onBwCoversSucceeded);
         connect(m_bwClient.data(), &BookWalkerClient::coversFailed,
-                this, &VolumeCoverResolver::onCoversFailed);
+                this, &VolumeCoverResolver::onBwCoversFailed);
     }
 }
 
 VolumeCoverResolver::~VolumeCoverResolver()
 {
-    if (m_bwClient) {
-        disconnect(m_bwClient.data(), nullptr, this, nullptr);
+    if (m_muResolver) disconnect(m_muResolver.data(), nullptr, this, nullptr);
+    if (m_bwClient) disconnect(m_bwClient.data(), nullptr, this, nullptr);
+}
+
+void VolumeCoverResolver::resolveForSeries(const QString& seriesKey,
+                                           const QString& englishTitle,
+                                           int anilistIdOptional)
+{
+    if (seriesKey.isEmpty()) {
+        emit unresolved(QString(), QStringLiteral("empty-series-key"));
+        return;
     }
-}
 
-int VolumeCoverResolver::nextRequestId() { return m_nextRequestId++; }
+    // Premium short-circuit
+    if (m_premium && anilistIdOptional > 0 && m_premium->hasPremiumEntry(anilistIdOptional)) {
+        emit skipped(seriesKey, QStringLiteral("premium-short-circuit"));
+        return;
+    }
 
-void VolumeCoverResolver::emitFromCache(int anilistId, const BookWalkerCacheRecord& rec)
-{
-    QMap<int, QString> m;
-    for (const auto& e : rec.volumes) m.insert(e.volume, e.url);
-    emit resolved(anilistId, m);
-}
-
-void VolumeCoverResolver::serveCachedOrFallback(int anilistId,
-                                                int /*canonicalCount*/,
-                                                const QString& failureReason)
-{
-    // Degradation per spec section 6: AniList/MangaUpdates unreachable BUT a
-    // fresh cache exists -> serve cached covers, skip drift check (pass 0 so
-    // BookWalkerCache::load skips the count-drift guard).
-    auto cached = BookWalkerCache::load(anilistId, 0);
+    // Cache check
+    auto cached = BookWalkerCache::loadByKey(seriesKey, /*currentCanonicalCount=*/0);
     if (cached) {
-        emitFromCache(anilistId, *cached);
-        return;
-    }
-    emit unresolved(anilistId, failureReason);
-}
-
-void VolumeCoverResolver::resolveForAnilist(int anilistId)
-{
-    // Step 1: Premium short-circuit.
-    // Spec Decision #5: BookWalker is never consulted for Premium series;
-    // curated Premium covers are handled by PremiumCoverExtractor upstream.
-    if (m_premium && m_premium->hasPremiumEntry(anilistId)) {
-        // Premium-curated covers come via PremiumCoverExtractor in the existing pipeline.
-        // BookWalker explicitly does not run for Premium series (spec Decision #5).
-        // Emit `skipped` (not `unresolved`) so the caller can route to its Premium path
-        // without conflating with BookWalker-failure fallback.
-        emit skipped(anilistId, QStringLiteral("premium-short-circuit"));
+        QMap<int, QString> m;
+        for (const auto& e : cached->volumes) m.insert(e.volume, e.url);
+        emit resolved(seriesKey, m);
         return;
     }
 
-    // Step 2: AniList alt-title (Japanese).
-    // japaneseTitleFor scans alternateTitles for a CJK-script entry; returns
-    // empty if the series is not cached in AniListCache yet.
-    QString japaneseTitle;
-    if (m_anilistCache) japaneseTitle = m_anilistCache->japaneseTitleFor(anilistId);
-    if (japaneseTitle.isEmpty()) {
-        serveCachedOrFallback(anilistId, 0,
-                              QStringLiteral("no-japanese-title"));
+    if (!m_muResolver) {
+        emit unresolved(seriesKey, QStringLiteral("mu-resolver-null"));
         return;
     }
 
-    // Step 3: MangaUpdates volume count via AniListCache sidecar.
-    // The sidecar is warmed by VolumeMetadataResolver; we read it here so
-    // VolumeCoverResolver has no live network dependency on MangaUpdatesClient.
-    // canonicalCount = 0 is the degraded path; VolumeCoverAlignment handles it
-    // by mapping all raw URLs sequentially starting at volume 1.
-    int canonicalCount = 0;
-    if (m_anilistCache) {
-        auto sidecar = m_anilistCache->getMangaUpdatesSidecar(anilistId);
-        if (sidecar.has_value()) canonicalCount = sidecar->volumeCount;
-    }
-
-    // Step 4: Cache check (TTL + drift guard in BookWalkerCache::load).
-    auto cached = BookWalkerCache::load(anilistId, canonicalCount);
-    if (cached) {
-        emitFromCache(anilistId, *cached);
-        return;
-    }
-
-    // Step 5: BookWalker search.
-    if (!m_bwClient) {
-        emit unresolved(anilistId, QStringLiteral("bookwalker-client-null"));
-        return;
-    }
     PendingResolve p;
-    p.anilistId      = anilistId;
-    p.japaneseTitle  = japaneseTitle;
-    p.canonicalCount = canonicalCount;
-    const int reqId = nextRequestId();
-    m_pending.insert(reqId, p);
-    m_bwClient->searchSeries(japaneseTitle, reqId);
+    p.seriesKey          = seriesKey;
+    p.englishTitle       = englishTitle;
+    p.anilistIdOptional  = anilistIdOptional;
+    m_pendingBySeriesKey.insert(seriesKey, p);
+
+    m_muResolver->resolveBySeriesKey(seriesKey, englishTitle);
 }
 
-void VolumeCoverResolver::onSearchSucceeded(int requestId,
-                                            const QList<BookWalkerSearchHit>& hits)
+void VolumeCoverResolver::onMuResolvedBySeriesKey(const QString& seriesKey,
+                                                  int volumeCount,
+                                                  int /*chapterCount*/,
+                                                  const QStringList& altTitles)
 {
-    auto it = m_pending.find(requestId);
-    if (it == m_pending.end()) return;
+    auto it = m_pendingBySeriesKey.find(seriesKey);
+    if (it == m_pendingBySeriesKey.end()) return;
     PendingResolve p = it.value();
-
-    // Step 6: Disambiguate search hits by exact title match (strips parenthetical
-    // publisher suffix per BookWalkerSeriesPageParser::pickSeriesIdByTitle).
-    const QString seriesId = BookWalkerSeriesPageParser::pickSeriesIdByTitle(
-        hits, p.japaneseTitle);
-    if (seriesId.isEmpty()) {
-        m_pending.erase(it);
-        emit unresolved(p.anilistId, QStringLiteral("series-not-on-bookwalker"));
-        return;
-    }
-    p.bookwalkerSeriesId = seriesId;
+    p.canonicalCount = volumeCount;
+    p.japaneseTitle = tankoban::manga::mangaupdates::JapaneseTitlePicker::pickFirstJapanese(altTitles);
     it.value() = p;
 
-    // Step 7: Fetch ordered cover URLs from the series page.
-    m_bwClient->fetchSeriesCovers(seriesId, requestId);
-}
-
-void VolumeCoverResolver::onSearchFailed(int requestId, const QString& reason)
-{
-    auto it = m_pending.find(requestId);
-    if (it == m_pending.end()) return;
-    const PendingResolve p = it.value();
-    m_pending.erase(it);
-    emit unresolved(p.anilistId, QStringLiteral("search-failed: ") + reason);
-}
-
-void VolumeCoverResolver::onCoversSucceeded(int requestId,
-                                            const QList<QString>& orderedCoverUrls)
-{
-    auto it = m_pending.find(requestId);
-    if (it == m_pending.end()) return;
-    const PendingResolve p = it.value();
-    m_pending.erase(it);
-
-    // Step 8: Index alignment (maps raw ordered URLs to 1-based volume numbers).
-    QMap<int, QString> aligned = VolumeCoverAlignment::align(
-        orderedCoverUrls, p.canonicalCount);
-    if (aligned.isEmpty()) {
-        emit unresolved(p.anilistId, QStringLiteral("alignment-empty"));
+    if (p.japaneseTitle.isEmpty()) {
+        m_pendingBySeriesKey.erase(it);
+        emit unresolved(seriesKey, QStringLiteral("no-japanese-title"));
         return;
     }
 
-    // Step 9: Cache write. Disk-write failure is soft (log-and-continue).
+    if (!m_bwClient) {
+        m_pendingBySeriesKey.erase(it);
+        emit unresolved(seriesKey, QStringLiteral("bw-client-null"));
+        return;
+    }
+
+    const int bwReqId = m_nextBwRequestId++;
+    m_bwRequestIdToSeriesKey.insert(bwReqId, seriesKey);
+    m_bwClient->searchSeries(p.japaneseTitle, bwReqId);
+}
+
+void VolumeCoverResolver::onMuUnresolvedBySeriesKey(const QString& seriesKey,
+                                                    const QString& reason)
+{
+    auto it = m_pendingBySeriesKey.find(seriesKey);
+    if (it == m_pendingBySeriesKey.end()) return;
+    m_pendingBySeriesKey.erase(it);
+    emit unresolved(seriesKey, QStringLiteral("mu-unresolved: ") + reason);
+}
+
+void VolumeCoverResolver::onBwSearchSucceeded(int requestId,
+                                              const QList<BookWalkerSearchHit>& hits)
+{
+    auto idIt = m_bwRequestIdToSeriesKey.find(requestId);
+    if (idIt == m_bwRequestIdToSeriesKey.end()) return;
+    const QString seriesKey = idIt.value();
+    m_bwRequestIdToSeriesKey.erase(idIt);
+
+    auto it = m_pendingBySeriesKey.find(seriesKey);
+    if (it == m_pendingBySeriesKey.end()) return;
+    PendingResolve p = it.value();
+
+    const QString bwSeriesId = BookWalkerSeriesPageParser::pickSeriesIdByTitle(
+        hits, p.japaneseTitle);
+    if (bwSeriesId.isEmpty()) {
+        m_pendingBySeriesKey.erase(it);
+        emit unresolved(seriesKey, QStringLiteral("series-not-on-bookwalker"));
+        return;
+    }
+    p.bookwalkerSeriesId = bwSeriesId;
+    it.value() = p;
+
+    const int bwReqId = m_nextBwRequestId++;
+    m_bwRequestIdToSeriesKey.insert(bwReqId, seriesKey);
+    m_bwClient->fetchSeriesCovers(bwSeriesId, bwReqId);
+}
+
+void VolumeCoverResolver::onBwSearchFailed(int requestId, const QString& reason)
+{
+    auto idIt = m_bwRequestIdToSeriesKey.find(requestId);
+    if (idIt == m_bwRequestIdToSeriesKey.end()) return;
+    const QString seriesKey = idIt.value();
+    m_bwRequestIdToSeriesKey.erase(idIt);
+
+    m_pendingBySeriesKey.remove(seriesKey);
+    emit unresolved(seriesKey, QStringLiteral("bw-search-failed: ") + reason);
+}
+
+void VolumeCoverResolver::onBwCoversSucceeded(int requestId,
+                                              const QList<QString>& orderedCoverUrls)
+{
+    auto idIt = m_bwRequestIdToSeriesKey.find(requestId);
+    if (idIt == m_bwRequestIdToSeriesKey.end()) return;
+    const QString seriesKey = idIt.value();
+    m_bwRequestIdToSeriesKey.erase(idIt);
+
+    auto it = m_pendingBySeriesKey.find(seriesKey);
+    if (it == m_pendingBySeriesKey.end()) return;
+    const PendingResolve p = it.value();
+    m_pendingBySeriesKey.erase(it);
+
+    auto aligned = VolumeCoverAlignment::align(orderedCoverUrls, p.canonicalCount);
+    if (aligned.isEmpty()) {
+        emit unresolved(seriesKey, QStringLiteral("alignment-empty"));
+        return;
+    }
+
     BookWalkerCacheRecord rec;
     rec.schemaVersion     = 1;
     rec.fetchedAt         = QDateTime::currentDateTimeUtc();
-    rec.canonicalCount    = (p.canonicalCount > 0 ? p.canonicalCount
-                                                   : aligned.size());
+    rec.canonicalCount    = (p.canonicalCount > 0 ? p.canonicalCount : aligned.size());
     rec.bookwalkerSeriesId = p.bookwalkerSeriesId;
     for (auto k = aligned.constBegin(); k != aligned.constEnd(); ++k) {
         BookWalkerCoverEntry e;
@@ -185,21 +192,23 @@ void VolumeCoverResolver::onCoversSucceeded(int requestId,
         e.url    = k.value();
         rec.volumes.append(e);
     }
-    if (!BookWalkerCache::store(p.anilistId, rec)) {
-        qWarning("VolumeCoverResolver: failed to persist BookWalker cache for anilistId=%d", p.anilistId);
+    if (!BookWalkerCache::storeByKey(seriesKey, rec)) {
+        qWarning("VolumeCoverResolver: failed to persist BookWalker cache for seriesKey=%s",
+                 qUtf8Printable(seriesKey));
     }
 
-    // Step 10: Emit.
-    emit resolved(p.anilistId, aligned);
+    emit resolved(seriesKey, aligned);
 }
 
-void VolumeCoverResolver::onCoversFailed(int requestId, const QString& reason)
+void VolumeCoverResolver::onBwCoversFailed(int requestId, const QString& reason)
 {
-    auto it = m_pending.find(requestId);
-    if (it == m_pending.end()) return;
-    const PendingResolve p = it.value();
-    m_pending.erase(it);
-    emit unresolved(p.anilistId, QStringLiteral("covers-failed: ") + reason);
+    auto idIt = m_bwRequestIdToSeriesKey.find(requestId);
+    if (idIt == m_bwRequestIdToSeriesKey.end()) return;
+    const QString seriesKey = idIt.value();
+    m_bwRequestIdToSeriesKey.erase(idIt);
+
+    m_pendingBySeriesKey.remove(seriesKey);
+    emit unresolved(seriesKey, QStringLiteral("bw-covers-failed: ") + reason);
 }
 
 } // namespace tankoban::manga::bookwalker

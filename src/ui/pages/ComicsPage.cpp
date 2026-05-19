@@ -327,16 +327,17 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             &tankoban::manga::comics::ComicsSeriesView::backRequested,
             this, &ComicsPage::onDetailBack);
 
-    // Task 14: BookWalker per-volume cover resolver. BookWalkerClient owns
-    // its own network work via m_nam (same NAM as the rest of ComicsPage).
-    // VolumeCoverResolver is non-owning of its dependencies; all three
-    // (bwClient, m_anilistCache, m_premiumCatalog) outlive it since they
-    // are children of ComicsPage. setVolumeCoverResolver is non-owning too.
+    // Task 14 (updated Tasks 6+7 WEEBCENTRAL_IDENTITY_PIVOT): BookWalker per-volume
+    // cover resolver. Re-keyed to VolumeMetadataResolver (muResolver) instead of
+    // AniListCache; seriesKey now drives the chain. bwClient + m_volumeResolver +
+    // m_premiumCatalog all outlive coverResolver (children of ComicsPage).
+    // setVolumeCoverResolver is non-owning. Full wire-up (resolveForSeries call
+    // from showSeries) completes in Task 8.
     {
         auto* bwClient = new tankoban::manga::bookwalker::BookWalkerClient(
             m_nam, this);
         auto* coverResolver = new tankoban::manga::bookwalker::VolumeCoverResolver(
-            bwClient, m_anilistCache, m_premiumCatalog, this);
+            bwClient, m_volumeResolver, m_premiumCatalog, this);
         m_tyVolumeSeriesView->setVolumeCoverResolver(coverResolver);
     }
 
