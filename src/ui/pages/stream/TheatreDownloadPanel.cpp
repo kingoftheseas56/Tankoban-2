@@ -832,6 +832,10 @@ void TheatreDownloadPanel::rerenderScopePicker() {
         d.alreadyHave = m_downloadIndex
             && m_downloadIndex->filePathForMovie(m_imdbId).has_value();
         auto* tile = new EpisodeTile(d, m_scopeTileContainer);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — bind tile to
+        // live index state for chip rendering during in-flight downloads.
+        tile->setImdbId(m_imdbId);
+        tile->setStreamDownloadIndex(m_downloadIndex);
         layout->addWidget(tile);
         const quint32 movieKey = tileKey(0, 0);
         // F3 fix: restore previously-checked state across metadata-driven re-renders.
@@ -905,6 +909,10 @@ void TheatreDownloadPanel::rerenderScopePicker() {
         d.sizeBytes = m_selectedPack.raw.sizeBytes;
         d.alreadyHave = false;
         auto* tile = new EpisodeTile(d, m_scopeTileContainer);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — bind tile to
+        // live index state (fallback whole-pack path).
+        tile->setImdbId(m_imdbId);
+        tile->setStreamDownloadIndex(m_downloadIndex);
         layout->addWidget(tile);
         const quint32 fallbackKey = tileKey(0, 0);
         // F3 fix: restore previously-checked state across re-renders.
@@ -959,6 +967,10 @@ void TheatreDownloadPanel::rerenderScopePicker() {
             d.alreadyHave = m_downloadIndex
                 && m_downloadIndex->filePathFor(m_imdbId, ep.season, ep.episode).has_value();
             auto* tile = new EpisodeTile(d, m_scopeTileContainer);
+            // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — bind tile
+            // to live index state for the per-episode case.
+            tile->setImdbId(m_imdbId);
+            tile->setStreamDownloadIndex(m_downloadIndex);
             layout->addWidget(tile);
             const quint32 key = tileKey(ep.season, ep.episode);
             // F3 fix: restore previously-checked state if this tile existed in

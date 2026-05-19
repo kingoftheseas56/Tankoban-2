@@ -1019,6 +1019,17 @@ QList<TorrentStatus> TorrentEngine::allStatuses() const
     return result;
 }
 
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — metadata presence check.
+// Reads TorrentRecord::metadataReady which is set to true by the AlertWorker
+// on metadata_received_alert (line ~139 above). No libtorrent call needed —
+// the flag is the canonical in-process indicator that metadata has arrived.
+bool TorrentEngine::hasMetadata(const QString& infoHash) const
+{
+    QMutexLocker lock(&m_mutex);
+    auto it = m_records.find(infoHash);
+    return it != m_records.end() && it->metadataReady;
+}
+
 QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
 {
     QJsonArray files;
@@ -1048,6 +1059,30 @@ QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
         files.append(f);
     }
     return files;
+}
+
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — per-file byte download counts.
+// Mirrors torrentFiles() session/handle access pattern. piece_granularity flag
+// means libtorrent accumulates completed piece bytes per file rather than
+// waiting for the whole file to finish — critical for onPieceFinished callers.
+QJsonArray TorrentEngine::torrentFileProgress(const QString& infoHash) const
+{
+    QJsonArray result;
+    QMutexLocker lock(&m_mutex);
+
+    auto it = m_records.find(infoHash);
+    if (it == m_records.end() || !it->handle.is_valid())
+        return result;
+
+    auto ti = it->handle.torrent_file();
+    if (!ti)
+        return result;  // metadata not yet received
+
+    std::vector<int64_t> progress;
+    it->handle.file_progress(progress, lt::torrent_handle::piece_granularity);
+    for (int64_t bytes : progress)
+        result.append(QJsonValue::fromVariant(static_cast<qint64>(bytes)));
+    return result;
 }
 
 void TorrentEngine::renameFile(const QString& infoHash, int fileIndex, const QString& newName)
@@ -1766,6 +1801,8 @@ void TorrentEngine::setSeedingRules(const QString&, float, int) {}
 void TorrentEngine::setGlobalSeedingRules(float, int) {}
 QList<TorrentStatus> TorrentEngine::allStatuses() const { return {}; }
 QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
+bool TorrentEngine::hasMetadata(const QString&) const { return false; }
+QJsonArray TorrentEngine::torrentFileProgress(const QString&) const { return {}; }
 bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }
 bool TorrentEngine::havePiece(const QString&, int) const { return false; }
 void TorrentEngine::setPiecePriority(const QString&, int, int) {}

@@ -218,7 +218,20 @@ public:
 
     // Query (thread-safe snapshot)
     QList<TorrentStatus> allStatuses() const;
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — returns true when libtorrent
+    // has already received the metadata_received_alert for this infoHash (i.e.
+    // TorrentRecord::metadataReady is set). Used by TorrentClient::startDownload
+    // to synthesize an onMetadataReady call on duplicate_torrent re-adds, since
+    // metadata_received_alert is single-shot per handle and won't re-fire.
+    bool hasMetadata(const QString& infoHash) const;
     QJsonArray torrentFiles(const QString& infoHash) const;
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — per-file byte counts for
+    // progress tracking. Returns a QJsonArray of qint64 values (one per file
+    // in libtorrent's file_storage order) representing bytes downloaded so far.
+    // Uses piece_granularity flag so the count updates on every piece_finished
+    // alert rather than waiting for file completion. Empty array on unknown hash
+    // or no torrent_info yet (metadata still pending).
+    QJsonArray torrentFileProgress(const QString& infoHash) const;
 
     // Check if contiguous bytes [fileOffset .. fileOffset+length) are fully downloaded.
     // Used by StreamEngine to verify the file header is available before handing to player.

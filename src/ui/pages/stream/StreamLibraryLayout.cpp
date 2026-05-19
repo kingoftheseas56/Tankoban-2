@@ -53,6 +53,18 @@ void StreamLibraryLayout::setStreamDownloadIndex(StreamDownloadIndex* idx)
         connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                 this, &StreamLibraryLayout::refreshTileBadges,
                 Qt::QueuedConnection);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 16 — also listen for
+        // the granular entryStateChanged signal so movie tiles repaint when a
+        // single Pending/Downloading/Complete transition fires (entriesChanged
+        // is add/remove-only). The existing refreshTileBadges walk is cheap
+        // (small N for library tiles); granular-by-imdbId optimization left
+        // as v1.x polish.
+        connect(m_downloadIndex, &StreamDownloadIndex::entryStateChanged,
+                this,
+                [this](const QString& /*imdbId*/, int /*season*/, int /*episode*/) {
+                    refreshTileBadges();
+                },
+                Qt::QueuedConnection);
         // Apply badges to any tiles already rendered before the wire landed.
         refreshTileBadges();
     }

@@ -29,6 +29,30 @@
 //   tankoctl comics-get-downloads
 //   tankoctl comics-dispatch-volume <seriesId|anilistId> <volume> [--source kind|index]
 //   tankoctl comics-get-sources
+//   tankoctl books-get-state
+//   tankoctl books-get-library
+//   tankoctl books-refresh-library
+//   tankoctl books-search-library <query>
+//   tankoctl books-clear-search
+//   tankoctl books-open-book <absPath>
+//   tankoctl books-open-series <seriesPath|--title name>
+//   tankoctl books-get-series-state
+//   tankoctl books-set-sort <key>
+//   tankoctl books-set-density <0|1|2>
+//   tankoctl books-get-progress
+//   tankoctl books-seek-page <n>
+//   tankoctl books-set-layout <single|double-page|columns>
+//   tankoctl books-get-chapters
+//   tankoctl books-open-chapter <id>
+//   tankoctl books-tts-state
+//   tankoctl books-get-listen-state
+//   tankoctl books-tts-play
+//   tankoctl books-tts-pause
+//   tankoctl books-tts-resume
+//   tankoctl books-tts-stop
+//   tankoctl books-tts-set-voice <voice>
+//   tankoctl books-tts-set-speed <speed>
+//   tankoctl books-tts-cancel-stream <streamId>
 //
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
@@ -93,7 +117,38 @@ void printUsage(QTextStream& err)
         << "  comics-get-downloads     Manga download index + active queue\n"
         << "  comics-dispatch-volume <seriesId|anilistId> <volume> [--source kind|index]\n"
         << "                           dispatch active volume source\n"
-        << "  comics-get-sources       current Comics sources panel snapshot\n";
+        << "  comics-get-sources       current Comics sources panel snapshot\n"
+        << "\n"
+        << "  v1.3 stream-side bridge expansion (Agent 4, 2026-05-19):\n"
+        << "  stream-open-detail <imdbId>\n"
+        << "                           navigate Stream mode to a detail view\n"
+        << "  stream-get-sources       active detail view's source-card list\n"
+        << "  stream-direct-download <sourceIndex>\n"
+        << "                           fire directDownloadRequested on Nth source-card\n"
+        << "\n"
+        << "  v1.3 books-side bridge (Phase D.1, 2026-05-19):\n"
+        << "  books-get-state          BooksPage snapshot\n"
+        << "  books-get-library        per-series entries + file roster\n"
+        << "  books-refresh-library    trigger BooksPage::triggerScan()\n"
+        << "  books-search-library <query>\n"
+        << "                           drive the library search bar\n"
+        << "  books-clear-search       reset the library search bar\n"
+        << "  books-open-book <absPath>\n"
+        << "                           open a book in the reader\n"
+        << "  books-open-series <seriesPath|--title name>\n"
+        << "                           navigate to BookSeriesView\n"
+        << "  books-get-series-state   BookSeriesView snapshot\n"
+        << "  books-set-sort <key>     name_asc / name_desc / updated_desc / ...\n"
+        << "  books-set-density <0|1|2>\n"
+        << "                           cover-density slider value\n"
+        << "  books-get-progress       current reader file + booksProgress entry\n"
+        << "  books-tts-state          Qt-side Edge TTS worker snapshot\n"
+        << "  books-tts-cancel-stream <streamId>\n"
+        << "                           fire EdgeTtsWorker::cancelStream\n"
+        << "  (books-seek-page / books-set-layout / books-get-chapters /\n"
+        << "   books-open-chapter / books-tts-{play,pause,resume,stop,\n"
+        << "   set-voice,set-speed} / books-get-listen-state — JS-resident;\n"
+        << "   return structured JS_RESIDENT_NOT_IMPLEMENTED reply)\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -316,6 +371,133 @@ int main(int argc, char** argv)
             }
             payload["source"] = a[++i];
         }
+    } else if (sub == QLatin1String("stream-open-detail")) {
+        // v1.3 stream-side bridge expansion (Agent 4, 2026-05-19).
+        if (a.size() < 3) {
+            err << "stream-open-detail requires <imdbId>\n";
+            return 64;
+        }
+        payload["imdbId"] = a[2];
+    } else if (sub == QLatin1String("stream-direct-download")) {
+        // v1.3 stream-side bridge expansion (Agent 4, 2026-05-19).
+        if (a.size() < 3) {
+            err << "stream-direct-download requires <sourceIndex>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int sourceIndex = a[2].toInt(&ok);
+        if (!ok || sourceIndex < 0) {
+            err << "stream-direct-download sourceIndex must be a non-negative integer\n";
+            return 64;
+        }
+        payload["sourceIndex"] = sourceIndex;
+    } else if (sub == QLatin1String("books-search-library")) {
+        // v1.3 books-side bridge (Phase D.1, 2026-05-19).
+        if (a.size() < 3) {
+            err << "books-search-library requires <query>\n";
+            return 64;
+        }
+        payload["query"] = a[2];
+    } else if (sub == QLatin1String("books-open-book")) {
+        if (a.size() < 3) {
+            err << "books-open-book requires <absPath>\n";
+            return 64;
+        }
+        payload["path"] = a[2];
+    } else if (sub == QLatin1String("books-open-series")) {
+        if (a.size() < 3) {
+            err << "books-open-series requires <seriesPath> or --title <name>\n";
+            return 64;
+        }
+        if (a[2] == QLatin1String("--title")) {
+            if (a.size() < 4) {
+                err << "books-open-series --title requires <name>\n";
+                return 64;
+            }
+            payload["title"] = a[3];
+        } else {
+            payload["seriesPath"] = a[2];
+        }
+    } else if (sub == QLatin1String("books-set-sort")) {
+        if (a.size() < 3) {
+            err << "books-set-sort requires <key> "
+                   "(name_asc|name_desc|updated_desc|updated_asc|count_desc|count_asc)\n";
+            return 64;
+        }
+        payload["key"] = a[2];
+    } else if (sub == QLatin1String("books-set-density")) {
+        if (a.size() < 3) {
+            err << "books-set-density requires <0|1|2>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int val = a[2].toInt(&ok);
+        if (!ok || val < 0 || val > 2) {
+            err << "books-set-density value must be 0, 1, or 2\n";
+            return 64;
+        }
+        payload["value"] = val;
+    } else if (sub == QLatin1String("books-seek-page")) {
+        if (a.size() < 3) {
+            err << "books-seek-page requires <n>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int n = a[2].toInt(&ok);
+        if (!ok || n < 0) {
+            err << "books-seek-page n must be a non-negative integer\n";
+            return 64;
+        }
+        payload["page"] = n;
+    } else if (sub == QLatin1String("books-set-layout")) {
+        if (a.size() < 3) {
+            err << "books-set-layout requires <single|double-page|columns>\n";
+            return 64;
+        }
+        const QString layout = a[2];
+        if (layout != QLatin1String("single")
+            && layout != QLatin1String("double-page")
+            && layout != QLatin1String("columns")) {
+            err << "books-set-layout must be single, double-page, or columns\n";
+            return 64;
+        }
+        payload["layout"] = layout;
+    } else if (sub == QLatin1String("books-open-chapter")) {
+        if (a.size() < 3) {
+            err << "books-open-chapter requires <id>\n";
+            return 64;
+        }
+        payload["chapterId"] = a[2];
+    } else if (sub == QLatin1String("books-tts-set-voice")) {
+        if (a.size() < 3) {
+            err << "books-tts-set-voice requires <voice>\n";
+            return 64;
+        }
+        payload["voice"] = a[2];
+    } else if (sub == QLatin1String("books-tts-set-speed")) {
+        if (a.size() < 3) {
+            err << "books-tts-set-speed requires <speed>\n";
+            return 64;
+        }
+        bool ok = false;
+        const double speed = a[2].toDouble(&ok);
+        if (!ok) {
+            err << "books-tts-set-speed speed must be a number\n";
+            return 64;
+        }
+        payload["speed"] = speed;
+    } else if (sub == QLatin1String("books-tts-cancel-stream")) {
+        if (a.size() < 3) {
+            err << "books-tts-cancel-stream requires <streamId>\n";
+            return 64;
+        }
+        bool ok = false;
+        const qulonglong streamId = a[2].toULongLong(&ok);
+        if (!ok) {
+            err << "books-tts-cancel-stream streamId must be a positive integer\n";
+            return 64;
+        }
+        payload["streamId"] = static_cast<double>(streamId);
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -325,7 +507,21 @@ int main(int argc, char** argv)
                || sub == QLatin1String("comics-get-library")
                || sub == QLatin1String("comics-get-series")
                || sub == QLatin1String("comics-get-downloads")
-               || sub == QLatin1String("comics-get-sources")) {
+               || sub == QLatin1String("comics-get-sources")
+               || sub == QLatin1String("stream-get-sources")
+               || sub == QLatin1String("books-get-state")
+               || sub == QLatin1String("books-get-library")
+               || sub == QLatin1String("books-refresh-library")
+               || sub == QLatin1String("books-clear-search")
+               || sub == QLatin1String("books-get-series-state")
+               || sub == QLatin1String("books-get-progress")
+               || sub == QLatin1String("books-get-chapters")
+               || sub == QLatin1String("books-tts-state")
+               || sub == QLatin1String("books-get-listen-state")
+               || sub == QLatin1String("books-tts-play")
+               || sub == QLatin1String("books-tts-pause")
+               || sub == QLatin1String("books-tts-resume")
+               || sub == QLatin1String("books-tts-stop")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";
