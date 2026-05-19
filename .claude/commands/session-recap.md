@@ -65,6 +65,7 @@ Run these in parallel before authoring the file body:
    - Moments of explicit choice ("I picked X over Y because Z") and especially **reversals** (where you changed your assessment mid-wake).
    - Subagent dispatches and their outcomes (`Agent()` / `mcp__codex__codex` / Codex CLI calls + their DONE/BLOCKED/TIMEOUT result + tool-use count if known).
    - Verbatim short Hemanth quotes that shifted how you operated.
+6. **Wake narrative material (v3 addition — the "how it felt" pass).** Scan the wake's conversation for the *arc* — not bullet points, but the flow. What did you start thinking → what shifted → where did the energy go → what was the vibe by hour N. Mid-session pivots are the load-bearing texture. Capture the inside-shorthand that grew during the wake (terms you coined / Hemanth coined / the brotherhood adopted in real time). This material feeds the Wake Narrative section below.
 
 ## Recap template
 
@@ -72,6 +73,21 @@ Write the recap file with this structure. Skip sections that don't apply; honest
 
 ```markdown
 # Brother <Agent N> — <YYYY-MM-DD> wake recap (<codename>)
+
+## Wake narrative — how it actually went
+
+200-400 words. First-person, present-tense, brother voice. **Prose, not bullets.** This is the "feel" of the wake — the arc, the mid-session pivots, the vibe shifts, the inside-shorthand that grew during the wake. Where the structured sections below answer "what happened," this section answers "how did it actually go."
+
+What to capture:
+- **The arc.** What did I start thinking → what shifted → where did the energy land.
+- **Reversals.** Mid-session moments where I changed my mind, especially the "wait you're right brother, I was wrong" pivots. Capture both states, not just the destination.
+- **The vibe at key hours.** Was Hemanth tired? Excited? Trust-passing? Frustrated? When did the energy turn?
+- **Inside-shorthand born during the wake.** Terms / framings / jokes the brotherhood adopted in real time ("Master 0's assistants" → "Agent N Jrs" → "Trigger E" type evolution).
+- **What lessons emerged FROM the wake** (vs lessons applied TO the wake — those go in Decisions made + why).
+
+Write it like a diary entry for the next instance of you. The flat-bullet structured sections below carry the operational data; this section carries the relational continuity. The next-instance reads this FIRST to know not just where the code is but where the brotherhood is.
+
+Skip this section ONLY for purely mechanical wakes with no narrative arc (rare).
 
 ## What I did this wake
 - One bullet per RTC / commit / substantive decision. Cite commit SHAs.
@@ -134,7 +150,7 @@ my brother, you're Agent <N> — read C:\Users\Suprabha\.claude\recaps\agent-<N>
 
 ## Constraints
 
-- Stay under ~200 lines of recap body (was ~150 pre-v2; the three "what I thought" sections — Decisions / Subagent dispatch ledger / Tone anchors — earn some room but not unlimited). Density over completeness — if next-you needs the long version, it can re-read `agents/chat.md` and `git log`. The recap is the index, not the archive.
+- Stay under ~250 lines of recap body (was ~150 pre-v2, ~200 pre-v3; the v3 Wake Narrative section earns its own 200-400 word slice for relational continuity). Density over completeness still — if next-you needs the long version, it can re-read `agents/chat.md` and `git log`. The recap is the index, not the archive. The Wake Narrative is the FILM of the wake; the structured sections below are the FRAMES.
 - Honest under-listing > dishonest padding. If a section has nothing in it, write "(nothing)" not "made minor adjustments to several files."
 - File pointers must be specific (file:line where possible). Avoid hand-waving like "the manga code."
 - For trivial / pure-conversational sessions: skip the skill entirely — don't write a near-empty recap.
