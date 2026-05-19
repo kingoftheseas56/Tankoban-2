@@ -170,6 +170,7 @@ set(SOURCES
     src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
     src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
     src/core/manga/mangaupdates/MangaUpdatesClient.cpp
+    src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
     src/core/manga/mangaupdates/VolumeMetadataResolver.cpp
     src/core/manga/bookwalker/BookWalkerClient.cpp
     src/core/manga/bookwalker/BookWalkerCache.cpp
@@ -762,6 +763,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
+        tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
+        src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
         tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp
         tests/core/manga/bookwalker/test_volume_cover_alignment.cpp
         tests/core/PerModeNavControllerTest.cpp
