@@ -59,6 +59,19 @@ QStringList extractStringList(const QJsonValue& v)
     return out;
 }
 
+// MangaUpdates /series/{id} endpoint returns associated titles as
+// array<object{title:string}>, not array<string> like the search endpoint.
+QStringList extractAssociatedTitles(const QJsonValue& v)
+{
+    QStringList out;
+    if (!v.isArray()) return out;
+    for (const auto& entry : v.toArray()) {
+        const QString t = entry.toObject().value(QStringLiteral("title")).toString().trimmed();
+        if (!t.isEmpty()) out.append(t);
+    }
+    return out;
+}
+
 QString imageUrlFromRecord(const QJsonObject& rec)
 {
     const auto image = rec.value(QStringLiteral("image"));
@@ -190,6 +203,7 @@ void MangaUpdatesClient::onSeriesReplyFinished()
     MangaUpdatesSeriesInfo info;
     info.seriesId = int64Value(rec.value(QStringLiteral("series_id")));
     info.title = rec.value(QStringLiteral("title")).toString();
+    info.altTitles = extractAssociatedTitles(rec.value(QStringLiteral("associated"))); // NEW
     info.rawStatus = stringValue(rec.value(QStringLiteral("status")));
     info.volumeCount = MangaUpdatesStatusParser::parseLeadingVolumeCount(info.rawStatus);
     info.latestChapter = intValue(rec.value(QStringLiteral("latest_chapter")));
