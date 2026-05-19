@@ -22,6 +22,9 @@
 
 #include "ComicsSourcesPanel.h"
 #include "core/manga/anilist/AniListTypes.h"
+#include "core/manga/MangaResult.h"
+
+class MangaSourceRegistry;
 
 #include <QHash>
 #include <QJsonObject>
@@ -77,6 +80,15 @@ public:
     // Entry point: render the series at the given AniList preview. Will
     // consult the cache first, then fire a background refetch.
     void showSeries(const anilist::MediaPreview& preview);
+
+    // Overload for WeebCentral-sourced series (WEEBCENTRAL_IDENTITY_PIVOT Task 8).
+    // seriesKey is derived from wc.source + ":" + wc.id; drives the cover
+    // resolver and the detail fetch via MangaSourceRegistry.
+    void showSeries(const MangaResult& wc);
+
+    // Setter for MangaSourceRegistry; called by ComicsPage after construction.
+    // Non-owning; registry lifetime is owned by ComicsPage.
+    void setSourceRegistry(MangaSourceRegistry* registry) { m_sourceRegistry = registry; }
 
     // PHASE 9: called by ComicsPage when navigating away.
     void clearView();
@@ -169,10 +181,10 @@ private slots:
     void onVolumeCheckboxToggled(int row, bool checked);
     void onDownloadSelectedClicked();
 
-    // Task 14: BookWalker cover resolver signal handlers.
-    // TASK_8_NOTE: signatures updated to seriesKey (QString) from anilistId (int)
-    // per WEEBCENTRAL_IDENTITY_PIVOT Tasks 6+7. Bodies are stubs pending Task 8
-    // wire-up (m_currentResolvingAnilistId guard replaced by seriesKey guard in Task 8).
+    // Task 14 / Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): BookWalker cover resolver
+    // signal handlers. Signatures use seriesKey (QString) — re-keyed from
+    // anilistId (int) in Tasks 6+7; stale-request guards fully implemented in
+    // Task 8 via m_currentResolvingSeriesKey.
     void onCoverResolverResolved(const QString& seriesKey, const QMap<int, QString>& volumeToCoverUrl);
     void onCoverResolverUnresolved(const QString& seriesKey, const QString& reason);
     void onCoverResolverSkipped(const QString& seriesKey, const QString& reason);
@@ -266,7 +278,17 @@ private:
     QPointer<tankoban::manga::bookwalker::VolumeCoverResolver> m_coverResolver;
     tankoban::ui::widgets::ComicsSeriesViewLoadingOverlay* m_loadingOverlay  = nullptr;
     QTimer*                                                m_loadingSafetyTimer = nullptr;
-    int                                                    m_currentResolvingAnilistId = 0;
+
+    // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): seriesKey-based identity for the
+    // current series and the in-flight resolver request. Replace the old
+    // m_currentResolvingAnilistId (int) stale-guard with QString comparison.
+    // For AniList-only series the key is synthesized as "anilist:<anilistId>".
+    // For WeebCentral series the key is "<source>:<seriesId>" (e.g.
+    // "weebcentral:01J76XYAVE3FZ3YMHMTKEZGXM4").
+    QString m_currentSeriesKey;           // identity of the currently displayed series
+    QString m_currentResolvingSeriesKey;  // key stamped when resolver was fired; cleared on clearView
+
+    MangaSourceRegistry* m_sourceRegistry = nullptr;  // non-owning; set by ComicsPage
 };
 
 } // namespace tankoban::manga::comics

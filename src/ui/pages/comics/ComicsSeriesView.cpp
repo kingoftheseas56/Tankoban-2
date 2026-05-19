@@ -5,6 +5,8 @@
 #include "core/manga/anilist/AniListClient.h"
 #include "core/manga/anilist/AniListVolumeMapper.h"
 #include "core/manga/MangaDownloadIndex.h"
+#include "core/manga/MangaSourceRegistry.h"
+#include "core/manga/MangaScraper.h"
 #include "core/manga/PremiumCatalog.h"
 #include "core/manga/bookwalker/VolumeCoverResolver.h"
 #include "ui/widgets/ComicsSeriesViewLoadingOverlay.h"
@@ -603,21 +605,23 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     m_volumesTable->setRowCount(0);
     refreshLibraryButton();
 
-    // Task 14: kick off BookWalker per-volume cover resolution. Overlay shown
-    // here; hidden on resolver signal or safety timeout. populateVolumeRows
-    // (called after cache/detail fetch) builds the rows first; resolver
-    // callbacks then paint per-volume covers over the AniList thumbs.
-    m_currentResolvingAnilistId = preview.anilistId;
+    // Task 14 / Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): kick off BookWalker
+    // per-volume cover resolution. Overlay shown here; hidden on resolver
+    // signal or safety timeout. populateVolumeRows (called after cache/detail
+    // fetch) builds the rows first; resolver callbacks then paint per-volume
+    // covers over the AniList thumbs.
+    //
+    // AniList-only path: synthesize a "anilist:<id>" key so the stale-guard
+    // comparison in the resolver slots uses the same seriesKey idiom as the
+    // WeebCentral path.
+    m_currentSeriesKey          = QStringLiteral("anilist:%1").arg(preview.anilistId);
+    m_currentResolvingSeriesKey = m_currentSeriesKey;
     showLoadingOverlay();
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
     if (m_coverResolver) {
-        // TASK_8_PENDING: replace with resolveForSeries(seriesKey, englishTitle)
-        // once ComicsSeriesView receives the seriesKey from showSeries(). For now
-        // the resolver is not invoked; fallback paint runs immediately below.
-        // m_coverResolver->resolveForSeries(seriesKey, preview.title);
-        qWarning("ComicsSeriesView: resolveForSeries pending Task 8 wire-up; falling back to AniList art");
-        paintVolumeCoversAsFallback();
-        hideLoadingOverlay();
+        m_coverResolver->resolveForSeries(m_currentSeriesKey,
+                                          preview.title,
+                                          preview.anilistId);
     } else {
         qWarning("ComicsSeriesView: no cover resolver set; falling back to AniList art");
         paintVolumeCoversAsFallback();
@@ -649,6 +653,72 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     }
 }
 
+// WEEBCENTRAL_IDENTITY_PIVOT Task 8: WeebCentral-sourced series entry point.
+// Mirrors showSeries(MediaPreview) but drives the cover resolver via the
+// seriesKey composite and fetches chapter/volume detail via MangaSourceRegistry.
+void ComicsSeriesView::showSeries(const MangaResult& wc)
+{
+    if (wc.id.isEmpty() || wc.source.isEmpty()) {
+        qWarning("ComicsSeriesView::showSeries(MangaResult): empty id or source — ignoring");
+        return;
+    }
+
+    // Reset description expand state on series navigation (mirrors MediaPreview path).
+    m_descExpanded = false;
+    if (m_descShowMoreBtn) {
+        m_descShowMoreBtn->hide();
+        m_descShowMoreBtn->setText(tr("Show more"));
+    }
+    if (m_synopsis) {
+        const QFontMetrics fm(m_synopsis->font());
+        m_synopsis->setMaximumHeight(fm.lineSpacing() * m_descClampLines);
+    }
+
+    m_currentSeriesKey   = wc.source + QStringLiteral(":") + wc.id;
+    m_currentSeriesTitle = wc.title;
+    m_currentVolumeRows.clear();
+    if (m_sourcesPanel) m_sourcesPanel->clear();
+
+    // Paint immediately from available preview data.
+    m_title->setText(wc.title);
+    m_synopsis->clear();
+    m_metaLine->setText(mangaSourceDisplayName(wc.source));
+    m_volumesTable->setRowCount(0);
+    refreshLibraryButton();
+
+    // Banner: use thumbnailUrl from MangaResult as the hero image until an
+    // AniList augmentation lookup overrides it (v1.x decoration; out of scope).
+    if (!wc.thumbnailUrl.isEmpty()) {
+        loadBannerUrl(wc.thumbnailUrl);
+    }
+
+    // Kick off cover resolution via seriesKey-driven entry.
+    m_currentResolvingSeriesKey = m_currentSeriesKey;
+    showLoadingOverlay();
+    if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
+    if (m_coverResolver) {
+        m_coverResolver->resolveForSeries(m_currentSeriesKey, wc.title, /*anilistIdOptional=*/0);
+    } else {
+        qWarning("ComicsSeriesView: no cover resolver set; falling back to series-level art");
+        paintVolumeCoversAsFallback();
+        hideLoadingOverlay();
+    }
+
+    // Trigger detail fetch via the WeebCentral scraper (delivers chapter/volume
+    // list via detailReady signal — caller must connect scraper::detailReady to
+    // this view's population slots, or route via ComicsPage).
+    if (m_sourceRegistry) {
+        if (MangaScraper* scraper = m_sourceRegistry->find(wc.source)) {
+            scraper->fetchDetail(wc);
+        } else {
+            qWarning("ComicsSeriesView::showSeries(MangaResult): no scraper for source '%s'",
+                     qUtf8Printable(wc.source));
+        }
+    } else {
+        qWarning("ComicsSeriesView::showSeries(MangaResult): no source registry set");
+    }
+}
+
 void ComicsSeriesView::clearView()
 {
     m_currentAnilistId   = 0;
@@ -668,7 +738,11 @@ void ComicsSeriesView::clearView()
     // previous Task-7 clear()+hide() guard caused a noticeable rescale
     // flicker on every re-open; Hemanth flagged it as "the poster keeps
     // loading every time we reopen the series view."
-    m_currentResolvingAnilistId = 0;
+
+    // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): reset seriesKey-based guards.
+    m_currentSeriesKey.clear();
+    m_currentResolvingSeriesKey.clear();
+
     m_lastAppliedCoverUrlByVolume.clear();
     hideLoadingOverlay();  // stops the safety timer before clearing rows
     m_volumesTable->setRowCount(0);
@@ -1147,32 +1221,31 @@ void ComicsSeriesView::hideLoadingOverlay()
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->stop();
 }
 
-// TASK_8_NOTE: slot signatures updated from (int anilistId, ...) to
-// (const QString& seriesKey, ...) per WEEBCENTRAL_IDENTITY_PIVOT Tasks 6+7.
-// The guard comparison (seriesKey vs m_currentResolvingAnilistId) is a stub:
-// Task 8 will add a m_currentResolvingSeriesKey member and compare against it.
-// For now the slots are no-ops since resolveForSeries is not yet invoked from
-// showSeries (see TASK_8_PENDING comment above). The bodies are safe dead code.
-void ComicsSeriesView::onCoverResolverResolved(const QString& /*seriesKey*/,
+// Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): resolver slot bodies fully implemented.
+// All three signal-backed slots guard against stale responses by comparing
+// the incoming seriesKey against m_currentResolvingSeriesKey (stamped when
+// the resolver was fired in showSeries). This replaces the old int-based
+// m_currentResolvingAnilistId guard.
+void ComicsSeriesView::onCoverResolverResolved(const QString& seriesKey,
                                                const QMap<int, QString>& volumeToCoverUrl)
 {
-    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
+    if (seriesKey != m_currentResolvingSeriesKey) return;
     paintVolumeCovers(volumeToCoverUrl);
     hideLoadingOverlay();
 }
 
-void ComicsSeriesView::onCoverResolverUnresolved(const QString& /*seriesKey*/,
+void ComicsSeriesView::onCoverResolverUnresolved(const QString& seriesKey,
                                                  const QString& /*reason*/)
 {
-    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
+    if (seriesKey != m_currentResolvingSeriesKey) return;
     paintVolumeCoversAsFallback();
     hideLoadingOverlay();
 }
 
-void ComicsSeriesView::onCoverResolverSkipped(const QString& /*seriesKey*/,
+void ComicsSeriesView::onCoverResolverSkipped(const QString& seriesKey,
                                               const QString& /*reason*/)
 {
-    // TASK_8_PENDING: guard with seriesKey == m_currentResolvingSeriesKey
+    if (seriesKey != m_currentResolvingSeriesKey) return;
     // Premium short-circuit: PremiumCoverExtractor handles cover paint via the
     // existing pipeline. Just hide the overlay; do not call the paint helpers.
     hideLoadingOverlay();
@@ -1180,8 +1253,8 @@ void ComicsSeriesView::onCoverResolverSkipped(const QString& /*seriesKey*/,
 
 void ComicsSeriesView::onCoverResolverSafetyTimeout()
 {
-    // Resolver took > 10s -- paint fallback and clear the overlay so the
-    // user isn't left staring at a spinner indefinitely.
+    // Safety timeout: no seriesKey guard here — the timer fires once and we
+    // always want to escape the spinner regardless of which series is current.
     paintVolumeCoversAsFallback();
     hideLoadingOverlay();
 }

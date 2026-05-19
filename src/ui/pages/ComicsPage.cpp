@@ -327,12 +327,16 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             &tankoban::manga::comics::ComicsSeriesView::backRequested,
             this, &ComicsPage::onDetailBack);
 
+    // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): wire MangaSourceRegistry into the
+    // series view so showSeries(MangaResult) can dispatch fetchDetail() to the
+    // correct scraper. m_sourceRegistry is owned by ComicsPage (constructed above).
+    m_tyVolumeSeriesView->setSourceRegistry(m_sourceRegistry);
+
     // Task 14 (updated Tasks 6+7 WEEBCENTRAL_IDENTITY_PIVOT): BookWalker per-volume
     // cover resolver. Re-keyed to VolumeMetadataResolver (muResolver) instead of
     // AniListCache; seriesKey now drives the chain. bwClient + m_volumeResolver +
     // m_premiumCatalog all outlive coverResolver (children of ComicsPage).
-    // setVolumeCoverResolver is non-owning. Full wire-up (resolveForSeries call
-    // from showSeries) completes in Task 8.
+    // setVolumeCoverResolver is non-owning. resolveForSeries wire-up completed Task 8.
     {
         auto* bwClient = new tankoban::manga::bookwalker::BookWalkerClient(
             m_nam, this);
