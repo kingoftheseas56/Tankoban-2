@@ -98,6 +98,10 @@ public:
 
     // Query
     QList<TorrentInfo> listActive() const;
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — set of infoHashes libtorrent
+    // currently tracks. Used by StreamDownloadIndex::validateInFlightEntries at
+    // startup to evict stale Pending/Downloading entries.
+    QSet<QString> activeInfoHashes() const;
     QJsonArray         listHistory() const;
     QJsonObject        streamBulkGroups() const;
     QJsonArray         devTorrentsSnapshot(bool activeOnly) const;
@@ -270,6 +274,11 @@ signals:
 private slots:
     void onMetadataReady(const QString& infoHash, const QString& name,
                          qint64 totalSize, const QJsonArray& files);
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — drives per-episode progress
+    // updates into StreamDownloadIndex as pieces arrive. Connected with
+    // Qt::QueuedConnection because pieceFinished emits from the AlertWorker
+    // thread (same as metadataReady).
+    void onPieceFinished(const QString& infoHash, int pieceIndex);
     void onTorrentFinished(const QString& infoHash);
     void onTorrentError(const QString& infoHash, const QString& message);
     void onStorageMoved(const QString& infoHash, const QString& newPath);
