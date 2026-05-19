@@ -17,9 +17,10 @@ struct MangaUpdatesSearchHit {
 };
 
 struct MangaUpdatesSeriesInfo {
-    qint64    seriesId      = 0;
-    QString   title;
-    QString   rawStatus;
+    qint64      seriesId      = 0;
+    QString     title;
+    QStringList altTitles;        // parsed from `associated` array; carries the Japanese title we need for BookWalker JP search
+    QString     rawStatus;
     int       volumeCount   = 0;
     int       latestChapter = 0;
     bool      completed     = false;
