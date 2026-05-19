@@ -921,6 +921,11 @@ void StreamPage::buildUI()
                     dispatchConfig.streamGroupId.clear();
                     dispatchConfig.imdbId = imdbId;
                     dispatchConfig.season = season;
+                    // F9 fix 2026-05-19: pass the magnet URI through so startDownload can
+                    // self-defend when the indexer pre-filled infoHash and resolveMetadata was
+                    // skipped. Empty magnetUri is fine — startDownload will warn+abort cleanly
+                    // rather than writing a zombie record.
+                    dispatchConfig.magnetUri = magnetUri;
 
                     if (season > 0 && !selectedEpisodes.isEmpty()) {
                         const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
