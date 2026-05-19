@@ -3296,6 +3296,8 @@ void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPick
     config.startPaused     = false;
     config.imdbId          = imdbId;
     config.season          = season;
+    // F9 fix 2026-05-19: pass magnet URI so startDownload can self-defend.
+    config.magnetUri       = choice.magnetUri;
 
     m_torrentClient->startDownload(hash, config);
 }
