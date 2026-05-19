@@ -321,6 +321,15 @@ private:
     // published in a prior Tankoban session BEFORE the on-publish
     // registerEpisode fallback chain at line ~2270 shipped.
     void backfillStreamDownloadIndex();
+    // F9 fix 2026-05-19 Task 9: orphan-recovery for direct-download movie records.
+    // Walks m_records, finds entries with imdbId set + empty streamGroupId +
+    // non-terminal state + no live engine handle (libtorrent didn't restore the
+    // handle from resume data on startup), demotes them to state="error" with
+    // human-readable message. Separate from the bulk-group orphan recovery at
+    // the entry-update hot path (line ~1417); that one only covers cohort items.
+    // Runs once on startup via a QTimer::singleShot delay (gives libtorrent time
+    // to complete resume-data load before sweeping).
+    void reconcileMovieRecordOrphans();
 
     // STREAM_BULK_DOWNLOAD_V2 Phase 2 — cohort-sequential scheduler.
     // Within a per-episode bulk group, only ONE magnet runs at a time.
