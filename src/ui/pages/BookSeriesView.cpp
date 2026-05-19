@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QHeaderView>
 #include <QCryptographicHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QStyleFactory>
 #include <QDir>
@@ -860,4 +861,40 @@ QString BookSeriesView::formatSize(qint64 bytes)
     }
     double gb = bytes / (1024.0 * 1024.0 * 1024.0);
     return QString::number(gb, 'f', 2) + " GB";
+}
+
+// v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot. Reports the current
+// series-view state (root path/name, current rel folder, search + sort,
+// continue-bar file path, table rows). Read-only; safe to call any time.
+QJsonObject BookSeriesView::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["seriesRootPath"] = m_seriesRootPath;
+    snap["seriesRootName"] = m_seriesRootName;
+    snap["currentRel"]     = m_currentRel;
+    snap["searchText"]     = m_searchText;
+    snap["sortKey"]        = m_sortKey;
+    snap["continueFilePath"] = m_continueFilePath;
+    snap["hasContinueBar"]   = m_continueBar && m_continueBar->isVisible();
+
+    QJsonArray rows;
+    if (m_table) {
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            auto* item = m_table->item(r, 0);
+            if (!item)
+                continue;
+            QJsonObject row;
+            row["label"] = item->text();
+            if (item->data(FolderRowRole).toBool()) {
+                row["kind"]    = QStringLiteral("folder");
+                row["relPath"] = item->data(FolderRelRole).toString();
+            } else {
+                row["kind"]    = QStringLiteral("file");
+                row["absPath"] = item->data(FilePathRole).toString();
+            }
+            rows.append(row);
+        }
+    }
+    snap["rows"] = rows;
+    return snap;
 }

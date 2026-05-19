@@ -21,6 +21,12 @@ public:
     void showSeries(const QString& seriesPath, const QString& seriesName,
                     const QString& coverThumbPath = QString());
 
+    // v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot.
+    // Reports the breadcrumb (root + current rel), search text + sort key,
+    // continue-bar file path, and the visible table rows (kind=folder|file,
+    // label, relPath or absPath).
+    QJsonObject devSnapshot() const;
+
 signals:
     void backRequested();
     void bookSelected(const QString& filePath);

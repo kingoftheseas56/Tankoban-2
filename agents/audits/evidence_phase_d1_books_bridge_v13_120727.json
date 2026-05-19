@@ -1,0 +1,13 @@
+{
+  "smoke_at": "2026-05-19T12:07:27+05:30",
+  "schema_expected": "tankoban.dev.v1.3",
+  "tankoban_pid": 23192,
+  "commands": [
+    {"cmd":"ping","reply":{"appVersion":"0.1.0","commands":["ping","get_state","open_page","scan_videos","get_videos","play_file","close_player","get_player","logs","get_torrents","get_library","get_downloads","get_bulk_groups","search","dispatch_episode","dispatch_season","dump_ui","comics_get_state","comics_get_library","comics_get_series","comics_select_volume","comics_open_series","comics_open_chapter","comics_search_tankoyomi","comics_get_downloads","comics_dispatch_volume","comics_get_sources","books_get_state","books_get_library","books_refresh_library","books_search_library","books_clear_search","books_open_book","books_open_series","books_get_series_state","books_set_sort","books_set_density","books_get_progress","books_seek_page","books_set_layout","books_get_chapters","books_open_chapter","books_tts_state","books_get_listen_state","books_tts_play","books_tts_pause","books_tts_resume","books_tts_stop","books_tts_set_voice","books_tts_set_speed","books_tts_cancel_stream"],"features":[],"schema":"tankoban.dev.v1.3","seq":1,"type":"reply"}},
+    {"cmd":"books-get-state","reply":{"seq":1,"snapshot":{"activePageId":"books","density":0,"gridMode":true,"hasScanned":true,"progressEntries":0,"reader":{"constructed":true,"currentFile":"","isVisible":false},"rescanPending":false,"scanning":false,"searchText":"","seriesCount":0,"seriesViewActive":false,"sortKey":"name_asc"},"type":"reply"}},
+    {"cmd":"books-get-library","reply":{"library":{"count":0,"entries":[],"hasScanned":true,"scanning":false},"seq":1,"type":"reply"}},
+    {"cmd":"books-refresh-library","reply":{"buffered":false,"scanning":true,"seq":1,"triggered":true,"type":"reply","wasScanning":false}},
+    {"cmd":"books-tts-state","reply":{"seq":1,"snapshot":{"jsPlaybackNote":"playing/paused/voice/speed/position live in tts_core.js","pendingProbeReqId":0,"pendingResetReqId":0,"pendingVoicesReqId":0,"pendingWarmupReqId":0,"workerAttached":true,"workerThreadRunning":true},"type":"reply"}},
+    {"cmd":"dump-ui books","reply":{"pageId":"books","seq":1,"snapshot":{"activePageId":"books","density":0,"gridMode":true,"hasScanned":true,"progressEntries":0,"reader":{"constructed":true,"currentFile":"","isVisible":false},"rescanPending":false,"scanning":false,"searchText":"","seriesCount":0,"seriesViewActive":false,"sortKey":"name_asc"},"type":"reply"}}
+  ]
+}

@@ -32,6 +32,13 @@ public:
                                         const QJsonObject& payload,
                                         QJsonObject& reply);
 
+    // v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshots. Used by
+    // MainWindow::handleDevCommand (dump_ui books branch) and by the
+    // page-local dispatch in dispatchDevCommand. All read-only / no UI
+    // mutation.
+    QJsonObject devSnapshot() const;
+    QJsonObject devLibrarySnapshot() const;
+
 signals:
     void openBook(const QString& filePath);
     void enteredLayer(const tankoban::ui::LayerEntry& entry);

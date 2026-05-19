@@ -551,3 +551,32 @@ void BookBridge::onWorkerResetFinished()
     m_pendingResetReqId = 0;
     emit booksTtsEdgeResetFinished(reqId, result);
 }
+
+// v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot of Qt-side TTS state.
+// Playback fields (playing/paused/voice/speed/position) live in
+// engine_foliate.js + tts_core.js inside the WebEngine page; this snapshot
+// only reports state visible to the C++ layer.
+QJsonObject BookBridge::devTtsSnapshot() const
+{
+    QJsonObject snap;
+    snap["workerAttached"] = m_ttsWorker != nullptr;
+    snap["workerThreadRunning"] =
+        m_ttsThread != nullptr && m_ttsThread->isRunning();
+    snap["pendingProbeReqId"]  = static_cast<double>(m_pendingProbeReqId);
+    snap["pendingVoicesReqId"] = static_cast<double>(m_pendingVoicesReqId);
+    snap["pendingWarmupReqId"] = static_cast<double>(m_pendingWarmupReqId);
+    snap["pendingResetReqId"]  = static_cast<double>(m_pendingResetReqId);
+    return snap;
+}
+
+// v1.3 Phase D.1 (2026-05-19) — direct cancel-stream surface for the
+// dev-bridge. Mirrors booksTtsEdgeCancelStream's worker invocation but
+// fires straight from C++ (the JS bridge path is reserved for the JS
+// shim's promise-correlated calls).
+void BookBridge::devCancelStream(quint64 streamId)
+{
+    if (!m_ttsWorker)
+        return;
+    QMetaObject::invokeMethod(m_ttsWorker, "cancelStream", Qt::QueuedConnection,
+                              Q_ARG(quint64, streamId));
+}

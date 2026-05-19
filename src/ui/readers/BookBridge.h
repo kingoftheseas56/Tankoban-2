@@ -88,6 +88,17 @@ public:
 
     void setFullscreen(bool fs);
 
+    // v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot of Qt-side TTS
+    // state (worker thread alive, pending request IDs for probe / voices /
+    // warmup / reset). Playback fields (playing/paused/voice/speed/position)
+    // live in JS engine_foliate.js and are not surfaced here.
+    QJsonObject devTtsSnapshot() const;
+
+    // v1.3 Phase D.1 (2026-05-19) — direct cancel-stream surface for the
+    // dev bridge. Mirrors booksTtsEdgeCancelStream's worker invocation but
+    // is callable from C++ (no QWebChannel round-trip).
+    void devCancelStream(quint64 streamId);
+
     // ── Edge TTS (EDGE_TTS_FIX Phase 1.3) ──
     // Async-style bridge over a worker QThread. JS shim issues an `*Start`
     // call with a JS-generated request ID + payload; bridge dispatches to

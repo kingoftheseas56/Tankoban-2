@@ -1649,9 +1649,22 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "comics_get_series","comics_select_volume",
                          "comics_open_series","comics_open_chapter",
                          "comics_search_tankoyomi","comics_get_downloads",
-                         "comics_dispatch_volume","comics_get_sources" };
+                         "comics_dispatch_volume","comics_get_sources",
+                         // v1.3 books-side bridge (Phase D.1, 2026-05-19).
+                         "books_get_state","books_get_library",
+                         "books_refresh_library","books_search_library",
+                         "books_clear_search","books_open_book",
+                         "books_open_series","books_get_series_state",
+                         "books_set_sort","books_set_density",
+                         "books_get_progress","books_seek_page",
+                         "books_set_layout","books_get_chapters",
+                         "books_open_chapter","books_tts_state",
+                         "books_get_listen_state","books_tts_play",
+                         "books_tts_pause","books_tts_resume",
+                         "books_tts_stop","books_tts_set_voice",
+                         "books_tts_set_speed","books_tts_cancel_stream" };
         return reply({
-            {"schema",     "tankoban.dev.v1.2"},
+            {"schema",     "tankoban.dev.v1.3"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -1914,6 +1927,13 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
             if (!m_videosPage)
                 return err("INTERNAL", "VideosPage not initialized");
             return reply({{"pageId", pageId}, {"snapshot", m_videosPage->devSnapshot(50)}});
+        }
+        if (pageId == QLatin1String("books")) {
+            // v1.3 Phase D.1 (2026-05-19) — books-side dump-ui.
+            auto* books = m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr;
+            if (!books)
+                return err("INTERNAL", "BooksPage not initialized");
+            return reply({{"pageId", pageId}, {"snapshot", books->devSnapshot()}});
         }
         return reply({{"pageId", pageId}, {"snapshot", devSnapshot()}});
     }

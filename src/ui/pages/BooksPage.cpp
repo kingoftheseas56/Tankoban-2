@@ -7,6 +7,9 @@
 #include "core/ScannerUtils.h"
 
 #include "ui/ContextMenuHelper.h"
+#include "ui/MainWindow.h"
+#include "ui/readers/BookBridge.h"
+#include "ui/readers/BookReader.h"
 #include "ui/widgets/FadingStackedWidget.h"
 #include "ui/widgets/LibraryListView.h"
 
@@ -18,7 +21,9 @@
 #include <QSettings>
 #include <QInputDialog>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QFileInfo>
 #include <QShortcut>
@@ -65,14 +70,342 @@ BooksPage::~BooksPage()
     // thread::finished. No manual delete.
 }
 
+// v1.3 Phase D.1 (2026-05-19) — books-side dispatch layer. See
+// docs/superpowers/specs/2026-05-19-bridge-v1.3-books-commission.md for
+// the 21-command catalog. JS-resident playback commands (seek-page,
+// set-layout, get-chapters, open-chapter, tts-play / tts-pause /
+// tts-resume / tts-set-voice / tts-set-speed / tts-stop / get-listen-state)
+// return a structured `code=JS_RESIDENT_NOT_IMPLEMENTED` reply that
+// names the JS file owning the state. Wiring those into BookBridge is a
+// follow-on v1.3.x ticket.
+namespace {
+
+inline bool replyOk(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+
+inline bool replyErr(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+
+inline bool replyJsResident(QJsonObject& reply, const QString& jsFile,
+                            const QString& note)
+{
+    reply["ok"]         = false;
+    reply["code"]       = QStringLiteral("JS_RESIDENT_NOT_IMPLEMENTED");
+    reply["jsSource"]   = jsFile;
+    reply["note"]       = note;
+    return true;
+}
+
+inline QString progressKeyFor(const QString& absPath)
+{
+    return QString(QCryptographicHash::hash(
+        absPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+}
+
+}  // namespace
+
 bool BooksPage::dispatchDevCommand(const QString& cmd,
                                    const QJsonObject& payload,
                                    QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
-    Q_UNUSED(payload);
-    Q_UNUSED(reply);
-    return false;
+    // ── Library + page-local state ────────────────────────────────────────
+    if (cmd == QLatin1String("books_get_state"))
+        return replyOk(reply, {{"snapshot", devSnapshot()}});
+
+    if (cmd == QLatin1String("books_get_library"))
+        return replyOk(reply, {{"library", devLibrarySnapshot()}});
+
+    if (cmd == QLatin1String("books_refresh_library")) {
+        const bool wasScanning = m_scanning;
+        triggerScan();
+        return replyOk(reply, {
+            {"triggered",   true},
+            {"wasScanning", wasScanning},
+            {"scanning",    m_scanning},
+            {"buffered",    m_rescanPending}
+        });
+    }
+
+    if (cmd == QLatin1String("books_search_library")) {
+        const QString query = payload.value("query").toString();
+        if (!m_searchBar)
+            return replyErr(reply, "INTERNAL", "search bar not constructed");
+        m_searchBar->setText(query);
+        // applySearch is debounce-fired by the QLineEdit textChanged signal,
+        // but we want a synchronous reply — run the search immediately.
+        applySearch();
+        return replyOk(reply, {
+            {"query",          query},
+            {"visibleSeries",  m_bookStrip ? m_bookStrip->visibleCount() : 0},
+            {"bookHitsShown",  m_bookHitsSection && m_bookHitsSection->isVisible()},
+            {"totalSeries",    m_bookStrip ? m_bookStrip->totalCount() : 0}
+        });
+    }
+
+    if (cmd == QLatin1String("books_clear_search")) {
+        if (!m_searchBar)
+            return replyErr(reply, "INTERNAL", "search bar not constructed");
+        m_searchBar->clear();
+        applySearch();
+        return replyOk(reply, {
+            {"visibleSeries", m_bookStrip ? m_bookStrip->visibleCount() : 0},
+            {"totalSeries",   m_bookStrip ? m_bookStrip->totalCount() : 0}
+        });
+    }
+
+    if (cmd == QLatin1String("books_set_sort")) {
+        const QString key = payload.value("key").toString();
+        if (key.isEmpty())
+            return replyErr(reply, "BAD_REQUEST", "payload.key required");
+        if (!m_sortCombo)
+            return replyErr(reply, "INTERNAL", "sort combo not constructed");
+        bool found = false;
+        for (int i = 0; i < m_sortCombo->count(); ++i) {
+            if (m_sortCombo->itemData(i).toString() == key) {
+                m_sortCombo->setCurrentIndex(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return replyErr(reply, "BAD_REQUEST",
+                QStringLiteral("unknown sort key '%1'").arg(key));
+        return replyOk(reply, {{"sortKey", key}});
+    }
+
+    if (cmd == QLatin1String("books_set_density")) {
+        if (!payload.contains(QStringLiteral("value")))
+            return replyErr(reply, "BAD_REQUEST", "payload.value required (0|1|2)");
+        const int val = payload.value("value").toInt(-1);
+        if (val < 0 || val > 2)
+            return replyErr(reply, "BAD_REQUEST", "value must be 0, 1, or 2");
+        if (!m_densitySlider)
+            return replyErr(reply, "INTERNAL", "density slider not constructed");
+        m_densitySlider->setValue(val);
+        return replyOk(reply, {{"density", val}});
+    }
+
+    if (cmd == QLatin1String("books_open_book")) {
+        const QString path = payload.value("path").toString();
+        if (path.isEmpty())
+            return replyErr(reply, "BAD_REQUEST", "payload.path required");
+        if (!QFileInfo::exists(path))
+            return replyErr(reply, "BAD_REQUEST",
+                QStringLiteral("file does not exist: %1").arg(path));
+        emit openBook(path);
+        return replyOk(reply, {{"opened", true}, {"path", path}});
+    }
+
+    if (cmd == QLatin1String("books_open_series")) {
+        const QString seriesPath = payload.value("seriesPath").toString();
+        const QString title      = payload.value("title").toString();
+        if (seriesPath.isEmpty() && title.isEmpty())
+            return replyErr(reply, "BAD_REQUEST",
+                "payload.seriesPath or payload.title required");
+        QString resolvedPath = seriesPath;
+        QString resolvedName;
+        if (!resolvedPath.isEmpty()) {
+            resolvedName = ScannerUtils::cleanMediaFolderTitle(
+                QDir(resolvedPath).dirName());
+        } else {
+            // Fallback: match by cleaned series name (case-insensitive).
+            const QString want = title.trimmed().toLower();
+            for (auto it = m_seriesFiles.constBegin();
+                 it != m_seriesFiles.constEnd(); ++it) {
+                const QString name = ScannerUtils::cleanMediaFolderTitle(
+                    QDir(it.key()).dirName());
+                if (name.toLower() == want) {
+                    resolvedPath = it.key();
+                    resolvedName = name;
+                    break;
+                }
+            }
+            if (resolvedPath.isEmpty())
+                return replyErr(reply, "NOT_FOUND",
+                    QStringLiteral("no series matching title '%1'").arg(title));
+        }
+        if (!m_seriesView || !m_stack)
+            return replyErr(reply, "INTERNAL", "series view not constructed");
+        m_seriesView->showSeries(resolvedPath, resolvedName);
+        m_stack->setCurrentIndexAnimated(1);
+        return replyOk(reply, {
+            {"seriesPath", resolvedPath},
+            {"seriesName", resolvedName}
+        });
+    }
+
+    if (cmd == QLatin1String("books_get_series_state")) {
+        if (!m_seriesView || !m_stack)
+            return replyErr(reply, "INTERNAL", "series view not constructed");
+        const bool onSeriesView = m_stack->currentIndex() == 1;
+        QJsonObject snap = m_seriesView->devSnapshot();
+        snap["isVisible"] = onSeriesView;
+        return replyOk(reply, {{"snapshot", snap}});
+    }
+
+    // ── Reader-side state (needs MainWindow + m_bookReader) ───────────────
+    auto* mainWin = qobject_cast<MainWindow*>(window());
+    BookReader* reader = mainWin ? mainWin->bookReader() : nullptr;
+
+    if (cmd == QLatin1String("books_get_progress")) {
+        if (!reader)
+            return replyErr(reply, "NO_READER",
+                "BookReader not yet constructed (no book opened this session)");
+        QJsonObject readerSnap = reader->devSnapshot();
+        QString currentFile = readerSnap.value("currentFile").toString();
+        QJsonObject prog;
+        if (!currentFile.isEmpty() && m_bridge) {
+            prog = m_bridge->progress("books", progressKeyFor(currentFile));
+        }
+        return replyOk(reply, {
+            {"reader",      readerSnap},
+            {"progressKey", currentFile.isEmpty() ? QString()
+                                : progressKeyFor(currentFile)},
+            {"progress",    prog}
+        });
+    }
+
+    // JS-resident: page/layout/chapter live in engine_foliate.js.
+    if (cmd == QLatin1String("books_seek_page")
+        || cmd == QLatin1String("books_set_layout")
+        || cmd == QLatin1String("books_get_chapters")
+        || cmd == QLatin1String("books_open_chapter")) {
+        if (!reader)
+            return replyErr(reply, "NO_READER",
+                "BookReader not yet constructed (no book opened this session)");
+        return replyJsResident(reply,
+            QStringLiteral("src/ui/readers/engine_foliate.js"),
+            QStringLiteral("reader page/layout/chapter state lives in Foliate's "
+                           "JS engine; v1.3.x will wire BookBridge methods to "
+                           "drive these via runJavaScript"));
+    }
+
+    // ── TTS-side state (BookBridge holds the Qt-side worker) ──────────────
+#ifdef HAS_WEBENGINE
+    BookBridge* bridge = reader ? reader->bridge() : nullptr;
+
+    if (cmd == QLatin1String("books_tts_state")) {
+        if (!bridge)
+            return replyErr(reply, "NO_READER",
+                "BookBridge not yet constructed (no book opened this session)");
+        QJsonObject ttsSnap = bridge->devTtsSnapshot();
+        ttsSnap["jsPlaybackNote"] = QStringLiteral(
+            "playing/paused/voice/speed/position live in tts_core.js");
+        return replyOk(reply, {{"snapshot", ttsSnap}});
+    }
+
+    if (cmd == QLatin1String("books_tts_cancel_stream")) {
+        if (!bridge)
+            return replyErr(reply, "NO_READER",
+                "BookBridge not yet constructed (no book opened this session)");
+        if (!payload.contains(QStringLiteral("streamId")))
+            return replyErr(reply, "BAD_REQUEST", "payload.streamId required");
+        const quint64 streamId = static_cast<quint64>(
+            payload.value("streamId").toVariant().toULongLong());
+        bridge->devCancelStream(streamId);
+        return replyOk(reply, {{"cancelled", true}, {"streamId",
+            static_cast<double>(streamId)}});
+    }
+#else
+    if (cmd == QLatin1String("books_tts_state")
+        || cmd == QLatin1String("books_tts_cancel_stream")) {
+        return replyErr(reply, "WEBENGINE_DISABLED",
+            "Edge TTS surface requires HAS_WEBENGINE build");
+    }
+#endif
+
+    // JS-resident: playback control lives in tts_core.js + engine_foliate.js.
+    if (cmd == QLatin1String("books_tts_play")
+        || cmd == QLatin1String("books_tts_pause")
+        || cmd == QLatin1String("books_tts_resume")
+        || cmd == QLatin1String("books_tts_stop")
+        || cmd == QLatin1String("books_tts_set_voice")
+        || cmd == QLatin1String("books_tts_set_speed")
+        || cmd == QLatin1String("books_get_listen_state")) {
+        if (!reader)
+            return replyErr(reply, "NO_READER",
+                "BookReader not yet constructed (no book opened this session)");
+        return replyJsResident(reply,
+            QStringLiteral("src/ui/readers/tts_core.js"),
+            QStringLiteral("TTS playback / voice / speed / Listen-button state "
+                           "lives in the JS layer; v1.3.x will add BookBridge "
+                           "Q_INVOKABLE methods + runJavaScript drivers"));
+    }
+
+    return false;  // unknown books_* command — fall through to UNKNOWN_CMD
+}
+
+// v1.3 Phase D.1 (2026-05-19) — page-local snapshot for books-get-state +
+// dump-ui books.
+QJsonObject BooksPage::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["activePageId"]   = QStringLiteral("books");
+    snap["hasScanned"]     = m_hasScanned;
+    snap["scanning"]       = m_scanning;
+    snap["rescanPending"]  = m_rescanPending;
+    snap["gridMode"]       = m_gridMode;
+    snap["seriesCount"]    = m_seriesFiles.size();
+    snap["progressEntries"] = m_progressKeyMap.size();
+    snap["searchText"]     = m_searchBar ? m_searchBar->text() : QString();
+    snap["sortKey"]        = m_sortCombo ? m_sortCombo->currentData().toString()
+                                         : QString();
+    snap["density"]        = m_densitySlider ? m_densitySlider->value() : -1;
+    snap["seriesViewActive"] = m_stack && m_stack->currentIndex() == 1;
+
+    if (auto* mainWin = qobject_cast<const MainWindow*>(
+            const_cast<BooksPage*>(this)->window())) {
+        BookReader* reader = mainWin->bookReader();
+        QJsonObject readerSnap;
+        readerSnap["constructed"] = reader != nullptr;
+        readerSnap["isVisible"]   = reader && reader->isVisible();
+        if (reader)
+            readerSnap["currentFile"] = reader->devSnapshot()
+                                            .value("currentFile").toString();
+        snap["reader"] = readerSnap;
+    }
+    return snap;
+}
+
+// v1.3 Phase D.1 (2026-05-19) — library snapshot (one entry per series
+// folder + the file roster collected during the last scan).
+QJsonObject BooksPage::devLibrarySnapshot() const
+{
+    QJsonArray entries;
+    for (auto it = m_seriesFiles.constBegin(); it != m_seriesFiles.constEnd();
+         ++it) {
+        QJsonObject e;
+        const QString seriesPath = it.key();
+        e["seriesPath"] = seriesPath;
+        e["seriesName"] = ScannerUtils::cleanMediaFolderTitle(
+            QDir(seriesPath).dirName());
+        e["fileCount"]  = it.value().size();
+        QJsonArray files;
+        for (const auto& bf : it.value()) {
+            QJsonObject f;
+            f["title"]    = bf.title;
+            f["filePath"] = bf.filePath;
+            f["progressKey"] = progressKeyFor(bf.filePath);
+            files.append(f);
+        }
+        e["files"] = files;
+        entries.append(e);
+    }
+    QJsonObject snap;
+    snap["entries"] = entries;
+    snap["count"]   = entries.size();
+    snap["hasScanned"] = m_hasScanned;
+    snap["scanning"]   = m_scanning;
+    return snap;
 }
 
 void BooksPage::buildUI()

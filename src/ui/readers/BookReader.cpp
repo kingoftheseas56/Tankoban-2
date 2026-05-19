@@ -520,3 +520,27 @@ void BookReader::updateChromeMaxIcon(bool isMaximized)
     Q_UNUSED(isMaximized);
 #endif
 }
+
+// v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot. JS-side playback
+// fields (page index, layout, chapter, position) live in engine_foliate.js
+// and are not surfaced here. BooksPage::dispatchDevCommand returns
+// NOT_IMPLEMENTED for those commands with a structured note pointing at
+// the JS shim — same pattern as the comics-side JS surfaces.
+QJsonObject BookReader::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["currentFile"] = m_currentFile;
+    snap["isVisible"]   = isVisible();
+#ifdef HAS_WEBENGINE
+    snap["engine"]       = QStringLiteral("webengine");
+    snap["readerReady"]  = m_readerReady;
+    snap["pendingBook"]  = m_pendingBook;
+    snap["hasBridge"]    = m_bridge != nullptr;
+#else
+    snap["engine"]       = QStringLiteral("textbrowser_fallback");
+    snap["readerReady"]  = !m_currentFile.isEmpty();
+    snap["pendingBook"]  = QString();
+    snap["hasBridge"]    = false;
+#endif
+    return snap;
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
@@ -27,6 +28,19 @@ public:
     // to JS (P5 wires the JS subscriber that swaps the icon). No-op when
     // the WebEngine path is disabled.
     void updateChromeMaxIcon(bool isMaximized);
+
+    // v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshot. Reports the C++-
+    // side reader state (current file, readerReady gate, visibility, engine
+    // path). Playback fields (page index, layout, position) live in the
+    // JS engine — exposed via the WebChannel BookBridge separately.
+    QJsonObject devSnapshot() const;
+
+    // v1.3 Phase D.1 (2026-05-19) — non-owning bridge accessor. Returns null
+    // on the non-WebEngine fallback build. Used by BooksPage::dispatchDev-
+    // Command to reach BookBridge TTS snapshot + cancel-stream surface.
+#ifdef HAS_WEBENGINE
+    BookBridge* bridge() const { return m_bridge; }
+#endif
 
 signals:
     void closeRequested();

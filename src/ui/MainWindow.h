@@ -69,6 +69,13 @@ public:
     // (per-episode markers + click routing) in later phases.
     StreamDownloadIndex* streamDownloadIndex() const { return m_streamDownloadIndex; }
 
+    // v1.3 bridge Phase D.1 (2026-05-19) — non-owning accessor used by
+    // BooksPage::dispatchDevCommand to reach the reader-side snapshot
+    // surfaces (reader open?, current file, BookBridge TTS state, JS-resident
+    // playback fields). Returns nullptr until the reader has been opened
+    // at least once.
+    BookReader* bookReader() const { return m_bookReader; }
+
 public slots:
     // Frameless-chrome public slots — connectable from any takeover surface
     // (VideoPlayer, ComicReader, BookReader) via the per-view chrome buttons.
