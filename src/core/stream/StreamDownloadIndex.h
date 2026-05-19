@@ -32,12 +32,18 @@ public:
         qint64  addedAt = 0;
         QString sourceGroupId; // empty for migration-rescued; non-empty for bulk-completion
         qint64  fileSizeBytes = 0;
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — v2 schema fields.
+        enum State { Complete = 0, Pending = 1, Downloading = 2, Failed = 3 };
+        State   state = Complete;       // default Complete so v1 entries migrate cleanly
+        int     progressPct = 100;      // 0-100; 100 == fully downloaded
     };
 
     explicit StreamDownloadIndex(JsonStore* store, QObject* parent = nullptr);
 
     // ── Thread safety contract ──────────────────────────────────────────────
-    // All mutating methods (registerEpisode/registerMovie/evictByImdb/evictByPath/validateAll)
+    // All mutating methods (registerEpisode/registerMovie/registerPendingEpisode/
+    // registerPendingMovie/updateEpisodeProgress/evictByImdb/evictByPath/
+    // evictBySourceGroup/validateAll)
     // execute synchronously on the calling thread. They acquire m_mutex around
     // the in-memory map mutations, then call save() and emit entriesChanged()
     // OFF the lock. JsonStore::write is internally thread-safe (its writer
@@ -60,9 +66,41 @@ public:
                          qint64 fileSizeBytes);
     void registerMovie(const QString& imdbId, const QString& canonicalPath,
                        const QString& sourceGroupId, qint64 fileSizeBytes);
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — register as Pending. canonicalPath
+    // is the EXPECTED path (libtorrent's savePath + relName); the file may not exist
+    // on disk yet at Pending state.
+    void registerPendingEpisode(const QString& imdbId, int season, int episode,
+                                const QString& canonicalPath,
+                                const QString& sourceGroupId,
+                                qint64 fileSizeBytes);
+
+    // Movie variant — parallels registerMovie() but with state=Pending.
+    void registerPendingMovie(const QString& imdbId,
+                              const QString& canonicalPath,
+                              const QString& sourceGroupId,
+                              qint64 fileSizeBytes);
+
+    // Update progress on an existing Pending/Downloading entry.
+    // Auto-flips state: first progressPct > 0 → Downloading; progressPct == 100 → Complete.
+    // Works for both episodes (season > 0) and movies (season == 0, episode == 0).
+    void updateEpisodeProgress(const QString& imdbId, int season, int episode,
+                               int progressPct);
+
+    // Drop all entries for a given sourceGroupId (cancel semantics, Decision 7).
+    // Files on disk are NOT touched.
+    void evictBySourceGroup(const QString& sourceGroupId);
+
     void evictByImdb(const QString& imdbId);
     void evictByPath(const QString& canonicalKey);
     void validateAll();
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — on launch, walk Pending/Downloading
+    // entries and evict those for which libtorrent has no record. activeInfoHashes
+    // is the set of infoHashes libtorrent currently tracks; format expected:
+    //   each element is the QString-form infoHash (lowercase hex).
+    // Pass the result of TorrentClient::activeInfoHashes() at startup.
+    void validateInFlightEntries(const QSet<QString>& activeInfoHashes);
 
     // Read API — mutex-guarded. Safe from any thread.
     bool isStreamOwned(const QString& canonicalKey) const;
@@ -81,6 +119,8 @@ public:
 
 signals:
     void entriesChanged();
+    // Granular: fires when a single entry's state OR progressPct changes.
+    void entryStateChanged(const QString& imdbId, int season, int episode);
 
 private:
     void load();
@@ -99,5 +139,7 @@ private:
     QSet<QString>           m_imdbHasAny;   // imdb if at least one entry exists
 
     static constexpr const char* FILENAME = "stream_downloads.json";
-    static constexpr int kSchemaVersion = 1;
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — schema bump for Entry.state +
+    // progressPct. v1 entries on load get state=Complete + progressPct=100.
+    static constexpr int kSchemaVersion = 2;
 };

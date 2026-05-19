@@ -7,6 +7,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <algorithm>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -49,12 +50,19 @@ void StreamDownloadIndex::load()
         return;  // first-launch: file doesn't exist yet, nothing to load
 
     const int storedVersion = data.value(QStringLiteral("version")).toInt(0);
-    if (storedVersion != kSchemaVersion) {
+    // Accept v1 (migrate) and v2 (read natively). Reject anything else.
+    if (storedVersion < 1 || storedVersion > kSchemaVersion) {
         DebugLogBuffer::instance().info(QStringLiteral("stream-download-index"),
             QStringLiteral("schema mismatch on load — starting empty"),
             QJsonObject{{QStringLiteral("storedVersion"), storedVersion},
                         {QStringLiteral("expected"), kSchemaVersion}});
         return;
+    }
+    if (storedVersion < kSchemaVersion) {
+        DebugLogBuffer::instance().info(QStringLiteral("stream-download-index"),
+            QStringLiteral("migrating schema"),
+            QJsonObject{{QStringLiteral("from"), storedVersion},
+                        {QStringLiteral("to"), kSchemaVersion}});
     }
 
     const QJsonObject byPath = data.value(QStringLiteral("byPath")).toObject();
@@ -71,6 +79,13 @@ void StreamDownloadIndex::load()
         e.addedAt       = static_cast<qint64>(obj.value(QStringLiteral("addedAt")).toDouble());
         e.sourceGroupId = obj.value(QStringLiteral("sourceGroupId")).toString();
         e.fileSizeBytes = static_cast<qint64>(obj.value(QStringLiteral("fileSizeBytes")).toDouble());
+        // v2 fields — default Complete/100 for v1 migration.
+        const int rawState = obj.value(QStringLiteral("state")).toInt(
+            static_cast<int>(Entry::Complete));
+        e.state = (rawState >= 0 && rawState <= static_cast<int>(Entry::Failed))
+            ? static_cast<Entry::State>(rawState)
+            : Entry::Complete;
+        e.progressPct = obj.value(QStringLiteral("progressPct")).toInt(100);
 
         if (e.imdbId.isEmpty() || e.canonicalPath.isEmpty())
             continue;
@@ -105,6 +120,8 @@ void StreamDownloadIndex::save()
             obj[QStringLiteral("addedAt")]       = static_cast<double>(e.addedAt);
             obj[QStringLiteral("sourceGroupId")] = e.sourceGroupId;
             obj[QStringLiteral("fileSizeBytes")] = static_cast<double>(e.fileSizeBytes);
+            obj[QStringLiteral("state")]         = static_cast<int>(e.state);
+            obj[QStringLiteral("progressPct")]   = e.progressPct;
             byPath[it.key()] = obj;
         }
     }
@@ -228,6 +245,130 @@ void StreamDownloadIndex::registerMovie(const QString& imdbId,
     }
 }
 
+void StreamDownloadIndex::registerPendingEpisode(const QString& imdbId, int season,
+                                                 int episode,
+                                                 const QString& canonicalPath,
+                                                 const QString& sourceGroupId,
+                                                 qint64 fileSizeBytes)
+{
+    QString epKey = computeEpisodeKey(imdbId, season, episode);
+    QString canonKey = computeCanonicalKey(canonicalPath);
+    {
+        QMutexLocker locker(&m_mutex);
+        Entry e;
+        e.imdbId = imdbId;
+        e.type = QStringLiteral("series");
+        e.season = season;
+        e.episode = episode;
+        e.canonicalPath = canonicalPath;
+        e.addedAt = QDateTime::currentSecsSinceEpoch();
+        e.sourceGroupId = sourceGroupId;
+        e.fileSizeBytes = fileSizeBytes;
+        e.state = Entry::Pending;
+        e.progressPct = 0;
+        m_byPath.insert(canonKey, e);
+        m_byEpisode.insert(epKey, canonKey);
+        m_imdbHasAny.insert(imdbId);
+    }
+    save();
+    emit entriesChanged();
+    emit entryStateChanged(imdbId, season, episode);
+}
+
+void StreamDownloadIndex::registerPendingMovie(const QString& imdbId,
+                                               const QString& canonicalPath,
+                                               const QString& sourceGroupId,
+                                               qint64 fileSizeBytes)
+{
+    QString canonKey = computeCanonicalKey(canonicalPath);
+    QString epKey = computeEpisodeKey(imdbId, 0, 0);
+    {
+        QMutexLocker locker(&m_mutex);
+        Entry e;
+        e.imdbId = imdbId;
+        e.type = QStringLiteral("movie");
+        e.season = 0;
+        e.episode = 0;
+        e.canonicalPath = canonicalPath;
+        e.addedAt = QDateTime::currentSecsSinceEpoch();
+        e.sourceGroupId = sourceGroupId;
+        e.fileSizeBytes = fileSizeBytes;
+        e.state = Entry::Pending;
+        e.progressPct = 0;
+        m_byPath.insert(canonKey, e);
+        m_byEpisode.insert(epKey, canonKey);
+        m_imdbHasAny.insert(imdbId);
+    }
+    save();
+    emit entriesChanged();
+    emit entryStateChanged(imdbId, 0, 0);
+}
+
+void StreamDownloadIndex::updateEpisodeProgress(const QString& imdbId, int season,
+                                                int episode, int progressPct)
+{
+    QString epKey = computeEpisodeKey(imdbId, season, episode);
+    bool changed = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        auto it = m_byEpisode.find(epKey);
+        if (it == m_byEpisode.end())
+            return;  // unknown entry, no-op
+        const QString canonKey = it.value();
+        auto pathIt = m_byPath.find(canonKey);
+        if (pathIt == m_byPath.end())
+            return;
+        Entry& e = pathIt.value();
+        const int clamped = std::clamp(progressPct, 0, 100);
+        Entry::State newState = e.state;
+        if (clamped >= 100) {
+            newState = Entry::Complete;
+        } else if (clamped > 0) {
+            newState = Entry::Downloading;
+        }
+        if (clamped != e.progressPct || newState != e.state) {
+            e.progressPct = clamped;
+            e.state = newState;
+            changed = true;
+        }
+    }
+    if (changed) {
+        save();
+        emit entryStateChanged(imdbId, season, episode);
+    }
+}
+
+void StreamDownloadIndex::evictBySourceGroup(const QString& sourceGroupId)
+{
+    if (sourceGroupId.isEmpty())
+        return;
+    QList<QString> evictedImdbs;
+    {
+        QMutexLocker locker(&m_mutex);
+        QList<QString> keysToEvict;
+        QList<QString> epKeysToEvict;
+        for (auto it = m_byPath.begin(); it != m_byPath.end(); ++it) {
+            if (it.value().sourceGroupId == sourceGroupId) {
+                keysToEvict.append(it.key());
+                epKeysToEvict.append(
+                    computeEpisodeKey(it.value().imdbId,
+                                      it.value().season,
+                                      it.value().episode));
+                if (!evictedImdbs.contains(it.value().imdbId))
+                    evictedImdbs.append(it.value().imdbId);
+            }
+        }
+        for (const QString& k : keysToEvict)
+            m_byPath.remove(k);
+        for (const QString& k : epKeysToEvict)
+            m_byEpisode.remove(k);
+        for (const QString& imdb : evictedImdbs)
+            recomputeImdbHasAnyLocked(imdb);
+    }
+    save();
+    emit entriesChanged();
+}
+
 void StreamDownloadIndex::evictByImdb(const QString& imdbId)
 {
     if (imdbId.isEmpty())
@@ -323,6 +464,45 @@ void StreamDownloadIndex::validateAll()
 
     for (const QString& key : missing)
         evictByPath(key);
+}
+
+void StreamDownloadIndex::validateInFlightEntries(const QSet<QString>& activeInfoHashes)
+{
+    QList<QString> keysToEvict;
+    QList<QString> epKeysToEvict;
+    QList<QString> evictedImdbs;
+    {
+        QMutexLocker locker(&m_mutex);
+        for (auto it = m_byPath.begin(); it != m_byPath.end(); ++it) {
+            const Entry& e = it.value();
+            if (e.state != Entry::Pending && e.state != Entry::Downloading)
+                continue;
+            // sourceGroupId for Tankorent path is "tankorent:<infoHash>"
+            const QString prefix = QStringLiteral("tankorent:");
+            if (!e.sourceGroupId.startsWith(prefix))
+                continue;  // not a Tankorent in-flight entry
+            const QString infoHash = e.sourceGroupId.mid(prefix.size());
+            if (activeInfoHashes.contains(infoHash))
+                continue;  // libtorrent knows about it — leave alone
+            keysToEvict.append(it.key());
+            epKeysToEvict.append(
+                computeEpisodeKey(e.imdbId, e.season, e.episode));
+            if (!evictedImdbs.contains(e.imdbId))
+                evictedImdbs.append(e.imdbId);
+        }
+        for (const QString& k : keysToEvict)
+            m_byPath.remove(k);
+        for (const QString& k : epKeysToEvict)
+            m_byEpisode.remove(k);
+        for (const QString& imdb : evictedImdbs)
+            recomputeImdbHasAnyLocked(imdb);
+    }
+    if (!keysToEvict.isEmpty()) {
+        save();
+        emit entriesChanged();
+        qDebug() << "validateInFlightEntries: evicted" << keysToEvict.size()
+                 << "stale Pending/Downloading entries";
+    }
 }
 
 // ── Read API ────────────────────────────────────────────────────────────────
