@@ -65,6 +65,16 @@ BooksPage::~BooksPage()
     // thread::finished. No manual delete.
 }
 
+bool BooksPage::dispatchDevCommand(const QString& cmd,
+                                   const QJsonObject& payload,
+                                   QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 void BooksPage::buildUI()
 {
     auto* outerLayout = new QVBoxLayout(this);

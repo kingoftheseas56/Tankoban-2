@@ -20,8 +20,10 @@ class MainWindow;
 //   reply    = {"type": "reply", "seq": <int>, ...}
 //   error    = {"type": "error", "seq": <int>, "code": "<UPPER_SNAKE>", "message": "<human>"}
 //
-// Schema version returned in `ping` response: "tankoban.dev.v1.2".
-// Additive changes within v1.x are non-breaking; removals/renames bump to v2.
+// Schema version is returned by MainWindow's `ping` command. Additive
+// changes within v1.x are non-breaking; removals/renames bump to v2.
+// MainWindow owns command dispatch; v1.3+ domain surfaces may delegate
+// prefixed commands to page-local dispatchDevCommand methods.
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.

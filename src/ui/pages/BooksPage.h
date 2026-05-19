@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QSettings>
 #include <QPushButton>
+#include <QJsonObject>
 #include "../LayerEntry.h"
 class QScrollArea;
 class CoreBridge;
@@ -27,6 +28,9 @@ public:
 
     void activate();
     void triggerScan();
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 signals:
     void openBook(const QString& filePath);

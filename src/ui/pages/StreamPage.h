@@ -107,6 +107,19 @@ public:
     QJsonObject devDispatchEpisode(const QString& imdbId, int season, int episode);
     QJsonObject devDispatchSeason(const QString& imdbId, int season);
 
+    // v1.3 stream-side bridge expansion (Agent 4 attribution, 2026-05-19).
+    // Three commands that programmatically drive what a user does to dispatch
+    // a Tankorent-source record (the Phase 2 substrate trigger from
+    // TANKORENT_CINEMETA_PACK_MAPPING Tasks 7-10): open detail view → enumerate
+    // source cards → trigger directDownloadRequested on the Nth card.
+    // Stubs land first; bodies filled in by Agent 4 subordinates A4S1/A4S2/A4S3.
+    QJsonObject devOpenDetail(const QString& imdbId);          // A4S1
+    QJsonObject devGetSources();                                // A4S2
+    QJsonObject devDirectDownload(int sourceIndex);             // A4S3
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
+
 signals:
     // STREAM_ADD_TO_TANKORENT (2026-05-06) — emitted when the user
     // right-clicks a magnet stream card and picks "Add torrent to

@@ -147,6 +147,16 @@ VideosPage::~VideosPage()
     // the deleteLater connect on thread::finished above. No manual delete.
 }
 
+bool VideosPage::dispatchDevCommand(const QString& cmd,
+                                    const QJsonObject& payload,
+                                    QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 void VideosPage::buildUI()
 {
     auto* outerLayout = new QVBoxLayout(this);

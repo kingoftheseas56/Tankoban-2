@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QPixmap>
 #include <QWidget>
+#include <QJsonObject>
 
 #include "core/book/BookResult.h"
 #include "tankolibrary/TransfersView.h"
@@ -40,6 +41,9 @@ public:
     explicit TankoLibraryPage(CoreBridge* bridge,
                               TorrentClient* client = nullptr,
                               QWidget* parent = nullptr);
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 private:
     // Media-type tab (TANKOLIBRARY_ABB_FIX_TODO M1). Books = EPUB/PDF/MOBI

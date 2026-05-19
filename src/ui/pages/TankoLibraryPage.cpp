@@ -587,6 +587,16 @@ void TankoLibraryPage::updateFiltersDotIndicator()
 
 // ── UI builders ─────────────────────────────────────────────────────────────
 
+bool TankoLibraryPage::dispatchDevCommand(const QString& cmd,
+                                          const QJsonObject& payload,
+                                          QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 void TankoLibraryPage::buildUI()
 {
     auto* root = new QVBoxLayout(this);
@@ -2033,4 +2043,3 @@ void TankoLibraryPage::updateInnerResultsView()
     }
     m_resultsInnerStack->setCurrentIndex(0);   // data view (grid)
 }
-

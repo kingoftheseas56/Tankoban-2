@@ -115,6 +115,10 @@ private:
     void applyFramelessWin32Style();
 
     void activatePage(const QString &pageId);
+    bool forwardToDispatch(QObject* page,
+                           const QString& cmd,
+                           const QJsonObject& payload,
+                           QJsonObject& reply);
 
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — standing Tankoban
     // contract: topbar mode pills are end-all-be-all hard resets. Clicking

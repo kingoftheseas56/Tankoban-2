@@ -13,6 +13,7 @@
 #include <QSet>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
+#include <QJsonObject>
 
 #include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
@@ -49,6 +50,9 @@ public:
         const StreamBulkGroupRecord& group,
         const tankostream::stream::BulkPackVerificationResult& verifierOutput,
         const QString& displayLabel);
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 signals:
     void enteredLayer(const tankoban::ui::LayerEntry& entry);

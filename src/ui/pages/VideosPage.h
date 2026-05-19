@@ -64,6 +64,9 @@ public:
     // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
     // Returns library tile state for the `get_videos` command. Pure read.
     QJsonObject devSnapshot(int limit = 50) const;
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 signals:
     void playVideo(const QString& filePath);

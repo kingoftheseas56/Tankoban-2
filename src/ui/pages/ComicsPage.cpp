@@ -418,6 +418,16 @@ ComicsPage::~ComicsPage()
     // thread::finished. No manual delete.
 }
 
+bool ComicsPage::dispatchDevCommand(const QString& cmd,
+                                    const QJsonObject& payload,
+                                    QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 void ComicsPage::setTorrentClient(TorrentClient* client)
 {
     // TANKOYOMI_PREMIUM Phase 3 -- MainWindow wires this AFTER both ComicsPage

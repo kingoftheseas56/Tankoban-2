@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QSettings>
 #include <QMap>
+#include <QJsonObject>
 #include "../LayerEntry.h"
 class QPushButton;
 class QScrollArea;
@@ -97,6 +98,9 @@ public:
     QJsonObject devDownloadsSnapshot() const;
     QJsonObject devDispatchVolume(const QString& seriesId, int volumeNumber, const QString& source);
     QJsonObject devSourcesSnapshot() const;
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 signals:
     void openComic(const QString& cbzPath, const QStringList& seriesCbzList, const QString& seriesName);

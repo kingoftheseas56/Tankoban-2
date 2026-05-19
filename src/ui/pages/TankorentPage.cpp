@@ -633,6 +633,16 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     m_transferTimer->start(1000);
 }
 
+bool TankorentPage::dispatchDevCommand(const QString& cmd,
+                                       const QJsonObject& payload,
+                                       QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // UI
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2923,4 +2933,3 @@ void TankorentPage::restoreLayer(const tankoban::ui::LayerEntry& target)
     // + results live on the same surface. Phase 1+ may extend.
     Q_UNUSED(target);
 }
-

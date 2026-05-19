@@ -42,6 +42,7 @@
 #include <QDialog>
 #include <QEvent>
 #include <QMouseEvent>
+#include <QMetaObject>
 #include <QWindowStateChangeEvent>
 
 #ifdef Q_OS_WIN
@@ -1599,6 +1600,26 @@ QJsonObject MainWindow::devSnapshot() const
     return snap;
 }
 
+bool MainWindow::forwardToDispatch(QObject* page,
+                                   const QString& cmd,
+                                   const QJsonObject& payload,
+                                   QJsonObject& reply)
+{
+    if (!page)
+        return false;
+
+    bool handled = false;
+    const bool invoked = QMetaObject::invokeMethod(
+        page,
+        "dispatchDevCommand",
+        Qt::DirectConnection,
+        Q_RETURN_ARG(bool, handled),
+        Q_ARG(QString, cmd),
+        Q_ARG(QJsonObject, payload),
+        Q_ARG(QJsonObject&, reply));
+    return invoked && handled;
+}
+
 QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJsonObject& payload)
 {
     auto reply = [seq](QJsonObject extras) {
@@ -1900,6 +1921,49 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("logs")) {
         const int limit = payload.value("limit").toInt(100);
         return reply({{"entries", DebugLogBuffer::instance().recent(limit)}});
+    }
+
+    QJsonObject delegatedReply;
+    auto tryForward = [&](bool matches, QObject* page) -> bool {
+        if (!matches)
+            return false;
+        delegatedReply = QJsonObject{
+            {"type", QStringLiteral("reply")},
+            {"seq", seq}
+        };
+        return forwardToDispatch(page, cmd, payload, delegatedReply);
+    };
+
+    if (tryForward(cmd.startsWith(QLatin1String("books_")),
+                   m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr))
+        return delegatedReply;
+    if (tryForward(cmd.startsWith(QLatin1String("comics_")),
+                   m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr))
+        return delegatedReply;
+    if (tryForward(cmd.startsWith(QLatin1String("videos_")), m_videosPage))
+        return delegatedReply;
+    if (tryForward(cmd.startsWith(QLatin1String("stream_")), m_streamPage))
+        return delegatedReply;
+    if (tryForward(cmd.startsWith(QLatin1String("tankorent_")), m_tankorentPage))
+        return delegatedReply;
+    if (tryForward(cmd.startsWith(QLatin1String("tankolibrary_")),
+                   m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr))
+        return delegatedReply;
+    if (cmd.startsWith(QLatin1String("sources_"))) {
+        if (tryForward(true, m_tankorentPage))
+            return delegatedReply;
+        if (tryForward(true, m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr))
+            return delegatedReply;
+    }
+    if (cmd.startsWith(QLatin1String("library_"))) {
+        if (tryForward(true, m_videosPage))
+            return delegatedReply;
+        if (tryForward(true, m_streamPage))
+            return delegatedReply;
+        if (tryForward(true, m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr))
+            return delegatedReply;
+        if (tryForward(true, m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr))
+            return delegatedReply;
     }
 
     return err("UNKNOWN_CMD",
