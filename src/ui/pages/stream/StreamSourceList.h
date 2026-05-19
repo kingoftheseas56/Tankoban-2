@@ -43,6 +43,30 @@ public:
     void showAutoLaunchToast(const QString& label);
     void hideAutoLaunchToast();
 
+    // v1.3 dev-bridge helper (A4S3, 2026-05-19) — programmatic accessors that
+    // the tankoctl dev-control surface uses to drive what a user does when
+    // they click "Direct Download" on the Nth source card. Behavioural parity:
+    // emits the same directDownloadRequested signal the StreamSourceCard would
+    // re-emit on user invocation, so the entire downstream chain (StreamDetailView
+    // → StreamPage::onDirectDownloadRequested → TorrentClient::startDownload)
+    // fires identically. Returns false (without emitting) when index is out of
+    // range. Optional out-params receive a snapshot of the dispatched choice
+    // for caller logging; pass nullptr to skip.
+    int  sourceCardCount() const { return m_cards.size(); }
+    bool triggerDirectDownloadAt(int      index,
+                                 QString* outAddonName   = nullptr,
+                                 QString* outDisplayName = nullptr,
+                                 bool*    outHasMagnet   = nullptr);
+
+    // v1.3 dev-bridge helpers (A4S2, 2026-05-19) — let StreamPage::devGetSources
+    // snapshot the populated picker rows + tell "loading" apart from terminal-
+    // but-empty states so smokes can wait the async StreamAggregator fan-out
+    // out before picking a card. Both are read-only / non-mutating; safe to
+    // call any time. isLoading() flips true in setLoading() and back to false
+    // in setSources/setEmpty/setError/setPlaceholder.
+    QList<StreamPickerChoice> snapshotChoices() const;
+    bool isLoading() const { return m_loading; }
+
 signals:
     void sourceActivated(const tankostream::stream::StreamPickerChoice& choice);
     void autoLaunchCancelRequested();
@@ -72,6 +96,12 @@ private:
     QLabel*      m_autoLaunchLabel = nullptr;
 
     QList<StreamSourceCard*> m_cards;
+
+    // v1.3 dev-bridge state flag (A4S2) — true between setLoading() and the
+    // next terminal state setter (setSources/setEmpty/setError/setPlaceholder).
+    // Read by StreamPage::devGetSources to distinguish in-flight aggregation
+    // from a terminal "no sources" / "error" state.
+    bool m_loading = false;
 };
 
 }

@@ -114,6 +114,24 @@ void StreamSourceList::hideAutoLaunchToast()
     m_autoLaunchToast->hide();
 }
 
+bool StreamSourceList::triggerDirectDownloadAt(int      index,
+                                                QString* outAddonName,
+                                                QString* outDisplayName,
+                                                bool*    outHasMagnet)
+{
+    if (index < 0 || index >= m_cards.size()) return false;
+    StreamSourceCard* card = m_cards.at(index);
+    if (!card) return false;
+
+    const StreamPickerChoice& choice = card->choice();
+    if (outAddonName)   *outAddonName   = choice.addonName;
+    if (outDisplayName) *outDisplayName = choice.displayTitle;
+    if (outHasMagnet)   *outHasMagnet   = !choice.magnetUri.isEmpty();
+
+    emit directDownloadRequested(choice);
+    return true;
+}
+
 void StreamSourceList::clearCards()
 {
     for (StreamSourceCard* card : m_cards) {
@@ -141,32 +159,47 @@ void StreamSourceList::showStatus(const QString& message, bool emphasizeError)
 void StreamSourceList::setPlaceholder(const QString& message)
 {
     clearCards();
+    m_loading = false;
     showStatus(message);
 }
 
 void StreamSourceList::setLoading()
 {
     clearCards();
+    m_loading = true;
     showStatus(tr("Loading sources..."));
 }
 
 void StreamSourceList::setEmpty()
 {
     clearCards();
+    m_loading = false;
     showStatus(tr("No sources found. Try enabling another stream addon."));
 }
 
 void StreamSourceList::setError(const QString& message)
 {
     clearCards();
+    m_loading = false;
     showStatus(message.isEmpty() ? tr("Failed to fetch sources.") : message,
                /*emphasizeError=*/true);
+}
+
+QList<StreamPickerChoice> StreamSourceList::snapshotChoices() const
+{
+    QList<StreamPickerChoice> out;
+    out.reserve(m_cards.size());
+    for (const StreamSourceCard* card : m_cards) {
+        if (card) out.append(card->choice());
+    }
+    return out;
 }
 
 void StreamSourceList::setSources(const QList<StreamPickerChoice>& choices,
                                    const QString&                   savedChoiceKey)
 {
     clearCards();
+    m_loading = false;
 
     if (choices.isEmpty()) {
         setEmpty();

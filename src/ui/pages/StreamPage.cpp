@@ -17,6 +17,7 @@
 #include "stream/StreamSearchWidget.h"
 #include "stream/StreamDetailView.h"
 #include "stream/StreamSourceChoice.h"
+#include "stream/StreamSourceList.h"
 #include "core/stream/StreamAggregator.h"
 #include "core/stream/SubtitlesAggregator.h"
 #include "core/stream/CalendarEngine.h"
@@ -367,6 +368,16 @@ void StreamPage::activate()
         m_libraryLayout->refresh();
 }
 
+bool StreamPage::dispatchDevCommand(const QString& cmd,
+                                    const QJsonObject& payload,
+                                    QJsonObject& reply)
+{
+    Q_UNUSED(cmd);
+    Q_UNUSED(payload);
+    Q_UNUSED(reply);
+    return false;
+}
+
 // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) â€” fan out the download
 // index to both consumers: StreamLibrary (so remove() also evicts per-
 // episode rows) and StreamLibraryLayout (so tile DOWNLOADED chips render +
@@ -507,6 +518,185 @@ QJsonObject StreamPage::devDispatchEpisode(const QString& imdbId, int season, in
 QJsonObject StreamPage::devDispatchSeason(const QString& imdbId, int season)
 {
     return devDispatchEpisodes(imdbId, season, QList<int>{});
+}
+
+// ─── v1.3 stream-side bridge expansion ──────────────────────────────────────
+// Agent 4 attribution, 2026-05-19. Skeleton stubs land first to pre-allocate
+// dispatcher namespace + verify the build green; bodies filled by parallel
+// Agent 4 subordinate sessions (A4S1/A4S2/A4S3).
+
+QJsonObject StreamPage::devOpenDetail(const QString& imdbId)
+{
+    // A4S1: mirror the user-visible search-result single-click path. The
+    // (QString) overload of showDetail is the exact same slot wired to
+    // StreamLibraryLayout::showClicked / StreamSearchWidget::metaActivated
+    // (via lambda) -- it pushes a Detail NavEntry, emits enteredLayer, and
+    // is idempotent against repeat-clicks on the same imdbId.
+    QJsonObject out;
+    if (imdbId.isEmpty()) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("imdbId is empty");
+        return out;
+    }
+    if (!m_detailView || !m_mainStack) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("StreamPage not fully constructed (m_detailView or m_mainStack null)");
+        return out;
+    }
+
+    showDetail(imdbId);
+
+    out[QStringLiteral("status")]      = QStringLiteral("ok");
+    out[QStringLiteral("imdbId")]      = imdbId;
+    out[QStringLiteral("currentImdb")] = m_detailView->currentImdb();
+    // StreamPage m_mainStack layout: 0=browse, 1=detail, 2=player, 3=addons.
+    // After showDetail() the stack should land on index 1; report whatever
+    // it actually settled at so the caller can verify the navigation took.
+    out[QStringLiteral("layer")]       = m_mainStack->currentIndex();
+    return out;
+}
+
+QJsonObject StreamPage::devGetSources()
+{
+    // A4S2 (2026-05-19). Snapshot the active detail view's source-card pane
+    // as JSON for the v1.3 dev-control bridge. Mirrors the user-visible
+    // StreamSourceList without mutating it; the StreamSourceList descendant
+    // is reached via findChild (same pattern A4S3's devDirectDownload uses).
+    QJsonObject out;
+
+    if (!m_detailView || !m_mainStack
+     || m_detailView->currentImdb().isEmpty()) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("no detail view active");
+        return out;
+    }
+
+    auto* sourceList =
+        m_detailView->findChild<tankostream::stream::StreamSourceList*>();
+    if (!sourceList) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("no detail view active");
+        return out;
+    }
+
+    if (sourceList->isLoading()) {
+        out[QStringLiteral("status")]  = QStringLiteral("pending");
+        out[QStringLiteral("message")] = QStringLiteral("source collection in progress");
+        return out;
+    }
+
+    const auto choices = sourceList->snapshotChoices();
+
+    QJsonArray sources;
+    int idx = 0;
+    for (const tankostream::stream::StreamPickerChoice& choice : choices) {
+        QJsonObject row;
+        row[QStringLiteral("index")] = idx++;
+
+        // Coarse kind classification — drives the smoke's "pick the tankorent
+        // card" / "pick a premium debrid card" selectors. No canonical enum
+        // exists; this is a heuristic over StreamPickerChoice fields:
+        //   tankorent  — addonId/addonName carries "tankorent" (the in-app
+        //                Tankorent-as-Source surface from TANKORENT_STREAM_INTEGRATION)
+        //   addon-bulk — magnet-source rows from a torrent-aggregator addon
+        //                (Torrentio et al; the bulk of the panel for series)
+        //   premium    — direct streams (HTTP/URL) — usually debrid-resolved
+        //                or premium hosted (RealDebrid, etc.)
+        //   other      — anything we didn't classify above (YouTube, etc.)
+        QString kind = QStringLiteral("other");
+        if (choice.addonId.contains(QStringLiteral("tankorent"), Qt::CaseInsensitive)
+         || choice.addonName.contains(QStringLiteral("tankorent"), Qt::CaseInsensitive)) {
+            kind = QStringLiteral("tankorent");
+        } else if (choice.sourceKind == QLatin1String("magnet")
+                || !choice.magnetUri.isEmpty()) {
+            kind = QStringLiteral("addon-bulk");
+        } else if (choice.isDirect
+                || choice.sourceKind == QLatin1String("http")
+                || choice.sourceKind == QLatin1String("url")) {
+            kind = QStringLiteral("premium");
+        }
+        row[QStringLiteral("kind")] = kind;
+
+        row[QStringLiteral("addonName")]  = choice.addonName;
+        row[QStringLiteral("name")]       = choice.displayTitle;
+        row[QStringLiteral("magnetUri")]  = !choice.magnetUri.isEmpty();
+        row[QStringLiteral("quality")]    = choice.displayQuality;
+        row[QStringLiteral("peers")]      = choice.seeders;
+        row[QStringLiteral("sizeBytes")]  = static_cast<qint64>(choice.sizeBytes);
+
+        // Bonus context the smoke benefits from when filtering pack-type
+        // results (TANKORENT_CINEMETA_PACK_MAPPING Phase 2 targets packs).
+        if (!choice.packType.isEmpty())
+            row[QStringLiteral("packType")] = choice.packType;
+        if (!choice.packLabel.isEmpty())
+            row[QStringLiteral("packLabel")] = choice.packLabel;
+
+        sources.append(row);
+    }
+
+    out[QStringLiteral("status")]        = QStringLiteral("ok");
+    out[QStringLiteral("detailImdb")]    = m_detailView->currentImdb();
+    out[QStringLiteral("currentSeason")] = m_detailView->currentSeason();
+    out[QStringLiteral("sources")]       = sources;
+    return out;
+}
+
+QJsonObject StreamPage::devDirectDownload(int sourceIndex)
+{
+    // A4S3 (2026-05-19). Programmatic trigger for the directDownloadRequested
+    // chain: StreamSourceList -> StreamDetailView -> StreamPage::onDirectDownloadRequested
+    // -> TorrentClient::startDownload (Phase 2 substrate from
+    // TANKORENT_CINEMETA_PACK_MAPPING Tasks 7-10). The bridge needs no
+    // accessor on StreamDetailView -- the StreamSourceList lives as a
+    // descendant of m_detailView and findChild reaches it via its objectName.
+    QJsonObject out;
+
+    if (!m_detailView || !m_mainStack) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("no detail view active");
+        return out;
+    }
+
+    auto* sourceList =
+        m_detailView->findChild<tankostream::stream::StreamSourceList*>();
+    if (!sourceList) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("no detail view active");
+        return out;
+    }
+
+    const int count = sourceList->sourceCardCount();
+    if (count <= 0) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("no source cards loaded (panel empty or still loading)");
+        return out;
+    }
+    if (sourceIndex < 0 || sourceIndex >= count) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] =
+            QStringLiteral("sourceIndex %1 out of range (0..%2)")
+                .arg(sourceIndex)
+                .arg(count - 1);
+        return out;
+    }
+
+    QString addonName;
+    QString displayName;
+    bool    hasMagnet = false;
+    const bool ok = sourceList->triggerDirectDownloadAt(
+        sourceIndex, &addonName, &displayName, &hasMagnet);
+    if (!ok) {
+        out[QStringLiteral("status")]  = QStringLiteral("error");
+        out[QStringLiteral("message")] = QStringLiteral("triggerDirectDownloadAt failed for sourceIndex %1").arg(sourceIndex);
+        return out;
+    }
+
+    out[QStringLiteral("status")]      = QStringLiteral("ok");
+    out[QStringLiteral("sourceIndex")] = sourceIndex;
+    out[QStringLiteral("magnetUri")]   = hasMagnet;
+    out[QStringLiteral("addonName")]   = addonName;
+    out[QStringLiteral("displayName")] = displayName;
+    return out;
 }
 
 // â”€â”€â”€ UI construction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
