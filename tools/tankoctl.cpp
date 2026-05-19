@@ -131,6 +131,30 @@
 //   tankoctl subs-get-fonts-loaded
 //   tankoctl osd-get-state
 //
+//   --- v1.8 synthetic UI interaction layer (Phase D.5, 2026-05-19) ---
+//   tankoctl ui-query-widget <objectName>
+//   tankoctl ui-query-focus
+//   tankoctl ui-active-layer
+//   tankoctl ui-list-widgets [filter] [--limit N]   (default filter "*", limit 100)
+//   tankoctl ui-dry-run <innerCmd> <objectName>      (resolves target, no fire)
+//   tankoctl ui-click <objectName>
+//   tankoctl ui-keypress <objectName> <key>         (e.g. Qt.Key_Down)
+//   tankoctl ui-text-input <objectName> <text>
+//   tankoctl ui-simulate-scroll <objectName> <delta>
+//   tankoctl ui-simulate-mouse <objectName> <press|release|move|double-click> [x] [y]
+//   tankoctl ui-wait-for <condition> [--timeout ms]  (default 5000ms, cap 30000ms)
+//                                                    condition forms:
+//                                                      <name>            (defaults to :visible)
+//                                                      <name>:visible
+//                                                      <name>:enabled
+//                                                      <name>:text-matches:<regex>
+//   tankoctl ui-set-checkbox <objectName> <true|false>
+//   tankoctl ui-set-combo <objectName> <value>
+//   tankoctl ui-select-table-row <objectName> <row>
+//   write-capable ui-* commands (click/keypress/text-input/scroll/mouse/wait/
+//   set-checkbox/set-combo/select-table-row) require TANKOBAN_DEV_UI_SIM=1 on
+//   the Tankoban server's environment or return UI_SIM_DISABLED.
+//
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
 //
@@ -323,7 +347,31 @@ void printUsage(QTextStream& err)
         << "  subs-get-active-track                 active sub id + delay + position + size\n"
         << "  subs-get-positioning                  SubtitleOverlay full positioning state\n"
         << "  subs-get-fonts-loaded                 overlay font + sidecar-side font roster note\n"
-        << "  osd-get-state                         loading/toast/volume/center/sub/stats overlay visibility\n";
+        << "  osd-get-state                         loading/toast/volume/center/sub/stats overlay visibility\n"
+        << "\n"
+        << "  v1.8 synthetic UI interaction layer (Phase D.5, 2026-05-19):\n"
+        << "  ui-query-widget <objectName>          {visible, enabled, geometry, text, className}\n"
+        << "  ui-query-focus                        focused QWidget objectName + class\n"
+        << "  ui-active-layer                       focused widget + parent chain + visible top-levels\n"
+        << "  ui-list-widgets [filter] [--limit N]  glob over objectNames (default '*', limit 100)\n"
+        << "  ui-dry-run <innerCmd> <objectName>    resolve target + planned event, no fire\n"
+        << "  ui-click <objectName>                 animateClick / invokeMethod(click) / center mouse\n"
+        << "  ui-keypress <objectName> <key>        e.g. Qt.Key_Down (or numeric Qt::Key)\n"
+        << "  ui-text-input <objectName> <text>     QLineEdit/QTextEdit/QComboBox-editable setText\n"
+        << "  ui-simulate-scroll <objectName> <delta>\n"
+        << "                                        QWheelEvent angleDelta on widget center\n"
+        << "  ui-simulate-mouse <objectName> <press|release|move|double-click> [x] [y]\n"
+        << "                                        QMouseEvent at (x,y) or widget center\n"
+        << "  ui-wait-for <condition> [--timeout ms]\n"
+        << "                                        condition: <name>[:visible|:enabled|:text-matches:<regex>]\n"
+        << "                                        default 5000ms, cap 30000ms\n"
+        << "  ui-set-checkbox <objectName> <true|false>\n"
+        << "  ui-set-combo <objectName> <value>     findText then setCurrentIndex; else setCurrentText\n"
+        << "  ui-select-table-row <objectName> <row>\n"
+        << "                                        QAbstractItemView setCurrentIndex(row,0)\n"
+        << "  (write-capable ui-* commands require TANKOBAN_DEV_UI_SIM=1 on server env\n"
+        << "   or return UI_SIM_DISABLED. Read-only commands: query-widget, query-focus,\n"
+        << "   active-layer, list-widgets, dry-run.)\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -993,6 +1041,149 @@ int main(int argc, char** argv)
             return 64;
         }
         payload["mode"] = a[2];
+    } else if (sub == QLatin1String("ui-query-widget")
+               || sub == QLatin1String("ui-click")) {
+        // v1.8 Phase D.5 (2026-05-19) — synthetic UI interaction layer.
+        if (a.size() < 3) {
+            err << sub << " requires <objectName>\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+    } else if (sub == QLatin1String("ui-list-widgets")) {
+        // ui-list-widgets [filter] [--limit N]
+        if (a.size() >= 3 && !a[2].startsWith(QLatin1String("--")))
+            payload["filter"] = a[2];
+        for (int i = (a.size() >= 3 && !a[2].startsWith(QLatin1String("--"))) ? 3 : 2;
+             i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--limit") && i + 1 < a.size()) {
+                bool ok = false;
+                const int n = a[++i].toInt(&ok);
+                if (!ok || n <= 0) {
+                    err << "ui-list-widgets --limit must be a positive integer\n";
+                    return 64;
+                }
+                payload["limit"] = n;
+            } else {
+                err << "ui-list-widgets optional args: [filter] [--limit N]\n";
+                return 64;
+            }
+        }
+    } else if (sub == QLatin1String("ui-dry-run")) {
+        // ui-dry-run <innerCmd> <objectName>
+        if (a.size() < 4) {
+            err << "ui-dry-run requires <innerCmd> <objectName>\n";
+            return 64;
+        }
+        QString inner = a[2];
+        inner.replace('-', '_');
+        payload["innerCmd"] = inner;
+        QJsonObject innerPayload;
+        innerPayload["objectName"] = a[3];
+        payload["innerPayload"] = innerPayload;
+    } else if (sub == QLatin1String("ui-keypress")) {
+        if (a.size() < 4) {
+            err << "ui-keypress requires <objectName> <key> (e.g. Qt.Key_Down)\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["key"] = a[3];
+    } else if (sub == QLatin1String("ui-text-input")) {
+        if (a.size() < 4) {
+            err << "ui-text-input requires <objectName> <text>\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["text"] = a[3];
+    } else if (sub == QLatin1String("ui-simulate-scroll")) {
+        if (a.size() < 4) {
+            err << "ui-simulate-scroll requires <objectName> <delta>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int delta = a[3].toInt(&ok);
+        if (!ok) {
+            err << "ui-simulate-scroll delta must be an integer\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["delta"] = delta;
+    } else if (sub == QLatin1String("ui-simulate-mouse")) {
+        if (a.size() < 4) {
+            err << "ui-simulate-mouse requires <objectName> <press|release|move|double-click> [x] [y]\n";
+            return 64;
+        }
+        const QString ev = a[3];
+        if (ev != QLatin1String("press") && ev != QLatin1String("release")
+            && ev != QLatin1String("move") && ev != QLatin1String("double-click")) {
+            err << "ui-simulate-mouse eventType must be press|release|move|double-click\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["eventType"] = ev;
+        if (a.size() >= 5) {
+            bool ok = false;
+            const int x = a[4].toInt(&ok);
+            if (!ok) { err << "ui-simulate-mouse x must be an integer\n"; return 64; }
+            payload["x"] = x;
+        }
+        if (a.size() >= 6) {
+            bool ok = false;
+            const int y = a[5].toInt(&ok);
+            if (!ok) { err << "ui-simulate-mouse y must be an integer\n"; return 64; }
+            payload["y"] = y;
+        }
+    } else if (sub == QLatin1String("ui-wait-for")) {
+        if (a.size() < 3) {
+            err << "ui-wait-for requires <condition> [--timeout ms]\n";
+            return 64;
+        }
+        payload["condition"] = a[2];
+        for (int i = 3; i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--timeout") && i + 1 < a.size()) {
+                bool ok = false;
+                const int ms = a[++i].toInt(&ok);
+                if (!ok || ms < 0) {
+                    err << "ui-wait-for --timeout must be a non-negative integer\n";
+                    return 64;
+                }
+                payload["timeoutMs"] = ms;
+            } else {
+                err << "ui-wait-for optional args: --timeout <ms>\n";
+                return 64;
+            }
+        }
+    } else if (sub == QLatin1String("ui-set-checkbox")) {
+        if (a.size() < 4) {
+            err << "ui-set-checkbox requires <objectName> <true|false>\n";
+            return 64;
+        }
+        const QString v = a[3].toLower();
+        if (v != QLatin1String("true") && v != QLatin1String("false")) {
+            err << "ui-set-checkbox value must be true or false\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["checked"] = (v == QLatin1String("true"));
+    } else if (sub == QLatin1String("ui-set-combo")) {
+        if (a.size() < 4) {
+            err << "ui-set-combo requires <objectName> <value>\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["value"] = a[3];
+    } else if (sub == QLatin1String("ui-select-table-row")) {
+        if (a.size() < 4) {
+            err << "ui-select-table-row requires <objectName> <row>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int row = a[3].toInt(&ok);
+        if (!ok || row < 0) {
+            err << "ui-select-table-row row must be a non-negative integer\n";
+            return 64;
+        }
+        payload["objectName"] = a[2];
+        payload["row"] = row;
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -1053,7 +1244,10 @@ int main(int argc, char** argv)
                || sub == QLatin1String("subs-get-active-track")
                || sub == QLatin1String("subs-get-positioning")
                || sub == QLatin1String("subs-get-fonts-loaded")
-               || sub == QLatin1String("osd-get-state")) {
+               || sub == QLatin1String("osd-get-state")
+               // v1.8 synthetic UI layer — no-payload reads.
+               || sub == QLatin1String("ui-query-focus")
+               || sub == QLatin1String("ui-active-layer")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

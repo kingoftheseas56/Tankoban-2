@@ -39,6 +39,18 @@ class MainWindow;
 // commands (sidecar-get-decoder-queue + sidecar-get-render-queue) are
 // stubbed with NYI replies until a push-event-based sidecar stats
 // surface lands in a follow-on commission (kept additive within v1.x).
+// v1.8 (Phase D.5, 2026-05-19) adds the synthetic UI interaction layer
+// (`ui_*` prefix, 14 commands) backed by UiInteractionDispatcher. Bypasses
+// UIA/pixel-click flakiness by looking up the target QObject by objectName
+// and dispatching via QApplication::postEvent + QMetaObject::invokeMethod.
+// Read-only commands (ui_query_widget / ui_query_focus / ui_active_layer /
+// ui_list_widgets / ui_dry_run) gate on `--dev-control` only; write-capable
+// commands (ui_click, ui_keypress, ui_text_input, ui_simulate_scroll,
+// ui_simulate_mouse, ui_wait_for, ui_set_checkbox, ui_set_combo,
+// ui_select_table_row) additionally require `TANKOBAN_DEV_UI_SIM=1` or
+// return UI_SIM_DISABLED. Synthetic UI proves a widget RECEIVED an event,
+// NOT that the screen looks right — visual verification still needs
+// screenshots or human eyes (main-spec anti-pattern #10).
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.

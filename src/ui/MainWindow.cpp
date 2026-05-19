@@ -23,6 +23,7 @@
 #include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
+#include "devtools/UiInteractionDispatcher.h"
 #include "Theme.h"
 #include "PerModeNavController.h"
 #include "LayerEntry.h"
@@ -1576,6 +1577,13 @@ void MainWindow::enableDevControl()
             QStringLiteral("DevControlServer listening on %1")
                 .arg(QString::fromLatin1(DevControlServer::kSocketName)));
     }
+
+    // Phase D.5 (2026-05-19) — v1.8 synthetic UI layer. Same --dev-control
+    // gate as the server itself; write-capable ui_* commands additionally
+    // require TANKOBAN_DEV_UI_SIM=1 (enforced in handleDevCommand before
+    // forwarding).
+    if (!m_uiDispatcher)
+        m_uiDispatcher = new UiInteractionDispatcher(this, this);
 }
 
 QJsonObject MainWindow::devSnapshot() const
@@ -1743,9 +1751,27 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "subs_get_active_track",
                          "subs_get_positioning",
                          "subs_get_fonts_loaded",
-                         "osd_get_state" };
+                         "osd_get_state",
+                         // v1.8 synthetic UI interaction layer (Phase D.5,
+                         // 2026-05-19). 5 read-only + 9 write-capable. Write-
+                         // capable commands gate on TANKOBAN_DEV_UI_SIM=1 or
+                         // return UI_SIM_DISABLED.
+                         "ui_query_widget",
+                         "ui_query_focus",
+                         "ui_active_layer",
+                         "ui_list_widgets",
+                         "ui_dry_run",
+                         "ui_click",
+                         "ui_keypress",
+                         "ui_text_input",
+                         "ui_simulate_scroll",
+                         "ui_simulate_mouse",
+                         "ui_wait_for",
+                         "ui_set_checkbox",
+                         "ui_set_combo",
+                         "ui_select_table_row" };
         return reply({
-            {"schema",     "tankoban.dev.v1.7"},
+            {"schema",     "tankoban.dev.v1.8"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -2290,6 +2316,39 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
             return delegated;
         return err("UNKNOWN_CMD",
             QStringLiteral("player-side command '%1' not handled by VideoPlayer")
+                .arg(cmd));
+    }
+
+    // ── v1.8 synthetic UI interaction layer — Phase D.5 (2026-05-19) ────────
+    // ui_* commands are looked up against MainWindow's QObject tree by
+    // objectName. Read-only commands (query/list/dry-run/active-layer/
+    // query-focus) gate on --dev-control only. Write-capable commands
+    // (click/keypress/text-input/scroll/mouse/wait/set-checkbox/set-combo/
+    // select-table-row) additionally require TANKOBAN_DEV_UI_SIM=1 or return
+    // UI_SIM_DISABLED — the gate check happens here BEFORE forwarding so
+    // we never partially execute and then bail.
+    if (cmd.startsWith(QLatin1String("ui_"))) {
+        if (!m_uiDispatcher) {
+            return err("INTERNAL",
+                QStringLiteral("UiInteractionDispatcher not initialized; "
+                               "enableDevControl() must run first"));
+        }
+        if (UiInteractionDispatcher::isWriteCapable(cmd)) {
+            const QByteArray sim = qgetenv("TANKOBAN_DEV_UI_SIM");
+            if (sim != "1") {
+                return err("UI_SIM_DISABLED",
+                    QStringLiteral("synthetic UI write '%1' requires "
+                                   "TANKOBAN_DEV_UI_SIM=1").arg(cmd));
+            }
+        }
+        QJsonObject delegated{
+            {"type", QStringLiteral("reply")},
+            {"seq", seq}
+        };
+        if (m_uiDispatcher->dispatch(cmd, payload, delegated))
+            return delegated;
+        return err("UNKNOWN_CMD",
+            QStringLiteral("ui_* command '%1' not recognised by UiInteractionDispatcher")
                 .arg(cmd));
     }
 

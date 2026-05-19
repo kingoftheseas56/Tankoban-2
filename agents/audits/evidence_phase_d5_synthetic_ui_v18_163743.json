@@ -1,0 +1,1621 @@
+﻿{
+    "commission":  "Phase D.5 synthetic UI bridge v1.8",
+    "schema":  "tankoban.dev.v1.8",
+    "timestamp":  "2026-05-19T16:37:43.3882325+05:30",
+    "gate1_no_sim_env":  {
+                             "description":  "Tankoban launched WITHOUT TANKOBAN_DEV_UI_SIM; read-only ui-* succeed, write-capable return UI_SIM_DISABLED.",
+                             "pid":  23772,
+                             "results":  [
+                                             {
+                                                 "label":  "ping (gate1 — schema must be v1.8)",
+                                                 "cmd":  "tankoctl ping",
+                                                 "exitCode":  0,
+                                                 "reply":  {
+                                                               "appVersion":  "0.1.0",
+                                                               "commands":  [
+                                                                                "ping",
+                                                                                "get_state",
+                                                                                "open_page",
+                                                                                "scan_videos",
+                                                                                "get_videos",
+                                                                                "play_file",
+                                                                                "close_player",
+                                                                                "get_player",
+                                                                                "logs",
+                                                                                "get_torrents",
+                                                                                "get_library",
+                                                                                "get_downloads",
+                                                                                "get_bulk_groups",
+                                                                                "search",
+                                                                                "dispatch_episode",
+                                                                                "dispatch_season",
+                                                                                "dump_ui",
+                                                                                "comics_get_state",
+                                                                                "comics_get_library",
+                                                                                "comics_get_series",
+                                                                                "comics_select_volume",
+                                                                                "comics_open_series",
+                                                                                "comics_open_chapter",
+                                                                                "comics_search_tankoyomi",
+                                                                                "comics_get_downloads",
+                                                                                "comics_dispatch_volume",
+                                                                                "comics_get_sources",
+                                                                                "books_get_state",
+                                                                                "books_get_library",
+                                                                                "books_refresh_library",
+                                                                                "books_search_library",
+                                                                                "books_clear_search",
+                                                                                "books_open_book",
+                                                                                "books_open_series",
+                                                                                "books_get_series_state",
+                                                                                "books_set_sort",
+                                                                                "books_set_density",
+                                                                                "books_get_progress",
+                                                                                "books_seek_page",
+                                                                                "books_set_layout",
+                                                                                "books_get_chapters",
+                                                                                "books_open_chapter",
+                                                                                "books_tts_state",
+                                                                                "books_get_listen_state",
+                                                                                "books_tts_play",
+                                                                                "books_tts_pause",
+                                                                                "books_tts_resume",
+                                                                                "books_tts_stop",
+                                                                                "books_tts_set_voice",
+                                                                                "books_tts_set_speed",
+                                                                                "books_tts_cancel_stream",
+                                                                                "sources_search_tankorent",
+                                                                                "sources_search_tankolibrary",
+                                                                                "sources_get_indexer_health",
+                                                                                "sources_get_pending_downloads",
+                                                                                "sources_cancel_download",
+                                                                                "sources_force_indexer_refresh",
+                                                                                "sources_get_tankorent_state",
+                                                                                "sources_get_tankolibrary_state",
+                                                                                "sources_add_magnet",
+                                                                                "sources_add_url",
+                                                                                "sources_pause_torrent",
+                                                                                "sources_resume_torrent",
+                                                                                "sources_remove_torrent",
+                                                                                "sources_set_speed_limits",
+                                                                                "sources_set_queue_limits",
+                                                                                "sources_get_tankolibrary_results",
+                                                                                "sources_open_tankolibrary_detail",
+                                                                                "sources_download_tankolibrary_selected",
+                                                                                "sources_cancel_search",
+                                                                                "sources_set_tankolibrary_filters",
+                                                                                "library_get_continue_reading",
+                                                                                "library_get_recently_added",
+                                                                                "library_get_search_state",
+                                                                                "library_apply_theme",
+                                                                                "library_get_active_theme",
+                                                                                "library_set_density",
+                                                                                "library_get_settings",
+                                                                                "library_set_setting",
+                                                                                "library_get_active_mode_pill",
+                                                                                "library_trigger_scan",
+                                                                                "library_get_scan_state",
+                                                                                "library_get_root_folders",
+                                                                                "library_get_active_layer",
+                                                                                "library_reset_mode",
+                                                                                "library_set_sort",
+                                                                                "library_get_sort",
+                                                                                "library_get_selected_items",
+                                                                                "player_get_audio_tracks",
+                                                                                "player_get_subtitle_tracks",
+                                                                                "player_select_audio_track",
+                                                                                "player_select_subtitle_track",
+                                                                                "player_set_audio_delay",
+                                                                                "player_set_sub_delay",
+                                                                                "player_set_sub_size",
+                                                                                "player_set_sub_position",
+                                                                                "player_get_chapters",
+                                                                                "player_seek_chapter",
+                                                                                "player_set_volume",
+                                                                                "player_set_speed",
+                                                                                "player_get_hud_state",
+                                                                                "player_get_decoder_stats",
+                                                                                "player_get_canvas_size",
+                                                                                "player_screenshot",
+                                                                                "player_simulate_seek_drag",
+                                                                                "player_pause",
+                                                                                "player_resume",
+                                                                                "player_toggle_play",
+                                                                                "player_seek",
+                                                                                "player_frame_step",
+                                                                                "player_stop",
+                                                                                "player_set_mute",
+                                                                                "player_get_volume_state",
+                                                                                "player_set_aspect",
+                                                                                "player_set_crop",
+                                                                                "player_get_loading_overlay",
+                                                                                "player_get_buffering_state",
+                                                                                "player_get_keybindings",
+                                                                                "sidecar_get_process_state",
+                                                                                "sidecar_get_current_stream_info",
+                                                                                "sidecar_get_decoder_queue",
+                                                                                "sidecar_get_render_queue",
+                                                                                "sidecar_restart",
+                                                                                "sidecar_get_ipc_latency",
+                                                                                "subs_get_active_track",
+                                                                                "subs_get_positioning",
+                                                                                "subs_get_fonts_loaded",
+                                                                                "osd_get_state",
+                                                                                "ui_query_widget",
+                                                                                "ui_query_focus",
+                                                                                "ui_active_layer",
+                                                                                "ui_list_widgets",
+                                                                                "ui_dry_run",
+                                                                                "ui_click",
+                                                                                "ui_keypress",
+                                                                                "ui_text_input",
+                                                                                "ui_simulate_scroll",
+                                                                                "ui_simulate_mouse",
+                                                                                "ui_wait_for",
+                                                                                "ui_set_checkbox",
+                                                                                "ui_set_combo",
+                                                                                "ui_select_table_row"
+                                                                            ],
+                                                               "features":  [
+
+                                                                            ],
+                                                               "schema":  "tankoban.dev.v1.8",
+                                                               "seq":  1,
+                                                               "type":  "reply"
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-list-widgets * --limit 3 (read-only — expect success)",
+                                                 "cmd":  "tankoctl ui-list-widgets * --limit 3",
+                                                 "exitCode":  0,
+                                                 "reply":  {
+                                                               "count":  3,
+                                                               "filter":  "*",
+                                                               "limit":  3,
+                                                               "seq":  1,
+                                                               "type":  "reply",
+                                                               "widgets":  [
+                                                                               {
+                                                                                   "className":  "QMainWindowLayout",
+                                                                                   "enabled":  false,
+                                                                                   "geometry":  {
+
+                                                                                                },
+                                                                                   "isWidget":  false,
+                                                                                   "objectName":  "_layout",
+                                                                                   "text":  "",
+                                                                                   "visible":  false
+                                                                               },
+                                                                               {
+                                                                                   "className":  "QFrame",
+                                                                                   "enabled":  true,
+                                                                                   "geometry":  {
+                                                                                                    "height":  672,
+                                                                                                    "width":  1280,
+                                                                                                    "x":  0,
+                                                                                                    "y":  0
+                                                                                                },
+                                                                                   "isWidget":  true,
+                                                                                   "objectName":  "Content",
+                                                                                   "text":  "",
+                                                                                   "visible":  true
+                                                                               },
+                                                                               {
+                                                                                   "className":  "QFrame",
+                                                                                   "enabled":  true,
+                                                                                   "geometry":  {
+                                                                                                    "height":  57,
+                                                                                                    "width":  1280,
+                                                                                                    "x":  0,
+                                                                                                    "y":  0
+                                                                                                },
+                                                                                   "isWidget":  true,
+                                                                                   "objectName":  "TopBar",
+                                                                                   "text":  "",
+                                                                                   "visible":  true
+                                                                               }
+                                                                           ]
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-query-focus (read-only — expect success)",
+                                                 "cmd":  "tankoctl ui-query-focus",
+                                                 "exitCode":  0,
+                                                 "reply":  {
+                                                               "focus":  {
+                                                                             "className":  "QPushButton",
+                                                                             "geometry":  {
+                                                                                              "height":  32,
+                                                                                              "width":  69,
+                                                                                              "x":  0,
+                                                                                              "y":  2
+                                                                                          },
+                                                                             "hasFocus":  true,
+                                                                             "objectName":  "TopNavButton"
+                                                                         },
+                                                               "seq":  1,
+                                                               "type":  "reply"
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-active-layer (read-only — expect success)",
+                                                 "cmd":  "tankoctl ui-active-layer",
+                                                 "exitCode":  0,
+                                                 "reply":  {
+                                                               "layer":  {
+                                                                             "focusChain":  [
+                                                                                                {
+                                                                                                    "className":  "QPushButton",
+                                                                                                    "objectName":  "TopNavButton"
+                                                                                                },
+                                                                                                {
+                                                                                                    "className":  "QFrame",
+                                                                                                    "objectName":  "TopNav"
+                                                                                                },
+                                                                                                {
+                                                                                                    "className":  "QFrame",
+                                                                                                    "objectName":  "TopBar"
+                                                                                                },
+                                                                                                {
+                                                                                                    "className":  "QFrame",
+                                                                                                    "objectName":  "Content"
+                                                                                                },
+                                                                                                {
+                                                                                                    "className":  "QWidget",
+                                                                                                    "objectName":  ""
+                                                                                                },
+                                                                                                {
+                                                                                                    "className":  "MainWindow",
+                                                                                                    "objectName":  ""
+                                                                                                }
+                                                                                            ],
+                                                                             "focusClassName":  "QPushButton",
+                                                                             "focusObjectName":  "TopNavButton",
+                                                                             "visibleTopLevels":  [
+                                                                                                      {
+                                                                                                          "className":  "MainWindow",
+                                                                                                          "geometry":  {
+                                                                                                                           "height":  672,
+                                                                                                                           "width":  1280,
+                                                                                                                           "x":  0,
+                                                                                                                           "y":  0
+                                                                                                                       },
+                                                                                                          "objectName":  ""
+                                                                                                      }
+                                                                                                  ]
+                                                                         },
+                                                               "seq":  1,
+                                                               "type":  "reply"
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-click HamburgerButton (write — expect UI_SIM_DISABLED)",
+                                                 "cmd":  "tankoctl ui-click HamburgerButton",
+                                                 "exitCode":  1,
+                                                 "reply":  {
+                                                               "code":  "UI_SIM_DISABLED",
+                                                               "message":  "synthetic UI write \u0027ui_click\u0027 requires TANKOBAN_DEV_UI_SIM=1",
+                                                               "seq":  1,
+                                                               "type":  "error"
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-keypress HamburgerButton Qt.Key_Space (write — expect UI_SIM_DISABLED)",
+                                                 "cmd":  "tankoctl ui-keypress HamburgerButton Qt.Key_Space",
+                                                 "exitCode":  1,
+                                                 "reply":  {
+                                                               "code":  "UI_SIM_DISABLED",
+                                                               "message":  "synthetic UI write \u0027ui_keypress\u0027 requires TANKOBAN_DEV_UI_SIM=1",
+                                                               "seq":  1,
+                                                               "type":  "error"
+                                                           }
+                                             },
+                                             {
+                                                 "label":  "ui-text-input ComicsSeriesSearchBar foo (write — expect UI_SIM_DISABLED)",
+                                                 "cmd":  "tankoctl ui-text-input ComicsSeriesSearchBar foo",
+                                                 "exitCode":  1,
+                                                 "reply":  {
+                                                               "code":  "UI_SIM_DISABLED",
+                                                               "message":  "synthetic UI write \u0027ui_text_input\u0027 requires TANKOBAN_DEV_UI_SIM=1",
+                                                               "seq":  1,
+                                                               "type":  "error"
+                                                           }
+                                             }
+                                         ]
+                         },
+    "gate2_with_sim_env":  {
+                               "description":  "Tankoban launched WITH TANKOBAN_DEV_UI_SIM=1; 14-command smoke against Comics series-view + negative test envelopes.",
+                               "pid":  8544,
+                               "results":  [
+                                               {
+                                                   "label":  "ping",
+                                                   "cmd":  "tankoctl ping",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "appVersion":  "0.1.0",
+                                                                 "commands":  [
+                                                                                  "ping",
+                                                                                  "get_state",
+                                                                                  "open_page",
+                                                                                  "scan_videos",
+                                                                                  "get_videos",
+                                                                                  "play_file",
+                                                                                  "close_player",
+                                                                                  "get_player",
+                                                                                  "logs",
+                                                                                  "get_torrents",
+                                                                                  "get_library",
+                                                                                  "get_downloads",
+                                                                                  "get_bulk_groups",
+                                                                                  "search",
+                                                                                  "dispatch_episode",
+                                                                                  "dispatch_season",
+                                                                                  "dump_ui",
+                                                                                  "comics_get_state",
+                                                                                  "comics_get_library",
+                                                                                  "comics_get_series",
+                                                                                  "comics_select_volume",
+                                                                                  "comics_open_series",
+                                                                                  "comics_open_chapter",
+                                                                                  "comics_search_tankoyomi",
+                                                                                  "comics_get_downloads",
+                                                                                  "comics_dispatch_volume",
+                                                                                  "comics_get_sources",
+                                                                                  "books_get_state",
+                                                                                  "books_get_library",
+                                                                                  "books_refresh_library",
+                                                                                  "books_search_library",
+                                                                                  "books_clear_search",
+                                                                                  "books_open_book",
+                                                                                  "books_open_series",
+                                                                                  "books_get_series_state",
+                                                                                  "books_set_sort",
+                                                                                  "books_set_density",
+                                                                                  "books_get_progress",
+                                                                                  "books_seek_page",
+                                                                                  "books_set_layout",
+                                                                                  "books_get_chapters",
+                                                                                  "books_open_chapter",
+                                                                                  "books_tts_state",
+                                                                                  "books_get_listen_state",
+                                                                                  "books_tts_play",
+                                                                                  "books_tts_pause",
+                                                                                  "books_tts_resume",
+                                                                                  "books_tts_stop",
+                                                                                  "books_tts_set_voice",
+                                                                                  "books_tts_set_speed",
+                                                                                  "books_tts_cancel_stream",
+                                                                                  "sources_search_tankorent",
+                                                                                  "sources_search_tankolibrary",
+                                                                                  "sources_get_indexer_health",
+                                                                                  "sources_get_pending_downloads",
+                                                                                  "sources_cancel_download",
+                                                                                  "sources_force_indexer_refresh",
+                                                                                  "sources_get_tankorent_state",
+                                                                                  "sources_get_tankolibrary_state",
+                                                                                  "sources_add_magnet",
+                                                                                  "sources_add_url",
+                                                                                  "sources_pause_torrent",
+                                                                                  "sources_resume_torrent",
+                                                                                  "sources_remove_torrent",
+                                                                                  "sources_set_speed_limits",
+                                                                                  "sources_set_queue_limits",
+                                                                                  "sources_get_tankolibrary_results",
+                                                                                  "sources_open_tankolibrary_detail",
+                                                                                  "sources_download_tankolibrary_selected",
+                                                                                  "sources_cancel_search",
+                                                                                  "sources_set_tankolibrary_filters",
+                                                                                  "library_get_continue_reading",
+                                                                                  "library_get_recently_added",
+                                                                                  "library_get_search_state",
+                                                                                  "library_apply_theme",
+                                                                                  "library_get_active_theme",
+                                                                                  "library_set_density",
+                                                                                  "library_get_settings",
+                                                                                  "library_set_setting",
+                                                                                  "library_get_active_mode_pill",
+                                                                                  "library_trigger_scan",
+                                                                                  "library_get_scan_state",
+                                                                                  "library_get_root_folders",
+                                                                                  "library_get_active_layer",
+                                                                                  "library_reset_mode",
+                                                                                  "library_set_sort",
+                                                                                  "library_get_sort",
+                                                                                  "library_get_selected_items",
+                                                                                  "player_get_audio_tracks",
+                                                                                  "player_get_subtitle_tracks",
+                                                                                  "player_select_audio_track",
+                                                                                  "player_select_subtitle_track",
+                                                                                  "player_set_audio_delay",
+                                                                                  "player_set_sub_delay",
+                                                                                  "player_set_sub_size",
+                                                                                  "player_set_sub_position",
+                                                                                  "player_get_chapters",
+                                                                                  "player_seek_chapter",
+                                                                                  "player_set_volume",
+                                                                                  "player_set_speed",
+                                                                                  "player_get_hud_state",
+                                                                                  "player_get_decoder_stats",
+                                                                                  "player_get_canvas_size",
+                                                                                  "player_screenshot",
+                                                                                  "player_simulate_seek_drag",
+                                                                                  "player_pause",
+                                                                                  "player_resume",
+                                                                                  "player_toggle_play",
+                                                                                  "player_seek",
+                                                                                  "player_frame_step",
+                                                                                  "player_stop",
+                                                                                  "player_set_mute",
+                                                                                  "player_get_volume_state",
+                                                                                  "player_set_aspect",
+                                                                                  "player_set_crop",
+                                                                                  "player_get_loading_overlay",
+                                                                                  "player_get_buffering_state",
+                                                                                  "player_get_keybindings",
+                                                                                  "sidecar_get_process_state",
+                                                                                  "sidecar_get_current_stream_info",
+                                                                                  "sidecar_get_decoder_queue",
+                                                                                  "sidecar_get_render_queue",
+                                                                                  "sidecar_restart",
+                                                                                  "sidecar_get_ipc_latency",
+                                                                                  "subs_get_active_track",
+                                                                                  "subs_get_positioning",
+                                                                                  "subs_get_fonts_loaded",
+                                                                                  "osd_get_state",
+                                                                                  "ui_query_widget",
+                                                                                  "ui_query_focus",
+                                                                                  "ui_active_layer",
+                                                                                  "ui_list_widgets",
+                                                                                  "ui_dry_run",
+                                                                                  "ui_click",
+                                                                                  "ui_keypress",
+                                                                                  "ui_text_input",
+                                                                                  "ui_simulate_scroll",
+                                                                                  "ui_simulate_mouse",
+                                                                                  "ui_wait_for",
+                                                                                  "ui_set_checkbox",
+                                                                                  "ui_set_combo",
+                                                                                  "ui_select_table_row"
+                                                                              ],
+                                                                 "features":  [
+
+                                                                              ],
+                                                                 "schema":  "tankoban.dev.v1.8",
+                                                                 "seq":  1,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "open-page comics",
+                                                   "cmd":  "tankoctl open-page comics",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "activePageId":  "comics",
+                                                                 "seq":  1,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "comics-open-series Death Note (30021)",
+                                                   "cmd":  "tankoctl comics-open-series 30021",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "anilistId":  30021,
+                                                                 "seq":  1,
+                                                                 "snapshot":  {
+                                                                                  "bookmarkedCount":  1,
+                                                                                  "currentAnilistId":  30021,
+                                                                                  "currentSeriesTitle":  "Death Note",
+                                                                                  "downloadedSeriesCount":  0,
+                                                                                  "folderSeriesCount":  0,
+                                                                                  "gridMode":  true,
+                                                                                  "hasScanned":  true,
+                                                                                  "layer":  "series-view",
+                                                                                  "library":  {
+                                                                                                  "active_layer":  "series-view",
+                                                                                                  "cr_strip":  {
+                                                                                                                   "count":  0,
+                                                                                                                   "visible":  false
+                                                                                                               },
+                                                                                                  "density":  0,
+                                                                                                  "recently_added":  {
+                                                                                                                         "count":  1,
+                                                                                                                         "visible":  true
+                                                                                                                     },
+                                                                                                  "root_folders":  [
+                                                                                                                       "C:/Users/Suprabha/Desktop/Media/Comics"
+                                                                                                                   ],
+                                                                                                  "scan_state":  {
+                                                                                                                     "hasScanned":  true,
+                                                                                                                     "rescanPending":  false,
+                                                                                                                     "scanning":  false
+                                                                                                                 },
+                                                                                                  "search_state":  {
+                                                                                                                       "query":  "",
+                                                                                                                       "visibleSeries":  1
+                                                                                                                   },
+                                                                                                  "selection":  [
+
+                                                                                                                ],
+                                                                                                  "sort_key":  "name_asc"
+                                                                                              },
+                                                                                  "scanning":  false,
+                                                                                  "searchQuery":  "",
+                                                                                  "seriesView":  {
+                                                                                                     "active":  true,
+                                                                                                     "bannerHasPixmap":  true,
+                                                                                                     "bannerVisible":  true,
+                                                                                                     "currentAnilistId":  30021,
+                                                                                                     "currentRow":  -1,
+                                                                                                     "currentSeriesTitle":  "Death Note",
+                                                                                                     "libraryButtonText":  "Remove from Library",
+                                                                                                     "nextUnreadRow":  0,
+                                                                                                     "pendingSeriesReqId":  2,
+                                                                                                     "selectedRows":  [
+
+                                                                                                                      ],
+                                                                                                     "selectedVolumeCount":  0,
+                                                                                                     "sourcesPanel":  {
+                                                                                                                          "anilistId":  0,
+                                                                                                                          "autoPickArmed":  false,
+                                                                                                                          "chapterIds":  [
+
+                                                                                                                                         ],
+                                                                                                                          "nyaaInFlight":  false,
+                                                                                                                          "seriesTitle":  "",
+                                                                                                                          "sourceCount":  0,
+                                                                                                                          "sources":  [
+
+                                                                                                                                      ],
+                                                                                                                          "statusSubText":  "",
+                                                                                                                          "statusText":  "Select a volume to see sources",
+                                                                                                                          "visible":  true,
+                                                                                                                          "volume":  0
+                                                                                                                      },
+                                                                                                     "volumes":  [
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 1-9 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "1",
+                                                                                                                                          "2",
+                                                                                                                                          "3",
+                                                                                                                                          "4",
+                                                                                                                                          "5",
+                                                                                                                                          "6",
+                                                                                                                                          "7",
+                                                                                                                                          "8",
+                                                                                                                                          "9"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/50fc787e68c7ee8fcf4214d716f2ed8/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  0,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  1,
+                                                                                                                         "volumeLabel":  "1"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 10-18 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "10",
+                                                                                                                                          "11",
+                                                                                                                                          "12",
+                                                                                                                                          "13",
+                                                                                                                                          "14",
+                                                                                                                                          "15",
+                                                                                                                                          "16",
+                                                                                                                                          "17",
+                                                                                                                                          "18"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/934436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  1,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  2,
+                                                                                                                         "volumeLabel":  "2"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 19-27 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "19",
+                                                                                                                                          "20",
+                                                                                                                                          "21",
+                                                                                                                                          "22",
+                                                                                                                                          "23",
+                                                                                                                                          "24",
+                                                                                                                                          "25",
+                                                                                                                                          "26",
+                                                                                                                                          "27"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/234436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  2,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  3,
+                                                                                                                         "volumeLabel":  "3"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 28-36 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "28",
+                                                                                                                                          "29",
+                                                                                                                                          "30",
+                                                                                                                                          "31",
+                                                                                                                                          "32",
+                                                                                                                                          "33",
+                                                                                                                                          "34",
+                                                                                                                                          "35",
+                                                                                                                                          "36"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/524436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  3,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  4,
+                                                                                                                         "volumeLabel":  "4"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 37-45 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "37",
+                                                                                                                                          "38",
+                                                                                                                                          "39",
+                                                                                                                                          "40",
+                                                                                                                                          "41",
+                                                                                                                                          "42",
+                                                                                                                                          "43",
+                                                                                                                                          "44",
+                                                                                                                                          "45"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/814436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  4,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  5,
+                                                                                                                         "volumeLabel":  "5"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 46-54 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "46",
+                                                                                                                                          "47",
+                                                                                                                                          "48",
+                                                                                                                                          "49",
+                                                                                                                                          "50",
+                                                                                                                                          "51",
+                                                                                                                                          "52",
+                                                                                                                                          "53",
+                                                                                                                                          "54"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/114436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  5,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  6,
+                                                                                                                         "volumeLabel":  "6"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 55-63 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "55",
+                                                                                                                                          "56",
+                                                                                                                                          "57",
+                                                                                                                                          "58",
+                                                                                                                                          "59",
+                                                                                                                                          "60",
+                                                                                                                                          "61",
+                                                                                                                                          "62",
+                                                                                                                                          "63"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/404436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  6,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  7,
+                                                                                                                         "volumeLabel":  "7"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 64-72 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "64",
+                                                                                                                                          "65",
+                                                                                                                                          "66",
+                                                                                                                                          "67",
+                                                                                                                                          "68",
+                                                                                                                                          "69",
+                                                                                                                                          "70",
+                                                                                                                                          "71",
+                                                                                                                                          "72"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/793436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  7,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  8,
+                                                                                                                         "volumeLabel":  "8"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 73-81 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "73",
+                                                                                                                                          "74",
+                                                                                                                                          "75",
+                                                                                                                                          "76",
+                                                                                                                                          "77",
+                                                                                                                                          "78",
+                                                                                                                                          "79",
+                                                                                                                                          "80",
+                                                                                                                                          "81"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/093436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  8,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  9,
+                                                                                                                         "volumeLabel":  "9"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 82-90 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "82",
+                                                                                                                                          "83",
+                                                                                                                                          "84",
+                                                                                                                                          "85",
+                                                                                                                                          "86",
+                                                                                                                                          "87",
+                                                                                                                                          "88",
+                                                                                                                                          "89",
+                                                                                                                                          "90"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/383436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  9,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  10,
+                                                                                                                         "volumeLabel":  "10"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 91-99 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "91",
+                                                                                                                                          "92",
+                                                                                                                                          "93",
+                                                                                                                                          "94",
+                                                                                                                                          "95",
+                                                                                                                                          "96",
+                                                                                                                                          "97",
+                                                                                                                                          "98",
+                                                                                                                                          "99"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/673436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  10,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  11,
+                                                                                                                         "volumeLabel":  "11"
+                                                                                                                     },
+                                                                                                                     {
+                                                                                                                         "cbzPath":  "",
+                                                                                                                         "chapterCount":  9,
+                                                                                                                         "chapterRange":  "Chs 100-108 (9 ch)",
+                                                                                                                         "chapters":  [
+                                                                                                                                          "100",
+                                                                                                                                          "101",
+                                                                                                                                          "102",
+                                                                                                                                          "103",
+                                                                                                                                          "104",
+                                                                                                                                          "105",
+                                                                                                                                          "106",
+                                                                                                                                          "107",
+                                                                                                                                          "108"
+                                                                                                                                      ],
+                                                                                                                         "coverUrl":  "https://rimg.bookwalker.jp/963436/eUnObgIVNjRTJtVUNQrbaQ__.jpg",
+                                                                                                                         "downloaded":  false,
+                                                                                                                         "row":  11,
+                                                                                                                         "selected":  false,
+                                                                                                                         "volume":  12,
+                                                                                                                         "volumeLabel":  "12"
+                                                                                                                     }
+                                                                                                                 ]
+                                                                                                 },
+                                                                                  "stackIndex":  3,
+                                                                                  "tyLibraryCount":  0
+                                                                              },
+                                                                 "status":  "ok",
+                                                                 "title":  "Death Note",
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-list-widgets ComicsSeries* (read-only)",
+                                                   "cmd":  "tankoctl ui-list-widgets ComicsSeries* --limit 20",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "count":  20,
+                                                                 "filter":  "ComicsSeries*",
+                                                                 "limit":  20,
+                                                                 "seq":  1,
+                                                                 "type":  "reply",
+                                                                 "widgets":  [
+                                                                                 {
+                                                                                     "className":  "tankoban::manga::comics::ComicsSeriesView",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  615,
+                                                                                                      "width":  1280,
+                                                                                                      "x":  0,
+                                                                                                      "y":  0
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesView",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QPushButton",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  26,
+                                                                                                      "width":  59,
+                                                                                                      "x":  24,
+                                                                                                      "y":  17
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesBackButton",
+                                                                                     "text":  "← Back",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QPushButton",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  32,
+                                                                                                      "width":  141,
+                                                                                                      "x":  1115,
+                                                                                                      "y":  14
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesLibraryButton",
+                                                                                     "text":  "Remove from Library",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  140,
+                                                                                                      "width":  1232,
+                                                                                                      "x":  24,
+                                                                                                      "y":  58
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesHeroBanner",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  32,
+                                                                                                      "width":  912,
+                                                                                                      "x":  24,
+                                                                                                      "y":  210
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesTitle",
+                                                                                     "text":  "Death Note",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  18,
+                                                                                                      "width":  912,
+                                                                                                      "x":  24,
+                                                                                                      "y":  250
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesMetaLine",
+                                                                                     "text":  "Manga  -  2003  -  Completed  -  12 volumes  -  108 chapters",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  51,
+                                                                                                      "width":  912,
+                                                                                                      "x":  24,
+                                                                                                      "y":  276
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesSynopsis",
+                                                                                     "text":  "Light Yagami is an ace student with great prospects—and he’s bored out of his mind. But all that changes when he finds the Death Note, a notebook dropped by a rogue Shinigami death god. Any human whose name is written in the notebook dies, and Light has vowed to use the power of the Death Note to rid the world of evil. But will Light succeed in his noble goal, or will the Death Note turn him into the very thing he fights against?\n\n(Source: VIZ Media)",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QPushButton",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  15,
+                                                                                                      "width":  57,
+                                                                                                      "x":  24,
+                                                                                                      "y":  335
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesDescShowMore",
+                                                                                     "text":  "Show more",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QTableWidget",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  233,
+                                                                                                      "width":  912,
+                                                                                                      "x":  24,
+                                                                                                      "y":  358
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumesTable",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  16,
+                                                                                                      "x":  8,
+                                                                                                      "y":  4
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowCheckbox",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  48,
+                                                                                                      "x":  76,
+                                                                                                      "y":  4
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowThumb",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QWidget",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  598,
+                                                                                                      "x":  152,
+                                                                                                      "y":  4
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesNextUnreadTitle",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  44,
+                                                                                                      "x":  846,
+                                                                                                      "y":  4
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowStatus",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  16,
+                                                                                                      "x":  8,
+                                                                                                      "y":  76
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowCheckbox",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  48,
+                                                                                                      "x":  76,
+                                                                                                      "y":  76
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowThumb",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  44,
+                                                                                                      "x":  846,
+                                                                                                      "y":  76
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowStatus",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  16,
+                                                                                                      "x":  8,
+                                                                                                      "y":  148
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowCheckbox",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  48,
+                                                                                                      "x":  76,
+                                                                                                      "y":  148
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowThumb",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  44,
+                                                                                                      "x":  846,
+                                                                                                      "y":  148
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowStatus",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 },
+                                                                                 {
+                                                                                     "className":  "QLabel",
+                                                                                     "enabled":  true,
+                                                                                     "geometry":  {
+                                                                                                      "height":  64,
+                                                                                                      "width":  16,
+                                                                                                      "x":  8,
+                                                                                                      "y":  220
+                                                                                                  },
+                                                                                     "isWidget":  true,
+                                                                                     "objectName":  "ComicsSeriesVolumeRowCheckbox",
+                                                                                     "text":  "",
+                                                                                     "visible":  true
+                                                                                 }
+                                                                             ]
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-query-widget ComicsSeriesVolumesTable",
+                                                   "cmd":  "tankoctl ui-query-widget ComicsSeriesVolumesTable",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "seq":  1,
+                                                                 "type":  "reply",
+                                                                 "widget":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            }
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-query-focus",
+                                                   "cmd":  "tankoctl ui-query-focus",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "focus":  {
+                                                                               "className":  "QPushButton",
+                                                                               "geometry":  {
+                                                                                                "height":  32,
+                                                                                                "width":  69,
+                                                                                                "x":  0,
+                                                                                                "y":  2
+                                                                                            },
+                                                                               "hasFocus":  true,
+                                                                               "objectName":  "TopNavButton"
+                                                                           },
+                                                                 "seq":  1,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-active-layer",
+                                                   "cmd":  "tankoctl ui-active-layer",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "layer":  {
+                                                                               "focusChain":  [
+                                                                                                  {
+                                                                                                      "className":  "QPushButton",
+                                                                                                      "objectName":  "TopNavButton"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "className":  "QFrame",
+                                                                                                      "objectName":  "TopNav"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "className":  "QFrame",
+                                                                                                      "objectName":  "TopBar"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "className":  "QFrame",
+                                                                                                      "objectName":  "Content"
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "className":  "QWidget",
+                                                                                                      "objectName":  ""
+                                                                                                  },
+                                                                                                  {
+                                                                                                      "className":  "MainWindow",
+                                                                                                      "objectName":  ""
+                                                                                                  }
+                                                                                              ],
+                                                                               "focusClassName":  "QPushButton",
+                                                                               "focusObjectName":  "TopNavButton",
+                                                                               "visibleTopLevels":  [
+                                                                                                        {
+                                                                                                            "className":  "MainWindow",
+                                                                                                            "geometry":  {
+                                                                                                                             "height":  672,
+                                                                                                                             "width":  1280,
+                                                                                                                             "x":  0,
+                                                                                                                             "y":  0
+                                                                                                                         },
+                                                                                                            "objectName":  ""
+                                                                                                        }
+                                                                                                    ]
+                                                                           },
+                                                                 "seq":  1,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-dry-run ui-click ComicsSeriesVolumesTable (NO-fire)",
+                                                   "cmd":  "tankoctl ui-dry-run ui-click ComicsSeriesVolumesTable",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  false,
+                                                                 "innerCmd":  "ui_click",
+                                                                 "plannedEvent":  "ui_click",
+                                                                 "resolved":  true,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-select-table-row ComicsSeriesVolumesTable 0",
+                                                   "cmd":  "tankoctl ui-select-table-row ComicsSeriesVolumesTable 0",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "row":  0,
+                                                                 "rowCount":  12,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-query-focus (post row-0 select)",
+                                                   "cmd":  "tankoctl ui-query-focus",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "focus":  {
+                                                                               "className":  "QPushButton",
+                                                                               "geometry":  {
+                                                                                                "height":  32,
+                                                                                                "width":  69,
+                                                                                                "x":  0,
+                                                                                                "y":  2
+                                                                                            },
+                                                                               "hasFocus":  true,
+                                                                               "objectName":  "TopNavButton"
+                                                                           },
+                                                                 "seq":  1,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-select-table-row ComicsSeriesVolumesTable 1",
+                                                   "cmd":  "tankoctl ui-select-table-row ComicsSeriesVolumesTable 1",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "row":  1,
+                                                                 "rowCount":  12,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-keypress ComicsSeriesVolumesTable Qt.Key_Down",
+                                                   "cmd":  "tankoctl ui-keypress ComicsSeriesVolumesTable Qt.Key_Down",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "key":  "Qt.Key_Down",
+                                                                 "keyValue":  16777237,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-keypress ComicsSeriesVolumesTable Qt.Key_Up",
+                                                   "cmd":  "tankoctl ui-keypress ComicsSeriesVolumesTable Qt.Key_Up",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "key":  "Qt.Key_Up",
+                                                                 "keyValue":  16777235,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-simulate-scroll ComicsSeriesVolumesTable 120",
+                                                   "cmd":  "tankoctl ui-simulate-scroll ComicsSeriesVolumesTable 120",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "delta":  120,
+                                                                 "fired":  true,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-simulate-mouse ComicsSeriesVolumesTable move 30 30",
+                                                   "cmd":  "tankoctl ui-simulate-mouse ComicsSeriesVolumesTable move 30 30",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "eventType":  "move",
+                                                                 "fired":  true,
+                                                                 "point":  {
+                                                                               "x":  30,
+                                                                               "y":  30
+                                                                           },
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-click HamburgerButton",
+                                                   "cmd":  "tankoctl ui-click HamburgerButton",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "path":  "animateClick",
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QPushButton",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  26,
+                                                                                                 "width":  30,
+                                                                                                 "x":  0,
+                                                                                                 "y":  5
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "HamburgerButton",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-click HamburgerButton (close)",
+                                                   "cmd":  "tankoctl ui-click HamburgerButton",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "fired":  true,
+                                                                 "path":  "animateClick",
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QPushButton",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  26,
+                                                                                                 "width":  30,
+                                                                                                 "x":  0,
+                                                                                                 "y":  5
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "HamburgerButton",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-wait-for ComicsSeriesVolumesTable:visible --timeout 2000",
+                                                   "cmd":  "tankoctl ui-wait-for ComicsSeriesVolumesTable:visible --timeout 2000",
+                                                   "exitCode":  0,
+                                                   "reply":  {
+                                                                 "condition":  "ComicsSeriesVolumesTable:visible",
+                                                                 "elapsedMs":  0,
+                                                                 "met":  true,
+                                                                 "resolved":  true,
+                                                                 "seq":  1,
+                                                                 "target":  {
+                                                                                "className":  "QTableWidget",
+                                                                                "enabled":  true,
+                                                                                "geometry":  {
+                                                                                                 "height":  233,
+                                                                                                 "width":  912,
+                                                                                                 "x":  24,
+                                                                                                 "y":  358
+                                                                                             },
+                                                                                "isWidget":  true,
+                                                                                "objectName":  "ComicsSeriesVolumesTable",
+                                                                                "text":  "",
+                                                                                "visible":  true
+                                                                            },
+                                                                 "timeoutMs":  2000,
+                                                                 "type":  "reply"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-wait-for NoSuchWidget:visible --timeout 200 (expect TIMEOUT)",
+                                                   "cmd":  "tankoctl ui-wait-for NoSuchWidget:visible --timeout 200",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "TIMEOUT",
+                                                                 "condition":  "NoSuchWidget:visible",
+                                                                 "elapsedMs":  254,
+                                                                 "message":  "condition \u0027NoSuchWidget:visible\u0027 not met within 200ms",
+                                                                 "met":  false,
+                                                                 "resolved":  false,
+                                                                 "seq":  1,
+                                                                 "target":  {
+
+                                                                            },
+                                                                 "timeoutMs":  200,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-set-checkbox NotACheckbox true (expect UNSUPPORTED)",
+                                                   "cmd":  "tankoctl ui-set-checkbox ComicsSeriesVolumesTable true",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "UNSUPPORTED",
+                                                                 "message":  "object \u0027ComicsSeriesVolumesTable\u0027 is not a checkable QAbstractButton",
+                                                                 "seq":  1,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-set-combo NotACombo Foo (expect UNSUPPORTED)",
+                                                   "cmd":  "tankoctl ui-set-combo ComicsSeriesVolumesTable Foo",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "UNSUPPORTED",
+                                                                 "message":  "object \u0027ComicsSeriesVolumesTable\u0027 is not a QComboBox",
+                                                                 "seq":  1,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-text-input MissingWidget hello (expect WIDGET_NOT_FOUND)",
+                                                   "cmd":  "tankoctl ui-text-input MissingWidget hello",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "WIDGET_NOT_FOUND",
+                                                                 "message":  "no QObject with objectName \u0027MissingWidget\u0027",
+                                                                 "seq":  1,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-click GhostWidget (expect WIDGET_NOT_FOUND)",
+                                                   "cmd":  "tankoctl ui-click GhostWidget",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "WIDGET_NOT_FOUND",
+                                                                 "message":  "no QObject with objectName \u0027GhostWidget\u0027",
+                                                                 "seq":  1,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               },
+                                               {
+                                                   "label":  "ui-keypress ComicsSeriesVolumesTable BogusKey (expect BAD_REQUEST)",
+                                                   "cmd":  "tankoctl ui-keypress ComicsSeriesVolumesTable BogusKey",
+                                                   "exitCode":  1,
+                                                   "reply":  {
+                                                                 "code":  "BAD_REQUEST",
+                                                                 "message":  "key \u0027BogusKey\u0027 did not resolve to Qt::Key (try \u0027Qt.Key_Down\u0027 or a numeric value)",
+                                                                 "seq":  1,
+                                                                 "type":  "error"
+                                                             },
+                                                   "rawIfFail":  null
+                                               }
+                                           ]
+                           }
+}

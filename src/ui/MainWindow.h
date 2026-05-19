@@ -23,6 +23,7 @@ class StreamPage;
 class TankorentPage;
 class TorrentClient;
 class DevControlServer;
+class UiInteractionDispatcher;
 class SidebarDrawer;
 class StreamDownloadIndex;
 namespace tankoban::ui { class PerModeNavController; }
@@ -233,6 +234,12 @@ private:
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).
     DevControlServer *m_devControl = nullptr;
+
+    // Phase D.5 (2026-05-19) — synthetic UI interaction layer behind the
+    // v1.8 ui_* command prefix. Constructed lazily alongside m_devControl
+    // (same --dev-control gate); write-capable commands additionally gate
+    // on TANKOBAN_DEV_UI_SIM=1 in handleDevCommand before forwarding.
+    UiInteractionDispatcher *m_uiDispatcher = nullptr;
 
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
     // bulk-downloaded episodes. Constructed early in MainWindow ctor (after
