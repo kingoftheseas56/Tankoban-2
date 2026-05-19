@@ -1446,8 +1446,13 @@ void StreamDetailView::renderEpisodeStateChip(
     if (!statusItem)
         return;
 
+    // PHASE3_CHIP_VISIBILITY_FIX_v2 2026-05-19 (Hemanth smoke feedback) —
+    // Complete state writes a BLANK to the Status column. The kColAction
+    // button's ✓ icon is the canonical "downloaded" signal; the prior
+    // "✓ Downloaded" text + icon combo was redundant. Matches the existing
+    // bulk-cohort behavior for terminal states (which also leaves Status
+    // blank). Status column now shows ACTIVE states only.
     QString chipText;
-    bool checkmark = false;
     switch (state) {
     case StreamDownloadIndex::Entry::Pending:
         chipText = QStringLiteral("Queued");
@@ -1456,17 +1461,14 @@ void StreamDetailView::renderEpisodeStateChip(
         chipText = QStringLiteral("Downloading %1%").arg(progressPct);
         break;
     case StreamDownloadIndex::Entry::Complete:
-        chipText = QStringLiteral("Downloaded");
-        checkmark = true;
+        // Empty — kColAction icon is the canonical "downloaded" signal.
         break;
     case StreamDownloadIndex::Entry::Failed:
         chipText = QStringLiteral("Failed");
         break;
     }
 
-    statusItem->setText(checkmark
-                        ? QStringLiteral("\xE2\x9C\x93 %1").arg(chipText)
-                        : chipText);
+    statusItem->setText(chipText);
 }
 
 // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — initial-paint sweep over the active
