@@ -51,6 +51,28 @@ class MainWindow;
 // return UI_SIM_DISABLED. Synthetic UI proves a widget RECEIVED an event,
 // NOT that the screen looks right — visual verification still needs
 // screenshots or human eyes (main-spec anti-pattern #10).
+// v1.9 (Phase D.6, 2026-05-19) adds the cross-cutting system state +
+// introspection layer (27 commands across app-/settings-/jsonstore-/
+// cache-/scanner-/log-/events-/theme-/font-/perf-/dev- prefixes) backed
+// by SystemIntrospection. Headline unlock is `log-mark <label>` — emits
+// a correlation marker into all four active log streams simultaneously
+// (out/sidecar_debug_live.log + out/stream_telemetry.log + out/events.jsonl
+// + out/ipc_latency.log), so multi-source log analysis post-smoke can
+// pivot on the label instead of timestamp guesswork. Read-only commands
+// gate on `--dev-control` only; write-capable commands (settings-set /
+// settings-reset / jsonstore-set / cache-clear / log-set-level /
+// theme-reload / dev-inject-error / dev-toggle-feature) additionally
+// require `TANKOBAN_DEV_WRITE=1` (env var, SEPARATE from D.5's
+// TANKOBAN_DEV_UI_SIM) or return DEV_WRITE_DISABLED. Twelve commands
+// from the spec catalogue (network-list-requests, network-get-active,
+// network-throttle-set, network-block-host, perf-get-frame-times,
+// perf-get-cpu-usage, perf-get-gpu-usage, scanner-pause, scanner-resume,
+// scanner-trigger, cache-get-stats, app-trace-signals, jsonstore-dump)
+// are deferred to a follow-on commission — their underlying instrumen-
+// tation (shared QNetworkAccessManager observer, paint-time counters,
+// VideosScanner pause API, PosterCache stats accessor, signal tracer)
+// does not yet exist, and the spec's "ship `unsupported` placeholders"
+// option was vetoed by Agent 0 in favour of a tighter v1.9 surface.
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.

@@ -43,6 +43,7 @@ set(SOURCES
     src/core/JsonlEventLog.cpp
     src/devtools/DevControlServer.cpp
     src/devtools/UiInteractionDispatcher.cpp
+    src/devtools/SystemIntrospection.cpp
     src/core/JsonStore.cpp
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
@@ -246,6 +247,7 @@ set(HEADERS
     src/core/JsonlEventLog.h
     src/devtools/DevControlServer.h
     src/devtools/UiInteractionDispatcher.h
+    src/devtools/SystemIntrospection.h
     src/core/JsonStore.h
     src/core/CoreBridge.h
     src/core/LibraryScanner.h

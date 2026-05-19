@@ -24,6 +24,7 @@ class TankorentPage;
 class TorrentClient;
 class DevControlServer;
 class UiInteractionDispatcher;
+class SystemIntrospection;
 class SidebarDrawer;
 class StreamDownloadIndex;
 namespace tankoban::ui { class PerModeNavController; }
@@ -76,6 +77,13 @@ public:
     // playback fields). Returns nullptr until the reader has been opened
     // at least once.
     BookReader* bookReader() const { return m_bookReader; }
+
+    // v1.9 bridge Phase D.6 (2026-05-19) — non-owning accessor used by
+    // SystemIntrospection for jsonstore-* + scanner-list-watched + cache-*
+    // commands that need to reach JsonStore + the per-domain root-folders
+    // list. Returns nullptr only if MainWindow was constructed without a
+    // CoreBridge (no production code path does this; smoke tests may).
+    CoreBridge* bridge() const { return m_bridge; }
 
 public slots:
     // Frameless-chrome public slots — connectable from any takeover surface
@@ -240,6 +248,14 @@ private:
     // (same --dev-control gate); write-capable commands additionally gate
     // on TANKOBAN_DEV_UI_SIM=1 in handleDevCommand before forwarding.
     UiInteractionDispatcher *m_uiDispatcher = nullptr;
+
+    // Phase D.6 (2026-05-19) — cross-cutting system state + introspection
+    // layer behind the v1.9 surface (app-/settings-/jsonstore-/cache-/
+    // scanner-/log-/events-/theme-/font-/perf-/dev- prefixes). Same
+    // --dev-control gate as the server itself; write-capable commands
+    // additionally require TANKOBAN_DEV_WRITE=1 in handleDevCommand
+    // before forwarding.
+    SystemIntrospection *m_systemIntrospection = nullptr;
 
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
     // bulk-downloaded episodes. Constructed early in MainWindow ctor (after

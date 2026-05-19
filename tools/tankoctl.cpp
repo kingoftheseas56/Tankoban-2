@@ -155,6 +155,37 @@
 //   set-checkbox/set-combo/select-table-row) require TANKOBAN_DEV_UI_SIM=1 on
 //   the Tankoban server's environment or return UI_SIM_DISABLED.
 //
+//   --- v1.9 system state + introspection layer (Phase D.6, 2026-05-19) ---
+//   tankoctl app-get-active-modals
+//   tankoctl app-get-window-list
+//   tankoctl app-get-shortcut-table
+//   tankoctl settings-get <key>
+//   tankoctl settings-set <key> <value>            (WRITE flag)
+//   tankoctl settings-dump [group]
+//   tankoctl settings-reset <key>                  (WRITE flag)
+//   tankoctl jsonstore-get <path>
+//   tankoctl jsonstore-set <path> <jsonObject>     (WRITE flag)
+//   tankoctl cache-list
+//   tankoctl cache-clear <layer>                   (WRITE flag)
+//   tankoctl scanner-get-status
+//   tankoctl scanner-list-watched
+//   tankoctl log-tail <component> [n]              (sidecar|telemetry|events|ipc|tankoctl)
+//   tankoctl log-grep <pattern> [maxPerFile]
+//   tankoctl log-mark <label>                       (writes to all 4 active log streams)
+//   tankoctl log-set-level <component> <level>     (WRITE flag)
+//   tankoctl events-tail [n]
+//   tankoctl theme-get-palette
+//   tankoctl theme-get-applied-stylesheet [objectName]
+//   tankoctl theme-reload                          (WRITE flag)
+//   tankoctl font-list-loaded
+//   tankoctl perf-mark-start <label>
+//   tankoctl perf-mark-end <label>
+//   tankoctl perf-dump-counters
+//   tankoctl dev-inject-error <code> [note]        (WRITE flag)
+//   tankoctl dev-toggle-feature <flag> [true|false] (WRITE flag)
+//   write-capable v1.9 commands require TANKOBAN_DEV_WRITE=1 on server env or
+//   return DEV_WRITE_DISABLED — SEPARATE flag from TANKOBAN_DEV_UI_SIM.
+//
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
 //
@@ -371,7 +402,44 @@ void printUsage(QTextStream& err)
         << "                                        QAbstractItemView setCurrentIndex(row,0)\n"
         << "  (write-capable ui-* commands require TANKOBAN_DEV_UI_SIM=1 on server env\n"
         << "   or return UI_SIM_DISABLED. Read-only commands: query-widget, query-focus,\n"
-        << "   active-layer, list-widgets, dry-run.)\n";
+        << "   active-layer, list-widgets, dry-run.)\n"
+        << "\n"
+        << "  v1.9 system state + introspection layer (Phase D.6, 2026-05-19):\n"
+        << "  app-get-active-modals          active modal + visible QDialog instances\n"
+        << "  app-get-window-list            top-level windows + geometry + state flags\n"
+        << "  app-get-shortcut-table         registered QShortcut bindings (key/owner/enabled)\n"
+        << "  settings-get <key>             QSettings(\"Tankoban\") value lookup\n"
+        << "  settings-set <key> <value>     write to QSettings (allowlist-gated, WRITE flag)\n"
+        << "  settings-dump [group]          QSettings dump, optionally scoped to a group\n"
+        << "  settings-reset <key>           remove a QSettings key (allowlist-gated, WRITE flag)\n"
+        << "  jsonstore-get <path>           read JsonStore file (e.g. \"prefs.json\")\n"
+        << "  jsonstore-set <path> <json>    write JsonStore file (JSON object, WRITE flag)\n"
+        << "  cache-list                     known cache layers + per-layer clear support note\n"
+        << "  cache-clear <layer>            clear a layer (WRITE flag; many layers unsupported)\n"
+        << "  scanner-get-status             VideosScanner duration-cache state proxy\n"
+        << "  scanner-list-watched           per-domain root-folders the scanners walk\n"
+        << "  log-tail <component> [n]       last n lines of sidecar|telemetry|events|ipc|tankoctl\n"
+        << "  log-grep <pattern> [maxPerFile]\n"
+        << "                                 search recent log lines across all 4 streams\n"
+        << "  log-mark <label>               THE unlock — write correlation marker into ALL\n"
+        << "                                 4 active log streams simultaneously\n"
+        << "  log-set-level <component> <level>\n"
+        << "                                 record an in-memory log-level override (WRITE flag)\n"
+        << "  events-tail [n]                last n parsed rows of out/events.jsonl\n"
+        << "  theme-get-palette              current applied ThemePalette tokens + blob colors\n"
+        << "  theme-get-applied-stylesheet [objectName]\n"
+        << "                                 stylesheet on a target widget (or app default)\n"
+        << "  theme-reload                   re-apply theme from QSettings (WRITE flag)\n"
+        << "  font-list-loaded               QFontDatabase::families() snapshot\n"
+        << "  perf-mark-start <label>        open a named timing region (in-memory)\n"
+        << "  perf-mark-end <label>          close a region; reports elapsed + per-label total\n"
+        << "  perf-dump-counters             all open + closed perf regions\n"
+        << "  dev-inject-error <code> [note] register an in-memory fault-injection code (WRITE flag)\n"
+        << "  dev-toggle-feature <flag> [true|false]\n"
+        << "                                 toggle / set an in-memory feature flag (WRITE flag)\n"
+        << "  (write-capable v1.9 commands require TANKOBAN_DEV_WRITE=1 on server env or return\n"
+        << "   DEV_WRITE_DISABLED. This is a SEPARATE flag from D.5's TANKOBAN_DEV_UI_SIM.)\n"
+        << "  Twelve spec-catalogue commands deferred — see DevControlServer.h v1.9 block.\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -1184,6 +1252,137 @@ int main(int argc, char** argv)
         }
         payload["objectName"] = a[2];
         payload["row"] = row;
+    }
+    // ── v1.9 system state + introspection layer (Phase D.6, 2026-05-19) ─────
+    // 17 commands take args; 10 take none and route through the no-payload
+    // OR-chain below. Wire format is snake_case; CLI is the natural kebab-
+    // case (the main.cpp `cmd.replace('-', '_')` line handles the mapping).
+    else if (sub == QLatin1String("settings-get")
+          || sub == QLatin1String("settings-reset")) {
+        if (a.size() < 3) {
+            err << sub << " requires <key>\n";
+            return 64;
+        }
+        payload["key"] = a[2];
+    } else if (sub == QLatin1String("settings-set")) {
+        if (a.size() < 4) {
+            err << "settings-set requires <key> <value>\n";
+            return 64;
+        }
+        payload["key"] = a[2];
+        payload["value"] = a[3];
+    } else if (sub == QLatin1String("settings-dump")) {
+        if (a.size() >= 3) payload["group"] = a[2];
+    } else if (sub == QLatin1String("jsonstore-get")) {
+        if (a.size() < 3) {
+            err << "jsonstore-get requires <path>\n";
+            return 64;
+        }
+        payload["path"] = a[2];
+    } else if (sub == QLatin1String("jsonstore-set")) {
+        if (a.size() < 4) {
+            err << "jsonstore-set requires <path> <jsonObject>\n";
+            return 64;
+        }
+        const QByteArray rawJson = a[3].toUtf8();
+        QJsonParseError perr;
+        const QJsonDocument doc = QJsonDocument::fromJson(rawJson, &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+            err << "jsonstore-set <jsonObject> must parse as a JSON object (parse error: "
+                << perr.errorString() << ")\n";
+            return 64;
+        }
+        payload["path"]  = a[2];
+        payload["value"] = doc.object();
+    } else if (sub == QLatin1String("cache-clear")) {
+        if (a.size() < 3) {
+            err << "cache-clear requires <layer> (see cache-list for catalogue)\n";
+            return 64;
+        }
+        payload["layer"] = a[2];
+    } else if (sub == QLatin1String("log-tail")) {
+        if (a.size() < 3) {
+            err << "log-tail requires <component> [n]\n";
+            return 64;
+        }
+        payload["component"] = a[2];
+        if (a.size() >= 4) {
+            bool ok = false;
+            const int n = a[3].toInt(&ok);
+            if (!ok || n <= 0) {
+                err << "log-tail n must be a positive integer\n";
+                return 64;
+            }
+            payload["n"] = n;
+        }
+    } else if (sub == QLatin1String("log-grep")) {
+        if (a.size() < 3) {
+            err << "log-grep requires <pattern> [maxPerFile]\n";
+            return 64;
+        }
+        payload["pattern"] = a[2];
+        if (a.size() >= 4) {
+            bool ok = false;
+            const int m = a[3].toInt(&ok);
+            if (!ok || m <= 0) {
+                err << "log-grep maxPerFile must be a positive integer\n";
+                return 64;
+            }
+            payload["maxPerFile"] = m;
+        }
+    } else if (sub == QLatin1String("log-mark")) {
+        if (a.size() < 3) {
+            err << "log-mark requires <label> — written to all 4 active log streams\n";
+            return 64;
+        }
+        payload["label"] = a[2];
+    } else if (sub == QLatin1String("log-set-level")) {
+        if (a.size() < 4) {
+            err << "log-set-level requires <component> <level>\n";
+            return 64;
+        }
+        payload["component"] = a[2];
+        payload["level"]     = a[3];
+    } else if (sub == QLatin1String("events-tail")) {
+        if (a.size() >= 3) {
+            bool ok = false;
+            const int n = a[2].toInt(&ok);
+            if (!ok || n <= 0) {
+                err << "events-tail n must be a positive integer\n";
+                return 64;
+            }
+            payload["n"] = n;
+        }
+    } else if (sub == QLatin1String("theme-get-applied-stylesheet")) {
+        if (a.size() >= 3) payload["objectName"] = a[2];
+    } else if (sub == QLatin1String("perf-mark-start")
+            || sub == QLatin1String("perf-mark-end")) {
+        if (a.size() < 3) {
+            err << sub << " requires <label>\n";
+            return 64;
+        }
+        payload["label"] = a[2];
+    } else if (sub == QLatin1String("dev-inject-error")) {
+        if (a.size() < 3) {
+            err << "dev-inject-error requires <code> [note]\n";
+            return 64;
+        }
+        payload["code"] = a[2];
+        if (a.size() >= 4) payload["note"] = a[3];
+    } else if (sub == QLatin1String("dev-toggle-feature")) {
+        if (a.size() < 3) {
+            err << "dev-toggle-feature requires <flag> [true|false] (omit to flip)\n";
+            return 64;
+        }
+        payload["flag"] = a[2];
+        if (a.size() >= 4) {
+            const QString v = a[3].toLower();
+            if (v != QLatin1String("true") && v != QLatin1String("false")) {
+                err << "dev-toggle-feature value must be true or false\n";
+                return 64;
+            }
+            payload["value"] = (v == QLatin1String("true"));
+        }
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -1247,7 +1446,18 @@ int main(int argc, char** argv)
                || sub == QLatin1String("osd-get-state")
                // v1.8 synthetic UI layer — no-payload reads.
                || sub == QLatin1String("ui-query-focus")
-               || sub == QLatin1String("ui-active-layer")) {
+               || sub == QLatin1String("ui-active-layer")
+               // v1.9 system state + introspection — no-payload commands.
+               || sub == QLatin1String("app-get-active-modals")
+               || sub == QLatin1String("app-get-window-list")
+               || sub == QLatin1String("app-get-shortcut-table")
+               || sub == QLatin1String("cache-list")
+               || sub == QLatin1String("scanner-get-status")
+               || sub == QLatin1String("scanner-list-watched")
+               || sub == QLatin1String("theme-get-palette")
+               || sub == QLatin1String("theme-reload")
+               || sub == QLatin1String("font-list-loaded")
+               || sub == QLatin1String("perf-dump-counters")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

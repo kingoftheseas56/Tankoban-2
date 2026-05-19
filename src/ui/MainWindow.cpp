@@ -24,6 +24,7 @@
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
 #include "devtools/UiInteractionDispatcher.h"
+#include "devtools/SystemIntrospection.h"
 #include "Theme.h"
 #include "PerModeNavController.h"
 #include "LayerEntry.h"
@@ -1584,6 +1585,16 @@ void MainWindow::enableDevControl()
     // forwarding).
     if (!m_uiDispatcher)
         m_uiDispatcher = new UiInteractionDispatcher(this, this);
+
+    // Phase D.6 (2026-05-19) — v1.9 cross-cutting system state +
+    // introspection layer (27 commands across 11 prefixes). Same
+    // --dev-control gate as the server itself; write-capable commands
+    // additionally require TANKOBAN_DEV_WRITE=1 (enforced in handleDevCommand
+    // before forwarding). DEV_WRITE is DELIBERATELY DISTINCT from D.5's
+    // DEV_UI_SIM — synthetic clicks and state writes / cache busts are
+    // independent risk surfaces and should not share a flag.
+    if (!m_systemIntrospection)
+        m_systemIntrospection = new SystemIntrospection(this, this);
 }
 
 QJsonObject MainWindow::devSnapshot() const
@@ -1770,8 +1781,18 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "ui_set_checkbox",
                          "ui_set_combo",
                          "ui_select_table_row" };
+        // v1.9 cross-cutting system state + introspection layer (Phase D.6,
+        // 2026-05-19). 27 commands across 11 prefixes. Backed by
+        // SystemIntrospection. Write-capable subset (8) gates on
+        // TANKOBAN_DEV_WRITE=1 or returns DEV_WRITE_DISABLED. The 12 spec-
+        // catalogue commands deferred from v1.9 (network-*/perf-frame/cpu/
+        // gpu/scanner-pause/resume/trigger/cache-get-stats/app-trace-signals/
+        // jsonstore-dump) are intentionally absent — see DevControlServer.h
+        // v1.9 block.
+        for (const QString& c : SystemIntrospection::commandList())
+            cmds.append(c);
         return reply({
-            {"schema",     "tankoban.dev.v1.8"},
+            {"schema",     "tankoban.dev.v1.9"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -2350,6 +2371,59 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         return err("UNKNOWN_CMD",
             QStringLiteral("ui_* command '%1' not recognised by UiInteractionDispatcher")
                 .arg(cmd));
+    }
+
+    // ── v1.9 system state + introspection layer — Phase D.6 (2026-05-19) ────
+    // Eleven prefixes (app_/settings_/jsonstore_/cache_/scanner_/log_/
+    // events_/theme_/font_/perf_/dev_) all route through SystemIntrospection.
+    // Wire format is snake_case per existing v1.x convention (player_*,
+    // ui_*, books_*, ...); tankoctl's CLI surface accepts the natural
+    // kebab-case (app-get-active-modals) and converts hyphens to
+    // underscores before sending. Write-capable commands (settings_set/
+    // reset, jsonstore_set, cache_clear, log_set_level, theme_reload,
+    // dev_inject_error, dev_toggle_feature) additionally require
+    // TANKOBAN_DEV_WRITE=1 or return DEV_WRITE_DISABLED — the gate check
+    // happens HERE BEFORE forwarding so write-capable commands never
+    // partially execute and then bail. The gate name is DELIBERATELY
+    // DISTINCT from D.5's TANKOBAN_DEV_UI_SIM — synthetic UI clicks and
+    // state writes / cache busts are independent risk surfaces.
+    {
+        const bool isSysCmd =
+               cmd.startsWith(QLatin1String("app_"))
+            || cmd.startsWith(QLatin1String("settings_"))
+            || cmd.startsWith(QLatin1String("jsonstore_"))
+            || cmd.startsWith(QLatin1String("cache_"))
+            || cmd.startsWith(QLatin1String("scanner_"))
+            || cmd.startsWith(QLatin1String("log_"))
+            || cmd.startsWith(QLatin1String("events_"))
+            || cmd.startsWith(QLatin1String("theme_"))
+            || cmd.startsWith(QLatin1String("font_"))
+            || cmd.startsWith(QLatin1String("perf_"))
+            || cmd.startsWith(QLatin1String("dev_"));
+        if (isSysCmd) {
+            if (!m_systemIntrospection) {
+                return err("INTERNAL",
+                    QStringLiteral("SystemIntrospection not initialized; "
+                                   "enableDevControl() must run first"));
+            }
+            if (SystemIntrospection::isWriteCapable(cmd)) {
+                const QByteArray write = qgetenv("TANKOBAN_DEV_WRITE");
+                if (write != "1") {
+                    return err("DEV_WRITE_DISABLED",
+                        QStringLiteral("write-capable command '%1' requires "
+                                       "TANKOBAN_DEV_WRITE=1").arg(cmd));
+                }
+            }
+            QJsonObject delegated{
+                {"type", QStringLiteral("reply")},
+                {"seq", seq}
+            };
+            if (m_systemIntrospection->dispatch(cmd, payload, delegated))
+                return delegated;
+            return err("UNKNOWN_CMD",
+                QStringLiteral("v1.9 command '%1' not recognised by SystemIntrospection")
+                    .arg(cmd));
+        }
     }
 
     return err("UNKNOWN_CMD",
