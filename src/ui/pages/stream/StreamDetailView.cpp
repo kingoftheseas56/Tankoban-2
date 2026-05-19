@@ -1619,7 +1619,7 @@ void StreamDetailView::refreshMovieDownloadState()
         return;
     }
     if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Downloading) {
-        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING %1%").arg(indexPct));
+        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING"));
         m_movieDownloadChip->show();
         m_movieDownloadBtn->setText(tr("Downloading %1%").arg(indexPct));
         m_movieDownloadBtn->setEnabled(false);
@@ -1641,8 +1641,7 @@ void StreamDetailView::refreshMovieDownloadState()
         // download (e.g. high-seeder torrent that never attached) reads as
         // 0% indefinitely; suppressing the number hides that fact. Showing
         // "0%" surfaces the stuck state immediately to the user.
-        m_movieDownloadChip->setText(
-            QStringLiteral("DOWNLOADING %1%").arg(snapshot.second));
+        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING"));
         m_movieDownloadChip->show();
         m_movieDownloadBtn->setText(tr("Downloading %1%").arg(snapshot.second));
         m_movieDownloadBtn->setEnabled(false);
