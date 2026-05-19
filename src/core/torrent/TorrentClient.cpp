@@ -2170,6 +2170,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
                        << addedHash.left(16) << "but caller expected"
                        << infoHash.left(16) << "— aborting (hash mismatch could indicate"
                        << "magnet/infoHash desync from indexer).";
+            m_engine->removeTorrent(addedHash, /*deleteFiles=*/false);
             return;
         }
     }
