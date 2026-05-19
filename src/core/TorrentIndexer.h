@@ -53,6 +53,15 @@ public:
     // store from a different TorrentIndexer instance.
     void reloadPersistedState() { loadPersistedHealth(); }
 
+    // v1.5 Phase D.3 (2026-05-19) — agent-readable label for IndexerHealth.
+    // Used by sources-get-indexer-health JSON serialization.
+    static QString healthToString(IndexerHealth h);
+
+    // v1.5 Phase D.3 (2026-05-19) — reset persisted state back to Unknown
+    // (used by sources-force-indexer-refresh). Caller is expected to fire a
+    // search to repopulate live state.
+    void clearPersistedHealth();
+
 signals:
     void searchFinished(const QList<TorrentResult>& results);
     void searchError(const QString& error);

@@ -1,0 +1,24 @@
+{
+  "phase": "D.3 write-path smokes",
+  "timestamp": "2026-05-19T13:13:56+05:30",
+  "smokes": [
+    {"cmd": "sources-set-tankolibrary-filters audiobooks", "response":
+      {"applied":{"media_tab":"audiobooks"},"seq":1,"snapshot":{"activePageId":"tankolibrary","detailActive":false,"downloadStage":"idle","downloader":{"active":null,"queue":[],"queueLength":0},"filters":{"audio_format":2,"english_only":false,"epub":true,"mobi":false,"pdf":false,"sort":1},"lastQuery":"","mediaTab":"audiobooks","query":"","resultCount":0,"searchInFlight":false,"selectedMd5":"","transfersCount":0},"type":"reply"}
+    },
+    {"cmd": "sources-get-tankolibrary-state (verify after set)", "response":
+      {"seq":1,"snapshot":{"activePageId":"tankolibrary","detailActive":false,"downloadStage":"idle","downloader":{"active":null,"queue":[],"queueLength":0},"filters":{"audio_format":2,"english_only":false,"epub":true,"mobi":false,"pdf":false,"sort":1},"lastQuery":"","mediaTab":"audiobooks","query":"","resultCount":0,"searchInFlight":false,"selectedMd5":"","transfersCount":0},"type":"reply"}
+    },
+    {"cmd": "sources-set-tankolibrary-filters books (flip back)", "response":
+      {"applied":{"media_tab":"books"},"seq":1,"snapshot":{"activePageId":"tankolibrary","detailActive":false,"downloadStage":"idle","downloader":{"active":null,"queue":[],"queueLength":0},"filters":{"audio_format":2,"english_only":false,"epub":true,"mobi":false,"pdf":false,"sort":1},"lastQuery":"","mediaTab":"books","query":"","resultCount":0,"searchInFlight":false,"selectedMd5":"","transfersCount":0},"type":"reply"}
+    },
+    {"cmd": "sources-cancel-search", "response":
+      {"pendingSearches":0,"seq":1,"type":"reply","wasActive":false}
+    },
+    {"cmd": "dump-ui sources", "response":
+      {"pageId":"sources","seq":1,"snapshot":{"tankolibrary":{"activePageId":"tankolibrary","detailActive":false,"downloadStage":"idle","downloader":{"active":null,"queue":[],"queueLength":0},"filters":{"audio_format":2,"english_only":false,"epub":true,"mobi":false,"pdf":false,"sort":1},"lastQuery":"","mediaTab":"books","query":"","resultCount":0,"searchInFlight":false,"selectedMd5":"","transfersCount":0},"tankorent":{"activeIndexers":0,"activePageId":"tankorent","activeTab":0,"activeTransfers":26,"categoryFilter":"","lastQuery":"","mediaType":"videos","pendingSearches":0,"query":"","resultCount":0,"searchInFlight":false,"seederFilter":"active","showAll":false,"sourceFilter":"all","totalResults":0}},"type":"reply"}
+    },
+    {"cmd": "sources-force-indexer-refresh nyaa", "response":
+      {"indexerId":"nyaa","note":"persisted health cleared; live re-query happens on next search","refreshed":true,"seq":1,"type":"reply"}
+    }
+  ]
+}

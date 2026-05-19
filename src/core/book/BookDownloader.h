@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QPointer>
+#include <QJsonObject>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -61,6 +62,10 @@ public:
 
     void cancelDownload(const QString& md5);
     bool isActive(const QString& md5) const;
+
+    // v1.5 Phase D.3 (2026-05-19) — agent-readable snapshot of the active +
+    // queued downloads. Used by sources-get-tankolibrary-state JSON.
+    QJsonObject devSnapshot() const;
 
 signals:
     void downloadProgress(const QString& md5, qint64 bytesReceived, qint64 bytesTotal);

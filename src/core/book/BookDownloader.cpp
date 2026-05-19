@@ -5,6 +5,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -112,6 +114,39 @@ bool BookDownloader::isActive(const QString& md5) const
         if (q.md5 == md5) return true;
     }
     return false;
+}
+
+QJsonObject BookDownloader::devSnapshot() const
+{
+    // v1.5 Phase D.3 (2026-05-19) — agent-readable snapshot for the
+    // sources-get-tankolibrary-state command.
+    QJsonObject snap;
+    if (m_active) {
+        QJsonObject a;
+        a["md5"]             = m_active->md5;
+        a["urlIdx"]          = m_active->urlIdx;
+        a["urlCount"]        = m_active->urls.size();
+        a["attempt"]         = m_active->attempt;
+        a["destinationDir"]  = m_active->destinationDir;
+        a["suggestedName"]   = m_active->suggestedName;
+        a["expectedBytes"]   = static_cast<double>(m_active->expectedBytes);
+        a["receivedBytes"]   = static_cast<double>(m_active->receivedBytes);
+        snap["active"] = a;
+    } else {
+        snap["active"] = QJsonValue::Null;
+    }
+    QJsonArray queueArr;
+    for (const InFlight& q : m_queue) {
+        QJsonObject o;
+        o["md5"]            = q.md5;
+        o["destinationDir"] = q.destinationDir;
+        o["suggestedName"]  = q.suggestedName;
+        o["expectedBytes"]  = static_cast<double>(q.expectedBytes);
+        queueArr.append(o);
+    }
+    snap["queue"] = queueArr;
+    snap["queueLength"] = queueArr.size();
+    return snap;
 }
 
 QString BookDownloader::startDownload(const QString& md5,

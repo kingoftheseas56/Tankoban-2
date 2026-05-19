@@ -2117,6 +2117,29 @@ QString TorrentClient::resolveMetadata(const QString& magnetUri)
     return hash;
 }
 
+QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
+                                         const QString& category,
+                                         const QString& destinationPath)
+{
+    // v1.5 Phase D.3 (2026-05-19) — dialog-free magnet add for dev-bridge use.
+    if (isDuplicate(magnetUri))
+        return {};
+    const QString hash = resolveMetadata(magnetUri);
+    if (hash.isEmpty())
+        return {};
+    const QMap<QString, QString> paths = defaultPaths();
+    AddTorrentConfig cfg;
+    cfg.category        = category.isEmpty() ? QStringLiteral("videos") : category;
+    cfg.destinationPath = destinationPath.isEmpty()
+        ? paths.value(cfg.category, paths.value(QString()))
+        : destinationPath;
+    cfg.contentLayout   = QStringLiteral("original");
+    cfg.sequential      = false;
+    cfg.startPaused     = false;
+    startDownload(hash, cfg);
+    return hash;
+}
+
 void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfig& config)
 {
     // Apply file priorities

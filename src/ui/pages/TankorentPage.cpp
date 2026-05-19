@@ -633,14 +633,322 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     m_transferTimer->start(1000);
 }
 
+// v1.5 Phase D.3 (2026-05-19) — Tankorent-side dispatch layer.
+//
+// reply["type"] = "reply" + reply["seq"] are pre-set by MainWindow's
+// handleDevCommand before forwarding; replyOk preserves those, replyErr
+// overrides "type" to "error". See docs/superpowers/specs/
+// 2026-05-19-bridge-v1.5-sources-commission.md for the catalog.
+namespace {
+
+inline bool tkrReplyOk(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+
+inline bool tkrReplyErr(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+
+// Built-in indexer id list (mirrors dispatchIndexers' addIf calls).
+// Used by sources-get-indexer-health to enumerate known sources without
+// having to keep an active live indexer instance per id.
+static const QStringList kKnownIndexerIds = {
+    QStringLiteral("nyaa"),
+    QStringLiteral("piratebay"),
+    QStringLiteral("1337x"),
+    QStringLiteral("yts"),
+    QStringLiteral("eztv"),
+    QStringLiteral("exttorrents"),
+    QStringLiteral("torrentscsv"),
+};
+
+// Construct a sentinel indexer for the given id, used only for its
+// persisted-health load. Returns nullptr for unknown ids. Caller deletes.
+TorrentIndexer* makeSentinelIndexer(const QString& id, QNetworkAccessManager* nam,
+                                    QObject* parent)
+{
+    if (id == QLatin1String("nyaa"))         return new NyaaIndexer(nam, parent);
+    if (id == QLatin1String("piratebay"))    return new PirateBayIndexer(nam, parent);
+    if (id == QLatin1String("1337x"))        return new X1337xIndexer(nam, parent);
+    if (id == QLatin1String("yts"))          return new YtsIndexer(nam, parent);
+    if (id == QLatin1String("eztv"))         return new EztvIndexer(nam, parent);
+    if (id == QLatin1String("exttorrents"))  return new ExtTorrentsIndexer(nam, parent);
+    if (id == QLatin1String("torrentscsv"))  return new TorrentsCsvIndexer(nam, parent);
+    return nullptr;
+}
+
+}  // namespace
+
 bool TankorentPage::dispatchDevCommand(const QString& cmd,
                                        const QJsonObject& payload,
                                        QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
-    Q_UNUSED(payload);
-    Q_UNUSED(reply);
-    return false;
+    // ── State snapshot ─────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_get_tankorent_state"))
+        return tkrReplyOk(reply, {{"snapshot", devSnapshot()}});
+
+    // ── Search dispatch ────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_search_tankorent")) {
+        const QString query = payload.value("query").toString();
+        if (query.trimmed().isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.query required (non-empty)"));
+        if (!m_queryEdit || !m_searchTypeCombo || !m_sourceCombo
+            || !m_categoryCombo)
+            return tkrReplyErr(reply, "INTERNAL",
+                QStringLiteral("search controls not constructed"));
+        m_queryEdit->setText(query);
+        // Optional --type override (videos/books/audiobooks/comics).
+        const QString typeOverride = payload.value("type").toString();
+        if (!typeOverride.isEmpty()) {
+            const int idx = m_searchTypeCombo->findData(typeOverride);
+            if (idx >= 0) m_searchTypeCombo->setCurrentIndex(idx);
+        }
+        startSearch();
+        return tkrReplyOk(reply, {
+            {"query",          query},
+            {"dispatched",     m_activeIndexers.size()},
+            {"pendingSearches", m_pendingSearches}
+        });
+    }
+
+    if (cmd == QLatin1String("sources_cancel_search")) {
+        const bool wasActive = (m_pendingSearches > 0
+                                || !m_activeIndexers.isEmpty());
+        cancelSearch();
+        return tkrReplyOk(reply, {
+            {"wasActive",       wasActive},
+            {"pendingSearches", m_pendingSearches}
+        });
+    }
+
+    // ── Indexer health ─────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_get_indexer_health")) {
+        QSettings settings;
+        QJsonArray arr;
+        for (const QString& id : kKnownIndexerIds) {
+            TorrentIndexer* sentinel = makeSentinelIndexer(id, m_nam, nullptr);
+            QJsonObject obj;
+            obj["id"]           = id;
+            obj["enabled"]      = settings.value(
+                QStringLiteral("tankorent/indexers/%1/enabled").arg(id), true).toBool();
+            if (sentinel) {
+                obj["displayName"]      = sentinel->displayName();
+                obj["health"]           = TorrentIndexer::healthToString(sentinel->health());
+                obj["lastSuccess"]      = sentinel->lastSuccess().isValid()
+                    ? sentinel->lastSuccess().toString(Qt::ISODate)
+                    : QString();
+                obj["lastError"]        = sentinel->lastError();
+                obj["lastResponseMs"]   = static_cast<double>(sentinel->lastResponseMs());
+                obj["requiresCredentials"] = sentinel->requiresCredentials();
+                delete sentinel;
+            } else {
+                obj["displayName"]    = id;
+                obj["health"]         = QStringLiteral("unknown");
+                obj["lastSuccess"]    = QString();
+                obj["lastError"]      = QStringLiteral("no sentinel constructor");
+                obj["lastResponseMs"] = 0.0;
+            }
+            arr.append(obj);
+        }
+        return tkrReplyOk(reply, {{"indexers", arr}});
+    }
+
+    if (cmd == QLatin1String("sources_force_indexer_refresh")) {
+        const QString id = payload.value("indexerId").toString();
+        if (id.isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.indexerId required"));
+        if (!kKnownIndexerIds.contains(id))
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("unknown indexerId '%1'").arg(id));
+        TorrentIndexer* sentinel = makeSentinelIndexer(id, m_nam, nullptr);
+        if (!sentinel)
+            return tkrReplyErr(reply, "INTERNAL",
+                QStringLiteral("could not construct sentinel for '%1'").arg(id));
+        sentinel->clearPersistedHealth();
+        delete sentinel;
+        return tkrReplyOk(reply, {
+            {"indexerId", id},
+            {"refreshed", true},
+            {"note",      QStringLiteral("persisted health cleared; live re-query "
+                                          "happens on next search")}
+        });
+    }
+
+    // ── Downloads queue + lifecycle ────────────────────────────────────────
+    if (cmd == QLatin1String("sources_get_pending_downloads")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        QJsonArray arr;
+        for (const TorrentInfo& t : m_client->listActive()) {
+            QJsonObject obj;
+            obj["infoHash"]    = t.infoHash;
+            obj["name"]        = t.name;
+            obj["category"]    = t.category;
+            obj["state"]       = t.stateString;
+            obj["progress"]    = static_cast<double>(t.progress);
+            obj["dlSpeed"]     = t.dlSpeed;
+            obj["ulSpeed"]     = t.ulSpeed;
+            obj["peers"]       = t.peers;
+            obj["seeds"]       = t.seeds;
+            obj["totalDone"]   = static_cast<double>(t.totalDone);
+            obj["totalWanted"] = static_cast<double>(t.totalWanted);
+            obj["savePath"]    = t.savePath;
+            obj["dlLimit"]     = t.dlLimit;
+            obj["ulLimit"]     = t.ulLimit;
+            obj["queuePosition"] = t.queuePosition;
+            obj["sequential"]    = t.sequential;
+            obj["forceStarted"]  = t.forceStarted;
+            obj["errorMessage"]  = t.errorMessage;
+            arr.append(obj);
+        }
+        return tkrReplyOk(reply, {
+            {"entries", arr},
+            {"count",   arr.size()}
+        });
+    }
+
+    if (cmd == QLatin1String("sources_cancel_download")
+        || cmd == QLatin1String("sources_remove_torrent")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        const QString infoHash = payload.value("infoHash").toString();
+        if (infoHash.isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.infoHash required"));
+        // deleteFiles defaults to false (leaves files on disk; sources-cancel-
+        // download is a queue-abort, not a destructive purge). Callers wanting
+        // disk eviction pass payload.deleteFiles=true explicitly.
+        const bool deleteFiles = payload.value("deleteFiles").toBool(false);
+        m_client->deleteTorrent(infoHash, deleteFiles);
+        return tkrReplyOk(reply, {
+            {"infoHash",    infoHash},
+            {"deleteFiles", deleteFiles},
+            {"cancelled",   true}
+        });
+    }
+
+    if (cmd == QLatin1String("sources_pause_torrent")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        const QString infoHash = payload.value("infoHash").toString();
+        if (infoHash.isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.infoHash required"));
+        m_client->pauseTorrent(infoHash);
+        return tkrReplyOk(reply, {{"infoHash", infoHash}, {"paused", true}});
+    }
+
+    if (cmd == QLatin1String("sources_resume_torrent")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        const QString infoHash = payload.value("infoHash").toString();
+        if (infoHash.isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.infoHash required"));
+        m_client->resumeTorrent(infoHash);
+        return tkrReplyOk(reply, {{"infoHash", infoHash}, {"resumed", true}});
+    }
+
+    if (cmd == QLatin1String("sources_add_magnet")
+        || cmd == QLatin1String("sources_add_url")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        const QString key = (cmd == QLatin1String("sources_add_url"))
+            ? QStringLiteral("url")
+            : QStringLiteral("magnet");
+        const QString uri = payload.value(key).toString();
+        if (uri.isEmpty())
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.%1 required").arg(key));
+        const QString category    = payload.value("category").toString();
+        const QString destination = payload.value("destinationPath").toString();
+        const QString hash = m_client->addMagnetHeadless(uri, category, destination);
+        if (hash.isEmpty())
+            return tkrReplyErr(reply, "ADD_FAILED",
+                QStringLiteral("addMagnetHeadless returned empty (duplicate or "
+                               "resolve-metadata failure)"));
+        return tkrReplyOk(reply, {
+            {"infoHash",    hash},
+            {"category",    category},
+            {"destination", destination}
+        });
+    }
+
+    if (cmd == QLatin1String("sources_set_speed_limits")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        if (!payload.contains(QStringLiteral("dlLimit"))
+            || !payload.contains(QStringLiteral("ulLimit")))
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.dlLimit and payload.ulLimit required (bytes/sec)"));
+        const int dl = payload.value("dlLimit").toInt();
+        const int ul = payload.value("ulLimit").toInt();
+        const QString scope = payload.value("scope").toString(
+            QStringLiteral("global"));
+        if (scope == QLatin1String("global")) {
+            m_client->setGlobalSpeedLimits(dl, ul);
+            return tkrReplyOk(reply, {
+                {"scope", scope}, {"dlLimit", dl}, {"ulLimit", ul}});
+        }
+        // Per-torrent: scope == infoHash.
+        const QString infoHash = scope;
+        m_client->setSpeedLimits(infoHash, dl, ul);
+        return tkrReplyOk(reply, {
+            {"scope", QStringLiteral("infoHash")},
+            {"infoHash", infoHash}, {"dlLimit", dl}, {"ulLimit", ul}});
+    }
+
+    if (cmd == QLatin1String("sources_set_queue_limits")) {
+        if (!m_client)
+            return tkrReplyErr(reply, "INTERNAL", "TorrentClient not wired");
+        if (!payload.contains(QStringLiteral("maxDownloads"))
+            || !payload.contains(QStringLiteral("maxUploads"))
+            || !payload.contains(QStringLiteral("maxActive")))
+            return tkrReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.maxDownloads, maxUploads, maxActive required"));
+        const int dl = payload.value("maxDownloads").toInt();
+        const int ul = payload.value("maxUploads").toInt();
+        const int ac = payload.value("maxActive").toInt();
+        m_client->setQueueLimits(dl, ul, ac);
+        return tkrReplyOk(reply, {
+            {"maxDownloads", dl}, {"maxUploads", ul}, {"maxActive", ac}});
+    }
+
+    return false;  // unknown sources_* command — caller falls through.
+}
+
+QJsonObject TankorentPage::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["activePageId"]   = QStringLiteral("tankorent");
+    snap["query"]          = m_queryEdit ? m_queryEdit->text() : QString();
+    snap["lastQuery"]      = m_lastQuery;
+    snap["mediaType"]      = m_searchTypeCombo
+        ? m_searchTypeCombo->currentData().toString() : QString();
+    snap["sourceFilter"]   = m_sourceCombo
+        ? m_sourceCombo->currentData().toString() : QString();
+    snap["categoryFilter"] = m_categoryCombo
+        ? m_categoryCombo->currentData().toString() : QString();
+    snap["seederFilter"]   = m_filterCombo
+        ? m_filterCombo->currentData().toString() : QString();
+    snap["resultCount"]    = m_displayedResults.size();
+    snap["totalResults"]   = m_allResults.size();
+    snap["showAll"]        = m_showAll;
+    snap["pendingSearches"] = m_pendingSearches;
+    snap["searchInFlight"]  = (m_pendingSearches > 0);
+    snap["activeIndexers"]  = m_activeIndexers.size();
+    snap["activeTab"]       = m_tabWidget ? m_tabWidget->currentIndex() : -1;
+    snap["activeTransfers"] = m_cachedActive.size();
+    return snap;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -45,6 +45,11 @@ public:
                                         const QJsonObject& payload,
                                         QJsonObject& reply);
 
+    // v1.5 Phase D.3 (2026-05-19) — agent-readable snapshot of TankoLibrary
+    // search + filter + transfers state. Used by sources-get-tankolibrary-state
+    // + dump-ui tankolibrary.
+    QJsonObject devSnapshot() const;
+
 private:
     // Media-type tab (TANKOLIBRARY_ABB_FIX_TODO M1). Books = EPUB/PDF/MOBI
     // via LibGen. Audiobooks = M4B/MP3 torrents via AudioBookBay.

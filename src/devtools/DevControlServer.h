@@ -23,7 +23,10 @@ class MainWindow;
 // Schema version is returned by MainWindow's `ping` command. Additive
 // changes within v1.x are non-breaking; removals/renames bump to v2.
 // MainWindow owns command dispatch; v1.3+ domain surfaces may delegate
-// prefixed commands to page-local dispatchDevCommand methods.
+// prefixed commands to page-local dispatchDevCommand methods. v1.5
+// (Phase D.3, 2026-05-19) adds the sources-side bridge layer covering
+// TankorentPage + TankoLibraryPage (search dispatch, indexer health,
+// torrent lifecycle controls, TankoLibrary detail/download surface).
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.

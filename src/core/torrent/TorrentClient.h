@@ -96,6 +96,17 @@ public:
     QString resolveMetadata(const QString& magnetUri);
     void    startDownload(const QString& infoHash, const AddTorrentConfig& config);
 
+    // v1.5 Phase D.3 (2026-05-19) — dialog-free magnet add for dev-bridge use.
+    // Calls resolveMetadata + startDownload with a minimal AddTorrentConfig
+    // (category resolved against defaultPaths(); destination = defaultPaths()
+    // entry for that category; empty streamGroupId; non-sequential; not
+    // paused). Returns the infoHash on success, empty QString if resolveMetadata
+    // failed or the magnet was a duplicate. Mirrors what the AddTorrentDialog
+    // submit path produces but without the user-confirm prompt.
+    QString addMagnetHeadless(const QString& magnetUri,
+                              const QString& category   = QString(),
+                              const QString& destinationPath = QString());
+
     // Query
     QList<TorrentInfo> listActive() const;
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — set of infoHashes libtorrent

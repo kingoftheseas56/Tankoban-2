@@ -1662,9 +1662,30 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "books_get_listen_state","books_tts_play",
                          "books_tts_pause","books_tts_resume",
                          "books_tts_stop","books_tts_set_voice",
-                         "books_tts_set_speed","books_tts_cancel_stream" };
+                         "books_tts_set_speed","books_tts_cancel_stream",
+                         // v1.5 sources-side bridge (Phase D.3, 2026-05-19).
+                         "sources_search_tankorent",
+                         "sources_search_tankolibrary",
+                         "sources_get_indexer_health",
+                         "sources_get_pending_downloads",
+                         "sources_cancel_download",
+                         "sources_force_indexer_refresh",
+                         "sources_get_tankorent_state",
+                         "sources_get_tankolibrary_state",
+                         "sources_add_magnet",
+                         "sources_add_url",
+                         "sources_pause_torrent",
+                         "sources_resume_torrent",
+                         "sources_remove_torrent",
+                         "sources_set_speed_limits",
+                         "sources_set_queue_limits",
+                         "sources_get_tankolibrary_results",
+                         "sources_open_tankolibrary_detail",
+                         "sources_download_tankolibrary_selected",
+                         "sources_cancel_search",
+                         "sources_set_tankolibrary_filters" };
         return reply({
-            {"schema",     "tankoban.dev.v1.3"},
+            {"schema",     "tankoban.dev.v1.5"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -1934,6 +1955,30 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
             if (!books)
                 return err("INTERNAL", "BooksPage not initialized");
             return reply({{"pageId", pageId}, {"snapshot", books->devSnapshot()}});
+        }
+        if (pageId == QLatin1String("tankorent")) {
+            // v1.5 Phase D.3 (2026-05-19) — tankorent dump-ui.
+            if (!m_tankorentPage)
+                return err("INTERNAL", "TankorentPage not initialized");
+            return reply({{"pageId", pageId},
+                          {"snapshot", m_tankorentPage->devSnapshot()}});
+        }
+        if (pageId == QLatin1String("tankolibrary")) {
+            // v1.5 Phase D.3 (2026-05-19) — tankolibrary dump-ui.
+            auto* tl = m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr;
+            if (!tl)
+                return err("INTERNAL", "TankoLibraryPage not initialized");
+            return reply({{"pageId", pageId}, {"snapshot", tl->devSnapshot()}});
+        }
+        if (pageId == QLatin1String("sources")) {
+            // v1.5 Phase D.3 (2026-05-19) — composite sources dump-ui.
+            QJsonObject composite;
+            if (m_tankorentPage)
+                composite["tankorent"] = m_tankorentPage->devSnapshot();
+            auto* tl = m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr;
+            if (tl)
+                composite["tankolibrary"] = tl->devSnapshot();
+            return reply({{"pageId", pageId}, {"snapshot", composite}});
         }
         return reply({{"pageId", pageId}, {"snapshot", devSnapshot()}});
     }

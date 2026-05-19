@@ -84,3 +84,30 @@ void TorrentIndexer::savePersistedHealth()
     s.setValue(base + QStringLiteral("lastError"),      m_lastError);
     s.setValue(base + QStringLiteral("lastResponseMs"), m_lastResponseMs);
 }
+
+QString TorrentIndexer::healthToString(IndexerHealth h)
+{
+    switch (h) {
+        case IndexerHealth::Unknown:           return QStringLiteral("unknown");
+        case IndexerHealth::Ok:                return QStringLiteral("ok");
+        case IndexerHealth::Disabled:          return QStringLiteral("disabled");
+        case IndexerHealth::AuthRequired:      return QStringLiteral("auth_required");
+        case IndexerHealth::CloudflareBlocked: return QStringLiteral("cloudflare_blocked");
+        case IndexerHealth::RateLimited:       return QStringLiteral("rate_limited");
+        case IndexerHealth::Unreachable:       return QStringLiteral("unreachable");
+    }
+    return QStringLiteral("unknown");
+}
+
+void TorrentIndexer::clearPersistedHealth()
+{
+    QSettings s;
+    const QString base = QStringLiteral("tankorent/indexers/%1/health/").arg(id());
+    s.remove(base + QStringLiteral("lastSuccess"));
+    s.remove(base + QStringLiteral("lastError"));
+    s.remove(base + QStringLiteral("lastResponseMs"));
+    m_health         = IndexerHealth::Unknown;
+    m_lastSuccess    = QDateTime();
+    m_lastError.clear();
+    m_lastResponseMs = 0;
+}

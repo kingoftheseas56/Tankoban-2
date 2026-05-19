@@ -18,6 +18,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMap>
 #include <QPalette>
 #include <QProgressBar>
@@ -587,14 +589,235 @@ void TankoLibraryPage::updateFiltersDotIndicator()
 
 // ── UI builders ─────────────────────────────────────────────────────────────
 
+// v1.5 Phase D.3 (2026-05-19) — TankoLibrary-side dispatch layer.
+namespace {
+
+inline bool tlReplyOk(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+
+inline bool tlReplyErr(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+
+QJsonObject serializeBookResult(const BookResult& r)
+{
+    QJsonObject o;
+    o["source"]    = r.source;
+    o["sourceId"]  = r.sourceId;
+    o["md5"]       = r.md5;
+    o["title"]     = r.title;
+    o["author"]    = r.author;
+    o["publisher"] = r.publisher;
+    o["year"]      = r.year;
+    o["language"]  = r.language;
+    o["format"]    = r.format;
+    o["isbn"]      = r.isbn;
+    o["pages"]     = r.pages;
+    o["fileSize"]  = r.fileSize;
+    o["coverUrl"]  = r.coverUrl;
+    o["detailUrl"] = r.detailUrl;
+    return o;
+}
+
+}  // namespace
+
 bool TankoLibraryPage::dispatchDevCommand(const QString& cmd,
                                           const QJsonObject& payload,
                                           QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
-    Q_UNUSED(payload);
-    Q_UNUSED(reply);
-    return false;
+    // ── State snapshot ─────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_get_tankolibrary_state"))
+        return tlReplyOk(reply, {{"snapshot", devSnapshot()}});
+
+    // ── Search dispatch ────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_search_tankolibrary")) {
+        const QString query = payload.value("query").toString();
+        if (query.trimmed().isEmpty())
+            return tlReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.query required (non-empty)"));
+        if (!m_queryEdit)
+            return tlReplyErr(reply, "INTERNAL",
+                QStringLiteral("search bar not constructed"));
+        m_queryEdit->setText(query);
+        startSearch();
+        return tlReplyOk(reply, {
+            {"query",        query},
+            {"mediaTab",     (m_mediaTab == MediaTab::Books)
+                                ? QStringLiteral("books")
+                                : QStringLiteral("audiobooks")},
+            {"inFlight",     m_searchInFlight}
+        });
+    }
+
+    // ── Results inspection ─────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_get_tankolibrary_results")) {
+        QJsonArray arr;
+        for (const BookResult& r : m_results)
+            arr.append(serializeBookResult(r));
+        QJsonObject selected;
+        if (!m_selectedResult.md5.isEmpty())
+            selected = serializeBookResult(m_selectedResult);
+        return tlReplyOk(reply, {
+            {"results",      arr},
+            {"count",        arr.size()},
+            {"selected",     selected.isEmpty() ? QJsonValue::Null
+                                                : QJsonValue(selected)},
+            {"detailActive", m_stack && m_stack->currentWidget() == m_detailPage}
+        });
+    }
+
+    // ── Detail navigation ──────────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_open_tankolibrary_detail")) {
+        const QString md5 = payload.value("md5").toString();
+        if (md5.isEmpty())
+            return tlReplyErr(reply, "BAD_REQUEST",
+                QStringLiteral("payload.md5 required (BookResult primary key)"));
+        bool found = false;
+        for (int i = 0; i < m_results.size(); ++i) {
+            if (m_results[i].md5 == md5) {
+                onResultActivated(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return tlReplyErr(reply, "NOT_FOUND",
+                QStringLiteral("no result with md5 '%1' (search first?)").arg(md5));
+        return tlReplyOk(reply, {
+            {"md5",          md5},
+            {"detailActive", m_stack && m_stack->currentWidget() == m_detailPage}
+        });
+    }
+
+    if (cmd == QLatin1String("sources_download_tankolibrary_selected")) {
+        if (m_selectedResult.md5.isEmpty())
+            return tlReplyErr(reply, "NO_SELECTION",
+                QStringLiteral("no detail page open (call "
+                               "sources-open-tankolibrary-detail first)"));
+        if (m_downloadStage == DownloadStage::Downloading
+            || m_downloadStage == DownloadStage::Resolving)
+            return tlReplyErr(reply, "ALREADY_DOWNLOADING",
+                QStringLiteral("download already in flight for md5 '%1'")
+                    .arg(m_selectedResult.md5));
+        onDownloadClicked();
+        return tlReplyOk(reply, {
+            {"md5",   m_selectedResult.md5},
+            {"stage", (m_downloadStage == DownloadStage::Resolving)
+                        ? QStringLiteral("resolving")
+                        : (m_downloadStage == DownloadStage::Downloading)
+                              ? QStringLiteral("downloading")
+                              : QStringLiteral("idle")}
+        });
+    }
+
+    // ── Filter / sort settings ────────────────────────────────────────────
+    if (cmd == QLatin1String("sources_set_tankolibrary_filters")) {
+        // payload may contain any subset of:
+        //   media_tab: "books" | "audiobooks"
+        //   epub, pdf, mobi: bool (Books-tab format filter)
+        //   english_only: bool
+        //   sort: int (combo index)
+        //   audio_format: int (combo index)
+        QJsonObject applied;
+        if (payload.contains(QStringLiteral("media_tab"))) {
+            const QString tab = payload.value("media_tab").toString();
+            if (tab == QLatin1String("books"))
+                setMediaTab(MediaTab::Books);
+            else if (tab == QLatin1String("audiobooks"))
+                setMediaTab(MediaTab::Audiobooks);
+            else
+                return tlReplyErr(reply, "BAD_REQUEST",
+                    QStringLiteral("media_tab must be 'books' or 'audiobooks'"));
+            applied["media_tab"] = tab;
+        }
+        if (payload.contains(QStringLiteral("epub")) && m_epubChk) {
+            m_epubChk->setChecked(payload.value("epub").toBool());
+            applied["epub"] = m_epubChk->isChecked();
+        }
+        if (payload.contains(QStringLiteral("pdf")) && m_pdfChk) {
+            m_pdfChk->setChecked(payload.value("pdf").toBool());
+            applied["pdf"] = m_pdfChk->isChecked();
+        }
+        if (payload.contains(QStringLiteral("mobi")) && m_mobiChk) {
+            m_mobiChk->setChecked(payload.value("mobi").toBool());
+            applied["mobi"] = m_mobiChk->isChecked();
+        }
+        if (payload.contains(QStringLiteral("english_only")) && m_englishOnlyCheckbox) {
+            m_englishOnlyCheckbox->setChecked(
+                payload.value("english_only").toBool());
+            applied["english_only"] = m_englishOnlyCheckbox->isChecked();
+        }
+        if (payload.contains(QStringLiteral("sort")) && m_sortCombo) {
+            const int idx = payload.value("sort").toInt(-1);
+            if (idx >= 0 && idx < m_sortCombo->count()) {
+                m_sortCombo->setCurrentIndex(idx);
+                applied["sort"] = idx;
+            }
+        }
+        if (payload.contains(QStringLiteral("audio_format")) && m_audioFormatCombo) {
+            const int idx = payload.value("audio_format").toInt(-1);
+            if (idx >= 0 && idx < m_audioFormatCombo->count()) {
+                m_audioFormatCombo->setCurrentIndex(idx);
+                applied["audio_format"] = idx;
+            }
+        }
+        applyClientFilter();
+        return tlReplyOk(reply, {
+            {"applied",  applied},
+            {"snapshot", devSnapshot()}
+        });
+    }
+
+    return false;  // unknown sources_* command — caller falls through.
+}
+
+QJsonObject TankoLibraryPage::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["activePageId"]   = QStringLiteral("tankolibrary");
+    snap["mediaTab"]       = (m_mediaTab == MediaTab::Books)
+        ? QStringLiteral("books")
+        : QStringLiteral("audiobooks");
+    snap["query"]          = m_queryEdit ? m_queryEdit->text() : QString();
+    snap["lastQuery"]      = m_lastQuery;
+    snap["searchInFlight"] = m_searchInFlight;
+    snap["resultCount"]    = m_results.size();
+    snap["detailActive"]   = m_stack && m_stack->currentWidget() == m_detailPage;
+    snap["selectedMd5"]    = m_selectedResult.md5;
+
+    QJsonObject filters;
+    filters["epub"]         = m_epubChk         ? m_epubChk->isChecked()         : false;
+    filters["pdf"]          = m_pdfChk          ? m_pdfChk->isChecked()          : false;
+    filters["mobi"]         = m_mobiChk         ? m_mobiChk->isChecked()         : false;
+    filters["english_only"] = m_englishOnlyCheckbox
+        ? m_englishOnlyCheckbox->isChecked() : false;
+    filters["sort"]         = m_sortCombo
+        ? m_sortCombo->currentIndex() : -1;
+    filters["audio_format"] = m_audioFormatCombo
+        ? m_audioFormatCombo->currentIndex() : -1;
+    snap["filters"] = filters;
+
+    // Download surface.
+    snap["downloadStage"] = (m_downloadStage == DownloadStage::Idle)
+        ? QStringLiteral("idle")
+        : (m_downloadStage == DownloadStage::Resolving)
+              ? QStringLiteral("resolving")
+              : QStringLiteral("downloading");
+    if (m_downloader)
+        snap["downloader"] = m_downloader->devSnapshot();
+    else
+        snap["downloader"] = QJsonValue::Null;
+
+    snap["transfersCount"] = m_transfers.size();
+    return snap;
 }
 
 void TankoLibraryPage::buildUI()

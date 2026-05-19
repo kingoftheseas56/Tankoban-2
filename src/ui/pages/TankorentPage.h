@@ -54,6 +54,10 @@ public:
                                         const QJsonObject& payload,
                                         QJsonObject& reply);
 
+    // v1.5 Phase D.3 (2026-05-19) — agent-readable snapshot of search +
+    // transfers state. Used by sources-get-tankorent-state + dump-ui tankorent.
+    QJsonObject devSnapshot() const;
+
 signals:
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     void exitedLayer();

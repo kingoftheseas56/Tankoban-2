@@ -53,6 +53,26 @@
 //   tankoctl books-tts-set-voice <voice>
 //   tankoctl books-tts-set-speed <speed>
 //   tankoctl books-tts-cancel-stream <streamId>
+//   tankoctl sources-search-tankorent <query> [--type videos|books|audiobooks|comics]
+//   tankoctl sources-search-tankolibrary <query>
+//   tankoctl sources-cancel-search
+//   tankoctl sources-get-tankorent-state
+//   tankoctl sources-get-tankolibrary-state
+//   tankoctl sources-get-indexer-health
+//   tankoctl sources-force-indexer-refresh <indexer-id>
+//   tankoctl sources-get-pending-downloads
+//   tankoctl sources-cancel-download <infoHash> [--delete-files]
+//   tankoctl sources-pause-torrent <infoHash>
+//   tankoctl sources-resume-torrent <infoHash>
+//   tankoctl sources-remove-torrent <infoHash> [--delete-files]
+//   tankoctl sources-add-magnet <magnet> [--category cat] [--dest path]
+//   tankoctl sources-add-url <url> [--category cat] [--dest path]
+//   tankoctl sources-set-speed-limits <down-bps> <up-bps> [--scope global|<infoHash>]
+//   tankoctl sources-set-queue-limits <max-downloads> <max-uploads> <max-active>
+//   tankoctl sources-get-tankolibrary-results
+//   tankoctl sources-open-tankolibrary-detail <md5>
+//   tankoctl sources-download-tankolibrary-selected
+//   tankoctl sources-set-tankolibrary-filters <json>
 //
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
@@ -66,6 +86,7 @@
 //   64 — usage error (unknown subcommand or missing required argument)
 
 #include <QCoreApplication>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
@@ -148,7 +169,41 @@ void printUsage(QTextStream& err)
         << "  (books-seek-page / books-set-layout / books-get-chapters /\n"
         << "   books-open-chapter / books-tts-{play,pause,resume,stop,\n"
         << "   set-voice,set-speed} / books-get-listen-state — JS-resident;\n"
-        << "   return structured JS_RESIDENT_NOT_IMPLEMENTED reply)\n";
+        << "   return structured JS_RESIDENT_NOT_IMPLEMENTED reply)\n"
+        << "\n"
+        << "  v1.5 sources-side bridge (Phase D.3, 2026-05-19):\n"
+        << "  sources-search-tankorent <query> [--type videos|books|audiobooks|comics]\n"
+        << "                           fire a Tankorent search\n"
+        << "  sources-search-tankolibrary <query>\n"
+        << "                           fire a TankoLibrary search (active media tab)\n"
+        << "  sources-cancel-search    abort the active Tankorent search\n"
+        << "  sources-get-tankorent-state    TankorentPage snapshot\n"
+        << "  sources-get-tankolibrary-state TankoLibraryPage snapshot\n"
+        << "  sources-get-indexer-health     per-indexer status, response time, error rate\n"
+        << "  sources-force-indexer-refresh <indexer-id>\n"
+        << "                           clear persisted health for an indexer\n"
+        << "  sources-get-pending-downloads  current torrent queue\n"
+        << "  sources-cancel-download <infoHash> [--delete-files]\n"
+        << "                           cancel a queued torrent download\n"
+        << "  sources-pause-torrent <infoHash>\n"
+        << "  sources-resume-torrent <infoHash>\n"
+        << "  sources-remove-torrent <infoHash> [--delete-files]\n"
+        << "                           full TorrentClient lifecycle controls\n"
+        << "  sources-add-magnet <magnet-uri> [--category cat] [--dest path]\n"
+        << "  sources-add-url <url> [--category cat] [--dest path]\n"
+        << "                           headless add via TorrentClient::addMagnetHeadless\n"
+        << "  sources-set-speed-limits <down-bps> <up-bps> [--scope global|<infoHash>]\n"
+        << "                           global or per-torrent speed limits\n"
+        << "  sources-set-queue-limits <max-downloads> <max-uploads> <max-active>\n"
+        << "  sources-get-tankolibrary-results\n"
+        << "                           current BookResult list + selection state\n"
+        << "  sources-open-tankolibrary-detail <md5>\n"
+        << "                           navigate to the detail page for a search result\n"
+        << "  sources-download-tankolibrary-selected\n"
+        << "                           kick off download for the open detail\n"
+        << "  sources-set-tankolibrary-filters <json>\n"
+        << "                           media_tab / epub / pdf / mobi / english_only /\n"
+        << "                           sort / audio_format -- pass JSON subset\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -498,6 +553,129 @@ int main(int argc, char** argv)
             return 64;
         }
         payload["streamId"] = static_cast<double>(streamId);
+    } else if (sub == QLatin1String("sources-search-tankorent")) {
+        // v1.5 Phase D.3 (2026-05-19) — Tankorent + TankoLibrary surface.
+        if (a.size() < 3) {
+            err << "sources-search-tankorent requires <query>\n";
+            return 64;
+        }
+        payload["query"] = a[2];
+        for (int i = 3; i < a.size(); ++i) {
+            if (a[i] != QLatin1String("--type") || i + 1 >= a.size()) {
+                err << "sources-search-tankorent optional args: --type videos|books|audiobooks|comics\n";
+                return 64;
+            }
+            payload["type"] = a[++i];
+        }
+    } else if (sub == QLatin1String("sources-search-tankolibrary")) {
+        if (a.size() < 3) {
+            err << "sources-search-tankolibrary requires <query>\n";
+            return 64;
+        }
+        payload["query"] = a[2];
+    } else if (sub == QLatin1String("sources-force-indexer-refresh")) {
+        if (a.size() < 3) {
+            err << "sources-force-indexer-refresh requires <indexer-id>\n";
+            return 64;
+        }
+        payload["indexerId"] = a[2];
+    } else if (sub == QLatin1String("sources-cancel-download")
+               || sub == QLatin1String("sources-remove-torrent")) {
+        if (a.size() < 3) {
+            err << sub << " requires <infoHash> [--delete-files]\n";
+            return 64;
+        }
+        payload["infoHash"] = a[2];
+        for (int i = 3; i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--delete-files")) {
+                payload["deleteFiles"] = true;
+            } else {
+                err << sub << " optional args: --delete-files\n";
+                return 64;
+            }
+        }
+    } else if (sub == QLatin1String("sources-pause-torrent")
+               || sub == QLatin1String("sources-resume-torrent")) {
+        if (a.size() < 3) {
+            err << sub << " requires <infoHash>\n";
+            return 64;
+        }
+        payload["infoHash"] = a[2];
+    } else if (sub == QLatin1String("sources-add-magnet")
+               || sub == QLatin1String("sources-add-url")) {
+        const QString key = (sub == QLatin1String("sources-add-url"))
+            ? QStringLiteral("url")
+            : QStringLiteral("magnet");
+        if (a.size() < 3) {
+            err << sub << " requires <" << key << "> [--category cat] [--dest path]\n";
+            return 64;
+        }
+        payload[key] = a[2];
+        for (int i = 3; i < a.size(); ++i) {
+            if ((a[i] == QLatin1String("--category") && i + 1 < a.size())) {
+                payload["category"] = a[++i];
+            } else if (a[i] == QLatin1String("--dest") && i + 1 < a.size()) {
+                payload["destinationPath"] = a[++i];
+            } else {
+                err << sub << " optional args: --category <cat> --dest <path>\n";
+                return 64;
+            }
+        }
+    } else if (sub == QLatin1String("sources-set-speed-limits")) {
+        if (a.size() < 4) {
+            err << "sources-set-speed-limits requires <down-bps> <up-bps> [--scope global|<infoHash>]\n";
+            return 64;
+        }
+        bool okDl = false, okUl = false;
+        const int dl = a[2].toInt(&okDl);
+        const int ul = a[3].toInt(&okUl);
+        if (!okDl || !okUl) {
+            err << "sources-set-speed-limits down-bps and up-bps must be integers (0 = unlimited)\n";
+            return 64;
+        }
+        payload["dlLimit"] = dl;
+        payload["ulLimit"] = ul;
+        for (int i = 4; i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--scope") && i + 1 < a.size()) {
+                payload["scope"] = a[++i];
+            } else {
+                err << "sources-set-speed-limits optional args: --scope global|<infoHash>\n";
+                return 64;
+            }
+        }
+    } else if (sub == QLatin1String("sources-set-queue-limits")) {
+        if (a.size() < 5) {
+            err << "sources-set-queue-limits requires <max-downloads> <max-uploads> <max-active>\n";
+            return 64;
+        }
+        bool okD = false, okU = false, okA = false;
+        const int md = a[2].toInt(&okD);
+        const int mu = a[3].toInt(&okU);
+        const int mac = a[4].toInt(&okA);
+        if (!okD || !okU || !okA) {
+            err << "sources-set-queue-limits values must be integers\n";
+            return 64;
+        }
+        payload["maxDownloads"] = md;
+        payload["maxUploads"]   = mu;
+        payload["maxActive"]    = mac;
+    } else if (sub == QLatin1String("sources-open-tankolibrary-detail")) {
+        if (a.size() < 3) {
+            err << "sources-open-tankolibrary-detail requires <md5>\n";
+            return 64;
+        }
+        payload["md5"] = a[2];
+    } else if (sub == QLatin1String("sources-set-tankolibrary-filters")) {
+        if (a.size() < 3) {
+            err << "sources-set-tankolibrary-filters requires <json>\n";
+            return 64;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(a[2].toUtf8());
+        if (!doc.isObject()) {
+            err << "sources-set-tankolibrary-filters: json must be an object\n";
+            return 64;
+        }
+        payload = doc.object();
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -521,7 +699,15 @@ int main(int argc, char** argv)
                || sub == QLatin1String("books-tts-play")
                || sub == QLatin1String("books-tts-pause")
                || sub == QLatin1String("books-tts-resume")
-               || sub == QLatin1String("books-tts-stop")) {
+               || sub == QLatin1String("books-tts-stop")
+               // v1.5 sources-side bridge (Phase D.3, 2026-05-19).
+               || sub == QLatin1String("sources-cancel-search")
+               || sub == QLatin1String("sources-get-tankorent-state")
+               || sub == QLatin1String("sources-get-tankolibrary-state")
+               || sub == QLatin1String("sources-get-indexer-health")
+               || sub == QLatin1String("sources-get-pending-downloads")
+               || sub == QLatin1String("sources-get-tankolibrary-results")
+               || sub == QLatin1String("sources-download-tankolibrary-selected")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";
