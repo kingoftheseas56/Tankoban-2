@@ -126,6 +126,50 @@ bool isTerminalCohortState(const QString& state)
     };
     return kTerminal.contains(state);
 }
+
+std::optional<StreamDownloadIndex::Entry> substrateEpisodeEntry(
+    StreamDownloadIndex* index,
+    const QString& imdbId,
+    int season,
+    int episode)
+{
+    if (!index || imdbId.isEmpty() || season <= 0 || episode <= 0)
+        return std::nullopt;
+
+    const auto entries = index->entriesForImdb(imdbId);
+    for (const auto& e : entries) {
+        if (e.season == season && e.episode == episode)
+            return e;
+    }
+    return std::nullopt;
+}
+
+QString tankorentInfoHashForSubstrateEntry(const StreamDownloadIndex::Entry& entry)
+{
+    const QString prefix = QStringLiteral("tankorent:");
+    if (!entry.sourceGroupId.startsWith(prefix))
+        return {};
+    return entry.sourceGroupId.mid(prefix.size());
+}
+
+ActionIconSpec actionIconForSubstrateState(StreamDownloadIndex::Entry::State state)
+{
+    switch (state) {
+    case StreamDownloadIndex::Entry::Complete:
+        return { QStringLiteral(":/icons/check.svg"),
+                 QObject::tr("Play downloaded episode"),
+                 true };
+    case StreamDownloadIndex::Entry::Pending:
+        return { QStringLiteral(":/icons/download-arrow.svg"),
+                 QObject::tr("Choose source"),
+                 true };
+    case StreamDownloadIndex::Entry::Downloading:
+        return actionIconForState(RowState::Downloading);
+    case StreamDownloadIndex::Entry::Failed:
+        return actionIconForState(RowState::Failed);
+    }
+    return actionIconForState(RowState::Idle);
+}
 }  // namespace
 
 StreamDetailView::StreamDetailView(CoreBridge* bridge,
@@ -1912,6 +1956,15 @@ void StreamDetailView::repaintActionIconForRow(int row,
     auto* btn = holder->findChild<QPushButton*>();
     if (!btn) return;
 
+    if (const auto substrate =
+            substrateEpisodeEntry(m_downloadIndex, m_currentImdb, season, episode)) {
+        const ActionIconSpec spec = actionIconForSubstrateState(substrate->state);
+        btn->setIcon(QIcon(spec.iconResource));
+        btn->setToolTip(spec.tooltip);
+        btn->setEnabled(spec.enabled);
+        return;
+    }
+
     RowStateInput in;
     if (m_downloadIndex) {
         in.downloadIndexHit =
@@ -1986,6 +2039,61 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& globalAnch
             activeSeason = m_seasonCombo->itemData(idx).toInt();
     }
     if (activeSeason <= 0) return;
+
+    if (const auto substrate =
+            substrateEpisodeEntry(m_downloadIndex, m_currentImdb, activeSeason, episode)) {
+        switch (substrate->state) {
+        case StreamDownloadIndex::Entry::Complete: {
+            const auto pathOpt =
+                m_downloadIndex->filePathFor(m_currentImdb, activeSeason, episode);
+            if (pathOpt.has_value() && QFileInfo::exists(*pathOpt)) {
+                emit playLocalFileFromStreamRequested(
+                    *pathOpt, m_currentImdb, currentTitle(), activeSeason, episode);
+                return;
+            }
+            if (pathOpt.has_value()) {
+                m_downloadIndex->evictByPath(
+                    StreamDownloadIndex::computeCanonicalKey(*pathOpt));
+                if (m_statusLabel)
+                    m_statusLabel->setText(tr("File missing - falling back to streams."));
+            }
+            emit alternateStreamRequested(activeSeason, episode);
+            return;
+        }
+        case StreamDownloadIndex::Entry::Pending:
+            emit alternateStreamRequested(activeSeason, episode);
+            return;
+        case StreamDownloadIndex::Entry::Downloading: {
+            QString infoHash = tankorentInfoHashForSubstrateEntry(*substrate);
+            if (infoHash.isEmpty())
+                infoHash = findInfoHashForEpisode(activeSeason, episode);
+            if (!infoHash.isEmpty() && m_torrentClient) {
+                m_torrentClient->pauseTorrent(infoHash);
+                m_torrentClient->setStreamBulkItemPaused(infoHash, /*paused=*/true);
+            }
+            return;
+        }
+        case StreamDownloadIndex::Entry::Failed: {
+            const QString groupId = findGroupIdForCohort(activeSeason);
+            const QString itemKey = QStringLiteral("%1:S%2E%3")
+                .arg(m_currentImdb)
+                .arg(activeSeason, 2, 10, QLatin1Char('0'))
+                .arg(episode, 2, 10, QLatin1Char('0'));
+            if (!groupId.isEmpty() && m_torrentClient) {
+                m_torrentClient->retryStreamBulkGroupFailedItems(groupId, itemKey);
+                return;
+            }
+            const QString infoHash = tankorentInfoHashForSubstrateEntry(*substrate);
+            if (!infoHash.isEmpty() && m_torrentClient) {
+                m_torrentClient->resumeTorrent(infoHash);
+                return;
+            }
+            startBulkProgressGraceWindow();
+            emit singleEpisodeDownloadRequested(activeSeason, episode);
+            return;
+        }
+        }
+    }
 
     RowStateInput in;
     if (m_downloadIndex) {
