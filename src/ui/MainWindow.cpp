@@ -1702,9 +1702,50 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "library_reset_mode",
                          "library_set_sort",
                          "library_get_sort",
-                         "library_get_selected_items" };
+                         "library_get_selected_items",
+                         // v1.7 player-side deeper bridge (Phase D.2, 2026-05-19).
+                         "player_get_audio_tracks",
+                         "player_get_subtitle_tracks",
+                         "player_select_audio_track",
+                         "player_select_subtitle_track",
+                         "player_set_audio_delay",
+                         "player_set_sub_delay",
+                         "player_set_sub_size",
+                         "player_set_sub_position",
+                         "player_get_chapters",
+                         "player_seek_chapter",
+                         "player_set_volume",
+                         "player_set_speed",
+                         "player_get_hud_state",
+                         "player_get_decoder_stats",
+                         "player_get_canvas_size",
+                         "player_screenshot",
+                         "player_simulate_seek_drag",
+                         "player_pause",
+                         "player_resume",
+                         "player_toggle_play",
+                         "player_seek",
+                         "player_frame_step",
+                         "player_stop",
+                         "player_set_mute",
+                         "player_get_volume_state",
+                         "player_set_aspect",
+                         "player_set_crop",
+                         "player_get_loading_overlay",
+                         "player_get_buffering_state",
+                         "player_get_keybindings",
+                         "sidecar_get_process_state",
+                         "sidecar_get_current_stream_info",
+                         "sidecar_get_decoder_queue",
+                         "sidecar_get_render_queue",
+                         "sidecar_restart",
+                         "sidecar_get_ipc_latency",
+                         "subs_get_active_track",
+                         "subs_get_positioning",
+                         "subs_get_fonts_loaded",
+                         "osd_get_state" };
         return reply({
-            {"schema",     "tankoban.dev.v1.6"},
+            {"schema",     "tankoban.dev.v1.7"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -2223,6 +2264,33 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
             return delegatedReply;
         if (tryForward(true, m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr))
             return delegatedReply;
+    }
+
+    // ── v1.7 player-side deeper bridge — Phase D.2 (2026-05-19) ─────────────
+    // player_/sidecar_/subs_/osd_ all route through VideoPlayer's single
+    // dispatchDevCommand entry point. VideoPlayer internally forwards
+    // sidecar_* to the live SidecarProcess backend, subs_* to m_subOverlay,
+    // and osd_* to its own overlay-state surface. NO_PLAYER fires when
+    // the user hasn't opened a file yet (m_videoPlayer null or not
+    // visible) — agents are expected to `play-file <path>` first.
+    if (cmd.startsWith(QLatin1String("player_"))
+        || cmd.startsWith(QLatin1String("sidecar_"))
+        || cmd.startsWith(QLatin1String("subs_"))
+        || cmd.startsWith(QLatin1String("osd_"))) {
+        if (!m_videoPlayer || !m_videoPlayer->isVisible()) {
+            return err("NO_PLAYER",
+                QStringLiteral("video player not open; play a file first via "
+                               "play_file <path>"));
+        }
+        QJsonObject delegated{
+            {"type", QStringLiteral("reply")},
+            {"seq", seq}
+        };
+        if (forwardToDispatch(m_videoPlayer, cmd, payload, delegated))
+            return delegated;
+        return err("UNKNOWN_CMD",
+            QStringLiteral("player-side command '%1' not handled by VideoPlayer")
+                .arg(cmd));
     }
 
     return err("UNKNOWN_CMD",

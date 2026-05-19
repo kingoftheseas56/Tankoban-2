@@ -160,7 +160,25 @@ public:
     // m_paused / m_streamMode / m_persistenceMode / m_streamStalled /
     // m_currentAspect / m_currentCrop / m_durationSec /
     // m_lastKnownPosSec / m_sidecarRetryCount / m_firstFrameSeen + stats.
+    // v1.7 Phase D.2 (2026-05-19) extends with: volume + mute + speedIdx
+    // + audioDelay + subDelay + subPosition + subSize + brightness +
+    // subsVisible + audioTracks + subTracks + chapters + statsCodec +
+    // statsWidth + statsHeight + statsFps + canvasGeometry + canvasZero-
+    // Copy + alwaysOnTop + fullscreen-via-window().
     QJsonObject devSnapshot() const;
+
+    // v1.7 Phase D.2 (2026-05-19) — dev-control bridge dispatcher for
+    // player_* / sidecar_* / subs_* / osd_* commands. MainWindow routes
+    // all four prefixes here via forwardToDispatch's QMetaObject::invoke-
+    // Method path (so this MUST stay Q_INVOKABLE). Returns true when the
+    // command name was recognized and `reply` populated (success OR
+    // structured error); false if the name didn't match any prefix
+    // handler (signals MainWindow to surface UNKNOWN_CMD). Caller pre-
+    // populates `reply` with `type=reply` + `seq` — handlers add their
+    // own payload keys on success or call writeErr() to flip the type.
+    Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
+                                        const QJsonObject& payload,
+                                        QJsonObject& reply);
 
 public slots:
     // PLAYER_STREMIO_PARITY_FIX Phase 1 Batch 1.3 — slot consumed by

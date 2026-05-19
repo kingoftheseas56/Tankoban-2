@@ -4111,7 +4111,504 @@ QJsonObject VideoPlayer::devSnapshot() const
     // to mirror the rest of the codebase (lines 3014, 3442). Field
     // m_fullscreen is the alternative source-of-truth — both agree.
     snap["fullScreen"]          = window() && window()->isFullScreen();
+
+    // v1.7 Phase D.2 (2026-05-19) — extended player state.
+    snap["volume"]              = m_volume;
+    snap["muted"]               = m_muted;
+    snap["speedIdx"]            = m_speedIdx;
+    snap["speed"]               = (m_speedIdx >= 0 && m_speedIdx < SPEED_COUNT)
+                                      ? SPEED_PRESETS[m_speedIdx] : 1.0;
+    snap["audioDelayMs"]        = m_audioDelayMs;
+    snap["subDelayMs"]          = m_subDelayMs;
+    snap["subPositionPct"]      = m_subPositionPct;
+    snap["subPositionMode"]     = m_subPositionMode;
+    snap["subtitleSize"]        = m_subtitleSize;
+    snap["brightness"]          = m_brightness;
+    snap["subsVisible"]         = m_subsVisible;
+    snap["alwaysOnTop"]         = m_alwaysOnTop;
+    snap["inPip"]               = m_inPip;
+    snap["statsCodec"]          = m_statsCodec;
+    snap["statsWidth"]          = m_statsWidth;
+    snap["statsHeight"]         = m_statsHeight;
+    snap["statsFps"]            = m_statsFps;
+    snap["activeAudioId"]       = m_activeAudioId;
+    snap["activeSubId"]         = m_activeSubId;
+    snap["audioTracks"]         = m_audioTracks;
+    snap["subTracks"]           = m_subTracks;
+    snap["chapters"]            = m_chapters;
+    if (m_canvas) {
+        QJsonObject canvas;
+        canvas["width"]         = m_canvas->width();
+        canvas["height"]        = m_canvas->height();
+        canvas["zeroCopyActive"] = m_canvas->isZeroCopyActive();
+        snap["canvas"]          = canvas;
+    }
+    snap["controlsVisible"]     = m_controlBar && m_controlBar->isVisible();
     return snap;
+}
+
+// ── v1.7 Phase D.2 (2026-05-19) — dev-control bridge dispatcher ─────────────
+//
+// Handles player_/sidecar_/subs_/osd_ command prefixes routed in from
+// MainWindow::handleDevCommand via forwardToDispatch. Each handler is a
+// pure UI-thread call. Read-only handlers populate `reply` and return
+// true; write-capable handlers (pause/resume/seek/setters/screenshot)
+// invoke the existing send* / toggle* paths so they share the same
+// keyboard/menu code path. Returns false ONLY when the command name was
+// unrecognized by any prefix branch — MainWindow surfaces UNKNOWN_CMD
+// in that case.
+//
+// Scope-pruning note (Rule 14, technical): sidecar-get-decoder-queue +
+// sidecar-get-render-queue return structured NOT_IMPLEMENTED replies in
+// v1.7. Live queue depths need either a new periodic push event on the
+// sidecar stats loop OR a synchronous IPC bridge with QEventLoop — both
+// touch native_sidecar/src/main.cpp which is deliberately left untouched
+// this commission to keep the blast radius small. Same pattern D.1 used
+// for JS-resident books commands.
+bool VideoPlayer::dispatchDevCommand(const QString& cmd,
+                                     const QJsonObject& payload,
+                                     QJsonObject& reply)
+{
+    auto setErr = [&](const char* code, const QString& msg) {
+        reply["type"]    = QStringLiteral("error");
+        reply["code"]    = QString::fromLatin1(code);
+        reply["message"] = msg;
+    };
+    auto requireBackend = [&]() -> SidecarProcess* {
+        SidecarProcess* sc = dynamic_cast<SidecarProcess*>(m_backend);
+        if (!sc || !sc->isRunning()) {
+            setErr("NO_SIDECAR",
+                   QStringLiteral("sidecar process not running; play a file first"));
+            return nullptr;
+        }
+        return sc;
+    };
+
+    // ─── player_* ──────────────────────────────────────────────────────────
+    if (cmd == QLatin1String("player_get_audio_tracks")) {
+        reply["tracks"]     = m_audioTracks;
+        reply["activeId"]   = m_activeAudioId;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_subtitle_tracks")) {
+        reply["tracks"]     = m_subTracks;
+        reply["activeId"]   = m_activeSubId;
+        reply["visible"]    = m_subsVisible;
+        return true;
+    }
+    if (cmd == QLatin1String("player_select_audio_track")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const QString id = payload.value("id").toString();
+        if (id.isEmpty()) { setErr("BAD_REQUEST", "payload.id required"); return true; }
+        sc->sendSetTracks(id, m_activeSubId);
+        reply["dispatched"] = true;
+        reply["audioId"]    = id;
+        return true;
+    }
+    if (cmd == QLatin1String("player_select_subtitle_track")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const QJsonValue v = payload.value("id");
+        bool ok = false;
+        const int idx = v.isString() ? v.toString().toInt(&ok) : v.toInt(-1);
+        if (v.isString() && !ok) {
+            setErr("BAD_REQUEST", QStringLiteral("payload.id must parse to int (-1 = disable)"));
+            return true;
+        }
+        sc->sendSetSubtitleTrack(v.isString() ? idx : v.toInt(-1));
+        reply["dispatched"] = true;
+        reply["index"]      = v.isString() ? idx : v.toInt(-1);
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_audio_delay")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const int ms = payload.value("ms").toInt(0);
+        m_audioDelayMs = ms;
+        sc->sendSetAudioDelay(ms);
+        reply["audioDelayMs"] = ms;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_sub_delay")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const int ms = payload.value("ms").toInt(0);
+        m_subDelayMs = ms;
+        sc->sendSetSubDelay(ms);
+        reply["subDelayMs"] = ms;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_sub_size")) {
+        const double delta = payload.value("delta").toDouble(0.0);
+        adjustSubtitleSize(delta);
+        reply["subtitleSize"] = m_subtitleSize;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_sub_position")) {
+        const int pct = qBound(0, payload.value("pct").toInt(100), 100);
+        SidecarProcess* sc = requireBackend();
+        m_subPositionPct = pct;
+        if (sc) sc->sendSetSubtitlePosition(pct);
+        reply["subPositionPct"] = pct;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_chapters")) {
+        reply["chapters"] = m_chapters;
+        return true;
+    }
+    if (cmd == QLatin1String("player_seek_chapter")) {
+        const int idx = payload.value("id").toInt(-1);
+        if (idx < 0 || idx >= m_chapters.size()) {
+            setErr("BAD_REQUEST",
+                QStringLiteral("payload.id must be 0..%1").arg(m_chapters.size() - 1));
+            return true;
+        }
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const double start = m_chapters.at(idx).toObject().value("start").toDouble();
+        sc->sendSeek(start);
+        reply["seekedToSec"] = start;
+        reply["chapterIdx"]  = idx;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_volume")) {
+        const int vol = qBound(0, payload.value("volume").toInt(100), 200);
+        SidecarProcess* sc = requireBackend();
+        m_volume = vol;
+        if (sc) sc->sendSetVolume(vol / 100.0);
+        reply["volume"] = vol;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_speed")) {
+        const double speed = payload.value("speed").toDouble(1.0);
+        if (speed < 0.25 || speed > 4.0) {
+            setErr("BAD_REQUEST", "payload.speed must be 0.25..4.0");
+            return true;
+        }
+        SidecarProcess* sc = requireBackend();
+        if (sc) sc->sendSetRate(speed);
+        // Snap m_speedIdx to closest preset for HUD consistency.
+        int closest = 2;
+        double bestDiff = 1e9;
+        for (int i = 0; i < SPEED_COUNT; ++i) {
+            const double d = std::abs(SPEED_PRESETS[i] - speed);
+            if (d < bestDiff) { bestDiff = d; closest = i; }
+        }
+        m_speedIdx = closest;
+        reply["speed"]    = speed;
+        reply["speedIdx"] = closest;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_hud_state")) {
+        QJsonObject hud;
+        hud["controlsVisible"] = m_controlBar && m_controlBar->isVisible();
+        hud["title"]           = m_fullTitle;
+        hud["paused"]          = m_paused;
+        hud["streamMode"]      = m_streamMode;
+        hud["streamStalled"]   = m_streamStalled;
+        hud["inPip"]           = m_inPip;
+        hud["alwaysOnTop"]     = m_alwaysOnTop;
+        hud["showStats"]       = m_showStats;
+        hud["fullScreen"]      = window() && window()->isFullScreen();
+        reply["hud"] = hud;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_decoder_stats")) {
+        QJsonObject stats;
+        stats["codec"]         = m_statsCodec;
+        stats["widthPx"]       = m_statsWidth;
+        stats["heightPx"]      = m_statsHeight;
+        stats["fps"]           = m_statsFps;
+        stats["durationIsEstimate"] = m_durationIsEstimate;
+        stats["zeroCopyActive"] = m_canvas ? m_canvas->isZeroCopyActive() : false;
+        // Frame drop / queue depth counters require a sidecar-stats push
+        // event (deferred to v1.8 — see scope note at top of dispatch).
+        stats["dropsAvailable"] = false;
+        reply["stats"] = stats;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_canvas_size")) {
+        if (!m_canvas) { setErr("INTERNAL", "FrameCanvas not initialized"); return true; }
+        reply["widthPx"]        = m_canvas->width();
+        reply["heightPx"]       = m_canvas->height();
+        reply["zeroCopyActive"] = m_canvas->isZeroCopyActive();
+        return true;
+    }
+    if (cmd == QLatin1String("player_screenshot")) {
+        const QString path = payload.value("path").toString();
+        if (path.isEmpty()) {
+            setErr("BAD_REQUEST", "payload.path required (PNG output target)");
+            return true;
+        }
+        if (!m_canvas) { setErr("INTERNAL", "FrameCanvas not initialized"); return true; }
+        const QImage img = m_canvas->captureCurrentFrame();
+        if (img.isNull()) {
+            setErr("NO_FRAME", "no frame available to capture (sidecar not yet rendered)");
+            return true;
+        }
+        // Ensure parent dir exists (caller may pass a fresh subfolder path).
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        if (!img.save(path, "PNG")) {
+            setErr("WRITE_FAILED",
+                QStringLiteral("could not write PNG to '%1'").arg(path));
+            return true;
+        }
+        reply["path"]    = path;
+        reply["widthPx"] = img.width();
+        reply["heightPx"] = img.height();
+        return true;
+    }
+    if (cmd == QLatin1String("player_simulate_seek_drag")) {
+        if (!m_seekBar) { setErr("INTERNAL", "SeekSlider not initialized"); return true; }
+        const int pos = payload.value("position").toInt(-1);
+        if (pos < 0) {
+            setErr("BAD_REQUEST", "payload.position required (slider integer value)");
+            return true;
+        }
+        // Mirror the mouse-drag interaction shape: emit sliderPressed → set
+        // value → emit sliderReleased. Use the slider's own min/max so the
+        // caller can hand a value in slider-native units.
+        const int clamped = qBound(m_seekBar->minimum(), pos, m_seekBar->maximum());
+        emit m_seekBar->sliderPressed();
+        m_seekBar->setValue(clamped);
+        emit m_seekBar->sliderReleased();
+        reply["value"]   = clamped;
+        reply["minimum"] = m_seekBar->minimum();
+        reply["maximum"] = m_seekBar->maximum();
+        return true;
+    }
+    if (cmd == QLatin1String("player_pause")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        if (!m_paused) togglePause();
+        reply["paused"] = m_paused;
+        return true;
+    }
+    if (cmd == QLatin1String("player_resume")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        if (m_paused) togglePause();
+        reply["paused"] = m_paused;
+        return true;
+    }
+    if (cmd == QLatin1String("player_toggle_play")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        togglePause();
+        reply["paused"] = m_paused;
+        return true;
+    }
+    if (cmd == QLatin1String("player_seek")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const double secs = payload.value("seconds").toDouble(-1.0);
+        if (secs < 0.0) {
+            setErr("BAD_REQUEST", "payload.seconds required (non-negative)");
+            return true;
+        }
+        sc->sendSeek(secs);
+        reply["seekedToSec"] = secs;
+        return true;
+    }
+    if (cmd == QLatin1String("player_frame_step")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        const QString dir = payload.value("direction").toString(QStringLiteral("forward"));
+        const bool backward = (dir == QLatin1String("back") || dir == QLatin1String("backward"));
+        sc->sendFrameStep(backward, m_lastKnownPosSec);
+        reply["direction"] = backward ? QStringLiteral("back") : QStringLiteral("forward");
+        return true;
+    }
+    if (cmd == QLatin1String("player_stop")) {
+        SidecarProcess* sc = requireBackend();
+        if (!sc) return true;
+        sc->sendStop();
+        reply["stopped"] = true;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_mute")) {
+        SidecarProcess* sc = requireBackend();
+        const bool muted = payload.value("muted").toBool(false);
+        m_muted = muted;
+        if (sc) sc->sendSetMute(muted);
+        reply["muted"] = muted;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_volume_state")) {
+        reply["volume"]       = m_volume;
+        reply["muted"]        = m_muted;
+        reply["audioDelayMs"] = m_audioDelayMs;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_aspect")) {
+        const QString mode = payload.value("mode").toString();
+        const QStringList valid{"original","4:3","16:9","2.35:1","1.85:1"};
+        if (!valid.contains(mode)) {
+            setErr("BAD_REQUEST",
+                QStringLiteral("mode must be one of: %1").arg(valid.join('/')));
+            return true;
+        }
+        m_currentAspect = mode;
+        saveShowPrefs();
+        reply["currentAspect"] = mode;
+        return true;
+    }
+    if (cmd == QLatin1String("player_set_crop")) {
+        const QString mode = payload.value("mode").toString();
+        const QStringList valid{"none","16:9","2.35:1","2.39:1","1.85:1","4:3"};
+        if (!valid.contains(mode)) {
+            setErr("BAD_REQUEST",
+                QStringLiteral("mode must be one of: %1").arg(valid.join('/')));
+            return true;
+        }
+        m_currentCrop = mode;
+        saveShowPrefs();
+        reply["currentCrop"] = mode;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_loading_overlay")) {
+        QJsonObject ovl;
+        ovl["visible"] = m_loadingOverlay && m_loadingOverlay->isVisible();
+        ovl["opacity"] = m_loadingOverlay ? m_loadingOverlay->opacity() : 0.0;
+        ovl["firstFrameWatchdogActive"] = m_firstFrameWatchdog.isActive();
+        // Stage is private to LoadingOverlay; not exposed in v1.7 (a
+        // public getter would be a follow-on additive change).
+        reply["loadingOverlay"] = ovl;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_buffering_state")) {
+        reply["streamStalled"]     = m_streamStalled;
+        reply["sidecarBuffering"]  = m_sidecarBuffering;
+        reply["streamStallOwner"]  = m_streamStallOverlayOwner;
+        return true;
+    }
+    if (cmd == QLatin1String("player_get_keybindings")) {
+        // KeyBindings internals not exposed via a snapshot accessor yet —
+        // returning the binding count + a structured-deferred flag keeps
+        // the wire shape stable when v1.8 adds full key list. Avoids
+        // touching KeyBindings.h (out of files-in-scope).
+        QJsonObject kb;
+        kb["available"] = (m_keys != nullptr);
+        kb["note"] = QStringLiteral(
+            "key->action map introspection deferred to v1.8 follow-on "
+            "(KeyBindings.h accessor not in this commission's scope)");
+        reply["keybindings"] = kb;
+        return true;
+    }
+
+    // ─── sidecar_* ─────────────────────────────────────────────────────────
+    if (cmd == QLatin1String("sidecar_get_process_state")) {
+        SidecarProcess* sc = dynamic_cast<SidecarProcess*>(m_backend);
+        if (!sc) { setErr("INTERNAL", "backend is not a SidecarProcess instance"); return true; }
+        reply["sidecar"] = sc->devSnapshot();
+        return true;
+    }
+    if (cmd == QLatin1String("sidecar_get_current_stream_info")) {
+        QJsonObject info;
+        info["codec"]    = m_statsCodec;
+        info["widthPx"]  = m_statsWidth;
+        info["heightPx"] = m_statsHeight;
+        info["fps"]      = m_statsFps;
+        info["durationSec"]         = m_durationSec;
+        info["durationIsEstimate"]  = m_durationIsEstimate;
+        info["currentFile"]         = m_currentFile;
+        info["firstFrameSeen"]      = m_firstFrameSeen;
+        // bitrate + hwaccel surfaced from sidecar's mediaInfo event flow
+        // in a v1.8 follow-on once SidecarProcess caches them explicitly
+        // (today only m_stats* fields land on VideoPlayer side).
+        info["bitrateAvailable"]   = false;
+        info["hwAccelAvailable"]   = false;
+        reply["streamInfo"] = info;
+        return true;
+    }
+    if (cmd == QLatin1String("sidecar_get_decoder_queue")
+        || cmd == QLatin1String("sidecar_get_render_queue")) {
+        // Live queue depths require either a new periodic push event on
+        // the sidecar stats loop OR a synchronous IPC bridge — both touch
+        // native_sidecar/src/main.cpp which is deliberately untouched in
+        // this commission to keep scope tight (per Rule 14 technical
+        // decision, surfaced in the RTC). Returns a structured NYI reply
+        // so callers can detect and degrade gracefully — same shape D.1
+        // used for JS-resident books commands.
+        setErr("NOT_YET_IMPLEMENTED",
+            QStringLiteral("sidecar %1 needs a sidecar-side push event; "
+                           "deferred to v1.8 (native_sidecar/src/main.cpp "
+                           "out of scope for this v1.7 commission)")
+                .arg(cmd == QLatin1String("sidecar_get_decoder_queue")
+                         ? QStringLiteral("decoder queue")
+                         : QStringLiteral("render queue")));
+        return true;
+    }
+    if (cmd == QLatin1String("sidecar_restart")) {
+        SidecarProcess* sc = dynamic_cast<SidecarProcess*>(m_backend);
+        if (!sc) { setErr("INTERNAL", "backend is not a SidecarProcess instance"); return true; }
+        // resetAndRestart() is the existing graceful-then-force teardown
+        // + fresh spawn path SidecarProcess uses on stop-ack timeout. Safe
+        // to invoke here for diagnostic restart per spec §Constraints.
+        // VideoPlayer's onSidecarReady will redispatch the pending open
+        // when the new sidecar comes up (m_currentFile preserved).
+        sc->resetAndRestart();
+        reply["restarted"] = true;
+        return true;
+    }
+    if (cmd == QLatin1String("sidecar_get_ipc_latency")) {
+        SidecarProcess* sc = dynamic_cast<SidecarProcess*>(m_backend);
+        if (!sc) { setErr("INTERNAL", "backend is not a SidecarProcess instance"); return true; }
+        reply["ipcLatency"] = sc->devIpcLatencySnapshot();
+        return true;
+    }
+
+    // ─── subs_* ────────────────────────────────────────────────────────────
+    if (cmd == QLatin1String("subs_get_active_track")) {
+        reply["activeId"]   = m_activeSubId;
+        reply["visible"]    = m_subsVisible;
+        reply["subDelayMs"] = m_subDelayMs;
+        reply["positionPct"] = m_subPositionPct;
+        reply["positionMode"] = m_subPositionMode;
+        reply["size"]       = m_subtitleSize;
+        return true;
+    }
+    if (cmd == QLatin1String("subs_get_positioning")) {
+        if (!m_subOverlay) { setErr("INTERNAL", "SubtitleOverlay not initialized"); return true; }
+        reply["overlay"]    = m_subOverlay->devSnapshot();
+        reply["positionPct"] = m_subPositionPct;
+        reply["positionMode"] = m_subPositionMode;
+        reply["size"]       = m_subtitleSize;
+        return true;
+    }
+    if (cmd == QLatin1String("subs_get_fonts_loaded")) {
+        // libass-loaded fonts live sidecar-side; overlay only knows its CSS
+        // font-family. Surface the overlay font + a structured-deferred
+        // flag for sidecar fonts (same NYI pattern as queue depths).
+        reply["overlayFontFamily"] = QStringLiteral("Arial, sans-serif");
+        reply["sidecarFontsAvailable"] = false;
+        reply["note"] = QStringLiteral(
+            "libass-loaded font roster lives sidecar-side; deferred to v1.8 "
+            "follow-on (needs new sidecar push event)");
+        return true;
+    }
+
+    // ─── osd_* ─────────────────────────────────────────────────────────────
+    if (cmd == QLatin1String("osd_get_state")) {
+        // Overlay surfaces: LoadingOverlay (loading/buffering pill),
+        // ToastHud (toasts), VolumeHud (volume pill), CenterFlash (play/
+        // pause flash), SubtitleOverlay (subtitles). Surface visibility +
+        // any key state available without touching out-of-scope headers.
+        QJsonObject osd;
+        osd["loadingOverlayVisible"] = m_loadingOverlay && m_loadingOverlay->isVisible();
+        osd["toastHudVisible"]       = m_toastHud && m_toastHud->isVisible();
+        osd["volumeHudVisible"]      = m_volumeHud && m_volumeHud->isVisible();
+        osd["centerFlashVisible"]    = m_centerFlash && m_centerFlash->isVisible();
+        osd["subtitleOverlayVisible"] = m_subOverlay && m_subOverlay->isVisible();
+        osd["statsBadgeVisible"]     = m_statsBadge && m_statsBadge->isVisible();
+        osd["controlsVisible"]       = m_controlBar && m_controlBar->isVisible();
+        osd["popoverOpen"]           = isAnyPopoverOpen();
+        reply["osd"] = osd;
+        return true;
+    }
+
+    return false;  // unrecognized — MainWindow surfaces UNKNOWN_CMD
 }
 
 // ── Backend wiring ───────────────────────────────────────────────────────────

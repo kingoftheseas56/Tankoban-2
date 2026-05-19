@@ -31,6 +31,14 @@ class MainWindow;
 // covering cross-mode landing-page state (continue-reading, recently-
 // added, search/scan/sort/density/selection/active-layer) plus theme
 // apply + active-mode-pill query.
+// v1.7 (Phase D.2, 2026-05-19) adds the player-side deeper surface
+// covering player/sidecar/subs/osd prefixes: track + delay controls,
+// chapters, screenshot, decoder stats, HUD state, sidecar process +
+// IPC-latency introspection, sidecar graceful restart, subtitle
+// overlay + positioning state, and OSD overlay state. Two queue-depth
+// commands (sidecar-get-decoder-queue + sidecar-get-render-queue) are
+// stubbed with NYI replies until a push-event-based sidecar stats
+// surface lands in a follow-on commission (kept additive within v1.x).
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.

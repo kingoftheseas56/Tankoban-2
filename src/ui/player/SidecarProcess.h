@@ -180,6 +180,17 @@ public:
     // int-ms alias matching Batch 5.2 naming (forwards to sendSetSubDelay).
     int sendSetSubtitleDelayMs(int ms) override;
 
+    // v1.7 Phase D.2 (2026-05-19) — dev-control bridge surface.
+    //
+    // devSnapshot returns process-level state (alive/pid/seqCounter/
+    // sessionId/strict-mode) — used by `sidecar-get-process-state`.
+    // devIpcLatencySnapshot synthesizes per-command-name p50/p99/max/
+    // count from the live m_ipcLatencies tracker (same shape as the
+    // append-only out/ipc_latency.log dump) — used by `sidecar-get-
+    // ipc-latency`. Both are pure reads; no side effects.
+    QJsonObject devSnapshot() const;
+    QJsonObject devIpcLatencySnapshot() const;
+
     // MPV_BACKEND_INTEGRATION P1 2026-04-26 — signals: block removed.
     // All 33 signals (ready/firstFrame/timeUpdate/stateChanged/tracksChanged/
     // endOfFile/errorOccurred/subtitleText/subVisibilityChanged/subDelayChanged/

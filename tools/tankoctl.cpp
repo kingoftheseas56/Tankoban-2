@@ -90,6 +90,46 @@
 //   tankoctl library-get-active-mode-pill
 //   tankoctl library-get-settings
 //   tankoctl library-set-setting <key> <value>
+//   tankoctl player-get-audio-tracks
+//   tankoctl player-get-subtitle-tracks
+//   tankoctl player-select-audio-track <id>
+//   tankoctl player-select-subtitle-track <id>      (-1 disables subs)
+//   tankoctl player-set-audio-delay <ms>
+//   tankoctl player-set-sub-delay <ms>
+//   tankoctl player-set-sub-size <delta>            (double, +/- 0.1 = +/-10%)
+//   tankoctl player-set-sub-position <pct>          (0..100, 100 = bottom)
+//   tankoctl player-get-chapters
+//   tankoctl player-seek-chapter <id>
+//   tankoctl player-set-volume <0-200>
+//   tankoctl player-set-speed <0.25-4.0>
+//   tankoctl player-get-hud-state
+//   tankoctl player-get-decoder-stats
+//   tankoctl player-get-canvas-size
+//   tankoctl player-screenshot <path>
+//   tankoctl player-simulate-seek-drag <position>
+//   tankoctl player-pause
+//   tankoctl player-resume
+//   tankoctl player-toggle-play
+//   tankoctl player-seek <seconds>
+//   tankoctl player-frame-step <forward|back>
+//   tankoctl player-stop
+//   tankoctl player-set-mute <true|false>
+//   tankoctl player-get-volume-state
+//   tankoctl player-set-aspect <original|4:3|16:9|2.35:1|1.85:1>
+//   tankoctl player-set-crop <none|16:9|2.35:1|2.39:1|1.85:1|4:3>
+//   tankoctl player-get-loading-overlay
+//   tankoctl player-get-buffering-state
+//   tankoctl player-get-keybindings
+//   tankoctl sidecar-get-process-state
+//   tankoctl sidecar-get-current-stream-info
+//   tankoctl sidecar-get-decoder-queue              (NYI in v1.7)
+//   tankoctl sidecar-get-render-queue               (NYI in v1.7)
+//   tankoctl sidecar-restart
+//   tankoctl sidecar-get-ipc-latency
+//   tankoctl subs-get-active-track
+//   tankoctl subs-get-positioning
+//   tankoctl subs-get-fonts-loaded
+//   tankoctl osd-get-state
 //
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
@@ -241,7 +281,49 @@ void printUsage(QTextStream& err)
         << "  library-get-active-mode-pill          which top-bar mode pill is active\n"
         << "  library-get-settings                  composite settings dump + writableKeys allowlist\n"
         << "  library-set-setting <key> <value>     allowlisted writes: theme.id, density.<mode>,\n"
-        << "                                        sort_key.<mode>, search.query.<mode>\n";
+        << "                                        sort_key.<mode>, search.query.<mode>\n"
+        << "\n"
+        << "  v1.7 player-side deeper bridge (Phase D.2, 2026-05-19):\n"
+        << "  player-get-audio-tracks               list audio tracks + activeId\n"
+        << "  player-get-subtitle-tracks            list subtitle tracks + activeId + visible flag\n"
+        << "  player-select-audio-track <id>        switch active audio track (id from get-audio-tracks)\n"
+        << "  player-select-subtitle-track <id>     switch subtitle (id can be -1 to disable)\n"
+        << "  player-set-audio-delay <ms>           int ms; sidecar set_audio_delay\n"
+        << "  player-set-sub-delay <ms>             int ms; sidecar set_sub_delay\n"
+        << "  player-set-sub-size <delta>           double; +/- 0.1 = +/- 10%\n"
+        << "  player-set-sub-position <pct>         0..100; 100 = bottom (mpv sub-pos parity)\n"
+        << "  player-get-chapters                   chapter list from current file\n"
+        << "  player-seek-chapter <id>              seek to chapter index (0-based)\n"
+        << "  player-set-volume <0-200>             percent; 100 = unity, 200 = +6 dB amp\n"
+        << "  player-set-speed <0.25-4.0>           double; sidecar set_rate\n"
+        << "  player-get-hud-state                  HUD chips/title/controls visibility/fullscreen\n"
+        << "  player-get-decoder-stats              codec + resolution + fps + zero-copy flag\n"
+        << "  player-get-canvas-size                FrameCanvas pixel dimensions\n"
+        << "  player-screenshot <path>              capture current frame to PNG path\n"
+        << "  player-simulate-seek-drag <position>  drive SeekSlider value as if mouse-drag\n"
+        << "  player-pause                          pause (no-op if already paused)\n"
+        << "  player-resume                         resume (no-op if already playing)\n"
+        << "  player-toggle-play                    flip pause state\n"
+        << "  player-seek <seconds>                 absolute seek; double seconds\n"
+        << "  player-frame-step <forward|back>      sidecar frame-step\n"
+        << "  player-stop                           sidecar stop without closing player window\n"
+        << "  player-set-mute <true|false>          mute toggle\n"
+        << "  player-get-volume-state               volume + muted + audioDelayMs\n"
+        << "  player-set-aspect <mode>              original|4:3|16:9|2.35:1|1.85:1\n"
+        << "  player-set-crop <mode>                none|16:9|2.35:1|2.39:1|1.85:1|4:3\n"
+        << "  player-get-loading-overlay            LoadingOverlay visibility + opacity\n"
+        << "  player-get-buffering-state            streamStalled + sidecarBuffering\n"
+        << "  player-get-keybindings                keybinding snapshot (full map deferred to v1.8)\n"
+        << "  sidecar-get-process-state             pid + alive + sessionId + seq counter\n"
+        << "  sidecar-get-current-stream-info       codec/width/height/fps from cached mediaInfo\n"
+        << "  sidecar-get-decoder-queue             (NYI v1.7: needs sidecar push-event surface)\n"
+        << "  sidecar-get-render-queue              (NYI v1.7: needs sidecar push-event surface)\n"
+        << "  sidecar-restart                       graceful diagnostic restart via resetAndRestart()\n"
+        << "  sidecar-get-ipc-latency               p50/p99/max per-command from live tracker\n"
+        << "  subs-get-active-track                 active sub id + delay + position + size\n"
+        << "  subs-get-positioning                  SubtitleOverlay full positioning state\n"
+        << "  subs-get-fonts-loaded                 overlay font + sidecar-side font roster note\n"
+        << "  osd-get-state                         loading/toast/volume/center/sub/stats overlay visibility\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -769,6 +851,148 @@ int main(int argc, char** argv)
         const int n = a[3].toInt(&isInt);
         if (isInt) payload["value"] = n;
         else       payload["value"] = a[3];
+    } else if (sub == QLatin1String("player-select-audio-track")) {
+        // v1.7 Phase D.2 (2026-05-19) — player-side deeper bridge.
+        if (a.size() < 3) {
+            err << "player-select-audio-track requires <id>\n";
+            return 64;
+        }
+        payload["id"] = a[2];
+    } else if (sub == QLatin1String("player-select-subtitle-track")) {
+        if (a.size() < 3) {
+            err << "player-select-subtitle-track requires <id> (-1 to disable)\n";
+            return 64;
+        }
+        // id can be a numeric string ("-1", "0", "1") — pass through as
+        // string; VideoPlayer parses to int with explicit -1 disable path.
+        payload["id"] = a[2];
+    } else if (sub == QLatin1String("player-set-audio-delay")
+               || sub == QLatin1String("player-set-sub-delay")) {
+        if (a.size() < 3) {
+            err << sub << " requires <ms>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int ms = a[2].toInt(&ok);
+        if (!ok) { err << sub << " ms must be an integer\n"; return 64; }
+        payload["ms"] = ms;
+    } else if (sub == QLatin1String("player-set-sub-size")) {
+        if (a.size() < 3) {
+            err << "player-set-sub-size requires <delta> (e.g. 0.1 / -0.1)\n";
+            return 64;
+        }
+        bool ok = false;
+        const double d = a[2].toDouble(&ok);
+        if (!ok) { err << "player-set-sub-size delta must be a number\n"; return 64; }
+        payload["delta"] = d;
+    } else if (sub == QLatin1String("player-set-sub-position")) {
+        if (a.size() < 3) {
+            err << "player-set-sub-position requires <pct> (0..100)\n";
+            return 64;
+        }
+        bool ok = false;
+        const int pct = a[2].toInt(&ok);
+        if (!ok || pct < 0 || pct > 100) {
+            err << "player-set-sub-position pct must be 0..100\n";
+            return 64;
+        }
+        payload["pct"] = pct;
+    } else if (sub == QLatin1String("player-seek-chapter")) {
+        if (a.size() < 3) {
+            err << "player-seek-chapter requires <id> (0-based index)\n";
+            return 64;
+        }
+        bool ok = false;
+        const int id = a[2].toInt(&ok);
+        if (!ok || id < 0) {
+            err << "player-seek-chapter id must be a non-negative integer\n";
+            return 64;
+        }
+        payload["id"] = id;
+    } else if (sub == QLatin1String("player-set-volume")) {
+        if (a.size() < 3) {
+            err << "player-set-volume requires <0-200>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int v = a[2].toInt(&ok);
+        if (!ok || v < 0 || v > 200) {
+            err << "player-set-volume volume must be 0..200\n";
+            return 64;
+        }
+        payload["volume"] = v;
+    } else if (sub == QLatin1String("player-set-speed")) {
+        if (a.size() < 3) {
+            err << "player-set-speed requires <speed> (0.25..4.0)\n";
+            return 64;
+        }
+        bool ok = false;
+        const double s = a[2].toDouble(&ok);
+        if (!ok || s < 0.25 || s > 4.0) {
+            err << "player-set-speed speed must be 0.25..4.0\n";
+            return 64;
+        }
+        payload["speed"] = s;
+    } else if (sub == QLatin1String("player-screenshot")) {
+        if (a.size() < 3) {
+            err << "player-screenshot requires <path> (PNG output target)\n";
+            return 64;
+        }
+        payload["path"] = a[2];
+    } else if (sub == QLatin1String("player-simulate-seek-drag")) {
+        if (a.size() < 3) {
+            err << "player-simulate-seek-drag requires <position> (slider int)\n";
+            return 64;
+        }
+        bool ok = false;
+        const int p = a[2].toInt(&ok);
+        if (!ok || p < 0) {
+            err << "player-simulate-seek-drag position must be a non-negative integer\n";
+            return 64;
+        }
+        payload["position"] = p;
+    } else if (sub == QLatin1String("player-seek")) {
+        if (a.size() < 3) {
+            err << "player-seek requires <seconds>\n";
+            return 64;
+        }
+        bool ok = false;
+        const double s = a[2].toDouble(&ok);
+        if (!ok || s < 0.0) {
+            err << "player-seek seconds must be a non-negative number\n";
+            return 64;
+        }
+        payload["seconds"] = s;
+    } else if (sub == QLatin1String("player-frame-step")) {
+        if (a.size() < 3) {
+            err << "player-frame-step requires <forward|back>\n";
+            return 64;
+        }
+        const QString dir = a[2];
+        if (dir != QLatin1String("forward") && dir != QLatin1String("back")
+            && dir != QLatin1String("backward")) {
+            err << "player-frame-step direction must be forward or back\n";
+            return 64;
+        }
+        payload["direction"] = dir;
+    } else if (sub == QLatin1String("player-set-mute")) {
+        if (a.size() < 3) {
+            err << "player-set-mute requires <true|false>\n";
+            return 64;
+        }
+        const QString v = a[2].toLower();
+        if (v != QLatin1String("true") && v != QLatin1String("false")) {
+            err << "player-set-mute argument must be true or false\n";
+            return 64;
+        }
+        payload["muted"] = (v == QLatin1String("true"));
+    } else if (sub == QLatin1String("player-set-aspect")
+               || sub == QLatin1String("player-set-crop")) {
+        if (a.size() < 3) {
+            err << sub << " requires <mode>\n";
+            return 64;
+        }
+        payload["mode"] = a[2];
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -804,7 +1028,32 @@ int main(int argc, char** argv)
                // v1.6 library-side bridge — no-payload globals.
                || sub == QLatin1String("library-get-active-theme")
                || sub == QLatin1String("library-get-active-mode-pill")
-               || sub == QLatin1String("library-get-settings")) {
+               || sub == QLatin1String("library-get-settings")
+               // v1.7 player-side deeper bridge — no-payload reads + lifecycle controls.
+               || sub == QLatin1String("player-get-audio-tracks")
+               || sub == QLatin1String("player-get-subtitle-tracks")
+               || sub == QLatin1String("player-get-chapters")
+               || sub == QLatin1String("player-get-hud-state")
+               || sub == QLatin1String("player-get-decoder-stats")
+               || sub == QLatin1String("player-get-canvas-size")
+               || sub == QLatin1String("player-pause")
+               || sub == QLatin1String("player-resume")
+               || sub == QLatin1String("player-toggle-play")
+               || sub == QLatin1String("player-stop")
+               || sub == QLatin1String("player-get-volume-state")
+               || sub == QLatin1String("player-get-loading-overlay")
+               || sub == QLatin1String("player-get-buffering-state")
+               || sub == QLatin1String("player-get-keybindings")
+               || sub == QLatin1String("sidecar-get-process-state")
+               || sub == QLatin1String("sidecar-get-current-stream-info")
+               || sub == QLatin1String("sidecar-get-decoder-queue")
+               || sub == QLatin1String("sidecar-get-render-queue")
+               || sub == QLatin1String("sidecar-restart")
+               || sub == QLatin1String("sidecar-get-ipc-latency")
+               || sub == QLatin1String("subs-get-active-track")
+               || sub == QLatin1String("subs-get-positioning")
+               || sub == QLatin1String("subs-get-fonts-loaded")
+               || sub == QLatin1String("osd-get-state")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

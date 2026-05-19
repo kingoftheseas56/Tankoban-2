@@ -1098,3 +1098,61 @@ void SidecarProcess::dumpIpcLatency()
     m_ipcLatencies.clear();
     m_ipcPending.clear();
 }
+
+// ── v1.7 Phase D.2 (2026-05-19) — dev-control bridge surface ────────────────
+
+QJsonObject SidecarProcess::devSnapshot() const
+{
+    QJsonObject snap;
+    const bool alive = m_process && m_process->state() == QProcess::Running;
+    snap["alive"]            = alive;
+    snap["pid"]              = alive ? static_cast<double>(m_process->processId()) : 0.0;
+    snap["sessionId"]        = m_sessionId;
+    snap["sessionStrict"]    = m_sessionStrict;
+    snap["intentionalShutdown"] = m_intentionalShutdown;
+    snap["nextSeq"]          = m_seq.load();
+    snap["pendingStopSeq"]   = m_pendingStopSeq;
+    snap["pendingAckCount"]  = m_ipcPending.size();
+    if (m_process) {
+        snap["processState"] = static_cast<int>(m_process->state());
+        snap["exitCode"]     = m_process->exitCode();
+    }
+    return snap;
+}
+
+QJsonObject SidecarProcess::devIpcLatencySnapshot() const
+{
+    // Mirrors dumpIpcLatency's per-command percentile synthesis but returns
+    // a JSON object instead of appending to out/ipc_latency.log. Read-only;
+    // does NOT clear the tracker (the destructor flush path still owns that).
+    QJsonObject snap;
+    int totalSamples = 0;
+    for (auto it = m_ipcLatencies.constBegin(); it != m_ipcLatencies.constEnd(); ++it)
+        totalSamples += it.value().size();
+    snap["totalCommands"]      = totalSamples;
+    snap["distinctCmdTypes"]   = m_ipcLatencies.size();
+    snap["pendingUnmatched"]   = m_ipcPending.size();
+
+    QList<QString> names = m_ipcLatencies.keys();
+    std::sort(names.begin(), names.end());
+    QJsonArray rows;
+    for (const QString& cmdName : names) {
+        QVector<qint64> samples = m_ipcLatencies.value(cmdName);
+        if (samples.isEmpty()) continue;
+        std::sort(samples.begin(), samples.end());
+        const int n = samples.size();
+        const qint64 p50 = samples[n / 2];
+        const int p99Idx = qMin(n - 1, static_cast<int>(n * 0.99));
+        const qint64 p99 = samples[p99Idx];
+        const qint64 maxV = samples.last();
+        QJsonObject row;
+        row["cmd"]   = cmdName;
+        row["count"] = n;
+        row["p50Ms"] = static_cast<double>(p50);
+        row["p99Ms"] = static_cast<double>(p99);
+        row["maxMs"] = static_cast<double>(maxV);
+        rows.append(row);
+    }
+    snap["perCommand"] = rows;
+    return snap;
+}

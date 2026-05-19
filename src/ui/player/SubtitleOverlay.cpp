@@ -107,3 +107,20 @@ void SubtitleOverlay::applyStyleSheet()
         ).arg(m_fontColor).arg(m_fontSize).arg(m_bgOpacity)
     );
 }
+
+QJsonObject SubtitleOverlay::devSnapshot() const
+{
+    QJsonObject snap;
+    snap["visible"]        = isVisible();
+    snap["text"]           = m_label ? m_label->text() : QString();
+    snap["fontSize"]       = m_fontSize;
+    snap["marginPercent"]  = m_marginPercent;
+    snap["outline"]        = m_outline;
+    snap["fontColor"]      = m_fontColor;
+    snap["bgOpacity"]      = m_bgOpacity;
+    snap["controlsVisible"] = m_controlsVisible;
+    snap["geometry"]       = QStringLiteral("%1x%2+%3+%4")
+                                .arg(width()).arg(height())
+                                .arg(x()).arg(y());
+    return snap;
+}

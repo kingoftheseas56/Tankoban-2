@@ -1,8 +1,9 @@
 #pragma once
 
-#include <QWidget>
+#include <QJsonObject>
 #include <QLabel>
 #include <QTimer>
+#include <QWidget>
 
 class SubtitleOverlay : public QWidget {
     Q_OBJECT
@@ -15,6 +16,13 @@ public:
     void setColors(const QString& fontColor, int bgOpacity);
     void reposition();
     void setControlsVisible(bool visible);
+
+    // v1.7 Phase D.2 (2026-05-19) — dev-control bridge snapshot. Surfaces
+    // the overlay's current rendered text + style state for `subs-get-
+    // positioning`. Active-track + fonts-loaded queries live higher up
+    // (VideoPlayer + sidecar-side respectively); this widget only owns
+    // visual styling.
+    QJsonObject devSnapshot() const;
 
 private:
     void applyStyleSheet();
