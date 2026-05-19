@@ -137,8 +137,8 @@ private slots:
     // Phase 9 -- replaces the legacy ComicsTankoyomiDetailView).
     void showLibraryMode();
     void showSearchMode(const QString& query);
-    // Phase 9: signature changed from MangaResult to MediaPreview.
-    void onSearchResultActivated(const tankoban::manga::anilist::MediaPreview& preview);
+    // Tasks 9+10: signature changed from MediaPreview to MangaResult (WC pivot).
+    void onSearchResultActivated(const MangaResult& result);
     // Phase 9: routes ComicsSeriesView::downloadDispatchRequested to either
     // TorrentVolumeProvider (Catalog / NyaaRuntime) or
     // WeebCentralVolumePacker (WeebCentralPacker).

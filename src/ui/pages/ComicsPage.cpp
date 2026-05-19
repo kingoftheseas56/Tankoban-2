@@ -176,13 +176,16 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                                 + QStringLiteral("/resources/manga_uploader_trust.json");
     m_nyaaRuntime = new tankoban::manga::NyaaRuntimeSource(m_nam, trustJsonPath, this);
 
-    // Phase 9 search widget: AniList-backed single-strip variant.
-    m_searchTakeover = new ComicsTankoyomiSearchWidget(m_anilistClient, m_nam, this);
+    // WEEBCENTRAL_IDENTITY_PIVOT Tasks 9+10 (2026-05-19): search widget now
+    // routes through MangaSourceRegistry (WeebCentral scraper) instead of
+    // AniListClient. seriesActivated(MediaPreview) replaced by
+    // resultPicked(MangaResult).
+    m_searchTakeover = new ComicsTankoyomiSearchWidget(m_sourceRegistry, m_nam, this);
     m_stack->addWidget(m_searchTakeover);
 
     connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::backRequested,
             this, &ComicsPage::showLibraryMode);
-    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::seriesActivated,
+    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::resultPicked,
             this, &ComicsPage::onSearchResultActivated);
 
     // Scraper error toasts retained -- downloads in flight still route
@@ -1786,11 +1789,12 @@ void ComicsPage::showSearchMode(const QString& query)
     m_stack->setCurrentWidget(m_searchTakeover);
 }
 
-void ComicsPage::onSearchResultActivated(const tankoban::manga::anilist::MediaPreview& preview)
+void ComicsPage::onSearchResultActivated(const MangaResult& result)
 {
-    // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- search-result click
-    // routes into the new ComicsSeriesView. Origin is recorded so Back
-    // returns to the search-takeover (Phase 9 Task 52 carry-over).
+    // WEEBCENTRAL_IDENTITY_PIVOT Tasks 9+10 (2026-05-19) -- search-result
+    // click now carries a MangaResult (WeebCentral) instead of MediaPreview
+    // (AniList). Routes into ComicsSeriesView::showSeries(MangaResult).
+    // Origin is recorded so Back returns to the search-takeover.
     //
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit BEFORE the
     // in-page state change so NavHistory captures the SearchResults state
@@ -1798,17 +1802,17 @@ void ComicsPage::onSearchResultActivated(const tankoban::manga::anilist::MediaPr
     // fresh tankoyomiDetail entry for the target.
     if (!m_inNavRestore) {
         QJsonObject blob;
-        blob[QStringLiteral("anilistId")]   = preview.anilistId;
-        blob[QStringLiteral("seriesTitle")] = preview.title;
+        blob[QStringLiteral("seriesId")]    = result.id;
+        blob[QStringLiteral("seriesTitle")] = result.title;
         blob[QStringLiteral("enteredFrom")] = QStringLiteral("search");
-        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), preview.title, blob));
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), result.title, blob));
     }
     m_enteredDetailFrom = Mode::SearchResults;
     m_mode = Mode::TankoyomiDetail;
-    m_currentDetailAnilistId    = preview.anilistId;
-    m_currentDetailSeriesTitle  = preview.title;
+    m_currentDetailAnilistId   = 0;   // MangaResult has no anilist integer id
+    m_currentDetailSeriesTitle = result.title;
     if (m_tyVolumeSeriesView) {
-        m_tyVolumeSeriesView->showSeries(preview);
+        m_tyVolumeSeriesView->showSeries(result);
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
     }
 }

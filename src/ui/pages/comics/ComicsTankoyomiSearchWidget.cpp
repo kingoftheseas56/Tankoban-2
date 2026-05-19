@@ -1,20 +1,25 @@
 // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 -- Phase 3 Task 17 (original);
 // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- collapsed to single AniList
 // strip. Premium catalog routing + scraper fan-out + Manga/Comics type split
-// all removed. Backbone is now AniListClient::searchByTitle and the strip
-// holds MediaPreview-typed tiles. Click on a tile emits seriesActivated.
+// all removed. Backbone was AniListClient::searchByTitle.
+//
+// WEEBCENTRAL_IDENTITY_PIVOT Tasks 9+10 (2026-05-19) -- backbone swapped from
+// AniListClient to MangaSourceRegistry. Search routes through
+// m_sourceRegistry->find("weebcentral")->search(query, 60). Results are
+// MangaResult-typed. Tile click emits resultPicked(MangaResult).
 
 #include "ComicsTankoyomiSearchWidget.h"
 
-#include "core/manga/anilist/AniListClient.h"
+#include "core/manga/MangaSourceRegistry.h"
+#include "core/manga/MangaScraper.h"
 #include "ui/Theme.h"
 #include "ui/pages/TileStrip.h"
 #include "ui/pages/TileCard.h"
 
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QFrame>
+#include <QRegularExpression>
 #include <QHBoxLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -24,17 +29,17 @@
 #include <QVBoxLayout>
 
 ComicsTankoyomiSearchWidget::ComicsTankoyomiSearchWidget(
-    tankoban::manga::anilist::AniListClient* client,
+    MangaSourceRegistry* sourceRegistry,
     QNetworkAccessManager* nam, QWidget* parent)
-    : QWidget(parent), m_client(client), m_nam(nam)
+    : QWidget(parent), m_sourceRegistry(sourceRegistry), m_nam(nam)
 {
     buildUI();
 
-    if (m_client) {
-        connect(m_client, &tankoban::manga::anilist::AniListClient::searchSucceeded,
-                this,     &ComicsTankoyomiSearchWidget::onSearchSucceeded);
-        connect(m_client, &tankoban::manga::anilist::AniListClient::searchFailed,
-                this,     &ComicsTankoyomiSearchWidget::onSearchFailed);
+    if (m_sourceRegistry) {
+        if (auto* scraper = m_sourceRegistry->find(QStringLiteral("weebcentral"))) {
+            connect(scraper, &MangaScraper::searchFinished,
+                    this,    &ComicsTankoyomiSearchWidget::onSearchFinished);
+        }
     }
 }
 
@@ -95,37 +100,36 @@ void ComicsTankoyomiSearchWidget::buildUI()
 void ComicsTankoyomiSearchWidget::search(const QString& query)
 {
     m_currentQuery = query;
-    if (!m_client) {
+
+    if (!m_sourceRegistry) {
+        m_statusLabel->setText(QStringLiteral("Search unavailable"));
+        return;
+    }
+
+    auto* scraper = m_sourceRegistry->find(QStringLiteral("weebcentral"));
+    if (!scraper) {
+        qWarning() << "[ComicsTankoyomiSearchWidget] weebcentral scraper not found";
         m_statusLabel->setText(QStringLiteral("Search unavailable"));
         return;
     }
 
     clearResults();
-    m_pendingReqId = m_nextRequestId++;
     m_statusLabel->setText(QStringLiteral("Searching... (%1)").arg(query));
-    m_client->searchByTitle(query, m_pendingReqId);
+    scraper->search(query, /*limit=*/60);
 }
 
 void ComicsTankoyomiSearchWidget::clearResults()
 {
-    if (m_resultsStrip) m_resultsStrip->clear();
-    m_seenAnilistIds.clear();
+    if (m_resultsStrip)  m_resultsStrip->clear();
     if (m_resultsHeader) m_resultsHeader->hide();
     if (m_statusLabel)   m_statusLabel->clear();
 }
 
-void ComicsTankoyomiSearchWidget::onSearchSucceeded(
-    int requestId,
-    const QList<tankoban::manga::anilist::MediaPreview>& results)
+void ComicsTankoyomiSearchWidget::onSearchFinished(const QList<MangaResult>& results)
 {
-    // Late-arriving response for a prior search call: ignore.
-    if (requestId != m_pendingReqId) return;
-
     int added = 0;
     for (const auto& r : results) {
-        if (r.anilistId <= 0) continue;
-        if (m_seenAnilistIds.contains(r.anilistId)) continue;
-        m_seenAnilistIds.insert(r.anilistId, true);
+        if (r.id.isEmpty()) continue;
         addResultCard(r);
         ++added;
     }
@@ -139,46 +143,30 @@ void ComicsTankoyomiSearchWidget::onSearchSucceeded(
     }
 }
 
-void ComicsTankoyomiSearchWidget::onSearchFailed(int requestId, const QString& reason)
+void ComicsTankoyomiSearchWidget::addResultCard(const MangaResult& r)
 {
-    if (requestId != m_pendingReqId) return;
-    m_statusLabel->setText(QStringLiteral("Search failed: %1").arg(reason));
-}
-
-void ComicsTankoyomiSearchWidget::addResultCard(
-    const tankoban::manga::anilist::MediaPreview& r)
-{
-    // TileCard ctor expects (thumbPath, title, subtitle). MediaPreview carries
-    // a URL not a local path; we hand the URL straight to the card and rely
-    // on TileCard's async poster loader (if available) or future Phase 12
-    // banner-loader retrofit. For v1 we pass empty string for the thumb path
-    // (clean placeholder) and let the page-side QNetworkAccessManager warm
-    // the cache once a series is opened. Subtitle uses the AniList format
-    // ("MANGA"/"MANHWA"/etc) plus year when available -- consistent with the
-    // Stream-blueprint detail surface vocabulary.
-    QString subtitle;
-    if (!r.format.isEmpty()) subtitle = r.format;
-    if (r.yearStarted > 0) {
+    // MangaResult carries source + status; use those as the subtitle text,
+    // mirroring the Stream-blueprint detail surface vocabulary.
+    QString subtitle = mangaSourceDisplayName(r.source);
+    if (!r.status.isEmpty()) {
         if (!subtitle.isEmpty()) subtitle += QStringLiteral("  ");
-        subtitle += QString::number(r.yearStarted);
+        subtitle += r.status;
     }
 
     auto* card = new TileCard(QString(), r.title, subtitle);
-    card->setProperty("anilistId", r.anilistId);
+    card->setProperty("seriesId",    r.id);
     card->setProperty("seriesTitle", r.title);
 
     connect(card, &TileCard::clicked, this, [this, r]() {
-        emit seriesActivated(r);
+        emit resultPicked(r);
     });
 
     m_resultsStrip->addTile(card);
 
-    // Best-effort cover thumbnail: hand the AniList coverThumbUrl to a
-    // direct NAM fetch and update the card on completion. This is the
-    // simplest viable poster path until the dedicated Phase 12 image cache
-    // lands; failures are silent (placeholder remains).
-    if (m_nam && !r.coverThumbUrl.isEmpty()) {
-        QNetworkRequest req{QUrl(r.coverThumbUrl)};
+    // Best-effort cover thumbnail via thumbnailUrl. Failures are silent;
+    // placeholder remains until the dedicated image cache lands.
+    if (m_nam && !r.thumbnailUrl.isEmpty()) {
+        QNetworkRequest req{QUrl(r.thumbnailUrl)};
         req.setHeader(QNetworkRequest::UserAgentHeader,
             QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
         req.setTransferTimeout(10000);
@@ -188,10 +176,11 @@ void ComicsTankoyomiSearchWidget::addResultCard(
         auto* reply = m_nam->get(req);
         const QString posterCacheDir =
             QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-            + QStringLiteral("/Tankoban/data/anilist_posters");
+            + QStringLiteral("/Tankoban/data/wc_posters");
         QDir().mkpath(posterCacheDir);
-        const QString outPath = posterCacheDir + QStringLiteral("/anilist_%1.jpg")
-                                                     .arg(r.anilistId);
+        // Sanitise the series id so it can be used as a filename safely.
+        const QString safeName = QString(r.id).replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")), QStringLiteral("_"));
+        const QString outPath  = posterCacheDir + QStringLiteral("/%1.jpg").arg(safeName);
         connect(reply, &QNetworkReply::finished, this, [reply, outPath, guard]() {
             reply->deleteLater();
             if (reply->error() != QNetworkReply::NoError) return;
