@@ -263,7 +263,7 @@ private:
     void refreshEpisodeMarkers();
 
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — shared chip render for the
-    // season-row table's kColAction cell. Mirrors EpisodeTile's state-driven
+    // season-row table's kColStatus item. Mirrors EpisodeTile's state-driven
     // chip contract so both surfaces converge on one look. Provenance-driven
     // amber-tint lands in Task 20 once tone is ratified.
     void renderEpisodeStateChip(
@@ -271,6 +271,14 @@ private:
         StreamDownloadIndex::Entry::State state,
         int progressPct,
         tankoban::stream::theatre::EpisodeTileState::Provenance provenance);
+
+    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — initial-paint helper. Walks the
+    // episode table, looks up each row's episode in the substrate, and calls
+    // renderEpisodeStateChip for tracked rows. Called from populateEpisodeTable,
+    // setStreamDownloadIndex, and onSeasonChanged so substrate state is visible
+    // on view-open, signal-wire, and season-switch (entryStateChanged covers
+    // subsequent in-flight transitions).
+    void refreshSubstrateStatesForActiveSeason();
     void refreshMovieLocalChip();
     void refreshMovieDownloadState();
     void updateProgressColumn();

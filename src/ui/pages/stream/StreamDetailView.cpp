@@ -1043,6 +1043,9 @@ void StreamDetailView::onSeasonChanged(int comboIndex)
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — re-evaluate the
     // season-header morphing button for the newly-selected season.
     refreshSeasonHeaderButton();
+    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — paint substrate state for the
+    // newly-selected season's episodes.
+    refreshSubstrateStatesForActiveSeason();
 }
 
 void StreamDetailView::populateEpisodeTable(int season)
@@ -1249,6 +1252,11 @@ void StreamDetailView::populateEpisodeTable(int season)
     // season-header morphing button for the newly-populated season.
     refreshSeasonHeaderButton();
 
+    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — paint substrate state for any
+    // rows the substrate already tracks (most common: re-entering a detail
+    // view where downloads were dispatched previously).
+    refreshSubstrateStatesForActiveSeason();
+
     m_episodeTable->show();
 }
 
@@ -1380,6 +1388,9 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
         refreshEpisodeMarkers();
         refreshMovieLocalChip();
         refreshMovieDownloadState();
+        // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — initial substrate paint
+        // for any rows already in the table when the wire lands.
+        refreshSubstrateStatesForActiveSeason();
     }
     if (!m_downloadIndex) {
         refreshMovieLocalChip();
@@ -1456,6 +1467,46 @@ void StreamDetailView::renderEpisodeStateChip(
     statusItem->setText(checkmark
                         ? QStringLiteral("\xE2\x9C\x93 %1").arg(chipText)
                         : chipText);
+}
+
+// PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — initial-paint sweep over the active
+// season's episode table. Synthesizes calls to renderEpisodeStateChip for each
+// row whose episode has a substrate entry. Companion to the entryStateChanged
+// signal subscriber (which handles in-flight state transitions); together they
+// cover initial-load + live-update.
+void StreamDetailView::refreshSubstrateStatesForActiveSeason()
+{
+    if (!m_episodeTable || !m_downloadIndex || m_currentImdb.isEmpty())
+        return;
+
+    const int season = currentSeason();
+    if (season <= 0)
+        return;
+
+    const auto entries = m_downloadIndex->entriesForImdb(m_currentImdb);
+    if (entries.isEmpty())
+        return;
+
+    using ProvT = tankoban::stream::theatre::EpisodeTileState::Provenance;
+
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        auto* epItem = m_episodeTable->item(row, kColEpisode);
+        if (!epItem)
+            continue;
+        const int episode = epItem->data(Qt::UserRole).toInt();
+
+        for (const auto& e : entries) {
+            if (e.season != season || e.episode != episode)
+                continue;
+            ProvT prov = ProvT::AddonBulk;
+            if (e.sourceGroupId.startsWith(QStringLiteral("tankorent:")))
+                prov = ProvT::Tankorent;
+            else if (e.sourceGroupId.isEmpty())
+                prov = ProvT::LocalScan;
+            renderEpisodeStateChip(row, e.state, e.progressPct, prov);
+            break;
+        }
+    }
 }
 
 void StreamDetailView::refreshMovieLocalChip()
