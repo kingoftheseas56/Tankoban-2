@@ -159,18 +159,23 @@ Only one review at a time in REVIEW.md. Multiple can queue in chat.md; Agent 6 p
 
 ---
 
-## PROTOTYPE + AUDIT + IMPLEMENTATION Protocol (added 2026-04-14 — Agent 7; Trigger D added 2026-04-21)
+## PROTOTYPE + AUDIT + IMPLEMENTATION Protocol (added 2026-04-14 — Agent 7; Trigger D added 2026-04-21; Trigger E added 2026-05-19)
+
+Five brotherhood triggers exist. **Triggers A/B/C/D run on Codex (Agent 7)**; **Trigger E runs on Claude Jrs** — additional Claude sessions spawned by any active brotherhood agent in their own identity. Substrate split is intentional: Codex air is precious (Hemanth's ChatGPT account is lower-tier; every dispatch is finite), Claude air is effectively unlimited. Triggers A/B/C/D buy independent perspective + GPT-5.5 quality; Trigger E buys parallel wall-clock execution at zero quota cost.
 
 Agent 7 is the Codex-driven agent. Originally (2026-04-14) scoped to write reference prototypes (Triggers A/B) and comparative audits (Trigger C) only — no src/ writes, no commits, no authority. Expanded 2026-04-21 to include implementation work (Trigger D) — Codex may ship actual code in `src/` when a domain agent posts a `REQUEST IMPLEMENTATION` block with task + scope + files + exit criterion. Trigger D is the implementation substrate for any of Agents 0-5 / 4B who wants to dispatch a scoped task to Codex instead of executing it themselves (rate-limited, stuck fix-loop, Anthropic 500s, or just substrate preference).
 
+Trigger E (added 2026-05-19) promotes the previously-ad-hoc parallel-tab dispatch pattern ("Master 0's assistants" from the 2026-05-19 SKILL_AUGMENTATION_ARC Phase B Wave 1) to a first-class brotherhood capability. Any active agent (0-5 / 4B / 8) can spawn **Agent N Jrs** — additional Claude sessions of their own identity — for parallel commission execution. Agent 0 has Agent 0 Jrs, Agent 1 has Agent 1 Jrs, etc. Jrs come in effectively infinite supply.
+
 Purposes by trigger:
-- **A/B:** give a domain agent a concrete second-perspective implementation to consult when facing an architecturally novel or risky batch. Reference-only; domain agent writes their own version.
-- **C:** give a domain agent a structured comparative analysis against reference apps, with observations separated from hypotheses. Advisory; domain agent decides which gaps become work.
+- **A/B:** give a domain agent a concrete second-perspective implementation to consult when facing an architecturally novel or risky batch. Reference-only; domain agent writes their own version. (Codex.)
+- **C:** give a domain agent a structured comparative analysis against reference apps, with observations separated from hypotheses. Advisory; domain agent decides which gaps become work. (Codex.)
 - **D:** let a domain agent dispatch a scoped implementation task to Codex when they want to. Authoritative; Codex ships the work and flags RTC for Agent 0 to sweep. Domain agent keeps ownership via the REQUEST block (scope + files + constraints); Codex executes inside that envelope.
+- **E:** let any agent fan out a pattern-match commission set across N parallel Claude tabs. Each tab is an Agent N Jr — full Claude session, inherits parent agent identity, executes one commission, posts its own RTC, closes. Parent agent sweeps the Jr RTCs. (Claude.)
 
 ### Triggers
 
-Agent 7 accepts three trigger types. He writes nothing unsolicited. Triggers A and B produce prototypes; Trigger C produces audits.
+Triggers A/B/C/D fire against Agent 7 (Codex). Trigger E fires against Claude Jrs spawned by the requesting agent. Codex writes nothing unsolicited. Jrs only spawn when their parent agent authors per-tab dispatch briefs.
 
 **Trigger A — Reactive prototype (per-batch request):** A domain agent posts in chat.md:
 ```
@@ -206,11 +211,36 @@ Hemanth copies the REQUEST block into his Codex desktop GUI (which has this repo
 - One-fix-per-rebuild: if the task spans multiple independent fixes, Codex produces one RTC line per fix.
 - All other brotherhood rules (1, 11, 14, 15, 17, CSS scoping, no color/emoji, etc.) apply identically to Trigger D work.
 
+**Trigger E — Agent N Jrs (parallel Claude tab dispatch, added 2026-05-19):** Any active brotherhood agent (0-5 / 4B / 8) can spawn Agent N Jrs — additional Claude sessions of their own identity — for parallel commission execution. Agent N Jrs inherit the parent's identity (an Agent 1 Jr is doing Agent 1 work — comics-mode-aware, owns Agent 1's TODOs, follows Agent 1's standing decisions and memory pointers); they are not generic Claude assistants. Multiple Jrs of the same agent can fire concurrently across independent file sets. Jrs come in effectively infinite supply because Claude quota is unlimited for the brotherhood.
+
+Mechanism:
+
+1. Parent agent decides Trigger E is the right fire (pattern is set, work is fan-outable, no cross-cutting collision risk).
+2. Parent agent drafts per-tab briefs to `~/.claude/dispatch/<arc-slug>/tab<N>-<commission-id>.md`. Each brief is self-contained: parent-agent identity context + scope + files-in-scope + references-to-read + exit criterion + anti-scope + RTC format. Paste-ready — the Jr should not need to ask Hemanth anything to execute.
+3. Parent agent posts a single chat.md announcement: `TRIGGER E DISPATCH — [Agent N, <arc>]: <count> Jrs spawning across <commission ids>. Briefs at <dispatch dir>.`
+4. Hemanth opens N tabs in Claude Code, pastes each brief one tab at a time.
+5. Each Jr executes inside its brief envelope, runs `build_check.bat` / smoke per the exit criterion, and posts `READY TO COMMIT - [Agent N Jr, <work>]: <subject> | Skills invoked: [...]` to chat.md on close. The `Jr` suffix preserves substrate attribution in git log alongside the parent agent identity.
+6. Parent agent sweeps the Jr RTCs in the next commit-sweep (or Agent 0 sweeps brotherhood-wide).
+
+**Trigger E scope discipline:**
+- Jrs stay inside the per-brief `Files:` envelope. Cross-Jr file collisions are the parent agent's responsibility to avoid at brief-authoring time.
+- Jrs do NOT modify `CLAUDE.md`, `AGENTS.md`, `agents/GOVERNANCE.md`, `agents/CONTRACTS.md`, `agents/VERSIONS.md`, or other governance docs unless their brief explicitly authorizes.
+- Jrs do NOT spawn further Jrs of their own (no recursion). If a Jr needs to fan out further, it posts an in-thread observation and stops; parent agent re-evaluates.
+- All other brotherhood rules (1, 11, 14, 15, 17, 19, CSS scoping, no color/emoji, etc.) apply identically to Trigger E work.
+- **MCP LANE LOCK (Rule 19) is per-Jr, not per-parent.** If two Jrs both need pywinauto-mcp or tankoctl, they serialize via the LOCK like any other agent pair.
+
+**Trigger E anti-patterns (do NOT fire E for these):**
+- Cross-cutting refactors that all subtasks depend on (collision class — central dispatcher / registry / index touched concurrently). Use Trigger D solo for the prereq refactor, THEN fire Trigger E for the downstream pattern-matched expansions.
+- Pipelined work where one Jr's output feeds the next Jr's input. Single-tab orchestration is cleaner.
+- Architecturally-novel patterns where the template hasn't been validated yet. Author one reference implementation first (Trigger D or domain agent direct), THEN fan out via Trigger E.
+- Tasks needing live cross-Jr coordination. Jrs don't see each other's tabs.
+
 **When to pick which trigger:**
 
-- **Trigger A/B (prototype):** architectural novelty; you want a reference-only second perspective to consult; you'll still reimplement in your own style. No src/ touch.
-- **Trigger C (audit):** comparative analysis against reference apps; observation vs hypothesis separation; you'll validate hypotheses and decide which gaps become work. No src/ touch.
-- **Trigger D (implementation):** you want Codex to actually do the work and ship it. You author the REQUEST block with files + constraints + exit criterion; Codex executes inside that envelope and flags RTC. You keep ownership (the REQUEST block IS your plan); Codex executes it.
+- **Trigger A/B (Codex prototype):** architectural novelty; you want a reference-only second perspective to consult; you'll still reimplement in your own style. No src/ touch.
+- **Trigger C (Codex audit):** comparative analysis against reference apps; observation vs hypothesis separation; you'll validate hypotheses and decide which gaps become work. No src/ touch.
+- **Trigger D (Codex implementation):** you want a second substrate to actually do the work and ship it under independent perspective; surgical or architecturally novel src/ work where GPT-5.5 quality bar matters more than air spent; you keep ownership via the REQUEST block. Spends Codex air.
+- **Trigger E (Claude Jrs):** pattern-match execution where the architectural pattern is already set; N independent commissions with well-scoped briefs; wall-clock parallelism matters more than independent perspective. Spends Claude air (effectively unlimited). When in doubt and the work is repetitive fan-out across well-defined templates, prefer E.
 
 **Audit vs Agent 6 review — the line:**
 
