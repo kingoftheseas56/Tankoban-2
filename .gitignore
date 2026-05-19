@@ -82,3 +82,6 @@ sidecar_debug_live.log.*
 # .mcp.json). First @playwright/mcp@latest invocation downloads Chromium
 # here. Per-machine cache, not for tracking.
 .playwright-mcp/
+
+# Claude Code Exporter — auto-exported conversation transcripts (per-machine, never commit)
+.cc-history/

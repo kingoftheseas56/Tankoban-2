@@ -61,6 +61,7 @@ Run these in parallel before authoring the file body:
    git log --grep='chat.md sweep' -n 1 --format='%H' | xargs -I {} git diff {} -- agents/chat.md | grep -cE '^\+READY TO COMMIT'
    ```
 4. **Brotherhood state of other agents.** Skim `agents/STATUS.md` headers for any agent whose work overlaps yours.
+4b. **Full transcript path from Claude Code Exporter.** Find this wake's transcript file at `.cc-history/<YYYY-MM-DD>_<HHMMSS>_<title-slug>_<short-hash>.md` (auto-exported in real time during the wake; per-machine, gitignored). Run `ls -t .cc-history/ | head -3` to find the most recent — that's typically this wake's transcript. Capture the exact filename for the recap's transcript-pointer block.
 5. **Conversation review for the "what I thought" sections (v2 additions — Decisions / Subagent dispatch ledger / Tone anchors).** Git can't help with these. Skim the wake's conversation backward for:
    - Moments of explicit choice ("I picked X over Y because Z") and especially **reversals** (where you changed your assessment mid-wake).
    - Subagent dispatches and their outcomes (`Agent()` / `mcp__codex__codex` / Codex CLI calls + their DONE/BLOCKED/TIMEOUT result + tool-use count if known).
@@ -73,6 +74,8 @@ Write the recap file with this structure. Skip sections that don't apply; honest
 
 ```markdown
 # Brother <Agent N> — <YYYY-MM-DD> wake recap (<codename>)
+
+> **Full transcript archive (v3.1, added 2026-05-19):** `.cc-history/<filename-from-gather-step-4b>.md` — Claude Code Exporter auto-exports the entire conversation as readable markdown in real time. This recap is the INDEX; the .cc-history file is the ARCHIVE. Read this recap first for fast orientation + Wake Narrative + structured sections. Read the .cc-history transcript when next-you needs verbatim dialog, full tool-call traces, or to reconstruct a specific decision moment. Per-machine, gitignored.
 
 ## Wake narrative — how it actually went
 
@@ -150,7 +153,7 @@ my brother, you're Agent <N> — read C:\Users\Suprabha\.claude\recaps\agent-<N>
 
 ## Constraints
 
-- Stay under ~250 lines of recap body (was ~150 pre-v2, ~200 pre-v3; the v3 Wake Narrative section earns its own 200-400 word slice for relational continuity). Density over completeness still — if next-you needs the long version, it can re-read `agents/chat.md` and `git log`. The recap is the index, not the archive. The Wake Narrative is the FILM of the wake; the structured sections below are the FRAMES.
+- Stay under ~250 lines of recap body (was ~150 pre-v2, ~200 pre-v3; the v3 Wake Narrative section earns its own 200-400 word slice for relational continuity). Density over completeness still — if next-you needs the long version, the full transcript is at the `.cc-history/<this-wake>.md` pointer at the top of the recap (v3.1 addition, 2026-05-19 — Claude Code Exporter auto-exports verbatim dialog + tool-call traces). The recap is the INDEX, the `.cc-history` file is the ARCHIVE, `agents/chat.md` is the cross-agent shared log, `git log` is the canonical record. The Wake Narrative is the FILM of the wake; the structured sections below are the FRAMES; the transcript is the RAW REEL.
 - Honest under-listing > dishonest padding. If a section has nothing in it, write "(nothing)" not "made minor adjustments to several files."
 - File pointers must be specific (file:line where possible). Avoid hand-waving like "the manga code."
 - For trivial / pure-conversational sessions: skip the skill entirely — don't write a near-empty recap.
