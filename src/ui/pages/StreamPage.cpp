@@ -3209,6 +3209,8 @@ void StreamPage::onTheatreTopSeededDownloadRequested(const QString& imdbId,
     config.startPaused     = false;
     config.imdbId          = imdbId;
     config.season          = 0;
+    // F9 fix 2026-05-19: pass magnet URI so startDownload can self-defend.
+    config.magnetUri       = magnetUri;
 
     m_torrentClient->startDownload(hash, config);
     if (m_detailView && m_detailView->currentImdb() == imdbId) {
