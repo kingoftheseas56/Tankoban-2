@@ -73,6 +73,23 @@
 //   tankoctl sources-open-tankolibrary-detail <md5>
 //   tankoctl sources-download-tankolibrary-selected
 //   tankoctl sources-set-tankolibrary-filters <json>
+//   tankoctl library-get-continue-reading <mode>
+//   tankoctl library-get-recently-added <mode>
+//   tankoctl library-get-search-state <mode>
+//   tankoctl library-get-scan-state <mode>
+//   tankoctl library-trigger-scan <mode>
+//   tankoctl library-get-root-folders <mode>
+//   tankoctl library-get-active-layer <mode>
+//   tankoctl library-reset-mode <mode>
+//   tankoctl library-get-sort <mode>
+//   tankoctl library-set-sort <mode> <key>
+//   tankoctl library-set-density <mode> <0|1|2>
+//   tankoctl library-get-selected-items <mode>
+//   tankoctl library-apply-theme <theme-id>
+//   tankoctl library-get-active-theme
+//   tankoctl library-get-active-mode-pill
+//   tankoctl library-get-settings
+//   tankoctl library-set-setting <key> <value>
 //
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
@@ -203,7 +220,28 @@ void printUsage(QTextStream& err)
         << "                           kick off download for the open detail\n"
         << "  sources-set-tankolibrary-filters <json>\n"
         << "                           media_tab / epub / pdf / mobi / english_only /\n"
-        << "                           sort / audio_format -- pass JSON subset\n";
+        << "                           sort / audio_format -- pass JSON subset\n"
+        << "\n"
+        << "  v1.6 library-side bridge (Phase D.4, 2026-05-19):\n"
+        << "  library-get-continue-reading <mode>\n"
+        << "                           continue-reading strip state (mode = comics|books|videos|stream)\n"
+        << "  library-get-recently-added <mode>     recently-added strip state\n"
+        << "  library-get-search-state <mode>       library search overlay state\n"
+        << "  library-get-scan-state <mode>         scanning state per mode\n"
+        << "  library-trigger-scan <mode>           kick a triggerScan() on the mode's landing page\n"
+        << "  library-get-root-folders <mode>       inspect the root folder list via CoreBridge\n"
+        << "  library-get-active-layer <mode>       current sub-view layer for the mode\n"
+        << "  library-reset-mode <mode>             reset the mode's topbar pill to root\n"
+        << "  library-get-sort <mode>               per-mode sort combo key\n"
+        << "  library-set-sort <mode> <key>         set the per-mode sort combo (UI-bound combo data)\n"
+        << "  library-set-density <mode> <0|1|2>    set the tile density slider\n"
+        << "  library-get-selected-items <mode>     per-mode selection roster (empty when no multi-select)\n"
+        << "  library-apply-theme <theme-id>        runtime theme apply (dark|nord|solarized|gruvbox|catppuccin, noir alias dark)\n"
+        << "  library-get-active-theme              current theme id\n"
+        << "  library-get-active-mode-pill          which top-bar mode pill is active\n"
+        << "  library-get-settings                  composite settings dump + writableKeys allowlist\n"
+        << "  library-set-setting <key> <value>     allowlisted writes: theme.id, density.<mode>,\n"
+        << "                                        sort_key.<mode>, search.query.<mode>\n";
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
@@ -676,6 +714,61 @@ int main(int argc, char** argv)
             return 64;
         }
         payload = doc.object();
+    } else if (sub == QLatin1String("library-get-continue-reading")
+               || sub == QLatin1String("library-get-recently-added")
+               || sub == QLatin1String("library-get-search-state")
+               || sub == QLatin1String("library-get-scan-state")
+               || sub == QLatin1String("library-trigger-scan")
+               || sub == QLatin1String("library-get-root-folders")
+               || sub == QLatin1String("library-get-active-layer")
+               || sub == QLatin1String("library-reset-mode")
+               || sub == QLatin1String("library-get-sort")
+               || sub == QLatin1String("library-get-selected-items")) {
+        // v1.6 Phase D.4 (2026-05-19) — library-side bridge cross-mode reads.
+        if (a.size() < 3) {
+            err << sub << " requires <mode> (comics|books|videos|stream)\n";
+            return 64;
+        }
+        payload["mode"] = a[2];
+    } else if (sub == QLatin1String("library-set-sort")) {
+        if (a.size() < 4) {
+            err << "library-set-sort requires <mode> <key>\n";
+            return 64;
+        }
+        payload["mode"] = a[2];
+        payload["key"]  = a[3];
+    } else if (sub == QLatin1String("library-set-density")) {
+        if (a.size() < 4) {
+            err << "library-set-density requires <mode> <0|1|2>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int v = a[3].toInt(&ok);
+        if (!ok || v < 0 || v > 2) {
+            err << "library-set-density value must be 0, 1, or 2\n";
+            return 64;
+        }
+        payload["mode"]  = a[2];
+        payload["value"] = v;
+    } else if (sub == QLatin1String("library-apply-theme")) {
+        if (a.size() < 3) {
+            err << "library-apply-theme requires <theme-id> (dark|nord|solarized|gruvbox|catppuccin)\n";
+            return 64;
+        }
+        payload["themeId"] = a[2];
+    } else if (sub == QLatin1String("library-set-setting")) {
+        if (a.size() < 4) {
+            err << "library-set-setting requires <key> <value>\n";
+            return 64;
+        }
+        payload["key"] = a[2];
+        // value: try parsing as int first (density slots want int); otherwise
+        // pass through as string. Theme + sort + search keys are strings, so
+        // the fallback string path is correct for those.
+        bool isInt = false;
+        const int n = a[3].toInt(&isInt);
+        if (isInt) payload["value"] = n;
+        else       payload["value"] = a[3];
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -707,7 +800,11 @@ int main(int argc, char** argv)
                || sub == QLatin1String("sources-get-indexer-health")
                || sub == QLatin1String("sources-get-pending-downloads")
                || sub == QLatin1String("sources-get-tankolibrary-results")
-               || sub == QLatin1String("sources-download-tankolibrary-selected")) {
+               || sub == QLatin1String("sources-download-tankolibrary-selected")
+               // v1.6 library-side bridge — no-payload globals.
+               || sub == QLatin1String("library-get-active-theme")
+               || sub == QLatin1String("library-get-active-mode-pill")
+               || sub == QLatin1String("library-get-settings")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

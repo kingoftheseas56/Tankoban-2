@@ -64,6 +64,9 @@ public:
     // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge snapshot.
     // Returns library tile state for the `get_videos` command. Pure read.
     QJsonObject devSnapshot(int limit = 50) const;
+    // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot used
+    // by library_get_* commands + embedded in devSnapshot under "library".
+    QJsonObject devLibrarySection() const;
     Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
                                         const QJsonObject& payload,
                                         QJsonObject& reply);

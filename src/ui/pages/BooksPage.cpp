@@ -341,7 +341,129 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
                            "Q_INVOKABLE methods + runJavaScript drivers"));
     }
 
+    // ── v1.6 library-side bridge (Phase D.4, 2026-05-19) ──────────────────
+    if (cmd.startsWith(QLatin1String("library_"))) {
+        if (cmd == QLatin1String("library_get_section"))
+            return replyOk(reply, {{"section", devLibrarySection()}});
+        if (cmd == QLatin1String("library_get_continue_reading")) {
+            const QJsonObject sec = devLibrarySection();
+            return replyOk(reply, {{"cr_strip", sec.value("cr_strip").toObject()}});
+        }
+        if (cmd == QLatin1String("library_get_recently_added")) {
+            const QJsonObject sec = devLibrarySection();
+            return replyOk(reply,
+                {{"recently_added", sec.value("recently_added").toObject()}});
+        }
+        if (cmd == QLatin1String("library_get_search_state")) {
+            return replyOk(reply, {
+                {"query", m_searchBar ? m_searchBar->text() : QString()},
+                {"search_state", devLibrarySection().value("search_state").toObject()}
+            });
+        }
+        if (cmd == QLatin1String("library_get_scan_state")) {
+            return replyOk(reply, {
+                {"scan_state", devLibrarySection().value("scan_state").toObject()}
+            });
+        }
+        if (cmd == QLatin1String("library_trigger_scan")) {
+            const bool was = m_scanning;
+            triggerScan();
+            return replyOk(reply, {{"triggered", true},
+                                   {"wasScanning", was},
+                                   {"scanning", m_scanning},
+                                   {"buffered", m_rescanPending}});
+        }
+        if (cmd == QLatin1String("library_get_sort"))
+            return replyOk(reply, {{"sortKey",
+                m_sortCombo ? m_sortCombo->currentData().toString() : QString()}});
+        if (cmd == QLatin1String("library_set_sort")) {
+            const QString key = payload.value("key").toString();
+            if (key.isEmpty())
+                return replyErr(reply, "BAD_REQUEST", "payload.key required");
+            if (!m_sortCombo)
+                return replyErr(reply, "INTERNAL", "sort combo not constructed");
+            for (int i = 0; i < m_sortCombo->count(); ++i) {
+                if (m_sortCombo->itemData(i).toString() == key) {
+                    m_sortCombo->setCurrentIndex(i);
+                    return replyOk(reply, {{"sortKey", key}});
+                }
+            }
+            return replyErr(reply, "BAD_REQUEST",
+                QStringLiteral("unknown sort key '%1'").arg(key));
+        }
+        if (cmd == QLatin1String("library_set_density")) {
+            const int val = payload.value("value").toInt(-1);
+            if (val < 0 || val > 2)
+                return replyErr(reply, "BAD_REQUEST", "value must be 0|1|2");
+            if (!m_densitySlider)
+                return replyErr(reply, "INTERNAL", "density slider not constructed");
+            m_densitySlider->setValue(val);
+            return replyOk(reply, {{"density", val}});
+        }
+        if (cmd == QLatin1String("library_set_search_query")) {
+            if (!m_searchBar)
+                return replyErr(reply, "INTERNAL", "search bar not constructed");
+            const QString q = payload.value("query").toString();
+            m_searchBar->setText(q);
+            applySearch();
+            return replyOk(reply, {{"query", q}});
+        }
+        if (cmd == QLatin1String("library_get_active_layer"))
+            return replyOk(reply, {{"layer",
+                devLibrarySection().value("active_layer").toString()}});
+        if (cmd == QLatin1String("library_reset_mode")) {
+            // BooksPage has no resetToRoot slot; showGrid flips m_stack
+            // back to index 0 (library grid), matching the contract from
+            // feedback_mode_pill_resets_to_root.md for non-deep modes.
+            showGrid();
+            return replyOk(reply, {{"reset", true},
+                {"layer", devLibrarySection().value("active_layer").toString()}});
+        }
+        if (cmd == QLatin1String("library_get_selected_items"))
+            return replyOk(reply, {{"selection", QJsonArray{}}});
+        return false;  // unknown library_* — fall through to UNKNOWN_CMD
+    }
+
     return false;  // unknown books_* command — fall through to UNKNOWN_CMD
+}
+
+// v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot.
+QJsonObject BooksPage::devLibrarySection() const
+{
+    QJsonObject sec;
+    QJsonObject cr;
+    cr["visible"] = m_continueSection && m_continueSection->isVisible();
+    cr["count"]   = static_cast<int>(m_progressKeyMap.size());
+    sec["cr_strip"] = cr;
+
+    QJsonObject ra;
+    ra["count"]   = m_bookStrip ? m_bookStrip->totalCount() : 0;
+    ra["visible"] = m_bookStrip && m_bookStrip->totalCount() > 0;
+    sec["recently_added"] = ra;
+
+    QJsonObject ss;
+    ss["query"]         = m_searchBar ? m_searchBar->text() : QString();
+    ss["visibleSeries"] = m_bookStrip ? m_bookStrip->visibleCount() : 0;
+    sec["search_state"] = ss;
+
+    QJsonObject scan;
+    scan["scanning"]      = m_scanning;
+    scan["hasScanned"]    = m_hasScanned;
+    scan["rescanPending"] = m_rescanPending;
+    sec["scan_state"] = scan;
+
+    QJsonArray roots;
+    if (m_bridge)
+        for (const QString& p : m_bridge->rootFolders(QStringLiteral("books")))
+            roots.append(p);
+    sec["root_folders"] = roots;
+
+    sec["sort_key"] = m_sortCombo ? m_sortCombo->currentData().toString() : QString();
+    sec["density"]  = m_densitySlider ? m_densitySlider->value() : -1;
+    sec["selection"] = QJsonArray{};
+    sec["active_layer"] = (m_stack && m_stack->currentIndex() == 1)
+        ? QStringLiteral("series-view") : QStringLiteral("library");
+    return sec;
 }
 
 // v1.3 Phase D.1 (2026-05-19) — page-local snapshot for books-get-state +
@@ -361,6 +483,7 @@ QJsonObject BooksPage::devSnapshot() const
                                          : QString();
     snap["density"]        = m_densitySlider ? m_densitySlider->value() : -1;
     snap["seriesViewActive"] = m_stack && m_stack->currentIndex() == 1;
+    snap["library"] = devLibrarySection();
 
     if (auto* mainWin = qobject_cast<const MainWindow*>(
             const_cast<BooksPage*>(this)->window())) {

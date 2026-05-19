@@ -23,6 +23,7 @@
 #include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
 #include "devtools/DevControlServer.h"
+#include "Theme.h"
 #include "PerModeNavController.h"
 #include "LayerEntry.h"
 
@@ -1683,9 +1684,27 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "sources_open_tankolibrary_detail",
                          "sources_download_tankolibrary_selected",
                          "sources_cancel_search",
-                         "sources_set_tankolibrary_filters" };
+                         "sources_set_tankolibrary_filters",
+                         // v1.6 library-side bridge (Phase D.4, 2026-05-19).
+                         "library_get_continue_reading",
+                         "library_get_recently_added",
+                         "library_get_search_state",
+                         "library_apply_theme",
+                         "library_get_active_theme",
+                         "library_set_density",
+                         "library_get_settings",
+                         "library_set_setting",
+                         "library_get_active_mode_pill",
+                         "library_trigger_scan",
+                         "library_get_scan_state",
+                         "library_get_root_folders",
+                         "library_get_active_layer",
+                         "library_reset_mode",
+                         "library_set_sort",
+                         "library_get_sort",
+                         "library_get_selected_items" };
         return reply({
-            {"schema",     "tankoban.dev.v1.5"},
+            {"schema",     "tankoban.dev.v1.6"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -1980,12 +1999,197 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                 composite["tankolibrary"] = tl->devSnapshot();
             return reply({{"pageId", pageId}, {"snapshot", composite}});
         }
+        if (pageId == QLatin1String("library")) {
+            // v1.6 Phase D.4 (2026-05-19) — composite library dump-ui.
+            QJsonObject composite;
+            composite["activeModePill"] = m_activePageId;
+            composite["activeTheme"]    = Theme::slugFor(Theme::currentMode());
+            if (m_videosPage)
+                composite["videos"] = m_videosPage->devSnapshot(50);
+            if (m_streamPage)
+                composite["stream"] = m_streamPage->devSnapshot();
+            if (auto* comics = comicsPage())
+                composite["comics"] = comics->devSnapshot();
+            if (auto* books = m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr)
+                composite["books"] = books->devSnapshot();
+            return reply({{"pageId", pageId}, {"snapshot", composite}});
+        }
         return reply({{"pageId", pageId}, {"snapshot", devSnapshot()}});
     }
 
     if (cmd == QLatin1String("logs")) {
         const int limit = payload.value("limit").toInt(100);
         return reply({{"entries", DebugLogBuffer::instance().recent(limit)}});
+    }
+
+    // ── v1.6 library-side bridge — global commands ──────────────────────────
+    // Phase D.4 (2026-05-19). Theme + active-mode-pill + settings are global
+    // (cross-mode); per-mode library_* commands are routed below via the
+    // payload's `mode` field to the matching landing page.
+
+    if (cmd == QLatin1String("library_get_active_mode_pill"))
+        return reply({{"pageId", m_activePageId}});
+
+    if (cmd == QLatin1String("library_get_active_theme"))
+        return reply({{"themeId", Theme::slugFor(Theme::currentMode())}});
+
+    if (cmd == QLatin1String("library_apply_theme")) {
+        const QString themeId = payload.value("themeId").toString();
+        if (themeId.isEmpty())
+            return err("BAD_REQUEST", "payload.themeId required");
+        // Aliasing: "noir" is the legacy/docs synonym for "dark"; everything
+        // else must match a known kModes slug exactly.
+        QString canonical = themeId;
+        if (themeId.compare(QStringLiteral("noir"), Qt::CaseInsensitive) == 0)
+            canonical = QStringLiteral("dark");
+        bool known = false;
+        for (const auto& entry : Theme::kModes) {
+            if (canonical.compare(QString::fromLatin1(entry.slug),
+                                  Qt::CaseInsensitive) == 0) {
+                known = true;
+                canonical = QString::fromLatin1(entry.slug);
+                break;
+            }
+        }
+        if (!known)
+            return err("BAD_REQUEST",
+                QStringLiteral("unknown themeId '%1'; valid: dark/nord/"
+                               "solarized/gruvbox/catppuccin").arg(themeId));
+        const Theme::Mode mode = Theme::modeFromSlug(canonical, Theme::Mode::Dark);
+        if (auto* app = qobject_cast<QApplication*>(QCoreApplication::instance())) {
+            Theme::applyTheme(*app, mode);
+            Theme::saveMode(mode);
+        }
+        return reply({{"themeId", Theme::slugFor(Theme::currentMode())},
+                      {"requested", themeId}});
+    }
+
+    if (cmd == QLatin1String("library_get_settings")) {
+        // Composite snapshot via each landing page's library_get_section
+        // delegate. Read-only keys span the full library-section JSON;
+        // writableKeys enumerates the allowlist accepted by library_set_setting.
+        QJsonObject settings;
+        settings["theme.id"] = Theme::slugFor(Theme::currentMode());
+        settings["active_mode_pill"] = m_activePageId;
+        const QStringList modes{"comics", "books", "videos", "stream"};
+        QJsonObject perMode;
+        for (const QString& mode : modes) {
+            QObject* page = nullptr;
+            if (mode == QLatin1String("videos"))      page = m_videosPage;
+            else if (mode == QLatin1String("stream")) page = m_streamPage;
+            else if (mode == QLatin1String("comics")) page = comicsPage();
+            else if (mode == QLatin1String("books"))
+                page = m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr;
+            if (!page) continue;
+            QJsonObject p{{"mode", mode}};
+            QJsonObject r{
+                {"type", QStringLiteral("reply")},
+                {"seq", seq}
+            };
+            if (forwardToDispatch(page, QStringLiteral("library_get_section"), p, r))
+                perMode[mode] = r.value("section").toObject();
+        }
+        settings["perMode"] = perMode;
+        QJsonArray writable{"theme.id"};
+        for (const QString& mode : modes) {
+            writable.append(QStringLiteral("density.") + mode);
+            writable.append(QStringLiteral("sort_key.") + mode);
+            writable.append(QStringLiteral("search.query.") + mode);
+        }
+        return reply({{"settings", settings}, {"writableKeys", writable}});
+    }
+
+    if (cmd == QLatin1String("library_set_setting")) {
+        const QString key   = payload.value("key").toString();
+        const QJsonValue v  = payload.value("value");
+        if (key.isEmpty())
+            return err("BAD_REQUEST", "payload.key required");
+        // Allowlist-gated write surface. Default read-only; only the keys
+        // below mutate state. Anything else returns READONLY_KEY.
+        if (key == QLatin1String("theme.id")) {
+            QJsonObject p{{"themeId", v.toString()}};
+            return handleDevCommand(QStringLiteral("library_apply_theme"), seq, p);
+        }
+        auto parseMode = [](const QString& key, const QString& prefix) -> QString {
+            if (!key.startsWith(prefix)) return QString();
+            return key.mid(prefix.size());
+        };
+        QString mode;
+        QString innerCmd;
+        QJsonObject innerPayload;
+        if ((mode = parseMode(key, QStringLiteral("density."))).size()) {
+            innerCmd = QStringLiteral("library_set_density");
+            innerPayload[QStringLiteral("value")] = v.toInt();
+        } else if ((mode = parseMode(key, QStringLiteral("sort_key."))).size()) {
+            innerCmd = QStringLiteral("library_set_sort");
+            innerPayload[QStringLiteral("key")] = v.toString();
+        } else if ((mode = parseMode(key, QStringLiteral("search.query."))).size()) {
+            innerCmd = QStringLiteral("library_set_search_query");
+            innerPayload[QStringLiteral("query")] = v.toString();
+        } else {
+            return err("READONLY_KEY",
+                QStringLiteral("key '%1' is not in the library-set-setting "
+                               "allowlist; writable keys: theme.id, "
+                               "density.<mode>, sort_key.<mode>, "
+                               "search.query.<mode>").arg(key));
+        }
+        innerPayload[QStringLiteral("mode")] = mode;
+        return handleDevCommand(innerCmd, seq, innerPayload);
+    }
+
+    if (cmd == QLatin1String("library_get_root_folders")) {
+        const QString mode = payload.value("mode").toString();
+        if (mode.isEmpty())
+            return err("BAD_REQUEST", "payload.mode required (comics|books|videos|stream)");
+        if (mode == QLatin1String("stream"))
+            return reply({{"mode", mode}, {"roots", QJsonArray{}},
+                          {"note", QStringLiteral("stream is network-driven; "
+                                                  "no root folders concept")}});
+        const QStringList valid{"comics", "books", "videos"};
+        if (!valid.contains(mode))
+            return err("BAD_REQUEST",
+                QStringLiteral("mode must be one of comics/books/videos/stream"));
+        QJsonArray arr;
+        for (const QString& p : m_bridge->rootFolders(mode))
+            arr.append(p);
+        return reply({{"mode", mode}, {"roots", arr}});
+    }
+
+    // ── v1.6 library-side bridge — per-mode routing ─────────────────────────
+    // Mode-specific library_* commands (continue-reading, recently-added,
+    // search-state, scan-state, sort, density, active-layer, reset-mode,
+    // selection, trigger-scan) take payload.mode = comics|books|videos|stream
+    // and route to that landing page's dispatchDevCommand.
+
+    if (cmd.startsWith(QLatin1String("library_"))) {
+        const QString mode = payload.value("mode").toString();
+        if (mode.isEmpty())
+            return err("BAD_REQUEST",
+                QStringLiteral("library_* commands require payload.mode "
+                               "(comics|books|videos|stream)"));
+        QObject* page = nullptr;
+        if (mode == QLatin1String("videos"))      page = m_videosPage;
+        else if (mode == QLatin1String("stream")) page = m_streamPage;
+        else if (mode == QLatin1String("comics")) page = comicsPage();
+        else if (mode == QLatin1String("books"))
+            page = m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr;
+        else
+            return err("BAD_REQUEST",
+                QStringLiteral("mode '%1' not in [comics,books,videos,stream]")
+                    .arg(mode));
+        if (!page)
+            return err("INTERNAL",
+                QStringLiteral("landing page for mode '%1' not initialized")
+                    .arg(mode));
+        QJsonObject delegatedReply{
+            {"type", QStringLiteral("reply")},
+            {"seq", seq}
+        };
+        if (forwardToDispatch(page, cmd, payload, delegatedReply))
+            return delegatedReply;
+        return err("UNKNOWN_CMD",
+            QStringLiteral("library_* command '%1' not handled by mode '%2'")
+                .arg(cmd, mode));
     }
 
     QJsonObject delegatedReply;
@@ -2018,16 +2222,6 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         if (tryForward(true, m_tankorentPage))
             return delegatedReply;
         if (tryForward(true, m_pageStack ? m_pageStack->findChild<TankoLibraryPage*>() : nullptr))
-            return delegatedReply;
-    }
-    if (cmd.startsWith(QLatin1String("library_"))) {
-        if (tryForward(true, m_videosPage))
-            return delegatedReply;
-        if (tryForward(true, m_streamPage))
-            return delegatedReply;
-        if (tryForward(true, m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr))
-            return delegatedReply;
-        if (tryForward(true, m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr))
             return delegatedReply;
     }
 

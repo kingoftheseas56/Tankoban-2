@@ -426,14 +426,153 @@ ComicsPage::~ComicsPage()
     // thread::finished. No manual delete.
 }
 
+namespace {
+inline bool replyOkComics(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+inline bool replyErrComics(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+}  // namespace
+
 bool ComicsPage::dispatchDevCommand(const QString& cmd,
                                     const QJsonObject& payload,
                                     QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
-    Q_UNUSED(payload);
-    Q_UNUSED(reply);
-    return false;
+    // v1.6 Phase D.4 (2026-05-19) — library-side bridge. Existing comics_*
+    // commands are dispatched directly from MainWindow's handleDevCommand
+    // (ComicsPage::dev* helpers), so this method only handles the cross-mode
+    // library_* surface.
+    if (!cmd.startsWith(QLatin1String("library_")))
+        return false;
+
+    if (cmd == QLatin1String("library_get_section"))
+        return replyOkComics(reply, {{"section", devLibrarySection()}});
+    if (cmd == QLatin1String("library_get_continue_reading")) {
+        return replyOkComics(reply,
+            {{"cr_strip", devLibrarySection().value("cr_strip").toObject()}});
+    }
+    if (cmd == QLatin1String("library_get_recently_added")) {
+        return replyOkComics(reply,
+            {{"recently_added", devLibrarySection().value("recently_added").toObject()}});
+    }
+    if (cmd == QLatin1String("library_get_search_state")) {
+        return replyOkComics(reply, {
+            {"query", m_searchBar ? m_searchBar->text() : QString()},
+            {"search_state", devLibrarySection().value("search_state").toObject()}
+        });
+    }
+    if (cmd == QLatin1String("library_get_scan_state")) {
+        return replyOkComics(reply,
+            {{"scan_state", devLibrarySection().value("scan_state").toObject()}});
+    }
+    if (cmd == QLatin1String("library_trigger_scan")) {
+        const bool was = m_scanning;
+        triggerScan();
+        return replyOkComics(reply, {{"triggered", true},
+                                     {"wasScanning", was},
+                                     {"scanning", m_scanning},
+                                     {"buffered", m_rescanPending}});
+    }
+    if (cmd == QLatin1String("library_get_sort"))
+        return replyOkComics(reply, {{"sortKey",
+            m_sortCombo ? m_sortCombo->currentData().toString() : QString()}});
+    if (cmd == QLatin1String("library_set_sort")) {
+        const QString key = payload.value("key").toString();
+        if (key.isEmpty())
+            return replyErrComics(reply, "BAD_REQUEST", "payload.key required");
+        if (!m_sortCombo)
+            return replyErrComics(reply, "INTERNAL", "sort combo not constructed");
+        for (int i = 0; i < m_sortCombo->count(); ++i) {
+            if (m_sortCombo->itemData(i).toString() == key) {
+                m_sortCombo->setCurrentIndex(i);
+                return replyOkComics(reply, {{"sortKey", key}});
+            }
+        }
+        return replyErrComics(reply, "BAD_REQUEST",
+            QStringLiteral("unknown sort key '%1'").arg(key));
+    }
+    if (cmd == QLatin1String("library_set_density")) {
+        const int val = payload.value("value").toInt(-1);
+        if (val < 0 || val > 2)
+            return replyErrComics(reply, "BAD_REQUEST", "value must be 0|1|2");
+        if (!m_densitySlider)
+            return replyErrComics(reply, "INTERNAL", "density slider not constructed");
+        m_densitySlider->setValue(val);
+        return replyOkComics(reply, {{"density", val}});
+    }
+    if (cmd == QLatin1String("library_set_search_query")) {
+        if (!m_searchBar)
+            return replyErrComics(reply, "INTERNAL", "search bar not constructed");
+        const QString q = payload.value("query").toString();
+        m_searchBar->setText(q);
+        return replyOkComics(reply, {{"query", q}});
+    }
+    if (cmd == QLatin1String("library_get_active_layer"))
+        return replyOkComics(reply, {{"layer",
+            devLibrarySection().value("active_layer").toString()}});
+    if (cmd == QLatin1String("library_reset_mode")) {
+        resetToRoot();
+        return replyOkComics(reply, {{"reset", true},
+            {"layer", devLibrarySection().value("active_layer").toString()}});
+    }
+    if (cmd == QLatin1String("library_get_selected_items"))
+        return replyOkComics(reply, {{"selection", QJsonArray{}}});
+    return false;  // unknown library_*
+}
+
+QJsonObject ComicsPage::devLibrarySection() const
+{
+    QJsonObject sec;
+    QJsonObject cr;
+    cr["visible"] = m_continueSection && m_continueSection->isVisible();
+    cr["count"]   = static_cast<int>(m_progressKeyMap.size());
+    sec["cr_strip"] = cr;
+
+    QJsonObject ra;
+    ra["count"]   = m_tileStrip ? m_tileStrip->totalCount() : 0;
+    ra["visible"] = m_tileStrip && m_tileStrip->totalCount() > 0;
+    sec["recently_added"] = ra;
+
+    QJsonObject ss;
+    ss["query"]    = m_searchBar ? m_searchBar->text() : QString();
+    ss["visibleSeries"] = m_tileStrip ? m_tileStrip->visibleCount() : 0;
+    sec["search_state"] = ss;
+
+    QJsonObject scan;
+    scan["scanning"]      = m_scanning;
+    scan["hasScanned"]    = m_hasScanned;
+    scan["rescanPending"] = m_rescanPending;
+    sec["scan_state"] = scan;
+
+    QJsonArray roots;
+    if (m_bridge)
+        for (const QString& p : m_bridge->rootFolders(QStringLiteral("comics")))
+            roots.append(p);
+    sec["root_folders"] = roots;
+
+    sec["sort_key"] = m_sortCombo ? m_sortCombo->currentData().toString() : QString();
+    sec["density"]  = m_densitySlider ? m_densitySlider->value() : -1;
+    sec["selection"] = QJsonArray{};
+
+    // active_layer reflects the page's Mode + folder-series sub-stack state.
+    QString layer = QStringLiteral("library");
+    switch (m_mode) {
+    case Mode::Library: layer = QStringLiteral("library"); break;
+    case Mode::SearchResults: layer = QStringLiteral("search-results"); break;
+    case Mode::TankoyomiDetail: layer = QStringLiteral("series-view"); break;
+    }
+    if (m_stack && m_stack->currentWidget() == m_seriesView)
+        layer = QStringLiteral("folder-series-view");
+    sec["active_layer"] = layer;
+    return sec;
 }
 
 void ComicsPage::setTorrentClient(TorrentClient* client)
@@ -2586,6 +2725,7 @@ QJsonObject ComicsPage::devSnapshot() const
         m_anilistCache ? m_anilistCache->bookmarkedPreviews().size() : 0;
     if (m_tyVolumeSeriesView)
         snap[QStringLiteral("seriesView")] = m_tyVolumeSeriesView->devSnapshot();
+    snap[QStringLiteral("library")] = devLibrarySection();
     return snap;
 }
 

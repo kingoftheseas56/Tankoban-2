@@ -91,6 +91,9 @@ public:
     QJsonObject devSnapshot() const;
     QJsonObject devLibrarySnapshot() const;
     QJsonObject devSeriesSnapshot() const;
+    // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot used
+    // by library_get_* commands + embedded in devSnapshot under "library".
+    QJsonObject devLibrarySection() const;
     QJsonObject devSelectVolume(int row);
     QJsonObject devOpenSeries(const QString& seriesId);
     QJsonObject devOpenChapter(const QString& seriesId, int volumeNumber, int chapterNumber);

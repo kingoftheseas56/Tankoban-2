@@ -38,6 +38,9 @@ public:
     // mutation.
     QJsonObject devSnapshot() const;
     QJsonObject devLibrarySnapshot() const;
+    // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot used
+    // by library_get_* commands + embedded in devSnapshot under "library".
+    QJsonObject devLibrarySection() const;
 
 signals:
     void openBook(const QString& filePath);

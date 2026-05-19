@@ -368,14 +368,120 @@ void StreamPage::activate()
         m_libraryLayout->refresh();
 }
 
+namespace {
+inline bool replyOkStream(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+inline bool replyErrStream(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+}  // namespace
+
 bool StreamPage::dispatchDevCommand(const QString& cmd,
                                     const QJsonObject& payload,
                                     QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
-    Q_UNUSED(payload);
-    Q_UNUSED(reply);
+    // v1.6 Phase D.4 (2026-05-19) — library-side bridge. Pre-existing
+    // stream_* commands route through MainWindow's handleDevCommand
+    // directly (devOpenDetail / devGetSources / devDirectDownload). This
+    // method only handles the cross-mode library_* surface. Stream has no
+    // disk-scan or sort/density combos so those branches return
+    // NOT_APPLICABLE rather than silently no-op'ing.
+    if (!cmd.startsWith(QLatin1String("library_")))
+        return false;
+
+    if (cmd == QLatin1String("library_get_section"))
+        return replyOkStream(reply, {{"section", devLibrarySection()}});
+    if (cmd == QLatin1String("library_get_continue_reading"))
+        return replyOkStream(reply,
+            {{"cr_strip", devLibrarySection().value("cr_strip").toObject()}});
+    if (cmd == QLatin1String("library_get_recently_added"))
+        return replyOkStream(reply,
+            {{"recently_added", devLibrarySection().value("recently_added").toObject()}});
+    if (cmd == QLatin1String("library_get_search_state")) {
+        return replyOkStream(reply, {
+            {"query", m_searchInput ? m_searchInput->text() : QString()},
+            {"search_state", devLibrarySection().value("search_state").toObject()}
+        });
+    }
+    if (cmd == QLatin1String("library_get_scan_state"))
+        return replyErrStream(reply, "NOT_APPLICABLE",
+            "stream is network-driven; no on-disk scan state");
+    if (cmd == QLatin1String("library_trigger_scan"))
+        return replyErrStream(reply, "NOT_APPLICABLE",
+            "stream has no disk scan to trigger");
+    if (cmd == QLatin1String("library_get_sort"))
+        return replyErrStream(reply, "NOT_APPLICABLE",
+            "stream has no library sort combo");
+    if (cmd == QLatin1String("library_set_sort"))
+        return replyErrStream(reply, "NOT_APPLICABLE",
+            "stream has no library sort combo");
+    if (cmd == QLatin1String("library_set_density"))
+        return replyErrStream(reply, "NOT_APPLICABLE",
+            "stream has no density slider");
+    if (cmd == QLatin1String("library_set_search_query")) {
+        if (!m_searchInput)
+            return replyErrStream(reply, "INTERNAL", "search input not constructed");
+        const QString q = payload.value("query").toString();
+        m_searchInput->setText(q);
+        return replyOkStream(reply, {{"query", q}});
+    }
+    if (cmd == QLatin1String("library_get_active_layer"))
+        return replyOkStream(reply, {{"layer",
+            devLibrarySection().value("active_layer").toString()}});
+    if (cmd == QLatin1String("library_reset_mode")) {
+        resetToRoot();
+        return replyOkStream(reply, {{"reset", true},
+            {"layer", devLibrarySection().value("active_layer").toString()}});
+    }
+    if (cmd == QLatin1String("library_get_selected_items"))
+        return replyOkStream(reply, {{"selection", QJsonArray{}}});
     return false;
+}
+
+QJsonObject StreamPage::devLibrarySection() const
+{
+    QJsonObject sec;
+    QJsonObject cr;
+    cr["visible"] = m_continueStrip && m_continueStrip->isVisible();
+    cr["count"]   = 0;  // StreamContinueStrip count not exposed; smoke
+                        // surfaces visibility via the visible flag.
+    sec["cr_strip"] = cr;
+
+    QJsonObject ra;
+    ra["count"]   = m_library ? static_cast<int>(m_library->getAll().size()) : 0;
+    ra["visible"] = m_library && !m_library->getAll().isEmpty();
+    sec["recently_added"] = ra;
+
+    QJsonObject ss;
+    ss["query"]      = m_searchInput ? m_searchInput->text() : QString();
+    ss["overlayVisible"] = m_searchWidget && m_searchWidget->isVisible();
+    sec["search_state"] = ss;
+
+    sec["scan_state"]   = QJsonValue::Null;  // stream is network-driven
+    sec["root_folders"] = QJsonArray{};      // no on-disk roots
+    sec["sort_key"]     = QJsonValue::Null;
+    sec["density"]      = -1;
+    sec["selection"]    = QJsonArray{};
+
+    QString layer = QStringLiteral("browse");
+    const int idx = m_mainStack ? m_mainStack->currentIndex() : -1;
+    if (m_searchWidget && m_searchWidget->isVisible())
+        layer = QStringLiteral("search");
+    else if (idx == 1) layer = QStringLiteral("detail");
+    else if (idx == 2) layer = QStringLiteral("player");
+    else if (idx == 3) layer = QStringLiteral("addons");
+    else if (idx == 4) layer = QStringLiteral("catalog");
+    else if (idx == 5) layer = QStringLiteral("calendar");
+    sec["active_layer"] = layer;
+    return sec;
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) â€” fan out the download
@@ -453,6 +559,7 @@ QJsonObject StreamPage::devSnapshot() const
 
     if (m_detailView)
         snap[QStringLiteral("detail")] = m_detailView->devSnapshot();
+    snap[QStringLiteral("library")] = devLibrarySection();
     return snap;
 }
 

@@ -147,14 +147,145 @@ VideosPage::~VideosPage()
     // the deleteLater connect on thread::finished above. No manual delete.
 }
 
+namespace {
+inline bool replyOkVideos(QJsonObject& reply, QJsonObject fields)
+{
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        reply.insert(it.key(), it.value());
+    return true;
+}
+inline bool replyErrVideos(QJsonObject& reply, const char* code, const QString& msg)
+{
+    reply["type"]    = QStringLiteral("error");
+    reply["code"]    = QString::fromLatin1(code);
+    reply["message"] = msg;
+    return true;
+}
+}  // namespace
+
 bool VideosPage::dispatchDevCommand(const QString& cmd,
                                     const QJsonObject& payload,
                                     QJsonObject& reply)
 {
-    Q_UNUSED(cmd);
+    // v1.6 Phase D.4 (2026-05-19) — library-side bridge. No videos_*
+    // commands yet; only the cross-mode library_* surface.
+    if (!cmd.startsWith(QLatin1String("library_")))
+        return false;
+
+    if (cmd == QLatin1String("library_get_section"))
+        return replyOkVideos(reply, {{"section", devLibrarySection()}});
+    if (cmd == QLatin1String("library_get_continue_reading"))
+        return replyOkVideos(reply,
+            {{"cr_strip", devLibrarySection().value("cr_strip").toObject()}});
+    if (cmd == QLatin1String("library_get_recently_added"))
+        return replyOkVideos(reply,
+            {{"recently_added", devLibrarySection().value("recently_added").toObject()}});
+    if (cmd == QLatin1String("library_get_search_state")) {
+        return replyOkVideos(reply, {
+            {"query", m_searchBar ? m_searchBar->text() : QString()},
+            {"search_state", devLibrarySection().value("search_state").toObject()}
+        });
+    }
+    if (cmd == QLatin1String("library_get_scan_state"))
+        return replyOkVideos(reply,
+            {{"scan_state", devLibrarySection().value("scan_state").toObject()}});
+    if (cmd == QLatin1String("library_trigger_scan")) {
+        const bool was = m_scanning;
+        triggerScan();
+        return replyOkVideos(reply, {{"triggered", true},
+                                     {"wasScanning", was},
+                                     {"scanning", m_scanning},
+                                     {"buffered", m_rescanPending}});
+    }
+    if (cmd == QLatin1String("library_get_sort"))
+        return replyOkVideos(reply, {{"sortKey",
+            m_sortCombo ? m_sortCombo->currentData().toString() : QString()}});
+    if (cmd == QLatin1String("library_set_sort")) {
+        const QString key = payload.value("key").toString();
+        if (key.isEmpty())
+            return replyErrVideos(reply, "BAD_REQUEST", "payload.key required");
+        if (!m_sortCombo)
+            return replyErrVideos(reply, "INTERNAL", "sort combo not constructed");
+        for (int i = 0; i < m_sortCombo->count(); ++i) {
+            if (m_sortCombo->itemData(i).toString() == key) {
+                m_sortCombo->setCurrentIndex(i);
+                return replyOkVideos(reply, {{"sortKey", key}});
+            }
+        }
+        return replyErrVideos(reply, "BAD_REQUEST",
+            QStringLiteral("unknown sort key '%1'").arg(key));
+    }
+    if (cmd == QLatin1String("library_set_density")) {
+        const int val = payload.value("value").toInt(-1);
+        if (val < 0 || val > 2)
+            return replyErrVideos(reply, "BAD_REQUEST", "value must be 0|1|2");
+        if (!m_densitySlider)
+            return replyErrVideos(reply, "INTERNAL", "density slider not constructed");
+        m_densitySlider->setValue(val);
+        return replyOkVideos(reply, {{"density", val}});
+    }
+    if (cmd == QLatin1String("library_set_search_query")) {
+        if (!m_searchBar)
+            return replyErrVideos(reply, "INTERNAL", "search bar not constructed");
+        const QString q = payload.value("query").toString();
+        m_searchBar->setText(q);
+        applySearch();
+        return replyOkVideos(reply, {{"query", q}});
+    }
+    if (cmd == QLatin1String("library_get_active_layer"))
+        return replyOkVideos(reply, {{"layer",
+            devLibrarySection().value("active_layer").toString()}});
+    if (cmd == QLatin1String("library_reset_mode")) {
+        // VideosPage has no resetToRoot; showGrid flips m_stack to the
+        // library grid (index 0). Per feedback_mode_pill_resets_to_root.md.
+        showGrid();
+        return replyOkVideos(reply, {{"reset", true},
+            {"layer", devLibrarySection().value("active_layer").toString()}});
+    }
+    if (cmd == QLatin1String("library_get_selected_items"))
+        return replyOkVideos(reply, {{"selection", QJsonArray{}}});
     Q_UNUSED(payload);
-    Q_UNUSED(reply);
     return false;
+}
+
+QJsonObject VideosPage::devLibrarySection() const
+{
+    QJsonObject sec;
+    QJsonObject cr;
+    cr["visible"] = m_continueSection && m_continueSection->isVisible();
+    cr["count"]   = m_continueStrip ? m_continueStrip->totalCount() : 0;
+    sec["cr_strip"] = cr;
+
+    // VideosPage has no single "recently added" strip — the show grid is
+    // organised by category. Reporting total show count gives smokes a
+    // useful "library populated?" signal without overstating the model.
+    QJsonObject ra;
+    ra["count"]   = static_cast<int>(m_showPathToName.size());
+    ra["visible"] = !m_showPathToName.isEmpty();
+    sec["recently_added"] = ra;
+
+    QJsonObject ss;
+    ss["query"] = m_searchBar ? m_searchBar->text() : QString();
+    sec["search_state"] = ss;
+
+    QJsonObject scan;
+    scan["scanning"]      = m_scanning;
+    scan["hasScanned"]    = m_hasScanned;
+    scan["rescanPending"] = m_rescanPending;
+    sec["scan_state"] = scan;
+
+    QJsonArray roots;
+    if (m_bridge)
+        for (const QString& p : m_bridge->rootFolders(QStringLiteral("videos")))
+            roots.append(p);
+    sec["root_folders"] = roots;
+
+    sec["sort_key"] = m_sortCombo ? m_sortCombo->currentData().toString() : QString();
+    sec["density"]  = m_densitySlider ? m_densitySlider->value() : -1;
+    sec["selection"] = QJsonArray{};
+    sec["active_layer"] = (m_stack && m_stack->currentIndex() == 1)
+        ? QStringLiteral("show-view") : QStringLiteral("library");
+    return sec;
 }
 
 void VideosPage::buildUI()
@@ -1660,6 +1791,7 @@ QJsonObject VideosPage::devSnapshot(int limit) const
     else
         snap["activeShow"] = QJsonValue::Null;
 
+    snap["library"] = devLibrarySection();
     return snap;
 }
 

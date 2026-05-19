@@ -27,6 +27,10 @@ class MainWindow;
 // (Phase D.3, 2026-05-19) adds the sources-side bridge layer covering
 // TankorentPage + TankoLibraryPage (search dispatch, indexer health,
 // torrent lifecycle controls, TankoLibrary detail/download surface).
+// v1.6 (Phase D.4, 2026-05-19) adds the library-side bridge layer
+// covering cross-mode landing-page state (continue-reading, recently-
+// added, search/scan/sort/density/selection/active-layer) plus theme
+// apply + active-mode-pill query.
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.
