@@ -72,6 +72,29 @@ void VolumeMetadataResolver::resolveForAnilist(
     m_client->searchByTitle(preview.title, requestId);
 }
 
+void VolumeMetadataResolver::resolveBySeriesKey(
+    const QString& seriesKey,
+    const QString& englishTitle,
+    const QStringList& authorsHint)
+{
+    if (!m_client || seriesKey.isEmpty() || englishTitle.trimmed().isEmpty()) {
+        emit unresolvedBySeriesKey(seriesKey, QStringLiteral("invalid-args"));
+        return;
+    }
+    PendingResolve p;
+    p.anilistId = 0;
+    p.seriesKey = seriesKey;
+    p.englishTitle = englishTitle.trimmed();
+    p.anilistAuthors = authorsHint;
+    // Populate preview.title so MangaUpdatesDisambiguator::bestMatch can
+    // perform its title-match step without any changes to onSearchSucceeded.
+    p.preview.title = p.englishTitle;
+
+    const int reqId = nextRequestId();
+    m_pending.insert(reqId, p);
+    m_client->searchByTitle(p.englishTitle, reqId);
+}
+
 void VolumeMetadataResolver::onSearchSucceeded(
     int requestId,
     const QList<MangaUpdatesSearchHit>& hits)
@@ -84,7 +107,11 @@ void VolumeMetadataResolver::onSearchSucceeded(
         hits, pending.preview, pending.anilistAuthors);
     if (seriesId <= 0) {
         m_pending.remove(requestId);
-        emit unresolved(pending.anilistId, QStringLiteral("no disambiguated match"));
+        if (pending.seriesKey.isEmpty()) {
+            emit unresolved(pending.anilistId, QStringLiteral("no disambiguated match"));
+        } else {
+            emit unresolvedBySeriesKey(pending.seriesKey, QStringLiteral("no disambiguated match"));
+        }
         return;
     }
 
@@ -95,9 +122,13 @@ void VolumeMetadataResolver::onSearchFailed(int requestId, const QString& reason
 {
     const auto it = m_pending.constFind(requestId);
     if (it == m_pending.constEnd()) return;
-    const int anilistId = it->anilistId;
+    const PendingResolve p = it.value();
     m_pending.remove(requestId);
-    emit unresolved(anilistId, QStringLiteral("search failed: %1").arg(reason));
+    if (p.seriesKey.isEmpty()) {
+        emit unresolved(p.anilistId, QStringLiteral("search failed: %1").arg(reason));
+    } else {
+        emit unresolvedBySeriesKey(p.seriesKey, QStringLiteral("search failed: %1").arg(reason));
+    }
 }
 
 void VolumeMetadataResolver::onSeriesSucceeded(
@@ -110,22 +141,39 @@ void VolumeMetadataResolver::onSeriesSucceeded(
     m_pending.remove(requestId);
 
     if (info.volumeCount <= 0) {
-        emit unresolved(pending.anilistId,
-            QStringLiteral("detail returned volumeCount<=0 (raw: %1)").arg(info.rawStatus));
+        if (pending.seriesKey.isEmpty()) {
+            emit unresolved(pending.anilistId,
+                QStringLiteral("detail returned volumeCount<=0 (raw: %1)").arg(info.rawStatus));
+        } else {
+            emit unresolvedBySeriesKey(pending.seriesKey,
+                QStringLiteral("detail returned volumeCount<=0 (raw: %1)").arg(info.rawStatus));
+        }
         return;
     }
 
-    m_cache->putMangaUpdatesSidecar(pending.anilistId, info);
-    emit resolved(pending.anilistId, info.volumeCount, info.latestChapter);
+    if (pending.seriesKey.isEmpty()) {
+        // Legacy by-anilist path — write through to AniList cache.
+        m_cache->putMangaUpdatesSidecar(pending.anilistId, info);
+        emit resolved(pending.anilistId, info.volumeCount, info.latestChapter);
+    } else {
+        emit resolvedBySeriesKey(pending.seriesKey,
+                                 info.volumeCount,
+                                 info.latestChapter,
+                                 info.altTitles);
+    }
 }
 
 void VolumeMetadataResolver::onSeriesFailed(int requestId, const QString& reason)
 {
     const auto it = m_pending.constFind(requestId);
     if (it == m_pending.constEnd()) return;
-    const int anilistId = it->anilistId;
+    const PendingResolve p = it.value();
     m_pending.remove(requestId);
-    emit unresolved(anilistId, QStringLiteral("detail failed: %1").arg(reason));
+    if (p.seriesKey.isEmpty()) {
+        emit unresolved(p.anilistId, QStringLiteral("detail failed: %1").arg(reason));
+    } else {
+        emit unresolvedBySeriesKey(p.seriesKey, QStringLiteral("detail failed: %1").arg(reason));
+    }
 }
 
 } // namespace tankoban::manga::mangaupdates
