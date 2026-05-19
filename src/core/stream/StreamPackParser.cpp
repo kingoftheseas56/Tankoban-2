@@ -50,7 +50,7 @@ ParsedPack StreamPackParser::parsePack(const QJsonArray& files,
         ParsedFile pf;
         pf.season = detectedSeason;
         pf.episode = episodeNum;
-        pf.fileIndex = fileIdx;
+        pf.fileIndex = matchedFileIdx;
         pf.relName = file.value(QStringLiteral("name")).toString();
         pf.sizeBytes = file.value(QStringLiteral("size")).toVariant().toLongLong();
         if (pf.relName.isEmpty())
@@ -73,6 +73,8 @@ ParsedPack StreamPackParser::parsePack(const QJsonArray& files,
             const QJsonObject file = files.at(fileIdx).toObject();
             const QString relName = file.value(QStringLiteral("name")).toString();
             const QString lowerName = relName.toLower();
+            // .avi included here but NOT in detail::isWhitelistedVideoExtension (episode path) —
+            // legacy movie rips commonly use .avi; TV episode packs almost never do.
             if (!(lowerName.endsWith(QStringLiteral(".mkv"))
                   || lowerName.endsWith(QStringLiteral(".mp4"))
                   || lowerName.endsWith(QStringLiteral(".webm"))
