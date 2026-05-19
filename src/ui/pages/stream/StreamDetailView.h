@@ -219,6 +219,12 @@ signals:
     // re-firing the existing source-pick flow. Spec §6.3.
     void alternateStreamRequested(int season, int episode);
 
+protected:
+    // F13 fix 2026-05-19: start/stop m_progressRefreshTimer scoped to
+    // visibility so we only poll while the user can actually see the badges.
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
     void buildUI();
     void onSeriesMetaReady(const QString& imdbId,
@@ -491,6 +497,15 @@ private:
     // download-state repaints. Started in populateEpisodeTable when bulk
     // activity exists for the show+season; idle otherwise.
     QTimer*                m_bulkPollTimer = nullptr;
+
+    // F13 fix 2026-05-19: periodic refresh of movie + episode download badges
+    // during active downloads. The substrate's state-change signals only fire on
+    // transitions (Pending→Downloading→Complete), not on per-piece progress, so
+    // the badge would stay frozen at the dispatch-time percent without this poll.
+    // Timer is started in showEvent + stopped in hideEvent; cheap (~1Hz against
+    // in-process QHash). Connected to refreshMovieDownloadState +
+    // refreshSubstrateStatesForActiveSeason.
+    QTimer*                m_progressRefreshTimer = nullptr;
 
     // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task B - stamped when a download
     // dispatch fires (movie or season-header pack). refreshEpisodeBulkProgress

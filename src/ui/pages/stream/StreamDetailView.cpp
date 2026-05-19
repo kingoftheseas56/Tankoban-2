@@ -202,6 +202,15 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
     connect(m_bulkPollTimer, &QTimer::timeout,
             this, &StreamDetailView::refreshEpisodeBulkProgress);
 
+    // F13 fix 2026-05-19: 1Hz refresh of movie + episode download badges during
+    // active downloads. See member declaration comment in the header for rationale.
+    m_progressRefreshTimer = new QTimer(this);
+    m_progressRefreshTimer->setInterval(1000);
+    connect(m_progressRefreshTimer, &QTimer::timeout, this, [this]() {
+        refreshMovieDownloadState();
+        refreshSubstrateStatesForActiveSeason();
+    });
+
     if (m_meta) {
         connect(m_meta, &MetaAggregator::seriesMetaReady,
                 this, &StreamDetailView::onSeriesMetaReady);
@@ -1939,7 +1948,11 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                 }, Qt::QueuedConnection);
         connect(m_torrentClient, &TorrentClient::torrentCompleted,
                 this, [this](const QString& /*infoHash*/) {
+                    // F13 fix 2026-05-19: immediate refresh on completion —
+                    // don't wait up to 1s for the next timer tick to flip the
+                    // badge from 'Downloading 99%' to 'Downloaded'.
                     refreshMovieDownloadState();
+                    refreshSubstrateStatesForActiveSeason();
                 }, Qt::QueuedConnection);
     }
     refreshMovieDownloadState();
@@ -2298,6 +2311,22 @@ void StreamDetailView::refreshSeasonHeaderButton()
     m_downloadBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
     m_downloadBtn->setVisible(season > 0);
     if (m_packOptionsBtn) m_packOptionsBtn->setVisible(season > 0);
+}
+
+// ─── F13 fix 2026-05-19: visibility-scoped progress refresh timer ────────────
+
+void StreamDetailView::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+        m_progressRefreshTimer->start();
+}
+
+void StreamDetailView::hideEvent(QHideEvent* event)
+{
+    if (m_progressRefreshTimer && m_progressRefreshTimer->isActive())
+        m_progressRefreshTimer->stop();
+    QWidget::hideEvent(event);
 }
 
 // ─── Library toggle (Phase 1 Batch 1.2) ─────────────────────────────────────
