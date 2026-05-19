@@ -23,6 +23,14 @@ struct AddTorrentConfig {
     QVector<int>   selectedIndices;   // file indices with priority > 0
     QMap<int, int> filePriorities;    // fileIndex → priority (0/1/6/7)
 
+    // F9 fix 2026-05-19: when a dispatch caller derives infoHash from a pre-
+    // filled indexer field (Torrentio etc.), resolveMetadata() is skipped and
+    // the magnet never reaches libtorrent. startDownload() now self-defends by
+    // calling addMagnet via this URI when the engine doesn't know the hash.
+    // Empty = engine MUST already have the torrent (e.g. set by an explicit
+    // resolveMetadata caller upstream); startDownload will warn+abort otherwise.
+    QString magnetUri;
+
     // TANKORENT_STREAM_INTEGRATION 2026-05-15: identity capture from show-first
     // picker flow. Empty when the dialog was invoked from non-show paths
     // (repurposed "Direct torrent search" or external callers).
