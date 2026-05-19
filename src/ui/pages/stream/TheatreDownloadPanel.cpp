@@ -25,6 +25,7 @@
 #include <QListWidgetItem>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSet>
 #include <QSignalBlocker>
@@ -73,6 +74,96 @@ QPushButton* makeFilterChip(const QString& text, bool isActive, QWidget* parent)
     return chip;
 }
 
+QStringList titleTokens(const QString& text)
+{
+    QString normalized = text.toLower();
+    normalized.replace(QRegularExpression(QStringLiteral("[^a-z0-9]+")),
+                       QStringLiteral(" "));
+    return normalized.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+}
+
+QString fileDisplayPath(const QJsonObject& file)
+{
+    const QString path = file.value(QStringLiteral("path")).toString();
+    return path.isEmpty() ? file.value(QStringLiteral("name")).toString() : path;
+}
+
+bool isPackBoundaryToken(const QString& token)
+{
+    static const QSet<QString> kBoundary = {
+        QStringLiteral("s01"), QStringLiteral("s02"), QStringLiteral("s03"),
+        QStringLiteral("s04"), QStringLiteral("s05"), QStringLiteral("s06"),
+        QStringLiteral("s07"), QStringLiteral("s08"), QStringLiteral("s09"),
+        QStringLiteral("s10"), QStringLiteral("season"), QStringLiteral("complete"),
+        QStringLiteral("full"), QStringLiteral("series"), QStringLiteral("1080p"),
+        QStringLiteral("720p"), QStringLiteral("2160p"), QStringLiteral("480p"),
+        QStringLiteral("web"), QStringLiteral("webdl"), QStringLiteral("webrip"),
+        QStringLiteral("bluray"), QStringLiteral("bdrip"), QStringLiteral("h264"),
+        QStringLiteral("h265"), QStringLiteral("x264"), QStringLiteral("x265"),
+        QStringLiteral("hevc"), QStringLiteral("dsnp"), QStringLiteral("amzn"),
+        QStringLiteral("nf")
+    };
+    if (kBoundary.contains(token))
+        return true;
+    static const QRegularExpression kSeasonToken(QStringLiteral("^s\\d{1,2}$"),
+                                                 QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kEpisodeToken(QStringLiteral("^e\\d{1,3}$"),
+                                                  QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kYearToken(QStringLiteral("^(19|20)\\d{2}$"));
+    return kSeasonToken.match(token).hasMatch()
+        || kEpisodeToken.match(token).hasMatch()
+        || kYearToken.match(token).hasMatch();
+}
+
+bool packTitleMatchesShowIdentity(const QString& packTitle,
+                                  const QString& showName,
+                                  const QString& showYear)
+{
+    const QStringList pack = titleTokens(packTitle);
+    const QStringList show = titleTokens(showName);
+    if (pack.isEmpty() || show.isEmpty())
+        return false;
+
+    QStringList identity = show;
+    int start = -1;
+    for (int i = 0; i <= pack.size() - identity.size(); ++i) {
+        bool match = true;
+        for (int j = 0; j < identity.size(); ++j) {
+            if (pack.at(i + j) != identity.at(j)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            start = i;
+            break;
+        }
+    }
+    if (start < 0 && show.size() > 1) {
+        identity = QStringList{show.last()};
+        for (int i = 0; i <= pack.size() - identity.size(); ++i) {
+            if (pack.at(i) == identity.first()) {
+                start = i;
+                break;
+            }
+        }
+    }
+    if (start < 0)
+        return false;
+
+    const int afterShow = start + identity.size();
+    const QString expectedYear = showYear.trimmed();
+    for (int i = afterShow; i < pack.size(); ++i) {
+        const QString token = pack.at(i);
+        if (isPackBoundaryToken(token))
+            return true;
+        if (!expectedYear.isEmpty() && token == expectedYear)
+            continue;
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 namespace tankoban::stream::theatre {
@@ -117,10 +208,12 @@ void TheatreDownloadPanel::setTorrentClient(TorrentClient* client) {
 
 void TheatreDownloadPanel::openFor(const QString& imdbId,
                                    const QString& showName,
+                                   const QString& showYear,
                                    int season,
                                    const QString& mediaType) {
     m_imdbId    = imdbId;
     m_showName  = showName;
+    m_showYear  = showYear;
     m_season    = season;
     m_mediaType = mediaType;
     m_packs.clear();
@@ -541,6 +634,20 @@ void TheatreDownloadPanel::onDownloadClicked() {
         return;
     if (!m_torrentClient) return;
 
+    QList<int> selectedEpisodes;
+    QSet<int> selectedSeasons;
+    for (auto it = m_tileChecked.constBegin(); it != m_tileChecked.constEnd(); ++it) {
+        if (!it.value())
+            continue;
+        const int season = static_cast<int>(it.key() >> 16);
+        const int episode = static_cast<int>(it.key() & 0xffff);
+        if (season > 0 && episode > 0) {
+            selectedSeasons.insert(season);
+            selectedEpisodes.append(episode);
+        }
+    }
+    std::sort(selectedEpisodes.begin(), selectedEpisodes.end());
+
     AddTorrentConfig config;
     config.category        = QStringLiteral("videos");
     config.destinationPath = m_torrentClient->defaultPaths().value("videos");
@@ -550,6 +657,7 @@ void TheatreDownloadPanel::onDownloadClicked() {
     config.startPaused     = false;
     config.imdbId          = m_imdbId;
     config.season          = m_season;
+    QMap<int, int> fileIndexByEpisode;
 
     // F1 fix (Codex audit 2026-05-16): movie mode has no detectedSeasons, so
     // the season-iteration loop below would write priority 0 to every file
@@ -571,7 +679,7 @@ void TheatreDownloadPanel::onDownloadClicked() {
             int bestIdx = -1;
             for (int idx = 0; idx < m_realFiles.size(); ++idx) {
                 const QJsonObject f = m_realFiles.at(idx).toObject();
-                const QString path = f.value("path").toString();
+                const QString path = fileDisplayPath(f);
                 const qint64 size = f.value("size").toVariant().toLongLong();
                 if (path.endsWith(QStringLiteral(".mkv"), Qt::CaseInsensitive)
                     || path.endsWith(QStringLiteral(".mp4"), Qt::CaseInsensitive)
@@ -646,13 +754,17 @@ void TheatreDownloadPanel::onDownloadClicked() {
     // and checked, set priority=4 (normal), else priority=0. Non-episode files
     // (samples, .nfo, extras) won't match any season and stay at priority 0.
     //
-    // Note: if m_realFiles is empty (metadata not yet arrived OR same-pack
-    // re-selection edge where libtorrent's metadata_received_alert is single-
-    // shot per handle), the for-loop iterates zero times and filePriorities
-    // stays empty. That's correct end-state for D4 - libtorrent will start the
-    // torrent and download all files by default. Metadata-driven filtering
-    // refinement is D5+ scope.
+    // F7 2026-05-19: do not dispatch a series pack until metadata has arrived.
+    // The host now creates a visible bulk-group record from the selected
+    // episode/file-index mapping before starting the direct Tankorent download;
+    // without real file indexes that group would be unbound and the old path
+    // would close the panel after a silent no-op-looking dispatch.
     {
+        if (m_realFiles.isEmpty()) {
+            if (m_scopeStatusLine)
+                m_scopeStatusLine->setText(tr("Loading pack metadata..."));
+            return;
+        }
         QMap<int, int> priorities;
         QVector<int> selectedIndices;
         for (int idx = 0; idx < m_realFiles.size(); ++idx) {
@@ -662,7 +774,7 @@ void TheatreDownloadPanel::onDownloadClicked() {
             int matchedEp = 0;
             int matchedIdx = 0;
             bool keepFile = false;
-            const auto seasons = m_scopeEstimate.detectedSeasons;
+            const auto seasons = selectedSeasons.values();
             for (int season : seasons) {
                 const bool ok = tankostream::stream::BulkPackVerifier::matchEpisodeFileForSeason(
                     file, season, &matchedEp, &matchedIdx);
@@ -671,11 +783,17 @@ void TheatreDownloadPanel::onDownloadClicked() {
                     if (m_tileChecked.value(key, false)) {
                         keepFile = true;
                         selectedIndices.append(idx);
+                        fileIndexByEpisode[matchedEp] = idx;
                     }
                     break;
                 }
             }
             priorities[idx] = keepFile ? 4 : 0;
+        }
+        if (selectedIndices.isEmpty()) {
+            if (m_scopeStatusLine)
+                m_scopeStatusLine->setText(tr("No selected episodes matched this pack."));
+            return;
         }
         config.filePriorities = priorities;
         config.selectedIndices = selectedIndices;
@@ -695,10 +813,9 @@ hash_resolution:
     }
 
     emit downloadRequested(m_imdbId, m_season,
-                           m_selectedPack.raw.magnetUri, hash, config);
-
-    // Reset + return to PackList state for further picking.
-    reset();
+                           m_selectedPack.raw.magnetUri, hash, config,
+                           selectedEpisodes, fileIndexByEpisode,
+                           m_selectedPack.raw.title);
 }
 
 void TheatreDownloadPanel::onFilterChipClicked() {
@@ -737,6 +854,14 @@ void TheatreDownloadPanel::rerenderPackList() {
     // score-descending sort.
     m_filteredPacks.clear();
     for (const auto& p : m_packs) {
+        // F6 2026-05-19: Tankorent pack search is title-query based, so a
+        // broad title like "Daredevil" can return a sequel/spinoff pack such
+        // as "Daredevil Born Again". Keep only rows whose release title
+        // reaches a season/quality boundary immediately after the requested
+        // show identity. Real metadata still owns episode counts below.
+        if (!packTitleMatchesShowIdentity(p.raw.title, m_showName, m_showYear))
+            continue;
+
         // Type filter: compare classification label against m_typeFilter.
         // "All" matches everything.
         if (m_typeFilter != QLatin1String("All")) {
@@ -870,20 +995,16 @@ void TheatreDownloadPanel::rerenderScopePicker() {
     for (const auto& ep : m_scopeEstimate.episodes)
         bySeason[ep.season].append(ep);
 
-    // F2 fix (Codex audit 2026-05-16): if title estimate yielded nothing AND
-    // real files are available, probe files for season tokens.
-    // I2/I3 fix (code-quality review 2026-05-16): the derived result (cached
-    // on m_pendingMetadataHash) also feeds the per-tile O(1) overlay lookup
-    // below via tileKeyToFileIndex.
+    // F6 2026-05-19: once real torrent metadata arrives, it owns the scope.
+    // Title estimates default unknown season packs to 10 episodes, which
+    // mislabels packs like Born Again S01 (9 real files) and any 13-episode
+    // season. The filename probe gives the actual torrent file count and
+    // tile list, so prefer it whenever it detects episodes.
     DerivedScope derivedForOverlay;
-    if (bySeason.isEmpty() && !m_realFiles.isEmpty()) {
+    if (!m_realFiles.isEmpty()) {
         derivedForOverlay = deriveScopeFromFiles();
-        bySeason = derivedForOverlay.episodesBySeason;
-    } else if (!m_realFiles.isEmpty()) {
-        // Title estimate produced bySeason; we still want the file-index map
-        // so addSeasonGroup can do O(1) overlay lookups. deriveScopeFromFiles
-        // is cache-keyed so this is one regex sweep total per pack.
-        derivedForOverlay = deriveScopeFromFiles();
+        if (!derivedForOverlay.episodesBySeason.isEmpty())
+            bySeason = derivedForOverlay.episodesBySeason;
     }
 
     // F2 fix: if STILL empty after the probe, render a fallback path.
@@ -959,7 +1080,7 @@ void TheatreDownloadPanel::rerenderScopePicker() {
                     const int fileIdx = derivedForOverlay.tileKeyToFileIndex.value(lookupKey);
                     if (fileIdx >= 0 && fileIdx < m_realFiles.size()) {
                         const QJsonObject f = m_realFiles.at(fileIdx).toObject();
-                        d.title = f.value("path").toString().section('/', -1);
+                        d.title = fileDisplayPath(f).section('/', -1).section('\\', -1);
                         d.sizeBytes = f.value("size").toVariant().toLongLong();
                     }
                 }
@@ -1021,7 +1142,7 @@ TheatreDownloadPanel::DerivedScope TheatreDownloadPanel::deriveScopeFromFiles() 
                     EpisodeEstimate est;
                     est.season = s;
                     est.episode = ep;
-                    est.title = f.value("path").toString().section('/', -1);  // basename
+                    est.title = fileDisplayPath(f).section('/', -1).section('\\', -1);  // basename
                     bySeason[s].append(est);
                     // I3 fix (code-quality review 2026-05-16): record the
                     // tile-key -> file-index mapping so addSeasonGroup can do

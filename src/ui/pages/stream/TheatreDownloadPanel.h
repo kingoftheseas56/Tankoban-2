@@ -52,7 +52,8 @@ public:
     // imdbId + showName + season identify the search; mediaType is "series"
     // or "movie" (drives the degenerate movie scope-picker mode).
     void openFor(const QString& imdbId, const QString& showName,
-                 int season, const QString& mediaType);
+                 const QString& showYear, int season,
+                 const QString& mediaType);
 
     // Called by StreamDetailView when the user dismisses the panel
     // (Cancel / back-nav / focus change). Resets internal state to empty.
@@ -64,7 +65,10 @@ signals:
     void downloadRequested(const QString& imdbId, int season,
                            const QString& magnetUri,
                            const QString& infoHash,
-                           const AddTorrentConfig& config);
+                           const AddTorrentConfig& config,
+                           const QList<int>& selectedEpisodes,
+                           const QMap<int, int>& fileIndexByEpisode,
+                           const QString& packTitle);
 
     // Emitted on Cancel or back-from-scope-picker. Panel itself transitions
     // internally; this is for the host (StreamDetailView) to maybe re-show
@@ -128,6 +132,7 @@ private:
     // Current search context.
     QString m_imdbId;
     QString m_showName;
+    QString m_showYear;
     int     m_season = 0;
     QString m_mediaType;
 

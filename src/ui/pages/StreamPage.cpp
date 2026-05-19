@@ -766,7 +766,9 @@ void StreamPage::buildUI()
                          const QString& mediaType) {
                 if (!m_theatreDownloadPanel)
                     return;
-                m_theatreDownloadPanel->openFor(imdbId, showName, season, mediaType);
+                const QString showYear = m_detailView ? m_detailView->currentYear() : QString();
+                m_theatreDownloadPanel->openFor(imdbId, showName, showYear,
+                                                season, mediaType);
                 if (m_detailSourcesPanel)
                     slideOutToRight(m_detailSourcesPanel);
                 slideInFromRight(m_theatreDownloadPanel);
@@ -797,14 +799,110 @@ void StreamPage::buildUI()
                              int season,
                              const QString& magnetUri,
                              const QString& infoHash,
-                             const AddTorrentConfig& config) {
-                    Q_UNUSED(imdbId);
-                    Q_UNUSED(season);
+                             const AddTorrentConfig& config,
+                             const QList<int>& selectedEpisodes,
+                             const QMap<int, int>& fileIndexByEpisode,
+                             const QString& packTitle) {
+                    using namespace tankostream::stream;
+
+                    if (!m_torrentClient || !m_bridge || !m_detailView
+                        || imdbId.isEmpty() || infoHash.isEmpty()) {
+                        return;
+                    }
+
+                    AddTorrentConfig dispatchConfig = config;
+                    dispatchConfig.streamGroupId.clear();
+                    dispatchConfig.imdbId = imdbId;
+                    dispatchConfig.season = season;
+
+                    if (season > 0 && !selectedEpisodes.isEmpty()) {
+                        const QStringList roots = m_bridge->rootFolders(QStringLiteral("videos"));
+                        if (roots.isEmpty() || roots.first().isEmpty())
+                            return;
+
+                        BulkPlanInput input;
+                        input.seriesId = imdbId;
+                        input.seriesTitle = m_detailView->currentTitle();
+                        if (input.seriesTitle.isEmpty())
+                            input.seriesTitle = imdbId;
+                        input.seriesYear = m_detailView->currentYear();
+                        input.seasonNumber = season;
+                        input.videosRootPath = roots.first();
+
+                        const QList<StreamEpisode> allEpisodes =
+                            m_detailView->episodesForSeason(season);
+                        QSet<int> selectedSet;
+                        for (int ep : selectedEpisodes)
+                            selectedSet.insert(ep);
+                        for (const StreamEpisode& episode : allEpisodes) {
+                            if (!selectedSet.contains(episode.episode))
+                                continue;
+                            BulkPlanEpisodeInput row;
+                            row.season = season;
+                            row.episode = episode.episode;
+                            row.title = episode.title;
+                            row.extensionHint = QStringLiteral("mkv");
+                            input.episodes.push_back(row);
+                        }
+                        if (input.episodes.isEmpty())
+                            return;
+
+                        const BulkPlanResult plan = buildBulkPlan(input, [](const QString& path) {
+                            return QFileInfo::exists(path);
+                        });
+                        QHash<QString, BulkPlanItem> planByKey;
+                        for (const BulkPlanItem& item : plan.items)
+                            planByKey.insert(item.itemKey, item);
+
+                        StreamBulkGroupRecord group;
+                        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                        group.groupId = QStringLiteral("stream:%1:s%2:%3")
+                            .arg(input.seriesId)
+                            .arg(input.seasonNumber, 2, 10, QChar('0'))
+                            .arg(now);
+                        group.groupKind = QStringLiteral("streamSeason");
+                        group.label = QStringLiteral("%1 - Season %2")
+                            .arg(input.seriesTitle)
+                            .arg(input.seasonNumber);
+                        group.sourceSeriesId = input.seriesId;
+                        group.sourceSeason = input.seasonNumber;
+                        group.destinationRoot = input.videosRootPath;
+                        group.createdAtMs = now;
+                        group.updatedAtMs = now;
+
+                        for (const BulkPlanEpisodeInput& episode : input.episodes) {
+                            const QString itemKey = makeItemKey(
+                                input.seriesId, input.seasonNumber, episode.episode);
+                            const BulkPlanItem planItem = planByKey.value(itemKey);
+                            if (planItem.itemKey.isEmpty())
+                                return;
+                            if (!fileIndexByEpisode.contains(episode.episode))
+                                return;
+
+                            StreamBulkGroupItem item;
+                            item.itemKey = planItem.itemKey;
+                            item.destinationKey = planItem.destinationKey;
+                            item.canonicalFilename = planItem.canonicalFilename;
+                            item.infoHash = infoHash;
+                            item.fileIndex = fileIndexByEpisode.value(episode.episode);
+                            item.itemState = StreamBulkItemState::Pending;
+                            group.items.push_back(item);
+                        }
+                        if (group.items.isEmpty())
+                            return;
+
+                        m_torrentClient->upsertStreamBulkGroup(group);
+                    }
+
                     Q_UNUSED(magnetUri);
-                    if (m_torrentClient && !infoHash.isEmpty())
-                        m_torrentClient->startDownload(infoHash, config);
-                    if (m_theatreDownloadPanel)
+                    Q_UNUSED(packTitle);
+                    m_torrentClient->startDownload(infoHash, dispatchConfig);
+                    if (m_detailView)
+                        m_detailView->autoAddToLibrary();
+                    if (m_theatreDownloadPanel) {
+                        m_theatreDownloadPanel->reset();
                         slideOutToRight(m_theatreDownloadPanel);
+                    }
                     if (m_detailSourcesPanel)
                         slideInFromRight(m_detailSourcesPanel);
                 });
