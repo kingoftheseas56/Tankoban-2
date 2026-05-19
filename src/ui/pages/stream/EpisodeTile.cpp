@@ -3,6 +3,8 @@
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPaintEvent>
+#include <QPainter>
 
 namespace tankoban::stream::theatre {
 
@@ -69,6 +71,152 @@ bool EpisodeTile::isChecked() const { return m_checkBox && m_checkBox->isChecked
 
 void EpisodeTile::setChecked(bool checked) {
     if (m_checkBox) m_checkBox->setChecked(checked);
+}
+
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — state-input setter. Stores the
+// new state and triggers a repaint; the actual paint logic for the chip +
+// progress strip + completion glyph lands in Task 13.
+void EpisodeTile::setEpisodeState(const EpisodeTileState& s) {
+    m_episodeState = s;
+    update();
+}
+
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — identity setter +
+// live-state wiring. setImdbId is idempotent; setStreamDownloadIndex performs
+// disconnect/reconnect of the entryStateChanged subscription and triggers an
+// immediate refreshFromIndex() so the chip reflects current state at attach.
+void EpisodeTile::setImdbId(const QString& imdbId) {
+    m_imdbId = imdbId;
+    if (m_streamDownloadIndex)
+        refreshFromIndex();
+}
+
+void EpisodeTile::setStreamDownloadIndex(StreamDownloadIndex* idx) {
+    if (m_streamDownloadIndex == idx) return;
+    if (m_streamDownloadIndex)
+        disconnect(m_streamDownloadIndex, nullptr, this, nullptr);
+    m_streamDownloadIndex = idx;
+    if (m_streamDownloadIndex) {
+        connect(m_streamDownloadIndex, &StreamDownloadIndex::entryStateChanged,
+                this,
+                [this](const QString& imdbId, int season, int episode) {
+                    if (imdbId == m_imdbId
+                        && season == m_data.season
+                        && episode == m_data.episode) {
+                        refreshFromIndex();
+                    }
+                },
+                Qt::QueuedConnection);
+        refreshFromIndex();
+    }
+}
+
+void EpisodeTile::refreshFromIndex() {
+    if (!m_streamDownloadIndex || m_imdbId.isEmpty()) {
+        if (m_hasIndexEntry) {
+            m_hasIndexEntry = false;
+            update();
+        }
+        return;
+    }
+    const auto entries = m_streamDownloadIndex->entriesForImdb(m_imdbId);
+    EpisodeTileState s;
+    bool found = false;
+    for (const auto& e : entries) {
+        if (e.season == m_data.season && e.episode == m_data.episode) {
+            s.state = e.state;
+            s.progressPct = e.progressPct;
+            if (e.sourceGroupId.startsWith(QStringLiteral("tankorent:")))
+                s.provenance = EpisodeTileState::Tankorent;
+            else if (e.sourceGroupId.isEmpty())
+                s.provenance = EpisodeTileState::LocalScan;
+            else
+                s.provenance = EpisodeTileState::AddonBulk;
+            found = true;
+            break;
+        }
+    }
+    if (found) {
+        m_hasIndexEntry = true;
+        setEpisodeState(s);  // also calls update()
+    } else if (m_hasIndexEntry) {
+        m_hasIndexEntry = false;
+        update();
+    }
+}
+
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — state-aware paint pass.
+// Renders the download-state chip on the right side of the tile + an optional
+// progress strip along the bottom edge for Downloading state. Defaults
+// (state=Complete + provenance=AddonBulk) render as a "Downloaded" chip;
+// the visible-regression-pre-Task-15 window is acceptable per plan §Task 17
+// smoke-checkpoint scope. Amber-tint based on provenance lands in Task 20
+// once tone is ratified; for now all provenances render identically.
+void EpisodeTile::paintEvent(QPaintEvent* event) {
+    QFrame::paintEvent(event);
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — only render the
+    // state chip when the tile has been bound to an index entry. Untracked
+    // tiles (no setStreamDownloadIndex+setImdbId attached, or no matching
+    // entry in the index) skip chip rendering to avoid a misleading default
+    // "Downloaded" chip.
+    if (!m_hasIndexEntry)
+        return;
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    // Right-anchored chip rect: 80x18 with 8px right margin, vertically centered.
+    constexpr int chipWidth   = 80;
+    constexpr int chipHeight  = 18;
+    constexpr int rightMargin = 8;
+    const QRect chipRect(width() - rightMargin - chipWidth,
+                         (height() - chipHeight) / 2,
+                         chipWidth, chipHeight);
+
+    QString chipText;
+    bool drawProgressStrip = false;
+    QColor chipBg(64, 64, 64, 220);  // default gray
+
+    switch (m_episodeState.state) {
+    case StreamDownloadIndex::Entry::Pending:
+        chipText = QStringLiteral("Queued");
+        break;
+    case StreamDownloadIndex::Entry::Downloading:
+        chipText = QStringLiteral("%1%").arg(m_episodeState.progressPct);
+        drawProgressStrip = true;
+        break;
+    case StreamDownloadIndex::Entry::Complete:
+        chipText = QStringLiteral("Downloaded");
+        // TODO Task 20 polish: add ✓ glyph in chip when amber-tone is ratified.
+        break;
+    case StreamDownloadIndex::Entry::Failed:
+        chipText = QStringLiteral("Failed");
+        chipBg = QColor(180, 60, 60, 220);  // muted red
+        break;
+    }
+
+    // Chip background (rounded corners).
+    painter.setBrush(chipBg);
+    painter.setPen(Qt::NoPen);
+    painter.drawRoundedRect(chipRect, 3, 3);
+
+    // Chip text — small bold white.
+    painter.setPen(QColor(255, 255, 255, 220));
+    QFont chipFont = painter.font();
+    chipFont.setPointSize(8);
+    chipFont.setBold(true);
+    painter.setFont(chipFont);
+    painter.drawText(chipRect, Qt::AlignCenter, chipText);
+
+    if (drawProgressStrip) {
+        constexpr int stripHeight = 2;
+        const int progressW =
+            (width() * m_episodeState.progressPct) / 100;
+        painter.fillRect(
+            QRect(0, height() - stripHeight, progressW, stripHeight),
+            palette().color(QPalette::Highlight));
+    }
 }
 
 }  // namespace tankoban::stream::theatre

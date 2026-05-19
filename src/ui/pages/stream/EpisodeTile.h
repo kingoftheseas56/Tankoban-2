@@ -7,8 +7,14 @@
 
 #include <QFrame>
 
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — state-input contract for the
+// download-source-aware episode tile. EpisodeTile reads state + progressPct
+// to render the chip; reads provenance to apply (or skip) the warm-amber tint.
+#include "core/stream/StreamDownloadIndex.h"
+
 class QCheckBox;
 class QLabel;
+class QPaintEvent;
 
 namespace tankoban::stream::theatre {
 
@@ -18,6 +24,18 @@ struct EpisodeTileData {
     QString title;
     qint64  sizeBytes = 0;
     bool    alreadyHave = false;
+};
+
+struct EpisodeTileState {
+    StreamDownloadIndex::Entry::State state =
+        StreamDownloadIndex::Entry::Complete;
+    int progressPct = 100;
+    enum Provenance {
+        AddonBulk = 0,   // sourced from Stremio addon download
+        Tankorent = 1,   // sourced from Tankorent pack
+        LocalScan = 2    // pre-existing file discovered by StreamRescueScanner
+    };
+    Provenance provenance = AddonBulk;
 };
 
 class EpisodeTile : public QFrame {
@@ -31,18 +49,39 @@ public:
     int season() const  { return m_data.season; }
     int episode() const { return m_data.episode; }
 
+    void setEpisodeState(const EpisodeTileState& s);
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — wire the tile to
+    // live StreamDownloadIndex state. After setStreamDownloadIndex(idx) the
+    // tile subscribes to entryStateChanged scoped on (m_imdbId, m_data.season,
+    // m_data.episode) and pulls its initial state from the index.
+    void setImdbId(const QString& imdbId);
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
+
 signals:
     void toggled(bool checked);
 
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
 private:
     void buildUI();
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — re-read live state
+    // from the index for this tile's (imdbId, season, episode). Called once
+    // on setStreamDownloadIndex(idx) and again on each entryStateChanged signal
+    // that scopes to this tile.
+    void refreshFromIndex();
 
-    EpisodeTileData m_data;
-    QCheckBox*      m_checkBox = nullptr;
-    QLabel*         m_seLabel  = nullptr;
-    QLabel*         m_titleLabel = nullptr;
-    QLabel*         m_sizeLabel  = nullptr;
-    QLabel*         m_haveBadge  = nullptr;
+    EpisodeTileData      m_data;
+    EpisodeTileState     m_episodeState;
+    bool                 m_hasIndexEntry = false;  // gates chip rendering
+    QString              m_imdbId;
+    StreamDownloadIndex* m_streamDownloadIndex = nullptr;
+    QCheckBox*           m_checkBox = nullptr;
+    QLabel*              m_seLabel  = nullptr;
+    QLabel*              m_titleLabel = nullptr;
+    QLabel*              m_sizeLabel  = nullptr;
+    QLabel*              m_haveBadge  = nullptr;
 };
 
 }  // namespace tankoban::stream::theatre
