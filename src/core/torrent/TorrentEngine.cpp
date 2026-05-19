@@ -1026,7 +1026,7 @@ QList<TorrentStatus> TorrentEngine::allStatuses() const
 bool TorrentEngine::hasTorrent(const QString& infoHash) const
 {
     QMutexLocker lock(&m_mutex);
-    return m_records.find(infoHash) != m_records.end();
+    return m_records.find(infoHash.toLower()) != m_records.end();
 }
 
 // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — metadata presence check.

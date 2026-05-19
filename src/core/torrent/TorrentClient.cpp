@@ -1560,8 +1560,7 @@ void TorrentClient::reconcileMovieRecordOrphans()
         if (!liveHashes.contains(it.key().toLower())) {
             rec[QStringLiteral("state")] = QStringLiteral("error");
             rec[QStringLiteral("errorMessage")] = QStringLiteral(
-                "Engine has no handle (resume data missing or never persisted). "
-                "Click Download again to re-dispatch.");
+                "Download didn't start — click Download again to retry.");
             it.value() = rec;
             demotedHashes.append(it.key().left(16));
             ++demoted;
