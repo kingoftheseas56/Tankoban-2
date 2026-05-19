@@ -1019,6 +1019,16 @@ QList<TorrentStatus> TorrentEngine::allStatuses() const
     return result;
 }
 
+// F9 fix 2026-05-19: cheap presence check, no libtorrent call required.
+// Returns true even when the handle is invalid — the bug we're guarding
+// against is "engine has no record at all," not "engine record exists but
+// handle stale."
+bool TorrentEngine::hasTorrent(const QString& infoHash) const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_records.find(infoHash) != m_records.end();
+}
+
 // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — metadata presence check.
 // Reads TorrentRecord::metadataReady which is set to true by the AlertWorker
 // on metadata_received_alert (line ~139 above). No libtorrent call needed —
@@ -1801,6 +1811,7 @@ void TorrentEngine::setSeedingRules(const QString&, float, int) {}
 void TorrentEngine::setGlobalSeedingRules(float, int) {}
 QList<TorrentStatus> TorrentEngine::allStatuses() const { return {}; }
 QJsonArray TorrentEngine::torrentFiles(const QString&) const { return {}; }
+bool TorrentEngine::hasTorrent(const QString&) const { return false; }
 bool TorrentEngine::hasMetadata(const QString&) const { return false; }
 QJsonArray TorrentEngine::torrentFileProgress(const QString&) const { return {}; }
 bool TorrentEngine::haveContiguousBytes(const QString&, int, qint64, qint64) const { return false; }

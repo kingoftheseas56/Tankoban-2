@@ -218,6 +218,11 @@ public:
 
     // Query (thread-safe snapshot)
     QList<TorrentStatus> allStatuses() const;
+    // F9 fix 2026-05-19: returns whether the engine has a record for this hash
+    // at all (handle valid OR invalid). Used by TorrentClient::startDownload to
+    // detect "magnet was never added" cases before writing a zombie record.
+    // Distinct from hasMetadata which gates on metadata_received_alert.
+    bool hasTorrent(const QString& infoHash) const;
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — returns true when libtorrent
     // has already received the metadata_received_alert for this infoHash (i.e.
     // TorrentRecord::metadataReady is set). Used by TorrentClient::startDownload
