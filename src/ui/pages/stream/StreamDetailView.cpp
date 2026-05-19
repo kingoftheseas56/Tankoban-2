@@ -1411,9 +1411,14 @@ void StreamDetailView::refreshEpisodeMarkers()
 }
 
 // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — shared chip render for the
-// season-row table's kColAction cell. Mirrors EpisodeTile's state-driven chip
-// contract so both surfaces converge on one look. Stage 1 of Phase 3 wiring —
-// Task 15 will subscribe this to StreamDownloadIndex::entryStateChanged.
+// season-row table's kColStatus item. Mirrors EpisodeTile's state-driven chip
+// contract so both surfaces converge on one look. PHASE3_CHIP_VISIBILITY_FIX
+// 2026-05-19 retarget: prior body looked for a QLabel in kColAction's
+// cellWidget but the cell contains an icon-only QPushButton (no QLabel child),
+// making the helper a silent no-op. kColStatus is the natural text surface
+// and is already driven by refreshEpisodeBulkProgress for addon-bulk rows.
+// Single-writer-per-row contract enforced here + in refreshEpisodeBulkProgress
+// (substrate owns rows the substrate tracks; bulk-cohort owns the rest).
 // Amber-tint application based on provenance lands in Task 20.
 void StreamDetailView::renderEpisodeStateChip(
     int row,
@@ -1426,8 +1431,9 @@ void StreamDetailView::renderEpisodeStateChip(
     if (row < 0 || row >= m_episodeTable->rowCount())
         return;
 
-    QWidget* chipWidget = m_episodeTable->cellWidget(row, kColAction);
-    QLabel* chipLabel = chipWidget ? chipWidget->findChild<QLabel*>() : nullptr;
+    QTableWidgetItem* statusItem = m_episodeTable->item(row, kColStatus);
+    if (!statusItem)
+        return;
 
     QString chipText;
     bool checkmark = false;
@@ -1447,11 +1453,9 @@ void StreamDetailView::renderEpisodeStateChip(
         break;
     }
 
-    if (chipLabel) {
-        chipLabel->setText(checkmark
-                           ? QStringLiteral("\xE2\x9C\x93 %1").arg(chipText)
-                           : chipText);
-    }
+    statusItem->setText(checkmark
+                        ? QStringLiteral("\xE2\x9C\x93 %1").arg(chipText)
+                        : chipText);
 }
 
 void StreamDetailView::refreshMovieLocalChip()
