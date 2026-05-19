@@ -1590,12 +1590,15 @@ void StreamDetailView::refreshMovieDownloadState()
     // Fall through: index says Complete or no entry. Snapshot path handles
     // the addon-bulk live-progress case.
     if (!snapshot.first.isEmpty()) {
-        const QString pctText = snapshot.second > 0
-            ? QStringLiteral(" %1%").arg(snapshot.second)
-            : QString();
-        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING%1").arg(pctText));
+        // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 F8 — always show a numeric
+        // percent (even 0%) instead of suppressing the suffix. A stuck
+        // download (e.g. high-seeder torrent that never attached) reads as
+        // 0% indefinitely; suppressing the number hides that fact. Showing
+        // "0%" surfaces the stuck state immediately to the user.
+        m_movieDownloadChip->setText(
+            QStringLiteral("DOWNLOADING %1%").arg(snapshot.second));
         m_movieDownloadChip->show();
-        m_movieDownloadBtn->setText(tr("Downloading%1").arg(pctText));
+        m_movieDownloadBtn->setText(tr("Downloading %1%").arg(snapshot.second));
         m_movieDownloadBtn->setEnabled(false);
         return;
     }
