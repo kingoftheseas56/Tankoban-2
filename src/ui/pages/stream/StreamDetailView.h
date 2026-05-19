@@ -23,10 +23,15 @@ class QTimer;
 #include "core/stream/addon/MetaItem.h"
 #include "StreamSourceChoice.h"
 
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — full include (not fwd-decl)
+// required because renderEpisodeStateChip uses StreamDownloadIndex::Entry::State
+// in its signature and EpisodeTileState::Provenance from the theatre tile.
+#include "core/stream/StreamDownloadIndex.h"
+#include "ui/pages/stream/EpisodeTile.h"
+
 class CoreBridge;
 class StreamLibrary;
 struct StreamLibraryEntry;
-class StreamDownloadIndex;
 class TorrentClient;
 
 namespace tankostream::stream {
@@ -256,6 +261,16 @@ private:
     // StreamDownloadIndex::entriesChanged so a bulk-completion lights up
     // the rows in place.
     void refreshEpisodeMarkers();
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — shared chip render for the
+    // season-row table's kColAction cell. Mirrors EpisodeTile's state-driven
+    // chip contract so both surfaces converge on one look. Provenance-driven
+    // amber-tint lands in Task 20 once tone is ratified.
+    void renderEpisodeStateChip(
+        int row,
+        StreamDownloadIndex::Entry::State state,
+        int progressPct,
+        tankoban::stream::theatre::EpisodeTileState::Provenance provenance);
     void refreshMovieLocalChip();
     void refreshMovieDownloadState();
     void updateProgressColumn();

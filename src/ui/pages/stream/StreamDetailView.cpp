@@ -1306,6 +1306,10 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
                    this, &StreamDetailView::refreshMovieLocalChip);
         disconnect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                    this, &StreamDetailView::refreshMovieDownloadState);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — tear down the
+        // entryStateChanged-driven season-row chip subscriber.
+        disconnect(m_downloadIndex, &StreamDownloadIndex::entryStateChanged,
+                   this, nullptr);
     }
     m_downloadIndex = idx;
     if (m_downloadIndex) {
@@ -1317,6 +1321,59 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
                 Qt::QueuedConnection);
         connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged,
                 this, &StreamDetailView::refreshMovieDownloadState,
+                Qt::QueuedConnection);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 15 — granular per-row
+        // re-render on entryStateChanged. Filters on current imdb + season,
+        // walks the table to find the matching row, then calls the shared
+        // renderEpisodeStateChip helper. Episode rows store the episode number
+        // at Qt::UserRole on the kColEpisode item (see populateEpisodeTable).
+        connect(m_downloadIndex, &StreamDownloadIndex::entryStateChanged,
+                this,
+                [this](const QString& imdbId, int season, int episode) {
+                    if (imdbId != m_currentImdb)
+                        return;
+                    if (season != currentSeason())
+                        return;
+                    if (!m_episodeTable)
+                        return;
+                    int row = -1;
+                    for (int r = 0; r < m_episodeTable->rowCount(); ++r) {
+                        auto* epItem = m_episodeTable->item(r, kColEpisode);
+                        if (epItem && epItem->data(Qt::UserRole).toInt() == episode) {
+                            row = r;
+                            break;
+                        }
+                    }
+                    if (row < 0)
+                        return;
+                    using ProvT = tankoban::stream::theatre::EpisodeTileState::Provenance;
+                    ProvT prov = ProvT::AddonBulk;
+                    int pct = 100;
+                    auto stateVal = StreamDownloadIndex::Entry::Complete;
+                    const auto entries = m_downloadIndex->entriesForImdb(imdbId);
+                    for (const auto& e : entries) {
+                        if (e.season == season && e.episode == episode) {
+                            stateVal = e.state;
+                            pct = e.progressPct;
+                            if (e.sourceGroupId.startsWith(QStringLiteral("tankorent:")))
+                                prov = ProvT::Tankorent;
+                            else if (e.sourceGroupId.isEmpty())
+                                prov = ProvT::LocalScan;
+                            break;
+                        }
+                    }
+                    renderEpisodeStateChip(row, stateVal, pct, prov);
+                },
+                Qt::QueuedConnection);
+        // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 16 — movie-side
+        // subscriber. entryStateChanged for (currentImdb, season=0, episode=0)
+        // re-runs the chip/button refresh against the Index's per-movie entry.
+        connect(m_downloadIndex, &StreamDownloadIndex::entryStateChanged,
+                this,
+                [this](const QString& imdbId, int season, int episode) {
+                    if (imdbId == m_currentImdb && season == 0 && episode == 0)
+                        refreshMovieDownloadState();
+                },
                 Qt::QueuedConnection);
         // Repaint immediately if the table already has rows from a prior
         // showEntry call (the wiring may land late-in-MainWindow ctor).
@@ -1353,6 +1410,50 @@ void StreamDetailView::refreshEpisodeMarkers()
     }
 }
 
+// TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — shared chip render for the
+// season-row table's kColAction cell. Mirrors EpisodeTile's state-driven chip
+// contract so both surfaces converge on one look. Stage 1 of Phase 3 wiring —
+// Task 15 will subscribe this to StreamDownloadIndex::entryStateChanged.
+// Amber-tint application based on provenance lands in Task 20.
+void StreamDetailView::renderEpisodeStateChip(
+    int row,
+    StreamDownloadIndex::Entry::State state,
+    int progressPct,
+    tankoban::stream::theatre::EpisodeTileState::Provenance /*provenance*/)
+{
+    if (!m_episodeTable)
+        return;
+    if (row < 0 || row >= m_episodeTable->rowCount())
+        return;
+
+    QWidget* chipWidget = m_episodeTable->cellWidget(row, kColAction);
+    QLabel* chipLabel = chipWidget ? chipWidget->findChild<QLabel*>() : nullptr;
+
+    QString chipText;
+    bool checkmark = false;
+    switch (state) {
+    case StreamDownloadIndex::Entry::Pending:
+        chipText = QStringLiteral("Queued");
+        break;
+    case StreamDownloadIndex::Entry::Downloading:
+        chipText = QStringLiteral("Downloading %1%").arg(progressPct);
+        break;
+    case StreamDownloadIndex::Entry::Complete:
+        chipText = QStringLiteral("Downloaded");
+        checkmark = true;
+        break;
+    case StreamDownloadIndex::Entry::Failed:
+        chipText = QStringLiteral("Failed");
+        break;
+    }
+
+    if (chipLabel) {
+        chipLabel->setText(checkmark
+                           ? QStringLiteral("\xE2\x9C\x93 %1").arg(chipText)
+                           : chipText);
+    }
+}
+
 void StreamDetailView::refreshMovieLocalChip()
 {
     if (!m_movieActionRow || !m_movieLocalChip)
@@ -1384,9 +1485,55 @@ void StreamDetailView::refreshMovieDownloadState()
         return;
     }
 
+    // Layer 1: existing addon-bulk snapshot (Codex Trigger D #5, 2026-05-18).
     const QPair<QString, int> snapshot = m_torrentClient
         ? m_torrentClient->streamMovieDownloadSnapshot(m_currentImdb)
         : QPair<QString, int>();
+
+    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 Task 16 — Layer 2: consult
+    // StreamDownloadIndex for the Tankorent-side movie entry. Index Pending/
+    // Downloading/Failed take precedence over snapshot for visible chip text;
+    // Index Complete falls through to snapshot if snapshot is active.
+    auto indexState = StreamDownloadIndex::Entry::Complete;
+    int indexPct = 100;
+    bool indexHasEntry = false;
+    if (m_downloadIndex) {
+        const auto entries = m_downloadIndex->entriesForImdb(m_currentImdb);
+        for (const auto& e : entries) {
+            if (e.type == QStringLiteral("movie")) {
+                indexState = e.state;
+                indexPct = e.progressPct;
+                indexHasEntry = true;
+                break;
+            }
+        }
+    }
+    // Provenance read for amber-tint application — deferred to Task 20.
+
+    if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Pending) {
+        m_movieDownloadChip->setText(QStringLiteral("QUEUED"));
+        m_movieDownloadChip->show();
+        m_movieDownloadBtn->setText(tr("Queued"));
+        m_movieDownloadBtn->setEnabled(false);
+        return;
+    }
+    if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Downloading) {
+        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADING %1%").arg(indexPct));
+        m_movieDownloadChip->show();
+        m_movieDownloadBtn->setText(tr("Downloading %1%").arg(indexPct));
+        m_movieDownloadBtn->setEnabled(false);
+        return;
+    }
+    if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Failed) {
+        m_movieDownloadChip->setText(QStringLiteral("FAILED"));
+        m_movieDownloadChip->show();
+        m_movieDownloadBtn->setText(tr("Retry"));
+        m_movieDownloadBtn->setEnabled(true);
+        return;
+    }
+
+    // Fall through: index says Complete or no entry. Snapshot path handles
+    // the addon-bulk live-progress case.
     if (!snapshot.first.isEmpty()) {
         const QString pctText = snapshot.second > 0
             ? QStringLiteral(" %1%").arg(snapshot.second)
@@ -1398,7 +1545,13 @@ void StreamDetailView::refreshMovieDownloadState()
         return;
     }
 
-    m_movieDownloadChip->hide();
+    // Index Complete + snapshot empty → explicit "DOWNLOADED" badge.
+    if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Complete) {
+        m_movieDownloadChip->setText(QStringLiteral("DOWNLOADED"));
+        m_movieDownloadChip->show();
+    } else {
+        m_movieDownloadChip->hide();
+    }
     m_movieDownloadBtn->setText(tr("Download"));
 
     bool hasMagnet = false;
