@@ -1678,6 +1678,18 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         return;
     }
 
+    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — cache substrate's per-episode
+    // ownership so we can skip rows the substrate has claimed. Single
+    // O(N entries) read; N is small for typical shows. Substrate writes
+    // those rows via renderEpisodeStateChip on entryStateChanged +
+    // refreshSubstrateStatesForActiveSeason initial paint.
+    QSet<QPair<int, int>> substrateOwnedKeys;  // (season, episode) pairs
+    if (m_downloadIndex) {
+        const auto entries = m_downloadIndex->entriesForImdb(m_currentImdb);
+        for (const auto& e : entries)
+            substrateOwnedKeys.insert(qMakePair(e.season, e.episode));
+    }
+
     bool anyActive = false;  // any non-terminal row → keep polling
     for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
         QTableWidgetItem* numItem = m_episodeTable->item(row, kColEpisode);
@@ -1685,6 +1697,17 @@ void StreamDetailView::refreshEpisodeBulkProgress()
         if (!numItem || !statusItem) continue;
         const int episode = numItem->data(Qt::UserRole).toInt();
         if (episode <= 0) continue;
+
+        // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — substrate owns this row's
+        // kColStatus if a StreamDownloadIndex entry exists for the
+        // (currentImdb, activeSeason, episode) triple. Skip the bulk-cohort
+        // write so the substrate text persists. The action-icon repaint
+        // below is preserved (kColAction's icon is a separate concern).
+        if (substrateOwnedKeys.contains(qMakePair(activeSeason, episode))) {
+            anyActive = true;  // poll-keep-alive: substrate may transition
+            repaintActionIconForRow(row, episode, activeSeason, snapshot);
+            continue;
+        }
 
         const auto it = snapshot.constFind(episode);
         if (it == snapshot.cend())
