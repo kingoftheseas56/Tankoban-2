@@ -2142,6 +2142,38 @@ QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
 
 void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfig& config)
 {
+    // F9 fix 2026-05-19: self-defense against callers that derived infoHash
+    // from an indexer's pre-filled field (Torrentio always pre-fills BTIH=
+    // parsed from magnet URIs) and never actually called resolveMetadata.
+    // Pre-fix symptom: m_records[infoHash] = rec succeeded + libtorrent had
+    // no handle + UI showed "DOWNLOADING 0%" forever. Three direct-download
+    // entry points all had the same gap (TheatreDownloadPanel slot,
+    // onDirectDownloadRequested, onTheatreTopSeededDownloadRequested) — fixed
+    // here in one place so the contract is self-defending regardless of caller.
+    if (!m_engine->hasTorrent(infoHash)) {
+        if (config.magnetUri.isEmpty()) {
+            qWarning() << "TorrentClient::startDownload: engine has no torrent for"
+                       << infoHash.left(16) << "and config.magnetUri is empty —"
+                       << "aborting without writing a zombie record."
+                       << "imdbId=" << config.imdbId << "season=" << config.season;
+            return;
+        }
+        const QString tempPath = m_bridge->dataDir() + "/torrent_cache/resolve_tmp";
+        const QString addedHash = m_engine->addMagnet(config.magnetUri, tempPath, /*paused=*/true);
+        if (addedHash.isEmpty()) {
+            qWarning() << "TorrentClient::startDownload: addMagnet failed for"
+                       << infoHash.left(16) << "— aborting without writing a zombie record.";
+            return;
+        }
+        if (addedHash.compare(infoHash, Qt::CaseInsensitive) != 0) {
+            qWarning() << "TorrentClient::startDownload: addMagnet returned hash"
+                       << addedHash.left(16) << "but caller expected"
+                       << infoHash.left(16) << "— aborting (hash mismatch could indicate"
+                       << "magnet/infoHash desync from indexer).";
+            return;
+        }
+    }
+
     // Apply file priorities
     if (!config.filePriorities.isEmpty()) {
         int maxIdx = 0;
