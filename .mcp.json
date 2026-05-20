@@ -7,10 +7,6 @@
     "codex": {
       "command": "C:\\Users\\Suprabha\\AppData\\Roaming\\npm\\codex.cmd",
       "args": ["mcp-server"]
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"]
     }
   }
 }
