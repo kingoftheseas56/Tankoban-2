@@ -11,6 +11,7 @@
 #include "ui/dialogs/AddTorrentDialog.h"  // for AddTorrentConfig
 
 #include <QRegularExpression>
+#include <QDate>    // Phase 4.5 — date-stamped legacy file .bak suffix
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -560,6 +561,37 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
             qWarning() << "[TorrentClient] Bridge dataDir unavailable; "
                           "skipping repository open + first-boot importer";
         }
+
+        // ── TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 — two-boot retention ──
+        //
+        // After Phase 1.6 migration completes (schema_meta has
+        // migration_completed_at), the legacy files on disk are kept around
+        // for two clean reboots so a user noticing a regression can roll
+        // back by reverting Tankoban and continuing from JSON state. On the
+        // SECOND boot post-migration (first_clean_boot_at stamped on the
+        // first boot's clean shutdown), rename the legacy files to
+        // .legacy-imported-YYYY-MM-DD.bak so they stop being read by the
+        // importer existence-check on the third boot. Renames not deletes
+        // — full manual rollback still possible until the user deletes the
+        // .bak files themselves.
+        if (!dataDir.isEmpty() && m_repo.isOpen()) {
+            const QString migration =
+                m_repo.metaValue(QStringLiteral("migration_completed_at"));
+            if (!migration.isEmpty()) {
+                const QString firstClean =
+                    m_repo.metaValue(QStringLiteral("legacy_first_clean_boot_at"));
+                const QString cleaned =
+                    m_repo.metaValue(QStringLiteral("legacy_files_cleaned_at"));
+                if (!firstClean.isEmpty() && cleaned.isEmpty()) {
+                    renameLegacyFilesToBak(dataDir);
+                    m_repo.setMetaValue(
+                        QStringLiteral("legacy_files_cleaned_at"),
+                        QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+                    qInfo() << "[TorrentClient] Phase 4.5: renamed legacy "
+                               "files to .bak (second boot post-migration)";
+                }
+            }
+        }
     }
 
     loadRecords();
@@ -671,6 +703,66 @@ TorrentClient::~TorrentClient()
 {
     m_engine->stop();
     saveRecords();
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 — stamp legacy_first_clean_boot_at
+    // on the first clean shutdown post-migration. Next boot's ctor sees this
+    // stamp + the empty legacy_files_cleaned_at and runs renameLegacyFilesToBak.
+    // The two-boot window gives the user a recovery surface between migration
+    // landing and the legacy files leaving the active dir.
+    if (m_repo.isOpen()) {
+        const QString migration =
+            m_repo.metaValue(QStringLiteral("migration_completed_at"));
+        const QString firstClean =
+            m_repo.metaValue(QStringLiteral("legacy_first_clean_boot_at"));
+        if (!migration.isEmpty() && firstClean.isEmpty()) {
+            m_repo.setMetaValue(
+                QStringLiteral("legacy_first_clean_boot_at"),
+                QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+        }
+    }
+}
+
+// TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 (2026-05-20) — rename helper.
+// Both top-level legacy JSON files AND the per-hash .fastresume cache get a
+// dated .bak suffix so the importer existence-check at next-boot doesn't
+// re-trigger. Renames not deletes — manual rollback still possible until the
+// user removes the .bak files. Defensive try-then-warn per file; one bad
+// rename doesn't abort the sweep.
+void TorrentClient::renameLegacyFilesToBak(const QString& dataDir)
+{
+    const QString suffix = QStringLiteral(".legacy-imported-")
+                           + QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))
+                           + QStringLiteral(".bak");
+
+    const QStringList topLevel = {
+        QStringLiteral("torrents.json"),
+        QStringLiteral("stream_bulk_groups.json"),
+        QStringLiteral("stream_downloads.json"),
+    };
+    for (const QString& name : topLevel) {
+        const QString src = QDir(dataDir).filePath(name);
+        if (!QFile::exists(src)) continue;
+        const QString dst = src + suffix;
+        if (!QFile::rename(src, dst)) {
+            qWarning() << "[TorrentClient] Phase 4.5: failed to rename"
+                       << src << "to" << dst;
+        }
+    }
+
+    const QString resumeDir = QDir(dataDir).filePath(QStringLiteral("torrent_cache/resume"));
+    QDir resume(resumeDir);
+    if (!resume.exists()) return;
+    const QStringList fastresumes =
+        resume.entryList({QStringLiteral("*.fastresume")}, QDir::Files);
+    for (const QString& f : fastresumes) {
+        const QString src = resume.filePath(f);
+        if (!QFile::rename(src, src + suffix)) {
+            qWarning() << "[TorrentClient] Phase 4.5: failed to rename"
+                       << src;
+        }
+    }
+    qInfo() << "[TorrentClient] Phase 4.5: legacy file rename swept"
+            << topLevel.size() << "top-level files +"
+            << fastresumes.size() << ".fastresume cache entries";
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────

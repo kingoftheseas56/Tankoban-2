@@ -329,6 +329,11 @@ private slots:
 private:
     void loadRecords();
     void saveRecords();
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 (2026-05-20) — rename legacy
+    // torrents.json / stream_bulk_groups.json / stream_downloads.json + every
+    // *.fastresume in torrent_cache/resume to a dated .bak suffix. Called from
+    // the ctor on the second clean boot post-migration. Renames not deletes.
+    void renameLegacyFilesToBak(const QString& dataDir);
     void loadStreamBulkGroups();
     void saveStreamBulkGroups();
     void reconcileStreamBulkGroups();
