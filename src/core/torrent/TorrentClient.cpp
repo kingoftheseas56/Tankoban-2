@@ -15,6 +15,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+
+#include <algorithm>  // P3.3 std::sort over StreamGroupRow vector by createdAt
 #include <QHash>
 #include <QJsonValue>
 #include <QSet>
@@ -1176,6 +1178,41 @@ QStringList TorrentClient::streamBulkGroupIdsForImdb(const QString& imdbId) cons
 QHash<int, QPair<QString, int>>
 TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season) const
 {
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.3 (2026-05-20) — third UI projection
+    // cutover. Stream season detail view's per-episode badge data (which
+    // renders the small "ep3 80%, ep4 paused, ep5 done" badges in the season
+    // table) now sources its (groupId, itemId, state, infoHash) rows from the
+    // SQLite repository's stream_groups + stream_group_items tables instead
+    // of the legacy m_streamBulkGroups JSON map.
+    //
+    // Contract preserved verbatim from the legacy walker:
+    //   - Returns episode_num -> (state, pct) keyed by episode.
+    //   - state is the cohort item state string ("Pending"/"Downloading"/
+    //     "Published"/...).
+    //   - pct semantics: Downloading -> engine progress in 0..100;
+    //     Pending -> 0; Published or Publishing -> 100; failed/cancelled
+    //     terminal -> -1 sentinel (UI renders as failure badge).
+    //   - Dedup: when multiple groups touch the same episode (re-issued
+    //     bulk), the LATEST group's entry wins. Legacy relied on
+    //     QJsonObject insertion order matching save chronology; we now
+    //     sort StreamGroupRow vector by createdAt ascending so the later-
+    //     created group overwrites the earlier one via QHash::insert,
+    //     reproducing the same semantic without depending on a SQL
+    //     ORDER BY clause in the repo API.
+    //   - Engine progress is sourced from listActive() (now also repo-
+    //     backed post-Phase 3.1), so the live runtime overlay path is
+    //     a single chain rooted at the repo.
+    //
+    // Episode number resolution defensive fallback:
+    //   The Phase 1 importer (parseStreamGroupItems) currently reads only
+    //   the "episode" JSON key when populating StreamGroupItemRow.episode.
+    //   Real legacy data wrote items with itemKey "<imdb>:S<NN>E<NN>" and
+    //   no clean "episode" field, so already-migrated rows can have
+    //   row.episode == 0. The fallback below parses the trailing E<NN>
+    //   off row.itemId, matching the exact regex the legacy code used.
+    //   Filed for cleanup as a follow-up commit to the importer; until
+    //   then this defensive parse keeps the post-cutover behaviour
+    //   identical for the existing data set.
     QHash<int, QPair<QString, int>> out;
     if (imdbId.isEmpty() || season <= 0)
         return out;
@@ -1188,29 +1225,25 @@ TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season
                               static_cast<int>(qBound(0.0f, info.progress, 1.0f) * 100.0f));
     }
 
-    const QString prefix = QStringLiteral("stream:") + imdbId + QLatin1Char(':');
-    for (auto groupIt = m_streamBulkGroups.constBegin();
-         groupIt != m_streamBulkGroups.constEnd(); ++groupIt) {
-        if (!groupIt.key().startsWith(prefix))
-            continue;
-        const QJsonObject group = groupIt.value().toObject();
-        const QJsonObject sourceIds = group.value("sourceIds").toObject();
-        if (sourceIds.value("season").toInt(-1) != season)
-            continue;
+    // Sort groups by createdAt ascending so QHash::insert overwrites the
+    // earlier group with the later one — reproducing the legacy save-
+    // chronology dedup semantic.
+    auto groups = m_repo.listStreamGroupsByImdbSeason(imdbId, season);
+    std::sort(groups.begin(), groups.end(),
+              [](const tankoban::torrent::StreamGroupRow& a,
+                 const tankoban::torrent::StreamGroupRow& b) {
+                  return a.createdAt < b.createdAt;
+              });
 
-        const QJsonArray items = group.value("items").toArray();
-        for (const auto& v : items) {
-            const QJsonObject item = v.toObject();
-            const QString itemKey = item.value("itemKey").toString();
-            // Parse "<imdb>:S<NN>E<NN>" — locate the trailing "E" after
-            // the "S<NN>" segment. Fallback to ":episode_num" field if
-            // present (defensive against schema drift).
-            int episodeNum = item.value("episode_num").toInt(0);
+    for (const auto& g : groups) {
+        const auto items = m_repo.listStreamGroupItems(g.groupId);
+        for (const auto& it : items) {
+            int episodeNum = it.episode;
             if (episodeNum <= 0) {
-                const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
+                const int eIdx = it.itemId.lastIndexOf(QLatin1Char('E'));
                 if (eIdx > 0) {
                     bool ok = false;
-                    const int parsed = itemKey.mid(eIdx + 1).toInt(&ok);
+                    const int parsed = it.itemId.mid(eIdx + 1).toInt(&ok);
                     if (ok)
                         episodeNum = parsed;
                 }
@@ -1218,11 +1251,10 @@ TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season
             if (episodeNum <= 0)
                 continue;
 
-            const QString state = item.value("itemState").toString();
+            const QString& state = it.state;
             int pct = -1;
             if (state == QLatin1String(kStateDownloading)) {
-                const QString hash = item.value("infoHash").toString().toLower();
-                pct = progressByHash.value(hash, 0);
+                pct = progressByHash.value(it.infoHash.toLower(), 0);
             } else if (state == QLatin1String(kStatePending)) {
                 pct = 0;
             } else if (state == QLatin1String(kStatePublished) ||
@@ -1230,9 +1262,6 @@ TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season
                 pct = 100;
             }  // failed states: pct = -1 sentinel
 
-            // If multiple groups touch the same episode (re-issued bulk),
-            // prefer the latest entry (overwrite) — group iteration order
-            // is QJsonObject insertion order which mirrors save chronology.
             out.insert(episodeNum, qMakePair(state, pct));
         }
     }
