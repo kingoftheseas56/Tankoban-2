@@ -1661,6 +1661,17 @@ void StreamDetailView::refreshMovieDownloadState()
     if (indexHasEntry && indexState == StreamDownloadIndex::Entry::Complete) {
         m_movieDownloadChip->setText(QStringLiteral("DOWNLOADED"));
         m_movieDownloadChip->show();
+    } else if (m_torrentClient
+               && m_torrentClient->streamMovieIsLegacyNoMagnet(m_currentImdb)) {
+        // TORRENT_PERSISTENCE_COLLAPSE Phase 4.2 (2026-05-20) — a movie row
+        // for this imdb survived the Phase 1.6 migration without a magnetUri
+        // (audit D10). Cannot be auto-resumed. Surface the recovery state
+        // via the chip; the existing Download button already creates a
+        // fresh download from m_lastChoices when the user clicks it, which
+        // is exactly the re-add semantics here. No button-handler change
+        // required.
+        m_movieDownloadChip->setText(QStringLiteral("NEEDS RE-ADD"));
+        m_movieDownloadChip->show();
     } else {
         m_movieDownloadChip->hide();
     }

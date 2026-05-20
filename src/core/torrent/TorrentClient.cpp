@@ -2726,6 +2726,25 @@ QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& im
     return qMakePair(bestState, bestPct);
 }
 
+bool TorrentClient::streamMovieIsLegacyNoMagnet(const QString& imdbId) const
+{
+    // Phase 4.2 — sibling query to streamMovieDownloadSnapshot. Same imdb /
+    // season=0 / empty-streamGroupId filter; returns true iff any matching
+    // row carries legacy_no_magnet=1. Cheap repo read; called once per
+    // refreshMovieDownloadState pass.
+    if (imdbId.isEmpty()) return false;
+    const auto rows = m_repo.listTorrentsByImdb(imdbId, 0);
+    for (const auto& row : rows) {
+        if (!row.streamGroupId.isEmpty()) continue;
+        if (row.state == tankoban::torrent::TorrentState::Removed
+            || row.state == tankoban::torrent::TorrentState::RemovePending) {
+            continue;
+        }
+        if (row.legacyNoMagnet) return true;
+    }
+    return false;
+}
+
 QList<TorrentInfo> TorrentClient::listActive() const
 {
     // TORRENT_PERSISTENCE_COLLAPSE Phase 3.1 (2026-05-20) — first UI projection

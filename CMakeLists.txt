@@ -203,6 +203,7 @@ set(SOURCES
     src/core/book/BookDownloader.cpp
     src/core/book/BooksCatalogueLibraryStore.cpp
     src/core/book/CatalogueRecord.cpp
+    src/core/book/OpenLibraryClient.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
@@ -389,6 +390,7 @@ set(HEADERS
     src/core/book/BookCatalogueResult.h
     src/core/book/BooksCatalogueLibraryStore.h
     src/core/book/CatalogueRecord.h
+    src/core/book/OpenLibraryClient.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -805,6 +807,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/book/test_books_catalogue_library_store.cpp
         src/core/book/CatalogueRecord.cpp
         src/core/book/BooksCatalogueLibraryStore.cpp
+        tests/core/book/test_open_library_client_parser.cpp
+        src/core/book/OpenLibraryClient.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
@@ -849,6 +853,7 @@ if(TANKOBAN_BUILD_TESTS)
     )
     target_compile_definitions(tankoban_tests PRIVATE
         TANKOBAN_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
+        TANKOBAN_TESTS_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
     )
     find_package(Qt6 REQUIRED COMPONENTS Test)
     target_link_libraries(tankoban_tests PRIVATE

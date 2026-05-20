@@ -150,6 +150,15 @@ public:
     // means no active movie download should be shown in the detail view.
     QPair<QString, int> streamMovieDownloadSnapshot(const QString& imdbId) const;
 
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.2 (2026-05-20) — true when at
+    // least one Theatre-style movie row (imdb match + season=0 + empty
+    // streamGroupId) was migrated from the legacy torrents.json without a
+    // magnetUri and so cannot be auto-resumed. StreamDetailView surfaces
+    // this via a "NEEDS RE-ADD" chip; the existing Download button already
+    // routes the re-add intent through m_lastChoices so no button-handler
+    // change is needed.
+    bool streamMovieIsLegacyNoMagnet(const QString& imdbId) const;
+
     // Control
     void pauseTorrent(const QString& infoHash);
     void resumeTorrent(const QString& infoHash);
