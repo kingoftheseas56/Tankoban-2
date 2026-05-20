@@ -1,0 +1,7 @@
+# Directory placeholder for Fandom Wiki Manifests.
+#
+# Curated per-series JSON manifests live here. v1 ships with ~15 of them
+# (Phase 8 of docs/superpowers/plans/2026-05-19-fandom-catalog-redesign.md).
+#
+# Schema: src/core/manga/fandom/WikiManifest.h
+# Spec: docs/superpowers/specs/2026-05-19-fandom-catalog-redesign-design.md §5
