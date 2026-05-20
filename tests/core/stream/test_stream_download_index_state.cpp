@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "core/JsonStore.h"
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/torrent/TorrentRepository.h"
 
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -16,13 +16,16 @@ protected:
     void SetUp() override
     {
         ASSERT_TRUE(m_tmpDir.isValid());
-        m_store = std::make_unique<JsonStore>(m_tmpDir.path());
-        m_index = std::make_unique<StreamDownloadIndex>(m_store.get());
+        // Phase 3.4 — StreamDownloadIndex now backed by TorrentRepository.
+        m_repo = std::make_unique<tankoban::torrent::TorrentRepository>();
+        ASSERT_TRUE(m_repo->open(m_tmpDir.path() + QStringLiteral("/torrents.db")));
+        m_index = std::make_unique<StreamDownloadIndex>();
+        m_index->setRepository(m_repo.get());
     }
 
-    QTemporaryDir                           m_tmpDir;
-    std::unique_ptr<JsonStore>              m_store;
-    std::unique_ptr<StreamDownloadIndex>    m_index;
+    QTemporaryDir                                              m_tmpDir;
+    std::unique_ptr<tankoban::torrent::TorrentRepository>      m_repo;
+    std::unique_ptr<StreamDownloadIndex>                       m_index;
 };
 
 }  // namespace

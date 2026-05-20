@@ -3,9 +3,14 @@
 // STREAM_DOWNLOADED_LIBRARY 2026-05-10 — persistent index of bulk-downloaded
 // episodes. Spec: docs/superpowers/specs/2026-05-10-stream-downloaded-library-design.md
 //
-// Owns three in-memory lookup maps derived from a single sibling JSON file
-// (<dataDir>/stream_downloads.json) keyed by canonicalKey (lowercased
-// native-form absolute path). Threadsafe — VideosScanner reads from a worker
+// TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — durable storage moved
+// from JsonStore (<dataDir>/stream_downloads.json) to the SQLite
+// TorrentRepository's stream_downloads_index table. The three in-memory
+// lookup maps (byPath / byEpisode / imdbHasAny) remain as the fast read path;
+// repository writes happen per-mutation. Phase 1.6 importer pre-populated
+// the table from the legacy file at first boot, so existing entries survive
+// the cutover. Phase 4 retires stream_downloads.json on disk after the two-
+// boot retention window. Threadsafe — VideosScanner reads from a worker
 // thread via mutex-guarded const APIs.
 
 #include <QHash>
@@ -16,7 +21,7 @@
 #include <QString>
 #include <optional>
 
-class JsonStore;
+namespace tankoban::torrent { class TorrentRepository; }
 
 class StreamDownloadIndex : public QObject
 {
@@ -31,14 +36,22 @@ public:
         QString canonicalPath; // display-form absolute path
         qint64  addedAt = 0;
         QString sourceGroupId; // empty for migration-rescued; non-empty for bulk-completion
-        qint64  fileSizeBytes = 0;
+        qint64  fileSizeBytes = 0;  // post-3.4: no repo home; defaults 0 on load (cosmetic only)
         // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — v2 schema fields.
         enum State { Complete = 0, Pending = 1, Downloading = 2, Failed = 3 };
         State   state = Complete;       // default Complete so v1 entries migrate cleanly
         int     progressPct = 100;      // 0-100; 100 == fully downloaded
     };
 
-    explicit StreamDownloadIndex(JsonStore* store, QObject* parent = nullptr);
+    explicit StreamDownloadIndex(QObject* parent = nullptr);
+
+    // Phase 3.4 — inject the durable backing store. Caller is MainWindow,
+    // after TorrentClient (which owns the repository) has been constructed.
+    // Triggers load() to rebuild the in-memory maps from the repo. Until
+    // this is called, the index is empty (reads return empty defaults);
+    // mutators between ctor and setRepository will fail silently with a
+    // qWarning. Non-owning pointer; lifetime exceeds the index.
+    void setRepository(tankoban::torrent::TorrentRepository* repo);
 
     // ── Thread safety contract ──────────────────────────────────────────────
     // All mutating methods (registerEpisode/registerMovie/registerPendingEpisode/
@@ -124,22 +137,17 @@ signals:
 
 private:
     void load();
-    void save();
 
     // Recompute m_imdbHasAny for a single imdbId after an entry was evicted.
     // MUST be called with m_mutex already held by the caller.
     void recomputeImdbHasAnyLocked(const QString& imdbId);
 
-    JsonStore* m_store;
+    tankoban::torrent::TorrentRepository* m_repo = nullptr;  // non-owning; set via setRepository
     mutable QMutex m_mutex;
 
-    // Three derived maps; all updated atomically under m_mutex.
+    // Three derived maps; all updated atomically under m_mutex. Rebuilt from
+    // repository contents on setRepository.
     QHash<QString, Entry>   m_byPath;       // canonicalKey -> Entry
     QHash<QString, QString> m_byEpisode;    // "imdb:NN:NN" -> canonicalKey
     QSet<QString>           m_imdbHasAny;   // imdb if at least one entry exists
-
-    static constexpr const char* FILENAME = "stream_downloads.json";
-    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — schema bump for Entry.state +
-    // progressPct. v1 entries on load get state=Complete + progressPct=100.
-    static constexpr int kSchemaVersion = 2;
 };

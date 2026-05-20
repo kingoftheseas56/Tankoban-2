@@ -122,7 +122,13 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     // downloading + published correctly to disk yet StreamDetailView
     // showed them as not-downloaded (no Status marker, click opened
     // sources panel instead of auto-playing local file).
-    m_streamDownloadIndex = new StreamDownloadIndex(&m_bridge->store(), this);
+    // Phase 3.4 (2026-05-20) — StreamDownloadIndex no longer owns a JsonStore.
+    // Constructed empty here; setRepository() is called below (after the
+    // TorrentClient that owns the SQLite repo exists) to inject the durable
+    // backing store and trigger the in-memory map rebuild. Reads between this
+    // line and that wire return empty defaults — every existing consumer of
+    // the index already tolerates that via the nullptr/empty-return guards.
+    m_streamDownloadIndex = new StreamDownloadIndex(this);
     DebugLogBuffer::instance().info(QStringLiteral("boot"),
         QStringLiteral("stream-download-index-created"));
 
@@ -756,6 +762,15 @@ void MainWindow::buildPageStack()
     // created above). Non-owning pointer; nullptr-tolerant on the receiver.
     if (m_streamDownloadIndex)
         torrentClient->setStreamDownloadIndex(m_streamDownloadIndex);
+
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — inject the SQLite
+    // repository the StreamDownloadIndex now reads from / writes through to.
+    // Triggers a one-time load() that rebuilds the in-memory byPath/byEpisode/
+    // imdbHasAny maps from the stream_downloads_index table populated by the
+    // Phase 1.6 first-boot importer (and kept in sync by the index's own
+    // per-mutation upserts going forward).
+    if (m_streamDownloadIndex)
+        m_streamDownloadIndex->setRepository(&torrentClient->repository());
 
     // Stream page — m_streamPage cache (STREAM_ADD_TO_TANKORENT 2026-05-06)
     // so we can wire the magnet-handoff signal without a qobject_cast walk.

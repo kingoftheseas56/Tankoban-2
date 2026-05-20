@@ -98,6 +98,14 @@ public:
 
     TorrentEngine* engine() const { return m_engine; }
 
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — exposes the
+    // SQLite-backed durable store so peers like StreamDownloadIndex can be
+    // wired to it post-construction. Non-const because the repo's read
+    // methods are non-const (QSqlQuery::prepare/exec aren't const-clean on
+    // QSqlDatabase). The reference is stable for the lifetime of the
+    // TorrentClient. Phase 4 may relocate this when m_records goes away.
+    tankoban::torrent::TorrentRepository& repository() { return m_repo; }
+
     // Add flow
     QString resolveMetadata(const QString& magnetUri);
     void    startDownload(const QString& infoHash, const AddTorrentConfig& config);
