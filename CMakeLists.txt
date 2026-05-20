@@ -143,6 +143,7 @@ set(SOURCES
     src/core/torrent/TorrentEngine.cpp
     src/core/torrent/TorrentClient.cpp
     src/core/torrent/TorrentRepository.cpp
+    src/core/torrent/LegacyImporter.cpp
     src/ui/dialogs/AddTorrentDialog.cpp
     src/ui/dialogs/AddFromUrlDialog.cpp
     src/ui/dialogs/StreamRescueProgressDialog.cpp
@@ -780,6 +781,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_torrent_repository_crud.cpp
         tests/core/torrent/test_torrent_repository_groups.cpp
         src/core/torrent/TorrentRepository.cpp
+        src/core/torrent/LegacyImporter.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
