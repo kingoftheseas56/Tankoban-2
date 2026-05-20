@@ -169,6 +169,7 @@ set(SOURCES
     src/core/manga/NyaaRuntimeSource.cpp
     src/core/manga/WeebCentralVolumePacker.cpp
     src/core/manga/ComicsPrePivotMigrator.cpp
+    src/core/manga/FallbackChainResolver.cpp
     src/core/manga/anilist/AniListClient.cpp
     src/core/manga/anilist/AniListCache.cpp
     src/core/manga/anilist/AniListVolumeMapper.cpp
