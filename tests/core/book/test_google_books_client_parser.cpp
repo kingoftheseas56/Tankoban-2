@@ -35,9 +35,42 @@ TEST(GoogleBooksClientParserTest, ParsesTwoBooks) {
     EXPECT_TRUE(r0.isbn.contains(QStringLiteral("9780765326355")));
     EXPECT_TRUE(r0.genres.contains(QStringLiteral("Fiction / Fantasy / Epic")));
     EXPECT_FALSE(r0.coverUrl.isEmpty());
+    // Google Books returns http:// URLs; parser rewrites to https:// for Qt6
+    // strict-protocol compatibility. This is the most behaviorally-load-bearing
+    // line in parseItem — assert it explicitly so a future regression that
+    // removes the rewrite fails the test instead of silently breaking covers.
+    EXPECT_TRUE(r0.coverUrl.startsWith(QStringLiteral("https://")));
     EXPECT_FALSE(r0.description.isEmpty());
 
     EXPECT_EQ(results[1].title, QStringLiteral("Words of Radiance"));
+}
+
+TEST(GoogleBooksClientParserTest, SmallThumbnailFallbackWhenThumbnailMissing) {
+    // imageLinks has smallThumbnail but no thumbnail — parser falls back +
+    // applies the HTTP→HTTPS rewrite to the smallThumbnail URL.
+    QByteArray bytes = R"({
+        "kind":"books#volumes","totalItems":1,
+        "items":[{"id":"a","volumeInfo":{"title":"T",
+          "imageLinks":{"smallThumbnail":"http://books.google.com/small.jpg"}}}]
+    })";
+    auto results = GoogleBooksClient::parseVolumesResponse(bytes);
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results[0].coverUrl,
+              QStringLiteral("https://books.google.com/small.jpg"));
+}
+
+TEST(GoogleBooksClientParserTest, EmptyIdSkipsItem) {
+    // parseVolumesResponse skips items with empty id even if volumeInfo present.
+    QByteArray bytes = R"({
+        "kind":"books#volumes","totalItems":2,
+        "items":[
+            {"id":"","volumeInfo":{"title":"Skipped"}},
+            {"id":"keep","volumeInfo":{"title":"Kept"}}
+        ]
+    })";
+    auto results = GoogleBooksClient::parseVolumesResponse(bytes);
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results[0].title, QStringLiteral("Kept"));
 }
 
 TEST(GoogleBooksClientParserTest, MultipleAuthorsJoinWithAmpersand) {
