@@ -1,0 +1,25 @@
+{
+  "seriesId": "kingdom",
+  "wikidataQid": "Q1741396",
+  "fandomWikiId": "kingdom",
+  "volumePagePath": "/wiki/Volumes_and_Chapters",
+  "pageModel": "hierarchy",
+  "extractorType": "infobox",
+  "chapterKeyword": "Chapter",
+  "groupingSemantics": "mathematical-buckets",
+  "editionFilters": [],
+  "unitHierarchy": ["chapter", "volume"],
+  "expectedFields": {
+    "titleEnglish": "absent",
+    "titleJapanese": "absent",
+    "isbnJp": "expected",
+    "isbnEn": "absent",
+    "coverUrlJapanese": "required",
+    "synopsis": "expected"
+  },
+  "paginationModel": "range-pages",
+  "pagePathPattern": "/wiki/Volumes_and_Chapters/Volume_%1-%2",
+  "pageRangeSize": 10,
+  "maxVolumeProbe": 80,
+  "notes": "Hierarchy model. Each volume lives at /wiki/Vol.<N> with a <aside class='portable-infobox'> block carrying Release Date + ISBN + cover. <h2 Synopsis> body sometimes empty (Vol.73 — slot-exists-but-empty case) sometimes populated (Vol.74 onward). Cover URL stored at cdn subdomain 'kingdom-anime', distinct from fandomWikiId 'kingdom'."
+}
