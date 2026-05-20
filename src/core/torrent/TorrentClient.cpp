@@ -2621,6 +2621,25 @@ float TorrentClient::downloadProgress(const QString& folderPath) const
 // ── Query ───────────────────────────────────────────────────────────────────
 QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& imdbId) const
 {
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.2 (2026-05-20) — second UI projection
+    // cutover. Stream detail view's movie download chip reads its source-of-
+    // truth from the SQLite repository (Phase 1 importer pre-populated; Phase 2
+    // mirroring keeps in sync) and overlays live engine status on top, picking
+    // the most-recently-added active candidate.
+    //
+    // The contract this preserves verbatim from the legacy m_records merge:
+    //   - imdb match + season=0 + streamGroupId empty -> "this is a direct
+    //     Theatre movie download row, not a bulk-cohort row"
+    //   - Engine status (when handle present) is authoritative for stateString
+    //     and progress; otherwise repo state + 1.0/0.0 progress fallback.
+    //   - Terminal-success / error states (completed / seeding / error) are
+    //     filtered out — the chip only shows in-progress activity.
+    //   - Max-addedAt wins among multiple candidates so a re-add supersedes a
+    //     stale earlier row.
+    //
+    // listTorrentsByImdb already applies the (imdb_id == :imdb AND season == :s)
+    // SQL filter, so this loop only does the cross-row predicates that don't
+    // belong in the query API.
     if (imdbId.isEmpty())
         return {};
 
@@ -2632,20 +2651,22 @@ QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& im
     int bestPct = 0;
     qint64 bestAddedAt = -1;
 
-    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
-        const QString hash = it.key();
-        const QJsonObject rec = it.value().toObject();
-        if (rec.value(QStringLiteral("imdbId")).toString() != imdbId)
+    const auto rows = m_repo.listTorrentsByImdb(imdbId, 0);
+    for (const auto& row : rows) {
+        if (!row.streamGroupId.isEmpty())
             continue;
-        if (rec.value(QStringLiteral("season")).toInt(-1) != 0)
+        if (row.state == tankoban::torrent::TorrentState::Removed
+            || row.state == tankoban::torrent::TorrentState::RemovePending) {
             continue;
-        if (!rec.value(QStringLiteral("streamGroupId")).toString().isEmpty())
-            continue;
+        }
 
-        QString state = rec.value(QStringLiteral("state")).toString();
-        float progress = state == QLatin1String("completed") ? 1.0f : 0.0f;
-        if (statusMap.contains(hash)) {
-            const TorrentStatus& st = statusMap.value(hash);
+        QString state = tankoban::torrent::torrentStateToString(row.state);
+        float progress = (row.state == tankoban::torrent::TorrentState::Completed)
+                             ? 1.0f
+                             : 0.0f;
+        const auto stIt = statusMap.constFind(row.hash);
+        if (stIt != statusMap.constEnd()) {
+            const TorrentStatus& st = stIt.value();
             state = st.stateString;
             progress = st.progress;
         }
@@ -2657,7 +2678,8 @@ QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& im
             continue;
         }
 
-        const qint64 addedAt = rec.value(QStringLiteral("addedAt")).toVariant().toLongLong();
+        const qint64 addedAt =
+            row.addedAt.isValid() ? row.addedAt.toMSecsSinceEpoch() : 0;
         if (addedAt < bestAddedAt)
             continue;
 
