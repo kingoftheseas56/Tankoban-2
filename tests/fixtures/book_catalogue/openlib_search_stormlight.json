@@ -1,0 +1,45 @@
+{
+  "numFound": 3,
+  "start": 0,
+  "docs": [
+    {
+      "key": "/works/OL14868682W",
+      "title": "The Way of Kings",
+      "author_name": ["Brandon Sanderson"],
+      "author_key": ["OL34184A"],
+      "first_publish_year": 2010,
+      "isbn": ["9780765326355", "076532635X"],
+      "subject": ["Epic fantasy", "High fantasy", "Magic systems", "Cosmere"],
+      "cover_i": 6979861,
+      "publisher": ["Tor Books"],
+      "language": ["eng"],
+      "number_of_pages_median": 1007
+    },
+    {
+      "key": "/works/OL15843427W",
+      "title": "Words of Radiance",
+      "author_name": ["Brandon Sanderson"],
+      "author_key": ["OL34184A"],
+      "first_publish_year": 2014,
+      "isbn": ["9780765326362"],
+      "subject": ["Epic fantasy", "High fantasy", "Cosmere"],
+      "cover_i": 7898123,
+      "publisher": ["Tor Books"],
+      "language": ["eng"],
+      "number_of_pages_median": 1087
+    },
+    {
+      "key": "/works/OL17893215W",
+      "title": "Oathbringer",
+      "author_name": ["Brandon Sanderson"],
+      "author_key": ["OL34184A"],
+      "first_publish_year": 2017,
+      "isbn": ["9780765326379"],
+      "subject": ["Epic fantasy", "High fantasy", "Cosmere"],
+      "cover_i": 8123456,
+      "publisher": ["Tor Books"],
+      "language": ["eng"],
+      "number_of_pages_median": 1248
+    }
+  ]
+}

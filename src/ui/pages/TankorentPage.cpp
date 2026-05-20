@@ -2392,6 +2392,43 @@ void TankorentPage::refreshTransfers()
         stateItem->setText(childRow ? streamBulkItemStatusText(childItem, &t) : torrentStatusText(t));
         stateItem->setTextAlignment(Qt::AlignCenter | Qt::AlignVCenter);
 
+        // TORRENT_PERSISTENCE_COLLAPSE Phase 4.1 (2026-05-20) — legacy rows
+        // imported from torrents.json without a magnetUri (per audit D10)
+        // can't be resumed automatically. Replace the Status cell with a
+        // click-to-re-add button that switches the Tankorent tab to Search
+        // and pre-fills the row's name. Stream-side bulk rows are excluded
+        // (they have their own group-level recovery via the cohort restart
+        // action; they don't carry the legacyNoMagnet flag in practice
+        // because bulk rows always shipped with magnetUri).
+        if (!childRow && t.legacyNoMagnet) {
+            const QString rowName = t.name.isEmpty() ? t.infoHash.left(8) : t.name;
+            auto* btn = new QPushButton(tr("Needs re-add"), m_transfersTable);
+            btn->setObjectName(QStringLiteral("LegacyReAddButton"));
+            btn->setToolTip(tr(
+                "This download was migrated from a previous Tankoban version "
+                "without a magnet link. Click to switch to Search and look "
+                "it up again."));
+            btn->setCursor(Qt::PointingHandCursor);
+            btn->setStyleSheet(QStringLiteral(
+                "QPushButton#LegacyReAddButton {"
+                "  color: #ffffff; background: #d97706;"
+                "  border: 0; border-radius: 4px; padding: 2px 10px;"
+                "  font-weight: 600;"
+                "} QPushButton#LegacyReAddButton:hover { background: #f59e0b; }"));
+            connect(btn, &QPushButton::clicked, this, [this, rowName]() {
+                if (m_tabWidget) m_tabWidget->setCurrentIndex(0);  // Search tab
+                if (m_queryEdit) m_queryEdit->setText(rowName);
+                startSearch();
+            });
+            m_transfersTable->setCellWidget(row, 3, btn);
+        } else {
+            // Defensive: in case a prior row at this index had a cellWidget,
+            // clear it so the icon + text from the QTableWidgetItem above
+            // actually paints.
+            if (m_transfersTable->cellWidget(row, 3))
+                m_transfersTable->removeCellWidget(row, 3);
+        }
+
         auto* seedItem = ensureItem(row, 4);
         seedItem->setText(QString::number(t.seeds));
         seedItem->setData(Qt::UserRole, t.seeds);

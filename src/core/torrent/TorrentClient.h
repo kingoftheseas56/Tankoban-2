@@ -45,6 +45,12 @@ struct TorrentInfo {
     int     dlLimit        = 0;   // 0 = unlimited, else bytes/s
     int     ulLimit        = 0;
     QString errorMessage;
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.1 (2026-05-20) — true when the
+    // row was imported from a legacy torrents.json that had no magnetUri
+    // field (every pre-Phase-0 row matches that shape per audit Part C +
+    // D10). The Tankorent transfers row uses this to surface a "Needs re-add"
+    // recovery button; Stream detail view uses it on its movie row variant.
+    bool legacyNoMagnet = false;
 };
 
 enum class StreamBulkItemState {

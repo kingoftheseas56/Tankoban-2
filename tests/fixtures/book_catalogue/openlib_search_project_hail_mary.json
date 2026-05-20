@@ -1,0 +1,19 @@
+{
+  "numFound": 1,
+  "start": 0,
+  "docs": [
+    {
+      "key": "/works/OL27448W",
+      "title": "Project Hail Mary",
+      "author_name": ["Andy Weir"],
+      "author_key": ["OL7173552A"],
+      "first_publish_year": 2021,
+      "isbn": ["9780593135204", "0593135202"],
+      "subject": ["Hard science fiction", "First contact", "Space opera"],
+      "cover_i": 10458823,
+      "publisher": ["Ballantine Books"],
+      "language": ["eng"],
+      "number_of_pages_median": 480
+    }
+  ]
+}
