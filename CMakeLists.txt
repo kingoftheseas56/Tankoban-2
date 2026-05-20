@@ -183,6 +183,7 @@ set(SOURCES
     src/core/manga/fandom/WikiManifest.cpp
     src/core/manga/fandom/WikiManifestRegistry.cpp
     src/core/manga/fandom/FandomClient.cpp
+    src/core/manga/wikidata/WikidataClient.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
