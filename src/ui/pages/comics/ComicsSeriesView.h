@@ -22,6 +22,7 @@
 
 #include "ComicsSourcesPanel.h"
 #include "core/manga/anilist/AniListTypes.h"
+#include "core/manga/fandom/FandomTypes.h"
 #include "core/manga/MangaResult.h"
 
 class MangaSourceRegistry;
@@ -116,6 +117,17 @@ public slots:
     void setVolumeDownloadState(int volumeNumber, const QString& cbzPath,
                                 bool downloaded);
     void setVolumeStatusText(int volumeNumber, const QString& statusText);
+
+    // Fandom catalog redesign Task 18 (Phase 7, 2026-05-20). Render volume
+    // rows from a FandomCatalog produced by FallbackChainResolver. Mirrors
+    // populateVolumeRows(QList<anilist::VolumeRow>) shape for the cellWidget
+    // layout (checkbox / index / thumb / title / progress / status), but
+    // consumes FandomCatalog fields directly and surfaces richer per-volume
+    // content per Codex review-and-expand pass on 2026-05-19 (primary title
+    // + range+grouping subtitle + dates/ISBN microline + synopsis snippet).
+    // Wired into ComicsPage in Task 19 via FallbackChainResolver::resolved.
+    void populateVolumeRowsFromFandom(
+        const tankoban::manga::fandom::FandomCatalog& catalog);
 
 signals:
     // Fired when user clicks Download on a volume row OR clicks a downloaded
