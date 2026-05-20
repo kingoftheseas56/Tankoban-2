@@ -775,6 +775,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
         tests/core/torrent/test_torrent_repository_schema.cpp
+        tests/core/torrent/test_torrent_repository_downloads.cpp
         src/core/torrent/TorrentRepository.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp

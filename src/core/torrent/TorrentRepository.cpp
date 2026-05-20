@@ -251,12 +251,121 @@ bool TorrentRepository::removeStreamGroupItem(const QString&, const QString&) { 
 std::vector<StreamGroupItemRow> TorrentRepository::listStreamGroupItems(const QString&) { return {}; }
 
 // ─── stream_downloads_index CRUD ─────────────────────────────────────────────
-// Implementation in P0.7.
 
-bool TorrentRepository::upsertStreamDownload(const StreamDownloadRow&) { return false; }
-bool TorrentRepository::removeStreamDownload(const QString&) { return false; }
-std::optional<StreamDownloadRow> TorrentRepository::getStreamDownload(const QString&) { return std::nullopt; }
-std::vector<StreamDownloadRow> TorrentRepository::listStreamDownloads() { return {}; }
-std::vector<StreamDownloadRow> TorrentRepository::listStreamDownloadsByImdb(const QString&, int) { return {}; }
+namespace {
+
+// TU-local projection from an executed SELECT against stream_downloads_index.
+// Column order must match kStreamDownloadSelectCols below to keep get / list
+// paths in lockstep.
+static StreamDownloadRow streamDownloadFromQuery(QSqlQuery& q) {
+    StreamDownloadRow r;
+    r.canonicalPath = q.value(0).toString();
+    r.imdbId        = q.value(1).toString();
+    r.season        = q.value(2).toInt();
+    r.episode       = q.value(3).toInt();
+    r.state         = q.value(4).toString();
+    r.infoHash      = q.value(5).toString();
+    r.addedAt       = QDateTime::fromString(q.value(6).toString(), Qt::ISODate);
+    return r;
+}
+
+static const char* kStreamDownloadSelectCols =
+    "canonical_path, imdb_id, season, episode, state, info_hash, added_at";
+
+}  // namespace
+
+bool TorrentRepository::upsertStreamDownload(const StreamDownloadRow& row) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(R"SQL(
+        INSERT INTO stream_downloads_index (
+            canonical_path, imdb_id, season, episode, state, info_hash, added_at
+        ) VALUES (
+            :canonical_path, :imdb_id, :season, :episode, :state, :info_hash, :added_at
+        )
+        ON CONFLICT(canonical_path) DO UPDATE SET
+            imdb_id = excluded.imdb_id,
+            season = excluded.season,
+            episode = excluded.episode,
+            state = excluded.state,
+            info_hash = excluded.info_hash,
+            added_at = excluded.added_at
+    )SQL"));
+    q.bindValue(QStringLiteral(":canonical_path"), row.canonicalPath);
+    q.bindValue(QStringLiteral(":imdb_id"), row.imdbId);
+    q.bindValue(QStringLiteral(":season"), row.season);
+    q.bindValue(QStringLiteral(":episode"), row.episode);
+    q.bindValue(QStringLiteral(":state"), row.state);
+    // Bind SQL NULL (not '') when infoHash is empty so the FK constraint stays
+    // satisfied and the ON DELETE SET NULL action has a target to overwrite.
+    if (row.infoHash.isEmpty()) {
+        q.bindValue(QStringLiteral(":info_hash"), QVariant());
+    } else {
+        q.bindValue(QStringLiteral(":info_hash"), row.infoHash.toLower());
+    }
+    q.bindValue(QStringLiteral(":added_at"), row.addedAt.toString(Qt::ISODate));
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] upsertStreamDownload failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::removeStreamDownload(const QString& canonicalPath) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "DELETE FROM stream_downloads_index WHERE canonical_path = :cp"));
+    q.bindValue(QStringLiteral(":cp"), canonicalPath);
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] removeStreamDownload failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+std::optional<StreamDownloadRow> TorrentRepository::getStreamDownload(const QString& canonicalPath) {
+    if (!m_open) return std::nullopt;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+                  "SELECT %1 FROM stream_downloads_index WHERE canonical_path = :cp")
+                  .arg(QString::fromUtf8(kStreamDownloadSelectCols)));
+    q.bindValue(QStringLiteral(":cp"), canonicalPath);
+    if (!q.exec() || !q.next()) return std::nullopt;
+    return streamDownloadFromQuery(q);
+}
+
+std::vector<StreamDownloadRow> TorrentRepository::listStreamDownloads() {
+    std::vector<StreamDownloadRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("SELECT %1 FROM stream_downloads_index")
+                    .arg(QString::fromUtf8(kStreamDownloadSelectCols)))) {
+        qWarning() << "[TorrentRepository] listStreamDownloads failed:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(streamDownloadFromQuery(q));
+    return out;
+}
+
+std::vector<StreamDownloadRow> TorrentRepository::listStreamDownloadsByImdb(const QString& imdbId,
+                                                                            int season) {
+    std::vector<StreamDownloadRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+                  "SELECT %1 FROM stream_downloads_index "
+                  "WHERE imdb_id = :imdb AND season = :season")
+                  .arg(QString::fromUtf8(kStreamDownloadSelectCols)));
+    q.bindValue(QStringLiteral(":imdb"), imdbId);
+    q.bindValue(QStringLiteral(":season"), season);
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] listStreamDownloadsByImdb failed:"
+                   << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(streamDownloadFromQuery(q));
+    return out;
+}
 
 } // namespace tankoban::torrent
