@@ -421,6 +421,11 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                 }
             },
             Qt::QueuedConnection);
+    connect(m_engine, &TorrentEngine::resumeDataAvailable,
+            this, [this](const QString& infoHash, const QByteArray& blob) {
+                m_repo.updateTorrentResumeData(infoHash.toLower(), blob);
+            },
+            Qt::QueuedConnection);
     connect(m_engine, &TorrentEngine::torrentFinished,
             this, &TorrentClient::onTorrentFinished);
     connect(m_engine, &TorrentEngine::torrentError,

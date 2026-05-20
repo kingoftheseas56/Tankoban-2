@@ -173,6 +173,8 @@ private:
                 auto path = m_engine->m_cacheDir + "/resume/" + hash + ".fastresume";
                 try {
                     auto buf = lt::write_resume_data_buf(srd->params);
+                    QByteArray blob(buf.data(), static_cast<int>(buf.size()));
+                    emit m_engine->resumeDataAvailable(hash, blob);
                     std::ofstream ofs(path.toStdString(), std::ios::binary | std::ios::trunc);
                     ofs.write(buf.data(), static_cast<std::streamsize>(buf.size()));
                 } catch (const std::exception& e) {

@@ -343,6 +343,7 @@ signals:
     void torrentError(const QString& infoHash, const QString& message);
     void torrentAddedConfirmed(const QString& infoHash);
     void torrentAddFailed(const QString& infoHash, const QString& errorMessage);
+    void resumeDataAvailable(const QString& infoHash, const QByteArray& blob);
 
     // Emitted when libtorrent finishes relocating a torrent's storage. Fired
     // from the AlertWorker thread on storage_moved_alert / storage_moved_failed_alert
