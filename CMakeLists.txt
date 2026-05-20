@@ -179,6 +179,7 @@ set(SOURCES
     src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
     src/core/manga/bookwalker/VolumeCoverAlignment.cpp
     src/core/manga/bookwalker/VolumeCoverResolver.cpp
+    src/core/manga/fandom/FandomTypes.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
