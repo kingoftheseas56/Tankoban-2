@@ -756,9 +756,13 @@ void TorrentClient::saveStreamBulkGroups()
         }
     }
 
-    QJsonObject data;
-    data["groups"] = m_streamBulkGroups;
-    m_bridge->store().write(STREAM_BULK_GROUPS_FILE, data);
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.5 (2026-05-20) — JsonStore write
+    // path dropped. Phase 2.6's per-group / per-item repo mirror writes
+    // above are now the only durable sink. The m_streamBulkGroups in-memory
+    // map is still maintained because numerous read paths (UI snapshot
+    // queries, devBulkGroupsSnapshot, isTerminalStreamBulkState helpers)
+    // still serve from it; those readers move to the repo in Phase 4 along
+    // with the deletion of the map itself.
 }
 
 QJsonObject TorrentClient::streamBulkGroups() const
