@@ -7,6 +7,7 @@
 #include <QScreen>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QPixmapCache>
 #include <QStringList>
 #include <QTimer>
 #include "core/CoreBridge.h"
@@ -160,6 +161,18 @@ int main(int argc, char *argv[])
 #endif
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
+
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot fix 2026-05-19: bump QPixmapCache
+    // from its Qt-default 10 MB to 64 MB. Comics series view paints 43+
+    // BookWalker tankobon covers per series at full resolution (~500x700
+    // RGBA ≈ ~1.4 MB each decoded), which overflows the 10 MB cap on the
+    // first series open — every re-entry then sees cache misses and re-fetches
+    // every cover over the network. 64 MB comfortably holds ~40-50 covers
+    // plus series banners with headroom for cross-series navigation. The
+    // cache is in-memory only, lives for the process lifetime, and costs RAM
+    // proportional to actually-loaded pixmaps (not the cap itself).
+    QPixmapCache::setCacheLimit(65536); // KB → 64 MB
+
     JsonlEventLog::installQtMessageHandler();
 
     const QStringList cliArgs = QCoreApplication::arguments();

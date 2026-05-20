@@ -582,6 +582,7 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     m_currentAnilistId   = preview.anilistId;
     m_currentSeriesTitle = preview.title;
     m_currentVolumeRows.clear();
+    m_pendingMediaLoads = 0;   // Pass 3: reset overlay-hide counter for new series
     if (m_sourcesPanel) m_sourcesPanel->clear();
 
     // Paint immediately from preview (cheap data, no detail required for hero).
@@ -677,6 +678,7 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
     m_currentSeriesKey   = wc.source + QStringLiteral(":") + wc.id;
     m_currentSeriesTitle = wc.title;
     m_currentVolumeRows.clear();
+    m_pendingMediaLoads = 0;   // Pass 3: reset overlay-hide counter for new series
     if (m_sourcesPanel) m_sourcesPanel->clear();
 
     // Paint immediately from available preview data.
@@ -982,16 +984,31 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                 : detail->preview.coverThumbUrl)
             : QString();
         if (!coverUrl.isEmpty()) {
-            // Race-condition guard: VolumeCoverResolver (BookWalker arc) may emit
-            // resolved() with BookWalker CDN URLs BEFORE populateVolumeRows fires
-            // (e.g. when MangaUpdates sidecar is warm but AniList detail fetch lags).
-            // If a BookWalker URL has already been applied for this volume, don't
-            // overwrite it with the AniList fallback per-vol thumbnail. The resolver's
-            // BookWalker URLs are publisher-canonical and strictly preferred.
+            // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 4 fix 2026-05-19:
+            // resolve the race between paintVolumeCovers (which can fire
+            // SYNCHRONOUSLY off a BookWalkerCache hit inside resolveForSeries,
+            // i.e. BEFORE populateVolumeRows ever runs) and the per-row
+            // populate here. Old behaviour:
+            //   - resolver hit -> paintVolumeCovers -> loadCoverUrlForVolume
+            //     records URL in m_lastAppliedCoverUrlByVolume, kicks async
+            //     fetch BUT applyPixmapToVolumeRow finds no rows (table not
+            //     yet populated) -> silent drop
+            //   - populateVolumeRows fires -> sees BookWalker URL recorded ->
+            //     skips loadCoverUrlForVolume entirely under the now-flawed
+            //     "BookWalker already applied" assumption -> covers never
+            //     paint (Hemanth screenshot 2026-05-19: 12 rows, 0 covers
+            //     visible)
+            // New behaviour: PREFER the BookWalker URL when recorded, but
+            // ALWAYS re-fire loadCoverUrlForVolume here so the freshly-built
+            // QLabel cellWidget gets the pixmap (cache hit if prior fetch
+            // landed; cache miss kicks a duplicate fetch which is cheap and
+            // hits the same CDN with the same URL key). The race is closed
+            // because the row's cellWidget definitely exists at THIS call.
             const QString existing = m_lastAppliedCoverUrlByVolume.value(row.volumeNumber);
-            if (!existing.contains(QStringLiteral("rimg.bookwalker.jp"))) {
-                loadCoverUrlForVolume(coverUrl, row.volumeNumber);
-            }
+            const QString urlToLoad = existing.contains(QStringLiteral("rimg.bookwalker.jp"))
+                ? existing       // resolver already picked the publisher-canonical URL
+                : coverUrl;      // AniList fallback (per-vol art, or detail's coverThumbUrl)
+            loadCoverUrlForVolume(urlToLoad, row.volumeNumber);
         }
 
         // Col 3 -- title cellWidget. STREAM_PORT Bug-5 fix 2026-05-18:
@@ -1213,12 +1230,40 @@ void ComicsSeriesView::showLoadingOverlay()
     m_loadingOverlay->setGeometry(rect());
     m_loadingOverlay->raise();
     m_loadingOverlay->show();
+    // Pass 3-followup 2026-05-19: re-sync geometry on the next event-loop
+    // tick. showLoadingOverlay is typically called from inside showSeries
+    // (right after the QStackedWidget switches to this view); at that moment
+    // the view has just become current but the layout pass hasn't run yet,
+    // so rect() may still report the widget's pre-layout default size and
+    // the overlay paints in a tiny upper-left strip. Hemanth flagged this
+    // 2026-05-19: "loading covers toast went to the top left corner and
+    // melted into the back button." Deferring one tick lets the layout
+    // settle; resizeEvent below handles any later parent resizes.
+    QPointer<ComicsSeriesView> self(this);
+    QTimer::singleShot(0, this, [self]() {
+        if (!self || !self->m_loadingOverlay) return;
+        if (self->m_loadingOverlay->isVisible()) {
+            self->m_loadingOverlay->setGeometry(self->rect());
+        }
+    });
 }
 
 void ComicsSeriesView::hideLoadingOverlay()
 {
     if (m_loadingOverlay) m_loadingOverlay->hide();
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->stop();
+}
+
+void ComicsSeriesView::resizeEvent(QResizeEvent* ev)
+{
+    QWidget::resizeEvent(ev);
+    // Pass 3-followup 2026-05-19: keep the loading overlay covering the
+    // full view on any parent resize (window resize, QStackedWidget settling
+    // after a tile click). Without this, the overlay only gets sized once
+    // in showLoadingOverlay and stays at that geometry forever.
+    if (m_loadingOverlay && m_loadingOverlay->isVisible()) {
+        m_loadingOverlay->setGeometry(rect());
+    }
 }
 
 // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): resolver slot bodies fully implemented.
@@ -1231,7 +1276,13 @@ void ComicsSeriesView::onCoverResolverResolved(const QString& seriesKey,
 {
     if (seriesKey != m_currentResolvingSeriesKey) return;
     paintVolumeCovers(volumeToCoverUrl);
-    hideLoadingOverlay();
+    // Pass 3 fix 2026-05-19: only hide overlay if no async media fetches
+    // were spawned by paintVolumeCovers (every cache-miss inside
+    // loadCoverUrlForVolume incremented m_pendingMediaLoads). If non-zero,
+    // the per-fetch finished lambdas will call hideLoadingOverlay when the
+    // last fetch lands. This gives the user a visible spinner during the
+    // cover-download window even on the BookWalkerCache-warm path.
+    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
 }
 
 void ComicsSeriesView::onCoverResolverUnresolved(const QString& seriesKey,
@@ -1239,7 +1290,7 @@ void ComicsSeriesView::onCoverResolverUnresolved(const QString& seriesKey,
 {
     if (seriesKey != m_currentResolvingSeriesKey) return;
     paintVolumeCoversAsFallback();
-    hideLoadingOverlay();
+    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
 }
 
 void ComicsSeriesView::onCoverResolverSkipped(const QString& seriesKey,
@@ -1248,7 +1299,7 @@ void ComicsSeriesView::onCoverResolverSkipped(const QString& seriesKey,
     if (seriesKey != m_currentResolvingSeriesKey) return;
     // Premium short-circuit: PremiumCoverExtractor handles cover paint via the
     // existing pipeline. Just hide the overlay; do not call the paint helpers.
-    hideLoadingOverlay();
+    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
 }
 
 void ComicsSeriesView::onCoverResolverSafetyTimeout()
@@ -1301,22 +1352,50 @@ void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumbe
     QNetworkAccessManager* nam = m_client ? m_client->networkManager() : nullptr;
     if (!nam) return;
 
+    // Pass 3 fix 2026-05-19: inc counter for in-flight async media fetches;
+    // decremented in the finished lambda below. Drives the loading overlay
+    // hide-timing — overlay stays visible until counter reaches 0.
+    m_pendingMediaLoads++;
+
     QPointer<ComicsSeriesView> self(this);
-    const int snapshotAnilistId = m_currentAnilistId;
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot fix 2026-05-19: stale-guard re-keyed
+    // from m_currentAnilistId (int) to m_currentSeriesKey (QString). The
+    // anilistId-keyed guard was a no-op on the WeebCentral path (anilistId
+    // stays 0 across all WC series), so prior series' covers leaked onto the
+    // newly-opened series until the new fetch landed. seriesKey is the
+    // unified identity for both AniList ("anilist:<id>") and WeebCentral
+    // ("<source>:<id>") paths; see showSeries(MediaPreview):617 and
+    // showSeries(MangaResult):677.
+    const QString snapshotSeriesKey = m_currentSeriesKey;
     const QUrl coverUrl(url);
     QNetworkRequest req(coverUrl);
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
-            [self, reply, url, volumeNumber, snapshotAnilistId]() {
+            [self, reply, url, volumeNumber, snapshotSeriesKey]() {
         reply->deleteLater();
         if (!self) return;
-        // Stale-series guard: discard if user navigated away during the fetch.
-        if (self->m_currentAnilistId != snapshotAnilistId) return;
+        // Pass 3: decrement counter unconditionally (even for stale replies
+        // — the counter belongs to the series the fetch was initiated for,
+        // and a fresh showSeries would have reset the counter anyway, so
+        // the decrement is only meaningful if the series didn't change).
+        if (self->m_pendingMediaLoads > 0) self->m_pendingMediaLoads--;
+        const bool stillCurrentSeries = (self->m_currentSeriesKey == snapshotSeriesKey);
+        auto maybeHideOverlay = [self]() {
+            if (self->m_pendingMediaLoads == 0) self->hideLoadingOverlay();
+        };
+        // Stale-series guard: discard the pixmap if user navigated away
+        // during the fetch (still let the overlay-hide check run for the
+        // current series — the counter is shared).
+        if (!stillCurrentSeries) {
+            maybeHideOverlay();
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             qWarning("loadCoverUrlForVolume: fetch failed url=%s vol=%d error=%s",
                      qUtf8Printable(url), volumeNumber, qUtf8Printable(reply->errorString()));
+            maybeHideOverlay();
             return;
         }
         const QByteArray data = reply->readAll();
@@ -1324,10 +1403,12 @@ void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumbe
         if (!pm.loadFromData(data)) {
             qWarning("loadCoverUrlForVolume: pixmap decode failed url=%s vol=%d bytes=%lld",
                      qUtf8Printable(url), volumeNumber, static_cast<long long>(data.size()));
+            maybeHideOverlay();
             return;
         }
         QPixmapCache::insert(url, pm);
         self->applyPixmapToVolumeRow(volumeNumber, pm);
+        maybeHideOverlay();
     });
 }
 
@@ -1340,30 +1421,89 @@ void ComicsSeriesView::loadBannerUrl(const QString& url)
     // approach.
     if (url.isEmpty() || !m_heroBannerLabel) return;
 
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 1 fix 2026-05-19: on
+    // series-switch (new URL differs from what's currently painted), wipe
+    // the label pixmap before kicking off the load so the previous series'
+    // banner does not leak into the new view. clearView() intentionally
+    // does NOT wipe the banner pixmap (2026-05-18 hero-instant-load fix at
+    // line 732+); that contract only makes sense for same-URL re-opens.
+    // For different URLs the prior pixmap is a stale leak — Hemanth flagged
+    // this 2026-05-19: "Death Note's banner shows Berserk's cover."
+    // For same-URL re-opens we skip the wipe so the QPixmapCache hit can
+    // replace atomically with no flicker (instant-load contract preserved).
+    if (url != m_lastBannerUrl) {
+        m_heroBannerLabel->clear();   // wipe pixmap; widget stays sized + visible
+        m_lastBannerUrl = url;
+    }
+
     QPixmap cached;
     if (QPixmapCache::find(url, &cached)) {
         applyBannerPixmap(cached);
         return;
     }
 
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 2 fix 2026-05-19: local-file
+    // URLs (library records: "file:///C:/.../cover.jpg") load synchronously
+    // via QPixmap::load, skipping the QNetworkAccessManager round-trip. QNAM
+    // *does* handle file:/// scheme, but the request is queued onto the event
+    // loop so even a local file takes ~50-200ms to land — long enough for
+    // Hemanth to see a blank banner gap on every library open ("Death Note's
+    // banner takes its sweet time to load"). Direct QPixmap::load is single-
+    // digit ms file IO. We still insert into QPixmapCache so subsequent re-
+    // opens of the same library series hit instantly via the cache path
+    // above. Failure falls through to the async path as a safety net.
+    if (url.startsWith(QStringLiteral("file:///"), Qt::CaseInsensitive)) {
+        const QString localPath = QUrl(url).toLocalFile();
+        QPixmap pm;
+        if (pm.load(localPath)) {
+            QPixmapCache::insert(url, pm);
+            applyBannerPixmap(pm);
+            return;
+        }
+        qWarning("loadBannerUrl: local-file load failed url=%s path=%s",
+                 qUtf8Printable(url), qUtf8Printable(localPath));
+        // Fall through to async path below.
+    }
+
     QNetworkAccessManager* nam = m_client ? m_client->networkManager() : nullptr;
     if (!nam) return;
 
+    // Pass 3 fix 2026-05-19: inc counter for in-flight async media fetches;
+    // decremented in the finished lambda below. Drives the loading overlay
+    // hide-timing — overlay stays visible until counter reaches 0.
+    m_pendingMediaLoads++;
+
     QPointer<ComicsSeriesView> self(this);
-    const int snapshotAnilistId = m_currentAnilistId;
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot fix 2026-05-19: stale-guard re-keyed
+    // from m_currentAnilistId (int) to m_currentSeriesKey (QString). Same bug
+    // class as loadCoverUrlForVolume — banner from a prior WeebCentral series
+    // would paint onto the newly-opened series because both shared anilistId=0
+    // and the guard never fired. See the longer comment at the cover variant.
+    const QString snapshotSeriesKey = m_currentSeriesKey;
     const QUrl bannerUrl(url);
     QNetworkRequest req(bannerUrl);
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
-            [self, reply, url, snapshotAnilistId]() {
+            [self, reply, url, snapshotSeriesKey]() {
         reply->deleteLater();
         if (!self) return;
-        if (self->m_currentAnilistId != snapshotAnilistId) return;
+        // Pass 3: decrement counter unconditionally (see loadCoverUrlForVolume
+        // for the rationale around stale replies + the shared counter).
+        if (self->m_pendingMediaLoads > 0) self->m_pendingMediaLoads--;
+        const bool stillCurrentSeries = (self->m_currentSeriesKey == snapshotSeriesKey);
+        auto maybeHideOverlay = [self]() {
+            if (self->m_pendingMediaLoads == 0) self->hideLoadingOverlay();
+        };
+        if (!stillCurrentSeries) {
+            maybeHideOverlay();
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             qWarning("loadBannerUrl: fetch failed url=%s error=%s",
                      qUtf8Printable(url), qUtf8Printable(reply->errorString()));
+            maybeHideOverlay();
             return;
         }
         const QByteArray data = reply->readAll();
@@ -1371,10 +1511,12 @@ void ComicsSeriesView::loadBannerUrl(const QString& url)
         if (!pm.loadFromData(data)) {
             qWarning("loadBannerUrl: pixmap decode failed url=%s bytes=%lld",
                      qUtf8Printable(url), static_cast<long long>(data.size()));
+            maybeHideOverlay();
             return;
         }
         QPixmapCache::insert(url, pm);
         self->applyBannerPixmap(pm);
+        maybeHideOverlay();
     });
 }
 

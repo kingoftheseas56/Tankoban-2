@@ -161,6 +161,15 @@ signals:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 3-followup fix 2026-05-19:
+    // keep m_loadingOverlay sized to the view on parent resize. Without
+    // this override, the overlay's geometry only got set once in
+    // showLoadingOverlay() — if the parent later resized (window resize,
+    // QStackedWidget switch settling), the overlay stayed at its prior
+    // (often tiny / corner) size. Hemanth surfaced this 2026-05-19:
+    // "loading covers toast went to the top left corner."
+    void resizeEvent(QResizeEvent* ev) override;
+
 private slots:
     void onSeriesSucceeded(int requestId, const tankoban::manga::anilist::MediaDetail& detail);
     void onSeriesFailed(int requestId, const QString& reason);
@@ -217,6 +226,33 @@ private:
     // Task 15: last-applied cover URL per volume -- populated in
     // loadCoverUrlForVolume, cleared in clearView, exposed via devSnapshot.
     QMap<int, QString> m_lastAppliedCoverUrlByVolume;
+
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 1 fix 2026-05-19: tracks
+    // the banner URL currently painted on m_heroBannerLabel. Used by
+    // loadBannerUrl to detect series-switch (URL changes) vs same-series
+    // re-open (URL stays). On series-switch we wipe the label pixmap before
+    // the async load so the prior series' banner doesn't leak into the new
+    // view (Hemanth: "Death Note opens with Berserk's banner"). On
+    // same-series re-open we skip the wipe so the QPixmapCache hit can
+    // replace atomically with no flicker -- preserves the 2026-05-18
+    // hero-instant-load contract documented at clearView():732-740.
+    // NOT cleared in clearView() because the pixmap survives clearView()
+    // by design; the URL tracker must mirror that lifetime.
+    QString m_lastBannerUrl;
+
+    // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 3 fix 2026-05-19: counter
+    // tracking in-flight async media fetches (banner + per-volume covers).
+    // The loading overlay hides only when this counter reaches 0 AFTER
+    // resolver completion — gives the user a visible spinner during the
+    // cover-image download window. Without this, library-warm path opens
+    // (BookWalkerCache hit → resolver emits synchronously → hideOverlay
+    // fires before any event-loop tick) had no perceptible spinner even
+    // though the 12 volume cover IMAGES were still loading from the
+    // network. Reset to 0 in both showSeries overloads; incremented when
+    // loadBannerUrl / loadCoverUrlForVolume kick off an async fetch;
+    // decremented unconditionally in each finished lambda; hideLoading-
+    // Overlay called when counter hits 0 after a decrement.
+    int m_pendingMediaLoads = 0;
 
     // Task 14: BookWalker cover overlay helpers.
     void showLoadingOverlay();
