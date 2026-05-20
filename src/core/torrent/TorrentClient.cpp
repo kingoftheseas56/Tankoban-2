@@ -660,10 +660,11 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     // landed). Idempotent after first pass.
     compactHistory();
 
-    // F9 fix 2026-05-19 Task 9: schedule orphan-recovery sweep for movie records.
-    // 2s delay gives libtorrent's resume-data load time to populate engine handles
-    // before we sweep for "no live handle" records. Single-shot, fire-and-forget.
-    QTimer::singleShot(2000, this, &TorrentClient::reconcileMovieRecordOrphans);
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.3 (2026-05-20) — T9's 2s
+    // orphan-recovery sweep is retired. Phase 2.3's pending_engine_add row
+    // replay handles the deterministic recovery for the F9 scenario T9 was
+    // papering over (movie records whose engine handle didn't survive a
+    // restart). The 2s heuristic delay is gone.
 }
 
 TorrentClient::~TorrentClient()
@@ -1793,49 +1794,11 @@ void TorrentClient::restartStreamBulkGroup(const QString& groupId)
     }
 }
 
-// F9 fix 2026-05-19 Task 9: see header declaration for full rationale.
-void TorrentClient::reconcileMovieRecordOrphans()
-{
-    QSet<QString> liveHashes;
-    for (const TorrentStatus& s : m_engine->allStatuses())
-        liveHashes.insert(s.infoHash.toLower());
-
-    int demoted = 0;
-    QStringList demotedHashes;
-    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        QJsonObject rec = it.value().toObject();
-        const QString streamGroupId = rec.value(QStringLiteral("streamGroupId")).toString();
-        const QString imdbId = rec.value(QStringLiteral("imdbId")).toString();
-        const QString state = rec.value(QStringLiteral("state")).toString();
-
-        // Only direct-download (movie or show) records — bulk-group items are
-        // covered by tryRescueStreamBulkGroup elsewhere.
-        if (!streamGroupId.isEmpty()) continue;
-        if (imdbId.isEmpty()) continue;
-
-        // Skip terminal states — they're stable observations, not stuck records.
-        if (state == QLatin1String("completed") || state == QLatin1String("seeding")
-            || state == QLatin1String("error")) continue;
-
-        // If no live engine handle → orphan
-        if (!liveHashes.contains(it.key().toLower())) {
-            rec[QStringLiteral("state")] = QStringLiteral("error");
-            rec[QStringLiteral("errorMessage")] = QStringLiteral(
-                "Download didn't start — click Download again to retry.");
-            it.value() = rec;
-            demotedHashes.append(it.key().left(16));
-            ++demoted;
-        }
-    }
-    if (demoted > 0) {
-        saveRecords();
-        qInfo() << "TorrentClient::reconcileMovieRecordOrphans: demoted"
-                << demoted << "movie records to error (engine had no handle). hashes="
-                << demotedHashes.join(",");
-    } else {
-        qInfo() << "TorrentClient::reconcileMovieRecordOrphans: no orphans found.";
-    }
-}
+// TORRENT_PERSISTENCE_COLLAPSE Phase 4.3 (2026-05-20) — reconcileMovieRecordOrphans
+// retired. Phase 2.3's pending_engine_add row replay handles the F9 scenario
+// deterministically (no 2s heuristic delay needed). Function body + the
+// QTimer::singleShot scheduler at the end of the ctor were both removed in
+// the same commit.
 
 void TorrentClient::markStreamBulkItemsForTorrent(const QString& infoHash,
                                                   StreamBulkItemState state,
