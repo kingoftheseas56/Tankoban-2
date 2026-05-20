@@ -17,10 +17,24 @@
 
 namespace tankoban::torrent {
 
-// Schema SQL — split on ';' inside initSchema and run statement-by-statement.
+// Schema SQL — initSchema runs in two passes around any ALTER TABLE migrations
+// so post-migration columns can be referenced by post-pass indexes:
+//   pass 1: kSchemaSqlTables  (PRAGMAs + every CREATE TABLE IF NOT EXISTS)
+//   step  : version check + ALTER TABLE migrations
+//   pass 2: kSchemaSqlIndexes (every CREATE INDEX IF NOT EXISTS — runs after
+//           any column-adding migrations so an index over a newly-added
+//           column finds its column rather than failing with "no such column")
+//
 // COLLATE NOCASE on hash columns canonicalises case at the SQLite boundary
 // (audit Part B item 13 — hash case drift was already an F9 follow-up concern).
-static const char* kSchemaSql = R"SQL(
+//
+// PARSER CONSTRAINT: each blob is dispatched via a naive QString::split on
+// the semicolon character, NOT a SQL parser. Comments AND string literals
+// AND identifiers inside either blob must NOT contain semicolons or the
+// dispatch will fragment statements mid-flight. Phase 3.4.0 (Agent 4) burned
+// build cycles learning this. Keep literal semicolons OUT of comments and
+// DEFAULT values here.
+static const char* kSchemaSqlTables = R"SQL(
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
@@ -43,10 +57,6 @@ CREATE TABLE IF NOT EXISTS torrents (
     torrent_file BLOB
 );
 
-CREATE INDEX IF NOT EXISTS idx_torrents_state ON torrents(state);
-CREATE INDEX IF NOT EXISTS idx_torrents_stream_group ON torrents(stream_group_id);
-CREATE INDEX IF NOT EXISTS idx_torrents_imdb_season ON torrents(imdb_id, season);
-
 CREATE TABLE IF NOT EXISTS stream_groups (
     group_id TEXT PRIMARY KEY NOT NULL,
     imdb_id TEXT NOT NULL DEFAULT '',
@@ -58,8 +68,6 @@ CREATE TABLE IF NOT EXISTS stream_groups (
     created_at TEXT NOT NULL,
     pack_mode INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE INDEX IF NOT EXISTS idx_stream_groups_imdb_season ON stream_groups(imdb_id, season);
 
 CREATE TABLE IF NOT EXISTS stream_group_items (
     group_id TEXT NOT NULL,
@@ -74,8 +82,6 @@ CREATE TABLE IF NOT EXISTS stream_group_items (
     FOREIGN KEY (info_hash) REFERENCES torrents(hash) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_stream_group_items_hash ON stream_group_items(info_hash);
-
 CREATE TABLE IF NOT EXISTS stream_downloads_index (
     canonical_path TEXT PRIMARY KEY NOT NULL,
     imdb_id TEXT NOT NULL DEFAULT '',
@@ -84,15 +90,37 @@ CREATE TABLE IF NOT EXISTS stream_downloads_index (
     state TEXT NOT NULL,
     info_hash TEXT COLLATE NOCASE,
     added_at TEXT NOT NULL,
+    -- Phase 3.4.0 (2026-05-20) added for StreamDownloadIndex full-shape
+    -- absorption. Existing v1 DBs get these via ALTER TABLE in initSchema
+    -- migration step. Fresh installs at v2 create the table with them present.
+    source_group_id TEXT NOT NULL DEFAULT '',
+    progress_pct INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (info_hash) REFERENCES torrents(hash) ON DELETE SET NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_stream_downloads_imdb ON stream_downloads_index(imdb_id, season, episode);
 
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 );
+)SQL";
+
+// Indexes run AFTER kSchemaSqlTables + any ALTER TABLE migrations so an index
+// over a column added by migration (e.g. idx_stream_downloads_source_group on
+// the Phase 3.4.0 source_group_id column) doesn't fail with "no such column"
+// on a still-being-migrated v1 DB.
+static const char* kSchemaSqlIndexes = R"SQL(
+CREATE INDEX IF NOT EXISTS idx_torrents_state ON torrents(state);
+CREATE INDEX IF NOT EXISTS idx_torrents_stream_group ON torrents(stream_group_id);
+CREATE INDEX IF NOT EXISTS idx_torrents_imdb_season ON torrents(imdb_id, season);
+
+CREATE INDEX IF NOT EXISTS idx_stream_groups_imdb_season ON stream_groups(imdb_id, season);
+
+CREATE INDEX IF NOT EXISTS idx_stream_group_items_hash ON stream_group_items(info_hash);
+
+CREATE INDEX IF NOT EXISTS idx_stream_downloads_imdb ON stream_downloads_index(imdb_id, season, episode);
+-- Phase 3.4.0 — supports evictBySourceGroup O(N) -> O(log N) pivot for the
+-- cohort-cancel path that filters by source_group_id.
+CREATE INDEX IF NOT EXISTS idx_stream_downloads_source_group ON stream_downloads_index(source_group_id);
 )SQL";
 
 // ─── ctor / dtor ─────────────────────────────────────────────────────────────
@@ -130,27 +158,98 @@ bool TorrentRepository::open(const QString& dbFilePath) {
     return true;
 }
 
+namespace {
+
+// Phase 3.4.0 (2026-05-20) — ALTER TABLE migration v1 -> v2 for an existing
+// stream_downloads_index table. SQLite ALTER TABLE ADD COLUMN supports adding
+// nullable or default-having columns without per-row patches; both new columns
+// carry safe defaults so already-populated rows stay valid.
+//
+// SQLite has no IF NOT EXISTS clause on ALTER TABLE ADD COLUMN, so we ignore
+// "duplicate column name" errors defensively — that lets the migration be
+// re-runnable (a partial run that landed one column but failed on the next
+// will succeed cleanly on retry).
+bool migrateStreamDownloadsV1ToV2(QSqlDatabase& db) {
+    struct Add { const char* name; const char* ddl; };
+    const Add adds[] = {
+        { "source_group_id",
+          "ALTER TABLE stream_downloads_index "
+          "ADD COLUMN source_group_id TEXT NOT NULL DEFAULT ''" },
+        { "progress_pct",
+          "ALTER TABLE stream_downloads_index "
+          "ADD COLUMN progress_pct INTEGER NOT NULL DEFAULT 0" },
+    };
+    for (const auto& add : adds) {
+        QSqlQuery q(db);
+        if (q.exec(QString::fromUtf8(add.ddl)))
+            continue;
+        const QString err = q.lastError().text();
+        // "duplicate column name" -> column was already added, treat as success.
+        if (err.contains(QStringLiteral("duplicate column name"),
+                         Qt::CaseInsensitive)) {
+            continue;
+        }
+        qWarning() << "[TorrentRepository] v1->v2 migration ADD COLUMN"
+                   << add.name << "failed:" << err;
+        return false;
+    }
+    // CREATE INDEX is idempotent via IF NOT EXISTS in the schema blob; the
+    // index gets created during the initial schema apply pass either way.
+    return true;
+}
+
+}  // namespace
+
 bool TorrentRepository::initSchema() {
     if (!m_open) return false;
 
-    const QString blob = QString::fromUtf8(kSchemaSql);
-    const QStringList stmts = blob.split(';', Qt::SkipEmptyParts);
-    QSqlQuery q(m_db);
-    for (const QString& stmt : stmts) {
-        const QString trimmed = stmt.trimmed();
-        if (trimmed.isEmpty()) continue;
-        if (!q.exec(trimmed)) {
-            qWarning() << "[TorrentRepository] schema stmt failed:"
-                       << q.lastError().text()
-                       << "stmt:" << trimmed.left(120);
-            return false;
+    auto runBlob = [this](const char* blob, const char* label) -> bool {
+        const QString text = QString::fromUtf8(blob);
+        const QStringList stmts = text.split(';', Qt::SkipEmptyParts);
+        QSqlQuery q(m_db);
+        for (const QString& stmt : stmts) {
+            const QString trimmed = stmt.trimmed();
+            if (trimmed.isEmpty()) continue;
+            if (!q.exec(trimmed)) {
+                qWarning() << "[TorrentRepository]" << label
+                           << "schema stmt failed:" << q.lastError().text()
+                           << "stmt:" << trimmed.left(120);
+                return false;
+            }
         }
-    }
+        return true;
+    };
 
+    // Pass 1: PRAGMAs + CREATE TABLE IF NOT EXISTS. Fresh installs get the
+    // full v2 shape; pre-existing tables on older versions are untouched.
+    if (!runBlob(kSchemaSqlTables, "tables")) return false;
+
+    // Step 2: schema_version sentinel — empty == fresh install. Stamp at
+    // current, then create indexes against the (fresh, fully-columned) schema.
     if (metaValue(QStringLiteral("schema_version")).isEmpty()) {
         setSchemaVersion(kSchemaVersion);
+        return runBlob(kSchemaSqlIndexes, "indexes");
     }
-    return true;
+
+    // Step 3: incremental ALTER TABLE migrations for older-version DBs.
+    // Idempotent + re-runnable; each upgrade step ratchets schema_version
+    // forward exactly once on success.
+    const int current = schemaVersion();
+    if (current < 2) {
+        if (!migrateStreamDownloadsV1ToV2(m_db)) {
+            qWarning() << "[TorrentRepository] v1->v2 migration failed; "
+                          "leaving schema_version at" << current;
+            return false;
+        }
+        setSchemaVersion(2);
+        qInfo() << "[TorrentRepository] schema migrated v1 -> v2 "
+                   "(stream_downloads_index gained source_group_id + "
+                   "progress_pct columns)";
+    }
+
+    // Pass 2: CREATE INDEX IF NOT EXISTS — runs AFTER any column-adding
+    // migrations so indexes over newly-added columns find their column.
+    return runBlob(kSchemaSqlIndexes, "indexes");
 }
 
 void TorrentRepository::close() {
@@ -680,18 +779,21 @@ namespace {
 // paths in lockstep.
 static StreamDownloadRow streamDownloadFromQuery(QSqlQuery& q) {
     StreamDownloadRow r;
-    r.canonicalPath = q.value(0).toString();
-    r.imdbId        = q.value(1).toString();
-    r.season        = q.value(2).toInt();
-    r.episode       = q.value(3).toInt();
-    r.state         = q.value(4).toString();
-    r.infoHash      = q.value(5).toString();
-    r.addedAt       = QDateTime::fromString(q.value(6).toString(), Qt::ISODate);
+    r.canonicalPath  = q.value(0).toString();
+    r.imdbId         = q.value(1).toString();
+    r.season         = q.value(2).toInt();
+    r.episode        = q.value(3).toInt();
+    r.state          = q.value(4).toString();
+    r.infoHash       = q.value(5).toString();
+    r.addedAt        = QDateTime::fromString(q.value(6).toString(), Qt::ISODate);
+    r.sourceGroupId  = q.value(7).toString();
+    r.progressPct    = q.value(8).toInt();
     return r;
 }
 
 static const char* kStreamDownloadSelectCols =
-    "canonical_path, imdb_id, season, episode, state, info_hash, added_at";
+    "canonical_path, imdb_id, season, episode, state, info_hash, added_at, "
+    "source_group_id, progress_pct";
 
 }  // namespace
 
@@ -700,9 +802,11 @@ bool TorrentRepository::upsertStreamDownload(const StreamDownloadRow& row) {
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(R"SQL(
         INSERT INTO stream_downloads_index (
-            canonical_path, imdb_id, season, episode, state, info_hash, added_at
+            canonical_path, imdb_id, season, episode, state, info_hash, added_at,
+            source_group_id, progress_pct
         ) VALUES (
-            :canonical_path, :imdb_id, :season, :episode, :state, :info_hash, :added_at
+            :canonical_path, :imdb_id, :season, :episode, :state, :info_hash, :added_at,
+            :source_group_id, :progress_pct
         )
         ON CONFLICT(canonical_path) DO UPDATE SET
             imdb_id = excluded.imdb_id,
@@ -710,17 +814,21 @@ bool TorrentRepository::upsertStreamDownload(const StreamDownloadRow& row) {
             episode = excluded.episode,
             state = excluded.state,
             info_hash = excluded.info_hash,
-            added_at = excluded.added_at
+            added_at = excluded.added_at,
+            source_group_id = excluded.source_group_id,
+            progress_pct = excluded.progress_pct
     )SQL"));
     // canonical_path is PRIMARY KEY NOT NULL; state is TEXT NOT NULL; imdb_id
     // has DEFAULT '' but binding a null QString still violates it. All three
     // funneled through bindStrOrEmpty for the same defence as
-    // upsertStreamGroup / upsertTorrent.
+    // upsertStreamGroup / upsertTorrent. source_group_id same treatment.
     q.bindValue(QStringLiteral(":canonical_path"), bindStrOrEmpty(row.canonicalPath));
     q.bindValue(QStringLiteral(":imdb_id"), bindStrOrEmpty(row.imdbId));
     q.bindValue(QStringLiteral(":season"), row.season);
     q.bindValue(QStringLiteral(":episode"), row.episode);
     q.bindValue(QStringLiteral(":state"), bindStrOrEmpty(row.state));
+    q.bindValue(QStringLiteral(":source_group_id"), bindStrOrEmpty(row.sourceGroupId));
+    q.bindValue(QStringLiteral(":progress_pct"), qBound(0, row.progressPct, 100));
     // Bind SQL NULL (not '') when infoHash is empty so the FK constraint stays
     // satisfied and the ON DELETE SET NULL action has a target to overwrite.
     if (row.infoHash.isEmpty()) {

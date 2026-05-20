@@ -545,6 +545,17 @@ std::vector<StreamDownloadRow> LegacyImporter::parseStreamDownloads(
         }
 
         // infoHash absent in legacy schema — leave empty
+
+        // Phase 3.4.0 (2026-05-20) — sourceGroupId + progressPct round-trip.
+        // Both are direct copies from the legacy StreamDownloadIndex::Entry
+        // shape (camelCase keys) so the post-migration repo row carries the
+        // same data the legacy in-memory Entry held. Defaults (empty string
+        // and 0) match the schema-side DEFAULT clauses for absent-key rows.
+        row.sourceGroupId =
+            e.value(QStringLiteral("sourceGroupId")).toString();
+        row.progressPct =
+            qBound(0, e.value(QStringLiteral("progressPct")).toInt(0), 100);
+
         rows.push_back(std::move(row));
     }
 

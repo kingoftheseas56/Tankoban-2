@@ -112,6 +112,12 @@ struct StreamGroupItemRow {
 // Path-keyed playback index. Answers "what file plays this IMDb/season/episode"
 // — a different question from "what torrents exist", which is why it lives in
 // its own table.
+//
+// Phase 3.4.0 (2026-05-20) — schema bumped v1 → v2: added sourceGroupId +
+// progressPct fields to absorb StreamDownloadIndex::Entry's full shape so the
+// Phase 3.4 cutover doesn't lose evictBySourceGroup semantics or post-restart
+// progress display state. Default '' / 0 keep existing v1 rows valid post-
+// ALTER TABLE migration.
 struct StreamDownloadRow {
     QString canonicalPath;
     QString imdbId;
@@ -120,6 +126,8 @@ struct StreamDownloadRow {
     QString state;
     QString infoHash;
     QDateTime addedAt;
+    QString sourceGroupId;  // bulk-cohort group id; empty for migration-rescued movies
+    int progressPct = 0;    // 0-100; persisted offline display when engine has no live status
 };
 
 } // namespace tankoban::torrent

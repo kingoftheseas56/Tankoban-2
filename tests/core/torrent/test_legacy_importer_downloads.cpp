@@ -134,29 +134,66 @@ TEST_F(LegacyImporterDownloadsTest, ParsesPendingDownloadingComplete) {
     // Complete row (state=0).
     const StreamDownloadRow* r1 = findByPath(rows, QStringLiteral("C:/Media/Show/S01E01.mkv"));
     ASSERT_NE(r1, nullptr);
-    EXPECT_EQ(r1->imdbId,   QStringLiteral("tt1000001"));
-    EXPECT_EQ(r1->season,   1);
-    EXPECT_EQ(r1->episode,  1);
-    EXPECT_EQ(r1->state,    QStringLiteral("complete"));
+    EXPECT_EQ(r1->imdbId,        QStringLiteral("tt1000001"));
+    EXPECT_EQ(r1->season,        1);
+    EXPECT_EQ(r1->episode,       1);
+    EXPECT_EQ(r1->state,         QStringLiteral("complete"));
     EXPECT_TRUE(r1->infoHash.isEmpty());
     EXPECT_TRUE(r1->addedAt.isValid());
     EXPECT_EQ(r1->addedAt.toMSecsSinceEpoch(), 1748736000000LL);
+    // Phase 3.4.0 schema bump — parser now extracts sourceGroupId + progressPct
+    // from the legacy entry shape (which already wrote both fields).
+    EXPECT_EQ(r1->sourceGroupId, QStringLiteral("grp-a"));
+    EXPECT_EQ(r1->progressPct,   100);
 
     // Downloading row (state=2).
     const StreamDownloadRow* r2 = findByPath(rows, QStringLiteral("C:/Media/Show/S01E02.mkv"));
     ASSERT_NE(r2, nullptr);
-    EXPECT_EQ(r2->episode,  2);
-    EXPECT_EQ(r2->state,    QStringLiteral("downloading"));
+    EXPECT_EQ(r2->episode,       2);
+    EXPECT_EQ(r2->state,         QStringLiteral("downloading"));
     EXPECT_TRUE(r2->infoHash.isEmpty());
     EXPECT_EQ(r2->addedAt.toMSecsSinceEpoch(), 1748822400000LL);
+    EXPECT_EQ(r2->sourceGroupId, QStringLiteral("grp-a"));
+    EXPECT_EQ(r2->progressPct,   42);
 
     // Pending row (state=1) — addedAt in seconds; heuristic upgrades to ms.
     const StreamDownloadRow* r3 = findByPath(rows, QStringLiteral("C:/Media/Show/S01E03.mkv"));
     ASSERT_NE(r3, nullptr);
-    EXPECT_EQ(r3->episode,  3);
-    EXPECT_EQ(r3->state,    QStringLiteral("pending"));
+    EXPECT_EQ(r3->episode,       3);
+    EXPECT_EQ(r3->state,         QStringLiteral("pending"));
     EXPECT_TRUE(r3->infoHash.isEmpty());
     EXPECT_EQ(r3->addedAt.toSecsSinceEpoch(), 1748908800LL);
+    EXPECT_EQ(r3->sourceGroupId, QStringLiteral("grp-a"));
+    EXPECT_EQ(r3->progressPct,   0);
+}
+
+// Phase 3.4.0 — defensive parse for legacy rows missing the new keys. Older
+// stream_downloads.json files written before the schema-bump-aware
+// StreamDownloadIndex existed may lack sourceGroupId / progressPct entirely;
+// importer must default cleanly without warning.
+TEST_F(LegacyImporterDownloadsTest, MissingSourceGroupAndProgressDefault) {
+    const QByteArray fixture = R"({
+      "version": 1,
+      "byPath": {
+        "c:/legacy.mkv": {
+          "imdbId": "tt7777777",
+          "type": "movie",
+          "season": 0,
+          "episode": 0,
+          "canonicalPath": "C:/Legacy.mkv",
+          "addedAt": 1748736000000,
+          "state": 0
+        }
+      }
+    })";
+
+    LegacyImporter imp;
+    QStringList warnings;
+    const auto rows = imp.parseStreamDownloads(writeFixture(fixture), &warnings);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].sourceGroupId, QString());
+    EXPECT_EQ(rows[0].progressPct,   0);
+    EXPECT_TRUE(warnings.isEmpty());
 }
 
 // ─── 2. Malformed entry skipped; rest survive + warning ─────────────────────

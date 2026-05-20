@@ -99,6 +99,9 @@ TEST_F(TorrentRepoStreamDownloadTest, UpsertRoundTrip) {
     row.infoHash = QStringLiteral("ABCDEF1234567890ABCDEF1234567890ABCDEF12");
     row.addedAt = QDateTime::fromString(QStringLiteral("2026-05-19T15:30:00Z"),
                                         Qt::ISODate);
+    // Phase 3.4.0 schema bump: set the two new fields and round-trip them.
+    row.sourceGroupId = QStringLiteral("stream:tt7654321:s03:1234567890");
+    row.progressPct = 65;
     // FK requires the referenced torrent row to exist (PRAGMA foreign_keys=ON).
     ASSERT_TRUE(insertRawTorrent(row.infoHash));
     ASSERT_TRUE(m_repo.upsertStreamDownload(row));
@@ -112,6 +115,80 @@ TEST_F(TorrentRepoStreamDownloadTest, UpsertRoundTrip) {
     EXPECT_EQ(fetched->state, row.state);
     EXPECT_EQ(fetched->infoHash, row.infoHash.toLower());
     EXPECT_EQ(fetched->addedAt, row.addedAt);
+    EXPECT_EQ(fetched->sourceGroupId, row.sourceGroupId);
+    EXPECT_EQ(fetched->progressPct, row.progressPct);
+}
+
+// Phase 3.4.0 schema bump verification — fresh DB has the two new columns
+// present after initSchema runs.
+TEST_F(TorrentRepoStreamDownloadTest, V2SchemaHasNewColumns) {
+    QSqlDatabase db = QSqlDatabase::database(connectionName());
+    QSqlQuery q(db);
+    ASSERT_TRUE(q.exec(QStringLiteral(
+        "PRAGMA table_info(stream_downloads_index)")));
+    QStringList cols;
+    while (q.next()) cols << q.value(1).toString();
+    EXPECT_TRUE(cols.contains(QStringLiteral("source_group_id"))) << cols.join(',').toStdString();
+    EXPECT_TRUE(cols.contains(QStringLiteral("progress_pct"))) << cols.join(',').toStdString();
+    // Schema version stamp should be at current after fresh open.
+    EXPECT_EQ(m_repo.schemaVersion(), TorrentRepository::kSchemaVersion);
+}
+
+// Phase 3.4.0 ALTER TABLE migration — pre-existing v1-shaped DB gets upgraded
+// to v2 on next open, and pre-existing rows survive with defaulted values for
+// the new columns.
+TEST_F(TorrentRepoStreamDownloadTest, MigratesPreExistingV1ToV2) {
+    const QString v1DbPath =
+        m_tmpDir.path() + QStringLiteral("/v1_legacy.db");
+    {
+        QSqlDatabase v1 = QSqlDatabase::addDatabase(
+            QStringLiteral("QSQLITE"), QStringLiteral("v1_legacy_test"));
+        v1.setDatabaseName(v1DbPath);
+        ASSERT_TRUE(v1.open());
+        QSqlQuery setup(v1);
+        // v1 table shape — no source_group_id / progress_pct columns.
+        ASSERT_TRUE(setup.exec(QStringLiteral(R"SQL(
+            CREATE TABLE stream_downloads_index (
+                canonical_path TEXT PRIMARY KEY NOT NULL,
+                imdb_id TEXT NOT NULL DEFAULT '',
+                season INTEGER NOT NULL DEFAULT 0,
+                episode INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL,
+                info_hash TEXT,
+                added_at TEXT NOT NULL
+            )
+        )SQL")));
+        ASSERT_TRUE(setup.exec(QStringLiteral(R"SQL(
+            CREATE TABLE schema_meta (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            )
+        )SQL")));
+        ASSERT_TRUE(setup.exec(QStringLiteral(
+            "INSERT INTO schema_meta VALUES ('schema_version', '1')")));
+        ASSERT_TRUE(setup.exec(QStringLiteral(R"SQL(
+            INSERT INTO stream_downloads_index
+                (canonical_path, imdb_id, season, episode, state, added_at)
+            VALUES ('C:/legacy_row.mkv', 'tt999', 1, 1, 'complete',
+                    '2026-05-19T00:00:00Z')
+        )SQL")));
+        v1.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("v1_legacy_test"));
+
+    // Open via TorrentRepository — triggers initSchema's v1->v2 ALTER TABLE
+    // migration path.
+    TorrentRepository upgraded;
+    ASSERT_TRUE(upgraded.open(v1DbPath));
+    EXPECT_EQ(upgraded.schemaVersion(), 2);
+
+    // Pre-existing row survives + gains defaulted values for the new columns.
+    auto fetched =
+        upgraded.getStreamDownload(QStringLiteral("C:/legacy_row.mkv"));
+    ASSERT_TRUE(fetched.has_value());
+    EXPECT_EQ(fetched->imdbId, QStringLiteral("tt999"));
+    EXPECT_EQ(fetched->sourceGroupId, QString());  // ALTER DEFAULT '' surfaces as empty
+    EXPECT_EQ(fetched->progressPct, 0);            // ALTER DEFAULT 0
 }
 
 TEST_F(TorrentRepoStreamDownloadTest, ListByImdbSeasonFilters) {

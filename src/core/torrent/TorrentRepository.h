@@ -29,7 +29,11 @@ namespace tankoban::torrent {
 class TorrentRepository : public QObject {
     Q_OBJECT
 public:
-    static constexpr int kSchemaVersion = 1;
+    // Schema version bumped 2026-05-20 (Phase 3.4.0): stream_downloads_index
+    // gained source_group_id + progress_pct columns to absorb the full
+    // StreamDownloadIndex::Entry shape ahead of the Phase 3.4 subsystem rebake.
+    // initSchema runs ALTER TABLE migrations from each older version to current.
+    static constexpr int kSchemaVersion = 2;
 
     explicit TorrentRepository(QObject* parent = nullptr);
     ~TorrentRepository() override;
