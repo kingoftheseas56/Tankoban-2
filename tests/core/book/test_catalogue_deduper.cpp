@@ -117,3 +117,35 @@ TEST(CatalogueDeduperTest, MergePreservesOpenLibraryDescriptionAndCover) {
     EXPECT_EQ(out[0].description, QStringLiteral("Ryland Grace, sole survivor..."));
     EXPECT_TRUE(out[0].coverUrl.startsWith(QStringLiteral("https://covers.openlibrary.org")));
 }
+
+TEST(CatalogueDeduperTest, NormalizeDirectInvocation) {
+    // normalize is exposed as a public static specifically for unit testing.
+    // Indirect coverage via fuzzy-match tests cannot isolate a normalize
+    // regression from a fuzzy-compare regression — exercise it directly.
+    EXPECT_EQ(CatalogueDeduper::normalize(QStringLiteral("The Way of Kings.")),
+              QStringLiteral("the way of kings"));
+    EXPECT_EQ(CatalogueDeduper::normalize(QStringLiteral("BRANDON SANDERSON")),
+              QStringLiteral("brandon sanderson"));
+    EXPECT_EQ(CatalogueDeduper::normalize(QStringLiteral("  Multiple   Spaces  ")),
+              QStringLiteral("multiple spaces"));
+    EXPECT_EQ(CatalogueDeduper::normalize(QStringLiteral("Punct,uation: stripped!")),
+              QStringLiteral("punctuation stripped"));
+    EXPECT_TRUE(CatalogueDeduper::normalize(QString()).isEmpty());
+}
+
+TEST(CatalogueDeduperTest, OneSidedIsbnFallsThroughToFuzzy) {
+    // OpenLib has ISBN, Google has none (default empty isbn). isbnsOverlap
+    // returns false (empty set guard), then fuzzyTitleAuthorEqual catches the
+    // match. Verifies the dedup path falls through correctly when one side
+    // lacks ISBN data.
+    QList<BookCatalogueResult> openlib{
+        mk("openlib", "OL27448W", "Project Hail Mary", "Andy Weir",
+           QStringLiteral("9780593135204")),
+    };
+    QList<BookCatalogueResult> googlebooks{
+        mk("googlebooks", "xyz", "Project Hail Mary", "Andy Weir"),  // no ISBN
+    };
+    auto out = CatalogueDeduper::merge(openlib, googlebooks);
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_TRUE(out[0].catalogueId.startsWith(QStringLiteral("openlib:")));
+}
