@@ -311,6 +311,66 @@ QMap<int, int> priorityVectorToMap(const QVector<int>& priorities)
     return mapped;
 }
 
+int streamBulkEpisodeFromItem(const QJsonObject& item)
+{
+    int episode = item.value(QStringLiteral("episode")).toInt(0);
+    if (episode <= 0)
+        episode = item.value(QStringLiteral("episodeNum")).toInt(0);
+    if (episode <= 0) {
+        const QString itemKey = item.value(QStringLiteral("itemKey")).toString();
+        const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
+        if (eIdx > 0)
+            episode = itemKey.mid(eIdx + 1).toInt();
+    }
+    return episode;
+}
+
+tankoban::torrent::StreamGroupRow streamGroupRowFromBulkGroup(
+    const QString& fallbackGroupId,
+    const QJsonObject& group)
+{
+    tankoban::torrent::StreamGroupRow row;
+    row.groupId = group.value(QStringLiteral("groupId")).toString(fallbackGroupId);
+    const QJsonObject sourceIds = group.value(QStringLiteral("sourceIds")).toObject();
+    row.imdbId = group.value(QStringLiteral("imdbId")).toString();
+    if (row.imdbId.isEmpty())
+        row.imdbId = sourceIds.value(QStringLiteral("seriesId")).toString();
+    row.season = group.contains(QStringLiteral("season"))
+        ? group.value(QStringLiteral("season")).toInt(0)
+        : sourceIds.value(QStringLiteral("season")).toInt(0);
+    row.label = group.value(QStringLiteral("label")).toString();
+    row.state = group.value(QStringLiteral("state")).toString();
+    row.retryGeneration = group.value(QStringLiteral("retryGeneration")).toInt(0);
+    const QJsonValue stagingPath = group.value(QStringLiteral("stagingPath"));
+    row.stagingPath = stagingPath.isNull() ? QString() : stagingPath.toString();
+    const qint64 createdAtMs = group.value(QStringLiteral("createdAtMs")).toVariant().toLongLong();
+    if (createdAtMs > 0)
+        row.createdAt = QDateTime::fromMSecsSinceEpoch(createdAtMs, Qt::UTC);
+    row.packMode = group.value(QStringLiteral("packMode")).toBool(false);
+    return row;
+}
+
+tankoban::torrent::StreamGroupItemRow streamGroupItemRowFromBulkItem(
+    const QString& groupId,
+    const QJsonObject& item)
+{
+    tankoban::torrent::StreamGroupItemRow row;
+    row.groupId = groupId;
+    row.itemId = item.value(QStringLiteral("itemId")).toString();
+    if (row.itemId.isEmpty())
+        row.itemId = item.value(QStringLiteral("itemKey")).toString();
+    row.episode = streamBulkEpisodeFromItem(item);
+    row.infoHash = item.value(QStringLiteral("infoHash")).toString();
+    row.state = item.value(QStringLiteral("state")).toString();
+    if (row.state.isEmpty())
+        row.state = item.value(QStringLiteral("itemState")).toString();
+    row.errorMessage = item.value(QStringLiteral("errorMessage")).toString();
+    if (row.errorMessage.isEmpty())
+        row.errorMessage = item.value(QStringLiteral("lastError")).toString();
+    row.fileIndex = item.value(QStringLiteral("fileIndex")).toInt(-1);
+    return row;
+}
+
 tankoban::torrent::TorrentRow torrentRowFromStartConfig(
     const QString& hash,
     const AddTorrentConfig& config,
@@ -661,7 +721,39 @@ void TorrentClient::loadStreamBulkGroups()
 
 void TorrentClient::saveStreamBulkGroups()
 {
+    QSet<QString> beforePrune;
+    for (auto it = m_streamBulkGroups.constBegin(); it != m_streamBulkGroups.constEnd(); ++it)
+        beforePrune.insert(it.key());
+
     m_streamBulkGroups = pruneTerminalStreamBulkGroups(m_streamBulkGroups);
+
+    QSet<QString> afterPrune;
+    for (auto it = m_streamBulkGroups.constBegin(); it != m_streamBulkGroups.constEnd(); ++it)
+        afterPrune.insert(it.key());
+    for (const QString& groupId : beforePrune) {
+        if (!afterPrune.contains(groupId))
+            m_repo.removeStreamGroup(groupId);
+    }
+
+    for (auto it = m_streamBulkGroups.constBegin(); it != m_streamBulkGroups.constEnd(); ++it) {
+        if (!it.value().isObject())
+            continue;
+        const QJsonObject group = it.value().toObject();
+        const auto groupRow = streamGroupRowFromBulkGroup(it.key(), group);
+        if (!groupRow.groupId.isEmpty())
+            m_repo.upsertStreamGroup(groupRow);
+        const QString groupId = groupRow.groupId.isEmpty() ? it.key() : groupRow.groupId;
+        const QJsonArray items = group.value(QStringLiteral("items")).toArray();
+        for (const auto& itemValue : items) {
+            if (!itemValue.isObject())
+                continue;
+            const auto itemRow =
+                streamGroupItemRowFromBulkItem(groupId, itemValue.toObject());
+            if (!itemRow.itemId.isEmpty())
+                m_repo.upsertStreamGroupItem(itemRow);
+        }
+    }
+
     QJsonObject data;
     data["groups"] = m_streamBulkGroups;
     m_bridge->store().write(STREAM_BULK_GROUPS_FILE, data);
@@ -1220,6 +1312,7 @@ void TorrentClient::cancelStreamBulkGroup(const QString& groupId,
 
     if (allOrphaned) {
         m_streamBulkGroups.remove(groupId);
+        m_repo.removeStreamGroup(groupId);
         saveStreamBulkGroups();
         emit streamBulkGroupsChanged(groupId);
         return;
@@ -1249,6 +1342,7 @@ void TorrentClient::cancelStreamBulkGroup(const QString& groupId,
     }
     if (allTerminalNoSuccess) {
         m_streamBulkGroups.remove(groupId);
+        m_repo.removeStreamGroup(groupId);
         saveStreamBulkGroups();
         emit streamBulkGroupsChanged(groupId);
         return;
