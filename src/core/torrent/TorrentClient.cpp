@@ -2934,6 +2934,7 @@ void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name
         // an already-stated record — the prior overwrite was net-negative.
         m_records[infoHash] = rec;
         saveRecords();
+        m_repo.updateTorrentName(infoHash, name);
     }
     emit torrentUpdated(infoHash);
 
@@ -3077,6 +3078,8 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
         rec["state"] = QStringLiteral("completed");
         m_records[infoHash] = rec;
         saveRecords();
+        m_repo.updateTorrentState(
+            infoHash, tankoban::torrent::TorrentState::Completed);
         category = rec.value("category").toString();
         savePath = rec.value("savePath").toString();
         streamGroupId = rec.value("streamGroupId").toString();
@@ -3146,6 +3149,8 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
         m_records[infoHash] = rec;
         saveRecords();
     }
+    m_repo.updateTorrentState(
+        infoHash, tankoban::torrent::TorrentState::Error, message);
     markStreamBulkItemsForTorrent(
         infoHash,
         StreamBulkItemState::Failed,
@@ -3164,6 +3169,7 @@ void TorrentClient::onStorageMoved(const QString& infoHash, const QString& newPa
     rec["savePath"] = newPath;
     m_records[infoHash] = rec;
     saveRecords();
+    m_repo.updateTorrentSavePath(infoHash, newPath);
 
     emit torrentUpdated(infoHash);
 
