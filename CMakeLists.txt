@@ -207,6 +207,7 @@ set(SOURCES
     src/core/book/OpenLibraryClient.cpp
     src/core/book/SeriesDetector.cpp
     src/core/book/CatalogueDeduper.cpp
+    src/core/book/BookCatalogueAggregator.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
@@ -397,6 +398,7 @@ set(HEADERS
     src/core/book/OpenLibraryClient.h
     src/core/book/SeriesDetector.h
     src/core/book/CatalogueDeduper.h
+    src/core/book/BookCatalogueAggregator.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
