@@ -190,6 +190,7 @@ set(SOURCES
     src/core/manga/fandom/extractors/TableExtractor.cpp
     src/core/manga/fandom/extractors/InfoboxExtractor.cpp
     src/core/manga/wikidata/WikidataClient.cpp
+    src/core/manga/wikidata/WikidataCache.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -795,12 +796,14 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/fandom/test_table_extractor.cpp
         tests/core/manga/fandom/test_infobox_extractor.cpp
         tests/core/manga/fandom/test_fandom_catalog_cache.cpp
+        tests/core/manga/wikidata/test_wikidata_cache.cpp
         src/core/manga/fandom/FandomTypes.cpp
         src/core/manga/fandom/WikiManifest.cpp
         src/core/manga/fandom/WikiManifestRegistry.cpp
         src/core/manga/fandom/FandomCatalogCache.cpp
         src/core/manga/fandom/extractors/TableExtractor.cpp
         src/core/manga/fandom/extractors/InfoboxExtractor.cpp
+        src/core/manga/wikidata/WikidataCache.cpp
         tests/core/PerModeNavControllerTest.cpp
         src/core/DebugLogBuffer.cpp
         src/core/JsonlEventLog.cpp

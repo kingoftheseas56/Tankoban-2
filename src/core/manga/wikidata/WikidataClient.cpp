@@ -2,12 +2,15 @@
 
 #include "WikidataClient.h"
 
+#include "WikidataCache.h"
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -42,6 +45,18 @@ void WikidataClient::resolveQid(int requestId, const QString& qid)
     }
     if (qid.isEmpty()) {
         emit resolveFailed(requestId, QStringLiteral("empty-qid"));
+        return;
+    }
+
+    // Plan Task 13 — cache-consult-first. 30-day TTL. A hit dispatches
+    // resolved() on the next event-loop tick so callers can rely on the
+    // "signal fires after resolveQid returns" contract regardless of path.
+    if (auto cached = WikidataCache::loadByQid(qid)) {
+        qCInfo(lcWikidata).noquote() << "cache hit for" << qid
+                                      << "→" << cached->subdomain;
+        QTimer::singleShot(0, this, [this, requestId, ref = *cached]() {
+            emit resolved(requestId, ref);
+        });
         return;
     }
 
@@ -121,6 +136,11 @@ void WikidataClient::resolveQid(int requestId, const QString& qid)
         // heuristic discovery resolves the page path. pageModel defaults to
         // Monolith and gets refined by the manifest before extraction.
         ref.pageModel = tankoban::manga::fandom::PageModel::Monolith;
+
+        // Plan Task 13 — populate the 30d cache so subsequent resolveQid
+        // calls for the same Q-ID short-circuit the SPARQL round-trip.
+        WikidataCache::storeByQid(qid, ref);
+
         emit resolved(requestId, ref);
     });
 }
