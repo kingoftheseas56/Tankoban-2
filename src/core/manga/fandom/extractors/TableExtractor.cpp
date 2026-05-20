@@ -84,12 +84,17 @@ bool sectionMatchesEditionFilter(const QString& sectionTitle,
 
 QDate parseFandomDate(const QString& raw)
 {
-    // Fandom dates come in both "April 2, 2004" and "April 2 2004" shapes.
-    // Try the comma form first, fall back to no-comma.
+    // Fandom dates come in three shapes across wikis:
+    //   - "April 2, 2004"        (Death Note, One Piece — US style)
+    //   - "April 2 2004"         (rare — comma stripped)
+    //   - "26 November 1990"     (Berserk — DD Month YYYY)
     QDate d = QDate::fromString(raw, QStringLiteral("MMMM d, yyyy"));
     if (d.isValid())
         return d;
     d = QDate::fromString(raw, QStringLiteral("MMMM d yyyy"));
+    if (d.isValid())
+        return d;
+    d = QDate::fromString(raw, QStringLiteral("d MMMM yyyy"));
     return d;
 }
 
@@ -215,6 +220,115 @@ QList<FandomVolume> extractMathematicalBuckets(const QString& rawHtml,
     return volumes;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// narrative-arcs — Berserk style (Task 8)
+//
+// Page layout: single continuous <table class="wikitable"> with TWO <tr>
+// rows per volume:
+//   top row    — <td id="volN"><b>N</b></td>
+//                <td>arc(s) links</td>
+//                <td>DD Month YYYY (JP)</td>
+//                <td>DD Month YYYY (EN)</td>
+//   bottom row — <td colspan=2>episode list</td>
+//                <td>ISBN block: (ja) <a>…</a> (en) <a>…</a></td>
+//                <td>cover image + page counts</td>
+//
+// No volume titles surfaced; "title" lives only at the arc level. We populate
+// FandomVolume::groupingLabel with the arc text (multiple arcs joined by " / ")
+// so the UI can render an arc breadcrumb without inventing fake titles.
+
+const QRegularExpression kBerserkVolumeAnchorRe(
+    R"RX(<td id="vol(\d+)"><b>\d+</b>)RX"
+);
+
+const QRegularExpression kBerserkArcLinkRe(
+    R"RX(<a href="/wiki/[^"]+_Arc[^"]*"[^>]*>([^<]+)</a>)RX"
+);
+
+// "26 November 1990" — DD Month YYYY. Anchored to <td> so it only matches
+// the dedicated date cells (not page counts or page numbers in episode lists).
+const QRegularExpression kBerserkDateRe(
+    R"RX(<td>\s*(\d{1,2}\s+[A-Z][a-z]+\s+\d{4})\s*\n?\s*</td>)RX"
+);
+
+const QRegularExpression kBerserkIsbnJaRe(
+    R"RX(\(ja\)</tt></sup>\s*<a href="/wiki/Special:BookSources/([\d\-Xx]+)")RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kBerserkIsbnEnRe(
+    R"RX(\(en\)</tt></sup>\s*<a href="/wiki/Special:BookSources/([\d\-Xx]+)")RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+QList<FandomVolume> extractNarrativeArcs(const QString& rawHtml,
+                                        const WikiManifest& manifest)
+{
+    QList<FandomVolume> volumes;
+
+    // Trim at first edition-filter header (Unvolumized Episodes / Deluxe Edition).
+    int cutoff = findFirstEditionFilterOffset(rawHtml, manifest.editionFilters);
+    const QString body = (cutoff > 0) ? rawHtml.left(cutoff) : rawHtml;
+
+    auto anchorIt = kBerserkVolumeAnchorRe.globalMatch(body);
+    QVector<QPair<int, int>> anchors; // (offset, volumeNumber)
+    while (anchorIt.hasNext()) {
+        auto m = anchorIt.next();
+        anchors.append({ m.capturedStart(), m.captured(1).toInt() });
+    }
+
+    for (int i = 0; i < anchors.size(); ++i) {
+        const int     sliceStart = anchors[i].first;
+        const int     volNum     = anchors[i].second;
+        const int     sliceEnd   = (i + 1 < anchors.size())
+                                       ? anchors[i + 1].first
+                                       : body.size();
+        const QString slice = body.mid(sliceStart, sliceEnd - sliceStart);
+
+        FandomVolume v;
+        v.volumeNumber = volNum;
+        // titleEnglish / titleJapanese intentionally empty per manifest.
+
+        // Arc(s) — possibly multiple, join with " / " for groupingLabel.
+        QStringList arcs;
+        auto arcIt = kBerserkArcLinkRe.globalMatch(slice);
+        while (arcIt.hasNext()) {
+            const QString name = arcIt.next().captured(1).trimmed();
+            if (!arcs.contains(name))
+                arcs.append(name);
+        }
+        v.groupingLabel = arcs.join(QStringLiteral(" / "));
+
+        // Dates — first match = JP, second = EN.
+        auto dateIt = kBerserkDateRe.globalMatch(slice);
+        if (dateIt.hasNext())
+            v.releaseDateJp = parseFandomDate(dateIt.next().captured(1));
+        if (dateIt.hasNext())
+            v.releaseDateEn = parseFandomDate(dateIt.next().captured(1));
+
+        // ISBNs.
+        auto iJa = kBerserkIsbnJaRe.match(slice);
+        if (iJa.hasMatch())
+            v.isbnJp = iJa.captured(1);
+
+        auto iEn = kBerserkIsbnEnRe.match(slice);
+        if (iEn.hasMatch())
+            v.isbnEn = iEn.captured(1);
+
+        // Cover — first mw-file-description image in slice (single tankobon cover).
+        auto cover = kFullResCoverRe.match(slice);
+        if (cover.hasMatch())
+            v.coverUrlJapanese = cover.captured(1);
+
+        volumes.append(v);
+    }
+
+    qCInfo(lcTableExtractor) << "extractNarrativeArcs:" << volumes.size()
+                              << "volumes for" << manifest.seriesId
+                              << "(trimmed at offset" << cutoff << ")";
+    return volumes;
+}
+
 QList<FandomVolume> extractSubsectionHeaders(const QString& rawHtml,
                                              const WikiManifest& manifest)
 {
@@ -311,8 +425,10 @@ QList<FandomVolume> TableExtractor::extract(const QString& rawHtml,
         return extractSubsectionHeaders(rawHtml, manifest);
     if (manifest.groupingSemantics == QStringLiteral("mathematical-buckets"))
         return extractMathematicalBuckets(rawHtml, manifest);
+    if (manifest.groupingSemantics == QStringLiteral("narrative-arcs"))
+        return extractNarrativeArcs(rawHtml, manifest);
 
-    // narrative-arcs / multi-era land in Tasks 8-9.
+    // multi-era lands in Task 9.
     qCWarning(lcTableExtractor)
         << "TableExtractor: unsupported groupingSemantics"
         << manifest.groupingSemantics

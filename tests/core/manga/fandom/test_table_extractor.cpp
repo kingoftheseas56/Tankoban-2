@@ -139,10 +139,111 @@ TEST(TableExtractorTest, UnsupportedGroupingSemantics_ReturnsEmpty)
     WikiManifest m;
     m.seriesId          = QStringLiteral("test");
     m.fandomWikiId      = QStringLiteral("test");
-    m.groupingSemantics = QStringLiteral("narrative-arcs"); // Task 8 territory
+    m.groupingSemantics = QStringLiteral("multi-era"); // Task 9 territory
     QList<FandomVolume> vols = TableExtractor::extract(
         QStringLiteral("<html></html>"), m);
     EXPECT_TRUE(vols.isEmpty());
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 8 — Berserk narrative-arcs pattern
+// ──────────────────────────────────────────────────────────────────────────
+
+TEST(TableExtractorTest, Berserk_ExtractsAtLeast42Volumes)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    ASSERT_TRUE(m.isValid()) << "berserk manifest failed to load";
+
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    ASSERT_FALSE(html.isEmpty()) << "fixture empty or missing";
+
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    EXPECT_GE(vols.size(), 42)
+        << "Berserk had 42 published canonical volumes when Miura passed; "
+        << "actual: " << vols.size();
+}
+
+TEST(TableExtractorTest, Berserk_Vol1_HasBlackSwordsmanArcGroupingLabel)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.volumeNumber, 1);
+    EXPECT_EQ(v1.groupingLabel.toStdString(), "Black Swordsman Arc");
+    // Manifest declares titles as absent — verify the extractor honors that.
+    EXPECT_TRUE(v1.titleEnglish.isEmpty());
+    EXPECT_TRUE(v1.titleJapanese.isEmpty());
+}
+
+TEST(TableExtractorTest, Berserk_Vol1_HasReleaseDatesAndIsbns)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    // Berserk uses DD Month YYYY date format.
+    EXPECT_EQ(v1.releaseDateJp, QDate(1990, 11, 26));
+    EXPECT_EQ(v1.releaseDateEn, QDate(2003, 10, 22));
+    EXPECT_EQ(v1.isbnJp.toStdString(), "9784592135746");
+    EXPECT_EQ(v1.isbnEn.toStdString(), "9781593070205");
+}
+
+TEST(TableExtractorTest, Berserk_Vol1_HasCoverUrl)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    EXPECT_TRUE(vols[0].coverUrlJapanese.startsWith(
+        "https://static.wikia.nocookie.net/berserk/"))
+        << "actual: " << vols[0].coverUrlJapanese.toStdString();
+}
+
+TEST(TableExtractorTest, Berserk_VolumesAreInDocumentOrder)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 2);
+
+    for (int i = 0; i < vols.size(); ++i) {
+        EXPECT_EQ(vols[i].volumeNumber, i + 1)
+            << "volume index " << i << " mismatch";
+    }
+}
+
+TEST(TableExtractorTest, Berserk_Vol3_HasMultipleArcsJoined)
+{
+    // Vol 3 sits at the Black Swordsman / Golden Age boundary — its Arc(s)
+    // cell carries both. Verify the joined groupingLabel.
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/berserk.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/berserk_releases-manga_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 3);
+
+    const QString& label = vols[2].groupingLabel;
+    EXPECT_TRUE(label.contains("Black Swordsman", Qt::CaseInsensitive))
+        << "actual: " << label.toStdString();
+    EXPECT_TRUE(label.contains("Golden Age", Qt::CaseInsensitive))
+        << "actual: " << label.toStdString();
 }
 
 // ──────────────────────────────────────────────────────────────────────────

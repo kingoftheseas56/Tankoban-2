@@ -1,0 +1,25 @@
+{
+  "seriesId": "berserk",
+  "wikidataQid": "Q633292",
+  "fandomWikiId": "berserk",
+  "volumePagePath": "/wiki/Releases_(Manga)",
+  "pageModel": "monolith",
+  "extractorType": "table",
+  "chapterKeyword": "Episode",
+  "groupingSemantics": "narrative-arcs",
+  "editionFilters": [
+    "Deluxe Edition",
+    "Unvolumized Episodes"
+  ],
+  "unitHierarchy": ["episode", "chapter", "arc", "volume"],
+  "expectedFields": {
+    "titleEnglish": "absent",
+    "titleJapanese": "absent",
+    "isbnEn": "expected",
+    "isbnJp": "expected",
+    "coverUrlJapanese": "required",
+    "synopsis": "absent",
+    "groupingLabel": "required"
+  },
+  "notes": "Continuous wikitable, two <tr> rows per volume: top with vol number + Arc(s) + JP/EN release dates; bottom with episode list + ISBN block + cover. Uses 'Episode' not 'Chapter'. ISBNs prefixed (ja)/(en). Dates in 'DD Month YYYY' format (not 'Month D, YYYY'). No volume titles surfaced. Black Swordsman Arc / Golden Age Arc etc. live in the Arc(s) cell — carried into groupingLabel for hierarchy display."
+}
