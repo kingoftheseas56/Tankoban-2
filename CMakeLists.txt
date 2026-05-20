@@ -789,6 +789,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_legacy_importer_torrents.cpp
         tests/core/torrent/test_legacy_importer_resume.cpp
         tests/core/torrent/test_legacy_importer_groups.cpp
+        tests/core/torrent/test_legacy_importer_downloads.cpp
         src/core/torrent/TorrentRepository.cpp
         src/core/torrent/LegacyImporter.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp

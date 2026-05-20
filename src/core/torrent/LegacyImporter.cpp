@@ -407,13 +407,148 @@ std::vector<StreamGroupItemRow> LegacyImporter::parseStreamGroupItems(
     return rows;
 }
 
-// ─── parseStreamDownloads — P1.4 (Jr 4) ──────────────────────────────────────
+// ─── parseStreamDownloads — P1.4 (Jr 4, completed by Agent 4 parent-sweep) ───
+//
+// Reads the legacy stream_downloads.json on-disk schema written by
+// StreamDownloadIndex::save() at src/core/stream/StreamDownloadIndex.cpp:104+:
+//
+//   { "version": 2,
+//     "byPath": {
+//       "<lowercase-canonical-path>": {
+//         "imdbId": "tt...",
+//         "type": "series" | "movie",
+//         "season": N,
+//         "episode": N,
+//         "canonicalPath": "C:/Media/.../X.mkv",
+//         "addedAt": <epoch in ms (registerEpisode) OR sec (registerPendingEpisode)>,
+//         "sourceGroupId": "...",
+//         "fileSizeBytes": N,
+//         "state": 0|1|2|3,   // 0=complete 1=pending 2=downloading 3=failed
+//         "progressPct": N
+//       }
+//     } }
+//
+// State int → string mapping (preserves the playback-index state vocab; not
+// mapped onto TorrentState because this index has its own state language):
+//   0 → "complete"   1 → "pending"   2 → "downloading"   3 → "failed"
+//   anything else → "complete" + warn
+//
+// addedAt magnitude heuristic: values > 1e11 are treated as ms-since-epoch
+// (year ≥ 1973 in ms); smaller positive values are treated as sec-since-epoch.
+// Negative/zero → currentDateTimeUtc() + warn.
+//
+// infoHash is NOT in the legacy schema — leave row.infoHash empty (the new
+// stream_downloads_index FK column accepts NULL via ON DELETE SET NULL).
+//
+// Error semantics match the other parsers:
+//   - missing file        → empty vector, no warn (importInto handles at orchestrator)
+//   - malformed JSON      → empty vector + warn
+//   - missing byPath obj  → empty vector + warn
+//   - per-entry anomaly   → skip entry + warn; remaining entries survive
 std::vector<StreamDownloadRow> LegacyImporter::parseStreamDownloads(
     const QString& path,
     QStringList* warnings) {
-    Q_UNUSED(path);
-    Q_UNUSED(warnings);
-    return {};
+    const auto warn = [warnings](const QString& msg) {
+        if (warnings) warnings->append(msg);
+    };
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        warn(QStringLiteral("stream_downloads.json: malformed JSON (%1)")
+                 .arg(perr.errorString()));
+        return {};
+    }
+
+    const QJsonObject root = doc.object();
+    const QJsonValue byPathVal = root.value(QStringLiteral("byPath"));
+    if (!byPathVal.isObject()) {
+        warn(QStringLiteral("stream_downloads.json: top-level 'byPath' object missing"));
+        return {};
+    }
+    const QJsonObject byPath = byPathVal.toObject();
+
+    std::vector<StreamDownloadRow> rows;
+    rows.reserve(static_cast<size_t>(byPath.size()));
+
+    for (auto it = byPath.constBegin(); it != byPath.constEnd(); ++it) {
+        const QString key = it.key();
+        const QJsonValue entryVal = it.value();
+        if (!entryVal.isObject()) {
+            warn(QStringLiteral(
+                     "stream_downloads.json: entry %1 is not an object")
+                     .arg(key));
+            continue;
+        }
+        const QJsonObject e = entryVal.toObject();
+
+        StreamDownloadRow row;
+        // canonical_path: prefer the entry's "canonicalPath" field (preserves
+        // original case); fall back to the object key (which is lowercased).
+        const QString canonical = e.value(QStringLiteral("canonicalPath")).toString();
+        row.canonicalPath = canonical.isEmpty() ? key : canonical;
+        row.imdbId  = e.value(QStringLiteral("imdbId")).toString();
+        row.season  = e.value(QStringLiteral("season")).toInt(0);
+        row.episode = e.value(QStringLiteral("episode")).toInt(0);
+
+        // state int → string
+        const QJsonValue stateVal = e.value(QStringLiteral("state"));
+        if (stateVal.isDouble()) {
+            const int rawState = stateVal.toInt(-1);
+            switch (rawState) {
+                case 0: row.state = QStringLiteral("complete");    break;
+                case 1: row.state = QStringLiteral("pending");     break;
+                case 2: row.state = QStringLiteral("downloading"); break;
+                case 3: row.state = QStringLiteral("failed");      break;
+                default:
+                    row.state = QStringLiteral("complete");
+                    warn(QStringLiteral(
+                             "stream_downloads.json: unknown state %1 "
+                             "for %2, defaulting to 'complete'")
+                             .arg(rawState).arg(key));
+                    break;
+            }
+        } else {
+            row.state = QStringLiteral("complete");
+        }
+
+        // addedAt decode (numeric epoch — ms vs sec heuristic)
+        const QJsonValue addedVal = e.value(QStringLiteral("addedAt"));
+        if (addedVal.isDouble()) {
+            const double rawAdded = addedVal.toDouble(0.0);
+            if (rawAdded <= 0.0) {
+                row.addedAt = QDateTime::currentDateTimeUtc();
+                warn(QStringLiteral(
+                         "stream_downloads.json: non-positive addedAt %1 "
+                         "for %2, defaulting to now")
+                         .arg(rawAdded).arg(key));
+            } else if (rawAdded > 1.0e11) {
+                row.addedAt = QDateTime::fromMSecsSinceEpoch(
+                    static_cast<qint64>(rawAdded), Qt::UTC);
+            } else {
+                row.addedAt = QDateTime::fromSecsSinceEpoch(
+                    static_cast<qint64>(rawAdded), Qt::UTC);
+            }
+        } else {
+            row.addedAt = QDateTime::currentDateTimeUtc();
+            warn(QStringLiteral(
+                     "stream_downloads.json: missing/non-numeric addedAt "
+                     "for %1, defaulting to now")
+                     .arg(key));
+        }
+
+        // infoHash absent in legacy schema — leave empty
+        rows.push_back(std::move(row));
+    }
+
+    return rows;
 }
 
 // ─── importInto — P1.5 (in-line) ─────────────────────────────────────────────
