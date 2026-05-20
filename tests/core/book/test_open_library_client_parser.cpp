@@ -7,8 +7,8 @@
 namespace {
 QByteArray loadFixture(const char* relPath) {
     // tankoban_tests runs from out/; fixtures resolved relative to project root.
-    // CMake sets TANKOBAN_TESTS_FIXTURE_DIR via add_compile_definitions.
-    const QString base = QStringLiteral(TANKOBAN_TESTS_FIXTURE_DIR);
+    // CMake sets TANKOBAN_TEST_FIXTURE_DIR via add_compile_definitions.
+    const QString base = QStringLiteral(TANKOBAN_TEST_FIXTURE_DIR);
     QFile f(base + QLatin1Char('/') + QString::fromLatin1(relPath));
     if (!f.open(QIODevice::ReadOnly)) return {};
     return f.readAll();

@@ -4,7 +4,7 @@
 
 namespace {
 QByteArray loadFixture(const char* relPath) {
-    const QString base = QStringLiteral(TANKOBAN_TESTS_FIXTURE_DIR);
+    const QString base = QStringLiteral(TANKOBAN_TEST_FIXTURE_DIR);
     QFile f(base + QLatin1Char('/') + QString::fromLatin1(relPath));
     if (!f.open(QIODevice::ReadOnly)) return {};
     return f.readAll();

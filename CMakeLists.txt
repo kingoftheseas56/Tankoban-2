@@ -857,12 +857,12 @@ if(TANKOBAN_BUILD_TESTS)
     )
     target_compile_definitions(tankoban_tests PRIVATE
         TANKOBAN_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
-        TANKOBAN_TESTS_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
     )
-    find_package(Qt6 REQUIRED COMPONENTS Test)
+    find_package(Qt6 REQUIRED COMPONENTS Test Network)
     target_link_libraries(tankoban_tests PRIVATE
         GTest::gtest
         Qt6::Core
+        Qt6::Network
         Qt6::Sql
         Qt6::Test
     )
