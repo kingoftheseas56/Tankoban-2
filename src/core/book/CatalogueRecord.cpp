@@ -55,6 +55,10 @@ CatalogueRecord CatalogueRecord::fromJson(const QJsonObject& o)
     r.filePath        = o.value(QStringLiteral("filePath")).toString();
     r.format          = o.value(QStringLiteral("format")).toString();
     r.fileSize        = o.value(QStringLiteral("fileSize")).toString();
+    // QJsonValue stores qint64 as double internally (no separate integer slot in Qt 6).
+    // toDouble round-trips correctly for epoch seconds — current values (~1.7e9) sit
+    // far below 2^53 precision boundary (year ~285 million). Do NOT replace with
+    // .toInt() — that returns int32, silently zeroes out any epoch value > 2^31.
     r.addedAt         = static_cast<qint64>(o.value(QStringLiteral("addedAt")).toDouble(0));
     r.readProgress    = o.value(QStringLiteral("readProgress")).toDouble(0.0);
     r.lastReadAt      = static_cast<qint64>(o.value(QStringLiteral("lastReadAt")).toDouble(0));
