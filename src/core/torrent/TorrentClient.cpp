@@ -693,9 +693,16 @@ void TorrentClient::loadRecords()
 
 void TorrentClient::saveRecords()
 {
-    QJsonObject data;
-    data["active"] = m_records;
-    m_bridge->store().write(RECORDS_FILE, data);
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.4 (2026-05-20) — JsonStore write
+    // path dropped. Phase 2 alert-handler mirrors (onMetadataReady /
+    // onTorrentFinished / onTorrentError / onStorageMoved + startDownload)
+    // already keep the repository's torrents table in sync as the durable
+    // source of truth. m_records in-memory map continues to be maintained
+    // because numerous read paths (devTorrentsSnapshot, hasActive*,
+    // imdb-by-hash lookups in onPieceFinished, etc.) still serve from it;
+    // those readers move to the repo in a future cleanup pass alongside
+    // m_records removal itself. torrents.json on disk is preserved per
+    // Phase 4.5's two-boot retention window.
 }
 
 void TorrentClient::loadStreamBulkGroups()
@@ -2418,19 +2425,20 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
 {
     const QString hash = infoHash.toLower();
 
-    // F9 fix 2026-05-19: self-defense against callers that derived infoHash
-    // from an indexer's pre-filled field (Torrentio always pre-fills BTIH=
-    // parsed from magnet URIs) and never actually called resolveMetadata.
-    // Pre-fix symptom: m_records[infoHash] = rec succeeded + libtorrent had
-    // no handle + UI showed "DOWNLOADING 0%" forever. Three direct-download
-    // entry points all had the same gap (TheatreDownloadPanel slot,
-    // onDirectDownloadRequested, onTheatreTopSeededDownloadRequested) — fixed
-    // here in one place so the contract is self-defending regardless of caller.
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.4 (2026-05-20) — the F9 fix
+    // 2026-05-19 self-defense narrative is retired. Phase 2.2's
+    // pending_engine_add row write below (BEFORE engine.addMagnet) makes
+    // the contract structurally correct: every dispatch either lands a
+    // durable repo row that gets re-attempted on next boot via the Phase
+    // 2.3 replay, OR fails fast with a clear error transition. The
+    // magnet-empty branch below is now just an input bounds check — calling
+    // engine.addMagnet("") would fail anyway, the early return saves a
+    // useless repo write.
     if (!m_engine->hasTorrent(hash)) {
         if (config.magnetUri.isEmpty()) {
             qWarning() << "TorrentClient::startDownload: engine has no torrent for"
                        << hash.left(16) << "and config.magnetUri is empty —"
-                       << "aborting without writing a zombie record."
+                       << "aborting (no magnet to dispatch)."
                        << "imdbId=" << config.imdbId << "season=" << config.season;
             return;
         }
