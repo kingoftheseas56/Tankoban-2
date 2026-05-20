@@ -2673,47 +2673,68 @@ QPair<QString, int> TorrentClient::streamMovieDownloadSnapshot(const QString& im
 
 QList<TorrentInfo> TorrentClient::listActive() const
 {
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 3.1 (2026-05-20) — first UI projection
+    // cutover. The durable existence-truth now comes from the SQLite repository
+    // (Phase 1 importer pre-populated it, Phase 2 mirroring keeps it in sync).
+    // The engine still owns the LIVE runtime fields (progress / speed / peers /
+    // seeds / queue position) — we overlay those when the engine has a handle
+    // for the hash, exactly as the legacy m_records merge did. Rows past their
+    // Removed terminal are skipped so the Transfers list doesn't render
+    // tombstones.
+    //
+    // Phase 1 invariant honoured: m_records still exists in memory and is
+    // still written to by the legacy path; it is just no longer read here.
+    // Phase 4 deletes m_records + saveRecords entirely.
     QList<TorrentInfo> result;
-    auto statuses = m_engine->allStatuses();
 
-    // Build lookup from engine
     QMap<QString, TorrentStatus> statusMap;
-    for (const auto& s : statuses)
+    for (const auto& s : m_engine->allStatuses())
         statusMap[s.infoHash] = s;
 
-    // Merge with stored records
-    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        QString hash = it.key();
-        QJsonObject rec = it.value().toObject();
+    const auto rows = m_repo.listTorrents();
+    result.reserve(static_cast<int>(rows.size()));
+    for (const auto& row : rows) {
+        if (row.state == tankoban::torrent::TorrentState::Removed)
+            continue;
 
         TorrentInfo info;
-        info.infoHash    = hash;
-        info.name        = rec["name"].toString();
-        info.savePath    = rec["savePath"].toString();
-        info.category    = rec["category"].toString();
-        info.addedAt      = rec["addedAt"].toVariant().toLongLong();
-        info.streamGroupId = rec["streamGroupId"].toString();
-        info.sequential   = rec["sequential"].toBool();
-        info.errorMessage = rec["errorMessage"].toString();
+        info.infoHash      = row.hash;
+        info.name          = row.name;
+        info.savePath      = row.savePath;
+        info.category      = row.category;
+        info.addedAt       = row.addedAt.isValid()
+                                 ? row.addedAt.toMSecsSinceEpoch()
+                                 : 0;
+        info.streamGroupId = row.streamGroupId;
+        info.sequential    = row.sequential;
+        info.errorMessage  = row.errorMessage;
 
-        if (statusMap.contains(hash)) {
-            const auto& st = statusMap[hash];
-            info.stateString = st.stateString;
-            info.progress    = st.progress;
-            info.dlSpeed     = st.downloadRate;
-            info.ulSpeed     = st.uploadRate;
-            info.peers       = st.numPeers;
-            info.seeds       = st.numSeeds;
-            info.totalDone    = st.totalDone;
-            info.totalWanted  = st.totalWanted;
-            info.forceStarted = st.forceStarted;
+        const auto stIt = statusMap.constFind(row.hash);
+        if (stIt != statusMap.constEnd()) {
+            const TorrentStatus& st = stIt.value();
+            // Engine is authoritative for live runtime — keep its stateString
+            // (which carries "downloading"/"seeding"/"checking"/"metadata"
+            // distinctions the repo's coarser TorrentState enum collapses
+            // into "active").
+            info.stateString   = st.stateString;
+            info.progress      = st.progress;
+            info.dlSpeed       = st.downloadRate;
+            info.ulSpeed       = st.uploadRate;
+            info.peers         = st.numPeers;
+            info.seeds         = st.numSeeds;
+            info.totalDone     = st.totalDone;
+            info.totalWanted   = st.totalWanted;
+            info.forceStarted  = st.forceStarted;
             info.queuePosition = st.queuePosition;
-            info.dlLimit      = st.dlLimit;
-            info.ulLimit      = st.ulLimit;
+            info.dlLimit       = st.dlLimit;
+            info.ulLimit       = st.ulLimit;
             if (info.name.isEmpty())
                 info.name = st.name;
         } else {
-            info.stateString = rec["state"].toString();
+            // No engine handle: row is paused / errored / pending-engine-add.
+            // Fall back to the repo's persisted state, mapped to the legacy
+            // string vocabulary every existing UI consumer already understands.
+            info.stateString = tankoban::torrent::torrentStateToString(row.state);
         }
 
         result.append(info);

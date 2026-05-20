@@ -375,7 +375,14 @@ private:
     // continues to drive UI state — the repository is written into but not yet
     // read from. Phase 3 cuts over the consumers; Phase 4 removes m_records +
     // saveRecords entirely.
-    tankoban::torrent::TorrentRepository m_repo;
+    //
+    // `mutable` because TorrentRepository's read methods (listTorrents,
+    // getTorrent, listStreamGroups, etc.) cannot be `const` — QSqlQuery::prepare
+    // + exec are not const-clean on QSqlDatabase. The conceptual state of
+    // TorrentClient is unchanged by these queries, matching the standard
+    // C++ idiom for cache/storage members accessed from const methods (e.g.
+    // listActive() const, which Phase 3.1 routes through m_repo).
+    mutable tankoban::torrent::TorrentRepository m_repo;
 
     // Persistent records keyed by infoHash
     QJsonObject m_records;  // { "hash": { name, savePath, category, addedAt, ... } }
