@@ -223,19 +223,241 @@ bool TorrentRepository::rollback() {
 }
 
 // ─── torrents CRUD ───────────────────────────────────────────────────────────
-// Implementation in P0.5. Stubs return false / empty.
 
-bool TorrentRepository::upsertTorrent(const TorrentRow&) { return false; }
-bool TorrentRepository::updateTorrentState(const QString&, TorrentState, const QString&) { return false; }
-bool TorrentRepository::updateTorrentResumeData(const QString&, const QByteArray&) { return false; }
-bool TorrentRepository::updateTorrentName(const QString&, const QString&) { return false; }
-bool TorrentRepository::updateTorrentSavePath(const QString&, const QString&) { return false; }
-bool TorrentRepository::removeTorrent(const QString&) { return false; }
-std::optional<TorrentRow> TorrentRepository::getTorrent(const QString&) { return std::nullopt; }
-std::vector<TorrentRow> TorrentRepository::listTorrents() { return {}; }
-std::vector<TorrentRow> TorrentRepository::listTorrentsByState(TorrentState) { return {}; }
-std::vector<TorrentRow> TorrentRepository::listTorrentsByImdb(const QString&, int) { return {}; }
-std::vector<TorrentRow> TorrentRepository::listTorrentsByStreamGroup(const QString&) { return {}; }
+namespace {
+
+// Default-constructed QStrings are isNull() == true. Qt's SQLite driver
+// serialises a null QString as SQL NULL, which violates the NOT NULL
+// constraints carried by every TEXT column on the torrents table. Funnel all
+// string binds through this helper so callers that leave fields default-
+// constructed (the legacy importer, future TorrentClient writers, tests) reach
+// the column as the empty string, matching its DEFAULT '' clause.
+static QVariant bindStrOrEmpty(const QString& s) {
+    return s.isNull() ? QVariant(QString::fromUtf8("")) : QVariant(s);
+}
+
+// TU-local helper — projects an executed query row onto a TorrentRow. The
+// SELECT column order matches kTorrentSelectCols so list / get implementations
+// stay in lockstep.
+static TorrentRow torrentRowFromQuery(QSqlQuery& q) {
+    TorrentRow r;
+    r.hash           = q.value(0).toString();
+    r.state          = torrentStateFromString(q.value(1).toString())
+                           .value_or(TorrentState::Active);
+    r.name           = q.value(2).toString();
+    r.addedAt        = QDateTime::fromString(q.value(3).toString(), Qt::ISODate);
+    r.category       = q.value(4).toString();
+    r.savePath       = q.value(5).toString();
+    r.contentLayout  = q.value(6).toString();
+    r.streamGroupId  = q.value(7).toString();
+    r.sequential     = q.value(8).toInt() != 0;
+    r.imdbId         = q.value(9).toString();
+    r.season         = q.value(10).toInt();
+    r.magnetUri      = q.value(11).toString();
+    r.legacyNoMagnet = q.value(12).toInt() != 0;
+    r.errorMessage   = q.value(13).toString();
+    r.resumeData     = q.value(14).toByteArray();
+    r.torrentFile    = q.value(15).toByteArray();
+    return r;
+}
+
+static const char* kTorrentSelectCols =
+    "hash, state, name, added_at, category, save_path, content_layout, "
+    "stream_group_id, sequential, imdb_id, season, magnet_uri, "
+    "legacy_no_magnet, error_message, resume_data, torrent_file";
+
+}  // namespace
+
+bool TorrentRepository::upsertTorrent(const TorrentRow& row) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(R"SQL(
+        INSERT INTO torrents (
+            hash, state, name, added_at, category, save_path, content_layout,
+            stream_group_id, sequential, imdb_id, season, magnet_uri,
+            legacy_no_magnet, error_message, resume_data, torrent_file
+        ) VALUES (
+            :hash, :state, :name, :added_at, :category, :save_path, :content_layout,
+            :stream_group_id, :sequential, :imdb_id, :season, :magnet_uri,
+            :legacy_no_magnet, :error_message, :resume_data, :torrent_file
+        )
+        ON CONFLICT(hash) DO UPDATE SET
+            state = excluded.state,
+            name = excluded.name,
+            category = excluded.category,
+            save_path = excluded.save_path,
+            content_layout = excluded.content_layout,
+            stream_group_id = excluded.stream_group_id,
+            sequential = excluded.sequential,
+            imdb_id = excluded.imdb_id,
+            season = excluded.season,
+            magnet_uri = CASE WHEN excluded.magnet_uri != '' THEN excluded.magnet_uri ELSE torrents.magnet_uri END,
+            legacy_no_magnet = excluded.legacy_no_magnet,
+            error_message = excluded.error_message,
+            resume_data = excluded.resume_data,
+            torrent_file = excluded.torrent_file
+    )SQL"));
+    q.bindValue(QStringLiteral(":hash"), row.hash.toLower());
+    q.bindValue(QStringLiteral(":state"), torrentStateToString(row.state));
+    q.bindValue(QStringLiteral(":name"), bindStrOrEmpty(row.name));
+    q.bindValue(QStringLiteral(":added_at"), row.addedAt.toString(Qt::ISODate));
+    q.bindValue(QStringLiteral(":category"), bindStrOrEmpty(row.category));
+    q.bindValue(QStringLiteral(":save_path"), bindStrOrEmpty(row.savePath));
+    q.bindValue(QStringLiteral(":content_layout"), bindStrOrEmpty(row.contentLayout));
+    q.bindValue(QStringLiteral(":stream_group_id"), bindStrOrEmpty(row.streamGroupId));
+    q.bindValue(QStringLiteral(":sequential"), row.sequential ? 1 : 0);
+    q.bindValue(QStringLiteral(":imdb_id"), bindStrOrEmpty(row.imdbId));
+    q.bindValue(QStringLiteral(":season"), row.season);
+    q.bindValue(QStringLiteral(":magnet_uri"), bindStrOrEmpty(row.magnetUri));
+    q.bindValue(QStringLiteral(":legacy_no_magnet"), row.legacyNoMagnet ? 1 : 0);
+    q.bindValue(QStringLiteral(":error_message"), bindStrOrEmpty(row.errorMessage));
+    q.bindValue(QStringLiteral(":resume_data"), row.resumeData);
+    q.bindValue(QStringLiteral(":torrent_file"), row.torrentFile);
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] upsertTorrent failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::updateTorrentState(const QString& hash,
+                                           TorrentState state,
+                                           const QString& errorMessage) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "UPDATE torrents SET state = :state, error_message = :err WHERE hash = :hash"));
+    q.bindValue(QStringLiteral(":state"), torrentStateToString(state));
+    q.bindValue(QStringLiteral(":err"), bindStrOrEmpty(errorMessage));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] updateTorrentState failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::updateTorrentResumeData(const QString& hash, const QByteArray& blob) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "UPDATE torrents SET resume_data = :blob WHERE hash = :hash"));
+    q.bindValue(QStringLiteral(":blob"), blob);
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] updateTorrentResumeData failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::updateTorrentName(const QString& hash, const QString& name) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE torrents SET name = :name WHERE hash = :hash"));
+    q.bindValue(QStringLiteral(":name"), bindStrOrEmpty(name));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] updateTorrentName failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::updateTorrentSavePath(const QString& hash, const QString& savePath) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE torrents SET save_path = :sp WHERE hash = :hash"));
+    q.bindValue(QStringLiteral(":sp"), bindStrOrEmpty(savePath));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] updateTorrentSavePath failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool TorrentRepository::removeTorrent(const QString& hash) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM torrents WHERE hash = :hash"));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] removeTorrent failed:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+std::optional<TorrentRow> TorrentRepository::getTorrent(const QString& hash) {
+    if (!m_open) return std::nullopt;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT %1 FROM torrents WHERE hash = :hash")
+                  .arg(QString::fromUtf8(kTorrentSelectCols)));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    if (!q.exec() || !q.next()) return std::nullopt;
+    return torrentRowFromQuery(q);
+}
+
+std::vector<TorrentRow> TorrentRepository::listTorrents() {
+    std::vector<TorrentRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("SELECT %1 FROM torrents")
+                    .arg(QString::fromUtf8(kTorrentSelectCols)))) {
+        qWarning() << "[TorrentRepository] listTorrents failed:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(torrentRowFromQuery(q));
+    return out;
+}
+
+std::vector<TorrentRow> TorrentRepository::listTorrentsByState(TorrentState state) {
+    std::vector<TorrentRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT %1 FROM torrents WHERE state = :state")
+                  .arg(QString::fromUtf8(kTorrentSelectCols)));
+    q.bindValue(QStringLiteral(":state"), torrentStateToString(state));
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] listTorrentsByState failed:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(torrentRowFromQuery(q));
+    return out;
+}
+
+std::vector<TorrentRow> TorrentRepository::listTorrentsByImdb(const QString& imdbId, int season) {
+    std::vector<TorrentRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+                  "SELECT %1 FROM torrents WHERE imdb_id = :imdb AND season = :season")
+                  .arg(QString::fromUtf8(kTorrentSelectCols)));
+    q.bindValue(QStringLiteral(":imdb"), imdbId);
+    q.bindValue(QStringLiteral(":season"), season);
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] listTorrentsByImdb failed:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(torrentRowFromQuery(q));
+    return out;
+}
+
+std::vector<TorrentRow> TorrentRepository::listTorrentsByStreamGroup(const QString& streamGroupId) {
+    std::vector<TorrentRow> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT %1 FROM torrents WHERE stream_group_id = :sg")
+                  .arg(QString::fromUtf8(kTorrentSelectCols)));
+    q.bindValue(QStringLiteral(":sg"), streamGroupId);
+    if (!q.exec()) {
+        qWarning() << "[TorrentRepository] listTorrentsByStreamGroup failed:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.push_back(torrentRowFromQuery(q));
+    return out;
+}
 
 // ─── stream_groups + stream_group_items CRUD ─────────────────────────────
 
