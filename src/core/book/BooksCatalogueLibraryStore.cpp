@@ -26,7 +26,10 @@ void BooksCatalogueLibraryStore::upsertRecord(const CatalogueRecord& r)
         // Replace existing record's derived-map entries before re-inserting.
         auto existing = m_byId.find(r.catalogueId);
         if (existing != m_byId.end()) {
-            const auto& old = existing.value();
+            // Value copy (not reference) — m_byId.insert below could
+            // invalidate the iterator; we want to be safe against any
+            // future refactor that reaches for `old` post-insert.
+            const auto old = existing.value();
             if (!old.seriesId.isEmpty()) {
                 auto sit = m_bySeries.find(old.seriesId);
                 if (sit != m_bySeries.end()) {
@@ -80,9 +83,12 @@ void BooksCatalogueLibraryStore::validateAll()
         for (auto it = m_byId.constBegin(); it != m_byId.constEnd(); ++it) {
             const auto& rec = it.value();
             if (rec.filePath.isEmpty()) continue;
+            // CatalogueRecord.filePath is the canonical relative path under
+            // Books root; the absolute resolution against m_dataDir is the
+            // only existence-check signal. Mirrors StreamDownloadIndex's
+            // single-path validateAll pattern.
             const QString abs = QDir(m_dataDir).absoluteFilePath(rec.filePath);
-            if (!QFileInfo::exists(abs) &&
-                !QFileInfo::exists(rec.filePath)) {
+            if (!QFileInfo::exists(abs)) {
                 toEvict.append(it.key());
             }
         }
