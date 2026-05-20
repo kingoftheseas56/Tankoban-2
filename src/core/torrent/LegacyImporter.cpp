@@ -552,14 +552,133 @@ std::vector<StreamDownloadRow> LegacyImporter::parseStreamDownloads(
 }
 
 // ─── importInto — P1.5 (in-line) ─────────────────────────────────────────────
+//
+// One-shot orchestrator. Wraps every per-source parser + per-row upsert inside
+// a single repository transaction so a partial migration either fully lands or
+// fully rolls back — never half-populates the SQLite store. On clean commit,
+// stamps schema_meta `migration_completed_at` with the UTC timestamp; the
+// presence of that key is the gate that TorrentClient's first-boot check uses
+// to decide "migration done, skip importer next time" (Phase 1 Task 1.6).
+//
+// Caller contract: repo MUST be opened (isOpen() == true) before invocation.
+// initSchema() is the caller's responsibility too — open() runs it as part of
+// the open path in P0.3, so calling open() is sufficient. We do NOT call
+// open/initSchema here because the importer is intentionally agnostic about
+// where the repository lives on disk.
+//
+// Failure modes:
+//   - repo not open                          → empty summary + warning, no tx
+//   - beginTransaction fails                 → empty summary + warning, no tx
+//   - parser returns empty due to missing
+//     legacy file (silent-skip contract)     → 0 imports for that source, no warn
+//   - parser appends warnings                → preserved into summary.warnings
+//   - per-row upsert fails                   → warning appended, loop continues;
+//                                              the import-counter is NOT bumped
+//                                              for the failed row (summary counts
+//                                              reflect successful upserts only)
+//   - commit fails                           → rollback + warning appended
+//
+// The summary's warnings list is the union of every parser warning + every
+// upsert/commit warning. Caller logs them at WARN level (TorrentClient does
+// this in P1.6).
 LegacyImportSummary LegacyImporter::importInto(
     TorrentRepository& repo,
     const LegacySources& sources) {
-    Q_UNUSED(repo);
-    Q_UNUSED(sources);
     LegacyImportSummary summary;
-    summary.warnings.append(
-        QStringLiteral("LegacyImporter::importInto not yet implemented (P1.5 pending)"));
+
+    if (!repo.isOpen()) {
+        summary.warnings.append(
+            QStringLiteral("LegacyImporter::importInto: repository not open"));
+        return summary;
+    }
+
+    if (!repo.beginTransaction()) {
+        summary.warnings.append(
+            QStringLiteral("LegacyImporter::importInto: failed to begin transaction"));
+        return summary;
+    }
+
+    QStringList warnings;
+
+    // 1. Torrents (+ resume blobs attached inline per-row).
+    auto torrentRows = parseTorrentsJson(sources.torrentsJsonPath, &warnings);
+    for (auto& row : torrentRows) {
+        row.resumeData = loadResumeBlob(sources.resumeCacheDir, row.hash);
+        if (!row.resumeData.isEmpty()) {
+            ++summary.resumeBlobsAttached;
+        }
+        if (row.legacyNoMagnet) {
+            ++summary.torrentsLegacyNoMagnet;
+        }
+        if (repo.upsertTorrent(row)) {
+            ++summary.torrentsImported;
+        } else {
+            warnings.append(QStringLiteral(
+                                "torrents: upsertTorrent failed for %1")
+                                .arg(row.hash));
+        }
+    }
+
+    // 2. Stream groups (header rows) + their items (child rows).
+    //
+    // Parsers are called twice on the same path — once for groups, once for
+    // items — by design: each parser owns one row vector, the file is small
+    // (legacy live max ~11 groups / ~140 items), and the second open avoids
+    // coupling the two output containers in a shared traversal that would
+    // need its own helper.
+    auto groupRows = parseStreamGroups(
+        sources.streamBulkGroupsJsonPath, &warnings);
+    for (const auto& g : groupRows) {
+        if (repo.upsertStreamGroup(g)) {
+            ++summary.streamGroupsImported;
+        } else {
+            warnings.append(QStringLiteral(
+                                "stream_groups: upsertStreamGroup failed for %1")
+                                .arg(g.groupId));
+        }
+    }
+    auto itemRows = parseStreamGroupItems(
+        sources.streamBulkGroupsJsonPath, &warnings);
+    for (const auto& it : itemRows) {
+        if (repo.upsertStreamGroupItem(it)) {
+            ++summary.streamGroupItemsImported;
+        } else {
+            warnings.append(QStringLiteral(
+                                "stream_group_items: upsertStreamGroupItem "
+                                "failed for group=%1 item=%2")
+                                .arg(it.groupId, it.itemId));
+        }
+    }
+
+    // 3. Stream downloads (path-keyed playback index).
+    auto downloadRows = parseStreamDownloads(
+        sources.streamDownloadsJsonPath, &warnings);
+    for (const auto& d : downloadRows) {
+        if (repo.upsertStreamDownload(d)) {
+            ++summary.streamDownloadsImported;
+        } else {
+            warnings.append(QStringLiteral(
+                                "stream_downloads: upsertStreamDownload "
+                                "failed for %1")
+                                .arg(d.canonicalPath));
+        }
+    }
+
+    summary.warnings = warnings;
+
+    // Stamp the completion marker BEFORE commit so it lands in the same
+    // transaction. If commit fails, this write rolls back along with every
+    // upsert above — the importer is all-or-nothing.
+    repo.setMetaValue(
+        QStringLiteral("migration_completed_at"),
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+
+    if (!repo.commit()) {
+        repo.rollback();
+        summary.warnings.append(QStringLiteral(
+            "LegacyImporter::importInto: commit failed; transaction rolled back"));
+    }
+
     return summary;
 }
 

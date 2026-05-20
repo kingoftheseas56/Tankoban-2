@@ -525,13 +525,18 @@ bool TorrentRepository::upsertStreamGroup(const StreamGroupRow& row) {
             created_at = excluded.created_at,
             pack_mode = excluded.pack_mode
     )SQL"));
-    q.bindValue(QStringLiteral(":group_id"), row.groupId);
-    q.bindValue(QStringLiteral(":imdb_id"), row.imdbId);
+    // Funnel TEXT NOT NULL columns through bindStrOrEmpty so a null QString
+    // from the legacy importer (or any defensive caller that didn't pre-
+    // normalise an absent JSON key) doesn't trip the NOT NULL constraint.
+    // Matches upsertTorrent's pattern; staging_path defaults to '' in schema
+    // so the same defence applies there too.
+    q.bindValue(QStringLiteral(":group_id"), bindStrOrEmpty(row.groupId));
+    q.bindValue(QStringLiteral(":imdb_id"), bindStrOrEmpty(row.imdbId));
     q.bindValue(QStringLiteral(":season"), row.season);
-    q.bindValue(QStringLiteral(":label"), row.label);
-    q.bindValue(QStringLiteral(":state"), row.state);
+    q.bindValue(QStringLiteral(":label"), bindStrOrEmpty(row.label));
+    q.bindValue(QStringLiteral(":state"), bindStrOrEmpty(row.state));
     q.bindValue(QStringLiteral(":retry_generation"), row.retryGeneration);
-    q.bindValue(QStringLiteral(":staging_path"), row.stagingPath);
+    q.bindValue(QStringLiteral(":staging_path"), bindStrOrEmpty(row.stagingPath));
     q.bindValue(QStringLiteral(":created_at"), row.createdAt.toString(Qt::ISODate));
     q.bindValue(QStringLiteral(":pack_mode"), row.packMode ? 1 : 0);
     if (!q.exec()) {
@@ -614,8 +619,8 @@ bool TorrentRepository::upsertStreamGroupItem(const StreamGroupItemRow& row) {
             error_message = excluded.error_message,
             file_index = excluded.file_index
     )SQL"));
-    q.bindValue(QStringLiteral(":group_id"), row.groupId);
-    q.bindValue(QStringLiteral(":item_id"), row.itemId);
+    q.bindValue(QStringLiteral(":group_id"), bindStrOrEmpty(row.groupId));
+    q.bindValue(QStringLiteral(":item_id"), bindStrOrEmpty(row.itemId));
     q.bindValue(QStringLiteral(":episode"), row.episode);
     // Bind SQL NULL (not '') when infoHash is empty so the FK constraint stays
     // satisfied and the ON DELETE SET NULL action has a target to overwrite.
@@ -624,8 +629,11 @@ bool TorrentRepository::upsertStreamGroupItem(const StreamGroupItemRow& row) {
     } else {
         q.bindValue(QStringLiteral(":info_hash"), row.infoHash.toLower());
     }
-    q.bindValue(QStringLiteral(":state"), row.state);
-    q.bindValue(QStringLiteral(":error_message"), row.errorMessage);
+    // state / error_message are TEXT NOT NULL — funnel through bindStrOrEmpty
+    // so a default-constructed QString from the importer doesn't trip the
+    // constraint (matches upsertTorrent's defence; see upsertStreamGroup).
+    q.bindValue(QStringLiteral(":state"), bindStrOrEmpty(row.state));
+    q.bindValue(QStringLiteral(":error_message"), bindStrOrEmpty(row.errorMessage));
     q.bindValue(QStringLiteral(":file_index"), row.fileIndex);
     if (!q.exec()) {
         qWarning() << "[TorrentRepository] upsertStreamGroupItem failed:" << q.lastError().text();
@@ -704,11 +712,15 @@ bool TorrentRepository::upsertStreamDownload(const StreamDownloadRow& row) {
             info_hash = excluded.info_hash,
             added_at = excluded.added_at
     )SQL"));
-    q.bindValue(QStringLiteral(":canonical_path"), row.canonicalPath);
-    q.bindValue(QStringLiteral(":imdb_id"), row.imdbId);
+    // canonical_path is PRIMARY KEY NOT NULL; state is TEXT NOT NULL; imdb_id
+    // has DEFAULT '' but binding a null QString still violates it. All three
+    // funneled through bindStrOrEmpty for the same defence as
+    // upsertStreamGroup / upsertTorrent.
+    q.bindValue(QStringLiteral(":canonical_path"), bindStrOrEmpty(row.canonicalPath));
+    q.bindValue(QStringLiteral(":imdb_id"), bindStrOrEmpty(row.imdbId));
     q.bindValue(QStringLiteral(":season"), row.season);
     q.bindValue(QStringLiteral(":episode"), row.episode);
-    q.bindValue(QStringLiteral(":state"), row.state);
+    q.bindValue(QStringLiteral(":state"), bindStrOrEmpty(row.state));
     // Bind SQL NULL (not '') when infoHash is empty so the FK constraint stays
     // satisfied and the ON DELETE SET NULL action has a target to overwrite.
     if (row.infoHash.isEmpty()) {
