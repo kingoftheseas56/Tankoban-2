@@ -1,0 +1,48 @@
+{
+  "kind": "books#volumes",
+  "totalItems": 2,
+  "items": [
+    {
+      "kind": "books#volume",
+      "id": "qE9SBgAAQBAJ",
+      "volumeInfo": {
+        "title": "The Way of Kings",
+        "authors": ["Brandon Sanderson"],
+        "publisher": "Tor Books",
+        "publishedDate": "2010-08-31",
+        "description": "Roshar is a world of stone and storms.",
+        "industryIdentifiers": [
+          { "type": "ISBN_13", "identifier": "9780765326355" },
+          { "type": "ISBN_10", "identifier": "076532635X" }
+        ],
+        "pageCount": 1007,
+        "categories": ["Fiction / Fantasy / Epic"],
+        "language": "en",
+        "imageLinks": {
+          "smallThumbnail": "http://books.google.com/books/content?id=qE9SBgAAQBAJ&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api",
+          "thumbnail": "http://books.google.com/books/content?id=qE9SBgAAQBAJ&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api"
+        }
+      }
+    },
+    {
+      "kind": "books#volume",
+      "id": "TGtnDAAAQBAJ",
+      "volumeInfo": {
+        "title": "Words of Radiance",
+        "authors": ["Brandon Sanderson"],
+        "publisher": "Tor Books",
+        "publishedDate": "2014-03-04",
+        "description": "Six years ago, the Assassin in White killed Gavilar Kholin.",
+        "industryIdentifiers": [
+          { "type": "ISBN_13", "identifier": "9780765326362" }
+        ],
+        "pageCount": 1087,
+        "categories": ["Fiction / Fantasy / Epic"],
+        "language": "en",
+        "imageLinks": {
+          "thumbnail": "http://books.google.com/books/content?id=TGtnDAAAQBAJ&img=1&zoom=1"
+        }
+      }
+    }
+  ]
+}

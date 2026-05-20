@@ -203,6 +203,7 @@ set(SOURCES
     src/core/book/BookDownloader.cpp
     src/core/book/BooksCatalogueLibraryStore.cpp
     src/core/book/CatalogueRecord.cpp
+    src/core/book/GoogleBooksClient.cpp
     src/core/book/OpenLibraryClient.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
@@ -390,6 +391,7 @@ set(HEADERS
     src/core/book/BookCatalogueResult.h
     src/core/book/BooksCatalogueLibraryStore.h
     src/core/book/CatalogueRecord.h
+    src/core/book/GoogleBooksClient.h
     src/core/book/OpenLibraryClient.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
@@ -809,6 +811,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/book/BooksCatalogueLibraryStore.cpp
         tests/core/book/test_open_library_client_parser.cpp
         src/core/book/OpenLibraryClient.cpp
+        tests/core/book/test_google_books_client_parser.cpp
+        src/core/book/GoogleBooksClient.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
