@@ -311,6 +311,27 @@ QMap<int, int> priorityVectorToMap(const QVector<int>& priorities)
     return mapped;
 }
 
+tankoban::torrent::TorrentRow torrentRowFromStartConfig(
+    const QString& hash,
+    const AddTorrentConfig& config,
+    tankoban::torrent::TorrentState state)
+{
+    tankoban::torrent::TorrentRow row;
+    row.hash = hash.toLower();
+    row.state = state;
+    row.addedAt = QDateTime::currentDateTimeUtc();
+    row.category = config.category;
+    row.savePath = config.destinationPath;
+    row.contentLayout = config.contentLayout;
+    row.streamGroupId = config.streamGroupId;
+    row.sequential = config.sequential;
+    row.imdbId = config.imdbId;
+    row.season = config.season;
+    row.magnetUri = config.magnetUri;
+    row.legacyNoMagnet = config.magnetUri.isEmpty();
+    return row;
+}
+
 bool streamBulkGroupAllTerminal(const QJsonObject& group)
 {
     const QJsonArray items = group.value("items").toArray();
@@ -379,6 +400,27 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     connect(m_engine, &TorrentEngine::pieceFinished,
             this, &TorrentClient::onPieceFinished,
             Qt::QueuedConnection);  // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — emit fires from AlertWorker thread
+    connect(m_engine, &TorrentEngine::torrentAddedConfirmed,
+            this, [this](const QString& infoHash) {
+                const QString hash = infoHash.toLower();
+                const auto row = m_repo.getTorrent(hash);
+                if (row.has_value() &&
+                    row->state == tankoban::torrent::TorrentState::PendingEngineAdd) {
+                    m_repo.updateTorrentState(
+                        hash, tankoban::torrent::TorrentState::Active);
+                }
+            },
+            Qt::QueuedConnection);
+    connect(m_engine, &TorrentEngine::torrentAddFailed,
+            this, [this](const QString& infoHash, const QString& errorMessage) {
+                const QString hash = infoHash.toLower();
+                if (m_repo.getTorrent(hash).has_value()) {
+                    m_repo.updateTorrentState(
+                        hash, tankoban::torrent::TorrentState::Error,
+                        errorMessage);
+                }
+            },
+            Qt::QueuedConnection);
     connect(m_engine, &TorrentEngine::torrentFinished,
             this, &TorrentClient::onTorrentFinished);
     connect(m_engine, &TorrentEngine::torrentError,
@@ -2250,6 +2292,8 @@ QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
 
 void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfig& config)
 {
+    const QString hash = infoHash.toLower();
+
     // F9 fix 2026-05-19: self-defense against callers that derived infoHash
     // from an indexer's pre-filled field (Torrentio always pre-fills BTIH=
     // parsed from magnet URIs) and never actually called resolveMetadata.
@@ -2258,29 +2302,49 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     // entry points all had the same gap (TheatreDownloadPanel slot,
     // onDirectDownloadRequested, onTheatreTopSeededDownloadRequested) — fixed
     // here in one place so the contract is self-defending regardless of caller.
-    if (!m_engine->hasTorrent(infoHash)) {
+    if (!m_engine->hasTorrent(hash)) {
         if (config.magnetUri.isEmpty()) {
             qWarning() << "TorrentClient::startDownload: engine has no torrent for"
-                       << infoHash.left(16) << "and config.magnetUri is empty —"
+                       << hash.left(16) << "and config.magnetUri is empty —"
                        << "aborting without writing a zombie record."
                        << "imdbId=" << config.imdbId << "season=" << config.season;
             return;
         }
+
+        auto pendingRow = torrentRowFromStartConfig(
+            hash, config, tankoban::torrent::TorrentState::PendingEngineAdd);
+        if (!m_repo.upsertTorrent(pendingRow)) {
+            qWarning() << "TorrentClient::startDownload: failed to persist"
+                       << "pending_engine_add row for" << hash.left(16);
+        }
+
         const QString tempPath = m_bridge->dataDir() + "/torrent_cache/resolve_tmp";
         const QString addedHash = m_engine->addMagnet(config.magnetUri, tempPath, /*paused=*/true);
         if (addedHash.isEmpty()) {
+            m_repo.updateTorrentState(
+                hash,
+                tankoban::torrent::TorrentState::Error,
+                QStringLiteral("engine.addMagnet failed"));
             qWarning() << "TorrentClient::startDownload: addMagnet failed for"
-                       << infoHash.left(16) << "— aborting without writing a zombie record.";
+                       << hash.left(16) << "— aborting without writing a zombie record.";
             return;
         }
-        if (addedHash.compare(infoHash, Qt::CaseInsensitive) != 0) {
+        if (addedHash.compare(hash, Qt::CaseInsensitive) != 0) {
+            m_repo.updateTorrentState(
+                hash,
+                tankoban::torrent::TorrentState::Error,
+                QStringLiteral("engine.addMagnet returned mismatched hash"));
             qWarning() << "TorrentClient::startDownload: addMagnet returned hash"
                        << addedHash.left(16) << "but caller expected"
-                       << infoHash.left(16) << "— aborting (hash mismatch could indicate"
+                       << hash.left(16) << "— aborting (hash mismatch could indicate"
                        << "magnet/infoHash desync from indexer).";
             m_engine->removeTorrent(addedHash, /*deleteFiles=*/false);
             return;
         }
+        m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
+    } else if (!m_repo.getTorrent(hash).has_value()) {
+        m_repo.upsertTorrent(torrentRowFromStartConfig(
+            hash, config, tankoban::torrent::TorrentState::Active));
     }
 
     // Apply file priorities
@@ -2293,16 +2357,16 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
         for (auto it = config.filePriorities.begin(); it != config.filePriorities.end(); ++it)
             priorities[it.key()] = it.value();
 
-        m_engine->setFilePriorities(infoHash, priorities);
+        m_engine->setFilePriorities(hash, priorities);
     }
 
     // Sequential download
     if (config.sequential)
-        m_engine->setSequentialDownload(infoHash, true);
+        m_engine->setSequentialDownload(hash, true);
 
     // Content layout: strip root folder if "no_subfolder"
     if (config.contentLayout == QLatin1String("no_subfolder"))
-        m_engine->flattenFiles(infoHash);
+        m_engine->flattenFiles(hash);
 
     // Create the record only now — user has confirmed the download
     QJsonObject rec;
@@ -2319,7 +2383,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     // non-Cinemeta downloads (repurposed direct torrent search).
     rec["imdbId"]          = config.imdbId;
     rec["season"]          = config.season;
-    m_records[infoHash]    = rec;
+    m_records[hash]        = rec;
     saveRecords();
 
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — same-session re-dispatch:
@@ -2331,8 +2395,8 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     // so it fires on the next event-loop tick — after the current startDownload
     // stack frame has returned and m_records is fully committed.
     if (!config.imdbId.isEmpty() && config.streamGroupId.isEmpty()
-            && m_engine->hasMetadata(infoHash)) {
-        const QString capturedHash = infoHash;
+            && m_engine->hasMetadata(hash)) {
+        const QString capturedHash = hash;
         QTimer::singleShot(0, this, [this, capturedHash]() {
             const QJsonArray files = m_engine->torrentFiles(capturedHash);
             onMetadataReady(capturedHash, QString(), 0, files);
@@ -2342,7 +2406,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     JsonlEventLog::instance().emitEvent(
         QStringLiteral("torrent.added"),
         QStringLiteral("start_download"),
-        QJsonObject{{QStringLiteral("hash"), infoHash},
+        QJsonObject{{QStringLiteral("hash"), hash},
                     {QStringLiteral("imdbId"), config.imdbId},
                     {QStringLiteral("season"), config.season},
                     {QStringLiteral("streamGroupId"), config.streamGroupId},
@@ -2360,11 +2424,11 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     // speeds, ETA in the thousands of hours. startTorrent does the right
     // setup (move from resolve_tmp → destination + unset upload_mode +
     // resume); pauseTorrent then immediately suspends in the correct state.
-    m_engine->startTorrent(infoHash, config.destinationPath);
+    m_engine->startTorrent(hash, config.destinationPath);
     if (config.startPaused)
-        m_engine->pauseTorrent(infoHash);
+        m_engine->pauseTorrent(hash);
 
-    emit torrentAdded(infoHash);
+    emit torrentAdded(hash);
 }
 
 void TorrentClient::moveStorage(const QString& infoHash, const QString& newSavePath)
