@@ -765,6 +765,7 @@ if(TANKOBAN_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 
     add_executable(tankoban_tests
+        tests/test_main.cpp
         tests/core/stream/test_quality_scorer.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_stream_pack_parser.cpp
@@ -772,6 +773,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_unified_progress_store.cpp
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
+        tests/core/torrent/test_torrent_repository_schema.cpp
+        src/core/torrent/TorrentRepository.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
@@ -808,8 +811,9 @@ if(TANKOBAN_BUILD_TESTS)
     )
     find_package(Qt6 REQUIRED COMPONENTS Test)
     target_link_libraries(tankoban_tests PRIVATE
-        GTest::gtest_main
+        GTest::gtest
         Qt6::Core
+        Qt6::Sql
         Qt6::Test
     )
     include(GoogleTest)
@@ -827,6 +831,28 @@ if(TANKOBAN_BUILD_TESTS)
             "$<TARGET_FILE:Qt6::Test>"
             "$<TARGET_FILE_DIR:tankoban_tests>"
         COMMENT "Deploying Qt6Test.dll alongside tankoban_tests.exe for discovery + ctest runtime"
+    )
+    # TORRENT_PERSISTENCE_COLLAPSE P0.4 (2026-05-20) — Qt6Sql.dll is required
+    # by TorrentRepository (now linked into tankoban_tests) but is not part of
+    # windeployqt's main-app deployment, same situation as Qt6Test.dll above.
+    # Copy it next to tankoban_tests.exe so loader can resolve at discovery.
+    add_custom_command(TARGET tankoban_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:Qt6::Sql>"
+            "$<TARGET_FILE_DIR:tankoban_tests>"
+        COMMENT "Deploying Qt6Sql.dll alongside tankoban_tests.exe for discovery + ctest runtime"
+    )
+    # QSQLITE driver is loaded as a plugin from <exe_dir>/sqldrivers/qsqlite.dll
+    # at QSqlDatabase::addDatabase("QSQLITE") time. Without it, the call
+    # silently fails and subsequent operations on the handle SEH-segfault
+    # (0xc0000005). Copy the plugin alongside tankoban_tests.exe.
+    add_custom_command(TARGET tankoban_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:tankoban_tests>/sqldrivers"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${Qt6_DIR}/../../../plugins/sqldrivers/qsqlite.dll"
+            "$<TARGET_FILE_DIR:tankoban_tests>/sqldrivers/qsqlite.dll"
+        COMMENT "Deploying qsqlite.dll Qt SQL driver plugin alongside tankoban_tests.exe"
     )
     gtest_discover_tests(tankoban_tests)
 endif()
