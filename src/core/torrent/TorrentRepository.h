@@ -1,0 +1,95 @@
+#pragma once
+
+// TorrentRepository — SQLite-backed durable store for the torrent persistence
+// substrate.
+//
+// Owns one SQLite DB file (typically <dataDir>/torrents.db) with four
+// coordinated tables (torrents / stream_groups / stream_group_items /
+// stream_downloads_index) plus a schema_meta key-value table. Becomes the
+// durable authority for "what torrents exist", group lifecycle, and path-keyed
+// playback index, replacing torrents.json + stream_bulk_groups.json +
+// stream_downloads.json + per-hash .fastresume files.
+//
+// Runtime torrent_handle maps in TorrentEngine remain as caches projected from
+// the repository state.
+//
+// See docs/superpowers/plans/2026-05-19-torrent-persistence-collapse.md
+// (Phase 0) and agents/audits/torrent_persistence_collapse_2026-05-19.md for
+// the architectural rationale + audit Part B state-machine derivation.
+
+#include "TorrentRow.h"
+#include <QObject>
+#include <QSqlDatabase>
+#include <QString>
+#include <optional>
+#include <vector>
+
+namespace tankoban::torrent {
+
+class TorrentRepository : public QObject {
+    Q_OBJECT
+public:
+    static constexpr int kSchemaVersion = 1;
+
+    explicit TorrentRepository(QObject* parent = nullptr);
+    ~TorrentRepository() override;
+
+    // Lifecycle.
+    bool open(const QString& dbFilePath);
+    bool initSchema();             // idempotent
+    void close();
+    bool isOpen() const;
+
+    // Schema meta — schema_version, migration_completed_at, legacy_first_clean_boot_at, etc.
+    int schemaVersion();
+    void setSchemaVersion(int version);
+    QString metaValue(const QString& key);
+    void setMetaValue(const QString& key, const QString& value);
+
+    // Diagnostic helper — primarily for tests.
+    bool hasTable(const QString& tableName);
+
+    // Transactions.
+    bool beginTransaction();
+    bool commit();
+    bool rollback();
+
+    // torrents CRUD — implemented in P0.5.
+    bool upsertTorrent(const TorrentRow& row);
+    bool updateTorrentState(const QString& hash, TorrentState state, const QString& errorMessage = QString());
+    bool updateTorrentResumeData(const QString& hash, const QByteArray& blob);
+    bool updateTorrentName(const QString& hash, const QString& name);
+    bool updateTorrentSavePath(const QString& hash, const QString& savePath);
+    bool removeTorrent(const QString& hash);
+    std::optional<TorrentRow> getTorrent(const QString& hash);
+    std::vector<TorrentRow> listTorrents();
+    std::vector<TorrentRow> listTorrentsByState(TorrentState state);
+    std::vector<TorrentRow> listTorrentsByImdb(const QString& imdbId, int season);
+    std::vector<TorrentRow> listTorrentsByStreamGroup(const QString& streamGroupId);
+
+    // stream_groups CRUD — implemented in P0.6.
+    bool upsertStreamGroup(const StreamGroupRow& row);
+    bool removeStreamGroup(const QString& groupId);
+    std::optional<StreamGroupRow> getStreamGroup(const QString& groupId);
+    std::vector<StreamGroupRow> listStreamGroups();
+    std::vector<StreamGroupRow> listStreamGroupsByImdbSeason(const QString& imdbId, int season);
+
+    // stream_group_items CRUD — implemented in P0.6.
+    bool upsertStreamGroupItem(const StreamGroupItemRow& row);
+    bool removeStreamGroupItem(const QString& groupId, const QString& itemId);
+    std::vector<StreamGroupItemRow> listStreamGroupItems(const QString& groupId);
+
+    // stream_downloads_index CRUD — implemented in P0.7.
+    bool upsertStreamDownload(const StreamDownloadRow& row);
+    bool removeStreamDownload(const QString& canonicalPath);
+    std::optional<StreamDownloadRow> getStreamDownload(const QString& canonicalPath);
+    std::vector<StreamDownloadRow> listStreamDownloads();
+    std::vector<StreamDownloadRow> listStreamDownloadsByImdb(const QString& imdbId, int season);
+
+private:
+    QString m_connectionName;
+    QSqlDatabase m_db;
+    bool m_open = false;
+};
+
+} // namespace tankoban::torrent

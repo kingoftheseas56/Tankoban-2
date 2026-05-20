@@ -142,6 +142,7 @@ set(SOURCES
     src/ui/player/StatsBadge.cpp
     src/core/torrent/TorrentEngine.cpp
     src/core/torrent/TorrentClient.cpp
+    src/core/torrent/TorrentRepository.cpp
     src/ui/dialogs/AddTorrentDialog.cpp
     src/ui/dialogs/AddFromUrlDialog.cpp
     src/ui/dialogs/StreamRescueProgressDialog.cpp
