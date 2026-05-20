@@ -106,3 +106,79 @@ TEST(InfoboxExtractorTest, Kingdom_Vol73_StampsVolumeNumberFromCaller)
     FandomVolume v999 = InfoboxExtractor::extractSingle(html, 999, m);
     EXPECT_EQ(v999.volumeNumber, 999);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 11 — JJK Volume 0 prequel handling (InfoboxExtractor JJK variant)
+// ──────────────────────────────────────────────────────────────────────────
+
+TEST(InfoboxExtractorTest, Jjk_Vol0_PreservesVolumeNumberZero)
+{
+    // Volume 0 is a canon prequel — extractor must not skip or shift it.
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/jujutsu-kaisen.json"));
+    ASSERT_TRUE(m.isValid()) << "jjk manifest failed to load";
+
+    QString html = loadFixture(
+        QStringLiteral("fandom/jujutsu-kaisen_volume-0_2026-05-19.html"));
+    ASSERT_FALSE(html.isEmpty());
+
+    FandomVolume v = InfoboxExtractor::extractSingle(html, 0, m);
+    EXPECT_EQ(v.volumeNumber, 0);
+}
+
+TEST(InfoboxExtractorTest, Jjk_Vol0_HasAllTitleFields)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/jujutsu-kaisen.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/jujutsu-kaisen_volume-0_2026-05-19.html"));
+
+    FandomVolume v = InfoboxExtractor::extractSingle(html, 0, m);
+    EXPECT_EQ(v.titleEnglish.toStdString(), "Blinding Darkness");
+    EXPECT_EQ(v.titleRomaji.toStdString(), "Mabushii Yami");
+    EXPECT_FALSE(v.titleJapanese.isEmpty());
+}
+
+TEST(InfoboxExtractorTest, Jjk_Vol0_HasJpAndEnReleaseFields)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/jujutsu-kaisen.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/jujutsu-kaisen_volume-0_2026-05-19.html"));
+
+    FandomVolume v = InfoboxExtractor::extractSingle(html, 0, m);
+    EXPECT_EQ(v.releaseDateJp, QDate(2018, 12, 4));
+    EXPECT_EQ(v.releaseDateEn, QDate(2021, 1, 5));
+    EXPECT_EQ(v.isbnJp.toStdString(), "9784088816722");
+    EXPECT_EQ(v.isbnEn.toStdString(), "9781974720149");
+}
+
+TEST(InfoboxExtractorTest, Jjk_Vol0_HasCoverUrl)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/jujutsu-kaisen.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/jujutsu-kaisen_volume-0_2026-05-19.html"));
+
+    FandomVolume v = InfoboxExtractor::extractSingle(html, 0, m);
+    EXPECT_TRUE(v.coverUrlJapanese.startsWith(
+        "https://static.wikia.nocookie.net/jujutsu-kaisen/"))
+        << "actual: " << v.coverUrlJapanese.toStdString();
+}
+
+TEST(InfoboxExtractorTest, Jjk_Vol1_HasOwnIdentity)
+{
+    // Quick smoke that vol 1 isn't mis-extracted as vol 0 — distinct title
+    // + cover URL.
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/jujutsu-kaisen.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/jujutsu-kaisen_volume-1_2026-05-19.html"));
+
+    FandomVolume v = InfoboxExtractor::extractSingle(html, 1, m);
+    EXPECT_EQ(v.volumeNumber, 1);
+    EXPECT_EQ(v.titleEnglish.toStdString(), "Ryomen Sukuna");
+    EXPECT_EQ(v.titleRomaji.toStdString(), "Ry\xc5\x8dmen Sukuna");
+    EXPECT_TRUE(v.coverUrlJapanese.contains("Volume_1.png"))
+        << "actual: " << v.coverUrlJapanese.toStdString();
+}

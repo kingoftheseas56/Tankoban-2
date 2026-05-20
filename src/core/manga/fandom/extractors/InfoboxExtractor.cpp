@@ -46,6 +46,47 @@ const QRegularExpression kInfoboxSynopsisRe(
     QRegularExpression::DotMatchesEverythingOption
 );
 
+// ────────────────────────────────────────────────────────────────────────────
+// JJK-shape variants (Task 11): Jujutsu Kaisen's portable-infobox splits
+// the JP and EN release into TWO data-source fields ("jp release" / "eng
+// release") with the ISBN embedded as a Special:BookSources link inside
+// each pi-data-value block. Title fields are explicit data-source fields
+// rather than h2 headers. The english volume title lives in a pi-header h2.
+
+const QRegularExpression kInfoboxJjkEnglishTitleRe(
+    R"RX(<h2 class="pi-item pi-header[^"]*"[^>]*>([^<]+)</h2>)RX"
+);
+
+const QRegularExpression kInfoboxJjkJpTitleRe(
+    R"RX(data-source="jp title"[^>]*>.*?<span lang="ja">([^<]+)</span>)RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kInfoboxJjkRomajiRe(
+    R"RX(data-source="romaji title"[^>]*>.*?<div class="pi-data-value pi-font"><i>([^<]+)</i>)RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kInfoboxJjkJpReleaseDateRe(
+    R"RX(data-source="jp release"[^>]*>.*?<div class="pi-data-value pi-font">\s*([A-Z][a-z]+\s+\d{1,2},?\s+\d{4}))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kInfoboxJjkEnReleaseDateRe(
+    R"RX(data-source="eng release"[^>]*>.*?<div class="pi-data-value pi-font">\s*([A-Z][a-z]+\s+\d{1,2},?\s+\d{4}))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kInfoboxJjkJpIsbnRe(
+    R"RX(data-source="jp release"[^>]*>.*?Special:BookSources/([\d\-Xx]+))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kInfoboxJjkEnIsbnRe(
+    R"RX(data-source="eng release"[^>]*>.*?Special:BookSources/([\d\-Xx]+))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
 // Strip HTML tags + whitespace from a captured snippet to reveal whether
 // the slot has body content. mw-empty-elt paragraphs render as <p
 // class="mw-empty-elt"></p> which would survive a naive isEmpty() check.
@@ -91,18 +132,52 @@ FandomVolume InfoboxExtractor::extractSingle(const QString& rawHtml,
             v.coverUrlJapanese = coverImg.captured(1);
     }
 
-    // Release date.
+    // Release date — try Kingdom-shape first (single "release date" field).
     auto date = kInfoboxReleaseDateRe.match(rawHtml);
-    if (date.hasMatch())
+    if (date.hasMatch()) {
         v.releaseDateJp = parseInfoboxDate(date.captured(1).trimmed());
+    } else {
+        // Fall back to JJK-shape ("jp release" / "eng release").
+        auto jpDate = kInfoboxJjkJpReleaseDateRe.match(rawHtml);
+        if (jpDate.hasMatch())
+            v.releaseDateJp = parseInfoboxDate(jpDate.captured(1).trimmed());
 
-    // ISBN (single — most hierarchy-model wikis only carry the JP edition's
-    // ISBN per page).
+        auto enDate = kInfoboxJjkEnReleaseDateRe.match(rawHtml);
+        if (enDate.hasMatch())
+            v.releaseDateEn = parseInfoboxDate(enDate.captured(1).trimmed());
+    }
+
+    // ISBN — Kingdom has a single "isbn" data-source; JJK embeds them in the
+    // release-date data-source blocks.
     auto isbn = kInfoboxIsbnRe.match(rawHtml);
-    if (isbn.hasMatch())
+    if (isbn.hasMatch()) {
         v.isbnJp = isbn.captured(1);
+    } else {
+        auto jpIsbn = kInfoboxJjkJpIsbnRe.match(rawHtml);
+        if (jpIsbn.hasMatch())
+            v.isbnJp = jpIsbn.captured(1);
 
-    // Synopsis (may be empty — Kingdom Vol.73 case).
+        auto enIsbn = kInfoboxJjkEnIsbnRe.match(rawHtml);
+        if (enIsbn.hasMatch())
+            v.isbnEn = enIsbn.captured(1);
+    }
+
+    // Title fields — JJK exposes English title in pi-header h2, JP kanji in
+    // "jp title" data-source, romaji in "romaji title". Kingdom doesn't
+    // surface these, so missing matches simply leave fields empty.
+    auto enTitle = kInfoboxJjkEnglishTitleRe.match(rawHtml);
+    if (enTitle.hasMatch())
+        v.titleEnglish = enTitle.captured(1).trimmed();
+
+    auto jpTitle = kInfoboxJjkJpTitleRe.match(rawHtml);
+    if (jpTitle.hasMatch())
+        v.titleJapanese = jpTitle.captured(1).trimmed();
+
+    auto romaji = kInfoboxJjkRomajiRe.match(rawHtml);
+    if (romaji.hasMatch())
+        v.titleRomaji = romaji.captured(1).trimmed();
+
+    // Synopsis (may be empty — Kingdom Vol.73 case; absent on JJK).
     auto syn = kInfoboxSynopsisRe.match(rawHtml);
     if (syn.hasMatch())
         v.synopsis = stripTagsAndNormalize(syn.captured(1));

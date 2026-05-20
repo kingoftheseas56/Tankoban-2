@@ -1,0 +1,25 @@
+{
+  "seriesId": "jujutsu-kaisen",
+  "wikidataQid": "Q49001531",
+  "fandomWikiId": "jujutsu-kaisen",
+  "volumePagePath": "/wiki/Volume_1",
+  "pageModel": "hierarchy",
+  "extractorType": "infobox",
+  "chapterKeyword": "Chapter",
+  "groupingSemantics": "mathematical-buckets",
+  "editionFilters": [],
+  "unitHierarchy": ["chapter", "volume"],
+  "expectedFields": {
+    "titleEnglish": "expected",
+    "titleJapanese": "expected",
+    "titleRomaji": "expected",
+    "isbnJp": "expected",
+    "isbnEn": "expected",
+    "coverUrlJapanese": "required",
+    "synopsis": "absent"
+  },
+  "paginationModel": "detail-links",
+  "pagePathPattern": "/wiki/Volume_%1",
+  "maxVolumeProbe": 30,
+  "notes": "Hierarchy model with Volume 0 as a canon prequel — caller must iterate from 0, not 1. Per-volume <aside class='portable-infobox'> differs from Kingdom: English title in <h2 class='pi-header'>; JP kanji in data-source='jp title'; romaji in data-source='romaji title'; JP release date + ISBN combined in data-source='jp release'; EN release date + ISBN combined in data-source='eng release'. No standalone <h2>Synopsis</h2> section."
+}
