@@ -329,6 +329,109 @@ QList<FandomVolume> extractNarrativeArcs(const QString& rawHtml,
     return volumes;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// multi-era — Naruto style (Task 9)
+//
+// Page layout: top-level <h2>Tankōbon</h2> with sequential <h3>Part I</h3>
+// / <h3>Part II</h3> / <h3>Boruto: …</h3> / spinoff / alt-edition subsections.
+// Each era restarts volume numbering, so a naive parser would collide them.
+//
+// v1 strategy: list all non-Part-I eras as edition-filter entries. The
+// generic findFirstEditionFilterOffset() returns the offset of the first
+// non-Part-I header in document order (Part II for Naruto), and we trim
+// the body at that point. Everything left is Part I content.
+//
+// groupingLabel is the most-recent h3 era header before each volume's
+// anchor — set to "Part I" for all Naruto v1 volumes.
+
+const QRegularExpression kNarutoVolumeAnchorRe(
+    R"RX(<td align="center"><b>(\d+)</b>)RX"
+);
+
+const QRegularExpression kNarutoTitleRe(
+    R"RX(<td><i><a href="/wiki/[^"]+_\(volume\)"[^>]*>([^<]+?)\s*</a></i>\s*\(<span lang="ja">([^<]+)</span>&#44;\s*<i>([^<]+?)</i>\))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kNarutoDateRe(
+    R"RX(<td align="center">\s*(\d{1,2}\s+[A-Z][a-z]+\s+\d{4})\s*\n?\s*</td>)RX"
+);
+
+const QRegularExpression kNarutoCoverImgRe(
+    R"RX(<img alt="[^"]*\(volume\)"\s+src="(https://static\.wikia\.nocookie\.net/naruto/[^"]+\.(?:png|jpg|jpeg|webp))[^"]*")RX"
+);
+
+QString findEraLabelAtOffset(const QString& body, int offset)
+{
+    static const QRegularExpression kH3HeaderRe(
+        R"RX(<h3[^>]*>.*?<span class="mw-headline"[^>]*>([^<]+)</span>)RX",
+        QRegularExpression::DotMatchesEverythingOption
+    );
+
+    QString label;
+    auto it = kH3HeaderRe.globalMatch(body);
+    while (it.hasNext()) {
+        auto m = it.next();
+        if (m.capturedStart() > offset)
+            break;
+        label = m.captured(1).trimmed();
+    }
+    return label;
+}
+
+QList<FandomVolume> extractMultiEra(const QString& rawHtml,
+                                    const WikiManifest& manifest)
+{
+    QList<FandomVolume> volumes;
+
+    int cutoff = findFirstEditionFilterOffset(rawHtml, manifest.editionFilters);
+    const QString body = (cutoff > 0) ? rawHtml.left(cutoff) : rawHtml;
+
+    auto anchorIt = kNarutoVolumeAnchorRe.globalMatch(body);
+    QVector<QPair<int, int>> anchors;
+    while (anchorIt.hasNext()) {
+        auto m = anchorIt.next();
+        anchors.append({ m.capturedStart(), m.captured(1).toInt() });
+    }
+
+    for (int i = 0; i < anchors.size(); ++i) {
+        const int     sliceStart = anchors[i].first;
+        const int     volNum     = anchors[i].second;
+        const int     sliceEnd   = (i + 1 < anchors.size())
+                                       ? anchors[i + 1].first
+                                       : body.size();
+        const QString slice = body.mid(sliceStart, sliceEnd - sliceStart);
+
+        FandomVolume v;
+        v.volumeNumber  = volNum;
+        v.groupingLabel = findEraLabelAtOffset(body, sliceStart);
+
+        auto title = kNarutoTitleRe.match(slice);
+        if (title.hasMatch()) {
+            v.titleEnglish  = title.captured(1).trimmed();
+            v.titleJapanese = title.captured(2).trimmed();
+            v.titleRomaji   = title.captured(3).trimmed();
+        }
+
+        auto dateIt = kNarutoDateRe.globalMatch(slice);
+        if (dateIt.hasNext())
+            v.releaseDateJp = parseFandomDate(dateIt.next().captured(1));
+        if (dateIt.hasNext())
+            v.releaseDateEn = parseFandomDate(dateIt.next().captured(1));
+
+        auto cover = kNarutoCoverImgRe.match(slice);
+        if (cover.hasMatch())
+            v.coverUrlJapanese = cover.captured(1);
+
+        volumes.append(v);
+    }
+
+    qCInfo(lcTableExtractor) << "extractMultiEra:" << volumes.size()
+                              << "volumes for" << manifest.seriesId
+                              << "(trimmed at offset" << cutoff << ")";
+    return volumes;
+}
+
 QList<FandomVolume> extractSubsectionHeaders(const QString& rawHtml,
                                              const WikiManifest& manifest)
 {
@@ -427,8 +530,10 @@ QList<FandomVolume> TableExtractor::extract(const QString& rawHtml,
         return extractMathematicalBuckets(rawHtml, manifest);
     if (manifest.groupingSemantics == QStringLiteral("narrative-arcs"))
         return extractNarrativeArcs(rawHtml, manifest);
+    if (manifest.groupingSemantics == QStringLiteral("multi-era"))
+        return extractMultiEra(rawHtml, manifest);
 
-    // multi-era lands in Task 9.
+    // Anything else is genuinely unsupported.
     qCWarning(lcTableExtractor)
         << "TableExtractor: unsupported groupingSemantics"
         << manifest.groupingSemantics

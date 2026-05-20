@@ -1,0 +1,25 @@
+{
+  "seriesId": "naruto",
+  "wikidataQid": "Q83004",
+  "fandomWikiId": "naruto",
+  "volumePagePath": "/wiki/List_of_Volumes",
+  "pageModel": "monolith",
+  "extractorType": "table",
+  "chapterKeyword": "Chapter",
+  "groupingSemantics": "multi-era",
+  "editionFilters": [
+    "Part II"
+  ],
+  "unitHierarchy": ["chapter", "volume", "era"],
+  "expectedFields": {
+    "titleEnglish": "expected",
+    "titleJapanese": "expected",
+    "titleRomaji": "expected",
+    "isbnJp": "absent",
+    "isbnEn": "absent",
+    "coverUrlJapanese": "required",
+    "synopsis": "absent",
+    "groupingLabel": "required"
+  },
+  "notes": "Multi-era page with <h3>Part I</h3> / <h3>Part II</h3> / Boruto / spinoff subsections under a top-level <h2>Tankōbon</h2>. Each era restarts volume numbering — a naive parser would collide them. v1 extracts ONLY Part I (volumes 1-27) by trimming at the first edition-filter header (Part II, which appears in document order before all other eras + alt editions). groupingLabel is the era name (\"Part I\"). Naruto wiki does not surface ISBNs in this catalog table — declared absent."
+}

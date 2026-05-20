@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
+#include <QSet>
 
 using namespace tankoban::manga::fandom;
 
@@ -139,10 +140,113 @@ TEST(TableExtractorTest, UnsupportedGroupingSemantics_ReturnsEmpty)
     WikiManifest m;
     m.seriesId          = QStringLiteral("test");
     m.fandomWikiId      = QStringLiteral("test");
-    m.groupingSemantics = QStringLiteral("multi-era"); // Task 9 territory
+    m.groupingSemantics = QStringLiteral("unknown-future-pattern");
     QList<FandomVolume> vols = TableExtractor::extract(
         QStringLiteral("<html></html>"), m);
     EXPECT_TRUE(vols.isEmpty());
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 9 — Naruto multi-era pattern
+// ──────────────────────────────────────────────────────────────────────────
+
+TEST(TableExtractorTest, Naruto_ExtractsExactly27PartIVolumes)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    ASSERT_TRUE(m.isValid()) << "naruto manifest failed to load";
+
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    ASSERT_FALSE(html.isEmpty());
+
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    EXPECT_EQ(vols.size(), 27)
+        << "Naruto Part I has exactly 27 tankobon volumes; got "
+        << vols.size();
+}
+
+TEST(TableExtractorTest, Naruto_Vol1_HasAllTitleFields)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.volumeNumber, 1);
+    EXPECT_EQ(v1.titleEnglish.toStdString(), "Naruto Uzumaki");
+    EXPECT_EQ(v1.titleRomaji.toStdString(), "Uzumaki Naruto");
+    EXPECT_FALSE(v1.titleJapanese.isEmpty())
+        << "JP kanji should be populated";
+}
+
+TEST(TableExtractorTest, Naruto_Vol1_HasReleaseDatesNoIsbns)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.releaseDateJp, QDate(2000, 3, 3));
+    EXPECT_EQ(v1.releaseDateEn, QDate(2003, 8, 6));
+    // Manifest declares both ISBNs absent.
+    EXPECT_TRUE(v1.isbnJp.isEmpty());
+    EXPECT_TRUE(v1.isbnEn.isEmpty());
+}
+
+TEST(TableExtractorTest, Naruto_Vol1_HasCoverUrl)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    EXPECT_TRUE(vols[0].coverUrlJapanese.startsWith(
+        "https://static.wikia.nocookie.net/naruto/"))
+        << "actual: " << vols[0].coverUrlJapanese.toStdString();
+}
+
+TEST(TableExtractorTest, Naruto_AllVolumesHavePartIGroupingLabel)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    for (const auto& v : vols) {
+        EXPECT_EQ(v.groupingLabel.toStdString(), "Part I")
+            << "vol " << v.volumeNumber << " label drift: "
+            << v.groupingLabel.toStdString();
+    }
+}
+
+TEST(TableExtractorTest, Naruto_NoPartIIVolumesLeakIn)
+{
+    // Part II restarts volume numbering at 1. If the trim failed and Part II
+    // volumes leaked through, we'd see duplicate volume numbers.
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/naruto.json"));
+    QString html = loadFixture(
+        QStringLiteral("fandom/naruto_list-of-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+
+    QSet<int> seenNumbers;
+    for (const auto& v : vols) {
+        EXPECT_FALSE(seenNumbers.contains(v.volumeNumber))
+            << "duplicate volume number " << v.volumeNumber
+            << " — Part II era leaked through";
+        seenNumbers.insert(v.volumeNumber);
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
