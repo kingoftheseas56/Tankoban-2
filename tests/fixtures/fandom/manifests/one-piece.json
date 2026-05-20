@@ -1,0 +1,24 @@
+{
+  "seriesId": "one-piece",
+  "wikidataQid": "Q173086",
+  "fandomWikiId": "onepiece",
+  "volumePagePath": "/wiki/Chapters_and_Volumes/Volumes",
+  "pageModel": "monolith",
+  "extractorType": "table",
+  "chapterKeyword": "Chapter",
+  "groupingSemantics": "mathematical-buckets",
+  "editionFilters": [
+    "Special Volumes",
+    "Stampede"
+  ],
+  "unitHierarchy": ["chapter", "volume"],
+  "expectedFields": {
+    "titleEnglish": "expected",
+    "titleJapanese": "expected",
+    "isbnEn": "expected",
+    "isbnJp": "expected",
+    "coverUrlJapanese": "required",
+    "synopsis": "absent"
+  },
+  "notes": "Monolith page with range subsection headers (Volume 1 To 10 / 11 To 20 / ...). Per-volume <table id=\"Volume_N\"> blocks inside each range. Two rows per table: 'Japan' (JP title/date/ISBN) + 'US' (EN title/date/ISBN). Single cover image per volume (JP tankobon). Special Volumes + Stampede sections come after the canon block and are trimmed pre-extraction."
+}

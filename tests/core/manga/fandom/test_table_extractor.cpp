@@ -139,8 +139,111 @@ TEST(TableExtractorTest, UnsupportedGroupingSemantics_ReturnsEmpty)
     WikiManifest m;
     m.seriesId          = QStringLiteral("test");
     m.fandomWikiId      = QStringLiteral("test");
-    m.groupingSemantics = QStringLiteral("mathematical-buckets"); // Task 7 territory
+    m.groupingSemantics = QStringLiteral("narrative-arcs"); // Task 8 territory
     QList<FandomVolume> vols = TableExtractor::extract(
         QStringLiteral("<html></html>"), m);
     EXPECT_TRUE(vols.isEmpty());
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 7 — One Piece mathematical-buckets pattern
+// ──────────────────────────────────────────────────────────────────────────
+
+TEST(TableExtractorTest, OnePiece_ExtractsAtLeast100Volumes)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    ASSERT_TRUE(m.isValid()) << "one-piece manifest failed to load";
+
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    ASSERT_FALSE(html.isEmpty()) << "fixture empty or missing";
+
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    EXPECT_GE(vols.size(), 100)
+        << "One Piece has well over 100 published volumes; got "
+        << vols.size();
+}
+
+TEST(TableExtractorTest, OnePiece_Vol1_HasJapanAndUsTitles)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.volumeNumber, 1);
+    EXPECT_EQ(v1.titleEnglish.toStdString(), "Romance Dawn");
+    // JP title is "ROMANCE DAWN—冒険の夜明け—" — assert prefix + non-empty
+    // (full Unicode equality is exercised by the Death Note test).
+    EXPECT_TRUE(v1.titleJapanese.startsWith(QStringLiteral("ROMANCE DAWN")))
+        << "actual: " << v1.titleJapanese.toStdString();
+}
+
+TEST(TableExtractorTest, OnePiece_Vol1_HasReleaseDatesAndIsbns)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.releaseDateJp, QDate(1997, 12, 24));
+    EXPECT_EQ(v1.releaseDateEn, QDate(2003, 6, 30));
+    EXPECT_EQ(v1.isbnJp.toStdString(), "978-4-08-872509-3");
+    EXPECT_EQ(v1.isbnEn.toStdString(), "978-1-56931-901-7");
+}
+
+TEST(TableExtractorTest, OnePiece_Vol1_HasJapanCoverUrl)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_TRUE(v1.coverUrlJapanese.startsWith(
+        "https://static.wikia.nocookie.net/onepiece/"))
+        << "actual: " << v1.coverUrlJapanese.toStdString();
+}
+
+TEST(TableExtractorTest, OnePiece_VolumesAreInDocumentOrder)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 2);
+
+    for (int i = 0; i < vols.size(); ++i) {
+        EXPECT_EQ(vols[i].volumeNumber, i + 1)
+            << "volume index " << i << " mismatch";
+    }
+}
+
+TEST(TableExtractorTest, OnePiece_SpecialVolumesSectionFiltered)
+{
+    // The fixture contains a "Special Volumes" h2 section after the canon
+    // 1..N range. With the edition filter, that section must be trimmed
+    // pre-extraction; we verify no extracted volume's English title contains
+    // typical Special-Volumes markers.
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/one-piece.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/one-piece_chapters-and-volumes-volumes_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+
+    for (const auto& v : vols) {
+        EXPECT_FALSE(v.titleEnglish.contains("Special", Qt::CaseInsensitive))
+            << "vol " << v.volumeNumber << " leaked: " << v.titleEnglish.toStdString();
+        EXPECT_FALSE(v.titleEnglish.contains("Stampede", Qt::CaseInsensitive));
+    }
 }

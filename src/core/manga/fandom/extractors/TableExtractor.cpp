@@ -93,6 +93,128 @@ QDate parseFandomDate(const QString& raw)
     return d;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// mathematical-buckets — One Piece style (Task 7)
+//
+// Page layout: top-level Volume List with a sequence of range
+// <h3 id="Volume_N_To_M">Volume N To M</h3> subsections, each enclosing one
+// <table id="Volume&#95;K"> per volume. Each table has a "Japan" row + a "US"
+// row with title / release-date / pages / ISBN cells, plus a single cover
+// image (the JP tankobon).
+//
+// HTML entity gotcha: the table id attribute uses &#95; rather than literal
+// underscore in the source, i.e., <table id="Volume&#95;1">. Regex matches
+// the raw source bytes, not the entity-decoded view.
+
+const QRegularExpression kOnePieceVolumeTableRe(
+    R"RX(<table id="Volume&#95;(\d+)")RX"
+);
+
+const QRegularExpression kOnePieceJapanRowRe(
+    R"RX(<th[^>]*>Japan\s*</th>\s*<td>([^<]+?)\s*</td>\s*<td>([A-Z][a-z]+\s+\d{1,2},?\s+\d{4}))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+const QRegularExpression kOnePieceUsRowRe(
+    R"RX(<th[^>]*>US\s*</th>\s*<td>([^<]+?)\s*</td>\s*<td>([A-Z][a-z]+\s+\d{1,2},?\s+\d{4}))RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+// One Piece BookSources links appear twice per ISBN (href + title attribute).
+// Bind to the href attribute so each ISBN is captured exactly once.
+const QRegularExpression kOnePieceIsbnRe(
+    R"RX(href="/wiki/Special:BookSources/([\d\-Xx]+)")RX"
+);
+
+const QRegularExpression kOnePieceCoverRe(
+    R"RX(<a href="(https://static\.wikia\.nocookie\.net/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"\s+class="mw-file-description image")RX"
+);
+
+// Section-header scan for edition-filter pre-trim.
+const QRegularExpression kAnyHeaderRe(
+    R"RX(<h[23][^>]*>.*?<span class="mw-headline"[^>]*>([^<]+)</span>)RX",
+    QRegularExpression::DotMatchesEverythingOption
+);
+
+int findFirstEditionFilterOffset(const QString& rawHtml,
+                                 const QStringList& filters)
+{
+    int firstHit = -1;
+    auto it = kAnyHeaderRe.globalMatch(rawHtml);
+    while (it.hasNext()) {
+        auto m = it.next();
+        const QString displayed = m.captured(1).trimmed();
+        if (sectionMatchesEditionFilter(displayed, filters)) {
+            const int start = m.capturedStart();
+            if (firstHit < 0 || start < firstHit)
+                firstHit = start;
+        }
+    }
+    return firstHit;
+}
+
+QList<FandomVolume> extractMathematicalBuckets(const QString& rawHtml,
+                                               const WikiManifest& manifest)
+{
+    QList<FandomVolume> volumes;
+
+    // Trim at first edition-filter header so Special Volumes / Stampede etc.
+    // don't leak past the canon volume range.
+    int cutoff = findFirstEditionFilterOffset(rawHtml, manifest.editionFilters);
+    const QString body = (cutoff > 0) ? rawHtml.left(cutoff) : rawHtml;
+
+    auto tableIt = kOnePieceVolumeTableRe.globalMatch(body);
+    QVector<QPair<int, int>> tables; // (offset, volumeNumber)
+    while (tableIt.hasNext()) {
+        auto m = tableIt.next();
+        tables.append({ m.capturedStart(), m.captured(1).toInt() });
+    }
+
+    for (int i = 0; i < tables.size(); ++i) {
+        const int     sliceStart = tables[i].first;
+        const int     volNum     = tables[i].second;
+        const int     sliceEnd   = (i + 1 < tables.size())
+                                       ? tables[i + 1].first
+                                       : body.size();
+        const QString slice = body.mid(sliceStart, sliceEnd - sliceStart);
+
+        FandomVolume v;
+        v.volumeNumber = volNum;
+
+        // Titles + release dates from the Japan / US rows.
+        auto jpRow = kOnePieceJapanRowRe.match(slice);
+        if (jpRow.hasMatch()) {
+            v.titleJapanese = jpRow.captured(1).trimmed();
+            v.releaseDateJp = parseFandomDate(jpRow.captured(2));
+        }
+
+        auto usRow = kOnePieceUsRowRe.match(slice);
+        if (usRow.hasMatch()) {
+            v.titleEnglish  = usRow.captured(1).trimmed();
+            v.releaseDateEn = parseFandomDate(usRow.captured(2));
+        }
+
+        // ISBNs (first = JP, second = US in document order).
+        auto isbnIt = kOnePieceIsbnRe.globalMatch(slice);
+        if (isbnIt.hasNext())
+            v.isbnJp = isbnIt.next().captured(1);
+        if (isbnIt.hasNext())
+            v.isbnEn = isbnIt.next().captured(1);
+
+        // Single tankobon cover image per volume.
+        auto cover = kOnePieceCoverRe.match(slice);
+        if (cover.hasMatch())
+            v.coverUrlJapanese = cover.captured(1);
+
+        volumes.append(v);
+    }
+
+    qCInfo(lcTableExtractor) << "extractMathematicalBuckets:" << volumes.size()
+                              << "volumes for" << manifest.seriesId
+                              << "(trimmed at offset" << cutoff << ")";
+    return volumes;
+}
+
 QList<FandomVolume> extractSubsectionHeaders(const QString& rawHtml,
                                              const WikiManifest& manifest)
 {
@@ -187,8 +309,10 @@ QList<FandomVolume> TableExtractor::extract(const QString& rawHtml,
 {
     if (manifest.groupingSemantics == QStringLiteral("subsection-headers"))
         return extractSubsectionHeaders(rawHtml, manifest);
+    if (manifest.groupingSemantics == QStringLiteral("mathematical-buckets"))
+        return extractMathematicalBuckets(rawHtml, manifest);
 
-    // mathematical-buckets / narrative-arcs / multi-era land in Tasks 7-9.
+    // narrative-arcs / multi-era land in Tasks 8-9.
     qCWarning(lcTableExtractor)
         << "TableExtractor: unsupported groupingSemantics"
         << manifest.groupingSemantics
