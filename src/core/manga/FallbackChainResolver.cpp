@@ -2,6 +2,7 @@
 
 #include "FallbackChainResolver.h"
 
+#include "core/manga/fandom/FandomCatalogCache.h"
 #include "core/manga/fandom/FandomVolumeResolver.h"
 #include "core/manga/wikipedia/WikipediaResolver.h"
 
@@ -88,6 +89,26 @@ void FallbackChainResolver::resolveForSeries(const QString& seriesId,
         pp.wikipediaFailReason = QStringLiteral("no-english-title-hint");
         maybeFinalize(seriesId);
     }
+}
+
+void FallbackChainResolver::forceRefreshSeries(const QString& seriesId,
+                                                const QString& wikidataQidHint,
+                                                const QString& englishTitleHint)
+{
+    if (!wikidataQidHint.isEmpty()) {
+        const bool ok = fandom::FandomCatalogCache::invalidateByQid(wikidataQidHint);
+        qCInfo(lcFallback).noquote()
+            << "forceRefreshSeries: invalidate" << wikidataQidHint
+            << "→" << (ok ? "ok" : "fail");
+    } else {
+        qCInfo(lcFallback).noquote()
+            << "forceRefreshSeries: empty qidHint for" << seriesId
+            << "— skipping cache invalidation, will still re-resolve";
+    }
+    // Drop any pending in-flight resolve for this series so the re-fire
+    // doesn't get rejected by resolveForSeries' dedup guard.
+    m_pending.remove(seriesId);
+    resolveForSeries(seriesId, wikidataQidHint, englishTitleHint);
 }
 
 void FallbackChainResolver::onFandomResolved(const QString& seriesId,

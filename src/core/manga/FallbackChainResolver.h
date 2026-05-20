@@ -48,6 +48,17 @@ public:
                           const QString& wikidataQidHint = {},
                           const QString& englishTitleHint = {});
 
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Invalidate the
+    // 7d FandomCatalogCache entry for the given Q-ID + immediately re-fire
+    // resolveForSeries. Used by the force-refresh affordance on the series
+    // view when a wiki has updated since the last cache fetch. No-op
+    // tolerated when qidHint is empty (cache key requires a Q-ID) — caller
+    // logs the skip + still re-resolves via the normal path. Wikipedia
+    // side has no cache layer in v1, so this only touches the Fandom cache.
+    void forceRefreshSeries(const QString& seriesId,
+                            const QString& wikidataQidHint = {},
+                            const QString& englishTitleHint = {});
+
 signals:
     void resolved(const QString& seriesId,
                   const tankoban::manga::fandom::FandomCatalog& catalog);

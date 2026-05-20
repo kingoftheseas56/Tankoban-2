@@ -158,6 +158,13 @@ signals:
     // this signal to come from the new view).
     void backRequested();
 
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Emitted when
+    // the force-refresh button is clicked. ComicsPage invalidates the
+    // FandomCatalogCache entry + re-resolves via FallbackChainResolver.
+    // No payload: ComicsPage already tracks the current series identity
+    // (m_currentDetailAnilistId / m_currentDetailSeriesTitle).
+    void forceRefreshRequested();
+
     // STREAM_PORT 2026-05-18 Task 5: multi-volume bulk dispatch.
     // ComicsPage v1.x will route this through the default provider
     // (catalog if present, otherwise Tankoyomi) once bulk routing is wired.
@@ -289,6 +296,11 @@ private:
     QLabel*               m_metaLine      = nullptr;
     QLabel*               m_synopsis      = nullptr;
     QPushButton*          m_libraryButton = nullptr;
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Force-refresh
+    // affordance — invalidates the 7d FandomCatalogCache entry for the
+    // current series + re-resolves via FallbackChainResolver. Useful when a
+    // wiki has updated since the last cache fetch.
+    QPushButton*          m_forceRefreshButton = nullptr;
     QTableWidget*         m_volumesTable  = nullptr;
     ComicsSourcesPanel*   m_sourcesPanel  = nullptr;  // PHASE 8: replaces the placeholder QLabel
 

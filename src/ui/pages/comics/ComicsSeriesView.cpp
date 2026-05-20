@@ -361,6 +361,36 @@ void ComicsSeriesView::buildUi()
         "}"));
     actionRow->addWidget(m_libraryButton, /*stretch*/ 0, Qt::AlignRight);
 
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Force-refresh
+    // icon button. Unicode "↻" (U+21BB CLOCKWISE OPEN CIRCLE ARROW) keeps
+    // the affordance icon-only without needing a new SVG asset; matches the
+    // m_backButton "←" pattern. Click emits forceRefreshRequested, which
+    // ComicsPage handles by invalidating the FandomCatalogCache entry +
+    // re-resolving via FallbackChainResolver.
+    m_forceRefreshButton = new QPushButton(QStringLiteral("\xe2\x86\xbb"), this);
+    m_forceRefreshButton->setObjectName(QStringLiteral("ComicsSeriesForceRefreshButton"));
+    m_forceRefreshButton->setAccessibleName(QStringLiteral("ComicsSeriesForceRefreshButton"));
+    m_forceRefreshButton->setAccessibleDescription(
+        QStringLiteral("Force-refresh the Fandom catalog cache for this series."));
+    m_forceRefreshButton->setToolTip(tr("Refresh wiki catalog"));
+    m_forceRefreshButton->setFixedSize(32, 32);
+    m_forceRefreshButton->setCursor(Qt::PointingHandCursor);
+    m_forceRefreshButton->setStyleSheet(QStringLiteral(
+        "QPushButton#ComicsSeriesForceRefreshButton {"
+        "  background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.18);"
+        "  border-radius: 6px;"
+        "  color: #ddd;"
+        "  font-size: 16px;"
+        "}"
+        "QPushButton#ComicsSeriesForceRefreshButton:hover {"
+        "  background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.28);"
+        "}"));
+    connect(m_forceRefreshButton, &QPushButton::clicked,
+            this, &ComicsSeriesView::forceRefreshRequested);
+    actionRow->addWidget(m_forceRefreshButton, /*stretch*/ 0, Qt::AlignRight);
+
     outer->addLayout(actionRow);
 
     // --- Hero banner: 140px solid block holding the series art ----------

@@ -25,6 +25,13 @@
 #include "core/manga/mangaupdates/VolumeMetadataResolver.h"
 #include "core/manga/bookwalker/BookWalkerClient.h"
 #include "core/manga/bookwalker/VolumeCoverResolver.h"
+#include "core/manga/FallbackChainResolver.h"
+#include "core/manga/fandom/FandomClient.h"
+#include "core/manga/fandom/FandomTypes.h"
+#include "core/manga/fandom/FandomVolumeResolver.h"
+#include "core/manga/fandom/WikiManifestRegistry.h"
+#include "core/manga/wikidata/WikidataClient.h"
+#include "core/manga/wikipedia/WikipediaResolver.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/torrent/TorrentEngine.h"
 #include "comics/ComicsTankoyomiSearchWidget.h"
@@ -348,6 +355,39 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         m_tyVolumeSeriesView->setVolumeCoverResolver(coverResolver);
     }
 
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Wire the
+    // Stremio-style resolver chain into ComicsPage. WikidataClient +
+    // FandomClient + WikipediaResolver all share m_nam. WikiManifestRegistry
+    // loads from resources/fandom_manifests/ next to the app (populated by
+    // Phase 8 Tasks 20-34; 0 manifests at load is fine — unresolved fires
+    // with "no-manifest-for-seriesId" for every series until Phase 8 ships).
+    {
+        m_wikidataClient       = new tankoban::manga::wikidata::WikidataClient(m_nam, this);
+        m_fandomClient         = new tankoban::manga::fandom::FandomClient(m_nam, this);
+        m_wikiManifestRegistry = new tankoban::manga::fandom::WikiManifestRegistry();
+        const QString manifestsDir = QCoreApplication::applicationDirPath()
+                                   + QStringLiteral("/resources/fandom_manifests");
+        const int loaded = m_wikiManifestRegistry->loadFromDirectory(manifestsDir);
+        qInfo("ComicsPage: WikiManifestRegistry loaded %d manifests from %s",
+              loaded, qUtf8Printable(manifestsDir));
+
+        m_fandomVolumeResolver = new tankoban::manga::fandom::FandomVolumeResolver(
+            m_wikidataClient, m_fandomClient, m_wikiManifestRegistry, this);
+        m_wikipediaResolver = new tankoban::manga::wikipedia::WikipediaResolver(m_nam, this);
+        m_fallbackResolver = new tankoban::manga::FallbackChainResolver(
+            m_fandomVolumeResolver, m_wikipediaResolver, this);
+
+        connect(m_fallbackResolver,
+                &tankoban::manga::FallbackChainResolver::resolved,
+                this, &ComicsPage::onFandomCatalogResolved);
+        connect(m_fallbackResolver,
+                &tankoban::manga::FallbackChainResolver::unresolved,
+                this, &ComicsPage::onFandomCatalogUnresolved);
+        connect(m_tyVolumeSeriesView,
+                &tankoban::manga::comics::ComicsSeriesView::forceRefreshRequested,
+                this, &ComicsPage::onForceRefreshRequested);
+    }
+
     connect(m_anilistClient,
             &tankoban::manga::anilist::AniListClient::seriesSucceeded,
             this, [this](int, const tankoban::manga::anilist::MediaDetail& detail) {
@@ -424,6 +464,11 @@ ComicsPage::~ComicsPage()
     m_scanThread->wait();
     // REPO_HYGIENE Phase 4 P4.2: m_scanner auto-deleted via deleteLater on
     // thread::finished. No manual delete.
+    // Fandom catalog redesign Task 19 (2026-05-20): WikiManifestRegistry is
+    // a plain non-QObject (no auto-parent). All other Fandom-resolver
+    // members are QObjects parented to this — Qt deletes them.
+    delete m_wikiManifestRegistry;
+    m_wikiManifestRegistry = nullptr;
 }
 
 namespace {
@@ -1599,6 +1644,11 @@ void ComicsPage::fetchPosterForTile(TileCard* card, int anilistId,
     });
 }
 
+// Fandom catalog redesign Task 19 (2026-05-20). Forward decl for the slug
+// helper used by all 5 showSeries call sites below; definition lives at the
+// end of this TU next to dispatchFandomResolve + the slot implementations.
+static QString fandomSeriesSlugFromTitle(const QString& title);
+
 void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTitle)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- DOWNLOADED + BOOKMARKED
@@ -1644,6 +1694,9 @@ void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTit
     m_currentDetailAnilistId   = anilistId;
     m_currentDetailSeriesTitle = preview.title;
     m_tyVolumeSeriesView->showSeries(preview);
+    dispatchFandomResolve(fandomSeriesSlugFromTitle(preview.title),
+                          /*qidHint*/QString(),
+                          /*titleHint*/preview.title);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
@@ -1681,6 +1734,13 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
     m_currentDetailAnilistId   = 0;   // WeebCentral record has no AniList integer id
     m_currentDetailSeriesTitle = record.title;
     m_tyVolumeSeriesView->showSeries(result);
+    // Fandom catalog redesign Task 19 (2026-05-20). Library-record open
+    // path passes the record's wikidataQid (Task 17 schema ext) so the
+    // FandomVolumeResolver short-circuits the Wikidata SPARQL hop +
+    // FandomCatalogCache hits cleanly on re-opens.
+    dispatchFandomResolve(fandomSeriesSlugFromTitle(record.title),
+                          /*qidHint*/record.wikidataQid,
+                          /*titleHint*/record.title);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
@@ -1985,6 +2045,9 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     m_currentDetailSeriesTitle = result.title;
     if (m_tyVolumeSeriesView) {
         m_tyVolumeSeriesView->showSeries(result);
+        dispatchFandomResolve(fandomSeriesSlugFromTitle(result.title),
+                              /*qidHint*/QString(),
+                              /*titleHint*/result.title);
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
     }
 }
@@ -2648,6 +2711,9 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
             m_currentDetailAnilistId   = anilistId;
             m_currentDetailSeriesTitle = seriesTitle;
             m_tyVolumeSeriesView->showSeries(preview);
+            dispatchFandomResolve(fandomSeriesSlugFromTitle(seriesTitle),
+                                  /*qidHint*/QString(),
+                                  /*titleHint*/seriesTitle);
             m_stack->setCurrentWidget(m_tyVolumeSeriesView);
             return;
         }
@@ -2677,6 +2743,9 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
                 result.status       = rec.detailCache.status;
                 result.type         = QStringLiteral("manga");
                 m_tyVolumeSeriesView->showSeries(result);
+                dispatchFandomResolve(fandomSeriesSlugFromTitle(rec.title),
+                                      /*qidHint*/rec.wikidataQid,
+                                      /*titleHint*/rec.title);
                 m_stack->setCurrentWidget(m_tyVolumeSeriesView);
                 return;
             }
@@ -3000,4 +3069,105 @@ QJsonObject ComicsPage::devSourcesSnapshot() const
     if (!m_tyVolumeSeriesView)
         return QJsonObject{{QStringLiteral("sources"), QJsonValue::Null}};
     return QJsonObject{{QStringLiteral("sources"), m_tyVolumeSeriesView->devSourcesSnapshot()}};
+}
+
+// -----------------------------------------------------------------------
+// Fandom catalog redesign Task 19 (Phase 7, 2026-05-20).
+// -----------------------------------------------------------------------
+// Wire FallbackChainResolver into the four showSeries dispatch paths +
+// route the resolved/unresolved/forceRefresh signals.
+//
+// seriesId derivation v1: slug-from-title (lowercase ASCII + spaces→dashes
+// + drop non-[a-z0-9-]). Matches the resources/fandom_manifests/*.json
+// filename convention locked in Phase 8 (death-note, one-piece, berserk,
+// naruto, kingdom, jujutsu-kaisen, bleach, ...). The slug is fragile for
+// edge cases (subtitled releases, parenthetical disambiguation) — when
+// Phase 8 manifests surface a hit-rate problem the upgrade path is adding
+// anilistId-keyed lookup to WikiManifestRegistry + WikiManifest (a Task 17
+// schema extension follow-up).
+// -----------------------------------------------------------------------
+
+static QString fandomSeriesSlugFromTitle(const QString& title)
+{
+    QString out;
+    out.reserve(title.size());
+    bool lastWasDash = false;
+    for (QChar ch : title) {
+        const QChar lower = ch.toLower();
+        if (lower.isLetterOrNumber()) {
+            out.append(lower);
+            lastWasDash = false;
+        } else if (lower.isSpace() || lower == QChar('-') || lower == QChar('_')) {
+            if (!lastWasDash && !out.isEmpty()) {
+                out.append(QChar('-'));
+                lastWasDash = true;
+            }
+        }
+        // drop everything else (punctuation, symbols, non-Latin marks)
+    }
+    while (out.endsWith(QChar('-'))) out.chop(1);
+    return out;
+}
+
+void ComicsPage::dispatchFandomResolve(const QString& seriesId,
+                                        const QString& qidHint,
+                                        const QString& titleHint)
+{
+    if (!m_fallbackResolver) return;
+    if (seriesId.isEmpty()) {
+        qInfo("ComicsPage::dispatchFandomResolve: empty seriesId — skipping");
+        return;
+    }
+    m_pendingFandomSeriesId = seriesId;
+    qInfo("ComicsPage::dispatchFandomResolve: seriesId=%s qidHint=%s titleHint=%s",
+          qUtf8Printable(seriesId),
+          qUtf8Printable(qidHint),
+          qUtf8Printable(titleHint));
+    m_fallbackResolver->resolveForSeries(seriesId, qidHint, titleHint);
+}
+
+void ComicsPage::onFandomCatalogResolved(
+    const QString& seriesId,
+    const tankoban::manga::fandom::FandomCatalog& catalog)
+{
+    if (seriesId != m_pendingFandomSeriesId) {
+        qInfo("ComicsPage::onFandomCatalogResolved: stale (got %s, expected %s) — dropping",
+              qUtf8Printable(seriesId),
+              qUtf8Printable(m_pendingFandomSeriesId));
+        return;
+    }
+    if (!m_tyVolumeSeriesView) return;
+    qInfo("ComicsPage::onFandomCatalogResolved: %s with %d volumes",
+          qUtf8Printable(seriesId), int(catalog.volumes.size()));
+    m_tyVolumeSeriesView->populateVolumeRowsFromFandom(catalog);
+}
+
+void ComicsPage::onFandomCatalogUnresolved(const QString& seriesId,
+                                            const QString& reason)
+{
+    if (seriesId != m_pendingFandomSeriesId) return;
+    qInfo("ComicsPage::onFandomCatalogUnresolved: %s reason=%s — table stays on AniList path",
+          qUtf8Printable(seriesId), qUtf8Printable(reason));
+    // No fallback paint here: the AniList populate path runs in parallel
+    // (via showSeries → AniList client → onVolumeMetadataResolved) and is
+    // the v1 baseline. Fandom is an enrichment overlay, not a hard replace.
+}
+
+void ComicsPage::onForceRefreshRequested()
+{
+    if (!m_fallbackResolver || m_pendingFandomSeriesId.isEmpty()) {
+        qInfo("ComicsPage::onForceRefreshRequested: no series in flight — skip");
+        return;
+    }
+    // v1 lookup of qid: not persisted on ComicsPage state. We re-fire with
+    // empty qidHint; FandomVolumeResolver will hit the manifest's own
+    // wikidataQid when the manifest is present, and the cache invalidate
+    // inside forceRefreshSeries no-ops on empty qid (logs the skip). Once
+    // ComicsLibraryRecord-keyed lookups land (future task wiring the new
+    // Task 17 fields into the resolve dispatch), this can pass the real
+    // qid through and the cache invalidation will bite.
+    qInfo("ComicsPage::onForceRefreshRequested: re-resolving %s",
+          qUtf8Printable(m_pendingFandomSeriesId));
+    m_fallbackResolver->forceRefreshSeries(
+        m_pendingFandomSeriesId, /*qidHint*/QString(), m_currentDetailSeriesTitle);
 }

@@ -234,4 +234,23 @@ bool FandomCatalogCache::storeByQid(const QString& qid,
     return true;
 }
 
+bool FandomCatalogCache::invalidateByQid(const QString& qid)
+{
+    if (qid.isEmpty()) return false;
+    const QString path = cacheFilePath(qid);
+    QFile f(path);
+    if (!f.exists()) {
+        qCInfo(lcFandomCatalogCache) << "invalidate: no file at" << path
+                                      << "— treating as success";
+        return true;
+    }
+    if (!f.remove()) {
+        qCWarning(lcFandomCatalogCache) << "invalidate: remove failed"
+                                          << path << f.errorString();
+        return false;
+    }
+    qCInfo(lcFandomCatalogCache) << "invalidated" << qid;
+    return true;
+}
+
 } // namespace tankoban::manga::fandom

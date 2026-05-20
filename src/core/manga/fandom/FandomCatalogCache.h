@@ -41,6 +41,14 @@ public:
     // directories if missing.
     static bool storeByQid(const QString& qid, const FandomCatalog& catalog);
 
+    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Delete the
+    // cache entry for the given Q-ID. No-op if the file is absent. Returns
+    // true on success (delete + absent both count as success). Used by
+    // FallbackChainResolver::forceRefreshSeries to invalidate before the
+    // re-resolve fan-out — guarantees the next resolveForSeries hits the
+    // network instead of returning the stale cached catalog.
+    static bool invalidateByQid(const QString& qid);
+
     // JSON serialization helpers — exposed for testing + future consumers.
     static QJsonObject toJson(const FandomCatalog& c);
     static FandomCatalog fromJson(const QJsonObject& obj);
