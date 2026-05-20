@@ -60,6 +60,10 @@ struct FandomVolume {
     QString      synopsis;            // empty if not on this wiki (e.g., Berserk volume blocks)
     QString      coverUrlEnglish;     // empty if no English-edition cover surfaced
     QString      coverUrlJapanese;
+    QString      groupingLabel;       // optional arc/era label (e.g., Berserk "Black Swordsman Arc",
+                                      //   Naruto "Part I") — carried forward via TableExtractor when
+                                      //   the manifest's groupingSemantics is narrative-arcs or
+                                      //   multi-era. Empty when not applicable.
 };
 
 // Schema version stamp baked into every cached FandomCatalog. Bumping this
