@@ -180,6 +180,7 @@ set(SOURCES
     src/core/manga/bookwalker/VolumeCoverAlignment.cpp
     src/core/manga/bookwalker/VolumeCoverResolver.cpp
     src/core/manga/fandom/FandomTypes.cpp
+    src/core/manga/fandom/WikiManifest.cpp
     src/core/book/AnnaArchiveScraper.cpp
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
@@ -772,6 +773,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
         tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp
         tests/core/manga/bookwalker/test_volume_cover_alignment.cpp
+        tests/core/manga/fandom/test_wiki_manifest.cpp
+        src/core/manga/fandom/WikiManifest.cpp
         tests/core/PerModeNavControllerTest.cpp
         src/core/DebugLogBuffer.cpp
         src/core/JsonlEventLog.cpp

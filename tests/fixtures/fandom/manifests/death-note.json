@@ -1,0 +1,24 @@
+{
+  "seriesId": "death-note",
+  "wikidataQid": "Q14559",
+  "fandomWikiId": "deathnote",
+  "volumePagePath": "/wiki/List_of_Death_Note_chapters",
+  "pageModel": "chapter-branded",
+  "extractorType": "table",
+  "chapterKeyword": "Chapter",
+  "groupingSemantics": "subsection-headers",
+  "editionFilters": [
+    "Volume 13: How to Read",
+    "Short Stories"
+  ],
+  "unitHierarchy": ["chapter", "volume"],
+  "expectedFields": {
+    "titleEnglish": "required",
+    "titleJapanese": "required",
+    "isbnEn": "expected",
+    "isbnJp": "expected",
+    "coverUrlEnglish": "expected",
+    "synopsis": "absent"
+  },
+  "notes": "Chapter-branded URL, body contains repeated per-volume blocks. English Viz cover surfaces as a second image under the edition bullets."
+}
