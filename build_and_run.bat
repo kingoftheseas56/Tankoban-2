@@ -73,6 +73,16 @@ if exist "%PROJECT_DIR%\resources\book_reader" (
     xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\book_reader" "%BUILD_DIR%\resources\book_reader" >nul 2>&1
 )
 
+:: ── Deploy Fandom manifests (sync newer files each build) ──────────────────
+:: Fandom catalog redesign Task 20 (2026-05-20) — WikiManifestRegistry reads
+:: from applicationDirPath() + "/resources/fandom_manifests" at app start;
+:: that's out\resources\fandom_manifests\ here. Same /D /Y pattern as the
+:: book_reader sync above. Pre-Phase-8 the dir contains just death-note.json;
+:: Phase 8 ships the other 14 manifests via Trigger E worktree fan-out.
+if exist "%PROJECT_DIR%\resources\fandom_manifests" (
+    xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\fandom_manifests" "%BUILD_DIR%\resources\fandom_manifests" >nul 2>&1
+)
+
 :: ── Run ────────────────────────────────────────────────────────────────────
 echo [4/4] Launching Tankoban...
 set "SHERPA_BIN=%PROJECT_DIR%\third_party\sherpa-onnx\sherpa-onnx-v1.12.21-win-x64-shared\lib"
