@@ -534,6 +534,35 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     if (anyChanged)
         saveRecords();
 
+    for (const auto& row :
+         m_repo.listTorrentsByState(tankoban::torrent::TorrentState::PendingEngineAdd)) {
+        const QString hash = row.hash.toLower();
+        if (hash.isEmpty())
+            continue;
+        if (row.magnetUri.isEmpty()) {
+            m_repo.updateTorrentState(
+                hash,
+                tankoban::torrent::TorrentState::Error,
+                QStringLiteral("Pending row with no magnet (cannot replay)"));
+            continue;
+        }
+        if (m_engine->hasTorrent(hash)) {
+            m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
+            continue;
+        }
+        const QString addedHash = m_engine->addMagnet(row.magnetUri, row.savePath);
+        if (addedHash.isEmpty() || addedHash.compare(hash, Qt::CaseInsensitive) != 0) {
+            m_repo.updateTorrentState(
+                hash,
+                tankoban::torrent::TorrentState::Error,
+                QStringLiteral("Replay failed: engine rejected magnet"));
+            if (!addedHash.isEmpty())
+                m_engine->removeTorrent(addedHash, /*deleteFiles=*/false);
+        } else {
+            m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
+        }
+    }
+
     reconcileStreamBulkGroups();
 
     retryStreamBulkPublishing();
