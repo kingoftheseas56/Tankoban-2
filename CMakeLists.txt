@@ -169,6 +169,7 @@ set(SOURCES
     src/core/manga/NyaaRuntimeSource.cpp
     src/core/manga/WeebCentralVolumePacker.cpp
     src/core/manga/ComicsPrePivotMigrator.cpp
+    src/core/manga/TrustedUploaders.cpp
     src/core/manga/FallbackChainResolver.cpp
     src/core/manga/anilist/AniListClient.cpp
     src/core/manga/anilist/AniListCache.cpp
@@ -200,6 +201,7 @@ set(SOURCES
     src/core/book/LibGenScraper.cpp
     src/core/book/AbbScraper.cpp
     src/core/book/BookDownloader.cpp
+    src/core/book/CatalogueRecord.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
@@ -384,6 +386,7 @@ set(HEADERS
     src/core/manga/mangaupdates/MangaUpdatesClient.h
     src/core/manga/mangaupdates/VolumeMetadataResolver.h
     src/core/book/BookCatalogueResult.h
+    src/core/book/CatalogueRecord.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -794,7 +797,10 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_legacy_importer_orchestrator.cpp
         src/core/torrent/TorrentRepository.cpp
         src/core/torrent/LegacyImporter.cpp
+        # Book tests
         tests/core/book/test_book_catalogue_result.cpp
+        tests/core/book/test_catalogue_record.cpp
+        src/core/book/CatalogueRecord.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
