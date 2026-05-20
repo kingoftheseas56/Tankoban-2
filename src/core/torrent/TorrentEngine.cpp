@@ -143,6 +143,23 @@ private:
 
                 emit m_engine->metadataReady(hash, name, totalSize, files);
             }
+            else if (auto* ata = lt::alert_cast<lt::add_torrent_alert>(a)) {
+                QString hash;
+                if (ata->handle.is_valid()) {
+                    hash = TorrentEngine::hashToHex(ata->handle);
+                } else {
+                    const auto raw = ata->params.info_hashes.get_best().to_string();
+                    hash.reserve(static_cast<int>(raw.size()) * 2);
+                    for (unsigned char c : raw)
+                        hash += QString::asprintf("%02x", c);
+                }
+                if (ata->error) {
+                    emit m_engine->torrentAddFailed(
+                        hash, QString::fromStdString(ata->error.message()));
+                } else {
+                    emit m_engine->torrentAddedConfirmed(hash);
+                }
+            }
             else if (auto* tea = lt::alert_cast<lt::torrent_error_alert>(a)) {
                 auto hash = TorrentEngine::hashToHex(tea->handle);
                 emit m_engine->torrentError(hash, QString::fromStdString(tea->message()));
