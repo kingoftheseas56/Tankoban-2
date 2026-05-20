@@ -187,6 +187,7 @@ set(SOURCES
     src/core/manga/fandom/WikiManifestRegistry.cpp
     src/core/manga/fandom/FandomClient.cpp
     src/core/manga/fandom/FandomCatalogCache.cpp
+    src/core/manga/fandom/FandomVolumeResolver.cpp
     src/core/manga/fandom/extractors/TableExtractor.cpp
     src/core/manga/fandom/extractors/InfoboxExtractor.cpp
     src/core/manga/wikidata/WikidataClient.cpp
