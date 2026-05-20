@@ -39,12 +39,30 @@ std::vector<TorrentRow> LegacyImporter::parseTorrentsJson(
 }
 
 // ─── loadResumeBlob — P1.2 (Jr 2) ────────────────────────────────────────────
+//
+// Reads a single <hash.toLower()>.fastresume file from the legacy resume cache
+// directory. Filename convention matches TorrentEngine.cpp:154-156 where the
+// engine writes resume blobs as `<m_cacheDir>/resume/<hash>.fastresume` with
+// `hash = TorrentEngine::hashToHex(handle)` — and `hashToHex` always emits
+// lowercase via `%02x` formatting. The .toLower() at this boundary makes the
+// reader tolerant of callers that hand us the hash in any case.
+//
+// Silent-fail contract: every failure mode (missing file, unreadable file,
+// missing or non-existent directory, empty file) collapses to an empty
+// QByteArray return. The importer treats an empty blob the same as
+// "no resume data" — libtorrent will rehash the content on next add — so
+// there is no value in surfacing IO errors here. importInto's summary
+// tallies resumeBlobsAttached only when the blob is non-empty.
 QByteArray LegacyImporter::loadResumeBlob(
     const QString& resumeCacheDir,
     const QString& hash) {
-    Q_UNUSED(resumeCacheDir);
-    Q_UNUSED(hash);
-    return {};
+    QFile file(QDir(resumeCacheDir).filePath(hash.toLower() + QStringLiteral(".fastresume")));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    QByteArray bytes = file.readAll();
+    file.close();
+    return bytes;
 }
 
 // ─── parseStreamGroups — P1.3 (Jr 3) ─────────────────────────────────────────
