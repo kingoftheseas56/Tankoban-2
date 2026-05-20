@@ -26,7 +26,11 @@
 #include <QJsonValue>
 #include <QJsonParseError>
 #include <QDateTime>
+#include <QPair>
+#include <QVector>
 #include <QtGlobal>
+
+#include <optional>
 
 namespace tankoban::torrent {
 
@@ -188,22 +192,219 @@ QByteArray LegacyImporter::loadResumeBlob(
     return bytes;
 }
 
-// ─── parseStreamGroups — P1.3 (Jr 3) ─────────────────────────────────────────
+// ─── parseStreamGroups + parseStreamGroupItems — P1.3 (Jr 3) ─────────────────
+//
+// Two-parser-one-file design: both parsers walk the same legacy
+// stream_bulk_groups.json document. parseStreamGroups returns one
+// StreamGroupRow per top-level group; parseStreamGroupItems flattens every
+// item across every group, attributing each item to its enclosing group via
+// groupId. The shared open/parse helper lives in an anonymous namespace with
+// prefixed names to avoid clashing with the other P1.x parsers' helpers in
+// this TU.
+//
+// Field mapping is dual-shape tolerant:
+//   - real legacy (TorrentClient::loadStreamBulkGroups at TorrentClient.cpp
+//     §504, write path at TorrentClient.cpp:128 streamBulkGroupToJson) writes
+//     `groups` as an OBJECT keyed by groupId, with nested sourceIds (seriesId
+//     + season), itemKey, itemState, lastError, and qint64 createdAtMs;
+//   - the plan §1.3 expected shape uses an ARRAY with flat field names
+//     (imdbId/season/itemId/state/errorMessage/createdAt ISO + a packMode
+//     boolean that the legacy writer doesn't emit).
+// The parsers accept either shape — flat-named keys take precedence; nested
+// legacy keys are the fallback. The new schema's group-level state +
+// packMode fields come straight from JSON when present, defaulted otherwise.
+//
+// Verified live 2026-05-19 against ~/AppData/Local/Tankoban/data/
+// stream_bulk_groups.json (11 groups including one Breaking Bad S01 cohort
+// with 13 items in mixed Cancelled/Downloading/Pending states).
+
+namespace {
+
+// Open + JSON-parse the legacy file. Returns the root object on success, or
+// std::nullopt on any read/parse failure. Missing file is silent (legacy stores
+// may not exist on a fresh install); other failures append a warning.
+std::optional<QJsonObject> openStreamGroupsJsonDoc(
+    const QString& path,
+    QStringList* warnings) {
+    QFile file(path);
+    if (!file.exists()) {
+        return std::nullopt;  // silent skip — caller treats absence as no rows
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (warnings)
+            warnings->append(QStringLiteral(
+                "stream_bulk_groups.json: cannot open %1").arg(path));
+        return std::nullopt;
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
+    if (err.error != QJsonParseError::NoError) {
+        if (warnings)
+            warnings->append(QStringLiteral(
+                "stream_bulk_groups.json: malformed JSON (%1)")
+                    .arg(err.errorString()));
+        return std::nullopt;
+    }
+    if (!doc.isObject()) {
+        if (warnings)
+            warnings->append(QStringLiteral(
+                "stream_bulk_groups.json: top-level value is not an object"));
+        return std::nullopt;
+    }
+    return doc.object();
+}
+
+// Extract (groupId, groupObject) pairs from the root document. Accepts both
+// the array shape (plan §1.3 expected) and the object-keyed shape (real
+// TorrentClient.cpp write path). Returns empty + appended warning when the
+// "groups" key is absent. An EMPTY array or EMPTY object is valid (no
+// warning, just no rows).
+QVector<QPair<QString, QJsonObject>> extractStreamGroupsFromRoot(
+    const QJsonObject& root,
+    QStringList* warnings) {
+    QVector<QPair<QString, QJsonObject>> out;
+    if (!root.contains(QStringLiteral("groups"))) {
+        if (warnings)
+            warnings->append(QStringLiteral(
+                "stream_bulk_groups.json: missing \"groups\" key"));
+        return out;
+    }
+    const QJsonValue v = root.value(QStringLiteral("groups"));
+    if (v.isArray()) {
+        const QJsonArray arr = v.toArray();
+        for (const auto& el : arr) {
+            if (!el.isObject()) continue;
+            const QJsonObject group = el.toObject();
+            out.append({group.value(QStringLiteral("groupId")).toString(),
+                        group});
+        }
+    } else if (v.isObject()) {
+        const QJsonObject obj = v.toObject();
+        for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+            if (!it.value().isObject()) continue;
+            const QJsonObject group = it.value().toObject();
+            QString gid = group.value(QStringLiteral("groupId")).toString();
+            if (gid.isEmpty()) gid = it.key();
+            out.append({gid, group});
+        }
+    } else {
+        if (warnings)
+            warnings->append(QStringLiteral(
+                "stream_bulk_groups.json: \"groups\" value is neither array "
+                "nor object"));
+    }
+    return out;
+}
+
+// Resolve createdAt from either ISO string (plan §1.3 expected) or epoch-ms
+// long (real legacy createdAtMs). Returns an invalid QDateTime when neither
+// is present; caller leaves row.createdAt default-constructed.
+QDateTime resolveStreamGroupCreatedAt(const QJsonObject& group) {
+    const QString iso = group.value(QStringLiteral("createdAt")).toString();
+    if (!iso.isEmpty()) {
+        QDateTime dt = QDateTime::fromString(iso, Qt::ISODate);
+        if (dt.isValid()) return dt;
+    }
+    const QJsonValue msv = group.value(QStringLiteral("createdAtMs"));
+    if (msv.isDouble()) {
+        return QDateTime::fromMSecsSinceEpoch(
+            static_cast<qint64>(msv.toDouble()));
+    }
+    return QDateTime();
+}
+
+}  // namespace
+
 std::vector<StreamGroupRow> LegacyImporter::parseStreamGroups(
     const QString& path,
     QStringList* warnings) {
-    Q_UNUSED(path);
-    Q_UNUSED(warnings);
-    return {};
+    std::vector<StreamGroupRow> rows;
+    const auto rootOpt = openStreamGroupsJsonDoc(path, warnings);
+    if (!rootOpt) return rows;
+
+    const auto groups = extractStreamGroupsFromRoot(*rootOpt, warnings);
+    rows.reserve(static_cast<size_t>(groups.size()));
+    for (const auto& pair : groups) {
+        const QString& gid = pair.first;
+        const QJsonObject& group = pair.second;
+
+        StreamGroupRow row;
+        row.groupId = gid;
+
+        // Flat name first; nested sourceIds.* fallback for real legacy shape.
+        row.imdbId = group.value(QStringLiteral("imdbId")).toString();
+        if (row.imdbId.isEmpty()) {
+            row.imdbId = group.value(QStringLiteral("sourceIds")).toObject()
+                              .value(QStringLiteral("seriesId")).toString();
+        }
+        if (group.contains(QStringLiteral("season"))) {
+            row.season = group.value(QStringLiteral("season")).toInt(0);
+        } else {
+            row.season = group.value(QStringLiteral("sourceIds")).toObject()
+                              .value(QStringLiteral("season")).toInt(0);
+        }
+        row.label = group.value(QStringLiteral("label")).toString();
+        row.state = group.value(QStringLiteral("state")).toString();
+        row.retryGeneration =
+            group.value(QStringLiteral("retryGeneration")).toInt(0);
+
+        const QJsonValue spv = group.value(QStringLiteral("stagingPath"));
+        row.stagingPath = spv.isNull() ? QString() : spv.toString();
+
+        row.createdAt = resolveStreamGroupCreatedAt(group);
+        row.packMode = group.value(QStringLiteral("packMode")).toBool(false);
+        rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
-// ─── parseStreamGroupItems — P1.3 (Jr 3) ─────────────────────────────────────
 std::vector<StreamGroupItemRow> LegacyImporter::parseStreamGroupItems(
     const QString& path,
     QStringList* warnings) {
-    Q_UNUSED(path);
-    Q_UNUSED(warnings);
-    return {};
+    std::vector<StreamGroupItemRow> rows;
+    const auto rootOpt = openStreamGroupsJsonDoc(path, warnings);
+    if (!rootOpt) return rows;
+
+    const auto groups = extractStreamGroupsFromRoot(*rootOpt, warnings);
+    for (const auto& pair : groups) {
+        const QString& gid = pair.first;
+        const QJsonObject& group = pair.second;
+        if (!group.contains(QStringLiteral("items"))) continue;
+
+        const QJsonArray items =
+            group.value(QStringLiteral("items")).toArray();
+        for (const auto& iv : items) {
+            if (!iv.isObject()) continue;
+            const QJsonObject item = iv.toObject();
+
+            StreamGroupItemRow ir;
+            ir.groupId = gid;
+
+            ir.itemId = item.value(QStringLiteral("itemId")).toString();
+            if (ir.itemId.isEmpty())
+                ir.itemId = item.value(QStringLiteral("itemKey")).toString();
+
+            ir.episode = item.value(QStringLiteral("episode")).toInt(0);
+            ir.infoHash = item.value(QStringLiteral("infoHash")).toString();
+
+            ir.state = item.value(QStringLiteral("state")).toString();
+            if (ir.state.isEmpty())
+                ir.state = item.value(QStringLiteral("itemState")).toString();
+
+            ir.errorMessage =
+                item.value(QStringLiteral("errorMessage")).toString();
+            if (ir.errorMessage.isEmpty())
+                ir.errorMessage =
+                    item.value(QStringLiteral("lastError")).toString();
+
+            ir.fileIndex = item.value(QStringLiteral("fileIndex")).toInt(-1);
+            rows.push_back(std::move(ir));
+        }
+    }
+    return rows;
 }
 
 // ─── parseStreamDownloads — P1.4 (Jr 4) ──────────────────────────────────────
