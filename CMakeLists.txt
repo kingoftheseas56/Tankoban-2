@@ -383,6 +383,7 @@ set(HEADERS
     src/core/manga/mangaupdates/MangaUpdatesDisambiguator.h
     src/core/manga/mangaupdates/MangaUpdatesClient.h
     src/core/manga/mangaupdates/VolumeMetadataResolver.h
+    src/core/book/BookCatalogueResult.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -793,6 +794,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_legacy_importer_orchestrator.cpp
         src/core/torrent/TorrentRepository.cpp
         src/core/torrent/LegacyImporter.cpp
+        tests/core/book/test_book_catalogue_result.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
