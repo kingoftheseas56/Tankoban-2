@@ -22,9 +22,14 @@ class GoogleBooksClient;
 // Per-source failures are non-fatal — if Google Books fails, results from
 // OpenLibrary still flow through. Both-failure cases emit aggregateFailed.
 //
-// Lifecycle: one Aggregator instance owned by BooksPage; new query()
-// supersedes any pending in-flight query (cheaper than tracking generation IDs
-// for a 2-user app — last-fire-wins is acceptable).
+// Lifecycle: one Aggregator instance owned by BooksPage. A new query()
+// supersedes any pending in-flight query by resetting state — adequate for
+// the 2-user app's low rapid-search rate. KNOWN LIMITATION (v1.x followup):
+// the reset is racy if a stale callback arrives AFTER the new query()'s
+// state reset (m_*Pending=true) — the stale callback would be accepted as
+// if it belonged to the new query. The proper fix is a generation counter
+// captured in lambdas at re-connect-on-query time; m_generation field is
+// scaffolded below for that fix. See cpp for the full race trace.
 class BookCatalogueAggregator : public QObject
 {
     Q_OBJECT
@@ -60,6 +65,11 @@ private:
     GoogleBooksClient*     m_googlebooks;
 
     QString m_currentQuery;
+
+    // Monotonically-incrementing generation counter for the stale-callback
+    // guard. query() bumps it; each lambda captures the value at-connect
+    // time and drops the callback if m_generation has advanced past it.
+    int m_generation = 0;
 
     // Pending state for the current query — both must complete (success or
     // failure) before tryEmitAggregate() fires.

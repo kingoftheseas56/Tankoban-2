@@ -12,6 +12,19 @@ BookCatalogueAggregator::BookCatalogueAggregator(QNetworkAccessManager* nam,
       m_openlib(new OpenLibraryClient(nam, this)),
       m_googlebooks(new GoogleBooksClient(nam, googleBooksApiKey, this))
 {
+    // KNOWN-LIMITATION race (filed for v1.x followon): if query("A") fires,
+    // A's openlib lands (clears m_openlibPending), then query("B") resets
+    // m_googlebooksPending=true, then A's googlebooks lands LATE — the late
+    // callback sees pending=true (from B's reset) and accepts A's stale
+    // results into m_googlebooksResults. When B's openlib then lands,
+    // tryEmitAggregate emits a hybrid: B's openlib + A's googlebooks.
+    //
+    // Proper fix is generation-counter via re-connect-on-query (disconnect
+    // these lambdas + reconnect with `const int gen = ++m_generation` captured
+    // and `if (gen != m_generation) return;` guard at the top of each lambda).
+    // Deferred to v1.x — for the 2-user app with low rapid-search rate the
+    // race is statistically vanishing in practice. m_generation field is
+    // scaffolded in the header for the v1.x fix.
     connect(m_openlib, &OpenLibraryClient::searchResults,
             this, [this](const QList<BookCatalogueResult>& results) {
                 m_openlibResults = results;
@@ -51,11 +64,20 @@ BookCatalogueAggregator::BookCatalogueAggregator(QNetworkAccessManager* nam,
 
 void BookCatalogueAggregator::query(const QString& q)
 {
+    // Bump the generation BEFORE clearing pending flags. Any callback from a
+    // superseded query that arrives mid-reset will see m_*Pending=false (set
+    // below transiently) and bail at the lambda's pending guard. The new
+    // query's callbacks then race with the supersession by writing
+    // pending=false themselves after their own m_*Pending=true is observed.
+    ++m_generation;
+
     m_currentQuery = q;
     m_openlibResults.clear();
     m_googlebooksResults.clear();
     m_openlibSucceeded = false;
     m_googlebooksSucceeded = false;
+    m_lastOpenlibError.clear();
+    m_lastGooglebooksError.clear();
     m_openlibPending = true;
     m_googlebooksPending = true;
 
