@@ -1,0 +1,146 @@
+// tests/core/manga/fandom/test_table_extractor.cpp
+
+#include <gtest/gtest.h>
+
+#include "core/manga/fandom/extractors/TableExtractor.h"
+#include "core/manga/fandom/WikiManifest.h"
+
+#include <QCoreApplication>
+#include <QFile>
+#include <QJsonDocument>
+
+using namespace tankoban::manga::fandom;
+
+namespace {
+
+QString fixturePath(const QString& relPath)
+{
+    return QStringLiteral(TANKOBAN_TEST_FIXTURE_DIR) + QStringLiteral("/") + relPath;
+}
+
+WikiManifest loadManifest(const QString& relPath)
+{
+    QFile f(fixturePath(relPath));
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    auto doc = QJsonDocument::fromJson(f.readAll());
+    return WikiManifest::fromJson(doc.object());
+}
+
+QString loadFixture(const QString& relPath)
+{
+    QFile f(fixturePath(relPath));
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return QString::fromUtf8(f.readAll());
+}
+
+} // anonymous
+
+TEST(TableExtractorTest, DeathNote_ExtractsExactly12MainVolumes)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    ASSERT_TRUE(m.isValid()) << "manifest failed to load";
+
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    ASSERT_FALSE(html.isEmpty()) << "fixture empty or missing";
+
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    EXPECT_EQ(vols.size(), 12)
+        << "Death Note has 12 main volumes; 'Volume 13: How to Read' + "
+        << "'Short Stories' filtered out via manifest editionFilters";
+}
+
+TEST(TableExtractorTest, DeathNote_Vol1_HasEnglishTitleAndJapanese)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.volumeNumber, 1);
+    EXPECT_EQ(v1.titleEnglish.toStdString(), "Boredom");
+    // JP kanji "退屈" + romaji "Taikutsu" — exact-string match validates the
+    // id-suffix splitter and the UTF-8 round-trip.
+    EXPECT_EQ(v1.titleJapanese.toStdString(), std::string("\xe9\x80\x80\xe5\xb1\x88"));
+    EXPECT_EQ(v1.titleRomaji.toStdString(), "Taikutsu");
+}
+
+TEST(TableExtractorTest, DeathNote_VolumesAreInDocumentOrder)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_EQ(vols.size(), 12);
+
+    for (int i = 0; i < vols.size(); ++i) {
+        EXPECT_EQ(vols[i].volumeNumber, i + 1)
+            << "volume " << (i + 1) << " out of order";
+    }
+}
+
+TEST(TableExtractorTest, DeathNote_Vol1_HasReleaseDatesAndIsbns)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_EQ(v1.releaseDateJp, QDate(2004, 4, 2));
+    EXPECT_EQ(v1.releaseDateEn, QDate(2005, 10, 10));
+    EXPECT_EQ(v1.isbnJp.toStdString(), "978-4-088-73621-1");
+    EXPECT_EQ(v1.isbnEn.toStdString(), "978-1-421-50168-0");
+}
+
+TEST(TableExtractorTest, DeathNote_Vol1_HasBothCoverUrls)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+    ASSERT_GE(vols.size(), 1);
+
+    const FandomVolume& v1 = vols[0];
+    EXPECT_TRUE(v1.coverUrlEnglish.startsWith("https://static.wikia.nocookie.net/"))
+        << "actual: " << v1.coverUrlEnglish.toStdString();
+    EXPECT_TRUE(v1.coverUrlJapanese.startsWith("https://static.wikia.nocookie.net/"))
+        << "actual: " << v1.coverUrlJapanese.toStdString();
+    EXPECT_NE(v1.coverUrlEnglish, v1.coverUrlJapanese);
+}
+
+TEST(TableExtractorTest, DeathNote_FiltersOutHowToReadAndShortStories)
+{
+    WikiManifest m = loadManifest(
+        QStringLiteral("fandom/manifests/death-note.json"));
+    QString html = loadFixture(QStringLiteral(
+        "fandom/death-note_list-of-chapters_2026-05-19.html"));
+    QList<FandomVolume> vols = TableExtractor::extract(html, m);
+
+    for (const auto& v : vols) {
+        EXPECT_NE(v.volumeNumber, 13) << "Volume 13 (How to Read) should be filtered";
+        EXPECT_FALSE(v.titleEnglish.contains("How to Read"));
+        EXPECT_FALSE(v.titleEnglish.contains("Short Stories"));
+    }
+}
+
+TEST(TableExtractorTest, UnsupportedGroupingSemantics_ReturnsEmpty)
+{
+    WikiManifest m;
+    m.seriesId          = QStringLiteral("test");
+    m.fandomWikiId      = QStringLiteral("test");
+    m.groupingSemantics = QStringLiteral("mathematical-buckets"); // Task 7 territory
+    QList<FandomVolume> vols = TableExtractor::extract(
+        QStringLiteral("<html></html>"), m);
+    EXPECT_TRUE(vols.isEmpty());
+}
