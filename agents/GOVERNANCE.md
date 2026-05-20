@@ -412,6 +412,32 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     (Added 2026-05-20 after independent advocacy briefs from Agent 1 and Agent 4 converged on the same shape. Hemanth ratified verbatim: *"open work trees for all our agents... they can now abuse the hell out of worktrees and get some proper work done."* Full rule body + first-deployment target at `feedback_trigger_e_worktrees_for_shared_files.md` memory.)
 
+22. **BUILD LANE LOCK — one agent runs `build_check.bat` against `out/` at a time (gov-v6).** Tankoban's `out/` directory is single-point-of-contention. When two agents fire `build_check.bat` / `build_and_run.bat` / `cmake --build out` / `native_sidecar/build.ps1` simultaneously, intermediate `.obj` files get clobbered mid-write, ninja's state corrupts (`premature end of file; recovering` warning surfaces; rebuilds inflate from a few files to hundreds), and link outputs come back meaningless. Same shape as Rule 19's MCP LANE LOCK — separate physical resource, separate lane, separate lock.
+
+    **Claim:** before any build command that touches `out/`, post in `agents/chat.md`:
+    ```
+    BUILD LOCK CLAIMED - [Agent N, <scope>]: expecting ~X min. <brief why>
+    ```
+    Typical X: 1-2 min for a `build_check.bat` against a warm cache, 5-15 min for a cold rebuild or LTCG link, 8-12 min for `native_sidecar/build.ps1` first run.
+
+    **Hold:** any agent about to fire a build greps recent ~50 lines of `agents/chat.md` for an unreleased `BUILD LOCK` line. If one exists and is fresh (<X min since post OR within the expected-duration estimate), hold — do non-build work (file reads, grep, planning, doc writes, RTC drafting) until released. If the lock is stale (>15 min past its expected duration with no release line), it's reclaimable — post a fresh `BUILD LOCK` line citing the stale takeover.
+
+    **Release:** at build end (success OR failure), post:
+    ```
+    BUILD LOCK RELEASED - [Agent N, <scope>]: <outcome — BUILD OK / BUILD FAILED <stage> / etc>.
+    ```
+    Release is mandatory even on failure or abort. A dropped lock strands the build tree.
+
+    **Applies to:** `build_check.bat`, `build_and_run.bat`, `cmake --build out ...`, `native_sidecar/build.ps1`, `build_qrhi.bat`, any direct ninja invocation against the `out/` tree. Does NOT apply to: subagents running INSIDE worktrees per Rule 21 (their `out/` is isolated by definition), `out_test/` or `out2/` experimental dirs, or read-only build inspections (`ls out/`, `git status`).
+
+    **Applies identically to Codex Trigger D** — Codex commissions that include build verification claim + release the LOCK the same way. The TODAY (2026-05-21 ~12:25am) Codex burning tokens in a `while ($true) { Get-CimInstance ... ninja.exe OR cmake.exe OR cl.exe }` wait-loop is the canonical motivating incident: Codex was correctly avoiding clobbering Claude's mid-flight build, but the cost was Codex tokens spent spinning. With the lock, Codex (and every brother) sees the lane state explicitly and waits cheaply via chat.md poll instead of expensive process-wait.
+
+    **Relates to Rule 1** (`taskkill Tankoban.exe` before every build): Rule 1 guards exe-overwrite correctness; Rule 22 guards build-tree-state correctness against concurrent builders. Both are independently required.
+
+    **Relates to Rule 21** (worktrees for shared-file Trigger E): worktrees physically eliminate the lock's need for any Jr running INSIDE a worktree (their `out/` is isolated). The lock applies only to builds against the shared root `out/` tree.
+
+    (Added 2026-05-21 after Codex burned multiple wait-loop cycles during a build-state collision on 2026-05-20→2026-05-21 wake. Pattern lifted directly from Rule 19 MCP LANE LOCK — same claim/hold/release/stale-reclaim protocol, different physical resource.)
+
 ---
 
 ## File Hygiene & Rotation (added 2026-04-16)

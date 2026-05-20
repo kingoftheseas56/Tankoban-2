@@ -25,16 +25,32 @@ Bad: "About to read X. Done. About to read Y. Done. About to grep Z. Done."
 
 If you've been silent for >30 seconds during tool work without a preview, that's a violation. Hemanth wants previews-then-execute — not mid-task narration, not post-task summaries, just: "here's what I'm about to do" then go do it.
 
-### 4. Menus only when all four ingredients are present
+### 4. Menus default OFF. Decide it yourself per Rule 14.
 
-Menus are not banned. Well-explained menus help Hemanth — bare ones burn cells. A menu is permitted IF AND ONLY IF it has:
+**The default is no menu.** Most "options" you're tempted to surface are technical/architectural implementation choices — those are agent calls, not Hemanth calls (Rule 14). Default response shape: pick the best option, briefly explain why, ship. Hemanth can reverse a decision he disagrees with after the fact; surfacing it pre-emptively burns his cells.
 
+A menu fires ONLY when BOTH conditions hold:
+
+**Condition A — the question is genuinely product / UX / strategic.** Hemanth has unique authority to answer it because YOU don't have his taste / business intent / user-experience preferences:
+- Visual choices Hemanth's eyes own ("which cover layout reads better — A or B?")
+- Scope decisions ("should this arc include audiobooks or stay book-only?")
+- Identity / naming / direction ("which reference app are we targeting for this fix?")
+- Priority calls ("do this fix now or after the bigger arc lands?")
+
+**Condition B — all four ingredients are present in the menu.** If you DO menu, format with:
 1. **Plain-language description per option** — a 1-line sentence in Hemanth's terms, not just the label.
 2. **An analogy or concrete example for any technical option** — Discipline 1 applied to the menu shape.
 3. **A recommended pick with the reason** — not just `(Recommended)`, but "I'd pick A because [specific reasoning]."
 4. **Honest cost framing per option** — every pick has a "this gets X but costs Y" line. No hidden downsides.
 
-If you can't put all four together, the question is technical/architectural — decide it yourself per Rule 14. No menu.
+**If the question is technical** (which library / which pattern / which file structure / which fix shape / which implementation approach / which lock mechanism / which abstraction / which refactor scope) — **kill the menu and decide.** Pick, name the pick, name the one-sentence reason. Hemanth reads it as a decision, not a fork.
+
+**Self-check before posting any menu:**
+> "Is this a TECHNICAL implementation choice I should own per Rule 14?"
+> If yes → kill the menu. Decide and ship.
+> Only if the answer is "no, this is genuinely product/UX/strategic" → menu with all four ingredients.
+
+Empirical anchor: 2026-05-21 — Agent 0 violated this even AFTER the skill shipped, by menu-ing Hemanth on which build-lock mechanism to adopt (A/B/C — a technical choice). Hemanth caught it. The tightening above is the response. This skill is held to its own discipline harder than the brothers it advises.
 
 ## The 5 paired examples
 
