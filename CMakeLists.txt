@@ -186,6 +186,7 @@ set(SOURCES
     src/core/manga/fandom/WikiManifest.cpp
     src/core/manga/fandom/WikiManifestRegistry.cpp
     src/core/manga/fandom/FandomClient.cpp
+    src/core/manga/fandom/FandomCatalogCache.cpp
     src/core/manga/fandom/extractors/TableExtractor.cpp
     src/core/manga/fandom/extractors/InfoboxExtractor.cpp
     src/core/manga/wikidata/WikidataClient.cpp
@@ -793,8 +794,11 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/fandom/test_wiki_manifest_registry.cpp
         tests/core/manga/fandom/test_table_extractor.cpp
         tests/core/manga/fandom/test_infobox_extractor.cpp
+        tests/core/manga/fandom/test_fandom_catalog_cache.cpp
+        src/core/manga/fandom/FandomTypes.cpp
         src/core/manga/fandom/WikiManifest.cpp
         src/core/manga/fandom/WikiManifestRegistry.cpp
+        src/core/manga/fandom/FandomCatalogCache.cpp
         src/core/manga/fandom/extractors/TableExtractor.cpp
         src/core/manga/fandom/extractors/InfoboxExtractor.cpp
         tests/core/PerModeNavControllerTest.cpp
