@@ -1,4 +1,5 @@
 #include "TorrentClient.h"
+#include "LegacyImporter.h"  // TORRENT_PERSISTENCE_COLLAPSE P1.6 first-boot importer
 #include "TorrentEngine.h"
 #include "core/CoreBridge.h"
 #include "core/JsonlEventLog.h"
@@ -12,6 +13,7 @@
 #include <QRegularExpression>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonValue>
@@ -394,6 +396,62 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                 if (m_bridge)
                     m_bridge->notifyRootFoldersChanged(QStringLiteral("videos"));
             });
+
+    // ── TORRENT_PERSISTENCE_COLLAPSE Phase 1.6 — first-boot legacy import ─
+    //
+    // Opens the SQLite repository at <dataDir>/torrents.db. If the DB file
+    // does not yet exist BUT a legacy torrents.json sits next to it, run
+    // LegacyImporter::importInto exactly once to pre-populate the four
+    // SQLite tables from the legacy stores. On subsequent boots the DB
+    // exists and the importer is skipped — schema_meta.migration_completed_at
+    // is the authoritative "already migrated" marker (importInto stamps it
+    // inside the same transaction as the bulk inserts).
+    //
+    // Critically: the legacy loadRecords() / loadStreamBulkGroups() /
+    // addFromResume hydration path BELOW continues to run regardless. The
+    // repository is the new durable substrate but Phase 1 does not yet
+    // route any consumer through it — Phase 3 cuts over readers, Phase 4
+    // removes the legacy writers entirely. Both stores coexist for the
+    // Phase 1-3 window so a partial rollout never breaks UI behaviour.
+    {
+        const QString dataDir = m_bridge ? m_bridge->dataDir() : QString();
+        if (!dataDir.isEmpty()) {
+            const QString dbPath           = QDir(dataDir).filePath(QStringLiteral("torrents.db"));
+            const QString torrentsJsonPath = QDir(dataDir).filePath(QStringLiteral("torrents.json"));
+            const bool dbExists     = QFile::exists(dbPath);
+            const bool legacyExists = QFile::exists(torrentsJsonPath);
+
+            if (!m_repo.open(dbPath)) {
+                qWarning() << "[TorrentClient] Failed to open repository at"
+                           << dbPath;
+            } else if (!dbExists && legacyExists) {
+                qInfo() << "[TorrentClient] First-boot migration: legacy "
+                           "JSON -> SQLite";
+                tankoban::torrent::LegacySources sources;
+                sources.torrentsJsonPath           = torrentsJsonPath;
+                sources.streamBulkGroupsJsonPath   = QDir(dataDir).filePath(QStringLiteral("stream_bulk_groups.json"));
+                sources.streamDownloadsJsonPath    = QDir(dataDir).filePath(QStringLiteral("stream_downloads.json"));
+                sources.resumeCacheDir             = QDir(dataDir).filePath(QStringLiteral("torrent_cache/resume"));
+                tankoban::torrent::LegacyImporter imp;
+                const auto summary = imp.importInto(m_repo, sources);
+                qInfo().noquote()
+                    << "[TorrentClient] Migration summary:"
+                    << "torrents="            << summary.torrentsImported
+                    << "legacy_no_magnet="    << summary.torrentsLegacyNoMagnet
+                    << "resume_blobs="        << summary.resumeBlobsAttached
+                    << "groups="              << summary.streamGroupsImported
+                    << "items="               << summary.streamGroupItemsImported
+                    << "downloads="           << summary.streamDownloadsImported;
+                for (const auto& w : summary.warnings) {
+                    qWarning().noquote()
+                        << "[TorrentClient] migration warning:" << w;
+                }
+            }
+        } else {
+            qWarning() << "[TorrentClient] Bridge dataDir unavailable; "
+                          "skipping repository open + first-boot importer";
+        }
+    }
 
     loadRecords();
     loadStreamBulkGroups();

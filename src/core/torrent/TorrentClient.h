@@ -11,6 +11,12 @@
 #include <QStringList>
 #include <optional>
 
+// TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — TorrentRepository is a
+// QObject-based member with internal QSqlDatabase state; the by-value member
+// declaration below needs the full type, so this is a real include rather
+// than a forward declaration.
+#include "TorrentRepository.h"
+
 class CoreBridge;
 class TorrentEngine;
 class StreamDownloadIndex;
@@ -360,6 +366,16 @@ private:
     CoreBridge*          m_bridge;
     TorrentEngine*       m_engine;
     StreamDownloadIndex* m_streamDownloadIndex = nullptr;  // STREAM_DOWNLOADED_LIBRARY Phase 2; non-owning
+
+    // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — SQLite-backed
+    // durable store that will replace the legacy m_records / m_streamBulkGroups
+    // JSON objects + .fastresume cache. Opened in the ctor; populated on first
+    // boot by LegacyImporter::importInto when torrents.db is absent but the
+    // legacy stores exist on disk. During Phase 1 the legacy hydration path
+    // continues to drive UI state — the repository is written into but not yet
+    // read from. Phase 3 cuts over the consumers; Phase 4 removes m_records +
+    // saveRecords entirely.
+    tankoban::torrent::TorrentRepository m_repo;
 
     // Persistent records keyed by infoHash
     QJsonObject m_records;  // { "hash": { name, savePath, category, addedAt, ... } }
