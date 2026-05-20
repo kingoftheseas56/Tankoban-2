@@ -205,6 +205,7 @@ set(SOURCES
     src/core/book/CatalogueRecord.cpp
     src/core/book/GoogleBooksClient.cpp
     src/core/book/OpenLibraryClient.cpp
+    src/core/book/SeriesDetector.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
@@ -393,6 +394,7 @@ set(HEADERS
     src/core/book/CatalogueRecord.h
     src/core/book/GoogleBooksClient.h
     src/core/book/OpenLibraryClient.h
+    src/core/book/SeriesDetector.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
     src/core/book/AnnaArchiveScraper.h
@@ -813,6 +815,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/book/OpenLibraryClient.cpp
         tests/core/book/test_google_books_client_parser.cpp
         src/core/book/GoogleBooksClient.cpp
+        tests/core/book/test_series_detector.cpp
+        src/core/book/SeriesDetector.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
