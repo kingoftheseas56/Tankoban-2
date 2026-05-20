@@ -21,6 +21,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Widgets
     Svg
+    Sql
     Network
     OpenGL
     OpenGLWidgets
@@ -497,6 +498,7 @@ if(TARGET Qt6::Multimedia)
 endif()
 
 target_link_libraries(Tankoban PRIVATE Qt6::Svg)
+target_link_libraries(Tankoban PRIVATE Qt6::Sql)
 
 # TANKOBAN_BETA_DATA_NAMESPACE — see top-of-file option block.
 if(TANKOBAN_BETA)
