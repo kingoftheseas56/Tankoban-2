@@ -125,9 +125,7 @@ public:
     // submit path produces but without the user-confirm prompt.
     QString addMagnetHeadless(const QString& magnetUri,
                               const QString& category   = QString(),
-                              const QString& destinationPath = QString(),
-                              const QString& imdbId     = QString(),
-                              int            season     = 0);
+                              const QString& destinationPath = QString());
 
     // Query
     QList<TorrentInfo> listActive() const;

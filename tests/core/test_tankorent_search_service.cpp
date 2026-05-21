@@ -1,6 +1,5 @@
 #include "core/TankorentSearchService.h"
 #include "core/TorrentResult.h"
-#include "core/stream/SourceRanker.h"
 #include "MockTorrentIndexer.h"
 
 #include <QSignalSpy>
@@ -165,57 +164,4 @@ TEST(TankorentSearchServiceTest, ConcurrentHandlesAreIsolated)
     ASSERT_EQ(finishedSpy.count(), 2);
     EXPECT_EQ(finishedSpy.last().at(0).toString(), handle2);
     EXPECT_FALSE(svc.isActive(handle2));
-}
-
-TEST(TankorentSearchServiceTest, AutoPickFiresWhenRankerInjectedAndIdentityNonEmpty)
-{
-    TestableSearchService svc;
-    auto* mock = new MockTorrentIndexer("piratebay");
-    svc.setMockIndexers({mock});
-
-    tankoban::stream::SourceRanker ranker({QStringLiteral("NTb")});
-    svc.setRanker(&ranker);
-
-    QSignalSpy topPickedSpy(&svc, &TankorentSearchService::topResultPicked);
-
-    TankorentSearchService::CinemataIdentity id;
-    id.imdbId = "tt1439629";
-    id.season = 5;
-
-    const QString handle = svc.startSearch("videos", "all", "Community S5", 30, {}, id);
-    ASSERT_FALSE(handle.isEmpty());
-
-    TorrentResult r;
-    r.title = "Community.S05E03.1080p.NTb";
-    r.magnetUri = "magnet:?xt=urn:btih:abc";
-    r.seeders = 500;
-    mock->triggerFinished({r});
-
-    ASSERT_EQ(topPickedSpy.count(), 1);
-    EXPECT_EQ(topPickedSpy.first().at(0).toString(), handle);
-    auto picked = topPickedSpy.first().at(1).value<TorrentResult>();
-    EXPECT_EQ(picked.title, QString("Community.S05E03.1080p.NTb"));
-}
-
-TEST(TankorentSearchServiceTest, NoAutoPickWhenIdentityEmpty)
-{
-    TestableSearchService svc;
-    auto* mock = new MockTorrentIndexer("piratebay");
-    svc.setMockIndexers({mock});
-
-    tankoban::stream::SourceRanker ranker({QStringLiteral("NTb")});
-    svc.setRanker(&ranker);
-
-    QSignalSpy topPickedSpy(&svc, &TankorentSearchService::topResultPicked);
-
-    // No identity passed (legacy direct-search shape: 5-arg overload).
-    const QString handle = svc.startSearch("videos", "all", "Community", 30);
-    ASSERT_FALSE(handle.isEmpty());
-
-    TorrentResult r;
-    r.title = "Community.S05E03.NTb";
-    r.seeders = 500;
-    mock->triggerFinished({r});
-
-    EXPECT_EQ(topPickedSpy.count(), 0);  // legacy path doesn't auto-pick
 }

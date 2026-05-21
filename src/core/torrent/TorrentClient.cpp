@@ -2472,15 +2472,9 @@ QString TorrentClient::resolveMetadata(const QString& magnetUri)
 
 QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
                                          const QString& category,
-                                         const QString& destinationPath,
-                                         const QString& imdbId,
-                                         int            season)
+                                         const QString& destinationPath)
 {
     // v1.5 Phase D.3 (2026-05-19) — dialog-free magnet add for dev-bridge use.
-    // TANKORENT_CINEMATA P1.T7 (2026-05-21) — extended with imdbId+season so
-    // the new Theatre detail-view auto-pick path (ShowView -> SourceRanker ->
-    // here) writes the Cinemata identity into the persisted repo row at the
-    // same upsert point as the legacy stream-bulk dispatchSeason flow.
     if (isDuplicate(magnetUri))
         return {};
     const QString hash = resolveMetadata(magnetUri);
@@ -2495,8 +2489,6 @@ QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
     cfg.contentLayout   = QStringLiteral("original");
     cfg.sequential      = false;
     cfg.startPaused     = false;
-    cfg.imdbId          = imdbId;
-    cfg.season          = season;
     startDownload(hash, cfg);
     return hash;
 }

@@ -12,10 +12,6 @@
 class QNetworkAccessManager;
 class TorrentIndexer;
 
-namespace tankoban::stream {
-class SourceRanker;
-}
-
 // Headless fan-out for Tankorent's federated torrent search. Owns indexer
 // instantiation + dispatch + per-indexer signal forwarding. UI pages and
 // background services (e.g. BookCatalogueAggregator) consume it via the
@@ -39,18 +35,6 @@ public:
                                     QObject* parent = nullptr);
     ~TankorentSearchService() override;
 
-    // Cinemata identity baked into a search at dispatch time. Empty imdbId
-    // is the legacy direct-search shape (TankorentPage Add flow); a non-
-    // empty imdbId triggers the auto-pick path in conjunction with a
-    // registered SourceRanker (see T5/T6). Season/episode disambiguate the
-    // search target so the downloader writes the right repo-row columns
-    // (T7) and the per-row state painter can find the resulting entry (T10).
-    struct CinemataIdentity {
-        QString imdbId;     // empty if no identity (legacy direct-search path)
-        int     season = 0; // 0 for movies
-        int     episode = 0; // 0 = whole-season search, else specific episode
-    };
-
     // mediaType: "books" / "audiobooks" / "videos" / "comics" / ""
     //   When set, restricts to indexers in the internal allowlist for that
     //   type. Empty means no media-type filter (only sourceFilter applies).
@@ -64,25 +48,9 @@ public:
                         const QString& sourceFilter,
                         const QString& query,
                         int limit,
-                        const QString& categoryId = {},
-                        const CinemataIdentity& identity = {});
+                        const QString& categoryId = {});
 
     void cancelSearch(const QString& handle);
-
-    // Returns the CinemataIdentity captured at startSearch() time for
-    // `handle`. Returns a default-constructed (empty imdbId) identity if the
-    // handle is unknown or settled/cleaned-up. Page-side callers use this
-    // to retrieve identity at addMagnetHeadless time (T7+T8 wiring).
-    CinemataIdentity identityFor(const QString& handle) const;
-
-    // Inject a non-owning SourceRanker for the auto-pick path. nullptr (the
-    // default) keeps the legacy direct-search shape — no auto-pick signals
-    // ever fire. When set AND the in-flight search has a non-empty
-    // CinemataIdentity.imdbId, the FIRST indexer to return a non-empty
-    // result set whose pickTop clears the confidence threshold drives the
-    // topResultPicked emit. Caller owns the ranker; service holds only a
-    // raw pointer.
-    void setRanker(const tankoban::stream::SourceRanker* ranker) { m_ranker = ranker; }
 
     // True if `handle` has any indexers still pending. False once all
     // indexers in the batch have settled (success or error), or if the
@@ -107,14 +75,6 @@ signals:
     // status text) without having to maintain their own pending counter.
     void searchFinished(const QString& handle);
 
-    // Emitted at most once per handle when the FIRST indexer returns a
-    // non-empty result set AND a SourceRanker is wired AND the search
-    // carries a non-empty CinemataIdentity.imdbId AND ranker.pickTop
-    // clears its confidence threshold. UI consumes this for auto-pick;
-    // subsequent indexer completions still emit resultsReady so the
-    // [Pick different source] expansion list keeps growing.
-    void topResultPicked(const QString& handle, const TorrentResult& result);
-
 protected:
     // Hook for tests: subclasses (TestableSearchService in tests) override
     // this to inject MockTorrentIndexer instances. Default impl reads
@@ -127,8 +87,6 @@ private:
     struct SearchContext {
         QList<TorrentIndexer*> activeIndexers;
         int pendingCount = 0;
-        CinemataIdentity identity;  // bake-time identity for this search
-        bool autoPicked = false;    // latches once topResultPicked fires for this handle
     };
 
     // Snapshot of media-type → indexer-id allowlist. Was kMediaTypeIndexers
@@ -141,7 +99,4 @@ private:
     QNetworkAccessManager* m_nam = nullptr;
     QHash<QString, SearchContext> m_contexts;
     quint64 m_handleSeq = 0;
-
-    // Non-owning ranker for the auto-pick path. nullptr = no auto-pick.
-    const tankoban::stream::SourceRanker* m_ranker = nullptr;
 };

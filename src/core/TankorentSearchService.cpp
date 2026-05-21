@@ -1,6 +1,5 @@
 #include "core/TankorentSearchService.h"
 
-#include "core/stream/SourceRanker.h"
 #include "core/TorrentIndexer.h"
 #include "core/indexers/NyaaIndexer.h"
 #include "core/indexers/PirateBayIndexer.h"
@@ -92,8 +91,7 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
                                             const QString& sourceFilter,
                                             const QString& query,
                                             int limit,
-                                            const QString& categoryId,
-                                            const CinemataIdentity& identity)
+                                            const QString& categoryId)
 {
     QList<TorrentIndexer*> indexers = buildIndexersFor(mediaType, sourceFilter);
     if (indexers.isEmpty())
@@ -103,7 +101,6 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
     SearchContext ctx;
     ctx.activeIndexers = indexers;
     ctx.pendingCount = indexers.size();
-    ctx.identity = identity;
     m_contexts.insert(handle, ctx);
 
     for (auto* idx : indexers) {
@@ -114,21 +111,6 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
             if (!m_contexts.contains(handle))
                 return;
             emit resultsReady(handle, results);
-
-            // Auto-pick: fires at most once per handle, when the first non-
-            // empty result set arrives, the search has a CinemataIdentity
-            // (imdbId set), a ranker is wired, AND pickTop clears its
-            // confidence threshold. Legacy direct-search (empty identity)
-            // never auto-picks regardless of ranker presence.
-            SearchContext& ctx = m_contexts[handle];
-            if (m_ranker && !ctx.identity.imdbId.isEmpty()
-                    && !ctx.autoPicked && !results.isEmpty()) {
-                if (auto top = m_ranker->pickTop(results)) {
-                    ctx.autoPicked = true;
-                    emit topResultPicked(handle, *top);
-                }
-            }
-
             settleOne(handle);
         });
         connect(idx, &TorrentIndexer::searchError, this,
@@ -159,15 +141,6 @@ bool TankorentSearchService::isActive(const QString& handle) const
 {
     auto it = m_contexts.find(handle);
     return it != m_contexts.end() && it.value().pendingCount > 0;
-}
-
-TankorentSearchService::CinemataIdentity
-TankorentSearchService::identityFor(const QString& handle) const
-{
-    auto it = m_contexts.find(handle);
-    if (it == m_contexts.end())
-        return {};
-    return it.value().identity;
 }
 
 void TankorentSearchService::settleOne(const QString& handle)
