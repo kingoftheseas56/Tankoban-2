@@ -2177,18 +2177,18 @@ void TorrentClient::publishTankorentItemsForTorrent(const QString& infoHash)
         qWarning() << "publishTankorentItemsForTorrent: no StreamDownloadIndex bound; skipping";
         return;
     }
-    if (!m_repo.hasTorrent(infoHash)) {
+    const auto row = m_repo.getTorrent(infoHash);
+    if (!row) {
         qWarning() << "publishTankorentItemsForTorrent: no record for" << infoHash;
         return;
     }
 
-    const QJsonObject record = m_records.value(infoHash).toObject();
-    const QString imdbId = record.value(QStringLiteral("imdbId")).toString();
+    const QString imdbId = row->imdbId;
     if (imdbId.isEmpty())
         return;
 
-    const int configSeason = record.value(QStringLiteral("season")).toInt(0);
-    const QString savePath = record.value(QStringLiteral("savePath")).toString();
+    const int configSeason = row->season;
+    const QString savePath = row->savePath;
     if (savePath.isEmpty()) {
         qWarning() << "publishTankorentItemsForTorrent: empty savePath for" << infoHash;
         return;
@@ -3197,21 +3197,20 @@ void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name
     // streamBulkGroups path; addon-only torrents have no imdbId binding.
     if (!m_streamDownloadIndex)
         return;
-    if (!m_repo.hasTorrent(infoHash))
+    const auto row = m_repo.getTorrent(infoHash);
+    if (!row)
         return;
 
-    const QJsonObject record = m_records.value(infoHash).toObject();
-    const QString imdbId = record.value(QStringLiteral("imdbId")).toString();
+    const QString imdbId = row->imdbId;
     if (imdbId.isEmpty())
         return;  // not a Tankorent-source torrent
 
-    const QString streamGroupId =
-        record.value(QStringLiteral("streamGroupId")).toString();
+    const QString streamGroupId = row->streamGroupId;
     if (!streamGroupId.isEmpty())
         return;  // bulk-cohort path handles its own registration
 
-    const int configSeason = record.value(QStringLiteral("season")).toInt(0);
-    const QString savePath = record.value(QStringLiteral("savePath")).toString();
+    const int configSeason = row->season;
+    const QString savePath = row->savePath;
     if (savePath.isEmpty())
         return;
 
@@ -3248,20 +3247,19 @@ void TorrentClient::onPieceFinished(const QString& infoHash, int /*pieceIndex*/)
     // piece event. libtorrent's file_progress is O(files), so this is cheap.
     if (!m_streamDownloadIndex || !m_engine)
         return;
-    if (!m_repo.hasTorrent(infoHash))
+    const auto row = m_repo.getTorrent(infoHash);
+    if (!row)
         return;
 
-    const QJsonObject record = m_records.value(infoHash).toObject();
-    const QString imdbId = record.value(QStringLiteral("imdbId")).toString();
+    const QString imdbId = row->imdbId;
     if (imdbId.isEmpty())
         return;  // not a Tankorent-source torrent
 
-    const QString streamGroupId =
-        record.value(QStringLiteral("streamGroupId")).toString();
+    const QString streamGroupId = row->streamGroupId;
     if (!streamGroupId.isEmpty())
         return;  // bulk-cohort path handles its own progress tracking
 
-    const int configSeason = record.value(QStringLiteral("season")).toInt(0);
+    const int configSeason = row->season;
     const QJsonArray files = m_engine->torrentFiles(infoHash);
     if (files.isEmpty())
         return;
