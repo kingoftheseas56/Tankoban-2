@@ -13,6 +13,7 @@ class BookScraper;
 class BookDownloader;
 class BookResultsGrid;
 class TorrentClient;
+class TankorentSearchService;
 class QLineEdit;
 class QPushButton;
 class QCheckBox;
@@ -129,6 +130,11 @@ private:
     CoreBridge*            m_bridge        = nullptr;
     TorrentClient*         m_torrentClient = nullptr;  // M2 ABB: magnet handoff
     QNetworkAccessManager* m_nam           = nullptr;
+    // BOOKS_STREMIO_PIVOT Phase 4.4: per-page TankorentSearchService instance
+    // owned via QObject parent. TankorentBookScraper consumes it. Agent 4's
+    // service is concurrent-safe; one instance per consumer page is the
+    // pattern established by TankorentPage's own consume rewire at a324919.
+    TankorentSearchService* m_tankorentService = nullptr;
 
     // M2.3 + TANKOLIBRARY_ABB_FIX M1 — per-media-tab scraper lists.
     // Books tab = LibGen (primary, no anti-bot gate). AA remains compiled

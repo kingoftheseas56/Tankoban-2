@@ -6,6 +6,7 @@
 #include "core/book/AnnaArchiveScraper.h"
 #include "core/book/LibGenScraper.h"
 #include "core/book/TankorentBookScraper.h"
+#include "core/TankorentSearchService.h"
 #include "core/book/AbbScraper.h"
 #include "core/book/BookDownloader.h"
 #include "core/torrent/TorrentClient.h"
@@ -253,12 +254,12 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
     // switch startSearch() dispatches via activeScrapers().
     m_scrapersBooks << new LibGenScraper(m_nam, this);
     // m_scrapersBooks << new AnnaArchiveScraper(m_nam, this);   // DISABLED — captcha-blocked (Path C 2026-05-21, see agents/audits/aa_captcha_investigation_2026-05-21.md)
-    // BOOKS_STREMIO_PIVOT Phase 4: register TankorentBookScraper. Service
-    // pointer is nullptr today — Agent 4's TankorentSearchService is a Phase 5
-    // follow-on commit (~one wake from 2026-05-21 HELP resolution). The
-    // scraper's stub search() emits an empty result + warning log until
-    // the real service injects through this site.
-    m_scrapersBooks << new TankorentBookScraper(/*service=*/nullptr, this);
+    // BOOKS_STREMIO_PIVOT Phase 4.4: TankorentBookScraper consumes Agent 4's
+    // TankorentSearchService (shipped 2026-05-21 at b94e47f). One service
+    // instance per page; cheap to construct. Service auto-cleans via QObject
+    // parent ownership when the page tears down.
+    m_tankorentService = new TankorentSearchService(m_nam, this);
+    m_scrapersBooks << new TankorentBookScraper(m_tankorentService, this);
     m_scrapersAudiobooks << new AbbScraper(m_nam, this);
 
     buildUI();
