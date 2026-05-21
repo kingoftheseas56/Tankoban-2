@@ -57,6 +57,28 @@ protected:
 
 }  // namespace
 
+TEST_F(TorrentRepoCrudTest, HasTorrentReturnsTrueAfterUpsert) {
+    const QString hash =
+        QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    EXPECT_FALSE(m_repo.hasTorrent(hash));
+    ASSERT_TRUE(m_repo.upsertTorrent(sampleRow(hash)));
+    EXPECT_TRUE(m_repo.hasTorrent(hash));
+}
+
+TEST_F(TorrentRepoCrudTest, HasTorrentReturnsFalseForUnknownHash) {
+    const QString unknown =
+        QStringLiteral("ffffffffffffffffffffffffffffffffffffffff");
+    EXPECT_FALSE(m_repo.hasTorrent(unknown));
+}
+
+TEST_F(TorrentRepoCrudTest, HasTorrentIsCaseInsensitive) {
+    const QString upper =
+        QStringLiteral("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    ASSERT_TRUE(m_repo.upsertTorrent(sampleRow(upper)));
+    EXPECT_TRUE(m_repo.hasTorrent(upper.toLower()));
+    EXPECT_TRUE(m_repo.hasTorrent(upper));
+}
+
 TEST_F(TorrentRepoCrudTest, UpsertAndGetRoundTrip) {
     const QString hash =
         QStringLiteral("abcdef1234567890abcdef1234567890abcdef12");

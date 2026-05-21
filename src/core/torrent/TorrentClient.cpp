@@ -682,7 +682,7 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
         QDir::Files | QDir::NoDotAndDotDot);
     for (const QFileInfo& fi : orphanCandidates) {
         const QString hash = fi.completeBaseName();
-        if (m_records.contains(hash)) continue;
+        if (m_repo.hasTorrent(hash)) continue;
         qDebug() << "TorrentClient: removing orphan resume file:" << fi.fileName();
         QFile::remove(fi.absoluteFilePath());
     }
@@ -933,7 +933,7 @@ void TorrentClient::reconcileStreamBulkGroups()
 
             const QString infoHash = item.value("infoHash").toString();
             const QString torrentKey = infoHash.toLower();
-            const bool hasRecord = !infoHash.isEmpty() && m_records.contains(infoHash);
+            const bool hasRecord = !infoHash.isEmpty() && m_repo.hasTorrent(infoHash);
             const QString canonicalPath = canonicalPathForStreamBulkItem(group, item);
             const bool destinationExists =
                 !canonicalPath.isEmpty() && QFileInfo::exists(canonicalPath);
@@ -1680,7 +1680,7 @@ void TorrentClient::retryStreamBulkGroupFailedItems(const QString& groupId,
 
         if (state == QLatin1String(kStateFailed) &&
             !infoHash.isEmpty() &&
-            m_records.contains(infoHash) &&
+            m_repo.hasTorrent(infoHash) &&
             lastError.startsWith(QStringLiteral("Torrent error:"), Qt::CaseInsensitive)) {
             m_engine->resumeTorrent(infoHash);
             QJsonObject rec = m_records.value(infoHash).toObject();
@@ -2177,7 +2177,7 @@ void TorrentClient::publishTankorentItemsForTorrent(const QString& infoHash)
         qWarning() << "publishTankorentItemsForTorrent: no StreamDownloadIndex bound; skipping";
         return;
     }
-    if (!m_records.contains(infoHash)) {
+    if (!m_repo.hasTorrent(infoHash)) {
         qWarning() << "publishTankorentItemsForTorrent: no record for" << infoHash;
         return;
     }
@@ -2238,7 +2238,7 @@ void TorrentClient::retryStreamBulkPublishing()
         activeStates.insert(info.infoHash.toLower(), info.stateString);
 
     auto seedingLike = [&](const QString& infoHash) {
-        if (!m_records.contains(infoHash))
+        if (!m_repo.hasTorrent(infoHash))
             return false;
         const QJsonObject rec = m_records.value(infoHash).toObject();
         const QString persisted = rec.value("state").toString();
@@ -2473,7 +2473,7 @@ bool TorrentClient::isDuplicate(const QString& magnetUri) const
 {
     QString hash = extractInfoHash(magnetUri);
     if (hash.isEmpty()) return false;
-    return m_records.contains(hash);
+    return m_repo.hasTorrent(hash);
 }
 
 // ── Add flow ────────────────────────────────────────────────────────────────
@@ -2658,7 +2658,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
 void TorrentClient::moveStorage(const QString& infoHash, const QString& newSavePath)
 {
     if (newSavePath.isEmpty()) return;
-    if (!m_records.contains(infoHash)) return;
+    if (!m_repo.hasTorrent(infoHash)) return;
 
     QJsonObject rec = m_records[infoHash].toObject();
     const QString oldSavePath = rec.value("savePath").toString();
@@ -2996,7 +2996,7 @@ QJsonArray TorrentClient::listHistory() const
 void TorrentClient::pauseTorrent(const QString& infoHash)
 {
     m_engine->pauseTorrent(infoHash);
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("paused");
         m_records[infoHash] = rec;
@@ -3012,7 +3012,7 @@ void TorrentClient::pauseTorrent(const QString& infoHash)
 void TorrentClient::resumeTorrent(const QString& infoHash)
 {
     m_engine->resumeTorrent(infoHash);
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("downloading");
         rec.remove("errorMessage");
@@ -3028,7 +3028,7 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
 
 void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
 {
-    const bool hadRecord = m_records.contains(infoHash);
+    const bool hadRecord = m_repo.hasTorrent(infoHash);
     const QJsonObject rec = hadRecord ? m_records.value(infoHash).toObject() : QJsonObject{};
     m_engine->removeTorrent(infoHash, deleteFiles);
     m_records.remove(infoHash);
@@ -3082,7 +3082,7 @@ bool TorrentClient::releaseFolder(const QString& folderPath)
 void TorrentClient::forceStart(const QString& infoHash)
 {
     m_engine->forceStart(infoHash);
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("downloading");
         rec.remove("errorMessage");
@@ -3166,7 +3166,7 @@ QMap<QString, QString> TorrentClient::defaultPaths() const
 void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name,
                                      qint64 /*totalSize*/, const QJsonArray& files)
 {
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["name"] = name;
         // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — state write REMOVED
@@ -3197,7 +3197,7 @@ void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name
     // streamBulkGroups path; addon-only torrents have no imdbId binding.
     if (!m_streamDownloadIndex)
         return;
-    if (!m_records.contains(infoHash))
+    if (!m_repo.hasTorrent(infoHash))
         return;
 
     const QJsonObject record = m_records.value(infoHash).toObject();
@@ -3248,7 +3248,7 @@ void TorrentClient::onPieceFinished(const QString& infoHash, int /*pieceIndex*/)
     // piece event. libtorrent's file_progress is O(files), so this is cheap.
     if (!m_streamDownloadIndex || !m_engine)
         return;
-    if (!m_records.contains(infoHash))
+    if (!m_repo.hasTorrent(infoHash))
         return;
 
     const QJsonObject record = m_records.value(infoHash).toObject();
@@ -3305,7 +3305,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     // finished). Without this guard every app startup would append a dup
     // history entry, rewrite records.json, and re-trigger a library rescan.
     // Only first-time completions should fire side-effects.
-    if (m_records.contains(infoHash) &&
+    if (m_repo.hasTorrent(infoHash) &&
         m_records[infoHash].toObject().value("state").toString()
             == QLatin1String("completed")) {
         return;
@@ -3326,7 +3326,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     QString category;
     QString savePath;
     QString streamGroupId;
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("completed");
         m_records[infoHash] = rec;
@@ -3362,7 +3362,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     //         files section automatically.
     const bool hasBulkGroup = !streamGroupId.isEmpty();
     QString recordImdbId;
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         recordImdbId = m_records[infoHash].toObject().value(QStringLiteral("imdbId")).toString();
     }
     const bool hasTankorentBinding = !hasBulkGroup && !recordImdbId.isEmpty();
@@ -3395,7 +3395,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
 void TorrentClient::onTorrentError(const QString& infoHash, const QString& message)
 {
     qWarning() << "Torrent error:" << infoHash << message;
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["state"] = QStringLiteral("error");
         rec["errorMessage"] = message;
@@ -3414,7 +3414,7 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
 void TorrentClient::onStorageMoved(const QString& infoHash, const QString& newPath)
 {
     qDebug() << "Torrent storage moved:" << infoHash << "→" << newPath;
-    if (!m_records.contains(infoHash)) return;
+    if (!m_repo.hasTorrent(infoHash)) return;
 
     // Reconcile the persisted savePath with what libtorrent actually settled
     // on (paths may have been canonicalized/normalized by the OS during move).
@@ -3451,7 +3451,7 @@ void TorrentClient::onStorageMoveFailed(const QString& infoHash, const QString& 
     // from wherever the files actually are, and the user can retry the move
     // or delete+re-add. Reverting savePath would risk pointing at a folder
     // that's now half-moved (libtorrent doesn't roll back partial copies).
-    if (m_records.contains(infoHash)) {
+    if (m_repo.hasTorrent(infoHash)) {
         QJsonObject rec = m_records[infoHash].toObject();
         rec["errorMessage"] = QStringLiteral("Move failed: ") + message;
         m_records[infoHash] = rec;

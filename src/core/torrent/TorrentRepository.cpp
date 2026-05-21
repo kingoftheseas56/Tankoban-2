@@ -498,6 +498,14 @@ std::optional<TorrentRow> TorrentRepository::getTorrent(const QString& hash) {
     return torrentRowFromQuery(q);
 }
 
+bool TorrentRepository::hasTorrent(const QString& hash) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT 1 FROM torrents WHERE hash = :hash LIMIT 1"));
+    q.bindValue(QStringLiteral(":hash"), hash.toLower());
+    return q.exec() && q.next();
+}
+
 std::vector<TorrentRow> TorrentRepository::listTorrents() {
     std::vector<TorrentRow> out;
     if (!m_open) return out;

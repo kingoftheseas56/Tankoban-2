@@ -66,6 +66,11 @@ public:
     bool updateTorrentSavePath(const QString& hash, const QString& savePath);
     bool removeTorrent(const QString& hash);
     std::optional<TorrentRow> getTorrent(const QString& hash);
+    // Cheaper than getTorrent(...).has_value() — issues SELECT 1 instead
+    // of loading + decoding the full TorrentRow. Phase 5 of the
+    // persistence-collapse arc swaps all m_records.contains(hash) callsites
+    // in TorrentClient.cpp to this predicate.
+    bool hasTorrent(const QString& hash);
     std::vector<TorrentRow> listTorrents();
     std::vector<TorrentRow> listTorrentsByState(TorrentState state);
     std::vector<TorrentRow> listTorrentsByImdb(const QString& imdbId, int season);
