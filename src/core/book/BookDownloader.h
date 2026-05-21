@@ -186,4 +186,21 @@ private:
 
     MagnetInFlight*       m_activeMagnet = nullptr;
     QList<MagnetInFlight> m_magnetQueue;
+
+    // Guard against duplicate TorrentClient signal connections. Brotherhood
+    // code-review of c7acf74 flagged: re-entering startMagnetDownload from
+    // drainMagnetQueue's tail call would unconditionally connect a second
+    // pair if drainMagnetQueue's disconnect ever short-circuited. Single
+    // bool guard eliminates the future-bug-class.
+    bool m_magnetSignalsConnected = false;
+    void connectMagnetSignals();
+    void disconnectMagnetSignals();
+
+    // Metadata / completion timeout — if a magnet sits in m_activeMagnet
+    // without ever hitting torrentCompleted (dead tracker, no peers, libtorrent
+    // metadata-stuck), this timer fires to escape the slot so queued magnets
+    // can proceed. Single QTimer reused across magnet downloads since only one
+    // is active at a time.
+    QTimer* m_magnetTimeoutTimer = nullptr;
+    void onMagnetTimeout();
 };

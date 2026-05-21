@@ -10,6 +10,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QDirIterator>
 #include <QRegularExpression>
 #include <QStorageInfo>
 #include <QTimer>
@@ -38,6 +39,19 @@ constexpr qint64 kProgressThrottleBytes = 512LL * 1024;
 // Retry policy — copied from MangaDownloader (proven in manga chapter
 // flows): 3 attempts per URL with exponential backoff 2s / 4s / 8s.
 constexpr int kMaxAttempts = 3;
+
+// Magnet metadata / completion timeout. Five minutes covers tracker-warm
+// + handshake + a generous metadata fetch window; if a torrent hasn't even
+// announced bytes-total by then, the magnet is almost certainly dead-tracker
+// + dead-peers and the user is better off failing fast than blocking the
+// queue forever. Brotherhood code-review of c7acf74 added this guard.
+constexpr int kMagnetTimeoutMs = 5 * 60 * 1000;
+
+// Bounded recursive subdir search for pickBestBookFile. Libtorrent commonly
+// nests payloads two levels deep (savePath/torrent-name/file.epub) but legit
+// torrents rarely exceed ~4. Cap protects against pathological zip-bomb-style
+// torrents without ruining real-world payloads.
+constexpr int kMagnetWalkMaxDepth = 6;
 
 // Backoff delay for attempt N (0-based).
 int attemptDelayMs(int attempt)
@@ -149,17 +163,62 @@ QString BookDownloader::startMagnetDownload(const QString& magnetUri,
     qInfo() << "[BookDownloader] magnet started infoHash=" << infoHash
             << "magnetUri=" << magnetUri;
 
-    // Wire TorrentClient signals — both use QueuedConnection so they arrive
-    // on the same thread as BookDownloader (main thread) even when TorrentClient
-    // emits from its AlertWorker thread.
+    // Wire TorrentClient signals via the guarded helper — at most one
+    // connection pair active at a time regardless of reentry shape.
+    connectMagnetSignals();
+
+    // Arm the metadata / completion timeout. Lazily construct on first use.
+    if (!m_magnetTimeoutTimer) {
+        m_magnetTimeoutTimer = new QTimer(this);
+        m_magnetTimeoutTimer->setSingleShot(true);
+        connect(m_magnetTimeoutTimer, &QTimer::timeout,
+                this, &BookDownloader::onMagnetTimeout);
+    }
+    m_magnetTimeoutTimer->start(kMagnetTimeoutMs);
+
+    return magnetUri;
+}
+
+void BookDownloader::connectMagnetSignals()
+{
+    if (m_magnetSignalsConnected || !m_torrentClient) return;
     connect(m_torrentClient, &TorrentClient::torrentCompleted,
             this, &BookDownloader::onMagnetTorrentCompleted,
             Qt::QueuedConnection);
     connect(m_torrentClient, &TorrentClient::torrentUpdated,
             this, &BookDownloader::onMagnetTorrentUpdated,
             Qt::QueuedConnection);
+    m_magnetSignalsConnected = true;
+}
 
-    return magnetUri;
+void BookDownloader::disconnectMagnetSignals()
+{
+    if (!m_magnetSignalsConnected) return;
+    if (m_torrentClient) {
+        disconnect(m_torrentClient, &TorrentClient::torrentCompleted,
+                   this, &BookDownloader::onMagnetTorrentCompleted);
+        disconnect(m_torrentClient, &TorrentClient::torrentUpdated,
+                   this, &BookDownloader::onMagnetTorrentUpdated);
+    }
+    m_magnetSignalsConnected = false;
+    if (m_magnetTimeoutTimer) m_magnetTimeoutTimer->stop();
+}
+
+void BookDownloader::onMagnetTimeout()
+{
+    if (!m_activeMagnet) return;
+    const QString handle = m_activeMagnet->magnetUri;
+    const QString infoHash = m_activeMagnet->infoHash;
+    qWarning() << "[BookDownloader] magnet timeout infoHash=" << infoHash
+               << "after" << (kMagnetTimeoutMs / 1000) << "s with no completion."
+               << "Aborting + draining queue.";
+    // Best-effort libtorrent-side teardown — same surface cancelDownload uses.
+    if (m_torrentClient) m_torrentClient->deleteTorrent(infoHash, false);
+    emit downloadFailed(handle,
+        QStringLiteral("Magnet timed out after %1s with no metadata / completion"
+                       " (likely dead tracker + no peers)")
+            .arg(kMagnetTimeoutMs / 1000));
+    drainMagnetQueue();
 }
 
 // ── Magnet-path slot: completion ────────────────────────────────────────────
@@ -245,23 +304,28 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
     const QDir dir(m.destinationDir);
     if (!dir.exists()) return {};
 
-    // Collect all qualifying files recursively under destinationDir.
-    QFileInfoList candidates;
+    // Collect all qualifying files recursively under destinationDir. Depth is
+    // bounded by kMagnetWalkMaxDepth to defang pathological zip-bomb torrents.
+    // Brotherhood code-review of c7acf74 flagged the original one-level scan:
+    // libtorrent commonly nests payloads two levels deep (savePath/torrent-name
+    // /file.epub) and even legit scanlation packs occasionally reach three.
     QStringList nameFilters;
     for (const QString& ext : kBookExts) {
         nameFilters << QStringLiteral("*.") + ext;
     }
-    candidates = dir.entryInfoList(nameFilters,
-                                   QDir::Files | QDir::Readable,
-                                   QDir::NoSort);
-
-    // Also search one level deep (libtorrent may deposit into a subfolder).
-    const QFileInfoList subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QFileInfo& sub : subdirs) {
-        QDir subDir(sub.absoluteFilePath());
-        candidates += subDir.entryInfoList(nameFilters,
-                                           QDir::Files | QDir::Readable,
-                                           QDir::NoSort);
+    QFileInfoList candidates;
+    const QString rootPath = dir.absolutePath();
+    QDirIterator it(rootPath, nameFilters,
+                    QDir::Files | QDir::Readable,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QFileInfo fi = it.fileInfo();
+        // Cheap depth check: relative path segment count from the root.
+        const QString rel = dir.relativeFilePath(fi.absoluteFilePath());
+        const int depth = rel.count(QLatin1Char('/'));
+        if (depth > kMagnetWalkMaxDepth) continue;
+        candidates << fi;
     }
 
     if (candidates.isEmpty()) return {};
@@ -285,20 +349,26 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
     const QFileInfoList& pool = preferred.isEmpty() ? candidates : preferred;
 
     // From the pool, pick the largest file (heuristic: junk payloads tend to
-    // pad small files; the real book is usually the biggest one).
+    // pad small files; the real book is usually the biggest one). Use the
+    // filePath-empty sentinel (not exists()) so we don't stat the filesystem
+    // on every iteration (brotherhood code-review note c7acf74).
     QFileInfo best;
     for (const QFileInfo& fi : pool) {
-        if (!best.exists() || fi.size() > best.size()) {
+        if (best.filePath().isEmpty() || fi.size() > best.size()) {
             best = fi;
         }
     }
 
-    if (!best.exists()) return {};
+    if (best.filePath().isEmpty()) return {};
 
     // If the best file lives in a subdirectory, move it up to destinationDir
-    // so BooksScanner sees it at the library root level.
+    // so BooksScanner sees it at the library root level. Sanitize the target
+    // name to scrub NTFS-illegal chars that torrent payloads occasionally
+    // carry (parity with the HTTP path's sanitizeFilename — brotherhood
+    // code-review of c7acf74 caught the asymmetry).
     if (best.absoluteDir() != dir) {
-        const QString target = dir.absoluteFilePath(best.fileName());
+        const QString safeName = sanitizeFilename(best.fileName());
+        const QString target = dir.absoluteFilePath(safeName);
         // Overwrite if a same-named file already sits at the root.
         if (QFile::exists(target)) QFile::remove(target);
         if (QFile::rename(best.absoluteFilePath(), target)) {
@@ -315,15 +385,10 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
 
 void BookDownloader::drainMagnetQueue()
 {
-    // Disconnect the TorrentClient signals we wired in startMagnetDownload.
-    // Unconditional disconnect is safe here — no-op if signals were never
-    // connected (null m_torrentClient path should never reach here).
-    if (m_torrentClient) {
-        disconnect(m_torrentClient, &TorrentClient::torrentCompleted,
-                   this, &BookDownloader::onMagnetTorrentCompleted);
-        disconnect(m_torrentClient, &TorrentClient::torrentUpdated,
-                   this, &BookDownloader::onMagnetTorrentUpdated);
-    }
+    // Disconnect TorrentClient signals + stop the metadata timeout via the
+    // guarded helper. Re-entry through startMagnetDownload below re-arms both
+    // for the next magnet, so the connection-pair count is invariant at <= 1.
+    disconnectMagnetSignals();
 
     delete m_activeMagnet;
     m_activeMagnet = nullptr;
@@ -348,12 +413,7 @@ BookDownloader::~BookDownloader()
     // Magnet path: disconnect signals + release state without calling
     // drainMagnetQueue (drainMagnetQueue would re-enter startMagnetDownload
     // which is unsafe in the destructor).
-    if (m_torrentClient) {
-        disconnect(m_torrentClient, &TorrentClient::torrentCompleted,
-                   this, &BookDownloader::onMagnetTorrentCompleted);
-        disconnect(m_torrentClient, &TorrentClient::torrentUpdated,
-                   this, &BookDownloader::onMagnetTorrentUpdated);
-    }
+    disconnectMagnetSignals();
     delete m_activeMagnet;
     m_activeMagnet = nullptr;
     m_magnetQueue.clear();
@@ -472,11 +532,15 @@ void BookDownloader::cancelDownload(const QString& md5)
     if (m_activeMagnet && m_activeMagnet->magnetUri == md5) {
         const QString infoHash = m_activeMagnet->infoHash;
         emit downloadFailed(md5, QStringLiteral("cancelled by user"));
-        drainMagnetQueue();   // disconnects signals + clears slot + starts next
+        // Tell libtorrent to release this torrent BEFORE the queue drain
+        // starts the next magnet (brotherhood code-review of c7acf74 flagged
+        // the inverted order — next magnet could race against cleanup if
+        // they share libtorrent resources). deleteFiles=false keeps partial
+        // payloads on disk; caller decides cleanup policy.
         if (m_torrentClient && !infoHash.isEmpty()) {
-            // TODO: consider deleteFiles=true here if caller passes a flag.
             m_torrentClient->deleteTorrent(infoHash, /*deleteFiles=*/false);
         }
+        drainMagnetQueue();   // disconnects signals + clears slot + starts next
         return;
     }
     // Magnet-path queue cancel
