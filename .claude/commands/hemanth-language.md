@@ -6,13 +6,15 @@ Six scattered memories were not enough to stop brothers from burning Hemanth's b
 
 ## The 4 disciplines
 
-### 1. Analogies first
+### 1. Analogies first + context anchored
 
-For any non-trivial explanation, lead with a non-coding metaphor, then map to the code reality.
+For any non-trivial explanation, lead with a non-coding metaphor AND anchor the thread to its history — where it came from, who flagged it, which prior wake or finding triggered it.
 
-Pattern: `[non-coding analogy that captures the structural truth] + [code-reality mapping] + [why this matters for the decision]`.
+Pattern: `[non-coding analogy that captures the structural truth] + [context anchor: where this thread came from / who flagged it / which prior wake or audit spawned it] + [code-reality mapping] + [why this matters now / what's queued]`.
 
-The analogy is the doorway — it gives Hemanth's brain a handle to grab before the technical detail lands.
+Hemanth lives in a multi-domain, multi-wake brotherhood with many parallel threads running concurrently. Without an explicit context anchor he loses which thread you're pulling from — even a perfect analogy lands disconnected from the chain of cause. **The analogy is the doorway; the context anchor is the breadcrumb trail.** Both must be present on every non-trivial explanation.
+
+Empirical anchor: 2026-05-21 morning — Hemanth re-asked for the overnight recap after the first version led with seven good analogies but glossed where each thread came from (which Codex finding, which prior wake, which audit). Verbatim: *"when you explain something I forget where it came from or the context behind it so the context is very important."* The "+ context anchored" expansion above is the response. Pattern recognition: this skill keeps getting tightened against its own near-misses — Discipline 4 last wake, Discipline 1 this wake.
 
 ### 2. Preview per task group, not per file
 
@@ -54,11 +56,13 @@ Empirical anchor: 2026-05-21 — Agent 0 violated this even AFTER the skill ship
 
 ## The 5 paired examples
 
-### Example 1 — Analogy-first (Discipline 1)
+### Example 1 — Analogy-first + context-anchored (Discipline 1)
 
 **Brain-burner:** "Worktrees create isolated git working directories that point at separate branches, eliminating Edit-races by physically separating filesystem state across N parallel subagent worktrees."
 
-**Hemanth-friendly:** "Worktrees are like giving each carpenter their own workshop instead of fighting over one workbench. In code terms, each brother gets their own copy of the repo so they can't accidentally erase each other's edits."
+**Hemanth-friendly (analogy only — INCOMPLETE):** "Worktrees are like giving each carpenter their own workshop instead of fighting over one workbench. In code terms, each brother gets their own copy of the repo so they can't accidentally erase each other's edits."
+
+**Hemanth-friendly (analogy + context anchor — COMPLETE):** "Worktrees are like giving each carpenter their own workshop instead of fighting over one workbench. **This came up because Agent 1 and Agent 4 independently wrote advocacy briefs last wake about same-file Edit races during Trigger E fanouts — both flagged the same collision problem, which led to Rule 21.** In code terms, each brother gets their own copy of the repo so they can't accidentally erase each other's edits. Queued: a 30GB disk-hit cap and a delete-immediately-on-merge enforcement detail."
 
 ### Example 2 — Preview per task group (Discipline 2)
 
@@ -103,6 +107,7 @@ When you catch yourself doing one of these, stop and rewrite:
 
 Ask yourself:
 - Did I lead with an analogy if the concept is non-trivial?
+- **Did I anchor the thread to its history — where it came from, who flagged it, which prior wake or audit triggered it?**
 - Did I announce a preview before starting this work?
 - If I'm posting a menu, does it have all four ingredients?
 - Am I asking Hemanth to do anything that's actually a coder task?
