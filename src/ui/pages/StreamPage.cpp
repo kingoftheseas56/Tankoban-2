@@ -28,7 +28,12 @@
 #include "stream/CatalogBrowseScreen.h"
 #include "stream/TheatreDownloadPanel.h"
 #include "core/stream/StreamProgress.h"
+#include "core/TankorentSearchService.h"
 #include "core/torrent/TorrentClient.h"
+
+#include <QNetworkAccessManager>
+
+#include <QNetworkAccessManager>
 #include "core/VideosScanner.h"
 #include "ui/pages/TileStrip.h"
 #include "ui/pages/TileCard.h"
@@ -294,6 +299,25 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
     m_streamAggregator = new tankostream::stream::StreamAggregator(m_addonRegistry, this);
     m_metaAggregator = new tankostream::stream::MetaAggregator(m_addonRegistry, this);
     m_subtitlesAggregator = new tankostream::stream::SubtitlesAggregator(m_addonRegistry, this);
+
+    // TANKORENT_CINEMATA P1.T9 (2026-05-21) — Tankorent headless search +
+    // Phase 1 SourceRanker for the [Find sources for Season N] auto-pick
+    // path on StreamDetailView (T8). Construction order matters: NAM →
+    // ranker → service → wire setRanker. The trusted-uploader set is
+    // hardcoded Phase 1 (5 well-known reliable video uploaders); user-
+    // configurable trust list is Phase 4 polish per the design spec.
+    m_nam = new QNetworkAccessManager(this);
+    const QSet<QString> kVideoTrustedUploaders = {
+        QStringLiteral("NTb"),
+        QStringLiteral("Joy"),
+        QStringLiteral("ELiTE"),
+        QStringLiteral("RARBG"),
+        QStringLiteral("PSA"),
+    };
+    m_videoSourceRanker =
+        std::make_unique<tankoban::stream::SourceRanker>(kVideoTrustedUploaders);
+    m_tankorentSearchService = new TankorentSearchService(m_nam, this);
+    m_tankorentSearchService->setRanker(m_videoSourceRanker.get());
 
     // Phase 4 Batch 4.1 â€” drive the search-bar spinner off the aggregator's
     // catalog signals. StreamSearchWidget is the primary result consumer;
@@ -824,6 +848,12 @@ void StreamPage::buildUI()
     // Detail layer
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
+
+    // TANKORENT_CINEMATA P1.T9 (2026-05-21) — inject the Tankorent headless
+    // search service so the new [Find sources for Season N] button on the
+    // detail view's season-picker row goes from disabled → active. The
+    // ranker is already wired into the service above.
+    m_detailView->setSearchService(m_tankorentSearchService);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) â€” wire TorrentClient
     // through to the detail view so Remove-from-Library can detect active

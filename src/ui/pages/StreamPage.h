@@ -16,6 +16,7 @@
 #include <optional>
 
 #include "core/stream/BulkSourceCollector.h"
+#include "core/stream/SourceRanker.h"
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/LayerEntry.h"
@@ -24,7 +25,9 @@
 
 class CoreBridge;
 class QDialog;
+class QNetworkAccessManager;
 class QProgressBar;
+class TankorentSearchService;
 class TorrentClient;
 class TorrentEngine;
 struct StreamBulkGroupRecord;
@@ -427,6 +430,18 @@ private:
 
     // Meta aggregator (Phase 4 Batch 4.4) — search + series meta via addon registry
     tankostream::stream::MetaAggregator* m_metaAggregator = nullptr;
+
+    // TANKORENT_CINEMATA P1.T9 (2026-05-21) — Tankorent headless search +
+    // Phase 1 SourceRanker for the [Find sources for Season N] auto-pick
+    // bridge. m_nam is the QNAM shared between the search service and any
+    // future http surface owned by StreamPage (mirrors the TankorentPage +
+    // TankoLibraryPage per-page-NAM pattern). m_videoSourceRanker is a
+    // non-QObject; unique_ptr destroys it cleanly when StreamPage tears
+    // down. m_tankorentSearchService is parented to `this` (QObject parent),
+    // so Qt's parent ownership reclaims it without manual delete.
+    QNetworkAccessManager*                          m_nam                    = nullptr;
+    std::unique_ptr<tankoban::stream::SourceRanker> m_videoSourceRanker;
+    TankorentSearchService*                         m_tankorentSearchService = nullptr;
 
     // Subtitles aggregator (Phase 5 Batch 5.1) — multi-addon subtitle fan-out.
     // Fed with the selected Stream on onPlayRequested; result pushed to
