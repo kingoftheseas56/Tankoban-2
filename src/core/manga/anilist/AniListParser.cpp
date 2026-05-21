@@ -65,6 +65,31 @@ MediaPreview parseMediaPreviewFromJson(const QJsonObject& mediaObj)
     const QJsonArray genres = mediaObj.value("genres").toArray();
     for (const auto& v : genres) p.genres.append(v.toString());
     p.description     = mediaObj.value("description").toString();
+
+    p.countryOfOrigin = mediaObj.value("countryOfOrigin").toString();
+
+    const QJsonObject staffObj = mediaObj.value("staff").toObject();
+    const QJsonArray staffEdges = staffObj.value("edges").toArray();
+    for (const auto& edgeVal : staffEdges) {
+        const QJsonObject edge = edgeVal.toObject();
+        StaffEntry se;
+        se.role = edge.value("role").toString();
+        se.name = edge.value("node").toObject()
+                      .value("name").toObject()
+                      .value("full").toString();
+        if (!se.name.isEmpty()) p.staff.append(se);
+    }
+
+    const QJsonArray tagsArr = mediaObj.value("tags").toArray();
+    for (const auto& tagVal : tagsArr) {
+        const QJsonObject tagObj = tagVal.toObject();
+        RankedTag rt;
+        rt.name      = tagObj.value("name").toString();
+        rt.rank      = tagObj.value("rank").toInt();
+        rt.isSpoiler = tagObj.value("isMediaSpoiler").toBool();
+        if (!rt.name.isEmpty()) p.tags.append(rt);
+    }
+
     return p;
 }
 

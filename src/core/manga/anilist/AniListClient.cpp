@@ -34,6 +34,18 @@ query ($search: String) {
       startDate { year }
       genres
       description(asHtml: false)
+      countryOfOrigin
+      staff(perPage: 8, sort: RELEVANCE) {
+        edges {
+          role
+          node { name { full } }
+        }
+      }
+      tags {
+        name
+        rank
+        isMediaSpoiler
+      }
     }
   }
 }
@@ -52,6 +64,18 @@ query ($id: Int) {
     startDate { year }
     genres
     description(asHtml: false)
+    countryOfOrigin
+    staff(perPage: 8, sort: RELEVANCE) {
+      edges {
+        role
+        node { name { full } }
+      }
+    }
+    tags {
+      name
+      rank
+      isMediaSpoiler
+    }
     chapters
     volumes
   }
