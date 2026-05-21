@@ -1,43 +1,49 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
-:: ── Paths ───────────────────────────────────────────────────────────────────
-set QT_DIR=C:\tools\qt6sdk\6.10.2\msvc2022_64
-set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+:: Paths
+set "QT_DIR=C:\tools\qt6sdk\6.10.2\msvc2022_64"
+set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
 set "PROJECT_DIR=%~dp0."
-set "BUILD_DIR=%~dp0out"
 
-:: ── Kill any running instance ───────────────────────────────────────────────
+:: Build dir resolution:
+::   - no lane: out\ (backwards-compatible main checkout behavior)
+::   - TANKOBAN_BUILD_LANE=<lane>: out_<lane>\ after strict validation
+::   - unset env in a Git worktree: derive <lane> from .git/worktrees/<name>
+:: Lane names must match [A-Za-z0-9_-]+. Invalid names fail before creating
+:: any build directory.
+call :resolve_build_dir
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+:: Kill any running instance. Preserves the historical run-script behavior.
 taskkill /F /IM Tankoban.exe >nul 2>&1
 taskkill /F /IM ninja.exe    >nul 2>&1
 taskkill /F /IM cl.exe       >nul 2>&1
 
-:: ── Set up MSVC environment ────────────────────────────────────────────────
+:: Set up MSVC environment
 echo [1/4] Setting up MSVC environment...
-call %VCVARS% x64 >nul 2>&1
+call "%VCVARS%" x64 >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Failed to set up MSVC environment.
     pause
     exit /b 1
 )
 
-:: ── Configure (skipped if already configured) ──────────────────────────────
-:: REPO_HYGIENE Phase 2 (2026-04-26) — uses CMakePresets.json + vcpkg.
-:: VCPKG_ROOT auto-set to C:\vcpkg if not already in env. Run setup.bat once
-:: after a fresh clone to install vcpkg deps via the manifest.
-if "%VCPKG_ROOT%"=="" (
-    if exist "C:\vcpkg\vcpkg.exe" (
-        set "VCPKG_ROOT=C:\vcpkg"
-    ) else if exist "C:\tools\vcpkg\vcpkg.exe" (
-        set "VCPKG_ROOT=C:\tools\vcpkg"
-    )
-)
+call :ensure_vcpkg_root
 
+:: Configure (skipped if already configured)
+:: REPO_HYGIENE Phase 2 (2026-04-26) - same effective options as the default
+:: preset: Ninja, Release, vcpkg toolchain, x64-windows, Qt prefix path.
 if exist "%BUILD_DIR%\CMakeCache.txt" (
-    echo [2/4] Build dir exists — skipping configure.
+    echo [2/4] Build dir exists - skipping configure.
 ) else (
-    echo [2/4] Configuring CMake via `cmake --preset default`...
-    cmake --preset default
+    echo [2/4] Configuring CMake in %BUILD_DIR%...
+    cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
+        -DCMAKE_BUILD_TYPE=Release ^
+        -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
+        -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" ^
+        -DVCPKG_TARGET_TRIPLET=x64-windows ^
+        -DCMAKE_PREFIX_PATH="%QT_DIR%"
     if errorlevel 1 (
         echo ERROR: CMake configure failed.
         echo If this is a fresh clone, run setup.bat first to install vcpkg deps.
@@ -46,7 +52,7 @@ if exist "%BUILD_DIR%\CMakeCache.txt" (
     )
 )
 
-:: ── Build ──────────────────────────────────────────────────────────────────
+:: Build
 echo [3/4] Building...
 cmake --build "%BUILD_DIR%" --parallel
 set BUILD_EXIT=%ERRORLEVEL%
@@ -56,7 +62,7 @@ if %BUILD_EXIT% NEQ 0 (
     exit /b %BUILD_EXIT%
 )
 
-:: ── Deploy Kokoro TTS model (if not already present) ──────────────────────
+:: Deploy Kokoro TTS model (if not already present)
 if exist "%PROJECT_DIR%\models\kokoro" (
     if not exist "%BUILD_DIR%\models\kokoro" (
         echo Deploying Kokoro TTS model...
@@ -64,8 +70,8 @@ if exist "%PROJECT_DIR%\models\kokoro" (
     )
 )
 
-:: ── Deploy book reader resources (sync newer files each build) ─────────────
-:: PER_VIEW_CHROME_FIX 2026-05-02 — was guarded with `if not exist` which
+:: Deploy book reader resources (sync newer files each build)
+:: PER_VIEW_CHROME_FIX 2026-05-02 - was guarded with `if not exist` which
 :: skipped the sync after first build, leaving HTML/CSS/JS edits silently
 :: invisible. /D copies only files newer than destination so re-builds stay
 :: fast. /Y overwrites without prompts.
@@ -73,50 +79,66 @@ if exist "%PROJECT_DIR%\resources\book_reader" (
     xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\book_reader" "%BUILD_DIR%\resources\book_reader" >nul 2>&1
 )
 
-:: ── Deploy Fandom manifests (sync newer files each build) ──────────────────
-:: Fandom catalog redesign Task 20 (2026-05-20) — WikiManifestRegistry reads
-:: from applicationDirPath() + "/resources/fandom_manifests" at app start;
-:: that's out\resources\fandom_manifests\ here. Same /D /Y pattern as the
-:: book_reader sync above. Pre-Phase-8 the dir contains just death-note.json;
-:: Phase 8 ships the other 14 manifests via Trigger E worktree fan-out.
+:: Deploy Fandom manifests (sync newer files each build)
+:: WikiManifestRegistry reads from applicationDirPath() +
+:: "/resources/fandom_manifests" at app start.
 if exist "%PROJECT_DIR%\resources\fandom_manifests" (
     xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\fandom_manifests" "%BUILD_DIR%\resources\fandom_manifests" >nul 2>&1
 )
 
-:: ── Run ────────────────────────────────────────────────────────────────────
+:: Run
 echo [4/4] Launching Tankoban...
 set "SHERPA_BIN=%PROJECT_DIR%\third_party\sherpa-onnx\sherpa-onnx-v1.12.21-win-x64-shared\lib"
 set PATH=%QT_DIR%\bin;C:\tools\ffmpeg-master-latest-win64-gpl-shared\bin;%SHERPA_BIN%;%PATH%
-:: STREAM_ENGINE_FIX Phase 1.2 — structured telemetry log facility (Agent 4).
-:: When set to 1, StreamEngine writes per-stream lifecycle events to
-:: stream_telemetry.log next to Tankoban.exe. Cheap when off (cached env-var
-:: short-circuit before any allocation in the writeTelemetry hot path).
-:: TODO Phase 4 will gate on per-need; for Slice A trace collection it stays
-:: on by default. Flip to 0 (or remove) to disable.
+:: STREAM_ENGINE_FIX Phase 1.2 - structured telemetry log facility (Agent 4).
 set TANKOBAN_STREAM_TELEMETRY=1
-:: Mode A/B alert-trace diagnostic (Agent 4B) — when set to 1, TorrentEngine
-:: captures libtorrent piece_finished + block_finished alerts with wall-clock
-:: ms to alert_trace.log. Disambiguates the "deadlines not being honored"
-:: hypothesis for cold-session 0%-buffering + mid-file-seek-hang classes.
-:: Delete or flip to 0 after diagnosis concludes.
+:: Mode A/B alert-trace diagnostic (Agent 4B).
 set TANKOBAN_ALERT_TRACE=1
-:: AUDIO_HOT_DEVICE_REROUTE_FIX2 diagnostic: route sidecar stderr
-:: (audio_device_watcher + AVSYNC_DIAG reroute lines) to out\sidecar_debug_live.log.
+:: AUDIO_HOT_DEVICE_REROUTE_FIX2 diagnostic.
 set TANKOBAN_SIDECAR_DEBUG=1
 :: Stremio libtorrent session_params port (Experiment 1 APPROVED 2026-04-23).
-:: Activates 10 streaming-optimized libtorrent settings in TorrentEngine.cpp
-:: (commit 59cf47b). Empirical: 65% stall reduction, 89.5% cold-open improvement,
-:: 86.3% p99 wait reduction on Invincible S01E01 EZTV. Audit at
-:: agents/audits/stremio_tuning_ab_2026-04-23.md. Interim path until the
-:: STREAM_ENGINE_SPLIT refactor lands (at which point this env var becomes
-:: unnecessary because the stream-dedicated engine always applies the settings
-:: and Tankorent-dedicated engine stays on current defaults). Flip to 0 to
-:: revert to pre-experiment Tankoban behavior for testing.
 set TANKOBAN_STREMIO_TUNE=1
 :: REPO_HYGIENE Phase 3 (2026-04-26): --dev-control activates the dev-control
 :: bridge (QLocalServer on TankobanDevControl named pipe) so tankoctl + agent
-:: smokes can query app state directly. Production NSIS builds (Phase 6) won't
-:: pass the flag and won't advertise the socket.
+:: smokes can query app state directly.
 start "" "%BUILD_DIR%\Tankoban.exe" --dev-control
 
 endlocal
+exit /b 0
+
+:resolve_build_dir
+set "BUILD_LANE=%TANKOBAN_BUILD_LANE%"
+if "%BUILD_LANE%"=="" (
+    for /f "delims=" %%G in ('git rev-parse --git-dir 2^>nul') do set "GIT_DIR=%%G"
+    if defined GIT_DIR (
+        set "GIT_DIR_NORM=!GIT_DIR:/=\!"
+        if not "!GIT_DIR_NORM:\worktrees\=!"=="!GIT_DIR_NORM!" (
+            set "WORKTREE_NAME=!GIT_DIR_NORM:*\worktrees\=!"
+            for /f "tokens=1 delims=\" %%L in ("!WORKTREE_NAME!") do set "BUILD_LANE=%%L"
+        )
+    )
+)
+
+if not "%BUILD_LANE%"=="" (
+    echo(%BUILD_LANE%| findstr /R "[^A-Za-z0-9_-]" >nul
+    if not errorlevel 1 (
+        echo ERROR: TANKOBAN_BUILD_LANE must match [A-Za-z0-9_-]+
+        exit /b 2
+    )
+    set "BUILD_DIR=%~dp0out_%BUILD_LANE%"
+    set "VCPKG_INSTALLED_DIR=%LOCALAPPDATA%\vcpkg\tankoban_out_%BUILD_LANE%"
+) else (
+    set "BUILD_DIR=%~dp0out"
+    set "VCPKG_INSTALLED_DIR=%LOCALAPPDATA%\vcpkg\tankoban_out"
+)
+exit /b 0
+
+:ensure_vcpkg_root
+if "%VCPKG_ROOT%"=="" (
+    if exist "C:\vcpkg\vcpkg.exe" (
+        set "VCPKG_ROOT=C:\vcpkg"
+    ) else if exist "C:\tools\vcpkg\vcpkg.exe" (
+        set "VCPKG_ROOT=C:\tools\vcpkg"
+    )
+)
+exit /b 0
