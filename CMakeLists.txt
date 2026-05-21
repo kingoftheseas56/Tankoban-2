@@ -99,6 +99,7 @@ set(SOURCES
     src/ui/pages/tankorent/TorrentPeersTab.cpp
     src/ui/pages/tankorent/TorrentGeneralTab.cpp
     src/core/TorrentIndexer.cpp
+    src/core/TankorentSearchService.cpp
     src/core/indexers/TorrentsCsvIndexer.cpp
     src/core/indexers/NyaaIndexer.cpp
     src/core/indexers/PirateBayIndexer.cpp
