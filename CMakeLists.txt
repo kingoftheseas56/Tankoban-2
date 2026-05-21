@@ -832,6 +832,18 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/book/test_catalogue_deduper.cpp
         src/core/book/CatalogueDeduper.cpp
         tests/core/book/test_book_downloader_magnet.cpp
+        # Tankorent search service tests
+        tests/core/test_tankorent_search_service.cpp
+        src/core/TankorentSearchService.cpp
+        src/core/TorrentIndexer.cpp
+        src/core/indexers/NyaaIndexer.cpp
+        src/core/indexers/PirateBayIndexer.cpp
+        src/core/indexers/X1337xIndexer.cpp
+        src/core/indexers/YtsIndexer.cpp
+        src/core/indexers/EztvIndexer.cpp
+        src/core/indexers/ExtTorrentsIndexer.cpp
+        src/core/indexers/TorrentsCsvIndexer.cpp
+        src/core/indexers/CloudflareCookieHarvester.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/anilist/test_anilist_parser.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
