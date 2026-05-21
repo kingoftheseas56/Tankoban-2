@@ -91,7 +91,8 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
                                             const QString& sourceFilter,
                                             const QString& query,
                                             int limit,
-                                            const QString& categoryId)
+                                            const QString& categoryId,
+                                            const CinemataIdentity& identity)
 {
     QList<TorrentIndexer*> indexers = buildIndexersFor(mediaType, sourceFilter);
     if (indexers.isEmpty())
@@ -101,6 +102,7 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
     SearchContext ctx;
     ctx.activeIndexers = indexers;
     ctx.pendingCount = indexers.size();
+    ctx.identity = identity;
     m_contexts.insert(handle, ctx);
 
     for (auto* idx : indexers) {
@@ -141,6 +143,15 @@ bool TankorentSearchService::isActive(const QString& handle) const
 {
     auto it = m_contexts.find(handle);
     return it != m_contexts.end() && it.value().pendingCount > 0;
+}
+
+TankorentSearchService::CinemataIdentity
+TankorentSearchService::identityFor(const QString& handle) const
+{
+    auto it = m_contexts.find(handle);
+    if (it == m_contexts.end())
+        return {};
+    return it.value().identity;
 }
 
 void TankorentSearchService::settleOne(const QString& handle)

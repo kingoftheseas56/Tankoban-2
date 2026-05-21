@@ -35,6 +35,18 @@ public:
                                     QObject* parent = nullptr);
     ~TankorentSearchService() override;
 
+    // Cinemata identity baked into a search at dispatch time. Empty imdbId
+    // is the legacy direct-search shape (TankorentPage Add flow); a non-
+    // empty imdbId triggers the auto-pick path in conjunction with a
+    // registered SourceRanker (see T5/T6). Season/episode disambiguate the
+    // search target so the downloader writes the right repo-row columns
+    // (T7) and the per-row state painter can find the resulting entry (T10).
+    struct CinemataIdentity {
+        QString imdbId;     // empty if no identity (legacy direct-search path)
+        int     season = 0; // 0 for movies
+        int     episode = 0; // 0 = whole-season search, else specific episode
+    };
+
     // mediaType: "books" / "audiobooks" / "videos" / "comics" / ""
     //   When set, restricts to indexers in the internal allowlist for that
     //   type. Empty means no media-type filter (only sourceFilter applies).
@@ -48,9 +60,16 @@ public:
                         const QString& sourceFilter,
                         const QString& query,
                         int limit,
-                        const QString& categoryId = {});
+                        const QString& categoryId = {},
+                        const CinemataIdentity& identity = {});
 
     void cancelSearch(const QString& handle);
+
+    // Returns the CinemataIdentity captured at startSearch() time for
+    // `handle`. Returns a default-constructed (empty imdbId) identity if the
+    // handle is unknown or settled/cleaned-up. Page-side callers use this
+    // to retrieve identity at addMagnetHeadless time (T7+T8 wiring).
+    CinemataIdentity identityFor(const QString& handle) const;
 
     // True if `handle` has any indexers still pending. False once all
     // indexers in the batch have settled (success or error), or if the
@@ -87,6 +106,7 @@ private:
     struct SearchContext {
         QList<TorrentIndexer*> activeIndexers;
         int pendingCount = 0;
+        CinemataIdentity identity;  // bake-time identity for this search
     };
 
     // Snapshot of media-type → indexer-id allowlist. Was kMediaTypeIndexers
