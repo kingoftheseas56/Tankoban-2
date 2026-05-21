@@ -1,5 +1,6 @@
 #include "core/TankorentSearchService.h"
 
+#include "core/stream/SourceRanker.h"
 #include "core/TorrentIndexer.h"
 #include "core/indexers/NyaaIndexer.h"
 #include "core/indexers/PirateBayIndexer.h"
@@ -113,6 +114,21 @@ QString TankorentSearchService::startSearch(const QString& mediaType,
             if (!m_contexts.contains(handle))
                 return;
             emit resultsReady(handle, results);
+
+            // Auto-pick: fires at most once per handle, when the first non-
+            // empty result set arrives, the search has a CinemataIdentity
+            // (imdbId set), a ranker is wired, AND pickTop clears its
+            // confidence threshold. Legacy direct-search (empty identity)
+            // never auto-picks regardless of ranker presence.
+            SearchContext& ctx = m_contexts[handle];
+            if (m_ranker && !ctx.identity.imdbId.isEmpty()
+                    && !ctx.autoPicked && !results.isEmpty()) {
+                if (auto top = m_ranker->pickTop(results)) {
+                    ctx.autoPicked = true;
+                    emit topResultPicked(handle, *top);
+                }
+            }
+
             settleOne(handle);
         });
         connect(idx, &TorrentIndexer::searchError, this,
