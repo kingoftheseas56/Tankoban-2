@@ -42,6 +42,7 @@ class QNetworkReply;
 class QPushButton;
 class QTableWidget;
 class QTimer;
+class QHBoxLayout;
 class QVBoxLayout;
 class MangaDownloadIndex;
 
@@ -236,11 +237,14 @@ private:
     // volumeNumber identifies the target row; -1 means the banner.
     void loadCoverUrlForVolume(const QString& url, int volumeNumber);
     void loadBannerUrl(const QString& url);
+    void loadHeroCoverUrl(const QString& url);
     // STREAM_PORT 2026-05-18 Task 1: paint a pixmap onto m_heroBannerLabel,
     // scaled to fit the 140px band via KeepAspectRatioByExpanding. Called
     // from loadBannerUrl on cache-hit OR async-fetch completion.
     void applyBannerPixmap(const QPixmap& pm);
+    void applyHeroCoverPixmap(const QPixmap& pm);
     void applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm);
+    void populateHeroTags(const QStringList& genres);
 
     // Task 15: last-applied cover URL per volume -- populated in
     // loadCoverUrlForVolume, cleared in clearView, exposed via devSnapshot.
@@ -291,10 +295,15 @@ private:
     // scaled pixmap on the label. Matches StreamDetailView::m_heroLabel
     // (StreamDetailView.cpp:397-406) pattern.
     QLabel*               m_heroBannerLabel = nullptr;
+    QWidget*              m_heroBlock       = nullptr;
+    QLabel*               m_heroCoverLabel  = nullptr;
     QPushButton*          m_backButton      = nullptr;
     QLabel*               m_title         = nullptr;
+    QLabel*               m_mangakaByline = nullptr;
     QLabel*               m_metaLine      = nullptr;
     QLabel*               m_synopsis      = nullptr;
+    QWidget*              m_tagChipsRow   = nullptr;
+    QHBoxLayout*          m_tagChipsLayout = nullptr;
     QPushButton*          m_libraryButton = nullptr;
     // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Force-refresh
     // affordance — invalidates the 7d FandomCatalogCache entry for the

@@ -828,11 +828,14 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
         src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
+        tests/core/manga/test_trusted_uploaders.cpp
+        src/core/manga/TrustedUploaders.cpp
         tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp
         tests/core/manga/bookwalker/test_volume_cover_alignment.cpp
         tests/core/manga/fandom/test_wiki_manifest.cpp
         tests/core/manga/fandom/test_wiki_manifest_registry.cpp
         tests/core/manga/fandom/test_table_extractor.cpp
+        tests/core/manga/fandom/test_table_extractor_death_note_covers.cpp
         tests/core/manga/fandom/test_infobox_extractor.cpp
         tests/core/manga/fandom/test_fandom_catalog_cache.cpp
         tests/core/manga/wikidata/test_wikidata_cache.cpp

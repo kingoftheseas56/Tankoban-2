@@ -85,6 +85,8 @@ public:
                   const anilist::VolumeRow& vol,
                   const QStringList& chapterIds);
 
+    void setContext(int volumeNumber, const QString& volumeTitle);
+
     QJsonObject devSnapshot() const;
     bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);
 
@@ -120,6 +122,7 @@ private:
     premium::PremiumCatalog*      m_catalog  = nullptr;  // non-owning
     NyaaRuntimeSource*            m_nyaa     = nullptr;  // non-owning
     QLabel*                       m_headerLabel = nullptr;
+    QLabel*                       m_contextLineLabel = nullptr;
     QScrollArea*                  m_scroll = nullptr;
     QWidget*                      m_cardsContainer = nullptr;
     QVBoxLayout*                  m_cardsLayout = nullptr;

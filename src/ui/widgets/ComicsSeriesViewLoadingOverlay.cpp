@@ -15,7 +15,7 @@ ComicsSeriesViewLoadingOverlay::ComicsSeriesViewLoadingOverlay(QWidget* parent)
 
     m_label = new QLabel(this);
     m_label->setObjectName(QStringLiteral("ComicsSeriesViewLoadingOverlay_Label"));
-    m_label->setText(QStringLiteral("Loading volume covers..."));
+    m_label->setText(QStringLiteral("Loading"));
     m_label->setAlignment(Qt::AlignCenter);
     m_label->setStyleSheet(QStringLiteral(
         "QLabel#ComicsSeriesViewLoadingOverlay_Label { color: #d0d0d0; font-size: 14px; }"));
@@ -36,7 +36,7 @@ void ComicsSeriesViewLoadingOverlay::setMessage(const QString& text)
 void ComicsSeriesViewLoadingOverlay::paintEvent(QPaintEvent* /*ev*/)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor(0, 0, 0, 200));
+    p.fillRect(rect(), QColor(0, 0, 0));
 }
 
 void ComicsSeriesViewLoadingOverlay::resizeEvent(QResizeEvent* ev)
