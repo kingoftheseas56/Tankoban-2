@@ -5,8 +5,6 @@
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
-#include "core/TankorentSearchService.h"
-#include "core/TorrentResult.h"
 #include "core/torrent/TorrentClient.h"
 #include "ui/dialogs/AddTorrentDialog.h"
 #include "StreamSourceList.h"
@@ -685,30 +683,6 @@ void StreamDetailView::buildUI()
     m_seasonCombo->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_seasonCombo, &QComboBox::customContextMenuRequested,
             this, &StreamDetailView::onSeasonHeaderRightClick);
-
-    // TANKORENT_CINEMATA P1.T8 (2026-05-21) — new identity-baked Tankorent
-    // search entry. Sits next to the season combo so the row reads as
-    // "Season X | [Find sources for Season X]" before the right-aligned
-    // existing download buttons. Disabled until setSearchService injects
-    // the headless dispatcher (MainWindow T9).
-    m_findSourcesBtn = new QPushButton(tr("⬇ Find sources for Season"),
-                                       m_seasonRow);
-    m_findSourcesBtn->setObjectName(QStringLiteral("DetailFindSourcesBtn"));
-    m_findSourcesBtn->setFixedHeight(30);
-    m_findSourcesBtn->setCursor(Qt::PointingHandCursor);
-    m_findSourcesBtn->setToolTip(
-        tr("Search Tankorent indexers for this season and auto-pick the "
-           "highest-ranked source. Identity (IMDb + season) is baked in."));
-    m_findSourcesBtn->setStyleSheet(
-        "#DetailFindSourcesBtn { background: #a78bfa; color: black;"
-        "  font-weight: 600; padding: 0 14px; font-size: 12px; border: none;"
-        "  border-radius: 4px; }"
-        "#DetailFindSourcesBtn:hover { background: #b89cff; }"
-        "#DetailFindSourcesBtn:disabled { background: #4a3b6a; color: #888; }");
-    m_findSourcesBtn->setEnabled(false);
-    connect(m_findSourcesBtn, &QPushButton::clicked,
-            this, &StreamDetailView::onFindSourcesClicked);
-    seasonLayout->addWidget(m_findSourcesBtn);
 
     seasonLayout->addStretch();
     seasonLayout->addWidget(m_downloadSelectedBtn);
@@ -1555,16 +1529,6 @@ void StreamDetailView::renderEpisodeStateChip(
 // row whose episode has a substrate entry. Companion to the entryStateChanged
 // signal subscriber (which handles in-flight state transitions); together they
 // cover initial-load + live-update.
-// TANKORENT_CINEMATA P1.T10 collapse (2026-05-21) — this is also the Phase 1
-// per-episode state painter for the new [Find sources for Season N] flow.
-// The plan's T10 specified a parallel lookupByImdbSeasonEpisode + EpisodeRowState
-// path; investigation showed this method already does it correctly: reads
-// m_downloadIndex->entriesForImdb, filters by season+episode, paints via
-// renderEpisodeStateChip. The ProvT::Tankorent branch at the sourceGroupId
-// prefix check is the existing provenance hook. T12 live smoke verifies the
-// new addMagnetHeadless(imdbId, season) path actually populates entries that
-// satisfy the prov=Tankorent branch; if entries land as AddonBulk-provenance,
-// that becomes the F1 carry-through for v1.1.
 void StreamDetailView::refreshSubstrateStatesForActiveSeason()
 {
     if (!m_episodeTable || !m_downloadIndex || m_currentImdb.isEmpty())
@@ -1993,11 +1957,6 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                 this, [this](const QString& /*infoHash*/) {
                     refreshMovieDownloadState();
                 }, Qt::QueuedConnection);
-        // TANKORENT_CINEMATA P1.T11 collapse (2026-05-21) — this connect is
-        // also the Phase 1 episode-row repaint trigger for the new [Find
-        // sources for Season N] flow. When a Find-sources auto-pick download
-        // completes, refreshSubstrateStatesForActiveSeason() (above) re-walks
-        // the index and renders the chip. No new connect required.
         connect(m_torrentClient, &TorrentClient::torrentCompleted,
                 this, [this](const QString& /*infoHash*/) {
                     // F13 fix 2026-05-19: immediate refresh on completion —
@@ -2008,93 +1967,6 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                 }, Qt::QueuedConnection);
     }
     refreshMovieDownloadState();
-}
-
-void StreamDetailView::setSearchService(TankorentSearchService* svc)
-{
-    // TANKORENT_CINEMATA P1.T8 (2026-05-21) — MainWindow injects the Tankorent
-    // headless search service post-construction. Non-owning pointer; the
-    // service is a MainWindow singleton, outlives this view.
-    if (m_searchService == svc) return;
-    m_searchService = svc;
-    if (m_searchService) {
-        connect(m_searchService, &TankorentSearchService::topResultPicked,
-                this, &StreamDetailView::onSearchTopPicked);
-        connect(m_searchService, &TankorentSearchService::searchFinished,
-                this, &StreamDetailView::onSearchFinished);
-    }
-    if (m_findSourcesBtn)
-        m_findSourcesBtn->setEnabled(m_searchService != nullptr);
-}
-
-void StreamDetailView::onFindSourcesClicked()
-{
-    // Guard against re-click while a search is in flight or before any
-    // identity has resolved.
-    if (!m_searchService || m_currentImdb.isEmpty())
-        return;
-    if (!m_currentSearchHandle.isEmpty())
-        return;
-    const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
-    if (season <= 0)
-        return;  // movies use the existing m_movieDownloadBtn fast-path
-
-    TankorentSearchService::CinemataIdentity id;
-    id.imdbId  = m_currentImdb;
-    id.season  = season;
-    id.episode = 0;  // season-level search; per-episode picking is Phase 2
-
-    const QString query = QStringLiteral("%1 S%2")
-                              .arg(currentTitle())
-                              .arg(season, 2, 10, QChar('0'));
-
-    m_currentSearchHandle = m_searchService->startSearch(
-        QStringLiteral("videos"),
-        QStringLiteral("all"),
-        query,
-        50,
-        QString(),
-        id);
-
-    if (m_currentSearchHandle.isEmpty()) {
-        // No indexers matched — service didn't accept the search.
-        return;
-    }
-
-    m_findSourcesBtn->setText(tr("Searching…"));
-    m_findSourcesBtn->setEnabled(false);
-}
-
-void StreamDetailView::onSearchTopPicked(const QString& handle,
-                                         const TorrentResult& result)
-{
-    if (handle != m_currentSearchHandle) return;
-    if (!m_torrentClient) return;
-
-    const QString destination =
-        m_torrentClient->defaultPaths().value(QStringLiteral("videos"));
-    const int season =
-        m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
-
-    m_torrentClient->addMagnetHeadless(
-        result.magnetUri,
-        QStringLiteral("videos"),
-        destination,
-        m_currentImdb,
-        season);
-}
-
-void StreamDetailView::onSearchFinished(const QString& handle)
-{
-    if (handle != m_currentSearchHandle) return;
-    m_currentSearchHandle.clear();
-    if (m_findSourcesBtn) {
-        const int season =
-            m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
-        m_findSourcesBtn->setText(
-            tr("⬇ Find sources for Season %1").arg(season));
-        m_findSourcesBtn->setEnabled(m_searchService != nullptr);
-    }
 }
 
 void StreamDetailView::repaintActionIconForRow(int row,

@@ -33,8 +33,6 @@ class CoreBridge;
 class StreamLibrary;
 struct StreamLibraryEntry;
 class TorrentClient;
-class TankorentSearchService;
-struct TorrentResult;
 
 namespace tankostream::stream {
 class MetaAggregator;
@@ -128,13 +126,6 @@ public:
     // repaint immediately on any cohort state change (not only on the 1Hz
     // poll tick).
     void setTorrentClient(TorrentClient* client);
-
-    // TANKORENT_CINEMATA P1.T8 (2026-05-21) — wires the Tankorent headless
-    // search service so the new [Find sources for Season N] button can
-    // fire identity-baked searches + receive topResultPicked auto-pick
-    // emits. MainWindow (T9) injects the singleton service after creating
-    // the detail view. Non-owning pointer; lifetime is MainWindow's.
-    void setSearchService(TankorentSearchService* svc);
 
     // THEATRE_DOWNLOAD_OVERHAUL Phase E: the detail view owns the right pane.
     // StreamPage mounts TheatreDownloadPanel into this host beside Sources.
@@ -363,16 +354,6 @@ private:
         const QList<tankostream::addon::Stream>& trailerStreams);
     void onTrailerClicked();
 
-    // TANKORENT_CINEMATA P1.T8 (2026-05-21) — [Find sources for Season N]
-    // click handler + auto-pick + completion callbacks. onFindSourcesClicked
-    // fires the identity-baked search through m_searchService; onSearchTopPicked
-    // receives the ranker's pickTop result and dispatches via
-    // m_torrentClient->addMagnetHeadless; onSearchFinished restores button text
-    // + re-enables on terminal handle settlement.
-    void onFindSourcesClicked();
-    void onSearchTopPicked(const QString& handle, const TorrentResult& result);
-    void onSearchFinished(const QString& handle);
-
     // Phase 3 Batch 3.3 — description clamp + show-more toggle.
     // `setDescription` rewrites text, resets expanded state, runs
     // `updateDescriptionClamp` to decide whether the toggle button should
@@ -516,18 +497,6 @@ private:
     // download-state repaints. Started in populateEpisodeTable when bulk
     // activity exists for the show+season; idle otherwise.
     QTimer*                m_bulkPollTimer = nullptr;
-
-    // TANKORENT_CINEMATA P1.T8 (2026-05-21) — Tankorent headless search
-    // service for the [Find sources for Season N] flow. Non-owning;
-    // injected via setSearchService from MainWindow (T9).
-    TankorentSearchService* m_searchService = nullptr;
-    // Tracks the in-flight Find-sources handle for handle-vs-other-handle
-    // dispatch checks in the topResultPicked / searchFinished slots.
-    // Empty when no search is pending.
-    QString                 m_currentSearchHandle;
-    // The new [Find sources for Season N] button. Lives in the seasonLayout
-    // beside the existing m_downloadBtn + m_packOptionsBtn pair.
-    QPushButton*            m_findSourcesBtn = nullptr;
 
     // F13 fix 2026-05-19: periodic refresh of movie + episode download badges
     // during active downloads. The substrate's state-change signals only fire on
