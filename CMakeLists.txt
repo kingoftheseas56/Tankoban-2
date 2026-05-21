@@ -193,6 +193,7 @@ set(SOURCES
     src/core/manga/fandom/FandomCatalogCache.cpp
     src/core/manga/fandom/FandomVolumeResolver.cpp
     src/core/manga/fandom/LocalFandomCatalogLoader.cpp
+    src/core/manga/fandom/LocalFandomCatalogIndex.cpp
     src/core/manga/fandom/extractors/TableExtractor.cpp
     src/core/manga/fandom/extractors/InfoboxExtractor.cpp
     src/core/manga/wikidata/WikidataClient.cpp
@@ -864,6 +865,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/fandom/test_infobox_extractor.cpp
         tests/core/manga/fandom/test_fandom_catalog_cache.cpp
         tests/core/manga/fandom/test_local_fandom_catalog_loader.cpp
+        tests/core/manga/fandom/test_local_fandom_catalog_index.cpp
         tests/core/manga/wikidata/test_wikidata_cache.cpp
         tests/core/manga/wikipedia/test_wikipedia_resolver.cpp
         src/core/manga/fandom/FandomTypes.cpp
@@ -871,6 +873,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/fandom/WikiManifestRegistry.cpp
         src/core/manga/fandom/FandomCatalogCache.cpp
         src/core/manga/fandom/LocalFandomCatalogLoader.cpp
+        src/core/manga/fandom/LocalFandomCatalogIndex.cpp
         src/core/manga/fandom/extractors/TableExtractor.cpp
         src/core/manga/fandom/extractors/InfoboxExtractor.cpp
         src/core/manga/wikidata/WikidataCache.cpp
