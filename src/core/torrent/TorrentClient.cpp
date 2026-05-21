@@ -3029,8 +3029,8 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
 
 void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
 {
-    const bool hadRecord = m_repo.hasTorrent(infoHash);
-    const QJsonObject rec = hadRecord ? m_records.value(infoHash).toObject() : QJsonObject{};
+    const auto row = m_repo.getTorrent(infoHash);
+    const bool hadRecord = row.has_value();
     m_engine->removeTorrent(infoHash, deleteFiles);
     m_records.remove(infoHash);
     if (hadRecord) {
@@ -3045,8 +3045,8 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
         QStringLiteral("delete_torrent"),
         QJsonObject{{QStringLiteral("hash"), infoHash},
                     {QStringLiteral("deleteFiles"), deleteFiles},
-                    {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
-                    {QStringLiteral("streamGroupId"), rec.value(QStringLiteral("streamGroupId")).toString()}});
+                    {QStringLiteral("imdbId"), row ? row->imdbId : QString()},
+                    {QStringLiteral("streamGroupId"), row ? row->streamGroupId : QString()}});
     emit torrentRemoved(infoHash);
 }
 
