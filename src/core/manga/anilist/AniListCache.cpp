@@ -50,7 +50,7 @@ QJsonObject mediaPreviewToJson(const MediaPreview& p)
         QJsonObject tagObj;
         tagObj["name"]      = rt.name;
         tagObj["rank"]      = rt.rank;
-        tagObj["isSpoiler"] = rt.isSpoiler;
+        tagObj["isSpoiler"] = rt.isSpoiler;  // normalized from AniList's isMediaSpoiler GraphQL key
         tagsArr.append(tagObj);
     }
     o["tags"] = tagsArr;
@@ -90,7 +90,7 @@ MediaPreview mediaPreviewFromJson(const QJsonObject& o)
         RankedTag rt;
         rt.name      = tagObj.value("name").toString();
         rt.rank      = tagObj.value("rank").toInt();
-        rt.isSpoiler = tagObj.value("isSpoiler").toBool();
+        rt.isSpoiler = tagObj.value("isSpoiler").toBool();  // normalized from AniList's isMediaSpoiler GraphQL key
         if (!rt.name.isEmpty()) p.tags.append(rt);
     }
 
