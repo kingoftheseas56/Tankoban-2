@@ -24,10 +24,13 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLayoutItem>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QPixmap>
 #include <QPixmapCache>
 #include <QPointer>
@@ -59,6 +62,10 @@ constexpr int kColTitle    = 3;
 constexpr int kColProgress = 4;
 constexpr int kColStatus   = 5;
 constexpr int kColCount    = 6;
+
+const QSize kVolumeThumbSize(110, 150);
+constexpr int kVolumeRowHeight = 168;
+const QSize kHeroCoverSize(110, 165);
 
 constexpr const char* kPremiumSourceId = "tankoyomi_premium";
 constexpr const char* kWeebCentralSourceId = "weebcentral";
@@ -94,9 +101,9 @@ QString humanizeFormat(const QString& raw)
 QString buildPreviewMetaLine(const anilist::MediaPreview& preview)
 {
     QStringList parts;
-    if (!preview.format.isEmpty())   parts << humanizeFormat(preview.format);
-    if (preview.yearStarted > 0)     parts << QString::number(preview.yearStarted);
+    if (!preview.genres.isEmpty())   parts << preview.genres.first().toLower();
     if (!preview.status.isEmpty())   parts << humanizeStatus(preview.status);
+    if (preview.yearStarted > 0)     parts << QString::number(preview.yearStarted);
     return parts.join(QStringLiteral("  -  "));
 }
 
@@ -146,6 +153,64 @@ QString formatChapterRange(const anilist::VolumeRow& row)
         ? QString::number(row.chapterRangeStart)
         : QString::number(row.chapterRangeStart) + QStringLiteral("-") + QString::number(row.chapterRangeEnd);
     return QStringLiteral("Chs %1 (%2 ch)").arg(range).arg(row.chapterCount);
+}
+
+QPixmap makeVolumeThumbPlaceholder()
+{
+    QPixmap pm(kVolumeThumbSize);
+    pm.fill(QColor(QStringLiteral("#1c1c22")));
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(QStringLiteral("#2f2f36")), 1));
+    p.drawRoundedRect(pm.rect().adjusted(0, 0, -1, -1), 4, 4);
+    return pm;
+}
+
+QPixmap makeHeroCoverPlaceholder(const QString& title)
+{
+    QPixmap pm(kHeroCoverSize);
+    pm.fill(QColor(QStringLiteral("#1c1c22")));
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(QStringLiteral("#2f2f36")), 1));
+    p.drawRoundedRect(pm.rect().adjusted(0, 0, -1, -1), 5, 5);
+
+    const QString initials = title.split(QRegularExpression(QStringLiteral("\\s+")),
+                                         Qt::SkipEmptyParts)
+        .mid(0, 2)
+        .join(QString())
+        .left(2)
+        .toUpper();
+    if (!initials.isEmpty()) {
+        QFont f = p.font();
+        f.setPointSize(18);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QColor(QStringLiteral("#8b8b95")));
+        p.drawText(pm.rect(), Qt::AlignCenter, initials);
+    }
+
+    return pm;
+}
+
+QString buildHeroMetaLine(const anilist::MediaDetail& detail)
+{
+    QStringList parts;
+    if (detail.totalVolumes > 0) {
+        parts << QStringLiteral("%1 volumes").arg(detail.totalVolumes);
+    }
+    if (!detail.preview.genres.isEmpty()) {
+        parts << detail.preview.genres.first().toLower();
+    }
+    if (!detail.preview.status.isEmpty()) {
+        parts << humanizeStatus(detail.preview.status).toLower();
+    }
+    if (detail.preview.yearStarted > 0) {
+        parts << QString::number(detail.preview.yearStarted);
+    }
+    return parts.join(QStringLiteral("  -  "));
 }
 
 QJsonObject volumeRowJson(const anilist::VolumeRow& row, int rowIndex,
@@ -266,17 +331,45 @@ void ComicsSeriesView::buildUi()
         "  background: #101010;"
         "  border-radius: 8px;"
         "}"
+        "QWidget#ComicsSeriesHeroBlock {"
+        "  background: transparent;"
+        "}"
+        "QLabel#ComicsSeriesHeroCover {"
+        "  background: #1c1c22;"
+        "  border: 1px solid #2f2f36;"
+        "  border-radius: 5px;"
+        "}"
         "QLabel#ComicsSeriesTitle {"
         "  color: #ffffff;"
+        "  font-size: 24px;"
+        "  font-weight: 700;"
+        "  background: transparent;"
+        "}"
+        "QLabel#ComicsSeriesMangakaByline {"
+        "  color: #c0a0ff;"
+        "  font-size: 13px;"
         "  background: transparent;"
         "}"
         "QLabel#ComicsSeriesMetaLine {"
-        "  color: rgba(255, 255, 255, 0.62);"
+        "  color: #8b8b95;"
+        "  font-size: 12px;"
         "  background: transparent;"
         "}"
         "QLabel#ComicsSeriesSynopsis {"
-        "  color: rgba(255, 255, 255, 0.55);"
+        "  color: #c8c8d0;"
+        "  font-size: 13px;"
         "  background: transparent;"
+        "}"
+        "QWidget#ComicsSeriesHeroTagsRow {"
+        "  background: transparent;"
+        "}"
+        "QLabel#ComicsSeriesHeroTagChip {"
+        "  background: #1c1c22;"
+        "  border: 1px solid #2a2a32;"
+        "  border-radius: 999px;"
+        "  color: #a8a8b4;"
+        "  font-size: 11px;"
+        "  padding: 2px 9px;"
         "}"
         "QTableWidget#ComicsSeriesVolumesTable {"
         "  background-color: rgba(15, 15, 18, 0.88);"
@@ -406,41 +499,48 @@ void ComicsSeriesView::buildUi()
     auto* contentRow = new QHBoxLayout();
     contentRow->setSpacing(16);
 
-    // Left column: title + meta + synopsis + volume table
+    // Left column: hero block + volume table
     auto* leftCol = new QVBoxLayout();
     leftCol->setSpacing(8);
 
-    m_title = new QLabel(this);
+    m_heroBlock = new QWidget(this);
+    m_heroBlock->setObjectName(QStringLiteral("ComicsSeriesHeroBlock"));
+    auto* heroLayout = new QHBoxLayout(m_heroBlock);
+    heroLayout->setContentsMargins(0, 4, 0, 18);
+    heroLayout->setSpacing(22);
+
+    m_heroCoverLabel = new QLabel(m_heroBlock);
+    m_heroCoverLabel->setObjectName(QStringLiteral("ComicsSeriesHeroCover"));
+    m_heroCoverLabel->setFixedSize(kHeroCoverSize);
+    m_heroCoverLabel->setAlignment(Qt::AlignCenter);
+    m_heroCoverLabel->setScaledContents(false);
+    heroLayout->addWidget(m_heroCoverLabel, 0, Qt::AlignTop);
+
+    auto* heroTextStack = new QVBoxLayout();
+    heroTextStack->setContentsMargins(0, 0, 0, 0);
+    heroTextStack->setSpacing(8);
+
+    m_title = new QLabel(m_heroBlock);
     m_title->setObjectName(QStringLiteral("ComicsSeriesTitle"));
-    {
-        QFont f = m_title->font();
-        f.setPointSize(18);
-        f.setBold(true);
-        m_title->setFont(f);
-    }
     m_title->setWordWrap(true);
-    leftCol->addWidget(m_title);
+    heroTextStack->addWidget(m_title);
 
-    m_metaLine = new QLabel(this);
+    m_mangakaByline = new QLabel(m_heroBlock);
+    m_mangakaByline->setObjectName(QStringLiteral("ComicsSeriesMangakaByline"));
+    m_mangakaByline->hide();
+    heroTextStack->addWidget(m_mangakaByline);
+
+    m_metaLine = new QLabel(m_heroBlock);
     m_metaLine->setObjectName(QStringLiteral("ComicsSeriesMetaLine"));
-    {
-        QFont f = m_metaLine->font();
-        f.setPointSize(10);
-        m_metaLine->setFont(f);
-    }
-    leftCol->addWidget(m_metaLine);
+    heroTextStack->addWidget(m_metaLine);
 
-    m_synopsis = new QLabel(this);
+    m_synopsis = new QLabel(m_heroBlock);
     m_synopsis->setObjectName(QStringLiteral("ComicsSeriesSynopsis"));
-    {
-        QFont f = m_synopsis->font();
-        f.setPointSize(10);
-        m_synopsis->setFont(f);
-    }
     m_synopsis->setWordWrap(true);
     m_synopsis->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_synopsis->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    leftCol->addWidget(m_synopsis);
+    m_synopsis->setMaximumWidth(720);
+    heroTextStack->addWidget(m_synopsis);
 
     // STREAM_PORT 2026-05-18 Task 3: 3-line clamped description with
     // "Show more / less" toggle. Clamp is computed dynamically from
@@ -467,7 +567,18 @@ void ComicsSeriesView::buildUi()
     m_descShowMoreBtn->hide();
     connect(m_descShowMoreBtn, &QPushButton::clicked,
             this, &ComicsSeriesView::onDescShowMoreClicked);
-    leftCol->addWidget(m_descShowMoreBtn, /*stretch*/ 0, Qt::AlignLeft);
+    heroTextStack->addWidget(m_descShowMoreBtn, /*stretch*/ 0, Qt::AlignLeft);
+
+    m_tagChipsRow = new QWidget(m_heroBlock);
+    m_tagChipsRow->setObjectName(QStringLiteral("ComicsSeriesHeroTagsRow"));
+    m_tagChipsLayout = new QHBoxLayout(m_tagChipsRow);
+    m_tagChipsLayout->setContentsMargins(0, 0, 0, 0);
+    m_tagChipsLayout->setSpacing(6);
+    heroTextStack->addWidget(m_tagChipsRow);
+
+    heroTextStack->addStretch(1);
+    heroLayout->addLayout(heroTextStack, 1);
+    leftCol->addWidget(m_heroBlock);
 
     // Future story-arcs slot reserved here per brainstorm Decision 7
     // (2026-05-18). v1 inserts nothing; future v1.x widget mounts before
@@ -481,7 +592,7 @@ void ComicsSeriesView::buildUi()
     // parity at StreamDetailView.cpp:661-674. Columns:
     //   [kColCheckbox=0 chk]  -- 32px checkbox (Task 5 wires the toggle)
     //   [kColIndex=1   #]     -- 36px volume index; F1 stash lives here
-    //   [kColThumb=2   thmb]  -- 76px (48x64 portrait + padding), MANGA aspect
+    //   [kColThumb=2   thmb]  -- 126px (110x150 portrait + padding), MANGA aspect
     //   [kColTitle=3   ttl]   -- stretch, stacked "Vol N" + "Chs A-B" cellWidget
     //   [kColProgress=4 prog] -- 80px progress text ("--" in v1)
     //   [kColStatus=5  stat]  -- 60px status text ("Downloaded" / ...)
@@ -515,7 +626,7 @@ void ComicsSeriesView::buildUi()
     hdr->setSectionResizeMode(kColStatus,   QHeaderView::Fixed);
     m_volumesTable->setColumnWidth(kColCheckbox, 32);
     m_volumesTable->setColumnWidth(kColIndex,    36);
-    m_volumesTable->setColumnWidth(kColThumb,    76);
+    m_volumesTable->setColumnWidth(kColThumb,    126);
     m_volumesTable->setColumnWidth(kColProgress, 80);
     m_volumesTable->setColumnWidth(kColStatus,   60);
     // STREAM_PORT Bug-4 round-3 fix 2026-05-18: m_volumesTable->setIconSize
@@ -530,7 +641,7 @@ void ComicsSeriesView::buildUi()
     // every cell's icon sizing. Col-2 thumb migrated to cellWidget+QLabel
     // (same pattern as col-5 status from round-2) -- see populateVolumeRows
     // + applyPixmapToVolumeRow.
-    m_volumesTable->verticalHeader()->setDefaultSectionSize(72);
+    m_volumesTable->verticalHeader()->setDefaultSectionSize(kVolumeRowHeight);
 
     leftCol->addWidget(m_volumesTable, /*stretch*/ 1);
 
@@ -578,7 +689,7 @@ void ComicsSeriesView::buildUi()
     // Task 14: loading overlay covers the entire widget during BookWalker
     // resolution; starts hidden. Safety timer forces fallback after 10s.
     m_loadingOverlay = new tankoban::ui::widgets::ComicsSeriesViewLoadingOverlay(this);
-    m_loadingOverlay->setMessage(tr("Loading covers..."));
+    m_loadingOverlay->setMessage(tr("Loading"));
     m_loadingOverlay->hide();
 
     m_loadingSafetyTimer = new QTimer(this);
@@ -619,6 +730,15 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     m_title->setText(preview.title);
     m_synopsis->setText(stripDescriptionHtml(preview.description));
     m_metaLine->setText(buildPreviewMetaLine(preview));
+    if (m_mangakaByline) {
+        m_mangakaByline->clear();
+        m_mangakaByline->hide();
+    }
+    populateHeroTags(preview.genres);
+    if (m_heroCoverLabel) {
+        m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(preview.title));
+    }
+    loadHeroCoverUrl(preview.coverFullUrl);
     // STREAM_PORT 2026-05-18 hero-instant-load fix: REMOVED the
     // clear() + hide() on m_heroBannerLabel here. Previous behavior:
     // every series-open cleared the pixmap + hid the label BEFORE
@@ -662,12 +782,7 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     // PHASE 12: kick off banner async-load from preview (renderDetail will
     // re-fire with detail.preview.bannerUrl after the cache hit / refetch
     // lands; the URL identity makes QPixmapCache a synchronous-hit second time).
-    const QString previewBannerUrl = !preview.bannerUrl.isEmpty()
-        ? preview.bannerUrl
-        : preview.coverFullUrl;
-    if (!previewBannerUrl.isEmpty()) {
-        loadBannerUrl(previewBannerUrl);
-    }
+    loadBannerUrl(preview.bannerUrl);
 
     // Cache first: render whatever we have on disk, even if stale.
     if (m_cache) {
@@ -715,6 +830,15 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
     m_title->setText(wc.title);
     m_synopsis->clear();
     m_metaLine->setText(mangaSourceDisplayName(wc.source));
+    if (m_mangakaByline) {
+        m_mangakaByline->clear();
+        m_mangakaByline->hide();
+    }
+    populateHeroTags(QStringList());
+    if (m_heroCoverLabel) {
+        m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(wc.title));
+    }
+    loadHeroCoverUrl(wc.thumbnailUrl);
     m_volumesTable->setRowCount(0);
     refreshLibraryButton();
 
@@ -759,6 +883,12 @@ void ComicsSeriesView::clearView()
     m_currentVolumeRows.clear();
 
     m_title->clear();
+    if (m_heroCoverLabel) m_heroCoverLabel->clear();
+    if (m_mangakaByline) {
+        m_mangakaByline->clear();
+        m_mangakaByline->hide();
+    }
+    populateHeroTags(QStringList());
     m_metaLine->clear();
     m_synopsis->clear();
     // STREAM_PORT 2026-05-18 hero-instant-load fix: m_heroBannerLabel
@@ -832,6 +962,10 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
     if (!detail.preview.title.isEmpty()) {
         m_title->setText(detail.preview.title);
     }
+    if (m_mangakaByline) {
+        m_mangakaByline->clear();
+        m_mangakaByline->hide();
+    }
     if (!detail.preview.description.isEmpty()) {
         m_synopsis->setText(stripDescriptionHtml(detail.preview.description));
 
@@ -857,18 +991,19 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
             }
         }
     }
-    m_metaLine->setText(buildDetailMetaLine(detail));
+    m_metaLine->setText(buildHeroMetaLine(detail));
+    populateHeroTags(detail.preview.genres);
+    if (m_heroCoverLabel && !detail.preview.title.isEmpty()
+        && m_heroCoverLabel->pixmap(Qt::ReturnByValue).isNull()) {
+        m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(detail.preview.title));
+    }
+    loadHeroCoverUrl(detail.preview.coverFullUrl);
 
     populateVolumeRows(anilist::AniListVolumeMapper::map(detail), &detail);
 
-    // PHASE 12: async-load banner. Prefer preview.bannerUrl; fall back to
-    // coverFullUrl (stretched) when the AniList Media has no banner.
-    const QString bannerUrl = !detail.preview.bannerUrl.isEmpty()
-        ? detail.preview.bannerUrl
-        : detail.preview.coverFullUrl;
-    if (!bannerUrl.isEmpty()) {
-        loadBannerUrl(bannerUrl);
-    }
+    // Phase 8a Wave 2: banner slot exists only for a real AniList banner.
+    // Never stretch the portrait cover into this landscape band.
+    loadBannerUrl(detail.preview.bannerUrl);
 }
 
 void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
@@ -996,7 +1131,7 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         }
         m_volumesTable->setItem(i, kColIndex, indexItem);
 
-        // Col 2 -- thumbnail (48x64 portrait). STREAM_PORT Bug-4 round-3
+        // Col 2 -- thumbnail. STREAM_PORT Bug-4 round-3
         // fix 2026-05-18: was QTableWidgetItem.setIcon which required the
         // now-removed table-wide setIconSize(48, 64). Migrated to a
         // cellWidget+QLabel-with-pixmap pattern -- explicit pixel size,
@@ -1005,8 +1140,10 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         auto* coverLabel = new QLabel(m_volumesTable);
         coverLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowThumb"));
         coverLabel->setAlignment(Qt::AlignCenter);
-        coverLabel->setFixedSize(QSize(48, 64));
-        coverLabel->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
+        coverLabel->setMinimumSize(kVolumeThumbSize);
+        coverLabel->setPixmap(makeVolumeThumbPlaceholder());
+        coverLabel->setStyleSheet(QStringLiteral(
+            "QLabel#ComicsSeriesVolumeRowThumb { background: transparent; }"));
         m_volumesTable->setCellWidget(i, kColThumb, coverLabel);
         const QString coverUrl = detail
             ? (!row.art.thumbnailUrl.isEmpty()
@@ -1222,12 +1359,10 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
 
     m_volumesTable->setRowCount(catalog.volumes.size());
 
-    constexpr int kFandomRowHeight = 130; // taller than the 72px AniList default
-
     for (int i = 0; i < catalog.volumes.size(); ++i) {
         const FV& v = catalog.volumes.at(i);
 
-        m_volumesTable->setRowHeight(i, kFandomRowHeight);
+        m_volumesTable->setRowHeight(i, kVolumeRowHeight);
 
         // m_currentVolumeRows compat stash — minimal mapping for
         // applyPixmapToVolumeRow + onVolumeCellClicked downstream.
@@ -1264,17 +1399,23 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
         indexItem->setTextAlignment(Qt::AlignCenter);
         m_volumesTable->setItem(i, kColIndex, indexItem);
 
-        // Col kColThumb -- 48x64 portrait cover. Mirror populateVolumeRows.
+        // Col kColThumb -- portrait cover. Mirror populateVolumeRows.
         auto* coverLabel = new QLabel(m_volumesTable);
         coverLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowThumb"));
         coverLabel->setAlignment(Qt::AlignCenter);
-        coverLabel->setFixedSize(QSize(48, 64));
-        coverLabel->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
+        coverLabel->setMinimumSize(kVolumeThumbSize);
+        coverLabel->setPixmap(makeVolumeThumbPlaceholder());
+        coverLabel->setStyleSheet(QStringLiteral(
+            "QLabel#ComicsSeriesVolumeRowThumb { background: transparent; }"));
         m_volumesTable->setCellWidget(i, kColThumb, coverLabel);
 
-        const QString coverUrl = v.coverUrlEnglish.isEmpty()
+        const QString fandomCoverUrl = v.coverUrlEnglish.isEmpty()
             ? v.coverUrlJapanese
             : v.coverUrlEnglish;
+        const QString existingCoverUrl = m_lastAppliedCoverUrlByVolume.value(v.volumeNumber);
+        const QString coverUrl = existingCoverUrl.contains(QStringLiteral("rimg.bookwalker.jp"))
+            ? existingCoverUrl
+            : fandomCoverUrl;
         if (!coverUrl.isEmpty()) {
             loadCoverUrlForVolume(coverUrl, v.volumeNumber);
         }
@@ -1292,6 +1433,7 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
         const QString primaryTitle = v.titleEnglish.isEmpty()
             ? tr("Volume %1").arg(v.volumeNumber)
             : v.titleEnglish;
+        indexItem->setData(Qt::UserRole + 2, primaryTitle);
         auto* primaryLabel = new QLabel(primaryTitle, titleWrap);
         primaryLabel->setStyleSheet(QStringLiteral(
             "color: #e5e7eb; font-size: 13px; font-weight: 500; background: transparent;"));
@@ -1664,6 +1806,55 @@ void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumbe
     });
 }
 
+void ComicsSeriesView::loadHeroCoverUrl(const QString& url)
+{
+    if (!m_heroCoverLabel || url.trimmed().isEmpty()) return;
+
+    QPixmap cached;
+    if (QPixmapCache::find(url, &cached)) {
+        applyHeroCoverPixmap(cached);
+        return;
+    }
+
+    if (url.startsWith(QStringLiteral("file:///"), Qt::CaseInsensitive)) {
+        QPixmap pm(QUrl(url).toLocalFile());
+        if (!pm.isNull()) {
+            QPixmapCache::insert(url, pm);
+            applyHeroCoverPixmap(pm);
+            return;
+        }
+    }
+
+    QNetworkAccessManager* nam = m_client ? m_client->networkManager() : nullptr;
+    if (!nam) return;
+
+    QPointer<ComicsSeriesView> self(this);
+    const QString snapshotSeriesKey = m_currentSeriesKey;
+    QNetworkRequest req{QUrl(url)};
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+    QNetworkReply* reply = nam->get(req);
+    connect(reply, &QNetworkReply::finished, this,
+            [self, reply, url, snapshotSeriesKey]() {
+        reply->deleteLater();
+        if (!self || self->m_currentSeriesKey != snapshotSeriesKey) return;
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("loadHeroCoverUrl: fetch failed url=%s error=%s",
+                     qUtf8Printable(url), qUtf8Printable(reply->errorString()));
+            return;
+        }
+        const QByteArray data = reply->readAll();
+        QPixmap pm;
+        if (!pm.loadFromData(data)) {
+            qWarning("loadHeroCoverUrl: pixmap decode failed url=%s bytes=%lld",
+                     qUtf8Printable(url), static_cast<long long>(data.size()));
+            return;
+        }
+        QPixmapCache::insert(url, pm);
+        self->applyHeroCoverPixmap(pm);
+    });
+}
+
 void ComicsSeriesView::loadBannerUrl(const QString& url)
 {
     // STREAM_PORT 2026-05-18 Task 1: was full-viewport paintEvent wallpaper;
@@ -1671,7 +1862,13 @@ void ComicsSeriesView::loadBannerUrl(const QString& url)
     // KeepAspectRatioByExpanding so the banner image fills the 140px band
     // (horizontal slice, centered). Mirrors StreamDetailView's hero label
     // approach.
-    if (url.isEmpty() || !m_heroBannerLabel) return;
+    if (!m_heroBannerLabel) return;
+    if (url.trimmed().isEmpty()) {
+        m_heroBannerLabel->clear();
+        m_heroBannerLabel->hide();
+        m_lastBannerUrl.clear();
+        return;
+    }
 
     // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 1 fix 2026-05-19: on
     // series-switch (new URL differs from what's currently painted), wipe
@@ -1789,6 +1986,43 @@ void ComicsSeriesView::applyBannerPixmap(const QPixmap& pm)
     m_heroBannerLabel->setPixmap(scaled);
 }
 
+void ComicsSeriesView::applyHeroCoverPixmap(const QPixmap& pm)
+{
+    if (!m_heroCoverLabel || pm.isNull()) return;
+    const QPixmap scaled = pm.scaled(kHeroCoverSize,
+                                     Qt::KeepAspectRatio,
+                                     Qt::SmoothTransformation);
+    m_heroCoverLabel->setPixmap(scaled);
+}
+
+void ComicsSeriesView::populateHeroTags(const QStringList& genres)
+{
+    if (!m_tagChipsRow || !m_tagChipsLayout) return;
+
+    while (QLayoutItem* item = m_tagChipsLayout->takeAt(0)) {
+        if (QWidget* w = item->widget()) w->deleteLater();
+        delete item;
+    }
+
+    QStringList chips;
+    for (const QString& genre : genres) {
+        const QString trimmed = genre.trimmed();
+        if (trimmed.isEmpty() || chips.contains(trimmed, Qt::CaseInsensitive)) continue;
+        chips << trimmed;
+        if (chips.size() >= 5) break;
+    }
+
+    for (const QString& chipText : chips) {
+        auto* chip = new QLabel(chipText.toLower(), m_tagChipsRow);
+        chip->setObjectName(QStringLiteral("ComicsSeriesHeroTagChip"));
+        chip->setTextFormat(Qt::PlainText);
+        chip->setAlignment(Qt::AlignCenter);
+        m_tagChipsLayout->addWidget(chip, 0, Qt::AlignLeft);
+    }
+    m_tagChipsLayout->addStretch(1);
+    m_tagChipsRow->setVisible(!chips.isEmpty());
+}
+
 void ComicsSeriesView::applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm)
 {
     if (!m_volumesTable || pm.isNull()) {
@@ -1810,8 +2044,7 @@ void ComicsSeriesView::applyPixmapToVolumeRow(int volumeNumber, const QPixmap& p
                          static_cast<void*>(m_volumesTable->cellWidget(i, kColThumb)));
                 return;
             }
-            const QSize thumb(48, 64);
-            const QPixmap scaled = pm.scaled(thumb, Qt::KeepAspectRatio,
+            const QPixmap scaled = pm.scaled(kVolumeThumbSize, Qt::KeepAspectRatio,
                                              Qt::SmoothTransformation);
             coverLabel->setPixmap(scaled);
             return;
@@ -1960,6 +2193,17 @@ void ComicsSeriesView::populateSourcesForRow(int row)
     if (auto* item = m_volumesTable->item(row, kColIndex)) {
         chapterNumbers = item->data(Qt::UserRole).toStringList();
     }
+
+    QString volumeTitle;
+    if (auto* item = m_volumesTable->item(row, kColIndex)) {
+        volumeTitle = item->data(Qt::UserRole + 2).toString();
+    }
+    if (volumeTitle.isEmpty()) {
+        volumeTitle = volRow.isVolumeX
+            ? tr("Volume X")
+            : tr("Volume %1").arg(volRow.volumeNumber);
+    }
+    m_sourcesPanel->setContext(volRow.volumeNumber, volumeTitle);
 
     m_sourcesPanel->populate(m_currentSeriesTitle,
                              m_currentAnilistId,
