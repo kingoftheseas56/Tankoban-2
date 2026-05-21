@@ -328,6 +328,7 @@ set(HEADERS
     src/ui/pages/tankorent/TorrentGeneralTab.h
     src/core/TorrentResult.h
     src/core/TorrentIndexer.h
+    src/core/TankorentSearchService.h
     src/core/indexers/TorrentsCsvIndexer.h
     src/core/indexers/NyaaIndexer.h
     src/core/indexers/PirateBayIndexer.h
