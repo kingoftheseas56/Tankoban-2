@@ -21,6 +21,7 @@
 
 class CoreBridge;
 class TorrentIndexer;
+class TankorentSearchService;
 class QNetworkAccessManager;
 class QTimer;
 class QDragEnterEvent;
@@ -76,13 +77,12 @@ private:
 
     void startSearch();
     void cancelSearch();
-    int  dispatchIndexers(const QString& mediaType,
-                          const QString& sourceFilter,
-                          const QString& query,
-                          int limit,
-                          const QString& categoryId);
-    void onSearchFinished(const QList<TorrentResult>& results);
-    void onSearchError(const QString& error);
+    // Service-slot handlers — wired to TankorentSearchService signals in
+    // the constructor. The page tracks `m_currentSearchHandle` for single-
+    // flight UX and ignores signals from stale handles.
+    void onServiceResultsReady(const QString& handle, const QList<TorrentResult>& results);
+    void onServiceIndexerError(const QString& handle, const QString& indexerId, const QString& error);
+    void onServiceSearchFinished(const QString& handle);
     void renderResults();
     void populateSourceCombo();
     void reloadCategoryOptions();
@@ -137,9 +137,10 @@ protected:
     QNetworkAccessManager* m_nam = nullptr;
     QTimer* m_transferTimer = nullptr;
 
-    // Active indexers during a search
-    QList<TorrentIndexer*> m_activeIndexers;
-    int m_pendingSearches = 0;
+    // Headless dispatcher; owns indexer instantiation + fan-out. The page
+    // is a consumer of its 3-signal contract (results/error/finished).
+    TankorentSearchService* m_searchService = nullptr;
+    QString m_currentSearchHandle;  // single-flight: only one in-flight per page
     QList<TorrentResult> m_allResults;
     QList<TorrentResult> m_displayedResults; // deduped, sorted — matches table rows 1:1
 

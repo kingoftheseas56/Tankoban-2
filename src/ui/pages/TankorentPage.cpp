@@ -1,6 +1,7 @@
 ﻿#include "TankorentPage.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
+#include "core/TankorentSearchService.h"
 #include "core/TorrentIndexer.h"
 #include "core/indexers/TorrentsCsvIndexer.h"
 #include "core/indexers/NyaaIndexer.h"
@@ -515,6 +516,18 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     qRegisterMetaType<QList<TorrentResult>>();
 
     m_nam = new QNetworkAccessManager(this);
+
+    // Headless search service consumes the same QNAM the page already uses
+    // for per-indexer networking. Wired to the 3-signal contract; the page
+    // drops its own dispatch state in favor of the service.
+    m_searchService = new TankorentSearchService(m_nam, this);
+    connect(m_searchService, &TankorentSearchService::resultsReady,
+            this, &TankorentPage::onServiceResultsReady);
+    connect(m_searchService, &TankorentSearchService::indexerError,
+            this, &TankorentPage::onServiceIndexerError);
+    connect(m_searchService, &TankorentSearchService::searchFinished,
+            this, &TankorentPage::onServiceSearchFinished);
+
     setObjectName(QStringLiteral("TankorentPage"));
     setWindowTitle(tr("Direct torrent search"));
     setAcceptDrops(true);
@@ -656,7 +669,7 @@ inline bool tkrReplyErr(QJsonObject& reply, const char* code, const QString& msg
     return true;
 }
 
-// Built-in indexer id list (mirrors dispatchIndexers' addIf calls).
+// Built-in indexer id list (mirrors TankorentSearchService's buildIndexersFor addIf calls).
 // Used by sources-get-indexer-health to enumerate known sources without
 // having to keep an active live indexer instance per id.
 static const QStringList kKnownIndexerIds = {
@@ -712,20 +725,26 @@ bool TankorentPage::dispatchDevCommand(const QString& cmd,
             if (idx >= 0) m_searchTypeCombo->setCurrentIndex(idx);
         }
         startSearch();
+        // Post-extraction (HELP.md 2026-05-21): pendingSearches / dispatched
+        // counts no longer live on the page. `searchInFlight` is the booled
+        // equivalent for callers that just wanted "is a search active?".
         return tkrReplyOk(reply, {
-            {"query",          query},
-            {"dispatched",     m_activeIndexers.size()},
-            {"pendingSearches", m_pendingSearches}
+            {"query",         query},
+            {"searchHandle",  m_currentSearchHandle},
+            {"searchInFlight", !m_currentSearchHandle.isEmpty()
+                                && m_searchService
+                                && m_searchService->isActive(m_currentSearchHandle)}
         });
     }
 
     if (cmd == QLatin1String("sources_cancel_search")) {
-        const bool wasActive = (m_pendingSearches > 0
-                                || !m_activeIndexers.isEmpty());
+        const bool wasActive = !m_currentSearchHandle.isEmpty()
+                                && m_searchService
+                                && m_searchService->isActive(m_currentSearchHandle);
         cancelSearch();
         return tkrReplyOk(reply, {
-            {"wasActive",       wasActive},
-            {"pendingSearches", m_pendingSearches}
+            {"wasActive",     wasActive},
+            {"searchInFlight", false}
         });
     }
 
@@ -943,9 +962,13 @@ QJsonObject TankorentPage::devSnapshot() const
     snap["resultCount"]    = m_displayedResults.size();
     snap["totalResults"]   = m_allResults.size();
     snap["showAll"]        = m_showAll;
-    snap["pendingSearches"] = m_pendingSearches;
-    snap["searchInFlight"]  = (m_pendingSearches > 0);
-    snap["activeIndexers"]  = m_activeIndexers.size();
+    // Post-extraction (HELP.md 2026-05-21): dispatch state now lives in
+    // TankorentSearchService; the page only knows the handle + delegates
+    // active-state queries.
+    snap["searchHandle"]   = m_currentSearchHandle;
+    snap["searchInFlight"] = !m_currentSearchHandle.isEmpty()
+                              && m_searchService
+                              && m_searchService->isActive(m_currentSearchHandle);
     snap["activeTab"]       = m_tabWidget ? m_tabWidget->currentIndex() : -1;
     snap["activeTransfers"] = m_cachedActive.size();
     return snap;
@@ -1497,70 +1520,11 @@ void TankorentPage::reloadCategoryOptions()
 // Search logic
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Single-purpose trackers (YTS = movies, EZTV = TV, Nyaa = anime/manga) ride
-// only with their matching media types; general-purpose trackers ride all.
-// 1337x appears in every set but is gated behind its own un-comment in the
-// instantiation block below — listing it here makes the flip a one-liner
-// once its Cloudflare path lands.
-static const QHash<QString, QSet<QString>> kMediaTypeIndexers = {
-    { "videos",     { "nyaa", "yts", "eztv", "piratebay", "1337x", "exttorrents" } },
-    { "books",      { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
-    { "audiobooks", { "piratebay", "exttorrents", "torrentscsv", "1337x" } },
-    { "comics",     { "nyaa", "piratebay", "1337x" } },
-};
-
-int TankorentPage::dispatchIndexers(const QString& mediaType,
-                                    const QString& sourceFilter,
-                                    const QString& query,
-                                    int limit,
-                                    const QString& categoryId)
-{
-    const QSet<QString> allowed = kMediaTypeIndexers.value(mediaType);
-    const bool hasAllowlist = !allowed.isEmpty();
-    const bool explicitSource = (sourceFilter != "all");
-
-    QSettings settings;
-    auto wanted = [&](const QString& id) -> bool {
-        // When the user picks a specific source, honor the explicit intent and
-        // skip the media-type allowlist. The allowlist exists to keep the
-        // "All Sources" path from spamming irrelevant trackers (e.g. YTS on a
-        // comics search); it should not second-guess an explicit pick like
-        // Nyaa+Videos for anime (Hemanth 2026-04-20).
-        if (explicitSource) {
-            if (sourceFilter != id)
-                return false;
-        } else if (hasAllowlist && !allowed.contains(id)) {
-            return false;
-        }
-        return settings.value(
-            QStringLiteral("tankorent/indexers/%1/enabled").arg(id), true).toBool();
-    };
-
-    auto addIf = [&](const QString& id, TorrentIndexer* indexer) {
-        if (wanted(id))
-            m_activeIndexers.append(indexer);
-        else
-            delete indexer;
-    };
-
-    addIf("nyaa",         new NyaaIndexer(m_nam, this));
-    addIf("piratebay",    new PirateBayIndexer(m_nam, this));
-    addIf("1337x",        new X1337xIndexer(m_nam, this));
-    addIf("yts",          new YtsIndexer(m_nam, this));
-    addIf("eztv",         new EztvIndexer(m_nam, this));
-    addIf("exttorrents",  new ExtTorrentsIndexer(m_nam, this));
-    addIf("torrentscsv",  new TorrentsCsvIndexer(m_nam, this));
-
-    m_pendingSearches = m_activeIndexers.size();
-
-    for (auto* idx : m_activeIndexers) {
-        connect(idx, &TorrentIndexer::searchFinished, this, &TankorentPage::onSearchFinished);
-        connect(idx, &TorrentIndexer::searchError,    this, &TankorentPage::onSearchError);
-        idx->search(query, limit, categoryId);
-    }
-
-    return m_activeIndexers.size();
-}
+// Dispatch + media-type allowlist + per-id QSettings enable read moved into
+// TankorentSearchService 2026-05-21 (HELP.md handshake with Agent 2). The
+// page is now a consumer of the 3-signal contract; single-flight UX is
+// preserved by tracking m_currentSearchHandle and ignoring stale handles
+// in the slot bodies.
 
 void TankorentPage::startSearch()
 {
@@ -1574,15 +1538,15 @@ void TankorentPage::startSearch()
     m_resultsTable->setRowCount(0);
     m_showAll = false;                          // D2: re-arm soft cap on each search
     if (m_resultsCountLabel) m_resultsCountLabel->hide();
-    m_pendingSearches = 0;
 
     QString mediaType  = m_searchTypeCombo->currentData().toString();
     QString sourceId   = m_sourceCombo->currentData().toString();
     QString categoryId = m_categoryCombo->currentData().toString();
 
-    const int dispatched = dispatchIndexers(mediaType, sourceId, query, 80, categoryId);
+    m_currentSearchHandle = m_searchService->startSearch(
+        mediaType, sourceId, query, 80, categoryId);
 
-    if (dispatched == 0) {
+    if (m_currentSearchHandle.isEmpty()) {
         m_searchStatus->setText(
             QStringLiteral("No sources available for %1 search")
                 .arg(mediaType.isEmpty() ? QStringLiteral("this") : mediaType));
@@ -1598,58 +1562,64 @@ void TankorentPage::startSearch()
 
 void TankorentPage::cancelSearch()
 {
-    for (auto *idx : m_activeIndexers) {
-        idx->disconnect(this);
-        idx->deleteLater();
+    if (!m_currentSearchHandle.isEmpty()) {
+        m_searchService->cancelSearch(m_currentSearchHandle);
+        m_currentSearchHandle.clear();
     }
-    m_activeIndexers.clear();
-    m_pendingSearches = 0;
-
     m_searchBtn->setVisible(true);
     m_cancelBtn->setVisible(false);
 }
 
-void TankorentPage::onSearchFinished(const QList<TorrentResult>& results)
+void TankorentPage::onServiceResultsReady(const QString& handle,
+                                          const QList<TorrentResult>& results)
 {
-    // Partial results: append and render immediately
-    m_allResults.append(results);
-    --m_pendingSearches;
+    if (handle != m_currentSearchHandle)
+        return;  // stale; user fired a newer search
 
-    // Render what we have so far
+    m_allResults.append(results);
     renderResults();
     m_searchStatus->setText(
-        m_pendingSearches > 0
+        m_searchService->isActive(handle)
             ? QStringLiteral("Searching... %1 Results").arg(m_allResults.size())
             : QStringLiteral("Done: %1 Results").arg(m_allResults.size()));
+    updateResultsView();
+}
 
-    if (m_pendingSearches <= 0) {
-        for (auto *idx : m_activeIndexers)
-            idx->deleteLater();
-        m_activeIndexers.clear();
-        m_searchBtn->setVisible(true);
-        m_cancelBtn->setVisible(false);
+void TankorentPage::onServiceIndexerError(const QString& handle,
+                                          const QString& /*indexerId*/,
+                                          const QString& error)
+{
+    if (handle != m_currentSearchHandle)
+        return;
+
+    if (m_searchService->isActive(handle))
+        return;  // wait for other indexers to settle first
+
+    // All indexers settled and this one was the error edge — if we have no
+    // results at all, surface the error; otherwise note partial-success.
+    if (m_allResults.isEmpty())
+        m_searchStatus->setText("Search Failed: " + error);
+    else {
+        renderResults();
+        m_searchStatus->setText(
+            QStringLiteral("%1 Results (Some Sources Failed)").arg(m_allResults.size()));
     }
     updateResultsView();
 }
 
-void TankorentPage::onSearchError(const QString& error)
+void TankorentPage::onServiceSearchFinished(const QString& handle)
 {
-    --m_pendingSearches;
+    if (handle != m_currentSearchHandle)
+        return;
 
-    if (m_pendingSearches <= 0) {
-        for (auto *idx : m_activeIndexers)
-            idx->deleteLater();
-        m_activeIndexers.clear();
-        m_searchBtn->setVisible(true);
-        m_cancelBtn->setVisible(false);
+    m_currentSearchHandle.clear();
+    m_searchBtn->setVisible(true);
+    m_cancelBtn->setVisible(false);
 
-        if (m_allResults.isEmpty())
-            m_searchStatus->setText("Search Failed: " + error);
-        else {
-            renderResults();
-            m_searchStatus->setText(QStringLiteral("%1 Results (Some Sources Failed)").arg(m_allResults.size()));
-        }
-    }
+    // Final status-text refresh in case the last edge was an error path
+    // that didn't update the count line.
+    if (!m_allResults.isEmpty())
+        m_searchStatus->setText(QStringLiteral("Done: %1 Results").arg(m_allResults.size()));
     updateResultsView();
 }
 
@@ -1892,12 +1862,13 @@ bool TankorentPage::compareResults(int col, Qt::SortOrder order,
 void TankorentPage::updateResultsView()
 {
     if (!m_resultsStack) return;
-    if (m_pendingSearches > 0) {
+    const bool searchInFlight = !m_currentSearchHandle.isEmpty()
+                                 && m_searchService
+                                 && m_searchService->isActive(m_currentSearchHandle);
+    if (searchInFlight) {
         m_resultsStack->setCurrentIndex(2);   // loading
         if (m_loadingLabel)
-            m_loadingLabel->setText(QStringLiteral("Searching %1 source%2...")
-                                    .arg(m_activeIndexers.size())
-                                    .arg(m_activeIndexers.size() == 1 ? "" : "s"));
+            m_loadingLabel->setText(QStringLiteral("Searching sources..."));
         return;
     }
     if (m_allResults.isEmpty()) {
@@ -3045,7 +3016,7 @@ void TankorentPage::onSourcesClicked()
     IndexerStatusPanel dlg(m_nam, this);
     dlg.exec();
     // configurationChanged fires on enable/credential changes; no live handling
-    // needed — the next startSearch re-reads QSettings via dispatchIndexers.
+    // needed — the next startSearch re-reads QSettings via TankorentSearchService.
 }
 
 QPair<int, int> TankorentPage::addMagnetBatch(const QStringList& magnets,
