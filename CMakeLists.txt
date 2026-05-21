@@ -172,6 +172,7 @@ set(SOURCES
     src/core/manga/TrustedUploaders.cpp
     src/core/manga/FallbackChainResolver.cpp
     src/core/manga/anilist/AniListClient.cpp
+    src/core/manga/anilist/AniListParser.cpp
     src/core/manga/anilist/AniListCache.cpp
     src/core/manga/anilist/AniListVolumeMapper.cpp
     src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
@@ -386,6 +387,7 @@ set(HEADERS
     src/core/manga/CanonicalChapterKey.h
     src/core/manga/anilist/AniListTypes.h
     src/core/manga/anilist/AniListClient.h
+    src/core/manga/anilist/AniListParser.h
     src/core/manga/anilist/AniListCache.h
     src/core/manga/anilist/AniListVolumeMapper.h
     src/core/manga/mangaupdates/MangaUpdatesTypes.h
@@ -827,7 +829,9 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/book/SeriesDetector.cpp
         tests/core/book/test_catalogue_deduper.cpp
         src/core/book/CatalogueDeduper.cpp
+        tests/core/book/test_book_downloader_magnet.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
+        tests/core/manga/anilist/test_anilist_parser.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
@@ -862,6 +866,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/PackClassifier.cpp
         src/core/stream/StreamPackParser.cpp
         src/core/stream/TitleMetadataEstimator.cpp
+        src/core/manga/anilist/AniListParser.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
         src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
         src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
