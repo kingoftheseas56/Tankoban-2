@@ -28,6 +28,27 @@ struct AniListVolumeArt {
     QString fullUrl;       // higher-res; used in the detail-view hero
 };
 
+// Single staff credit returned from AniList's Media.staff.edges. Used by
+// the Comics series view to render the mangaka byline under the title.
+// Multiple entries per role are possible (co-writers, multiple artists);
+// renderer picks the highest-ranked Story / Art roles.
+struct StaffEntry {
+    QString name;  // Full name (Western order); AniList's name.full field
+    QString role;  // Free-form role string: "Story", "Art", "Story & Art",
+                   // "Original Creator", "Assistant" — we only render the
+                   // first two role shapes (others filtered client-side).
+};
+
+// Single tag entry returned from AniList's Media.tags. `rank` is AniList's
+// 0-100 community-voted relevance score; higher = more central to the
+// series. `isSpoiler` flags tags that reveal late-series plot beats
+// (renderer must filter these out of public-facing chip rows).
+struct RankedTag {
+    QString name;
+    int     rank      = 0;
+    bool    isSpoiler = false;
+};
+
 // AniList Media node, slimmed to fields we use.
 struct MediaPreview {
     int         anilistId      = 0;
@@ -41,6 +62,9 @@ struct MediaPreview {
     int         yearStarted       = 0;
     QStringList genres;
     QString     description;       // raw HTML/BBCode; stripped to plain text by display layer
+    QString          countryOfOrigin;  // ISO 3166-1 alpha-2: "JP" / "KR" / "CN" / "TW"; empty if not provided
+    QList<StaffEntry> staff;           // empty when query did not request staff or AniList returned none
+    QList<RankedTag>  tags;            // empty when query did not request tags or AniList returned none; NOT pre-sorted
 };
 
 // Full series detail. Includes per-chapter binding info needed by
