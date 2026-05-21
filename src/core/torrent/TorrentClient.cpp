@@ -2900,15 +2900,35 @@ QJsonArray TorrentClient::devTorrentsSnapshot(bool activeOnly) const
     for (const TorrentStatus& s : m_engine->allStatuses())
         statusMap.insert(s.infoHash, s);
 
+    // Preserve dev-bridge JSON shape across the P5.3.1 cutover: OLD m_records
+    // only ever wrote 4 strings ("downloading" / "paused" / "completed" /
+    // "error"). torrentStateToString emits the NEW 8-string vocabulary (active /
+    // pending_engine_add / etc) which would break downstream consumers
+    // (`tankoctl get-torrents`, Agent 0/7 readers). This lambda maps the new
+    // enum back to the old strings byte-for-byte.
+    auto legacyStateString = [](tankoban::torrent::TorrentState s) -> QString {
+        using tankoban::torrent::TorrentState;
+        switch (s) {
+            case TorrentState::Active:           return QStringLiteral("downloading");
+            case TorrentState::Paused:           return QStringLiteral("paused");
+            case TorrentState::Completed:        return QStringLiteral("completed");
+            case TorrentState::Error:            return QStringLiteral("error");
+            case TorrentState::PendingEngineAdd: return QStringLiteral("downloading");
+            case TorrentState::MetadataProbe:    return QStringLiteral("downloading");
+            case TorrentState::RemovePending:    return QStringLiteral("removed");
+            case TorrentState::Removed:          return QStringLiteral("removed");
+        }
+        return QStringLiteral("downloading");
+    };
+
     QJsonArray out;
-    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
-        const QString hash = it.key();
-        const QJsonObject rec = it.value().toObject();
+    for (const auto& row : m_repo.listTorrents()) {
+        const QString hash = row.hash;
         const auto statusIt = statusMap.constFind(hash);
         const bool hasLiveStatus = statusIt != statusMap.constEnd();
         const QString state = hasLiveStatus
             ? statusIt->stateString
-            : rec.value(QStringLiteral("state")).toString();
+            : legacyStateString(row.state);
 
         const bool terminal =
             state == QLatin1String("completed") || state == QLatin1String("seeding");
@@ -2917,13 +2937,12 @@ QJsonArray TorrentClient::devTorrentsSnapshot(bool activeOnly) const
 
         QJsonObject o;
         o[QStringLiteral("hash")] = hash;
-        o[QStringLiteral("name")] = rec.value(QStringLiteral("name")).toString();
+        o[QStringLiteral("name")] = row.name;
         o[QStringLiteral("state")] = state;
-        o[QStringLiteral("imdbId")] = rec.value(QStringLiteral("imdbId")).toString();
-        o[QStringLiteral("season")] = rec.value(QStringLiteral("season")).toInt(0);
-        o[QStringLiteral("streamGroupId")] =
-            rec.value(QStringLiteral("streamGroupId")).toString();
-        o[QStringLiteral("savePath")] = rec.value(QStringLiteral("savePath")).toString();
+        o[QStringLiteral("imdbId")] = row.imdbId;
+        o[QStringLiteral("season")] = row.season;
+        o[QStringLiteral("streamGroupId")] = row.streamGroupId;
+        o[QStringLiteral("savePath")] = row.savePath;
 
         if (hasLiveStatus) {
             const TorrentStatus& s = statusIt.value();
