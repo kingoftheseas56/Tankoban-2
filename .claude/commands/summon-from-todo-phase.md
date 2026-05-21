@@ -1,3 +1,7 @@
+---
+description: Draft a summon prompt for a specific TODO phase. Use when handing a phase off to its owning agent via a fresh tab or Codex Trigger D.
+---
+
 You are drafting a summon prompt for a specific TODO phase.
 
 **Arguments:**

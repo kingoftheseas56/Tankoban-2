@@ -1,3 +1,7 @@
+---
+description: Scaffold an Agent 7-style audit document. Use when authoring an audit for a domain finding or REQUEST AUDIT response.
+---
+
 You are scaffolding an Agent 7-style audit document for Tankoban 2.
 
 **Arguments:**

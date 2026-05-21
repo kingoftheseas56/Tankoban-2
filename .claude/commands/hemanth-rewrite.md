@@ -1,3 +1,7 @@
+---
+description: Rewrite a paragraph in Hemanth-language. Use when a draft is jargon-heavy, missing analogy, or lacks context anchor.
+---
+
 You are rewriting a paragraph in Hemanth-language for Tankoban 2.
 
 **Argument:** the paragraph to rewrite (passed inline or via stdin).

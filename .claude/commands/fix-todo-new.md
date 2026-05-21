@@ -1,3 +1,7 @@
+---
+description: Scaffold a new fix-TODO document. Use when authoring a multi-phase TODO from a domain finding or audit.
+---
+
 You are scaffolding a new fix-TODO for Tankoban 2.
 
 **Arguments:**

@@ -1,3 +1,7 @@
+---
+description: Package a Codex Trigger D handoff prompt for scoped src/ implementation work. Use when commissioning Codex for a focused code change.
+---
+
 You are packaging a Codex Trigger D handoff for Tankoban 2.
 
 **Arguments:**

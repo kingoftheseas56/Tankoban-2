@@ -1,3 +1,7 @@
+---
+description: Format a smoke verification report. Use when reporting smoke outcomes against acceptance criteria.
+---
+
 You are formatting a smoke verification report for Tankoban 2.
 
 **Procedure:** This skill takes free-form smoke notes + evidence pointers and reformats them into the canonical brotherhood smoke-report shape.

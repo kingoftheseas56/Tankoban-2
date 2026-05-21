@@ -1,3 +1,7 @@
+---
+description: Scaffold a contracts-v3 RTC line for agents/chat.md. Use after non-trivial work is ready for Agent 0 sweep.
+---
+
 You are scaffolding a contracts-v3 RTC line for the agent to paste into agents/chat.md.
 
 **Arguments:**

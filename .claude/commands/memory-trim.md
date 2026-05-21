@@ -1,3 +1,7 @@
+---
+description: Propose MEMORY.md archive candidates. Use during quarterly memory hygiene or when MEMORY.md exceeds rotation threshold.
+---
+
 You are proposing MEMORY.md archive candidates for Tankoban 2.
 
 **Arguments:** none (always interactive)

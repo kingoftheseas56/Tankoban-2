@@ -1,3 +1,7 @@
+---
+description: Scaffold a new memory file (user / feedback / project / reference) with proper frontmatter. Use when capturing a load-bearing learning from the current session.
+---
+
 You are scaffolding a new memory file for Tankoban 2.
 
 **Arguments:**

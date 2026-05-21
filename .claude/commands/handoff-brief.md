@@ -1,3 +1,7 @@
+---
+description: Generate a mid-wake handoff brief for the next agent instance. Use when context is filling or stepping away mid-work.
+---
+
 You are generating a mid-wake handoff brief for Tankoban 2.
 
 **Arguments:**

@@ -1,3 +1,7 @@
+---
+description: Scaffold a smoke evidence bundle (PNGs + logs + verdict markdown). Use when delivering smoke results for an audit or fix-TODO closeout.
+---
+
 You are scaffolding a smoke evidence bundle for Tankoban 2.
 
 **Arguments:**

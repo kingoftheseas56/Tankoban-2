@@ -1,3 +1,7 @@
+---
+description: Scaffold a pure-logic GoogleTest file (Codex #4 Stage 3a pattern). Use when authoring tests for a new logic primitive.
+---
+
 You are scaffolding a pure-logic GoogleTest file for Tankoban 2.
 
 **Arguments:**

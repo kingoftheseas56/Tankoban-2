@@ -1,3 +1,7 @@
+---
+description: Scaffold lane-lock commands (MCP / build / shared-file) via the DevControl lease registry. Use when claiming, releasing, peeking, or extending a brotherhood resource lease.
+---
+
 You are scaffolding lane-lock commands for Tankoban 2 (Rule 19 MCP LANE LOCK / Rule 22 BUILD LANE LOCK via the DevControl lease registry, gov-v7, schema `tankoban.dev.v1.10`).
 
 **Arguments:**
