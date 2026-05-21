@@ -947,12 +947,14 @@ void TorrentClient::reconcileStreamBulkGroups()
                     continue;
                 }
 
-                const QJsonObject rec = m_records.value(infoHash).toObject();
-                const QString persistedState = rec.value("state").toString();
+                const auto row = m_repo.getTorrent(infoHash);
+                const tankoban::torrent::TorrentState persistedState =
+                    row ? row->state : tankoban::torrent::TorrentState::Removed;
                 const QString activeState = activeStates.value(torrentKey);
                 const bool seedingLike =
-                    persistedState == QLatin1String("completed") ||
-                    persistedState == QLatin1String("seeding") ||
+                    // TorrentState::Completed collapses legacy "completed" + "seeding"
+                    // strings — both meant "finished, may still be uploading".
+                    persistedState == tankoban::torrent::TorrentState::Completed ||
                     activeState == QLatin1String("completed") ||
                     activeState == QLatin1String("seeding");
                 if (seedingLike && destinationExists) {
@@ -2238,13 +2240,12 @@ void TorrentClient::retryStreamBulkPublishing()
         activeStates.insert(info.infoHash.toLower(), info.stateString);
 
     auto seedingLike = [&](const QString& infoHash) {
-        if (!m_repo.hasTorrent(infoHash))
+        const auto row = m_repo.getTorrent(infoHash);
+        if (!row)
             return false;
-        const QJsonObject rec = m_records.value(infoHash).toObject();
-        const QString persisted = rec.value("state").toString();
         const QString active = activeStates.value(infoHash.toLower());
-        return persisted == QLatin1String("completed") ||
-               persisted == QLatin1String("seeding") ||
+        // TorrentState::Completed collapses legacy "completed" + "seeding".
+        return row->state == tankoban::torrent::TorrentState::Completed ||
                active == QLatin1String("completed") ||
                active == QLatin1String("seeding");
     };
