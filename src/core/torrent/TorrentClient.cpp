@@ -611,22 +611,29 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     // m_records states drifted (e.g. from a late-firing
     // metadata_received_alert in onMetadataReady).
     bool anyChanged = false;
-    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        QString hash = it.key();
-        QJsonObject rec = it.value().toObject();
-        QString resumePath = m_bridge->dataDir() + "/torrent_cache/resume/" + hash + ".fastresume";
-        QString savePath = rec["savePath"].toString();
-        QString state = rec["state"].toString();
+    for (const auto& row : m_repo.listTorrents()) {
+        // PendingEngineAdd is handled by the dedicated replay loop below.
+        // RemovePending / Removed are terminal and should not be replayed.
+        if (row.state == tankoban::torrent::TorrentState::PendingEngineAdd
+            || row.state == tankoban::torrent::TorrentState::RemovePending
+            || row.state == tankoban::torrent::TorrentState::Removed)
+            continue;
 
-        // "paused" stays paused; everything else (downloading, completed/seeding) resumes
-        bool shouldPause = (state == "paused");
+        const QString hash = row.hash;
+        const QString resumePath =
+            m_bridge->dataDir() + "/torrent_cache/resume/" + hash + ".fastresume";
+        const QString savePath = row.savePath;
 
-        QString restored = m_engine->addFromResume(resumePath, savePath, shouldPause);
+        // Paused stays paused; everything else (Active, Completed, Error) resumes
+        const bool shouldPause = (row.state == tankoban::torrent::TorrentState::Paused);
+
+        const QString restored = m_engine->addFromResume(resumePath, savePath, shouldPause);
         if (restored.isEmpty()) {
             qWarning() << "Orphaned torrent record (no resume data):" << hash;
-            rec["state"] = QStringLiteral("error");
-            rec["errorMessage"] = QStringLiteral("Resume data missing — re-add torrent manually");
-            *it = rec;
+            m_repo.updateTorrentState(
+                hash,
+                tankoban::torrent::TorrentState::Error,
+                QStringLiteral("Resume data missing — re-add torrent manually"));
             anyChanged = true;
         }
     }
