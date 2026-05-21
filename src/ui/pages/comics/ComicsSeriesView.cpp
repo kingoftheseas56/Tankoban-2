@@ -277,6 +277,10 @@ QString buildHeroMetaLine(const anilist::MediaDetail& detail)
     if (detail.preview.yearStarted > 0) {
         parts << QString::number(detail.preview.yearStarted);
     }
+    const QString lang = humanizeOriginLanguage(detail.preview.countryOfOrigin);
+    if (!lang.isEmpty()) {
+        parts << lang;
+    }
     return parts.join(QStringLiteral("  -  "));
 }
 
@@ -1036,8 +1040,14 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
         m_title->setText(detail.preview.title);
     }
     if (m_mangakaByline) {
-        m_mangakaByline->clear();
-        m_mangakaByline->hide();
+        const QString byline = pickMangakaByline(detail.preview.staff);
+        if (byline.isEmpty()) {
+            m_mangakaByline->clear();
+            m_mangakaByline->hide();
+        } else {
+            m_mangakaByline->setText(byline);
+            m_mangakaByline->show();
+        }
     }
     if (!detail.preview.description.isEmpty()) {
         m_synopsis->setText(stripDescriptionHtml(detail.preview.description));
