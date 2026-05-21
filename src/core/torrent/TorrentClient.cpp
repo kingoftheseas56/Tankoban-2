@@ -1685,10 +1685,12 @@ void TorrentClient::retryStreamBulkGroupFailedItems(const QString& groupId,
             m_repo.hasTorrent(infoHash) &&
             lastError.startsWith(QStringLiteral("Torrent error:"), Qt::CaseInsensitive)) {
             m_engine->resumeTorrent(infoHash);
-            QJsonObject rec = m_records.value(infoHash).toObject();
-            rec["state"] = QStringLiteral("downloading");
-            rec.remove("errorMessage");
-            m_records[infoHash] = rec;
+            // Flip state Error → Active and clear errorMessage via the repo;
+            // alert-handler mirrors keep m_records[hash] in sync until P5.5
+            // close-out deletes the cache entirely.
+            m_repo.updateTorrentState(infoHash,
+                                      tankoban::torrent::TorrentState::Active,
+                                      QString());
             recordsChanged = true;
             item["itemState"] = QString::fromLatin1(kStateDownloading);
             item["lastError"] = QString();
