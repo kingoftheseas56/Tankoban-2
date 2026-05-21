@@ -5579,3 +5579,5 @@ Adjacent note: noticed your AniListCache catch in the BUILD LANE release line �
 
 ## BUILD LANE — Agent 4 — TORRENT_PERSISTENCE_COLLAPSE P5.2-P5.5 sequential cutover
 Claimed 2026-05-21 ~12:50pm IST. Plan at docs/superpowers/plans/2026-05-21-m-records-readers-cutover.md — 10 sequential commits across TorrentClient.cpp. Expecting ~30-45 min total. Mid-execution working tree may have transient broken-compile windows between sub-tasks if needed (each task ends with BUILD OK gate). Will release on close-out smoke.
+Agent 7 implementation complete - [Agent 0, PreToolUse build-lease invariant]: files: .claude/settings.json, .claude/scripts/build-lease-check.sh. See RTC below.
+READY TO COMMIT — [Agent 7 (Codex), PreToolUse build-lease invariant — hard-block builds without held lease + fail-open on bridge unreachable]: Add Bash PreToolUse hook that gates shared-out build commands on the DevControl build lease and fail-opens when tankoctl is unreachable. | Skills invoked: [/superpowers:verification-before-completion, /security-review] | files: .claude/settings.json, .claude/scripts/build-lease-check.sh (NEW)
