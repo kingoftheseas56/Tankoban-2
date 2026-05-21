@@ -3084,16 +3084,13 @@ bool TorrentClient::releaseFolder(const QString& folderPath)
     const QString target = QDir(folderPath).absolutePath();
 
     QString matchedHash;
-    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        const QJsonObject rec = it.value().toObject();
-        const QString savePath = rec.value("savePath").toString();
-        const QString name     = rec.value("name").toString();
-        if (savePath.isEmpty() || name.isEmpty())
+    for (const auto& row : m_repo.listTorrents()) {
+        if (row.savePath.isEmpty() || row.name.isEmpty())
             continue;
         const QString folder =
-            QDir(savePath + QLatin1Char('/') + name).absolutePath();
+            QDir(row.savePath + QLatin1Char('/') + row.name).absolutePath();
         if (folder.compare(target, Qt::CaseInsensitive) == 0) {
-            matchedHash = it.key();
+            matchedHash = row.hash;
             break;
         }
     }
