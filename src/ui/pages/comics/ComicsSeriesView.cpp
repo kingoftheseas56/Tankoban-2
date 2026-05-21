@@ -95,6 +95,18 @@ QString humanizeFormat(const QString& raw)
     return raw;
 }
 
+// Map AniList ISO 3166-1 alpha-2 country code to a display language name.
+// Empty input or unknown code returns empty string (so the meta-strip
+// composer can omit it without an "Unknown" token leaking through).
+QString humanizeOriginLanguage(const QString& countryCode)
+{
+    if (countryCode.compare(QStringLiteral("JP"), Qt::CaseInsensitive) == 0) return QStringLiteral("Japanese");
+    if (countryCode.compare(QStringLiteral("KR"), Qt::CaseInsensitive) == 0) return QStringLiteral("Korean");
+    if (countryCode.compare(QStringLiteral("CN"), Qt::CaseInsensitive) == 0) return QStringLiteral("Chinese");
+    if (countryCode.compare(QStringLiteral("TW"), Qt::CaseInsensitive) == 0) return QStringLiteral("Taiwanese");
+    return QString();
+}
+
 // Build the small meta-line shown under the title in the hero pane. Uses
 // only the fields available on MediaPreview so it can paint instantly
 // before the detail fetch returns.
@@ -104,6 +116,8 @@ QString buildPreviewMetaLine(const anilist::MediaPreview& preview)
     if (!preview.genres.isEmpty())   parts << preview.genres.first().toLower();
     if (!preview.status.isEmpty())   parts << humanizeStatus(preview.status);
     if (preview.yearStarted > 0)     parts << QString::number(preview.yearStarted);
+    const QString lang = humanizeOriginLanguage(preview.countryOfOrigin);
+    if (!lang.isEmpty())             parts << lang;
     return parts.join(QStringLiteral("  -  "));
 }
 
@@ -117,7 +131,44 @@ QString buildDetailMetaLine(const anilist::MediaDetail& detail)
     if (!detail.preview.status.isEmpty())   parts << humanizeStatus(detail.preview.status);
     if (detail.totalVolumes > 0)            parts << QString::number(detail.totalVolumes) + QStringLiteral(" volumes");
     if (detail.totalChapters > 0)           parts << QString::number(detail.totalChapters) + QStringLiteral(" chapters");
+    const QString lang = humanizeOriginLanguage(detail.preview.countryOfOrigin);
+    if (!lang.isEmpty())                    parts << lang;
     return parts.join(QStringLiteral("  -  "));
+}
+
+// Pick the mangaka byline shown under the title per spec §3.3:
+//   "<writer> · <artist>"  if both roles resolve from staff
+//   "<writer>" or "<artist>" alone if only one role
+//   ""                     if no Story/Art staff at all
+// AniList sometimes returns one staff entry with role "Story & Art"
+// (rare, e.g. solo-creator series like Berserk); handled as that string
+// being the full byline.
+QString pickMangakaByline(const QList<anilist::StaffEntry>& staff)
+{
+    QString writer, artist, both;
+    for (const auto& se : staff) {
+        const QString role = se.role.trimmed();
+        if (role.compare(QStringLiteral("Story & Art"), Qt::CaseInsensitive) == 0
+            || role.compare(QStringLiteral("Story and Art"), Qt::CaseInsensitive) == 0) {
+            if (both.isEmpty()) both = se.name;
+        } else if (role.compare(QStringLiteral("Story"),
+                                Qt::CaseInsensitive) == 0
+                || role.compare(QStringLiteral("Original Story"),
+                                Qt::CaseInsensitive) == 0) {
+            if (writer.isEmpty()) writer = se.name;
+        } else if (role.compare(QStringLiteral("Art"),
+                                Qt::CaseInsensitive) == 0) {
+            if (artist.isEmpty()) artist = se.name;
+        }
+    }
+
+    if (!both.isEmpty()) return QStringLiteral("by %1").arg(both);
+    if (!writer.isEmpty() && !artist.isEmpty()) {
+        return QStringLiteral("by %1 \xC2\xB7 %2").arg(writer, artist);  // U+00B7 middle dot
+    }
+    if (!writer.isEmpty()) return QStringLiteral("by %1").arg(writer);
+    if (!artist.isEmpty()) return QStringLiteral("by %1").arg(artist);
+    return QString();
 }
 
 // Format the chapter-range column ("Chs 1-7 (7 ch)"). Defensive against
@@ -731,8 +782,14 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     m_synopsis->setText(stripDescriptionHtml(preview.description));
     m_metaLine->setText(buildPreviewMetaLine(preview));
     if (m_mangakaByline) {
-        m_mangakaByline->clear();
-        m_mangakaByline->hide();
+        const QString byline = pickMangakaByline(preview.staff);
+        if (byline.isEmpty()) {
+            m_mangakaByline->clear();
+            m_mangakaByline->hide();
+        } else {
+            m_mangakaByline->setText(byline);
+            m_mangakaByline->show();
+        }
     }
     populateHeroTags(preview.genres);
     if (m_heroCoverLabel) {
