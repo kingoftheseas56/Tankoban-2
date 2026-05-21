@@ -196,6 +196,22 @@ COMMAND="$(extract_command)"
 
 CMD_NORM="$(printf '%s' "$COMMAND" | tr '\\' '/' | tr '[:upper:]' '[:lower:]')"
 
+# False-positive defense: bypass the hook when the command is an unchained
+# invocation of a known read-only verb. is_shared_build_command matches
+# build_check.bat / build_and_run.bat as substrings, which falsely caught
+# `git status -- build_check.bat`, `cat build_check.bat`, `grep -n ... build_*.bat`,
+# `head -60 build_check.bat`, etc. — read-only inspections that can never
+# write to out/. Restrict bypass to single-segment commands (no ; && || |
+# cmd /c, no command substitution) to keep chained build invocations gated.
+if ! printf '%s' "$CMD_NORM" | grep -Eq '(\$\(|`|;|&&|\|\||\||cmd[[:space:]]+/c|cmd\.exe[[:space:]]+/c|bash[[:space:]]+-c|powershell[[:space:]]+(-c|-command))'; then
+    FIRST_TOKEN="$(printf '%s' "$CMD_NORM" | sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/')"
+    case "$FIRST_TOKEN" in
+        git|grep|rg|cat|head|tail|ls|find|wc|awk|sed|diff|jq|fzf|file|stat|less|more|tree|dirname|basename|readlink|realpath|md5sum|sha1sum|sha256sum|cksum|sort|uniq|tr|cut|paste|column|hexdump|xxd|od|echo|printf|true|false|test|env|pwd)
+            exit 0
+            ;;
+    esac
+fi
+
 is_shared_build_command || exit 0
 
 run_lease_get
