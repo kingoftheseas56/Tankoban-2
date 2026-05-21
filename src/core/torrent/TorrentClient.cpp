@@ -3060,6 +3060,10 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
     const auto row = m_repo.getTorrent(infoHash);
     const bool hadRecord = row.has_value();
     m_engine->removeTorrent(infoHash, deleteFiles);
+    // P5.4: closing a Phase-4 gap — m_engine->removeTorrent never propagated
+    // to the repo, so deleted torrent rows persisted in torrents.db across
+    // restarts. Drop the SQL row alongside the in-memory cache entry.
+    m_repo.removeTorrent(infoHash);
     m_records.remove(infoHash);
     if (hadRecord) {
         markStreamBulkItemsForTorrent(
