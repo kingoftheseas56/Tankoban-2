@@ -327,8 +327,8 @@ private slots:
     void onFileRenameFailed(const QString& infoHash, int fileIndex, const QString& message);
 
 private:
-    void loadRecords();
-    void saveRecords();
+    // loadRecords()/saveRecords() retired 2026-05-21 P5.5 close-out.
+    // m_records JSON cache is gone; TorrentRepository owns persistence.
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 (2026-05-20) — rename legacy
     // torrents.json / stream_bulk_groups.json / stream_downloads.json + every
     // *.fastresume in torrent_cache/resume to a dated .bak suffix. Called from
@@ -408,8 +408,10 @@ private:
     // listActive() const, which Phase 3.1 routes through m_repo).
     mutable tankoban::torrent::TorrentRepository m_repo;
 
-    // Persistent records keyed by infoHash
-    QJsonObject m_records;  // { "hash": { name, savePath, category, addedAt, ... } }
+    // Persistent records keyed by infoHash — DELETED 2026-05-21 P5.5 close-out
+    // of TORRENT_PERSISTENCE_COLLAPSE. The SQLite-backed TorrentRepository
+    // (m_repo above) is now the durable source of truth. Reader callsites
+    // were migrated across P5.1-P5.4; writes were vestigial post-P4.4.
     QJsonObject m_streamBulkGroups;  // { "groupId": { group schema } }
     QSet<QString> m_publishCompleteNotified;
 

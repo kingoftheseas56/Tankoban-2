@@ -594,7 +594,6 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
         }
     }
 
-    loadRecords();
     loadStreamBulkGroups();
     m_engine->start();
 
@@ -638,7 +637,6 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
         }
     }
     if (anyChanged)
-        saveRecords();
 
     for (const auto& row :
          m_repo.listTorrentsByState(tankoban::torrent::TorrentState::PendingEngineAdd)) {
@@ -709,7 +707,6 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
 TorrentClient::~TorrentClient()
 {
     m_engine->stop();
-    saveRecords();
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 — stamp legacy_first_clean_boot_at
     // on the first clean shutdown post-migration. Next boot's ctor sees this
     // stamp + the empty legacy_files_cleaned_at and runs renameLegacyFilesToBak.
@@ -773,36 +770,10 @@ void TorrentClient::renameLegacyFilesToBak(const QString& dataDir)
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────
-void TorrentClient::loadRecords()
-{
-    auto data = m_bridge->store().read(RECORDS_FILE);
-    m_records = data.value("active").toObject();
-    bool changed = false;
-    for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        QJsonObject rec = it.value().toObject();
-        if (!rec.contains("streamGroupId")) {
-            rec["streamGroupId"] = QString();
-            *it = rec;
-            changed = true;
-        }
-    }
-    if (changed)
-        saveRecords();
-}
-
-void TorrentClient::saveRecords()
-{
-    // TORRENT_PERSISTENCE_COLLAPSE Phase 4.4 (2026-05-20) — JsonStore write
-    // path dropped. Phase 2 alert-handler mirrors (onMetadataReady /
-    // onTorrentFinished / onTorrentError / onStorageMoved + startDownload)
-    // already keep the repository's torrents table in sync as the durable
-    // source of truth. m_records in-memory map continues to be maintained
-    // because numerous read paths (devTorrentsSnapshot, hasActive*,
-    // imdb-by-hash lookups in onPieceFinished, etc.) still serve from it;
-    // those readers move to the repo in a future cleanup pass alongside
-    // m_records removal itself. torrents.json on disk is preserved per
-    // Phase 4.5's two-boot retention window.
-}
+// loadRecords() / saveRecords() retired 2026-05-21 P5.5 close-out of
+// TORRENT_PERSISTENCE_COLLAPSE. The SQLite-backed TorrentRepository
+// (m_repo) is the durable source of truth; the legacy torrents.json
+// reader + the no-op write stub are both dead.
 
 void TorrentClient::loadStreamBulkGroups()
 {
@@ -1710,7 +1681,6 @@ void TorrentClient::retryStreamBulkGroupFailedItems(const QString& groupId,
     group["updatedAtMs"] = QDateTime::currentMSecsSinceEpoch();
     m_streamBulkGroups[groupId] = group;
     if (recordsChanged)
-        saveRecords();
     saveStreamBulkGroups();
     emit streamBulkGroupsChanged(groupId);
 
@@ -2617,8 +2587,8 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     // non-Cinemeta downloads (repurposed direct torrent search).
     rec["imdbId"]          = config.imdbId;
     rec["season"]          = config.season;
-    m_records[hash]        = rec;
-    saveRecords();
+    // m_records[hash] = rec — DROPPED P5.5. repo upsert via the alert handler
+    // is the durable write; `rec` is no longer cached in-process.
 
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — same-session re-dispatch:
     // libtorrent's metadata_received_alert is single-shot per handle. On a
@@ -2670,9 +2640,10 @@ void TorrentClient::moveStorage(const QString& infoHash, const QString& newSaveP
     if (newSavePath.isEmpty()) return;
     if (!m_repo.hasTorrent(infoHash)) return;
 
-    QJsonObject rec = m_records[infoHash].toObject();
-    const QString oldSavePath = rec.value("savePath").toString();
-    const QString category    = rec.value("category").toString();
+    const auto row = m_repo.getTorrent(infoHash);
+    if (!row) return;
+    const QString oldSavePath = row->savePath;
+    const QString category    = row->category;
 
     // Same path = no-op (avoid spurious storage_moved_alert + rescan churn).
     if (QDir(oldSavePath).absolutePath().compare(
@@ -2684,12 +2655,9 @@ void TorrentClient::moveStorage(const QString& infoHash, const QString& newSaveP
     // subfolder, but the parent must exist or move_storage fails immediately.
     QDir().mkpath(newSavePath);
 
-    // Optimistic record update — mirrors startTorrent's pattern. If
-    // libtorrent ultimately reports failure, onStorageMoveFailed reverts
-    // the record below.
-    rec["savePath"] = newSavePath;
-    m_records[infoHash] = rec;
-    saveRecords();
+    // Optimistic repo update — mirrors startTorrent's pattern. If libtorrent
+    // ultimately reports failure, onStorageMoveFailed reverts the path.
+    m_repo.updateTorrentSavePath(infoHash, newSavePath);
 
     m_engine->moveStorage(infoHash, newSavePath);
     emit torrentUpdated(infoHash);
@@ -3026,10 +2994,7 @@ void TorrentClient::pauseTorrent(const QString& infoHash)
 {
     m_engine->pauseTorrent(infoHash);
     if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["state"] = QStringLiteral("paused");
-        m_records[infoHash] = rec;
-        saveRecords();
+        m_repo.updateTorrentState(infoHash, tankoban::torrent::TorrentState::Paused);
     }
     JsonlEventLog::instance().emitEvent(
         QStringLiteral("torrent.state_changed"),
@@ -3042,11 +3007,9 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
 {
     m_engine->resumeTorrent(infoHash);
     if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["state"] = QStringLiteral("downloading");
-        rec.remove("errorMessage");
-        m_records[infoHash] = rec;
-        saveRecords();
+        m_repo.updateTorrentState(infoHash,
+                                   tankoban::torrent::TorrentState::Active,
+                                   QString());  // clears errorMessage
     }
     JsonlEventLog::instance().emitEvent(
         QStringLiteral("torrent.state_changed"),
@@ -3062,16 +3025,14 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
     m_engine->removeTorrent(infoHash, deleteFiles);
     // P5.4: closing a Phase-4 gap — m_engine->removeTorrent never propagated
     // to the repo, so deleted torrent rows persisted in torrents.db across
-    // restarts. Drop the SQL row alongside the in-memory cache entry.
+    // restarts. The SQL row drop is now the only persistence write needed.
     m_repo.removeTorrent(infoHash);
-    m_records.remove(infoHash);
     if (hadRecord) {
         markStreamBulkItemsForTorrent(
             infoHash,
             StreamBulkItemState::Cancelled,
             QStringLiteral("Torrent removed from Tankorent"));
     }
-    saveRecords();
     JsonlEventLog::instance().emitEvent(
         QStringLiteral("torrent.removed"),
         QStringLiteral("delete_torrent"),
@@ -3113,11 +3074,9 @@ void TorrentClient::forceStart(const QString& infoHash)
 {
     m_engine->forceStart(infoHash);
     if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["state"] = QStringLiteral("downloading");
-        rec.remove("errorMessage");
-        m_records[infoHash] = rec;
-        saveRecords();
+        m_repo.updateTorrentState(infoHash,
+                                   tankoban::torrent::TorrentState::Active,
+                                   QString());  // clears errorMessage
     }
     emit torrentUpdated(infoHash);
 }
@@ -3197,26 +3156,18 @@ void TorrentClient::onMetadataReady(const QString& infoHash, const QString& name
                                      qint64 /*totalSize*/, const QJsonArray& files)
 {
     if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["name"] = name;
         // STREAM_BULK_DOWNLOAD_V2 hotfix 2026-05-11 — state write REMOVED
-        // here. Previously this overwrote rec["state"] with "metadata_ready"
+        // here. Previously this overwrote state with "metadata_ready"
         // regardless of the existing state. After my 2026-05-11 startTorrent
         // + upload_mode hotfix, startDownload writes state explicitly to
         // "paused" or "downloading" per config.startPaused — BEFORE libtorrent
         // fires the metadata_received_alert (seconds later for fresh magnets).
         // The late-firing alert routed here clobbered the persisted "paused"
         // state with "metadata_ready", breaking the cohort scheduler on the
-        // NEXT boot: addFromResume at line 380 below reads state="paused" to
-        // pick its shouldPause flag, so a state of "metadata_ready" causes
-        // ALL cohort items to re-add UNPAUSED in parallel — not sequential.
-        // Hemanth reported "not sequentially downloading" 2026-05-11 — that
-        // was this defect. Name update preserved (load-bearing for UI
-        // display + history persistence). Records are created exclusively by
-        // startDownload (line 1707), so onMetadataReady only ever updates
-        // an already-stated record — the prior overwrite was net-negative.
-        m_records[infoHash] = rec;
-        saveRecords();
+        // NEXT boot. Name update preserved (load-bearing for UI display +
+        // history persistence). Records are created exclusively by
+        // startDownload, so onMetadataReady only ever updates an
+        // already-stated record — the prior overwrite was net-negative.
         m_repo.updateTorrentName(infoHash, name);
     }
     emit torrentUpdated(infoHash);
@@ -3333,10 +3284,12 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     // finished). Without this guard every app startup would append a dup
     // history entry, rewrite records.json, and re-trigger a library rescan.
     // Only first-time completions should fire side-effects.
-    if (m_repo.hasTorrent(infoHash) &&
-        m_records[infoHash].toObject().value("state").toString()
-            == QLatin1String("completed")) {
-        return;
+    {
+        const auto existing = m_repo.getTorrent(infoHash);
+        if (existing &&
+            existing->state == tankoban::torrent::TorrentState::Completed) {
+            return;
+        }
     }
 
     qDebug() << "Torrent completed:" << infoHash;
@@ -3354,22 +3307,18 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     QString category;
     QString savePath;
     QString streamGroupId;
-    if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["state"] = QStringLiteral("completed");
-        m_records[infoHash] = rec;
-        saveRecords();
+    if (const auto row = m_repo.getTorrent(infoHash)) {
         m_repo.updateTorrentState(
             infoHash, tankoban::torrent::TorrentState::Completed);
-        category = rec.value("category").toString();
-        savePath = rec.value("savePath").toString();
-        streamGroupId = rec.value("streamGroupId").toString();
+        category = row->category;
+        savePath = row->savePath;
+        streamGroupId = row->streamGroupId;
         JsonlEventLog::instance().emitEvent(
             QStringLiteral("torrent.state_changed"),
             QStringLiteral("completed"),
             QJsonObject{{QStringLiteral("hash"), infoHash},
-                        {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
-                        {QStringLiteral("season"), rec.value(QStringLiteral("season")).toInt(0)},
+                        {QStringLiteral("imdbId"), row->imdbId},
+                        {QStringLiteral("season"), row->season},
                         {QStringLiteral("streamGroupId"), streamGroupId},
                         {QStringLiteral("savePath"), savePath}});
         JsonlEventLog::instance().emitEvent(
@@ -3390,8 +3339,8 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     //         files section automatically.
     const bool hasBulkGroup = !streamGroupId.isEmpty();
     QString recordImdbId;
-    if (m_repo.hasTorrent(infoHash)) {
-        recordImdbId = m_records[infoHash].toObject().value(QStringLiteral("imdbId")).toString();
+    if (const auto row = m_repo.getTorrent(infoHash)) {
+        recordImdbId = row->imdbId;
     }
     const bool hasTankorentBinding = !hasBulkGroup && !recordImdbId.isEmpty();
 
@@ -3423,13 +3372,6 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
 void TorrentClient::onTorrentError(const QString& infoHash, const QString& message)
 {
     qWarning() << "Torrent error:" << infoHash << message;
-    if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["state"] = QStringLiteral("error");
-        rec["errorMessage"] = message;
-        m_records[infoHash] = rec;
-        saveRecords();
-    }
     m_repo.updateTorrentState(
         infoHash, tankoban::torrent::TorrentState::Error, message);
     markStreamBulkItemsForTorrent(
@@ -3442,14 +3384,11 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
 void TorrentClient::onStorageMoved(const QString& infoHash, const QString& newPath)
 {
     qDebug() << "Torrent storage moved:" << infoHash << "→" << newPath;
-    if (!m_repo.hasTorrent(infoHash)) return;
+    const auto row = m_repo.getTorrent(infoHash);
+    if (!row) return;
 
     // Reconcile the persisted savePath with what libtorrent actually settled
     // on (paths may have been canonicalized/normalized by the OS during move).
-    QJsonObject rec = m_records[infoHash].toObject();
-    rec["savePath"] = newPath;
-    m_records[infoHash] = rec;
-    saveRecords();
     m_repo.updateTorrentSavePath(infoHash, newPath);
 
     emit torrentUpdated(infoHash);
@@ -3457,7 +3396,7 @@ void TorrentClient::onStorageMoved(const QString& infoHash, const QString& newPa
     // Library rescan now that files are physically at the new location. Match
     // newPath against this category's tracked roots — same prefix-match shape
     // as onTorrentFinished (TorrentClient.cpp completion handler).
-    const QString category = rec.value("category").toString();
+    const QString category = row->category;
     if (m_bridge && !category.isEmpty()) {
         const QString normNew = QDir(newPath).absolutePath();
         for (const QString& root : m_bridge->rootFolders(category)) {
@@ -3479,11 +3418,10 @@ void TorrentClient::onStorageMoveFailed(const QString& infoHash, const QString& 
     // from wherever the files actually are, and the user can retry the move
     // or delete+re-add. Reverting savePath would risk pointing at a folder
     // that's now half-moved (libtorrent doesn't roll back partial copies).
-    if (m_repo.hasTorrent(infoHash)) {
-        QJsonObject rec = m_records[infoHash].toObject();
-        rec["errorMessage"] = QStringLiteral("Move failed: ") + message;
-        m_records[infoHash] = rec;
-        saveRecords();
+    if (const auto row = m_repo.getTorrent(infoHash)) {
+        // Stamp errorMessage on the current state; do not change state.
+        m_repo.updateTorrentState(infoHash, row->state,
+                                   QStringLiteral("Move failed: ") + message);
     }
     emit torrentUpdated(infoHash);
 }
