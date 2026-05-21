@@ -186,6 +186,13 @@
 //   write-capable v1.9 commands require TANKOBAN_DEV_WRITE=1 on server env or
 //   return DEV_WRITE_DISABLED — SEPARATE flag from TANKOBAN_DEV_UI_SIM.
 //
+//   --- v1.10 lease registry (2026-05-21) ---
+//   tankoctl lease-acquire <lane> --holder <agent-id> --purpose <text> --ttl-sec <n>
+//   tankoctl lease-release <lane> --token <token>
+//   tankoctl lease-heartbeat <lane> --token <token> [--ttl-sec <n>]
+//   tankoctl lease-get <lane>
+//   tankoctl lease-list
+//
 // Connects to the named pipe `TankobanDevControl`. Tankoban must be running
 // with --dev-control or TANKOBAN_DEV_CONTROL=1.
 //
@@ -1257,6 +1264,82 @@ int main(int argc, char** argv)
     // 17 commands take args; 10 take none and route through the no-payload
     // OR-chain below. Wire format is snake_case; CLI is the natural kebab-
     // case (the main.cpp `cmd.replace('-', '_')` line handles the mapping).
+    else if (sub == QLatin1String("lease-acquire")) {
+        if (a.size() < 3) {
+            err << "lease-acquire requires <lane> --holder <agent-id> --purpose <text> --ttl-sec <n>\n";
+            return 64;
+        }
+        payload["lane"] = a[2];
+        bool haveHolder = false;
+        bool havePurpose = false;
+        bool haveTtl = false;
+        for (int i = 3; i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--holder") && i + 1 < a.size()) {
+                payload["holder"] = a[++i];
+                haveHolder = true;
+            } else if (a[i] == QLatin1String("--purpose") && i + 1 < a.size()) {
+                payload["purpose"] = a[++i];
+                havePurpose = true;
+            } else if (a[i] == QLatin1String("--ttl-sec") && i + 1 < a.size()) {
+                bool ok = false;
+                const int ttl = a[++i].toInt(&ok);
+                if (!ok || ttl <= 0) {
+                    err << "lease-acquire --ttl-sec must be a positive integer\n";
+                    return 64;
+                }
+                payload["ttl_sec"] = ttl;
+                haveTtl = true;
+            } else {
+                err << "lease-acquire args: <lane> --holder <agent-id> --purpose <text> --ttl-sec <n>\n";
+                return 64;
+            }
+        }
+        if (!haveHolder || !havePurpose || !haveTtl) {
+            err << "lease-acquire requires --holder, --purpose, and --ttl-sec\n";
+            return 64;
+        }
+    } else if (sub == QLatin1String("lease-release")) {
+        if (a.size() < 5 || a[3] != QLatin1String("--token")) {
+            err << "lease-release requires <lane> --token <token>\n";
+            return 64;
+        }
+        payload["lane"] = a[2];
+        payload["token"] = a[4];
+    } else if (sub == QLatin1String("lease-heartbeat")) {
+        if (a.size() < 5) {
+            err << "lease-heartbeat requires <lane> --token <token> [--ttl-sec <n>]\n";
+            return 64;
+        }
+        payload["lane"] = a[2];
+        bool haveToken = false;
+        for (int i = 3; i < a.size(); ++i) {
+            if (a[i] == QLatin1String("--token") && i + 1 < a.size()) {
+                payload["token"] = a[++i];
+                haveToken = true;
+            } else if (a[i] == QLatin1String("--ttl-sec") && i + 1 < a.size()) {
+                bool ok = false;
+                const int ttl = a[++i].toInt(&ok);
+                if (!ok || ttl <= 0) {
+                    err << "lease-heartbeat --ttl-sec must be a positive integer\n";
+                    return 64;
+                }
+                payload["ttl_sec"] = ttl;
+            } else {
+                err << "lease-heartbeat args: <lane> --token <token> [--ttl-sec <n>]\n";
+                return 64;
+            }
+        }
+        if (!haveToken) {
+            err << "lease-heartbeat requires --token <token>\n";
+            return 64;
+        }
+    } else if (sub == QLatin1String("lease-get")) {
+        if (a.size() < 3) {
+            err << "lease-get requires <lane>\n";
+            return 64;
+        }
+        payload["lane"] = a[2];
+    }
     else if (sub == QLatin1String("settings-get")
           || sub == QLatin1String("settings-reset")) {
         if (a.size() < 3) {
@@ -1457,7 +1540,9 @@ int main(int argc, char** argv)
                || sub == QLatin1String("theme-get-palette")
                || sub == QLatin1String("theme-reload")
                || sub == QLatin1String("font-list-loaded")
-               || sub == QLatin1String("perf-dump-counters")) {
+               || sub == QLatin1String("perf-dump-counters")
+               // v1.10 lease registry.
+               || sub == QLatin1String("lease-list")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

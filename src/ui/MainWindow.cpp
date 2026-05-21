@@ -1787,15 +1787,22 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "ui_active_layer",
                          "ui_list_widgets",
                          "ui_dry_run",
-                         "ui_click",
-                         "ui_keypress",
-                         "ui_text_input",
-                         "ui_simulate_scroll",
-                         "ui_simulate_mouse",
-                         "ui_wait_for",
-                         "ui_set_checkbox",
-                         "ui_set_combo",
-                         "ui_select_table_row" };
+                          "ui_click",
+                          "ui_keypress",
+                          "ui_text_input",
+                          "ui_simulate_scroll",
+                          "ui_simulate_mouse",
+                          "ui_wait_for",
+                          "ui_set_checkbox",
+                          "ui_set_combo",
+                          "ui_select_table_row",
+                          // v1.10 lease registry (2026-05-21). Machine-readable
+                          // agent lane coordination with token-gated mutation.
+                          "lease_acquire",
+                          "lease_release",
+                          "lease_heartbeat",
+                          "lease_get",
+                          "lease_list" };
         // v1.9 cross-cutting system state + introspection layer (Phase D.6,
         // 2026-05-19). 27 commands across 11 prefixes. Backed by
         // SystemIntrospection. Write-capable subset (8) gates on
@@ -1807,11 +1814,20 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         for (const QString& c : SystemIntrospection::commandList())
             cmds.append(c);
         return reply({
-            {"schema",     "tankoban.dev.v1.9"},
+            {"schema",     "tankoban.dev.v1.10"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
         });
+    }
+
+    if (cmd.startsWith(QLatin1String("lease_"))) {
+        if (!m_devControl) {
+            return err("INTERNAL",
+                QStringLiteral("DevControlServer not initialized; "
+                               "enableDevControl() must run first"));
+        }
+        return m_devControl->handleLeaseCommand(cmd, seq, payload);
     }
 
     if (cmd == QLatin1String("get_state"))

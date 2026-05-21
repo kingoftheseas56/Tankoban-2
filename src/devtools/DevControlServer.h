@@ -1,10 +1,14 @@
 #pragma once
 
+#include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QPointer>
+#include <QString>
 
 class QLocalServer;
 class QLocalSocket;
+class QTimer;
 class MainWindow;
 
 // REPO_HYGIENE Phase 3 (2026-04-26) — dev-control bridge.
@@ -76,6 +80,9 @@ class MainWindow;
 //
 // Gated dev-only — caller (MainWindow::enableDevControl) is itself gated
 // behind the `--dev-control` argv flag or `TANKOBAN_DEV_CONTROL=1` env var.
+// v1.10 (2026-05-21) adds an in-memory lease registry for machine-readable
+// agent lane coordination. `lease_*` commands cover acquire/release/heartbeat/
+// get/list, use UUID bearer tokens for release + heartbeat, and expire by TTL.
 class DevControlServer : public QObject
 {
     Q_OBJECT
@@ -89,14 +96,31 @@ public:
     void stop();
     bool isListening() const;
 
+    QJsonObject handleLeaseCommand(const QString& cmd, int seq, const QJsonObject& payload);
+
 private slots:
     void onNewConnection();
+    void cleanupExpiredLeases();
 
 private:
+    struct Lease {
+        QString lane;
+        QString holder;
+        QString purpose;
+        QString token;
+        qint64 expiryMs = 0;
+    };
+
     void handleConnection(QLocalSocket* conn);
     QByteArray buildErrorReply(int seq, const char* code, const QString& message) const;
     QByteArray serialize(const QJsonObject& obj) const;
+    void expireLeaseIfStale(const QString& lane, qint64 nowMs);
+    QJsonObject buildLeaseReply(int seq, QJsonObject extras) const;
+    QJsonObject buildLeaseError(int seq, const QString& reason) const;
 
     QPointer<MainWindow> m_window;
     QLocalServer*        m_server = nullptr;
+    QTimer*              m_leaseCleanupTimer = nullptr;
+    QHash<QString, Lease> m_leases;
+    QHash<QString, QString> m_expiredPriorHolders;
 };
