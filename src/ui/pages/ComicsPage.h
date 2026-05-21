@@ -59,6 +59,7 @@ namespace tankoban::manga {
         struct UnifiedSourceRow;
     }
 }
+#include "core/manga/fandom/LocalFandomCatalogIndex.h"
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
 struct MangaResult;
@@ -438,6 +439,7 @@ private:
     tankoban::manga::fandom::FandomVolumeResolver* m_fandomVolumeResolver = nullptr;
     tankoban::manga::wikipedia::WikipediaResolver* m_wikipediaResolver  = nullptr;
     tankoban::manga::FallbackChainResolver*        m_fallbackResolver   = nullptr;
+    tankoban::manga::fandom::LocalFandomCatalogIndex m_localCatalogIndex;
     // Identity of the most recently dispatched Fandom resolve. Used by
     // onFandomCatalogResolved to drop stale catalogs when the user navigated
     // away mid-resolve (mirrors the m_currentSeriesKey stale-guard pattern

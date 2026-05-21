@@ -29,6 +29,7 @@
 #include "core/manga/fandom/FandomClient.h"
 #include "core/manga/fandom/FandomTypes.h"
 #include "core/manga/fandom/FandomVolumeResolver.h"
+#include "core/manga/fandom/LocalFandomCatalogLoader.h"
 #include "core/manga/fandom/WikiManifestRegistry.h"
 #include "core/manga/wikidata/WikidataClient.h"
 #include "core/manga/wikipedia/WikipediaResolver.h"
@@ -387,6 +388,11 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                 &tankoban::manga::comics::ComicsSeriesView::forceRefreshRequested,
                 this, &ComicsPage::onForceRefreshRequested);
     }
+
+    // Build the local Fandom catalog index from data/fandom_catalog/*.json.
+    // One-shot scan at construction; refresh() is idempotent so a future
+    // dev-bridge / settings hook can re-scan if Hemanth drops in a new file.
+    m_localCatalogIndex.refresh();
 
     connect(m_anilistClient,
             &tankoban::manga::anilist::AniListClient::seriesSucceeded,
@@ -1984,21 +1990,16 @@ void ComicsPage::resetToRoot()
 
 void ComicsPage::showLibraryMode()
 {
-    // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit before the
-    // in-page transition so MainWindow's NavHistory records the Library
-    // landing as its own entry whenever we arrive from a deeper layer
-    // (search results, tankoyomi detail). Suppressed when (a) already on
-    // Library (no-op transition, no history pollution) or (b) called from
-    // restoreNavState via the m_inNavRestore guard.
-    if (!m_inNavRestore && m_mode != Mode::Library) {
-        QJsonObject blob;
-        if (m_sortCombo) blob[QStringLiteral("sort")] = m_sortCombo->currentData().toString();
-        if (m_gridScroll) {
-            if (auto* vsb = m_gridScroll->verticalScrollBar())
-                blob[QStringLiteral("scrollY")] = vsb->value();
-        }
-        emit enteredLayer(makeComicsLayer(QStringLiteral("library"), QStringLiteral("Library"), blob));
-    }
+    // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- the previous PHASE 0 push of
+    // a fresh "library" layer on every transition into Library mode has been
+    // removed. MainWindow now seeds Comics with a persistent library root
+    // via PerModeNavController::setRootLayer at startup, and page-internal
+    // back paths (onDetailBack -> showLibraryMode, search-takeover dismiss)
+    // pop the deep entry through exitedLayer so the controller stack returns
+    // to [library_root] naturally. Re-emitting library here would stack
+    // [library_root, library] and leave the topbar Back chevron enabled at
+    // the library landing surface, which violates the "Back disabled at
+    // mode root" contract.
     m_mode = Mode::Library;
     m_stack->setCurrentIndexAnimated(0);
     if (m_searchTakeover) m_searchTakeover->clearResults();
@@ -2684,7 +2685,12 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
                 }
             }
         }
-        if (m_gridScroll) {
+        // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- only force scrollY if the
+        // blob carried it. The persistent library root carries an empty blob
+        // (no sort, no scrollY); without this gate, restoring the root would
+        // snap scroll to 0 instead of letting Qt's retained widget state hold
+        // whatever position the user left the library grid in.
+        if (m_gridScroll && blob.contains(QStringLiteral("scrollY"))) {
             if (auto* vsb = m_gridScroll->verticalScrollBar())
                 vsb->setValue(blob.value(QStringLiteral("scrollY")).toInt(0));
         }
@@ -3123,6 +3129,26 @@ void ComicsPage::dispatchFandomResolve(const QString& seriesId,
           qUtf8Printable(seriesId),
           qUtf8Printable(qidHint),
           qUtf8Printable(titleHint));
+
+    // Local-first: if data/fandom_catalog/<slug>.json exists for this AniList
+    // id, load it synchronously and emit straight to ComicsSeriesView.
+    // Falls through to the live network chain on miss/malformed/empty-volumes.
+    if (m_currentDetailAnilistId > 0) {
+        const QString slug = m_localCatalogIndex.slugForAnilistId(m_currentDetailAnilistId);
+        if (!slug.isEmpty()) {
+            const QString path = m_localCatalogIndex.filePathForSlug(slug);
+            const auto local =
+                tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(path);
+            if (local.has_value()) {
+                qInfo("ComicsPage::dispatchFandomResolve: local catalog hit for anilistId=%d slug=%s — skipping network chain",
+                      m_currentDetailAnilistId, qUtf8Printable(slug));
+                m_tyVolumeSeriesView->populateVolumeRowsFromFandom(*local);
+                return;
+            }
+        }
+    }
+
+    // Existing live-network path (Task 19 wiring, 2026-05-20):
     m_fallbackResolver->resolveForSeries(seriesId, qidHint, titleHint);
 }
 
