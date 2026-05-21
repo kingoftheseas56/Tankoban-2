@@ -366,29 +366,56 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     (Added 2026-04-21. Hemanth directive verbatim: "we first plan and then execute it and smoke test with mcp, to see if it worked, if it didn't.. we come back to the drawing board.")
 
-19. **MCP lane lock — one agent drives the desktop at a time.** Multiple agents (Claude sessions + Codex Trigger D) can have their own MCP server subprocesses running simultaneously across both `mcp__windows-mcp__*` AND `mcp__pywinauto-mcp__*`, but the physical desktop is single-point-of-contention — focus, keyboard input, mouse, clipboard, and Tankoban.exe's single-instance model all collide when two agents interact concurrently. The lock covers BOTH tool prefixes (a pywinauto UIA-invoke + a windows-mcp screenshot in the same smoke are one session; another agent still has to wait for release). The lock protocol:
+19. **MCP LANE LOCK — one agent drives the desktop at a time (gov-v7, lease-registry primary).** Multiple agents (Claude sessions + Codex Trigger D) can have their own `mcp__pywinauto-mcp__*` server subprocesses running simultaneously, but the physical desktop is single-point-of-contention — focus, keyboard input, mouse, clipboard, and Tankoban.exe's single-instance model all collide when two agents interact concurrently. The lock covers ALL desktop-interacting MCP tool use.
 
-    **Claim:** before any agent-driven desktop interaction (Tankoban smoke, UIA recon, Inspect.exe, pywinauto drive, any other tool that clicks/types/reads focused-window state), post in `agents/chat.md`:
+    **Authoritative state since gov-v7 (2026-05-21):** the lock lives in the DevControl lease registry (shipped via Codex commission `210ba32`, schema `tankoban.dev.v1.10`). Lane name: `mcp`. Brothers query the lane via `out\tankoctl.exe lease-get mcp` — instant machine-truth, no chat.md tail parsing. The chat.md `## MCP LANE` / `RELEASED` companion lines remain required for human-readable brotherhood context (what task, why, what outcome) but the lease is the source of truth. Old hyphen-anchored protocol lines (`MCP LOCK - [Agent N, ...]:`) are deprecated for lane-state determination; old git history of those lines still parses for archaeological sweeps.
+
+    **Claim:**
     ```
-    MCP LOCK - [Agent N, <task>]: expecting ~X min. <brief scope>
+    out\tankoctl.exe lease-acquire mcp --holder agent-N --purpose "<one-line task>" --ttl-sec 900
+    ```
+    Returns one of: `ACQUIRED` (lane free, token in reply) / `BUSY` (held by another, returns holder + expiry, no token) / `STALE_RECLAIMED` (prior holder's TTL expired, new holder gets it, token in reply). Save the token for release. Default TTL 900s (15 min) — typical MCP smoke window; heartbeat to extend, or pass a longer `--ttl-sec` up front.
+
+    Then post the chat.md companion (`/mcp-lock claim mcp "<reason>"` skill scaffolds both):
+    ```
+    ## MCP LANE — Agent N — <task>
+    Claimed YYYY-MM-DDTHH:MM:SSZ. lease-token-prefix=<first 8 chars>. <Brief scope — what's being smoked, expected duration, exit criteria>.
     ```
 
-    **Hold:** any agent about to do desktop interaction greps for an unreleased `MCP LOCK` line in recent chat.md (last ~50 lines is sufficient). If one exists and is fresh (<15 min since post OR matches the expected-duration estimate), hold — do non-desktop work (file reads, grep, build_check.bat, sidecar compile, research) or stand by until released. If the lock is stale (>15-20 min past its expected duration with no release line), it's reclaimable — post a fresh MCP LOCK line citing the stale takeover.
-
-    **Release:** at smoke / recon / task end, post:
+    **Hold check (before any desktop interaction):**
     ```
-    MCP LOCK RELEASED - [Agent N, <task>]: <one-line outcome>.
+    out\tankoctl.exe lease-get mcp
     ```
+    `{"status":"FREE"}` or `{"status":"EXPIRED",...}` → safe to acquire. Holder-named reply with non-expired `expiry_ms` → hold; do non-desktop work or stand by. The chat.md tail still reads for narrative context but is no longer required for state determination.
 
-    Release is mandatory even on failure or abort. A dropped lock strands the lane.
+    **Release:**
+    ```
+    out\tankoctl.exe lease-release mcp --token <token>
+    ```
+    Then chat.md companion:
+    ```
+    ## MCP LANE — Agent N — RELEASED
+    YYYY-MM-DDTHH:MM:SSZ. <one-line outcome>.
+    ```
+    Release is mandatory even on failure or abort. A dropped lease will TTL out, but explicit release is cleaner.
 
-    Either MCP for file-system, grep, build, or other non-UI PowerShell work is always unrestricted — the lock covers only desktop-interacting tool use (anything that clicks, types, focus-steals, or reads focused-window state). An agent under LOCK can still issue non-UI MCP calls (e.g. `Get-Process`, reading a log, building the sidecar) in parallel with their smoke work, and any agent (locked or not) can run non-UI calls from either server at any time.
+    **Stale reclaim — now automatic.** Pre-gov-v7 brothers manually posted "STALE RECLAIM" lines after >15-20 min of stale chat.md state. Post-gov-v7: TTL expiry is the registry's job, and the next `lease-acquire` against an expired lane returns `STALE_RECLAIMED` automatically with a fresh token. Just post a chat.md companion noting the stale reclaim in the narrative.
 
-    Applies identically to Codex Trigger D — if a REQUEST IMPLEMENTATION block includes MCP smoke verification, Codex claims + releases the LOCK the same way.
+    **Heartbeat (extend a held lease without releasing):**
+    ```
+    out\tankoctl.exe lease-heartbeat mcp --token <token> --ttl-sec 900
+    ```
+    Use when a smoke runs longer than initial TTL.
 
-    Relates to Rule 17 (Tankoban/ffmpeg_sidecar cleanup at smoke close) — LOCK release and Rule 17 cleanup typically happen together, but they are distinct actions: cleanup terminates processes; LOCK release clears the lane for the next agent.
+    Non-UI MCP calls (file-system, grep, build, log reads via `Get-Process`) are always unrestricted — the lease covers only desktop-interacting tool use (clicks, keystrokes, focus-steals, focused-window state reads). An agent under LEASE can still issue non-UI calls in parallel with their smoke work; any agent (leased or not) can run non-UI calls anytime.
 
-    (Added 2026-04-22. First live use: Agent 0's UIA inspection recon — see `agents/audits/uia_inspection_2026-04-22.md`.)
+    Applies identically to Codex Trigger D — REQUEST IMPLEMENTATION blocks that include MCP smoke verification acquire + release the lease the same way.
+
+    Relates to Rule 17 (Tankoban/ffmpeg_sidecar cleanup at smoke close) — lease release and Rule 17 cleanup typically happen together; they remain distinct actions (cleanup terminates processes; lease release clears the lane).
+
+    **Transition fallback:** if for any reason the dev-bridge is unavailable (Tankoban not running with `--dev-control`, lease commands not yet wired in a brother's environment), the old chat.md-text-only protocol (`MCP LOCK - [Agent N, ...]:` / `MCP LOCK RELEASED - [Agent N, ...]:`) is acceptable as a fallback. Migrate to leases as soon as the bridge is reachable.
+
+    (Added 2026-04-22 as chat.md-text-only lock. Lease-registry-primary at gov-v7 2026-05-21 after Codex commission `210ba32` shipped the registry as schema v1.10. First live lease use is whoever next smokes — please report back so the brotherhood knows the cutover landed clean.)
 
 20. **Codex reviews-AND-EXPANDS Agent-1 brainstorm-md (gov-v4, scoped to the COMICS_TANKOYOMI_STREAM_MERGER arc).** Any brainstorm-md that Agent 1 produces for the Comics-mode + Tankoyomi + Stream merger arc must be reviewed AND EXPANDED by Codex (Agent 7) before `/superpowers:writing-plans` fires. Codex's role is co-authorship: verify the doc matches Hemanth's stated vision (Comics absorbs Tankoyomi; Stream-as-blueprint; series view inside the Comics library; Netflix-style in-library downloads; Tankoyomi-sourced badge), AND append any architectural / scope / flow / persistence / coordination gaps Agent 1's brainstorm did not cover. Codex edits the brainstorm-md **in place** with clear attribution markers (HTML comments naming Codex and the date for every added or rewritten section, e.g. `<!-- Codex 2026-05-14: ... -->`) so Agent 1 can trace what came from where. Agent 1 may not fire `/superpowers:writing-plans` until Codex's expansion lands AND Agent 1 has read it. **One Codex pass total — no second pass on the plan.** Execution follows `/superpowers:writing-plans` directly. The Codex output does NOT land as a separate audit file at `agents/audits/codex_vision_review_*.md` — it lands inline in Agent 1's brainstorm-md itself (this differs from the Trigger C audit pattern, which still applies for other-domain audits in its original form). This rule scopes to Agent 1 + this merger arc only; it is NOT a brotherhood-wide doctrine and does NOT alter the existing optional Trigger C audit pattern for other domains. (Added 2026-05-14. Revised same-day to the review-AND-expand co-authorship shape per Hemanth verbatim: *"How about we review the brainstorm itself and not the plan. Agent 1 will write the plan after Codex reviews and expands on the brainstorm and then based on the extended brainstorm, superpower writing-plans will be activated and from there, straight to execution."* The original framing was a separate-vision-md + audit-file pattern; superseded by this in-place co-authorship pattern. Underlying concern unchanged — Hemanth flagged "a lot of gaps with our mainline agent's brainstorms and superpower plans" as the motivating worry.)
 
@@ -412,31 +439,62 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
     (Added 2026-05-20 after independent advocacy briefs from Agent 1 and Agent 4 converged on the same shape. Hemanth ratified verbatim: *"open work trees for all our agents... they can now abuse the hell out of worktrees and get some proper work done."* Full rule body + first-deployment target at `feedback_trigger_e_worktrees_for_shared_files.md` memory.)
 
-22. **BUILD LANE LOCK — one agent runs `build_check.bat` against `out/` at a time (gov-v6).** Tankoban's `out/` directory is single-point-of-contention. When two agents fire `build_check.bat` / `build_and_run.bat` / `cmake --build out` / `native_sidecar/build.ps1` simultaneously, intermediate `.obj` files get clobbered mid-write, ninja's state corrupts (`premature end of file; recovering` warning surfaces; rebuilds inflate from a few files to hundreds), and link outputs come back meaningless. Same shape as Rule 19's MCP LANE LOCK — separate physical resource, separate lane, separate lock.
+22. **BUILD LANE LOCK — one agent runs `build_check.bat` against shared `out/` at a time (gov-v7, lease-registry primary).** Tankoban's shared `out/` directory is single-point-of-contention. When two agents fire `build_check.bat` / `build_and_run.bat` / `cmake --build out` / `native_sidecar/build.ps1` simultaneously, intermediate `.obj` files get clobbered mid-write, ninja's state corrupts (`premature end of file; recovering` warning surfaces; rebuilds inflate from a few files to hundreds), and link outputs come back meaningless. Same shape as Rule 19's MCP LANE LOCK — separate physical resource, separate lane, separate lock.
 
-    **Claim:** before any build command that touches `out/`, post in `agents/chat.md`:
+    **Authoritative state since gov-v7 (2026-05-21):** the lock lives in the DevControl lease registry at schema `tankoban.dev.v1.10`. Lane name: `build`. Brothers query the lane via `out\tankoctl.exe lease-get build` — machine-truth, no chat.md tail parsing. The chat.md `## BUILD LANE` / `RELEASED` companion lines remain required for human-readable context but the lease is source of truth. Old hyphen-anchored protocol lines (`BUILD LOCK CLAIMED - [Agent N, ...]:`) are deprecated for state determination.
+
+    **Claim:**
     ```
-    BUILD LOCK CLAIMED - [Agent N, <scope>]: expecting ~X min. <brief why>
+    out\tankoctl.exe lease-acquire build --holder agent-N --purpose "<scope>" --ttl-sec 1800
     ```
-    Typical X: 1-2 min for a `build_check.bat` against a warm cache, 5-15 min for a cold rebuild or LTCG link, 8-12 min for `native_sidecar/build.ps1` first run.
+    Default TTL 1800s (30 min) — covers `build_check.bat` against a warm cache (~5 min) through a cold rebuild or LTCG link (~15-20 min). Adjust per task; heartbeat to extend for longer builds.
 
-    **Hold:** any agent about to fire a build greps recent ~50 lines of `agents/chat.md` for an unreleased `BUILD LOCK` line. If one exists and is fresh (<X min since post OR within the expected-duration estimate), hold — do non-build work (file reads, grep, planning, doc writes, RTC drafting) until released. If the lock is stale (>15 min past its expected duration with no release line), it's reclaimable — post a fresh `BUILD LOCK` line citing the stale takeover.
-
-    **Release:** at build end (success OR failure), post:
+    Then post the chat.md companion (`/mcp-lock claim build "<reason>"` skill scaffolds both):
     ```
-    BUILD LOCK RELEASED - [Agent N, <scope>]: <outcome — BUILD OK / BUILD FAILED <stage> / etc>.
+    ## BUILD LANE — Agent N — <scope>
+    Claimed YYYY-MM-DDTHH:MM:SSZ. lease-token-prefix=<first 8 chars>. <Multi-line context — what's being built, expected duration, exit criteria>.
     ```
-    Release is mandatory even on failure or abort. A dropped lock strands the build tree.
 
-    **Applies to:** `build_check.bat`, `build_and_run.bat`, `cmake --build out ...`, `native_sidecar/build.ps1`, `build_qrhi.bat`, any direct ninja invocation against the `out/` tree. Does NOT apply to: subagents running INSIDE worktrees per Rule 21 (their `out/` is isolated by definition), `out_test/` or `out2/` experimental dirs, or read-only build inspections (`ls out/`, `git status`).
+    **Hold check:**
+    ```
+    out\tankoctl.exe lease-get build
+    ```
+    Same semantics as Rule 19. `FREE` / `EXPIRED` → safe to acquire. Holder-named with non-expired expiry → hold; do non-build work.
 
-    **Applies identically to Codex Trigger D** — Codex commissions that include build verification claim + release the LOCK the same way. The TODAY (2026-05-21 ~12:25am) Codex burning tokens in a `while ($true) { Get-CimInstance ... ninja.exe OR cmake.exe OR cl.exe }` wait-loop is the canonical motivating incident: Codex was correctly avoiding clobbering Claude's mid-flight build, but the cost was Codex tokens spent spinning. With the lock, Codex (and every brother) sees the lane state explicitly and waits cheaply via chat.md poll instead of expensive process-wait.
+    **Release:**
+    ```
+    out\tankoctl.exe lease-release build --token <token>
+    ```
+    Then chat.md:
+    ```
+    ## BUILD LANE — Agent N — RELEASED
+    YYYY-MM-DDTHH:MM:SSZ. <outcome — BUILD OK / BUILD FAILED <stage>>.
+    ```
 
-    **Relates to Rule 1** (`taskkill Tankoban.exe` before every build): Rule 1 guards exe-overwrite correctness; Rule 22 guards build-tree-state correctness against concurrent builders. Both are independently required.
+    **Stale reclaim:** automatic via TTL + `STALE_RECLAIMED` return code on next acquire. No manual reclaim post needed — companion line in narrative is enough.
 
-    **Relates to Rule 21** (worktrees for shared-file Trigger E): worktrees physically eliminate the lock's need for any Jr running INSIDE a worktree (their `out/` is isolated). The lock applies only to builds against the shared root `out/` tree.
+    **Heartbeat (longer builds):**
+    ```
+    out\tankoctl.exe lease-heartbeat build --token <token> --ttl-sec 1800
+    ```
 
-    (Added 2026-05-21 after Codex burned multiple wait-loop cycles during a build-state collision on 2026-05-20→2026-05-21 wake. Pattern lifted directly from Rule 19 MCP LANE LOCK — same claim/hold/release/stale-reclaim protocol, different physical resource.)
+    **Applies to:** `build_check.bat`, `build_and_run.bat`, `cmake --build out ...`, `native_sidecar/build.ps1`, `build_qrhi.bat`, any direct ninja invocation against the shared `out/` tree.
+
+    **Does NOT apply to:**
+    - Subagents running INSIDE Rule 21 worktrees (their `out/` is isolated by definition).
+    - **`TANKOBAN_BUILD_LANE=<lane>` builds** (Codex commission `07da143`, 2026-05-21) — these build to `out_<lane>/` and are independent of the shared lane; acquire `lease-acquire build-<lane>` if you want lane-scoped serialization, otherwise build freely.
+    - `out_test/` or `out2/` experimental dirs.
+    - Read-only inspections (`ls out/`, `git status`).
+
+    **Applies identically to Codex Trigger D** — Codex commissions that include build verification acquire + release the lease the same way. Pre-lease, Codex was burning tokens in `while ($true) { Get-CimInstance ... ninja.exe OR cmake.exe }` wait-loops; lease-based polling via `lease-get build` is cheap and explicit.
+
+    **Relates to Rule 1** (`taskkill Tankoban.exe` before every build): Rule 1 guards exe-overwrite correctness; Rule 22 guards build-tree-state correctness against concurrent builders. Both independently required.
+
+    **Relates to Rule 21** (worktrees for shared-file Trigger E): worktrees + per-lane build dirs together eliminate the lock's need for any work that runs in an isolated build dir. The shared-`out/` lease applies only when a brother actually builds against shared root.
+
+    **Transition fallback:** if dev-bridge is unavailable, old chat.md-text-only (`BUILD LOCK CLAIMED - [Agent N, ...]:` / `BUILD LOCK RELEASED - [Agent N, ...]:`) is acceptable. Migrate to leases as soon as the bridge is reachable.
+
+    (Added 2026-05-21 after Codex burned multiple wait-loop cycles during a build-state collision on 2026-05-20→2026-05-21 wake. Lease-registry-primary at gov-v7 same day after Codex commission `210ba32` shipped the registry. Per-lane build dirs via commission `07da143` shipped same day — bypasses the shared lock when used.)
 
 ---
 
