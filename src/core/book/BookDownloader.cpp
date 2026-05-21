@@ -15,6 +15,8 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "core/torrent/TorrentClient.h"
+
 namespace {
 
 // Match LibGenScraper's UA string — some mirrors (esp. CF-protected CDNs
@@ -111,28 +113,229 @@ QString BookDownloader::startMagnetDownload(const QString& magnetUri,
             QStringLiteral("BookDownloader::startMagnetDownload requires a TorrentClient (not wired)"));
         return {};
     }
-    // TODO(Task 4.5 implementer): per Agent 4 HELP resolution 2026-05-21:
-    //   1. Kick off: m_torrentClient->addMagnetHeadless(magnetUri, "books",
-    //      destinationDir) → captures returned infoHash. (TorrentClient.h:126)
-    //   2. State: track in sibling MagnetInFlight struct (infoHash, magnetUri,
-    //      destinationDir, suggestedName, expectedFormat, bytesReceived/Total).
-    //   3. Completion edge: connect TorrentClient::torrentCompleted(infoHash)
-    //      signal (TorrentClient.h:301), match by infoHash from step 1.
-    //   4. Progress edge: TorrentClient::torrentUpdated(infoHash) (line 299) +
-    //      listActive() for per-torrent progressPct → emit downloadProgress.
-    //   5. Post-completion file walk: TorrentClient deposits under
-    //      savePath/name. Single-file = file IS destination (BooksScanner.
-    //      validateAll() picks up directly). Multi-file folder = leave intact.
-    //      Mixed/junk = pick largest qualifying file by expectedFormat ext +
-    //      move up one level (heuristic, BookDownloader-internal).
-    //   6. Emit downloadProgress / downloadComplete / downloadFailed — same
-    //      shape as the HTTP path so caller-side onDownloader* slots fork-free.
-    Q_UNUSED(destinationDir);
-    Q_UNUSED(suggestedName);
-    Q_UNUSED(expectedFormat);
-    emit downloadFailed(magnetUri,
-        QStringLiteral("BookDownloader::startMagnetDownload not yet implemented (Task 4.5 in flight)"));
-    return {};
+
+    // Queue FIFO if a magnet download is already active.
+    if (m_activeMagnet) {
+        qInfo() << "[BookDownloader] queuing magnet download"
+                << magnetUri
+                << "(active infoHash is" << m_activeMagnet->infoHash << ")";
+        MagnetInFlight q;
+        q.magnetUri      = magnetUri;
+        q.destinationDir = destinationDir;
+        q.suggestedName  = suggestedName;
+        q.expectedFormat = expectedFormat.toLower();
+        m_magnetQueue.append(std::move(q));
+        return magnetUri;
+    }
+
+    // Kick off the libtorrent-side download.
+    const QString infoHash = m_torrentClient->addMagnetHeadless(
+        magnetUri, QStringLiteral("books"), destinationDir);
+
+    if (infoHash.isEmpty()) {
+        emit downloadFailed(magnetUri,
+            QStringLiteral("addMagnetHeadless failed (duplicate or metadata error)"));
+        return {};
+    }
+
+    // Populate the active-magnet slot.
+    m_activeMagnet = new MagnetInFlight;
+    m_activeMagnet->infoHash      = infoHash;
+    m_activeMagnet->magnetUri     = magnetUri;
+    m_activeMagnet->destinationDir= destinationDir;
+    m_activeMagnet->suggestedName = suggestedName;
+    m_activeMagnet->expectedFormat= expectedFormat.toLower();
+
+    qInfo() << "[BookDownloader] magnet started infoHash=" << infoHash
+            << "magnetUri=" << magnetUri;
+
+    // Wire TorrentClient signals — both use QueuedConnection so they arrive
+    // on the same thread as BookDownloader (main thread) even when TorrentClient
+    // emits from its AlertWorker thread.
+    connect(m_torrentClient, &TorrentClient::torrentCompleted,
+            this, &BookDownloader::onMagnetTorrentCompleted,
+            Qt::QueuedConnection);
+    connect(m_torrentClient, &TorrentClient::torrentUpdated,
+            this, &BookDownloader::onMagnetTorrentUpdated,
+            Qt::QueuedConnection);
+
+    return magnetUri;
+}
+
+// ── Magnet-path slot: completion ────────────────────────────────────────────
+
+void BookDownloader::onMagnetTorrentCompleted(const QString& infoHash)
+{
+    if (!m_activeMagnet || m_activeMagnet->infoHash != infoHash) return;
+
+    const QString handle = m_activeMagnet->magnetUri;
+
+    qInfo() << "[BookDownloader] magnet complete infoHash=" << infoHash
+            << "magnetUri=" << handle;
+
+    // Emit 100% progress before completion.
+    const qint64 total = (m_activeMagnet->bytesTotal > 0)
+        ? m_activeMagnet->bytesTotal : m_activeMagnet->bytesReceived;
+    if (total > 0) {
+        emit downloadProgress(handle, total, total);
+    }
+
+    const QString bestFile = pickBestBookFile(*m_activeMagnet);
+    if (bestFile.isEmpty()) {
+        emit downloadFailed(handle,
+            QStringLiteral("no qualifying book file found in torrent payload"));
+    } else {
+        emit downloadComplete(handle, bestFile);
+    }
+
+    drainMagnetQueue();
+}
+
+// ── Magnet-path slot: progress ───────────────────────────────────────────────
+
+void BookDownloader::onMagnetTorrentUpdated(const QString& infoHash)
+{
+    if (!m_activeMagnet || m_activeMagnet->infoHash != infoHash) return;
+
+    // Walk listActive() to find per-torrent progress fields.
+    const QList<TorrentInfo> active = m_torrentClient->listActive();
+    for (const TorrentInfo& t : active) {
+        if (t.infoHash != infoHash) continue;
+
+        const qint64 received = t.totalDone;
+        const qint64 total    = t.totalWanted;
+        const int    pct      = (total > 0)
+            ? static_cast<int>(100.0 * received / total)
+            : 0;
+
+        // Throttle: emit at most once per 250 ms OR when pct advances by ≥1.
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        const qint64 elapsedMs = nowMs - m_activeMagnet->lastProgressMs;
+        const int    deltaPct  = pct - m_activeMagnet->lastProgressPct;
+        const bool   pass      = (elapsedMs >= 250) || (deltaPct >= 1);
+
+        if (pass) {
+            m_activeMagnet->bytesReceived   = received;
+            m_activeMagnet->bytesTotal      = total;
+            m_activeMagnet->lastProgressMs  = nowMs;
+            m_activeMagnet->lastProgressPct = pct;
+            emit downloadProgress(m_activeMagnet->magnetUri, received, total);
+        }
+        break;
+    }
+}
+
+// ── Magnet-path helpers ──────────────────────────────────────────────────────
+
+QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
+{
+    // Book file extensions we consider "qualifying". Ordered by preference so
+    // epub > pdf > mobi if we have to pick from mixed junk.
+    static const QStringList kBookExts = {
+        QStringLiteral("epub"),
+        QStringLiteral("pdf"),
+        QStringLiteral("mobi"),
+        QStringLiteral("azw3"),
+        QStringLiteral("azw"),
+        QStringLiteral("djvu"),
+        QStringLiteral("cbz"),
+        QStringLiteral("cbr"),
+    };
+
+    const QDir dir(m.destinationDir);
+    if (!dir.exists()) return {};
+
+    // Collect all qualifying files recursively under destinationDir.
+    QFileInfoList candidates;
+    QStringList nameFilters;
+    for (const QString& ext : kBookExts) {
+        nameFilters << QStringLiteral("*.") + ext;
+    }
+    candidates = dir.entryInfoList(nameFilters,
+                                   QDir::Files | QDir::Readable,
+                                   QDir::NoSort);
+
+    // Also search one level deep (libtorrent may deposit into a subfolder).
+    const QFileInfoList subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QFileInfo& sub : subdirs) {
+        QDir subDir(sub.absoluteFilePath());
+        candidates += subDir.entryInfoList(nameFilters,
+                                           QDir::Files | QDir::Readable,
+                                           QDir::NoSort);
+    }
+
+    if (candidates.isEmpty()) return {};
+
+    // Single qualifying file — return it directly. BooksScanner picks it up
+    // without any move needed.
+    if (candidates.size() == 1) {
+        return candidates.first().absoluteFilePath();
+    }
+
+    // Multiple files. If caller specified an expectedFormat, prefer that ext.
+    QFileInfoList preferred;
+    if (!m.expectedFormat.isEmpty()) {
+        for (const QFileInfo& fi : candidates) {
+            if (fi.suffix().compare(m.expectedFormat, Qt::CaseInsensitive) == 0) {
+                preferred << fi;
+            }
+        }
+    }
+
+    const QFileInfoList& pool = preferred.isEmpty() ? candidates : preferred;
+
+    // From the pool, pick the largest file (heuristic: junk payloads tend to
+    // pad small files; the real book is usually the biggest one).
+    QFileInfo best;
+    for (const QFileInfo& fi : pool) {
+        if (!best.exists() || fi.size() > best.size()) {
+            best = fi;
+        }
+    }
+
+    if (!best.exists()) return {};
+
+    // If the best file lives in a subdirectory, move it up to destinationDir
+    // so BooksScanner sees it at the library root level.
+    if (best.absoluteDir() != dir) {
+        const QString target = dir.absoluteFilePath(best.fileName());
+        // Overwrite if a same-named file already sits at the root.
+        if (QFile::exists(target)) QFile::remove(target);
+        if (QFile::rename(best.absoluteFilePath(), target)) {
+            return target;
+        }
+        // rename failed — return the original nested path (scanner will still
+        // find it if BooksScanner walks subfolders).
+        qWarning() << "[BookDownloader] could not move" << best.absoluteFilePath()
+                   << "to" << target << "— returning nested path";
+    }
+
+    return best.absoluteFilePath();
+}
+
+void BookDownloader::drainMagnetQueue()
+{
+    // Disconnect the TorrentClient signals we wired in startMagnetDownload.
+    // Unconditional disconnect is safe here — no-op if signals were never
+    // connected (null m_torrentClient path should never reach here).
+    if (m_torrentClient) {
+        disconnect(m_torrentClient, &TorrentClient::torrentCompleted,
+                   this, &BookDownloader::onMagnetTorrentCompleted);
+        disconnect(m_torrentClient, &TorrentClient::torrentUpdated,
+                   this, &BookDownloader::onMagnetTorrentUpdated);
+    }
+
+    delete m_activeMagnet;
+    m_activeMagnet = nullptr;
+
+    if (!m_magnetQueue.isEmpty()) {
+        MagnetInFlight next = std::move(m_magnetQueue.takeFirst());
+        // Re-enter startMagnetDownload for the next queued item.
+        startMagnetDownload(next.magnetUri,
+                            next.destinationDir,
+                            next.suggestedName,
+                            next.expectedFormat);
+    }
 }
 
 BookDownloader::~BookDownloader()
@@ -142,6 +345,18 @@ BookDownloader::~BookDownloader()
         delete m_active;
         m_active = nullptr;
     }
+    // Magnet path: disconnect signals + release state without calling
+    // drainMagnetQueue (drainMagnetQueue would re-enter startMagnetDownload
+    // which is unsafe in the destructor).
+    if (m_torrentClient) {
+        disconnect(m_torrentClient, &TorrentClient::torrentCompleted,
+                   this, &BookDownloader::onMagnetTorrentCompleted);
+        disconnect(m_torrentClient, &TorrentClient::torrentUpdated,
+                   this, &BookDownloader::onMagnetTorrentUpdated);
+    }
+    delete m_activeMagnet;
+    m_activeMagnet = nullptr;
+    m_magnetQueue.clear();
 }
 
 bool BookDownloader::isActive(const QString& md5) const
@@ -234,16 +449,41 @@ QString BookDownloader::startDownload(const QString& md5,
 
 void BookDownloader::cancelDownload(const QString& md5)
 {
-    // Active slot cancel
+    // Active HTTP-path slot cancel
     if (m_active && m_active->md5 == md5) {
         failAndCleanup(*m_active, QStringLiteral("cancelled by user"));
         return;
     }
-    // Queue cancel
+    // HTTP-path queue cancel
     for (int i = 0; i < m_queue.size(); ++i) {
         if (m_queue[i].md5 == md5) {
             emit downloadFailed(md5, QStringLiteral("cancelled by user (queued)"));
             m_queue.removeAt(i);
+            return;
+        }
+    }
+
+    // Magnet-path cancel — handle is the magnetUri (same string returned by
+    // startMagnetDownload). TorrentClient has deleteTorrent(infoHash, deleteFiles)
+    // as the removal surface; we call it with deleteFiles=false so the partially-
+    // downloaded files stay on disk (caller decides if they want to clean up).
+    // NOTE: TorrentClient does NOT have a dedicated "cancelDownload" method; the
+    // correct surface is deleteTorrent(infoHash, false).
+    if (m_activeMagnet && m_activeMagnet->magnetUri == md5) {
+        const QString infoHash = m_activeMagnet->infoHash;
+        emit downloadFailed(md5, QStringLiteral("cancelled by user"));
+        drainMagnetQueue();   // disconnects signals + clears slot + starts next
+        if (m_torrentClient && !infoHash.isEmpty()) {
+            // TODO: consider deleteFiles=true here if caller passes a flag.
+            m_torrentClient->deleteTorrent(infoHash, /*deleteFiles=*/false);
+        }
+        return;
+    }
+    // Magnet-path queue cancel
+    for (int i = 0; i < m_magnetQueue.size(); ++i) {
+        if (m_magnetQueue[i].magnetUri == md5) {
+            emit downloadFailed(md5, QStringLiteral("cancelled by user (queued)"));
+            m_magnetQueue.removeAt(i);
             return;
         }
     }

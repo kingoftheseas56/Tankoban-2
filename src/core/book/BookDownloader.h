@@ -106,6 +106,13 @@ private slots:
     void onFinished();
     void onDownloadProgressFromReply(qint64 received, qint64 total);
 
+    // Magnet-path slots — wired to TorrentClient signals in startMagnetDownload.
+    // Named differently from their public-method counterparts to avoid ambiguity
+    // when TorrentClient emits the same signal for non-book torrents; both slots
+    // guard by comparing infoHash against m_activeMagnet.
+    void onMagnetTorrentCompleted(const QString& infoHash);
+    void onMagnetTorrentUpdated(const QString& infoHash);
+
 private:
     // State for the in-flight download. We keep only one active at a time
     // in v1; tracking by md5 lets cancel/isActive work uniformly + paves
@@ -151,10 +158,32 @@ private:
     InFlight*       m_active = nullptr;
     QList<InFlight> m_queue;
 
-    // TODO(Task 4.5 implementer): sibling MagnetInFlight struct + m_activeMagnet
-    // + m_magnetQueue, mirroring the HTTP-path shape above but holding
-    // {infoHash, magnetUri, destinationDir, suggestedName, expectedFormat,
-    // TorrentClient subscription handles, bytesReceived/bytesTotal cache}.
-    // Shared post-completion path (pickTargetFilename / finalizeSuccess
-    // equivalents) emits the same downloadComplete/downloadFailed signals.
+    // Magnet-path state — mirrors InFlight but for libtorrent-backed downloads.
+    // One active slot + FIFO queue, same shape as the HTTP path.
+    struct MagnetInFlight {
+        QString infoHash;       // returned by addMagnetHeadless; used to match signals
+        QString magnetUri;      // original caller-provided URI (used as the "handle")
+        QString destinationDir; // where TorrentClient deposits the files
+        QString suggestedName;  // caller hint (used for logging / devSnapshot)
+        QString expectedFormat; // e.g. "epub", "pdf", "mobi" — drives file-walk picker
+
+        qint64  bytesReceived = 0;   // cached from last torrentUpdated emit
+        qint64  bytesTotal    = 0;   // cached from last torrentUpdated emit
+
+        // Throttle: track last progress emit timestamp (ms) and last emitted pct
+        // so we don't flood the UI on every libtorrent piece alert.
+        qint64  lastProgressMs  = 0;
+        int     lastProgressPct = -1;
+    };
+
+    // Post-completion file walk: finds the best book file in the torrent's
+    // deposit directory. Returns the absolute path to emit via downloadComplete,
+    // or empty string on failure (caller emits downloadFailed).
+    QString pickBestBookFile(const MagnetInFlight& m) const;
+
+    // Drain the magnet queue: clear m_activeMagnet, pop the next entry if any.
+    void drainMagnetQueue();
+
+    MagnetInFlight*       m_activeMagnet = nullptr;
+    QList<MagnetInFlight> m_magnetQueue;
 };
