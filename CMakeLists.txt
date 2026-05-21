@@ -847,6 +847,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/indexers/CloudflareCookieHarvester.cpp
         tests/core/manga/AniListVolumeMapperTest.cpp
         tests/core/manga/anilist/test_anilist_parser.cpp
+        tests/core/manga/anilist/test_anilist_cache.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
@@ -883,6 +884,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/TitleMetadataEstimator.cpp
         src/core/manga/anilist/AniListParser.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
+        src/core/manga/anilist/AniListCache.cpp
         src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
         src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
         src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp

@@ -34,6 +34,27 @@ QJsonObject mediaPreviewToJson(const MediaPreview& p)
     for (const auto& s : p.genres) g.append(s);
     o["genres"]          = g;
     o["description"]     = p.description;
+    o["countryOfOrigin"] = p.countryOfOrigin;
+
+    QJsonArray staffArr;
+    for (const auto& se : p.staff) {
+        QJsonObject seObj;
+        seObj["name"] = se.name;
+        seObj["role"] = se.role;
+        staffArr.append(seObj);
+    }
+    o["staff"] = staffArr;
+
+    QJsonArray tagsArr;
+    for (const auto& rt : p.tags) {
+        QJsonObject tagObj;
+        tagObj["name"]      = rt.name;
+        tagObj["rank"]      = rt.rank;
+        tagObj["isSpoiler"] = rt.isSpoiler;
+        tagsArr.append(tagObj);
+    }
+    o["tags"] = tagsArr;
+
     return o;
 }
 
@@ -51,6 +72,28 @@ MediaPreview mediaPreviewFromJson(const QJsonObject& o)
     p.yearStarted   = o.value("yearStarted").toInt();
     for (const auto& v : o.value("genres").toArray()) p.genres.append(v.toString());
     p.description   = o.value("description").toString();
+
+    p.countryOfOrigin = o.value("countryOfOrigin").toString();
+
+    const QJsonArray staffArr = o.value("staff").toArray();
+    for (const auto& v : staffArr) {
+        const QJsonObject seObj = v.toObject();
+        StaffEntry se;
+        se.name = seObj.value("name").toString();
+        se.role = seObj.value("role").toString();
+        if (!se.name.isEmpty()) p.staff.append(se);
+    }
+
+    const QJsonArray tagsArr = o.value("tags").toArray();
+    for (const auto& v : tagsArr) {
+        const QJsonObject tagObj = v.toObject();
+        RankedTag rt;
+        rt.name      = tagObj.value("name").toString();
+        rt.rank      = tagObj.value("rank").toInt();
+        rt.isSpoiler = tagObj.value("isSpoiler").toBool();
+        if (!rt.name.isEmpty()) p.tags.append(rt);
+    }
+
     return p;
 }
 
