@@ -1555,6 +1555,16 @@ void StreamDetailView::renderEpisodeStateChip(
 // row whose episode has a substrate entry. Companion to the entryStateChanged
 // signal subscriber (which handles in-flight state transitions); together they
 // cover initial-load + live-update.
+// TANKORENT_CINEMATA P1.T10 collapse (2026-05-21) — this is also the Phase 1
+// per-episode state painter for the new [Find sources for Season N] flow.
+// The plan's T10 specified a parallel lookupByImdbSeasonEpisode + EpisodeRowState
+// path; investigation showed this method already does it correctly: reads
+// m_downloadIndex->entriesForImdb, filters by season+episode, paints via
+// renderEpisodeStateChip. The ProvT::Tankorent branch at the sourceGroupId
+// prefix check is the existing provenance hook. T12 live smoke verifies the
+// new addMagnetHeadless(imdbId, season) path actually populates entries that
+// satisfy the prov=Tankorent branch; if entries land as AddonBulk-provenance,
+// that becomes the F1 carry-through for v1.1.
 void StreamDetailView::refreshSubstrateStatesForActiveSeason()
 {
     if (!m_episodeTable || !m_downloadIndex || m_currentImdb.isEmpty())
@@ -1983,6 +1993,11 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                 this, [this](const QString& /*infoHash*/) {
                     refreshMovieDownloadState();
                 }, Qt::QueuedConnection);
+        // TANKORENT_CINEMATA P1.T11 collapse (2026-05-21) — this connect is
+        // also the Phase 1 episode-row repaint trigger for the new [Find
+        // sources for Season N] flow. When a Find-sources auto-pick download
+        // completes, refreshSubstrateStatesForActiveSeason() (above) re-walks
+        // the index and renders the chip. No new connect required.
         connect(m_torrentClient, &TorrentClient::torrentCompleted,
                 this, [this](const QString& /*infoHash*/) {
                     // F13 fix 2026-05-19: immediate refresh on completion —
