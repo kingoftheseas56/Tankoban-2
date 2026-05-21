@@ -200,7 +200,9 @@ set(SOURCES
     src/core/book/AaSlowDownloadWaitHandler.cpp
     src/core/book/LibGenScraper.cpp
     src/core/book/AbbScraper.cpp
+    src/core/book/TankorentBookScraper.cpp
     src/core/book/BookDownloader.cpp
+    src/core/book/BookSearchAggregator.cpp
     src/core/book/BooksCatalogueLibraryStore.cpp
     src/core/book/CatalogueRecord.cpp
     src/core/book/GoogleBooksClient.cpp
@@ -405,7 +407,9 @@ set(HEADERS
     src/core/book/AaSlowDownloadWaitHandler.h
     src/core/book/LibGenScraper.h
     src/core/book/AbbScraper.h
+    src/core/book/TankorentBookScraper.h
     src/core/book/BookDownloader.h
+    src/core/book/BookSearchAggregator.h
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/comics/SidecarMeta.h

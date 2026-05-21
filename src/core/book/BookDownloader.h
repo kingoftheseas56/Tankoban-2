@@ -10,6 +10,7 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QFile;
 class QTimer;
+class TorrentClient;
 
 // HTTP streaming downloader for book files from resolved direct-URL lists.
 //
@@ -47,7 +48,16 @@ class BookDownloader : public QObject
 {
     Q_OBJECT
 public:
-    explicit BookDownloader(QNetworkAccessManager* nam, QObject* parent = nullptr);
+    // `torrentClient` is the shared TorrentClient (owned by MainWindow / passed
+    // by TankoLibraryPage). Optional — defaults to nullptr so callers that only
+    // exercise the HTTP path keep the old single-arg construction shape. When
+    // null, startMagnetDownload() emits downloadFailed immediately with a clear
+    // "not wired" reason. Agent 4 HELP resolution 2026-05-21 settled the
+    // transport-strategy split: keep HTTP + magnet state machines separate, share
+    // the downstream signal contract.
+    explicit BookDownloader(QNetworkAccessManager* nam,
+                            TorrentClient* torrentClient = nullptr,
+                            QObject* parent = nullptr);
     ~BookDownloader() override;
 
     // Start a download. Returns the md5 as a caller-side handle; same md5
@@ -59,6 +69,25 @@ public:
                           const QString& destinationDir,
                           const QString& suggestedName,
                           qint64 expectedBytes = 0);
+
+    // Magnet-source variant — used by TankorentBookScraper's resolveDownload
+    // path. Peer method to startDownload (NOT a generic variant on it). Internal
+    // state lives in a sibling MagnetInFlight struct; shared post-completion
+    // path + signal contract with the HTTP path so callers don't care which
+    // transport delivered the bytes.
+    //
+    // Per Agent 4 HELP resolution 2026-05-21, the implementation uses:
+    //   TorrentClient::addMagnetHeadless(magnetUri, "books", destinationDir)
+    //   TorrentClient::torrentCompleted(infoHash) signal
+    //   TorrentClient::torrentUpdated(infoHash) for per-torrent progress
+    //
+    // Returns a handle (e.g., magnetUri or infoHash) the caller uses to
+    // correlate with downloadProgress/downloadComplete/downloadFailed signals.
+    // Returns empty string + emits downloadFailed if m_torrentClient is null.
+    QString startMagnetDownload(const QString& magnetUri,
+                                const QString& destinationDir,
+                                const QString& suggestedName,
+                                const QString& expectedFormat = {});
 
     void cancelDownload(const QString& md5);
     bool isActive(const QString& md5) const;
@@ -116,8 +145,16 @@ private:
     bool pickTargetFilename(InFlight& f, const QString& contentDisposition);
 
     QNetworkAccessManager* m_nam = nullptr;
+    TorrentClient*         m_torrentClient = nullptr;  // optional; null => magnet path disabled
 
     // One-slot v1. Queue for FIFO pending downloads.
     InFlight*       m_active = nullptr;
     QList<InFlight> m_queue;
+
+    // TODO(Task 4.5 implementer): sibling MagnetInFlight struct + m_activeMagnet
+    // + m_magnetQueue, mirroring the HTTP-path shape above but holding
+    // {infoHash, magnetUri, destinationDir, suggestedName, expectedFormat,
+    // TorrentClient subscription handles, bytesReceived/bytesTotal cache}.
+    // Shared post-completion path (pickTargetFilename / finalizeSuccess
+    // equivalents) emits the same downloadComplete/downloadFailed signals.
 };

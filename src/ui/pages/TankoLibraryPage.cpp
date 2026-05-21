@@ -5,6 +5,7 @@
 #include "core/book/BookScraper.h"
 #include "core/book/AnnaArchiveScraper.h"
 #include "core/book/LibGenScraper.h"
+#include "core/book/TankorentBookScraper.h"
 #include "core/book/AbbScraper.h"
 #include "core/book/BookDownloader.h"
 #include "core/torrent/TorrentClient.h"
@@ -251,7 +252,13 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
     // Books tab uses LibGen; Audiobooks tab uses AudioBookBay. On tab
     // switch startSearch() dispatches via activeScrapers().
     m_scrapersBooks << new LibGenScraper(m_nam, this);
-    // m_scrapersBooks << new AnnaArchiveScraper(m_nam, this);   // DISABLED — captcha-blocked
+    // m_scrapersBooks << new AnnaArchiveScraper(m_nam, this);   // DISABLED — captcha-blocked (Path C 2026-05-21, see agents/audits/aa_captcha_investigation_2026-05-21.md)
+    // BOOKS_STREMIO_PIVOT Phase 4: register TankorentBookScraper. Service
+    // pointer is nullptr today — Agent 4's TankorentSearchService is a Phase 5
+    // follow-on commit (~one wake from 2026-05-21 HELP resolution). The
+    // scraper's stub search() emits an empty result + warning log until
+    // the real service injects through this site.
+    m_scrapersBooks << new TankorentBookScraper(/*service=*/nullptr, this);
     m_scrapersAudiobooks << new AbbScraper(m_nam, this);
 
     buildUI();
@@ -336,7 +343,12 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
 
     // M2.4 — BookDownloader lives here; constructed once, reused across
     // downloads. Connect its signals to the download-flow slots.
-    m_downloader = new BookDownloader(m_nam, this);
+    // BOOKS_STREMIO_PIVOT Phase 4.5: BookDownloader now takes the shared
+    // TorrentClient* so the magnet-source variant can hand off to libtorrent
+    // for Tankorent torrent results. HTTP path (LibGen direct URLs) is
+    // unaffected. m_torrentClient may be null in test contexts; magnet calls
+    // fail honestly in that case.
+    m_downloader = new BookDownloader(m_nam, m_torrentClient, this);
     connect(m_downloader, &BookDownloader::downloadProgress,
             this, &TankoLibraryPage::onDownloaderProgress);
     connect(m_downloader, &BookDownloader::downloadComplete,

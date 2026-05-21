@@ -92,10 +92,47 @@ QString filenameFromContentDisposition(const QString& cd)
 
 } // namespace
 
-BookDownloader::BookDownloader(QNetworkAccessManager* nam, QObject* parent)
+BookDownloader::BookDownloader(QNetworkAccessManager* nam,
+                               TorrentClient* torrentClient,
+                               QObject* parent)
     : QObject(parent)
     , m_nam(nam)
+    , m_torrentClient(torrentClient)
 {
+}
+
+QString BookDownloader::startMagnetDownload(const QString& magnetUri,
+                                            const QString& destinationDir,
+                                            const QString& suggestedName,
+                                            const QString& expectedFormat)
+{
+    if (!m_torrentClient) {
+        emit downloadFailed(magnetUri,
+            QStringLiteral("BookDownloader::startMagnetDownload requires a TorrentClient (not wired)"));
+        return {};
+    }
+    // TODO(Task 4.5 implementer): per Agent 4 HELP resolution 2026-05-21:
+    //   1. Kick off: m_torrentClient->addMagnetHeadless(magnetUri, "books",
+    //      destinationDir) → captures returned infoHash. (TorrentClient.h:126)
+    //   2. State: track in sibling MagnetInFlight struct (infoHash, magnetUri,
+    //      destinationDir, suggestedName, expectedFormat, bytesReceived/Total).
+    //   3. Completion edge: connect TorrentClient::torrentCompleted(infoHash)
+    //      signal (TorrentClient.h:301), match by infoHash from step 1.
+    //   4. Progress edge: TorrentClient::torrentUpdated(infoHash) (line 299) +
+    //      listActive() for per-torrent progressPct → emit downloadProgress.
+    //   5. Post-completion file walk: TorrentClient deposits under
+    //      savePath/name. Single-file = file IS destination (BooksScanner.
+    //      validateAll() picks up directly). Multi-file folder = leave intact.
+    //      Mixed/junk = pick largest qualifying file by expectedFormat ext +
+    //      move up one level (heuristic, BookDownloader-internal).
+    //   6. Emit downloadProgress / downloadComplete / downloadFailed — same
+    //      shape as the HTTP path so caller-side onDownloader* slots fork-free.
+    Q_UNUSED(destinationDir);
+    Q_UNUSED(suggestedName);
+    Q_UNUSED(expectedFormat);
+    emit downloadFailed(magnetUri,
+        QStringLiteral("BookDownloader::startMagnetDownload not yet implemented (Task 4.5 in flight)"));
+    return {};
 }
 
 BookDownloader::~BookDownloader()
