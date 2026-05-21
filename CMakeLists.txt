@@ -243,6 +243,7 @@ set(SOURCES
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/StreamDownloadIndex.cpp
     src/core/stream/QualityScorer.cpp
+    src/core/stream/SourceRanker.cpp
     src/core/stream/UnifiedProgressStore.cpp
     src/core/stream/StreamRescueScanner.cpp
     src/core/stream/CalendarEngine.cpp
@@ -453,6 +454,7 @@ set(HEADERS
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/StreamDownloadIndex.h
     src/core/stream/QualityScorer.h
+    src/core/stream/SourceRanker.h
     src/core/stream/UnifiedProgressStore.h
     src/core/stream/StreamRescueScanner.h
     src/core/stream/CalendarEngine.h
@@ -800,6 +802,7 @@ if(TANKOBAN_BUILD_TESTS)
     add_executable(tankoban_tests
         tests/test_main.cpp
         tests/core/stream/test_quality_scorer.cpp
+        tests/core/stream/test_source_ranker.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_stream_pack_parser.cpp
         tests/core/stream/test_stream_download_index_state.cpp
@@ -877,6 +880,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/JsonlEventLog.cpp
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
+        src/core/stream/SourceRanker.cpp
         src/core/stream/StreamDownloadIndex.cpp
         src/core/stream/UnifiedProgressStore.cpp
         src/core/stream/PackClassifier.cpp
