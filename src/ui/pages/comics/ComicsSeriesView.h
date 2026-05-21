@@ -245,6 +245,7 @@ private:
     void applyHeroCoverPixmap(const QPixmap& pm);
     void applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm);
     void populateHeroTags(const QStringList& genres);
+    void populateHeroTags(const QList<tankoban::manga::anilist::RankedTag>& tags);
 
     // Task 15: last-applied cover URL per volume -- populated in
     // loadCoverUrlForVolume, cleared in clearView, exposed via devSnapshot.

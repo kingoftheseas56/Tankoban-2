@@ -38,6 +38,8 @@
 #include <QRegularExpression>
 #include <QSize>
 #include <QSizePolicy>
+#include <algorithm>
+#include <QSet>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -66,6 +68,20 @@ constexpr int kColCount    = 6;
 const QSize kVolumeThumbSize(110, 150);
 constexpr int kVolumeRowHeight = 168;
 const QSize kHeroCoverSize(110, 165);
+
+// Tag names that AniList classifies as "Theme-Other-Demographic" — these
+// land in the meta strip in a future v1.x extension, not the hero chip
+// row. v1 just filters them OUT of the chip row so the chips show only
+// genre/theme/setting-flavored tags. Lowercased for compare.
+static const QSet<QString>& kDemographicTagNames()
+{
+    static const QSet<QString> kNames = {
+        QStringLiteral("shounen"), QStringLiteral("shoujo"),
+        QStringLiteral("seinen"),  QStringLiteral("josei"),
+        QStringLiteral("kodomomuke"),
+    };
+    return kNames;
+}
 
 constexpr const char* kPremiumSourceId = "tankoyomi_premium";
 constexpr const char* kWeebCentralSourceId = "weebcentral";
@@ -791,7 +807,7 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
             m_mangakaByline->show();
         }
     }
-    populateHeroTags(preview.genres);
+    populateHeroTags(preview.tags);
     if (m_heroCoverLabel) {
         m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(preview.title));
     }
@@ -1049,7 +1065,7 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
         }
     }
     m_metaLine->setText(buildHeroMetaLine(detail));
-    populateHeroTags(detail.preview.genres);
+    populateHeroTags(detail.preview.tags);
     if (m_heroCoverLabel && !detail.preview.title.isEmpty()
         && m_heroCoverLabel->pixmap(Qt::ReturnByValue).isNull()) {
         m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(detail.preview.title));
@@ -2065,6 +2081,46 @@ void ComicsSeriesView::populateHeroTags(const QStringList& genres)
     for (const QString& genre : genres) {
         const QString trimmed = genre.trimmed();
         if (trimmed.isEmpty() || chips.contains(trimmed, Qt::CaseInsensitive)) continue;
+        chips << trimmed;
+        if (chips.size() >= 5) break;
+    }
+
+    for (const QString& chipText : chips) {
+        auto* chip = new QLabel(chipText.toLower(), m_tagChipsRow);
+        chip->setObjectName(QStringLiteral("ComicsSeriesHeroTagChip"));
+        chip->setTextFormat(Qt::PlainText);
+        chip->setAlignment(Qt::AlignCenter);
+        m_tagChipsLayout->addWidget(chip, 0, Qt::AlignLeft);
+    }
+    m_tagChipsLayout->addStretch(1);
+    m_tagChipsRow->setVisible(!chips.isEmpty());
+}
+
+void ComicsSeriesView::populateHeroTags(const QList<anilist::RankedTag>& tags)
+{
+    if (!m_tagChipsRow || !m_tagChipsLayout) return;
+
+    while (QLayoutItem* item = m_tagChipsLayout->takeAt(0)) {
+        if (QWidget* w = item->widget()) w->deleteLater();
+        delete item;
+    }
+
+    // Sort descending by rank, copy because input is const&.
+    QList<anilist::RankedTag> sorted = tags;
+    std::sort(sorted.begin(), sorted.end(),
+        [](const anilist::RankedTag& a, const anilist::RankedTag& b) {
+            return a.rank > b.rank;
+        });
+
+    QStringList chips;
+    const QSet<QString>& demographics = kDemographicTagNames();
+    for (const auto& t : sorted) {
+        if (t.isSpoiler) continue;
+        const QString trimmed = t.name.trimmed();
+        const QString lower = trimmed.toLower();
+        if (trimmed.isEmpty()) continue;
+        if (demographics.contains(lower)) continue;
+        if (chips.contains(trimmed, Qt::CaseInsensitive)) continue;
         chips << trimmed;
         if (chips.size() >= 5) break;
     }
