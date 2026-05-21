@@ -2572,23 +2572,11 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     if (config.contentLayout == QLatin1String("no_subfolder"))
         m_engine->flattenFiles(hash);
 
-    // Create the record only now — user has confirmed the download
-    QJsonObject rec;
-    rec["name"]            = QString();
-    rec["state"]           = config.startPaused ? QStringLiteral("paused") : QStringLiteral("downloading");
-    rec["addedAt"]         = QDateTime::currentMSecsSinceEpoch();
-    rec["category"]        = config.category;
-    rec["savePath"]        = config.destinationPath;
-    rec["contentLayout"]   = config.contentLayout;
-    rec["streamGroupId"]   = config.streamGroupId;
-    rec["sequential"]      = config.sequential;
-    // TANKORENT_STREAM_INTEGRATION 2026-05-15: identity capture for single-add
-    // Tankorent downloads originating from the show-first picker. Empty/0 for
-    // non-Cinemeta downloads (repurposed direct torrent search).
-    rec["imdbId"]          = config.imdbId;
-    rec["season"]          = config.season;
-    // m_records[hash] = rec — DROPPED P5.5. repo upsert via the alert handler
-    // is the durable write; `rec` is no longer cached in-process.
+    // Record creation moved to the m_repo.upsertTorrent call earlier in this
+    // function (P5.5 close-out 2026-05-21). The legacy `QJsonObject rec`
+    // build-up + m_records[hash] = rec write block here is now dead code —
+    // every field was duplicated from `config` and the only consumer
+    // (m_records) is gone.
 
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — same-session re-dispatch:
     // libtorrent's metadata_received_alert is single-shot per handle. On a
@@ -3325,7 +3313,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
             QStringLiteral("download.file_completed"),
             QStringLiteral("torrent_finished"),
             QJsonObject{{QStringLiteral("hash"), infoHash},
-                        {QStringLiteral("imdbId"), rec.value(QStringLiteral("imdbId")).toString()},
+                        {QStringLiteral("imdbId"), row->imdbId},
                         {QStringLiteral("streamGroupId"), streamGroupId}});
     }
 
