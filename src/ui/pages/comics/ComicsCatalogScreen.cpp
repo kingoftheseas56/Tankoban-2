@@ -152,9 +152,13 @@ void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& 
     const QString subtitle = tr("%1 volumes").arg(catalog.volumes.size());
 
     auto* tile = new TileCard(QString{}, title, subtitle, m_gridHost);
-    // Catalog tiles use a fixed cover size matching the 2:3 manga ratio locked
-    // by feedback_bigger_manga_covers.md (110 wide × 150 tall image area).
-    tile->setCardSize(110, 150);
+    // Catalog grid tiles use Stream-mode default dimensions (200×308) — not the
+    // volume-row cover size from feedback_bigger_manga_covers.md (110×150), which
+    // only applies inside the series detail view.
+    tile->setCardSize(TileCard::DEFAULT_WIDTH, TileCard::DEFAULT_IMAGE_HEIGHT);
+    tile->setBadges(/*progressFraction=*/0.0, /*pageBadge=*/QString(),
+                    /*countBadge=*/subtitle, /*status=*/QString());
+    tile->setProvenance(QStringLiteral("Fandom"));
     connect(tile, &TileCard::clicked, this, [this, tile, seriesId = catalog.seriesId, title]() {
         emit seriesActivated(seriesId, title, 0);
     });
