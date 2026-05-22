@@ -75,6 +75,7 @@ constexpr int kFandomCatalogSchemaVersion = 1;
 // FandomCatalogCache (Task 12) with a 7-day TTL.
 struct FandomCatalog {
     QString             seriesId;                       // Tankoban's canonical seriesId
+    QString             seriesTitle;                    // Display title from JSON top-level (e.g., "One Piece" not "one-piece")
     QString             wikidataQid;                    // canonical cross-source identity
     QString             fandomWikiId;                   // cached subdomain (e.g., "deathnote")
     QString             fandomVolumePath;               // cached page path

@@ -73,7 +73,8 @@ std::optional<FandomCatalog> LocalFandomCatalogLoader::loadFromFile(const QStrin
     if (volumesArr.isEmpty()) return std::nullopt;
 
     FandomCatalog cat;
-    cat.seriesId = seriesId;
+    cat.seriesId    = seriesId;
+    cat.seriesTitle = root.value(QStringLiteral("seriesTitle")).toString();
     cat.schemaVersion = kFandomCatalogSchemaVersion;
 
     const QString fandomUrl = root.value("fandomUrl").toString();

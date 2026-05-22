@@ -138,11 +138,14 @@ void ComicsCatalogScreen::loadAllCatalogs()
     }
     m_emptyLabel->hide();
 
-    // Pass 2: sort by seriesId (case-insensitive)
+    // Pass 2: sort by seriesTitle (case-insensitive), falling back to seriesId
+    // slug when title is empty (legacy or incomplete catalogs).
     std::sort(catalogs.begin(), catalogs.end(),
               [](const tankoban::manga::fandom::FandomCatalog& a,
                  const tankoban::manga::fandom::FandomCatalog& b) {
-                  return a.seriesId.compare(b.seriesId, Qt::CaseInsensitive) < 0;
+                  const QString& ka = a.seriesTitle.isEmpty() ? a.seriesId : a.seriesTitle;
+                  const QString& kb = b.seriesTitle.isEmpty() ? b.seriesId : b.seriesTitle;
+                  return ka.compare(kb, Qt::CaseInsensitive) < 0;
               });
 
     // Pass 3: paint
@@ -155,16 +158,11 @@ void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& 
 {
     if (catalog.seriesId.isEmpty()) return;
 
-    // Derive a display title from the seriesId slug ("one-piece" → "One Piece").
-    // FandomCatalog has no top-level seriesTitle field; slug-capitalisation is
-    // good enough for v1.
-    QString title = catalog.seriesId;
-    title.replace('-', ' ');
-    QStringList words = title.split(' ', Qt::SkipEmptyParts);
-    for (auto& w : words) {
-        if (!w.isEmpty()) w[0] = w[0].toUpper();
-    }
-    title = words.join(' ');
+    // Prefer the human-readable seriesTitle from JSON; fall back to seriesId
+    // slug if the catalog predates the title field or has it empty.
+    const QString title = !catalog.seriesTitle.isEmpty()
+                           ? catalog.seriesTitle
+                           : catalog.seriesId;
 
     // Subtitle: volume count.
     const QString subtitle = tr("%1 volumes").arg(catalog.volumes.size());
