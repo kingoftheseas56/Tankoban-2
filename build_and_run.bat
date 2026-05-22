@@ -15,10 +15,10 @@ set "PROJECT_DIR=%~dp0."
 call :resolve_build_dir
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-:: Kill any running instance. Preserves the historical run-script behavior.
+:: Kill any running instance. Tankoban.exe stays global because users run one
+:: app instance; build workers are lane-scoped so out\ does not kill out_<lane>\.
 taskkill /F /IM Tankoban.exe >nul 2>&1
-taskkill /F /IM ninja.exe    >nul 2>&1
-taskkill /F /IM cl.exe       >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $buildDir='%BUILD_DIR%'.Replace('\','/').TrimEnd('/'); $pattern=[regex]::Escape($buildDir)+'($|[/\s\x22''])'; Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'ninja.exe' -or $_.Name -eq 'cl.exe') -and (([string]$_.CommandLine -replace '\\','/') -match $pattern) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
 
 :: Set up MSVC environment
 echo [1/4] Setting up MSVC environment...
