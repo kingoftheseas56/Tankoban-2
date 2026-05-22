@@ -56,6 +56,8 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QProgressBar>
+#include <QIcon>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QMetaObject>
@@ -772,10 +774,46 @@ void ComicsPage::buildUI()
         "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
     auto* searchLayout = new QHBoxLayout();
     searchLayout->setContentsMargins(0, 12, 0, 0);
-    searchLayout->addWidget(m_searchBar);
+    searchLayout->setSpacing(8);
+    searchLayout->addWidget(m_searchBar, 1);
+
+    // Busy spinner — indeterminate QProgressBar (range 0..0) animates
+    // natively; 16x16 sits between input + search button. Mirrors
+    // StreamPage.cpp:1230-1242. Held as QWidget* in the header so the
+    // header doesn't need <QProgressBar>.
+    auto* busy = new QProgressBar();
+    busy->setRange(0, 0);
+    busy->setTextVisible(false);
+    busy->setFixedSize(16, 16);
+    busy->setObjectName("ComicsSearchBusy");
+    busy->setStyleSheet(
+        "#ComicsSearchBusy { background: transparent; border: none; }"
+        "#ComicsSearchBusy::chunk { background: rgba(255,255,255,0.5); }");
+    busy->hide();
+    searchLayout->addWidget(busy);
+    m_searchBusy = busy;
+
+    // Magnifying-glass search button (icon-only, 36×36). Reuses the
+    // search.svg Agent 4 shipped this wake at :/icons/search.svg.
+    m_searchBtn = new QPushButton();
+    m_searchBtn->setFixedHeight(36);
+    m_searchBtn->setFixedWidth(36);
+    m_searchBtn->setCursor(Qt::PointingHandCursor);
+    m_searchBtn->setObjectName("ComicsSearchBtn");
+    m_searchBtn->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
+    m_searchBtn->setIconSize(QSize(18, 18));
+    m_searchBtn->setToolTip(tr("Search"));
+    connect(m_searchBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_searchBar) return;
+        const QString q = m_searchBar->text().trimmed();
+        if (q.isEmpty()) return;
+        showSearchMode(q);
+    });
+    searchLayout->addWidget(m_searchBtn);
+
     gridLayout->addLayout(searchLayout);
 
-    m_searchBar->setToolTip("Press Enter to search Tankoyomi sources");
+    m_searchBar->setToolTip(tr("Press Enter or click the search icon to search Tankoyomi sources"));
 
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 — search bar
     // repurpose. textChanged still updates the activeSearch style hint
@@ -2062,6 +2100,12 @@ void ComicsPage::clearSearchHistory()
     m_searchHistory.clear();
     saveSearchHistory();
     hideSearchHistoryDropdown();
+}
+
+void ComicsPage::setSearchBusy(bool busy)
+{
+    if (!m_searchBusy) return;
+    m_searchBusy->setVisible(busy);
 }
 
 void ComicsPage::buildSearchHistoryDropdown()
