@@ -991,18 +991,48 @@ void TheatreDownloadPanel::rerenderScopePicker() {
         return;
     }
 
-    // Series mode: derive bySeason from title estimate (instant path) OR
-    // from real file metadata (F2 fix cascade for complete-series packs
-    // with no season tokens in the title).
+    // Series mode source-of-truth hierarchy (highest priority first):
+    //   1. m_realFiles - libtorrent file probe (the truest source)
+    //   2. m_knownEpisodeCounts - Cinemeta per-season counts (THEATRE_BULK_
+    //      PICKER_EPISODE_COUNT_FIX 2026-05-22)
+    //   3. m_scopeEstimate - title-token parse with 10-default fallback
     QMap<int, QList<EpisodeEstimate>> bySeason;
+
+    // Default: title-estimate path (least informed; supplies title + filename
+    // hints when the estimator extracts them).
     for (const auto& ep : m_scopeEstimate.episodes)
         bySeason[ep.season].append(ep);
 
-    // F6 2026-05-19: once real torrent metadata arrives, it owns the scope.
-    // Title estimates default unknown season packs to 10 episodes, which
-    // mislabels packs like Born Again S01 (9 real files) and any 13-episode
-    // season. The filename probe gives the actual torrent file count and
-    // tile list, so prefer it whenever it detects episodes.
+    // Override 1: Cinemeta-known episode counts. Honored when:
+    //   (a) at least one season has a positive count, AND
+    //   (b) for each known season, replace any title-estimate rows
+    //       with a fresh 1..count list. Seasons present only in the
+    //       estimate (not in Cinemeta) are kept as-is.
+    // This addresses the 10-default-everywhere bug for packs whose titles
+    // (e.g. "Community S05 + Featurettes 1080p Bluray x265") carry no
+    // SxxEyy / "13 Episodes" tokens.
+    if (!m_knownEpisodeCounts.isEmpty()) {
+        for (auto it = m_knownEpisodeCounts.constBegin();
+             it != m_knownEpisodeCounts.constEnd(); ++it) {
+            const int season = it.key();
+            const int count  = it.value();
+            if (count <= 0) continue;
+            QList<EpisodeEstimate> fresh;
+            fresh.reserve(count);
+            for (int ep = 1; ep <= count; ++ep) {
+                EpisodeEstimate e;
+                e.season  = season;
+                e.episode = ep;
+                fresh.append(e);
+            }
+            bySeason[season] = fresh;
+        }
+    }
+
+    // Override 2 (top priority): real torrent file probe. Once libtorrent
+    // delivers the file list we trust it absolutely — it's the actual on-
+    // disk truth, and it may also detect episodes Cinemeta doesn't know
+    // about (e.g. featurettes the addon meta omits).
     DerivedScope derivedForOverlay;
     if (!m_realFiles.isEmpty()) {
         derivedForOverlay = deriveScopeFromFiles();
