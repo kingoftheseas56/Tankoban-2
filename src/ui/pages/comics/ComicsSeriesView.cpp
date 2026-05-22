@@ -43,8 +43,6 @@
 #include <QSet>
 #include <QStringList>
 #include <QScrollArea>
-#include <QTableWidget>
-#include <QTableWidgetItem>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -55,18 +53,9 @@ namespace tankoban::manga::comics {
 
 namespace {
 
-// STREAM_PORT 2026-05-18 Task 5 carry-forward: column constants promoted from
-// function-local (Task 2 had them inside buildUi()) to file scope so all
-// slots in this file can reference them by name. Stream parity at
-// StreamDetailView.cpp:1064-1071 uses the same pattern.
-constexpr int kColCheckbox = 0;
-constexpr int kColIndex    = 1;
-constexpr int kColThumb    = 2;
-constexpr int kColTitle    = 3;
-constexpr int kColProgress = 4;
-constexpr int kColStatus   = 5;
-constexpr int kColCount    = 6;
-
+// Task 16: kCol* QTableWidget column constants removed -- QTableWidget fully
+// replaced by VolumeTile rows. kVolumeThumbSize kept for applyPixmapToVolumeRow
+// callers that pass explicit sizes (none remain; kept for documentation).
 const QSize kVolumeThumbSize(110, 150);
 constexpr int kVolumeRowHeight = 168;
 const QSize kHeroCoverSize(110, 165);
@@ -341,8 +330,8 @@ ComicsSeriesView::ComicsSeriesView(anilist::AniListClient*  client,
     }
 
     // Task 13: cellClicked + currentCellChanged connects removed (m_volumesTable
-    // no longer exists). onVolumeCellClicked + onVolumeCurrentChanged will be
-    // rewired to VolumeTile signals in Task 16.
+    // no longer exists). Task 16: onVolumeCellClicked + onVolumeCurrentChanged
+    // are now no-op stubs; VolumeTile owns its own click/toggle signals.
 
     // PHASE 8: forward the sources panel's downloadRequested verbatim via
     // ComicsSeriesView's own downloadDispatchRequested signal so Phase 9
@@ -433,31 +422,8 @@ void ComicsSeriesView::buildUi()
         "  font-size: 11px;"
         "  padding: 2px 9px;"
         "}"
-        "QTableWidget#ComicsSeriesVolumesTable {"
-        "  background-color: rgba(15, 15, 18, 0.88);"
-        "  border: 1px solid rgba(255, 255, 255, 0.08);"
-        "  border-radius: 8px;"
-        "  gridline-color: rgba(255, 255, 255, 0.05);"
-        "  color: #e5e7eb;"
-        "}"
-        "QTableWidget#ComicsSeriesVolumesTable::item {"
-        "  background: transparent;"
-        "  color: #e5e7eb;"
-        "  padding: 4px 8px;"
-        "}"
-        "QTableWidget#ComicsSeriesVolumesTable::item:alternate {"
-        "  background-color: rgba(255, 255, 255, 0.03);"
-        "}"
-        "QTableWidget#ComicsSeriesVolumesTable::item:selected {"
-        "  background: rgba(255, 255, 255, 0.08);"
-        "}"
-        "QTableWidget#ComicsSeriesVolumesTable QHeaderView::section {"
-        "  background-color: rgba(20, 20, 24, 0.95);"
-        "  color: rgba(255, 255, 255, 0.65);"
-        "  border: none;"
-        "  padding: 8px 10px;"
-        "  font-weight: 600;"
-        "}"
+        // Task 16: QTableWidget#ComicsSeriesVolumesTable QSS removed --
+        // volume rows are now VolumeTile QFrame widgets with their own QSS.
         "#ComicsSeriesSourcesPanel {"
         "  background-color: rgba(15, 15, 18, 0.88);"
         "  border: 1px solid rgba(255, 255, 255, 0.08);"
@@ -780,7 +746,10 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     // (instant on re-open of same series) or async fetch (brief
     // flicker of prior series' banner during series-change, only
     // visible if the new URL is not yet cached).
-    m_volumesTable->setRowCount(0);
+    // Task 16: clear VolumeTile rows instead of QTableWidget setRowCount(0).
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
     refreshLibraryButton();
 
     // Task 14 / Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): kick off BookWalker
@@ -872,7 +841,10 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
         m_heroCoverLabel->setPixmap(makeHeroCoverPlaceholder(wc.title));
     }
     loadHeroCoverUrl(wc.thumbnailUrl);
-    m_volumesTable->setRowCount(0);
+    // Task 16: clear VolumeTile rows instead of QTableWidget setRowCount(0).
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
     refreshLibraryButton();
 
     // Banner: use thumbnailUrl from MangaResult as the hero image until an
@@ -940,7 +912,13 @@ void ComicsSeriesView::clearView()
 
     m_lastAppliedCoverUrlByVolume.clear();
     hideLoadingOverlay();  // stops the safety timer before clearing rows
-    m_volumesTable->setRowCount(0);
+    // Task 16: clear VolumeTile rows instead of QTableWidget setRowCount(0).
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
+    m_currentVolumeRows.clear();
+    m_selectedRows.clear();
+    if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
     if (m_sourcesPanel) m_sourcesPanel->clear();
     refreshLibraryButton();
 }
@@ -984,7 +962,8 @@ void ComicsSeriesView::onSeriesFailed(int requestId, const QString& reason)
     qWarning("ComicsSeriesView: seriesFailed(reqId=%d) reason=%s",
              requestId, reason.toUtf8().constData());
 
-    if (m_volumesTable->rowCount() == 0) {
+    // Task 16: no QTableWidget rowCount; use tile list instead.
+    if (m_volumeTiles.isEmpty()) {
         renderEmpty(reason);
     }
 }
@@ -1150,8 +1129,8 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         tankoban::ui::comics::VolumeTileState state;
         state.provenance = QString();  // AniList-only path: no source badge
         if (!resolvedCbzPath.isEmpty()) {
-            state.downloadStatus = tankoban::ui::comics::VolumeDownloadStatus::Downloaded;
-            state.localPath      = resolvedCbzPath;
+            state.state   = tankoban::ui::comics::VolumeTileState::Complete;
+            state.cbzPath = resolvedCbzPath;
         }
         tile->setVolumeState(state);
         tile->setMangaDownloadIndex(m_downloadIndex);
@@ -1188,7 +1167,7 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
     m_nextUnreadRow = -1;
     for (int i = 0; i < m_volumeTiles.size(); ++i) {
         const auto* t = m_volumeTiles.at(i);
-        if (t && t->volumeState().localPath.isEmpty()) {
+        if (t && t->volumeState().cbzPath.isEmpty()) {
             m_nextUnreadRow = i;
             break;
         }
@@ -1366,7 +1345,10 @@ void ComicsSeriesView::setVolumeRows(const QList<anilist::VolumeRow>& rows)
 
 void ComicsSeriesView::renderEmpty(const QString& reason)
 {
-    m_volumesTable->setRowCount(0);
+    // Task 16: clear VolumeTile rows instead of QTableWidget setRowCount(0).
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
     m_currentVolumeRows.clear();
     if (m_sourcesPanel) m_sourcesPanel->clear();
     if (!reason.isEmpty()) {
@@ -1931,154 +1913,103 @@ void ComicsSeriesView::populateHeroTags(const QList<anilist::RankedTag>& tags)
 
 void ComicsSeriesView::applyPixmapToVolumeRow(int volumeNumber, const QPixmap& pm)
 {
-    if (!m_volumesTable || pm.isNull()) {
-        qWarning("applyPixmapToVolumeRow: precondition fail vol=%d table=%p null=%d",
-                 volumeNumber, static_cast<void*>(m_volumesTable), pm.isNull());
+    // Task 16: route through VolumeTile::setCoverFromPixmap.
+    // The old QTableWidget cellWidget lookup is replaced by a hash lookup.
+    if (pm.isNull()) {
+        qWarning("applyPixmapToVolumeRow: null pixmap for vol=%d", volumeNumber);
         return;
     }
-    // STREAM_PORT Bug-4 round-3 fix 2026-05-18: writes to the cellWidget
-    // QLabel#ComicsSeriesVolumeRowThumb (was QTableWidgetItem.setIcon via
-    // DecorationRole). Same 48x64 KeepAspectRatio scale; same per-row
-    // volumeNumber match. The migration was forced by removing the
-    // table-wide setIconSize that was clipping the col-0 QToolButton icon.
-    for (int i = 0; i < m_currentVolumeRows.size() && i < m_volumesTable->rowCount(); ++i) {
-        if (m_currentVolumeRows.at(i).volumeNumber == volumeNumber) {
-            auto* coverLabel = qobject_cast<QLabel*>(m_volumesTable->cellWidget(i, kColThumb));
-            if (!coverLabel) {
-                qWarning("applyPixmapToVolumeRow: cellWidget for vol=%d row=%d col=%d is not QLabel (got %p)",
-                         volumeNumber, i, kColThumb,
-                         static_cast<void*>(m_volumesTable->cellWidget(i, kColThumb)));
-                return;
-            }
-            const QPixmap scaled = pm.scaled(kVolumeThumbSize, Qt::KeepAspectRatio,
-                                             Qt::SmoothTransformation);
-            coverLabel->setPixmap(scaled);
-            return;
-        }
+    auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+    if (!tile) {
+        qWarning("applyPixmapToVolumeRow: no tile for volumeNumber=%d (tileCount=%d)",
+                 volumeNumber, m_volumeTilesByVolumeNumber.size());
+        return;
     }
-    qWarning("applyPixmapToVolumeRow: no row matched volumeNumber=%d (m_currentVolumeRows.size=%lld rowCount=%d)",
-             volumeNumber,
-             static_cast<long long>(m_currentVolumeRows.size()),
-             m_volumesTable->rowCount());
+    tile->setCoverFromPixmap(pm);
 }
 
 void ComicsSeriesView::setVolumeCoverFromDisk(const QString& seriesId, int volumeNumber,
                                               const QString& coverPath)
 {
-    // Stale-series guard: seriesId may be a real catalog seriesId (e.g.
-    // "death-note") OR a synthesized "anilist_<N>" slug. Parse the slug
-    // prefix and compare against m_currentAnilistId; if seriesId is not a
-    // recognized slug shape, fall through and apply unconditionally (cheaper
-    // than maintaining a per-view catalog-id map; the worst case is a stale
-    // event painting a stray row, which is recoverable on next renderDetail).
-    if (seriesId.startsWith(QStringLiteral("anilist_"))) {
-        bool ok = false;
-        const int parsed = QStringView(seriesId).mid(8).toInt(&ok);
-        if (ok && parsed != m_currentAnilistId) {
-            return;
+    // Task 16: stale-series guard preserved. seriesId may be "anilist_<N>"
+    // or a catalog slug (e.g. "death-note") or m_currentSeriesKey format
+    // ("anilist:<N>" / "weebcentral:<id>"). Check both formats.
+    const QString expectedAnilist    = QStringLiteral("anilist_%1").arg(m_currentAnilistId);
+    const QString expectedAnilistKey = QStringLiteral("anilist:%1").arg(m_currentAnilistId);
+    if (seriesId != expectedAnilist
+     && seriesId != expectedAnilistKey
+     && seriesId != m_currentSeriesKey) {
+        // Not an exact match — also allow the legacy anilist_ prefix parse.
+        if (seriesId.startsWith(QStringLiteral("anilist_"))) {
+            bool ok = false;
+            const int parsed = QStringView(seriesId).mid(8).toInt(&ok);
+            if (ok && parsed != m_currentAnilistId) {
+                return;  // stale event for a different series
+            }
+        } else {
+            // Unknown slug format — apply unconditionally (catalog-path; no
+            // per-view catalog-id map maintained in v1).
         }
     }
 
     if (coverPath.isEmpty() || !QFileInfo(coverPath).exists()) return;
-    QPixmap pm(coverPath);
-    if (pm.isNull()) return;
 
-    // Stage 3: replace the AniList thumb with the cbz-extracted cover. We
-    // intentionally do NOT cache disk-loaded paths in QPixmapCache (URL keys
-    // only; the URL cache is for network-fetched images). Re-renders pick up
-    // the disk file directly when this slot fires again.
-    applyPixmapToVolumeRow(volumeNumber, pm);
+    // Task 16: route through VolumeTile::setCoverFromDisk (reads disk file
+    // itself) rather than applyPixmapToVolumeRow (which takes a QPixmap).
+    // This avoids a redundant decode: setCoverFromDisk already handles scale.
+    auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+    if (!tile) return;
+    tile->setCoverFromDisk(coverPath);
 }
 
 void ComicsSeriesView::setVolumeDownloadState(int volumeNumber, const QString& cbzPath,
                                               bool downloaded)
 {
-    if (!m_volumesTable) return;
-    for (int i = 0; i < m_currentVolumeRows.size() && i < m_volumesTable->rowCount(); ++i) {
-        if (m_currentVolumeRows.at(i).volumeNumber != volumeNumber) continue;
-        if (auto* indexItem = m_volumesTable->item(i, kColIndex)) {
-            indexItem->setData(Qt::UserRole + 1, downloaded ? cbzPath : QString());
-        }
-        // STREAM_PORT Bug-3 round 2 fix 2026-05-18: write to the cellWidget
-        // QLabel (16x16 pixmap) instead of the now-removed QTableWidgetItem
-        // icon. populateVolumeRows installed a QLabel#ComicsSeriesVolumeRowStatus
-        // at this column for every row -- look it up and setPixmap.
-        if (auto* statusLabel = qobject_cast<QLabel*>(m_volumesTable->cellWidget(i, kColStatus))) {
-            statusLabel->setPixmap(QIcon(downloaded
-                ? QStringLiteral(":/icons/check.svg")
-                : QStringLiteral(":/icons/download-arrow.svg")).pixmap(16, 16));
-            statusLabel->setText(QString());
-            statusLabel->setToolTip(downloaded ? tr("Downloaded") : tr("Not downloaded"));
-        }
-        return;
-    }
+    // Task 16: route through VolumeTile state setter.
+    auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+    if (!tile) return;
+    auto state = tile->volumeState();
+    state.cbzPath = downloaded ? cbzPath : QString();
+    state.state   = downloaded
+        ? tankoban::ui::comics::VolumeTileState::Complete
+        : tankoban::ui::comics::VolumeTileState::NotStarted;
+    tile->setVolumeState(state);
 }
 
 
 void ComicsSeriesView::setVolumeStatusText(int volumeNumber, const QString& statusText)
 {
-    if (!m_volumesTable) return;
-    for (int i = 0; i < m_currentVolumeRows.size() && i < m_volumesTable->rowCount(); ++i) {
-        if (m_currentVolumeRows.at(i).volumeNumber != volumeNumber) continue;
-        // STREAM_PORT Bug-3 round 2 fix 2026-05-18: same cellWidget QLabel
-        // that holds the steady-state pixmap now holds transient text
-        // ("Downloading...", "Failed"). Clear the pixmap so it doesn't
-        // overlap the text inside the same QLabel.
-        if (auto* statusLabel = qobject_cast<QLabel*>(m_volumesTable->cellWidget(i, kColStatus))) {
-            statusLabel->setPixmap(QPixmap());
-            statusLabel->setText(statusText);
-        }
-        return;
-    }
+    // Task 16: route through VolumeTile::setStatusText + recompute state.
+    auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+    if (!tile) return;
+    tile->setStatusText(statusText);
+    // Re-derive state from (index-presence, statusText). The index-presence
+    // check mirrors what VolumeTile::onIndexEntriesChanged does, but that
+    // fires on the index signal — this slot handles transient push-state
+    // updates (Queued/Downloading/Failed) from the download manager.
+    auto state = tile->volumeState();
+    const bool hasEntry = m_downloadIndex
+        && m_downloadIndex->entryForSeriesAndVolume(
+               QStringLiteral("fandom_catalog"),
+               m_currentSeriesKey, volumeNumber).has_value();
+    state.state      = tankoban::ui::comics::VolumeTile::computeState(hasEntry, statusText);
+    state.statusText = statusText;
+    tile->setVolumeState(state);
 }
 
-void ComicsSeriesView::onVolumeCellClicked(int row, int column)
+void ComicsSeriesView::onVolumeCellClicked(int /*row*/, int /*column*/)
 {
-    if (row < 0 || row >= m_currentVolumeRows.size()) {
-        return;
-    }
-
-    // STREAM_PORT Bug-4 round-3 fix 2026-05-18: col-0 checkbox click toggles
-    // the QLabel pixmap + dynamic "checked" property + dispatches to
-    // onVolumeCheckboxToggled. cellWidget eventFilter routing was preempted
-    // by the table's SelectRows behavior; the cellClicked signal fires
-    // reliably regardless. Early-return after toggling so the cbz-open path
-    // below doesn't ALSO trigger.
-    if (column == kColCheckbox) {
-        if (auto* lbl = qobject_cast<QLabel*>(m_volumesTable->cellWidget(row, kColCheckbox))) {
-            const bool newChecked = !lbl->property("checked").toBool();
-            lbl->setProperty("checked", newChecked);
-            lbl->setPixmap(QIcon(newChecked
-                ? QStringLiteral(":/icons/checkbox-checked.svg")
-                : QStringLiteral(":/icons/checkbox-empty.svg")).pixmap(14, 14));
-            onVolumeCheckboxToggled(row, newChecked);
-        }
-        return;
-    }
-
-    // F1 (2026-05-18): mouse-tap-to-open path only. If the row has a stashed
-    // cbz path, emit openVolume so ComicsPage can route to the reader. The
-    // Sources panel populate side now lives on onVolumeCurrentChanged, which
-    // fires from this same click *before* cellClicked, so by the time we get
-    // here the panel is already up to date.
-    if (auto* item = m_volumesTable->item(row, kColIndex)) {
-        const QString cbzPath = item->data(Qt::UserRole + 1).toString();
-        if (!cbzPath.isEmpty()) {
-            const anilist::VolumeRow& volRow = m_currentVolumeRows.at(row);
-            emit openVolume(volRow.volumeNumber, cbzPath);
-        }
-    }
+    // Task 16: deprecated. VolumeTile owns its click handling (openRequested /
+    // downloadRequested / toggled signals). This slot is kept as a no-op so
+    // any residual signal-slot connect (if any) does not break at link time.
 }
 
-void ComicsSeriesView::onVolumeCurrentChanged(int currentRow, int currentColumn,
-                                              int previousRow, int previousColumn)
+
+void ComicsSeriesView::onVolumeCurrentChanged(int /*currentRow*/, int /*currentColumn*/,
+                                              int /*previousRow*/, int /*previousColumn*/)
 {
-    Q_UNUSED(currentColumn);
-    Q_UNUSED(previousRow);
-    Q_UNUSED(previousColumn);
-    // F1 (2026-05-18): fires on both mouse + keyboard selection changes, so
-    // arrow-key nav across the volumes table updates the Sources panel.
-    populateSourcesForRow(currentRow);
+    // Task 16: deprecated. VolumeTile keyboard/click nav drives the Sources
+    // panel via downloadRequested signal wiring. No-op stub.
 }
 
 void ComicsSeriesView::populateSourcesForRow(int row)
@@ -2090,25 +2021,17 @@ void ComicsSeriesView::populateSourcesForRow(int row)
 
     const anilist::VolumeRow& volRow = m_currentVolumeRows.at(row);
 
-    // Pull chapterNumbers back out of the col-1 item's UserRole stash. This is
-    // the QStringList we set during renderDetail (VolumeRow::chapterNumbers field).
-    // STREAM_PORT Task 2: col 0 is now checkbox; stash lives on col 1.
-    // Carry-forward B: renamed from chapterIds to chapterNumbers to match
-    // AniListTypes.h VolumeRow field naming. Panel API parameter stays chapterIds.
-    QStringList chapterNumbers;
-    if (auto* item = m_volumesTable->item(row, kColIndex)) {
-        chapterNumbers = item->data(Qt::UserRole).toStringList();
-    }
+    // Task 16: chapterNumbers come directly from VolumeRow (no QTableWidget
+    // UserRole stash needed). The UserRole stash was a QTableWidget-era hack
+    // to shuttle data back out of a cellWidget; VolumeRow already carries it.
+    const QStringList& chapterNumbers = volRow.chapterNumbers;
 
-    QString volumeTitle;
-    if (auto* item = m_volumesTable->item(row, kColIndex)) {
-        volumeTitle = item->data(Qt::UserRole + 2).toString();
-    }
-    if (volumeTitle.isEmpty()) {
-        volumeTitle = volRow.isVolumeX
-            ? tr("Volume X")
-            : tr("Volume %1").arg(volRow.volumeNumber);
-    }
+    // Task 16: volume title synthesized from VolumeRow fields (mirrors the
+    // title synthesis in populateVolumeRows). No UserRole+2 stash needed.
+    const QString volumeTitle = volRow.isVolumeX
+        ? tr("Volume X")
+        : tr("Volume %1").arg(volRow.volumeNumber);
+
     m_sourcesPanel->setContext(volRow.volumeNumber, volumeTitle);
 
     m_sourcesPanel->populate(m_currentSeriesTitle,
@@ -2193,7 +2116,8 @@ QJsonObject ComicsSeriesView::devSnapshot() const
     snap[QStringLiteral("libraryButtonText")] =
         m_libraryButton ? m_libraryButton->text() : QString();
     snap[QStringLiteral("selectedVolumeCount")] = m_selectedRows.size();
-    snap[QStringLiteral("currentRow")] = m_volumesTable ? m_volumesTable->currentRow() : -1;
+    // Task 16: no QTableWidget currentRow; report tile count instead.
+    snap[QStringLiteral("tileCount")] = m_volumeTiles.size();
     snap[QStringLiteral("nextUnreadRow")] = m_nextUnreadRow;
 
     QJsonArray selectedRows;
@@ -2203,12 +2127,11 @@ QJsonObject ComicsSeriesView::devSnapshot() const
 
     QJsonArray rows;
     for (int i = 0; i < m_currentVolumeRows.size(); ++i) {
-        QString cbzPath;
-        if (m_volumesTable) {
-            if (auto* item = m_volumesTable->item(i, kColIndex))
-                cbzPath = item->data(Qt::UserRole + 1).toString();
-        }
+        // Task 16: cbzPath now lives on the VolumeTileState instead of a
+        // QTableWidgetItem UserRole stash.
         const int volNum = m_currentVolumeRows.at(i).volumeNumber;
+        const auto* tile = m_volumeTilesByVolumeNumber.value(volNum, nullptr);
+        const QString cbzPath = tile ? tile->volumeState().cbzPath : QString();
         const QString coverUrl = m_lastAppliedCoverUrlByVolume.value(volNum);
         rows.append(volumeRowJson(m_currentVolumeRows.at(i), i,
                                   m_selectedRows.contains(i), cbzPath, coverUrl));
@@ -2221,13 +2144,14 @@ QJsonObject ComicsSeriesView::devSnapshot() const
 QJsonObject ComicsSeriesView::devSelectVolume(int row)
 {
     QJsonObject out;
-    if (!m_volumesTable || row < 0 || row >= m_currentVolumeRows.size()) {
+    // Task 16: no QTableWidget; guard against out-of-range row only.
+    if (row < 0 || row >= m_currentVolumeRows.size()) {
         out[QStringLiteral("status")] = QStringLiteral("error");
         out[QStringLiteral("message")] = QStringLiteral("row out of range");
         return out;
     }
 
-    m_volumesTable->setCurrentCell(row, kColIndex);
+    // Task 16: no setCurrentCell; drive the sources panel directly.
     populateSourcesForRow(row);
     out[QStringLiteral("status")] = QStringLiteral("ok");
     out[QStringLiteral("row")] = row;
@@ -2257,7 +2181,7 @@ QJsonObject ComicsSeriesView::devDispatchVolume(int volumeNumber, const QString&
         return out;
     }
 
-    m_volumesTable->setCurrentCell(row, kColIndex);
+    // Task 16: no setCurrentCell; drive the sources panel directly.
     populateSourcesForRow(row);
 
     QString err;

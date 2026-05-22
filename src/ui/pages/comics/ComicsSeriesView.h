@@ -41,7 +41,6 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QPushButton;
 class QScrollArea;
-class QTableWidget;
 class QTimer;
 class QHBoxLayout;
 class QVBoxLayout;
