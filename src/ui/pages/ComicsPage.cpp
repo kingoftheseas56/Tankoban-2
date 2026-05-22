@@ -30,6 +30,7 @@
 #include "core/manga/fandom/FandomTypes.h"
 #include "core/manga/fandom/FandomVolumeResolver.h"
 #include "core/manga/fandom/LocalFandomCatalogLoader.h"
+#include "comics/ComicsCatalogScreen.h"
 #include "core/manga/fandom/WikiManifestRegistry.h"
 #include "core/manga/wikidata/WikidataClient.h"
 #include "core/manga/wikipedia/WikipediaResolver.h"
@@ -840,6 +841,21 @@ void ComicsPage::buildUI()
         showSearchMode(q);
     });
     searchLayout->addWidget(m_searchBtn);
+
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-22 — Catalog button mirrors
+    // StreamPage's catalog entry. Sits to the right of the magnifying-glass
+    // search button. Opens ComicsCatalogScreen on click.
+    m_catalogBtn = new QPushButton(tr("Catalog"));
+    m_catalogBtn->setFixedHeight(36);
+    m_catalogBtn->setCursor(Qt::PointingHandCursor);
+    m_catalogBtn->setObjectName("ComicsCatalogBtn");
+    m_catalogBtn->setToolTip(tr("Browse all catalogued series"));
+    m_catalogBtn->setStyleSheet(
+        "QPushButton#ComicsCatalogBtn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 6px; color: #eee; padding: 6px 14px; font-size: 13px; }"
+        "QPushButton#ComicsCatalogBtn:hover { background: rgba(255,255,255,0.15); }");
+    connect(m_catalogBtn, &QPushButton::clicked, this, &ComicsPage::showCatalogMode);
+    searchLayout->addWidget(m_catalogBtn);
 
     gridLayout->addLayout(searchLayout);
 
@@ -2315,6 +2331,72 @@ void ComicsPage::showSearchMode(const QString& query)
     m_mode = Mode::SearchResults;
     m_searchTakeover->search(query);
     m_stack->setCurrentWidget(m_searchTakeover);
+}
+
+void ComicsPage::showCatalogMode()
+{
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-22 — open the Catalog browser.
+    // Lazy-creates the screen on first invocation; subsequent presses reuse
+    // it (cheap rebuild on refresh()). Mirrors showSearchMode's emit-then-
+    // swap shape so NavHistory captures the layer.
+    if (!m_catalogScreen) {
+        m_catalogScreen = new tankoban::ui::comics::ComicsCatalogScreen(m_nam, this);
+        m_stack->addWidget(m_catalogScreen);
+        connect(m_catalogScreen, &tankoban::ui::comics::ComicsCatalogScreen::backRequested,
+                this, [this]() { showLibraryMode(); });
+        connect(m_catalogScreen, &tankoban::ui::comics::ComicsCatalogScreen::seriesActivated,
+                this, &ComicsPage::onCatalogTileActivated);
+    }
+    m_catalogScreen->refresh();
+
+    if (!m_inNavRestore && m_mode != Mode::Catalog) {
+        QJsonObject blob;
+        emit enteredLayer(makeComicsLayer(QStringLiteral("catalog"),
+                                          QStringLiteral("Catalog"),
+                                          blob));
+    }
+    m_mode = Mode::Catalog;
+    m_stack->setCurrentWidget(m_catalogScreen);
+}
+
+void ComicsPage::onCatalogTileActivated(const QString& seriesId,
+                                        const QString& seriesTitle,
+                                        int            anilistId)
+{
+    // COMICS_CATALOG_SERIES_VIEW 2026-05-23 Task 5 — wire catalog tile click
+    // into the existing ComicsSeriesView::showSeries(MediaPreview) path.
+    //
+    // anilistId > 0  → AniList fetch fires for banner + ranked tags.
+    // anilistId == 0 → dispatchFandomResolve hits the local catalog via
+    //                  titleHint matching; no AniList enrichment.
+    //
+    // Nav contract: emit enteredLayer BEFORE state change so MainWindow's
+    // recordNavEvent captures the OLD Catalog state and pushes a fresh
+    // TankoyomiDetail entry — keeps Back chevron enabled (same discipline
+    // as openSeriesByPreview / PHASE 0 NAV CONTRACT RESTORE 2026-05-17).
+    Q_UNUSED(seriesId)  // carried in blob for future restore-layer use
+
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("anilistId")]   = anilistId;
+        blob[QStringLiteral("seriesTitle")] = seriesTitle;
+        blob[QStringLiteral("enteredFrom")] = QStringLiteral("catalog");
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), seriesTitle, blob));
+    }
+
+    tankoban::manga::anilist::MediaPreview preview;
+    preview.anilistId = anilistId;
+    preview.title     = seriesTitle;
+
+    m_enteredDetailFrom        = Mode::Catalog;
+    m_mode                     = Mode::TankoyomiDetail;
+    m_currentDetailAnilistId   = anilistId;
+    m_currentDetailSeriesTitle = seriesTitle;
+    m_tyVolumeSeriesView->showSeries(preview);
+    dispatchFandomResolve(fandomSeriesSlugFromTitle(seriesTitle),
+                          /*qidHint*/QString(),
+                          /*titleHint*/seriesTitle);
+    m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
 void ComicsPage::onSearchResultActivated(const MangaResult& result)
