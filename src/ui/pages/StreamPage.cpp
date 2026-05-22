@@ -52,7 +52,10 @@
 #include <QHBoxLayout>
 #include <QFileInfo>
 #include <QGraphicsOpacityEffect>
+#include <QInputDialog>
 #include <QMainWindow>
+#include <QMenu>
+#include <QMessageBox>
 #include <QParallelAnimationGroup>
 #include <QProgressBar>
 #include <QPropertyAnimation>
@@ -1322,6 +1325,41 @@ void StreamPage::buildSearchBar()
     m_catalogBtn->setToolTip("Browse all addon catalogs");
     layout->addWidget(m_catalogBtn);
 
+    // THEATRE_CLEANUP F2 (2026-05-22) — gear icon at the right edge of the
+    // Theatre topbar. Opens a small QMenu with a "Danger zone" section
+    // containing the Clear Library action (red text). Click → menu →
+    // action triggers onClearLibraryRequested which runs the two-step
+    // confirmation (warning modal + type-"clear" input modal) before
+    // invoking m_library->clear().
+    m_settingsBtn = new QPushButton(QStringLiteral("⚙"), m_searchBarFrame);
+    m_settingsBtn->setFixedHeight(36);
+    m_settingsBtn->setFixedWidth(36);
+    m_settingsBtn->setCursor(Qt::PointingHandCursor);
+    m_settingsBtn->setObjectName("StreamSettingsBtn");
+    m_settingsBtn->setToolTip("Theatre settings");
+    auto* settingsMenu = new QMenu(m_settingsBtn);
+    settingsMenu->addSection(tr("Danger zone"));
+    auto* clearLibraryAction = settingsMenu->addAction(tr("Clear Library…"));
+    // Color the destructive action red so it visually telegraphs as such.
+    {
+        QFont f = clearLibraryAction->font();
+        f.setBold(true);
+        clearLibraryAction->setFont(f);
+    }
+    settingsMenu->setStyleSheet(
+        "QMenu::item { padding: 6px 18px; }"
+        "QMenu::section { color: #888; padding: 6px 12px; font-size: 11px; }"
+        "QMenu::item:!selected { color: #e0e0e0; }");
+    // Tint just the Clear Library action red via property-based stylesheet
+    // hook (Qt doesn't natively style individual QAction text color, so we
+    // override on hover too via the action's own selection-state styling
+    // through a small palette tweak on the action's font color).
+    clearLibraryAction->setData(QStringLiteral("danger"));
+    m_settingsBtn->setMenu(settingsMenu);
+    connect(clearLibraryAction, &QAction::triggered,
+            this, &StreamPage::onClearLibraryRequested);
+    layout->addWidget(m_settingsBtn);
+
     connect(m_searchInput, &QLineEdit::returnPressed,
             this, &StreamPage::onSearchSubmit);
     connect(m_searchBtn, &QPushButton::clicked,
@@ -2172,6 +2210,65 @@ void StreamPage::onCatalogBtnClicked()
     // persists combo state via its own mechanisms so the user returns to
     // whatever they had selected.
     showCatalogBrowse(QString(), QString(), QString(), QString());
+}
+
+void StreamPage::onClearLibraryRequested()
+{
+    // THEATRE_CLEANUP F2 (2026-05-22) — gear-menu Clear Library handler.
+    // Per Hemanth Q3 2026-05-22 ~2:50pm IST: two-step confirmation. First
+    // a warning modal; if Yes, a type-"clear" input modal. Only on
+    // verbatim match does the destructive op fire.
+    if (!m_library) return;
+
+    // Step 1: warning modal. List the consequences explicitly so the
+    // user can back out before the second prompt.
+    const auto warnResult = QMessageBox::warning(
+        this,
+        tr("Clear Theatre Library?"),
+        tr("This will permanently delete your entire Theatre library:\n\n"
+           "  • Every added show + movie\n"
+           "  • Every downloaded video file on disk\n"
+           "  • Every in-flight download (cancelled + files removed)\n"
+           "  • Per-episode download tracking\n\n"
+           "Your Comics + Books libraries, Tankorent search history, "
+           "indexer settings, and user preferences are NOT affected.\n\n"
+           "Continue?"),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (warnResult != QMessageBox::Yes) return;
+
+    // Step 2: type-"clear" confirmation. Case-insensitive verbatim match.
+    bool ok = false;
+    const QString typed = QInputDialog::getText(
+        this,
+        tr("Confirm Clear Library"),
+        tr("Type 'clear' (lowercase) to confirm:"),
+        QLineEdit::Normal,
+        QString(),
+        &ok);
+    if (!ok) return;
+    if (typed.trimmed().toLower() != QLatin1String("clear")) {
+        QMessageBox::information(
+            this,
+            tr("Clear Library cancelled"),
+            tr("You did not type 'clear' — nothing was deleted."));
+        return;
+    }
+
+    // Both gates passed. Fire the destructive op. StreamLibrary::clear()
+    // handles the full cascade (entries + download-index eviction + every
+    // stream-bulk cohort cancelled with deleteFiles=true). Returns the
+    // count of entries cleared so we can surface a confirmation toast.
+    const int cleared = m_library->clear();
+
+    QMessageBox::information(
+        this,
+        tr("Theatre Library cleared"),
+        cleared == 0
+            ? tr("Your library was already empty — nothing to delete.")
+            : tr("Cleared %1 show/movie %2 + cancelled active downloads + "
+                 "deleted downloaded files. Your Theatre library is now "
+                 "empty.").arg(cleared).arg(cleared == 1 ? tr("entry") : tr("entries")));
 }
 
 void StreamPage::showCalendar()

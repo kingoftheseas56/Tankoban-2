@@ -223,6 +223,16 @@ private:
     // own default addon + catalog selection if the user hasn't opened it
     // before, or replays the last-used combo state if they have).
     void onCatalogBtnClicked();
+
+    // THEATRE_CLEANUP F2 (2026-05-22) — gear-button menu handler for the
+    // Clear Library destructive flow. Two-step confirmation: first a
+    // QMessageBox warning, then a QInputDialog requiring the user to type
+    // "clear" verbatim. On confirm, invokes m_library->clear() which
+    // cascades through evictByImdb + cancelStreamBulkGroup(deleteFiles=true)
+    // on every entry. Per Hemanth's Q1-Q4 ratification 2026-05-22 ~2:50pm
+    // IST (Theatre-only scope, full cascade including downloaded files,
+    // two-step type-clear confirmation, gear icon in topbar).
+    void onClearLibraryRequested();
     // Library-tile / calendar-row / continue-strip path — no preview available,
     // StreamLibrary::get(imdbId) is the fallback source for detail-view header.
     void showDetail(const QString& imdbId);
@@ -385,6 +395,10 @@ private:
     // deleted home-board featured rows as the user-facing entry point
     // into CatalogBrowseScreen.
     QPushButton* m_catalogBtn    = nullptr;
+    // THEATRE_CLEANUP F2 (2026-05-22) — gear icon at the right edge of
+    // the Theatre topbar. Opens a QMenu with a "Danger zone" section
+    // containing the Clear Library action.
+    QPushButton* m_settingsBtn   = nullptr;
 
     // Phase 4 Batch 4.1 — debounce + spinner. Timer is single-shot 300ms,
     // restarted on every textChanged. Busy indicator is an indeterminate

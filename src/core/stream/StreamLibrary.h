@@ -34,6 +34,17 @@ public:
     StreamLibraryEntry get(const QString& imdbId) const;
     QList<StreamLibraryEntry> getAll() const;
 
+    // THEATRE_CLEANUP F2 (2026-05-22) — Hemanth-driven "Clear Library" flow.
+    // Wipes every entry + cascades the same destructive cleanup remove()
+    // does for a single entry: evicts every download-index row (per
+    // m_downloadIndex), cancels every active stream-bulk cohort with
+    // deleteFiles=true (per m_torrentClient → drops downloaded bytes from
+    // disk), persists the empty state, and emits libraryChanged exactly
+    // once. Returns the count of entries cleared (useful for UI toasts /
+    // confirmation echo). Caller (UI layer) MUST gate this behind explicit
+    // user confirmation — engine-level there is no second guard.
+    int clear();
+
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — optional wire to the
     // download index so remove() can evict per-episode rows for the show
     // being removed from library. See spec §6.5 Data Flow E.
