@@ -723,6 +723,16 @@ void ComicsPage::showEvent(QShowEvent* e)
     if (m_mangaDownloadIndex) m_mangaDownloadIndex->validateAll();
 }
 
+// Stream/Theatre-parity search-bar event filter (2026-05-22, Task 1 stub).
+// Body is empty for the header-only ship; Task 6 replaces this with the
+// FocusIn/FocusOut routing for m_searchBar to drive the history dropdown.
+// Declared in the header now so the vtable is complete from this commit
+// forward.
+bool ComicsPage::eventFilter(QObject* obj, QEvent* event)
+{
+    return QWidget::eventFilter(obj, event);
+}
+
 void ComicsPage::buildUI()
 {
     auto* layout = new QVBoxLayout(this);

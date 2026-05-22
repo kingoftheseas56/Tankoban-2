@@ -8,10 +8,12 @@
 #include <QSlider>
 #include <QTimer>
 #include <QSettings>
+#include <QStringList>
 #include <QMap>
 #include <QJsonObject>
 #include "../LayerEntry.h"
 class QPushButton;
+class QFrame;
 class QScrollArea;
 class CoreBridge;
 class FadingStackedWidget;
@@ -208,8 +210,27 @@ protected:
     // is shown so external file deletions surface as chip-state updates.
     void showEvent(QShowEvent* e) override;
 
+    // Stream/Theatre-parity search-bar (2026-05-22): drives the search
+    // history dropdown off m_searchBar FocusIn / FocusOut events.
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private:
     void buildUI();
+
+    // Stream/Theatre-parity search-bar helpers (2026-05-22). All inline on
+    // this class, mirroring StreamPage's pattern (no separate helper class).
+    // See docs/superpowers/plans/2026-05-22-comics-search-bar-parity.md.
+    void loadSearchHistory();
+    void saveSearchHistory();
+    void pushSearchHistory(const QString& query);
+    void removeSearchHistoryEntry(const QString& query);
+    void clearSearchHistory();
+    void buildSearchHistoryDropdown();
+    void showSearchHistoryDropdown();
+    void hideSearchHistoryDropdown();
+    void positionSearchHistoryDropdown();
+    void setSearchBusy(bool busy);
+
     void addSeriesTile(const SeriesInfo& series);
     void toggleViewMode();
     // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Helper that
@@ -363,6 +384,20 @@ private:
     QLineEdit*       m_searchBar = nullptr;
     QComboBox*       m_sortCombo = nullptr;
     QTimer*          m_searchTimer = nullptr;
+
+    // Stream/Theatre-parity search-bar additions (2026-05-22, Agent 5 cross-
+    // domain commission). Mirrors StreamPage's chrome: magnifying-glass icon
+    // button + indeterminate busy spinner + persistent history dropdown.
+    // m_searchBusy is held as QWidget* so this header doesn't need to pull
+    // <QProgressBar> (matches StreamPage.h:409). QSettings key is
+    // "comics/searchHistory" -- disjoint from "stream/searchHistory".
+    QPushButton*     m_searchBtn               = nullptr;
+    QWidget*         m_searchBusy              = nullptr;
+    QFrame*          m_searchHistoryDropdown   = nullptr;
+    QWidget*         m_searchHistoryList       = nullptr;
+    QTimer*          m_searchHistoryHideTimer  = nullptr;
+    QStringList      m_searchHistory;
+    static constexpr int kMaxSearchHistory = 10;
     SeriesView*      m_seriesView = nullptr;
     QPushButton*     m_viewToggle = nullptr;
     QSlider*         m_densitySlider = nullptr;
