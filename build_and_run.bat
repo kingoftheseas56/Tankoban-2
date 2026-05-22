@@ -35,7 +35,19 @@ call :ensure_vcpkg_root
 :: REPO_HYGIENE Phase 2 (2026-04-26) - same effective options as the default
 :: preset: Ninja, Release, vcpkg toolchain, x64-windows, Qt prefix path.
 if exist "%BUILD_DIR%\CMakeCache.txt" (
-    echo [2/4] Build dir exists - skipping configure.
+    powershell -NoProfile -Command "$cmakeLists=Get-Item -LiteralPath '%PROJECT_DIR%\CMakeLists.txt'; $cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($cmakeLists.LastWriteTime -gt $cache.LastWriteTime -or -not $ninja -or $cmakeLists.LastWriteTime -gt $ninja.LastWriteTime -or $cache.LastWriteTime -gt $ninja.LastWriteTime) { exit 1 } else { exit 0 }"
+    if errorlevel 1 (
+        echo [2/4] CMakeLists.txt newer than cache -- re-configuring...
+        cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%"
+        if errorlevel 1 (
+            echo ERROR: cmake re-configure failed.
+            pause
+            exit /b 1
+        )
+        powershell -NoProfile -Command "$cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($ninja) { $cache.LastWriteTime = $ninja.LastWriteTime } else { $cache.LastWriteTime = Get-Date }" >nul 2>&1
+    ) else (
+        echo [2/4] Build dir exists, cache up-to-date -- skipping configure.
+    )
 ) else (
     echo [2/4] Configuring CMake in %BUILD_DIR%...
     cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
