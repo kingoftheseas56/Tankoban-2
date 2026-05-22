@@ -1048,97 +1048,38 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
 void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                                           const anilist::MediaDetail* detail)
 {
-    // PHASE 8: cache the mapped rows so onVolumeCellClicked can hand the
-    // full VolumeRow to the sources panel without rerunning the mapper.
+    // Tear down existing tiles.
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
+
+    // PHASE 8: cache the mapped rows so downstream slots (e.g. onVolumeCellClicked
+    // legacy path, populateSourcesForRow) can hand the full VolumeRow to the
+    // sources panel without rerunning the mapper.
     m_currentVolumeRows = rows;
     // Also stash the canonical title for the panel populate() call.
     if (detail && !detail->preview.title.isEmpty()) {
         m_currentSeriesTitle = detail->preview.title;
     }
 
-    // STREAM_PORT 2026-05-18 Task 5: clear stale selection state on every
-    // populateVolumeRows call so navigating between series resets the
-    // checkbox set + hides the Download Selected button.
+    // Clear stale selection state on every call so navigating between series
+    // resets the checkbox set + hides the Download Selected button.
     m_selectedRows.clear();
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
-    m_volumesTable->setRowCount(rows.size());
+    // AniList path: synthesize stable identity keys.
+    // Two-stage lookup mirrors the old QTableWidget cbzPath resolution:
+    //   1. If the fandom catalog knows this AniList ID, use its
+    //      (kPremiumSourceId, catalog.seriesId) key so downloads landed via
+    //      Fandom-aware paths are found.
+    //   2. Otherwise fall back to ("anilist_N") slug used by the premium +
+    //      weebcentral download paths.
+    const QString fallbackSeriesId = QStringLiteral("anilist_%1").arg(m_currentAnilistId);
 
-    for (int i = 0; i < rows.size(); ++i) {
-        const anilist::VolumeRow& row = rows.at(i);
-
-        // Col kColCheckbox -- checkbox cellWidget. STREAM_PORT 2026-05-18
-        // Task 5: toggled signal now wired to onVolumeCheckboxToggled which
-        // updates m_selectedRows and the Download Selected button visibility.
-        // STREAM_PORT Bug-4 fix 2026-05-18: was QCheckBox -- invisible at
-        // unchecked rest state against the dark theme because Win11's
-        // QStyle::PE_IndicatorCheckBox primitive clips the indicator
-        // geometry to its own intrinsic 13x13px and ignores QSS sizing
-        // (Stream hit the exact same bug 2026-05-12; their fix lives at
-        // StreamDetailView.cpp:1000-1035). QToolButton bypasses
-        // PE_IndicatorCheckBox entirely -- Qt just paints whatever icon we
-        // set at the fixed 18x18px we requested. Tankoban discipline:
-        // grayscale, no color, no emoji; the SVG assets at
-        // resources/icons/checkbox-{checked,empty}.svg already match.
-        // STREAM_PORT Bug-4 round-3 fix 2026-05-18: replaced QToolButton with
-        // a clickable QLabel. The QToolButton pattern (verbatim port from
-        // StreamDetailView.cpp:1010-1023) rendered as a "[" on Comics --
-        // only the left edge of the 14x14 SVG was visible, the right edge
-        // was clipped to ~6px width. Live MCP smoke at 0341/0342 confirmed
-        // the visual bug. Multiple fix attempts (objectName removal +
-        // explicit setChecked + table-wide setIconSize removal + col-2
-        // thumb migration to cellWidget) did not resolve it -- the clipping
-        // is specific to QToolButton-in-QTableWidget-cellWidget on this
-        // Win11 / Qt6 combination. QLabel + setPixmap renders the SVG at
-        // its exact dimensions without any clipping (proven by the col-5
-        // status icon round-2 fix above). Click handling via the existing
-        // eventFilter override -- the cbLabel carries a "rowIdx" + "checked"
-        // dynamic property pair the filter reads. Stream's pattern stays
-        // valid for Stream's context; Comics needs the QLabel workaround.
-        auto* cbLabel = new QLabel(m_volumesTable);
-        cbLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowCheckbox"));
-        // STREAM_PORT Bug-4 round-4 fix 2026-05-18: setFixedSize(32, 32)
-        // REMOVED -- it shrunk the QLabel to a tiny 32x32 widget that Qt
-        // parked at the top-left of the cell, leaving the checkbox visually
-        // higher than the # serial number in the adjacent col-1 (which sits
-        // vertically centered as a QTableWidgetItem). Without setFixedSize,
-        // the QLabel fills the cell's full 48x108 rect and the pixmap
-        // centers vertically + horizontally via setAlignment(AlignCenter).
-        cbLabel->setAlignment(Qt::AlignCenter);
-        cbLabel->setPixmap(QIcon(QStringLiteral(":/icons/checkbox-empty.svg")).pixmap(14, 14));
-        cbLabel->setCursor(Qt::PointingHandCursor);
-        cbLabel->setProperty("rowIdx", i);
-        cbLabel->setProperty("checked", false);
-        cbLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowCheckbox { background: transparent; }"
-            "QLabel#ComicsSeriesVolumeRowCheckbox:hover { background: rgba(255,255,255,0.06); border-radius: 2px; }"));
-        // STREAM_PORT Bug-4 round-3 fix 2026-05-18 (revision): click handling
-        // moved from QLabel eventFilter to QTableWidget::cellClicked. The
-        // eventFilter approach was preempted by the table's SelectRows
-        // selectionBehavior -- the click was being consumed by row-selection
-        // before reaching the QLabel's event chain. cellClicked fires
-        // reliably for col-0 cellWidget hits; onVolumeCellClicked branches
-        // on column == kColCheckbox to toggle the QLabel's pixmap + property
-        // + dispatch to onVolumeCheckboxToggled.
-        m_volumesTable->setCellWidget(i, kColCheckbox, cbLabel);
-
-        // Col 1 -- volume index. STREAM_PORT Task 2: F1 stash (chapterNumbers at
-        // UserRole, cbzPath at UserRole+1) lives on col-1 now since col-0
-        // is a cellWidget. onVolumeCellClicked + populateSourcesForRow updated
-        // to read from col-1. Carry-forward B: "chapterNumbers" matches the
-        // AniListTypes.h VolumeRow field name.
-        //
-        // Resolve cbzPath early via the same two-stage lookup used in the
-        // original code (catalog hit first, then anilist_ slug fallback for
-        // both premium + weebcentral sources). Stash on indexItem so the
-        // Status col and F1 open-path can read it synchronously.
-        const QString indexText = row.isVolumeX
-            ? QStringLiteral("X")
-            : QString::number(row.volumeNumber);
-        auto* indexItem = new QTableWidgetItem(indexText);
-        indexItem->setTextAlignment(Qt::AlignCenter);
-        indexItem->setData(Qt::UserRole, row.chapterNumbers);
-
+    for (const auto& row : rows) {
+        // Resolve the download-index entry for this volume (same two-stage
+        // logic the old code did inline per row).
+        QString resolvedCbzPath;
         if (m_downloadIndex && !row.isVolumeX) {
             std::optional<MangaDownloadIndex::Entry> dlEntry;
             if (m_catalog) {
@@ -1151,172 +1092,109 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                 }
             }
             if (!dlEntry) {
-                const QString fallbackSeriesId =
-                    QStringLiteral("anilist_%1").arg(m_currentAnilistId);
                 dlEntry = m_downloadIndex->entryForSeriesAndVolume(
                     QString::fromLatin1(kPremiumSourceId),
                     fallbackSeriesId,
                     row.volumeNumber);
-                if (!dlEntry) {
-                    dlEntry = m_downloadIndex->entryForSeriesAndVolume(
-                        QString::fromLatin1(kWeebCentralSourceId),
-                        fallbackSeriesId,
-                        row.volumeNumber);
-                }
+            }
+            if (!dlEntry) {
+                dlEntry = m_downloadIndex->entryForSeriesAndVolume(
+                    QString::fromLatin1(kWeebCentralSourceId),
+                    fallbackSeriesId,
+                    row.volumeNumber);
             }
             if (dlEntry && !dlEntry->canonicalPath.isEmpty()) {
-                indexItem->setData(Qt::UserRole + 1, dlEntry->canonicalPath);
+                resolvedCbzPath = dlEntry->canonicalPath;
             }
         }
-        m_volumesTable->setItem(i, kColIndex, indexItem);
 
-        // Col 2 -- thumbnail. STREAM_PORT Bug-4 round-3
-        // fix 2026-05-18: was QTableWidgetItem.setIcon which required the
-        // now-removed table-wide setIconSize(48, 64). Migrated to a
-        // cellWidget+QLabel-with-pixmap pattern -- explicit pixel size,
-        // no table-wide coupling. applyPixmapToVolumeRow targets this
-        // QLabel via objectName lookup.
-        auto* coverLabel = new QLabel(m_volumesTable);
-        coverLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowThumb"));
-        coverLabel->setAlignment(Qt::AlignCenter);
-        coverLabel->setMinimumSize(kVolumeThumbSize);
-        coverLabel->setPixmap(makeVolumeThumbPlaceholder());
-        coverLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowThumb { background: transparent; }"));
-        m_volumesTable->setCellWidget(i, kColThumb, coverLabel);
-        const QString coverUrl = detail
+        // Synthesize display title: VolumeRow has no per-volume title field
+        // (AniList doesn't expose one). Mirror the old volLabelText pattern.
+        const QString synthesizedTitle = row.isVolumeX
+            ? tr("Volume X")
+            : tr("Volume %1").arg(row.volumeNumber);
+
+        // Synthesize chapter range string from the numeric fields VolumeRow
+        // carries. Mirror the formatChapterRange tooltip from the old path.
+        const QString synthesizedChapterRange =
+            (row.chapterRangeStart > 0 && row.chapterRangeEnd > 0)
+            ? QStringLiteral("ch %1-%2").arg(row.chapterRangeStart).arg(row.chapterRangeEnd)
+            : QString();
+
+        // Cover URL: prefer per-volume art thumbnail; fall back to series
+        // coverThumbUrl from detail. Mirrors old coverUrl derivation exactly.
+        // PREFER any BookWalker URL already recorded by paintVolumeCovers
+        // (resolver race-fix: the BW URL may have landed before this populate
+        // fires — using it here guarantees the freshly-created tile widget
+        // gets the canonical cover, not a stale AniList thumb).
+        const QString anilistCoverUrl = detail
             ? (!row.art.thumbnailUrl.isEmpty()
                 ? row.art.thumbnailUrl
                 : detail->preview.coverThumbUrl)
-            : QString();
-        if (!coverUrl.isEmpty()) {
-            // WEEBCENTRAL_IDENTITY_PIVOT post-pivot Pass 4 fix 2026-05-19:
-            // resolve the race between paintVolumeCovers (which can fire
-            // SYNCHRONOUSLY off a BookWalkerCache hit inside resolveForSeries,
-            // i.e. BEFORE populateVolumeRows ever runs) and the per-row
-            // populate here. Old behaviour:
-            //   - resolver hit -> paintVolumeCovers -> loadCoverUrlForVolume
-            //     records URL in m_lastAppliedCoverUrlByVolume, kicks async
-            //     fetch BUT applyPixmapToVolumeRow finds no rows (table not
-            //     yet populated) -> silent drop
-            //   - populateVolumeRows fires -> sees BookWalker URL recorded ->
-            //     skips loadCoverUrlForVolume entirely under the now-flawed
-            //     "BookWalker already applied" assumption -> covers never
-            //     paint (Hemanth screenshot 2026-05-19: 12 rows, 0 covers
-            //     visible)
-            // New behaviour: PREFER the BookWalker URL when recorded, but
-            // ALWAYS re-fire loadCoverUrlForVolume here so the freshly-built
-            // QLabel cellWidget gets the pixmap (cache hit if prior fetch
-            // landed; cache miss kicks a duplicate fetch which is cheap and
-            // hits the same CDN with the same URL key). The race is closed
-            // because the row's cellWidget definitely exists at THIS call.
-            const QString existing = m_lastAppliedCoverUrlByVolume.value(row.volumeNumber);
-            const QString urlToLoad = existing.contains(QStringLiteral("rimg.bookwalker.jp"))
-                ? existing       // resolver already picked the publisher-canonical URL
-                : coverUrl;      // AniList fallback (per-vol art, or detail's coverThumbUrl)
-            loadCoverUrlForVolume(urlToLoad, row.volumeNumber);
+            : row.art.thumbnailUrl;
+        const QString existingBwUrl = m_lastAppliedCoverUrlByVolume.value(row.volumeNumber);
+        const QString resolvedCoverUrl = existingBwUrl.contains(QStringLiteral("rimg.bookwalker.jp"))
+            ? existingBwUrl
+            : anilistCoverUrl;
+
+        tankoban::ui::comics::VolumeTileData data;
+        data.sourceId     = QStringLiteral("anilist");
+        data.seriesId     = fallbackSeriesId;
+        data.volumeNumber = row.volumeNumber;
+        data.title        = synthesizedTitle;
+        data.chapterRange = synthesizedChapterRange;
+        data.coverUrl     = resolvedCoverUrl;
+
+        auto* tile = new tankoban::ui::comics::VolumeTile(data, m_volumesHost);
+
+        tankoban::ui::comics::VolumeTileState state;
+        state.provenance = QString();  // AniList-only path: no source badge
+        if (!resolvedCbzPath.isEmpty()) {
+            state.downloadStatus = tankoban::ui::comics::VolumeDownloadStatus::Downloaded;
+            state.localPath      = resolvedCbzPath;
         }
+        tile->setVolumeState(state);
+        tile->setMangaDownloadIndex(m_downloadIndex);
 
-        // Col 3 -- title cellWidget. STREAM_PORT Bug-5 fix 2026-05-18:
-        // dropped the "Chs A-B (N ch)" chapter-range subtitle Hemanth
-        // flagged as "kind of bad UI design" -- it read as a stats line
-        // rather than content. Stream's title col is title + optional
-        // human-readable description (StreamDetailView.cpp:1080-1090); for
-        // manga there is no per-volume blurb so a title-only cell is the
-        // closest Stream-parity. Chapter-range info preserved as a tooltip
-        // on the cell for the power-user who hovers (uses formatChapterRange
-        // verbatim including the "(N ch)" tail since tooltips can be more
-        // explanatory than a row-line subtitle).
-        auto* titleWrap = new QWidget(m_volumesTable);
-        auto* titleLay = new QVBoxLayout(titleWrap);
-        titleLay->setContentsMargins(8, 6, 8, 6);
-        titleLay->setSpacing(0);
+        const QString seriesIdCapture = fallbackSeriesId;
+        connect(tile, &tankoban::ui::comics::VolumeTile::openRequested,
+                this, [this, seriesIdCapture](int vn) {
+                    const auto entry = m_downloadIndex
+                        ? m_downloadIndex->entryForSeriesAndVolume(
+                              QStringLiteral("anilist"),
+                              seriesIdCapture, vn)
+                        : std::nullopt;
+                    emit openVolume(vn, entry ? entry->canonicalPath : QString());
+                });
+        connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
+                this, [this](int /*vn*/) {
+                    populateSourcesForRow(-1);
+                });
+        connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
+                this, [](bool /*checked*/, bool /*shiftHeld*/) {
+                    // Range-fill wiring lands in Task 17.
+                });
 
-        const QString volLabelText = row.isVolumeX
-            ? tr("Volume X")
-            : tr("Volume %1").arg(row.volumeNumber);
-        auto* volLabel = new QLabel(volLabelText, titleWrap);
-        volLabel->setStyleSheet(QStringLiteral("color: #e5e7eb; font-size: 13px; font-weight: 500; background: transparent;"));
-        titleLay->addWidget(volLabel);
-
-        titleWrap->setToolTip(formatChapterRange(row));
-
-        m_volumesTable->setCellWidget(i, kColTitle, titleWrap);
-
-        // Col 4 -- progress (v1 ships "--" per spec; per-chapter read-state
-        // wiring is out of scope for this plan).
-        auto* progItem = new QTableWidgetItem(QStringLiteral("--"));
-        progItem->setTextAlignment(Qt::AlignCenter);
-        progItem->setForeground(QBrush(QColor(255, 255, 255, 128)));
-        m_volumesTable->setItem(i, kColProgress, progItem);
-
-        // Col 5 -- status text. Derived from whether cbzPath was resolved above.
-        // STREAM_PORT Bug-3 round 2 fix 2026-05-18: was QTableWidgetItem
-        // text "Downloaded" / "Not downloaded" which clipped to "Not down..."
-        // in the 60px-wide Status column. First-round fix tried
-        // QTableWidgetItem::setIcon but the icon rendered at 48x64 (the
-        // table-wide setIconSize set in Task 2 for the col-2 thumb applies
-        // uniformly to ALL QTableWidgetItem icons -- so the download glyph
-        // was "incredibly big" per Hemanth's verdict). Round-2 ports
-        // Stream's action-col pattern at StreamDetailView.cpp:1041-1049:
-        // cellWidget holds a QLabel-with-pixmap rendered at 16x16, fully
-        // decoupled from the table-wide iconSize. Pixmap renders the same
-        // SVG asset Stream uses (check.svg / download-arrow.svg). The
-        // status text fallback path for transient states ("Downloading...",
-        // "Failed") is preserved by re-using the same QLabel for setText
-        // in setVolumeStatusText below.
-        const bool isDownloaded = (indexItem->data(Qt::UserRole + 1).toString().isEmpty() == false);
-        auto* statusLabel = new QLabel(m_volumesTable);
-        statusLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowStatus"));
-        statusLabel->setAlignment(Qt::AlignCenter);
-        statusLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowStatus {"
-            "  color: rgba(255,255,255,0.55);"
-            "  font-size: 11px;"
-            "  background: transparent;"
-            "}"));
-        statusLabel->setPixmap(QIcon(isDownloaded
-            ? QStringLiteral(":/icons/check.svg")
-            : QStringLiteral(":/icons/download-arrow.svg")).pixmap(16, 16));
-        statusLabel->setToolTip(isDownloaded ? tr("Downloaded") : tr("Not downloaded"));
-        m_volumesTable->setCellWidget(i, kColStatus, statusLabel);
+        m_volumeTiles.append(tile);
+        m_volumeTilesByVolumeNumber.insert(row.volumeNumber, tile);
+        m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
     }
 
-    // STREAM_PORT 2026-05-18 Task 6: next-unread highlight + auto-scroll.
-    // Proxy for "unread": no stashed cbz path. The first such row is the
-    // user's next stop. If every row has a cbz (all downloaded),
-    // m_nextUnreadRow stays -1 and no scroll fires.
+    // next-unread: proxy for "unread" is no resolved cbz path. Walk the
+    // freshly-built tile list (no QTableWidget rows to scan any more).
+    // The highlight + scroll-into-view wiring on the VolumeTile widget
+    // itself lands in a later task; for now we track the index so callers
+    // of m_nextUnreadRow still get a sane value.
     m_nextUnreadRow = -1;
-    for (int i = 0; i < m_volumesTable->rowCount(); ++i) {
-        if (auto* item = m_volumesTable->item(i, kColIndex)) {
-            const QString cbz = item->data(Qt::UserRole + 1).toString();
-            if (cbz.isEmpty()) {
-                m_nextUnreadRow = i;
-                break;
-            }
+    for (int i = 0; i < m_volumeTiles.size(); ++i) {
+        const auto* t = m_volumeTiles.at(i);
+        if (t && t->volumeState().localPath.isEmpty()) {
+            m_nextUnreadRow = i;
+            break;
         }
     }
 
-    if (m_nextUnreadRow >= 0 && m_nextUnreadRow < m_volumesTable->rowCount()) {
-        // Scroll the next-unread row into center view on first paint.
-        if (auto* item = m_volumesTable->item(m_nextUnreadRow, kColIndex)) {
-            m_volumesTable->scrollToItem(item, QAbstractItemView::PositionAtCenter);
-        }
-
-        // Apply a subtle 2px left-edge accent to the title-cell wrapper
-        // widget at the kColTitle column (the titleWrap cellWidget from
-        // Task 2). Re-applying QSS on the wrapper overrides the default
-        // transparent background only for the next-unread row.
-        if (QWidget* titleWrap = m_volumesTable->cellWidget(m_nextUnreadRow, kColTitle)) {
-            // STREAM_PORT 2026-05-18 final-review fix: scope the accent QSS to
-            // the titleWrap's objectName so it doesn't propagate to child
-            // QLabels (which would render double borders). Per
-            // feedback_css_scoping.md.
-            titleWrap->setObjectName(QStringLiteral("ComicsSeriesNextUnreadTitle"));
-            titleWrap->setStyleSheet(QStringLiteral(
-                "#ComicsSeriesNextUnreadTitle { border-left: 2px solid rgba(255,255,255,0.30); }"));
-        }
-    }
+    Q_UNUSED(detail);
 }
 
 // -----------------------------------------------------------------------
