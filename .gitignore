@@ -7,6 +7,10 @@ out_test/
 out_probe/
 out_old*/
 
+# Per-lane build dirs (gov-v7 / TANKOBAN_BUILD_LANE — Codex commission 07da143).
+# Added 2026-05-22 after out_agent-4/ accumulated mid-build.
+out_agent-*/
+
 # Brainstorm-skill visual-companion mockups (per-session HTML files for the
 # in-browser brainstorm preview). Persist locally for reference but not tracked.
 .superpowers/
@@ -58,6 +62,10 @@ chat_diff*.txt
 # Congress-check hook local session markers — regenerated each run, not for git
 .claude/.congress-warned-*
 
+# Per-machine Claude Code config (NOT the shared settings.json).
+# Added 2026-05-22 after .claude/settings.local.json appeared untracked.
+.claude/settings.local.json
+
 # .claude runtime state — lock files + telemetry are machine-local, regenerated
 .claude/*.lock
 .claude/telemetry/
@@ -85,3 +93,12 @@ sidecar_debug_live.log.*
 
 # Claude Code Exporter — auto-exported conversation transcripts (per-machine, never commit)
 .cc-history/
+
+# Root-level scratch convention (NOT the agent-scratch _*.{ext} convention above).
+# tmp_* + loose smoke/wiki PNG scratch at root — saved evidence belongs under
+# agents/audits/smoke_evidence/ via the smoke-package skill, not the repo root.
+# Added 2026-05-22 after deathnote-volumes-fandom.png + wiki-dn-*.png + tmp_*
+# accumulated at root from A1's fandom audit work.
+/tmp_*
+/wiki-*.png
+/deathnote-*.png
