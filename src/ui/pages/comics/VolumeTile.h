@@ -16,9 +16,8 @@ class QCheckBox;
 class QLabel;
 class QPushButton;
 
-namespace tankoban::manga {
+// MangaDownloadIndex lives at global scope (no namespace wrapper in its header).
 class MangaDownloadIndex;
-}
 
 namespace tankoban::ui::comics {
 
@@ -66,7 +65,7 @@ public:
     void setStatusText(const QString& text);
 
     // Per-tile subscription. Non-owning. May be set after construction.
-    void setMangaDownloadIndex(tankoban::manga::MangaDownloadIndex* idx);
+    void setMangaDownloadIndex(MangaDownloadIndex* idx);
 
     // Pure-logic helper exposed for testing -- maps (presence-of-DL-index-entry,
     // statusText) tuple to the canonical State value. Static so the test
@@ -97,7 +96,7 @@ private:
     VolumeTileData  m_data;
     VolumeTileState m_state;
 
-    QPointer<tankoban::manga::MangaDownloadIndex> m_idx;
+    QPointer<MangaDownloadIndex> m_idx;
 
     QCheckBox*   m_checkbox = nullptr;
     QLabel*      m_numberLabel = nullptr;

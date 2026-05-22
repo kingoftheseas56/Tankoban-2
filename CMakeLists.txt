@@ -913,6 +913,7 @@ if(TANKOBAN_BUILD_TESTS)
         # VolumeTile state tests (COMICS_CATALOG_SERIES_VIEW Phase 2 Task 8+9)
         tests/ui/test_volume_tile_state.cpp
         src/ui/pages/comics/VolumeTile.cpp
+        src/core/manga/MangaDownloadIndex.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
