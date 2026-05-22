@@ -31,7 +31,6 @@
 #include "core/torrent/TorrentClient.h"
 
 #include <QNetworkAccessManager>
-#include "core/VideosScanner.h"
 #include "ui/pages/TileStrip.h"
 #include "ui/pages/TileCard.h"
 
@@ -510,12 +509,6 @@ void StreamPage::setStreamDownloadIndex(StreamDownloadIndex* idx)
         m_detailView->setStreamDownloadIndex(idx);
     if (m_theatreDownloadPanel)
         m_theatreDownloadPanel->setStreamDownloadIndex(idx);
-    // TANKORENT_STREAM_INTEGRATION E4 2026-05-15 — propagate the index to
-    // the Local files scanner so it filters Stream-owned files out of the
-    // Local files row (spec §3 P1: a file that already surfaces via a
-    // show-view binding does not also appear as a bare folder tile).
-    if (m_localFilesScanner)
-        m_localFilesScanner->setStreamDownloadIndex(idx);
 }
 
 QJsonObject StreamPage::devSnapshot() const
@@ -1425,100 +1418,6 @@ void StreamPage::buildBrowseLayer()
     m_scrollLayout->addWidget(m_libraryLayout, 1);
 
     connect(m_library, &StreamLibrary::libraryChanged, m_libraryLayout, &StreamLibraryLayout::refresh);
-
-    // TANKORENT_STREAM_INTEGRATION E4 2026-05-15 — Local files row. Renders
-    // top-level video-folder subdirs as folder-style tile cards just below
-    // the shows + movies library grid. Click opens the folder in the OS
-    // file manager (v1 fallback for in-app folder browsing, which lands
-    // alongside the future VIDEO_STREAM_MERGE arc). Scanner runs on its
-    // own QThread (mirror of VideosPage's lifecycle pattern at
-    // VideosPage.cpp:108-134) and filters out files registered as Stream-
-    // owned via setStreamDownloadIndex (so Tankorent-bound + bulk-cohort
-    // content only surfaces in the main library grid, not duplicated here).
-    m_localFilesSection = new QWidget(m_scrollHome);
-    auto* localFilesLayout = new QVBoxLayout(m_localFilesSection);
-    localFilesLayout->setContentsMargins(0, 0, 0, 0);
-    // LOCAL_FILES_HEADER_SPACING_FIX 2026-05-18 (Agent 5) -- match the gap
-    // StreamLibraryLayout puts between "SHOWS & MOVIES" header and its tile
-    // strip (its root QVBoxLayout setSpacing(24) at StreamLibraryLayout.cpp:126).
-    // Was 4px which hugged the "Local files" label to the folder tiles below it
-    // while the headers above breathed at 24px.
-    localFilesLayout->setSpacing(24);
-    auto* localFilesLabel = new QLabel(tr("Local files"), m_localFilesSection);
-    localFilesLabel->setObjectName(QStringLiteral("LibraryHeading"));
-    localFilesLayout->addWidget(localFilesLabel);
-    m_localFilesStrip = new TileStrip(m_localFilesSection);
-    // LOCAL_FILES_TILE_SIZE_FIX 2026-05-17 (Agent 5) -- match the SHOWS &
-    // MOVIES strip's density so the Local files row tiles render at the
-    // same size as the library tiles above. StreamLibraryLayout reads the
-    // same "grid_cover_size_stream" QSetting (default 1 = mid-density) and
-    // calls setDensity on its own m_strip; without this matching call the
-    // Local files strip falls back to TileStrip's larger default size and
-    // visually dwarfs the posters above. Hemanth verbatim: "I would like
-    // that discrepancy to be gone my brother 5."
-    {
-        const int savedDensity = QSettings("Tankoban", "Tankoban")
-            .value(QStringLiteral("grid_cover_size_stream"), 1).toInt();
-        m_localFilesStrip->setDensity(qBound(0, savedDensity, 2));
-    }
-    localFilesLayout->addWidget(m_localFilesStrip);
-    m_localFilesSection->hide();  // Reveal once scanner returns non-empty.
-    m_scrollLayout->addWidget(m_localFilesSection);
-
-    // Folder-tile click opens the folder in the OS file explorer. In-app
-    // folder browsing inside Theatre is deferred — it lands with the
-    // VIDEO_STREAM_MERGE arc when the show-binding flow makes folder-as-
-    // show-view interaction the norm.
-    connect(m_localFilesStrip, &TileStrip::tileSingleClicked, this,
-            [](TileCard* card) {
-        if (!card) return;
-        const QString path = card->property("localFolderPath").toString();
-        if (!path.isEmpty())
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-    });
-
-    // Scanner-on-thread (VideosPage pattern). setStreamDownloadIndex is
-    // applied via setStreamDownloadIndex below when Stream wires the index.
-    m_localFilesScanThread = new QThread(this);
-    m_localFilesScanner = new VideosScanner();
-    m_localFilesScanner->setCacheDir(m_bridge->dataDir());
-    m_localFilesScanner->moveToThread(m_localFilesScanThread);
-    connect(m_localFilesScanThread, &QThread::finished,
-            m_localFilesScanner, &QObject::deleteLater);
-    connect(m_localFilesScanner, &VideosScanner::scanFinished, this,
-            [this](const QList<ShowInfo>& shows) {
-        if (!m_localFilesStrip || !m_localFilesSection) return;
-        m_localFilesStrip->clear();
-        for (const ShowInfo& info : shows) {
-            // Folder cards: no thumb path (Videos mode pattern), show name
-            // as title, "<N> file(s)" as subtitle.
-            const QString subtitle = info.episodeCount == 1
-                ? tr("1 file")
-                : tr("%1 files").arg(info.episodeCount);
-            auto* card = new TileCard(QString(), info.showName, subtitle,
-                                      m_localFilesStrip);
-            card->setIsFolder(true);
-            card->setProperty("localFolderPath", info.showPath);
-            m_localFilesStrip->addTile(card);
-        }
-        m_localFilesSection->setVisible(!shows.isEmpty());
-    }, Qt::QueuedConnection);
-
-    // Rescan on root-folder changes (user adds/removes a Videos root).
-    connect(m_bridge, &CoreBridge::rootFoldersChanged, this,
-            [this](const QString& domain) {
-        if (domain != "videos" || !m_localFilesScanner) return;
-        QMetaObject::invokeMethod(m_localFilesScanner, "scan",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(QStringList, m_bridge->rootFolders("videos")));
-    });
-
-    m_localFilesScanThread->start();
-
-    // Kick off initial scan once the thread loop is running.
-    QMetaObject::invokeMethod(m_localFilesScanner, "scan",
-                              Qt::QueuedConnection,
-                              Q_ARG(QStringList, m_bridge->rootFolders("videos")));
 
     m_browseScroll->setWidget(m_scrollHome);
     layerLayout->addWidget(m_browseScroll, 1);

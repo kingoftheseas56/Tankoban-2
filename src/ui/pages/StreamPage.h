@@ -42,7 +42,6 @@ class AddonManagerScreen;
 // of the Theatre library: surfaces top-level video-folder subdirs as
 // folder-style tile cards, just like Videos mode renders them. Replaces the
 // discoverability surface of the removed Videos sidebar entry (Task E5).
-class VideosScanner;
 class TileStrip;
 class QThread;
 
@@ -465,17 +464,6 @@ private:
 
     // Library grid
     StreamLibraryLayout* m_libraryLayout = nullptr;
-
-    // TANKORENT_STREAM_INTEGRATION E4 2026-05-15 — Local files row UI +
-    // scanner. Scanner owns its own QThread (mirror of VideosPage's pattern)
-    // so heavy-walk + duration probing don't block the Theatre UI thread.
-    // setStreamDownloadIndex on m_localFilesScanner makes it skip files
-    // already registered as Stream-owned (bulk-cohort or Tankorent-bound),
-    // so the row only shows content not surfaced elsewhere in Theatre.
-    QWidget*       m_localFilesSection = nullptr;
-    TileStrip*     m_localFilesStrip   = nullptr;
-    QThread*       m_localFilesScanThread = nullptr;
-    VideosScanner* m_localFilesScanner    = nullptr;
 
     // Search results overlay
     StreamSearchWidget* m_searchWidget = nullptr;
