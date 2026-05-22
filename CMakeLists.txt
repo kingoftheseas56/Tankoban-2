@@ -218,6 +218,7 @@ set(SOURCES
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
+    src/ui/pages/comics/ComicsCatalogScreen.cpp
     src/ui/pages/comics/ComicsSeriesView.cpp
     src/ui/pages/comics/ComicsSourceCard.cpp
     src/ui/pages/comics/ComicsSourcesPanel.cpp
@@ -745,6 +746,23 @@ add_custom_command(TARGET Tankoban POST_BUILD
     VERBATIM
 )
 
+# ── FANDOM_CATALOG qwebp plugin: WebP image-format decoder (2026-05-22) ──
+# Fandom's Static Wikia CDN serves cover images as WebP regardless of the .jpg
+# URL extension. Without Qt's qwebp.dll plugin, QImageReader silently fails to
+# decode the response and the cover renders as a blank tile. The plugin lives
+# in Qt's optional qtimageformats addon (not in the default qt6sdk install), so
+# vendor it into resources/imageformats/ alongside the stream_server bundle
+# and deploy from there — keeps clones-and-builds hermetic with zero extra
+# setup per dev machine.
+add_custom_command(TARGET Tankoban POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:Tankoban>/imageformats"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/resources/imageformats/qwebp.dll"
+        "$<TARGET_FILE_DIR:Tankoban>/imageformats/qwebp.dll"
+    COMMENT "Deploying qwebp.dll Qt image-format plugin for Fandom CDN WebP covers"
+)
+
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────
 target_precompile_headers(Tankoban PRIVATE
     <QWidget>
@@ -892,6 +910,9 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
         src/core/manga/bookwalker/VolumeCoverAlignment.cpp
         src/ui/PerModeNavController.cpp
+        # VolumeTile state tests (COMICS_CATALOG_SERIES_VIEW Phase 2 Task 8+9)
+        tests/ui/test_volume_tile_state.cpp
+        src/ui/pages/comics/VolumeTile.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -899,13 +920,14 @@ if(TANKOBAN_BUILD_TESTS)
     target_compile_definitions(tankoban_tests PRIVATE
         TANKOBAN_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
     )
-    find_package(Qt6 REQUIRED COMPONENTS Test Network)
+    find_package(Qt6 REQUIRED COMPONENTS Test Network Widgets)
     target_link_libraries(tankoban_tests PRIVATE
         GTest::gtest
         Qt6::Core
         Qt6::Network
         Qt6::Sql
         Qt6::Test
+        Qt6::Widgets
     )
     include(GoogleTest)
     # TANKOBAN_TESTS_QT_PATH_FIX 2026-05-17 — gtest_discover_tests runs the
