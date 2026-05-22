@@ -61,7 +61,13 @@ Run these in parallel before authoring the file body:
    git log --grep='chat.md sweep' -n 1 --format='%H' | xargs -I {} git diff {} -- agents/chat.md | grep -cE '^\+READY TO COMMIT'
    ```
 4. **Brotherhood state of other agents.** Skim `agents/STATUS.md` headers for any agent whose work overlaps yours.
-4b. **Full transcript path from Claude Code Exporter.** Find this wake's transcript file at `.cc-history/<YYYY-MM-DD>_<HHMMSS>_<title-slug>_<short-hash>.md` (auto-exported in real time during the wake; per-machine, gitignored). Run `ls -t .cc-history/ | head -3` to find the most recent — that's typically this wake's transcript. Capture the exact filename for the recap's transcript-pointer block.
+4b. **Full transcript paths from Claude Code Exporter — TWO files to know (v4, 2026-05-22).**
+    - **Source (raw):** `.cc-history/<YYYY-MM-DD>_<HHMMSS>_<title-slug>_<short-hash>.md` — auto-exported in real time during the wake; per-machine, gitignored. Contains ~70% tool-call noise + ~30% real dialogue.
+    - **Trimmed companion (the one next-wake reads):** `.cc-history/<same-basename>.trimmed.md` — auto-maintained by the Stop hook `.claude/scripts/trim-cc-history-stale.sh` which invokes `.claude/scripts/trim-cc-history.ps1`. Strips `<details>...</details>` tool blocks, `<system-reminder>` blocks, `<task-notification>` XML, empty placeholder turns, and the session metadata table — preserves every User and Assistant message verbatim. ~60-70% smaller; always current within 60 sec of source (throttle-bounded). This is the file the next-wake agent reads, not the raw source.
+
+    Run `ls -t .cc-history/*.trimmed.md | head -3` to find the most recent trimmed transcript — that's typically this wake's. If no `.trimmed.md` exists for the most recent source (rare race — hook hasn't fired yet), manually invoke `.\.claude\scripts\trim-cc-history.ps1 -InputFile <source>` to force it, or wait one turn for the auto-trim to catch up.
+
+    Capture the trimmed filename (not the raw source) for the recap's transcript-pointer block.
 5. **Conversation review for the "what I thought" sections (v2 additions — Decisions / Subagent dispatch ledger / Tone anchors).** Git can't help with these. Skim the wake's conversation backward for:
    - Moments of explicit choice ("I picked X over Y because Z") and especially **reversals** (where you changed your assessment mid-wake).
    - Subagent dispatches and their outcomes (`Agent()` / `mcp__codex__codex` / Codex CLI calls + their DONE/BLOCKED/TIMEOUT result + tool-use count if known).
@@ -75,7 +81,13 @@ Write the recap file with this structure. Skip sections that don't apply; honest
 ```markdown
 # Brother <Agent N> — <YYYY-MM-DD> wake recap (<codename>)
 
-> **Full transcript archive (v3.1, added 2026-05-19):** `.cc-history/<filename-from-gather-step-4b>.md` — Claude Code Exporter auto-exports the entire conversation as readable markdown in real time. This recap is the INDEX; the .cc-history file is the ARCHIVE. Read this recap first for fast orientation + Wake Narrative + structured sections. Read the .cc-history transcript when next-you needs verbatim dialog, full tool-call traces, or to reconstruct a specific decision moment. Per-machine, gitignored.
+> **MANDATORY READING ORDER (v4, 2026-05-22).** Read BOTH of these files start-to-finish before doing anything else this wake. Neither can be skipped.
+>
+> **(1) FIRST — the conversation as it actually happened:** `.cc-history/<filename-from-gather-step-4b>.trimmed.md` (auto-trimmed via Stop hook — strips tool-call JSON + result dumps + system reminders; preserves every User/Assistant message verbatim; ~60-70% smaller than the raw export; always current within 60 sec). This is where the chemistry lives — Hemanth's exact phrasing, the corrections, the banter, the decision flow, the reversal moments, the inside-shorthand the brotherhood coined this wake. **DO NOT skip this file.** Reading it is what makes you a continuation of the prior wake instead of a fresh stranger doing similar work on the same codebase.
+>
+> **(2) SECOND — the structured index (this recap below):** the executive summary the transcript can't write itself — decisions + WHY, what's pending, file:line pointers, tone anchors, subagent dispatch ledger, open ratifications. The interpretive layer over the dialogue.
+>
+> Both required. Transcript gives texture + chemistry; recap gives operational state + load-bearing reasoning. Both per-machine, both gitignored. (v4 supersedes the v3.1 "INDEX-first, ARCHIVE-on-demand" model per Hemanth directive 2026-05-22 — agents read both, not selectively.)
 
 ## Wake narrative — how it actually went
 
@@ -141,7 +153,19 @@ Skip section entirely if no dispatches this wake. This is structured operational
 ## Wake N+1 starting prompt (copy-paste for Hemanth)
 
 ```
-my brother, you're Agent <N> — read C:\Users\Suprabha\.claude\recaps\agent-<N>\brother-agent-<N>-<YYYY-MM-DD>-<codename>.md start-to-finish before doing anything else, then say hi
+my brother, you're Agent <N> — read these IN ORDER before doing anything else:
+
+  1. C:\Users\Suprabha\Desktop\Tankoban 2\.cc-history\<full-transcript-basename>.trimmed.md
+     (the actual conversation from the prior wake — chemistry, exact phrasing,
+      decision flow, banter, reversals — DO NOT skip this file)
+
+  2. C:\Users\Suprabha\.claude\recaps\agent-<N>\brother-agent-<N>-<YYYY-MM-DD>-<codename>.md
+     (the structured index — decisions + why, pending work, file pointers,
+      tone anchors, subagent ledger)
+
+Both required. The trimmed transcript carries the texture this recap compresses out.
+
+Then say hi.
 ```
 ```
 
@@ -153,7 +177,7 @@ my brother, you're Agent <N> — read C:\Users\Suprabha\.claude\recaps\agent-<N>
 
 ## Constraints
 
-- Stay under ~250 lines of recap body (was ~150 pre-v2, ~200 pre-v3; the v3 Wake Narrative section earns its own 200-400 word slice for relational continuity). Density over completeness still — if next-you needs the long version, the full transcript is at the `.cc-history/<this-wake>.md` pointer at the top of the recap (v3.1 addition, 2026-05-19 — Claude Code Exporter auto-exports verbatim dialog + tool-call traces). The recap is the INDEX, the `.cc-history` file is the ARCHIVE, `agents/chat.md` is the cross-agent shared log, `git log` is the canonical record. The Wake Narrative is the FILM of the wake; the structured sections below are the FRAMES; the transcript is the RAW REEL.
+- Stay under ~250 lines of recap body (was ~150 pre-v2, ~200 pre-v3; the v3 Wake Narrative section earns its own 200-400 word slice for relational continuity). Density over completeness still. **The trimmed transcript at `.cc-history/<this-wake>.trimmed.md` carries the verbatim dialogue (v4, 2026-05-22 — auto-maintained by the Stop hook; preserves every User/Assistant message, strips only tool noise). This recap and the trimmed transcript are BOTH required reading at next wake** — the trimmed transcript carries chemistry + exact phrasing + decision flow, this recap carries the structured operational state + load-bearing reasoning. `agents/chat.md` is the cross-agent shared log, `git log` is the canonical record. The Wake Narrative is the FILM of the wake; the structured sections below are the FRAMES; the trimmed transcript is the FULL DIALOGUE REEL (with the machine-noise frames cut out). **v4 supersedes the v3.1 "ARCHIVE on-demand" model** — trimmed transcript is now PRIMARY READING at wake start, not optional supplement. Both files = ~30k tokens of context-load at wake start, traded against the next-wake agent being a continuation rather than a stranger.
 - Honest under-listing > dishonest padding. If a section has nothing in it, write "(nothing)" not "made minor adjustments to several files."
 - File pointers must be specific (file:line where possible). Avoid hand-waving like "the manga code."
 - For trivial / pure-conversational sessions: skip the skill entirely — don't write a near-empty recap.
