@@ -1150,8 +1150,32 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                     populateSourcesForRow(-1);
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
-                this, [](bool /*checked*/, bool /*shiftHeld*/) {
-                    // Range-fill wiring lands in Task 17.
+                this, [this](bool checked, bool shiftHeld) {
+                    auto* src = qobject_cast<tankoban::ui::comics::VolumeTile*>(sender());
+                    if (!src) return;
+                    const int vn = src->volumeNumber();
+
+                    if (shiftHeld && m_lastBulkAnchorVolume > 0) {
+                        const int lo = std::min(m_lastBulkAnchorVolume, vn);
+                        const int hi = std::max(m_lastBulkAnchorVolume, vn);
+                        for (int v = lo; v <= hi; ++v) {
+                            auto* t = m_volumeTilesByVolumeNumber.value(v, nullptr);
+                            if (!t) continue;
+                            t->setCheckedQuiet(checked);
+                            if (checked) m_selectedRows.insert(v);
+                            else         m_selectedRows.remove(v);
+                        }
+                    } else {
+                        if (checked) m_selectedRows.insert(vn);
+                        else         m_selectedRows.remove(vn);
+                    }
+                    m_lastBulkAnchorVolume = vn;
+
+                    if (m_downloadSelectedBtn) {
+                        m_downloadSelectedBtn->setText(
+                            QStringLiteral("Download Selected (%1)").arg(m_selectedRows.size()));
+                        m_downloadSelectedBtn->setVisible(!m_selectedRows.isEmpty());
+                    }
                 });
 
         m_volumeTiles.append(tile);
@@ -1313,8 +1337,32 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
                     populateSourcesForRow(-1);
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
-                this, [](bool /*checked*/, bool /*shiftHeld*/) {
-                    // Range-fill wiring lands in Task 17.
+                this, [this](bool checked, bool shiftHeld) {
+                    auto* src = qobject_cast<tankoban::ui::comics::VolumeTile*>(sender());
+                    if (!src) return;
+                    const int vn = src->volumeNumber();
+
+                    if (shiftHeld && m_lastBulkAnchorVolume > 0) {
+                        const int lo = std::min(m_lastBulkAnchorVolume, vn);
+                        const int hi = std::max(m_lastBulkAnchorVolume, vn);
+                        for (int v = lo; v <= hi; ++v) {
+                            auto* t = m_volumeTilesByVolumeNumber.value(v, nullptr);
+                            if (!t) continue;
+                            t->setCheckedQuiet(checked);
+                            if (checked) m_selectedRows.insert(v);
+                            else         m_selectedRows.remove(v);
+                        }
+                    } else {
+                        if (checked) m_selectedRows.insert(vn);
+                        else         m_selectedRows.remove(vn);
+                    }
+                    m_lastBulkAnchorVolume = vn;
+
+                    if (m_downloadSelectedBtn) {
+                        m_downloadSelectedBtn->setText(
+                            QStringLiteral("Download Selected (%1)").arg(m_selectedRows.size()));
+                        m_downloadSelectedBtn->setVisible(!m_selectedRows.isEmpty());
+                    }
                 });
 
         m_volumeTiles.append(tile);

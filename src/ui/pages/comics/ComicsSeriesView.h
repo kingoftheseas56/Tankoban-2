@@ -335,6 +335,7 @@ private:
     // emits bulkDownloadRequested once with the full selection list. Mirrors
     // StreamDetailView::m_downloadSelectedBtn pattern at line 599.
     QSet<int>      m_selectedRows;
+    int            m_lastBulkAnchorVolume = -1;   // -1 = no anchor yet
     QPushButton*   m_downloadSelectedBtn = nullptr;
 
     // Cached during renderDetail so onVolumeCellClicked can pass the
