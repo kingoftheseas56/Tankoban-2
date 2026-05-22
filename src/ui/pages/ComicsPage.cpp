@@ -725,13 +725,25 @@ void ComicsPage::showEvent(QShowEvent* e)
     if (m_mangaDownloadIndex) m_mangaDownloadIndex->validateAll();
 }
 
-// Stream/Theatre-parity search-bar event filter (2026-05-22, Task 1 stub).
-// Body is empty for the header-only ship; Task 6 replaces this with the
-// FocusIn/FocusOut routing for m_searchBar to drive the history dropdown.
-// Declared in the header now so the vtable is complete from this commit
-// forward.
+// Stream/Theatre-parity search-bar event filter (2026-05-22). Drives the
+// search-history dropdown off m_searchBar focus events:
+//   FocusIn  + empty input  → show history dropdown (skipped if input has
+//                             text, so we don't obscure the user's typing)
+//   FocusOut                → start the 150ms delayed hide timer, giving a
+//                             clicked dropdown row time to consume its
+//                             press/release before the dropdown vanishes
+// Mirrors StreamPage.cpp's eventFilter at :1873-1889.
 bool ComicsPage::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == m_searchBar) {
+        if (event->type() == QEvent::FocusIn) {
+            if (m_searchBar->text().trimmed().isEmpty()) {
+                showSearchHistoryDropdown();
+            }
+        } else if (event->type() == QEvent::FocusOut) {
+            if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->start();
+        }
+    }
     return QWidget::eventFilter(obj, event);
 }
 
@@ -825,15 +837,33 @@ void ComicsPage::buildUI()
     m_searchTimer->setSingleShot(true);
     m_searchTimer->setInterval(250);
     connect(m_searchBar, &QLineEdit::textChanged, this, [this]() {
-        m_searchBar->setProperty("activeSearch", !m_searchBar->text().trimmed().isEmpty());
+        const bool hasText = !m_searchBar->text().trimmed().isEmpty();
+        m_searchBar->setProperty("activeSearch", hasText);
         m_searchBar->style()->unpolish(m_searchBar);
         m_searchBar->style()->polish(m_searchBar);
+
+        // Stream-bar parity: hide the history dropdown while typing (the user
+        // is composing a new query, irrelevant past queries would obscure it);
+        // re-show when the input is cleared and still focused.
+        if (hasText) {
+            hideSearchHistoryDropdown();
+        } else if (m_searchBar->hasFocus()) {
+            showSearchHistoryDropdown();
+        }
     });
     connect(m_searchBar, &QLineEdit::returnPressed, this, [this]() {
         const QString q = m_searchBar->text().trimmed();
         if (q.isEmpty()) return;
+        hideSearchHistoryDropdown();
         showSearchMode(q);
     });
+
+    // Stream/Theatre-parity search history (2026-05-22): load persisted
+    // queries, construct the floating dropdown widget once, install the
+    // event filter that opens/closes it on m_searchBar focus changes.
+    loadSearchHistory();
+    buildSearchHistoryDropdown();
+    m_searchBar->installEventFilter(this);
 
     // Ctrl+F focuses search bar
     auto* searchShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_F), this);
