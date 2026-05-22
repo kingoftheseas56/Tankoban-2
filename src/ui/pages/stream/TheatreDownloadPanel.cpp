@@ -222,6 +222,11 @@ void TheatreDownloadPanel::openFor(const QString& imdbId,
     m_filteredPacks.clear();
     m_widenedAutoFallback = false;
     m_tileChecked.clear();
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — reset the shift+click
+    // range-fill anchor so a stale tile-key from a prior pack can't
+    // bleed into this new openFor() cycle.
+    m_lastToggledKey = 0;
+    m_lastToggledValid = false;
 
     if (m_packHeading) {
         // ASCII-only heading: use " - " separator (no middle-dot/U+00B7).
@@ -245,6 +250,10 @@ void TheatreDownloadPanel::reset() {
     m_filteredPacks.clear();
     m_tileChecked.clear();
     m_knownEpisodeCounts.clear();  // T3
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — mirror openFor's
+    // reset so dismiss-then-reopen never resurrects the anchor.
+    m_lastToggledKey = 0;
+    m_lastToggledValid = false;
     // THEATRE_DOWNLOAD_OVERHAUL Task D3 (2026-05-16): clear pending-metadata
     // state so closing+reopening the panel doesn't leak a stale hash that
     // could match a late metadataReady from a prior selection.
@@ -971,7 +980,13 @@ void TheatreDownloadPanel::rerenderScopePicker() {
             tile->setChecked(previousChecked.value(movieKey));
         }
         m_tileChecked[movieKey] = tile->isChecked();
-        connect(tile, &EpisodeTile::toggled, this, [this, tile](bool checked) {
+        // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — movie mode is a
+        // degenerate single-tile pack so shift-range fill is a no-op
+        // here, but we wire toggledShift instead of the legacy toggled
+        // signal for API consistency across all 3 tile-connect sites.
+        connect(tile, &EpisodeTile::toggledShift, this,
+                [this, tile](bool checked, bool shiftHeld) {
+            Q_UNUSED(shiftHeld);
             m_tileChecked[tileKey(tile->season(), tile->episode())] = checked;
             // F1 fix (Codex audit 2026-05-16): movie-mode button must live-update
             // so the user can re-check an already-have movie if they want to
@@ -1074,7 +1089,12 @@ void TheatreDownloadPanel::rerenderScopePicker() {
             tile->setChecked(previousChecked.value(fallbackKey));
         }
         m_tileChecked[fallbackKey] = tile->isChecked();
-        connect(tile, &EpisodeTile::toggled, this, [this, tile](bool checked) {
+        // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — fallback "Download
+        // entire pack" path is also single-tile so shift-range is a no-op,
+        // but we mirror the toggledShift connect for API consistency.
+        connect(tile, &EpisodeTile::toggledShift, this,
+                [this, tile](bool checked, bool shiftHeld) {
+            Q_UNUSED(shiftHeld);
             m_tileChecked[tileKey(tile->season(), tile->episode())] = checked;
             if (m_scopeDownloadBtn) m_scopeDownloadBtn->setEnabled(checked);
         });
@@ -1134,8 +1154,44 @@ void TheatreDownloadPanel::rerenderScopePicker() {
                 tile->setChecked(previousChecked.value(key));
             }
             m_tileChecked[key] = tile->isChecked();
-            connect(tile, &EpisodeTile::toggled, this, [this, tile](bool checked) {
-                m_tileChecked[tileKey(tile->season(), tile->episode())] = checked;
+            // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — series-mode
+            // per-episode tile connect. On a shift-held click we walk
+            // the scope tile container's layout and apply the new
+            // checked state to every EpisodeTile whose key falls
+            // between the prior anchor and this tile (inclusive) AND
+            // whose season matches this tile's season. Cross-season
+            // range-fill is intentionally skipped (rarely the user
+            // intent on a Complete Series pack). The anchor advances
+            // to this tile on every click — shift or not.
+            connect(tile, &EpisodeTile::toggledShift, this,
+                    [this, tile](bool checked, bool shiftHeld) {
+                const quint32 clickedKey = tileKey(tile->season(), tile->episode());
+                if (shiftHeld && m_lastToggledValid
+                    && static_cast<int>(m_lastToggledKey >> 16) == tile->season()
+                    && m_scopeTileContainer) {
+                    if (auto* lay = m_scopeTileContainer->layout()) {
+                        const quint32 lo = qMin(m_lastToggledKey, clickedKey);
+                        const quint32 hi = qMax(m_lastToggledKey, clickedKey);
+                        for (int i = 0; i < lay->count(); ++i) {
+                            auto* item = lay->itemAt(i);
+                            if (!item) continue;
+                            auto* w = item->widget();
+                            if (!w) continue;
+                            auto* etile = qobject_cast<EpisodeTile*>(w);
+                            if (!etile) continue;
+                            const quint32 ekey =
+                                tileKey(etile->season(), etile->episode());
+                            if (ekey >= lo && ekey <= hi
+                                && etile->season() == tile->season()) {
+                                etile->setCheckedQuiet(checked);
+                                m_tileChecked[ekey] = checked;
+                            }
+                        }
+                    }
+                }
+                m_tileChecked[clickedKey] = checked;
+                m_lastToggledKey   = clickedKey;
+                m_lastToggledValid = true;
                 updateSeriesDownloadButton();
             });
         }

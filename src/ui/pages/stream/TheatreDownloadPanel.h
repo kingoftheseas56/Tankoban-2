@@ -163,6 +163,16 @@ private:
     // QMap for stable iteration order.
     QMap<quint32, bool> m_tileChecked;
 
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — anchor for shift-click
+    // range fill. Holds the (season, episode) key of the most-recently
+    // toggled tile in the active scope picker. On the next shift+click
+    // we walk the tile container layout between this anchor and the
+    // newly-clicked tile and apply the new checked state to every tile
+    // in the same season group. Cleared in reset() and rerenderScopePicker()
+    // so a stale anchor from a prior pack can't bleed into a new selection.
+    quint32 m_lastToggledKey = 0;
+    bool    m_lastToggledValid = false;
+
     // UI hierarchy.
     QStackedWidget* m_stack = nullptr;   // 0: PackList, 1: ScopePicker
     QWidget*        m_packListPage = nullptr;

@@ -1,10 +1,12 @@
 #include "ui/pages/stream/EpisodeTile.h"
 
 #include <QCheckBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QSignalBlocker>
 
 namespace tankoban::stream::theatre {
 
@@ -23,7 +25,20 @@ void EpisodeTile::buildUI() {
     m_checkBox = new QCheckBox(this);
     // Default check: true unless the episode is already-have (smart skip).
     m_checkBox->setChecked(!m_data.alreadyHave);
-    connect(m_checkBox, &QCheckBox::toggled, this, &EpisodeTile::toggled);
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — re-emit two signals on
+    // every checkbox toggle. The legacy `toggled(bool)` keeps the old
+    // contract for consumers that don't care about modifier state. The
+    // new `toggledShift(bool, bool)` carries the keyboard-modifier state
+    // at click time so the bulk picker can implement shift+click range
+    // fill. QGuiApplication::keyboardModifiers() returns the modifier
+    // state at the moment the event is processed, which is what we want
+    // (shift is still held during the click that triggers toggled).
+    connect(m_checkBox, &QCheckBox::toggled, this, [this](bool checked) {
+        const bool shiftHeld =
+            QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+        emit toggled(checked);
+        emit toggledShift(checked, shiftHeld);
+    });
     row->addWidget(m_checkBox);
 
     m_seLabel = new QLabel(
@@ -71,6 +86,16 @@ bool EpisodeTile::isChecked() const { return m_checkBox && m_checkBox->isChecked
 
 void EpisodeTile::setChecked(bool checked) {
     if (m_checkBox) m_checkBox->setChecked(checked);
+}
+
+void EpisodeTile::setCheckedQuiet(bool checked) {
+    if (!m_checkBox) return;
+    // QSignalBlocker RAII-suppresses signal emission for the lifetime of
+    // the scope. Both legacy `toggled(bool)` and new `toggledShift(bool,
+    // bool)` are routed through the m_checkBox->toggled connection set up
+    // in buildUI, so blocking the checkbox suppresses both.
+    QSignalBlocker blocker(m_checkBox);
+    m_checkBox->setChecked(checked);
 }
 
 // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — state-input setter. Stores the

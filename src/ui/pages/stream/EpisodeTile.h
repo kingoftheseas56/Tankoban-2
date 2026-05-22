@@ -46,6 +46,13 @@ public:
     bool isChecked() const;
     void setChecked(bool checked);
 
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — set the underlying
+    // checkbox state without emitting the toggled* signals. Used by the
+    // bulk picker's shift-click range-fill so a single shift-click
+    // doesn't cascade N tile-toggled events back into the panel's
+    // m_tileChecked map updates.
+    void setCheckedQuiet(bool checked);
+
     int season() const  { return m_data.season; }
     int episode() const { return m_data.episode; }
 
@@ -60,6 +67,12 @@ public:
 
 signals:
     void toggled(bool checked);
+
+    // THEATRE_BULK_PICKER_SHIFT_RANGE 2026-05-22 — richer toggle signal
+    // carrying the keyboard-modifier state at click time. Consumers that
+    // want shift+click range-fill connect here; consumers that only care
+    // about the binary checked state stay on `toggled(bool)`.
+    void toggledShift(bool checked, bool shiftHeld);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
