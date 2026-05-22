@@ -868,7 +868,9 @@ void StreamPage::buildUI()
             this, [this](const QString& imdbId,
                          const QString& showName,
                          int season,
-                         const QString& mediaType) {
+                         const QString& mediaType,
+                         const QMap<int, int>& knownEpisodeCounts) {
+                Q_UNUSED(knownEpisodeCounts);  // wired into openFor() in T3
                 if (!m_theatreDownloadPanel)
                     return;
                 const QString showYear = m_detailView ? m_detailView->currentYear() : QString();

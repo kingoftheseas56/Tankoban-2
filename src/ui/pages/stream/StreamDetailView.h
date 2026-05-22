@@ -193,12 +193,17 @@ signals:
     void seasonDownloadRequested(int season);
     void selectedEpisodesDownloadRequested(int season, const QList<int>& episodes);
 
-    // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 - unified Download button. Host
-    // (StreamPage) opens TheatreDownloadPanel with this context.
+    // THEATRE_BULK_PICKER_EPISODE_COUNT_FIX 2026-05-22 — knownEpisodeCounts
+    // added so the bulk-picker can build per-season tile lists from Cinemeta
+    // truth instead of the 10-default title-estimate fallback. Map is keyed
+    // by season number; values are episode counts. Empty map = "no Cinemeta
+    // data available, fall back to whatever you can derive" (movies always
+    // emit empty).
     void theatreDownloadRequested(const QString& imdbId,
                                   const QString& showName,
                                   int season,
-                                  const QString& mediaType);
+                                  const QString& mediaType,
+                                  const QMap<int, int>& knownEpisodeCounts);
 
     // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie-row primary
     // Download fast-path. Host (StreamPage) auto-picks the top-seeded torrent

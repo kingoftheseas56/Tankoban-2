@@ -713,7 +713,8 @@ void StreamDetailView::buildUI()
         emit theatreDownloadRequested(m_currentImdb,
                                        currentTitle(),
                                        season,
-                                       m_currentType);
+                                       m_currentType,
+                                       episodeCountsBySeason());
     });
     seasonLayout->addWidget(m_packOptionsBtn);
 
