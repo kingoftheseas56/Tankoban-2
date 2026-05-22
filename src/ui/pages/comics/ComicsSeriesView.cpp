@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <QSet>
 #include <QStringList>
+#include <QScrollArea>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
@@ -338,20 +339,9 @@ ComicsSeriesView::ComicsSeriesView(anilist::AniListClient*  client,
                 Qt::QueuedConnection);
     }
 
-    // PHASE 8/B.2: row-click on a not-downloaded volume populates the
-    // sources panel; row-click on a downloaded volume opens its cbz path.
-    // cellClicked fires for any cell hit (including col-6 chevron) but is
-    // mouse-only -- arrow keys do not raise it.
-    //
-    // F1 (2026-05-18): currentCellChanged fires for both mouse + keyboard
-    // selection changes, so the Sources panel populate path is wired there.
-    // cellClicked stays for the mouse-tap-to-open-cbz behavior only.
-    if (m_volumesTable) {
-        connect(m_volumesTable, &QTableWidget::cellClicked,
-                this,           &ComicsSeriesView::onVolumeCellClicked);
-        connect(m_volumesTable, &QTableWidget::currentCellChanged,
-                this,           &ComicsSeriesView::onVolumeCurrentChanged);
-    }
+    // Task 13: cellClicked + currentCellChanged connects removed (m_volumesTable
+    // no longer exists). onVolumeCellClicked + onVolumeCurrentChanged will be
+    // rewired to VolumeTile signals in Task 16.
 
     // PHASE 8: forward the sources panel's downloadRequested verbatim via
     // ComicsSeriesView's own downloadDispatchRequested signal so Phase 9
@@ -655,66 +645,25 @@ void ComicsSeriesView::buildUi()
     // (2026-05-18). v1 inserts nothing; future v1.x widget mounts before
     // the volume table.
 
-    // --- Volume list table (Task 2: Stream-blueprint 6-column layout). ---
-    m_volumesTable = new QTableWidget(this);
-    m_volumesTable->setObjectName(QStringLiteral("ComicsSeriesVolumesTable"));
+    // --- Volume scroll surface (Task 13: VolumeTile container replaces QTableWidget). ---
+    // QScrollArea wraps a QWidget host that owns a QVBoxLayout of VolumeTile rows.
+    // New tiles are inserted at layout index count()-1 (before the trailing stretch).
+    m_volumesScroll = new QScrollArea(this);
+    m_volumesScroll->setObjectName(QStringLiteral("ComicsSeriesVolumesScroll"));
+    m_volumesScroll->setWidgetResizable(true);
+    m_volumesScroll->setFrameShape(QFrame::NoFrame);
+    m_volumesScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_volumesScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
 
-    // STREAM_PORT 2026-05-18 Task 2: 6-column layout (down from 7). Stream
-    // parity at StreamDetailView.cpp:661-674. Columns:
-    //   [kColCheckbox=0 chk]  -- 32px checkbox (Task 5 wires the toggle)
-    //   [kColIndex=1   #]     -- 36px volume index; F1 stash lives here
-    //   [kColThumb=2   thmb]  -- 126px (110x150 portrait + padding), MANGA aspect
-    //   [kColTitle=3   ttl]   -- stretch, stacked "Vol N" + "Chs A-B" cellWidget
-    //   [kColProgress=4 prog] -- 80px progress text ("--" in v1)
-    //   [kColStatus=5  stat]  -- 60px status text ("Downloaded" / ...)
-    // Col-6 ("Open" chevron) is DROPPED entirely per brainstorm Decision 6.
-    // kCol* constants live at file-scope anonymous namespace (Task 5 carry-forward).
+    m_volumesHost = new QWidget(m_volumesScroll);
+    m_volumesLayout = new QVBoxLayout(m_volumesHost);
+    m_volumesLayout->setContentsMargins(0, 0, 0, 0);
+    m_volumesLayout->setSpacing(0);
+    m_volumesLayout->addStretch(1);   // pushes rows up; new tiles inserted at index count()-1
 
-    const QStringList headers = {
-        QString(),         // checkbox -- no header text
-        tr("#"),
-        QString(),         // thumb -- no header text
-        tr("Title"),
-        tr("Progress"),
-        tr("Status"),
-    };
-    m_volumesTable->setColumnCount(kColCount);
-    m_volumesTable->setHorizontalHeaderLabels(headers);
-    m_volumesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_volumesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_volumesTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_volumesTable->setShowGrid(false);
-    m_volumesTable->setAlternatingRowColors(true);
-    m_volumesTable->verticalHeader()->setVisible(false);
-    m_volumesTable->horizontalHeader()->setStretchLastSection(false);
+    m_volumesScroll->setWidget(m_volumesHost);
 
-    auto* hdr = m_volumesTable->horizontalHeader();
-    hdr->setSectionResizeMode(kColCheckbox, QHeaderView::Fixed);
-    hdr->setSectionResizeMode(kColIndex,    QHeaderView::Fixed);
-    hdr->setSectionResizeMode(kColThumb,    QHeaderView::Fixed);
-    hdr->setSectionResizeMode(kColTitle,    QHeaderView::Stretch);
-    hdr->setSectionResizeMode(kColProgress, QHeaderView::Fixed);
-    hdr->setSectionResizeMode(kColStatus,   QHeaderView::Fixed);
-    m_volumesTable->setColumnWidth(kColCheckbox, 32);
-    m_volumesTable->setColumnWidth(kColIndex,    36);
-    m_volumesTable->setColumnWidth(kColThumb,    126);
-    m_volumesTable->setColumnWidth(kColProgress, 80);
-    m_volumesTable->setColumnWidth(kColStatus,   60);
-    // STREAM_PORT Bug-4 round-3 fix 2026-05-18: m_volumesTable->setIconSize
-    // REMOVED. Was set to QSize(48, 64) in Task 2 for col-2 thumb sizing,
-    // but Qt6's QTableWidget appears to leak that iconSize hint into the
-    // cellWidget rendering pipeline -- specifically the col-0 QToolButton's
-    // SVG was rendering as a "[" (only left-edge visible), clipped to a
-    // narrow width while preserving 14px height. Stream's m_episodeTable
-    // does NOT set a table-wide iconSize (verified via grep) -- it uses
-    // explicit per-cellWidget iconSize on QToolButton (14x14) and
-    // QPushButton (16x16) only. Removing the table-wide call decouples
-    // every cell's icon sizing. Col-2 thumb migrated to cellWidget+QLabel
-    // (same pattern as col-5 status from round-2) -- see populateVolumeRows
-    // + applyPixmapToVolumeRow.
-    m_volumesTable->verticalHeader()->setDefaultSectionSize(kVolumeRowHeight);
-
-    leftCol->addWidget(m_volumesTable, /*stretch*/ 1);
+    leftCol->addWidget(m_volumesScroll, /*stretch*/ 1);
 
     // STREAM_PORT 2026-05-18 Task 5: "Download Selected (N)" button. Shown
     // when N >= 1 checked rows; hidden otherwise. Click emits
