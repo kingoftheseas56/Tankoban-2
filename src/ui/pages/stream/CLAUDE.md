@@ -26,7 +26,6 @@ Sibling file at `src/core/stream/CLAUDE.md` carries the stream-server + progress
 - `AddonManagerScreen` + `AddonDetailPanel` — Stremio addon registry UX
 - `EpisodeTile` — per-episode tile inside StreamDetailView; Phase D target
 - `StreamPlayerController` — launch-player coordination from stream context; bridges to `SidecarProcess` (Agent 3 surface — do not own it)
-- `CalendarScreen` — airing calendar; driven by `src/core/stream/CalendarEngine`
 
 ## Reference apps
 

@@ -20,8 +20,6 @@
 #include "stream/StreamSourceList.h"
 #include "core/stream/StreamAggregator.h"
 #include "core/stream/SubtitlesAggregator.h"
-#include "core/stream/CalendarEngine.h"
-#include "stream/CalendarScreen.h"
 #include "stream/StreamPlayerController.h"
 #include "stream/StreamContinueStrip.h"
 #include "stream/StreamHomeBoard.h"
@@ -50,6 +48,8 @@
 #include <QEventLoop>
 #include <QFocusEvent>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QSize>
 #include <QFileInfo>
 #include <QGraphicsOpacityEffect>
 #include <QInputDialog>
@@ -89,7 +89,6 @@ QString streamLayerLabelFor(const tankoban::ui::LayerEntry& e)
     if (e.kind == QLatin1String("catalogBrowse")) return e.stateBlob.value(QStringLiteral("catalogTitle")).toString();
     if (e.kind == QLatin1String("detail"))        return e.stateBlob.value(QStringLiteral("detailImdbId")).toString();
     if (e.kind == QLatin1String("addonManager"))  return QStringLiteral("Addons");
-    if (e.kind == QLatin1String("calendar"))      return QStringLiteral("Calendar");
     if (e.kind == QLatin1String("search"))        return QStringLiteral("Search");
     return QStringLiteral("Theatre");
 }
@@ -328,13 +327,6 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
         });
     m_library   = new StreamLibrary(&bridge->store(), this);
 
-    // Batch 6.1 â€” Calendar backend. Needs AddonRegistry (meta fan-out) +
-    // StreamLibrary (series source) + dataDir (cache path). No UI hookup
-    // in 6.1; Batch 6.2 wires CalendarScreen to this engine's signals and
-    // triggers loadUpcoming() on the calendar entry button.
-    m_calendarEngine = new tankostream::stream::CalendarEngine(
-        m_addonRegistry, m_library, bridge->dataDir(), this);
-
     // STREAM_SERVER_PIVOT Phase 3 (2026-04-25) â€” legacy libtorrent engine
     // deleted. Stream mode is stream-server subprocess only, no env gate,
     // no fallback. Cache lives under dataDir/stream_server_cache (renamed
@@ -483,7 +475,6 @@ QJsonObject StreamPage::devLibrarySection() const
     else if (idx == 2) layer = QStringLiteral("player");
     else if (idx == 3) layer = QStringLiteral("addons");
     else if (idx == 4) layer = QStringLiteral("catalog");
-    else if (idx == 5) layer = QStringLiteral("calendar");
     sec["active_layer"] = layer;
     return sec;
 }
@@ -531,8 +522,6 @@ QJsonObject StreamPage::devSnapshot() const
         layer = QStringLiteral("addons");
     else if (idx == 4)
         layer = QStringLiteral("catalog");
-    else if (idx == 5)
-        layer = QStringLiteral("calendar");
 
     snap[QStringLiteral("layer")] = layer;
     snap[QStringLiteral("searchQuery")] = m_searchInput ? m_searchInput->text() : QString();
@@ -546,7 +535,6 @@ QJsonObject StreamPage::devSnapshot() const
         case NavEntry::Kind::CatalogBrowse: o[QStringLiteral("kind")] = QStringLiteral("catalogBrowse"); break;
         case NavEntry::Kind::Detail:        o[QStringLiteral("kind")] = QStringLiteral("detail"); break;
         case NavEntry::Kind::AddonManager:  o[QStringLiteral("kind")] = QStringLiteral("addonManager"); break;
-        case NavEntry::Kind::Calendar:      o[QStringLiteral("kind")] = QStringLiteral("calendar"); break;
         case NavEntry::Kind::Search:        o[QStringLiteral("kind")] = QStringLiteral("search"); break;
         }
         o[QStringLiteral("detailImdbId")] = entry.detailImdbId;
@@ -1216,43 +1204,6 @@ void StreamPage::buildUI()
     // browseCatalogRequested (featured rows deleted). Users reach the
     // catalog browser via the Catalog button in the search bar instead.
 
-    // Calendar layer (Phase 6 Batch 6.2)
-    m_calendarScreen = new tankostream::stream::CalendarScreen(this);
-    m_mainStack->addWidget(m_calendarScreen); // index 5: calendar
-
-    // Engine â†’ screen dataflow. Prefer grouped signal (pre-bucketed + date
-    // math already done engine-side); the flat signal fires too but the
-    // screen's setItems regroups harmlessly if grouped hasn't arrived yet.
-    connect(m_calendarEngine, &tankostream::stream::CalendarEngine::calendarGroupedReady,
-            m_calendarScreen, &tankostream::stream::CalendarScreen::setGroupedItems);
-    connect(m_calendarEngine, &tankostream::stream::CalendarEngine::calendarError,
-            m_calendarScreen, &tankostream::stream::CalendarScreen::setError);
-
-    // Screen â†’ navigation.
-    connect(m_calendarScreen, &tankostream::stream::CalendarScreen::backRequested,
-            this, &StreamPage::goBack);
-    connect(m_calendarScreen, &tankostream::stream::CalendarScreen::refreshRequested,
-            this, [this]() {
-                if (m_calendarEngine && m_calendarScreen) {
-                    m_calendarScreen->setLoading(true);
-                    m_calendarEngine->loadUpcoming();
-                }
-            });
-    connect(m_calendarScreen, &tankostream::stream::CalendarScreen::seriesEpisodeActivated,
-            this, [this](const QString& imdbId, int season, int episode) {
-                if (!m_detailView) return;
-                // THEATRE_DOWNLOAD_OVERHAUL stale-panel fix v2 2026-05-17 -
-                // dismiss panel BEFORE showEntry so prior-show packs do not
-                // persist on the new show's detail view.
-                dismissTheatreDownloadPanelIfOpen();
-                // Route into the detail view with preselection staged. Detail
-                // view consumes once in onSeriesMetaReady and clears, so a
-                // subsequent showDetail click without preselection won't
-                // re-apply these values.
-                m_detailView->showEntry(imdbId, season, episode);
-                m_mainStack->setCurrentIndex(1);
-            });
-
     rootLayout->addWidget(m_mainStack, 1);
 
     m_mainStack->setCurrentIndex(0);
@@ -1292,10 +1243,17 @@ void StreamPage::buildSearchBar()
     layout->addWidget(busy);
     m_searchBusy = busy;
 
-    m_searchBtn = new QPushButton("Search", m_searchBarFrame);
+    // THEATRE_POLISH 2026-05-22 â€” Search button is now a magnifying-glass
+    // SVG icon only (no text). Saves horizontal space next to the topbar
+    // search input and matches the iconographic style of the gear button.
+    m_searchBtn = new QPushButton(m_searchBarFrame);
     m_searchBtn->setFixedHeight(36);
+    m_searchBtn->setFixedWidth(36);
     m_searchBtn->setCursor(Qt::PointingHandCursor);
     m_searchBtn->setObjectName("StreamSearchBtn");
+    m_searchBtn->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
+    m_searchBtn->setIconSize(QSize(18, 18));
+    m_searchBtn->setToolTip("Search");
     layout->addWidget(m_searchBtn);
 
     m_addonsBtn = new QPushButton("Addons", m_searchBarFrame);
@@ -1304,17 +1262,6 @@ void StreamPage::buildSearchBar()
     m_addonsBtn->setObjectName("StreamAddonsBtn");
     m_addonsBtn->setToolTip("Manage installed addons");
     layout->addWidget(m_addonsBtn);
-
-    // Batch 6.2 â€” Calendar entry button. Placed after Addons; opens the
-    // calendar stack layer and triggers an engine load on each click
-    // (CalendarEngine has its own 12h TTL cache + signature guard so
-    // repeated clicks don't re-fan-out unnecessarily).
-    m_calendarBtn = new QPushButton("Calendar", m_searchBarFrame);
-    m_calendarBtn->setFixedHeight(36);
-    m_calendarBtn->setCursor(Qt::PointingHandCursor);
-    m_calendarBtn->setObjectName("StreamCalendarBtn");
-    m_calendarBtn->setToolTip("Upcoming episodes from your library");
-    layout->addWidget(m_calendarBtn);
 
     // Stream library UX rework 2026-04-15 â€” Catalog button replaces the
     // deleted home-board featured rows. Opens the existing
@@ -1328,35 +1275,52 @@ void StreamPage::buildSearchBar()
     layout->addWidget(m_catalogBtn);
 
     // THEATRE_CLEANUP F2 (2026-05-22) — gear icon at the right edge of the
-    // Theatre topbar. Opens a small QMenu with a "Danger zone" section
-    // containing the Clear Library action (red text). Click → menu →
-    // action triggers onClearLibraryRequested which runs the two-step
-    // confirmation (warning modal + type-"clear" input modal) before
-    // invoking m_library->clear().
+    // Theatre topbar. Opens a small QMenu containing the Clear Library
+    // action (red text). Click → menu → action triggers
+    // onClearLibraryRequested which runs the two-step confirmation
+    // (warning modal + type-"clear" input modal) before invoking
+    // m_library->clear().
+    //
+    // THEATRE_POLISH 2026-05-22 — drop the button's default dark
+    // backdrop (transparent + no border, hover-tint on roll-over) so the
+    // gear icon reads as just-an-icon next to the boxy Addons/Catalog
+    // text buttons. Single-action menu (the "Danger zone" section header
+    // was visual clutter for one action) with a tighter padding box and
+    // red action text since destructive is the only thing in here.
     m_settingsBtn = new QPushButton(QStringLiteral("⚙"), m_searchBarFrame);
     m_settingsBtn->setFixedHeight(36);
     m_settingsBtn->setFixedWidth(36);
     m_settingsBtn->setCursor(Qt::PointingHandCursor);
     m_settingsBtn->setObjectName("StreamSettingsBtn");
     m_settingsBtn->setToolTip("Theatre settings");
+    m_settingsBtn->setStyleSheet(
+        "QPushButton#StreamSettingsBtn {"
+        "  background: transparent;"
+        "  border: none;"
+        "  color: #cccccc;"
+        "  font-size: 16px;"
+        "}"
+        "QPushButton#StreamSettingsBtn:hover {"
+        "  background: rgba(255,255,255,0.06);"
+        "  border-radius: 4px;"
+        "}"
+        "QPushButton#StreamSettingsBtn::menu-indicator { image: none; width: 0; }");
     auto* settingsMenu = new QMenu(m_settingsBtn);
-    settingsMenu->addSection(tr("Danger zone"));
-    auto* clearLibraryAction = settingsMenu->addAction(tr("Clear Library…"));
-    // Color the destructive action red so it visually telegraphs as such.
-    {
-        QFont f = clearLibraryAction->font();
-        f.setBold(true);
-        clearLibraryAction->setFont(f);
-    }
+    auto* clearLibraryAction = settingsMenu->addAction(tr("Clear Library"));
     settingsMenu->setStyleSheet(
-        "QMenu::item { padding: 6px 18px; }"
-        "QMenu::section { color: #888; padding: 6px 12px; font-size: 11px; }"
-        "QMenu::item:!selected { color: #e0e0e0; }");
-    // Tint just the Clear Library action red via property-based stylesheet
-    // hook (Qt doesn't natively style individual QAction text color, so we
-    // override on hover too via the action's own selection-state styling
-    // through a small palette tweak on the action's font color).
-    clearLibraryAction->setData(QStringLiteral("danger"));
+        "QMenu {"
+        "  background: #1f1f1f;"
+        "  border: 1px solid #3a3a3a;"
+        "  padding: 4px;"
+        "}"
+        "QMenu::item {"
+        "  padding: 6px 14px;"
+        "  color: #e85050;"
+        "}"
+        "QMenu::item:selected {"
+        "  background: #3a2020;"
+        "  color: #ff6464;"
+        "}");
     m_settingsBtn->setMenu(settingsMenu);
     connect(clearLibraryAction, &QAction::triggered,
             this, &StreamPage::onClearLibraryRequested);
@@ -1368,8 +1332,6 @@ void StreamPage::buildSearchBar()
             this, &StreamPage::onSearchSubmit);
     connect(m_addonsBtn, &QPushButton::clicked,
             this, &StreamPage::showAddonManager);
-    connect(m_calendarBtn, &QPushButton::clicked,
-            this, &StreamPage::showCalendar);
     connect(m_catalogBtn, &QPushButton::clicked,
             this, &StreamPage::onCatalogBtnClicked);
 
@@ -2054,17 +2016,6 @@ void StreamPage::showEntryRaw(const NavEntry& entry)
         m_mainStack->setCurrentIndex(3);
         break;
 
-    case Kind::Calendar:
-        if (!m_calendarScreen || !m_calendarEngine) break;
-        cancelBulkSeasonDownload();
-        cancelAutoLaunch();
-        hideNextEpisodeOverlay();
-        resetNextEpisodePrefetch();
-        m_calendarScreen->setLoading(true);
-        m_mainStack->setCurrentIndex(5);
-        m_calendarEngine->loadUpcoming();
-        break;
-
     case Kind::Search:
         showSearchResults();
         break;
@@ -2122,9 +2073,6 @@ void StreamPage::restoreLayer(const tankoban::ui::LayerEntry& target)
     } else if (kind == "addonManager") {
         if (!m_addonManager) return;
         entry.kind = Kind::AddonManager;
-    } else if (kind == "calendar") {
-        if (!m_calendarScreen || !m_calendarEngine) return;
-        entry.kind = Kind::Calendar;
     } else if (kind == "search") {
         entry.kind = Kind::Search;
         entry.searchQuery = blob.value("searchQuery").toString();
@@ -2271,17 +2219,6 @@ void StreamPage::onClearLibraryRequested()
             : tr("Cleared %1 show/movie %2 + cancelled active downloads + "
                  "deleted downloaded files. Your Theatre library is now "
                  "empty.").arg(cleared).arg(cleared == 1 ? tr("entry") : tr("entries")));
-}
-
-void StreamPage::showCalendar()
-{
-    if (!m_calendarScreen || !m_calendarEngine) return;
-    if (!m_inLayerRestore)
-        emit enteredLayer(makeStreamLayer(QStringLiteral("calendar")));
-    NavEntry e;
-    e.kind = NavEntry::Kind::Calendar;
-    m_navStack.push(e);
-    showEntryRaw(e);
 }
 
 void StreamPage::showDetail(const QString& imdbId)

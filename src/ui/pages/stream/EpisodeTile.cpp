@@ -138,9 +138,19 @@ void EpisodeTile::refreshFromIndex() {
     }
     if (found) {
         m_hasIndexEntry = true;
+        // THEATRE_POLISH 2026-05-22 — the painted state chip ("Downloaded" /
+        // "Downloading %1%" / "Queued" / "Failed") is strictly richer than
+        // the static "Have" badge, so hide the badge whenever the chip is
+        // active. Without this, both indicators render at the same right
+        // edge and the badge's border + letter caps poke through above and
+        // below the chip's 18px pill ("Download_ed_aded" garble).
+        if (m_haveBadge) m_haveBadge->setVisible(false);
         setEpisodeState(s);  // also calls update()
     } else if (m_hasIndexEntry) {
         m_hasIndexEntry = false;
+        // Restore the "Have" badge for the no-index-entry case (legacy
+        // local-only file with no download metadata).
+        if (m_haveBadge) m_haveBadge->setVisible(m_data.alreadyHave);
         update();
     }
 }

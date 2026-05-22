@@ -20,7 +20,7 @@ struct LayerEntry {
     // so signal payloads are self-contained -- MainWindow lambdas + the
     // restore slot dispatch from e.pageId without querying controller state.
     QString     pageId;       // "comics" / "stream" / "books" / etc.
-    QString     kind;         // page-local layer kind: "library", "searchResults", "seriesView", "detail", "catalogBrowse", "addonManager", "calendar", "search"
+    QString     kind;         // page-local layer kind: "library", "searchResults", "seriesView", "detail", "catalogBrowse", "addonManager", "search"
     QString     label;        // human-readable tooltip text, e.g. "Search Results"
     QJsonObject stateBlob;    // page-private state needed to re-render the layer
 };

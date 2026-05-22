@@ -51,6 +51,7 @@
         <file>icons/play-circle.svg</file>
         <file>icons/retry-arrow.svg</file>
         <file>icons/close-x.svg</file>
+        <file>icons/search.svg</file>
         <file>shaders/video_d3d11.hlsl</file>
     </qresource>
 </RCC>

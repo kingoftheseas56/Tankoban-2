@@ -247,7 +247,6 @@ set(SOURCES
     src/core/stream/QualityScorer.cpp
     src/core/stream/UnifiedProgressStore.cpp
     src/core/stream/StreamRescueScanner.cpp
-    src/core/stream/CalendarEngine.cpp
     src/core/stream/StreamBulkPlan.cpp
     src/core/stream/PackClassifier.cpp
     src/core/stream/UnifiedPackSearchEngine.cpp
@@ -269,7 +268,6 @@ set(SOURCES
     src/ui/pages/stream/AddonDetailPanel.cpp
     src/ui/pages/stream/StreamHomeBoard.cpp
     src/ui/pages/stream/CatalogBrowseScreen.cpp
-    src/ui/pages/stream/CalendarScreen.cpp
 )
 
 set(HEADERS
@@ -457,7 +455,6 @@ set(HEADERS
     src/core/stream/QualityScorer.h
     src/core/stream/UnifiedProgressStore.h
     src/core/stream/StreamRescueScanner.h
-    src/core/stream/CalendarEngine.h
     src/core/stream/StreamBulkPlan.h
     src/core/stream/PackClassifier.h
     src/core/stream/UnifiedPackSearchEngine.h
@@ -479,7 +476,6 @@ set(HEADERS
     src/ui/pages/stream/AddonDetailPanel.h
     src/ui/pages/stream/StreamHomeBoard.h
     src/ui/pages/stream/CatalogBrowseScreen.h
-    src/ui/pages/stream/CalendarScreen.h
 )
 
 set(RESOURCES

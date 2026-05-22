@@ -34,7 +34,6 @@ Vision: off the libtorrent C++ engine onto Stremio's Rust `stream-server` binary
 - `StreamRescueScanner` — recovery path for stuck or incomplete downloads
 - `StreamTelemetryWriter` — writes `out/stream_telemetry.log` (structured event stream; `log-mark` correlation available via v1.9 dev-bridge)
 - `addon/AddonRegistry` + `addon/AddonTransport` + `addon/Manifest` + `addon/Descriptor` — Stremio addon layer; catalog + stream + subtitle endpoint contracts
-- `CalendarEngine` — airing calendar data; consumed by `src/ui/pages/stream/CalendarScreen`
 
 ## Reference apps
 

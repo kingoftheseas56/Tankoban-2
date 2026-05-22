@@ -57,8 +57,6 @@ class CatalogBrowseScreen;
 class StreamAggregator;
 class MetaAggregator;
 class SubtitlesAggregator;
-class CalendarEngine;
-class CalendarScreen;
 struct StreamPickerChoice;
 }
 
@@ -156,7 +154,7 @@ signals:
     // Suppressed during restoreLayer via m_inLayerRestore.
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     // Emitted when the user closes a deep layer via an in-page affordance
-    // (goBack from Detail / Search / Catalog / AddonManager / Calendar).
+    // (goBack from Detail / Search / Catalog / AddonManager).
     // The controller pops via this signal so the back-stack stays
     // consistent with the in-page state machine.
     void exitedLayer();
@@ -215,7 +213,6 @@ private:
     // Library button, search-clear) pass the default true.
     void showBrowse(bool emitNav = true);
     void showAddonManager();
-    void showCalendar();  // Batch 6.2
     void showCatalogBrowse(const QString& addonId, const QString& type,
                            const QString& catalogId, const QString& title);
     // Stream library UX rework 2026-04-15 — catalog button handler. Opens
@@ -233,7 +230,7 @@ private:
     // IST (Theatre-only scope, full cascade including downloaded files,
     // two-step type-clear confirmation, gear icon in topbar).
     void onClearLibraryRequested();
-    // Library-tile / calendar-row / continue-strip path — no preview available,
+    // Library-tile / continue-strip path — no preview available,
     // StreamLibrary::get(imdbId) is the fallback source for detail-view header.
     void showDetail(const QString& imdbId);
     // Phase 1 Batch 1.1: catalog/home/search path — carries the tile's
@@ -249,7 +246,7 @@ private:
     // showEntryRaw (no push). Stack-bottom (Library home) is a no-op
     // re-show. Wired to all 5 child screens' backRequested signals
     // (StreamDetailView / AddonManagerScreen / CatalogBrowseScreen /
-    // CalendarScreen / StreamSearchWidget).
+    // StreamSearchWidget).
     void goBack();
 
     // STREAM_NAV_BACK_STACK 2026-05-06 — restore the pre-player view if
@@ -390,7 +387,6 @@ private:
     QLineEdit*  m_searchInput    = nullptr;
     QPushButton* m_searchBtn     = nullptr;
     QPushButton* m_addonsBtn     = nullptr;
-    QPushButton* m_calendarBtn   = nullptr;  // Batch 6.2
     // Stream library UX rework 2026-04-15 — Catalog button replaces the
     // deleted home-board featured rows as the user-facing entry point
     // into CatalogBrowseScreen.
@@ -445,17 +441,6 @@ private:
     // Fed with the selected Stream on onPlayRequested; result pushed to
     // VideoPlayer via setExternalSubtitleTracks for the Batch 5.3 menu.
     tankostream::stream::SubtitlesAggregator* m_subtitlesAggregator = nullptr;
-
-    // Calendar engine (Phase 6 Batch 6.1) — per-library-series meta fan-out
-    // over meta-capable addons, filtered to now..now+60d, grouped for the
-    // Phase 6 Batch 6.2 CalendarScreen.
-    tankostream::stream::CalendarEngine* m_calendarEngine = nullptr;
-
-    // Calendar screen (Phase 6 Batch 6.2) — 6th stack layer (index 5).
-    // Shown via m_calendarBtn in the search bar; consumes calendarReady /
-    // calendarGroupedReady from m_calendarEngine; double-click routes back
-    // to StreamDetailView with the selected episode pre-focused.
-    tankostream::stream::CalendarScreen* m_calendarScreen = nullptr;
 
     // Browse layer
     QWidget*     m_browseLayer   = nullptr;
@@ -639,7 +624,6 @@ private:
             CatalogBrowse,    // CatalogBrowseScreen home or single-catalog
             Detail,           // StreamDetailView — series or movie
             AddonManager,     // AddonManagerScreen
-            Calendar,         // CalendarScreen
             Search,           // StreamSearchWidget overlay
         };
         Kind kind = Kind::Browse;
@@ -651,7 +635,7 @@ private:
         QString catalogTitle;
 
         // Detail context. Two flavors:
-        //   (a) imdbId-only — library-tile / continue-watching / calendar path
+        //   (a) imdbId-only — library-tile / continue-watching path
         //   (b) preview-hint — catalog / home / search path with full preview
         // detailHasPreview discriminates.
         QString detailImdbId;
