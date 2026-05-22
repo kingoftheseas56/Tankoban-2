@@ -906,7 +906,13 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
     // Paint immediately from available preview data.
     m_title->setText(wc.title);
     m_synopsis->clear();
-    m_metaLine->setText(mangaSourceDisplayName(wc.source));
+    // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-22 (Agent 1, Hemanth-flagged) --
+    // Meta-line cleared. The previous source-name label ("WeebCentral",
+    // "Tankoyomi", etc.) was metadata-source-implementation-detail leaking
+    // into the view; the only time it mattered was when it lied
+    // (Fandom-derived volume rows under a WeebCentral banner). Hemanth's
+    // call: drop entirely, not flip.
+    m_metaLine->clear();
     if (m_mangakaByline) {
         m_mangakaByline->clear();
         m_mangakaByline->hide();
@@ -1440,6 +1446,16 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
     m_selectedRows.clear();
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
+    // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-22 (Agent 1, Hemanth-flagged) --
+    // Guarantee the meta-line is cleared when a Fandom catalog populates the
+    // rows, regardless of which entry path opened the view. The yesterday
+    // version of this edit FLIPPED the label to "Fandom"; Hemanth's
+    // correction: drop the label entirely. The source-name label has no
+    // user value, and the only time it mattered was when it lied.
+    if (m_metaLine) {
+        m_metaLine->clear();
+    }
+
     m_volumesTable->setRowCount(catalog.volumes.size());
 
     for (int i = 0; i < catalog.volumes.size(); ++i) {
@@ -1496,9 +1512,16 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
             ? v.coverUrlJapanese
             : v.coverUrlEnglish;
         const QString existingCoverUrl = m_lastAppliedCoverUrlByVolume.value(v.volumeNumber);
-        const QString coverUrl = existingCoverUrl.contains(QStringLiteral("rimg.bookwalker.jp"))
-            ? existingCoverUrl
-            : fandomCoverUrl;
+        // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-21 (Agent 1) -- reversed
+        // priority: Fandom catalog URL wins when present. Rationale: the
+        // local catalog is the canonical scraped source for series that
+        // have one (Hemanth scraped them specifically because the existing
+        // BookWalker/WeebCentral pipeline had bad covers for those series).
+        // BookWalker stays as the fallback for catalogs that didn't supply
+        // a cover URL OR for series without a local catalog entry at all.
+        const QString coverUrl = !fandomCoverUrl.isEmpty()
+            ? fandomCoverUrl
+            : existingCoverUrl;
         if (!coverUrl.isEmpty()) {
             loadCoverUrlForVolume(coverUrl, v.volumeNumber);
         }

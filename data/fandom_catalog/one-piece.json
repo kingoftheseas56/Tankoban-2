@@ -1,0 +1,931 @@
+{
+  "seriesId": "one-piece",
+  "seriesTitle": "One Piece",
+  "anilistId": 30013,
+  "fandomUrl": "https://onepiece.fandom.com/wiki/Chapters_and_Volumes/Volumes",
+  "scrapedAt": "2026-05-21T11:33:39Z",
+  "source": "Chrome Gemini Assist on the live Fandom wiki page",
+  "notes": "synopsis empty for all 114 volumes because One Piece's Fandom wiki does not have per-volume synopses (honest empties, not skipped work). coverUrl empty pending backfill via MediaWiki pageimages API. Volume 114 title preserves mojibake from source ('GoddobarÄ' should be romaji 'Goddobarē'/'GoddoBarē' for God Valley Incident).",
+  "volumes": [
+    {
+      "number": 1,
+      "title": "Romance Dawn",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/0e/Volume_1.png",
+      "chapterStart": "1",
+      "chapterEnd": "8"
+    },
+    {
+      "number": 2,
+      "title": "Buggy the Clown",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/2f/Volume_2.png",
+      "chapterStart": "9",
+      "chapterEnd": "17"
+    },
+    {
+      "number": 3,
+      "title": "Don't Get Fooled Again",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/7/75/Volume_3.png",
+      "chapterStart": "18",
+      "chapterEnd": "26"
+    },
+    {
+      "number": 4,
+      "title": "The Black Cat Pirates",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/31/Volume_4.png",
+      "chapterStart": "27",
+      "chapterEnd": "35"
+    },
+    {
+      "number": 5,
+      "title": "For Whom the Bell Tolls",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/8a/Volume_5.png",
+      "chapterStart": "36",
+      "chapterEnd": "44"
+    },
+    {
+      "number": 6,
+      "title": "The Oath",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/fb/Volume_6.png",
+      "chapterStart": "45",
+      "chapterEnd": "53"
+    },
+    {
+      "number": 7,
+      "title": "The Crap-Geezer",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/24/Volume_7.png",
+      "chapterStart": "54",
+      "chapterEnd": "62"
+    },
+    {
+      "number": 8,
+      "title": "I Won't Die",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/82/Volume_8.png",
+      "chapterStart": "63",
+      "chapterEnd": "71"
+    },
+    {
+      "number": 9,
+      "title": "Tears",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/7/79/Volume_9.png",
+      "chapterStart": "72",
+      "chapterEnd": "81"
+    },
+    {
+      "number": 10,
+      "title": "OK, Let's Stand Up!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/6b/Volume_10.png",
+      "chapterStart": "82",
+      "chapterEnd": "90"
+    },
+    {
+      "number": 11,
+      "title": "The Meanest Man In the East",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1b/Volume_11.png",
+      "chapterStart": "91",
+      "chapterEnd": "99"
+    },
+    {
+      "number": 12,
+      "title": "The Legend Begins",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/4e/Volume_12.png",
+      "chapterStart": "100",
+      "chapterEnd": "108"
+    },
+    {
+      "number": 13,
+      "title": "It's All Right!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/b/b6/Volume_13.png",
+      "chapterStart": "109",
+      "chapterEnd": "117"
+    },
+    {
+      "number": 14,
+      "title": "Instinct",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/17/Volume_14.png",
+      "chapterStart": "118",
+      "chapterEnd": "126"
+    },
+    {
+      "number": 15,
+      "title": "Straight Ahead!!!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/4e/Volume_15.png",
+      "chapterStart": "127",
+      "chapterEnd": "136"
+    },
+    {
+      "number": 16,
+      "title": "Carrying On His Will",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/45/Volume_16.png",
+      "chapterStart": "137",
+      "chapterEnd": "145"
+    },
+    {
+      "number": 17,
+      "title": "Hiriluk's Cherry Blossoms",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/64/Volume_17.png",
+      "chapterStart": "146",
+      "chapterEnd": "155"
+    },
+    {
+      "number": 18,
+      "title": "Ace Arrives",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a2/Volume_18.png",
+      "chapterStart": "156",
+      "chapterEnd": "166"
+    },
+    {
+      "number": 19,
+      "title": "Rebellion",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/c9/Volume_19.png",
+      "chapterStart": "167",
+      "chapterEnd": "176"
+    },
+    {
+      "number": 20,
+      "title": "Showdown At Alubarna",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/32/Volume_20.png",
+      "chapterStart": "177",
+      "chapterEnd": "186"
+    },
+    {
+      "number": 21,
+      "title": "Utopia",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a6/Volume_21.png",
+      "chapterStart": "187",
+      "chapterEnd": "195"
+    },
+    {
+      "number": 22,
+      "title": "HOPE!!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/5e/Volume_22.png",
+      "chapterStart": "196",
+      "chapterEnd": "205"
+    },
+    {
+      "number": 23,
+      "title": "Vivi's Adventure",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/5d/Volume_23.png",
+      "chapterStart": "206",
+      "chapterEnd": "216"
+    },
+    {
+      "number": 24,
+      "title": "People's Dreams",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/6a/Volume_24.png",
+      "chapterStart": "217",
+      "chapterEnd": "226"
+    },
+    {
+      "number": 25,
+      "title": "The 100 Million Berry Man",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/ef/Volume_25.png",
+      "chapterStart": "227",
+      "chapterEnd": "236"
+    },
+    {
+      "number": 26,
+      "title": "Adventure on Kami's Island",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/00/Volume_26.png",
+      "chapterStart": "237",
+      "chapterEnd": "246"
+    },
+    {
+      "number": 27,
+      "title": "Overture",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1d/Volume_27.png",
+      "chapterStart": "247",
+      "chapterEnd": "255"
+    },
+    {
+      "number": 28,
+      "title": "Wyper the Berserker",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a5/Volume_28.png",
+      "chapterStart": "256",
+      "chapterEnd": "264"
+    },
+    {
+      "number": 29,
+      "title": "Oratorio",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1a/Volume_29.png",
+      "chapterStart": "265",
+      "chapterEnd": "275"
+    },
+    {
+      "number": 30,
+      "title": "Capriccio",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/52/Volume_30.png",
+      "chapterStart": "276",
+      "chapterEnd": "285"
+    },
+    {
+      "number": 31,
+      "title": "We'll Be Here",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/f7/Volume_31.png",
+      "chapterStart": "286",
+      "chapterEnd": "295"
+    },
+    {
+      "number": 32,
+      "title": "Love Song",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/2b/Volume_32.png",
+      "chapterStart": "296",
+      "chapterEnd": "305"
+    },
+    {
+      "number": 33,
+      "title": "Davy Back Fight",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/e6/Volume_33.png",
+      "chapterStart": "306",
+      "chapterEnd": "316"
+    },
+    {
+      "number": 34,
+      "title": "The City of Water, Water Seven",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/6c/Volume_34.png",
+      "chapterStart": "317",
+      "chapterEnd": "327"
+    },
+    {
+      "number": 35,
+      "title": "Captain",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/65/Volume_35.png",
+      "chapterStart": "328",
+      "chapterEnd": "336"
+    },
+    {
+      "number": 36,
+      "title": "The Ninth Justice",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/63/Volume_36.png",
+      "chapterStart": "337",
+      "chapterEnd": "346"
+    },
+    {
+      "number": 37,
+      "title": "Tom",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/b/bd/Volume_37.png",
+      "chapterStart": "347",
+      "chapterEnd": "357"
+    },
+    {
+      "number": 38,
+      "title": "Rocketman!!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/b/b6/Volume_38.png",
+      "chapterStart": "358",
+      "chapterEnd": "367"
+    },
+    {
+      "number": 39,
+      "title": "Scramble",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/47/Volume_39.png",
+      "chapterStart": "368",
+      "chapterEnd": "377"
+    },
+    {
+      "number": 40,
+      "title": "Gear",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/2c/Volume_40.png",
+      "chapterStart": "378",
+      "chapterEnd": "388"
+    },
+    {
+      "number": 41,
+      "title": "Declaration of War",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/3a/Volume_41.png",
+      "chapterStart": "389",
+      "chapterEnd": "399"
+    },
+    {
+      "number": 42,
+      "title": "Pirates vs. CP9",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/16/Volume_42.png",
+      "chapterStart": "400",
+      "chapterEnd": "409"
+    },
+    {
+      "number": 43,
+      "title": "Legend of a Hero",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/15/Volume_43.png",
+      "chapterStart": "410",
+      "chapterEnd": "419"
+    },
+    {
+      "number": 44,
+      "title": "Let's Go Back",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d2/Volume_44.png",
+      "chapterStart": "420",
+      "chapterEnd": "430"
+    },
+    {
+      "number": 45,
+      "title": "You Have My Sympathies",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/f4/Volume_45.png",
+      "chapterStart": "431",
+      "chapterEnd": "440"
+    },
+    {
+      "number": 46,
+      "title": "Adventure on Ghost Island",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/cc/Volume_46.png",
+      "chapterStart": "441",
+      "chapterEnd": "449"
+    },
+    {
+      "number": 47,
+      "title": "Cloudy, Partly Bony",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/35/Volume_47.png",
+      "chapterStart": "450",
+      "chapterEnd": "459"
+    },
+    {
+      "number": 48,
+      "title": "Adventures of Oars",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/cd/Volume_48.png",
+      "chapterStart": "460",
+      "chapterEnd": "470"
+    },
+    {
+      "number": 49,
+      "title": "Nightmare Luffy",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d6/Volume_49.png",
+      "chapterStart": "471",
+      "chapterEnd": "481"
+    },
+    {
+      "number": 50,
+      "title": "Arriving Again",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/c7/Volume_50.png",
+      "chapterStart": "482",
+      "chapterEnd": "491"
+    },
+    {
+      "number": 51,
+      "title": "The Eleven Supernovas",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/43/Volume_51.png",
+      "chapterStart": "492",
+      "chapterEnd": "502"
+    },
+    {
+      "number": 52,
+      "title": "Roger and Rayleigh",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/6e/Volume_52.png",
+      "chapterStart": "503",
+      "chapterEnd": "512"
+    },
+    {
+      "number": 53,
+      "title": "Natural Born King",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/84/Volume_53.png",
+      "chapterStart": "513",
+      "chapterEnd": "522"
+    },
+    {
+      "number": 54,
+      "title": "Unstoppable",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/40/Volume_54.png",
+      "chapterStart": "523",
+      "chapterEnd": "532"
+    },
+    {
+      "number": 55,
+      "title": "A Ray of Hope",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a0/Volume_55.png",
+      "chapterStart": "533",
+      "chapterEnd": "541"
+    },
+    {
+      "number": 56,
+      "title": "Thank You",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/af/Volume_56.png",
+      "chapterStart": "542",
+      "chapterEnd": "551"
+    },
+    {
+      "number": 57,
+      "title": "Paramount War",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/04/Volume_57.png",
+      "chapterStart": "552",
+      "chapterEnd": "562"
+    },
+    {
+      "number": 58,
+      "title": "The Name Of This Era Is \"Whitebeard\"",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/5b/Volume_58.png",
+      "chapterStart": "563",
+      "chapterEnd": "573"
+    },
+    {
+      "number": 59,
+      "title": "The Death of Portgaz D. Ace",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/fd/Volume_59.png",
+      "chapterStart": "574",
+      "chapterEnd": "584"
+    },
+    {
+      "number": 60,
+      "title": "My Little Brother",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d8/Volume_60.png",
+      "chapterStart": "585",
+      "chapterEnd": "594"
+    },
+    {
+      "number": 61,
+      "title": "Romance Dawn For The New World",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/e8/Volume_61.png",
+      "chapterStart": "595",
+      "chapterEnd": "603"
+    },
+    {
+      "number": 62,
+      "title": "Adventure on Fish-Man Island",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/df/Volume_62.png",
+      "chapterStart": "604",
+      "chapterEnd": "614"
+    },
+    {
+      "number": 63,
+      "title": "Otohime and Tiger",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/7/71/Volume_63.png",
+      "chapterStart": "615",
+      "chapterEnd": "626"
+    },
+    {
+      "number": 64,
+      "title": "100,000 vs. 10",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/8c/Volume_64.png",
+      "chapterStart": "627",
+      "chapterEnd": "636"
+    },
+    {
+      "number": 65,
+      "title": "To Nothing",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/f0/Volume_65.png",
+      "chapterStart": "637",
+      "chapterEnd": "646"
+    },
+    {
+      "number": 66,
+      "title": "The Road Toward the Sun",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/f8/Volume_66.png",
+      "chapterStart": "647",
+      "chapterEnd": "656"
+    },
+    {
+      "number": 67,
+      "title": "Cool Fight",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/3b/Volume_67.png",
+      "chapterStart": "657",
+      "chapterEnd": "667"
+    },
+    {
+      "number": 68,
+      "title": "Pirate Alliance",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/ee/Volume_68.png",
+      "chapterStart": "668",
+      "chapterEnd": "678"
+    },
+    {
+      "number": 69,
+      "title": "S.A.D.",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/57/Volume_69.png",
+      "chapterStart": "679",
+      "chapterEnd": "690"
+    },
+    {
+      "number": 70,
+      "title": "Enter Doflamingo",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/34/Volume_70.png",
+      "chapterStart": "691",
+      "chapterEnd": "700"
+    },
+    {
+      "number": 71,
+      "title": "Coliseum of Scoundrels",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/9/90/Volume_71.png",
+      "chapterStart": "701",
+      "chapterEnd": "711"
+    },
+    {
+      "number": 72,
+      "title": "Dressrosa's Forgotten",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/9/92/Volume_72.png",
+      "chapterStart": "712",
+      "chapterEnd": "721"
+    },
+    {
+      "number": 73,
+      "title": "Operation Dressrosa S.O.P.",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/24/Volume_73.png",
+      "chapterStart": "722",
+      "chapterEnd": "731"
+    },
+    {
+      "number": 74,
+      "title": "Ever At Your Side",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1c/Volume_74.png",
+      "chapterStart": "732",
+      "chapterEnd": "741"
+    },
+    {
+      "number": 75,
+      "title": "My Repayment",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1b/Volume_75.png",
+      "chapterStart": "742",
+      "chapterEnd": "752"
+    },
+    {
+      "number": 76,
+      "title": "Just Keep Going",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/e6/Volume_76.png",
+      "chapterStart": "753",
+      "chapterEnd": "763"
+    },
+    {
+      "number": 77,
+      "title": "Smile",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/aa/Volume_77.png",
+      "chapterStart": "764",
+      "chapterEnd": "775"
+    },
+    {
+      "number": 78,
+      "title": "Champion of Evil",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a5/Volume_78.png",
+      "chapterStart": "776",
+      "chapterEnd": "785"
+    },
+    {
+      "number": 79,
+      "title": "Lucy!!",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/07/Volume_79.png",
+      "chapterStart": "786",
+      "chapterEnd": "795"
+    },
+    {
+      "number": 80,
+      "title": "Opening Speech",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d6/Volume_80.png",
+      "chapterStart": "796",
+      "chapterEnd": "806"
+    },
+    {
+      "number": 81,
+      "title": "Let's Go See Master Nekomamushi",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/86/Volume_81.png",
+      "chapterStart": "807",
+      "chapterEnd": "816"
+    },
+    {
+      "number": 82,
+      "title": "A World Abuzz",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/53/Volume_82.png",
+      "chapterStart": "817",
+      "chapterEnd": "827"
+    },
+    {
+      "number": 83,
+      "title": "Emperor of the Sea, Charlotte Linlin",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/8a/Volume_83.png",
+      "chapterStart": "828",
+      "chapterEnd": "838"
+    },
+    {
+      "number": 84,
+      "title": "Luffy vs. Sanji",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d0/Volume_84.png",
+      "chapterStart": "839",
+      "chapterEnd": "848"
+    },
+    {
+      "number": 85,
+      "title": "Liar",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/fe/Volume_85.png",
+      "chapterStart": "849",
+      "chapterEnd": "858"
+    },
+    {
+      "number": 86,
+      "title": "Emperor Assassination Plan",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/ad/Volume_86.png",
+      "chapterStart": "859",
+      "chapterEnd": "869"
+    },
+    {
+      "number": 87,
+      "title": "Not Sweet",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/f1/Volume_87.png",
+      "chapterStart": "870",
+      "chapterEnd": "879"
+    },
+    {
+      "number": 88,
+      "title": "Lion",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/c7/Volume_88.png",
+      "chapterStart": "880",
+      "chapterEnd": "889"
+    },
+    {
+      "number": 89,
+      "title": "Bad End Musical",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/e9/Volume_89.png",
+      "chapterStart": "890",
+      "chapterEnd": "900"
+    },
+    {
+      "number": 90,
+      "title": "The Holy Land Mary Geoise",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/3b/Volume_90.png",
+      "chapterStart": "901",
+      "chapterEnd": "910"
+    },
+    {
+      "number": 91,
+      "title": "Adventure in the Land of Samurai",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/7/74/Volume_91.png",
+      "chapterStart": "911",
+      "chapterEnd": "921"
+    },
+    {
+      "number": 92,
+      "title": "Introducing Komurasaki the Oiran",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/1/1f/Volume_92.png",
+      "chapterStart": "922",
+      "chapterEnd": "931"
+    },
+    {
+      "number": 93,
+      "title": "The Star of Ebisu Town",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/4/4c/Volume_93.png",
+      "chapterStart": "932",
+      "chapterEnd": "942"
+    },
+    {
+      "number": 94,
+      "title": "A Soldier's Dream",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/8a/Volume_94.png",
+      "chapterStart": "943",
+      "chapterEnd": "953"
+    },
+    {
+      "number": 95,
+      "title": "Oden's Adventure",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/0c/Volume_95.png",
+      "chapterStart": "954",
+      "chapterEnd": "964"
+    },
+    {
+      "number": 96,
+      "title": "I am Oden, And I Was Born to Boil",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/8a/Volume_96.png",
+      "chapterStart": "965",
+      "chapterEnd": "974"
+    },
+    {
+      "number": 97,
+      "title": "My Bible",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/57/Volume_97.png",
+      "chapterStart": "975",
+      "chapterEnd": "984"
+    },
+    {
+      "number": 98,
+      "title": "Vassals of Glory",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/b/b9/Volume_98.png",
+      "chapterStart": "985",
+      "chapterEnd": "994"
+    },
+    {
+      "number": 99,
+      "title": "Straw Hat Luffy",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/86/Volume_99.png",
+      "chapterStart": "995",
+      "chapterEnd": "1004"
+    },
+    {
+      "number": 100,
+      "title": "Color of the Supreme King",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/c/c6/Volume_100.png",
+      "chapterStart": "1005",
+      "chapterEnd": "1015"
+    },
+    {
+      "number": 101,
+      "title": "The Stars Take the Stage",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/b/b3/Volume_101.png",
+      "chapterStart": "1016",
+      "chapterEnd": "1025"
+    },
+    {
+      "number": 102,
+      "title": "The Pivotal Clash",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/5e/Volume_102.png",
+      "chapterStart": "1026",
+      "chapterEnd": "1035"
+    },
+    {
+      "number": 103,
+      "title": "Warrior of Liberation",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/6/69/Volume_103.png",
+      "chapterStart": "1036",
+      "chapterEnd": "1046"
+    },
+    {
+      "number": 104,
+      "title": "Shogun of Wano, Kozuki Momonosuke",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/a/a9/Volume_104.png",
+      "chapterStart": "1047",
+      "chapterEnd": "1055"
+    },
+    {
+      "number": 105,
+      "title": "Luffy's Dream",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/e/e4/Volume_105.png",
+      "chapterStart": "1056",
+      "chapterEnd": "1065"
+    },
+    {
+      "number": 106,
+      "title": "A Genius's Dream",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/9/9d/Volume_106.png",
+      "chapterStart": "1066",
+      "chapterEnd": "1076"
+    },
+    {
+      "number": 107,
+      "title": "The Hero of Legend",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/0/00/Volume_107.png",
+      "chapterStart": "1077",
+      "chapterEnd": "1088"
+    },
+    {
+      "number": 108,
+      "title": "Better Off Dead in This World",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/3/32/Volume_108.png",
+      "chapterStart": "1089",
+      "chapterEnd": "1100"
+    },
+    {
+      "number": 109,
+      "title": "On Your Side",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/fa/Volume_109.png",
+      "chapterStart": "1101",
+      "chapterEnd": "1110"
+    },
+    {
+      "number": 110,
+      "title": "The Upheaval of the Era",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/2/28/Volume_110.png",
+      "chapterStart": "1111",
+      "chapterEnd": "1121"
+    },
+    {
+      "number": 111,
+      "title": "Adventure in Elbaph",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/f/fb/Volume_111.png",
+      "chapterStart": "1122",
+      "chapterEnd": "1133"
+    },
+    {
+      "number": 112,
+      "title": "The Harley",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/d/d8/Volume_112.png",
+      "chapterStart": "1134",
+      "chapterEnd": "1144"
+    },
+    {
+      "number": 113,
+      "title": "The Birth of Loki",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/8/80/Volume_113.png",
+      "chapterStart": "1145",
+      "chapterEnd": "1155"
+    },
+    {
+      "number": 114,
+      "title": "GoddobarÄ Jiken",
+      "synopsis": "",
+      "coverUrl": "https://static.wikia.nocookie.net/onepiece/images/5/52/Volume_114.png",
+      "chapterStart": "1156",
+      "chapterEnd": "1166"
+    }
+  ],
+  "_meta": {
+    "coversBackfilledAt": "2026-05-21T13:55:32Z",
+    "coversBackfillCounts": {
+      "already_filled": 0,
+      "fetched": 114,
+      "missing": 0
+    }
+  }
+}

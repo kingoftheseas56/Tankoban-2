@@ -145,15 +145,13 @@ void ComicsTankoyomiSearchWidget::onSearchFinished(const QList<MangaResult>& res
 
 void ComicsTankoyomiSearchWidget::addResultCard(const MangaResult& r)
 {
-    // MangaResult carries source + status; use those as the subtitle text,
-    // mirroring the Stream-blueprint detail surface vocabulary.
-    QString subtitle = mangaSourceDisplayName(r.source);
-    if (!r.status.isEmpty()) {
-        if (!subtitle.isEmpty()) subtitle += QStringLiteral("  ");
-        subtitle += r.status;
-    }
-
-    auto* card = new TileCard(QString(), r.title, subtitle);
+    // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-22 (Agent 1, Hemanth-flagged) --
+    // Subtitle dropped entirely. The previous "WeebCentral  Ongoing" string
+    // was metadata-source-implementation-detail leaking into the user's
+    // view; Hemanth's call: tile sub-label adds noise without value.
+    // r.source + r.status remain on the MangaResult for downstream logic;
+    // they just don't render on the tile anymore.
+    auto* card = new TileCard(QString(), r.title, QString());
     card->setProperty("seriesId",    r.id);
     card->setProperty("seriesTitle", r.title);
 

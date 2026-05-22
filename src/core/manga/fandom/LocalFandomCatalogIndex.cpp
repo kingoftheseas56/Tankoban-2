@@ -14,8 +14,26 @@ LocalFandomCatalogIndex::LocalFandomCatalogIndex(const QString& dataDir)
 {
 }
 
+QString LocalFandomCatalogIndex::normalizeTitle(const QString& raw) {
+    QString out;
+    out.reserve(raw.size());
+    bool lastWasHyphen = false;
+    for (QChar c : raw) {
+        if (c.isLetterOrNumber()) {
+            out.append(c.toLower());
+            lastWasHyphen = false;
+        } else if (!lastWasHyphen && !out.isEmpty()) {
+            out.append('-');
+            lastWasHyphen = true;
+        }
+    }
+    while (out.endsWith('-')) out.chop(1);
+    return out;
+}
+
 void LocalFandomCatalogIndex::refresh() {
     m_anilistToSlug.clear();
+    m_titleToSlug.clear();
     m_slugToPath.clear();
 
     QDir dir(m_dataDir);
@@ -32,17 +50,38 @@ void LocalFandomCatalogIndex::refresh() {
         if (err.error != QJsonParseError::NoError || !doc.isObject()) continue;
 
         const QJsonObject root = doc.object();
-        const QString seriesId = root.value("seriesId").toString();
-        const int anilistId = root.value("anilistId").toInt(0);
-        if (seriesId.isEmpty() || anilistId == 0) continue;
+        const QString seriesId    = root.value("seriesId").toString();
+        const QString seriesTitle = root.value("seriesTitle").toString();
+        const int     anilistId   = root.value("anilistId").toInt(0);
+        if (seriesId.isEmpty()) continue;
 
-        m_anilistToSlug.insert(anilistId, seriesId);
+        // anilistId is optional for indexing — a catalog with only seriesTitle
+        // is still title-lookupable. Same for the inverse. Path map always
+        // populated since slug is required.
         m_slugToPath.insert(seriesId, path);
+
+        if (anilistId != 0) {
+            m_anilistToSlug.insert(anilistId, seriesId);
+        }
+
+        if (!seriesTitle.isEmpty()) {
+            const QString norm = normalizeTitle(seriesTitle);
+            if (!norm.isEmpty()) {
+                m_titleToSlug.insert(norm, seriesId);
+            }
+        }
     }
 }
 
 QString LocalFandomCatalogIndex::slugForAnilistId(int anilistId) const {
     return m_anilistToSlug.value(anilistId, QString());
+}
+
+QString LocalFandomCatalogIndex::slugForSeriesTitle(const QString& title) const {
+    if (title.isEmpty()) return QString();
+    const QString norm = normalizeTitle(title);
+    if (norm.isEmpty()) return QString();
+    return m_titleToSlug.value(norm, QString());
 }
 
 QString LocalFandomCatalogIndex::filePathForSlug(const QString& seriesId) const {

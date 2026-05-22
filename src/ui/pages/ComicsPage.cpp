@@ -3130,22 +3130,42 @@ void ComicsPage::dispatchFandomResolve(const QString& seriesId,
           qUtf8Printable(qidHint),
           qUtf8Printable(titleHint));
 
-    // Local-first: if data/fandom_catalog/<slug>.json exists for this AniList
-    // id, load it synchronously and emit straight to ComicsSeriesView.
-    // Falls through to the live network chain on miss/malformed/empty-volumes.
+    // Local-first: if data/fandom_catalog/<slug>.json exists for this series,
+    // load it synchronously and emit straight to ComicsSeriesView. Falls
+    // through to the live network chain on miss/malformed/empty-volumes.
+    //
+    // Two lookup paths because callers arrive with different identities:
+    //   (a) AniList-id path: library / bookmarked / AniList-cached series
+    //       carry m_currentDetailAnilistId > 0.
+    //   (b) Title path: WeebCentral search-result series open via
+    //       showSeries(MangaResult) which does NOT set m_currentDetailAnilistId
+    //       (the WEEBCENTRAL_IDENTITY_PIVOT 2026-05-18 re-keyed that path on
+    //       seriesKey). titleHint is the English series title supplied by the
+    //       caller; we normalize it (lowercase + non-alphanumeric -> hyphen)
+    //       and match against the catalog JSON's seriesTitle field.
+    QString slug;
+    QString matchedBy;
     if (m_currentDetailAnilistId > 0) {
-        const QString slug = m_localCatalogIndex.slugForAnilistId(m_currentDetailAnilistId);
-        if (!slug.isEmpty()) {
-            const QString path = m_localCatalogIndex.filePathForSlug(slug);
-            const auto local =
-                tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(path);
-            if (local.has_value()) {
-                qInfo("ComicsPage::dispatchFandomResolve: local catalog hit for anilistId=%d slug=%s — skipping network chain",
-                      m_currentDetailAnilistId, qUtf8Printable(slug));
-                m_tyVolumeSeriesView->populateVolumeRowsFromFandom(*local);
-                return;
-            }
+        slug = m_localCatalogIndex.slugForAnilistId(m_currentDetailAnilistId);
+        if (!slug.isEmpty()) matchedBy = QStringLiteral("anilistId=%1").arg(m_currentDetailAnilistId);
+    }
+    if (slug.isEmpty() && !titleHint.isEmpty()) {
+        slug = m_localCatalogIndex.slugForSeriesTitle(titleHint);
+        if (!slug.isEmpty()) matchedBy = QStringLiteral("titleHint=\"%1\"").arg(titleHint);
+    }
+
+    if (!slug.isEmpty()) {
+        const QString path = m_localCatalogIndex.filePathForSlug(slug);
+        const auto local =
+            tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(path);
+        if (local.has_value()) {
+            qInfo("ComicsPage::dispatchFandomResolve: local catalog hit (%s -> slug=%s) — skipping network chain",
+                  qUtf8Printable(matchedBy), qUtf8Printable(slug));
+            m_tyVolumeSeriesView->populateVolumeRowsFromFandom(*local);
+            return;
         }
+        qInfo("ComicsPage::dispatchFandomResolve: local catalog lookup matched slug=%s but loadFromFile failed — falling through to network",
+              qUtf8Printable(slug));
     }
 
     // Existing live-network path (Task 19 wiring, 2026-05-20):
