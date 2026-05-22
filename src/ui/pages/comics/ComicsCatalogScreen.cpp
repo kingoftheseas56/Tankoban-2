@@ -7,6 +7,7 @@
 #include "core/manga/fandom/FandomTypes.h"
 #include "ui/pages/TileCard.h"
 
+#include <algorithm>
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
@@ -103,6 +104,8 @@ void ComicsCatalogScreen::clearTiles()
 
 void ComicsCatalogScreen::loadAllCatalogs()
 {
+    clearTiles();
+
     const QString dataDir = tankoban::manga::fandom::LocalFandomCatalogLoader::canonicalDataDir();
     QDir dir(dataDir);
     if (!dir.exists()) {
@@ -110,27 +113,41 @@ void ComicsCatalogScreen::loadAllCatalogs()
         return;
     }
 
-    QStringList jsonFiles = dir.entryList(QStringList() << "*.json", QDir::Files, QDir::Name);
-    // Drop any file whose stem ends in GROUND_TRUTH (dev backup), and ignore
-    // anything in subdirs (entryList Files-only handles that already).
-    jsonFiles.erase(std::remove_if(jsonFiles.begin(), jsonFiles.end(),
-                                   [](const QString& n) {
-                                       return n.contains("GROUND_TRUTH", Qt::CaseInsensitive);
-                                   }),
-                    jsonFiles.end());
+    QFileInfoList files = dir.entryInfoList(QStringList() << "*.json", QDir::Files | QDir::Readable);
 
-    if (jsonFiles.isEmpty()) {
+    // Drop any file whose stem ends in GROUND_TRUTH (dev backup).
+    files.erase(std::remove_if(files.begin(), files.end(),
+                               [](const QFileInfo& fi) {
+                                   return fi.fileName().contains("GROUND_TRUTH", Qt::CaseInsensitive);
+                               }),
+                files.end());
+
+    // Pass 1: load + filter (empty-volumes stubs skipped)
+    QList<tankoban::manga::fandom::FandomCatalog> catalogs;
+    catalogs.reserve(files.size());
+    for (const QFileInfo& fi : files) {
+        const auto loaded = tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(fi.absoluteFilePath());
+        if (!loaded.has_value()) continue;
+        if (loaded->volumes.isEmpty()) continue;
+        catalogs.append(*loaded);
+    }
+
+    if (catalogs.isEmpty()) {
         m_emptyLabel->show();
         return;
     }
     m_emptyLabel->hide();
 
-    for (const QString& fname : jsonFiles) {
-        const QString full = dir.absoluteFilePath(fname);
-        auto opt = tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(full);
-        if (!opt) continue;
-        if (opt->volumes.isEmpty()) continue;
-        addTile(*opt);
+    // Pass 2: sort by seriesId (case-insensitive)
+    std::sort(catalogs.begin(), catalogs.end(),
+              [](const tankoban::manga::fandom::FandomCatalog& a,
+                 const tankoban::manga::fandom::FandomCatalog& b) {
+                  return a.seriesId.compare(b.seriesId, Qt::CaseInsensitive) < 0;
+              });
+
+    // Pass 3: paint
+    for (const auto& cat : catalogs) {
+        addTile(cat);
     }
 }
 
