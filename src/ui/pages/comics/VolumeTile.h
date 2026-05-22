@@ -9,6 +9,7 @@
 #pragma once
 
 #include <QFrame>
+#include <QPixmap>
 #include <QPointer>
 #include <QString>
 
@@ -61,7 +62,8 @@ public:
     VolumeTileState volumeState() const { return m_state; }
 
     void setCoverFromDisk(const QString& coverPath);
-    void setCoverFromUrl(const QString& url);   // for AniList-path covers
+    void setCoverFromUrl(const QString& url);     // for AniList-path covers
+    void setCoverFromPixmap(const QPixmap& pm);   // for async-fetch paint path
     void setStatusText(const QString& text);
 
     // Per-tile subscription. Non-owning. May be set after construction.

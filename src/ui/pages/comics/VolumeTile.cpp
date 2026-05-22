@@ -95,6 +95,15 @@ void VolumeTile::setCoverFromUrl(const QString& url)
     // calls setCoverFromDisk once the pixmap is decoded.
 }
 
+void VolumeTile::setCoverFromPixmap(const QPixmap& pm)
+{
+    // Task 16a: async-fetch paint path. applyPixmapToVolumeRow in
+    // ComicsSeriesView routes the decoded QPixmap here after QNAM fetch +
+    // QPixmapCache insert -- no temp-file round-trip needed.
+    if (pm.isNull() || !m_coverLabel) return;
+    m_coverLabel->setPixmap(pm.scaled(80, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
 void VolumeTile::setStatusText(const QString& t)
 {
     m_state.statusText = t;
