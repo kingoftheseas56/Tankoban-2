@@ -21,6 +21,7 @@
 #include <QString>
 #include <QList>
 #include <QHash>
+#include "../TileCard.h"
 
 class QGridLayout;
 class QLabel;
@@ -33,8 +34,6 @@ struct FandomCatalog;
 }
 
 namespace tankoban::ui::comics {
-
-class CatalogTile;
 
 class ComicsCatalogScreen : public QWidget {
     Q_OBJECT
@@ -55,7 +54,7 @@ private:
     void clearTiles();
     void loadAllCatalogs();
     void addTile(const tankoban::manga::fandom::FandomCatalog& catalog);
-    void fetchCover(CatalogTile* tile, const QString& url);
+    void fetchCover(TileCard* tile, const QString& url);
 
     QNetworkAccessManager* m_nam = nullptr;  // not owned; provided by ComicsPage
     QScrollArea*           m_scroll = nullptr;
@@ -63,7 +62,7 @@ private:
     QGridLayout*           m_grid = nullptr;
     QLabel*                m_emptyLabel = nullptr;
     QPushButton*           m_backBtn = nullptr;
-    QList<CatalogTile*>    m_tiles;
+    QList<TileCard*>       m_tiles;
 };
 
 } // namespace tankoban::ui::comics
