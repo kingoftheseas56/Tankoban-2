@@ -55,6 +55,11 @@
             "type": "command",
             "command": "bash .claude/scripts/skill-provenance-detect.sh",
             "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/trim-cc-history-stale.sh",
+            "timeout": 10
           }
         ]
       }
