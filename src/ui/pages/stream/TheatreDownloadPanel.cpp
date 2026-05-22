@@ -210,12 +210,14 @@ void TheatreDownloadPanel::openFor(const QString& imdbId,
                                    const QString& showName,
                                    const QString& showYear,
                                    int season,
-                                   const QString& mediaType) {
+                                   const QString& mediaType,
+                                   const QMap<int, int>& knownEpisodeCounts) {
     m_imdbId    = imdbId;
     m_showName  = showName;
     m_showYear  = showYear;
     m_season    = season;
     m_mediaType = mediaType;
+    m_knownEpisodeCounts = knownEpisodeCounts;  // T3
     m_packs.clear();
     m_filteredPacks.clear();
     m_widenedAutoFallback = false;
@@ -242,6 +244,7 @@ void TheatreDownloadPanel::reset() {
     m_packs.clear();
     m_filteredPacks.clear();
     m_tileChecked.clear();
+    m_knownEpisodeCounts.clear();  // T3
     // THEATRE_DOWNLOAD_OVERHAUL Task D3 (2026-05-16): clear pending-metadata
     // state so closing+reopening the panel doesn't leak a stale hash that
     // could match a late metadataReady from a prior selection.

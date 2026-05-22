@@ -51,9 +51,16 @@ public:
     // Called by StreamDetailView when the user clicks the new Download button.
     // imdbId + showName + season identify the search; mediaType is "series"
     // or "movie" (drives the degenerate movie scope-picker mode).
+    // THEATRE_BULK_PICKER_EPISODE_COUNT_FIX 2026-05-22 — knownEpisodeCounts
+    // is Cinemeta's per-season episode count (season -> count). Used by
+    // rerenderScopePicker() to size the per-season tile list when libtorrent
+    // metadata hasn't arrived yet (and to permanently size it for downloads
+    // the file probe can't resolve). Empty map = movies, or unknown series
+    // meta; estimator fallback path remains for that case.
     void openFor(const QString& imdbId, const QString& showName,
                  const QString& showYear, int season,
-                 const QString& mediaType);
+                 const QString& mediaType,
+                 const QMap<int, int>& knownEpisodeCounts);
 
     // Called by StreamDetailView when the user dismisses the panel
     // (Cancel / back-nav / focus change). Resets internal state to empty.
@@ -135,6 +142,13 @@ private:
     QString m_showYear;
     int     m_season = 0;
     QString m_mediaType;
+
+    // THEATRE_BULK_PICKER_EPISODE_COUNT_FIX 2026-05-22 — Cinemeta-known
+    // per-season episode counts (season -> count). Set by openFor() from
+    // StreamDetailView::episodeCountsBySeason(). Consulted by
+    // rerenderScopePicker() when m_realFiles is still empty. Empty = no
+    // Cinemeta data; fall through to title-estimate behavior.
+    QMap<int, int> m_knownEpisodeCounts;
 
     // PackList state.
     QList<EnrichedPack> m_packs;

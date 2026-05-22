@@ -858,12 +858,11 @@ void StreamPage::buildUI()
                          int season,
                          const QString& mediaType,
                          const QMap<int, int>& knownEpisodeCounts) {
-                Q_UNUSED(knownEpisodeCounts);  // wired into openFor() in T3
                 if (!m_theatreDownloadPanel)
                     return;
                 const QString showYear = m_detailView ? m_detailView->currentYear() : QString();
                 m_theatreDownloadPanel->openFor(imdbId, showName, showYear,
-                                                season, mediaType);
+                                                season, mediaType, knownEpisodeCounts);
                 if (m_detailSourcesPanel)
                     slideOutToRight(m_detailSourcesPanel);
                 slideInFromRight(m_theatreDownloadPanel);
