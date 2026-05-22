@@ -913,6 +913,14 @@ QList<StreamEpisode> StreamDetailView::episodesForSeason(int season) const
     return m_seasons.value(season);
 }
 
+QMap<int, int> StreamDetailView::episodeCountsBySeason() const
+{
+    QMap<int, int> out;
+    for (auto it = m_seasons.constBegin(); it != m_seasons.constEnd(); ++it)
+        out.insert(it.key(), it.value().size());
+    return out;
+}
+
 QJsonObject StreamDetailView::devSnapshot() const
 {
     QJsonObject snap;

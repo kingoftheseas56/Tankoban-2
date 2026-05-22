@@ -96,6 +96,11 @@ public:
     QString currentTitle() const;
     QString currentYear() const;
     QList<tankostream::stream::StreamEpisode> episodesForSeason(int season) const;
+    // THEATRE_BULK_PICKER_EPISODE_COUNT_FIX 2026-05-22 — snapshot of per-season
+    // episode counts known to Cinemeta. Keyed by season number. Used by the
+    // theatreDownloadRequested signal to give the bulk-picker the canonical
+    // truth instead of the 10-default title-estimate fallback.
+    QMap<int, int> episodeCountsBySeason() const;
     QJsonObject devSnapshot() const;
 
     // STREAM_CONTINUE_LIBRARY_AND_HUD_AUTOFIRE 2026-05-06 — auto-add the
