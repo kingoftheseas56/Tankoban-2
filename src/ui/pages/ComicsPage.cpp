@@ -194,18 +194,36 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     m_stack->addWidget(m_searchTakeover);
 
     connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::backRequested,
-            this, &ComicsPage::showLibraryMode);
+            this, [this]() {
+                // Stream-bar parity 2026-05-22: defensive reset when the user
+                // bails out of the search-takeover surface mid-flight — kills
+                // the busy spinner and any lingering history dropdown that
+                // somehow survived the focus-out path. Mirrors StreamPage's
+                // showBrowse defensive reset at StreamPage.cpp:1955-1957.
+                setSearchBusy(false);
+                hideSearchHistoryDropdown();
+                showLibraryMode();
+            });
     connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::resultPicked,
             this, &ComicsPage::onSearchResultActivated);
 
     // Scraper error toasts retained -- downloads in flight still route
-    // through MangaDownloader for legacy chapter pulls.
+    // through MangaDownloader for legacy chapter pulls. Stream-bar parity
+    // 2026-05-22: also flip the busy spinner off on either successful
+    // search finish or error so the indeterminate progress bar doesn't
+    // pin forever after the scraper returns. Mirrors StreamPage's
+    // MetaAggregator hook pattern at StreamPage.cpp:305-312.
     for (auto* s : m_sourceRegistry->scrapers()) {
         connect(s, &MangaScraper::errorOccurred, this, [this, s](const QString& msg) {
             Q_UNUSED(msg);
+            setSearchBusy(false);
             QWidget* anchor = window() ? window() : this;
             Toast::show(anchor, QStringLiteral("%1 didn't respond").arg(s->sourceName()));
         });
+        connect(s, &MangaScraper::searchFinished, this,
+                [this](const QList<MangaResult>&) {
+                    setSearchBusy(false);
+                });
     }
 
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 -- manga downloader.
@@ -2276,6 +2294,14 @@ void ComicsPage::hideSearchHistoryDropdown()
 
 void ComicsPage::showSearchMode(const QString& query)
 {
+    // Stream-bar parity 2026-05-22: this is the canonical submit funnel —
+    // Enter, search-icon click, AND history-row click all route through
+    // here, so push-to-history runs exactly once per submitted query.
+    // Dedup against the prior top entry happens inside pushSearchHistory.
+    pushSearchHistory(query);
+    hideSearchHistoryDropdown();
+    setSearchBusy(true);
+
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit before the
     // in-page transition so the SearchResults layer is recorded in
     // NavHistory. Guarded against same-mode re-entry (typing a new query
