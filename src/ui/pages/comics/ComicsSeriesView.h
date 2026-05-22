@@ -40,6 +40,7 @@ class QLabel;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QPushButton;
+class QScrollArea;
 class QTableWidget;
 class QTimer;
 class QHBoxLayout;
@@ -48,6 +49,7 @@ class MangaDownloadIndex;
 
 namespace tankoban::manga::bookwalker { class VolumeCoverResolver; }
 namespace tankoban::ui::widgets { class ComicsSeriesViewLoadingOverlay; }
+namespace tankoban::ui::comics { class VolumeTile; }
 
 namespace tankoban::manga {
 class NyaaRuntimeSource;
@@ -311,7 +313,15 @@ private:
     // current series + re-resolves via FallbackChainResolver. Useful when a
     // wiki has updated since the last cache fetch.
     QPushButton*          m_forceRefreshButton = nullptr;
-    QTableWidget*         m_volumesTable  = nullptr;
+    // REPLACED: QTableWidget surface is now a QScrollArea of VolumeTile rows.
+    // m_volumeTilesByVolumeNumber lets setVolumeDownloadState /
+    // setVolumeStatusText / setVolumeCoverFromDisk address rows by volumeNumber
+    // without iterating the list.
+    QScrollArea*  m_volumesScroll = nullptr;
+    QWidget*      m_volumesHost   = nullptr;
+    QVBoxLayout*  m_volumesLayout = nullptr;
+    QHash<int, tankoban::ui::comics::VolumeTile*> m_volumeTilesByVolumeNumber;
+    QList<tankoban::ui::comics::VolumeTile*>      m_volumeTiles;
     ComicsSourcesPanel*   m_sourcesPanel  = nullptr;  // PHASE 8: replaces the placeholder QLabel
 
     // STREAM_PORT 2026-05-18 Task 3: description clamp + show-more toggle.
