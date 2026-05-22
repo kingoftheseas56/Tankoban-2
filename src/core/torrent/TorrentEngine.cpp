@@ -341,10 +341,22 @@ void TorrentEngine::applySettings()
     //       pick the fastest one. Stremio defaults to 200 but runs on
     //       typically-headless server hardware; desktop Windows with
     //       libtorrent 2.x handles 400 comfortably.
-    //   active_downloads 5→10, active_seeds 5→10, active_limit 10→20:
-    //       prevents the stream torrent from being queued behind prior
-    //       library-mode downloads when multiple torrents are active.
-    //       A streaming app should treat stream adds as priority.
+    //   active_downloads = 1 (was 10 pre-SEQUENTIAL_DOWNLOADS_FIX 2026-05-21):
+    //       strict 1-at-a-time across the entire Tankoban session per
+    //       Hemanth 2026-05-21 ~7:45pm IST ("episode by episode sequential
+    //       is an absolute must"). libtorrent's session scheduler queues
+    //       any torrent above the cap into state queued_for_download and
+    //       auto-promotes the next queued one when the active one
+    //       completes. FIFO by add-order via queue_position(). This
+    //       REVERSES the 2026-04-19 stream-priority optimization (the
+    //       5→10 bump that prevented stream torrents from queuing behind
+    //       library-mode downloads) — under the new contract stream
+    //       torrents queue too. Tradeoff acknowledged; the absolute-must
+    //       framing won.
+    //   active_seeds 10, active_limit 20: unchanged. Seeding is
+    //       independent of download contention; the active_limit cap is
+    //       the outer ring and stays loose so completed torrents can keep
+    //       seeding without blocking new download dispatches.
     //   max_queued_disk_bytes 1MB (default) → 32MB: absorbs piece-write
     //       bursts during head-deadline fan-out without back-pressuring
     //       the scheduler. Streaming workloads write bigger bursts.
@@ -365,7 +377,7 @@ void TorrentEngine::applySettings()
     //       peers is good for streaming head-fetch.
     sp.set_int(lt::settings_pack::connections_limit, 400);
 
-    sp.set_int(lt::settings_pack::active_downloads, 10);
+    sp.set_int(lt::settings_pack::active_downloads, 1);
     sp.set_int(lt::settings_pack::active_seeds, 10);
     sp.set_int(lt::settings_pack::active_limit, 20);
 

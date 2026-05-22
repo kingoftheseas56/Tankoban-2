@@ -31,7 +31,10 @@ QueueLimitsDialog::QueueLimitsDialog(QWidget* parent)
 
     m_dlSpin = new QSpinBox;
     m_dlSpin->setRange(0, 999);
-    m_dlSpin->setValue(5);
+    // SEQUENTIAL_DOWNLOADS_FIX 2026-05-21 — default 5 → 1 to match
+    // TorrentEngine session settings (strict 1-at-a-time per Hemanth).
+    // Power-users can still bump this; the spin range stays 0-999.
+    m_dlSpin->setValue(1);
     m_dlSpin->setFixedHeight(28);
     form->addRow("Max active downloads:", m_dlSpin);
 
