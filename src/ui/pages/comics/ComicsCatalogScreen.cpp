@@ -129,6 +129,7 @@ void ComicsCatalogScreen::loadAllCatalogs()
         const QString full = dir.absoluteFilePath(fname);
         auto opt = tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(full);
         if (!opt) continue;
+        if (opt->volumes.isEmpty()) continue;
         addTile(*opt);
     }
 }
