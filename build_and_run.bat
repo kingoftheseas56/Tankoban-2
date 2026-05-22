@@ -70,6 +70,10 @@ cmake --build "%BUILD_DIR%" --parallel
 set BUILD_EXIT=%ERRORLEVEL%
 if %BUILD_EXIT% NEQ 0 (
     echo ERROR: Build failed ^(exit code %BUILD_EXIT%^).
+    echo Resetting ninja state to prevent recovery-loop corruption ^(next build will be a full clean rebuild^).
+    :: A failed or interrupted ninja can leave partial state files that recover
+    :: forever. Delete only this lane's ninja state; keep cache/build graph.
+    powershell -NoProfile -Command "Remove-Item -LiteralPath '%BUILD_DIR%\.ninja_deps','%BUILD_DIR%\.ninja_log' -Force -ErrorAction SilentlyContinue" >nul 2>&1
     pause
     exit /b %BUILD_EXIT%
 )

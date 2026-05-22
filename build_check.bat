@@ -48,6 +48,10 @@ if %BUILD_EXIT% EQU 0 (
 )
 
 echo BUILD FAILED exit=%BUILD_EXIT%
+echo BUILD CHECK: resetting ninja state to prevent recovery-loop corruption ^(next build will be a full clean rebuild^).
+:: A failed or interrupted ninja can leave partial state files that recover
+:: forever. Delete only this lane's ninja state; keep cache/build graph.
+powershell -NoProfile -Command "Remove-Item -LiteralPath '%BUILD_DIR%\.ninja_deps','%BUILD_DIR%\.ninja_log' -Force -ErrorAction SilentlyContinue" >nul 2>&1
 echo --- last 30 lines of %LOG% ---
 powershell -NoProfile -Command "Get-Content -Tail 30 -LiteralPath '%LOG%'"
 exit /b %BUILD_EXIT%
