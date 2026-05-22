@@ -1869,8 +1869,14 @@ void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumbe
     const QString snapshotSeriesKey = m_currentSeriesKey;
     const QUrl coverUrl(url);
     QNetworkRequest req(coverUrl);
+    // FANDOM_LOCAL_LOADER hotfix 2026-05-22 (Agent 1): Cloudflare-friendly UA.
+    // Previous "Tankoban/1.0" suffix triggered Fandom's Cloudflare bot heuristics
+    // -> 403 on static.wikia.nocookie.net cover URLs from our local catalog.
+    // Mirror of the UA we used in scripts/fandom_scraper/backfill_covers.py.
     req.setHeader(QNetworkRequest::UserAgentHeader,
-                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+                  QString::fromLatin1(
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"));
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
             [self, reply, url, volumeNumber, snapshotSeriesKey]() {
@@ -1937,8 +1943,14 @@ void ComicsSeriesView::loadHeroCoverUrl(const QString& url)
     QPointer<ComicsSeriesView> self(this);
     const QString snapshotSeriesKey = m_currentSeriesKey;
     QNetworkRequest req{QUrl(url)};
+    // FANDOM_LOCAL_LOADER hotfix 2026-05-22 (Agent 1): Cloudflare-friendly UA.
+    // Previous "Tankoban/1.0" suffix triggered Fandom's Cloudflare bot heuristics
+    // -> 403 on static.wikia.nocookie.net cover URLs from our local catalog.
+    // Mirror of the UA we used in scripts/fandom_scraper/backfill_covers.py.
     req.setHeader(QNetworkRequest::UserAgentHeader,
-                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+                  QString::fromLatin1(
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"));
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
             [self, reply, url, snapshotSeriesKey]() {
@@ -2037,8 +2049,14 @@ void ComicsSeriesView::loadBannerUrl(const QString& url)
     const QString snapshotSeriesKey = m_currentSeriesKey;
     const QUrl bannerUrl(url);
     QNetworkRequest req(bannerUrl);
+    // FANDOM_LOCAL_LOADER hotfix 2026-05-22 (Agent 1): Cloudflare-friendly UA.
+    // Previous "Tankoban/1.0" suffix triggered Fandom's Cloudflare bot heuristics
+    // -> 403 on static.wikia.nocookie.net cover URLs from our local catalog.
+    // Mirror of the UA we used in scripts/fandom_scraper/backfill_covers.py.
     req.setHeader(QNetworkRequest::UserAgentHeader,
-                  QString::fromLatin1("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+                  QString::fromLatin1(
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"));
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
             [self, reply, url, snapshotSeriesKey]() {
