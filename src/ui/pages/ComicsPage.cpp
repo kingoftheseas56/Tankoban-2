@@ -2015,6 +2015,191 @@ void ComicsPage::showLibraryMode()
     if (m_searchTakeover) m_searchTakeover->clearResults();
 }
 
+// ─── Search history (Stream-bar parity 2026-05-22) ───────────────────────
+//
+// QSettings key is `comics/searchHistory` — deliberately disjoint from
+// Stream's `stream/searchHistory` so the two modes don't cross-pollinate
+// past queries (Agent 1 guardrail at handoff).
+
+void ComicsPage::loadSearchHistory()
+{
+    QSettings s;
+    m_searchHistory = s.value(QStringLiteral("comics/searchHistory")).toStringList();
+    if (m_searchHistory.size() > kMaxSearchHistory)
+        m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+}
+
+void ComicsPage::saveSearchHistory()
+{
+    QSettings s;
+    s.setValue(QStringLiteral("comics/searchHistory"), m_searchHistory);
+}
+
+void ComicsPage::pushSearchHistory(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty()) return;
+    m_searchHistory.removeAll(q);
+    m_searchHistory.prepend(q);
+    if (m_searchHistory.size() > kMaxSearchHistory)
+        m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+    saveSearchHistory();
+}
+
+void ComicsPage::removeSearchHistoryEntry(const QString& query)
+{
+    m_searchHistory.removeAll(query);
+    saveSearchHistory();
+    // Rebuild the open dropdown so the row disappears immediately.
+    if (m_searchHistoryDropdown && m_searchHistoryDropdown->isVisible()) {
+        showSearchHistoryDropdown();
+    }
+}
+
+void ComicsPage::clearSearchHistory()
+{
+    if (m_searchHistory.isEmpty()) return;
+    m_searchHistory.clear();
+    saveSearchHistory();
+    hideSearchHistoryDropdown();
+}
+
+void ComicsPage::buildSearchHistoryDropdown()
+{
+    m_searchHistoryDropdown = new QFrame(this);
+    m_searchHistoryDropdown->setObjectName("ComicsSearchHistory");
+    m_searchHistoryDropdown->setStyleSheet(
+        "QFrame#ComicsSearchHistory { background: #1a1a1a; border: 1px solid #3a3a3a;"
+        "  border-radius: 6px; }");
+    m_searchHistoryDropdown->hide();
+
+    auto* outer = new QVBoxLayout(m_searchHistoryDropdown);
+    outer->setContentsMargins(0, 4, 0, 4);
+    outer->setSpacing(0);
+
+    m_searchHistoryList = new QWidget(m_searchHistoryDropdown);
+    auto* listLayout = new QVBoxLayout(m_searchHistoryList);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->setSpacing(0);
+
+    outer->addWidget(m_searchHistoryList);
+
+    // Delayed-hide timer so a click on a dropdown row gets its release
+    // event before the dropdown is dismissed (FocusOut → 150ms → hide).
+    m_searchHistoryHideTimer = new QTimer(this);
+    m_searchHistoryHideTimer->setSingleShot(true);
+    m_searchHistoryHideTimer->setInterval(150);
+    connect(m_searchHistoryHideTimer, &QTimer::timeout, this, [this]() {
+        if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
+    });
+}
+
+void ComicsPage::positionSearchHistoryDropdown()
+{
+    if (!m_searchHistoryDropdown || !m_searchBar) return;
+    const QPoint topLeft =
+        m_searchBar->mapTo(this, QPoint(0, m_searchBar->height() + 2));
+    m_searchHistoryDropdown->setGeometry(
+        topLeft.x(), topLeft.y(), m_searchBar->width(),
+        m_searchHistoryDropdown->sizeHint().height());
+}
+
+void ComicsPage::showSearchHistoryDropdown()
+{
+    if (!m_searchHistoryDropdown || !m_searchHistoryList) return;
+    if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
+
+    // Clear old rows.
+    auto* layout = qobject_cast<QVBoxLayout*>(m_searchHistoryList->layout());
+    if (!layout) return;
+    while (auto* item = layout->takeAt(0)) {
+        if (auto* w = item->widget()) w->deleteLater();
+        delete item;
+    }
+
+    if (m_searchHistory.isEmpty()) {
+        m_searchHistoryDropdown->hide();
+        return;
+    }
+
+    const int rows = qMin(m_searchHistory.size(), kMaxSearchHistory);
+    const char* kRowBtnStyle =
+        "QPushButton { background: transparent; color: #d0d0d0; border: none;"
+        "  text-align: left; padding: 6px 10px; font-size: 12px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.08); }";
+    const char* kRemoveBtnStyle =
+        "QPushButton { background: transparent; color: rgba(255,255,255,0.45);"
+        "  border: none; font-size: 14px; padding: 0 10px; }"
+        "QPushButton:hover { color: #fff; }";
+    const char* kClearAllBtnStyle =
+        "QPushButton { background: transparent; color: rgba(255,255,255,0.55);"
+        "  border: none; text-align: left; padding: 6px 10px;"
+        "  font-size: 11px; font-weight: 500; letter-spacing: 0.4px; }"
+        "QPushButton:hover { color: #fff; }";
+
+    for (int i = 0; i < rows; ++i) {
+        const QString q = m_searchHistory.at(i);
+
+        auto* row = new QWidget(m_searchHistoryList);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(0);
+
+        auto* queryBtn = new QPushButton(q, row);
+        queryBtn->setCursor(Qt::PointingHandCursor);
+        queryBtn->setStyleSheet(kRowBtnStyle);
+        queryBtn->setFocusPolicy(Qt::NoFocus);
+        connect(queryBtn, &QPushButton::clicked, this, [this, q]() {
+            if (m_searchBar) m_searchBar->setText(q);
+            // Re-enter the same submit path used by Enter / search button.
+            showSearchMode(q);
+            hideSearchHistoryDropdown();
+        });
+        rowLayout->addWidget(queryBtn, 1);
+
+        auto* removeBtn = new QPushButton(QStringLiteral("×"), row);
+        removeBtn->setCursor(Qt::PointingHandCursor);
+        removeBtn->setStyleSheet(kRemoveBtnStyle);
+        removeBtn->setFocusPolicy(Qt::NoFocus);
+        removeBtn->setToolTip(tr("Remove from history"));
+        connect(removeBtn, &QPushButton::clicked, this, [this, q]() {
+            removeSearchHistoryEntry(q);
+        });
+        rowLayout->addWidget(removeBtn);
+
+        layout->addWidget(row);
+    }
+
+    // Footer: "× Clear search history" wipes the entire list. Single visible
+    // affordance — per-entry × on each row above is preserved.
+    auto* divider = new QFrame(m_searchHistoryList);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setStyleSheet(
+        "QFrame { border: none; background: rgba(255,255,255,0.08);"
+        "  max-height: 1px; min-height: 1px; }");
+    layout->addWidget(divider);
+
+    auto* clearAllBtn = new QPushButton(
+        QStringLiteral("×  Clear search history"), m_searchHistoryList);
+    clearAllBtn->setCursor(Qt::PointingHandCursor);
+    clearAllBtn->setStyleSheet(kClearAllBtnStyle);
+    clearAllBtn->setFocusPolicy(Qt::NoFocus);
+    connect(clearAllBtn, &QPushButton::clicked,
+            this, &ComicsPage::clearSearchHistory);
+    layout->addWidget(clearAllBtn);
+
+    m_searchHistoryDropdown->adjustSize();
+    positionSearchHistoryDropdown();
+    m_searchHistoryDropdown->show();
+    m_searchHistoryDropdown->raise();
+}
+
+void ComicsPage::hideSearchHistoryDropdown()
+{
+    if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
+    if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
+}
+
 void ComicsPage::showSearchMode(const QString& query)
 {
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — emit before the
