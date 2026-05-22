@@ -1,5 +1,6 @@
 // src/ui/pages/comics/ComicsSeriesView.cpp
 #include "ComicsSeriesView.h"
+#include "VolumeTile.h"
 
 #include "core/manga/anilist/AniListCache.h"
 #include "core/manga/anilist/AniListClient.h"
@@ -1388,10 +1389,13 @@ QString clipSynopsisSnippet(const QString& synopsis, int maxChars = 120)
 void ComicsSeriesView::populateVolumeRowsFromFandom(
     const tankoban::manga::fandom::FandomCatalog& catalog)
 {
-    using FV = tankoban::manga::fandom::FandomVolume;
+    // Tear down existing tiles.
+    qDeleteAll(m_volumeTiles);
+    m_volumeTiles.clear();
+    m_volumeTilesByVolumeNumber.clear();
 
+    // Pre-population cleanup (mirrors prior function head).
     m_currentVolumeRows.clear();
-    m_currentVolumeRows.reserve(catalog.volumes.size());
     m_selectedRows.clear();
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
@@ -1405,160 +1409,71 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
         m_metaLine->clear();
     }
 
-    m_volumesTable->setRowCount(catalog.volumes.size());
+    // Insert each volume as a VolumeTile row, just before the trailing
+    // stretch in m_volumesLayout (index = count() - 1).
+    for (const auto& vol : catalog.volumes) {
+        tankoban::ui::comics::VolumeTileData data;
+        data.sourceId     = QStringLiteral("fandom_catalog");
+        data.seriesId     = catalog.seriesId;
+        data.volumeNumber = vol.volumeNumber;
+        data.title        = !vol.titleEnglish.isEmpty() ? vol.titleEnglish : vol.titleJapanese;
+        data.chapterRange = QStringLiteral("ch %1-%2")
+                                .arg(vol.chapterRangeStart)
+                                .arg(vol.chapterRangeEnd);
+        // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-21 (Agent 1) -- Fandom catalog
+        // URL wins when present (canonical scraped source); fall back to English
+        // cover URL when Japanese is absent.
+        data.coverUrl     = !vol.coverUrlJapanese.isEmpty()
+                              ? vol.coverUrlJapanese
+                              : vol.coverUrlEnglish;
+        // pages + publishDate: FandomVolume doesn't surface page count;
+        // releaseDateJp/En are QDate — leave publishDate empty for v1.
 
-    for (int i = 0; i < catalog.volumes.size(); ++i) {
-        const FV& v = catalog.volumes.at(i);
+        auto* tile = new tankoban::ui::comics::VolumeTile(data, m_volumesHost);
 
-        m_volumesTable->setRowHeight(i, kVolumeRowHeight);
+        tankoban::ui::comics::VolumeTileState state;
+        state.provenance = QStringLiteral("Fandom");
+        tile->setVolumeState(state);
+        tile->setMangaDownloadIndex(m_downloadIndex);
 
-        // m_currentVolumeRows compat stash — minimal mapping for
-        // applyPixmapToVolumeRow + onVolumeCellClicked downstream.
-        anilist::VolumeRow stashRow;
-        stashRow.volumeNumber      = v.volumeNumber;
-        stashRow.chapterRangeStart = v.chapterRangeStart;
-        stashRow.chapterRangeEnd   = v.chapterRangeEnd;
-        stashRow.art.thumbnailUrl  = v.coverUrlEnglish.isEmpty()
-                                         ? v.coverUrlJapanese
-                                         : v.coverUrlEnglish;
-        stashRow.art.fullUrl       = stashRow.art.thumbnailUrl;
-        m_currentVolumeRows.append(stashRow);
+        const QString seriesIdSnapshot = catalog.seriesId;
+        connect(tile, &tankoban::ui::comics::VolumeTile::openRequested,
+                this, [this, seriesIdSnapshot](int vn) {
+                    const auto entry = m_downloadIndex
+                        ? m_downloadIndex->entryForSeriesAndVolume(
+                              QStringLiteral("fandom_catalog"),
+                              seriesIdSnapshot, vn)
+                        : std::nullopt;
+                    emit openVolume(vn, entry ? entry->canonicalPath : QString());
+                });
+        connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
+                this, [this](int /*vn*/) {
+                    // Route through existing source-panel dispatch path.
+                    // populateSourcesForRow takes a table-row index from the
+                    // old QTableWidget world. For VolumeTile world the source
+                    // panel is driven by volume-number via the sources panel
+                    // directly — Task 16 fully rewires this path.
+                    populateSourcesForRow(-1);
+                });
+        connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
+                this, [](bool /*checked*/, bool /*shiftHeld*/) {
+                    // Range-fill wiring lands in Task 17.
+                });
 
-        // Col kColCheckbox -- mirror populateVolumeRows pattern verbatim.
-        auto* cbLabel = new QLabel(m_volumesTable);
-        cbLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowCheckbox"));
-        cbLabel->setAlignment(Qt::AlignCenter);
-        cbLabel->setPixmap(QIcon(QStringLiteral(":/icons/checkbox-empty.svg")).pixmap(14, 14));
-        cbLabel->setCursor(Qt::PointingHandCursor);
-        cbLabel->setProperty("rowIdx", i);
-        cbLabel->setProperty("checked", false);
-        cbLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowCheckbox { background: transparent; }"
-            "QLabel#ComicsSeriesVolumeRowCheckbox:hover { background: rgba(255,255,255,0.06); border-radius: 2px; }"));
-        m_volumesTable->setCellWidget(i, kColCheckbox, cbLabel);
-
-        // Col kColIndex -- volume number (or X for the rare unbound tail;
-        // Fandom catalogs don't synthesize Vol X today, but the constant is
-        // here for forward-compat with InfoboxExtractor hierarchy walkers).
-        const QString indexText = (v.volumeNumber > 0)
-            ? QString::number(v.volumeNumber)
-            : QStringLiteral("?");
-        auto* indexItem = new QTableWidgetItem(indexText);
-        indexItem->setTextAlignment(Qt::AlignCenter);
-        m_volumesTable->setItem(i, kColIndex, indexItem);
-
-        // Col kColThumb -- portrait cover. Mirror populateVolumeRows.
-        auto* coverLabel = new QLabel(m_volumesTable);
-        coverLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowThumb"));
-        coverLabel->setAlignment(Qt::AlignCenter);
-        coverLabel->setMinimumSize(kVolumeThumbSize);
-        coverLabel->setPixmap(makeVolumeThumbPlaceholder());
-        coverLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowThumb { background: transparent; }"));
-        m_volumesTable->setCellWidget(i, kColThumb, coverLabel);
-
-        const QString fandomCoverUrl = v.coverUrlEnglish.isEmpty()
-            ? v.coverUrlJapanese
-            : v.coverUrlEnglish;
-        const QString existingCoverUrl = m_lastAppliedCoverUrlByVolume.value(v.volumeNumber);
-        // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-21 (Agent 1) -- reversed
-        // priority: Fandom catalog URL wins when present. Rationale: the
-        // local catalog is the canonical scraped source for series that
-        // have one (Hemanth scraped them specifically because the existing
-        // BookWalker/WeebCentral pipeline had bad covers for those series).
-        // BookWalker stays as the fallback for catalogs that didn't supply
-        // a cover URL OR for series without a local catalog entry at all.
-        const QString coverUrl = !fandomCoverUrl.isEmpty()
-            ? fandomCoverUrl
-            : existingCoverUrl;
-        if (!coverUrl.isEmpty()) {
-            loadCoverUrlForVolume(coverUrl, v.volumeNumber);
-        }
-
-        // Col kColTitle -- stacked cellWidget:
-        //   line 1: primary title (English || "Volume N")
-        //   line 2: range + grouping subtitle
-        //   line 3: dates + ISBN microline
-        //   line 4: synopsis snippet (full text in tooltip)
-        auto* titleWrap = new QWidget(m_volumesTable);
-        auto* titleLay = new QVBoxLayout(titleWrap);
-        titleLay->setContentsMargins(8, 8, 8, 8);
-        titleLay->setSpacing(2);
-
-        const QString primaryTitle = v.titleEnglish.isEmpty()
-            ? tr("Volume %1").arg(v.volumeNumber)
-            : v.titleEnglish;
-        indexItem->setData(Qt::UserRole + 2, primaryTitle);
-        auto* primaryLabel = new QLabel(primaryTitle, titleWrap);
-        primaryLabel->setStyleSheet(QStringLiteral(
-            "color: #e5e7eb; font-size: 13px; font-weight: 500; background: transparent;"));
-        titleLay->addWidget(primaryLabel);
-
-        QStringList subParts;
-        const QString chapterRange = formatFandomChapterRange(v);
-        if (!chapterRange.isEmpty()) subParts << chapterRange;
-        if (!v.groupingLabel.isEmpty()) subParts << v.groupingLabel;
-        if (!subParts.isEmpty()) {
-            auto* subLabel = new QLabel(subParts.join(QStringLiteral(" · ")), titleWrap);
-            subLabel->setStyleSheet(QStringLiteral(
-                "color: rgba(229,231,235,0.75); font-size: 11px; background: transparent;"));
-            titleLay->addWidget(subLabel);
-        }
-
-        const QString micro = formatFandomMicroline(v);
-        if (!micro.isEmpty()) {
-            auto* microLabel = new QLabel(micro, titleWrap);
-            microLabel->setStyleSheet(QStringLiteral(
-                "color: rgba(255,255,255,0.45); font-size: 10px; background: transparent;"));
-            titleLay->addWidget(microLabel);
-        }
-
-        const QString synopsisText = v.synopsis.isEmpty()
-            ? catalog.seriesSynopsis  // fallback: series-level blurb when per-volume empty
-            : v.synopsis;
-        if (!synopsisText.isEmpty()) {
-            auto* synLabel = new QLabel(clipSynopsisSnippet(synopsisText), titleWrap);
-            synLabel->setWordWrap(false);
-            synLabel->setTextFormat(Qt::PlainText);
-            synLabel->setStyleSheet(QStringLiteral(
-                "color: rgba(255,255,255,0.55); font-size: 11px; background: transparent;"
-                "font-style: italic;"));
-            titleLay->addWidget(synLabel);
-            titleWrap->setToolTip(synopsisText);  // full text on hover
-        } else if (!chapterRange.isEmpty()) {
-            // No synopsis available — preserve the range tooltip convention
-            // from the AniList populate path for power-users hovering rows.
-            titleWrap->setToolTip(chapterRange);
-        }
-
-        titleLay->addStretch(1);
-        m_volumesTable->setCellWidget(i, kColTitle, titleWrap);
-
-        // Col kColProgress -- v1 ships "--" per spec.
-        auto* progItem = new QTableWidgetItem(QStringLiteral("--"));
-        progItem->setTextAlignment(Qt::AlignCenter);
-        progItem->setForeground(QBrush(QColor(255, 255, 255, 128)));
-        m_volumesTable->setItem(i, kColProgress, progItem);
-
-        // Col kColStatus -- always "Not downloaded" on the Fandom path in
-        // v1. Tankoyomi-download-linkage to flip this to the check.svg icon
-        // is out of scope for Task 18 (lives in the future
-        // MangaDownloadIndex-aware refresh path).
-        auto* statusLabel = new QLabel(m_volumesTable);
-        statusLabel->setObjectName(QStringLiteral("ComicsSeriesVolumeRowStatus"));
-        statusLabel->setAlignment(Qt::AlignCenter);
-        statusLabel->setStyleSheet(QStringLiteral(
-            "QLabel#ComicsSeriesVolumeRowStatus { color: rgba(255,255,255,0.55);"
-            " font-size: 11px; background: transparent; }"));
-        statusLabel->setPixmap(QIcon(QStringLiteral(":/icons/download-arrow.svg")).pixmap(16, 16));
-        statusLabel->setToolTip(tr("Not downloaded"));
-        m_volumesTable->setCellWidget(i, kColStatus, statusLabel);
+        m_volumeTiles.append(tile);
+        m_volumeTilesByVolumeNumber.insert(vol.volumeNumber, tile);
+        m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
     }
+
+    // Cache current identity for downstream slots (existing behavior).
+    m_currentSeriesTitle = !catalog.seriesTitle.isEmpty()
+                            ? catalog.seriesTitle
+                            : catalog.seriesId;
 
     // No next-unread highlight on the Fandom path in v1 — that hinges on
     // cbzPath stash which the Fandom catalog doesn't carry. The Tankoyomi-
     // download-linkage refresh in a future task will overlay highlight +
-    // status icons on top of the rendered rows.
+    // status icons on top of the rendered tiles.
     m_nextUnreadRow = -1;
 }
 
