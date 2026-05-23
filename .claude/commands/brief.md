@@ -5,12 +5,17 @@ allowed-tools: Bash, Grep, Read
 
 You are producing the live state dashboard for Tankoban 2. Output a markdown digest that mirrors the format of the `## 30-Second State Dashboard` block in `CLAUDE.md`, but computed from the actual current state of the repo. Use this when CLAUDE.md may be stale (Agent 0 forgot to bump after a phase) or for ground-truth verification.
 
+**Token discipline (load-bearing — read FIRST):** Do NOT use the `Read` tool on `agents/STATUS.md` or `agents/chat.md`. Both files are 25-50k tokens and the brief only needs specific extracted lines. Use targeted `grep` / `head` / `tail` / `wc` / `git log` / `git diff` commands only. Reading either file fully wastes ~75k tokens per `/brief` wake. This is the chat.md tail-only + STATUS.md grep-only enforcement per `agents/audits/token_cost_audit_2026-05-22.md` findings #2 + #3 (Codex audit 2026-05-22).
+
 **Procedure:**
 
-1. **Active agents.** For each `## Agent N` block in `agents/STATUS.md`, extract:
-   - The `Status:` line (first sentence only).
-   - Whether `Blockers:` line is non-empty (anything other than "None").
-   - The `Last session:` date — flag if older than 7 days from today.
+1. **Active agents.** Extract from `agents/STATUS.md` via targeted `grep` — DO NOT Read the file (it's ~49k tokens, and you only need the structured field lines):
+   - Agent list: `grep '^## Agent' agents/STATUS.md`
+   - Status lines: `grep -n '^Status:' agents/STATUS.md` (use first sentence only when surfacing)
+   - Blockers: `grep -n '^Blockers:' agents/STATUS.md` (any value other than "None" warrants surfacing)
+   - Last session dates: `grep -n '^Last session:' agents/STATUS.md` — flag dates older than 7 days vs today.
+
+   If you need the full body of one specific agent's section (rare — only for deep verification), use `awk '/^## Agent N/,/^## Agent /' agents/STATUS.md` to slice just that block rather than reading the whole file.
 
 2. **READY TO COMMIT backlog.** Find the last `chat.md sweep` commit:
    ```
@@ -30,7 +35,7 @@ You are producing the live state dashboard for Tankoban 2. Output a markdown dig
 
 4. **Open HELP.** Read first 30 lines of `agents/HELP.md`. Surface the STATUS line.
 
-5. **Last build / smoke.** Skim chat.md tail for the most recent line containing `smoke`, `green`, `PASS`, or `[PERF]`. Surface a one-liner.
+5. **Last build / smoke.** Run `tail -n 80 agents/chat.md | grep -iE '(smoke|green|pass|\[perf\])' | tail -1`. Surface the matched line as a one-liner. DO NOT Read `agents/chat.md` via the Read tool — it's ~26k tokens; the bash one-liner above returns exactly what you need (~50-150 tokens).
 
 6. **Chat.md size.** `wc -l agents/chat.md`. If > 3000, flag with `[ROTATION DUE]` per File Hygiene rule.
 
