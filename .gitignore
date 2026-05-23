@@ -15,6 +15,16 @@ out_agent-*/
 # in-browser brainstorm preview). Persist locally for reference but not tracked.
 .superpowers/
 
+# MangaFire catalog corpus (COMICS_MANGAFIRE_PIVOT Phase D, 2026-05-23).
+# scripts/mangafire_scraper/mangafire_ingest.py fetches ~53,313 series JSONs
+# from mangafire.to's sitemap into data/mangafire_catalog/. That's mechanically
+# reproducible data, not human-authored — same logic as BookWalker cache,
+# AniList cache, etc. Anyone cloning Tankoban runs the ingest script (~3hr
+# wall-clock at 4 workers) to populate locally. The 10 pilot JSONs committed
+# at 8617616 stay tracked as test fixtures (gitignore doesn't untrack existing
+# tracked files); only NEW catalog JSONs get ignored.
+data/mangafire_catalog/*.json
+
 # Sidecar build artifacts (post-migration 2026-04-15). Sources are tracked
 # under native_sidecar/; the build tree produced by build.ps1 is not.
 native_sidecar/build/
