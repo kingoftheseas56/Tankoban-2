@@ -44,10 +44,19 @@ set BUILD_EXIT=%ERRORLEVEL%
 
 if %BUILD_EXIT% EQU 0 (
     echo BUILD OK
+    :: Also append the verdict to the log so the pre-RTC build-gate hook
+    :: (.claude/scripts/pre-rtc-checker.sh, gov-v7+) can detect BUILD OK at
+    :: end-of-log. Without this line the gate sees only ninja's compile
+    :: output and treats every RTC on .cpp/.h files as unverified.
+    >>"%LOG%" echo BUILD OK
     exit /b 0
 )
 
 echo BUILD FAILED exit=%BUILD_EXIT%
+:: Append the failure verdict to the log so the pre-RTC build-gate can
+:: distinguish "build failed" from "log stale / build not run" and route
+:: agents to re-run build_check before re-posting RTC.
+>>"%LOG%" echo BUILD FAILED exit=%BUILD_EXIT%
 echo BUILD CHECK: resetting ninja state to prevent recovery-loop corruption ^(next build will be a full clean rebuild^).
 :: A failed or interrupted ninja can leave partial state files that recover
 :: forever. Delete only this lane's ninja state; keep cache/build graph.
