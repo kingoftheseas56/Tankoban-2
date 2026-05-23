@@ -1,0 +1,94 @@
+{
+  "seriesId": "a-silent-voice",
+  "seriesTitle": "A Silent Voice",
+  "seriesTitleAlt": [
+    "Koe no Katachi",
+    "The Shape of Voice",
+    "A Voz do Silêncio",
+    "A Forma da Voz",
+    "Kształt twojego głosu",
+    "Sessizliğin Sesi",
+    "声之形",
+    "Форма голоса",
+    "Němý hlas"
+  ],
+  "anilistId": 85135,
+  "mangafireUrl": "https://mangafire.to/manga/a-silent-voicee.7p56",
+  "mangafireId": "a-silent-voicee.7p56",
+  "author": "Yoshitoki Ooima",
+  "studio": "",
+  "genres": [
+    "Drama",
+    "Romance",
+    "Shounen",
+    "School",
+    "Slice of Life"
+  ],
+  "status": "COMPLETED",
+  "publishedYearStart": 2013,
+  "publishedYearEnd": 2014,
+  "mangazine": "Shounen Magazine (Weekly)",
+  "malScoreRaw": 8.86,
+  "scrapedAt": "2026-05-23T06:05:35Z",
+  "source": "mangafire_ingest.py v1",
+  "notes": "",
+  "synopsis": "Shouya Ishida, a mischievous pupil in elementary school, becomes troubled by the transfer of a deaf student, Shouko Nishimiya. Despite Shouko's genuine attempts at friendship, Shouya and his friends find her bothersome and delight in ridiculing her. Their jibes soon escalate into constant attacks, but the teachers remain apathetic to the situation. When Shouko eventually transfers to another school, Shouya is accused of being behind the bullying, although he denies it. The entire class puts the blame on him, and he becomes the new victim of bullying. For years, Shouya is treated with contempt and disregard, becoming meek and reclusive. Five years pass, and now in high school, Shouya comes face-to-face with Shouko again. Still haunted by his past, Shouya is determined to confront the trauma he caused and make amends for his mistakes, even if he faces tough obstacles along the way.",
+  "volumes": [
+    {
+      "number": 1,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/9d8a/i/f/fd/fd6f0f9cbdf43445c2d79f2933205fe2.jpg",
+      "chapterStart": "1",
+      "chapterEnd": "5"
+    },
+    {
+      "number": 2,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/fb01/i/1/18/18b7868de2bf296ccc217ed960016e7d.jpg",
+      "chapterStart": "6",
+      "chapterEnd": "14"
+    },
+    {
+      "number": 3,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/4957/i/3/3e/3e1e8702eec843ab659d6b5992d0657d.jpg",
+      "chapterStart": "15",
+      "chapterEnd": "23"
+    },
+    {
+      "number": 4,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/7a19/i/b/bc/bc60451d71171eaf96f31c66f2745576.jpg",
+      "chapterStart": "24",
+      "chapterEnd": "32.5"
+    },
+    {
+      "number": 5,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/397e/i/6/6e/6e1f94b84c550947b3ac1011010dfdc4.jpg",
+      "chapterStart": "33",
+      "chapterEnd": "42"
+    },
+    {
+      "number": 6,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/2600/i/b/b6/b61fe948d8a1aeb93a38d1807d5018ee.jpg",
+      "chapterStart": "43",
+      "chapterEnd": "52"
+    },
+    {
+      "number": 7,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/fedb/i/e/e8/e8240a13040f20ab11562bb4426bf31b.jpg",
+      "chapterStart": "53",
+      "chapterEnd": "62"
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "seriesId": "frieren-beyond-journey-s-end",
+  "seriesTitle": "Frieren: Beyond Journey’s End",
+  "seriesTitleAlt": [
+    "Sousou no Frieren",
+    "Frieren at the Funeral",
+    "장송의 프리렌",
+    "Frieren: Oltre la Fine del Viaggio",
+    "คำอธิษฐานในวันที่จากลา Frieren",
+    "Frieren e a Jornada para o Além",
+    "Frieren – Nach dem Ende der Reise",
+    "葬送的芙莉蓮",
+    "Frieren After \"The End\"",
+    "Frieren: Remnants of the Departed",
+    "Frieren"
+  ],
+  "anilistId": 118586,
+  "mangafireUrl": "https://mangafire.to/manga/sousou-no-frierenn.2v70",
+  "mangafireId": "sousou-no-frierenn.2v70",
+  "author": "Kanehito Yamada, Tsukasa Abe",
+  "studio": "",
+  "genres": [
+    "Drama",
+    "Shounen",
+    "Demons",
+    "Adventure",
+    "Fantasy",
+    "Iyashikei",
+    "Magic"
+  ],
+  "status": "ON_HIATUS",
+  "publishedYearStart": 2020,
+  "publishedYearEnd": null,
+  "mangazine": "Shounen Sunday",
+  "malScoreRaw": 8.61,
+  "scrapedAt": "2026-05-23T06:05:41Z",
+  "source": "mangafire_ingest.py v1",
+  "notes": "",
+  "synopsis": "Although the adventure has ended, an elf mage has only just started comprehending the true essence of living. After successfully defeating the Demon King alongside her brave companions, Frieren, the elf mage enters a serene phase of her life. However, being an elf, she will outlast all her former party members who are mortal. Coming to terms with their mortality proves challenging; how does one find contentment in their own existence? Can they comprehend what humans' lives mean? Frieren embarks on a fresh expedition to find the answers. Additional Information: - This work attained the Grand Prize at the 14th Manga Taisho Awards. - The book was shortlisted for the 25th Annual Tezuka Osamu Cultural Prize. - It placed third at the 7th Annual Next Manga Award.",
+  "volumes": [
+    {
+      "number": 1,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c9fa/i/0/0a/0aa6477b540a437409fc05d2355433b4.jpg",
+      "chapterStart": "1",
+      "chapterEnd": "7"
+    },
+    {
+      "number": 2,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/d6c7/i/2/2e/2e1ca444d0ade5ddce0029621f5ac214.jpg",
+      "chapterStart": "8",
+      "chapterEnd": "17"
+    },
+    {
+      "number": 3,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/fa8a/i/f/f1/f1348f236e681809d0efaad8761fc7d6.jpg",
+      "chapterStart": "18",
+      "chapterEnd": "27"
+    },
+    {
+      "number": 4,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/f92d/i/5/50/50e46ce2d9933c9213f02d31b41f71c4.jpg",
+      "chapterStart": "28",
+      "chapterEnd": "37"
+    },
+    {
+      "number": 5,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/f285/i/8/8c/8c5c157d7f22d468a2435dbfb0a2cdf7.jpg",
+      "chapterStart": "38",
+      "chapterEnd": "47"
+    },
+    {
+      "number": 6,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/2f24/i/e/e8/e885690b66728873528348b6155c55ed.jpg",
+      "chapterStart": "48",
+      "chapterEnd": "57"
+    },
+    {
+      "number": 7,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/d3d0/i/5/5f/5fd0e5d8aa5b9dfb89d96f6c1a680009.jpg",
+      "chapterStart": "58",
+      "chapterEnd": "67"
+    },
+    {
+      "number": 8,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/03a6/i/d/d0/d05f144d95192de107cb501964df4fb6.jpg",
+      "chapterStart": "68",
+      "chapterEnd": "77"
+    },
+    {
+      "number": 9,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/12bb/i/4/47/47dba7044ac0f4df4be5e924c0555c90.jpg",
+      "chapterStart": "78",
+      "chapterEnd": "87"
+    },
+    {
+      "number": 10,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/e094/i/a/a7/a7a83bdc12e6cbef08e3786b475a1db0.jpg",
+      "chapterStart": "88",
+      "chapterEnd": "97"
+    },
+    {
+      "number": 11,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/767f/i/5/54/50210e48f134f4a0d1eb8c08e672faa5.jpg",
+      "chapterStart": "98",
+      "chapterEnd": "107"
+    },
+    {
+      "number": 12,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/5410/i/9/1a/ef4ba7a1a64bdb33af2b9bd14b800c6e.jpg",
+      "chapterStart": "108",
+      "chapterEnd": "117"
+    },
+    {
+      "number": 13,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/f3f9/i/7/99/bdb227604b14f26368a5f163bc1cc544.jpg",
+      "chapterStart": "118",
+      "chapterEnd": "127"
+    },
+    {
+      "number": 14,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/3fb6/i/1/de/41161fb22e21e3fc4f9139d35d14bb71.jpg",
+      "chapterStart": "128",
+      "chapterEnd": "137"
+    },
+    {
+      "number": 15,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/fa31/i/0/66/4696a86f1518fb9c4c95aff37c19497d.jpg",
+      "chapterStart": "138",
+      "chapterEnd": "145"
+    }
+  ]
+}

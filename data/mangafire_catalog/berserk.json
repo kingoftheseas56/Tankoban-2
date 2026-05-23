@@ -1,0 +1,399 @@
+{
+  "seriesId": "berserk",
+  "seriesTitle": "Berserk",
+  "seriesTitleAlt": [
+    "بيرسيرك",
+    "Beruseruku",
+    "Берсерк",
+    "ברזרק",
+    "برزرک",
+    "เบอร์เซิร์ก",
+    "烙印勇士",
+    "烙印战士",
+    "베르세르크",
+    "Berserk Max",
+    "烙印戰士"
+  ],
+  "anilistId": 30002,
+  "mangafireUrl": "https://mangafire.to/manga/berserkk.m2vv",
+  "mangafireId": "berserkk.m2vv",
+  "author": "Kentarou Miura",
+  "studio": "Studio Gaga",
+  "genres": [
+    "Action",
+    "Drama",
+    "Super Power",
+    "Supernatural",
+    "Demons",
+    "Adventure",
+    "Fantasy",
+    "Horror",
+    "Military",
+    "Psychological",
+    "Seinen",
+    "Magic"
+  ],
+  "status": "RELEASING",
+  "publishedYearStart": 1989,
+  "publishedYearEnd": null,
+  "mangazine": "Young Animal",
+  "malScoreRaw": 9.47,
+  "scrapedAt": "2026-05-23T06:05:35Z",
+  "source": "mangafire_ingest.py v1",
+  "notes": "",
+  "synopsis": "The \"Black Swordsman,\" once a mercenary, now seeks revenge. Despite a turbulent childhood, Guts finally trusts and respects someone, only to have them betray him by taking away everything that matters for their own selfish desires. Branded for death, Guts now spends his days being chased by demonic entities. With his unyielding will, imposing strength, and a monstrous sword, Guts embarks on a harrowing journey of misfortune, undeterred by death itself. His sole goal is to take the head of the one who robbed him and his loved ones of their humanity. Additionally, Volume 14 includes the one-shot entitled \"Berserk: The Prototype.\"",
+  "volumes": [
+    {
+      "number": 1,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/b17b/i/e/e7/e77086f55a01dbfdb1549356b8f21b14.jpg",
+      "chapterStart": "0.01",
+      "chapterEnd": "0.03"
+    },
+    {
+      "number": 2,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/de4b/i/7/70/708ebea710c5f6a96eb53e4a2508634e.jpg",
+      "chapterStart": "0.04",
+      "chapterEnd": "0.05"
+    },
+    {
+      "number": 3,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/4e0c/i/0/0c/0cadaf8220af5b83936387511e1e30c2.jpg",
+      "chapterStart": "0.06",
+      "chapterEnd": "0.09"
+    },
+    {
+      "number": 4,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/902b/i/7/7c/7cb558c97793f4f1a4327a2f5102aee9.jpg",
+      "chapterStart": "0",
+      "chapterEnd": "0.5"
+    },
+    {
+      "number": 5,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/2c6b/i/a/a2/a270b69d9aabaa79ca3bf6b9b6fe3fde.jpg",
+      "chapterStart": "0.16",
+      "chapterEnd": "6"
+    },
+    {
+      "number": 6,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/46d9/i/2/24/24aab6cfdee8b1b960d8c62561767221.jpg",
+      "chapterStart": "7",
+      "chapterEnd": "16"
+    },
+    {
+      "number": 7,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/fb4a/i/4/47/47ff4ded262a2b6abf6b47ad630a7dae.jpg",
+      "chapterStart": "17",
+      "chapterEnd": "26"
+    },
+    {
+      "number": 8,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/271b/i/4/46/46ab1d400ccf78af8b8f45920bbba1b5.jpg",
+      "chapterStart": "27",
+      "chapterEnd": "36"
+    },
+    {
+      "number": 9,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/9800/i/8/8a/8aec882174ef8615ea9978a902d4d9f8.jpg",
+      "chapterStart": "37",
+      "chapterEnd": "47"
+    },
+    {
+      "number": 10,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/ff32/i/f/f8/f8c1bc85a6a4a015bb0285181bed47b3.jpg",
+      "chapterStart": "48",
+      "chapterEnd": "58"
+    },
+    {
+      "number": 11,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/5b22/i/4/44/44d254373dc3f9a7bc20da8bea1a3825.jpg",
+      "chapterStart": "59",
+      "chapterEnd": "69"
+    },
+    {
+      "number": 12,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/4b5b/i/9/94/9469dd1ee2ee4214f7b7feba40272a11.jpg",
+      "chapterStart": "70",
+      "chapterEnd": "79"
+    },
+    {
+      "number": 13,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/1e9a/i/1/10/105e630fe17a0aa1e7f9aab68a8363b6.jpg",
+      "chapterStart": "80",
+      "chapterEnd": "91"
+    },
+    {
+      "number": 14,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/5b32/i/b/bb/bbe7e8c0a1903ccfecb5fd87f973a341.jpg",
+      "chapterStart": "92",
+      "chapterEnd": "114.5"
+    },
+    {
+      "number": 15,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/6304/i/5/59/59f4d5bb645baf90eb909672c281ad62.jpg",
+      "chapterStart": "100",
+      "chapterEnd": "110"
+    },
+    {
+      "number": 16,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/9a75/i/6/6a/6a9efb9d8d479819db49324a0462793c.jpg",
+      "chapterStart": "111",
+      "chapterEnd": "121"
+    },
+    {
+      "number": 17,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/d79e/i/e/e6/e617aa567c1d59d3b45a806f5223dd5d.jpg",
+      "chapterStart": "122",
+      "chapterEnd": "132"
+    },
+    {
+      "number": 18,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c7fa/i/5/54/54bb74aa5afa2e99603017fd5e54a184.jpg",
+      "chapterStart": "133",
+      "chapterEnd": "143"
+    },
+    {
+      "number": 19,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/596f/i/6/63/637d8c8f0bc256fbd7fcf750d28f0038.jpg",
+      "chapterStart": "144",
+      "chapterEnd": "154"
+    },
+    {
+      "number": 20,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/9278/i/6/66/66d460f55098419adfb32fb848c29de0.jpg",
+      "chapterStart": "155",
+      "chapterEnd": "165"
+    },
+    {
+      "number": 21,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/e530/i/9/9e/9eb7d448a6c636fa0b5d602506016018.jpg",
+      "chapterStart": "166",
+      "chapterEnd": "176"
+    },
+    {
+      "number": 22,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/3896/i/0/0e/0ea488cc7102d65ecb3cd6b07fdfd4e1.jpg",
+      "chapterStart": "177",
+      "chapterEnd": "186"
+    },
+    {
+      "number": 23,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/380a/i/6/6a/6a26f5b9c2986416cf10df6df1d7cf96.jpg",
+      "chapterStart": "187",
+      "chapterEnd": "196"
+    },
+    {
+      "number": 24,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/a431/i/5/5f/5f32cd41613ae53883a1197501707c41.jpg",
+      "chapterStart": "197",
+      "chapterEnd": "206"
+    },
+    {
+      "number": 25,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/3bf0/i/3/32/32c722f88da22f9883d826397f5cac01.jpg",
+      "chapterStart": "207",
+      "chapterEnd": "216"
+    },
+    {
+      "number": 26,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/70a6/i/e/e1/e11f07bfbe0aba6dbdddd15ea16b47de.jpg",
+      "chapterStart": "217",
+      "chapterEnd": "226"
+    },
+    {
+      "number": 27,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/1745/i/f/f8/f89e8d89495dc6a782dc69eb11bc8a51.jpg",
+      "chapterStart": "227",
+      "chapterEnd": "236"
+    },
+    {
+      "number": 28,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/3209/i/8/86/86992a2e446adca0f9c07c0ff7f0819f.jpg",
+      "chapterStart": "237",
+      "chapterEnd": "246"
+    },
+    {
+      "number": 29,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/d152/i/3/39/39a19e3bc55c9d9b0f080a580fff6004.jpg",
+      "chapterStart": "247",
+      "chapterEnd": "256"
+    },
+    {
+      "number": 30,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/e882/i/6/62/62464ddb7d73a6b79e135f7c74fa7cf1.jpg",
+      "chapterStart": "257",
+      "chapterEnd": "266"
+    },
+    {
+      "number": 31,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/753e/i/c/c8/c8da2444e4a4c7b5d73a84855e3b429e.jpg",
+      "chapterStart": "267",
+      "chapterEnd": "276"
+    },
+    {
+      "number": 32,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/6abd/i/b/b9/b946b03f62c751eac12f654c83a7dd92.jpg",
+      "chapterStart": "277",
+      "chapterEnd": "286"
+    },
+    {
+      "number": 33,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c427/i/7/7d/7d245ac6caeced9a1382fe3de9e521a1.jpg",
+      "chapterStart": "287",
+      "chapterEnd": "296"
+    },
+    {
+      "number": 34,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/ebb4/i/a/a4/a48211380488a15e9be9740535ff3166.jpg",
+      "chapterStart": "297",
+      "chapterEnd": "306"
+    },
+    {
+      "number": 35,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/abba/i/e/e2/e21b10eb02030095752ca868c7f52c11.jpg",
+      "chapterStart": "307",
+      "chapterEnd": "315"
+    },
+    {
+      "number": 36,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/da9d/i/6/6e/6ef6325875d01e20f9ab021f6fb607ce.jpg",
+      "chapterStart": "316",
+      "chapterEnd": "324"
+    },
+    {
+      "number": 37,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/7255/i/5/5b/5b8e4d398015ebe5e0c76290154e6cbe.jpg",
+      "chapterStart": "325",
+      "chapterEnd": "333"
+    },
+    {
+      "number": 38,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/dfbe/i/c/c9/c99b50443ef66b3c56dec20139d7af3d.jpg",
+      "chapterStart": "334",
+      "chapterEnd": "342"
+    },
+    {
+      "number": 39,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/4549/i/d/dd/dd497a9c04213f031653fdd748a0bd17.jpg",
+      "chapterStart": "343",
+      "chapterEnd": "350"
+    },
+    {
+      "number": 40,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c4b7/i/3/36/36c3a11bf0537c2bb52080ec01f8c40b.jpg",
+      "chapterStart": "351",
+      "chapterEnd": "357"
+    },
+    {
+      "number": 41,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c356/i/7/7c/7c1d852e50827f5d2e8438fe7c94fdf4.jpg",
+      "chapterStart": "358",
+      "chapterEnd": "364"
+    },
+    {
+      "number": 42,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/925f/i/f/56/1d68277fcbeaf66f906bb89520b8c960.jpg",
+      "chapterStart": "365",
+      "chapterEnd": "373"
+    },
+    {
+      "number": 43,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "",
+      "chapterStart": "374",
+      "chapterEnd": "382"
+    },
+    {
+      "number": 44,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "",
+      "chapterStart": "383",
+      "chapterEnd": "383"
+    }
+  ]
+}

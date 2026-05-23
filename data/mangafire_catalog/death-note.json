@@ -1,0 +1,143 @@
+{
+  "seriesId": "death-note",
+  "seriesTitle": "Death Note",
+  "seriesTitleAlt": [
+    "DEATH NOTE",
+    "デスノート",
+    "Ölüm Defteri",
+    "Death Note - Zápisník smrti",
+    "Beležnica smrti",
+    "Τετράδιο θανάτου",
+    "Death Note: Тетрадка на смъртта"
+  ],
+  "anilistId": 30021,
+  "mangafireUrl": "https://mangafire.to/manga/death-notee.p46",
+  "mangafireId": "death-notee.p46",
+  "author": "Takeshi Obata, Tsugumi Ohba",
+  "studio": "",
+  "genres": [
+    "Drama",
+    "Mystery",
+    "Shounen",
+    "Suspense",
+    "Thriller",
+    "Supernatural",
+    "Demons",
+    "Psychological"
+  ],
+  "status": "COMPLETED",
+  "publishedYearStart": 2003,
+  "publishedYearEnd": 2006,
+  "mangazine": "Shounen Jump (Weekly)",
+  "malScoreRaw": 8.7,
+  "scrapedAt": "2026-05-23T06:05:42Z",
+  "source": "mangafire_ingest.py v1",
+  "notes": "",
+  "synopsis": "Ryuk, a god of death, throws his Death Note into the human world out of pure amusement. Light Yagami, a smart high school student from Japan, finds the note and reads a menacing message: anyone whose name is written in it will die. Light finds it fascinating and tests its power by writing a criminal's name, who dies soon after. Understanding the Death Note's immense potential, Light begins to commit hideous murders under the name \"Kira.\" He declares that he will eradicate criminals and shape a flawless world with no wrongdoing. But the authorities catch on, enlisting the help of L, a brilliant detective, to reveal the culprit. The gripping story of Death Note follows the intense clash between Light and L, as they confront each other using their sharp minds, shaping the future of the world.",
+  "volumes": [
+    {
+      "number": 1,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/9786/i/0/27/71a861768a3e3c9861d1b78c3aaccfec.jpg",
+      "chapterStart": "1",
+      "chapterEnd": "7"
+    },
+    {
+      "number": 2,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/414b/i/8/57/558145a6e74db74fbc2c4b4de33903fb.jpg",
+      "chapterStart": "8",
+      "chapterEnd": "16"
+    },
+    {
+      "number": 3,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/59bb/i/2/3c/b5aa2649f47d610a99f63dc693b0e59a.jpg",
+      "chapterStart": "17",
+      "chapterEnd": "25"
+    },
+    {
+      "number": 4,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/18c0/i/0/43/108adfb0fcb339d8a999ff364aa75956.jpg",
+      "chapterStart": "26",
+      "chapterEnd": "34"
+    },
+    {
+      "number": 5,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/1de6/i/0/85/6ef98a5b8309c49081f637ce47a1aaa9.jpg",
+      "chapterStart": "35",
+      "chapterEnd": "43"
+    },
+    {
+      "number": 6,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/bf52/i/c/38/0fb2a5eee2b720f66a9cb8d38e0eae32.jpg",
+      "chapterStart": "44",
+      "chapterEnd": "52"
+    },
+    {
+      "number": 7,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/f60a/i/b/45/fb718b03141435420633fac51b5e378b.jpg",
+      "chapterStart": "53",
+      "chapterEnd": "61"
+    },
+    {
+      "number": 8,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/ba1d/i/f/22/eba35e3ed0e34d987e8aa773d955e40f.jpg",
+      "chapterStart": "62",
+      "chapterEnd": "70"
+    },
+    {
+      "number": 9,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c76d/i/4/c2/e13c43756ad8a19811b027da7198f341.jpg",
+      "chapterStart": "71",
+      "chapterEnd": "79"
+    },
+    {
+      "number": 10,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/c692/i/0/34/bd9a9946ab16536f42ada810960e5a1c.jpg",
+      "chapterStart": "80",
+      "chapterEnd": "88"
+    },
+    {
+      "number": 11,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/e260/i/9/b1/f646f6e4992cb72121bf4f349e5a1bf0.jpg",
+      "chapterStart": "89",
+      "chapterEnd": "98"
+    },
+    {
+      "number": 12,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/0a36/i/9/40/09fd96503e4db2157da832cf6d034e07.jpg",
+      "chapterStart": "99",
+      "chapterEnd": "108"
+    },
+    {
+      "number": 13,
+      "title": "",
+      "synopsis": "",
+      "coverUrl": "https://static.mfcdn.nl/5e94/i/f/b6/95a9c4fd9e739a78fef874629f4836ed.jpg",
+      "chapterStart": "109",
+      "chapterEnd": "110.5"
+    }
+  ]
+}
