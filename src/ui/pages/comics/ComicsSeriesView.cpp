@@ -875,11 +875,12 @@ void ComicsSeriesView::showCatalogSeries(const QString& seriesId,
                                           int            anilistId)
 {
     // Pre-set the one-shot override so showSeries(MediaPreview) picks it up.
-    if (anilistId <= 0) {
-        m_pendingCatalogSeriesKey = QStringLiteral("mangafire:%1").arg(seriesId);
-    } else {
-        m_pendingCatalogSeriesKey.clear();
-    }
+    // Always tag as "mangafire:<slug>" regardless of anilistId — this lets
+    // renderDetail (the AniList async response handler) skip its populateVolumeRows
+    // call when the series was opened from the local catalog, so AniList's
+    // chapter-range estimate + series-cover-for-every-row don't overwrite the
+    // accurate per-volume MangaFire data already loaded by populateVolumeRowsFromCatalog.
+    m_pendingCatalogSeriesKey = QStringLiteral("mangafire:%1").arg(seriesId);
 
     tankoban::manga::anilist::MediaPreview preview;
     preview.anilistId = anilistId;
@@ -1023,7 +1024,14 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
     }
     loadHeroCoverUrl(detail.preview.coverFullUrl);
 
-    populateVolumeRows(anilist::AniListVolumeMapper::map(detail), &detail);
+    // Skip AniList volume-row population when MangaFire catalog already populated
+    // this series via populateVolumeRowsFromCatalog (catalog-tile entry path).
+    // AniList's per-volume data is an estimate (chapters/volumeCount even split,
+    // single series cover for every row) which would clobber the accurate per-volume
+    // covers + chapter ranges loaded from the catalog JSON.
+    if (!m_currentSeriesKey.startsWith(QStringLiteral("mangafire:"))) {
+        populateVolumeRows(anilist::AniListVolumeMapper::map(detail), &detail);
+    }
 
     // Phase 8a Wave 2: banner slot exists only for a real AniList banner.
     // Never stretch the portrait cover into this landscape band.
@@ -1179,6 +1187,16 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         m_volumeTiles.append(tile);
         m_volumeTilesByVolumeNumber.insert(row.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
+
+        // Phase B regression fix 2026-05-23: populateVolumeRows used to rely on
+        // paintVolumeCovers / paintVolumeCoversAsFallback (BookWalker-driven)
+        // to trigger the actual cover fetch. Phase B deleted those paths along
+        // with the BookWalker resolver; without this line the AniList-path
+        // VolumeTiles never get their cover labels painted. Mirrors line ~1322
+        // in populateVolumeRowsFromCatalog.
+        if (!resolvedCoverUrl.isEmpty()) {
+            loadCoverUrlForVolume(resolvedCoverUrl, row.volumeNumber);
+        }
     }
 
     // next-unread: proxy for "unread" is no resolved cbz path. Walk the
@@ -1337,6 +1355,16 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
 
 void ComicsSeriesView::setVolumeRows(const QList<anilist::VolumeRow>& rows)
 {
+    // Same guard as renderDetail: catalog-source series (mangafire:<slug>) have
+    // their volumes populated by populateVolumeRowsFromCatalog with accurate
+    // per-volume MangaFire data. The AniList-derived rows (estimated chapter
+    // ranges, series-cover-for-every-row) would clobber that. The clobber is
+    // most visible on ongoing series with many volumes (One Piece 117, Berserk
+    // 44, Dandadan 24) because their AniList metadata resolver fires delayed
+    // after the catalog has already painted.
+    if (m_currentSeriesKey.startsWith(QStringLiteral("mangafire:"))) {
+        return;
+    }
     std::optional<anilist::MediaDetail> detail;
     if (m_cache && m_currentAnilistId > 0) {
         detail = m_cache->get(m_currentAnilistId);
