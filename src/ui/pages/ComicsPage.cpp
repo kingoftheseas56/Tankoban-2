@@ -2453,6 +2453,8 @@ void ComicsPage::onDetailBack()
     if (m_enteredDetailFrom == Mode::SearchResults && m_searchTakeover) {
         m_mode = Mode::SearchResults;
         m_stack->setCurrentWidget(m_searchTakeover);
+    } else if (m_enteredDetailFrom == Mode::Catalog) {
+        showCatalogMode();
     } else {
         showLibraryMode();
     }
