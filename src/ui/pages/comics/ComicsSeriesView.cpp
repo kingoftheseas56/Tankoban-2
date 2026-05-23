@@ -710,6 +710,7 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     m_currentAnilistId   = preview.anilistId;
     m_currentSeriesTitle = preview.title;
     m_currentVolumeRows.clear();
+    m_lastAppliedCoverUrlByVolume.clear();  // Fix 2: clear stale cover map at every series-change
     m_pendingMediaLoads = 0;   // Pass 3: reset overlay-hide counter for new series
     if (m_sourcesPanel) m_sourcesPanel->clear();
 
@@ -761,7 +762,14 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     // AniList-only path: synthesize a "anilist:<id>" key so the stale-guard
     // comparison in the resolver slots uses the same seriesKey idiom as the
     // WeebCentral path.
-    m_currentSeriesKey          = QStringLiteral("anilist:%1").arg(preview.anilistId);
+    // Fix 3: honor a catalog-slug key if showCatalogSeries() pre-set one.
+    // This prevents zero-AniList catalog tiles from collapsing to "anilist:0".
+    if (!m_pendingCatalogSeriesKey.isEmpty()) {
+        m_currentSeriesKey = m_pendingCatalogSeriesKey;
+        m_pendingCatalogSeriesKey.clear();  // one-shot consume
+    } else {
+        m_currentSeriesKey = QStringLiteral("anilist:%1").arg(preview.anilistId);
+    }
     m_currentResolvingSeriesKey = m_currentSeriesKey;
     showLoadingOverlay();
     if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
@@ -819,6 +827,7 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
     m_currentSeriesKey   = wc.source + QStringLiteral(":") + wc.id;
     m_currentSeriesTitle = wc.title;
     m_currentVolumeRows.clear();
+    m_lastAppliedCoverUrlByVolume.clear();  // Fix 2: clear stale cover map at every series-change
     m_pendingMediaLoads = 0;   // Pass 3: reset overlay-hide counter for new series
     if (m_sourcesPanel) m_sourcesPanel->clear();
 
@@ -878,6 +887,25 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
     } else {
         qWarning("ComicsSeriesView::showSeries(MangaResult): no source registry set");
     }
+}
+
+// Fix 3: catalog-tile entry point that sets a slug-based key when AniList id
+// is unavailable, preventing all zero-id catalog series from sharing "anilist:0".
+void ComicsSeriesView::showCatalogSeries(const QString& seriesId,
+                                          const QString& title,
+                                          int            anilistId)
+{
+    // Pre-set the one-shot override so showSeries(MediaPreview) picks it up.
+    if (anilistId <= 0) {
+        m_pendingCatalogSeriesKey = QStringLiteral("fandom_catalog:%1").arg(seriesId);
+    } else {
+        m_pendingCatalogSeriesKey.clear();
+    }
+
+    tankoban::manga::anilist::MediaPreview preview;
+    preview.anilistId = anilistId;
+    preview.title     = title;
+    showSeries(preview);
 }
 
 void ComicsSeriesView::clearView()
@@ -1368,6 +1396,15 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
         m_volumeTiles.append(tile);
         m_volumeTilesByVolumeNumber.insert(vol.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
+
+        // Fix 4: paint the catalog's own cover URL for this volume. Removes the
+        // dependency on the BookWalker resolver for catalog rows and prevents the
+        // stale cross-series pixmap leak. The async fetch has a stale-series guard
+        // (m_currentSeriesKey) which now correctly differentiates catalog slugs
+        // after Fix 3 sets "fandom_catalog:<slug>" as the key.
+        if (!data.coverUrl.isEmpty()) {
+            loadCoverUrlForVolume(data.coverUrl, vol.volumeNumber);
+        }
     }
 
     // Cache current identity for downstream slots (existing behavior).
@@ -1994,10 +2031,18 @@ void ComicsSeriesView::setVolumeCoverFromDisk(const QString& seriesId, int volum
             if (ok && parsed != m_currentAnilistId) {
                 return;  // stale event for a different series
             }
-        } else {
-            // Unknown slug format — apply unconditionally (catalog-path; no
-            // per-view catalog-id map maintained in v1).
+        } else if (m_currentSeriesKey.startsWith(QStringLiteral("fandom_catalog:"))) {
+            // Fix 5: catalog-keyed series — compare incoming slug against the
+            // current catalog slug so late provider events from a prior series
+            // don't paint over the currently displayed catalog series.
+            const QString currentSlug = m_currentSeriesKey.mid(
+                QStringLiteral("fandom_catalog:").size());
+            if (!seriesId.isEmpty() && seriesId != currentSlug) {
+                return;  // stale disk-cover event for a different catalog series
+            }
         }
+        // Other unknown slug formats: apply unconditionally (v1 behaviour for
+        // non-catalog, non-anilist slug spaces).
     }
 
     if (coverPath.isEmpty() || !QFileInfo(coverPath).exists()) return;

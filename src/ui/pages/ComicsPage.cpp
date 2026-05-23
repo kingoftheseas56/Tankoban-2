@@ -2374,8 +2374,6 @@ void ComicsPage::onCatalogTileActivated(const QString& seriesId,
     // recordNavEvent captures the OLD Catalog state and pushes a fresh
     // TankoyomiDetail entry — keeps Back chevron enabled (same discipline
     // as openSeriesByPreview / PHASE 0 NAV CONTRACT RESTORE 2026-05-17).
-    Q_UNUSED(seriesId)  // carried in blob for future restore-layer use
-
     if (!m_inNavRestore) {
         QJsonObject blob;
         blob[QStringLiteral("anilistId")]   = anilistId;
@@ -2384,15 +2382,14 @@ void ComicsPage::onCatalogTileActivated(const QString& seriesId,
         emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"), seriesTitle, blob));
     }
 
-    tankoban::manga::anilist::MediaPreview preview;
-    preview.anilistId = anilistId;
-    preview.title     = seriesTitle;
-
     m_enteredDetailFrom        = Mode::Catalog;
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = anilistId;
     m_currentDetailSeriesTitle = seriesTitle;
-    m_tyVolumeSeriesView->showSeries(preview);
+    // Fix 3: use showCatalogSeries so zero-AniList entries get a slug-based
+    // resolver key ("fandom_catalog:<seriesId>") rather than collapsing to
+    // "anilist:0" for every catalog tile.
+    m_tyVolumeSeriesView->showCatalogSeries(seriesId, seriesTitle, anilistId);
     dispatchFandomResolve(fandomSeriesSlugFromTitle(seriesTitle),
                           /*qidHint*/QString(),
                           /*titleHint*/seriesTitle);

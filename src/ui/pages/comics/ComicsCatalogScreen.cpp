@@ -175,8 +175,10 @@ void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& 
     tile->setBadges(/*progressFraction=*/0.0, /*pageBadge=*/QString(),
                     /*countBadge=*/subtitle, /*status=*/QString());
     tile->setProvenance(QStringLiteral("Fandom"));
-    connect(tile, &TileCard::clicked, this, [this, tile, seriesId = catalog.seriesId, title]() {
-        emit seriesActivated(seriesId, title, 0);
+    connect(tile, &TileCard::clicked, this,
+            [this, tile, seriesId = catalog.seriesId, title,
+             anilistId = catalog.anilistId]() {
+        emit seriesActivated(seriesId, title, anilistId);
     });
     m_tiles.append(tile);
 

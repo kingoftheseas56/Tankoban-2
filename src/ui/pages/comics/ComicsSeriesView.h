@@ -84,6 +84,14 @@ public:
     // consult the cache first, then fire a background refetch.
     void showSeries(const anilist::MediaPreview& preview);
 
+    // Fix 3: catalog-tile entry point. Wraps showSeries(MediaPreview) but
+    // overrides the resolver/cache key to "fandom_catalog:<seriesId>" when
+    // anilistId <= 0, preventing identity collapse to "anilist:0" for every
+    // zero-AniList catalog series.
+    void showCatalogSeries(const QString& seriesId,
+                           const QString& title,
+                           int            anilistId);
+
     // Overload for WeebCentral-sourced series (WEEBCENTRAL_IDENTITY_PIVOT Task 8).
     // seriesKey is derived from wc.source + ":" + wc.id; drives the cover
     // resolver and the detail fetch via MangaSourceRegistry.
@@ -367,6 +375,11 @@ private:
     // "weebcentral:01J76XYAVE3FZ3YMHMTKEZGXM4").
     QString m_currentSeriesKey;           // identity of the currently displayed series
     QString m_currentResolvingSeriesKey;  // key stamped when resolver was fired; cleared on clearView
+
+    // Fix 3: one-shot override supplied by showCatalogSeries() so that
+    // zero-AniList catalog opens don't collapse to "anilist:0". Consumed and
+    // cleared by showSeries(MediaPreview) on the same call. Empty = no override.
+    QString m_pendingCatalogSeriesKey;
 
     MangaSourceRegistry* m_sourceRegistry = nullptr;  // non-owning; set by ComicsPage
 };

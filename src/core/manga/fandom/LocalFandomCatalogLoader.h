@@ -12,8 +12,7 @@
 //
 // Schema mapping (Layer-1 JSON -> FandomCatalog):
 //   seriesId               -> catalog.seriesId
-//   anilistId              -> NOT carried in FandomCatalog; LocalFandomCatalogIndex
-//                            preserves it externally for lookup
+//   anilistId              -> catalog.anilistId (0 when absent)
 //   fandomUrl              -> split into catalog.fandomWikiId (subdomain) +
 //                            catalog.fandomVolumePath (path with leading /)
 //   scrapedAt              -> catalog.fetchedAt (ISO 8601 UTC)

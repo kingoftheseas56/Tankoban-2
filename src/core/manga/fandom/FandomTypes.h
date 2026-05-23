@@ -83,6 +83,10 @@ struct FandomCatalog {
     QList<FandomVolume> volumes;
     QDateTime           fetchedAt;                      // for 7d TTL
     int                 schemaVersion = kFandomCatalogSchemaVersion;
+    // AniList id from the JSON "anilistId" field. 0 when not present or when
+    // the series has no AniList entry. Used by ComicsCatalogScreen::addTile
+    // to emit a real resolver key instead of collapsing all tiles to "anilist:0".
+    int                 anilistId     = 0;
     bool                isValid() const { return !seriesId.isEmpty() && !volumes.isEmpty(); }
 };
 

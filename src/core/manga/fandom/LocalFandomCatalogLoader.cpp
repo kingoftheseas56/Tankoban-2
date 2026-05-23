@@ -75,6 +75,7 @@ std::optional<FandomCatalog> LocalFandomCatalogLoader::loadFromFile(const QStrin
     FandomCatalog cat;
     cat.seriesId    = seriesId;
     cat.seriesTitle = root.value(QStringLiteral("seriesTitle")).toString();
+    cat.anilistId   = root.value(QStringLiteral("anilistId")).toInt(0);  // Fix 1: carry through for cover-resolver keying
     cat.schemaVersion = kFandomCatalogSchemaVersion;
 
     const QString fandomUrl = root.value("fandomUrl").toString();
