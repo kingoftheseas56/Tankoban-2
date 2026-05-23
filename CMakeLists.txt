@@ -205,7 +205,6 @@ set(SOURCES
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
-    src/ui/pages/comics/ComicsCatalogScreen.cpp
     src/ui/pages/comics/VolumeTile.cpp
     src/ui/pages/comics/ComicsSeriesView.cpp
     src/ui/pages/comics/ComicsSourceCard.cpp

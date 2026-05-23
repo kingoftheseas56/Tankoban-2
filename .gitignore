@@ -23,7 +23,7 @@ out_agent-*/
 # wall-clock at 4 workers) to populate locally. The 10 pilot JSONs committed
 # at 8617616 stay tracked as test fixtures (gitignore doesn't untrack existing
 # tracked files); only NEW catalog JSONs get ignored.
-data/mangafire_catalog/*.json
+data/mangafire_catalog/
 
 # Sidecar build artifacts (post-migration 2026-04-15). Sources are tracked
 # under native_sidecar/; the build tree produced by build.ps1 is not.

@@ -52,9 +52,6 @@ namespace tankoban::manga {
         struct UnifiedSourceRow;
     }
 }
-namespace tankoban::ui::comics {
-    class ComicsCatalogScreen;
-}
 #include "core/manga/LocalMangaCatalogIndex.h"
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
@@ -146,10 +143,6 @@ private slots:
     // Phase 9 -- replaces the legacy ComicsTankoyomiDetailView).
     void showLibraryMode();
     void showSearchMode(const QString& query);
-    void showCatalogMode();
-    void onCatalogTileActivated(const QString& seriesId,
-                                const QString& seriesTitle,
-                                int            anilistId);
     // Tasks 9+10: signature changed from MediaPreview to MangaResult (WC pivot).
     void onSearchResultActivated(const MangaResult& result);
     // Phase 9: routes ComicsSeriesView::downloadDispatchRequested to either
@@ -381,10 +374,6 @@ private:
     // "comics/searchHistory" -- disjoint from "stream/searchHistory".
     QPushButton*     m_searchBtn               = nullptr;
     QWidget*         m_searchBusy              = nullptr;
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-22 — Catalog button mirrors
-    // StreamPage's catalog entry point. Opens ComicsCatalogScreen which
-    // renders one tile per JSON file under data/fandom_catalog/.
-    QPushButton*     m_catalogBtn              = nullptr;
     QFrame*          m_searchHistoryDropdown   = nullptr;
     QWidget*         m_searchHistoryList       = nullptr;
     QTimer*          m_searchHistoryHideTimer  = nullptr;
@@ -421,12 +410,6 @@ private:
     ComicsTankoyomiSearchWidget* m_searchTakeover = nullptr;
     MangaSourceRegistry*         m_sourceRegistry  = nullptr;
     QNetworkAccessManager*       m_nam             = nullptr;
-
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-22 — Catalog screen lazy-created
-    // on first button press; lives at m_stack index 4 (after Tankoyomi vol
-    // series view at index 3). Reads from data/mangafire_catalog/*.json via
-    // LocalMangaCatalogLoader.
-    tankoban::ui::comics::ComicsCatalogScreen* m_catalogScreen = nullptr;
 
     // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- legacy
     // ComicsTankoyomiDetailView REMOVED in favor of ComicsSeriesView
@@ -472,7 +455,7 @@ private:
     int m_currentDetailAnilistId = 0;
     QString m_currentDetailSeriesTitle;
 
-    enum class Mode { Library, SearchResults, TankoyomiDetail, Catalog };
+    enum class Mode { Library, SearchResults, TankoyomiDetail };
     Mode m_mode = Mode::Library;
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 52 —
     // tracks the mode the user was in immediately BEFORE entering the
