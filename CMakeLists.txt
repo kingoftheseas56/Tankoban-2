@@ -171,7 +171,9 @@ set(SOURCES
     src/core/manga/WeebCentralVolumePacker.cpp
     src/core/manga/ComicsPrePivotMigrator.cpp
     src/core/manga/TrustedUploaders.cpp
-    src/core/manga/FallbackChainResolver.cpp
+    src/core/manga/MangaCatalogTypes.cpp
+    src/core/manga/LocalMangaCatalogLoader.cpp
+    src/core/manga/LocalMangaCatalogIndex.cpp
     src/core/manga/anilist/AniListClient.cpp
     src/core/manga/anilist/AniListParser.cpp
     src/core/manga/anilist/AniListCache.cpp
@@ -181,21 +183,6 @@ set(SOURCES
     src/core/manga/mangaupdates/MangaUpdatesClient.cpp
     src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
     src/core/manga/mangaupdates/VolumeMetadataResolver.cpp
-    src/core/manga/bookwalker/BookWalkerClient.cpp
-    src/core/manga/bookwalker/BookWalkerCache.cpp
-    src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
-    src/core/manga/bookwalker/VolumeCoverAlignment.cpp
-    src/core/manga/bookwalker/VolumeCoverResolver.cpp
-    src/core/manga/fandom/FandomTypes.cpp
-    src/core/manga/fandom/WikiManifest.cpp
-    src/core/manga/fandom/WikiManifestRegistry.cpp
-    src/core/manga/fandom/FandomClient.cpp
-    src/core/manga/fandom/FandomCatalogCache.cpp
-    src/core/manga/fandom/FandomVolumeResolver.cpp
-    src/core/manga/fandom/LocalFandomCatalogLoader.cpp
-    src/core/manga/fandom/LocalFandomCatalogIndex.cpp
-    src/core/manga/fandom/extractors/TableExtractor.cpp
-    src/core/manga/fandom/extractors/InfoboxExtractor.cpp
     src/core/manga/wikidata/WikidataClient.cpp
     src/core/manga/wikidata/WikidataCache.cpp
     src/core/manga/wikipedia/WikipediaParser.cpp
@@ -871,26 +858,11 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
         tests/core/manga/test_trusted_uploaders.cpp
         src/core/manga/TrustedUploaders.cpp
-        tests/core/manga/bookwalker/test_bookwalker_series_page_parser.cpp
-        tests/core/manga/bookwalker/test_volume_cover_alignment.cpp
-        tests/core/manga/fandom/test_wiki_manifest.cpp
-        tests/core/manga/fandom/test_wiki_manifest_registry.cpp
-        tests/core/manga/fandom/test_table_extractor.cpp
-        tests/core/manga/fandom/test_table_extractor_death_note_covers.cpp
-        tests/core/manga/fandom/test_infobox_extractor.cpp
-        tests/core/manga/fandom/test_fandom_catalog_cache.cpp
-        tests/core/manga/fandom/test_local_fandom_catalog_loader.cpp
-        tests/core/manga/fandom/test_local_fandom_catalog_index.cpp
         tests/core/manga/wikidata/test_wikidata_cache.cpp
         tests/core/manga/wikipedia/test_wikipedia_resolver.cpp
-        src/core/manga/fandom/FandomTypes.cpp
-        src/core/manga/fandom/WikiManifest.cpp
-        src/core/manga/fandom/WikiManifestRegistry.cpp
-        src/core/manga/fandom/FandomCatalogCache.cpp
-        src/core/manga/fandom/LocalFandomCatalogLoader.cpp
-        src/core/manga/fandom/LocalFandomCatalogIndex.cpp
-        src/core/manga/fandom/extractors/TableExtractor.cpp
-        src/core/manga/fandom/extractors/InfoboxExtractor.cpp
+        src/core/manga/MangaCatalogTypes.cpp
+        src/core/manga/LocalMangaCatalogLoader.cpp
+        src/core/manga/LocalMangaCatalogIndex.cpp
         src/core/manga/wikidata/WikidataCache.cpp
         src/core/manga/wikipedia/WikipediaParser.cpp
         tests/core/PerModeNavControllerTest.cpp
@@ -908,8 +880,6 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/anilist/AniListCache.cpp
         src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
         src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
-        src/core/manga/bookwalker/BookWalkerSeriesPageParser.cpp
-        src/core/manga/bookwalker/VolumeCoverAlignment.cpp
         src/ui/PerModeNavController.cpp
         # VolumeTile state tests (COMICS_CATALOG_SERIES_VIEW Phase 2 Task 8+9)
         tests/ui/test_volume_tile_state.cpp

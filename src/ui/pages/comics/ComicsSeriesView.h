@@ -22,7 +22,7 @@
 
 #include "ComicsSourcesPanel.h"
 #include "core/manga/anilist/AniListTypes.h"
-#include "core/manga/fandom/FandomTypes.h"
+#include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/MangaResult.h"
 
 class MangaSourceRegistry;
@@ -46,7 +46,6 @@ class QHBoxLayout;
 class QVBoxLayout;
 class MangaDownloadIndex;
 
-namespace tankoban::manga::bookwalker { class VolumeCoverResolver; }
 namespace tankoban::ui::widgets { class ComicsSeriesViewLoadingOverlay; }
 namespace tankoban::ui::comics { class VolumeTile; }
 
@@ -113,9 +112,9 @@ public:
                                 const QString& coverPath);
     void setVolumeRows(const QList<anilist::VolumeRow>& rows);
 
-    // Task 14: inject the BookWalker per-volume cover resolver. Non-owning.
-    // May be called before or after showSeries(); re-wires signals on each call.
-    void setVolumeCoverResolver(tankoban::manga::bookwalker::VolumeCoverResolver* resolver);
+    // BookWalker cover resolver removed (COMICS_MANGAFIRE_PIVOT Phase B.2).
+    // MangaFire catalog volumes carry direct cover URLs loaded via
+    // loadCoverUrlForVolume inside populateVolumeRowsFromCatalog.
     int currentAnilistId() const { return m_currentAnilistId; }
 
     QJsonObject devSnapshot() const;
@@ -128,16 +127,11 @@ public slots:
                                 bool downloaded);
     void setVolumeStatusText(int volumeNumber, const QString& statusText);
 
-    // Fandom catalog redesign Task 18 (Phase 7, 2026-05-20). Render volume
-    // rows from a FandomCatalog produced by FallbackChainResolver. Mirrors
-    // populateVolumeRows(QList<anilist::VolumeRow>) shape for the cellWidget
-    // layout (checkbox / index / thumb / title / progress / status), but
-    // consumes FandomCatalog fields directly and surfaces richer per-volume
-    // content per Codex review-and-expand pass on 2026-05-19 (primary title
-    // + range+grouping subtitle + dates/ISBN microline + synopsis snippet).
-    // Wired into ComicsPage in Task 19 via FallbackChainResolver::resolved.
-    void populateVolumeRowsFromFandom(
-        const tankoban::manga::fandom::FandomCatalog& catalog);
+    // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Render volume rows from
+    // a MangaCatalog loaded from data/mangafire_catalog/. Renamed from
+    // populateVolumeRowsFromFandom; parameter type updated to MangaCatalog.
+    void populateVolumeRowsFromCatalog(
+        const tankoban::manga::MangaCatalog& catalog);
 
 signals:
     // Fired when user clicks Download on a volume row OR clicks a downloaded
@@ -168,11 +162,10 @@ signals:
     // this signal to come from the new view).
     void backRequested();
 
-    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Emitted when
-    // the force-refresh button is clicked. ComicsPage invalidates the
-    // FandomCatalogCache entry + re-resolves via FallbackChainResolver.
-    // No payload: ComicsPage already tracks the current series identity
-    // (m_currentDetailAnilistId / m_currentDetailSeriesTitle).
+    // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Emitted when
+    // the force-refresh button is clicked. ComicsPage re-scans the local
+    // catalog index and re-resolves for the current series.
+    // No payload: ComicsPage tracks the current series identity.
     void forceRefreshRequested();
 
     // STREAM_PORT 2026-05-18 Task 5: multi-volume bulk dispatch.
@@ -219,14 +212,8 @@ private slots:
     void onVolumeCheckboxToggled(int row, bool checked);
     void onDownloadSelectedClicked();
 
-    // Task 14 / Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): BookWalker cover resolver
-    // signal handlers. Signatures use seriesKey (QString) — re-keyed from
-    // anilistId (int) in Tasks 6+7; stale-request guards fully implemented in
-    // Task 8 via m_currentResolvingSeriesKey.
-    void onCoverResolverResolved(const QString& seriesKey, const QMap<int, QString>& volumeToCoverUrl);
-    void onCoverResolverUnresolved(const QString& seriesKey, const QString& reason);
-    void onCoverResolverSkipped(const QString& seriesKey, const QString& reason);
-    void onCoverResolverSafetyTimeout();
+    // BookWalker cover resolver slots removed (COMICS_MANGAFIRE_PIVOT Phase B.2).
+    // MangaFire volumes carry direct cover URLs loaded via loadCoverUrlForVolume.
 
 private:
     void buildUi();
@@ -287,11 +274,9 @@ private:
     // Overlay called when counter hits 0 after a decrement.
     int m_pendingMediaLoads = 0;
 
-    // Task 14: BookWalker cover overlay helpers.
+    // Loading overlay helpers (retained for async cover-load spinner).
     void showLoadingOverlay();
     void hideLoadingOverlay();
-    void paintVolumeCovers(const QMap<int, QString>& volumeToCoverUrl);
-    void paintVolumeCoversAsFallback();
 
     anilist::AniListClient*  m_client  = nullptr;  // non-owning
     anilist::AniListCache*   m_cache   = nullptr;  // non-owning
@@ -362,19 +347,18 @@ private:
     int m_nextRequestId      = 1;
     bool m_libraryButtonSawPress = false;
 
-    // Task 14: BookWalker per-volume cover resolver + loading overlay.
-    QPointer<tankoban::manga::bookwalker::VolumeCoverResolver> m_coverResolver;
+    // Loading overlay (retained for async cover-image spinner).
+    // BookWalker VolumeCoverResolver removed (COMICS_MANGAFIRE_PIVOT Phase B.2);
+    // m_loadingSafetyTimer also removed — the safety-timeout path was only
+    // needed for the BookWalker HTTP path. loadCoverUrlForVolume uses
+    // m_pendingMediaLoads to hide the overlay when all covers have loaded.
     tankoban::ui::widgets::ComicsSeriesViewLoadingOverlay* m_loadingOverlay  = nullptr;
-    QTimer*                                                m_loadingSafetyTimer = nullptr;
 
     // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): seriesKey-based identity for the
-    // current series and the in-flight resolver request. Replace the old
-    // m_currentResolvingAnilistId (int) stale-guard with QString comparison.
-    // For AniList-only series the key is synthesized as "anilist:<anilistId>".
-    // For WeebCentral series the key is "<source>:<seriesId>" (e.g.
-    // "weebcentral:01J76XYAVE3FZ3YMHMTKEZGXM4").
+    // current series. For AniList-only series the key is "anilist:<anilistId>".
+    // For WeebCentral series the key is "<source>:<seriesId>".
+    // For MangaFire catalog series the key is "mangafire:<seriesId>".
     QString m_currentSeriesKey;           // identity of the currently displayed series
-    QString m_currentResolvingSeriesKey;  // key stamped when resolver was fired; cleared on clearView
 
     // Fix 3: one-shot override supplied by showCatalogSeries() so that
     // zero-AniList catalog opens don't collapse to "anilist:0". Consumed and

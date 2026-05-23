@@ -9,7 +9,6 @@
 #include "core/manga/MangaSourceRegistry.h"
 #include "core/manga/MangaScraper.h"
 #include "core/manga/PremiumCatalog.h"
-#include "core/manga/bookwalker/VolumeCoverResolver.h"
 #include "ui/widgets/ComicsSeriesViewLoadingOverlay.h"
 
 #include <QAbstractItemView>
@@ -482,17 +481,15 @@ void ComicsSeriesView::buildUi()
         "}"));
     actionRow->addWidget(m_libraryButton, /*stretch*/ 0, Qt::AlignRight);
 
-    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Force-refresh
-    // icon button. Unicode "↻" (U+21BB CLOCKWISE OPEN CIRCLE ARROW) keeps
-    // the affordance icon-only without needing a new SVG asset; matches the
+    // Force-refresh icon button. Unicode "↻" (U+21BB CLOCKWISE OPEN CIRCLE ARROW)
+    // keeps the affordance icon-only without needing a new SVG asset; matches the
     // m_backButton "←" pattern. Click emits forceRefreshRequested, which
-    // ComicsPage handles by invalidating the FandomCatalogCache entry +
-    // re-resolving via FallbackChainResolver.
+    // ComicsPage handles by re-loading from data/mangafire_catalog/.
     m_forceRefreshButton = new QPushButton(QStringLiteral("\xe2\x86\xbb"), this);
     m_forceRefreshButton->setObjectName(QStringLiteral("ComicsSeriesForceRefreshButton"));
     m_forceRefreshButton->setAccessibleName(QStringLiteral("ComicsSeriesForceRefreshButton"));
     m_forceRefreshButton->setAccessibleDescription(
-        QStringLiteral("Force-refresh the Fandom catalog cache for this series."));
+        QStringLiteral("Force-refresh the catalog for this series."));
     m_forceRefreshButton->setToolTip(tr("Refresh wiki catalog"));
     m_forceRefreshButton->setFixedSize(32, 32);
     m_forceRefreshButton->setCursor(Qt::PointingHandCursor);
@@ -679,11 +676,8 @@ void ComicsSeriesView::buildUi()
     m_loadingOverlay->setMessage(tr("Loading"));
     m_loadingOverlay->hide();
 
-    m_loadingSafetyTimer = new QTimer(this);
-    m_loadingSafetyTimer->setSingleShot(true);
-    m_loadingSafetyTimer->setInterval(10000);
-    connect(m_loadingSafetyTimer, &QTimer::timeout,
-            this, &ComicsSeriesView::onCoverResolverSafetyTimeout);
+    // m_loadingSafetyTimer removed: cover loading is now direct-URL via
+    // loadCoverUrlForVolume; m_pendingMediaLoads drives overlay hide timing.
 }
 
 void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
@@ -770,18 +764,10 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     } else {
         m_currentSeriesKey = QStringLiteral("anilist:%1").arg(preview.anilistId);
     }
-    m_currentResolvingSeriesKey = m_currentSeriesKey;
     showLoadingOverlay();
-    if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
-    if (m_coverResolver) {
-        m_coverResolver->resolveForSeries(m_currentSeriesKey,
-                                          preview.title,
-                                          preview.anilistId);
-    } else {
-        qWarning("ComicsSeriesView: no cover resolver set; falling back to AniList art");
-        paintVolumeCoversAsFallback();
-        hideLoadingOverlay();
-    }
+    // Covers are painted by loadCoverUrlForVolume calls in populateVolumeRows /
+    // populateVolumeRowsFromCatalog. hideLoadingOverlay is called when
+    // m_pendingMediaLoads reaches 0 after all QNAM fetches complete.
 
     // PHASE 12: kick off banner async-load from preview (renderDetail will
     // re-fire with detail.preview.bannerUrl after the cache hit / refetch
@@ -862,17 +848,10 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
         loadBannerUrl(wc.thumbnailUrl);
     }
 
-    // Kick off cover resolution via seriesKey-driven entry.
-    m_currentResolvingSeriesKey = m_currentSeriesKey;
     showLoadingOverlay();
-    if (m_loadingSafetyTimer) m_loadingSafetyTimer->start();
-    if (m_coverResolver) {
-        m_coverResolver->resolveForSeries(m_currentSeriesKey, wc.title, /*anilistIdOptional=*/0);
-    } else {
-        qWarning("ComicsSeriesView: no cover resolver set; falling back to series-level art");
-        paintVolumeCoversAsFallback();
-        hideLoadingOverlay();
-    }
+    // Covers are painted by loadCoverUrlForVolume calls in populateVolumeRows /
+    // populateVolumeRowsFromCatalog. hideLoadingOverlay is called when
+    // m_pendingMediaLoads reaches 0 after all QNAM fetches complete.
 
     // Trigger detail fetch via the WeebCentral scraper (delivers chapter/volume
     // list via detailReady signal — caller must connect scraper::detailReady to
@@ -897,7 +876,7 @@ void ComicsSeriesView::showCatalogSeries(const QString& seriesId,
 {
     // Pre-set the one-shot override so showSeries(MediaPreview) picks it up.
     if (anilistId <= 0) {
-        m_pendingCatalogSeriesKey = QStringLiteral("fandom_catalog:%1").arg(seriesId);
+        m_pendingCatalogSeriesKey = QStringLiteral("mangafire:%1").arg(seriesId);
     } else {
         m_pendingCatalogSeriesKey.clear();
     }
@@ -936,7 +915,6 @@ void ComicsSeriesView::clearView()
 
     // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): reset seriesKey-based guards.
     m_currentSeriesKey.clear();
-    m_currentResolvingSeriesKey.clear();
 
     m_lastAppliedCoverUrlByVolume.clear();
     hideLoadingOverlay();  // stops the safety timer before clearing rows
@@ -1129,20 +1107,12 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
             : QString();
 
         // Cover URL: prefer per-volume art thumbnail; fall back to series
-        // coverThumbUrl from detail. Mirrors old coverUrl derivation exactly.
-        // PREFER any BookWalker URL already recorded by paintVolumeCovers
-        // (resolver race-fix: the BW URL may have landed before this populate
-        // fires — using it here guarantees the freshly-created tile widget
-        // gets the canonical cover, not a stale AniList thumb).
-        const QString anilistCoverUrl = detail
+        // coverThumbUrl from detail.
+        const QString resolvedCoverUrl = detail
             ? (!row.art.thumbnailUrl.isEmpty()
                 ? row.art.thumbnailUrl
                 : detail->preview.coverThumbUrl)
             : row.art.thumbnailUrl;
-        const QString existingBwUrl = m_lastAppliedCoverUrlByVolume.value(row.volumeNumber);
-        const QString resolvedCoverUrl = existingBwUrl.contains(QStringLiteral("rimg.bookwalker.jp"))
-            ? existingBwUrl
-            : anilistCoverUrl;
 
         tankoban::ui::comics::VolumeTileData data;
         data.sourceId     = QStringLiteral("anilist");
@@ -1229,65 +1199,13 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
 }
 
 // -----------------------------------------------------------------------
-// Fandom catalog redesign Task 18 (Phase 7, 2026-05-20).
 // -----------------------------------------------------------------------
-// populateVolumeRowsFromFandom mirrors the populateVolumeRows shape above
-// for the table-cellWidget construction (checkbox / index / thumb / title /
-// progress / status — same kCol* layout, same cellWidget patterns) but
-// consumes FandomCatalog::volumes directly and surfaces richer per-volume
-// content per the Codex review-and-expand pass on 2026-05-19:
-//   - primary title:    English title || "Volume N"
-//   - secondary line:   "Chapters NNN-NNN" + grouping arc/era label
-//   - metadata microline: JP/EN release dates + ISBNs when non-empty
-//   - synopsis snippet: one clipped line + full text in tooltip
-//
-// Row height bumped from 72px (AniList-density default) to 130px per row
-// via setRowHeight to fit the 4-line stack. Volume rows stay single-select
-// per spec; Berserk-episode / Naruto-era nested rendering deferred per
-// Codex amendment.
-//
-// Cover paint reuses loadCoverUrlForVolume + applyPixmapToVolumeRow,
-// preferring FandomVolume::coverUrlEnglish over coverUrlJapanese (matches
-// the Viz-tankobon-first publisher preference baked into TableExtractor
-// and InfoboxExtractor on Phase 3). Loading-overlay hide path piggybacks
-// on the existing m_pendingMediaLoads counter (Pass 3 fix, see commit
-// 813166d) — no separate plumbing.
-//
-// m_currentVolumeRows stash maps each FandomVolume back into an
-// anilist::VolumeRow for compat with applyPixmapToVolumeRow's row-lookup
-// path + onVolumeCellClicked's sources-panel dispatch. The map is lossy
-// (FandomVolume's titles + dates + ISBN + synopsis + groupingLabel are
-// dropped on the way through) — those fields live on the cellWidget
-// QLabels directly. F1 stash (chapterNumbers at UserRole, cbzPath at
-// UserRole+1) is empty on the Fandom path in v1: Fandom catalog doesn't
-// carry per-chapter chapterIds, and the cbzPath stash is reserved for
-// future Tankoyomi-download-linkage (out of scope for Task 18).
+// populateVolumeRowsFromCatalog (COMICS_MANGAFIRE_PIVOT Phase B.2, 2026-05-23)
+// -----------------------------------------------------------------------
+// Consumes MangaCatalog::volumes (MangaFire schema) and emits one VolumeTile
+// per volume. Covers load via direct CDN URL (MangaVolume::coverUrlJapanese)
+// via loadCoverUrlForVolume — no BookWalker resolver needed.
 namespace {
-QString formatFandomChapterRange(const tankoban::manga::fandom::FandomVolume& v)
-{
-    if (v.chapterRangeStart <= 0 && v.chapterRangeEnd <= 0) return QString();
-    if (v.chapterRangeStart == v.chapterRangeEnd) {
-        return ComicsSeriesView::tr("Chapter %1").arg(v.chapterRangeStart);
-    }
-    return ComicsSeriesView::tr("Chapters %1-%2")
-        .arg(v.chapterRangeStart)
-        .arg(v.chapterRangeEnd);
-}
-
-QString formatFandomMicroline(const tankoban::manga::fandom::FandomVolume& v)
-{
-    QStringList parts;
-    if (v.releaseDateEn.isValid()) {
-        parts << ComicsSeriesView::tr("EN %1").arg(v.releaseDateEn.toString(QStringLiteral("MMM yyyy")));
-    }
-    if (v.releaseDateJp.isValid()) {
-        parts << ComicsSeriesView::tr("JP %1").arg(v.releaseDateJp.toString(QStringLiteral("MMM yyyy")));
-    }
-    if (!v.isbnEn.isEmpty()) parts << QStringLiteral("ISBN ") + v.isbnEn;
-    else if (!v.isbnJp.isEmpty()) parts << QStringLiteral("ISBN ") + v.isbnJp;
-    return parts.join(QStringLiteral("  ·  "));
-}
-
 QString clipSynopsisSnippet(const QString& synopsis, int maxChars = 120)
 {
     if (synopsis.size() <= maxChars) return synopsis;
@@ -1295,8 +1213,8 @@ QString clipSynopsisSnippet(const QString& synopsis, int maxChars = 120)
 }
 } // namespace
 
-void ComicsSeriesView::populateVolumeRowsFromFandom(
-    const tankoban::manga::fandom::FandomCatalog& catalog)
+void ComicsSeriesView::populateVolumeRowsFromCatalog(
+    const tankoban::manga::MangaCatalog& catalog)
 {
     // Tear down existing tiles.
     qDeleteAll(m_volumeTiles);
@@ -1308,12 +1226,7 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
     m_selectedRows.clear();
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
-    // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-22 (Agent 1, Hemanth-flagged) --
-    // Guarantee the meta-line is cleared when a Fandom catalog populates the
-    // rows, regardless of which entry path opened the view. The yesterday
-    // version of this edit FLIPPED the label to "Fandom"; Hemanth's
-    // correction: drop the label entirely. The source-name label has no
-    // user value, and the only time it mattered was when it lied.
+    // Clear meta-line — source-name leaking into view has no user value.
     if (m_metaLine) {
         m_metaLine->clear();
     }
@@ -1322,26 +1235,31 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
     // stretch in m_volumesLayout (index = count() - 1).
     for (const auto& vol : catalog.volumes) {
         tankoban::ui::comics::VolumeTileData data;
-        data.sourceId     = QStringLiteral("fandom_catalog");
+        data.sourceId     = QStringLiteral("mangafire_catalog");
         data.seriesId     = catalog.seriesId;
         data.volumeNumber = vol.volumeNumber;
         data.title        = !vol.titleEnglish.isEmpty() ? vol.titleEnglish : vol.titleJapanese;
-        data.chapterRange = QStringLiteral("ch %1-%2")
-                                .arg(vol.chapterRangeStart)
-                                .arg(vol.chapterRangeEnd);
-        // FANDOM_LOCAL_LOADER_INTEGRATION 2026-05-21 (Agent 1) -- Fandom catalog
-        // URL wins when present (canonical scraped source); fall back to English
-        // cover URL when Japanese is absent.
+        // chapterStartRaw/chapterEndRaw carry the raw MangaFire strings (e.g. "0.01", "5.5");
+        // fall back to integer range if raws are absent.
+        if (!vol.chapterStartRaw.isEmpty() || !vol.chapterEndRaw.isEmpty()) {
+            data.chapterRange = QStringLiteral("ch %1-%2")
+                                    .arg(vol.chapterStartRaw)
+                                    .arg(vol.chapterEndRaw);
+        } else {
+            data.chapterRange = QStringLiteral("ch %1-%2")
+                                    .arg(vol.chapterRangeStart)
+                                    .arg(vol.chapterRangeEnd);
+        }
+        // MangaFire volumes carry a direct CDN cover URL in coverUrlJapanese
+        // (mapped from JSON "coverUrl"); fall back to English cover if present.
         data.coverUrl     = !vol.coverUrlJapanese.isEmpty()
                               ? vol.coverUrlJapanese
                               : vol.coverUrlEnglish;
-        // pages + publishDate: FandomVolume doesn't surface page count;
-        // releaseDateJp/En are QDate — leave publishDate empty for v1.
 
         auto* tile = new tankoban::ui::comics::VolumeTile(data, m_volumesHost);
 
         tankoban::ui::comics::VolumeTileState state;
-        state.provenance = QStringLiteral("Fandom");
+        state.provenance = QStringLiteral("MangaFire");
         tile->setVolumeState(state);
         tile->setMangaDownloadIndex(m_downloadIndex);
 
@@ -1350,7 +1268,7 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
                 this, [this, seriesIdSnapshot](int vn) {
                     const auto entry = m_downloadIndex
                         ? m_downloadIndex->entryForSeriesAndVolume(
-                              QStringLiteral("fandom_catalog"),
+                              QStringLiteral("mangafire_catalog"),
                               seriesIdSnapshot, vn)
                         : std::nullopt;
                     emit openVolume(vn, entry ? entry->canonicalPath : QString());
@@ -1397,11 +1315,9 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
         m_volumeTilesByVolumeNumber.insert(vol.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
 
-        // Fix 4: paint the catalog's own cover URL for this volume. Removes the
-        // dependency on the BookWalker resolver for catalog rows and prevents the
-        // stale cross-series pixmap leak. The async fetch has a stale-series guard
-        // (m_currentSeriesKey) which now correctly differentiates catalog slugs
-        // after Fix 3 sets "fandom_catalog:<slug>" as the key.
+        // Paint the catalog's own CDN cover URL for this volume. The async fetch
+        // has a stale-series guard (m_currentSeriesKey) which correctly differentiates
+        // catalog slugs ("mangafire:<slug>") from AniList/WeebCentral series.
         if (!data.coverUrl.isEmpty()) {
             loadCoverUrlForVolume(data.coverUrl, vol.volumeNumber);
         }
@@ -1412,8 +1328,8 @@ void ComicsSeriesView::populateVolumeRowsFromFandom(
                             ? catalog.seriesTitle
                             : catalog.seriesId;
 
-    // No next-unread highlight on the Fandom path in v1 — that hinges on
-    // cbzPath stash which the Fandom catalog doesn't carry. The Tankoyomi-
+    // No next-unread highlight on the MangaFire catalog path in v1 — that
+    // hinges on cbzPath stash which the catalog doesn't carry. The Tankoyomi-
     // download-linkage refresh in a future task will overlay highlight +
     // status icons on top of the rendered tiles.
     m_nextUnreadRow = -1;
@@ -1510,28 +1426,6 @@ bool ComicsSeriesView::eventFilter(QObject* watched, QEvent* event)
 // finished-lambda when the reply lands.
 // -----------------------------------------------------------------------
 
-// -----------------------------------------------------------------------
-// Task 14: BookWalker per-volume cover resolver integration
-// -----------------------------------------------------------------------
-
-void ComicsSeriesView::setVolumeCoverResolver(
-        tankoban::manga::bookwalker::VolumeCoverResolver* resolver)
-{
-    if (m_coverResolver)
-        disconnect(m_coverResolver.data(), nullptr, this, nullptr);
-    m_coverResolver = resolver;
-    if (m_coverResolver) {
-        connect(m_coverResolver.data(),
-                &tankoban::manga::bookwalker::VolumeCoverResolver::resolved,
-                this, &ComicsSeriesView::onCoverResolverResolved);
-        connect(m_coverResolver.data(),
-                &tankoban::manga::bookwalker::VolumeCoverResolver::unresolved,
-                this, &ComicsSeriesView::onCoverResolverUnresolved);
-        connect(m_coverResolver.data(),
-                &tankoban::manga::bookwalker::VolumeCoverResolver::skipped,
-                this, &ComicsSeriesView::onCoverResolverSkipped);
-    }
-}
 
 void ComicsSeriesView::showLoadingOverlay()
 {
@@ -1560,7 +1454,6 @@ void ComicsSeriesView::showLoadingOverlay()
 void ComicsSeriesView::hideLoadingOverlay()
 {
     if (m_loadingOverlay) m_loadingOverlay->hide();
-    if (m_loadingSafetyTimer) m_loadingSafetyTimer->stop();
 }
 
 void ComicsSeriesView::resizeEvent(QResizeEvent* ev)
@@ -1575,73 +1468,11 @@ void ComicsSeriesView::resizeEvent(QResizeEvent* ev)
     }
 }
 
-// Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): resolver slot bodies fully implemented.
-// All three signal-backed slots guard against stale responses by comparing
-// the incoming seriesKey against m_currentResolvingSeriesKey (stamped when
-// the resolver was fired in showSeries). This replaces the old int-based
-// m_currentResolvingAnilistId guard.
-void ComicsSeriesView::onCoverResolverResolved(const QString& seriesKey,
-                                               const QMap<int, QString>& volumeToCoverUrl)
-{
-    if (seriesKey != m_currentResolvingSeriesKey) return;
-    paintVolumeCovers(volumeToCoverUrl);
-    // Pass 3 fix 2026-05-19: only hide overlay if no async media fetches
-    // were spawned by paintVolumeCovers (every cache-miss inside
-    // loadCoverUrlForVolume incremented m_pendingMediaLoads). If non-zero,
-    // the per-fetch finished lambdas will call hideLoadingOverlay when the
-    // last fetch lands. This gives the user a visible spinner during the
-    // cover-download window even on the BookWalkerCache-warm path.
-    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
-}
-
-void ComicsSeriesView::onCoverResolverUnresolved(const QString& seriesKey,
-                                                 const QString& /*reason*/)
-{
-    if (seriesKey != m_currentResolvingSeriesKey) return;
-    paintVolumeCoversAsFallback();
-    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
-}
-
-void ComicsSeriesView::onCoverResolverSkipped(const QString& seriesKey,
-                                              const QString& /*reason*/)
-{
-    if (seriesKey != m_currentResolvingSeriesKey) return;
-    // Premium short-circuit: PremiumCoverExtractor handles cover paint via the
-    // existing pipeline. Just hide the overlay; do not call the paint helpers.
-    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
-}
-
-void ComicsSeriesView::onCoverResolverSafetyTimeout()
-{
-    // Safety timeout: no seriesKey guard here — the timer fires once and we
-    // always want to escape the spinner regardless of which series is current.
-    paintVolumeCoversAsFallback();
-    hideLoadingOverlay();
-}
-
-void ComicsSeriesView::paintVolumeCovers(const QMap<int, QString>& volumeToCoverUrl)
-{
-    // volumeToCoverUrl is keyed by 1-based volumeNumber; m_currentVolumeRows
-    // stores the actual row order. Walk via applyPixmapToVolumeRow which
-    // already handles the volumeNumber -> row lookup + QLabel painting.
-    for (auto it = volumeToCoverUrl.constBegin(); it != volumeToCoverUrl.constEnd(); ++it) {
-        if (!it.value().isEmpty())
-            loadCoverUrlForVolume(it.value(), it.key());
-    }
-}
-
-void ComicsSeriesView::paintVolumeCoversAsFallback()
-{
-    // Fall back to the per-volume AniList art (row.art.thumbnailUrl).
-    // loadCoverUrlForVolume guards against empty URLs; it also hits
-    // QPixmapCache first so repeated calls on already-loaded rows are free.
-    // This is a no-op when m_currentVolumeRows is empty (rows not yet built
-    // by populateVolumeRows) -- that path already loads AniList art itself.
-    for (const auto& row : m_currentVolumeRows) {
-        if (!row.art.thumbnailUrl.isEmpty())
-            loadCoverUrlForVolume(row.art.thumbnailUrl, row.volumeNumber);
-    }
-}
+// Resolver slots removed in COMICS_MANGAFIRE_PIVOT Phase B:
+// onCoverResolverResolved / onCoverResolverUnresolved / onCoverResolverSkipped /
+// onCoverResolverSafetyTimeout / paintVolumeCovers / paintVolumeCoversAsFallback
+// — MangaFire volumes carry direct CDN URLs; covers load via
+// loadCoverUrlForVolume inside populateVolumeRowsFromCatalog.
 
 void ComicsSeriesView::loadCoverUrlForVolume(const QString& url, int volumeNumber)
 {
@@ -2083,7 +1914,7 @@ void ComicsSeriesView::setVolumeStatusText(int volumeNumber, const QString& stat
     auto state = tile->volumeState();
     const bool hasEntry = m_downloadIndex
         && m_downloadIndex->entryForSeriesAndVolume(
-               QStringLiteral("fandom_catalog"),
+               QStringLiteral("mangafire_catalog"),
                m_currentSeriesKey, volumeNumber).has_value();
     state.state      = tankoban::ui::comics::VolumeTile::computeState(hasEntry, statusText);
     state.statusText = statusText;

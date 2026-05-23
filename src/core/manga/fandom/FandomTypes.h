@@ -1,22 +1,20 @@
 // src/core/manga/fandom/FandomTypes.h
 //
-// Foundational data types for the Fandom-driven catalog redesign per
-// docs/superpowers/specs/2026-05-19-fandom-catalog-redesign-design.md § 4.3.
+// Minimal type stubs kept for wikidata/ and wikipedia/ module compatibility
+// after COMICS_MANGAFIRE_PIVOT Phase B (2026-05-23).
 //
-// These structs are POD-ish (Qt value types). JSON serialization for the
-// 7-day disk cache lands separately in FandomCatalogCache (Task 12 in the
-// implementation plan).
+// REMOVED in Phase B: FandomCatalog, kFandomCatalogSchemaVersion (replaced
+// by MangaCatalog + kMangaCatalogSchemaVersion in core/manga/MangaCatalogTypes.h).
 //
-// Consumers (created in later tasks):
-//   - FandomClient / WikidataClient / extractors PRODUCE FandomVolume +
-//     FandomCatalog + FandomReference values.
-//   - FandomVolumeResolver / FallbackChainResolver COMPOSE them.
-//   - ComicsSeriesView::populateVolumeRowsFromFandom CONSUMES FandomCatalog.
+// KEPT: FandomReference (WikidataClient/WikidataCache domain type — Q-ID →
+// Fandom wiki subdomain resolution) and FandomVolume (WikipediaParser/
+// WikipediaResolver return type — Wikipedia volume-table rows).
+// Neither type is a candidate for the MangaCatalog rename; they are specific
+// to their respective resolution layers and do not flow into ComicsSeriesView.
 
 #pragma once
 
 #include <QDate>
-#include <QDateTime>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -24,9 +22,6 @@
 namespace tankoban::manga::fandom {
 
 // How a series's volume data is laid out across Fandom wiki pages.
-// Locked by the spec's variance-axis "Topology" + extended for chapter-branded
-// URLs (Death Note, AoT) whose page title says "chapters" but whose body is
-// a repeated per-volume record.
 enum class PageModel {
     Monolith,        // one page = all volumes (One Piece, Berserk, Naruto, Spy x Family)
     Hierarchy,       // central index → atomized per-volume pages (Kingdom, JJK)
@@ -36,58 +31,31 @@ enum class PageModel {
 // Where a series's catalog lives on Fandom. Produced by the Discovery layer
 // (WikidataClient → manifest lookup → final resolution).
 struct FandomReference {
-    QString    subdomain;        // e.g., "deathnote"
-    QString    volumePagePath;   // e.g., "/wiki/List_of_Death_Note_chapters"
-    PageModel  pageModel = PageModel::Monolith;
-    bool       isValid() const { return !subdomain.isEmpty() && !volumePagePath.isEmpty(); }
+    QString   subdomain;        // e.g., "deathnote"
+    QString   volumePagePath;   // e.g., "/wiki/List_of_Death_Note_chapters"
+    PageModel pageModel = PageModel::Monolith;
+    bool      isValid() const { return !subdomain.isEmpty() && !volumePagePath.isEmpty(); }
 };
 
-// One volume's worth of normalized catalog data. Empty strings/dates mean
-// "field not present on this wiki" — distinct from "field exists but is
-// empty" (Codex Trigger C expansion §4.3 — Kingdom Vol.73 case).
+// One volume's worth of normalized data as parsed by WikipediaParser.
+// "Fandom" in the name is historical; this is a generic volume-row shape
+// reused by the Wikipedia fallback layer.
 struct FandomVolume {
-    int          volumeNumber     = 0;
-    QString      titleEnglish;        // e.g., "Romance Dawn" / "Boredom"
-    QString      titleJapanese;       // kanji form, e.g., "ROMANCE DAWN—冒険の夜明け—"
-    QString      titleRomaji;         // e.g., "Romansu Dōn -Bōken no Yoake-"
-    int          chapterRangeStart = 0;
-    int          chapterRangeEnd   = 0;
-    QStringList  chapterList;         // optional richer per-chapter strings if scraped
-    QDate        releaseDateJp;
-    QDate        releaseDateEn;
-    QString      isbnJp;
-    QString      isbnEn;
-    QString      synopsis;            // empty if not on this wiki (e.g., Berserk volume blocks)
-    QString      coverUrlEnglish;     // empty if no English-edition cover surfaced
-    QString      coverUrlJapanese;
-    QString      groupingLabel;       // optional arc/era label (e.g., Berserk "Black Swordsman Arc",
-                                      //   Naruto "Part I") — carried forward via TableExtractor when
-                                      //   the manifest's groupingSemantics is narrative-arcs or
-                                      //   multi-era. Empty when not applicable.
-};
-
-// Schema version stamp baked into every cached FandomCatalog. Bumping this
-// constant invalidates all on-disk caches — used when FandomVolume's field
-// shape changes (e.g., adding hierarchy-display fields per Codex §4.3).
-constexpr int kFandomCatalogSchemaVersion = 1;
-
-// One series's worth of normalized catalog data. Cached on disk by
-// FandomCatalogCache (Task 12) with a 7-day TTL.
-struct FandomCatalog {
-    QString             seriesId;                       // Tankoban's canonical seriesId
-    QString             seriesTitle;                    // Display title from JSON top-level (e.g., "One Piece" not "one-piece")
-    QString             wikidataQid;                    // canonical cross-source identity
-    QString             fandomWikiId;                   // cached subdomain (e.g., "deathnote")
-    QString             fandomVolumePath;               // cached page path
-    QString             seriesSynopsis;                 // optional fallback when per-volume synopsis empty
-    QList<FandomVolume> volumes;
-    QDateTime           fetchedAt;                      // for 7d TTL
-    int                 schemaVersion = kFandomCatalogSchemaVersion;
-    // AniList id from the JSON "anilistId" field. 0 when not present or when
-    // the series has no AniList entry. Used by ComicsCatalogScreen::addTile
-    // to emit a real resolver key instead of collapsing all tiles to "anilist:0".
-    int                 anilistId     = 0;
-    bool                isValid() const { return !seriesId.isEmpty() && !volumes.isEmpty(); }
+    int         volumeNumber      = 0;
+    QString     titleEnglish;
+    QString     titleJapanese;
+    QString     titleRomaji;
+    int         chapterRangeStart = 0;
+    int         chapterRangeEnd   = 0;
+    QStringList chapterList;
+    QDate       releaseDateJp;
+    QDate       releaseDateEn;
+    QString     isbnJp;
+    QString     isbnEn;
+    QString     synopsis;
+    QString     coverUrlEnglish;
+    QString     coverUrlJapanese;
+    QString     groupingLabel;
 };
 
 } // namespace tankoban::manga::fandom

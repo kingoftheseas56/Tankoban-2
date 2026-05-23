@@ -1,9 +1,11 @@
-// src/core/manga/fandom/LocalFandomCatalogIndex.h
+// src/core/manga/LocalMangaCatalogIndex.h
 //
-// In-memory index of locally-scraped Fandom catalogs keyed by AniList ID
-// AND by series title (fallback for entry paths where AniList id is unset,
-// e.g. the WeebCentral search-result path that opens ComicsSeriesView with
-// MangaResult identity instead of MediaPreview identity).
+// In-memory index of locally-scraped MangaFire catalogs keyed by AniList ID
+// AND by series title (fallback for entry paths where AniList id is unset).
+//
+// Renamed from src/core/manga/fandom/LocalFandomCatalogIndex.h
+// (Phase B.2, COMICS_MANGAFIRE_PIVOT 2026-05-23).
+// Data directory changed from data/fandom_catalog/ to data/mangafire_catalog/.
 //
 // Scans <data-dir>/*.json at refresh() time, extracts seriesId + anilistId
 // + seriesTitle from each file's root, and builds three maps:
@@ -12,36 +14,30 @@
 //   seriesId         -> absolute file path
 //
 // Consumed by ComicsPage to answer "does this AniList id (or series title)
-// have a local catalog, and where's the file?" before falling through to the
-// live HTTP fallback chain.
+// have a local catalog, and where's the file?"
 //
 // Title normalization: lowercase + non-alphanumeric runs collapsed to single
 // hyphen + leading/trailing hyphens stripped. Examples:
 //   "One Piece"                      -> "one-piece"
 //   "Demon Slayer: Kimetsu no Yaiba" -> "demon-slayer-kimetsu-no-yaiba"
-// Match works when the catalog JSON's seriesTitle normalizes to the same
-// string as the input title.
-//
-// Spec: docs/superpowers/plans/2026-05-21-fandom-catalog-local-loader-integration.md
 
 #pragma once
 
 #include <QHash>
 #include <QString>
 
-namespace tankoban::manga::fandom {
+namespace tankoban::manga {
 
-class LocalFandomCatalogIndex
+class LocalMangaCatalogIndex
 {
 public:
-    // dataDir defaults to LocalFandomCatalogLoader::canonicalDataDir() when
+    // dataDir defaults to LocalMangaCatalogLoader::canonicalDataDir() when
     // constructed via the no-arg path used in ComicsPage. Tests pass an
     // explicit temp dir.
-    explicit LocalFandomCatalogIndex(const QString& dataDir = QString());
+    explicit LocalMangaCatalogIndex(const QString& dataDir = QString());
 
     // Scan dataDir for *.json; populate maps. Idempotent — safe to call
-    // multiple times; each call rebuilds from scratch so files added or
-    // removed since the last call are reflected.
+    // multiple times; each call rebuilds from scratch.
     void refresh();
 
     // Lookup. Returns empty string when no match.
@@ -56,8 +52,7 @@ public:
 
     int size() const { return m_anilistToSlug.size(); }
 
-    // Public helper exposed for tests + ComicsPage call sites that want
-    // to confirm what the normalized form of a candidate title looks like.
+    // Public helper exposed for tests + ComicsPage call sites.
     static QString normalizeTitle(const QString& raw);
 
 private:
@@ -67,4 +62,4 @@ private:
     QHash<QString, QString> m_slugToPath;
 };
 
-} // namespace tankoban::manga::fandom
+} // namespace tankoban::manga

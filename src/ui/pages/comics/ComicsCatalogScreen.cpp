@@ -1,10 +1,12 @@
 // src/ui/pages/comics/ComicsCatalogScreen.cpp
 // See header for design notes.
+// COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23): updated to use
+// LocalMangaCatalogLoader + MangaCatalog.
 
 #include "ComicsCatalogScreen.h"
 
-#include "core/manga/fandom/LocalFandomCatalogLoader.h"
-#include "core/manga/fandom/FandomTypes.h"
+#include "core/manga/LocalMangaCatalogLoader.h"
+#include "core/manga/MangaCatalogTypes.h"
 #include "ui/pages/TileCard.h"
 
 #include <algorithm>
@@ -79,8 +81,8 @@ void ComicsCatalogScreen::buildUi()
     root->addWidget(m_scroll, 1);
 
     m_emptyLabel = new QLabel(
-        tr("No catalogued series yet. Run the Fandom catalog ingest pipeline "
-           "to populate data/fandom_catalog/."), this);
+        tr("No catalogued series yet. Place JSON files in data/mangafire_catalog/ "
+           "to populate the catalog."), this);
     m_emptyLabel->setAlignment(Qt::AlignCenter);
     m_emptyLabel->setStyleSheet("color: rgba(255,255,255,0.6); font-size: 14px;");
     m_emptyLabel->hide();
@@ -106,7 +108,7 @@ void ComicsCatalogScreen::loadAllCatalogs()
 {
     clearTiles();
 
-    const QString dataDir = tankoban::manga::fandom::LocalFandomCatalogLoader::canonicalDataDir();
+    const QString dataDir = tankoban::manga::LocalMangaCatalogLoader::canonicalDataDir();
     QDir dir(dataDir);
     if (!dir.exists()) {
         m_emptyLabel->show();
@@ -123,10 +125,10 @@ void ComicsCatalogScreen::loadAllCatalogs()
                 files.end());
 
     // Pass 1: load + filter (empty-volumes stubs skipped)
-    QList<tankoban::manga::fandom::FandomCatalog> catalogs;
+    QList<tankoban::manga::MangaCatalog> catalogs;
     catalogs.reserve(files.size());
     for (const QFileInfo& fi : files) {
-        const auto loaded = tankoban::manga::fandom::LocalFandomCatalogLoader::loadFromFile(fi.absoluteFilePath());
+        const auto loaded = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(fi.absoluteFilePath());
         if (!loaded.has_value()) continue;
         if (loaded->volumes.isEmpty()) continue;
         catalogs.append(*loaded);
@@ -141,8 +143,8 @@ void ComicsCatalogScreen::loadAllCatalogs()
     // Pass 2: sort by seriesTitle (case-insensitive), falling back to seriesId
     // slug when title is empty (legacy or incomplete catalogs).
     std::sort(catalogs.begin(), catalogs.end(),
-              [](const tankoban::manga::fandom::FandomCatalog& a,
-                 const tankoban::manga::fandom::FandomCatalog& b) {
+              [](const tankoban::manga::MangaCatalog& a,
+                 const tankoban::manga::MangaCatalog& b) {
                   const QString& ka = a.seriesTitle.isEmpty() ? a.seriesId : a.seriesTitle;
                   const QString& kb = b.seriesTitle.isEmpty() ? b.seriesId : b.seriesTitle;
                   return ka.compare(kb, Qt::CaseInsensitive) < 0;
@@ -154,7 +156,7 @@ void ComicsCatalogScreen::loadAllCatalogs()
     }
 }
 
-void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& catalog)
+void ComicsCatalogScreen::addTile(const tankoban::manga::MangaCatalog& catalog)
 {
     if (catalog.seriesId.isEmpty()) return;
 
@@ -174,7 +176,7 @@ void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& 
     tile->setCardSize(TileCard::DEFAULT_WIDTH, TileCard::DEFAULT_IMAGE_HEIGHT);
     tile->setBadges(/*progressFraction=*/0.0, /*pageBadge=*/QString(),
                     /*countBadge=*/subtitle, /*status=*/QString());
-    tile->setProvenance(QStringLiteral("Fandom"));
+    tile->setProvenance(QStringLiteral("MangaFire"));
     connect(tile, &TileCard::clicked, this,
             [this, tile, seriesId = catalog.seriesId, title,
              anilistId = catalog.anilistId]() {
@@ -188,7 +190,8 @@ void ComicsCatalogScreen::addTile(const tankoban::manga::fandom::FandomCatalog& 
     const int idx = m_tiles.size() - 1;
     m_grid->addWidget(tile, idx / kCols, idx % kCols);
 
-    // Kick off cover fetch for vol 1 — prefer Japanese, fall back to English.
+    // Kick off cover fetch for vol 1 — prefer Japanese (MangaFire CDN URL),
+    // fall back to English cover URL if present.
     if (!catalog.volumes.isEmpty()) {
         const auto& v1 = catalog.volumes.first();
         const QString coverUrl = !v1.coverUrlJapanese.isEmpty()

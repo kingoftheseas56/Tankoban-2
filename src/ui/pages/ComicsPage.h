@@ -31,15 +31,6 @@ class TorrentClient;
 namespace tankoban::manga {
     class NyaaRuntimeSource;
     class WeebCentralVolumePacker;
-    class FallbackChainResolver;
-    namespace fandom {
-        class FandomClient;
-        class FandomVolumeResolver;
-        class WikiManifestRegistry;
-        struct FandomCatalog;
-    }
-    namespace wikidata { class WikidataClient; }
-    namespace wikipedia { class WikipediaResolver; }
     namespace anilist {
         class AniListClient;
         class AniListCache;
@@ -64,7 +55,7 @@ namespace tankoban::manga {
 namespace tankoban::ui::comics {
     class ComicsCatalogScreen;
 }
-#include "core/manga/fandom/LocalFandomCatalogIndex.h"
+#include "core/manga/LocalMangaCatalogIndex.h"
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
 struct MangaResult;
@@ -202,13 +193,9 @@ private slots:
     // Tankoyomi library changes (add / remove).
     void onTankoyomiLibraryChanged();
 
-    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Slots wired to
-    // FallbackChainResolver's resolved/unresolved + ComicsSeriesView's
-    // forceRefreshRequested signal.
-    void onFandomCatalogResolved(
-        const QString& seriesId,
-        const tankoban::manga::fandom::FandomCatalog& catalog);
-    void onFandomCatalogUnresolved(const QString& seriesId, const QString& reason);
+    // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Slot wired to
+    // ComicsSeriesView's forceRefreshRequested signal (network fallback gone;
+    // catalog is always local-first now).
     void onForceRefreshRequested();
 
 protected:
@@ -240,17 +227,11 @@ private:
 
     void addSeriesTile(const SeriesInfo& series);
     void toggleViewMode();
-    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Helper that
-    // derives seriesId / qidHint / titleHint from the current showSeries
-    // payload + fires m_fallbackResolver->resolveForSeries. Called from
-    // each showSeries call site. seriesId is a slug-from-title (lowercase
-    // + spaces→dashes) — matches the resources/fandom_manifests/*.json
-    // filename convention locked in Phase 8 (death-note, one-piece, etc.).
-    // qidHint pulled from a library record's wikidataQid when present
-    // (Task 17), otherwise empty (FandomVolumeResolver does the lookup
-    // via the manifest itself). titleHint goes to WikipediaResolver.
-    void dispatchFandomResolve(const QString& seriesId,
-                                const QString& qidHint,
+    // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local-only catalog
+    // resolve: looks up the series in m_localCatalogIndex (data/mangafire_catalog/)
+    // and calls populateVolumeRowsFromCatalog on hit. No-ops on miss.
+    // Renamed from dispatchFandomResolve; network fallback chain removed.
+    void dispatchCatalogResolve(const QString& seriesId,
                                 const QString& titleHint);
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 34 — walks
     // m_tileStrip->tiles() and refreshes each Tankoyomi-origin tile's
@@ -443,8 +424,8 @@ private:
 
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-22 — Catalog screen lazy-created
     // on first button press; lives at m_stack index 4 (after Tankoyomi vol
-    // series view at index 3). Reads from data/fandom_catalog/*.json via
-    // LocalFandomCatalogLoader.
+    // series view at index 3). Reads from data/mangafire_catalog/*.json via
+    // LocalMangaCatalogLoader.
     tankoban::ui::comics::ComicsCatalogScreen* m_catalogScreen = nullptr;
 
     // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- legacy
@@ -476,27 +457,16 @@ private:
     tankoban::manga::WeebCentralVolumePacker* m_weebCentralPacker = nullptr;
     tankoban::manga::comics::ComicsSeriesView* m_tyVolumeSeriesView = nullptr;
 
-    // Fandom catalog redesign Task 19 (Phase 7, 2026-05-20). Resolver chain
-    // for Stremio-style per-volume catalogs. WikidataClient + FandomClient
-    // own no state — share m_nam. WikiManifestRegistry loads
-    // resources/fandom_manifests/*.json at ctor (0 manifests is fine pre-
-    // Phase-8). FandomVolumeResolver composes wd + fc + registry +
-    // FandomCatalogCache (the cache is static, no instance needed).
-    // WikipediaResolver is tier-2 fallback. FallbackChainResolver merges
-    // Fandom + Wikipedia results per-field and emits to
-    // onFandomCatalogResolved.
-    tankoban::manga::wikidata::WikidataClient*     m_wikidataClient     = nullptr;
-    tankoban::manga::fandom::FandomClient*         m_fandomClient       = nullptr;
-    tankoban::manga::fandom::WikiManifestRegistry* m_wikiManifestRegistry = nullptr;
-    tankoban::manga::fandom::FandomVolumeResolver* m_fandomVolumeResolver = nullptr;
-    tankoban::manga::wikipedia::WikipediaResolver* m_wikipediaResolver  = nullptr;
-    tankoban::manga::FallbackChainResolver*        m_fallbackResolver   = nullptr;
-    tankoban::manga::fandom::LocalFandomCatalogIndex m_localCatalogIndex;
-    // Identity of the most recently dispatched Fandom resolve. Used by
-    // onFandomCatalogResolved to drop stale catalogs when the user navigated
-    // away mid-resolve (mirrors the m_currentSeriesKey stale-guard pattern
-    // ComicsSeriesView uses for cover/banner fetches).
-    QString m_pendingFandomSeriesId;
+    // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
+    // index. Scans data/mangafire_catalog/*.json at construction; consulted
+    // by dispatchCatalogResolve for every series open. The live network
+    // fallback chain (FallbackChainResolver + FandomVolumeResolver +
+    // WikipediaResolver + WikidataClient) was removed — local-first is the
+    // ONLY resolution path now.
+    tankoban::manga::LocalMangaCatalogIndex m_localCatalogIndex;
+    // Identity of the most recently dispatched catalog resolve — stale-event
+    // guard mirroring the m_currentSeriesKey pattern in ComicsSeriesView.
+    QString m_pendingCatalogSeriesId;
     QMap<QString, PendingVolumeDispatch> m_pendingVolumeDispatches;
     // Last anilistId surfaced via showSeries(); used by captureNavState.
     int m_currentDetailAnilistId = 0;
