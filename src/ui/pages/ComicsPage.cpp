@@ -2073,7 +2073,6 @@ void ComicsPage::refreshLibraryStrips()
             }
 
             auto* card = new TileCard(coverPath, displayTitle, QStringLiteral("Downloaded"));
-            card->setProvenance(QStringLiteral("tankoyomi"));
             card->setProperty("anilistId", anilistId);
             card->setProperty("seriesKey",
                               e.sourceId + QStringLiteral(":") + e.seriesId);
@@ -2140,8 +2139,7 @@ void ComicsPage::refreshLibraryStrips()
             // bookmark is the duplicate and should be skipped.
             if (downloadedTitleKeysNorm.contains(p.title.toLower().trimmed())) continue;
 
-            auto* card = new TileCard(QString(), p.title,
-                                       QStringLiteral("Bookmarked"));
+            auto* card = new TileCard(QString(), p.title, QString());
             card->setProperty("anilistId", p.anilistId);
             card->setProperty("seriesName", p.title);
             const int anilistId = p.anilistId;
@@ -3029,8 +3027,6 @@ void ComicsPage::refreshContinueStrip()
         card->setProperty("seriesName", ScannerUtils::cleanMediaFolderTitle(
             QDir(item.seriesPath).dirName()));
         card->setProperty("coverPath", item.coverPath);
-        if (m_tyLibrary && m_tyLibrary->getByCanonicalPath(item.seriesPath))
-            card->setProvenance(QStringLiteral("tankoyomi"));
         connect(card, &TileCard::clicked, this, [this, card]() {
             QString path = card->property("filePath").toString();
             QString seriesPath = card->property("seriesPath").toString();
