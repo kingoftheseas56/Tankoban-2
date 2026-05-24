@@ -4,9 +4,12 @@
 
 #include "MangaWeebCentralResolver.h"
 
+#include "core/manga/MangaScraper.h"
+#include "core/manga/MangaResult.h"
 #include "core/manga/WeebCentralScraper.h"
 #include "core/manga/mangafire/MangaFireCatalogClient.h"
 
+#include <QDateTime>
 #include <QHash>
 #include <QNetworkAccessManager>
 #include <QRegularExpression>
@@ -83,28 +86,236 @@ struct MangaWeebCentralResolver::PendingResolve {
     int chapterRangeStart = 0;
     int chapterRangeEnd = 0;
     QString seriesTitle;
+    QString mangaFireSeriesId;
+    QString cachedWcSeriesId;
 };
 
 MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
                                                    QObject* parent)
     : QObject(parent)
     , m_nam(nam)
-    , m_scraper(nullptr)
-{}
+    , m_scraper(new WeebCentralScraper(nam, this))
+{
+    connect(m_scraper, &MangaScraper::searchFinished,
+            this, [this](const QList<MangaResult>& results) {
+        if (m_inflightSearch.isEmpty()) return;
+        const QString mangaFireSeriesId = m_inflightSearch;
+        m_inflightSearch.clear();
+
+        auto queued = m_pendingByMangafireSeriesId.value(mangaFireSeriesId);
+        if (queued.isEmpty()) return;
+
+        if (results.isEmpty() || results.first().id.isEmpty()) {
+            m_pendingByMangafireSeriesId.remove(mangaFireSeriesId);
+            for (const auto& pending : queued) {
+                emitSkip(pending, SkipReason::NoSeriesMatch);
+            }
+            return;
+        }
+
+        const QString wcSeriesId = results.first().id;
+        tankoban::manga::WeebCentralCacheBlock block;
+        block.seriesId = wcSeriesId;
+        block.chaptersFetchedAt = QDateTime::currentDateTimeUtc();
+        MangaFireCatalogClient::patchWeebCentralBlock(mangaFireSeriesId, block);
+
+        auto& liveQueue = m_pendingByMangafireSeriesId[mangaFireSeriesId];
+        for (const auto& pending : liveQueue) {
+            pending->cachedWcSeriesId = wcSeriesId;
+        }
+        if (!liveQueue.isEmpty()) {
+            stepFetchChapters(liveQueue.first());
+        }
+    });
+
+    connect(m_scraper, &MangaScraper::chaptersReady,
+            this, [this](const QList<ChapterInfo>& chapters) {
+        if (m_inflightFetch.isEmpty()) return;
+        const QString wcSeriesId = m_inflightFetch;
+        m_inflightFetch.clear();
+
+        QStringList chapterIds;
+        chapterIds.reserve(chapters.size());
+        for (const auto& ch : chapters) {
+            if (!ch.id.isEmpty()) chapterIds.append(ch.id);
+        }
+        m_chapterCache.insert(wcSeriesId, chapterIds);
+
+        QList<PendingResolvePtr> ready;
+        for (auto it = m_pendingByMangafireSeriesId.begin();
+             it != m_pendingByMangafireSeriesId.end(); ) {
+            QList<PendingResolvePtr> stillPending;
+            for (const auto& pending : it.value()) {
+                if (pending->cachedWcSeriesId == wcSeriesId) {
+                    ready.append(pending);
+                } else {
+                    stillPending.append(pending);
+                }
+            }
+
+            if (stillPending.isEmpty()) {
+                it = m_pendingByMangafireSeriesId.erase(it);
+            } else {
+                it.value() = stillPending;
+                ++it;
+            }
+        }
+
+        for (const auto& pending : ready) {
+            filterAndEmit(pending);
+        }
+    });
+
+    connect(m_scraper, &MangaScraper::errorOccurred,
+            this, [this](const QString&) {
+        const auto allPending = m_pendingByMangafireSeriesId;
+        m_pendingByMangafireSeriesId.clear();
+        m_inflightSearch.clear();
+        m_inflightFetch.clear();
+
+        for (const auto& queue : allPending) {
+            for (const auto& pending : queue) {
+                emitSkip(pending, SkipReason::NetworkError);
+            }
+        }
+    });
+}
 
 MangaWeebCentralResolver::~MangaWeebCentralResolver() = default;
 
 void MangaWeebCentralResolver::resolve(
-    const tankoban::manga::MangaCatalog&,
-    int,
+    const tankoban::manga::MangaCatalog& catalog,
+    int volumeNumber,
     const ResolveKey& key)
 {
-    emit skip(key, reasonCode(SkipReason::NetworkError));
+    int rangeStart = 0;
+    int rangeEnd = 0;
+    for (const auto& volume : catalog.volumes) {
+        if (volume.volumeNumber == volumeNumber) {
+            rangeStart = volume.chapterRangeStart;
+            rangeEnd = volume.chapterRangeEnd;
+            break;
+        }
+    }
+
+    if (rangeStart <= 0 || rangeEnd < rangeStart) {
+        emit skip(key, reasonCode(SkipReason::NoChapterOverlap));
+        return;
+    }
+
+    auto pending = std::make_shared<PendingResolve>();
+    pending->key = key;
+    pending->chapterRangeStart = rangeStart;
+    pending->chapterRangeEnd = rangeEnd;
+    pending->seriesTitle = catalog.seriesTitle;
+    pending->mangaFireSeriesId = catalog.seriesId;
+    pending->cachedWcSeriesId = catalog.weebCentral.seriesId;
+
+    if (!pending->cachedWcSeriesId.isEmpty()
+        && m_chapterCache.contains(pending->cachedWcSeriesId)) {
+        filterAndEmit(pending);
+        return;
+    }
+
+    m_pendingByMangafireSeriesId[catalog.seriesId].append(pending);
+    if (m_pendingByMangafireSeriesId[catalog.seriesId].size() > 1) {
+        return;
+    }
+
+    if (pending->cachedWcSeriesId.isEmpty()) {
+        if (!m_scraper || !m_inflightSearch.isEmpty()) {
+            m_pendingByMangafireSeriesId.remove(catalog.seriesId);
+            emitSkip(pending, SkipReason::NetworkError);
+            return;
+        }
+        m_inflightSearch = catalog.seriesId;
+        m_scraper->search(pending->seriesTitle, 1);
+        return;
+    }
+
+    stepFetchChapters(pending);
 }
 
-void MangaWeebCentralResolver::stepFetchChapters(PendingResolvePtr) {}
-void MangaWeebCentralResolver::filterAndEmit(PendingResolvePtr) {}
-void MangaWeebCentralResolver::emitSkip(PendingResolvePtr, SkipReason) {}
-void MangaWeebCentralResolver::emitViable(PendingResolvePtr, const QStringList&) {}
+void MangaWeebCentralResolver::stepFetchChapters(PendingResolvePtr pending)
+{
+    const QString wcSeriesId = pending->cachedWcSeriesId;
+    if (wcSeriesId.isEmpty()) {
+        m_pendingByMangafireSeriesId.remove(pending->mangaFireSeriesId);
+        emitSkip(pending, SkipReason::NoSeriesMatch);
+        return;
+    }
+
+    if (m_chapterCache.contains(wcSeriesId)) {
+        const auto queued =
+            m_pendingByMangafireSeriesId.take(pending->mangaFireSeriesId);
+        if (queued.isEmpty()) {
+            filterAndEmit(pending);
+            return;
+        }
+        for (const auto& item : queued) {
+            filterAndEmit(item);
+        }
+        return;
+    }
+
+    if (!m_scraper || !m_inflightFetch.isEmpty()) {
+        m_pendingByMangafireSeriesId.remove(pending->mangaFireSeriesId);
+        emitSkip(pending, SkipReason::NetworkError);
+        return;
+    }
+
+    m_inflightFetch = wcSeriesId;
+    m_scraper->fetchChapters(wcSeriesId);
+}
+
+void MangaWeebCentralResolver::filterAndEmit(PendingResolvePtr pending)
+{
+    const auto it = m_chapterCache.constFind(pending->cachedWcSeriesId);
+    if (it == m_chapterCache.constEnd() || it.value().isEmpty()) {
+        emitSkip(pending, SkipReason::NoChapterOverlap);
+        return;
+    }
+
+    bool hasOverlap = false;
+    for (const QString& id : it.value()) {
+        const int n = chapterNumberToken(id);
+        if (n >= pending->chapterRangeStart && n <= pending->chapterRangeEnd) {
+            hasOverlap = true;
+            break;
+        }
+    }
+    if (!hasOverlap) {
+        emitSkip(pending, SkipReason::NoChapterOverlap);
+        return;
+    }
+
+    bool incomplete = false;
+    const QStringList chapterIds = filterChaptersToRange(
+        it.value(),
+        pending->chapterRangeStart,
+        pending->chapterRangeEnd,
+        &incomplete);
+
+    if (chapterIds.isEmpty()) {
+        emitSkip(pending, incomplete ? SkipReason::IncompleteCoverage
+                                     : SkipReason::NoChapterOverlap);
+        return;
+    }
+
+    emitViable(pending, chapterIds);
+}
+
+void MangaWeebCentralResolver::emitSkip(PendingResolvePtr pending, SkipReason reason)
+{
+    if (!pending) return;
+    emit skip(pending->key, reasonCode(reason));
+}
+
+void MangaWeebCentralResolver::emitViable(PendingResolvePtr pending,
+                                          const QStringList& chapterIds)
+{
+    if (!pending) return;
+    emit viable(pending->key, chapterIds);
+}
 
 } // namespace tankoban::manga::mangafire

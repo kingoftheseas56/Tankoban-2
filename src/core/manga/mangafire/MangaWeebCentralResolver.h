@@ -84,6 +84,11 @@ private:
 
     QHash<QString, QStringList> m_chapterCache; // WC seriesId -> chapter ids
     QHash<QString, QList<PendingResolvePtr>> m_pendingByMangafireSeriesId;
+
+    // The private WeebCentralScraper signal surface is request-id-less, so
+    // serialize each async phase explicitly.
+    QString m_inflightSearch; // MangaFire seriesId
+    QString m_inflightFetch;  // WeebCentral seriesId
 };
 
 } // namespace tankoban::manga::mangafire

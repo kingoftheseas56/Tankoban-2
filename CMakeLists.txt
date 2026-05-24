@@ -854,6 +854,9 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/anilist/test_anilist_parser.cpp
         tests/core/manga/anilist/test_anilist_cache.cpp
         tests/core/manga/mangafire/test_manga_weebcentral_resolver.cpp
+        src/core/manga/MangaScraper.h
+        src/core/manga/WeebCentralScraper.cpp
+        src/core/manga/mangafire/MangaFireCatalogClient.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
