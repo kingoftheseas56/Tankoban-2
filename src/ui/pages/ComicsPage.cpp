@@ -76,6 +76,7 @@
 static const QStringList COMIC_EXTS = {"*.cbz", "*.cbr", "*.rar"};
 static constexpr const char* TANKOYOMI_PREMIUM_SOURCE_ID = "tankoyomi_premium";
 static constexpr const char* WEEBCENTRAL_PACKER_SOURCE_ID = "weebcentral";
+static constexpr const char* MANGAFIRE_CATALOG_SOURCE_ID = "mangafire_catalog";
 
 namespace {
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
@@ -1619,7 +1620,9 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
             sourceId = QString::fromLatin1(TANKOYOMI_PREMIUM_SOURCE_ID);
             break;
         case PendingVolumeSourceKind::WeebCentralPacker:
-            sourceId = QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID);
+            sourceId = seriesId.startsWith(QLatin1String("anilist_"))
+                ? QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID)
+                : QString::fromLatin1(MANGAFIRE_CATALOG_SOURCE_ID);
             break;
     }
 
@@ -1634,8 +1637,13 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
                                              QFileInfo(cbzPath).size(), chapterIds);
     }
 
-    if (m_tyVolumeSeriesView && anilistId > 0 &&
-        m_tyVolumeSeriesView->currentAnilistId() == anilistId) {
+    const bool currentMangaFireVolume =
+        kind == PendingVolumeSourceKind::WeebCentralPacker &&
+        seriesId == m_currentWcResolveKey.seriesId &&
+        volumeNumber == m_currentWcResolveKey.volumeNumber;
+    if (m_tyVolumeSeriesView &&
+        ((anilistId > 0 && m_tyVolumeSeriesView->currentAnilistId() == anilistId) ||
+         currentMangaFireVolume)) {
         m_tyVolumeSeriesView->setVolumeDownloadState(volumeNumber, cbzPath, true);
     }
 }
@@ -1664,8 +1672,13 @@ void ComicsPage::onProviderVolumeFailed(const QString& seriesId,
         anilistId = anilistIdForDownloadEntry(sourceId, seriesId);
     }
 
-    if (m_tyVolumeSeriesView && anilistId > 0 &&
-        m_tyVolumeSeriesView->currentAnilistId() == anilistId) {
+    const bool currentMangaFireVolume =
+        kind == PendingVolumeSourceKind::WeebCentralPacker &&
+        seriesId == m_currentWcResolveKey.seriesId &&
+        volumeNumber == m_currentWcResolveKey.volumeNumber;
+    if (m_tyVolumeSeriesView &&
+        ((anilistId > 0 && m_tyVolumeSeriesView->currentAnilistId() == anilistId) ||
+         currentMangaFireVolume)) {
         m_tyVolumeSeriesView->setVolumeStatusText(volumeNumber, QStringLiteral("Failed"));
     }
 
@@ -2534,9 +2547,28 @@ void ComicsPage::onDownloadDispatchRequested(
                 << "[Phase9 dispatch] WC row but packer not wired";
             return;
         }
-        if (chapterIds.isEmpty()) {
+        const QStringList wcChapterIds = row.weebCentralChapterIds.isEmpty()
+            ? chapterIds
+            : row.weebCentralChapterIds;
+        if (wcChapterIds.isEmpty()) {
             qDebug().noquote()
                 << "[Phase9 dispatch] WC row but no chapter ids supplied";
+            return;
+        }
+        QString mangaFireSeriesId;
+        if (m_currentWcResolveKey.volumeNumber == volumeNumber &&
+            !m_currentWcResolveKey.seriesId.isEmpty()) {
+            mangaFireSeriesId = m_currentWcResolveKey.seriesId;
+        }
+        if (mangaFireSeriesId.isEmpty() && anilistSeriesId > 0) {
+            mangaFireSeriesId = m_localCatalogIndex.slugForAnilistId(anilistSeriesId);
+        }
+        if (mangaFireSeriesId.isEmpty() && !seriesTitle.isEmpty()) {
+            mangaFireSeriesId = m_localCatalogIndex.slugForSeriesTitle(seriesTitle);
+        }
+        if (mangaFireSeriesId.isEmpty()) {
+            qDebug().noquote()
+                << "[Phase9 dispatch] WC requestVolume aborted -- no MangaFire seriesId";
             return;
         }
         const QStringList roots = m_bridge->rootFolders("comics");
@@ -2553,13 +2585,13 @@ void ComicsPage::onDownloadDispatchRequested(
                                                         .arg(volumeNumber, 2, 10, QChar('0'));
 
         VolumePackRequest req;
-        req.seriesId        = fallbackSeriesId;
+        req.seriesId        = mangaFireSeriesId;
         req.volumeNumber    = volumeNumber;
         req.destinationPath = destinationPath;
-        req.chapterIds      = chapterIds;
+        req.chapterIds      = wcChapterIds;
         rememberPendingVolumeDispatch(req.seriesId, volumeNumber,
                                       PendingVolumeSourceKind::WeebCentralPacker,
-                                      anilistSeriesId, chapterIds);
+                                      anilistSeriesId, wcChapterIds);
         m_weebCentralPacker->requestVolume(req);
         return;
     }
