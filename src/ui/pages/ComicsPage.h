@@ -51,8 +51,14 @@ namespace tankoban::manga {
         class ComicsSeriesView;
         struct UnifiedSourceRow;
     }
+    namespace mangafire {
+        class MangaFireCatalogClient;
+        class MangaWeebCentralResolver;
+    }
+    struct MangaCatalog;
 }
 #include "core/manga/LocalMangaCatalogIndex.h"
+#include "core/manga/mangafire/MangaWeebCentralResolver.h"
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
 struct MangaResult;
@@ -190,6 +196,24 @@ private slots:
     // ComicsSeriesView's forceRefreshRequested signal (network fallback gone;
     // catalog is always local-first now).
     void onForceRefreshRequested();
+
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1). When the
+    // local-first dispatchCatalogResolve finds no catalog JSON on disk,
+    // m_mangafireClient->fetchByTitle() fires; the reply lands here. On
+    // ready we refresh the local index and re-dispatch so populateVolumeRows-
+    // FromCatalog renders the rows. On failed we just log; the series-view
+    // already paints WeebCentral/AniList fallback content.
+    void onMangaFireCatalogReady(const tankoban::manga::MangaCatalog& catalog,
+                                  const QString& writtenPath);
+    void onMangaFireCatalogFailed(const QString& title, const QString& reason);
+    void onWcResolveRequested(const QString& mangaFireSeriesId,
+                              int volumeNumber);
+    void onWcResolverViable(
+        tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
+        QStringList chapterIds);
+    void onWcResolverSkip(
+        tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
+        QString reasonCode);
 
 protected:
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 —
@@ -447,9 +471,21 @@ private:
     // WikipediaResolver + WikidataClient) was removed — local-first is the
     // ONLY resolution path now.
     tankoban::manga::LocalMangaCatalogIndex m_localCatalogIndex;
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1). Live MangaFire
+    // scraper for the search-first architecture — runs only on no-local-match
+    // inside dispatchCatalogResolve. Caches to data/mangafire_catalog/*.json
+    // so subsequent opens of the same series are instant via the index.
+    tankoban::manga::mangafire::MangaFireCatalogClient* m_mangafireClient = nullptr;
+    tankoban::manga::mangafire::MangaWeebCentralResolver* m_wcResolver = nullptr;
     // Identity of the most recently dispatched catalog resolve — stale-event
     // guard mirroring the m_currentSeriesKey pattern in ComicsSeriesView.
     QString m_pendingCatalogSeriesId;
+    // Title hint stashed alongside m_pendingCatalogSeriesId so the on-demand
+    // MangaFire fetch ready-callback can re-dispatch with the same seriesId/
+    // titleHint pair the original resolve used.
+    QString m_pendingCatalogTitleHint;
+    tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey m_currentWcResolveKey;
+    quint64 m_wcResolveSerial = 0;
     QMap<QString, PendingVolumeDispatch> m_pendingVolumeDispatches;
     // Last anilistId surfaced via showSeries(); used by captureNavState.
     int m_currentDetailAnilistId = 0;

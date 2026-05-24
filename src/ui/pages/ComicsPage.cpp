@@ -25,6 +25,8 @@
 #include "core/manga/mangaupdates/VolumeMetadataResolver.h"
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/LocalMangaCatalogLoader.h"
+#include "core/manga/mangafire/MangaFireCatalogClient.h"
+#include "core/manga/mangafire/MangaWeebCentralResolver.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/torrent/TorrentEngine.h"
 #include "comics/ComicsTankoyomiSearchWidget.h"
@@ -131,6 +133,8 @@ QJsonObject mediaPreviewJson(const tankoban::manga::anilist::MediaPreview& p)
 }
 } // namespace
 
+static QString fandomSeriesSlugFromTitle(const QString& title);
+
 ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
@@ -138,6 +142,8 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     setObjectName("comics");
     qRegisterMetaType<SeriesInfo>("SeriesInfo");
     qRegisterMetaType<QList<SeriesInfo>>("QList<SeriesInfo>");
+    qRegisterMetaType<tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey>(
+        "tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey");
 
     buildUI();
 
@@ -164,6 +170,27 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     m_anilistClient = new tankoban::manga::anilist::AniListClient(m_nam, this);
     m_anilistCache  = new tankoban::manga::anilist::AniListCache(
                           m_bridge->dataDir() + QStringLiteral("/anilist_cache"), this);
+
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1). Live MangaFire
+    // scraper for search-first architecture. Sleeping until dispatchCatalogResolve
+    // fails the local-first lookup; then fetches one series from mangafire.to
+    // and writes data/mangafire_catalog/<slug>.json so the next resolve hits.
+    m_mangafireClient = new tankoban::manga::mangafire::MangaFireCatalogClient(
+                            m_nam, this);
+    connect(m_mangafireClient,
+            &tankoban::manga::mangafire::MangaFireCatalogClient::catalogReady,
+            this, &ComicsPage::onMangaFireCatalogReady);
+    connect(m_mangafireClient,
+            &tankoban::manga::mangafire::MangaFireCatalogClient::catalogFailed,
+            this, &ComicsPage::onMangaFireCatalogFailed);
+    m_wcResolver = new tankoban::manga::mangafire::MangaWeebCentralResolver(
+        m_nam, this);
+    connect(m_wcResolver,
+            &tankoban::manga::mangafire::MangaWeebCentralResolver::viable,
+            this, &ComicsPage::onWcResolverViable);
+    connect(m_wcResolver,
+            &tankoban::manga::mangafire::MangaWeebCentralResolver::skip,
+            this, &ComicsPage::onWcResolverSkip);
     m_mangaUpdatesClient = new tankoban::manga::mangaupdates::MangaUpdatesClient(
         m_anilistClient ? m_anilistClient->networkManager() : nullptr, this);
     m_volumeResolver = new tankoban::manga::mangaupdates::VolumeMetadataResolver(
@@ -360,6 +387,35 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::forceRefreshRequested,
             this, &ComicsPage::onForceRefreshRequested);
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRequested,
+            this, &ComicsPage::onWcResolveRequested);
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::detailResolvedForCatalog,
+            this, [this](int anilistId, const QString& title) {
+        if (!m_tyVolumeSeriesView || m_stack->currentWidget() != m_tyVolumeSeriesView)
+            return;
+        if (anilistId > 0 && m_currentDetailAnilistId > 0 &&
+            anilistId != m_currentDetailAnilistId) {
+            return;
+        }
+
+        const QString resolvedTitle = title.trimmed();
+        if (resolvedTitle.isEmpty() ||
+            resolvedTitle.startsWith(QStringLiteral("anilist_"),
+                                     Qt::CaseInsensitive)) {
+            return;
+        }
+        if (m_currentDetailSeriesTitle == resolvedTitle) {
+            return;
+        }
+
+        qInfo("ComicsPage::detailResolvedForCatalog: retrying MangaFire resolve for \"%s\"",
+              qUtf8Printable(resolvedTitle));
+        m_currentDetailSeriesTitle = resolvedTitle;
+        dispatchCatalogResolve(fandomSeriesSlugFromTitle(resolvedTitle),
+                               /*titleHint*/resolvedTitle);
+    });
 
     // Build the local MangaFire catalog index from data/mangafire_catalog/*.json.
     // One-shot scan at construction; refresh() is idempotent.
@@ -3352,7 +3408,8 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
         qInfo("ComicsPage::dispatchCatalogResolve: empty seriesId — skipping");
         return;
     }
-    m_pendingCatalogSeriesId = seriesId;
+    m_pendingCatalogSeriesId   = seriesId;
+    m_pendingCatalogTitleHint  = titleHint;
     qInfo("ComicsPage::dispatchCatalogResolve: seriesId=%s titleHint=%s",
           qUtf8Printable(seriesId),
           qUtf8Printable(titleHint));
@@ -3393,6 +3450,134 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
         qInfo("ComicsPage::dispatchCatalogResolve: no local catalog entry for seriesId=%s titleHint=%s",
               qUtf8Printable(seriesId), qUtf8Printable(titleHint));
     }
+
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1). No local hit
+    // and no slug match — fire the live MangaFire scrape. The reply lands at
+    // onMangaFireCatalogReady which refreshes m_localCatalogIndex and
+    // re-runs dispatchCatalogResolve so the cached path renders the rows.
+    // First-click latency: ~3–4s while the three HTTP calls fly. Every
+    // subsequent open of the same series is instant.
+    if (m_mangafireClient && !titleHint.isEmpty()) {
+        qInfo("ComicsPage::dispatchCatalogResolve: firing on-demand MangaFire fetch for \"%s\"",
+              qUtf8Printable(titleHint));
+        m_mangafireClient->fetchByTitle(titleHint);
+    }
+}
+
+// COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1).
+void ComicsPage::onMangaFireCatalogReady(
+    const tankoban::manga::MangaCatalog& catalog, const QString& writtenPath)
+{
+    qInfo("ComicsPage::onMangaFireCatalogReady: wrote %s (%lld volumes)",
+          qUtf8Printable(writtenPath),
+          static_cast<long long>(catalog.volumes.size()));
+
+    // Refresh the in-memory index so the freshly-written JSON is discoverable.
+    m_localCatalogIndex.refresh();
+
+    // Stale-guard: if the user has already navigated away (different series in
+    // flight, or back to library), don't clobber whatever they're now looking at.
+    if (m_pendingCatalogSeriesId.isEmpty()) {
+        qInfo("ComicsPage::onMangaFireCatalogReady: no pending dispatch — fetched but skipping render");
+        return;
+    }
+
+    // The reverse-dispatch will succeed via direct-slug match because we just
+    // wrote data/mangafire_catalog/<catalog.seriesId>.json. Use the freshly-
+    // written seriesId so the slug matches exactly even if title-normalization
+    // would have picked a different one.
+    if (!m_tyVolumeSeriesView) return;
+    const auto loaded = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(writtenPath);
+    if (!loaded.has_value()) {
+        qWarning("ComicsPage::onMangaFireCatalogReady: just-written JSON failed to reload");
+        return;
+    }
+    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*loaded);
+}
+
+void ComicsPage::onMangaFireCatalogFailed(const QString& title,
+                                           const QString& reason)
+{
+    qWarning("ComicsPage::onMangaFireCatalogFailed: title=\"%s\" reason=%s",
+             qUtf8Printable(title), qUtf8Printable(reason));
+    // No UI surfacing — the series view already shows WeebCentral/AniList
+    // content + a hero cover. The catalog rows just stay empty for series
+    // MangaFire doesn't host (extremely rare given the 53K-series corpus).
+}
+
+void ComicsPage::onWcResolveRequested(const QString& mangaFireSeriesId,
+                                      int volumeNumber)
+{
+    if (!m_wcResolver || volumeNumber <= 0) {
+        return;
+    }
+
+    QString seriesId = mangaFireSeriesId.trimmed();
+    if (seriesId.isEmpty() && !m_currentDetailSeriesTitle.isEmpty()) {
+        seriesId = m_localCatalogIndex.slugForSeriesTitle(m_currentDetailSeriesTitle);
+    }
+    if (seriesId.isEmpty()) {
+        qInfo("ComicsPage::onWcResolveRequested: no MangaFire seriesId for volume %d",
+              volumeNumber);
+        return;
+    }
+
+    const QString path = m_localCatalogIndex.filePathForSlug(seriesId);
+    if (path.isEmpty()) {
+        qInfo("ComicsPage::onWcResolveRequested: no catalog path for slug=%s volume=%d",
+              qUtf8Printable(seriesId), volumeNumber);
+        return;
+    }
+
+    const auto catalog = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
+    if (!catalog.has_value() || !catalog->isValid()) {
+        qWarning("ComicsPage::onWcResolveRequested: failed to load catalog %s",
+                 qUtf8Printable(path));
+        return;
+    }
+
+    tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key;
+    key.seriesId = catalog->seriesId;
+    key.volumeNumber = volumeNumber;
+    key.requestSerial = ++m_wcResolveSerial;
+    m_currentWcResolveKey = key;
+
+    m_wcResolver->resolve(*catalog, volumeNumber, key);
+}
+
+void ComicsPage::onWcResolverViable(
+    tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
+    QStringList chapterIds)
+{
+    if (!(key == m_currentWcResolveKey)) {
+        qInfo("ComicsPage::onWcResolverViable: dropped stale result slug=%s volume=%d serial=%llu",
+              qUtf8Printable(key.seriesId),
+              key.volumeNumber,
+              static_cast<unsigned long long>(key.requestSerial));
+        return;
+    }
+    if (!m_tyVolumeSeriesView || m_stack->currentWidget() != m_tyVolumeSeriesView) {
+        return;
+    }
+    m_tyVolumeSeriesView->onWeebCentralViable(key.volumeNumber, chapterIds);
+}
+
+void ComicsPage::onWcResolverSkip(
+    tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
+    QString reasonCode)
+{
+    if (!(key == m_currentWcResolveKey)) {
+        qInfo("ComicsPage::onWcResolverSkip: dropped stale result slug=%s volume=%d serial=%llu reason=%s",
+              qUtf8Printable(key.seriesId),
+              key.volumeNumber,
+              static_cast<unsigned long long>(key.requestSerial),
+              qUtf8Printable(reasonCode));
+        return;
+    }
+    qInfo("ComicsPage::onWcResolverSkip: slug=%s volume=%d reason=%s",
+          qUtf8Printable(key.seriesId),
+          key.volumeNumber,
+          qUtf8Printable(reasonCode));
 }
 
 void ComicsPage::onForceRefreshRequested()
