@@ -174,6 +174,8 @@ set(SOURCES
     src/core/manga/MangaCatalogTypes.cpp
     src/core/manga/LocalMangaCatalogLoader.cpp
     src/core/manga/LocalMangaCatalogIndex.cpp
+    src/core/manga/mangafire/MangaFireCatalogClient.cpp
+    src/core/manga/mangafire/MangaWeebCentralResolver.cpp
     src/core/manga/anilist/AniListClient.cpp
     src/core/manga/anilist/AniListParser.cpp
     src/core/manga/anilist/AniListCache.cpp
