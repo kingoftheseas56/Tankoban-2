@@ -437,6 +437,46 @@ void TileStrip::reflowTiles()
         return;
     }
 
+    // Fixed grid mode keeps the exact density-selected card dimensions.
+    // Comics Library uses this to match Continue Reading tile size while
+    // retaining multi-row grid layout.
+    if (m_mode == "fixedGrid") {
+        const int avail = availWidth - 4;
+        const int cols = std::max(1, (avail + m_tileSpacingH) / (m_cardWidth + m_tileSpacingH));
+
+        m_currentCols = cols;
+
+        int maxBottom = 0;
+        int visibleIndex = 0;
+
+        for (auto* tile : m_tiles) {
+            if (m_filteredOut.contains(tile)) {
+                tile->hide();
+                continue;
+            }
+
+            tile->setCardSize(m_cardWidth, m_imageHeight);
+
+            const int col = visibleIndex % cols;
+            const int row = visibleIndex / cols;
+
+            const int x = 2 + col * (m_cardWidth + m_tileSpacingH);
+            const int y = PADDING + row * (m_imageHeight + 50 + TILE_SPACING_V);
+
+            tile->move(x, y);
+            tile->show();
+
+            const int bottom = y + m_imageHeight + 50;
+            if (bottom > maxBottom)
+                maxBottom = bottom;
+
+            ++visibleIndex;
+        }
+
+        setFixedHeight(visibleIndex > 0 ? maxBottom + PADDING : 0);
+        return;
+    }
+
     // Grid mode with card width expansion (groundwork algorithm)
     const int avail  = availWidth - 4;
     const int baseW  = m_cardWidth;

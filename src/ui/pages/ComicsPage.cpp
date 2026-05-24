@@ -1223,6 +1223,7 @@ void ComicsPage::buildUI()
 
     m_tileStrip = new TileStrip(gridPage);
     m_tileStrip->hide();
+    m_tileStrip->setMode(QStringLiteral("fixedGrid"));
     m_tileStrip->setDensity(savedDensity);
     if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
     gridLayout->addWidget(m_tileStrip);
@@ -1239,6 +1240,7 @@ void ComicsPage::buildUI()
     m_bookmarkedLabel->setObjectName("LibraryHeading");
     bookmarkedLayout->addWidget(m_bookmarkedLabel);
     m_bookmarkedStrip = new TileStrip(m_bookmarkedSection);
+    m_bookmarkedStrip->setMode(QStringLiteral("fixedGrid"));
     m_bookmarkedStrip->setDensity(savedDensity);
     bookmarkedLayout->addWidget(m_bookmarkedStrip);
     m_bookmarkedSection->hide();
@@ -2065,9 +2067,28 @@ void ComicsPage::refreshLibraryStrips()
             if (!displayTitle.isEmpty()) {
                 downloadedTitleKeysNorm.insert(displayTitle.toLower().trimmed());
             }
+            if (m_bridge && !e.canonicalPath.isEmpty()) {
+                const QFileInfo fi(e.canonicalPath);
+                if (fi.exists()) {
+                    const QString fileKey = QDir::cleanPath(fi.absoluteFilePath())
+                                          + QStringLiteral("::")
+                                          + QString::number(fi.size())
+                                          + QStringLiteral("::")
+                                          + QString::number(fi.lastModified().toMSecsSinceEpoch());
+                    const QString fileHash = QString(QCryptographicHash::hash(
+                        fileKey.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+                    const QString fileCover = m_bridge->dataDir()
+                                            + QStringLiteral("/thumbs/")
+                                            + fileHash
+                                            + QStringLiteral(".jpg");
+                    if (QFile::exists(fileCover)) {
+                        coverPath = fileCover;
+                    }
+                }
+            }
             if (m_tyLibrary) {
                 const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
-                if (!rec.coverPath.isEmpty() && QFile::exists(rec.coverPath)) {
+                if (coverPath.isEmpty() && !rec.coverPath.isEmpty() && QFile::exists(rec.coverPath)) {
                     coverPath = rec.coverPath;
                 }
             }
@@ -2077,6 +2098,7 @@ void ComicsPage::refreshLibraryStrips()
             card->setProperty("seriesKey",
                               e.sourceId + QStringLiteral(":") + e.seriesId);
             card->setProperty("seriesName", displayTitle);
+            card->setProperty("coverPath", coverPath);
             // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Capture the
             // bookmark-enriched anilistId + display title alongside the entry
             // so the click handler can fall back to openSeriesByAnilistId
@@ -2114,7 +2136,8 @@ void ComicsPage::refreshLibraryStrips()
 
             if (anilistId > 0) {
                 downloadedAnilistIds.insert(anilistId);
-                fetchPosterForTile(card, anilistId, coverUrl);
+                if (coverPath.isEmpty())
+                    fetchPosterForTile(card, anilistId, coverUrl);
             }
         }
     }
