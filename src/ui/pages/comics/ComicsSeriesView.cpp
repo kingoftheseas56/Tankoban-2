@@ -1068,6 +1068,12 @@ void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
     // Phase 8a Wave 2: banner slot exists only for a real AniList banner.
     // Never stretch the portrait cover into this landscape band.
     loadBannerUrl(detail.preview.bannerUrl);
+
+    // COMICS_SERIES_OPEN_OVERLAY_CLEAR_FIX (Agent 1, 2026-05-25).
+    // Hero metadata is now visible as soon as renderDetail completes; volume
+    // covers continue loading in the background and still use the
+    // m_pendingMediaLoads safety path below.
+    hideLoadingOverlay();
 }
 
 void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
