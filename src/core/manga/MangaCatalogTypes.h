@@ -19,6 +19,7 @@
 
 #include <QDate>
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -51,6 +52,19 @@ struct MangaVolume {
 // Schema version stamp. Bumping this constant invalidates all on-disk caches.
 constexpr int kMangaCatalogSchemaVersion = 1;
 
+// COMICS_WC_VOLUME_WIRING 2026-05-24 (Agent 1). Cache hint for the
+// MangaWeebCentralResolver. Stores the WC seriesId resolved for this series
+// so subsequent vol clicks do not re-run the searchByTitle round-trip.
+// chaptersFetchedAt + volumeChapterIds are reserved for future on-disk
+// caching of the chapter enumeration; v1 keeps chapter lists in the
+// resolver's session-scoped memory cache.
+struct WeebCentralCacheBlock {
+    QString    seriesId;
+    QDateTime  chaptersFetchedAt;
+    QHash<int, QStringList> volumeChapterIds;
+    bool isEmpty() const { return seriesId.isEmpty(); }
+};
+
 // One series's worth of normalized catalog data.
 struct MangaCatalog {
     QString             seriesId;
@@ -77,6 +91,8 @@ struct MangaCatalog {
     double              malScoreRaw = 0.0;      // 0.0 if unknown
     QString             source;                 // e.g. "mangafire_ingest.py v1"
     QString             notes;
+    // COMICS_WC_VOLUME_WIRING 2026-05-24 - additive, no schema-version bump.
+    WeebCentralCacheBlock weebCentral;
     bool isValid() const { return !seriesId.isEmpty() && !volumes.isEmpty(); }
 };
 
