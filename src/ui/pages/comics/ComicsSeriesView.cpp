@@ -894,6 +894,7 @@ void ComicsSeriesView::clearView()
     m_pendingSeriesReqId = -1;
     m_currentSeriesTitle.clear();
     m_currentVolumeRows.clear();
+    m_currentMangaCatalog = tankoban::manga::MangaCatalog{};
 
     m_title->clear();
     if (m_heroCoverLabel) m_heroCoverLabel->clear();
@@ -1234,6 +1235,19 @@ QString clipSynopsisSnippet(const QString& synopsis, int maxChars = 120)
 void ComicsSeriesView::populateVolumeRowsFromCatalog(
     const tankoban::manga::MangaCatalog& catalog)
 {
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1). Tag the current
+    // series with a "mangafire:<slug>" key BEFORE inserting tiles. The
+    // catalog-tile entry path already pre-tags this in showCatalogSeries,
+    // but the search-open path (showSeries(MangaResult)) sets the key to
+    // "weebcentral:<id>", which leaves us exposed to late AniList replies
+    // clobbering the rows via renderDetail's populateVolumeRows call. This
+    // assignment closes that hole for the on-demand fetch path without
+    // changing the catalog-tile path (idempotent — same value either way).
+    if (!catalog.seriesId.isEmpty()) {
+        m_currentSeriesKey = QStringLiteral("mangafire:%1").arg(catalog.seriesId);
+    }
+    m_currentMangaCatalog = catalog;
+
     // Tear down existing tiles.
     qDeleteAll(m_volumeTiles);
     m_volumeTiles.clear();
@@ -1292,13 +1306,8 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
                     emit openVolume(vn, entry ? entry->canonicalPath : QString());
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
-                this, [this](int /*vn*/) {
-                    // Route through existing source-panel dispatch path.
-                    // populateSourcesForRow takes a table-row index from the
-                    // old QTableWidget world. For VolumeTile world the source
-                    // panel is driven by volume-number via the sources panel
-                    // directly — Task 16 fully rewires this path.
-                    populateSourcesForRow(-1);
+                this, [this](int vn) {
+                    populateSourcesForVolume(vn);
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
                 this, [this](bool checked, bool shiftHeld) {
@@ -1992,6 +2001,60 @@ void ComicsSeriesView::populateSourcesForRow(int row)
                              chapterNumbers);
 }
 
+void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
+{
+    if (volumeNumber <= 0 || !m_sourcesPanel) {
+        return;
+    }
+
+    for (int i = 0; i < m_currentVolumeRows.size(); ++i) {
+        if (m_currentVolumeRows.at(i).volumeNumber != volumeNumber) {
+            continue;
+        }
+
+        populateSourcesForRow(i);
+        const QString mangaFireSeriesId = m_currentMangaCatalog.isValid()
+            ? m_currentMangaCatalog.seriesId
+            : QString();
+        emit weebCentralResolveRequested(mangaFireSeriesId, volumeNumber);
+        return;
+    }
+
+    if (!m_currentMangaCatalog.isValid()) {
+        return;
+    }
+
+    for (const tankoban::manga::MangaCatalogVolume& vol : m_currentMangaCatalog.volumes) {
+        if (vol.volumeNumber != volumeNumber) {
+            continue;
+        }
+
+        tankoban::manga::anilist::VolumeRow stub;
+        stub.volumeNumber = vol.volumeNumber;
+        stub.chapterRangeStart = vol.chapterRangeStart;
+        stub.chapterRangeEnd = vol.chapterRangeEnd;
+        stub.chapterNumbers = vol.chapterList;
+        stub.art.thumbnailUrl = !vol.coverUrlJapanese.isEmpty()
+            ? vol.coverUrlJapanese
+            : vol.coverUrlEnglish;
+
+        m_currentVolumeRows.append(stub);
+        const int row = m_currentVolumeRows.size() - 1;
+        populateSourcesForRow(row);
+        m_currentVolumeRows.removeLast();
+        emit weebCentralResolveRequested(m_currentMangaCatalog.seriesId, volumeNumber);
+        return;
+    }
+}
+
+void ComicsSeriesView::onWeebCentralViable(int volumeNumber, const QStringList& chapterIds)
+{
+    if (!m_sourcesPanel) {
+        return;
+    }
+    m_sourcesPanel->appendWeebCentralRow(volumeNumber, chapterIds);
+}
+
 void ComicsSeriesView::onDescShowMoreClicked()
 {
     if (!m_synopsis || !m_descShowMoreBtn) return;
@@ -2104,7 +2167,7 @@ QJsonObject ComicsSeriesView::devSelectVolume(int row)
     }
 
     // Task 16: no setCurrentCell; drive the sources panel directly.
-    populateSourcesForRow(row);
+    populateSourcesForVolume(m_currentVolumeRows.at(row).volumeNumber);
     out[QStringLiteral("status")] = QStringLiteral("ok");
     out[QStringLiteral("row")] = row;
     out[QStringLiteral("volume")] = m_currentVolumeRows.at(row).volumeNumber;
@@ -2134,7 +2197,7 @@ QJsonObject ComicsSeriesView::devDispatchVolume(int volumeNumber, const QString&
     }
 
     // Task 16: no setCurrentCell; drive the sources panel directly.
-    populateSourcesForRow(row);
+    populateSourcesForVolume(volumeNumber);
 
     QString err;
     if (!m_sourcesPanel || !m_sourcesPanel->devDispatchSource(source, &err)) {

@@ -126,6 +126,8 @@ public slots:
     void setVolumeDownloadState(int volumeNumber, const QString& cbzPath,
                                 bool downloaded);
     void setVolumeStatusText(int volumeNumber, const QString& statusText);
+    void populateSourcesForVolume(int volumeNumber);
+    void onWeebCentralViable(int volumeNumber, const QStringList& chapterIds);
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Render volume rows from
     // a MangaCatalog loaded from data/mangafire_catalog/. Renamed from
@@ -167,6 +169,18 @@ signals:
     // catalog index and re-resolves for the current series.
     // No payload: ComicsPage tracks the current series identity.
     void forceRefreshRequested();
+
+    // COMICS_MANGAFIRE_ON_DEMAND_FETCH follow-up (2026-05-23). AniList-id
+    // opens can start with a placeholder title such as "anilist_87395";
+    // notify ComicsPage when the real detail title arrives so MangaFire
+    // catalog resolution can retry with a usable title.
+    void detailResolvedForCatalog(int anilistId, const QString& title);
+
+    // COMICS_WC_VOLUME_WIRING 2026-05-24 (Agent 1). Emitted after a volume
+    // source panel is populated so ComicsPage can lazily resolve the
+    // WeebCentral source for that MangaFire volume.
+    void weebCentralResolveRequested(const QString& mangaFireSeriesId,
+                                     int volumeNumber);
 
     // STREAM_PORT 2026-05-18 Task 5: multi-volume bulk dispatch.
     // ComicsPage v1.x will route this through the default provider
@@ -335,6 +349,7 @@ private:
     // VolumeRow to the sources panel without re-running the mapper.
     QList<anilist::VolumeRow> m_currentVolumeRows;
     QString                   m_currentSeriesTitle;
+    tankoban::manga::MangaCatalog m_currentMangaCatalog;
 
     // STREAM_PORT 2026-05-18 Task 6: index of the first volume the user
     // hasn't started reading (proxy: first row whose stashed cbz path is
