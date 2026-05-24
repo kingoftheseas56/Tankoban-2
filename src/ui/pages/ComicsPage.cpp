@@ -391,6 +391,18 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRequested,
             this, &ComicsPage::onWcResolveRequested);
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
+    // series (anilistId=0) can't bookmark via the AniList-keyed path. Wire
+    // the best-effort search-by-title enrichment here.
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::addToLibraryByTitleRequested,
+            this, &ComicsPage::onAddToLibraryByTitleRequested);
+    // COMICS_WC_AUTOENRICH 2026-05-24 — fires automatically on series-open
+    // from search results so the hero block renders without requiring an
+    // explicit Add to Library click.
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::enrichSeriesByTitleRequested,
+            this, &ComicsPage::onEnrichSeriesByTitleRequested);
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::detailResolvedForCatalog,
             this, [this](int anilistId, const QString& title) {
@@ -438,6 +450,97 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             m_volumeResolver->resolveForAnilist(
                 detail.preview.anilistId, detail.preview, QStringList{});
         }
+    }, Qt::QueuedConnection);
+
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). Persistent listeners
+    // for the Add-to-Library search-by-title enrichment. Filtered by
+    // m_pendingLibraryEnrichReqId so the search-bar / other AniList
+    // searches don't trample this flow.
+    connect(m_anilistClient,
+            &tankoban::manga::anilist::AniListClient::searchSucceeded,
+            this, [this](int reqId,
+                          const QList<tankoban::manga::anilist::MediaPreview>& results) {
+        if (reqId != m_pendingLibraryEnrichReqId || m_pendingLibraryEnrichReqId == 0) return;
+        const QString pendingTitle = m_pendingLibraryEnrichTitle;
+        const bool addBookmark = m_pendingLibraryEnrichAddBookmark;
+        const bool searchOpenRequest = (reqId == m_pendingSearchOpenEnrichReqId);
+        const MangaResult searchOpenFallback = m_pendingSearchOpenFallback;
+        m_pendingLibraryEnrichReqId = 0;
+        m_pendingLibraryEnrichTitle.clear();
+        m_pendingLibraryEnrichAddBookmark = false;
+        if (searchOpenRequest) {
+            m_pendingSearchOpenEnrichReqId = 0;
+            m_pendingSearchOpenFallback = MangaResult{};
+        }
+
+        if (!m_anilistCache || !m_tyVolumeSeriesView) return;
+
+        // No match: re-enable the button (if Add-to-Library path) or just
+        // leave the series view as-is (if auto-enrichment path).
+        if (results.isEmpty() || results.first().anilistId <= 0) {
+            qInfo("ComicsPage::AniListEnrich: no AniList match for \"%s\" (addBookmark=%d)",
+                  qUtf8Printable(pendingTitle), addBookmark ? 1 : 0);
+            if (searchOpenRequest) {
+                renderSearchOpenFallback(searchOpenFallback);
+                return;
+            }
+            if (addBookmark) m_tyVolumeSeriesView->refreshLibraryButton();
+            return;
+        }
+
+        const auto& preview = results.first();
+        qInfo("ComicsPage::AniListEnrich: matched \"%s\" -> anilistId=%d title=\"%s\" (addBookmark=%d)",
+              qUtf8Printable(pendingTitle), preview.anilistId,
+              qUtf8Printable(preview.title), addBookmark ? 1 : 0);
+
+        // Seed the cache with the preview so a future bookmarked tile (and
+        // the current view's hero) render with title + cover immediately.
+        tankoban::manga::anilist::MediaDetail seed;
+        seed.preview = preview;
+        m_anilistCache->put(seed);
+
+        // Only the Add-to-Library path commits a bookmark. Auto-enrichment
+        // is read-only — same hero rendering, no library commit.
+        if (addBookmark) {
+            m_anilistCache->addBookmark(preview.anilistId);
+        }
+
+        // Re-show the series so m_currentAnilistId picks up the new id and
+        // the hero block (banner, poster, synopsis, tags) renders via the
+        // existing AniList-driven flow. showSeries also fires the seriesById
+        // fetch in the background which deep-enriches once it lands.
+        m_currentDetailAnilistId   = preview.anilistId;
+        m_currentDetailSeriesTitle = preview.title;
+        m_tyVolumeSeriesView->showSeries(preview);
+        const QString catalogTitle = searchOpenRequest && !searchOpenFallback.title.isEmpty()
+            ? searchOpenFallback.title
+            : preview.title;
+        dispatchCatalogResolve(fandomSeriesSlugFromTitle(catalogTitle),
+                               catalogTitle);
+    }, Qt::QueuedConnection);
+
+    connect(m_anilistClient,
+            &tankoban::manga::anilist::AniListClient::searchFailed,
+            this, [this](int reqId, const QString& reason) {
+        if (reqId != m_pendingLibraryEnrichReqId || m_pendingLibraryEnrichReqId == 0) return;
+        const QString pendingTitle = m_pendingLibraryEnrichTitle;
+        const bool addBookmark = m_pendingLibraryEnrichAddBookmark;
+        const bool searchOpenRequest = (reqId == m_pendingSearchOpenEnrichReqId);
+        const MangaResult searchOpenFallback = m_pendingSearchOpenFallback;
+        m_pendingLibraryEnrichReqId = 0;
+        m_pendingLibraryEnrichTitle.clear();
+        m_pendingLibraryEnrichAddBookmark = false;
+        if (searchOpenRequest) {
+            m_pendingSearchOpenEnrichReqId = 0;
+            m_pendingSearchOpenFallback = MangaResult{};
+        }
+        qWarning("ComicsPage::AniListEnrich: AniList search failed for \"%s\" (addBookmark=%d): %s",
+                 qUtf8Printable(pendingTitle), addBookmark ? 1 : 0, qUtf8Printable(reason));
+        if (searchOpenRequest) {
+            renderSearchOpenFallback(searchOpenFallback);
+            return;
+        }
+        if (addBookmark && m_tyVolumeSeriesView) m_tyVolumeSeriesView->refreshLibraryButton();
     }, Qt::QueuedConnection);
 
     // Background scanner thread
@@ -1646,6 +1749,17 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
          currentMangaFireVolume)) {
         m_tyVolumeSeriesView->setVolumeDownloadState(volumeNumber, cbzPath, true);
     }
+
+    // COMICS_WC_AUTOBOOKMARK 2026-05-24 (Agent 1). Stremio-parity: downloading
+    // a volume implicitly adds the series to the library. Only fires when we
+    // have a resolved anilistId (from the dispatch-time enrichment) AND the
+    // series isn't already bookmarked. Series with no AniList match still
+    // appear in the library via the merged-download-tile path (Bug 1 fix).
+    if (anilistId > 0 && m_anilistCache && !m_anilistCache->isBookmarked(anilistId)) {
+        m_anilistCache->addBookmark(anilistId);
+        qInfo("ComicsPage::onProviderVolumeCompleted: auto-bookmarked anilistId=%d "
+              "(download-implies-library)", anilistId);
+    }
 }
 
 void ComicsPage::onProviderVolumeFailed(const QString& seriesId,
@@ -2426,11 +2540,34 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     m_currentDetailAnilistId   = 0;   // MangaResult has no anilist integer id
     m_currentDetailSeriesTitle = result.title;
     if (m_tyVolumeSeriesView) {
-        m_tyVolumeSeriesView->showSeries(result);
-        dispatchCatalogResolve(fandomSeriesSlugFromTitle(result.title),
-                               /*titleHint*/result.title);
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+        m_tyVolumeSeriesView->showSearchResultLoading();
+
+        if (!m_anilistClient || !m_anilistCache || result.title.trimmed().isEmpty()) {
+            renderSearchOpenFallback(result);
+            return;
+        }
+
+        const int reqId = ++m_nextLibraryEnrichReqId;
+        m_pendingLibraryEnrichReqId = reqId;
+        m_pendingLibraryEnrichTitle = result.title.trimmed();
+        m_pendingLibraryEnrichAddBookmark = false;
+        m_pendingSearchOpenEnrichReqId = reqId;
+        m_pendingSearchOpenFallback = result;
+        qInfo("ComicsPage::onSearchResultActivated: pre-resolving AniList for \"%s\" reqId=%d",
+              qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
+        m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
     }
+}
+
+void ComicsPage::renderSearchOpenFallback(const MangaResult& result)
+{
+    if (!m_tyVolumeSeriesView) return;
+    m_currentDetailAnilistId = 0;
+    m_currentDetailSeriesTitle = result.title;
+    m_tyVolumeSeriesView->showSeries(result, false);
+    dispatchCatalogResolve(fandomSeriesSlugFromTitle(result.title),
+                           /*titleHint*/result.title);
 }
 
 void ComicsPage::onDetailBack()
@@ -3686,6 +3823,51 @@ void ComicsPage::onWcResolverSkip(
           qUtf8Printable(key.seriesId),
           key.volumeNumber,
           qUtf8Printable(reasonCode));
+}
+
+// COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). Allocates a fresh reqId,
+// stashes the title + addBookmark flag, fires AniList searchByTitle. The
+// persistent connects in the constructor (filtered by reqId) land the result
+// — on match they seed the cache + re-show the series; addBookmark=true
+// ALSO commits a bookmark (Add-to-Library path); addBookmark=false leaves
+// the library untouched (auto-enrichment on series-open path).
+void ComicsPage::onAddToLibraryByTitleRequested(const QString& title)
+{
+    if (!m_anilistClient || !m_anilistCache || title.trimmed().isEmpty()) {
+        if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->refreshLibraryButton();
+        return;
+    }
+    const int reqId = ++m_nextLibraryEnrichReqId;
+    m_pendingLibraryEnrichReqId = reqId;
+    m_pendingLibraryEnrichTitle = title.trimmed();
+    m_pendingLibraryEnrichAddBookmark = true;
+    qInfo("ComicsPage::onAddToLibraryByTitleRequested: searching AniList for \"%s\" reqId=%d (with bookmark)",
+          qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
+    m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
+}
+
+// COMICS_WC_AUTOENRICH 2026-05-24 (Agent 1). Auto-fired on every
+// showSeries(MangaResult) where anilistId is 0. Same search + cache-seed +
+// re-show pattern as the Add-to-Library path, but the addBookmark flag is
+// false so the library isn't touched — purely a data-enrichment so the
+// hero block paints. Coalesces against any already-pending request: if a
+// search is already in flight for any title, this is a no-op (the prior
+// request's result will land and trigger the re-show).
+void ComicsPage::onEnrichSeriesByTitleRequested(const QString& title)
+{
+    if (!m_anilistClient || !m_anilistCache || title.trimmed().isEmpty()) return;
+    if (m_pendingLibraryEnrichReqId != 0) {
+        qInfo("ComicsPage::onEnrichSeriesByTitleRequested: skipping \"%s\" (request %d already in flight)",
+              qUtf8Printable(title), m_pendingLibraryEnrichReqId);
+        return;
+    }
+    const int reqId = ++m_nextLibraryEnrichReqId;
+    m_pendingLibraryEnrichReqId = reqId;
+    m_pendingLibraryEnrichTitle = title.trimmed();
+    m_pendingLibraryEnrichAddBookmark = false;
+    qInfo("ComicsPage::onEnrichSeriesByTitleRequested: searching AniList for \"%s\" reqId=%d (enrich-only)",
+          qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
+    m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
 }
 
 void ComicsPage::onForceRefreshRequested()

@@ -58,6 +58,7 @@ namespace tankoban::manga {
     struct MangaCatalog;
 }
 #include "core/manga/LocalMangaCatalogIndex.h"
+#include "core/manga/MangaResult.h"
 #include "core/manga/mangafire/MangaWeebCentralResolver.h"
 class QNetworkAccessManager;
 struct ComicsLibraryRecord;
@@ -215,6 +216,20 @@ private slots:
         tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
         QString reasonCode);
 
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). Best-effort AniList
+    // enrichment when the user clicks Add to Library on a series with no
+    // AniList id (MangaFire-catalog-only). Fires an async searchByTitle and
+    // on top-match adds a bookmark via the existing AniList-keyed cache
+    // plus re-shows the series with the enriched MediaPreview so the local
+    // view picks up its new identity.
+    void onAddToLibraryByTitleRequested(const QString& title);
+
+    // COMICS_WC_AUTOENRICH 2026-05-24 (Agent 1). Sibling slot fired on
+    // every showSeries(MangaResult) when anilistId is 0. Same search +
+    // cache-seed + re-show flow as the Add-to-Library path, but does NOT
+    // call addBookmark — the user opted into viewing, not into committing.
+    void onEnrichSeriesByTitleRequested(const QString& title);
+
 protected:
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 —
     // re-validate the on-disk MangaDownloadIndex each time this page
@@ -241,6 +256,7 @@ private:
     void hideSearchHistoryDropdown();
     void positionSearchHistoryDropdown();
     void setSearchBusy(bool busy);
+    void renderSearchOpenFallback(const MangaResult& result);
 
     void addSeriesTile(const SeriesInfo& series);
     void toggleViewMode();
@@ -486,6 +502,21 @@ private:
     QString m_pendingCatalogTitleHint;
     tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey m_currentWcResolveKey;
     quint64 m_wcResolveSerial = 0;
+
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). State for the AniList
+    // search-by-title enrichment fired from onAddToLibraryByTitleRequested.
+    // The requestId is allocated per-click and filtered in the persistent
+    // searchSucceeded/searchFailed connect lambdas so unrelated searches
+    // (the search bar) don't trample this flow.
+    int     m_nextLibraryEnrichReqId = 5000000;
+    int     m_pendingLibraryEnrichReqId = 0;
+    QString m_pendingLibraryEnrichTitle;
+    // COMICS_WC_AUTOENRICH 2026-05-24 — true when this pending enrichment
+    // should also add a bookmark on match (the Add-to-Library path); false
+    // when it's just data enrichment (the auto-on-series-open path).
+    bool    m_pendingLibraryEnrichAddBookmark = false;
+    int     m_pendingSearchOpenEnrichReqId = 0;
+    MangaResult m_pendingSearchOpenFallback;
     QMap<QString, PendingVolumeDispatch> m_pendingVolumeDispatches;
     // Last anilistId surfaced via showSeries(); used by captureNavState.
     int m_currentDetailAnilistId = 0;

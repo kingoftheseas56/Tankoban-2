@@ -45,7 +45,7 @@ set BUILD_EXIT=%ERRORLEVEL%
 if %BUILD_EXIT% EQU 0 (
     echo BUILD OK
     :: Also append the verdict to the log so the pre-RTC build-gate hook
-    :: (.claude/scripts/pre-rtc-checker.sh, gov-v7+) can detect BUILD OK at
+    :: pre-RTC build-gate hook can detect BUILD OK at
     :: end-of-log. Without this line the gate sees only ninja's compile
     :: output and treats every RTC on .cpp/.h files as unverified.
     >>"%LOG%" echo BUILD OK
@@ -103,20 +103,23 @@ if "%VCPKG_ROOT%"=="" (
 exit /b 0
 
 :configure_if_missing
-if exist "%BUILD_DIR%\CMakeCache.txt" (
-    powershell -NoProfile -Command "$cmakeLists=Get-Item -LiteralPath '%PROJECT_DIR%\CMakeLists.txt'; $cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($cmakeLists.LastWriteTime -gt $cache.LastWriteTime -or -not $ninja -or $cmakeLists.LastWriteTime -gt $ninja.LastWriteTime -or $cache.LastWriteTime -gt $ninja.LastWriteTime) { exit 1 } else { exit 0 }"
-    if errorlevel 1 (
-        echo BUILD CHECK: CMakeLists.txt newer than cache - re-configuring %BUILD_DIR%
-        cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%"
-        if errorlevel 1 (
-            echo BUILD CHECK: CMake re-configure failed.
-            exit /b 2
-        )
-        powershell -NoProfile -Command "$cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($ninja) { $cache.LastWriteTime = $ninja.LastWriteTime } else { $cache.LastWriteTime = Get-Date }" >nul 2>&1
-    )
+if not exist "%BUILD_DIR%\CMakeCache.txt" goto configure_fresh
+
+powershell -NoProfile -Command "$cmakeLists=Get-Item -LiteralPath '%PROJECT_DIR%\CMakeLists.txt'; $cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($cmakeLists.LastWriteTime -gt $cache.LastWriteTime -or -not $ninja -or $cmakeLists.LastWriteTime -gt $ninja.LastWriteTime -or $cache.LastWriteTime -gt $ninja.LastWriteTime) { exit 1 } else { exit 0 }"
+if not errorlevel 1 (
     exit /b 0
 )
 
+echo BUILD CHECK: CMakeLists.txt newer than cache - re-configuring %BUILD_DIR%
+cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%"
+if errorlevel 1 (
+    echo BUILD CHECK: CMake re-configure failed.
+    exit /b 2
+)
+powershell -NoProfile -Command "$cache=Get-Item -LiteralPath '%BUILD_DIR%\CMakeCache.txt'; $ninja=Get-Item -LiteralPath '%BUILD_DIR%\build.ninja' -ErrorAction SilentlyContinue; if ($ninja) { $cache.LastWriteTime = $ninja.LastWriteTime } else { $cache.LastWriteTime = Get-Date }" >nul 2>&1
+exit /b 0
+
+:configure_fresh
 echo BUILD CHECK: configuring %BUILD_DIR%
 cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^

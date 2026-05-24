@@ -789,10 +789,26 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     }
 }
 
+void ComicsSeriesView::showSearchResultLoading()
+{
+    clearView();
+    m_pendingMediaLoads = 0;
+    if (m_heroBannerLabel) {
+        m_heroBannerLabel->clear();
+        m_heroBannerLabel->hide();
+    }
+    showLoadingOverlay();
+}
+
 // WEEBCENTRAL_IDENTITY_PIVOT Task 8: WeebCentral-sourced series entry point.
 // Mirrors showSeries(MediaPreview) but drives the cover resolver via the
 // seriesKey composite and fetches chapter/volume detail via MangaSourceRegistry.
 void ComicsSeriesView::showSeries(const MangaResult& wc)
+{
+    showSeries(wc, true);
+}
+
+void ComicsSeriesView::showSeries(const MangaResult& wc, bool requestEnrichment)
 {
     if (wc.id.isEmpty() || wc.source.isEmpty()) {
         qWarning("ComicsSeriesView::showSeries(MangaResult): empty id or source — ignoring");
@@ -865,6 +881,17 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
         }
     } else {
         qWarning("ComicsSeriesView::showSeries(MangaResult): no source registry set");
+    }
+
+    // COMICS_WC_AUTOENRICH 2026-05-24 (Agent 1). Search-opened series start
+    // with anilistId=0 and no AniList cache hit — which leaves the hero
+    // banner, poster, synopsis, and tags blank until the user explicitly
+    // clicks Add to Library. Fire the AniList enrichment automatically so
+    // every series view paints the same Stream-style hero block regardless
+    // of bookmark status. ComicsPage handles the search + cache seed +
+    // re-show; bookmark is NOT added (that stays opt-in via the button).
+    if (requestEnrichment && m_currentAnilistId <= 0 && !wc.title.trimmed().isEmpty()) {
+        emit enrichSeriesByTitleRequested(wc.title.trimmed());
     }
 }
 
@@ -1426,7 +1453,16 @@ void ComicsSeriesView::refreshLibraryButton()
     if (!m_libraryButton) return;
     const bool hasSeries  = (m_currentAnilistId > 0);
     const bool bookmarked = (m_cache && hasSeries) ? m_cache->isBookmarked(m_currentAnilistId) : false;
-    m_libraryButton->setEnabled(hasSeries && m_cache);
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
+    // series (anilistId=0 because MangaFire couldn't resolve an AniList
+    // match) used to disable this button entirely. Now we ALSO enable it
+    // when we have a series title, and the click handler routes through a
+    // best-effort AniList-search-by-title enrichment flow owned by
+    // ComicsPage (via addToLibraryByTitleRequested signal). On match the
+    // series gets bookmarked under the discovered anilistId; on no match
+    // the button silently re-enables for retry.
+    const bool hasTitle = !m_currentSeriesTitle.isEmpty();
+    m_libraryButton->setEnabled((hasSeries || hasTitle) && m_cache);
     // STREAM_PORT 2026-05-18 Task 4: Stream-verbatim action labels.
     // Was "In library" (passive) / "Add to library" (action mixed); now
     // "Remove from Library" (when bookmarked) / "Add to Library" (when not).
@@ -1435,13 +1471,26 @@ void ComicsSeriesView::refreshLibraryButton()
 
 void ComicsSeriesView::onLibraryButtonClicked()
 {
-    if (!m_cache || m_currentAnilistId <= 0) return;
-    if (m_cache->isBookmarked(m_currentAnilistId)) {
-        m_cache->removeBookmark(m_currentAnilistId);
-    } else {
-        m_cache->addBookmark(m_currentAnilistId);
+    if (!m_cache) return;
+    // Existing AniList-keyed bookmark toggle path.
+    if (m_currentAnilistId > 0) {
+        if (m_cache->isBookmarked(m_currentAnilistId)) {
+            m_cache->removeBookmark(m_currentAnilistId);
+        } else {
+            m_cache->addBookmark(m_currentAnilistId);
+        }
+        refreshLibraryButton();
+        return;
     }
-    refreshLibraryButton();
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
+    // series (no AniList id resolved): hand off to ComicsPage for the
+    // best-effort search-by-title enrichment. ComicsPage emits an updated
+    // showSeries on the matched preview, which re-flows m_currentAnilistId
+    // and triggers refreshLibraryButton via the bookmarksChanged signal.
+    if (m_currentSeriesTitle.isEmpty()) return;
+    m_libraryButton->setEnabled(false);
+    m_libraryButton->setText(tr("Searching AniList…"));
+    emit addToLibraryByTitleRequested(m_currentSeriesTitle);
 }
 
 bool ComicsSeriesView::eventFilter(QObject* watched, QEvent* event)

@@ -83,6 +83,10 @@ public:
     // consult the cache first, then fire a background refetch.
     void showSeries(const anilist::MediaPreview& preview);
 
+    // Search-result-open staging state: clears the previous series and shows
+    // only the opaque loading overlay until ComicsPage has enrichment results.
+    void showSearchResultLoading();
+
     // Fix 3: catalog-tile entry point. Wraps showSeries(MediaPreview) but
     // overrides the resolver/cache key to "fandom_catalog:<seriesId>" when
     // anilistId <= 0, preventing identity collapse to "anilist:0" for every
@@ -95,6 +99,7 @@ public:
     // seriesKey is derived from wc.source + ":" + wc.id; drives the cover
     // resolver and the detail fetch via MangaSourceRegistry.
     void showSeries(const MangaResult& wc);
+    void showSeries(const MangaResult& wc, bool requestEnrichment);
 
     // Setter for MangaSourceRegistry; called by ComicsPage after construction.
     // Non-owning; registry lifetime is owned by ComicsPage.
@@ -128,6 +133,12 @@ public slots:
     void setVolumeStatusText(int volumeNumber, const QString& statusText);
     void populateSourcesForVolume(int volumeNumber);
     void onWeebCentralViable(int volumeNumber, const QStringList& chapterIds);
+
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). Promoted from private
+    // so ComicsPage can re-sync the button state after a deferred AniList
+    // search-by-title enrichment lands (success or failure both reset the
+    // button via this method).
+    void refreshLibraryButton();
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Render volume rows from
     // a MangaCatalog loaded from data/mangafire_catalog/. Renamed from
@@ -194,6 +205,22 @@ signals:
     void bulkDownloadRequested(int anilistId,
                                const QList<anilist::VolumeRow>& volumes);
 
+    // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). Emitted when the user
+    // clicks Add to Library on a series that has no AniList ID (MangaFire-
+    // catalog-only). ComicsPage runs a best-effort AniList searchByTitle,
+    // and on match bookmarks via the existing AniList-keyed path and
+    // re-shows the series with the enriched MediaPreview so the local view
+    // sees its new identity (m_currentAnilistId, banner, etc.).
+    void addToLibraryByTitleRequested(const QString& title);
+
+    // COMICS_WC_AUTOENRICH 2026-05-24 (Agent 1). Sibling to the above
+    // signal: emitted on showSeries(MangaResult) when anilistId is 0 so
+    // ComicsPage runs the AniList search-by-title + cache seed + re-show
+    // cycle WITHOUT adding a bookmark. This makes search-opened series
+    // render the same hero block (banner, poster, synopsis, tags) the
+    // bookmarked path does, without committing to the library.
+    void enrichSeriesByTitleRequested(const QString& title);
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -235,7 +262,7 @@ private:
     void renderEmpty(const QString& reason = {});
     void populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                             const anilist::MediaDetail* detail);
-    void refreshLibraryButton();
+    // refreshLibraryButton moved to public slots above (COMICS_WC_LIBRARY_ENRICH).
 
     // F1 (2026-05-18): shared by onVolumeCellClicked (mouse) +
     // onVolumeCurrentChanged (mouse + keyboard); pushes the row's mapped
