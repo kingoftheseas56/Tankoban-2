@@ -58,6 +58,7 @@ struct UnifiedSourceRow {
     qint64   sizeBytes    = 0;    // best-effort estimate; 0 when unknown (PHASE 13)
     QString  magnetUri;           // for nyaa/catalog
     QString  infoHash;            // for nyaa/catalog
+    QStringList weebCentralChapterIds; // for WeebCentralVolumePacker
 };
 
 class ComicsSourcesPanel : public QWidget
@@ -86,6 +87,7 @@ public:
                   const QStringList& chapterIds);
 
     void setContext(int volumeNumber, const QString& volumeTitle);
+    void appendWeebCentralRow(int volumeNumber, const QStringList& chapterIds);
 
     QJsonObject devSnapshot() const;
     bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);

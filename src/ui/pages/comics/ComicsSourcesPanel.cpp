@@ -21,14 +21,6 @@ namespace tankoban::manga::comics {
 
 namespace {
 
-QString wcSubtitle(const QStringList& chapterIds)
-{
-    if (chapterIds.isEmpty()) {
-        return QStringLiteral("chapters unavailable");
-    }
-    return QStringLiteral("%1 chapters - vol pack on demand").arg(chapterIds.size());
-}
-
 QString sourceKindString(UnifiedSourceRow::Kind kind)
 {
     switch (kind) {
@@ -50,6 +42,11 @@ QJsonObject sourceRowJson(const UnifiedSourceRow& row)
     obj[QStringLiteral("sizeBytes")] = static_cast<double>(row.sizeBytes);
     obj[QStringLiteral("magnetUri")] = row.magnetUri;
     obj[QStringLiteral("infoHash")] = row.infoHash;
+    QJsonArray wcChapterIds;
+    for (const QString& chapterId : row.weebCentralChapterIds) {
+        wcChapterIds.append(chapterId);
+    }
+    obj[QStringLiteral("weebCentralChapterIds")] = wcChapterIds;
     return obj;
 }
 
@@ -247,17 +244,6 @@ void ComicsSourcesPanel::populate(const QString& seriesTitle,
         }
     }
 
-    if (!chapterIds.isEmpty()) {
-        UnifiedSourceRow wcRow;
-        wcRow.kind = UnifiedSourceRow::Kind::WeebCentralPacker;
-        wcRow.tier = 99;
-        wcRow.title = QStringLiteral("WeebCentral pack");
-        wcRow.uploaderHint = wcSubtitle(chapterIds);
-        wcRow.seeders = -1;
-        wcRow.sizeBytes = 0;
-        appendRow(wcRow);
-    }
-
     const bool nyaaInFlight = (m_nyaa != nullptr);
     if (m_nyaa) {
         m_pendingNyaaReqId = m_nextNyaaReqId++;
@@ -292,6 +278,30 @@ void ComicsSourcesPanel::setContext(int volumeNumber, const QString& volumeTitle
         .arg(volumeNumber)
         .arg(title.toHtmlEscaped()));
     m_contextLineLabel->show();
+}
+
+void ComicsSourcesPanel::appendWeebCentralRow(int volumeNumber, const QStringList& chapterIds)
+{
+    if (volumeNumber <= 0 || volumeNumber != m_currentVolNumber || chapterIds.isEmpty()) {
+        return;
+    }
+
+    m_rows.erase(std::remove_if(m_rows.begin(), m_rows.end(),
+                                [](const UnifiedSourceRow& row) {
+                                    return row.kind == UnifiedSourceRow::Kind::WeebCentralPacker;
+                                }),
+                 m_rows.end());
+
+    UnifiedSourceRow wcRow;
+    wcRow.kind = UnifiedSourceRow::Kind::WeebCentralPacker;
+    wcRow.tier = 99;
+    wcRow.title = QStringLiteral("WeebCentral");
+    wcRow.seeders = -1;
+    wcRow.sizeBytes = 0;
+    wcRow.weebCentralChapterIds = chapterIds;
+
+    appendRow(wcRow);
+    setSources(m_rows, m_pendingNyaaReqId >= 0);
 }
 
 QJsonObject ComicsSourcesPanel::devSnapshot() const
