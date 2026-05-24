@@ -950,6 +950,10 @@ void ComicsSeriesView::onSeriesSucceeded(int requestId,
     }
 
     renderDetail(detail);
+    if (!detail.preview.title.isEmpty()) {
+        emit detailResolvedForCatalog(detail.preview.anilistId,
+                                      detail.preview.title);
+    }
 
     // Persist for next app launch (Phase 2 cache integration).
     if (m_cache) {
@@ -1070,7 +1074,9 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
     //      weebcentral download paths.
     const QString fallbackSeriesId = QStringLiteral("anilist_%1").arg(m_currentAnilistId);
 
+    int rowIndex = -1;
     for (const auto& row : rows) {
+        ++rowIndex;
         // Resolve the download-index entry for this volume (same two-stage
         // logic the old code did inline per row).
         QString resolvedCbzPath;
@@ -1153,8 +1159,8 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
                     emit openVolume(vn, entry ? entry->canonicalPath : QString());
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
-                this, [this](int /*vn*/) {
-                    populateSourcesForRow(-1);
+                this, [this, rowIndex](int /*vn*/) {
+                    populateSourcesForRow(rowIndex);
                 });
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
                 this, [this](bool checked, bool shiftHeld) {
@@ -1287,6 +1293,23 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         data.coverUrl     = !vol.coverUrlJapanese.isEmpty()
                               ? vol.coverUrlJapanese
                               : vol.coverUrlEnglish;
+
+        const int rowIndex = m_currentVolumeRows.size();
+        anilist::VolumeRow mappedRow;
+        mappedRow.volumeNumber      = vol.volumeNumber;
+        mappedRow.chapterRangeStart = vol.chapterRangeStart;
+        mappedRow.chapterRangeEnd   = vol.chapterRangeEnd;
+        mappedRow.chapterNumbers    = vol.chapterList;
+        if (mappedRow.chapterNumbers.isEmpty()) {
+            if (!vol.chapterStartRaw.isEmpty()) mappedRow.chapterNumbers.append(vol.chapterStartRaw);
+            if (!vol.chapterEndRaw.isEmpty() && vol.chapterEndRaw != vol.chapterStartRaw) {
+                mappedRow.chapterNumbers.append(vol.chapterEndRaw);
+            }
+        }
+        mappedRow.chapterCount      = mappedRow.chapterNumbers.size();
+        mappedRow.art.thumbnailUrl  = data.coverUrl;
+        mappedRow.art.fullUrl       = data.coverUrl;
+        m_currentVolumeRows.append(mappedRow);
 
         auto* tile = new tankoban::ui::comics::VolumeTile(data, m_volumesHost);
 
@@ -2024,7 +2047,7 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
         return;
     }
 
-    for (const tankoban::manga::MangaCatalogVolume& vol : m_currentMangaCatalog.volumes) {
+    for (const tankoban::manga::MangaVolume& vol : m_currentMangaCatalog.volumes) {
         if (vol.volumeNumber != volumeNumber) {
             continue;
         }
