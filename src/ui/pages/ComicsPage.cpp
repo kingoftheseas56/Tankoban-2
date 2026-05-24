@@ -1871,12 +1871,19 @@ void ComicsPage::refreshLibraryStrips()
 
     // ── DOWNLOADED ──
     QSet<int> downloadedAnilistIds;
+    // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Title-based dedup keys
+    // for the bookmark loop fallback when downloadedAnilistIds can't pair
+    // a MangaFire-catalog download with its bookmark (MangaFire-catalog
+    // downloads register with anilistId=0 when MangaFire couldn't resolve
+    // an AniList match; the bookmark has a real anilistId — so the existing
+    // anilistId-only dedup at line ~1951 misses).
+    QSet<QString> downloadedTitleKeysNorm;
     bool hasAnyDownloadedEntry = false;
     if (m_mangaDownloadIndex) {
         const auto entries = m_mangaDownloadIndex->entriesForAllSeries();
         hasAnyDownloadedEntry = !entries.isEmpty();
         for (const auto& e : entries) {
-            const int anilistId =
+            int anilistId =
                 anilistIdForDownloadEntry(e.sourceId, e.seriesId);
 
             // Resolve display title + cover. Prefer the AniList cache (so
@@ -1894,6 +1901,41 @@ void ComicsPage::refreshLibraryStrips()
                     coverUrl     = detailOpt->preview.coverThumbUrl;
                 }
             }
+            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). MangaFire-catalog
+            // downloads land with displayTitle empty + anilistId=0. Look up
+            // the canonical seriesTitle from the local MangaFire catalog JSON
+            // so the tile renders "Death Note" instead of the slug
+            // "death-note", AND so the bookmark-by-title pairing below has
+            // a non-empty key to match against.
+            if (displayTitle.isEmpty()
+                && e.sourceId == QString::fromLatin1(MANGAFIRE_CATALOG_SOURCE_ID)) {
+                const QString jsonPath = m_localCatalogIndex.filePathForSlug(e.seriesId);
+                if (!jsonPath.isEmpty()) {
+                    const auto cat =
+                        tankoban::manga::LocalMangaCatalogLoader::loadFromFile(jsonPath);
+                    if (cat.has_value() && !cat->seriesTitle.isEmpty()) {
+                        displayTitle = cat->seriesTitle;
+                    }
+                }
+            }
+            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). When the download
+            // has anilistId=0 (MangaFire-catalog case), look up bookmarks by
+            // normalized title and adopt the bookmark's anilistId + cover so
+            // (a) the tile shows the bookmark's poster instead of a blank
+            // letter-placeholder, and (b) downloadedAnilistIds picks up the
+            // bookmark's id so the bookmark-loop dedup at line ~1951 fires
+            // naturally and we end up with ONE merged library tile.
+            if (anilistId == 0 && m_anilistCache && !displayTitle.isEmpty()) {
+                const auto previews = m_anilistCache->bookmarkedPreviews();
+                const QString titleKey = displayTitle.toLower().trimmed();
+                for (const auto& p : previews) {
+                    if (p.title.toLower().trimmed() == titleKey) {
+                        anilistId = p.anilistId;
+                        if (coverUrl.isEmpty()) coverUrl = p.coverThumbUrl;
+                        break;
+                    }
+                }
+            }
             if (displayTitle.isEmpty() && m_premiumCatalog) {
                 if (auto cat = m_premiumCatalog->entryById(e.seriesId)) {
                     displayTitle = cat->title;
@@ -1901,6 +1943,13 @@ void ComicsPage::refreshLibraryStrips()
             }
             if (displayTitle.isEmpty()) {
                 displayTitle = e.seriesId;
+            }
+            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 — title-key for bookmark
+            // dedup fallback (covers the edge case where the bookmark exists
+            // but anilistId pairing failed; e.g. a bookmark from a different
+            // metadata source whose normalized title matches the download).
+            if (!displayTitle.isEmpty()) {
+                downloadedTitleKeysNorm.insert(displayTitle.toLower().trimmed());
             }
             if (m_tyLibrary) {
                 const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
@@ -1915,18 +1964,38 @@ void ComicsPage::refreshLibraryStrips()
             card->setProperty("seriesKey",
                               e.sourceId + QStringLiteral(":") + e.seriesId);
             card->setProperty("seriesName", displayTitle);
+            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Capture the
+            // bookmark-enriched anilistId + display title alongside the entry
+            // so the click handler can fall back to openSeriesByAnilistId
+            // when m_tyLibrary has no record for this (sourceId, seriesId)
+            // pair (the MangaFire-catalog case — the dedup-bookmark adopt
+            // path sets anilistId via the bookmark-by-title lookup above).
+            const int   linkedAnilistId  = anilistId;
+            const QString linkedTitle    = displayTitle;
             connect(card, &TileCard::clicked, this,
-                    [this, e]() {
-                // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- always
-                // route downloaded tiles through openSeriesByRecord so the
-                // WeebCentral (sourceId+seriesId) identity drives the series
-                // view, bypassing the AniList resolution chain. If no library
-                // record exists for this entry (defensive: index out of sync),
-                // the tile is silently non-routable.
-                if (!m_tyLibrary) return;
-                const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
-                if (rec.seriesId.isEmpty()) return;
-                openSeriesByRecord(rec);
+                    [this, e, linkedAnilistId, linkedTitle]() {
+                // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- prefer
+                // openSeriesByRecord (sourceId+seriesId identity) so the
+                // WeebCentral (Tankoyomi-library-keyed) bookmarks open via
+                // the legacy AniList-bypassed flow.
+                if (m_tyLibrary) {
+                    const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
+                    if (!rec.seriesId.isEmpty()) {
+                        openSeriesByRecord(rec);
+                        return;
+                    }
+                }
+                // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Fallback for
+                // MangaFire-catalog-sourced downloaded tiles: the
+                // Tankoyomi-library has no record (m_tyLibrary is keyed by
+                // WeebCentral sourceId, not "mangafire_catalog"), so route
+                // via openSeriesByAnilistId using the bookmark-adopted
+                // anilistId. This is what makes the merged tile (download
+                // metadata + bookmark identity) open the new ComicsSeriesView
+                // instead of falling through to a silent no-op.
+                if (linkedAnilistId > 0) {
+                    openSeriesByAnilistId(linkedAnilistId, linkedTitle);
+                }
             });
             m_tileStrip->addTile(card);
 
@@ -1949,6 +2018,13 @@ void ComicsPage::refreshLibraryStrips()
             // Suppress duplicate tile when a bookmarked series is also
             // downloaded (it already appears in the DOWNLOADED section).
             if (downloadedAnilistIds.contains(p.anilistId)) continue;
+            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Belt-and-
+            // suspenders dedup against MangaFire-catalog downloads whose
+            // anilistId resolution failed (catalog has anilistId=0 + no
+            // bookmark-by-title match was found upstream). Compare by
+            // normalized title; if any download has the same title, this
+            // bookmark is the duplicate and should be skipped.
+            if (downloadedTitleKeysNorm.contains(p.title.toLower().trimmed())) continue;
 
             auto* card = new TileCard(QString(), p.title,
                                        QStringLiteral("Bookmarked"));
