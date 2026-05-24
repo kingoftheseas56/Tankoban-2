@@ -100,6 +100,38 @@ std::optional<MangaCatalog> LocalMangaCatalogLoader::loadFromFile(const QString&
     cat.source             = root.value(QStringLiteral("source")).toString();
     cat.notes              = root.value(QStringLiteral("notes")).toString();
 
+    // COMICS_WC_VOLUME_WIRING 2026-05-24 (Agent 1). Additive cache block:
+    // absent key leaves MangaCatalog::weebCentral default-empty, so the
+    // resolver performs the first-click WeebCentral lookup.
+    if (root.contains(QStringLiteral("weebCentral"))) {
+        const QJsonObject wc = root.value(QStringLiteral("weebCentral")).toObject();
+        cat.weebCentral.seriesId = wc.value(QStringLiteral("seriesId")).toString();
+
+        const QString fetchedAtRaw = wc.value(QStringLiteral("chaptersFetchedAt")).toString();
+        if (!fetchedAtRaw.isEmpty()) {
+            cat.weebCentral.chaptersFetchedAt =
+                QDateTime::fromString(fetchedAtRaw, Qt::ISODate);
+        }
+
+        const QJsonObject volsObj =
+            wc.value(QStringLiteral("volumeChapterIds")).toObject();
+        for (auto it = volsObj.constBegin(); it != volsObj.constEnd(); ++it) {
+            bool ok = false;
+            const int volNum = it.key().toInt(&ok);
+            if (!ok || volNum <= 0) continue;
+
+            QStringList chs;
+            const QJsonArray arr = it.value().toArray();
+            for (const auto& v : arr) {
+                const QString s = v.toString();
+                if (!s.isEmpty()) chs.append(s);
+            }
+            if (!chs.isEmpty()) {
+                cat.weebCentral.volumeChapterIds.insert(volNum, chs);
+            }
+        }
+    }
+
     // scrapedAt -> fetchedAt (ISO 8601 UTC)
     const QString scrapedAt = root.value("scrapedAt").toString();
     if (!scrapedAt.isEmpty()) {
