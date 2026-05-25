@@ -1855,7 +1855,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("open_page")) {
         const QString pageId = payload.value("pageId").toString();
         const QStringList valid{"comics","books","videos","organise","stream",
-                                "tankorent","tankolibrary"};
+                                "tankorent","tankolibrary","streamDownloads"};
         if (!valid.contains(pageId)) {
             return err("UNKNOWN_PAGE",
                 QStringLiteral("pageId '%1' not in [%2]")
