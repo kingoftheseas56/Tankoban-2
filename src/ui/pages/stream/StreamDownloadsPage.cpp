@@ -12,11 +12,79 @@
 #include <QJsonObject>
 #include <QList>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QStringList>
 #include <QVBoxLayout>
 
 #include <algorithm>
+
+namespace {
+
+QString prettifyFilenameTitle(QString text)
+{
+    text = QFileInfo(text).completeBaseName();
+    text.replace(QRegularExpression(QStringLiteral("[._]+")), QStringLiteral(" "));
+    text.replace(QRegularExpression(QStringLiteral("\\s+")), QStringLiteral(" "));
+    text = text.trimmed();
+
+    const QRegularExpression episodeRe(QStringLiteral("\\bS\\d{1,2}E\\d{1,3}\\b"),
+                                       QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression seasonRe(QStringLiteral("\\bS\\d{1,2}\\b"),
+                                      QRegularExpression::CaseInsensitiveOption);
+
+    int cutAt = -1;
+    const QRegularExpressionMatch episodeMatch = episodeRe.match(text);
+    if (episodeMatch.hasMatch()) {
+        cutAt = episodeMatch.capturedStart();
+    } else {
+        const QRegularExpressionMatch seasonMatch = seasonRe.match(text);
+        if (seasonMatch.hasMatch())
+            cutAt = seasonMatch.capturedStart();
+    }
+
+    if (cutAt > 0)
+        text = text.left(cutAt).trimmed();
+
+    text.remove(QRegularExpression(QStringLiteral("\\[[^\\]]*\\]")));
+    text.remove(QRegularExpression(QStringLiteral("\\([^\\)]*\\)")));
+    text = text.trimmed();
+    return text;
+}
+
+QString bestTitleFromEntries(const QList<StreamDownloadIndex::Entry>& entries,
+                             const QString& fallback)
+{
+    for (const auto& entry : entries) {
+        const QString title = prettifyFilenameTitle(entry.canonicalPath);
+        if (!title.isEmpty() && title != fallback)
+            return title;
+    }
+    return fallback;
+}
+
+QString bestTitleFromGroups(const QList<QJsonObject>& groups, const QString& fallback)
+{
+    for (const QJsonObject& group : groups) {
+        const QString direct = group.value(QStringLiteral("showTitle")).toString(
+            group.value(QStringLiteral("title")).toString());
+        if (!direct.isEmpty())
+            return direct;
+
+        const QJsonArray items = group.value(QStringLiteral("items")).toArray();
+        for (const QJsonValue& value : items) {
+            const QJsonObject item = value.toObject();
+            const QString filename = item.value(QStringLiteral("canonicalFilename")).toString(
+                item.value(QStringLiteral("canonicalPath")).toString());
+            const QString title = prettifyFilenameTitle(filename);
+            if (!title.isEmpty() && title != fallback)
+                return title;
+        }
+    }
+    return fallback;
+}
+
+} // namespace
 
 StreamDownloadsPage::StreamDownloadsPage(QWidget* parent)
     : QFrame(parent)
@@ -147,6 +215,18 @@ void StreamDownloadsPage::setStreamDownloadIndex(StreamDownloadIndex* index)
     refreshHistory();
 }
 
+void StreamDownloadsPage::updateEmptyState()
+{
+    if (!m_emptyState || !m_activeBody || !m_historyBody
+        || !m_activeBodyLayout || !m_historyBodyLayout) {
+        return;
+    }
+
+    const bool anyActive = !m_activeBody->isHidden() && m_activeBodyLayout->count() > 0;
+    const bool anyHistory = !m_historyBody->isHidden() && m_historyBodyLayout->count() > 0;
+    m_emptyState->setVisible(!anyActive && !anyHistory);
+}
+
 void StreamDownloadsPage::refreshActive()
 {
     if (!m_activeBodyLayout)
@@ -160,6 +240,7 @@ void StreamDownloadsPage::refreshActive()
     if (!m_torrentClient) {
         m_activeHeader->setVisible(false);
         m_activeBody->setVisible(false);
+        updateEmptyState();
         return;
     }
 
@@ -167,6 +248,7 @@ void StreamDownloadsPage::refreshActive()
     if (groups.isEmpty()) {
         m_activeHeader->setVisible(false);
         m_activeBody->setVisible(false);
+        updateEmptyState();
         return;
     }
 
@@ -189,6 +271,7 @@ void StreamDownloadsPage::refreshActive()
     if (byImdb.isEmpty()) {
         m_activeHeader->setVisible(false);
         m_activeBody->setVisible(false);
+        updateEmptyState();
         return;
     }
 
@@ -212,10 +295,20 @@ void StreamDownloadsPage::refreshActive()
         cardLayout->setContentsMargins(14, 12, 14, 12);
         cardLayout->setSpacing(6);
 
-        auto* showLabel = new QLabel(imdbId, card);
+        const QString showTitle = bestTitleFromGroups(showGroups, imdbId);
+        auto* showLabel = new QLabel(showTitle, card);
+        showLabel->setObjectName("StreamDownloadsShowTitle");
         showLabel->setStyleSheet(
-            "color: #eeeeee; font-size: 12pt; font-weight: 600;");
+            "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
         cardLayout->addWidget(showLabel);
+
+        if (showTitle != imdbId) {
+            auto* imdbLabel = new QLabel(imdbId, card);
+            imdbLabel->setObjectName("StreamDownloadsShowMeta");
+            imdbLabel->setStyleSheet(
+                "QLabel#StreamDownloadsShowMeta { color: rgba(255,255,255,0.42); font-size: 9pt; }");
+            cardLayout->addWidget(imdbLabel);
+        }
 
         for (const QJsonObject& group : showGroups) {
             const int season = group.value(QStringLiteral("season")).toInt(
@@ -255,9 +348,7 @@ void StreamDownloadsPage::refreshActive()
         m_activeBodyLayout->addWidget(card);
     }
 
-    const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
-    const bool anyHistory = m_historyBody->isVisible() && m_historyBodyLayout->count() > 0;
-    m_emptyState->setVisible(!anyActive && !anyHistory);
+    updateEmptyState();
 }
 
 void StreamDownloadsPage::refreshHistory()
@@ -273,6 +364,7 @@ void StreamDownloadsPage::refreshHistory()
     if (!m_streamDownloadIndex) {
         m_historyHeader->setVisible(false);
         m_historyBody->setVisible(false);
+        updateEmptyState();
         return;
     }
 
@@ -280,6 +372,7 @@ void StreamDownloadsPage::refreshHistory()
     if (all.isEmpty()) {
         m_historyHeader->setVisible(false);
         m_historyBody->setVisible(false);
+        updateEmptyState();
         return;
     }
 
@@ -293,8 +386,7 @@ void StreamDownloadsPage::refreshHistory()
     if (byImdb.isEmpty()) {
         m_historyHeader->setVisible(false);
         m_historyBody->setVisible(false);
-        const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
-        m_emptyState->setVisible(!anyActive);
+        updateEmptyState();
         return;
     }
 
@@ -329,13 +421,24 @@ void StreamDownloadsPage::refreshHistory()
         cardLayout->setContentsMargins(14, 12, 14, 12);
         cardLayout->setSpacing(4);
 
+        const QString showTitle = bestTitleFromEntries(entries, imdbId);
         auto* showLabel = new QLabel(card);
+        showLabel->setObjectName("StreamDownloadsShowTitle");
         const QString showHeader = entries.first().type == QLatin1String("movie")
-            ? imdbId
-            : tr("%1  -  %2 episodes").arg(imdbId).arg(entries.size());
+            ? showTitle
+            : tr("%1  -  %2 episodes").arg(showTitle).arg(entries.size());
         showLabel->setText(showHeader);
-        showLabel->setStyleSheet("color: #eeeeee; font-size: 12pt; font-weight: 600;");
+        showLabel->setStyleSheet(
+            "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
         cardLayout->addWidget(showLabel);
+
+        if (showTitle != imdbId) {
+            auto* imdbLabel = new QLabel(imdbId, card);
+            imdbLabel->setObjectName("StreamDownloadsShowMeta");
+            imdbLabel->setStyleSheet(
+                "QLabel#StreamDownloadsShowMeta { color: rgba(255,255,255,0.42); font-size: 9pt; }");
+            cardLayout->addWidget(imdbLabel);
+        }
 
         for (const auto& e : entries) {
             auto* row = new QPushButton(card);
@@ -376,7 +479,5 @@ void StreamDownloadsPage::refreshHistory()
         m_historyBodyLayout->addWidget(card);
     }
 
-    const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
-    const bool anyHistory = m_historyBody->isVisible() && m_historyBodyLayout->count() > 0;
-    m_emptyState->setVisible(!anyActive && !anyHistory);
+    updateEmptyState();
 }

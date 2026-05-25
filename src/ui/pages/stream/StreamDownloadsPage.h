@@ -57,6 +57,7 @@ private slots:
 
 private:
     void buildUi();
+    void updateEmptyState();
 
     TorrentClient*       m_torrentClient = nullptr;
     StreamDownloadIndex* m_streamDownloadIndex = nullptr;
