@@ -7,6 +7,7 @@
 #include "pages/VideosPage.h"
 #include "pages/OrganisePage.h"
 #include "pages/StreamPage.h"
+#include "pages/stream/StreamDownloadsPage.h"
 #include "pages/TankorentPage.h"
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
@@ -63,6 +64,7 @@ static constexpr const char *PAGE_STREAM       = "stream";
 // pages reachable via the slide-in left sidebar drawer.
 static constexpr const char *PAGE_TANKORENT    = "tankorent";
 static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
+static constexpr const char *PAGE_STREAM_DOWNLOADS = "streamDownloads";
 
 // ── Constructor ─────────────────────────────────────────────────────────────
 MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
@@ -861,6 +863,23 @@ void MainWindow::buildPageStack()
     tankoLibraryPage->setObjectName(PAGE_TANKOLIBRARY);
     m_pageStack->addWidget(tankoLibraryPage);
     dbg("4g3-tankolibrarypage-created");
+
+    // STREAM_DOWNLOADS_SIDEBAR_PAGE 2026-05-25 - aggregate Theatre downloads
+    // view accessible from SidebarDrawer's "Downloads" entry. Reads from
+    // TorrentClient::streamBulkGroups (active) + StreamDownloadIndex (history).
+    m_streamDownloadsPage = new StreamDownloadsPage(this);
+    m_streamDownloadsPage->setObjectName(PAGE_STREAM_DOWNLOADS);
+    m_streamDownloadsPage->setTorrentClient(torrentClient);
+    if (m_streamPage) {
+        m_streamDownloadsPage->setStreamDownloadIndex(m_streamPage->streamDownloadIndex());
+    }
+    m_pageStack->addWidget(m_streamDownloadsPage);
+    connect(m_streamDownloadsPage, &StreamDownloadsPage::backRequested, this, [this]() {
+        activatePage(PAGE_STREAM);
+    });
+    connect(m_streamDownloadsPage, &StreamDownloadsPage::playLocalFileRequested,
+            this, &MainWindow::onPlayLocalFileFromStreamRequested);
+    dbg("4g4-streamdownloadspage-created");
     dbg("4h-pagestack-complete");
 }
 

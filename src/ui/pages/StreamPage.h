@@ -83,6 +83,7 @@ public:
     // index into the home library board (chip rendering on tiles) and into
     // StreamLibrary (so remove() evicts per-episode entries).
     void setStreamDownloadIndex(StreamDownloadIndex* idx);
+    StreamDownloadIndex* streamDownloadIndex() const { return m_streamDownloadIndex; }
 
     // Exposed for VideosPage (HELP.md 2026-04-15 — Agent 5 folder-poster
     // fetch). Sharing the same instance avoids duplicating the addon manifest

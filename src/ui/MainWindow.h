@@ -20,6 +20,7 @@ class VideoPlayer;
 class VideosPage;
 class OrganisePage;
 class StreamPage;
+class StreamDownloadsPage;
 class TankorentPage;
 class TorrentClient;
 class DevControlServer;
@@ -236,6 +237,7 @@ private:
     // signal at construction without doing a qobject_cast walk through
     // m_pageStack on each invocation.
     StreamPage    *m_streamPage    = nullptr;
+    StreamDownloadsPage *m_streamDownloadsPage = nullptr;
     TankorentPage *m_tankorentPage = nullptr;
     TorrentClient *m_torrentClient = nullptr;
 
