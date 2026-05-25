@@ -4,6 +4,7 @@
 #include "core/stream/StreamDownloadIndex.h"
 
 #include <QFrame>
+#include <QFileInfo>
 #include <QHash>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -261,11 +262,121 @@ void StreamDownloadsPage::refreshActive()
 
 void StreamDownloadsPage::refreshHistory()
 {
-    // Stub - Task 8 fills in row rendering.
     if (!m_historyBodyLayout)
         return;
+
     while (auto* item = m_historyBodyLayout->takeAt(0)) {
         if (auto* w = item->widget()) w->deleteLater();
         delete item;
     }
+
+    if (!m_streamDownloadIndex) {
+        m_historyHeader->setVisible(false);
+        m_historyBody->setVisible(false);
+        return;
+    }
+
+    const QList<StreamDownloadIndex::Entry> all = m_streamDownloadIndex->all();
+    if (all.isEmpty()) {
+        m_historyHeader->setVisible(false);
+        m_historyBody->setVisible(false);
+        return;
+    }
+
+    QHash<QString, QList<StreamDownloadIndex::Entry>> byImdb;
+    for (const auto& e : all) {
+        if (e.state != StreamDownloadIndex::Entry::Complete)
+            continue;
+        byImdb[e.imdbId].append(e);
+    }
+
+    if (byImdb.isEmpty()) {
+        m_historyHeader->setVisible(false);
+        m_historyBody->setVisible(false);
+        const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
+        m_emptyState->setVisible(!anyActive);
+        return;
+    }
+
+    m_historyHeader->setVisible(true);
+    m_historyBody->setVisible(true);
+
+    QStringList imdbsSorted = byImdb.keys();
+    std::sort(imdbsSorted.begin(), imdbsSorted.end(),
+              [&byImdb](const QString& a, const QString& b) {
+                  qint64 maxA = 0, maxB = 0;
+                  for (const auto& e : byImdb[a]) maxA = std::max(maxA, e.addedAt);
+                  for (const auto& e : byImdb[b]) maxB = std::max(maxB, e.addedAt);
+                  return maxA > maxB;
+              });
+
+    for (const QString& imdbId : imdbsSorted) {
+        QList<StreamDownloadIndex::Entry> entries = byImdb[imdbId];
+        std::sort(entries.begin(), entries.end(),
+                  [](const StreamDownloadIndex::Entry& a, const StreamDownloadIndex::Entry& b) {
+                      if (a.season != b.season) return a.season < b.season;
+                      return a.episode < b.episode;
+                  });
+
+        auto* card = new QFrame(m_historyBody);
+        card->setObjectName("StreamDownloadsHistoryCard");
+        card->setStyleSheet(
+            "QFrame#StreamDownloadsHistoryCard {"
+            "  background: rgba(255,255,255,0.04);"
+            "  border-radius: 8px;"
+            "}");
+        auto* cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(14, 12, 14, 12);
+        cardLayout->setSpacing(4);
+
+        auto* showLabel = new QLabel(card);
+        const QString showHeader = entries.first().type == QLatin1String("movie")
+            ? imdbId
+            : tr("%1  -  %2 episodes").arg(imdbId).arg(entries.size());
+        showLabel->setText(showHeader);
+        showLabel->setStyleSheet("color: #eeeeee; font-size: 12pt; font-weight: 600;");
+        cardLayout->addWidget(showLabel);
+
+        for (const auto& e : entries) {
+            auto* row = new QPushButton(card);
+            row->setObjectName("StreamDownloadsHistoryRow");
+            row->setCursor(Qt::PointingHandCursor);
+            row->setFlat(true);
+            row->setStyleSheet(
+                "QPushButton#StreamDownloadsHistoryRow {"
+                "  text-align: left; padding: 6px 8px; color: rgba(255,255,255,0.85);"
+                "  font-size: 10pt; border: none; background: transparent;"
+                "}"
+                "QPushButton#StreamDownloadsHistoryRow:hover {"
+                "  background: rgba(255,255,255,0.06); border-radius: 4px;"
+                "}");
+            QString rowLabel;
+            if (e.type == QLatin1String("movie")) {
+                rowLabel = QFileInfo(e.canonicalPath).fileName();
+            } else {
+                rowLabel = tr("S%1E%2  -  %3")
+                    .arg(e.season, 2, 10, QLatin1Char('0'))
+                    .arg(e.episode, 2, 10, QLatin1Char('0'))
+                    .arg(QFileInfo(e.canonicalPath).fileName());
+            }
+            row->setText(rowLabel);
+
+            const QString canonicalPath = e.canonicalPath;
+            const QString rowImdb = e.imdbId;
+            const int rowSeason = e.season;
+            const int rowEpisode = e.episode;
+            connect(row, &QPushButton::clicked, this, [this, canonicalPath, rowImdb, rowSeason, rowEpisode]() {
+                emit playLocalFileRequested(canonicalPath, rowImdb,
+                                            QFileInfo(canonicalPath).completeBaseName(),
+                                            rowSeason, rowEpisode);
+            });
+            cardLayout->addWidget(row);
+        }
+
+        m_historyBodyLayout->addWidget(card);
+    }
+
+    const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
+    const bool anyHistory = m_historyBody->isVisible() && m_historyBodyLayout->count() > 0;
+    m_emptyState->setVisible(!anyActive && !anyHistory);
 }
