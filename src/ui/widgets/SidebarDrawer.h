@@ -24,7 +24,7 @@ public:
     void toggle();
     bool isOpen() const { return m_open; }
 
-    // pageId in {"tankorent","tankolibrary"}; empty string clears.
+    // pageId in {"tankorent","tankolibrary","streamDownloads"}; empty string clears.
     void setActiveSource(const QString& pageId);
 
 signals:
@@ -49,6 +49,7 @@ private:
 
     QPushButton* m_btnTankorent = nullptr;
     QPushButton* m_btnTankoLibrary = nullptr;
+    QPushButton* m_btnStreamDownloads = nullptr;
 
     QString m_activePageId;
     bool m_open = false;
