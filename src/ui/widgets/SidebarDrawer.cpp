@@ -209,11 +209,13 @@ void SidebarDrawer::buildUi()
         return btn;
     };
 
-    m_btnTankorent     = makeItem(tr("Tankorent"),    QStringLiteral(":/icons/magnet.svg"),   QStringLiteral("tankorent"));
-    m_btnTankoLibrary  = makeItem(tr("TankoLibrary"), QStringLiteral(":/icons/book.svg"),     QStringLiteral("tankolibrary"));
+    m_btnTankorent        = makeItem(tr("Tankorent"),    QStringLiteral(":/icons/magnet.svg"),   QStringLiteral("tankorent"));
+    m_btnTankoLibrary     = makeItem(tr("TankoLibrary"), QStringLiteral(":/icons/book.svg"),     QStringLiteral("tankolibrary"));
+    m_btnStreamDownloads  = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("streamDownloads"));
 
     layout->addWidget(m_btnTankorent);
     layout->addWidget(m_btnTankoLibrary);
+    layout->addWidget(m_btnStreamDownloads);
 
     layout->addStretch(1);
 }
@@ -317,8 +319,9 @@ void SidebarDrawer::toggle()
 void SidebarDrawer::setActiveSource(const QString& pageId)
 {
     m_activePageId = pageId;
-    styleItem(m_btnTankorent,     QStringLiteral("tankorent"));
-    styleItem(m_btnTankoLibrary,  QStringLiteral("tankolibrary"));
+    styleItem(m_btnTankorent,        QStringLiteral("tankorent"));
+    styleItem(m_btnTankoLibrary,     QStringLiteral("tankolibrary"));
+    styleItem(m_btnStreamDownloads,  QStringLiteral("streamDownloads"));
 }
 
 void SidebarDrawer::styleItem(QPushButton* btn, const QString& pageId)
