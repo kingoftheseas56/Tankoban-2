@@ -243,6 +243,7 @@ set(SOURCES
     src/core/stream/TitleMetadataEstimator.cpp
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
+    src/ui/pages/stream/StreamDownloadsPage.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
     src/ui/pages/stream/TorrentPackPicker.cpp
@@ -451,6 +452,7 @@ set(HEADERS
     src/core/stream/TitleMetadataEstimator.h
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
+    src/ui/pages/stream/StreamDownloadsPage.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
     src/ui/pages/stream/TorrentPackPicker.h
