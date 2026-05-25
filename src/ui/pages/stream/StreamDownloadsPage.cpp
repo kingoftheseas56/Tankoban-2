@@ -4,11 +4,18 @@
 #include "core/stream/StreamDownloadIndex.h"
 
 #include <QFrame>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QList>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStringList>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 StreamDownloadsPage::StreamDownloadsPage(QWidget* parent)
     : QFrame(parent)
@@ -141,13 +148,115 @@ void StreamDownloadsPage::setStreamDownloadIndex(StreamDownloadIndex* index)
 
 void StreamDownloadsPage::refreshActive()
 {
-    // Stub - Task 7 fills in row rendering.
     if (!m_activeBodyLayout)
         return;
+
     while (auto* item = m_activeBodyLayout->takeAt(0)) {
         if (auto* w = item->widget()) w->deleteLater();
         delete item;
     }
+
+    if (!m_torrentClient) {
+        m_activeHeader->setVisible(false);
+        m_activeBody->setVisible(false);
+        return;
+    }
+
+    const QJsonObject groups = m_torrentClient->streamBulkGroups();
+    if (groups.isEmpty()) {
+        m_activeHeader->setVisible(false);
+        m_activeBody->setVisible(false);
+        return;
+    }
+
+    // Group by imdbId. Each group's items[] array carries the per-episode
+    // state machine entries. We display one card per show (imdbId), with
+    // an aggregated progress label and a per-episode summary count.
+    QHash<QString, QList<QJsonObject>> byImdb;
+    for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
+        if (!it.value().isObject()) continue;
+        const QJsonObject group = it.value().toObject();
+        const QJsonObject sourceIds = group.value(QStringLiteral("sourceIds")).toObject();
+        QString imdbId = group.value(QStringLiteral("imdbId")).toString();
+        if (imdbId.isEmpty())
+            imdbId = sourceIds.value(QStringLiteral("seriesId")).toString();
+        if (imdbId.isEmpty())
+            continue;
+        byImdb[imdbId].append(group);
+    }
+
+    if (byImdb.isEmpty()) {
+        m_activeHeader->setVisible(false);
+        m_activeBody->setVisible(false);
+        return;
+    }
+
+    m_activeHeader->setVisible(true);
+    m_activeBody->setVisible(true);
+
+    QStringList imdbsSorted = byImdb.keys();
+    std::sort(imdbsSorted.begin(), imdbsSorted.end());
+    for (const QString& imdbId : imdbsSorted) {
+        const QList<QJsonObject>& showGroups = byImdb[imdbId];
+
+        auto* card = new QFrame(m_activeBody);
+        card->setObjectName("StreamDownloadsActiveCard");
+        card->setStyleSheet(
+            "QFrame#StreamDownloadsActiveCard {"
+            "  background: rgba(255,255,255,0.04);"
+            "  border-radius: 8px;"
+            "  padding: 12px;"
+            "}");
+        auto* cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(14, 12, 14, 12);
+        cardLayout->setSpacing(6);
+
+        auto* showLabel = new QLabel(imdbId, card);
+        showLabel->setStyleSheet(
+            "color: #eeeeee; font-size: 12pt; font-weight: 600;");
+        cardLayout->addWidget(showLabel);
+
+        for (const QJsonObject& group : showGroups) {
+            const int season = group.value(QStringLiteral("season")).toInt(
+                group.value(QStringLiteral("sourceIds")).toObject()
+                     .value(QStringLiteral("season")).toInt(0));
+            const QJsonArray items = group.value(QStringLiteral("items")).toArray();
+
+            int total = items.size();
+            int done = 0, active = 0, pending = 0, failed = 0;
+            for (const auto& v : items) {
+                const QString state = v.toObject().value(QStringLiteral("itemState")).toString();
+                if (state == QLatin1String("Published") || state == QLatin1String("Completed"))
+                    ++done;
+                else if (state == QLatin1String("Downloading") || state == QLatin1String("Publishing"))
+                    ++active;
+                else if (state == QLatin1String("Pending"))
+                    ++pending;
+                else
+                    ++failed;
+            }
+
+            auto* groupLabel = new QLabel(card);
+            const QString summary = tr("Season %1 - %2 of %3 done")
+                                        .arg(season > 0 ? QString::number(season) : QStringLiteral("?"))
+                                        .arg(done)
+                                        .arg(total);
+            QString statusLine = summary;
+            if (active > 0) statusLine += tr("  -  %1 active").arg(active);
+            if (pending > 0) statusLine += tr("  -  %1 queued").arg(pending);
+            if (failed > 0) statusLine += tr("  -  %1 stuck").arg(failed);
+            groupLabel->setText(statusLine);
+            groupLabel->setStyleSheet(
+                "color: rgba(255,255,255,0.75); font-size: 10pt; padding-top: 2px;");
+            cardLayout->addWidget(groupLabel);
+        }
+
+        m_activeBodyLayout->addWidget(card);
+    }
+
+    const bool anyActive = m_activeBody->isVisible() && m_activeBodyLayout->count() > 0;
+    const bool anyHistory = m_historyBody->isVisible() && m_historyBodyLayout->count() > 0;
+    m_emptyState->setVisible(!anyActive && !anyHistory);
 }
 
 void StreamDownloadsPage::refreshHistory()
