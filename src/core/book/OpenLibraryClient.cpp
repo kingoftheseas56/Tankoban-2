@@ -43,6 +43,18 @@ QStringList toStringList(const QJsonArray& arr)
     return out;
 }
 
+QNetworkRequest makeOpenLibraryRequest(const QUrl& url)
+{
+    QNetworkRequest req(url);
+    req.setRawHeader("User-Agent",
+                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0");
+    req.setRawHeader("Accept", "application/json,text/plain,*/*");
+    req.setTransferTimeout(10000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    return req;
+}
+
 BookCatalogueResult parseDoc(const QJsonObject& doc)
 {
     BookCatalogueResult r;
@@ -170,7 +182,7 @@ void OpenLibraryClient::search(const QString& query)
                                   "isbn,subject,cover_i,publisher,language,"
                                   "number_of_pages_median,series"));
     url.setQuery(q);
-    auto* reply = m_nam->get(QNetworkRequest(url));
+    auto* reply = m_nam->get(makeOpenLibraryRequest(url));
     connect(reply, &QNetworkReply::finished, this, &OpenLibraryClient::onSearchReply);
 }
 
@@ -178,7 +190,7 @@ void OpenLibraryClient::fetchAuthorWorks(const QString& authorKey,
                                          const QString& authorName)
 {
     QUrl url(QStringLiteral("https://openlibrary.org/authors/%1/works.json").arg(authorKey));
-    auto* reply = m_nam->get(QNetworkRequest(url));
+    auto* reply = m_nam->get(makeOpenLibraryRequest(url));
     reply->setProperty("authorKey", authorKey);
     reply->setProperty("authorName", authorName);
     connect(reply, &QNetworkReply::finished, this, &OpenLibraryClient::onAuthorWorksReply);
@@ -190,7 +202,7 @@ void OpenLibraryClient::fetchWorkDetail(const QString& workKey)
     const QString suffix = workKey.startsWith(QLatin1Char('/'))
                                ? workKey.mid(1) : workKey;
     QUrl url(QStringLiteral("https://openlibrary.org/%1.json").arg(suffix));
-    auto* reply = m_nam->get(QNetworkRequest(url));
+    auto* reply = m_nam->get(makeOpenLibraryRequest(url));
     reply->setProperty("workKey", workKey);
     connect(reply, &QNetworkReply::finished, this, &OpenLibraryClient::onWorkDetailReply);
 }

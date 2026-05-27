@@ -38,6 +38,18 @@ QString yearOnly(const QString& publishedDate)
     return publishedDate;
 }
 
+QNetworkRequest makeGoogleBooksRequest(const QUrl& url)
+{
+    QNetworkRequest req(url);
+    req.setRawHeader("User-Agent",
+                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0");
+    req.setRawHeader("Accept", "application/json,text/plain,*/*");
+    req.setTransferTimeout(10000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    return req;
+}
+
 BookCatalogueResult parseItem(const QJsonObject& item)
 {
     BookCatalogueResult r;
@@ -121,7 +133,7 @@ void GoogleBooksClient::search(const QString& query)
         q.addQueryItem(QStringLiteral("key"), m_apiKey);
     }
     url.setQuery(q);
-    auto* reply = m_nam->get(QNetworkRequest(url));
+    auto* reply = m_nam->get(makeGoogleBooksRequest(url));
     connect(reply, &QNetworkReply::finished, this, &GoogleBooksClient::onSearchReply);
 }
 

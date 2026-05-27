@@ -50,5 +50,6 @@ inline QString bookSourceDisplayName(const QString& key)
 {
     if (key == QLatin1String("annas-archive")) return QStringLiteral("Anna's Archive");
     if (key == QLatin1String("libgen"))        return QStringLiteral("LibGen");
+    if (key == QLatin1String("tankorent"))     return QStringLiteral("Tankorent");
     return key;
 }
