@@ -341,18 +341,17 @@ void TorrentEngine::applySettings()
     //       pick the fastest one. Stremio defaults to 200 but runs on
     //       typically-headless server hardware; desktop Windows with
     //       libtorrent 2.x handles 400 comfortably.
-    //   active_downloads = 1 (was 10 pre-SEQUENTIAL_DOWNLOADS_FIX 2026-05-21):
-    //       strict 1-at-a-time across the entire Tankoban session per
-    //       Hemanth 2026-05-21 ~7:45pm IST ("episode by episode sequential
-    //       is an absolute must"). libtorrent's session scheduler queues
-    //       any torrent above the cap into state queued_for_download and
-    //       auto-promotes the next queued one when the active one
-    //       completes. FIFO by add-order via queue_position(). This
-    //       REVERSES the 2026-04-19 stream-priority optimization (the
-    //       5→10 bump that prevented stream torrents from queuing behind
-    //       library-mode downloads) — under the new contract stream
-    //       torrents queue too. Tradeoff acknowledged; the absolute-must
-    //       framing won.
+    //   active_downloads = 8 (TANKORENT_QUALITY_AND_QUEUE P1 T1.6, 2026-05-27):
+    //       libtorrent's global serial cap is RELEASED. Per-show sequential
+    //       discipline now lives in tankoban::queue::TransferQueue (keyed by
+    //       imdb:<id>) which gates addTorrent/addMagnetHeadless via
+    //       TorrentClient. Inside a show: strictly one transfer at a time.
+    //       Across shows: parallel up to active_downloads. Honors the
+    //       "episode by episode sequential" intent from Hemanth 2026-05-21
+    //       without forcing different shows to serialize against each other.
+    //       Previous setting was 1 (SEQUENTIAL_DOWNLOADS_FIX T1, 2026-05-25),
+    //       which collapsed cross-show parallelism as a side effect — the
+    //       per-show queue restores it.
     //   active_seeds 10, active_limit 20: unchanged. Seeding is
     //       independent of download contention; the active_limit cap is
     //       the outer ring and stays loose so completed torrents can keep
@@ -377,7 +376,7 @@ void TorrentEngine::applySettings()
     //       peers is good for streaming head-fetch.
     sp.set_int(lt::settings_pack::connections_limit, 400);
 
-    sp.set_int(lt::settings_pack::active_downloads, 1);
+    sp.set_int(lt::settings_pack::active_downloads, 8);
     sp.set_int(lt::settings_pack::active_seeds, 10);
     sp.set_int(lt::settings_pack::active_limit, 20);
 
