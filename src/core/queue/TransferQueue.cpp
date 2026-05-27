@@ -31,9 +31,48 @@ std::optional<TransferItem> TransferQueue::finishCurrent(const QString& showId, 
     return it->items.front();
 }
 
-bool TransferQueue::pauseCurrent(const QString&) { return false; }
-std::optional<TransferItem> TransferQueue::resumeCurrent(const QString&) { return std::nullopt; }
-bool TransferQueue::cancel(const QString&, std::optional<TransferItem>*) { return false; }
+bool TransferQueue::pauseCurrent(const QString& showId) {
+    auto it = m_lanes.find(showId);
+    if (it == m_lanes.end() || it->items.empty()) return false;
+    it->items.front().state = TransferState::Paused;
+    emit itemStateChanged(it->items.front().transferId, TransferState::Paused);
+    emit laneChanged(showId);
+    return true;
+}
+
+std::optional<TransferItem> TransferQueue::resumeCurrent(const QString& showId) {
+    auto it = m_lanes.find(showId);
+    if (it == m_lanes.end() || it->items.empty()) return std::nullopt;
+    if (it->items.front().state != TransferState::Paused) return std::nullopt;
+    it->items.front().state = TransferState::Running;
+    emit itemStateChanged(it->items.front().transferId, TransferState::Running);
+    emit laneChanged(showId);
+    return it->items.front();
+}
+
+bool TransferQueue::cancel(const QString& transferId, std::optional<TransferItem>* nextAfterCancel) {
+    if (nextAfterCancel) *nextAfterCancel = std::nullopt;
+    for (auto laneIt = m_lanes.begin(); laneIt != m_lanes.end(); ++laneIt) {
+        auto& items = laneIt->items;
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].transferId == transferId) {
+                const bool wasCurrent = (i == 0);
+                const QString showId = laneIt->showId;
+                items.erase(items.begin() + i);
+                emit itemStateChanged(transferId, TransferState::Cancelled);
+                if (wasCurrent && !items.empty() && nextAfterCancel) {
+                    *nextAfterCancel = items.front();
+                }
+                if (items.empty()) {
+                    m_lanes.erase(laneIt);
+                }
+                emit laneChanged(showId);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 bool TransferQueue::reorder(const QString&, int, int) { return false; }
 bool TransferQueue::bumpToFront(const QString&) { return false; }
 QHash<QString, TransferLane> TransferQueue::lanesSnapshot() const { return m_lanes; }

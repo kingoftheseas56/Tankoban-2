@@ -52,3 +52,53 @@ TEST(TransferQueueTest, FinishLastItemEmptiesLane) {
     q.finishCurrent("imdb:tt0001", TransferState::Completed);
     EXPECT_FALSE(q.laneFor("imdb:tt0001").has_value());
 }
+
+TEST(TransferQueueTest, PauseCurrentMarksPausedButLaneDoesNotAdvance) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0001", 2));
+    ASSERT_TRUE(q.pauseCurrent("imdb:tt0001"));
+    auto lane = q.laneFor("imdb:tt0001");
+    ASSERT_TRUE(lane.has_value());
+    EXPECT_EQ(lane->items.size(), 2u);
+    EXPECT_EQ(lane->items.front().state, TransferState::Paused);
+}
+
+TEST(TransferQueueTest, ResumeCurrentReturnsItemAndMarksRunning) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.pauseCurrent("imdb:tt0001");
+    auto resumed = q.resumeCurrent("imdb:tt0001");
+    ASSERT_TRUE(resumed.has_value());
+    EXPECT_EQ(resumed->transferId, "t1");
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items.front().state, TransferState::Running);
+}
+
+TEST(TransferQueueTest, CancelQueuedItemRemovesWithoutAdvancing) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0001", 2));
+    q.enqueue(makeItem("t3", "imdb:tt0001", 3));
+    std::optional<TransferItem> next;
+    ASSERT_TRUE(q.cancel("t2", &next));
+    EXPECT_FALSE(next.has_value());  // current (t1) unchanged
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items.size(), 2u);
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items[1].transferId, "t3");
+}
+
+TEST(TransferQueueTest, CancelCurrentItemAdvancesLane) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0001", 2));
+    std::optional<TransferItem> next;
+    ASSERT_TRUE(q.cancel("t1", &next));
+    ASSERT_TRUE(next.has_value());
+    EXPECT_EQ(next->transferId, "t2");
+}
+
+TEST(TransferQueueTest, CancelUnknownIdReturnsFalse) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    std::optional<TransferItem> next;
+    EXPECT_FALSE(q.cancel("ghost", &next));
+}
