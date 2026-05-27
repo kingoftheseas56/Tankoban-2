@@ -144,6 +144,7 @@ Tiered per SKILL_DISCIPLINE_FIX_TODO Phase 6 ratification 2026-04-25. Tier 1 = c
 | **`STREAM_SERVER_PIVOT_TODO.md`** | Agent 0 (authored) + Agent 7 P0 + Agent 4 P1-P5 | **P0 + P1 + P2A + P2B + P3 GREEN** as of 2026-05-19; P4 next | Strategic pivot: stream mode off libtorrent → Stremio's `stream-server` Rust binary as subprocess + REST adapter. Tankorent stays on libtorrent. |
 | **`TANKOYOMI_VOLUME_PIVOT` arc** | Agent 1 | **13-phase plan written 2026-05-16**; subagent execution in flight | Stremio-for-manga; volume-only first-class UI unit; chapters become buried implementation detail. Plan + memory `project_tankoyomi_volume_pivot_arc_2026-05-16.md`. |
 | **`THEATRE_DOWNLOAD_OVERHAUL` arc** | Agent 4 | **Phases A+B+C (9 of 22) SHIPPED 2026-05-16**; D1 EpisodeTile next | PackList state model overhaul; subagent-driven plan execution. Memory `project_theatre_download_overhaul_*.md`. |
+| **`TANKORENT_QUALITY_AND_QUEUE_TODO.md`** | Agent 4 | **AUTHORED 2026-05-27**; spec + plan landed; P1 lane queue infra kickoff next | Per-show download lanes (parallel across shows, sequential inside), Nyaa parity restore, Tankorent as source-addon in Theatre series view, season pack badges + filter chip, Netflix-clean Downloads page. |
 
 ---
 
