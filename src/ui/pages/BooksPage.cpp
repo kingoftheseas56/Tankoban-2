@@ -1,10 +1,14 @@
 #include "BooksPage.h"
 #include "TileStrip.h"
 #include "TileCard.h"
-#include "BookSeriesView.h"
+#include "books/BookCatalogueDetailView.h"
+#include "books/BookCatalogueSearchWidget.h"
 #include "core/CoreBridge.h"
-#include "core/BooksScanner.h"
 #include "core/ScannerUtils.h"
+#include "core/book/BookCatalogueAggregator.h"
+#include "core/book/BookCatalogueResult.h"
+#include "core/book/BooksCatalogueLibraryStore.h"
+#include "core/book/CatalogueRecord.h"
 
 #include "ui/ContextMenuHelper.h"
 #include "ui/MainWindow.h"
@@ -15,9 +19,13 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QEvent>
+#include <QShowEvent>
+#include <QFrame>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QMetaObject>
+#include <QNetworkAccessManager>
 #include <QSettings>
 #include <QInputDialog>
 #include <QCryptographicHash>
@@ -28,47 +36,60 @@
 #include <QFileInfo>
 #include <QShortcut>
 #include <QPushButton>
+#include <QIcon>
+#include <QSize>
 #include <QRegularExpression>
 #include <QFile>
 #include <QMessageBox>
+#include <QSizePolicy>
 
 BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
 {
     setObjectName("books");
-    qRegisterMetaType<BookSeriesInfo>("BookSeriesInfo");
-    qRegisterMetaType<QList<BookSeriesInfo>>("QList<BookSeriesInfo>");
 
     buildUI();
 
-    m_scanThread = new QThread(this);
-    m_scanner = new BooksScanner(m_bridge->dataDir() + "/thumbs");
-    m_scanner->moveToThread(m_scanThread);
+    // ── Catalogue aggregator (BOOKS_STREMIO_PIVOT — catalogue search) ──
+    m_catalogueNam = new QNetworkAccessManager(this);
+    const QString googleKey = qEnvironmentVariable("TANKOBAN_GOOGLE_BOOKS_KEY");
+    m_catalogueAggregator = new BookCatalogueAggregator(m_catalogueNam,
+        googleKey.isEmpty() ? QString() : googleKey, this);
+    // Catalogue cover cache directory
+    m_catalogueCoverDir = m_bridge->dataDir() + "/book_catalogue_covers";
+    QDir().mkpath(m_catalogueCoverDir);
 
-    connect(m_scanner, &BooksScanner::bookSeriesFound,
-            this, &BooksPage::onBookSeriesFound, Qt::QueuedConnection);
-    connect(m_scanner, &BooksScanner::scanFinished,
-            this, &BooksPage::onScanFinished, Qt::QueuedConnection);
+    m_catalogueStore = new BooksCatalogueLibraryStore(m_bridge->dataDir(), this);
+    m_catalogueStore->load();
+    if (m_catalogueDetailView) {
+        m_catalogueDetailView->setCatalogueStore(m_catalogueStore);
+    }
+    connect(m_catalogueStore, &BooksCatalogueLibraryStore::recordsChanged,
+            this, &BooksPage::rebuildBookGrid);
+    connect(m_catalogueStore, &BooksCatalogueLibraryStore::recordReadStateChanged,
+            this, [this](const QString&) { refreshContinueStrip(); });
 
-    // REPO_HYGIENE Phase 4 P4.2 (2026-04-26) — race-safe scanner ownership.
-    connect(m_scanThread, &QThread::finished, m_scanner, &QObject::deleteLater);
+    m_catalogueSearchView = new BookCatalogueSearchWidget(
+        m_catalogueAggregator, m_catalogueNam, m_catalogueCoverDir, this);
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::backRequested,
+            this, &BooksPage::showGrid);
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::bookPicked,
+            this, [this](const BookCatalogueResult& book, const QString& coverPath) {
+                if (!m_catalogueDetailView) return;
+                m_catalogueDetailReturnToSearch = true;
+                m_catalogueDetailView->showBook(book, coverPath);
+                m_stack->setCurrentWidget(m_catalogueDetailView);
+            });
+    if (m_stack) m_stack->addWidget(m_catalogueSearchView);
 
-    m_scanThread->start();
-
-    connect(m_bridge, &CoreBridge::rootFoldersChanged, this, [this](const QString& domain) {
-        if (domain == "books")
-            triggerScan();
-    });
+    // §3.8 burn-the-ships backout (2026-05-27): initial population from
+    // persisted catalogue records. recordsChanged drives subsequent refreshes.
+    rebuildBookGrid();
+    refreshContinueStrip();
 }
 
-BooksPage::~BooksPage()
-{
-    m_scanThread->quit();
-    m_scanThread->wait();
-    // REPO_HYGIENE Phase 4 P4.2: m_scanner auto-deleted via deleteLater on
-    // thread::finished. No manual delete.
-}
+BooksPage::~BooksPage() = default;
 
 // v1.3 Phase D.1 (2026-05-19) — books-side dispatch layer. See
 // docs/superpowers/specs/2026-05-19-bridge-v1.3-books-commission.md for
@@ -78,6 +99,19 @@ BooksPage::~BooksPage()
 // return a structured `code=JS_RESIDENT_NOT_IMPLEMENTED` reply that
 // names the JS file owning the state. Wiring those into BookBridge is a
 // follow-on v1.3.x ticket.
+bool BooksPage::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == m_searchBar) {
+        if (event->type() == QEvent::FocusIn) {
+            if (m_searchBar && m_searchBar->text().trimmed().isEmpty())
+                showSearchHistoryDropdown();
+        } else if (event->type() == QEvent::FocusOut) {
+            if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->start();
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
 namespace {
 
 inline bool replyOk(QJsonObject& reply, QJsonObject fields)
@@ -125,13 +159,10 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
         return replyOk(reply, {{"library", devLibrarySnapshot()}});
 
     if (cmd == QLatin1String("books_refresh_library")) {
-        const bool wasScanning = m_scanning;
-        triggerScan();
+        if (m_catalogueStore) m_catalogueStore->validateAll();
         return replyOk(reply, {
-            {"triggered",   true},
-            {"wasScanning", wasScanning},
-            {"scanning",    m_scanning},
-            {"buffered",    m_rescanPending}
+            {"triggered", true},
+            {"records",   m_catalogueStore ? m_catalogueStore->all().size() : 0}
         });
     }
 
@@ -206,50 +237,17 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
     }
 
     if (cmd == QLatin1String("books_open_series")) {
-        const QString seriesPath = payload.value("seriesPath").toString();
-        const QString title      = payload.value("title").toString();
-        if (seriesPath.isEmpty() && title.isEmpty())
-            return replyErr(reply, "BAD_REQUEST",
-                "payload.seriesPath or payload.title required");
-        QString resolvedPath = seriesPath;
-        QString resolvedName;
-        if (!resolvedPath.isEmpty()) {
-            resolvedName = ScannerUtils::cleanMediaFolderTitle(
-                QDir(resolvedPath).dirName());
-        } else {
-            // Fallback: match by cleaned series name (case-insensitive).
-            const QString want = title.trimmed().toLower();
-            for (auto it = m_seriesFiles.constBegin();
-                 it != m_seriesFiles.constEnd(); ++it) {
-                const QString name = ScannerUtils::cleanMediaFolderTitle(
-                    QDir(it.key()).dirName());
-                if (name.toLower() == want) {
-                    resolvedPath = it.key();
-                    resolvedName = name;
-                    break;
-                }
-            }
-            if (resolvedPath.isEmpty())
-                return replyErr(reply, "NOT_FOUND",
-                    QStringLiteral("no series matching title '%1'").arg(title));
-        }
-        if (!m_seriesView || !m_stack)
-            return replyErr(reply, "INTERNAL", "series view not constructed");
-        m_seriesView->showSeries(resolvedPath, resolvedName);
-        m_stack->setCurrentIndexAnimated(1);
-        return replyOk(reply, {
-            {"seriesPath", resolvedPath},
-            {"seriesName", resolvedName}
-        });
+        // §3.8 burn-the-ships backout (2026-05-27): series-shape detail view deferred to v1.x.
+        // The folder-tree BookSeriesView is gone; series-shape catalogue detail (§5.3) is the
+        // future replacement, not yet shipped.
+        return replyErr(reply, "DEFERRED_TO_V1X",
+            "books_open_series deferred until series-shape catalogue detail view ships");
     }
 
     if (cmd == QLatin1String("books_get_series_state")) {
-        if (!m_seriesView || !m_stack)
-            return replyErr(reply, "INTERNAL", "series view not constructed");
-        const bool onSeriesView = m_stack->currentIndex() == 1;
-        QJsonObject snap = m_seriesView->devSnapshot();
-        snap["isVisible"] = onSeriesView;
-        return replyOk(reply, {{"snapshot", snap}});
+        // §3.8 burn-the-ships backout (2026-05-27): see books_open_series.
+        return replyErr(reply, "DEFERRED_TO_V1X",
+            "books_get_series_state deferred until series-shape catalogue detail view ships");
     }
 
     // ── Reader-side state (needs MainWindow + m_bookReader) ───────────────
@@ -366,12 +364,10 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
             });
         }
         if (cmd == QLatin1String("library_trigger_scan")) {
-            const bool was = m_scanning;
-            triggerScan();
+            if (m_catalogueStore) m_catalogueStore->validateAll();
             return replyOk(reply, {{"triggered", true},
-                                   {"wasScanning", was},
-                                   {"scanning", m_scanning},
-                                   {"buffered", m_rescanPending}});
+                                   {"records",   m_catalogueStore
+                                       ? m_catalogueStore->all().size() : 0}});
         }
         if (cmd == QLatin1String("library_get_sort"))
             return replyOk(reply, {{"sortKey",
@@ -428,12 +424,13 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
 }
 
 // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot.
+// §3.8 burn-the-ships backout (2026-05-27) — scan_state replaced by catalogue_state.
 QJsonObject BooksPage::devLibrarySection() const
 {
     QJsonObject sec;
     QJsonObject cr;
     cr["visible"] = m_continueSection && m_continueSection->isVisible();
-    cr["count"]   = static_cast<int>(m_progressKeyMap.size());
+    cr["count"]   = m_continueStrip ? m_continueStrip->totalCount() : 0;
     sec["cr_strip"] = cr;
 
     QJsonObject ra;
@@ -446,11 +443,12 @@ QJsonObject BooksPage::devLibrarySection() const
     ss["visibleSeries"] = m_bookStrip ? m_bookStrip->visibleCount() : 0;
     sec["search_state"] = ss;
 
-    QJsonObject scan;
-    scan["scanning"]      = m_scanning;
-    scan["hasScanned"]    = m_hasScanned;
-    scan["rescanPending"] = m_rescanPending;
-    sec["scan_state"] = scan;
+    QJsonObject catalogue;
+    catalogue["recordCount"] = m_catalogueStore
+        ? m_catalogueStore->all().size() : 0;
+    catalogue["seriesCount"] = m_catalogueStore
+        ? m_catalogueStore->allSeriesIds().size() : 0;
+    sec["catalogue_state"] = catalogue;
 
     QJsonArray roots;
     if (m_bridge)
@@ -462,27 +460,26 @@ QJsonObject BooksPage::devLibrarySection() const
     sec["density"]  = m_densitySlider ? m_densitySlider->value() : -1;
     sec["selection"] = QJsonArray{};
     sec["active_layer"] = (m_stack && m_stack->currentIndex() == 1)
-        ? QStringLiteral("series-view") : QStringLiteral("library");
+        ? QStringLiteral("catalogue-detail") : QStringLiteral("library");
     return sec;
 }
 
 // v1.3 Phase D.1 (2026-05-19) — page-local snapshot for books-get-state +
-// dump-ui books.
+// dump-ui books. §3.8 burn-the-ships backout (2026-05-27) — scanner-state
+// fields replaced by catalogue-store-state.
 QJsonObject BooksPage::devSnapshot() const
 {
     QJsonObject snap;
     snap["activePageId"]   = QStringLiteral("books");
-    snap["hasScanned"]     = m_hasScanned;
-    snap["scanning"]       = m_scanning;
-    snap["rescanPending"]  = m_rescanPending;
     snap["gridMode"]       = m_gridMode;
-    snap["seriesCount"]    = m_seriesFiles.size();
-    snap["progressEntries"] = m_progressKeyMap.size();
+    snap["catalogueRecordCount"] = m_catalogueStore
+        ? m_catalogueStore->all().size() : 0;
+    snap["progressEntries"] = m_continueStrip ? m_continueStrip->totalCount() : 0;
     snap["searchText"]     = m_searchBar ? m_searchBar->text() : QString();
     snap["sortKey"]        = m_sortCombo ? m_sortCombo->currentData().toString()
                                          : QString();
     snap["density"]        = m_densitySlider ? m_densitySlider->value() : -1;
-    snap["seriesViewActive"] = m_stack && m_stack->currentIndex() == 1;
+    snap["catalogueDetailActive"] = m_stack && m_stack->currentIndex() == 1;
     snap["library"] = devLibrarySection();
 
     if (auto* mainWin = qobject_cast<const MainWindow*>(
@@ -499,35 +496,32 @@ QJsonObject BooksPage::devSnapshot() const
     return snap;
 }
 
-// v1.3 Phase D.1 (2026-05-19) — library snapshot (one entry per series
-// folder + the file roster collected during the last scan).
+// §3.8 burn-the-ships backout (2026-05-27) — library snapshot is now catalogue
+// records (one entry per CatalogueRecord), not folder-walker series entries.
 QJsonObject BooksPage::devLibrarySnapshot() const
 {
     QJsonArray entries;
-    for (auto it = m_seriesFiles.constBegin(); it != m_seriesFiles.constEnd();
-         ++it) {
-        QJsonObject e;
-        const QString seriesPath = it.key();
-        e["seriesPath"] = seriesPath;
-        e["seriesName"] = ScannerUtils::cleanMediaFolderTitle(
-            QDir(seriesPath).dirName());
-        e["fileCount"]  = it.value().size();
-        QJsonArray files;
-        for (const auto& bf : it.value()) {
-            QJsonObject f;
-            f["title"]    = bf.title;
-            f["filePath"] = bf.filePath;
-            f["progressKey"] = progressKeyFor(bf.filePath);
-            files.append(f);
+    if (m_catalogueStore) {
+        for (const CatalogueRecord& r : m_catalogueStore->all()) {
+            QJsonObject e;
+            e["catalogueId"]   = r.catalogueId;
+            e["title"]         = r.title;
+            e["author"]        = r.author;
+            e["year"]          = r.year;
+            e["filePath"]      = r.filePath;
+            e["format"]        = r.format;
+            e["seriesId"]      = r.seriesId;
+            e["seriesName"]    = r.seriesName;
+            e["seriesPosition"] = r.seriesPosition;
+            e["addedAt"]       = static_cast<double>(r.addedAt);
+            e["readProgress"]  = r.readProgress;
+            e["lastReadAt"]    = static_cast<double>(r.lastReadAt);
+            entries.append(e);
         }
-        e["files"] = files;
-        entries.append(e);
     }
     QJsonObject snap;
     snap["entries"] = entries;
     snap["count"]   = entries.size();
-    snap["hasScanned"] = m_hasScanned;
-    snap["scanning"]   = m_scanning;
     return snap;
 }
 
@@ -550,6 +544,7 @@ void BooksPage::buildUI()
     m_gridScroll = scroll;  // GLOBAL_NAV_HISTORY Task 9
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setStyleSheet("background: transparent;");
 
     auto* content = new QWidget();
@@ -558,9 +553,9 @@ void BooksPage::buildUI()
     layout->setContentsMargins(20, 0, 20, 20);
     layout->setSpacing(24);
 
-    // ── 1. Search bar (full width, top) ──
+    // Search bar submits to the catalogue takeover view.
     m_searchBar = new QLineEdit(content);
-    m_searchBar->setPlaceholderText("Search books and series\u2026");
+    m_searchBar->setPlaceholderText("Search books catalogue");
     m_searchBar->setClearButtonEnabled(true);
     m_searchBar->setObjectName("LibrarySearch");
     m_searchBar->setFixedHeight(36);
@@ -570,22 +565,52 @@ void BooksPage::buildUI()
         "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
     auto* searchLayout = new QHBoxLayout();
     searchLayout->setContentsMargins(0, 12, 0, 0);
-    searchLayout->addWidget(m_searchBar);
+    searchLayout->setSpacing(8);
+    searchLayout->addWidget(m_searchBar, 1);
+
+    auto* searchButton = new QPushButton(content);
+    searchButton->setObjectName("BooksSearchButton");
+    searchButton->setFixedSize(36, 36);
+    searchButton->setCursor(Qt::PointingHandCursor);
+    searchButton->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
+    searchButton->setIconSize(QSize(18, 18));
+    searchButton->setToolTip("Search");
+    searchButton->setStyleSheet(
+        "QPushButton#BooksSearchButton { background: rgba(255,255,255,0.07);"
+        " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; }"
+        "QPushButton#BooksSearchButton:hover { background: rgba(255,255,255,0.11); }");
+    connect(searchButton, &QPushButton::clicked, this, [this]() {
+        const QString q = m_searchBar ? m_searchBar->text().trimmed() : QString();
+        if (!q.isEmpty()) showCatalogueSearchMode(q);
+    });
+    searchLayout->addWidget(searchButton);
     layout->addLayout(searchLayout);
 
-    m_searchBar->setToolTip("Separate words to match all\n"
-                            "(e.g. 'one piece' matches series or volumes containing both words)");
+    m_searchBar->setToolTip("Press Enter or click the search icon to search book catalogues");
 
     m_searchTimer = new QTimer(this);
     m_searchTimer->setSingleShot(true);
     m_searchTimer->setInterval(250);
     connect(m_searchBar, &QLineEdit::textChanged, this, [this]() {
-        m_searchTimer->start();
-        m_searchBar->setProperty("activeSearch", !m_searchBar->text().trimmed().isEmpty());
+        const bool hasText = !m_searchBar->text().trimmed().isEmpty();
+        m_searchBar->setProperty("activeSearch", hasText);
         m_searchBar->style()->unpolish(m_searchBar);
         m_searchBar->style()->polish(m_searchBar);
+
+        if (hasText) {
+            hideSearchHistoryDropdown();
+        } else if (m_searchBar->hasFocus()) {
+            showSearchHistoryDropdown();
+        }
     });
-    connect(m_searchTimer, &QTimer::timeout, this, &BooksPage::applySearch);
+    connect(m_searchBar, &QLineEdit::returnPressed, this, [this]() {
+        const QString q = m_searchBar ? m_searchBar->text().trimmed() : QString();
+        if (!q.isEmpty()) showCatalogueSearchMode(q);
+    });
+
+    loadSearchHistory();
+    buildSearchHistoryDropdown();
+    m_searchBar->installEventFilter(this);
 
     auto* searchShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_F), this);
     connect(searchShortcut, &QShortcut::activated, this, [this]() {
@@ -623,10 +648,12 @@ void BooksPage::buildUI()
             isFinished = prog.value("finished").toBool();
         }
 
+        // §3.8 burn-the-ships backout (2026-05-27): "Open series" + "Remove from
+        // library" (folder-tier) actions deleted — they routed through BookSeriesView
+        // and triggerScan respectively, both gone. Other actions stay since they
+        // operate on filePath / progKey, not folder/scanner state.
         auto* menu = ContextMenuHelper::createMenu(this);
         auto* continueAct = menu->addAction("Continue reading");
-        auto* openSeriesAct = menu->addAction("Open series");
-        openSeriesAct->setEnabled(!seriesPath.isEmpty());
         menu->addSeparator();
         auto* markAct = menu->addAction(isFinished ? "Mark as unread" : "Mark as read");
         auto* clearAct = menu->addAction("Clear from Continue Reading");
@@ -636,16 +663,10 @@ void BooksPage::buildUI()
         revealAct->setEnabled(!filePath.isEmpty());
         auto* copyAct = menu->addAction("Copy path");
         copyAct->setEnabled(!filePath.isEmpty());
-        menu->addSeparator();
-        auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
-        removeAct->setEnabled(!seriesPath.isEmpty());
 
         auto* chosen = menu->exec(m_continueStrip->mapToGlobal(pos));
         if (chosen == continueAct) {
             if (!filePath.isEmpty()) emit openBook(filePath);
-        } else if (chosen == openSeriesAct) {
-            m_seriesView->showSeries(seriesPath, seriesName, coverPath);
-            m_stack->setCurrentIndexAnimated(1);
         } else if (chosen == markAct) {
             if (m_bridge && !progKey.isEmpty()) {
                 QJsonObject prog = m_bridge->progress("books", progKey);
@@ -678,12 +699,6 @@ void BooksPage::buildUI()
             ContextMenuHelper::revealInExplorer(filePath);
         } else if (chosen == copyAct) {
             ContextMenuHelper::copyToClipboard(filePath);
-        } else if (chosen == removeAct) {
-            if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                    "Remove this series from the library?\n" + seriesPath +
-                    "\n\nFiles will remain on disk.")) {
-                triggerScan();
-            }
         }
         menu->deleteLater();
     });
@@ -749,6 +764,7 @@ void BooksPage::buildUI()
         QSettings("Tankoban", "Tankoban").setValue("grid_cover_size", val);
         m_bookStrip->setDensity(val);
         if (m_continueStrip) m_continueStrip->setDensity(val);
+        if (m_bookHitsStrip) m_bookHitsStrip->setDensity(val);
     });
     booksRowLayout->addWidget(m_densitySlider);
 
@@ -773,6 +789,9 @@ void BooksPage::buildUI()
     m_bookStatus = new QLabel("Add a books folder to get started", content);
     m_bookStatus->setObjectName("TileSubtitle");
     m_bookStatus->setAlignment(Qt::AlignCenter);
+    m_bookStatus->setTextFormat(Qt::PlainText);
+    m_bookStatus->setWordWrap(true);
+    m_bookStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_bookStatus->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 40px;");
     layout->addWidget(m_bookStatus);
 
@@ -786,21 +805,9 @@ void BooksPage::buildUI()
     m_listView->hide();
     layout->addWidget(m_listView);
 
-    connect(m_listView, &LibraryListView::itemActivated, this, [this](const QString& path) {
-        // Find the series for this path and open series view
-        for (auto it = m_seriesFiles.begin(); it != m_seriesFiles.end(); ++it) {
-            if (it.key() == path) {
-                QString name = ScannerUtils::cleanMediaFolderTitle(QDir(path).dirName());
-                QString hash = QString(QCryptographicHash::hash(
-                    path.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-                QString thumbsDir = m_bridge->dataDir() + "/thumbs";
-                QString cover = thumbsDir + "/" + hash + ".jpg";
-                m_seriesView->showSeries(path, name, QFile::exists(cover) ? cover : QString());
-                m_stack->setCurrentIndexAnimated(1);
-                return;
-            }
-        }
-    });
+    // §3.8 burn-the-ships backout (2026-05-27): m_listView itemActivated handler
+    // was scanner-coupled (resolved series via m_seriesFiles + opened BookSeriesView).
+    // Catalogue-record-aware list-view interaction is a v1.x follow-on.
 
     // View toggle logic
     m_gridMode = QSettings("Tankoban", "Tankoban").value("library_view_mode_books", "grid").toString() == "grid";
@@ -820,120 +827,14 @@ void BooksPage::buildUI()
         }
     });
 
-    // Context menu on book tiles
-    m_bookStrip->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_bookStrip, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-        auto* card = m_bookStrip->tileAt(pos);
-        if (!card) return;
-
-        QString seriesPath = card->property("seriesPath").toString();
-        QString seriesName = card->property("seriesName").toString();
-        QString coverPath = card->property("coverPath").toString();
-
-        // Check if all books are finished
-        static const QStringList bookExts = {"*.epub","*.pdf","*.mobi","*.fb2","*.azw3","*.djvu","*.txt"};
-        QDir dir(seriesPath);
-        QStringList bookFiles = dir.entryList(bookExts, QDir::Files);
-        QJsonObject allProg = m_bridge->allProgress("books");
-        bool allFinished = !bookFiles.isEmpty();
-        for (const auto& f : bookFiles) {
-            QString id = QString(QCryptographicHash::hash(
-                dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-            if (!allProg.value(id).toObject().value("finished").toBool()) {
-                allFinished = false;
-                break;
-            }
-        }
-
-        // Find most recent in-progress book for "Continue reading"
-        bool hasInProgress = false;
-        QString continueFilePath;
-        qint64 bestAt = -1;
-        for (const auto& f : bookFiles) {
-            QString fullPath = dir.absoluteFilePath(f);
-            QString id = QString(QCryptographicHash::hash(
-                fullPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-            QJsonObject prog = allProg.value(id).toObject();
-            if (!prog.isEmpty() && !prog.value("finished").toBool() && prog.value("page").toInt(-1) >= 0) {
-                hasInProgress = true;
-                qint64 updAt = prog.value("updatedAt").toVariant().toLongLong();
-                if (updAt > bestAt) {
-                    bestAt = updAt;
-                    continueFilePath = fullPath;
-                }
-            }
-        }
-
-        auto* menu = ContextMenuHelper::createMenu(this);
-        auto* openAct = menu->addAction("Open series");
-        auto* continueAct = menu->addAction("Continue reading");
-        continueAct->setEnabled(hasInProgress);
-        menu->addSeparator();
-        auto* markAct = menu->addAction(allFinished ? "Mark all as unread" : "Mark all as read");
-        menu->addSeparator();
-        auto* renameAct = menu->addAction("Rename series...");
-        auto* hideAct = menu->addAction("Hide series");
-        auto* revealAct = menu->addAction("Reveal in File Explorer");
-        revealAct->setEnabled(!seriesPath.isEmpty());
-        auto* copyAct = menu->addAction("Copy path");
-        copyAct->setEnabled(!seriesPath.isEmpty());
-        menu->addSeparator();
-        auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove series folder...");
-        removeAct->setEnabled(!seriesPath.isEmpty());
-
-        auto* chosen = menu->exec(m_bookStrip->mapToGlobal(pos));
-        if (chosen == openAct) {
-            m_seriesView->showSeries(seriesPath, seriesName, coverPath);
-            m_stack->setCurrentIndexAnimated(1);
-        } else if (chosen == continueAct) {
-            if (!continueFilePath.isEmpty())
-                emit openBook(continueFilePath);
-        } else if (chosen == markAct) {
-            bool setFinished = !allFinished;
-            for (const auto& f : bookFiles) {
-                QString id = QString(QCryptographicHash::hash(
-                    dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-                QJsonObject prog = m_bridge->progress("books", id);
-                prog["finished"] = setFinished;
-                m_bridge->saveProgress("books", id, prog);
-            }
-        } else if (chosen == renameAct) {
-            QString dirName = QDir(seriesPath).dirName();
-            QString newName = QInputDialog::getText(this, "Rename series", "New name:", QLineEdit::Normal, dirName);
-            if (!newName.isEmpty() && newName != dirName) {
-                QString parentPath = QFileInfo(seriesPath).absolutePath();
-                QString oldPath = parentPath + "/" + dirName;
-                QString newPath = parentPath + "/" + newName.trimmed();
-                if (QFile::rename(oldPath, newPath)) {
-                    triggerScan();
-                } else {
-                    QMessageBox::warning(this, "Rename failed",
-                        "Could not rename \"" + dirName + "\".\n"
-                        "The folder may be in use by another program.");
-                }
-            }
-        } else if (chosen == hideAct) {
-            QSettings settings("Tankoban", "Tankoban");
-            QStringList hidden = settings.value("books_hidden_series").toStringList();
-            if (!hidden.contains(seriesPath)) {
-                hidden.append(seriesPath);
-                settings.setValue("books_hidden_series", hidden);
-            }
-            card->hide();
-            m_bookStrip->filterTiles(m_searchBar->text());
-        } else if (chosen == revealAct) {
-            ContextMenuHelper::revealInExplorer(seriesPath);
-        } else if (chosen == copyAct) {
-            ContextMenuHelper::copyToClipboard(seriesPath);
-        } else if (chosen == removeAct) {
-            if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                    "Remove this series from the library?\n" + seriesPath +
-                    "\n\nFiles will remain on disk.")) {
-                triggerScan();
-            }
-        }
-        menu->deleteLater();
-    });
+    // §3.8 burn-the-ships backout (2026-05-27): book-tile context menu was
+    // folder-tier-anchored (Open series → BookSeriesView; Mark-all-as-read by
+    // walking on-disk files; Rename/Hide/Remove series folder; Reveal in Explorer
+    // of seriesPath). All of these depend on the scanner-derived seriesPath /
+    // seriesFiles state that no longer exists. A simpler catalogue-record-aware
+    // context menu ("Remove from library" via evictByCatalogueId, "Open Library
+    // page" via OpenLibrary URL, "Reveal file in Explorer" when filePath
+    // populated) is v1.x follow-on scope.
 
     // ── Book Hits section (scored search — individual book matches) ──
     m_bookHitsSection = new QWidget(content);
@@ -951,6 +852,7 @@ void BooksPage::buildUI()
     // setDensity uniformly.
     m_bookStrip->setDensity(savedDensity);
     if (m_continueStrip) m_continueStrip->setDensity(savedDensity);
+    if (m_bookHitsStrip) m_bookHitsStrip->setDensity(savedDensity);
 
     layout->addStretch(1);
     scroll->setWidget(content);
@@ -958,11 +860,17 @@ void BooksPage::buildUI()
 
     m_stack->addWidget(gridPage);
 
-    // ── Series view (index 1) ──
-    m_seriesView = new BookSeriesView(m_bridge);
-    connect(m_seriesView, &BookSeriesView::backRequested, this, &BooksPage::showGrid);
-    connect(m_seriesView, &BookSeriesView::bookSelected, this, &BooksPage::openBook);
-    m_stack->addWidget(m_seriesView);
+    // Catalogue detail view (index 1; was index 2 pre-§3.8 backout when BookSeriesView held index 1)
+    m_catalogueDetailView = new BookCatalogueDetailView();
+    connect(m_catalogueDetailView, &BookCatalogueDetailView::backRequested, this, [this]() {
+        if (m_catalogueDetailReturnToSearch && m_catalogueSearchView) {
+            m_catalogueDetailReturnToSearch = false;
+            m_stack->setCurrentWidget(m_catalogueSearchView);
+            return;
+        }
+        showGrid();
+    });
+    m_stack->addWidget(m_catalogueDetailView);
 
     outerLayout->addWidget(m_stack, 1);
 
@@ -972,15 +880,17 @@ void BooksPage::buildUI()
     auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     escShortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escShortcut, &QShortcut::activated, this, [this]() {
-        if (!m_searchBar->text().trimmed().isEmpty()) {
-            m_searchBar->clear();
-        } else if (m_stack->currentIndex() == 1) {
+        if (m_stack->currentIndex() != 0) {
             showGrid();
+        } else if (!m_searchBar->text().trimmed().isEmpty()) {
+            m_searchBar->clear();
         }
     });
 
     auto* f5Shortcut = new QShortcut(QKeySequence(Qt::Key_F5), this);
-    connect(f5Shortcut, &QShortcut::activated, this, [this]() { triggerScan(); });
+    connect(f5Shortcut, &QShortcut::activated, this, [this]() {
+        if (m_catalogueStore) m_catalogueStore->validateAll();
+    });
 
     auto* refreshShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_R), this);
     connect(refreshShortcut, &QShortcut::activated, this, [this]() {
@@ -1011,164 +921,112 @@ void BooksPage::buildUI()
 
 void BooksPage::activate()
 {
-    if (!m_hasScanned)
-        triggerScan();
+    if (m_catalogueStore) m_catalogueStore->validateAll();
 }
 
-void BooksPage::triggerScan()
+// §3.8 burn-the-ships backout (2026-05-27) — orphan-record check on show
+// per design spec §6.2 ("validateAll() on showEvent walks the records,
+// checks each file path exists on disk, marks orphan records for cleanup").
+// Mirrors StreamDownloadIndex::validateAll pattern.
+void BooksPage::showEvent(QShowEvent* event)
 {
-    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer rather than drop.
-    if (m_scanning) {
-        m_rescanPending = true;
-        return;
-    }
-    m_scanning = true;
-    m_rescanPending = false;
-
-    QStringList bookRoots = m_bridge->rootFolders("books");
-
-    if (bookRoots.isEmpty()) {
-        m_bookStrip->clear();
-        m_bookStrip->hide();
-        m_bookStatus->setText("Add a books folder to get started");
-        m_bookStatus->show();
-        m_hasScanned = true;
-        m_scanning = false;
-        return;
-    }
-
-    if (!m_hasScanned) {
-        // First scan: clear tiles, show scanning label for progressive loading
-        m_bookStrip->clear();
-        m_bookHitsStrip->clear();
-        m_bookHitsSection->hide();
-        m_progressKeyMap.clear();
-        m_seriesFiles.clear();
-        m_bookStatus->setText("Scanning...");
-        m_bookStatus->show();
-        m_bookStrip->hide();
-    }
-    // Rescan: keep old tiles visible — atomic swap happens in onScanFinished
-
-    QMetaObject::invokeMethod(m_scanner, "scan", Qt::QueuedConnection,
-                              Q_ARG(QStringList, bookRoots));
+    QWidget::showEvent(event);
+    if (m_catalogueStore) m_catalogueStore->validateAll();
 }
 
-void BooksPage::addBookSeriesTile(const BookSeriesInfo& series)
+// §3.8 burn-the-ships backout (2026-05-27): rebuilds the library grid purely
+// from BooksCatalogueLibraryStore records. Scanner-output BookSeriesInfo tier
+// gone — catalogue records are the only first-class library entity per
+// design spec §3.8. Empty-library copy per §3.9.
+void BooksPage::rebuildBookGrid()
 {
-    static const QStringList bookExts = {"*.epub","*.pdf","*.mobi","*.fb2","*.azw3","*.djvu","*.txt"};
-    QString thumbsDir = m_bridge->dataDir() + "/thumbs";
-    QDir dir(series.seriesPath);
-    QList<BookFile> fileList;
-    for (const auto& f : dir.entryList(bookExts, QDir::Files)) {
-        QString fullPath = dir.absoluteFilePath(f);
-        QString progressKey = QString(QCryptographicHash::hash(
-            fullPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-        QFileInfo fi(fullPath);
-        QString fileKey = fullPath + "::" + QString::number(fi.size())
-                        + "::" + QString::number(fi.lastModified().toMSecsSinceEpoch());
-        QString fileHash = QString(QCryptographicHash::hash(
-            fileKey.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-        QString fileCover = thumbsDir + "/" + fileHash + ".jpg";
-        QString coverPath = QFile::exists(fileCover) ? fileCover : series.coverThumbPath;
-        m_progressKeyMap[progressKey] = {fullPath, series.seriesPath, coverPath};
-        fileList.append({fullPath, ScannerUtils::cleanMediaFolderTitle(fi.completeBaseName())});
+    if (!m_bookStrip || !m_bookStatus) return;
+
+    m_bookStrip->clear();
+    if (m_bookHitsStrip) m_bookHitsStrip->clear();
+    if (m_bookHitsSection) m_bookHitsSection->hide();
+    if (m_listView) m_listView->clear();
+
+    const QList<CatalogueRecord> records = m_catalogueStore
+        ? m_catalogueStore->all()
+        : QList<CatalogueRecord>{};
+    for (const CatalogueRecord& record : records)
+        addCatalogueRecordTile(record);
+
+    if (records.isEmpty()) {
+        m_bookStrip->hide();
+        if (m_listView) m_listView->hide();
+        m_bookStatus->setObjectName("LibraryEmptyLabel");
+        m_bookStatus->setAlignment(Qt::AlignCenter);
+        m_bookStatus->setText("Search for books to add to library");
+        m_bookStatus->show();
+        return;
     }
-    m_seriesFiles[series.seriesPath] = fileList;
 
-    QString subtitle = QString::number(series.fileCount)
-                     + (series.fileCount == 1 ? " book" : " books");
+    m_bookStatus->hide();
+    m_bookStrip->show();
+    if (m_listView) m_listView->hide();
+    m_bookStrip->sortTiles(m_sortCombo ? m_sortCombo->currentData().toString()
+                                       : QStringLiteral("name_asc"));
+}
 
-    auto* card = new TileCard(series.coverThumbPath, series.seriesName, subtitle);
+void BooksPage::addCatalogueRecordTile(const CatalogueRecord& record)
+{
+    if (record.catalogueId.isEmpty()) return;
 
-    card->setProperty("seriesPath", series.seriesPath);
-    card->setProperty("seriesName", series.seriesName);
-    card->setProperty("coverPath", series.coverThumbPath);
-    card->setProperty("fileCount", series.fileCount);
-    card->setProperty("newestMtime", series.newestMtimeMs);
+    QStringList subtitleParts;
+    if (!record.author.isEmpty()) subtitleParts << record.author;
+    if (!record.year.isEmpty()) subtitleParts << record.year;
+    const QString subtitle = subtitleParts.join(QStringLiteral(" / "));
+    const QString cover = QFile::exists(record.cachedCoverPath) ? record.cachedCoverPath
+                                                                : QString();
+
+    auto* card = new TileCard(cover, record.title, subtitle);
+    card->setProperty("catalogueRecord", true);
+    card->setProperty("catalogueId", record.catalogueId);
+    card->setProperty("tileTitle", record.title);
+    card->setProperty("fileCount", 1);
+    card->setProperty("newestMtime", record.addedAt * 1000);
     connect(card, &TileCard::clicked, this, [this, card]() {
-        QString path = card->property("seriesPath").toString();
-        QString name = card->property("seriesName").toString();
-        QString cover = card->property("coverPath").toString();
-        m_seriesView->showSeries(path, name, cover);
-        m_stack->setCurrentIndexAnimated(1);
-    });
+        if (!m_catalogueStore || !m_catalogueDetailView) return;
 
+        const QString catalogueId = card->property("catalogueId").toString();
+        const auto record = m_catalogueStore->recordFor(catalogueId);
+        if (!record) return;
+
+        m_catalogueDetailReturnToSearch = false;
+        m_catalogueDetailView->showBook(
+            catalogueRecordToResult(*record),
+            QFile::exists(record->cachedCoverPath) ? record->cachedCoverPath : QString());
+        m_stack->setCurrentWidget(m_catalogueDetailView);
+    });
     m_bookStrip->addTile(card);
 }
 
-void BooksPage::onBookSeriesFound(const BookSeriesInfo& series)
+BookCatalogueResult BooksPage::catalogueRecordToResult(const CatalogueRecord& record) const
 {
-    // On rescan: skip incremental tiles — atomic rebuild in onScanFinished
-    if (m_hasScanned) return;
-
-    // First scan: progressive loading
-    if (m_bookStatus->isVisible()) {
-        m_bookStatus->hide();
-        m_bookStrip->show();
-    }
-    addBookSeriesTile(series);
-}
-
-void BooksPage::onScanFinished(const QList<BookSeriesInfo>& allBooks)
-{
-    bool wasRescan = m_hasScanned;
-    m_hasScanned = true;
-    m_scanning = false;
-    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — fire pending rescan.
-    if (m_rescanPending) {
-        m_rescanPending = false;
-        QTimer::singleShot(0, this, [this]() { triggerScan(); });
-    }
-
-    if (wasRescan) {
-        // Atomic swap: clear old tiles, rebuild from complete list
-        m_bookStrip->clear();
-        m_bookHitsStrip->clear();
-        m_bookHitsSection->hide();
-        m_listView->clear();
-        m_progressKeyMap.clear();
-        m_seriesFiles.clear();
-
-        for (const auto& series : allBooks)
-            addBookSeriesTile(series);
-    }
-
-    // Populate list view
-    m_listView->clear();
-    for (const auto& series : allBooks) {
-        LibraryListView::ItemData item;
-        item.name = series.seriesName;
-        item.path = series.seriesPath;
-        item.itemCount = series.fileCount;
-        item.lastModifiedMs = series.newestMtimeMs;
-        m_listView->addItem(item);
-    }
-
-    if (allBooks.isEmpty()) {
-        m_bookStrip->hide();
-        m_listView->hide();
-        m_bookStatus->setObjectName("LibraryEmptyLabel");
-        m_bookStatus->setAlignment(Qt::AlignCenter);
-        m_bookStatus->setText("No books found\nAdd a root folder via the + button or browse Sources for content");
-        m_bookStatus->show();
-    } else {
-        m_bookStatus->hide();
-        m_bookStrip->show();
-        m_bookStrip->sortTiles(m_sortCombo->currentData().toString());
-    }
-
-    refreshContinueStrip();
-}
-
-void BooksPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
-{
-    m_seriesView->showSeries(seriesPath, seriesName);
-    m_stack->setCurrentIndexAnimated(1);
+    BookCatalogueResult result;
+    result.catalogueId = record.catalogueId;
+    result.isbn = record.isbn;
+    result.title = record.title;
+    result.author = record.author;
+    result.publisher = record.publisher;
+    result.year = record.year;
+    result.language = record.language;
+    result.description = record.description;
+    result.genres = record.genres;
+    result.coverUrl = record.coverUrl;
+    result.seriesId = record.seriesId;
+    result.seriesName = record.seriesName;
+    result.seriesPosition = record.seriesPosition;
+    result.seriesTotal = record.seriesTotal;
+    return result;
 }
 
 void BooksPage::showGrid()
 {
+    m_catalogueDetailReturnToSearch = false;
+    hideSearchHistoryDropdown();
     m_stack->setCurrentIndexAnimated(0);
 }
 
@@ -1212,185 +1070,243 @@ static int scoreTokens(const QString& text, const QStringList& queryTokens, cons
     return score;
 }
 
-void BooksPage::applySearch()
+void BooksPage::loadSearchHistory()
 {
-    QString rawQuery = m_searchBar->text().trimmed();
-    bool searchActive = !rawQuery.isEmpty();
+    QSettings settings("Tankoban", "Tankoban");
+    m_searchHistory = settings.value(QStringLiteral("books/searchHistory")).toStringList();
+    if (m_searchHistory.size() > kMaxSearchHistory)
+        m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+}
 
-    // Clear book hits from previous search
-    m_bookHitsStrip->clear();
-    m_bookHitsSection->hide();
+void BooksPage::saveSearchHistory()
+{
+    QSettings settings("Tankoban", "Tankoban");
+    settings.setValue(QStringLiteral("books/searchHistory"), m_searchHistory);
+}
 
-    if (!searchActive) {
-        // No search — show all, delegate to simple filter
-        m_bookStrip->filterTiles(QString());
+void BooksPage::pushSearchHistory(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty()) return;
 
-        if (m_bookStrip->totalCount() > 0) {
-            m_bookStatus->hide();
-            m_bookStrip->show();
-        }
+    m_searchHistory.removeAll(q);
+    m_searchHistory.prepend(q);
+    if (m_searchHistory.size() > kMaxSearchHistory)
+        m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+    saveSearchHistory();
+}
+
+void BooksPage::removeSearchHistoryEntry(const QString& query)
+{
+    m_searchHistory.removeAll(query);
+    saveSearchHistory();
+    if (m_searchHistoryDropdown && m_searchHistoryDropdown->isVisible())
+        showSearchHistoryDropdown();
+}
+
+void BooksPage::clearSearchHistory()
+{
+    if (m_searchHistory.isEmpty()) return;
+    m_searchHistory.clear();
+    saveSearchHistory();
+    hideSearchHistoryDropdown();
+}
+
+void BooksPage::buildSearchHistoryDropdown()
+{
+    m_searchHistoryDropdown = new QFrame(this);
+    m_searchHistoryDropdown->setObjectName(QStringLiteral("BooksSearchHistory"));
+    m_searchHistoryDropdown->setStyleSheet(
+        "QFrame#BooksSearchHistory { background: #181818;"
+        " border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; }");
+    m_searchHistoryDropdown->hide();
+
+    auto* outer = new QVBoxLayout(m_searchHistoryDropdown);
+    outer->setContentsMargins(6, 6, 6, 6);
+    outer->setSpacing(2);
+
+    m_searchHistoryList = new QWidget(m_searchHistoryDropdown);
+    auto* listLayout = new QVBoxLayout(m_searchHistoryList);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->setSpacing(2);
+    outer->addWidget(m_searchHistoryList);
+
+    m_searchHistoryHideTimer = new QTimer(this);
+    m_searchHistoryHideTimer->setSingleShot(true);
+    m_searchHistoryHideTimer->setInterval(150);
+    connect(m_searchHistoryHideTimer, &QTimer::timeout, this, [this]() {
+        if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
+    });
+}
+
+void BooksPage::positionSearchHistoryDropdown()
+{
+    if (!m_searchHistoryDropdown || !m_searchBar) return;
+    const QPoint pos = m_searchBar->mapTo(this, QPoint(0, m_searchBar->height() + 4));
+    m_searchHistoryDropdown->setFixedWidth(m_searchBar->width());
+    m_searchHistoryDropdown->setGeometry(pos.x(), pos.y(),
+        m_searchBar->width(), m_searchHistoryDropdown->sizeHint().height());
+}
+
+void BooksPage::showSearchHistoryDropdown()
+{
+    if (!m_searchHistoryDropdown || !m_searchHistoryList) return;
+    if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
+
+    auto* layout = qobject_cast<QVBoxLayout*>(m_searchHistoryList->layout());
+    if (!layout) return;
+
+    while (QLayoutItem* item = layout->takeAt(0)) {
+        if (auto* widget = item->widget()) widget->deleteLater();
+        delete item;
+    }
+
+    if (m_searchHistory.isEmpty()) {
+        m_searchHistoryDropdown->hide();
         return;
     }
 
-    QStringList queryTokens = tokenize(rawQuery);
-    if (queryTokens.isEmpty()) {
-        m_bookStrip->filterTiles(QString());
-        return;
+    const int rows = qMin(m_searchHistory.size(), kMaxSearchHistory);
+    for (int i = 0; i < rows; ++i) {
+        const QString q = m_searchHistory.at(i);
+
+        auto* row = new QWidget(m_searchHistoryList);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(4);
+
+        auto* submit = new QPushButton(q, row);
+        submit->setCursor(Qt::PointingHandCursor);
+        submit->setStyleSheet(
+            "QPushButton { background: transparent; border: none;"
+            " color: rgba(255,255,255,0.84); font-size: 13px;"
+            " padding: 7px 8px; text-align: left; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.08); }");
+        connect(submit, &QPushButton::clicked, this, [this, q]() {
+            hideSearchHistoryDropdown();
+            if (m_searchBar) m_searchBar->setText(q);
+            showCatalogueSearchMode(q);
+        });
+        rowLayout->addWidget(submit, 1);
+
+        auto* remove = new QPushButton(QStringLiteral("x"), row);
+        remove->setCursor(Qt::PointingHandCursor);
+        remove->setFixedSize(26, 26);
+        remove->setToolTip(QStringLiteral("Remove from search history"));
+        remove->setStyleSheet(
+            "QPushButton { background: transparent; border: none;"
+            " color: rgba(255,255,255,0.54); font-size: 13px; }"
+            "QPushButton:hover { color: #ffffff; background: rgba(255,255,255,0.08); }");
+        connect(remove, &QPushButton::clicked, this, [this, q]() {
+            removeSearchHistoryEntry(q);
+        });
+        rowLayout->addWidget(remove);
+
+        layout->addWidget(row);
     }
 
-    // ── Score each series tile ──
-    // We need to manually show/hide + sort by score, rather than using filterTiles
-    m_bookStrip->filterTiles(QString()); // first show all
-    struct ScoredTile { TileCard* card; int score; };
-    QList<ScoredTile> scoredTiles;
-    QSet<QString> seriesWithBookHits; // seriesPath of series that got book-level hits
+    auto* divider = new QFrame(m_searchHistoryList);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setStyleSheet("QFrame { color: rgba(255,255,255,0.10); }");
+    layout->addWidget(divider);
 
-    // Score series names
-    for (int i = 0; i < m_bookStrip->totalCount(); ++i) {
-        // Access tiles through the strip — use tileAt with position isn't ideal
-        // Instead, iterate children
-    }
+    auto* clearAll = new QPushButton(QStringLiteral("Clear search history"), m_searchHistoryList);
+    clearAll->setCursor(Qt::PointingHandCursor);
+    clearAll->setStyleSheet(
+        "QPushButton { background: transparent; border: none;"
+        " color: rgba(255,255,255,0.58); font-size: 12px;"
+        " padding: 7px 8px; text-align: left; }"
+        "QPushButton:hover { color: #ffffff; background: rgba(255,255,255,0.08); }");
+    connect(clearAll, &QPushButton::clicked, this, &BooksPage::clearSearchHistory);
+    layout->addWidget(clearAll);
 
-    // Since TileStrip doesn't expose tile iteration directly, use filterTiles
-    // and then also do book-level search for the "Book Hits" strip
-    m_bookStrip->filterTiles(rawQuery);
+    m_searchHistoryDropdown->adjustSize();
+    positionSearchHistoryDropdown();
+    m_searchHistoryDropdown->show();
+    m_searchHistoryDropdown->raise();
+}
 
-    // ── Book-level search: find individual books matching query ──
-    int bookHitCount = 0;
-    QString thumbsDir = m_bridge->dataDir() + "/thumbs";
+void BooksPage::hideSearchHistoryDropdown()
+{
+    if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
+    if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
+}
 
-    for (auto it = m_seriesFiles.begin(); it != m_seriesFiles.end() && bookHitCount < 24; ++it) {
-        QString seriesPath = it.key();
-        // Check if the series name already matches — skip book-level hits for matching series
-        QString seriesName = QDir(seriesPath).dirName();
-        int seriesScore = scoreTokens(seriesName, queryTokens, rawQuery);
-        if (seriesScore > 0) continue; // series already visible, no need for book hits
+void BooksPage::showCatalogueSearchMode(const QString& query)
+{
+    const QString trimmed = query.trimmed();
+    if (trimmed.isEmpty()) return;
 
-        const auto& files = it.value();
-        for (const auto& bf : files) {
-            if (bookHitCount >= 24) break;
-            int bookScore = scoreTokens(bf.title, queryTokens, rawQuery);
-            if (bookScore > 0) {
-                // Create a tile for this individual book
-                QFileInfo fi(bf.filePath);
-                QString fileKey = bf.filePath + "::" + QString::number(fi.size())
-                                + "::" + QString::number(fi.lastModified().toMSecsSinceEpoch());
-                QString fileHash = QString(QCryptographicHash::hash(
-                    fileKey.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-                QString fileCover = thumbsDir + "/" + fileHash + ".jpg";
+    pushSearchHistory(trimmed);
+    hideSearchHistoryDropdown();
 
-                // Find series cover as fallback
-                QString seriesHash = QString(QCryptographicHash::hash(
-                    seriesPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-                QString seriesCover = thumbsDir + "/" + seriesHash + ".jpg";
-                QString coverPath = QFile::exists(fileCover) ? fileCover :
-                                    (QFile::exists(seriesCover) ? seriesCover : QString());
+    if (m_searchBar && m_searchBar->text().trimmed() != trimmed)
+        m_searchBar->setText(trimmed);
 
-                auto* card = new TileCard(coverPath, bf.title, seriesName);
-                card->setProperty("seriesPath", seriesPath);
-                card->setProperty("filePath", bf.filePath);
-                connect(card, &TileCard::clicked, this, [this, bf]() {
-                    emit openBook(bf.filePath);
-                });
-                m_bookHitsStrip->addTile(card);
-                bookHitCount++;
-            }
-        }
-    }
-
-    if (bookHitCount > 0)
-        m_bookHitsSection->show();
-
-    // Books section empty state
-    if (m_bookStrip->visibleCount() == 0 && bookHitCount == 0) {
-        m_bookStatus->setObjectName("LibraryEmptyLabel");
-        m_bookStatus->setAlignment(Qt::AlignCenter);
-        m_bookStatus->setText(
-            QString("No results for \"%1\"").arg(rawQuery));
-        m_bookStatus->show();
-        m_bookStrip->hide();
-    } else if (m_bookStrip->visibleCount() > 0) {
-        m_bookStatus->hide();
-        m_bookStrip->show();
+    if (m_bookHitsStrip) m_bookHitsStrip->clear();
+    if (m_bookHitsSection) m_bookHitsSection->hide();
+    if (m_catalogueSearchView) {
+        m_catalogueDetailReturnToSearch = false;
+        m_catalogueSearchView->search(trimmed);
+        m_stack->setCurrentWidget(m_catalogueSearchView);
     }
 }
 
+void BooksPage::applySearch()
+{
+    const QString query = m_searchBar ? m_searchBar->text().trimmed() : QString();
+    if (query.isEmpty()) {
+        showGrid();
+        return;
+    }
+    showCatalogueSearchMode(query);
+}
+// §3.8 burn-the-ships backout (2026-05-27): walks catalogue records filtered
+// by readProgress in (0, 1), sorted by lastReadAt desc. §3.10 series-aware
+// subscript ("Series · Reading Book N · 62%") deferred to v1.x — v1 shows
+// "<author> · <progress%>" per file/progress-only spec.
 void BooksPage::refreshContinueStrip()
 {
+    if (!m_continueStrip || !m_continueSection) return;
     m_continueStrip->clear();
 
-    QJsonObject allProg = m_bridge->allProgress("books");
-    if (allProg.isEmpty()) {
+    if (!m_catalogueStore) {
         m_continueSection->hide();
         return;
     }
 
-    struct ContinueItem {
-        qint64 updatedAt;
-        QString filePath;
-        QString seriesPath;
-        QString title;
-        QString subtitle;
-        QString coverPath;
-    };
-    QList<ContinueItem> items;
-
-    for (auto it = allProg.begin(); it != allProg.end(); ++it) {
-        QJsonObject prog = it.value().toObject();
-        if (prog.value("finished").toBool())
-            continue;
-        int page = prog.value("page").toInt(0);
-        if (page < 0)
-            continue;
-
-        auto ref = m_progressKeyMap.find(it.key());
-        if (ref == m_progressKeyMap.end())
-            continue;
-
-        qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();
-        int pageCount = prog.value("pageCount").toInt(0);
-
-        QString title = ScannerUtils::cleanMediaFolderTitle(QFileInfo(ref->filePath).completeBaseName());
-        QString subtitle = pageCount > 0
-            ? QString("Page %1/%2").arg(page + 1).arg(pageCount)
-            : QString("Page %1").arg(page + 1);
-
-        items.append({updatedAt, ref->filePath, ref->seriesPath, title, subtitle, ref->coverPath});
+    QList<CatalogueRecord> inProgress;
+    for (const CatalogueRecord& r : m_catalogueStore->all()) {
+        if (r.readProgress > 0.0 && r.readProgress < 1.0)
+            inProgress.append(r);
     }
 
-    if (items.isEmpty()) {
+    if (inProgress.isEmpty()) {
         m_continueSection->hide();
         return;
     }
 
-    // Per-series dedup: keep only the most recently updated book per series
-    QMap<QString, int> bestPerSeries;
-    for (int i = 0; i < items.size(); ++i) {
-        auto it = bestPerSeries.find(items[i].seriesPath);
-        if (it == bestPerSeries.end() || items[i].updatedAt > items[it.value()].updatedAt)
-            bestPerSeries[items[i].seriesPath] = i;
-    }
+    std::sort(inProgress.begin(), inProgress.end(),
+              [](const CatalogueRecord& a, const CatalogueRecord& b) {
+                  return a.lastReadAt > b.lastReadAt;
+              });
 
-    QList<ContinueItem> deduped;
-    for (int idx : bestPerSeries)
-        deduped.append(items[idx]);
+    for (const CatalogueRecord& r : inProgress) {
+        const QString cover = QFile::exists(r.cachedCoverPath)
+            ? r.cachedCoverPath : QString();
+        const int pct = static_cast<int>(r.readProgress * 100.0);
+        QStringList subParts;
+        if (!r.author.isEmpty()) subParts << r.author;
+        subParts << QString("%1%").arg(pct);
+        const QString subtitle = subParts.join(QStringLiteral(" · "));
 
-    std::sort(deduped.begin(), deduped.end(), [](const ContinueItem& a, const ContinueItem& b) {
-        return a.updatedAt > b.updatedAt;
-    });
-
-    for (const auto& item : deduped) {
-        auto* card = new TileCard(item.coverPath, item.title, item.subtitle);
-        card->setProperty("filePath", item.filePath);
-        card->setProperty("seriesPath", item.seriesPath);
-        card->setProperty("seriesName", ScannerUtils::cleanMediaFolderTitle(QDir(item.seriesPath).dirName()));
-        card->setProperty("coverPath", item.coverPath);
-        // Store progress key for context menu operations
-        QString progKey = QString(QCryptographicHash::hash(
-            item.filePath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-        card->setProperty("progressKey", progKey);
-        connect(card, &TileCard::clicked, this, [this, card]() {
-            emit openBook(card->property("filePath").toString());
+        auto* card = new TileCard(cover, r.title, subtitle);
+        card->setProperty("catalogueId", r.catalogueId);
+        card->setProperty("filePath", r.filePath);
+        card->setProperty("progressKey", progressKeyFor(r.filePath));
+        connect(card, &TileCard::clicked, this, [this, r]() {
+            if (!r.filePath.isEmpty() && QFile::exists(r.filePath))
+                emit openBook(r.filePath);
         });
         m_continueStrip->addTile(card);
     }

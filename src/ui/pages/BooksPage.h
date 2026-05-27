@@ -1,24 +1,37 @@
 #pragma once
 
-#include <QWidget>
-#include <QThread>
+#include <QComboBox>
+#include <QHash>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QComboBox>
-#include <QSlider>
-#include <QTimer>
-#include <QSettings>
+#include <QList>
+#include <QMap>
 #include <QPushButton>
-#include <QJsonObject>
+#include <QSettings>
+#include <QSlider>
+#include <QStringList>
+#include <QTimer>
+#include <QWidget>
+
 #include "../LayerEntry.h"
-class QScrollArea;
+#include "core/book/SeriesDetector.h"
+
+class BookCatalogueAggregator;
+class BookCatalogueDetailView;
+class BookCatalogueSearchWidget;
+class BooksCatalogueLibraryStore;
 class CoreBridge;
 class FadingStackedWidget;
 class LibraryListView;
+class QEvent;
+class QFrame;
+class QNetworkAccessManager;
+class QScrollArea;
+class TileCard;
 class TileStrip;
-class BooksScanner;
-class BookSeriesView;
-struct BookSeriesInfo;
+struct BookCatalogueResult;
+struct CatalogueRecord;
 
 class BooksPage : public QWidget {
     Q_OBJECT
@@ -27,19 +40,12 @@ public:
     ~BooksPage();
 
     void activate();
-    void triggerScan();
     Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
                                         const QJsonObject& payload,
                                         QJsonObject& reply);
 
-    // v1.3 Phase D.1 (2026-05-19) — dev-bridge snapshots. Used by
-    // MainWindow::handleDevCommand (dump_ui books branch) and by the
-    // page-local dispatch in dispatchDevCommand. All read-only / no UI
-    // mutation.
     QJsonObject devSnapshot() const;
     QJsonObject devLibrarySnapshot() const;
-    // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot used
-    // by library_get_* commands + embedded in devSnapshot under "library".
     QJsonObject devLibrarySection() const;
 
 signals:
@@ -48,68 +54,67 @@ signals:
     void exitedLayer();
 
 public slots:
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. This
-    // page has no deep state today so there's nothing to restore beyond
-    // ensuring the page is on its landing view (which it always is).
     void restoreLayer(const tankoban::ui::LayerEntry& target);
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+
 private slots:
-    void onBookSeriesFound(const BookSeriesInfo& series);
-    void onScanFinished(const QList<BookSeriesInfo>& allBooks);
-    void onTileClicked(const QString& seriesPath, const QString& seriesName);
     void showGrid();
+    void showCatalogueSearchMode(const QString& query);
     void applySearch();
     void refreshContinueStrip();
+    void rebuildBookGrid();
 
 private:
     void buildUI();
-    void addBookSeriesTile(const BookSeriesInfo& series);
+    void addCatalogueRecordTile(const CatalogueRecord& record);
+    BookCatalogueResult catalogueRecordToResult(const CatalogueRecord& record) const;
+    void loadSearchHistory();
+    void saveSearchHistory();
+    void pushSearchHistory(const QString& query);
+    void removeSearchHistoryEntry(const QString& query);
+    void clearSearchHistory();
+    void buildSearchHistoryDropdown();
+    void showSearchHistoryDropdown();
+    void hideSearchHistoryDropdown();
+    void positionSearchHistoryDropdown();
 
-    CoreBridge*    m_bridge = nullptr;
+    CoreBridge* m_bridge = nullptr;
 
-    // Navigation
     FadingStackedWidget* m_stack = nullptr;
-    BookSeriesView* m_seriesView = nullptr;
+    BookCatalogueDetailView* m_catalogueDetailView = nullptr;
+    BookCatalogueSearchWidget* m_catalogueSearchView = nullptr;
+    bool m_catalogueDetailReturnToSearch = false;
 
-    // Continue Reading
-    QWidget*       m_continueSection = nullptr;
-    TileStrip*     m_continueStrip = nullptr;
-    struct FileRef { QString filePath; QString seriesPath; QString coverPath; };
-    QMap<QString, FileRef> m_progressKeyMap;
+    QWidget* m_continueSection = nullptr;
+    TileStrip* m_continueStrip = nullptr;
 
-    // Search & Sort
-    QLineEdit*     m_searchBar = nullptr;
-    QComboBox*     m_sortCombo = nullptr;
-    QTimer*        m_searchTimer = nullptr;
+    QLineEdit* m_searchBar = nullptr;
+    QComboBox* m_sortCombo = nullptr;
+    QTimer* m_searchTimer = nullptr;
+    QFrame* m_searchHistoryDropdown = nullptr;
+    QWidget* m_searchHistoryList = nullptr;
+    QTimer* m_searchHistoryHideTimer = nullptr;
+    QStringList m_searchHistory;
+    static constexpr int kMaxSearchHistory = 10;
 
-    // Books section
-    TileStrip*     m_bookStrip = nullptr;
-    QLabel*        m_bookStatus = nullptr;
+    TileStrip* m_bookStrip = nullptr;
+    QLabel* m_bookStatus = nullptr;
 
-    // Book Hits section (scored search — individual book tiles)
-    QWidget*       m_bookHitsSection = nullptr;
-    TileStrip*     m_bookHitsStrip = nullptr;
+    QWidget* m_bookHitsSection = nullptr;
+    TileStrip* m_bookHitsStrip = nullptr;
 
-    // Per-series file list for scored book search
-    struct BookFile { QString filePath; QString title; };
-    QMap<QString, QList<BookFile>> m_seriesFiles; // seriesPath -> files
+    QNetworkAccessManager* m_catalogueNam = nullptr;
+    BookCatalogueAggregator* m_catalogueAggregator = nullptr;
+    BooksCatalogueLibraryStore* m_catalogueStore = nullptr;
+    QString m_catalogueCoverDir;
 
-    // List view
     LibraryListView* m_listView = nullptr;
-    QPushButton*     m_viewToggle = nullptr;
-    QSlider*         m_densitySlider = nullptr;
-    bool             m_gridMode = true;
+    QPushButton* m_viewToggle = nullptr;
+    QSlider* m_densitySlider = nullptr;
+    bool m_gridMode = true;
 
-    // Scanner
-    QThread*       m_scanThread = nullptr;
-    BooksScanner*  m_scanner = nullptr;
-    bool           m_hasScanned = false;
-    bool           m_scanning = false;
-    // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer-not-drop rescan flag.
-    bool           m_rescanPending = false;
-
-    // GLOBAL_NAV_HISTORY Task 9: cache the grid QScrollArea pointer so
-    // capture/restore don't pay an O(n) findChild walk on every Back/Forward.
-    // Mirrors ComicsPage::m_gridScroll (Task 8 caching fix, commit 66b7e34).
-    QScrollArea*   m_gridScroll = nullptr;
+    QScrollArea* m_gridScroll = nullptr;
 };

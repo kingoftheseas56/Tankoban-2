@@ -48,7 +48,6 @@ set(SOURCES
     src/core/JsonStore.cpp
     src/core/CoreBridge.cpp
     src/core/LibraryScanner.cpp
-    src/core/BooksScanner.cpp
     src/core/library/VideoCategory.cpp
     src/core/library/VideoCategoryStore.cpp
     src/core/library/VideoClassifier.cpp
@@ -76,7 +75,6 @@ set(SOURCES
     src/ui/pages/CategoryEditorPage.cpp
     src/ui/pages/PosterPickerPopover.cpp
     src/ui/pages/SeriesView.cpp
-    src/ui/pages/BookSeriesView.cpp
     src/ui/pages/TileCard.cpp
     src/ui/pages/TileStrip.cpp
     src/ui/pages/ShowView.cpp
@@ -207,12 +205,15 @@ set(SOURCES
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.cpp
+    src/ui/pages/comics/ComicsDownloadsPage.cpp
     src/ui/pages/comics/VolumeTile.cpp
     src/ui/pages/comics/ComicsSeriesView.cpp
     src/ui/pages/comics/ComicsSourceCard.cpp
     src/ui/pages/comics/ComicsSourcesPanel.cpp
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.cpp
     src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
+    src/ui/pages/books/BookCatalogueSearchWidget.cpp
+    src/ui/pages/books/BookCatalogueDetailView.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
@@ -270,7 +271,6 @@ set(HEADERS
     src/core/JsonStore.h
     src/core/CoreBridge.h
     src/core/LibraryScanner.h
-    src/core/BooksScanner.h
     src/core/library/VideoCategory.h
     src/core/library/VideoCategoryStore.h
     src/core/library/VideoClassifier.h
@@ -296,7 +296,6 @@ set(HEADERS
     src/ui/pages/CategoryEditorPage.h
     src/ui/pages/PosterPickerPopover.h
     src/ui/pages/SeriesView.h
-    src/ui/pages/BookSeriesView.h
     src/ui/pages/TileCard.h
     src/ui/pages/TileStrip.h
     src/ui/pages/ShowView.h
@@ -409,11 +408,14 @@ set(HEADERS
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/comics/SidecarMeta.h
     src/ui/pages/comics/ComicsTankoyomiSearchWidget.h
+    src/ui/pages/comics/ComicsDownloadsPage.h
     src/ui/pages/comics/ComicsSeriesView.h
     src/ui/pages/comics/ComicsSourceCard.h
     src/ui/pages/comics/ComicsSourcesPanel.h
     src/ui/pages/tankoyomi/ChapterDownloadIndicator.h
     src/ui/pages/tankoyomi/ChapterRangeDialog.h
+    src/ui/pages/books/BookCatalogueSearchWidget.h
+    src/ui/pages/books/BookCatalogueDetailView.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
@@ -891,6 +893,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/ui/PerModeNavController.cpp
         # VolumeTile state tests (COMICS_CATALOG_SERIES_VIEW Phase 2 Task 8+9)
         tests/ui/test_volume_tile_state.cpp
+        tests/ui/readers/test_comic_reader_pairing.cpp
         src/ui/pages/comics/VolumeTile.cpp
         src/core/manga/MangaDownloadIndex.cpp
     )

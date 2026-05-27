@@ -554,9 +554,11 @@ bool SystemIntrospection::handleScanner(const QString& cmd, const QJsonObject&, 
         // VideosScanner is a one-shot scanner — no live "running/idle" status
         // exposed publicly. What's introspectable is whether the duration
         // cache file exists + its mtime, which agents use as a proxy for
-        // "scanner has run at least once". LibraryScanner and BooksScanner
-        // are similar shape; their "watched" set is the per-domain root
-        // folders QSettings list (see scanner-list-watched).
+        // "scanner has run at least once". LibraryScanner is similar shape;
+        // its "watched" set is the per-domain root folders QSettings list
+        // (see scanner-list-watched). BooksScanner was removed 2026-05-27 in
+        // the BOOKS_STREMIO_PIVOT §3.8 burn-the-ships backout — Books mode now
+        // owns its library via catalogue records, not folder-walker output.
         MainWindow* w = m_window.data();
         QString durationCachePath;
         bool durationCacheExists = false;

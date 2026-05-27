@@ -24,11 +24,12 @@
 //   - m_bySeries   : seriesId -> set<catalogueId> (series aggregation for grid)
 //   - m_byFilePath : filePath -> catalogueId (reverse lookup for validate)
 //
-// Threadsafe — BooksScanner reads from a worker thread via mutex-guarded
-// const APIs. Mutating methods (upsertRecord / evict / validateAll /
-// updateReadProgress) execute synchronously on the calling thread, acquire
-// m_mutex around map mutations, then call save() and emit recordsChanged()
-// OFF the lock.
+// Threadsafe — const APIs are mutex-guarded for cross-thread reads. Mutating
+// methods (upsertRecord / evict / validateAll / updateReadProgress) execute
+// synchronously on the calling thread, acquire m_mutex around map mutations,
+// then call save() and emit recordsChanged() OFF the lock.
+// (BooksScanner reference dropped 2026-05-27 — class removed in
+// BOOKS_STREMIO_PIVOT §3.8 backout; this store is the sole library data source now.)
 class BooksCatalogueLibraryStore : public QObject
 {
     Q_OBJECT

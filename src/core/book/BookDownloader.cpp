@@ -330,8 +330,8 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
 
     if (candidates.isEmpty()) return {};
 
-    // Single qualifying file — return it directly. BooksScanner picks it up
-    // without any move needed.
+    // Single qualifying file — return it directly. Caller (TankoLibraryPage)
+    // hands the path back to BooksCatalogueLibraryStore for record creation.
     if (candidates.size() == 1) {
         return candidates.first().absoluteFilePath();
     }
@@ -362,10 +362,11 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
     if (best.filePath().isEmpty()) return {};
 
     // If the best file lives in a subdirectory, move it up to destinationDir
-    // so BooksScanner sees it at the library root level. Sanitize the target
-    // name to scrub NTFS-illegal chars that torrent payloads occasionally
-    // carry (parity with the HTTP path's sanitizeFilename — brotherhood
-    // code-review of c7acf74 caught the asymmetry).
+    // so the file lives at the library root level for catalogue-record
+    // filePath canonicalization. Sanitize the target name to scrub
+    // NTFS-illegal chars that torrent payloads occasionally carry (parity
+    // with the HTTP path's sanitizeFilename — brotherhood code-review of
+    // c7acf74 caught the asymmetry).
     if (best.absoluteDir() != dir) {
         const QString safeName = sanitizeFilename(best.fileName());
         const QString target = dir.absoluteFilePath(safeName);
@@ -374,8 +375,8 @@ QString BookDownloader::pickBestBookFile(const MagnetInFlight& m) const
         if (QFile::rename(best.absoluteFilePath(), target)) {
             return target;
         }
-        // rename failed — return the original nested path (scanner will still
-        // find it if BooksScanner walks subfolders).
+        // rename failed — return the original nested path (catalogue record
+        // can still reference it; reader opens by absolute path either way).
         qWarning() << "[BookDownloader] could not move" << best.absoluteFilePath()
                    << "to" << target << "— returning nested path";
     }

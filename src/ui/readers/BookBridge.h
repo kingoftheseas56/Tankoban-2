@@ -24,8 +24,9 @@ public:
 
     // ── booksProgress ──
     // Canonical SHA1[:20] key derived from the forward-slash-normalized absolute
-    // path. Matches BooksPage.cpp:623-625 and BookSeriesView.cpp:740 exactly so
-    // the reader and the library read/write the same record.
+    // path. Matches BooksPage.cpp's progressKeyFor helper exactly so the reader
+    // and the library read/write the same record. (BookSeriesView reference
+    // dropped 2026-05-27 — class removed in BOOKS_STREMIO_PIVOT §3.8 backout.)
     Q_INVOKABLE QString progressKey(const QString& absPath) const;
     Q_INVOKABLE QJsonObject booksProgressGet(const QString& bookId);
     Q_INVOKABLE void booksProgressSave(const QString& bookId, const QJsonObject& data);
