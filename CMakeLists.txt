@@ -143,6 +143,8 @@ set(SOURCES
     src/core/torrent/TorrentClient.cpp
     src/core/torrent/TorrentRepository.cpp
     src/core/torrent/LegacyImporter.cpp
+    src/core/queue/TransferItem.h
+    src/core/queue/TransferLane.h
     src/ui/dialogs/AddTorrentDialog.cpp
     src/ui/dialogs/AddFromUrlDialog.cpp
     src/ui/dialogs/StreamRescueProgressDialog.cpp
