@@ -1,0 +1,64 @@
+#pragma once
+
+#include <QHash>
+#include <QList>
+#include <QLabel>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QString>
+#include <QWidget>
+
+#include "core/book/BookCatalogueResult.h"
+#include "core/book/SeriesDetector.h"
+
+class BookCatalogueAggregator;
+class QNetworkAccessManager;
+class TileCard;
+class TileStrip;
+
+class BookCatalogueSearchWidget : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit BookCatalogueSearchWidget(BookCatalogueAggregator* aggregator,
+                                       QNetworkAccessManager* nam,
+                                       const QString& coverCacheDir,
+                                       QWidget* parent = nullptr);
+
+    void search(const QString& query);
+    void clearResults();
+
+signals:
+    void backRequested();
+    void bookPicked(const BookCatalogueResult& book, const QString& coverPath);
+
+private slots:
+    void onCatalogueResult(const QString& query,
+                           const QList<SeriesDetector::SeriesGroup>& seriesGroups,
+                           const QList<BookCatalogueResult>& standalones);
+    void onCatalogueFailed(const QString& query, const QString& error);
+
+private:
+    void buildUi();
+    void addSeriesCard(const SeriesDetector::SeriesGroup& group);
+    void addBookCard(const BookCatalogueResult& book);
+    QString coverPathFor(const QString& catalogueId) const;
+    void downloadCover(const QString& catalogueId, const QString& coverUrl, TileCard* card);
+
+    BookCatalogueAggregator* m_aggregator = nullptr;
+    QNetworkAccessManager* m_nam = nullptr;
+    QString m_coverCacheDir;
+    QString m_currentQuery;
+    bool m_pending = false;
+
+    QPushButton* m_backButton = nullptr;
+    QLabel* m_statusLabel = nullptr;
+    QScrollArea* m_scroll = nullptr;
+    QLabel* m_seriesHeader = nullptr;
+    TileStrip* m_seriesStrip = nullptr;
+    QLabel* m_booksHeader = nullptr;
+    TileStrip* m_booksStrip = nullptr;
+
+    QHash<QString, BookCatalogueResult> m_resultsById;
+};
