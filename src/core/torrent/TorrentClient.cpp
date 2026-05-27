@@ -718,16 +718,38 @@ void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
     connect(q, &tankoban::queue::TransferQueue::itemStateChanged,
             this, [this](const QString& transferId,
                          tankoban::queue::TransferState newState) {
+        // Cleanup path: if a still-pending (never-started) transfer gets
+        // cancelled via the queue, drop the staged args to avoid stale replay.
+        if (newState == tankoban::queue::TransferState::Cancelled) {
+            m_pendingStartConfigs.remove(transferId);
+            m_pendingByTransferId.remove(transferId);
+            return;
+        }
         if (newState != tankoban::queue::TransferState::Running) return;
-        auto it = m_pendingByTransferId.find(transferId);
-        if (it == m_pendingByTransferId.end()) return;
-        const TransferStartArgs args = it.value();
-        m_pendingByTransferId.erase(it);
-        if (args.isMagnet) {
-            addMagnetHeadless(args.magnetOrPath, args.category, args.destinationPath);
-        } else {
-            qWarning() << "TransferQueue: .torrent path defer not supported in P1"
-                       << "(transferId=" << transferId.left(16) << ")";
+
+        // T1.10 path: rich AddTorrentConfig caller (StreamPage / TankoLibrary).
+        // Replay startDownload with the staged config; the imdbId-gate inside
+        // startDownload sees pos == 0 this time (we are the new head) and
+        // proceeds to libtorrent.
+        if (auto cfgIt = m_pendingStartConfigs.find(transferId);
+            cfgIt != m_pendingStartConfigs.end()) {
+            QSharedPointer<AddTorrentConfig> cfg = cfgIt.value();
+            m_pendingStartConfigs.erase(cfgIt);
+            startDownload(transferId, *cfg);
+            return;
+        }
+
+        // T1.9 path: thin addMagnetHeadless caller (Tankorent direct search).
+        if (auto it = m_pendingByTransferId.find(transferId);
+            it != m_pendingByTransferId.end()) {
+            const TransferStartArgs args = it.value();
+            m_pendingByTransferId.erase(it);
+            if (args.isMagnet) {
+                addMagnetHeadless(args.magnetOrPath, args.category, args.destinationPath);
+            } else {
+                qWarning() << "TransferQueue: .torrent path defer not supported in P1"
+                           << "(transferId=" << transferId.left(16) << ")";
+            }
         }
     });
 }
@@ -2594,6 +2616,36 @@ QString TorrentClient::addMagnetHeadless(const QString& magnetUri,
 void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfig& config)
 {
     const QString hash = infoHash.toLower();
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.10 (2026-05-27) — per-show lane gate.
+    // If the caller populated config.imdbId (Stream / Theatre / TankoLibrary
+    // do this; addMagnetHeadless explicitly does NOT — see line 2597), route
+    // through TransferQueue. If this isn't lane head, stash the full config in
+    // m_pendingStartConfigs and bail — the setTransferQueue lambda will replay
+    // startDownload with the staged config when the queue advances to us.
+    //
+    // Two guards prevent re-entry loops:
+    //   (1) Already-pending check: if we already staged this hash, we're being
+    //       called from the replay path — fall through and let it run.
+    //   (2) Standalone bypass: empty imdbId skips the gate entirely.
+    if (m_transferQueue
+        && !config.imdbId.isEmpty()
+        && !m_pendingStartConfigs.contains(hash)) {
+        tankoban::queue::TransferItem item;
+        item.transferId = hash;
+        item.showId = QStringLiteral("imdb:") + config.imdbId;
+        item.displayTitle = hash;
+        if (config.season > 0) item.seasonNumber = config.season;
+
+        const int pos = m_transferQueue->enqueue(item);
+        if (pos > 0) {
+            // Behind the current item — stage the config for replay.
+            m_pendingStartConfigs.insert(
+                hash, QSharedPointer<AddTorrentConfig>::create(config));
+            return;
+        }
+        // pos == 0: we are the new lane head, fall through and run.
+    }
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.4 (2026-05-20) — the F9 fix
     // 2026-05-19 self-defense narrative is retired. Phase 2.2's

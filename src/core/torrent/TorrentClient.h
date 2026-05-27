@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <optional>
 #include <QHash>
+#include <QSharedPointer>
 
 namespace tankoban::queue { class TransferQueue; }
 
@@ -442,6 +443,15 @@ private:
     // advances and emits itemStateChanged(Running).
     tankoban::queue::TransferQueue* m_transferQueue = nullptr;
     QHash<QString, TransferStartArgs> m_pendingByTransferId;
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.10 (2026-05-27) — staged AddTorrentConfig
+    // for startDownload callers (Stream / Theatre / TankoLibrary). When the
+    // config carries a non-empty imdbId, startDownload routes through the
+    // queue; if not at lane head, the full config is staged here and replayed
+    // when the queue advances. QSharedPointer keeps the forward-decl of
+    // AddTorrentConfig at TorrentClient.h:26 viable (no include of
+    // ui/dialogs/AddTorrentDialog.h needed here).
+    QHash<QString, QSharedPointer<AddTorrentConfig>> m_pendingStartConfigs;
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — SQLite-backed
     // durable store that will replace the legacy m_records / m_streamBulkGroups
