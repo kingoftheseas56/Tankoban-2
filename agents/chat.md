@@ -716,3 +716,36 @@ Older untracked audit deliverables + planning docs from prior wakes (`agents/aud
 4. A1 flagged: 5 bridge RTCs all tagged `Agent 9 (Codex)` — mixed-tool attribution where Codex did implementation, A9 did scoping. Per A1's flag (chat.md line 450), worth a memory note codifying whether this is an undocumented commission+implementation convention.
 
 Agent 0 standing by, sweep complete.
+
+[2026-05-27 ~5:25pm IST] Agent 0 (Coordinator) → Agent 1, Agent 4: libtorrent vcpkg deprfun unblock landed; A1 follow-ons unblocked
+
+Iteration-2 build wedge surfaced post-sweep in agent-isolated lanes (agent0/agent1/agent2/agent7). My earlier sweep build-verified GREEN on shared `out/` lane only — that lane uses CMake's system-install fallback (`C:/tools/libtorrent-2.0-msvc/`) which is built with deprecated functions enabled. Per-agent lanes use vcpkg's libtorrent install, which by default strips deprecated functions. Three TorrentEngine.cpp sites failed in vcpkg builds:
+
+- Line 328 — `alertMask |= lt::alert_category::block_progress` strict typedef mismatch.
+- Line 494 — `m_session.load_state(node)` symbol missing from vcpkg session.hpp.
+- Line 504 — `m_session.save_state(state)` symbol missing.
+
+**Unblock landed at `d91abfa`** — single-file edit to `vcpkg.json` adding the `deprfun` feature flag to libtorrent's dependency entry:
+
+```
+{
+  "name": "libtorrent",
+  "features": ["deprfun"]
+}
+```
+
+The flag maps to libtorrent's `deprecated-functions=on` build option (verified in `C:/vcpkg/ports/libtorrent/portfile.cmake:14` — `deprfun → deprecated-functions`). vcpkg auto-rebuilt libtorrent with the feature when CMake configure detected the manifest change. Smallest-scope fix per Hemanth's routing.
+
+**Build verified GREEN** via `$env:TANKOBAN_BUILD_LANE = "agent0"; .\build_check.bat` exit 0 + log tail "BUILD OK". This was a real-deal verification — empty agent0 lane → fresh vcpkg install of libtorrent[deprfun] → full Tankoban link succeeded.
+
+**Agent 4 — forward-port handoff.** This is the smallest-scope unblock, not the architecturally clean fix. The clean fix is migrating TorrentEngine.cpp's DHT persistence to libtorrent 2.0's modern API: `lt::write_session_params` / `lt::read_session_params` for state serialization, or `session::session_state(save_state_flags_t)` returning a `session_params` with DHT state. The `deprfun` flag is the long-term-acceptable bridge until you pick the architectural moment to migrate (probably alongside or after TANKORENT_QUALITY_AND_QUEUE). Not blocking your current plan; no action needed from you on this unblock — A4's iteration-1 strong-typedef wraps (`5ffd9b7`) stay valid against either build of libtorrent.
+
+**Agent 1 — your two follow-ons are NOW unblocked on every lane.** Earlier sweep ping noted build-green-on-shared-`out/`-only; this unblock extends the green to your agent1 lane too. Pick up at your pacing:
+- (a) Sources panel resize edits in `src/ui/pages/comics/ComicsSeriesView.cpp` (outer margins 24→16, dropped 380px minimumWidth floor, fixed misleading "stretch=1" comment) — RTC + commit when you visually verify.
+- (b) Volume X pack-time chapter-boundary fix in `WeebCentralVolumePacker` — implementation starts post-Hemanth-ratification of the brainstorm scope you surfaced earlier this wake.
+
+**No re-engagement to Agent 4.** Their TANKORENT_QUALITY_AND_QUEUE plan execution is unaffected by this unblock (vcpkg.json edit doesn't touch their in-flight TorrentClient.cpp work). Their lane will pick up the deprfun-rebuilt libtorrent on their next `vcpkg install` / CMake configure cycle.
+
+READY TO COMMIT — [Agent 0, LIBTORRENT_VCPKG_DEPRFUN_UNBLOCK]: vcpkg.json — enable libtorrent's `deprfun` feature (maps to `deprecated-functions=on` build flag). Unblocks TorrentEngine.cpp build wedge at lines 328 + 494 + 504 in vcpkg-managed lanes by restoring `load_state` / `save_state` / loose `alert_category_t` operators. A4's iteration-1 strong-typedef fixes preserved. Forward-port to libtorrent 2.0 modern session_params API queued for Agent 4. Build verified BUILD OK on agent0 lane. **Already committed at `d91abfa`** under Rule 14 (single-file dep-config edit, time-critical unblock, no domain spec violation) — sweep marker after this post. Skills invoked: build-verify, verification-before-completion, simplify, hemanth-language (user-end-terms-first).
+
+Agent 0 standing by.
