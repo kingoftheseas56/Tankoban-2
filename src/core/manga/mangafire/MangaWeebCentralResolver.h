@@ -15,6 +15,7 @@
 #include "core/manga/MangaCatalogTypes.h"
 
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -43,6 +44,11 @@ public:
         }
     };
 
+    struct ChapterRef {
+        int number = 0;      // Parsed WeebCentral chapter number.
+        QString id;          // Opaque WeebCentral chapter id for fetchPages().
+    };
+
     enum class SkipReason {
         NoSeriesMatch,
         NoChapterOverlap,
@@ -59,7 +65,7 @@ public:
                  int volumeNumber,
                  const ResolveKey& key);
 
-    static QStringList filterChaptersToRange(const QStringList& chapterIds,
+    static QStringList filterChaptersToRange(const QList<ChapterRef>& chapters,
                                              int rangeStart,
                                              int rangeEnd,
                                              bool* outIncomplete = nullptr);
@@ -82,7 +88,7 @@ private:
     QPointer<QNetworkAccessManager> m_nam;
     WeebCentralScraper*             m_scraper = nullptr;  // owned, private instance
 
-    QHash<QString, QStringList> m_chapterCache; // WC seriesId -> chapter ids
+    QHash<QString, QList<ChapterRef>> m_chapterCache; // WC seriesId -> chapter refs
     QHash<QString, QList<PendingResolvePtr>> m_pendingByMangafireSeriesId;
 
     // The private WeebCentralScraper signal surface is request-id-less, so

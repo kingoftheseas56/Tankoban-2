@@ -12,24 +12,23 @@
 #include <QDateTime>
 #include <QHash>
 #include <QNetworkAccessManager>
-#include <QRegularExpression>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 
 namespace tankoban::manga::mangafire {
 
 namespace {
 
-int chapterNumberToken(const QString& chapterId)
+int normalizedChapterNumber(double value)
 {
-    static const QRegularExpression rx(QStringLiteral("(\\d+)"));
-    const auto m = rx.match(chapterId);
-    if (!m.hasMatch()) return -1;
-
-    bool ok = false;
-    const int value = m.captured(1).toInt(&ok);
-    return ok ? value : -1;
+    if (value <= 0.0) return -1;
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) > 0.0001) return -1;
+    if (rounded > static_cast<double>(std::numeric_limits<int>::max())) return -1;
+    return static_cast<int>(rounded);
 }
 
 } // namespace
@@ -46,23 +45,23 @@ QString MangaWeebCentralResolver::reasonCode(SkipReason reason)
 }
 
 QStringList MangaWeebCentralResolver::filterChaptersToRange(
-    const QStringList& chapterIds,
+    const QList<ChapterRef>& chapters,
     int rangeStart,
     int rangeEnd,
     bool* outIncomplete)
 {
     if (outIncomplete) *outIncomplete = false;
-    if (chapterIds.isEmpty() || rangeStart <= 0 || rangeEnd < rangeStart) {
+    if (chapters.isEmpty() || rangeStart <= 0 || rangeEnd < rangeStart) {
         if (outIncomplete) *outIncomplete = true;
         return {};
     }
 
     QHash<int, QString> byNumber;
-    for (const QString& id : chapterIds) {
-        const int n = chapterNumberToken(id);
+    for (const ChapterRef& chapter : chapters) {
+        const int n = chapter.number;
         if (n < rangeStart || n > rangeEnd) continue;
         if (!byNumber.contains(n)) {
-            byNumber.insert(n, id);
+            byNumber.insert(n, chapter.id);
         }
     }
 
@@ -134,12 +133,15 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         const QString wcSeriesId = m_inflightFetch;
         m_inflightFetch.clear();
 
-        QStringList chapterIds;
-        chapterIds.reserve(chapters.size());
+        QList<ChapterRef> chapterRefs;
+        chapterRefs.reserve(chapters.size());
         for (const auto& ch : chapters) {
-            if (!ch.id.isEmpty()) chapterIds.append(ch.id);
+            const int chapterNumber = normalizedChapterNumber(ch.chapterNumber);
+            if (chapterNumber > 0 && !ch.id.isEmpty()) {
+                chapterRefs.append(ChapterRef{chapterNumber, ch.id});
+            }
         }
-        m_chapterCache.insert(wcSeriesId, chapterIds);
+        m_chapterCache.insert(wcSeriesId, chapterRefs);
 
         QList<PendingResolvePtr> ready;
         for (auto it = m_pendingByMangafireSeriesId.begin();
@@ -277,8 +279,8 @@ void MangaWeebCentralResolver::filterAndEmit(PendingResolvePtr pending)
     }
 
     bool hasOverlap = false;
-    for (const QString& id : it.value()) {
-        const int n = chapterNumberToken(id);
+    for (const ChapterRef& chapter : it.value()) {
+        const int n = chapter.number;
         if (n >= pending->chapterRangeStart && n <= pending->chapterRangeEnd) {
             hasOverlap = true;
             break;
