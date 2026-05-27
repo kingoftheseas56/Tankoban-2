@@ -13,6 +13,7 @@
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
 #include "core/torrent/TorrentClient.h"
+#include "core/queue/TransferQueue.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamProgress.h"
@@ -770,6 +771,13 @@ void MainWindow::buildPageStack()
             m_organisePage->setShows(m_videosPage->currentShows());
     });
     dbg("4d2-organisepage-created");
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.7 (2026-05-27) — per-show transfer
+    // lane queue. Constructed BEFORE TorrentClient so subsequent T1.8 setter
+    // can hand it in at construction time. Queue is owned by MainWindow;
+    // TorrentClient + StreamServerClient consume via non-owning pointers.
+    m_transferQueue = new tankoban::queue::TransferQueue(this);
+    dbg("4e0-transferqueue-created");
 
     // TorrentClient (shared by StreamPage, VideosPage, TankorentPage,
     // TankoLibraryPage). Hoisted at MainWindow scope post-SOURCES_SIDEBAR.

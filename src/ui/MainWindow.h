@@ -24,6 +24,7 @@ class StreamDownloadsPage;
 class ComicsDownloadsPage;
 class TankorentPage;
 class TorrentClient;
+namespace tankoban::queue { class TransferQueue; }
 class DevControlServer;
 class UiInteractionDispatcher;
 class SystemIntrospection;
@@ -79,6 +80,17 @@ public:
     // playback fields). Returns nullptr until the reader has been opened
     // at least once.
     BookReader* bookReader() const { return m_bookReader; }
+
+    // BOOKS_STREMIO_PIVOT §5.2 (2026-05-27) — non-owning accessor used by
+    // BooksPage to wire the magnet-source variant of BookDownloader (shared
+    // TorrentClient is MainWindow-owned). HTTP path needs no torrent client;
+    // returns nullptr-safe.
+    TorrentClient* torrentClient() const { return m_torrentClient; }
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 (2026-05-27) — non-owning accessor to the
+    // per-show transfer lane queue (owned by MainWindow; lifetime spans both
+    // TorrentClient and StreamServerClient consumers).
+    tankoban::queue::TransferQueue* transferQueue() const { return m_transferQueue; }
 
     // v1.9 bridge Phase D.6 (2026-05-19) — non-owning accessor used by
     // SystemIntrospection for jsonstore-* + scanner-list-watched + cache-*
@@ -242,6 +254,7 @@ private:
     ComicsDownloadsPage *m_comicsDownloadsPage = nullptr;
     TankorentPage *m_tankorentPage = nullptr;
     TorrentClient *m_torrentClient = nullptr;
+    tankoban::queue::TransferQueue *m_transferQueue = nullptr;
 
     // REPO_HYGIENE Phase 3 — dev-control bridge. Null until
     // enableDevControl() is called (gated behind --dev-control flag).
