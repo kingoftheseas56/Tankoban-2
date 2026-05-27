@@ -8,6 +8,7 @@
 #include "pages/OrganisePage.h"
 #include "pages/StreamPage.h"
 #include "pages/stream/StreamDownloadsPage.h"
+#include "pages/comics/ComicsDownloadsPage.h"
 #include "pages/TankorentPage.h"
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
@@ -65,6 +66,7 @@ static constexpr const char *PAGE_STREAM       = "stream";
 static constexpr const char *PAGE_TANKORENT    = "tankorent";
 static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
 static constexpr const char *PAGE_STREAM_DOWNLOADS = "streamDownloads";
+static constexpr const char *PAGE_COMICS_DOWNLOADS = "comicsDownloads";
 
 // ── Constructor ─────────────────────────────────────────────────────────────
 MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
@@ -166,8 +168,9 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::foldersChanged, this, [this]() {
         if (auto *comics = m_pageStack->findChild<ComicsPage*>())
             comics->triggerScan();
-        if (auto *books = m_pageStack->findChild<BooksPage*>())
-            books->triggerScan();
+        // §3.8 burn-the-ships backout (2026-05-27, Agent 2): BooksPage no longer
+        // folder-scans. Catalogue records own the library; root-folder changes
+        // are no-ops for Books.
         if (auto *videos = m_pageStack->findChild<VideosPage*>())
             videos->triggerScan();
     });
@@ -614,7 +617,9 @@ void MainWindow::buildTopBar()
     scanBtn->setToolTip("Rescan library (F5)");
     connect(scanBtn, &QPushButton::clicked, this, [this]() {
         if (auto *c = m_pageStack->findChild<ComicsPage*>()) c->triggerScan();
-        if (auto *b = m_pageStack->findChild<BooksPage*>())  b->triggerScan();
+        // §3.8 burn-the-ships backout (2026-05-27, Agent 2): rescan on Books =
+        // validate catalogue records (orphan cleanup), not folder-scan.
+        if (auto *b = m_pageStack->findChild<BooksPage*>())  b->activate();
         if (auto *v = m_pageStack->findChild<VideosPage*>()) v->triggerScan();
     });
     rightLayout->addWidget(scanBtn, 0, Qt::AlignVCenter);
@@ -706,6 +711,21 @@ void MainWindow::buildPageStack()
     connect(comicsPage, &ComicsPage::exitedLayer, this, [this]() {
         if (m_navController) m_navController->popLayer(QStringLiteral("comics"));
     });
+    // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- seed a persistent "library"
+    // root layer for Comics. ComicsPage starts with m_mode = Library and
+    // showLibraryMode short-circuits its push on same-mode re-entry, so
+    // without this seed the controller stack would be empty until the user
+    // navigated INTO the library from elsewhere. First-tile-click at startup
+    // would then push seriesView onto an empty stack and canGoBack (>= 2)
+    // would return false, leaving the topbar Back chevron disabled.
+    if (m_navController) {
+        tankoban::ui::LayerEntry libraryRoot{
+            QStringLiteral("comics"),
+            QStringLiteral("library"),
+            QStringLiteral("Library"),
+            {}};
+        m_navController->setRootLayer(QStringLiteral("comics"), libraryRoot);
+    }
     dbg("4b-comicspage-created");
 
     auto *booksPage = new BooksPage(m_bridge);
@@ -880,6 +900,22 @@ void MainWindow::buildPageStack()
     connect(m_streamDownloadsPage, &StreamDownloadsPage::playLocalFileRequested,
             this, &MainWindow::onPlayLocalFileFromStreamRequested);
     dbg("4g4-streamdownloadspage-created");
+
+    // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) - Comics-mode
+    // Downloads page accessible from SidebarDrawer's "Downloads" entry
+    // (Comics-only). Reads from MangaDownloadIndex shared with ComicsPage.
+    // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) —
+    // setComicsPage() MUST precede setMangaDownloadIndex() so the display
+    // projection helpers are available during the initial refresh() call.
+    m_comicsDownloadsPage = new ComicsDownloadsPage(this);
+    m_comicsDownloadsPage->setObjectName(PAGE_COMICS_DOWNLOADS);
+    m_comicsDownloadsPage->setComicsPage(comicsPage);
+    m_comicsDownloadsPage->setMangaDownloadIndex(comicsPage->mangaDownloadIndex());
+    m_pageStack->addWidget(m_comicsDownloadsPage);
+    connect(m_comicsDownloadsPage, &ComicsDownloadsPage::backRequested, this, [this]() {
+        activatePage(PAGE_COMICS);
+    });
+    dbg("4g5-comicsdownloadspage-created");
     dbg("4h-pagestack-complete");
 }
 
@@ -984,8 +1020,13 @@ void MainWindow::activatePage(const QString &pageId)
             }
             if (auto *stream = qobject_cast<StreamPage*>(m_pageStack->widget(i)))
                 stream->activate();
-            if (m_sidebar)
+            if (m_sidebar) {
                 m_sidebar->setActiveSource(pageId);
+                m_sidebar->setStreamDownloadsVisible(
+                    pageId == PAGE_STREAM || pageId == PAGE_STREAM_DOWNLOADS);
+                m_sidebar->setComicsDownloadsVisible(
+                    pageId == PAGE_COMICS || pageId == PAGE_COMICS_DOWNLOADS);
+            }
             break;
         }
     }

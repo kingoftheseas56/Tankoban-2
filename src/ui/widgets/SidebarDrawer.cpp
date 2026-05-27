@@ -212,10 +212,14 @@ void SidebarDrawer::buildUi()
     m_btnTankorent        = makeItem(tr("Tankorent"),    QStringLiteral(":/icons/magnet.svg"),   QStringLiteral("tankorent"));
     m_btnTankoLibrary     = makeItem(tr("TankoLibrary"), QStringLiteral(":/icons/book.svg"),     QStringLiteral("tankolibrary"));
     m_btnStreamDownloads  = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("streamDownloads"));
+    m_btnStreamDownloads->setVisible(false);  // Hidden by default; shown only in Theatre/stream mode
+    m_btnComicsDownloads  = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("comicsDownloads"));
+    m_btnComicsDownloads->setVisible(false);  // Hidden by default; shown only in Comics mode
 
     layout->addWidget(m_btnTankorent);
     layout->addWidget(m_btnTankoLibrary);
     layout->addWidget(m_btnStreamDownloads);
+    layout->addWidget(m_btnComicsDownloads);
 
     layout->addStretch(1);
 }
@@ -322,6 +326,19 @@ void SidebarDrawer::setActiveSource(const QString& pageId)
     styleItem(m_btnTankorent,        QStringLiteral("tankorent"));
     styleItem(m_btnTankoLibrary,     QStringLiteral("tankolibrary"));
     styleItem(m_btnStreamDownloads,  QStringLiteral("streamDownloads"));
+    styleItem(m_btnComicsDownloads,  QStringLiteral("comicsDownloads"));
+}
+
+void SidebarDrawer::setStreamDownloadsVisible(bool visible)
+{
+    if (m_btnStreamDownloads)
+        m_btnStreamDownloads->setVisible(visible);
+}
+
+void SidebarDrawer::setComicsDownloadsVisible(bool visible)
+{
+    if (m_btnComicsDownloads)
+        m_btnComicsDownloads->setVisible(visible);
 }
 
 void SidebarDrawer::styleItem(QPushButton* btn, const QString& pageId)

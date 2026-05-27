@@ -24,8 +24,16 @@ public:
     void toggle();
     bool isOpen() const { return m_open; }
 
-    // pageId in {"tankorent","tankolibrary","streamDownloads"}; empty string clears.
+    // pageId in {"tankorent","tankolibrary","streamDownloads","comicsDownloads"}; empty string clears.
     void setActiveSource(const QString& pageId);
+
+    // Show/hide the Theatre/stream Downloads sidebar entry.
+    // Only visible when the active mode is Theatre/stream.
+    void setStreamDownloadsVisible(bool visible);
+
+    // Show/hide the Comics Downloads sidebar entry.
+    // Only visible when the active mode is Comics.
+    void setComicsDownloadsVisible(bool visible);
 
 signals:
     void sourceClicked(const QString& pageId);
@@ -50,6 +58,7 @@ private:
     QPushButton* m_btnTankorent = nullptr;
     QPushButton* m_btnTankoLibrary = nullptr;
     QPushButton* m_btnStreamDownloads = nullptr;
+    QPushButton* m_btnComicsDownloads = nullptr;
 
     QString m_activePageId;
     bool m_open = false;

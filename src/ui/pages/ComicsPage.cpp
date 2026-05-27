@@ -64,6 +64,25 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
+#include <QTextStream>
+
+// COMICS_OPEN_TRACE (Agent 1, 2026-05-24 evening debug session). Timestamped
+// trace at the key phase boundaries of a series open. Sibling helper in
+// ComicsSeriesView.cpp; both write to %TEMP%/comics_open_trace.log. Stripped
+// after the bottleneck is identified + fixed. Defined here at file scope so
+// the constructor-side lambdas (searchSucceeded enrichment listener etc.)
+// see it; otherwise the helper would be unresolved at the constructor lines.
+namespace {
+void comicsOpenTrace(const QString& event)
+{
+    static const QString path = QDir::temp().absoluteFilePath(QStringLiteral("comics_open_trace.log"));
+    QFile f(path);
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream ts(&f);
+        ts << QDateTime::currentMSecsSinceEpoch() << '\t' << event << '\n';
+    }
+}
+} // namespace
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QCollator>
@@ -461,6 +480,8 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             this, [this](int reqId,
                           const QList<tankoban::manga::anilist::MediaPreview>& results) {
         if (reqId != m_pendingLibraryEnrichReqId || m_pendingLibraryEnrichReqId == 0) return;
+        comicsOpenTrace(QStringLiteral("CP::searchSucceeded LANDED reqId=%1 results=%2")
+                            .arg(reqId).arg(results.size()));
         const QString pendingTitle = m_pendingLibraryEnrichTitle;
         const bool addBookmark = m_pendingLibraryEnrichAddBookmark;
         const bool searchOpenRequest = (reqId == m_pendingSearchOpenEnrichReqId);
@@ -1698,6 +1719,185 @@ int ComicsPage::anilistIdForDownloadEntry(const QString& sourceId,
     return 0;
 }
 
+// COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — canonical
+// grouping key resolver. Maps (sourceId, seriesId) to a display-grouping
+// key so One Piece downloads from Premium + MangaFire merge into one card.
+// Priority: anilist:<id> > title:<normalized> > raw:<sourceId>:<seriesId>.
+QString ComicsPage::resolveCanonicalGroupKey(const QString& sourceId,
+                                              const QString& seriesId) const
+{
+    // 1. Prefer resolved AniList id from the entry directly.
+    const int directAnilistId = anilistIdForDownloadEntry(sourceId, seriesId);
+    if (directAnilistId > 0)
+        return QStringLiteral("anilist:") + QString::number(directAnilistId);
+
+    // 2. Resolve a human display title.
+    const QString title = resolveDisplayTitle(sourceId, seriesId);
+    if (!title.isEmpty()) {
+        // 2a. Cross-reference AniList bookmarks: if a bookmark has a
+        //     matching normalized title, adopt its anilistId so MangaFire
+        //     "One Piece" groups under "anilist:30013" instead of
+        //     "title:one-piece", merging with Premium's entry.
+        //     COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9).
+        if (m_anilistCache) {
+            const auto previews = m_anilistCache->bookmarkedPreviews();
+            const QString titleNorm = title.toLower().trimmed();
+            for (const auto& p : previews) {
+                if (p.title.toLower().trimmed() == titleNorm && p.anilistId > 0)
+                    return QStringLiteral("anilist:") + QString::number(p.anilistId);
+            }
+        }
+
+        // 2b. No bookmark match — group by normalized title.
+        return QStringLiteral("title:")
+            + title.toLower().trimmed().replace(QRegularExpression("[\\s]+"), QStringLiteral("-"));
+    }
+
+    // 3. Fallback to raw (sourceId, seriesId) key.
+    return QStringLiteral("raw:") + sourceId + QStringLiteral(":") + seriesId;
+}
+
+// COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — title resolution.
+// Order: AniList cache → MangaFire local catalog → Premium catalog →
+// Tankoyomi library record → empty (caller humanizes slug).
+QString ComicsPage::resolveDisplayTitle(const QString& sourceId,
+                                         const QString& seriesId) const
+{
+    // 1. AniList cache resolution.
+    const int anilistId = anilistIdForDownloadEntry(sourceId, seriesId);
+    if (anilistId > 0 && m_anilistCache) {
+        if (auto detailOpt = m_anilistCache->get(anilistId)) {
+            if (!detailOpt->preview.title.isEmpty())
+                return detailOpt->preview.title;
+        }
+    }
+
+    // 2. MangaFire local catalog.
+    if (sourceId == QLatin1String(MANGAFIRE_CATALOG_SOURCE_ID)) {
+        const QString jsonPath = m_localCatalogIndex.filePathForSlug(seriesId);
+        if (!jsonPath.isEmpty()) {
+            const auto cat =
+                tankoban::manga::LocalMangaCatalogLoader::loadFromFile(jsonPath);
+            if (cat.has_value() && !cat->seriesTitle.isEmpty())
+                return cat->seriesTitle;
+        }
+    }
+
+    // 3. Premium catalog.
+    if (m_premiumCatalog) {
+        if (auto entry = m_premiumCatalog->entryById(seriesId)) {
+            if (!entry->title.isEmpty())
+                return entry->title;
+        }
+    }
+
+    // 4. Tankoyomi library record.
+    if (m_tyLibrary) {
+        const auto rec = m_tyLibrary->get(sourceId, seriesId);
+        if (!rec.title.isEmpty())
+            return rec.title;
+    }
+
+    return {};
+}
+
+// COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — source label.
+// Static helper: maps sourceId to a human-readable display name.
+QString ComicsPage::resolveSourceLabel(const QString& sourceId)
+{
+    if (sourceId == QLatin1String("tankoyomi_premium"))
+        return QStringLiteral("Premium");
+    // COMICS_WC_SOURCE_LABEL_FIX 2026-05-26 (Agent 9).
+    // Pre-fix WeebCentralVolumePacker stored downloads with sourceId
+    // "mangafire_catalog". Map them to "WeebCentral" since the actual
+    // download origin was WeebCentral (not MangaFire). MangaFire is
+    // a catalog/series identity, not a download origin, and only
+    // WeebCentralVolumePacker ever used this sourceId for downloads.
+    if (sourceId == QLatin1String("mangafire_catalog"))
+        return QStringLiteral("WeebCentral");
+    if (sourceId == QLatin1String("weebcentral_packer")
+        || sourceId == QLatin1String("weebcentral"))
+        return QStringLiteral("WeebCentral");
+
+    // Fallback: strip known suffixes, then title-case.
+    QString label = sourceId;
+    static const QStringList suffixes = {
+        QStringLiteral("_catalog"), QStringLiteral("_packer"),
+        QStringLiteral("_runtime"), QStringLiteral("_source")
+    };
+    for (const auto& sfx : suffixes) {
+        if (label.endsWith(sfx, Qt::CaseInsensitive))
+            label = label.left(label.size() - sfx.size());
+    }
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    if (label.size() > 0) {
+        label = label.at(0).toUpper() + label.mid(1).toLower();
+    }
+    return label;
+}
+
+// COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — slug humanizer.
+// "one-piece" → "One Piece", "grand-blue-dreaming" → "Grand Blue Dreaming".
+// Returns empty for anilist_<N> slugs (callers must resolve via AniList first).
+QString ComicsPage::humanizeSlug(const QString& slug)
+{
+    if (slug.isEmpty())
+        return {};
+
+    // AniList ids are identity hints, not display titles.
+    if (slug.startsWith(QLatin1String("anilist_")))
+        return {};
+
+    QString s = slug;
+    s.replace(QLatin1Char('_'), QLatin1Char(' '));
+    s.replace(QLatin1Char('-'), QLatin1Char(' '));
+
+    QStringList words = s.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    for (auto& w : words) {
+        if (w.size() == 1)
+            w = w.toUpper();
+        else if (w.size() > 1)
+            w = w.at(0).toUpper() + w.mid(1).toLower();
+    }
+
+    return words.join(QLatin1Char(' '));
+}
+
+// COMICS_CANONICAL_COVER 2026-05-26 (Agent 9) — canonical-series-cover
+// resolver. Priority: MangaFire catalog Volume 1 coverUrlJapanese → empty
+// (caller falls back to existing AniList → CBZ thumbnail → placeholder).
+// Looks up the series in m_localCatalogIndex by anilistId or displayTitle,
+// loads the catalog JSON, and returns Volume 1's coverUrlJapanese.
+QString ComicsPage::resolveCanonicalSeriesCover(int anilistId,
+                                                 const QString& displayTitle) const
+{
+    // 1. Look up the catalog slug via anilistId or title.
+    QString slug;
+    if (anilistId > 0) {
+        slug = m_localCatalogIndex.slugForAnilistId(anilistId);
+    }
+    if (slug.isEmpty() && !displayTitle.isEmpty()) {
+        slug = m_localCatalogIndex.slugForSeriesTitle(displayTitle);
+    }
+    if (slug.isEmpty())
+        return QString();
+
+    const QString path = m_localCatalogIndex.filePathForSlug(slug);
+    if (path.isEmpty())
+        return QString();
+
+    // 2. Load the catalog JSON and extract Volume 1's cover.
+    const auto catalog = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
+    if (!catalog.has_value())
+        return QString();
+
+    for (const auto& vol : catalog->volumes) {
+        if (vol.volumeNumber == 1 && !vol.coverUrlJapanese.isEmpty())
+            return vol.coverUrlJapanese;
+    }
+    return QString();
+}
+
 void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
                                            int volumeNumber,
                                            const QString& cbzPath,
@@ -1725,9 +1925,13 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
             sourceId = QString::fromLatin1(TANKOYOMI_PREMIUM_SOURCE_ID);
             break;
         case PendingVolumeSourceKind::WeebCentralPacker:
-            sourceId = seriesId.startsWith(QLatin1String("anilist_"))
-                ? QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID)
-                : QString::fromLatin1(MANGAFIRE_CATALOG_SOURCE_ID);
+            // VOLUME_X 2026-05-26 (Agent 9). WeebCentral-packed volumes
+            // always use the packer source id regardless of whether the
+            // series came through MangaFire catalog or AniList. Previously
+            // MangaFire-catalog series were tagged as "mangafire_catalog"
+            // which caused the downloads page to show "MangaFire" instead
+            // of "WeebCentral" for volumes packed by WeebCentralVolumePacker.
+            sourceId = QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID);
             break;
     }
 
@@ -1837,18 +2041,32 @@ void ComicsPage::fetchPosterForTile(TileCard* card, int anilistId,
                                      const QString& coverUrl)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- async poster fetch.
+    // COMICS_CANONICAL_COVER 2026-05-26 (Agent 9) — extended to handle
+    // MangaFire Volume 1 cover URLs where anilistId may be 0. Cache
+    // naming: anilist_<id>.jpg when id > 0; mangafire_<base64>.jpg
+    // when id == 0 (URL-derived stable key).
     // Mirrors ComicsTankoyomiSearchWidget's NAM-direct path: cache to
-    // <writableData>/Tankoban/data/anilist_posters/anilist_<id>.jpg; reuse
-    // an existing cached file when present (no network round-trip on
-    // re-entry). Failures stay silent (placeholder remains).
-    if (!card || anilistId <= 0) return;
+    // <writableData>/Tankoban/data/anilist_posters/; reuse an existing
+    // cached file when present (no network round-trip on re-entry).
+    // Failures stay silent (placeholder remains).
+    if (!card || (anilistId <= 0 && coverUrl.isEmpty())) return;
 
     const QString posterCacheDir =
         QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
         + QStringLiteral("/Tankoban/data/anilist_posters");
     QDir().mkpath(posterCacheDir);
-    const QString outPath = posterCacheDir + QStringLiteral("/anilist_%1.jpg")
-                                                 .arg(anilistId);
+    QString outPath;
+    if (anilistId > 0) {
+        outPath = posterCacheDir + QStringLiteral("/anilist_%1.jpg")
+                                       .arg(anilistId);
+    } else {
+        // MangaFire Volume 1 cover — key cache entry by URL hash.
+        const QByteArray urlKey = QUrl(coverUrl).toString().toUtf8().toBase64(
+            QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+        outPath = posterCacheDir + QStringLiteral("/mangafire_")
+                  + QString::fromLatin1(urlKey.left(40))
+                  + QStringLiteral(".jpg");
+    }
 
     if (QFile::exists(outPath)) {
         card->setThumbPath(outPath);
@@ -1975,99 +2193,84 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
 void ComicsPage::refreshLibraryStrips()
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- rebuild DOWNLOADED +
-    // BOOKMARKED sections from MangaDownloadIndex + AniListCache. Section
-    // header visibility is toggled per data: an empty downloaded set hides
-    // the m_downloadedLabel + sort/density row indirectly via m_tileStrip
-    // hide; an empty bookmarked set hides m_bookmarkedSection.
+    // BOOKMARKED sections from MangaDownloadIndex + AniListCache.
+    //
+    // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — canonical
+    // grouping: entriesForAllSeries() returns one representative per
+    // (sourceId, seriesId) bucket. We now group those buckets by
+    // resolveCanonicalGroupKey() so One Piece downloads from Premium +
+    // MangaFire produce one tile instead of two.
     if (!m_tileStrip || !m_bookmarkedStrip) return;
 
     m_tileStrip->clear();
     m_bookmarkedStrip->clear();
     m_listView->clear();
 
-    // ── DOWNLOADED ──
+    // ── DOWNLOADED (canonical-grouped) ──
     QSet<int> downloadedAnilistIds;
-    // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Title-based dedup keys
-    // for the bookmark loop fallback when downloadedAnilistIds can't pair
-    // a MangaFire-catalog download with its bookmark (MangaFire-catalog
-    // downloads register with anilistId=0 when MangaFire couldn't resolve
-    // an AniList match; the bookmark has a real anilistId — so the existing
-    // anilistId-only dedup at line ~1951 misses).
     QSet<QString> downloadedTitleKeysNorm;
     bool hasAnyDownloadedEntry = false;
+
     if (m_mangaDownloadIndex) {
         const auto entries = m_mangaDownloadIndex->entriesForAllSeries();
         hasAnyDownloadedEntry = !entries.isEmpty();
-        for (const auto& e : entries) {
-            int anilistId =
-                anilistIdForDownloadEntry(e.sourceId, e.seriesId);
 
-            // Resolve display title + cover. Prefer the AniList cache (so
-            // a downloaded Premium series + its AniList metadata both land
-            // on the same title); fall back to the catalog entry; fall
-            // back to a humanised seriesId; cover falls back to series
-            // record cover path if we have a Tankoyomi-library record for
-            // this seriesId.
+        // Phase 1: Group entries by canonical group key.
+        struct GroupedTile {
             QString displayTitle;
             QString coverUrl;
             QString coverPath;
-            if (anilistId > 0 && m_anilistCache) {
-                if (auto detailOpt = m_anilistCache->get(anilistId)) {
-                    displayTitle = detailOpt->preview.title;
-                    coverUrl     = detailOpt->preview.coverThumbUrl;
+            int     anilistId = 0;
+            // Preserve the first representative entry for click routing.
+            MangaDownloadIndex::Entry representative;
+            bool hasRep = false;
+        };
+        QMap<QString, GroupedTile> groups; // groupKey → aggregated tile data
+
+        for (const auto& e : entries) {
+            const QString groupKey = resolveCanonicalGroupKey(e.sourceId, e.seriesId);
+            GroupedTile& gt = groups[groupKey];
+
+            // Resolve anilistId + title using the shared helper (covers
+            // AniList cache, MangaFire catalog, Premium catalog, tyLibrary).
+            const int rawAnilistId = anilistIdForDownloadEntry(e.sourceId, e.seriesId);
+            const QString resolvedTitle = resolveDisplayTitle(e.sourceId, e.seriesId);
+
+            // Adopt the best identity: prefer a group member with anilistId > 0.
+            if (rawAnilistId > 0 && gt.anilistId == 0) {
+                gt.anilistId = rawAnilistId;
+                gt.displayTitle = resolvedTitle.isEmpty()
+                    ? e.seriesId : resolvedTitle;
+            }
+            // Adopt the first non-empty display title.
+            if (gt.displayTitle.isEmpty()) {
+                if (!resolvedTitle.isEmpty()) {
+                    gt.displayTitle = resolvedTitle;
+                } else {
+                    const QString humanized = humanizeSlug(e.seriesId);
+                    gt.displayTitle = humanized.isEmpty() ? e.seriesId : humanized;
                 }
             }
-            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). MangaFire-catalog
-            // downloads land with displayTitle empty + anilistId=0. Look up
-            // the canonical seriesTitle from the local MangaFire catalog JSON
-            // so the tile renders "Death Note" instead of the slug
-            // "death-note", AND so the bookmark-by-title pairing below has
-            // a non-empty key to match against.
-            if (displayTitle.isEmpty()
-                && e.sourceId == QString::fromLatin1(MANGAFIRE_CATALOG_SOURCE_ID)) {
-                const QString jsonPath = m_localCatalogIndex.filePathForSlug(e.seriesId);
-                if (!jsonPath.isEmpty()) {
-                    const auto cat =
-                        tankoban::manga::LocalMangaCatalogLoader::loadFromFile(jsonPath);
-                    if (cat.has_value() && !cat->seriesTitle.isEmpty()) {
-                        displayTitle = cat->seriesTitle;
-                    }
+            // Preserve the first representative entry for click routing.
+            if (!gt.hasRep) {
+                gt.representative = e;
+                gt.hasRep = true;
+            }
+
+            // COMICS_CANONICAL_COVER 2026-05-26 (Agent 9).
+            // Resolve cover: prefer MangaFire catalog Volume 1 cover →
+            // AniList cache cover (if anilistId > 0) → file-thumb cover →
+            // Tankoyomi library record cover.
+            if (gt.coverUrl.isEmpty() && !gt.displayTitle.isEmpty()) {
+                gt.coverUrl = resolveCanonicalSeriesCover(gt.anilistId,
+                                                           gt.displayTitle);
+            }
+            if (rawAnilistId > 0 && m_anilistCache && gt.coverUrl.isEmpty()) {
+                if (auto detailOpt = m_anilistCache->get(rawAnilistId)) {
+                    gt.coverUrl = detailOpt->preview.coverThumbUrl;
                 }
             }
-            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). When the download
-            // has anilistId=0 (MangaFire-catalog case), look up bookmarks by
-            // normalized title and adopt the bookmark's anilistId + cover so
-            // (a) the tile shows the bookmark's poster instead of a blank
-            // letter-placeholder, and (b) downloadedAnilistIds picks up the
-            // bookmark's id so the bookmark-loop dedup at line ~1951 fires
-            // naturally and we end up with ONE merged library tile.
-            if (anilistId == 0 && m_anilistCache && !displayTitle.isEmpty()) {
-                const auto previews = m_anilistCache->bookmarkedPreviews();
-                const QString titleKey = displayTitle.toLower().trimmed();
-                for (const auto& p : previews) {
-                    if (p.title.toLower().trimmed() == titleKey) {
-                        anilistId = p.anilistId;
-                        if (coverUrl.isEmpty()) coverUrl = p.coverThumbUrl;
-                        break;
-                    }
-                }
-            }
-            if (displayTitle.isEmpty() && m_premiumCatalog) {
-                if (auto cat = m_premiumCatalog->entryById(e.seriesId)) {
-                    displayTitle = cat->title;
-                }
-            }
-            if (displayTitle.isEmpty()) {
-                displayTitle = e.seriesId;
-            }
-            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 — title-key for bookmark
-            // dedup fallback (covers the edge case where the bookmark exists
-            // but anilistId pairing failed; e.g. a bookmark from a different
-            // metadata source whose normalized title matches the download).
-            if (!displayTitle.isEmpty()) {
-                downloadedTitleKeysNorm.insert(displayTitle.toLower().trimmed());
-            }
-            if (m_bridge && !e.canonicalPath.isEmpty()) {
+            if (gt.coverPath.isEmpty() && m_bridge && !e.canonicalPath.isEmpty()) {
                 const QFileInfo fi(e.canonicalPath);
                 if (fi.exists()) {
                     const QString fileKey = QDir::cleanPath(fi.absoluteFilePath())
@@ -2077,73 +2280,91 @@ void ComicsPage::refreshLibraryStrips()
                                           + QString::number(fi.lastModified().toMSecsSinceEpoch());
                     const QString fileHash = QString(QCryptographicHash::hash(
                         fileKey.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-                    const QString fileCover = m_bridge->dataDir()
-                                            + QStringLiteral("/thumbs/")
-                                            + fileHash
-                                            + QStringLiteral(".jpg");
-                    if (QFile::exists(fileCover)) {
-                        coverPath = fileCover;
+                    const QString fc = m_bridge->dataDir()
+                                     + QStringLiteral("/thumbs/")
+                                     + fileHash
+                                     + QStringLiteral(".jpg");
+                    if (QFile::exists(fc))
+                        gt.coverPath = fc;
+                }
+            }
+            if (gt.coverPath.isEmpty() && m_tyLibrary) {
+                const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
+                if (!rec.coverPath.isEmpty() && QFile::exists(rec.coverPath))
+                    gt.coverPath = rec.coverPath;
+            }
+        }
+
+        // Phase 2: For groups with anilistId==0, attempt bookmark-by-title
+        // adoption (MangaFire-catalog case).
+        for (auto it = groups.begin(); it != groups.end(); ++it) {
+            GroupedTile& gt = it.value();
+            if (gt.anilistId == 0 && m_anilistCache && !gt.displayTitle.isEmpty()) {
+                const auto previews = m_anilistCache->bookmarkedPreviews();
+                const QString titleKey = gt.displayTitle.toLower().trimmed();
+                for (const auto& p : previews) {
+                    if (p.title.toLower().trimmed() == titleKey) {
+                        gt.anilistId = p.anilistId;
+                        if (gt.coverUrl.isEmpty()) gt.coverUrl = p.coverThumbUrl;
+                        break;
                     }
                 }
             }
-            if (m_tyLibrary) {
-                const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
-                if (coverPath.isEmpty() && !rec.coverPath.isEmpty() && QFile::exists(rec.coverPath)) {
-                    coverPath = rec.coverPath;
-                }
-            }
+        }
+
+        // Phase 3: Render one tile per canonical group.
+        for (auto it = groups.begin(); it != groups.end(); ++it) {
+            GroupedTile& gt = it.value();
+            const int   anilistId    = gt.anilistId;
+            const QString displayTitle = gt.displayTitle;
+            const QString coverUrl    = gt.coverUrl;
+            const QString coverPath   = gt.coverPath;
+            const MangaDownloadIndex::Entry rep = gt.representative;
+
+            // Track for bookmark dedup.
+            if (anilistId > 0)
+                downloadedAnilistIds.insert(anilistId);
+            if (!displayTitle.isEmpty())
+                downloadedTitleKeysNorm.insert(displayTitle.toLower().trimmed());
 
             auto* card = new TileCard(coverPath, displayTitle, QStringLiteral("Downloaded"));
             card->setProperty("anilistId", anilistId);
             card->setProperty("seriesKey",
-                              e.sourceId + QStringLiteral(":") + e.seriesId);
+                              rep.sourceId + QStringLiteral(":") + rep.seriesId);
             card->setProperty("seriesName", displayTitle);
             card->setProperty("coverPath", coverPath);
-            // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Capture the
-            // bookmark-enriched anilistId + display title alongside the entry
-            // so the click handler can fall back to openSeriesByAnilistId
-            // when m_tyLibrary has no record for this (sourceId, seriesId)
-            // pair (the MangaFire-catalog case — the dedup-bookmark adopt
-            // path sets anilistId via the bookmark-by-title lookup above).
-            const int   linkedAnilistId  = anilistId;
-            const QString linkedTitle    = displayTitle;
+            // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) —
+            // also stash the canonical group key so the click handler can
+            // use it for routing.
+            card->setProperty("canonicalGroupKey", it.key());
+
+            // Click handler: prefer AniList route when anilistId > 0; fall
+            // back to Tankoyomi library record; otherwise no-op.
+            const int   linkedAnilistId = anilistId;
+            const QString linkedTitle   = displayTitle;
             connect(card, &TileCard::clicked, this,
-                    [this, e, linkedAnilistId, linkedTitle]() {
-                // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- prefer
-                // openSeriesByRecord (sourceId+seriesId identity) so the
-                // WeebCentral (Tankoyomi-library-keyed) bookmarks open via
-                // the legacy AniList-bypassed flow.
+                    [this, rep, linkedAnilistId, linkedTitle]() {
                 if (m_tyLibrary) {
-                    const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
+                    const auto rec = m_tyLibrary->get(rep.sourceId, rep.seriesId);
                     if (!rec.seriesId.isEmpty()) {
                         openSeriesByRecord(rec);
                         return;
                     }
                 }
-                // COMICS_WC_LIBRARY_DEDUP 2026-05-24 (Agent 1). Fallback for
-                // MangaFire-catalog-sourced downloaded tiles: the
-                // Tankoyomi-library has no record (m_tyLibrary is keyed by
-                // WeebCentral sourceId, not "mangafire_catalog"), so route
-                // via openSeriesByAnilistId using the bookmark-adopted
-                // anilistId. This is what makes the merged tile (download
-                // metadata + bookmark identity) open the new ComicsSeriesView
-                // instead of falling through to a silent no-op.
                 if (linkedAnilistId > 0) {
                     openSeriesByAnilistId(linkedAnilistId, linkedTitle);
                 }
             });
             m_tileStrip->addTile(card);
 
-            if (anilistId > 0) {
-                downloadedAnilistIds.insert(anilistId);
-                if (coverPath.isEmpty())
-                    fetchPosterForTile(card, anilistId, coverUrl);
-            }
+            // COMICS_CANONICAL_COVER 2026-05-26 (Agent 9) — also trigger
+            // the poster fetch for MangaFire Volume 1 covers (anilistId=0
+            // but coverUrl is a remote CDN URL).
+            if (coverPath.isEmpty() && (!coverUrl.isEmpty() || anilistId > 0))
+                fetchPosterForTile(card, anilistId, coverUrl);
         }
     }
 
-    // Reuse the entries-walk result from above instead of re-locking and re-walking
-    // MangaDownloadIndex.
     const bool hasDownloaded = !downloadedAnilistIds.isEmpty() || hasAnyDownloadedEntry;
 
     // ── BOOKMARKED ──
@@ -2540,6 +2761,8 @@ void ComicsPage::showSearchMode(const QString& query)
 
 void ComicsPage::onSearchResultActivated(const MangaResult& result)
 {
+    comicsOpenTrace(QStringLiteral("CP::onSearchResultActivated ENTRY source=%1 id=%2 title=\"%3\"")
+                        .arg(result.source).arg(result.id).arg(result.title));
     // WEEBCENTRAL_IDENTITY_PIVOT Tasks 9+10 (2026-05-19) -- search-result
     // click now carries a MangaResult (WeebCentral) instead of MediaPreview
     // (AniList). Routes into ComicsSeriesView::showSeries(MangaResult).
@@ -3665,6 +3888,7 @@ static QString fandomSeriesSlugFromTitle(const QString& title)
     return out;
 }
 
+// Hook to trace dispatch entry — body unchanged otherwise.
 void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
                                         const QString& titleHint)
 {
@@ -3672,6 +3896,8 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
         qInfo("ComicsPage::dispatchCatalogResolve: empty seriesId — skipping");
         return;
     }
+    comicsOpenTrace(QStringLiteral("CP::dispatchCatalogResolve ENTRY seriesId=%1 titleHint=\"%2\"")
+                        .arg(seriesId).arg(titleHint));
     m_pendingCatalogSeriesId   = seriesId;
     m_pendingCatalogTitleHint  = titleHint;
     qInfo("ComicsPage::dispatchCatalogResolve: seriesId=%s titleHint=%s",
@@ -3729,9 +3955,13 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
 }
 
 // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1).
+// Hook for trace at MangaFire on-demand fetch arrival.
 void ComicsPage::onMangaFireCatalogReady(
     const tankoban::manga::MangaCatalog& catalog, const QString& writtenPath)
 {
+    comicsOpenTrace(QStringLiteral("CP::onMangaFireCatalogReady ENTRY slug=%1 volumes=%2")
+                        .arg(catalog.seriesId)
+                        .arg(catalog.volumes.size()));
     qInfo("ComicsPage::onMangaFireCatalogReady: wrote %s (%lld volumes)",
           qUtf8Printable(writtenPath),
           static_cast<long long>(catalog.volumes.size()));
@@ -3874,6 +4104,7 @@ void ComicsPage::onAddToLibraryByTitleRequested(const QString& title)
 // request's result will land and trigger the re-show).
 void ComicsPage::onEnrichSeriesByTitleRequested(const QString& title)
 {
+    comicsOpenTrace(QStringLiteral("CP::onEnrichSeriesByTitleRequested ENTRY title=\"%1\"").arg(title));
     if (!m_anilistClient || !m_anilistCache || title.trimmed().isEmpty()) return;
     if (m_pendingLibraryEnrichReqId != 0) {
         qInfo("ComicsPage::onEnrichSeriesByTitleRequested: skipping \"%s\" (request %d already in flight)",

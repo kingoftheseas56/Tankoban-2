@@ -111,6 +111,45 @@ public:
     QJsonObject devDownloadsSnapshot() const;
     QJsonObject devDispatchVolume(const QString& seriesId, int volumeNumber, const QString& source);
     QJsonObject devSourcesSnapshot() const;
+
+    // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) — non-owning accessor
+    // so MainWindow can wire the shared MangaDownloadIndex into ComicsDownloadsPage.
+    // Returns nullptr before ComicsPage::activate() completes construction.
+    MangaDownloadIndex* mangaDownloadIndex() const { return m_mangaDownloadIndex; }
+
+    // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — canonical
+    // display helpers. ComicsDownloadsPage calls these to project raw
+    // (sourceId, seriesId) buckets into human-grouped series cards.
+
+    // Canonical grouping key: "anilist:<id>", "title:<normalized>", or
+    // "raw:<sourceId>:<seriesId>". Used to merge entries from different
+    // sources into one display entity.
+    QString resolveCanonicalGroupKey(const QString& sourceId,
+                                     const QString& seriesId) const;
+
+    // Resolve the best human-readable display title for a download entry.
+    // Order: AniList cache → MangaFire local catalog → Premium catalog →
+    // Tankoyomi library record → empty (caller falls back to humanizing).
+    QString resolveDisplayTitle(const QString& sourceId,
+                                const QString& seriesId) const;
+
+    // COMICS_CANONICAL_COVER 2026-05-26 (Agent 9) — resolve the canonical
+    // series cover. Priority: MangaFire Volume 1 coverUrlJapanese → empty
+    // (caller falls back to existing AniList → CBZ thumbnail → placeholder).
+    // Accepts an anilistId (may be 0) and display title; uses the catalog
+    // index to find the matching JSON, then returns Volume 1's cover URL.
+    QString resolveCanonicalSeriesCover(int anilistId,
+                                        const QString& displayTitle) const;
+
+    // Static: map sourceId to human display label.
+    // tankoyomi_premium → "Premium", mangafire_catalog → "MangaFire",
+    // weebcentral → "WeebCentral", fallback: title-case with suffix stripping.
+    static QString resolveSourceLabel(const QString& sourceId);
+
+    // Static: derive a readable title from a slug or seriesId.
+    // "one-piece" → "One Piece", "anilist_30013" → "" (returns empty —
+    // callers must already have resolved via AniList cache first).
+    static QString humanizeSlug(const QString& slug);
     Q_INVOKABLE bool dispatchDevCommand(const QString& cmd,
                                         const QJsonObject& payload,
                                         QJsonObject& reply);

@@ -21,6 +21,7 @@ class VideosPage;
 class OrganisePage;
 class StreamPage;
 class StreamDownloadsPage;
+class ComicsDownloadsPage;
 class TankorentPage;
 class TorrentClient;
 class DevControlServer;
@@ -238,6 +239,7 @@ private:
     // m_pageStack on each invocation.
     StreamPage    *m_streamPage    = nullptr;
     StreamDownloadsPage *m_streamDownloadsPage = nullptr;
+    ComicsDownloadsPage *m_comicsDownloadsPage = nullptr;
     TankorentPage *m_tankorentPage = nullptr;
     TorrentClient *m_torrentClient = nullptr;
 

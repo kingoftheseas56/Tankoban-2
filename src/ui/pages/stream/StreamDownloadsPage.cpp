@@ -302,14 +302,6 @@ void StreamDownloadsPage::refreshActive()
             "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
         cardLayout->addWidget(showLabel);
 
-        if (showTitle != imdbId) {
-            auto* imdbLabel = new QLabel(imdbId, card);
-            imdbLabel->setObjectName("StreamDownloadsShowMeta");
-            imdbLabel->setStyleSheet(
-                "QLabel#StreamDownloadsShowMeta { color: rgba(255,255,255,0.42); font-size: 9pt; }");
-            cardLayout->addWidget(imdbLabel);
-        }
-
         for (const QJsonObject& group : showGroups) {
             const int season = group.value(QStringLiteral("season")).toInt(
                 group.value(QStringLiteral("sourceIds")).toObject()
@@ -431,14 +423,6 @@ void StreamDownloadsPage::refreshHistory()
         showLabel->setStyleSheet(
             "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
         cardLayout->addWidget(showLabel);
-
-        if (showTitle != imdbId) {
-            auto* imdbLabel = new QLabel(imdbId, card);
-            imdbLabel->setObjectName("StreamDownloadsShowMeta");
-            imdbLabel->setStyleSheet(
-                "QLabel#StreamDownloadsShowMeta { color: rgba(255,255,255,0.42); font-size: 9pt; }");
-            cardLayout->addWidget(imdbLabel);
-        }
 
         for (const auto& e : entries) {
             auto* row = new QPushButton(card);
