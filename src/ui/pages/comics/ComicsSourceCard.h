@@ -106,7 +106,6 @@ private:
 
     // Widgets owned by Qt parent chain.
     QLabel*       m_titleLabel     = nullptr;
-    QLabel*       m_hostLabel      = nullptr;
     QLabel*       m_metaLabel      = nullptr;
     QPushButton*  m_downloadButton = nullptr;
 };

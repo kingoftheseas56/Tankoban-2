@@ -44,16 +44,6 @@ QString cardStyleSheet(bool hovered, bool selected)
         " font-weight: 600;"
         " font-size: 11px;"
         " }"
-        // Host name -- purple for recognised hosts
-        "#ComicsSourceCardHost {"
-        " color: #c0a0ff;"
-        " font-size: 11px;"
-        " font-weight: 500;"
-        " }"
-        // Host name -- muted gray on fallback cards
-        "#ComicsSourceCard[fallback=\"true\"] #ComicsSourceCardHost {"
-        " color: #8b8b95;"
-        " }"
         // Meta line (RichText, contains green seed-count span + badges)
         "#ComicsSourceCardMeta {"
         " color: #8b8b95;"
@@ -190,12 +180,6 @@ void ComicsSourceCard::buildUi()
     m_titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     topRow->addWidget(m_titleLabel, /*stretch=*/1);
 
-    m_hostLabel = new QLabel(this);
-    m_hostLabel->setObjectName(QStringLiteral("ComicsSourceCardHost"));
-    m_hostLabel->setTextFormat(Qt::PlainText);
-    m_hostLabel->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
-    topRow->addWidget(m_hostLabel, 0, Qt::AlignRight | Qt::AlignVCenter);
-
     root->addLayout(topRow);
 
     m_metaLabel = new QLabel(this);
@@ -278,9 +262,6 @@ void ComicsSourceCard::seedFromUnifiedRow(const UnifiedSourceRow& row)
         m_titleLabel->setText(m_releaseTitle);
         m_titleLabel->setToolTip(m_releaseTitle);
     }
-    if (m_hostLabel) {
-        m_hostLabel->setText(m_hostName);
-    }
     rebuildMetaLine();
     rebuildDownloadButtonLabel();
 }
@@ -301,7 +282,6 @@ void ComicsSourceCard::setReleaseTitle(const QString& title)
 void ComicsSourceCard::setHostName(const QString& host)
 {
     m_hostName = host;
-    if (m_hostLabel) m_hostLabel->setText(host);
 }
 
 void ComicsSourceCard::setHostType(HostType type)
@@ -309,7 +289,6 @@ void ComicsSourceCard::setHostType(HostType type)
     m_hostType = type;
     if (m_hostName.isEmpty()) {
         m_hostName = defaultHostNameFor(type);
-        if (m_hostLabel) m_hostLabel->setText(m_hostName);
     }
     applyStylePerType();
 }
@@ -404,15 +383,12 @@ void ComicsSourceCard::rebuildMetaLine()
     QStringList parts;
 
     if (m_isFallback) {
-        // Spec §3.7: WeebCentral fallback meta line.
-        // "scrape + assemble · ~<approximate size> · fallback"
-        parts << QStringLiteral("scrape + assemble");
-        if (m_sizeBytes > 0) {
-            parts << QStringLiteral("~%1")
-                         .arg(QLocale().formattedDataSize(m_sizeBytes));
-        }
-        parts << QStringLiteral("<i>fallback</i>");
+        // Meta line intentionally suppressed for fallback cards per Hemanth polish-mode override, 2026-05-25.
+        m_metaLabel->setText(QString());
+        m_metaLabel->hide();
+        return;
     } else {
+        m_metaLabel->show();
         // Spec §3.7: nyaa-style meta line.
         // "<uploader> · <size formatted> · ▲ <seedCount> seeds<optional " · trusted">"
         if (!m_uploader.isEmpty()) {

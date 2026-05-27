@@ -30,6 +30,7 @@ struct VolumeTileData {
     QString chapterRange;              // "ch 1-8"
     int     pages = 0;                 // 0 if unknown
     QString publishDate;               // free-form, may be empty
+    QString synopsis;                  // optional per-volume summary
     QString coverUrl;                  // initial cover; setCoverFromDisk overrides post-DL
 };
 
@@ -65,6 +66,7 @@ public:
     void setCoverFromUrl(const QString& url);     // for AniList-path covers
     void setCoverFromPixmap(const QPixmap& pm);   // for async-fetch paint path
     void setStatusText(const QString& text);
+    void setSelected(bool selected);
 
     // Per-tile subscription. Non-owning. May be set after construction.
     void setMangaDownloadIndex(MangaDownloadIndex* idx);
@@ -78,6 +80,7 @@ public:
 signals:
     void toggled(bool checked);
     void toggledShift(bool checked, bool shiftHeld);
+    void rowClicked(int volumeNumber);
     void openRequested(int volumeNumber);          // user clicked Open on Complete
     void downloadRequested(int volumeNumber);      // user clicked Download on NotStarted
     void cancelRequested(int volumeNumber);        // user clicked Cancel on Queued/Downloading
@@ -85,7 +88,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private slots:
     void onIndexEntriesChanged();
@@ -94,9 +97,15 @@ private slots:
 private:
     void buildUi();
     void applyState();
+    void refreshCoverPixmap();
+    void refreshStateIcon();
+    void refreshReadProgress();
 
     VolumeTileData  m_data;
     VolumeTileState m_state;
+    QPixmap         m_coverPixmap;
+    double          m_readProgressFraction = 0.0;
+    bool            m_selected = false;
 
     QPointer<MangaDownloadIndex> m_idx;
 
@@ -104,10 +113,8 @@ private:
     QLabel*      m_numberLabel = nullptr;
     QLabel*      m_coverLabel = nullptr;
     QLabel*      m_titleLabel = nullptr;
-    QLabel*      m_metaLabel = nullptr;
-    QLabel*      m_chipLabel = nullptr;
-    QLabel*      m_progressLabel = nullptr;   // text "38% · 12.4 MB / 32.7 MB"
-    QPushButton* m_actionBtn = nullptr;
+    QLabel*      m_synopsisLabel = nullptr;
+    QLabel*      m_stateIconLabel = nullptr;
 };
 
 } // namespace tankoban::ui::comics

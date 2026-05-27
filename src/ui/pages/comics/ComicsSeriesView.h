@@ -243,6 +243,7 @@ private slots:
     void onVolumeCellClicked(int row, int column);
     void onVolumeCurrentChanged(int currentRow, int currentColumn,
                                 int previousRow, int previousColumn);
+    void onVolumeRowActivated(int volumeNumber);
     void onLibraryButtonClicked();
 
     // STREAM_PORT 2026-05-18 Task 3: toggle between clamped and expanded
@@ -361,7 +362,7 @@ private:
     // Mirrors StreamDetailView.cpp:460-472 pattern.
     QPushButton*  m_descShowMoreBtn = nullptr;
     bool          m_descExpanded    = false;
-    int           m_descClampLines  = 3;
+    int           m_descClampLines  = 2;
 
     // STREAM_PORT 2026-05-18 Task 5: per-row multi-select state.
     // m_selectedRows holds the rows currently checked; m_downloadSelectedBtn

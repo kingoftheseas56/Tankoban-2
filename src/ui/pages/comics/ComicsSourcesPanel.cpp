@@ -67,8 +67,6 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
         "#ComicsSourcesPanel { background: transparent; }"
         "#ComicsSourcesPanelHeader { color: rgba(255,255,255,0.82);"
         " font-size: 12px; font-weight: 600; background: transparent; }"
-        "#ComicsSourcesContextLine { color: #8b8b95;"
-        " font-size: 11px; background: transparent; padding: 0 2px 6px 2px; }"
         "#ComicsSourcesPanelScroll { background: transparent; border: none; }"
         "#ComicsSourcesPanelScroll > QWidget > QWidget { background: transparent; }"
         // STREAM_PORT Bug-2 fix 2026-05-18: drop font-weight 600 + soften
@@ -95,12 +93,6 @@ ComicsSourcesPanel::ComicsSourcesPanel(premium::PremiumCatalog* catalog,
     m_headerLabel = new QLabel(tr("Sources"), this);
     m_headerLabel->setObjectName(QStringLiteral("ComicsSourcesPanelHeader"));
     root->addWidget(m_headerLabel);
-
-    m_contextLineLabel = new QLabel(this);
-    m_contextLineLabel->setObjectName(QStringLiteral("ComicsSourcesContextLine"));
-    m_contextLineLabel->setTextFormat(Qt::RichText);
-    m_contextLineLabel->hide();
-    root->addWidget(m_contextLineLabel);
 
     m_scroll = new QScrollArea(this);
     m_scroll->setObjectName(QStringLiteral("ComicsSourcesPanelScroll"));
@@ -263,21 +255,10 @@ void ComicsSourcesPanel::populate(const QString& seriesTitle,
     }
 }
 
-void ComicsSourcesPanel::setContext(int volumeNumber, const QString& volumeTitle)
+void ComicsSourcesPanel::setContext(int /*volumeNumber*/, const QString& /*volumeTitle*/)
 {
-    if (!m_contextLineLabel) return;
-    const QString title = volumeTitle.trimmed();
-    if (volumeNumber <= 0 || title.isEmpty()) {
-        m_contextLineLabel->clear();
-        m_contextLineLabel->hide();
-        return;
-    }
-
-    m_contextLineLabel->setText(QStringLiteral(
-        "for <span style=\"color:#c0a0ff\">Volume %1 &mdash; %2</span>")
-        .arg(volumeNumber)
-        .arg(title.toHtmlEscaped()));
-    m_contextLineLabel->show();
+    // No-op stub: label removed per Hemanth's UI cleanup.
+    // Callers in ComicsSeriesView, clear(), and populate() still compile.
 }
 
 void ComicsSourcesPanel::appendWeebCentralRow(int volumeNumber, const QStringList& chapterIds)
@@ -495,7 +476,14 @@ void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
 
     for (const UnifiedSourceRow& row : std::as_const(m_rows)) {
         auto* card = new ComicsSourceCard(row, m_cardsContainer);
+        card->setVolumeNumber(m_currentVolNumber);
         connect(card, &ComicsSourceCard::clicked,
+                this, [this](const UnifiedSourceRow& clickedRow) {
+            m_autoPickSuppressed = true;
+            cancelAutoPick();
+            emitRowDownload(clickedRow);
+        });
+        connect(card, &ComicsSourceCard::downloadClicked,
                 this, [this](const UnifiedSourceRow& clickedRow) {
             m_autoPickSuppressed = true;
             cancelAutoPick();

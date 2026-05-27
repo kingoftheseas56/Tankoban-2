@@ -13,6 +13,10 @@
 
 #include <QAbstractItemView>
 #include <QBrush>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QTextStream>
 #include <QToolButton>
 #include <QColor>
 #include <QEvent>
@@ -21,10 +25,12 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLayoutItem>
+#include <QLinearGradient>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -55,9 +61,9 @@ namespace {
 // Task 16: kCol* QTableWidget column constants removed -- QTableWidget fully
 // replaced by VolumeTile rows. kVolumeThumbSize kept for applyPixmapToVolumeRow
 // callers that pass explicit sizes (none remain; kept for documentation).
-const QSize kVolumeThumbSize(110, 150);
-constexpr int kVolumeRowHeight = 168;
-const QSize kHeroCoverSize(110, 165);
+const QSize kVolumeThumbSize(76, 108);
+constexpr int kVolumeRowHeight = 124;
+const QSize kHeroCoverSize(90, 135);
 
 // Tag names that AniList classifies as "Theme-Other-Demographic" — these
 // land in the meta strip in a future v1.x extension, not the hero chip
@@ -119,12 +125,34 @@ QString humanizeOriginLanguage(const QString& countryCode)
 QString buildPreviewMetaLine(const anilist::MediaPreview& preview)
 {
     QStringList parts;
-    if (!preview.genres.isEmpty())   parts << preview.genres.first().toLower();
-    if (!preview.status.isEmpty())   parts << humanizeStatus(preview.status);
     if (preview.yearStarted > 0)     parts << QString::number(preview.yearStarted);
+    for (const QString& genre : preview.genres.mid(0, 2)) {
+        const QString trimmed = genre.trimmed();
+        if (!trimmed.isEmpty() && !parts.contains(trimmed, Qt::CaseInsensitive))
+            parts << trimmed;
+    }
+
+    QList<anilist::RankedTag> sortedTags = preview.tags;
+    std::sort(sortedTags.begin(), sortedTags.end(),
+              [](const anilist::RankedTag& a, const anilist::RankedTag& b) {
+                  return a.rank > b.rank;
+              });
+    const QSet<QString>& demographics = kDemographicTagNames();
+    int tagCount = 0;
+    for (const auto& tag : sortedTags) {
+        if (tag.isSpoiler) continue;
+        const QString trimmed = tag.name.trimmed();
+        if (trimmed.isEmpty()) continue;
+        if (demographics.contains(trimmed.toLower())) continue;
+        if (parts.contains(trimmed, Qt::CaseInsensitive)) continue;
+        parts << trimmed;
+        if (++tagCount >= 2) break;
+    }
+
     const QString lang = humanizeOriginLanguage(preview.countryOfOrigin);
     if (!lang.isEmpty())             parts << lang;
-    return parts.join(QStringLiteral("  -  "));
+    if (!preview.status.isEmpty())   parts << humanizeStatus(preview.status);
+    return parts.join(QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" "));
 }
 
 // Build the richer meta-line shown after the detail fetch returns. Adds
@@ -258,20 +286,40 @@ QString buildHeroMetaLine(const anilist::MediaDetail& detail)
     if (detail.totalVolumes > 0) {
         parts << QStringLiteral("%1 volumes").arg(detail.totalVolumes);
     }
-    if (!detail.preview.genres.isEmpty()) {
-        parts << detail.preview.genres.first().toLower();
-    }
-    if (!detail.preview.status.isEmpty()) {
-        parts << humanizeStatus(detail.preview.status).toLower();
-    }
     if (detail.preview.yearStarted > 0) {
         parts << QString::number(detail.preview.yearStarted);
     }
+    for (const QString& genre : detail.preview.genres.mid(0, 2)) {
+        const QString trimmed = genre.trimmed();
+        if (!trimmed.isEmpty() && !parts.contains(trimmed, Qt::CaseInsensitive))
+            parts << trimmed;
+    }
+
+    QList<anilist::RankedTag> sortedTags = detail.preview.tags;
+    std::sort(sortedTags.begin(), sortedTags.end(),
+              [](const anilist::RankedTag& a, const anilist::RankedTag& b) {
+                  return a.rank > b.rank;
+              });
+    const QSet<QString>& demographics = kDemographicTagNames();
+    int tagCount = 0;
+    for (const auto& tag : sortedTags) {
+        if (tag.isSpoiler) continue;
+        const QString trimmed = tag.name.trimmed();
+        if (trimmed.isEmpty()) continue;
+        if (demographics.contains(trimmed.toLower())) continue;
+        if (parts.contains(trimmed, Qt::CaseInsensitive)) continue;
+        parts << trimmed;
+        if (++tagCount >= 2) break;
+    }
+
     const QString lang = humanizeOriginLanguage(detail.preview.countryOfOrigin);
     if (!lang.isEmpty()) {
         parts << lang;
     }
-    return parts.join(QStringLiteral("  -  "));
+    if (!detail.preview.status.isEmpty()) {
+        parts << humanizeStatus(detail.preview.status);
+    }
+    return parts.join(QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" "));
 }
 
 QJsonObject volumeRowJson(const anilist::VolumeRow& row, int rowIndex,
@@ -368,7 +416,7 @@ void ComicsSeriesView::buildUi()
     // .superpowers/brainstorm/1608-1779095122/content/proposed-layout.html.
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(24, 14, 24, 24);
-    outer->setSpacing(12);
+    outer->setSpacing(18);
 
     // Root QSS -- no wallpaper, solid dark background, label foreground colors,
     // volume table + sources panel card styling. Selection style is the new
@@ -424,9 +472,8 @@ void ComicsSeriesView::buildUi()
         // Task 16: QTableWidget#ComicsSeriesVolumesTable QSS removed --
         // volume rows are now VolumeTile QFrame widgets with their own QSS.
         "#ComicsSeriesSourcesPanel {"
-        "  background-color: rgba(15, 15, 18, 0.88);"
-        "  border: 1px solid rgba(255, 255, 255, 0.08);"
-        "  border-radius: 8px;"
+        "  background: transparent;"
+        "  border: none;"
         "}"
     ));
 
@@ -514,7 +561,7 @@ void ComicsSeriesView::buildUi()
     // --- Hero banner: 140px solid block holding the series art ----------
     m_heroBannerLabel = new QLabel(this);
     m_heroBannerLabel->setObjectName(QStringLiteral("ComicsSeriesHeroBanner"));
-    m_heroBannerLabel->setFixedHeight(140);
+    m_heroBannerLabel->setFixedHeight(170);
     m_heroBannerLabel->setAlignment(Qt::AlignCenter);
     m_heroBannerLabel->setScaledContents(false);
     m_heroBannerLabel->hide();  // STREAM_PORT 2026-05-18 Task 1 fix: blueprint parity (StreamDetailView.cpp:405) -- reveal only when applyBannerPixmap paints.
@@ -531,7 +578,7 @@ void ComicsSeriesView::buildUi()
     m_heroBlock = new QWidget(this);
     m_heroBlock->setObjectName(QStringLiteral("ComicsSeriesHeroBlock"));
     auto* heroLayout = new QHBoxLayout(m_heroBlock);
-    heroLayout->setContentsMargins(0, 4, 0, 18);
+    heroLayout->setContentsMargins(0, 0, 0, 12);
     heroLayout->setSpacing(22);
 
     m_heroCoverLabel = new QLabel(m_heroBlock);
@@ -543,7 +590,7 @@ void ComicsSeriesView::buildUi()
 
     auto* heroTextStack = new QVBoxLayout();
     heroTextStack->setContentsMargins(0, 0, 0, 0);
-    heroTextStack->setSpacing(8);
+    heroTextStack->setSpacing(12);
 
     m_title = new QLabel(m_heroBlock);
     m_title->setObjectName(QStringLiteral("ComicsSeriesTitle"));
@@ -567,7 +614,7 @@ void ComicsSeriesView::buildUi()
     m_synopsis->setMaximumWidth(720);
     heroTextStack->addWidget(m_synopsis);
 
-    // STREAM_PORT 2026-05-18 Task 3: 3-line clamped description with
+    // STREAM_PORT 2026-05-18 Task 3: clamped description with
     // "Show more / less" toggle. Clamp is computed dynamically from
     // QFontMetrics so short descriptions skip the toggle entirely; long
     // ones reveal the affordance below. Expanded mode removes the maximum
@@ -594,12 +641,8 @@ void ComicsSeriesView::buildUi()
             this, &ComicsSeriesView::onDescShowMoreClicked);
     heroTextStack->addWidget(m_descShowMoreBtn, /*stretch*/ 0, Qt::AlignLeft);
 
-    m_tagChipsRow = new QWidget(m_heroBlock);
-    m_tagChipsRow->setObjectName(QStringLiteral("ComicsSeriesHeroTagsRow"));
-    m_tagChipsLayout = new QHBoxLayout(m_tagChipsRow);
-    m_tagChipsLayout->setContentsMargins(0, 0, 0, 0);
-    m_tagChipsLayout->setSpacing(6);
-    heroTextStack->addWidget(m_tagChipsRow);
+    m_tagChipsRow = nullptr;
+    m_tagChipsLayout = nullptr;
 
     heroTextStack->addStretch(1);
     heroLayout->addLayout(heroTextStack, 1);
@@ -664,9 +707,9 @@ void ComicsSeriesView::buildUi()
     // skeleton-pulse, auto-pick 300ms beat -- all UNCHANGED.
     m_sourcesPanel = new ComicsSourcesPanel(m_catalog, m_nyaa, this);
     m_sourcesPanel->setObjectName(QStringLiteral("ComicsSeriesSourcesPanel"));
-    m_sourcesPanel->setMinimumWidth(240);
-    m_sourcesPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
-    contentRow->addWidget(m_sourcesPanel, /*stretch*/ 1);
+    m_sourcesPanel->setMinimumWidth(380);
+    m_sourcesPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    contentRow->addWidget(m_sourcesPanel, /*stretch*/ 2);
 
     outer->addLayout(contentRow, /*stretch*/ 1);
 
@@ -680,8 +723,26 @@ void ComicsSeriesView::buildUi()
     // loadCoverUrlForVolume; m_pendingMediaLoads drives overlay hide timing.
 }
 
+// COMICS_OPEN_TRACE (Agent 1, 2026-05-24 evening debug session). Timestamped
+// file trace at the key phase boundaries of a series open. Writes to
+// %TEMP%/comics_open_trace.log so we can measure WHERE the perceived loading
+// time is spent. Will be stripped after the bottleneck is identified + fixed.
+namespace {
+void comicsOpenTrace(const QString& event)
+{
+    static const QString path = QDir::temp().absoluteFilePath(QStringLiteral("comics_open_trace.log"));
+    QFile f(path);
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream ts(&f);
+        ts << QDateTime::currentMSecsSinceEpoch() << '\t' << event << '\n';
+    }
+}
+} // namespace
+
 void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
 {
+    comicsOpenTrace(QStringLiteral("CSV::showSeries(MediaPreview) ENTRY anilistId=%1 title=\"%2\"")
+                        .arg(preview.anilistId).arg(preview.title));
     // STREAM_PORT 2026-05-18 Task 7 (Task 3 carry-forward): reset description
     // expand state at series navigation. Without this, navigating Series A
     // (expanded) -> Back -> Series B leaves m_descExpanded=true in the brief
@@ -785,8 +846,11 @@ void ComicsSeriesView::showSeries(const anilist::MediaPreview& preview)
     // job in v2. v1 keeps the contract simple: refetch every showSeries().
     if (m_client) {
         m_pendingSeriesReqId = m_nextRequestId++;
+        comicsOpenTrace(QStringLiteral("CSV::showSeries(MediaPreview) -> seriesById fire reqId=%1")
+                            .arg(m_pendingSeriesReqId));
         m_client->seriesById(preview.anilistId, m_pendingSeriesReqId);
     }
+    comicsOpenTrace(QStringLiteral("CSV::showSeries(MediaPreview) EXIT"));
 }
 
 void ComicsSeriesView::showSearchResultLoading()
@@ -810,6 +874,9 @@ void ComicsSeriesView::showSeries(const MangaResult& wc)
 
 void ComicsSeriesView::showSeries(const MangaResult& wc, bool requestEnrichment)
 {
+    comicsOpenTrace(QStringLiteral("CSV::showSeries(MangaResult) ENTRY source=%1 id=%2 title=\"%3\" enrich=%4")
+                        .arg(wc.source).arg(wc.id).arg(wc.title)
+                        .arg(requestEnrichment ? 1 : 0));
     if (wc.id.isEmpty() || wc.source.isEmpty()) {
         qWarning("ComicsSeriesView::showSeries(MangaResult): empty id or source — ignoring");
         return;
@@ -953,6 +1020,7 @@ void ComicsSeriesView::clearView()
     m_volumeTilesByVolumeNumber.clear();
     m_currentVolumeRows.clear();
     m_selectedRows.clear();
+    m_lastBulkAnchorVolume = -1;
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
     if (m_sourcesPanel) m_sourcesPanel->clear();
     refreshLibraryButton();
@@ -1009,6 +1077,8 @@ void ComicsSeriesView::onSeriesFailed(int requestId, const QString& reason)
 
 void ComicsSeriesView::renderDetail(const anilist::MediaDetail& detail)
 {
+    comicsOpenTrace(QStringLiteral("CSV::renderDetail ENTRY anilistId=%1 title=\"%2\"")
+                        .arg(detail.preview.anilistId).arg(detail.preview.title));
     // Refresh the hero pane with the richer detail data.
     if (!detail.preview.title.isEmpty()) {
         m_title->setText(detail.preview.title);
@@ -1096,6 +1166,7 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
     // Clear stale selection state on every call so navigating between series
     // resets the checkbox set + hides the Download Selected button.
     m_selectedRows.clear();
+    m_lastBulkAnchorVolume = -1;
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
     // AniList path: synthesize stable identity keys.
@@ -1181,20 +1252,9 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         tile->setVolumeState(state);
         tile->setMangaDownloadIndex(m_downloadIndex);
 
-        const QString seriesIdCapture = fallbackSeriesId;
-        connect(tile, &tankoban::ui::comics::VolumeTile::openRequested,
-                this, [this, seriesIdCapture](int vn) {
-                    const auto entry = m_downloadIndex
-                        ? m_downloadIndex->entryForSeriesAndVolume(
-                              QStringLiteral("anilist"),
-                              seriesIdCapture, vn)
-                        : std::nullopt;
-                    emit openVolume(vn, entry ? entry->canonicalPath : QString());
-                });
-        connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
-                this, [this, rowIndex](int /*vn*/) {
-                    populateSourcesForRow(rowIndex);
-                });
+        Q_UNUSED(rowIndex);
+        connect(tile, &tankoban::ui::comics::VolumeTile::rowClicked,
+                this, &ComicsSeriesView::onVolumeRowActivated);
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
                 this, [this](bool checked, bool shiftHeld) {
                     auto* src = qobject_cast<tankoban::ui::comics::VolumeTile*>(sender());
@@ -1295,6 +1355,7 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // Pre-population cleanup (mirrors prior function head).
     m_currentVolumeRows.clear();
     m_selectedRows.clear();
+    m_lastBulkAnchorVolume = -1;
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
 
     // Clear meta-line — source-name leaking into view has no user value.
@@ -1306,10 +1367,21 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // stretch in m_volumesLayout (index = count() - 1).
     for (const auto& vol : catalog.volumes) {
         tankoban::ui::comics::VolumeTileData data;
-        data.sourceId     = QStringLiteral("mangafire_catalog");
+        // COMICS_WC_SOURCE_LABEL_FIX 2026-05-26 (Agent 9).
+        // VolumeTile needs to find download index entries registered under
+        // "weebcentral" (not "mangafire_catalog"). The download index stores
+        // WeebCentral-packed volumes with sourceId="weebcentral" regardless
+        // of whether the catalog/series identity was resolved via MangaFire.
+        // Using the catalog sourceId here would prevent the tile from ever
+        // detecting its Complete state via onIndexEntriesChanged.
+        data.sourceId     = QString::fromLatin1(kWeebCentralSourceId);
         data.seriesId     = catalog.seriesId;
         data.volumeNumber = vol.volumeNumber;
         data.title        = !vol.titleEnglish.isEmpty() ? vol.titleEnglish : vol.titleJapanese;
+        data.synopsis     = vol.synopsis;
+        if (vol.releaseDateEn.isValid()) {
+            data.publishDate = vol.releaseDateEn.toString(Qt::ISODate);
+        }
         // chapterStartRaw/chapterEndRaw carry the raw MangaFire strings (e.g. "0.01", "5.5");
         // fall back to integer range if raws are absent.
         if (!vol.chapterStartRaw.isEmpty() || !vol.chapterEndRaw.isEmpty()) {
@@ -1328,6 +1400,7 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
                               : vol.coverUrlEnglish;
 
         const int rowIndex = m_currentVolumeRows.size();
+        Q_UNUSED(rowIndex);
         anilist::VolumeRow mappedRow;
         mappedRow.volumeNumber      = vol.volumeNumber;
         mappedRow.chapterRangeStart = vol.chapterRangeStart;
@@ -1351,20 +1424,8 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         tile->setVolumeState(state);
         tile->setMangaDownloadIndex(m_downloadIndex);
 
-        const QString seriesIdSnapshot = catalog.seriesId;
-        connect(tile, &tankoban::ui::comics::VolumeTile::openRequested,
-                this, [this, seriesIdSnapshot](int vn) {
-                    const auto entry = m_downloadIndex
-                        ? m_downloadIndex->entryForSeriesAndVolume(
-                              QStringLiteral("mangafire_catalog"),
-                              seriesIdSnapshot, vn)
-                        : std::nullopt;
-                    emit openVolume(vn, entry ? entry->canonicalPath : QString());
-                });
-        connect(tile, &tankoban::ui::comics::VolumeTile::downloadRequested,
-                this, [this](int vn) {
-                    populateSourcesForVolume(vn);
-                });
+        connect(tile, &tankoban::ui::comics::VolumeTile::rowClicked,
+                this, &ComicsSeriesView::onVolumeRowActivated);
         connect(tile, &tankoban::ui::comics::VolumeTile::toggledShift,
                 this, [this](bool checked, bool shiftHeld) {
                     auto* src = qobject_cast<tankoban::ui::comics::VolumeTile*>(sender());
@@ -1410,6 +1471,17 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     m_currentSeriesTitle = !catalog.seriesTitle.isEmpty()
                             ? catalog.seriesTitle
                             : catalog.seriesId;
+
+    // COMICS_CANONICAL_COVER 2026-05-26 (Agent 9) — update the hero poster
+    // to MangaFire Volume 1's cover URL when available. Volume rows still
+    // show their own per-volume covers (set in the loop above); this only
+    // touches the top-of-page hero block.
+    for (const auto& vol : catalog.volumes) {
+        if (vol.volumeNumber == 1 && !vol.coverUrlJapanese.isEmpty()) {
+            loadHeroCoverUrl(vol.coverUrlJapanese);
+            break;
+        }
+    }
 
     // No next-unread highlight on the MangaFire catalog path in v1 — that
     // hinges on cbzPath stash which the catalog doesn't carry. The Tankoyomi-
@@ -1544,6 +1616,7 @@ bool ComicsSeriesView::eventFilter(QObject* watched, QEvent* event)
 
 void ComicsSeriesView::showLoadingOverlay()
 {
+    comicsOpenTrace(QStringLiteral("CSV::showLoadingOverlay"));
     if (!m_loadingOverlay) return;
     m_loadingOverlay->setGeometry(rect());
     m_loadingOverlay->raise();
@@ -1568,6 +1641,8 @@ void ComicsSeriesView::showLoadingOverlay()
 
 void ComicsSeriesView::hideLoadingOverlay()
 {
+    comicsOpenTrace(QStringLiteral("CSV::hideLoadingOverlay pendingMediaLoads=%1")
+                        .arg(m_pendingMediaLoads));
     if (m_loadingOverlay) m_loadingOverlay->hide();
 }
 
@@ -1852,17 +1927,28 @@ void ComicsSeriesView::applyBannerPixmap(const QPixmap& pm)
 {
     if (!m_heroBannerLabel || pm.isNull()) return;
     m_heroBannerLabel->show();  // STREAM_PORT Task 1 fix: reveal banner when a pixmap actually lands.
-    const QSize target = m_heroBannerLabel->size();
-    if (target.width() <= 0 || target.height() <= 0) {
-        // Label hasn't been sized yet (first paint); store and re-apply on
-        // resize via setPixmap with the raw pixmap -- Qt will scale on paint.
-        m_heroBannerLabel->setPixmap(pm);
-        return;
-    }
-    const QPixmap scaled = pm.scaled(target,
-                                     Qt::KeepAspectRatioByExpanding,
-                                     Qt::SmoothTransformation);
-    m_heroBannerLabel->setPixmap(scaled);
+    const int targetW = qMax(m_heroBannerLabel->width(), 800);
+    const int targetH = m_heroBannerLabel->height() > 0 ? m_heroBannerLabel->height() : 170;
+
+    const QImage src = pm.toImage();
+    QImage scaled = src.scaled(targetW, targetH,
+                               Qt::KeepAspectRatioByExpanding,
+                               Qt::SmoothTransformation);
+    QImage canvas(targetW, targetH, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QPainter p(&canvas);
+    const int sx = (scaled.width() - targetW) / 2;
+    const int sy = (scaled.height() - targetH) / 2;
+    p.drawImage(QPoint(0, 0), scaled, QRect(sx, sy, targetW, targetH));
+
+    QLinearGradient fade(0, qMax(0, targetH - 80), 0, targetH);
+    fade.setColorAt(0.0, QColor(0, 0, 0, 0));
+    fade.setColorAt(1.0, QColor(13, 13, 16, 235));
+    p.fillRect(canvas.rect(), fade);
+    p.end();
+
+    m_heroBannerLabel->setPixmap(QPixmap::fromImage(canvas));
 }
 
 void ComicsSeriesView::applyHeroCoverPixmap(const QPixmap& pm)
@@ -2018,22 +2104,9 @@ void ComicsSeriesView::setVolumeDownloadState(int volumeNumber, const QString& c
 
 void ComicsSeriesView::setVolumeStatusText(int volumeNumber, const QString& statusText)
 {
-    // Task 16: route through VolumeTile::setStatusText + recompute state.
     auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
     if (!tile) return;
     tile->setStatusText(statusText);
-    // Re-derive state from (index-presence, statusText). The index-presence
-    // check mirrors what VolumeTile::onIndexEntriesChanged does, but that
-    // fires on the index signal — this slot handles transient push-state
-    // updates (Queued/Downloading/Failed) from the download manager.
-    auto state = tile->volumeState();
-    const bool hasEntry = m_downloadIndex
-        && m_downloadIndex->entryForSeriesAndVolume(
-               QStringLiteral("mangafire_catalog"),
-               m_currentSeriesKey, volumeNumber).has_value();
-    state.state      = tankoban::ui::comics::VolumeTile::computeState(hasEntry, statusText);
-    state.statusText = statusText;
-    tile->setVolumeState(state);
 }
 
 void ComicsSeriesView::onVolumeCellClicked(int /*row*/, int /*column*/)
@@ -2049,6 +2122,25 @@ void ComicsSeriesView::onVolumeCurrentChanged(int /*currentRow*/, int /*currentC
 {
     // Task 16: deprecated. VolumeTile keyboard/click nav drives the Sources
     // panel via downloadRequested signal wiring. No-op stub.
+}
+
+void ComicsSeriesView::onVolumeRowActivated(int volumeNumber)
+{
+    auto* tile = m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+    if (!tile) return;
+
+    for (auto* other : std::as_const(m_volumeTiles)) {
+        if (other) other->setSelected(other == tile);
+    }
+
+    const auto state = tile->volumeState();
+    if (state.state == tankoban::ui::comics::VolumeTileState::Complete
+        && !state.cbzPath.isEmpty()) {
+        emit openVolume(volumeNumber, state.cbzPath);
+        return;
+    }
+
+    populateSourcesForVolume(volumeNumber);
 }
 
 void ComicsSeriesView::populateSourcesForRow(int row)
@@ -2180,12 +2272,12 @@ void ComicsSeriesView::onDownloadSelectedClicked()
 
     // Snapshot the set since the dispatch may indirectly clear it (e.g. if
     // the receiver triggers a re-populate of the table).
-    const QList<int> rows = QList<int>(m_selectedRows.cbegin(), m_selectedRows.cend());
     QList<anilist::VolumeRow> selectedVols;
-    selectedVols.reserve(rows.size());
-    for (int row : rows) {
-        if (row < 0 || row >= m_currentVolumeRows.size()) continue;
-        selectedVols.append(m_currentVolumeRows.at(row));
+    selectedVols.reserve(m_selectedRows.size());
+    for (const auto& row : std::as_const(m_currentVolumeRows)) {
+        if (m_selectedRows.contains(row.volumeNumber)) {
+            selectedVols.append(row);
+        }
     }
     if (!selectedVols.isEmpty()) {
         emit bulkDownloadRequested(m_currentAnilistId, selectedVols);
