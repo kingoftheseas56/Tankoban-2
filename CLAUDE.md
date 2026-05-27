@@ -60,6 +60,7 @@ If you are tempted to give Hemanth a terminal command list longer than **one lin
 - **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired).
 - **Agent 7** (Codex prototypes + audits) — VERY ACTIVE this wake: four Trigger-D commissions all DONE (lane-scoped kill `4c5a1e7` + CMake mtime guard `88a7592` + ninja state reset `2aca3fb` + gov-v7 lease registry `210ba32`/`07da143`). Trigger taxonomy: A/B/C/D Codex-only (prototype / audit / implementation); E = Agent N Jrs (parallel Claude tab dispatch). Codex Trigger D for surgical/novel/independent-perspective work; Trigger E for pattern-match fan-out where the template is already set.
 - **Agent 8** (Prompt Architect) — ON-DEMAND, woken by Hemanth in a new tab. Persona at `.claude/agents/prompt-architect.md`.
+- **Agent 9** (Audit Junior — DeepSeek V4-Pro) — ON-DEMAND, woken via `C:\Users\Suprabha\Desktop\start_agent9.bat` (Claude Code harness pointed at DeepSeek's Anthropic-format endpoint). New brother as of 2026-05-25. **A7-lite**: first-pass audits, research, long-context synthesis, small Trigger-D-shaped scripts. In-process — replies inline in chat.md, no Codex-style couriering. Escalates to Agent 7 when production-codebase fluency is needed. Persona at `.claude/agents/audit-junior.md`. Cost profile ~₹1-3K/month medium activity.
 
 **READY TO COMMIT backlog:** ~10-15 narrative RTC lines unswept since `f323f6f`; per the post-hoc close-out pattern that landed last sweep, every referenced src/ file is already in HEAD via per-task commits earlier in each wake — next `/commit-sweep` likely lands a sweep marker only with N=0.
 
@@ -91,7 +92,7 @@ Tiered per SKILL_DISCIPLINE_FIX_TODO Phase 6 ratification 2026-04-25. Tier 1 = c
 
 ### Tier 1 — Core Mandatory (~7 skills, every relevant wake)
 
-- **`/hemanth-language`** — every wake, auto-loaded at SessionStart. 4 disciplines (analogies first, preview per task group, no silence, well-explained menus only) + paired examples + failure-shape taxonomy. Consolidated in `feedback_hemanth_language_field_manual.md`. Foundation builds on Rules 14 + 15. Re-read cover-to-cover every wake.
+- **`/hemanth-language`** — every wake, auto-loaded at SessionStart. 4 disciplines (user-end terms first, preview per task group, no silence, well-explained menus only) + paired examples + failure-shape taxonomy. Consolidated in `feedback_hemanth_language_field_manual.md`. Foundation builds on Rules 14 + 15. Discipline 1 updated 2026-05-27 from "analogies first" to "user-end terms first" — analogy is the fallback for internal-only work with no user manifestation. Re-read cover-to-cover every wake.
 - **`/brief`** — every wake start. SessionStart hook prints a pre-digest; `/brief` is the full state read.
 - **`/session-recap`** — every wake END for non-trivial sessions (≥1 RTC, ≥1 commit, ≥1 substantive decision, ≥30 min). v4 (2026-05-22) makes the trimmed `.cc-history/*.trimmed.md` transcript primary reading at next wake; the recap is the structured INDEX. Output lands at `~/.claude/recaps/<agent-slug>/brother-<agent-slug>-<YYYY-MM-DD>-<codename>.md`.
 - **`/superpowers:verification-before-completion`** — every RTC, every agent. Evidence-before-assertions checklist.

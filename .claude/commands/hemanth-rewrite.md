@@ -1,5 +1,5 @@
 ---
-description: Rewrite a paragraph in Hemanth-language. Use when a draft is jargon-heavy, missing analogy, or lacks context anchor.
+description: Rewrite a paragraph in Hemanth-language. Use when a draft is jargon-heavy, missing user-end framing, or lacks context anchor.
 ---
 
 You are rewriting a paragraph in Hemanth-language for Tankoban 2.
@@ -10,7 +10,7 @@ You are rewriting a paragraph in Hemanth-language for Tankoban 2.
 
 **Rules** (per `feedback_simple_language.md` + `feedback_no_tables_simple_lists.md`):
 
-1. **Lead with the answer.** First sentence states the conclusion or recommendation, not the context. If the original paragraph buries the lede, surface it.
+1. **Lead with the answer in user-end terms.** First sentence states the conclusion or recommendation in terms of what Hemanth sees / feels / clicks / waits on as the user of the app — not in terms of code internals. Example: "you'll see one card per series instead of two" beats "the projection collapses duplicate tiles." For purely internal work with no user-end manifestation (build infra, refactors, agent governance), lead with a plain-language analogy instead. If the original paragraph buries the lede, surface it.
 2. **Short sentences.** Aim for 15-20 words max. Break long sentences. One thought per sentence.
 3. **Translate jargon.** Replace coder terms with concrete actions / observations:
    - "Schema versioning" → "the rules for how we add new commands without breaking old ones"
