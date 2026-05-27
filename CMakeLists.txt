@@ -830,6 +830,9 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_legacy_importer_orchestrator.cpp
         src/core/torrent/TorrentRepository.cpp
         src/core/torrent/LegacyImporter.cpp
+        # Per-show transfer lane queue (TANKORENT_QUALITY_AND_QUEUE Phase 1)
+        tests/core/queue/test_transfer_queue.cpp
+        src/core/queue/TransferQueue.cpp
         # Book tests
         tests/core/book/test_book_catalogue_result.cpp
         tests/core/book/test_catalogue_record.cpp
