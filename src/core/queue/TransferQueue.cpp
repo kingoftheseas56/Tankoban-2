@@ -73,8 +73,37 @@ bool TransferQueue::cancel(const QString& transferId, std::optional<TransferItem
     }
     return false;
 }
-bool TransferQueue::reorder(const QString&, int, int) { return false; }
-bool TransferQueue::bumpToFront(const QString&) { return false; }
+bool TransferQueue::reorder(const QString& showId, int oldIdx, int newIdx) {
+    auto it = m_lanes.find(showId);
+    if (it == m_lanes.end()) return false;
+    auto& items = it->items;
+    const int n = static_cast<int>(items.size());
+    if (oldIdx <= 0 || oldIdx >= n) return false;   // cannot move current
+    if (newIdx <= 0 || newIdx >= n) return false;   // cannot target current
+    if (oldIdx == newIdx) return false;
+    TransferItem moved = items[oldIdx];
+    items.erase(items.begin() + oldIdx);
+    items.insert(items.begin() + newIdx, moved);
+    emit laneChanged(showId);
+    return true;
+}
+
+bool TransferQueue::bumpToFront(const QString& transferId) {
+    for (auto laneIt = m_lanes.begin(); laneIt != m_lanes.end(); ++laneIt) {
+        auto& items = laneIt->items;
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].transferId == transferId) {
+                if (i == 0 || i == 1) return false;  // already current or already at pos 1
+                TransferItem moved = items[i];
+                items.erase(items.begin() + i);
+                items.insert(items.begin() + 1, moved);
+                emit laneChanged(laneIt->showId);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 QHash<QString, TransferLane> TransferQueue::lanesSnapshot() const { return m_lanes; }
 std::optional<TransferLane> TransferQueue::laneFor(const QString& showId) const {
     auto it = m_lanes.find(showId);

@@ -102,3 +102,49 @@ TEST(TransferQueueTest, CancelUnknownIdReturnsFalse) {
     std::optional<TransferItem> next;
     EXPECT_FALSE(q.cancel("ghost", &next));
 }
+
+TEST(TransferQueueTest, ReorderMovesQueuedItem) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "S", 1));  // current
+    q.enqueue(makeItem("t2", "S", 2));
+    q.enqueue(makeItem("t3", "S", 3));
+    q.enqueue(makeItem("t4", "S", 4));
+    ASSERT_TRUE(q.reorder("S", 3, 1));  // move t4 to position 1
+    auto lane = q.laneFor("S");
+    EXPECT_EQ(lane->items[0].transferId, "t1");
+    EXPECT_EQ(lane->items[1].transferId, "t4");
+    EXPECT_EQ(lane->items[2].transferId, "t2");
+    EXPECT_EQ(lane->items[3].transferId, "t3");
+}
+
+TEST(TransferQueueTest, ReorderCannotMoveCurrent) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "S", 1));
+    q.enqueue(makeItem("t2", "S", 2));
+    EXPECT_FALSE(q.reorder("S", 0, 1));
+}
+
+TEST(TransferQueueTest, ReorderCannotTargetCurrentSlot) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "S", 1));
+    q.enqueue(makeItem("t2", "S", 2));
+    EXPECT_FALSE(q.reorder("S", 1, 0));
+}
+
+TEST(TransferQueueTest, BumpToFrontMovesQueuedToPositionOne) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "S", 1));
+    q.enqueue(makeItem("t2", "S", 2));
+    q.enqueue(makeItem("t3", "S", 3));
+    q.enqueue(makeItem("t4", "S", 4));
+    ASSERT_TRUE(q.bumpToFront("t4"));
+    auto lane = q.laneFor("S");
+    EXPECT_EQ(lane->items[0].transferId, "t1");  // current unchanged
+    EXPECT_EQ(lane->items[1].transferId, "t4");  // bumped
+}
+
+TEST(TransferQueueTest, BumpCurrentIsNoop) {
+    TransferQueue q;
+    q.enqueue(makeItem("t1", "S", 1));
+    EXPECT_FALSE(q.bumpToFront("t1"));
+}
