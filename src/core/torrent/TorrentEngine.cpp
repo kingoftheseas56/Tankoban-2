@@ -126,8 +126,8 @@ private:
                     for (int i = 0; i < fs.num_files(); ++i) {
                         QJsonObject f;
                         f["index"] = i;
-                        f["name"]  = QString::fromStdString(fs.file_path(i));
-                        f["size"]  = static_cast<qint64>(fs.file_size(i));
+                        f["name"]  = QString::fromStdString(fs.file_path(lt::file_index_t{i}));
+                        f["size"]  = static_cast<qint64>(fs.file_size(lt::file_index_t{i}));
                         files.append(f);
                     }
                 }
@@ -1089,13 +1089,13 @@ QJsonArray TorrentEngine::torrentFiles(const QString& infoHash) const
     for (int i = 0; i < fs.num_files(); ++i) {
         QJsonObject f;
         f["index"]    = i;
-        f["name"]     = QString::fromStdString(fs.file_path(i));
-        f["size"]     = static_cast<qint64>(fs.file_size(i));
-        f["progress"] = (fs.file_size(i) > 0 && i < static_cast<int>(fileProgress.size()))
-                        ? static_cast<double>(fileProgress[i]) / fs.file_size(i)
+        f["name"]     = QString::fromStdString(fs.file_path(lt::file_index_t{i}));
+        f["size"]     = static_cast<qint64>(fs.file_size(lt::file_index_t{i}));
+        f["progress"] = (fs.file_size(lt::file_index_t{i}) > 0 && i < static_cast<int>(fileProgress.size()))
+                        ? static_cast<double>(fileProgress[i]) / fs.file_size(lt::file_index_t{i})
                         : 0.0;
         f["priority"] = (i < static_cast<int>(priorities.size()))
-                        ? static_cast<int>(priorities[i])
+                        ? static_cast<int>(static_cast<std::uint8_t>(priorities[i]))
                         : 4;   // libtorrent default when out of range
         files.append(f);
     }
