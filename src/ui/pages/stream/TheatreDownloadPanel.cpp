@@ -240,6 +240,14 @@ void TheatreDownloadPanel::openFor(const QString& imdbId,
         m_statusLine->setText(tr("Searching sources..."));
     if (m_loadingBar) m_loadingBar->show();
 
+    // TANKORENT_QUALITY_AND_QUEUE audit DEFECT 1 (2026-05-27) — clear the
+    // visual pack list NOW, not just the data models above. Without this the
+    // previous show's rendered rows stay painted through the "Searching..."
+    // phase (e.g. One Piece rows lingering on a freshly-opened Community S4
+    // panel) until new results repaint. m_packs/m_filteredPacks are already
+    // cleared, so rerenderPackList() empties m_packList and renders nothing.
+    rerenderPackList();
+
     transitionTo(State::PackList);
     if (m_searchEngine)
         m_searchEngine->search(imdbId, showName, season, m_sourceFilter);
