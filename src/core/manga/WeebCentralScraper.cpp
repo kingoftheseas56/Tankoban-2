@@ -335,9 +335,12 @@ QList<PageInfo> WeebCentralScraper::parsePagesHtml(const QString& html)
 {
     QList<PageInfo> pages;
 
-    // Pattern: <img src="https://scans-hot.planeptune.us/...">
+    // Images endpoint returns only reader pages. Hosts drift over time
+    // (planeptune, lowee, etc.), so accept http(s) image URLs instead of
+    // pinning one CDN hostname.
     static QRegularExpression imgRe(
-        R"RE(<img[^>]+src="(https://[^"]*planeptune[^"]*)"[^>]*>)RE");
+        R"RE(<img[^>]+src="(https?://[^"]+\.(?:png|jpe?g|webp)(?:\?[^"]*)?)"[^>]*>)RE",
+        QRegularExpression::CaseInsensitiveOption);
 
     auto matches = imgRe.globalMatch(html);
     int idx = 0;
@@ -346,6 +349,9 @@ QList<PageInfo> WeebCentralScraper::parsePagesHtml(const QString& html)
         PageInfo p;
         p.index    = idx++;
         p.imageUrl = m.captured(1);
+        if (p.imageUrl.contains(QLatin1String("/broken_image."))) {
+            continue;
+        }
         pages.append(p);
     }
 

@@ -4,16 +4,18 @@ namespace tankoban::manga {
 
 namespace {
 
-// Canonical seed list (lowercase, no surrounding whitespace).
+// Canonical tier-1 seed list from resources/manga_uploader_trust.json
+// (lowercase, no surrounding whitespace).
 // Insertion order preserved for names() — keep this list short and
-// curated; adding an entry here promotes a Fandom uploader to the
-// "Trusted uploader" badge surface.
+// curated; adding an entry here promotes a Nyaa uploader to the
+// "Trusted uploader" badge surface. Keep this in sync with the JSON until
+// the badge path reads the shared resource directly.
 const QStringList& canonicalNames()
 {
     static const QStringList kNames = {
-        QStringLiteral("antiherogold"),
         QStringLiteral("1r0n"),
-        QStringLiteral("danke-empire"),
+        QStringLiteral("hox"),
+        QStringLiteral("viz digital"),
     };
     return kNames;
 }

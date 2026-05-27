@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QList>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -49,13 +50,26 @@ private slots:
     void onReplyFinished();
 
 private:
+    struct PendingSearch {
+        int requestId = 0;
+        int volumeNumber = 0;
+        int pendingReplies = 0;
+        QList<NyaaSourceCandidate> results;
+        QSet<QString> seenInfoHashes;
+        QStringList errors;
+    };
+
     void loadTrustJson(const QString& path);
     int  tierForUploader(const QString& uploader) const;
+    QString inferUploaderFromTitle(const QString& title) const;
+    QList<NyaaSourceCandidate> parseCandidates(const QByteArray& payload) const;
+    void finishBatchedReply(QNetworkReply* reply);
 
     QPointer<QNetworkAccessManager> m_nam;
     QSet<QString> m_tier1;
     QSet<QString> m_tier2;
     QSet<QString> m_blocked;
+    QHash<int, PendingSearch> m_pending;
 };
 
 } // namespace tankoban::manga

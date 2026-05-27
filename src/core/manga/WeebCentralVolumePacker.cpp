@@ -33,6 +33,9 @@ namespace tankoban::manga {
 namespace {
 
 constexpr qint64 kImageMaxBytes = 32LL * 1024 * 1024;  // 32 MiB per image safety bound
+static const QByteArray kUserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
 QString stagingDirFor(const QString& root, const QString& seriesId, int volNumber)
 {
@@ -199,6 +202,9 @@ void WeebCentralVolumePacker::startNextChapter(const VolumePackRequest& req,
                     return;
                 }
                 QNetworkRequest httpReq(QUrl(pages.at(p).imageUrl));
+                httpReq.setRawHeader("User-Agent", kUserAgent);
+                httpReq.setRawHeader("Referer", "https://weebcentral.com/");
+                httpReq.setRawHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
                 auto* reply = m_nam->get(httpReq);
                 connect(reply, &QNetworkReply::finished,
                     this, [this, reply, stagingDir, chapterIdx, p, total,

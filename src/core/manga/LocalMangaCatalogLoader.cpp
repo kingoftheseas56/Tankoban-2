@@ -8,10 +8,12 @@
 #include "LocalMangaCatalogLoader.h"
 
 #include <QCoreApplication>
+#include <QDate>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -41,6 +43,48 @@ int parseChapterPrefix(const QString& raw) {
     }
     if (prefix.isEmpty()) return 0;
     return prefix.toInt();
+}
+
+QHash<int, QJsonObject> loadVolumeEnrichment(const QString& catalogPath,
+                                             const QString& seriesId,
+                                             int anilistId)
+{
+    QHash<int, QJsonObject> out;
+    if (seriesId.isEmpty()) return out;
+
+    const QDir catalogDir(QFileInfo(catalogPath).absolutePath());
+    const QString enrichmentPath = QDir(catalogDir.absoluteFilePath(QStringLiteral("../manga_enrichment")))
+        .absoluteFilePath(seriesId + QStringLiteral(".volumes.json"));
+
+    QFile f(enrichmentPath);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return out;
+    }
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        return out;
+    }
+
+    const QJsonObject root = doc.object();
+    if (root.value(QStringLiteral("seriesId")).toString() != seriesId) {
+        return out;
+    }
+    const int overlayAnilistId = root.value(QStringLiteral("anilistId")).toInt(0);
+    if (anilistId > 0 && overlayAnilistId > 0 && overlayAnilistId != anilistId) {
+        return out;
+    }
+
+    const QJsonArray volumes = root.value(QStringLiteral("volumes")).toArray();
+    for (const auto& value : volumes) {
+        const QJsonObject obj = value.toObject();
+        const int volumeNumber = obj.value(QStringLiteral("volumeNumber")).toInt(0);
+        if (volumeNumber > 0) {
+            out.insert(volumeNumber, obj);
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -165,6 +209,31 @@ std::optional<MangaCatalog> LocalMangaCatalogLoader::loadFromFile(const QString&
         cat.volumes.append(std::move(vol));
     }
 
+    const QHash<int, QJsonObject> enrichment =
+        loadVolumeEnrichment(filePath, cat.seriesId, cat.anilistId);
+    if (!enrichment.isEmpty()) {
+        for (MangaVolume& vol : cat.volumes) {
+            const auto it = enrichment.constFind(vol.volumeNumber);
+            if (it == enrichment.constEnd()) continue;
+
+            const QJsonObject obj = it.value();
+            const QString title = obj.value(QStringLiteral("englishTitle")).toString().trimmed();
+            if (!title.isEmpty()) {
+                vol.titleEnglish = title;
+            }
+
+            const QString synopsis = obj.value(QStringLiteral("synopsis")).toString().trimmed();
+            if (!synopsis.isEmpty()) {
+                vol.synopsis = synopsis;
+            }
+
+            const QString releaseDate = obj.value(QStringLiteral("englishReleaseDate")).toString().trimmed();
+            if (!releaseDate.isEmpty()) {
+                vol.releaseDateEn = QDate::fromString(releaseDate, Qt::ISODate);
+            }
+        }
+    }
+
     return cat;
 }
 
@@ -175,6 +244,10 @@ QString LocalMangaCatalogLoader::canonicalDataDir() {
     QDir up(appDir);
     up.cdUp();
     const QString candidate = up.absoluteFilePath("data/mangafire_catalog");
+    if (QFileInfo(appDir).fileName().startsWith(
+            QStringLiteral("out"), Qt::CaseInsensitive)) {
+        return candidate;
+    }
     if (QFileInfo(candidate).isDir()) return candidate;
 
     // Fallback for tests or alternate launch paths: cwd-relative.

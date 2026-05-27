@@ -21,25 +21,61 @@ namespace {
 
 constexpr const char* kNyaaRssEndpoint = "https://nyaa.si";
 
-QString buildQueryString(const QString& seriesTitle, int volumeNumber,
-                         const QSet<QString>& tier1, const QSet<QString>& tier2)
+QStringList buildQueryStrings(const QString& seriesTitle, int volumeNumber)
 {
-    QStringList uploaders;
-    for (const auto& u : tier1) uploaders.append(u);
-    for (const auto& u : tier2) uploaders.append(u);
-    QString q = seriesTitle + QStringLiteral(" v") + QString::number(volumeNumber);
-    if (!uploaders.isEmpty()) {
-        q += QStringLiteral(" (") + uploaders.join(QStringLiteral(" | ")) + QChar(')');
-    }
-    return q;
+    QStringList out;
+    const auto add = [&out](const QString& q) {
+        const QString trimmed = q.simplified();
+        if (!trimmed.isEmpty() && !out.contains(trimmed)) {
+            out.append(trimmed);
+        }
+    };
+
+    add(QStringLiteral("%1 %2").arg(seriesTitle).arg(volumeNumber));
+    add(QStringLiteral("%1 %2").arg(seriesTitle).arg(volumeNumber, 2, 10, QChar('0')));
+    add(QStringLiteral("%1 %2").arg(seriesTitle).arg(volumeNumber, 3, 10, QChar('0')));
+    add(QStringLiteral("%1 Vol %2").arg(seriesTitle).arg(volumeNumber));
+    add(seriesTitle);
+    return out;
 }
 
-QString infoHashFromMagnet(const QString& magnet)
+QString normaliseUploader(QString uploader)
 {
-    // magnet:?xt=urn:btih:HEX&...
-    static const QRegularExpression re(QStringLiteral("xt=urn:btih:([0-9a-fA-F]{40})"));
-    const auto m = re.match(magnet);
-    return m.hasMatch() ? m.captured(1).toLower() : QString();
+    return uploader.trimmed().toLower();
+}
+
+bool titleMentionsVolume(const QString& title, int volumeNumber)
+{
+    if (volumeNumber <= 0) return true;
+
+    const QString vol = QString::number(volumeNumber);
+    const QString padded2 = QStringLiteral("0") + vol;
+    const QString padded3 = QStringLiteral("00") + vol;
+    const QString escapedVol = QStringLiteral("(?:%1|%2|%3)")
+        .arg(QRegularExpression::escape(vol),
+             QRegularExpression::escape(padded2.right(2)),
+             QRegularExpression::escape(padded3.right(3)));
+
+    const QRegularExpression direct(
+        QStringLiteral(R"((?:\bv|vol\.?\s*|volume\s*|\b)%1\b)").arg(escapedVol),
+        QRegularExpression::CaseInsensitiveOption);
+    if (direct.match(title).hasMatch()) {
+        return true;
+    }
+
+    const QRegularExpression range(
+        QStringLiteral(R"(\bv0*(\d{1,3})\s*-\s*0*(\d{1,3})\b)"),
+        QRegularExpression::CaseInsensitiveOption);
+    auto it = range.globalMatch(title);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const int start = m.captured(1).toInt();
+        const int end = m.captured(2).toInt();
+        if (start <= volumeNumber && volumeNumber <= end) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // anonymous namespace
@@ -69,17 +105,39 @@ void NyaaRuntimeSource::loadTrustJson(const QString& path)
         return;
     }
     // PHASE 13: when v2 schema lands (chapter-mode uploaders, etc.), enforce schemaVersion strictly.
-    for (const auto& v : root.value("tier1").toArray())   m_tier1.insert(v.toString());
-    for (const auto& v : root.value("tier2").toArray())   m_tier2.insert(v.toString());
-    for (const auto& v : root.value("blocked").toArray()) m_blocked.insert(v.toString());
+    for (const auto& v : root.value("tier1").toArray()) {
+        const QString uploader = normaliseUploader(v.toString());
+        if (!uploader.isEmpty()) m_tier1.insert(uploader);
+    }
+    for (const auto& v : root.value("tier2").toArray()) {
+        const QString uploader = normaliseUploader(v.toString());
+        if (!uploader.isEmpty()) m_tier2.insert(uploader);
+    }
+    for (const auto& v : root.value("blocked").toArray()) {
+        const QString uploader = normaliseUploader(v.toString());
+        if (!uploader.isEmpty()) m_blocked.insert(uploader);
+    }
 }
 
 int NyaaRuntimeSource::tierForUploader(const QString& uploader) const
 {
-    if (m_blocked.contains(uploader)) return -1; // skip entirely
-    if (m_tier1.contains(uploader))   return 1;
-    if (m_tier2.contains(uploader))   return 2;
+    const QString normalised = normaliseUploader(uploader);
+    if (m_blocked.contains(normalised)) return -1; // skip entirely
+    if (m_tier1.contains(normalised))   return 1;
+    if (m_tier2.contains(normalised))   return 2;
     return 99;
+}
+
+QString NyaaRuntimeSource::inferUploaderFromTitle(const QString& title) const
+{
+    const QString haystack = normaliseUploader(title);
+    for (const QString& uploader : m_tier1) {
+        if (haystack.contains(uploader)) return uploader;
+    }
+    for (const QString& uploader : m_tier2) {
+        if (haystack.contains(uploader)) return uploader;
+    }
+    return QString();
 }
 
 void NyaaRuntimeSource::search(const QString& seriesTitle, int volumeNumber, int requestId)
@@ -88,19 +146,33 @@ void NyaaRuntimeSource::search(const QString& seriesTitle, int volumeNumber, int
         emit searchFailed(requestId, QStringLiteral("network manager unavailable"));
         return;
     }
-    QUrl url(QString::fromLatin1(kNyaaRssEndpoint));
-    QUrlQuery q;
-    q.addQueryItem(QStringLiteral("page"), QStringLiteral("rss"));
-    q.addQueryItem(QStringLiteral("c"),    QStringLiteral("3_1")); // Literature - English-translated category
-    q.addQueryItem(QStringLiteral("s"),    QStringLiteral("seeders"));
-    q.addQueryItem(QStringLiteral("o"),    QStringLiteral("desc"));
-    q.addQueryItem(QStringLiteral("q"),    buildQueryString(seriesTitle, volumeNumber, m_tier1, m_tier2));
-    url.setQuery(q);
+    // Query broad volume-title variants and rank/filter after RSS parse.
+    // Nyaa's search parser often misses uploader OR clauses and "vNN"
+    // forms; post-result trust ranking is more reliable than over-
+    // constraining the search string.
+    const QStringList queries = buildQueryStrings(seriesTitle, volumeNumber);
+    PendingSearch pending;
+    pending.requestId = requestId;
+    pending.volumeNumber = volumeNumber;
+    pending.pendingReplies = queries.size();
+    m_pending.insert(requestId, pending);
 
-    auto* reply = m_nam->get(QNetworkRequest(url));
-    reply->setProperty("nyaa_requestId", requestId);
-    connect(reply, &QNetworkReply::finished,
-            this, &NyaaRuntimeSource::onReplyFinished);
+    for (const QString& query : queries) {
+        QUrl url(QString::fromLatin1(kNyaaRssEndpoint));
+        QUrlQuery q;
+        q.addQueryItem(QStringLiteral("page"), QStringLiteral("rss"));
+        q.addQueryItem(QStringLiteral("c"),    QStringLiteral("3_1")); // Literature - English-translated category
+        q.addQueryItem(QStringLiteral("s"),    QStringLiteral("seeders"));
+        q.addQueryItem(QStringLiteral("o"),    QStringLiteral("desc"));
+        q.addQueryItem(QStringLiteral("q"),    query);
+        url.setQuery(q);
+
+        auto* reply = m_nam->get(QNetworkRequest(url));
+        reply->setProperty("nyaa_requestId", requestId);
+        reply->setProperty("nyaa_query", query);
+        connect(reply, &QNetworkReply::finished,
+                this, &NyaaRuntimeSource::onReplyFinished);
+    }
 }
 
 void NyaaRuntimeSource::onReplyFinished()
@@ -109,14 +181,13 @@ void NyaaRuntimeSource::onReplyFinished()
     if (!reply) return;
     reply->deleteLater();
 
-    const int requestId = reply->property("nyaa_requestId").toInt();
-    if (reply->error() != QNetworkReply::NoError) {
-        emit searchFailed(requestId, reply->errorString());
-        return;
-    }
+    finishBatchedReply(reply);
+}
 
+QList<NyaaSourceCandidate> NyaaRuntimeSource::parseCandidates(const QByteArray& payload) const
+{
     QList<NyaaSourceCandidate> out;
-    QXmlStreamReader xml(reply->readAll());
+    QXmlStreamReader xml(payload);
     NyaaSourceCandidate cur;
     bool inItem = false;
     QString currentTag;
@@ -135,6 +206,9 @@ void NyaaRuntimeSource::onReplyFinished()
             }
         } else if (t == QXmlStreamReader::EndElement) {
             if (xml.name() == QStringLiteral("item") && inItem) {
+                if (cur.uploader.isEmpty()) {
+                    cur.uploader = inferUploaderFromTitle(cur.title);
+                }
                 cur.tier = tierForUploader(cur.uploader);
                 if (cur.tier >= 0) out.append(cur);
                 inItem = false;
@@ -172,7 +246,56 @@ void NyaaRuntimeSource::onReplyFinished()
                   return a.seeders > b.seeders;
               });
 
-    emit searchSucceeded(requestId, out);
+    return out;
+}
+
+void NyaaRuntimeSource::finishBatchedReply(QNetworkReply* reply)
+{
+    const int requestId = reply->property("nyaa_requestId").toInt();
+    auto it = m_pending.find(requestId);
+    if (it == m_pending.end()) {
+        return;
+    }
+
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString query = reply->property("nyaa_query").toString();
+        it->errors.append(QStringLiteral("%1: %2").arg(query, reply->errorString()));
+    } else {
+        const QList<NyaaSourceCandidate> parsed = parseCandidates(reply->readAll());
+        for (const NyaaSourceCandidate& cand : parsed) {
+            if (!titleMentionsVolume(cand.title, it->volumeNumber)) {
+                continue;
+            }
+            if (!cand.infoHash.isEmpty()) {
+                if (it->seenInfoHashes.contains(cand.infoHash)) {
+                    continue;
+                }
+                it->seenInfoHashes.insert(cand.infoHash);
+            }
+            it->results.append(cand);
+        }
+    }
+
+    it->pendingReplies -= 1;
+    if (it->pendingReplies > 0) {
+        return;
+    }
+
+    QList<NyaaSourceCandidate> results = it->results;
+    const QStringList errors = it->errors;
+    m_pending.erase(it);
+
+    std::stable_sort(results.begin(), results.end(),
+              [](const NyaaSourceCandidate& a, const NyaaSourceCandidate& b) {
+                  if (a.tier != b.tier) return a.tier < b.tier;
+                  return a.seeders > b.seeders;
+              });
+
+    if (results.isEmpty() && !errors.isEmpty()) {
+        emit searchFailed(requestId, errors.join(QStringLiteral("; ")));
+        return;
+    }
+    emit searchSucceeded(requestId, results);
 }
 
 } // namespace tankoban::manga

@@ -66,7 +66,9 @@ ArchiveValidationResult
 PremiumArchiveValidator::validate(const QString& cbzPath, int expectedPageCount)
 {
     const QFileInfo fi(cbzPath);
-    if (fi.suffix().toLower() != QLatin1String("cbz")) {
+    const QString fileName = fi.fileName().toLower();
+    if (fi.suffix().toLower() != QLatin1String("cbz") &&
+        !fileName.endsWith(QLatin1String(".cbz.tankoban-part"))) {
         return fail(ArchiveValidationCode::NotCbzExtension,
                     QStringLiteral("file extension is not .cbz"));
     }
