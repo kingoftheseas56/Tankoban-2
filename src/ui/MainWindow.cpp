@@ -783,6 +783,9 @@ void MainWindow::buildPageStack()
     // TankoLibraryPage). Hoisted at MainWindow scope post-SOURCES_SIDEBAR.
     auto *torrentClient = new TorrentClient(m_bridge, this);
     m_torrentClient = torrentClient;
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — hand TransferQueue to
+    // TorrentClient. Subsequent T1.9 makes addTorrent/addMagnet consult it.
+    torrentClient->setTransferQueue(m_transferQueue);
     dbg("4e-torrentclient-created");
 
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire the stream-side

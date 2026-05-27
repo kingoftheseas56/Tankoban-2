@@ -1,6 +1,7 @@
 #include "TorrentClient.h"
 #include "LegacyImporter.h"  // TORRENT_PERSISTENCE_COLLAPSE P1.6 first-boot importer
 #include "TorrentEngine.h"
+#include "core/queue/TransferQueue.h"  // TANKORENT_QUALITY_AND_QUEUE P1 T1.8
 #include "core/CoreBridge.h"
 #include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
@@ -704,6 +705,25 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     // restart). The 2s heuristic delay is gone.
 }
 
+// TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — install the per-show
+// transfer lane queue. T1.9 builds the actual gate on addTorrent/addMagnet
+// entry; this setter is wire-only — it stores the pointer and subscribes to
+// itemStateChanged so a later commit can react to queue advances.
+void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
+{
+    m_transferQueue = q;
+    if (!q) return;
+    connect(q, &tankoban::queue::TransferQueue::itemStateChanged,
+            this, [this](const QString& transferId,
+                         tankoban::queue::TransferState newState) {
+        // T1.9 turns this into a real handler: when the queue advances and a
+        // pending args entry exists for transferId, pop it and call the
+        // libtorrent add path that was deferred at enqueue time.
+        Q_UNUSED(transferId);
+        Q_UNUSED(newState);
+    });
+}
+
 TorrentClient::~TorrentClient()
 {
     m_engine->stop();
@@ -841,6 +861,24 @@ void TorrentClient::saveStreamBulkGroups()
     // queries, devBulkGroupsSnapshot, isTerminalStreamBulkState helpers)
     // still serve from it; those readers move to the repo in Phase 4 along
     // with the deletion of the map itself.
+    //
+    // STREAM_BULK_GROUPS_LOAD_REGRESSION 2026-05-23 (Agent 4) — Phase 3.5
+    // dropped the JsonStore WRITE but the matching READ-side cutover never
+    // shipped: loadStreamBulkGroups still reads from JsonStore. Net effect:
+    // every Tankoban restart loads an EMPTY bulk-group map, so
+    // publishStreamBulkItemsForTorrent + retryStreamBulkPublishing no-op on
+    // the m_streamBulkGroups.isEmpty() early-return, and any download that
+    // doesn't finish in one continuous session never publishes (files stay
+    // in .tankoban-partial/, no registerEpisode fires, click-gate in
+    // StreamDetailView falls through to source-picker). Restoring the JSON
+    // write here is the minimum-LOC fix that closes the regression class
+    // until Phase 4 lands a proper SQLite read+rich-schema migration. The
+    // SQLite mirror writes above continue, so Phase 4 will be additive.
+    if (m_bridge) {
+        QJsonObject wrap;
+        wrap[QStringLiteral("groups")] = m_streamBulkGroups;
+        m_bridge->store().write(STREAM_BULK_GROUPS_FILE, wrap);
+    }
 }
 
 QJsonObject TorrentClient::streamBulkGroups() const

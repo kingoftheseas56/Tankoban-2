@@ -10,6 +10,9 @@
 #include <QSet>
 #include <QStringList>
 #include <optional>
+#include <QHash>
+
+namespace tankoban::queue { class TransferQueue; }
 
 // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — TorrentRepository is a
 // QObject-based member with internal QSqlDatabase state; the by-value member
@@ -93,6 +96,18 @@ struct StreamBulkGroupRecord {
     qint64  updatedAtMs = 0;
 };
 
+// TANKORENT_QUALITY_AND_QUEUE P1 (2026-05-27) — deferred-start args stored
+// while a transfer waits its turn in its show's TransferQueue lane. When
+// the queue advances (itemStateChanged → Running), TorrentClient pops the
+// args and calls the libtorrent path that was deferred at enqueue time.
+struct TransferStartArgs {
+    QString magnetOrPath;   // magnet URI or .torrent path
+    QString showId;         // lane key (empty = standalone, runs immediately)
+    QString transferId;     // infohash (used as the queue key + libtorrent identity)
+    QString displayTitle;
+    bool isMagnet = true;   // false → magnetOrPath is a file path
+};
+
 // ── TorrentClient ───────────────────────────────────────────────────────────
 class TorrentClient : public QObject
 {
@@ -103,6 +118,12 @@ public:
     ~TorrentClient();
 
     TorrentEngine* engine() const { return m_engine; }
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — install the per-show
+    // transfer lane queue. Non-owning; pointer must outlive TorrentClient
+    // (MainWindow owns both). T1.9 builds the actual gate on addTorrent /
+    // addMagnet entry; this setter is wire-only.
+    void setTransferQueue(tankoban::queue::TransferQueue* q);
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — exposes the
     // SQLite-backed durable store so peers like StreamDownloadIndex can be
@@ -390,6 +411,13 @@ private:
     CoreBridge*          m_bridge;
     TorrentEngine*       m_engine;
     StreamDownloadIndex* m_streamDownloadIndex = nullptr;  // STREAM_DOWNLOADED_LIBRARY Phase 2; non-owning
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — non-owning queue
+    // pointer + pending-args staging map. T1.9 populates m_pendingByTransferId
+    // when a transfer is enqueued behind a current; pops it when the queue
+    // advances and emits itemStateChanged(Running).
+    tankoban::queue::TransferQueue* m_transferQueue = nullptr;
+    QHash<QString, TransferStartArgs> m_pendingByTransferId;
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — SQLite-backed
     // durable store that will replace the legacy m_records / m_streamBulkGroups
