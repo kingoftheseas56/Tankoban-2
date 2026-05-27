@@ -1543,8 +1543,19 @@ void TankorentPage::startSearch()
     QString sourceId   = m_sourceCombo->currentData().toString();
     QString categoryId = m_categoryCombo->currentData().toString();
 
+    // TANKORENT_QUALITY_AND_QUEUE P2 T2.2 (2026-05-27) — result limit raised
+    // 80 -> 300 to restore source-site parity. The parity probe
+    // (scripts/nyaa-parity-probe.sh) measured nyaa.si returning 300+ rows for
+    // high-volume anime queries ("One Piece", "Naruto") while Tankorent
+    // truncated at 80 — barely one page. 300 matches NyaaIndexer's natural
+    // NYAA_MAX_PAGES(4) x NYAA_PAGE_SIZE(75) ceiling, so we surface the source's
+    // full first-4-pages instead of one. Per-indexer upper bound — sparse
+    // sources (YTS / EZTV) still stop early; only high-volume ones go deep.
+    // Display soft-cap (kSoftCapRows=100, with "show all") protects the table
+    // from rendering all 300 at once.
+    static constexpr int kSearchResultLimit = 300;
     m_currentSearchHandle = m_searchService->startSearch(
-        mediaType, sourceId, query, 80, categoryId);
+        mediaType, sourceId, query, kSearchResultLimit, categoryId);
 
     if (m_currentSearchHandle.isEmpty()) {
         m_searchStatus->setText(
