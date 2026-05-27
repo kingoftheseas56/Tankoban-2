@@ -91,6 +91,162 @@ struct TwoPagePair {
     bool unpairedSingle = false;
 };
 
+struct TwoPagePairingPage {
+    bool isSpread = false;
+    bool hasSpreadOverride = false;
+    bool spreadOverride = false;
+};
+
+inline int clampTwoPagePairingIndex(int index, int pageCount)
+{
+    if (pageCount <= 0) return 0;
+    return qBound(0, index, pageCount - 1);
+}
+
+inline bool resolveTwoPageSpread(const QVector<TwoPagePairingPage>& pages, int index)
+{
+    if (pages.isEmpty()) return false;
+    const int i = clampTwoPagePairingIndex(index, pages.size());
+    const auto& page = pages[i];
+
+    // Build 29 (Tankoban-Max parity): explicit force-normal / force-spread
+    // override wins over any decoded auto spread flag.
+    if (page.hasSpreadOverride) return page.spreadOverride;
+    return page.isSpread;
+}
+
+inline int twoPageExtraSlotsBefore(const QVector<TwoPagePairingPage>& pages, int index)
+{
+    if (pages.isEmpty()) return 0;
+    const int stop = qBound(0, index, pages.size());
+    int extra = 0;
+    // Build 17 (Tankoban-Max parity): stitched spread consumes an extra
+    // physical slot for downstream pairing. Cover page 0 is excluded.
+    for (int j = 1; j < stop; ++j) {
+        if (resolveTwoPageSpread(pages, j)) ++extra;
+    }
+    return extra;
+}
+
+inline int twoPageEffectiveIndex(const QVector<TwoPagePairingPage>& pages, int index)
+{
+    if (pages.isEmpty()) return 0;
+    const int i = clampTwoPagePairingIndex(index, pages.size());
+    if (i <= 0) return i;
+    return i + twoPageExtraSlotsBefore(pages, i);
+}
+
+inline int snapTwoPageIndex(const QVector<TwoPagePairingPage>& pages, int index, bool couplingNudge)
+{
+    if (pages.isEmpty()) return 0;
+    const int idx = clampTwoPagePairingIndex(index, pages.size());
+    if (idx == 0) return 0;
+    if (resolveTwoPageSpread(pages, idx)) return idx;
+
+    const int nudge = couplingNudge ? 1 : 0;
+    const int effective = twoPageEffectiveIndex(pages, idx) + nudge;
+    if ((effective % 2) == 0) {
+        const int pairStart = idx - 1;
+        if (pairStart <= 0) return idx;
+        if (resolveTwoPageSpread(pages, pairStart)) return idx;
+        return pairStart;
+    }
+    return idx;
+}
+
+inline TwoPagePair getTwoPagePair(const QVector<TwoPagePairingPage>& pages, int index, bool couplingNudge)
+{
+    TwoPagePair pair;
+    if (pages.isEmpty()) return pair;
+
+    const int start = snapTwoPageIndex(pages, index, couplingNudge);
+
+    if (start == 0) {
+        pair.rightIndex = 0;
+        pair.isSpread = resolveTwoPageSpread(pages, 0);
+        pair.coverAlone = !pair.isSpread;
+        return pair;
+    }
+
+    if (resolveTwoPageSpread(pages, start)) {
+        pair.rightIndex = start;
+        pair.isSpread = true;
+        return pair;
+    }
+
+    const int nudge = couplingNudge ? 1 : 0;
+    if (((twoPageEffectiveIndex(pages, start) + nudge) % 2) == 1) {
+        pair.rightIndex = start;
+        const int leftIndex = start + 1;
+        if (leftIndex >= pages.size() || resolveTwoPageSpread(pages, leftIndex)) {
+            pair.unpairedSingle = true;
+            return pair;
+        }
+        pair.leftIndex = leftIndex;
+        return pair;
+    }
+
+    pair.rightIndex = start;
+    pair.unpairedSingle = true;
+    return pair;
+}
+
+inline QVector<TwoPagePair> buildTwoPagePairs(const QVector<TwoPagePairingPage>& pages, bool couplingNudge)
+{
+    QVector<TwoPagePair> pairs;
+    const int total = pages.size();
+    if (total == 0) return pairs;
+
+    int extraSlots = 0;
+    int idx = 0;
+    while (idx < total) {
+        TwoPagePair pair;
+
+        if (idx == 0) {
+            pair.rightIndex = 0;
+            pair.isSpread = resolveTwoPageSpread(pages, 0);
+            pair.coverAlone = !pair.isSpread;
+            pairs.append(pair);
+            ++idx;
+            continue;
+        }
+
+        if (resolveTwoPageSpread(pages, idx)) {
+            pair.rightIndex = idx;
+            pair.isSpread = true;
+            pairs.append(pair);
+            // Build 17 (Tankoban-Max parity): stitched spread consumes an
+            // extra slot for every following pair decision.
+            ++extraSlots;
+            ++idx;
+            continue;
+        }
+
+        const int nudge = couplingNudge ? 1 : 0;
+        const int parity = (idx + extraSlots + nudge) % 2;
+        if (parity == 1) {
+            pair.rightIndex = idx;
+            const int leftIndex = idx + 1;
+            if (leftIndex < total && !resolveTwoPageSpread(pages, leftIndex)) {
+                pair.leftIndex = leftIndex;
+                pairs.append(pair);
+                idx += 2;
+            } else {
+                pair.unpairedSingle = true;
+                pairs.append(pair);
+                ++idx;
+            }
+        } else {
+            pair.rightIndex = idx;
+            pair.unpairedSingle = true;
+            pairs.append(pair);
+            ++idx;
+        }
+    }
+
+    return pairs;
+}
+
 class ScrubBar : public QWidget {
     Q_OBJECT
 public:
@@ -210,6 +366,7 @@ private:
     bool resolveSpread(int index) const;
     bool isSpreadIndex(int index) const;
     int  pageAdvanceCount() const;
+    QVector<TwoPagePairingPage> pairingPages() const;
     void buildCanonicalPairingUnits();
     void invalidatePairing();
     const TwoPagePair* pairForPage(int pageIndex) const;
@@ -307,10 +464,10 @@ private:
     QMap<int, int> m_unitByPage;
 
     // Coupling
-    QString m_couplingMode  = "auto";
+    QString m_couplingMode  = "manual";
     QString m_couplingPhase = "normal";
     float   m_couplingConfidence = 0.0f;
-    bool    m_couplingResolved = false;
+    bool    m_couplingResolved = true;
     int     m_couplingProbeAttempts = 0;
 
     // Spread overrides

@@ -1083,10 +1083,26 @@ void ComicReader::openBook(const QString& cbzPath,
 
 bool ComicReader::resolveSpread(int index) const
 {
-    if (index <= 0 || index >= m_pageMeta.size()) return false;
-    auto it = m_spreadOverrides.find(index);
-    if (it != m_spreadOverrides.end()) return it.value();
-    return m_pageMeta[index].isSpread;
+    if (index < 0 || index >= m_pageMeta.size()) return false;
+    const auto pages = pairingPages();
+    return resolveTwoPageSpread(pages, index);
+}
+
+QVector<TwoPagePairingPage> ComicReader::pairingPages() const
+{
+    QVector<TwoPagePairingPage> pages;
+    pages.reserve(m_pageMeta.size());
+    for (int i = 0; i < m_pageMeta.size(); ++i) {
+        TwoPagePairingPage page;
+        page.isSpread = m_pageMeta[i].isSpread;
+        auto it = m_spreadOverrides.find(i);
+        if (it != m_spreadOverrides.end()) {
+            page.hasSpreadOverride = true;
+            page.spreadOverride = it.value();
+        }
+        pages.append(page);
+    }
+    return pages;
 }
 
 bool ComicReader::isSpreadIndex(int index) const { return resolveSpread(index); }
@@ -1102,54 +1118,11 @@ void ComicReader::buildCanonicalPairingUnits()
     m_canonicalUnits.clear();
     m_unitByPage.clear();
 
-    int total = m_pageNames.size();
-    if (total == 0) return;
-
-    int nudge = (m_couplingPhase == "shifted") ? 1 : 0;
-    int extraSlots = 0;
-    int idx = 0;
-
-    while (idx < total) {
-        TwoPagePair unit;
-
-        if (idx == 0) {
-            // Cover always alone
-            unit.rightIndex = 0;
-            unit.coverAlone = true;
-            m_unitByPage[0] = m_canonicalUnits.size();
-            m_canonicalUnits.append(unit);
-            idx++;
-            continue;
-        }
-
-        bool isSpr = resolveSpread(idx);
-        if (isSpr) {
-            unit.rightIndex = idx;
-            unit.isSpread = true;
-            m_unitByPage[idx] = m_canonicalUnits.size();
-            m_canonicalUnits.append(unit);
-            extraSlots++;
-            idx++;
-            continue;
-        }
-
-        int parity = (idx + extraSlots + nudge) % 2;
-        if (parity == 1 && idx + 1 < total && !resolveSpread(idx + 1)) {
-            // Pair two pages
-            unit.rightIndex = idx;
-            unit.leftIndex = idx + 1;
-            m_unitByPage[idx] = m_canonicalUnits.size();
-            m_unitByPage[idx + 1] = m_canonicalUnits.size();
-            m_canonicalUnits.append(unit);
-            idx += 2;
-        } else {
-            // Single page
-            unit.rightIndex = idx;
-            unit.unpairedSingle = true;
-            m_unitByPage[idx] = m_canonicalUnits.size();
-            m_canonicalUnits.append(unit);
-            idx++;
-        }
+    m_canonicalUnits = buildTwoPagePairs(pairingPages(), m_couplingPhase == "shifted");
+    for (int unitIndex = 0; unitIndex < m_canonicalUnits.size(); ++unitIndex) {
+        const auto& unit = m_canonicalUnits[unitIndex];
+        if (unit.rightIndex >= 0) m_unitByPage[unit.rightIndex] = unitIndex;
+        if (unit.leftIndex >= 0) m_unitByPage[unit.leftIndex] = unitIndex;
     }
 }
 
@@ -1552,12 +1525,12 @@ void ComicReader::displayCurrentPage()
 
         // Position pages: right page in right half, left page in left half
         // RTL swaps which pixmap goes where
-        const QPixmap& pageL = m_rtl ? m_currentPixmap : m_secondPixmap;
-        const QPixmap& pageR = m_rtl ? m_secondPixmap : m_currentPixmap;
-        int plw = m_rtl ? rw : lw;
-        int plh = m_rtl ? rh : lh;
-        int prw = m_rtl ? lw : rw;
-        int prh = m_rtl ? lh : rh;
+        const QPixmap& pageL = m_rtl ? m_secondPixmap : m_currentPixmap;
+        const QPixmap& pageR = m_rtl ? m_currentPixmap : m_secondPixmap;
+        int plw = m_rtl ? lw : rw;
+        int plh = m_rtl ? lh : rh;
+        int prw = m_rtl ? rw : lw;
+        int prh = m_rtl ? rh : lh;
 
         // Left page: right-aligned within left half, centered vertically
         int dxL = leftW - plw;
@@ -1684,12 +1657,17 @@ void ComicReader::saveCurrentProgress()
     QJsonObject prev = m_bridge->progress("comics", itemIdForPath(m_cbzPath));
     int maxSeen = qMax(prev["maxPageIndexSeen"].toInt(0), m_currentPage);
 
-    QJsonArray spreadsArr, normalsArr;
+    QJsonArray spreadsArr, normalsArr, forceSpreadArr, forceNormalArr;
     for (int i = 0; i < m_pageMeta.size(); ++i) {
         if (m_pageMeta[i].decoded) {
             if (m_pageMeta[i].isSpread) spreadsArr.append(i);
             else normalsArr.append(i);
         }
+    }
+    for (auto it = m_spreadOverrides.constBegin(); it != m_spreadOverrides.constEnd(); ++it) {
+        if (it.key() < 0 || it.key() >= m_pageMeta.size()) continue;
+        if (it.value()) forceSpreadArr.append(it.key());
+        else forceNormalArr.append(it.key());
     }
 
     QJsonArray bookmarksArr;
@@ -1702,6 +1680,8 @@ void ComicReader::saveCurrentProgress()
     data["maxPageIndexSeen"]   = maxSeen;
     data["knownSpreadIndices"] = spreadsArr;
     data["knownNormalIndices"] = normalsArr;
+    data["forceSpreadIndices"] = forceSpreadArr;
+    data["forceNormalIndices"] = forceNormalArr;
     data["updatedAt"]          = QDateTime::currentMSecsSinceEpoch();
     data["couplingMode"]       = m_couplingMode;
     data["couplingPhase"]      = m_couplingPhase;
@@ -1742,6 +1722,19 @@ int ComicReader::restoreSavedPage()
     for (const auto& v : data["knownSpreadIndices"].toArray()) {
         int i = v.toInt();
         if (i >= 0 && i < m_pageMeta.size()) m_pageMeta[i].isSpread = true;
+    }
+    for (const auto& v : data["knownNormalIndices"].toArray()) {
+        int i = v.toInt();
+        if (i >= 0 && i < m_pageMeta.size()) m_pageMeta[i].isSpread = false;
+    }
+    m_spreadOverrides.clear();
+    for (const auto& v : data["forceNormalIndices"].toArray()) {
+        int i = v.toInt();
+        if (i >= 0 && i < m_pageMeta.size()) m_spreadOverrides[i] = false;
+    }
+    for (const auto& v : data["forceSpreadIndices"].toArray()) {
+        int i = v.toInt();
+        if (i >= 0 && i < m_pageMeta.size()) m_spreadOverrides[i] = true;
     }
 
     // Restore coupling — prevents re-detection on re-open
@@ -1882,16 +1875,12 @@ double ComicReader::edgeContinuityCost(const QPixmap& leftPix, const QPixmap& ri
 QVector<int> ComicReader::autoPhaseSampleIndexes(bool shifted)
 {
     QVector<int> samples;
-    int total = m_pageNames.size();
-    int probeLimit = qMin(total - 1, COUPLING_PROBE_MAX_PAGES);
-    int nudge = shifted ? 1 : 0;
-    int extraSlots = 0;
-
-    for (int idx = 1; idx < probeLimit && samples.size() < COUPLING_MAX_SAMPLES; ++idx) {
-        if (resolveSpread(idx)) { extraSlots++; continue; }
-        int parity = (idx + extraSlots + nudge) % 2;
-        if (parity == 1 && idx + 1 < total && !resolveSpread(idx + 1))
-            samples.append(idx);
+    const auto pairs = buildTwoPagePairs(pairingPages(), shifted);
+    for (const auto& pair : pairs) {
+        if (pair.rightIndex <= 0) continue;
+        if (pair.rightIndex >= COUPLING_PROBE_MAX_PAGES) break;
+        if (pair.leftIndex >= 0) samples.append(pair.rightIndex);
+        if (samples.size() >= COUPLING_MAX_SAMPLES) break;
     }
     return samples;
 }
@@ -1989,6 +1978,7 @@ void ComicReader::showSpreadOverrideMenu(int pageIndex, const QPoint& globalPos)
             buildCanonicalPairingUnits();
             showPage(m_currentPage);
         }
+        saveCurrentProgress();
     } else if (chosen == resetAction) {
         m_spreadOverrides.clear();
         invalidatePairing();
@@ -1996,6 +1986,7 @@ void ComicReader::showSpreadOverrideMenu(int pageIndex, const QPoint& globalPos)
             buildCanonicalPairingUnits();
             showPage(m_currentPage);
         }
+        saveCurrentProgress();
     }
 }
 
@@ -2006,7 +1997,9 @@ void ComicReader::toggleReadingDirection()
     if (!m_isDoublePage) return;
     m_rtl = !m_rtl;
     showToast(m_rtl ? "Right to Left" : "Left to Right");
+    m_displayCachePage = -1;
     displayCurrentPage();
+    saveSeriesSettings();
 }
 
 // ── Portrait Width ──────────────────────────────────────────────────────────
@@ -3566,7 +3559,8 @@ void ComicReader::contextMenuEvent(QContextMenuEvent* event)
             m_spreadOverrides[p] = !cur;
             invalidatePairing();
             buildCanonicalPairingUnits();
-            displayCurrentPage();
+            showPage(m_currentPage);
+            saveCurrentProgress();
         });
 
         QMenu* shadowMenu = menu->addMenu("Gutter Shadow");
@@ -4036,8 +4030,10 @@ void ComicReader::resetSeriesSettings()
     m_portraitWidthPct = 78;
     m_readerMode = ReaderMode::DoublePage;
     m_hudPinned = true;
+    m_couplingMode = "manual";
     m_couplingPhase = "normal";
     m_gutterShadow = 0.35;
+    m_couplingResolved = true;
     m_scalingQuality = Qt::SmoothTransformation;
     m_zoomPct = 100;
     m_panX = 0;
