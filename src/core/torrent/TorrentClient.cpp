@@ -705,10 +705,12 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     // restart). The 2s heuristic delay is gone.
 }
 
-// TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — install the per-show
-// transfer lane queue. T1.9 builds the actual gate on addTorrent/addMagnet
-// entry; this setter is wire-only — it stores the pointer and subscribes to
-// itemStateChanged so a later commit can react to queue advances.
+// TANKORENT_QUALITY_AND_QUEUE P1 T1.8 + T1.9 (2026-05-27) — install the
+// per-show transfer lane queue and wire the queue-advance handler. When a
+// lane's current item finishes (finishCurrent) the queue emits
+// itemStateChanged(transferId, Running) for the next-in-line item. If we
+// have its TransferStartArgs staged in m_pendingByTransferId, pop them and
+// invoke addMagnetHeadless to actually fire the libtorrent add.
 void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
 {
     m_transferQueue = q;
@@ -716,12 +718,70 @@ void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
     connect(q, &tankoban::queue::TransferQueue::itemStateChanged,
             this, [this](const QString& transferId,
                          tankoban::queue::TransferState newState) {
-        // T1.9 turns this into a real handler: when the queue advances and a
-        // pending args entry exists for transferId, pop it and call the
-        // libtorrent add path that was deferred at enqueue time.
-        Q_UNUSED(transferId);
-        Q_UNUSED(newState);
+        if (newState != tankoban::queue::TransferState::Running) return;
+        auto it = m_pendingByTransferId.find(transferId);
+        if (it == m_pendingByTransferId.end()) return;
+        const TransferStartArgs args = it.value();
+        m_pendingByTransferId.erase(it);
+        if (args.isMagnet) {
+            addMagnetHeadless(args.magnetOrPath, args.category, args.destinationPath);
+        } else {
+            qWarning() << "TransferQueue: .torrent path defer not supported in P1"
+                       << "(transferId=" << transferId.left(16) << ")";
+        }
     });
+}
+
+QString TorrentClient::addMagnetForShow(const QString& magnetUri,
+                                        const QString& category,
+                                        const QString& destinationPath,
+                                        const QString& imdbId,
+                                        int season)
+{
+    // Resolve infohash up-front so we know the queue key + the duplicate state.
+    const QString hash = extractInfoHash(magnetUri).toLower();
+    if (hash.isEmpty()) {
+        qWarning() << "addMagnetForShow: could not parse infohash from magnet URI";
+        return {};
+    }
+    if (isDuplicate(magnetUri)) {
+        // Already in the system — treat as a no-op success, return existing hash.
+        return hash;
+    }
+
+    // No queue installed OR no show identity → bypass lane discipline and start
+    // immediately via the existing headless entry. Same behavior as today.
+    const QString showId = imdbId.isEmpty() ? QString() : QStringLiteral("imdb:") + imdbId;
+    if (!m_transferQueue || showId.isEmpty()) {
+        return addMagnetHeadless(magnetUri, category, destinationPath);
+    }
+
+    // Build the queue item.
+    tankoban::queue::TransferItem item;
+    item.transferId = hash;
+    item.showId = showId;
+    item.displayTitle = hash;  // Phase 5 will resolve via show-metadata cache
+    if (season > 0) item.seasonNumber = season;
+
+    const int pos = m_transferQueue->enqueue(item);
+    if (pos == 0) {
+        // Lane was empty — we are the new current. Start immediately.
+        return addMagnetHeadless(magnetUri, category, destinationPath);
+    }
+
+    // Queued behind current. Stage the args; queue-advance handler from
+    // setTransferQueue will fire addMagnetHeadless when our turn comes.
+    TransferStartArgs args;
+    args.magnetOrPath = magnetUri;
+    args.category = category;
+    args.destinationPath = destinationPath;
+    args.showId = showId;
+    args.transferId = hash;
+    args.displayTitle = item.displayTitle;
+    args.season = season;
+    args.isMagnet = true;
+    m_pendingByTransferId.insert(hash, args);
+    return hash;  // prospective hash; libtorrent add fires when queue advances
 }
 
 TorrentClient::~TorrentClient()
@@ -3333,12 +3393,14 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     QString category;
     QString savePath;
     QString streamGroupId;
+    QString imdbId;  // TANKORENT_QUALITY_AND_QUEUE P1 T1.9 — lane key derivation
     if (const auto row = m_repo.getTorrent(infoHash)) {
         m_repo.updateTorrentState(
             infoHash, tankoban::torrent::TorrentState::Completed);
         category = row->category;
         savePath = row->savePath;
         streamGroupId = row->streamGroupId;
+        imdbId = row->imdbId;
         JsonlEventLog::instance().emitEvent(
             QStringLiteral("torrent.state_changed"),
             QStringLiteral("completed"),
@@ -3392,6 +3454,17 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
                 break;
             }
         }
+    }
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.9 (2026-05-27) — advance the show's
+    // transfer lane. If the completed torrent was queued under an imdbId
+    // (i.e. added via addMagnetForShow), tell TransferQueue the current lane
+    // item is done; the queue then emits itemStateChanged(Running) for the
+    // next item which our setTransferQueue lambda picks up to start.
+    if (m_transferQueue && !imdbId.isEmpty()) {
+        const QString showId = QStringLiteral("imdb:") + imdbId;
+        m_transferQueue->finishCurrent(
+            showId, tankoban::queue::TransferState::Completed);
     }
 }
 

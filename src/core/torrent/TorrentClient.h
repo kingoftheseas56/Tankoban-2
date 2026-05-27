@@ -99,13 +99,21 @@ struct StreamBulkGroupRecord {
 // TANKORENT_QUALITY_AND_QUEUE P1 (2026-05-27) — deferred-start args stored
 // while a transfer waits its turn in its show's TransferQueue lane. When
 // the queue advances (itemStateChanged → Running), TorrentClient pops the
-// args and calls the libtorrent path that was deferred at enqueue time.
+// args and calls addMagnetHeadless to actually start the libtorrent transfer.
+//
+// Only carries the addMagnetHeadless parameter set + lane-keying identity.
+// Callers that need richer AddTorrentConfig fields (selectedIndices, file
+// priorities, etc.) go through startDownload directly and stay outside the
+// lane discipline for Phase 1 — future phases extend coverage.
 struct TransferStartArgs {
-    QString magnetOrPath;   // magnet URI or .torrent path
-    QString showId;         // lane key (empty = standalone, runs immediately)
-    QString transferId;     // infohash (used as the queue key + libtorrent identity)
+    QString magnetOrPath;       // magnet URI (isMagnet=true) or .torrent path
+    QString category;           // "videos" / "comics" / "books"
+    QString destinationPath;    // resolved destination root
+    QString showId;             // lane key (empty = standalone, immediate start)
+    QString transferId;         // infohash — queue key + libtorrent identity
     QString displayTitle;
-    bool isMagnet = true;   // false → magnetOrPath is a file path
+    int     season = 0;         // 0 = unbound / non-show / multi-season pack
+    bool    isMagnet = true;    // false reserved for .torrent file path support
 };
 
 // ── TorrentClient ───────────────────────────────────────────────────────────
@@ -121,9 +129,25 @@ public:
 
     // TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — install the per-show
     // transfer lane queue. Non-owning; pointer must outlive TorrentClient
-    // (MainWindow owns both). T1.9 builds the actual gate on addTorrent /
-    // addMagnet entry; this setter is wire-only.
+    // (MainWindow owns both).
     void setTransferQueue(tankoban::queue::TransferQueue* q);
+
+    // TANKORENT_QUALITY_AND_QUEUE P1 T1.9 (2026-05-27) — queue-aware magnet
+    // add. Routes through TransferQueue: if imdbId is non-empty and the
+    // show's lane already has a current item, the call defers — the actual
+    // libtorrent addMagnetHeadless fires when the queue advances. If imdbId
+    // is empty, behaves like a direct addMagnetHeadless call (standalone =
+    // own one-item lane, immediate start). Returns the infohash on
+    // immediate-start; returns the prospective infohash on defer.
+    //
+    // Callers needing AddTorrentConfig richness beyond magnet/category/dest
+    // should continue to use startDownload directly — Phase 1 lane coverage
+    // is limited to the headless-magnet shape.
+    QString addMagnetForShow(const QString& magnetUri,
+                             const QString& category,
+                             const QString& destinationPath,
+                             const QString& imdbId,
+                             int season);
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — exposes the
     // SQLite-backed durable store so peers like StreamDownloadIndex can be
