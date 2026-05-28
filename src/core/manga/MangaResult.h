@@ -22,6 +22,7 @@ struct ChapterInfo {
     double  chapterNumber = 0.0;
     qint64  dateUpload    = 0;   // ms epoch
     QString source;
+    bool    isVolumeScanned = false;  // WeebCentral violet tick: chapter is from a volume scan
 };
 Q_DECLARE_METATYPE(ChapterInfo)
 

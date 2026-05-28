@@ -18,6 +18,9 @@ public:
     void fetchPages(const QString& chapterId) override;
     void fetchDetail(const MangaResult& preview) override;
 
+    static QList<ChapterInfo> parseChaptersHtmlForTest(const QString& html, const QString& source)
+    { return parseChaptersHtml(html, source); }
+
 private:
     static QList<MangaResult> parseSearchHtml(const QString& html);
     static QList<ChapterInfo> parseChaptersHtml(const QString& html, const QString& source);

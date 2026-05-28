@@ -95,6 +95,14 @@ struct TwoPagePairingPage {
     bool isSpread = false;
     bool hasSpreadOverride = false;
     bool spreadOverride = false;
+    // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). True when this page is the
+    // first page of a stitched chapter inside a synthesized Volume X cbz. The
+    // pairing resets its parity origin here so each chapter's first page shows
+    // alone (cover-style) and the pages after it pair fresh — preventing the
+    // chapter-boundary offset that stitched uncollected chapters otherwise
+    // produce. Only Volume X cbzs (WeebCentral packer's <chapter>_<page>
+    // filenames) ever set this; normal volumes leave it false.
+    bool isChapterStart = false;
 };
 
 inline int clampTwoPagePairingIndex(int index, int pageCount)
@@ -197,7 +205,8 @@ inline QVector<TwoPagePair> buildTwoPagePairs(const QVector<TwoPagePairingPage>&
     const int total = pages.size();
     if (total == 0) return pairs;
 
-    int extraSlots = 0;
+    int extraSlots = 0;       // spreads since the current chapter's parity origin
+    int chapterOrigin = 0;    // index anchoring pairing parity (vol cover or a chapter start)
     int idx = 0;
     while (idx < total) {
         TwoPagePair pair;
@@ -211,23 +220,48 @@ inline QVector<TwoPagePair> buildTwoPagePairs(const QVector<TwoPagePairingPage>&
             continue;
         }
 
+        // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). A chapter boundary
+        // resets the parity origin so each stitched chapter pairs fresh
+        // (cover-alone, then 1+2, 3+4 within the chapter). The page itself is
+        // still rendered below — alone if normal, alone-as-spread if it is a
+        // color spread. For chapter 0 the origin stays 0, so this is a no-op
+        // and the formula below reduces to the original (idx + extraSlots).
+        if (pages[idx].isChapterStart) {
+            chapterOrigin = idx;
+            extraSlots = 0;
+        }
+
         if (resolveTwoPageSpread(pages, idx)) {
             pair.rightIndex = idx;
             pair.isSpread = true;
             pairs.append(pair);
             // Build 17 (Tankoban-Max parity): stitched spread consumes an
-            // extra slot for every following pair decision.
-            ++extraSlots;
+            // extra slot for every following pair decision. A spread that IS
+            // the chapter origin anchors its own chapter, so it does not shift
+            // it — only count spreads strictly after the origin.
+            if (idx != chapterOrigin) ++extraSlots;
+            ++idx;
+            continue;
+        }
+
+        // A normal (non-spread) chapter-start page is forced alone, cover-style.
+        if (pages[idx].isChapterStart) {
+            pair.rightIndex = idx;
+            pair.coverAlone = true;
+            pairs.append(pair);
             ++idx;
             continue;
         }
 
         const int nudge = couplingNudge ? 1 : 0;
-        const int parity = (idx + extraSlots + nudge) % 2;
+        const int parity = ((idx - chapterOrigin) + extraSlots + nudge) % 2;
         if (parity == 1) {
             pair.rightIndex = idx;
             const int leftIndex = idx + 1;
-            if (leftIndex < total && !resolveTwoPageSpread(pages, leftIndex)) {
+            // A chapter-start page must never be grabbed as a left partner —
+            // it has to begin its own chapter alone.
+            if (leftIndex < total && !resolveTwoPageSpread(pages, leftIndex)
+                && !pages[leftIndex].isChapterStart) {
                 pair.leftIndex = leftIndex;
                 pairs.append(pair);
                 idx += 2;
@@ -454,6 +488,13 @@ private:
     // Series context
     QStringList m_seriesCbzList;
     QString     m_seriesName;
+
+    // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). True when the open cbz has
+    // a ".volx" sidecar (written by WeebCentralVolumePacker for synthesized
+    // Volume X packs only). Drives chapter-boundary pairing breaks in
+    // pairingPages(); normal volumes leave it false. Re-evaluated per cbz in
+    // openBook so it stays correct when navigating between volumes.
+    bool        m_isVolumeX = false;
 
     // Modes
     ReaderMode  m_readerMode = ReaderMode::DoublePage;
