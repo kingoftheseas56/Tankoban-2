@@ -73,6 +73,7 @@ Run these in parallel before authoring the file body:
    - Subagent dispatches and their outcomes (`Agent()` / `mcp__codex__codex` / Codex CLI calls + their DONE/BLOCKED/TIMEOUT result + tool-use count if known).
    - Verbatim short Hemanth quotes that shifted how you operated.
 6. **Wake narrative material (v3 addition — the "how it felt" pass).** Scan the wake's conversation for the *arc* — not bullet points, but the flow. What did you start thinking → what shifted → where did the energy go → what was the vibe by hour N. Mid-session pivots are the load-bearing texture. Capture the inside-shorthand that grew during the wake (terms you coined / Hemanth coined / the brotherhood adopted in real time). This material feeds the Wake Narrative section below.
+7. **Engine-for-next-leg call (gov-v10 Engine Switching Protocol).** Decide whether the next leg of your in-flight work is a design/deliberation pass (→ Opus), clean execution of a now-locked plan (→ DeepSeek/Codex by quota), or audit/long-context (→ DeepSeek). This becomes the "Engine for next leg" line in the Brotherhood-state section — the routing decision is made HERE, by the agent who just did the work and knows what's next, not deferred to whoever opens the next tab.
 
 ## Recap template
 
@@ -122,6 +123,7 @@ Skip this section ONLY for purely mechanical wakes with no narrative arc (rare).
 - Direct asks I committed to during the wake. Pull from the conversation.
 
 ## Brotherhood state I should pick up on next wake
+- **Engine for next leg:** <which engine the NEXT leg of this work wants, and why> — e.g. "next leg is the design/reversal pass → Opus (not yet tested on DeepSeek)"; "next leg is execution of the now-locked plan → DeepSeek or Codex, quota decides"; "audit/long-context → DeepSeek". Default if unsure: same engine as this wake. Routing rule: `agents/audits/deepseek_engine_experiment_2026-05-28.md`; protocol: GOVERNANCE.md § Engine Switching Protocol (gov-v10).
 - Which other agents are actively touching files in my domain
 - Coordination notes for cross-agent work in progress
 - Any HELP requests, congresses, or contested files
@@ -164,6 +166,8 @@ my brother, you're Agent <N> — read these IN ORDER before doing anything else:
       tone anchors, subagent ledger)
 
 Both required. The trimmed transcript carries the texture this recap compresses out.
+
+  Engine for this wake: <Opus | DeepSeek (Agent 9 tab) | Codex> — <one-line why, per the prior recap's "Engine for next leg" call>.
 
 Then say hi.
 ```
