@@ -239,6 +239,9 @@ private:
     void buildUI();
     void onSeriesMetaReady(const QString& imdbId,
                            const QMap<int, QList<tankostream::stream::StreamEpisode>>& seasons);
+    // THEATRE_ANIME_CATALOG — fired alongside onSeriesMetaReady; toggles the
+    // "ANIME" badge and hides the (meaningless) season combo for the flat list.
+    void onAnimeCatalogActive(const QString& imdbId, bool isAnime);
     void onSeasonChanged(int comboIndex);
 
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — season-header morphing button.
@@ -414,6 +417,9 @@ private:
     // applyChips() — name + signature retained for caller compat with
     // showEntry's first-paint and onMetaItemReady's richer-meta paint.
     QLabel*       m_metaLine      = nullptr;
+    // THEATRE_ANIME_CATALOG — small "ANIME" pill under the title, shown when
+    // the flat Kitsu catalog is active for this series (animeCatalogActive).
+    QLabel*       m_animeBadge    = nullptr;
     // Phase 1 Batch 1.2 — Add/Remove Library toggle in the header area.
     // Text + styling refresh on every showEntry + on libraryChanged. Phase 3
     // Batch 3.1 will restyle when the hero image lands.
@@ -457,7 +463,11 @@ private:
     QUrl          m_currentTrailerDirectUrl;   // populated from Url/Http trailer
     QString       m_currentTrailerYouTubeId;   // populated from YouTube trailer
     QWidget*      m_seasonRow     = nullptr;
+    QLabel*       m_seasonLabel   = nullptr;  // hidden for anime (flat list)
     QComboBox*    m_seasonCombo   = nullptr;
+    // THEATRE_ANIME_CATALOG — true when the flat Kitsu catalog is active for
+    // the current series; hides the (meaningless) season combo.
+    bool          m_isAnime       = false;
     QTableWidget* m_episodeTable  = nullptr;
     QLabel*       m_statusLabel   = nullptr;
 
