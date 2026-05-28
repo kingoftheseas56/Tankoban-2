@@ -201,10 +201,9 @@ set(SOURCES
     src/core/book/BookSearchAggregator.cpp
     src/core/book/BooksCatalogueLibraryStore.cpp
     src/core/book/CatalogueRecord.cpp
-    src/core/book/GoogleBooksClient.cpp
-    src/core/book/OpenLibraryClient.cpp
-    src/core/book/SeriesDetector.cpp
-    src/core/book/CatalogueDeduper.cpp
+    src/core/book/FictionDbClient.cpp
+    src/core/book/BookSeriesIndex.cpp
+    src/core/book/BookSeriesIndexBuilder.cpp
     src/core/book/BookCatalogueAggregator.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
@@ -219,6 +218,7 @@ set(SOURCES
     src/ui/pages/tankoyomi/ChapterRangeDialog.cpp
     src/ui/pages/books/BookCatalogueSearchWidget.cpp
     src/ui/pages/books/BookCatalogueDetailView.cpp
+    src/ui/pages/books/BookSeriesDetailView.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
@@ -395,10 +395,7 @@ set(HEADERS
     src/core/book/BookCatalogueResult.h
     src/core/book/BooksCatalogueLibraryStore.h
     src/core/book/CatalogueRecord.h
-    src/core/book/GoogleBooksClient.h
-    src/core/book/OpenLibraryClient.h
     src/core/book/SeriesDetector.h
-    src/core/book/CatalogueDeduper.h
     src/core/book/BookCatalogueAggregator.h
     src/core/book/BookResult.h
     src/core/book/BookScraper.h
@@ -421,6 +418,7 @@ set(HEADERS
     src/ui/pages/tankoyomi/ChapterRangeDialog.h
     src/ui/pages/books/BookCatalogueSearchWidget.h
     src/ui/pages/books/BookCatalogueDetailView.h
+    src/ui/pages/books/BookSeriesDetailView.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
@@ -840,14 +838,12 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/book/test_books_catalogue_library_store.cpp
         src/core/book/CatalogueRecord.cpp
         src/core/book/BooksCatalogueLibraryStore.cpp
-        tests/core/book/test_open_library_client_parser.cpp
-        src/core/book/OpenLibraryClient.cpp
-        tests/core/book/test_google_books_client_parser.cpp
-        src/core/book/GoogleBooksClient.cpp
-        tests/core/book/test_series_detector.cpp
-        src/core/book/SeriesDetector.cpp
-        tests/core/book/test_catalogue_deduper.cpp
-        src/core/book/CatalogueDeduper.cpp
+        tests/core/book/test_fictiondb_client_parser.cpp
+        src/core/book/FictionDbClient.cpp
+        tests/core/book/test_book_series_index.cpp
+        src/core/book/BookSeriesIndex.cpp
+        tests/core/book/test_catalogue_rerank.cpp
+        src/core/book/BookCatalogueAggregator.cpp
         tests/core/book/test_book_downloader_magnet.cpp
         # Tankorent search service tests
         tests/core/test_tankorent_search_service.cpp

@@ -9,6 +9,8 @@
 
 #include <QApplication>
 #include <QFrame>
+#include <QMouseEvent>
+#include <functional>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QNetworkAccessManager>
@@ -20,6 +22,25 @@
 #include <QVBoxLayout>
 
 namespace {
+
+// §5.2 click-capture widget. Plain QWidget subclass — no Q_OBJECT so no moc
+// generation needed, no signal plumbing. Caller assigns onClick; mouse-press
+// invokes it. Used as the source-row root in renderSourceRow so the entire
+// card is clickable + child QLabels still lay out normally (QPushButton with
+// child layouts collapses to 0×0 when it has no text/icon — caught in smoke
+// 2026-05-27 ~4:45pm when status said "Found 2 results" but rows didn't show).
+class ClickableRow : public QWidget
+{
+public:
+    explicit ClickableRow(QWidget* parent = nullptr) : QWidget(parent) {}
+    std::function<void()> onClick;
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onClick) onClick();
+        QWidget::mousePressEvent(e);
+    }
+};
 
 QString joinedMeta(const BookCatalogueResult& book)
 {
@@ -79,6 +100,29 @@ void BookCatalogueDetailView::buildUi()
     connect(m_backButton, &QPushButton::clicked, this, &BookCatalogueDetailView::backRequested);
     actionLayout->addWidget(m_backButton, 0, Qt::AlignLeft);
     actionLayout->addStretch(1);
+
+    // §5.2 (2026-05-27) — primary CTA. Three states:
+    //   - Not in library, idle:        "Search for downloads" → re-fires picker
+    //   - Download in flight:           "Downloading XX%"      → disabled
+    //   - In library (record exists):   "Read"                 → emits readRequested
+    m_primaryCta = new QPushButton(QStringLiteral("Search for downloads"), actionRow);
+    m_primaryCta->setObjectName(QStringLiteral("BookDetailPrimaryCta"));
+    m_primaryCta->setMinimumSize(180, 38);
+    m_primaryCta->setCursor(Qt::PointingHandCursor);
+    m_primaryCta->setStyleSheet(QStringLiteral(
+        "QPushButton#BookDetailPrimaryCta {"
+        " background: #8b5cf6; border: 1px solid #a78bfa; border-radius: 4px;"
+        " color: #ffffff; font-size: 14px; font-weight: 600; padding: 0 18px; }"
+        "QPushButton#BookDetailPrimaryCta:hover { background: #a78bfa; }"
+        "QPushButton#BookDetailPrimaryCta:disabled {"
+        " background: rgba(139,92,246,0.32); color: rgba(255,255,255,0.72);"
+        " border-color: rgba(167,139,250,0.32); }"
+        "QPushButton#BookDetailPrimaryCta[ctaState=\"read\"] {"
+        " background: #1e293b; border-color: #334155; color: #f1f5f9; }"
+        "QPushButton#BookDetailPrimaryCta[ctaState=\"read\"]:hover { background: #334155; }"));
+    connect(m_primaryCta, &QPushButton::clicked,
+            this, &BookCatalogueDetailView::onPrimaryCtaClicked);
+    actionLayout->addWidget(m_primaryCta, 0, Qt::AlignRight);
     root->addWidget(actionRow);
 
     auto* scroll = new QScrollArea(this);
@@ -225,7 +269,18 @@ void BookCatalogueDetailView::buildUi()
 
 void BookCatalogueDetailView::setCatalogueStore(BooksCatalogueLibraryStore* store)
 {
+    if (m_catalogueStore == store) return;
+    if (m_catalogueStore) {
+        disconnect(m_catalogueStore, nullptr, this, nullptr);
+    }
     m_catalogueStore = store;
+    if (m_catalogueStore) {
+        // §5.2: CTA needs to morph to [Read] when a record lands for the
+        // currently-shown book (download-complete path upserts via BooksPage).
+        connect(m_catalogueStore, &BooksCatalogueLibraryStore::recordsChanged,
+                this, &BookCatalogueDetailView::refreshPrimaryCta);
+    }
+    refreshPrimaryCta();
 }
 
 void BookCatalogueDetailView::showBook(const BookCatalogueResult& book,
@@ -251,6 +306,15 @@ void BookCatalogueDetailView::showBook(const BookCatalogueResult& book,
     setCover(coverPath);
     resetSourceSections();
     startSourceSearch();
+
+    // §5.2: each book-show resets per-book download state. Existing in-flight
+    // downloads for a different book remain in BooksPage's tracker; the CTA
+    // just doesn't reflect them here.
+    m_downloadInFlight = false;
+    m_downloadPct = 0;
+    m_activeHandle.clear();
+    m_activeFilePath.clear();
+    refreshPrimaryCta();
 }
 
 void BookCatalogueDetailView::setCover(const QString& coverPath)
@@ -305,11 +369,54 @@ void BookCatalogueDetailView::recreateSourceAggregator(int generation)
     m_sourceScrapers.clear();
     delete m_tankorentService;
     m_tankorentService = nullptr;
+    m_pendingResolves.clear();
 
     m_tankorentService = new TankorentSearchService(m_nam, this);
     m_sourceScrapers << new LibGenScraper(m_nam, this);
     m_sourceScrapers << new TankorentBookScraper(m_tankorentService, this);
     m_sourceAggregator = new BookSearchAggregator(m_sourceScrapers, this);
+
+    // §5.2 resolve-then-download bridge — listen for fresh URLs coming back
+    // from scraper->resolveDownload(md5). LibGen's key rotates ~60s so this
+    // step is mandatory for the HTTP path; without it BookDownloader sees a
+    // stale URL and the download hangs at 0%.
+    for (BookScraper* scraper : m_sourceScrapers) {
+        if (!scraper) continue;
+        connect(scraper, &BookScraper::downloadResolved,
+                this, [this](const QString& md5, const QStringList& urls) {
+            auto it = m_pendingResolves.find(md5);
+            if (it == m_pendingResolves.end()) return;
+            const PendingResolve ctx = it.value();
+            m_pendingResolves.erase(it);
+            if (urls.isEmpty()) {
+                m_downloadInFlight = false;
+                refreshPrimaryCta();
+                if (m_sourceStatus) m_sourceStatus->setText(
+                    QStringLiteral("Source returned no download URL."));
+                return;
+            }
+            BookResult resolved = ctx.result;
+            resolved.downloadUrl = urls.first();
+            // Pass the FULL mirror list so BookDownloader's intra-row failover
+            // actually fires when mirror #1 returns 404 / stale-HTML / network
+            // error. Without this, the entire row reports "all mirrors failed"
+            // even though we never tried mirrors #2-#5 — root cause of the
+            // earlier "Download failed: all mirror URLs failed" smoke finding
+            // 2026-05-27 ~5:00pm.
+            emit downloadRequested(ctx.sourceId, resolved, urls,
+                                   m_currentBook, m_currentCoverPath);
+        });
+        connect(scraper, &BookScraper::downloadFailed,
+                this, [this](const QString& md5, const QString& reason) {
+            auto it = m_pendingResolves.find(md5);
+            if (it == m_pendingResolves.end()) return;
+            m_pendingResolves.erase(it);
+            m_downloadInFlight = false;
+            refreshPrimaryCta();
+            if (m_sourceStatus) m_sourceStatus->setText(
+                QStringLiteral("Source resolve failed: %1").arg(reason));
+        });
+    }
 
     connect(m_sourceAggregator, &BookSearchAggregator::sourceResultsReady,
             this, [this, generation](const QString& sourceId,
@@ -327,7 +434,7 @@ void BookCatalogueDetailView::recreateSourceAggregator(int generation)
             renderSourceMessage(section, sourceId, QStringLiteral("No matches"));
         } else {
             for (const BookResult& result : results) {
-                renderSourceRow(section, result);
+                renderSourceRow(section, sourceId, result);
             }
             section.heading->setText(QStringLiteral("%1 (%2 results)")
                 .arg(bookSourceDisplayName(sourceId))
@@ -370,13 +477,24 @@ void BookCatalogueDetailView::recreateSourceAggregator(int generation)
 }
 
 void BookCatalogueDetailView::renderSourceRow(SourceSection& section,
+                                              const QString& sourceId,
                                               const BookResult& result)
 {
-    auto* row = new QWidget(section.rows);
+    // §5.2 (2026-05-27) — row is a ClickableRow QWidget subclass so the entire
+    // card is clickable + child QLabels lay out normally. (Previous attempt
+    // used QPushButton-as-card, but QPushButton without text/icon has
+    // sizeHint = 0 and the button collapsed to 0×0 while child labels never
+    // got rendered space — smoke caught it at 4:45pm.)
+    auto* row = new ClickableRow(section.rows);
     row->setObjectName(QStringLiteral("BookDetailSourceRow"));
+    row->setCursor(Qt::PointingHandCursor);
+    row->setAttribute(Qt::WA_StyledBackground, true);  // styleSheet bg renders on QWidget
     row->setStyleSheet(QStringLiteral(
-        "QWidget#BookDetailSourceRow { background: rgba(255,255,255,0.04);"
-        " border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; }"));
+        "QWidget#BookDetailSourceRow {"
+        " background: rgba(255,255,255,0.04);"
+        " border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; }"
+        "QWidget#BookDetailSourceRow:hover {"
+        " background: rgba(255,255,255,0.08); border-color: rgba(167,139,250,0.6); }"));
     auto* rowLayout = new QVBoxLayout(row);
     rowLayout->setContentsMargins(10, 8, 10, 8);
     rowLayout->setSpacing(4);
@@ -403,6 +521,14 @@ void BookCatalogueDetailView::renderSourceRow(SourceSection& section,
     details->setVisible(!meta.isEmpty());
     rowLayout->addWidget(details);
 
+    // §5.2 click-to-download. Capture sourceId + result by value so the
+    // closure stays valid after recreateSourceAggregator clears m_sourceScrapers.
+    // Dispatch through handleSourceRowClick which inserts the
+    // scraper.resolveDownload step for HTTP sources (LibGen / Anna's).
+    row->onClick = [this, sourceId, result]() {
+        handleSourceRowClick(sourceId, result);
+    };
+
     section.rows->layout()->addWidget(row);
     ++section.resultCount;
 }
@@ -419,6 +545,158 @@ void BookCatalogueDetailView::renderSourceMessage(SourceSection& section,
         "QLabel#BookDetailSourceMessage { color: #8f8f8f; font-size: 12px;"
         " background: transparent; padding: 6px 0; }"));
     section.rows->layout()->addWidget(label);
+}
+
+// ── §5.2 CTA state machine + download lifecycle (2026-05-27) ──
+
+void BookCatalogueDetailView::refreshPrimaryCta()
+{
+    if (!m_primaryCta) return;
+
+    const bool noBook = m_currentCatalogueId.isEmpty();
+    m_primaryCta->setVisible(!noBook);
+    if (noBook) return;
+
+    const bool inLibrary = m_catalogueStore
+        && m_catalogueStore->hasRecord(m_currentCatalogueId);
+
+    if (m_downloadInFlight) {
+        m_primaryCta->setText(QStringLiteral("Downloading %1%").arg(m_downloadPct));
+        m_primaryCta->setEnabled(false);
+        m_primaryCta->setProperty("ctaState", QStringLiteral("downloading"));
+    } else if (inLibrary) {
+        m_primaryCta->setText(QStringLiteral("Read"));
+        m_primaryCta->setEnabled(true);
+        m_primaryCta->setProperty("ctaState", QStringLiteral("read"));
+    } else {
+        m_primaryCta->setText(QStringLiteral("Search for downloads"));
+        m_primaryCta->setEnabled(true);
+        m_primaryCta->setProperty("ctaState", QStringLiteral("idle"));
+    }
+    m_primaryCta->style()->unpolish(m_primaryCta);
+    m_primaryCta->style()->polish(m_primaryCta);
+}
+
+void BookCatalogueDetailView::onPrimaryCtaClicked()
+{
+    if (m_currentCatalogueId.isEmpty()) return;
+
+    const bool inLibrary = m_catalogueStore
+        && m_catalogueStore->hasRecord(m_currentCatalogueId);
+
+    if (inLibrary) {
+        // [Read] path — emit catalogueId + filePath. Look up filePath from
+        // the live record so it stays correct after move/rename.
+        QString filePath = m_activeFilePath;
+        if (filePath.isEmpty() && m_catalogueStore) {
+            const auto rec = m_catalogueStore->recordFor(m_currentCatalogueId);
+            if (rec) filePath = rec->filePath;
+        }
+        emit readRequested(m_currentCatalogueId, filePath);
+        return;
+    }
+
+    if (m_downloadInFlight) return;
+
+    // [Search for downloads] re-fires the picker — useful if results were
+    // empty on first attempt + the user wants to retry. The auto-search
+    // already runs on showBook; this is the manual re-run path.
+    resetSourceSections();
+    startSourceSearch();
+}
+
+void BookCatalogueDetailView::handleSourceRowClick(const QString& sourceId,
+                                                  const BookResult& result)
+{
+    if (m_downloadInFlight) return;  // single-flight per detail view
+
+    if (sourceId == QLatin1String("tankorent")) {
+        // Magnet path — downloadUrl carries the magnet URI directly, no
+        // scraper.resolveDownload step needed (TankorentBookScraper.cpp:65
+        // already stuffs the magnet into BookResult.downloadUrl at search
+        // time). Magnet "mirror list" = single-element list with the magnet.
+        m_downloadInFlight = true;
+        m_downloadPct = 0;
+        m_activeHandle.clear();
+        refreshPrimaryCta();
+        emit downloadRequested(sourceId, result,
+                               QStringList{result.downloadUrl},
+                               m_currentBook, m_currentCoverPath);
+        return;
+    }
+
+    // HTTP path (libgen / annas-archive). Find the matching scraper, fire
+    // resolveDownload, register the click context, wait for downloadResolved
+    // (handled in recreateSourceAggregator's connect block above).
+    BookScraper* scraper = nullptr;
+    for (BookScraper* s : m_sourceScrapers) {
+        if (s && s->sourceId() == sourceId) { scraper = s; break; }
+    }
+    if (!scraper || result.md5.isEmpty()) {
+        if (m_sourceStatus) m_sourceStatus->setText(
+            QStringLiteral("Source unavailable — pick another row."));
+        return;
+    }
+
+    m_downloadInFlight = true;
+    m_downloadPct = 0;
+    m_activeHandle.clear();
+    refreshPrimaryCta();
+    if (m_sourceStatus) m_sourceStatus->setText(
+        QStringLiteral("Resolving download URL from %1…")
+            .arg(scraper->sourceName()));
+
+    m_pendingResolves.insert(result.md5, {sourceId, result});
+    scraper->resolveDownload(result.md5);
+}
+
+void BookCatalogueDetailView::notifyDownloadStarted(const QString& handle)
+{
+    m_downloadInFlight = true;
+    m_downloadPct = 0;
+    m_activeHandle = handle;
+    refreshPrimaryCta();
+    if (m_sourceStatus) {
+        m_sourceStatus->setText(QStringLiteral("Downloading from source…"));
+    }
+}
+
+void BookCatalogueDetailView::notifyDownloadProgress(const QString& handle, int pct)
+{
+    if (handle != m_activeHandle) return;
+    m_downloadPct = qBound(0, pct, 100);
+    refreshPrimaryCta();
+}
+
+void BookCatalogueDetailView::notifyDownloadComplete(const QString& handle,
+                                                     const QString& filePath)
+{
+    if (handle != m_activeHandle) return;
+    m_downloadInFlight = false;
+    m_downloadPct = 100;
+    m_activeFilePath = filePath;
+    m_activeHandle.clear();
+    // recordsChanged from the store also drives refreshPrimaryCta; this is
+    // the redundant local refresh in case the store mutation lands on a
+    // different signal ordering.
+    refreshPrimaryCta();
+    if (m_sourceStatus) {
+        m_sourceStatus->setText(QStringLiteral("Downloaded — opening in reader…"));
+    }
+}
+
+void BookCatalogueDetailView::notifyDownloadFailed(const QString& handle,
+                                                   const QString& reason)
+{
+    if (handle != m_activeHandle) return;
+    m_downloadInFlight = false;
+    m_downloadPct = 0;
+    m_activeHandle.clear();
+    refreshPrimaryCta();
+    if (m_sourceStatus) {
+        m_sourceStatus->setText(
+            QStringLiteral("Download failed: %1 — pick another source.").arg(reason));
+    }
 }
 
 void BookCatalogueDetailView::clearRows(QWidget* rows)

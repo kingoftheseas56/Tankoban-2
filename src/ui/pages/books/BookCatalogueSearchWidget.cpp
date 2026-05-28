@@ -110,12 +110,36 @@ void BookCatalogueSearchWidget::buildUi()
     m_seriesStrip->hide();
     layout->addWidget(m_seriesStrip);
 
+    m_seriesMoreBtn = new QPushButton(content);
+    m_seriesMoreBtn->setObjectName(QStringLiteral("BookSearchShowMore"));
+    m_seriesMoreBtn->setCursor(Qt::PointingHandCursor);
+    m_seriesMoreBtn->setStyleSheet(QStringLiteral(
+        "QPushButton#BookSearchShowMore { background: transparent; border: none;"
+        " color: #8a6cff; font-size: 12px; text-align: left; padding: 2px 4px; }"
+        "QPushButton#BookSearchShowMore:hover { color: #ffffff; }"));
+    m_seriesMoreBtn->hide();
+    connect(m_seriesMoreBtn, &QPushButton::clicked,
+            this, &BookCatalogueSearchWidget::revealMoreSeries);
+    layout->addWidget(m_seriesMoreBtn);
+
     m_booksHeader = new QLabel(QStringLiteral("BOOKS"), content);
     m_booksHeader->setObjectName(QStringLiteral("LibraryHeadingSmall"));
     layout->addWidget(m_booksHeader);
     m_booksStrip = new TileStrip(content);
     m_booksStrip->setDensity(0);
     layout->addWidget(m_booksStrip);
+
+    m_booksMoreBtn = new QPushButton(content);
+    m_booksMoreBtn->setObjectName(QStringLiteral("BookSearchShowMore"));
+    m_booksMoreBtn->setCursor(Qt::PointingHandCursor);
+    m_booksMoreBtn->setStyleSheet(QStringLiteral(
+        "QPushButton#BookSearchShowMore { background: transparent; border: none;"
+        " color: #8a6cff; font-size: 12px; text-align: left; padding: 2px 4px; }"
+        "QPushButton#BookSearchShowMore:hover { color: #ffffff; }"));
+    m_booksMoreBtn->hide();
+    connect(m_booksMoreBtn, &QPushButton::clicked,
+            this, &BookCatalogueSearchWidget::revealMoreBooks);
+    layout->addWidget(m_booksMoreBtn);
 
     layout->addStretch(1);
     m_scroll->setWidget(content);
@@ -149,10 +173,14 @@ void BookCatalogueSearchWidget::clearResults()
 {
     m_pending = false;
     m_resultsById.clear();
+    m_overflowSeries.clear();
+    m_overflowBooks.clear();
     if (m_seriesStrip) m_seriesStrip->clear();
     if (m_booksStrip) m_booksStrip->clear();
     if (m_seriesHeader) m_seriesHeader->hide();
     if (m_booksHeader) m_booksHeader->hide();
+    if (m_seriesMoreBtn) m_seriesMoreBtn->hide();
+    if (m_booksMoreBtn) m_booksMoreBtn->hide();
     if (m_statusLabel) m_statusLabel->clear();
 }
 
@@ -161,38 +189,66 @@ void BookCatalogueSearchWidget::onCatalogueResult(
     const QList<SeriesDetector::SeriesGroup>& seriesGroups,
     const QList<BookCatalogueResult>& standalones)
 {
-    if (!m_pending || query != m_currentQuery) return;
+    if (query != m_currentQuery) return;
+    // Single clean paint: the aggregator resolves the series before emitting
+    // once, so there's no intermediate flat-results flash. search() shows the
+    // "Searching…" state until this lands.
     m_pending = false;
 
-    QSet<QString> seenIds;
-    int total = 0;
+    // Re-render fresh each emit.
+    m_resultsById.clear();
+    m_overflowSeries.clear();
+    m_overflowBooks.clear();
+    m_seriesStrip->clear();
+    m_booksStrip->clear();
+    m_seriesMoreBtn->hide();
+    m_booksMoreBtn->hide();
+
+    // ── Series section (capped) ──
+    int seriesShown = 0;
     for (const auto& group : seriesGroups) {
-        for (const auto& book : group.books) {
-            if (seenIds.contains(book.catalogueId)) continue;
-            seenIds.insert(book.catalogueId);
-            addBookCard(book);
-            ++total;
-        }
+        if (group.books.isEmpty()) continue;
+        if (seriesShown < kInitialCap) { addSeriesCard(group); ++seriesShown; }
+        else m_overflowSeries.append(group);
     }
+    const bool hasSeries = seriesShown > 0;
+    m_seriesHeader->setVisible(hasSeries);
+    m_seriesStrip->setVisible(hasSeries);
+    if (!m_overflowSeries.isEmpty()) {
+        m_seriesMoreBtn->setText(QStringLiteral("Show %1 more series").arg(m_overflowSeries.size()));
+        m_seriesMoreBtn->show();
+    }
+
+    // ── Books section (capped, de-duped) ──
+    int booksShown = 0;
+    QSet<QString> seen;
     for (const auto& book : standalones) {
-        if (seenIds.contains(book.catalogueId)) continue;
-        seenIds.insert(book.catalogueId);
-        addBookCard(book);
-        ++total;
+        if (book.catalogueId.isEmpty() || seen.contains(book.catalogueId)) continue;
+        seen.insert(book.catalogueId);
+        if (booksShown < kInitialCap) { addBookCard(book); ++booksShown; }
+        else m_overflowBooks.append(book);
+    }
+    const bool hasBooks = booksShown > 0;
+    m_booksHeader->setVisible(hasBooks);
+    m_booksStrip->setVisible(hasBooks);
+    if (!m_overflowBooks.isEmpty()) {
+        m_booksMoreBtn->setText(QStringLiteral("Show %1 more books").arg(m_overflowBooks.size()));
+        m_booksMoreBtn->show();
     }
 
-    m_seriesHeader->hide();
-    m_seriesStrip->hide();
-    m_booksHeader->setVisible(m_booksStrip->totalCount() > 0);
-
-    if (total == 0) {
-        m_statusLabel->setText(QStringLiteral("No catalogue results for \"%1\"")
-                                   .arg(m_currentQuery));
+    // ── Status ──
+    if (seriesGroups.isEmpty() && standalones.isEmpty()) {
+        m_statusLabel->setText(
+            QStringLiteral("No catalogue results for \"%1\"").arg(m_currentQuery));
     } else {
-        m_statusLabel->setText(QStringLiteral("%1 result%2 for \"%3\"")
-                                   .arg(total)
-                                   .arg(total == 1 ? QString() : QStringLiteral("s"))
-                                   .arg(m_currentQuery));
+        QString parts;
+        if (!seriesGroups.isEmpty())
+            parts = QStringLiteral("%1 series").arg(seriesGroups.size());
+        if (!standalones.isEmpty()) {
+            if (!parts.isEmpty()) parts += QStringLiteral(" · ");
+            parts += QStringLiteral("%1 books").arg(standalones.size());
+        }
+        m_statusLabel->setText(parts + QStringLiteral(" for \"%1\"").arg(m_currentQuery));
     }
 }
 
@@ -208,7 +264,49 @@ void BookCatalogueSearchWidget::onCatalogueFailed(const QString& query,
 
 void BookCatalogueSearchWidget::addSeriesCard(const SeriesDetector::SeriesGroup& group)
 {
-    Q_UNUSED(group);
+    if (group.books.isEmpty()) return;
+    const BookCatalogueResult stub = group.books.first();
+    if (stub.seriesId.isEmpty() || stub.catalogueId.isEmpty()) return;
+
+    m_resultsById.insert(stub.catalogueId, stub);
+
+    const QString localCover = coverPathFor(stub.catalogueId);
+    const QString thumb = QFile::exists(localCover) ? localCover : QString();
+
+    // Series tiles come from the local index (no cover field); the cover
+    // surfaces in the series detail view (v1). Subtitle = author when known.
+    const QString subtitle = group.author.isEmpty()
+        ? QStringLiteral("Series")
+        : group.author;
+    auto* card = new TileCard(thumb, group.seriesName, subtitle);
+    card->setProperty("catalogueType", QStringLiteral("series"));
+    card->setProperty("catalogueId", stub.catalogueId);
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        const QString catalogueId = card->property("catalogueId").toString();
+        const auto it = m_resultsById.constFind(catalogueId);
+        if (it == m_resultsById.constEnd()) return;
+        emit seriesPicked(it.value());
+    });
+    m_seriesStrip->addTile(card);
+
+    if (thumb.isEmpty() && !stub.coverUrl.isEmpty())
+        downloadCover(stub.catalogueId, stub.coverUrl, card);
+}
+
+void BookCatalogueSearchWidget::revealMoreSeries()
+{
+    const auto overflow = m_overflowSeries;
+    m_overflowSeries.clear();
+    for (const auto& group : overflow) addSeriesCard(group);
+    if (m_seriesMoreBtn) m_seriesMoreBtn->hide();
+}
+
+void BookCatalogueSearchWidget::revealMoreBooks()
+{
+    const auto overflow = m_overflowBooks;
+    m_overflowBooks.clear();
+    for (const auto& book : overflow) addBookCard(book);
+    if (m_booksMoreBtn) m_booksMoreBtn->hide();
 }
 
 void BookCatalogueSearchWidget::addBookCard(const BookCatalogueResult& book)

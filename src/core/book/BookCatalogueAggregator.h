@@ -2,83 +2,65 @@
 
 #include <QObject>
 #include <QList>
+#include <QSet>
 #include <QString>
 
 #include "BookCatalogueResult.h"
-#include "SeriesDetector.h"
+#include "SeriesDetector.h"   // SeriesGroup wire-type
 
-class QNetworkAccessManager;
-class OpenLibraryClient;
-class GoogleBooksClient;
+class FictionDbClient;
 
-// Top-of-the-catalogue layer for BOOKS_STREMIO_PIVOT.
+// Top-of-the-catalogue layer for Books mode (BOOKS_FICTIONDB_CATALOGUE).
 //
-// Fires OpenLibraryClient + GoogleBooksClient queries in parallel, waits for
-// BOTH to return (or timeout/fail), dedupes with CatalogueDeduper, runs
-// SeriesDetector, and emits TWO ordered lists for the search-takeover view:
-//   - seriesGroups (multi-book series tiles)
-//   - standalones (movie-shape book tiles)
+// Two-track search, both fed from FictionDB's comprehensive free-text book
+// search (FictionDB has no enumerable series directory, but every book page
+// self-declares its series — so series are reached *through* the books):
 //
-// Per-source failures are non-fatal — if Google Books fails, results from
-// OpenLibrary still flow through. Both-failure cases emit aggregateFailed.
+//   1. BOOKS track  — the search results, re-ranked locally so the obvious
+//      title floats up (FictionDB's native order isn't relevance-ranked).
+//      Emitted immediately.
+//   2. SERIES track — "Top-N resolution": fetch the top-N result book pages,
+//      read each book's series link, group same-series books into one tile.
+//      Series-member books then fold out of the BOOKS track. Emitted once the
+//      resolutions land (a beat after the books).
 //
-// Lifecycle: one Aggregator instance owned by BooksPage. A new query()
-// supersedes any pending in-flight query by resetting state — adequate for
-// the 2-user app's low rapid-search rate. KNOWN LIMITATION (v1.x followup):
-// the reset is racy if a stale callback arrives AFTER the new query()'s
-// state reset (m_*Pending=true) — the stale callback would be accepted as
-// if it belonged to the new query. The proper fix is a generation counter
-// captured in lambdas at re-connect-on-query time; m_generation field is
-// scaffolded below for that fix. See cpp for the full race trace.
+// query() therefore emits aggregateReady twice: books-only first, then
+// series + folded-standalones. A superseded query is dropped via a generation
+// guard + the current-query check.
 class BookCatalogueAggregator : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit BookCatalogueAggregator(QNetworkAccessManager* nam,
-                                     const QString& googleBooksApiKey,
-                                     QObject* parent = nullptr);
+    explicit BookCatalogueAggregator(FictionDbClient* fictiondb, QObject* parent = nullptr);
 
     void query(const QString& q);
 
-    // For the "Other books by author" scroller on detail pages.
-    void fetchAuthorWorks(const QString& openLibraryAuthorKey, const QString& authorName);
+    // Pure: re-rank live FictionDB book results so exact/prefix title (+author)
+    // matches float to the top. Exposed for unit tests.
+    static QList<BookCatalogueResult> rerankBooks(const QString& query,
+                                                  QList<BookCatalogueResult> books);
 
 signals:
-    // Fires once both sources have replied (or one replied + the other failed).
-    // seriesGroups + standalones are partitioned via SeriesDetector.
     void aggregateReady(const QString& query,
                         const QList<SeriesDetector::SeriesGroup>& seriesGroups,
                         const QList<BookCatalogueResult>& standalones);
-
     void aggregateFailed(const QString& query, const QString& error);
 
-    // Per-author works for the scroller.
-    void authorWorksReady(const QString& authorKey,
-                          const QList<BookCatalogueResult>& works);
-
 private:
-    void tryEmitAggregate();
+    void onFictionResults(const QString& query, const QList<BookCatalogueResult>& books);
+    void onFictionFailed(const QString& query, const QString& error);
+    void onBookResolved(const QString& bookId, const BookCatalogueResult& book);
+    void onBookResolveFailed(const QString& bookId, const QString& error);
+    void emitGrouped();
 
-    QNetworkAccessManager* m_nam;
-    OpenLibraryClient*     m_openlib;
-    GoogleBooksClient*     m_googlebooks;
-
+    FictionDbClient* m_fictiondb = nullptr;
     QString m_currentQuery;
-
-    // Monotonically-incrementing generation counter for the stale-callback
-    // guard. query() bumps it; each lambda captures the value at-connect
-    // time and drops the callback if m_generation has advanced past it.
     int m_generation = 0;
 
-    // Pending state for the current query — both must complete (success or
-    // failure) before tryEmitAggregate() fires.
-    bool m_openlibPending = false;
-    bool m_googlebooksPending = false;
-    QList<BookCatalogueResult> m_openlibResults;
-    QList<BookCatalogueResult> m_googlebooksResults;
-    bool m_openlibSucceeded = false;
-    bool m_googlebooksSucceeded = false;
-    QString m_lastOpenlibError;
-    QString m_lastGooglebooksError;
+    QList<BookCatalogueResult> m_books;       // re-ranked search results (Books track)
+    QSet<QString> m_pendingBookIds;           // top-N slugs awaiting fetchBook
+    QList<BookCatalogueResult> m_resolved;    // resolved top-N books (carry series info)
+
+    static constexpr int kTopN = 8;           // book pages peeked per search for series grouping (kept low for snappy single-paint)
 };

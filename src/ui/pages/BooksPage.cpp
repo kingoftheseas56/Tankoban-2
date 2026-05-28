@@ -3,10 +3,15 @@
 #include "TileCard.h"
 #include "books/BookCatalogueDetailView.h"
 #include "books/BookCatalogueSearchWidget.h"
+#include "books/BookSeriesDetailView.h"
 #include "core/CoreBridge.h"
 #include "core/ScannerUtils.h"
 #include "core/book/BookCatalogueAggregator.h"
 #include "core/book/BookCatalogueResult.h"
+#include "core/book/BookSeriesIndex.h"
+#include "core/book/BookSeriesIndexBuilder.h"
+#include "core/book/FictionDbClient.h"
+#include "core/book/BookDownloader.h"
 #include "core/book/BooksCatalogueLibraryStore.h"
 #include "core/book/CatalogueRecord.h"
 
@@ -42,6 +47,7 @@
 #include <QFile>
 #include <QMessageBox>
 #include <QSizePolicy>
+#include <QCoreApplication>
 
 BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
@@ -53,9 +59,14 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
 
     // ── Catalogue aggregator (BOOKS_STREMIO_PIVOT — catalogue search) ──
     m_catalogueNam = new QNetworkAccessManager(this);
-    const QString googleKey = qEnvironmentVariable("TANKOBAN_GOOGLE_BOOKS_KEY");
-    m_catalogueAggregator = new BookCatalogueAggregator(m_catalogueNam,
-        googleKey.isEmpty() ? QString() : googleKey, this);
+    m_fictiondb = new FictionDbClient(m_catalogueNam, this);
+    // BOOKS_FICTIONDB_CATALOGUE — series come from Top-N resolution over
+    // FictionDB's free-text search (no enumerable series directory exists; the
+    // author-series A-Z directory is the indie long tail and excludes major
+    // franchises). The aggregator searches, then peeks the top results' book
+    // pages to group by their self-declared series. (BookSeriesIndex + builder
+    // remain dormant — candidate persistent-cache layer / removable.)
+    m_catalogueAggregator = new BookCatalogueAggregator(m_fictiondb, this);
     // Catalogue cover cache directory
     m_catalogueCoverDir = m_bridge->dataDir() + "/book_catalogue_covers";
     QDir().mkpath(m_catalogueCoverDir);
@@ -64,6 +75,9 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     m_catalogueStore->load();
     if (m_catalogueDetailView) {
         m_catalogueDetailView->setCatalogueStore(m_catalogueStore);
+    }
+    if (m_seriesDetailView) {
+        m_seriesDetailView->setCatalogueStore(m_catalogueStore);
     }
     connect(m_catalogueStore, &BooksCatalogueLibraryStore::recordsChanged,
             this, &BooksPage::rebuildBookGrid);
@@ -82,6 +96,36 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
                 m_stack->setCurrentWidget(m_catalogueDetailView);
             });
     if (m_stack) m_stack->addWidget(m_catalogueSearchView);
+
+    // BOOKS_FICTIONDB_CATALOGUE — series tile → fetch the series → open the
+    // series-shape detail view with its books in order.
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::seriesPicked,
+            this, [this](const BookCatalogueResult& s) {
+                if (m_fictiondb && !s.seriesId.isEmpty())
+                    m_fictiondb->fetchSeries(s.seriesId);
+            });
+    if (m_fictiondb) {
+        connect(m_fictiondb, &FictionDbClient::seriesReady, this,
+                [this](const QString&, const QString& name,
+                       const QList<BookCatalogueResult>& books) {
+                    if (!m_seriesDetailView) return;
+                    const QString author = books.isEmpty() ? QString() : books.first().author;
+                    m_seriesDetailView->showSeries(name, author, QString(), books);
+                    if (m_stack) m_stack->setCurrentWidget(m_seriesDetailView);
+                });
+    }
+
+    // §5.2 (2026-05-27) — wire catalogue download lifecycle. Detail view emits
+    // downloadRequested when the user clicks a source row; readRequested when
+    // the [Read] CTA fires (book is already in library).
+    if (m_catalogueDetailView) {
+        connect(m_catalogueDetailView,
+                &BookCatalogueDetailView::downloadRequested,
+                this, &BooksPage::onCatalogueDownloadRequested);
+        connect(m_catalogueDetailView,
+                &BookCatalogueDetailView::readRequested,
+                this, &BooksPage::onCatalogueReadRequested);
+    }
 
     // §3.8 burn-the-ships backout (2026-05-27): initial population from
     // persisted catalogue records. recordsChanged drives subsequent refreshes.
@@ -163,6 +207,27 @@ bool BooksPage::dispatchDevCommand(const QString& cmd,
         return replyOk(reply, {
             {"triggered", true},
             {"records",   m_catalogueStore ? m_catalogueStore->all().size() : 0}
+        });
+    }
+
+    // BOOKS_FICTIONDB_CATALOGUE — crawl FictionDB's A–Z series directory into
+    // the local series index (one-time build / refresh).
+    if (cmd == QLatin1String("books_build_series_index")) {
+        if (!m_fictiondb || !m_seriesIndex)
+            return replyErr(reply, "INTERNAL", "series index not constructed");
+        if (!m_indexBuilder)
+            m_indexBuilder = new BookSeriesIndexBuilder(m_fictiondb, m_seriesIndex, this);
+        if (m_indexBuilder->running())
+            return replyOk(reply, {{"started", false}, {"reason", "already running"}});
+        m_indexBuilder->start();
+        return replyOk(reply, {{"started", true}});
+    }
+
+    if (cmd == QLatin1String("books_series_index_status")) {
+        return replyOk(reply, {
+            {"size",     m_seriesIndex ? m_seriesIndex->size() : 0},
+            {"builtAt",  m_seriesIndex ? static_cast<double>(m_seriesIndex->builtAt()) : 0.0},
+            {"building", m_indexBuilder ? m_indexBuilder->running() : false}
         });
     }
 
@@ -863,6 +928,11 @@ void BooksPage::buildUI()
     // Catalogue detail view (index 1; was index 2 pre-§3.8 backout when BookSeriesView held index 1)
     m_catalogueDetailView = new BookCatalogueDetailView();
     connect(m_catalogueDetailView, &BookCatalogueDetailView::backRequested, this, [this]() {
+        if (m_catalogueDetailReturnToSeries && m_seriesDetailView) {
+            m_catalogueDetailReturnToSeries = false;
+            m_stack->setCurrentWidget(m_seriesDetailView);
+            return;
+        }
         if (m_catalogueDetailReturnToSearch && m_catalogueSearchView) {
             m_catalogueDetailReturnToSearch = false;
             m_stack->setCurrentWidget(m_catalogueSearchView);
@@ -871,6 +941,24 @@ void BooksPage::buildUI()
         showGrid();
     });
     m_stack->addWidget(m_catalogueDetailView);
+
+    // Series-shape detail view (BOOKS_FICTIONDB_CATALOGUE §4.4). A book row's
+    // [Get] routes into the movie-shape detail view for that book (reusing the
+    // §5.2 source-search + download); [Read] opens the reader.
+    m_seriesDetailView = new BookSeriesDetailView();
+    connect(m_seriesDetailView, &BookSeriesDetailView::backRequested,
+            this, [this]() { showGrid(); });
+    connect(m_seriesDetailView, &BookSeriesDetailView::bookReadRequested,
+            this, &BooksPage::onCatalogueReadRequested);
+    connect(m_seriesDetailView, &BookSeriesDetailView::bookOpenRequested, this,
+            [this](const BookCatalogueResult& book) {
+                if (!m_catalogueDetailView) return;
+                m_catalogueDetailReturnToSeries = true;
+                m_catalogueDetailReturnToSearch = false;
+                m_catalogueDetailView->showBook(book, QString());
+                m_stack->setCurrentWidget(m_catalogueDetailView);
+            });
+    m_stack->addWidget(m_seriesDetailView);
 
     outerLayout->addWidget(m_stack, 1);
 
@@ -950,8 +1038,22 @@ void BooksPage::rebuildBookGrid()
     const QList<CatalogueRecord> records = m_catalogueStore
         ? m_catalogueStore->all()
         : QList<CatalogueRecord>{};
-    for (const CatalogueRecord& record : records)
-        addCatalogueRecordTile(record);
+    // Group library records by series: one tile per series (first owned book is
+    // the representative), standalone tiles for the rest. A downloaded series
+    // book thus appears under its series, not as a one-off.
+    QSet<QString> seriesSeen;
+    for (const CatalogueRecord& record : records) {
+        if (!record.seriesId.isEmpty()) {
+            if (seriesSeen.contains(record.seriesId)) continue;
+            seriesSeen.insert(record.seriesId);
+            const int owned = m_catalogueStore
+                ? m_catalogueStore->catalogueIdsForSeries(record.seriesId).size()
+                : 1;
+            addLibrarySeriesTile(record, owned);
+        } else {
+            addCatalogueRecordTile(record);
+        }
+    }
 
     if (records.isEmpty()) {
         m_bookStrip->hide();
@@ -999,6 +1101,32 @@ void BooksPage::addCatalogueRecordTile(const CatalogueRecord& record)
             catalogueRecordToResult(*record),
             QFile::exists(record->cachedCoverPath) ? record->cachedCoverPath : QString());
         m_stack->setCurrentWidget(m_catalogueDetailView);
+    });
+    m_bookStrip->addTile(card);
+}
+
+void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount)
+{
+    if (rep.seriesId.isEmpty()) return;
+
+    const QString cover = QFile::exists(rep.cachedCoverPath) ? rep.cachedCoverPath : QString();
+    const QString title = rep.seriesName.isEmpty() ? rep.title : rep.seriesName;
+    QStringList subtitleParts;
+    if (!rep.author.isEmpty()) subtitleParts << rep.author;
+    subtitleParts << QStringLiteral("%1 book%2").arg(ownedCount)
+                                                .arg(ownedCount == 1 ? QString() : QStringLiteral("s"));
+    auto* card = new TileCard(cover, title, subtitleParts.join(QStringLiteral(" / ")));
+    card->setProperty("catalogueSeries", true);
+    card->setProperty("seriesId", rep.seriesId);
+    card->setProperty("tileTitle", title);
+    card->setProperty("fileCount", ownedCount);
+    card->setProperty("newestMtime", rep.addedAt * 1000);
+    connect(card, &TileCard::clicked, this, [this, card]() {
+        const QString seriesId = card->property("seriesId").toString();
+        // Reuse the search→series flow: fetch the full series, open the series
+        // detail view (owned books show Read, the rest Get).
+        if (m_fictiondb && !seriesId.isEmpty())
+            m_fictiondb->fetchSeries(seriesId);
     });
     m_bookStrip->addTile(card);
 }
@@ -1319,4 +1447,204 @@ void BooksPage::restoreLayer(const tankoban::ui::LayerEntry& target)
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- no-op restore. BooksPage
     // has no deep state today; the page is always on its landing view.
     Q_UNUSED(target);
+}
+
+// ── §5.2 catalogue download lifecycle (2026-05-27) ────────────────────────────
+//
+// Flow:
+//   1. Detail view emits downloadRequested(sourceId, row, book, coverPath)
+//   2. BooksPage lazy-constructs BookDownloader (window()-mediated
+//      TorrentClient lookup needs the page to be parented + visible)
+//   3. Dispatches to BookDownloader::startDownload (HTTP for libgen/annas)
+//      or ::startMagnetDownload (tankorent), receives a handle
+//   4. Tracks the active context in m_activeDownloads keyed by handle so
+//      onBookDownloadComplete can re-construct a CatalogueRecord
+//   5. Forwards downloadProgress/Complete/Failed to the detail view so the
+//      CTA can morph: "Search for downloads" → "Downloading XX%" → "Read"
+//   6. On completion, builds a CatalogueRecord from the stored
+//      BookCatalogueResult + the new filePath, upserts to the store,
+//      then emits openBook so MainWindow's openBookReader slot fires
+//      automatically (per spec §5.2 final beat).
+
+namespace {
+
+QString resolveBooksDestinationDir(CoreBridge* bridge)
+{
+    if (!bridge) return QString();
+    const QStringList roots = bridge->rootFolders(QStringLiteral("books"));
+    if (!roots.isEmpty() && QDir(roots.first()).exists())
+        return roots.first();
+    // Fallback: under the per-user data dir. Catalogue-records-only world
+    // post-§3.8 — user with no configured root folder gets a default sink
+    // so first-use download still works end-to-end.
+    const QString fallback = bridge->dataDir() + QStringLiteral("/books-catalogue");
+    QDir().mkpath(fallback);
+    return fallback;
+}
+
+}  // namespace
+
+CatalogueRecord BooksPage::buildRecordFromContext(
+    const ActiveCatalogueDownload& ctx, const QString& filePath)
+{
+    CatalogueRecord r;
+    r.catalogueId       = ctx.book.catalogueId;
+    r.isbn              = ctx.book.isbn;
+    r.title             = ctx.book.title;
+    r.author            = ctx.book.author;
+    r.publisher         = ctx.book.publisher;
+    r.year              = ctx.book.year;
+    r.language          = ctx.book.language;
+    r.description       = ctx.book.description;
+    r.genres            = ctx.book.genres;
+    r.coverUrl          = ctx.book.coverUrl;
+    r.cachedCoverPath   = ctx.coverPath;
+    r.seriesId          = ctx.book.seriesId;
+    r.seriesName        = ctx.book.seriesName;
+    r.seriesPosition    = ctx.book.seriesPosition;
+    r.seriesTotal       = ctx.book.seriesTotal;
+    r.filePath          = filePath;
+    r.format            = ctx.format;
+    r.addedAt           = QDateTime::currentSecsSinceEpoch();
+    r.readProgress      = 0.0;
+    r.lastReadAt        = 0;
+    return r;
+}
+
+void BooksPage::onCatalogueDownloadRequested(const QString& sourceId,
+                                             const BookResult& row,
+                                             const QStringList& urls,
+                                             const BookCatalogueResult& book,
+                                             const QString& coverPath)
+{
+    // Lazy-construct BookDownloader on first request — TorrentClient lookup
+    // through window() needs the page to be parented + visible, which is
+    // guaranteed by the time a user clicks a source row.
+    if (!m_bookDownloader) {
+        auto* mainWin = qobject_cast<MainWindow*>(window());
+        TorrentClient* tc = mainWin ? mainWin->torrentClient() : nullptr;
+        m_bookDownloader = new BookDownloader(m_catalogueNam, tc, this);
+        connect(m_bookDownloader, &BookDownloader::downloadProgress,
+                this, &BooksPage::onBookDownloadProgress);
+        connect(m_bookDownloader, &BookDownloader::downloadComplete,
+                this, &BooksPage::onBookDownloadComplete);
+        connect(m_bookDownloader, &BookDownloader::downloadFailed,
+                this, &BooksPage::onBookDownloadFailed);
+    }
+
+    const QString destDir = resolveBooksDestinationDir(m_bridge);
+    if (destDir.isEmpty()) {
+        if (m_catalogueDetailView) {
+            m_catalogueDetailView->notifyDownloadFailed(
+                QString(), QStringLiteral("no books folder configured"));
+        }
+        return;
+    }
+
+    // Suggested filename: prefer the row's title (often the canonical book
+    // name as the source listed it), fall back to the catalogue title.
+    QString suggestedName = row.title.isEmpty() ? book.title : row.title;
+    if (suggestedName.isEmpty()) suggestedName = QStringLiteral("download");
+
+    QString handle;
+    if (sourceId == QLatin1String("tankorent")) {
+        // Tankorent rows carry the magnet URI in downloadUrl per
+        // TankorentBookScraper.cpp:65. expectedFormat helps pickBestBookFile
+        // disambiguate multi-file torrents.
+        handle = m_bookDownloader->startMagnetDownload(
+            row.downloadUrl, destDir, suggestedName, row.format);
+    } else {
+        // libgen / annas-archive — HTTP path. urls is the FULL mirror list
+        // from scraper->resolveDownload(); BookDownloader walks them for
+        // intra-row failover when individual mirrors return 404 / stale-HTML
+        // / network error.
+        const QString md5 = row.md5.isEmpty()
+            ? QCryptographicHash::hash(row.downloadUrl.toUtf8(),
+                                       QCryptographicHash::Sha1).toHex().left(20)
+            : row.md5;
+        handle = m_bookDownloader->startDownload(
+            md5, urls, destDir, suggestedName, row.fileSize.toLongLong());
+    }
+
+    if (handle.isEmpty()) {
+        if (m_catalogueDetailView) {
+            m_catalogueDetailView->notifyDownloadFailed(
+                QString(), QStringLiteral("transport refused — already active?"));
+        }
+        return;
+    }
+
+    ActiveCatalogueDownload ctx;
+    ctx.sourceId = sourceId;
+    ctx.book     = book;
+    ctx.coverPath = coverPath;
+    ctx.format   = row.format;
+    m_activeDownloads.insert(handle, ctx);
+
+    if (m_catalogueDetailView)
+        m_catalogueDetailView->notifyDownloadStarted(handle);
+}
+
+void BooksPage::onBookDownloadProgress(const QString& handle,
+                                       qint64 bytesReceived,
+                                       qint64 bytesTotal)
+{
+    if (!m_catalogueDetailView) return;
+    int pct = 0;
+    if (bytesTotal > 0)
+        pct = static_cast<int>((bytesReceived * 100) / bytesTotal);
+    m_catalogueDetailView->notifyDownloadProgress(handle, pct);
+}
+
+void BooksPage::onBookDownloadComplete(const QString& handle, const QString& filePath)
+{
+    auto it = m_activeDownloads.find(handle);
+    if (it == m_activeDownloads.end()) {
+        // Unknown handle — could be a TankoLibraryPage-side download leaking
+        // here if signal connections ever cross. Defensive no-op.
+        if (m_catalogueDetailView)
+            m_catalogueDetailView->notifyDownloadComplete(handle, filePath);
+        return;
+    }
+
+    ActiveCatalogueDownload ctx = it.value();
+    ctx.filePath = filePath;
+    m_activeDownloads.erase(it);
+
+    if (m_catalogueStore) {
+        const CatalogueRecord record = BooksPage::buildRecordFromContext(ctx, filePath);
+        m_catalogueStore->upsertRecord(record);
+        // recordsChanged signal will fire rebuildBookGrid + refreshContinueStrip
+        // automatically (wired in ctor).
+    }
+
+    if (m_catalogueDetailView)
+        m_catalogueDetailView->notifyDownloadComplete(handle, filePath);
+
+    // §5.2 final beat: "User clicks [Read]. BookReader opens at page 1."
+    // For v1 we auto-open on download-complete instead of requiring a second
+    // click — the file is downloaded, the user already engaged the flow, the
+    // CTA-morph-to-[Read] becomes meaningful for subsequent re-opens.
+    if (!filePath.isEmpty())
+        emit openBook(filePath);
+}
+
+void BooksPage::onBookDownloadFailed(const QString& handle, const QString& reason)
+{
+    m_activeDownloads.remove(handle);
+    if (m_catalogueDetailView)
+        m_catalogueDetailView->notifyDownloadFailed(handle, reason);
+}
+
+void BooksPage::onCatalogueReadRequested(const QString& catalogueId,
+                                         const QString& filePath)
+{
+    // [Read] CTA fired from detail view. If filePath empty (book in library
+    // but cached path lost?), look it up live from the store.
+    QString path = filePath;
+    if (path.isEmpty() && m_catalogueStore) {
+        const auto rec = m_catalogueStore->recordFor(catalogueId);
+        if (rec) path = rec->filePath;
+    }
+    if (!path.isEmpty()) emit openBook(path);
 }
