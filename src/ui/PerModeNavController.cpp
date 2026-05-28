@@ -26,6 +26,16 @@ void PerModeNavController::setActiveMode(const QString& pageId) {
     emitBackAvailability();
 }
 
+void PerModeNavController::setRootLayer(const QString& pageId, const LayerEntry& root) {
+    // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- register the persistent root
+    // for pageId. If the stack is currently empty (typical at app startup),
+    // push the root immediately so the next pushLayer lands on top of it.
+    m_roots[pageId] = root;
+    auto& s = m_stacks[pageId];
+    if (s.isEmpty()) s.push(root);
+    if (pageId == m_activeMode) emitBackAvailability();
+}
+
 void PerModeNavController::pushLayer(const QString& pageId, const LayerEntry& entry) {
     m_stacks[pageId].push(entry);
     if (pageId == m_activeMode) emitBackAvailability();
@@ -34,6 +44,10 @@ void PerModeNavController::pushLayer(const QString& pageId, const LayerEntry& en
 void PerModeNavController::popLayer(const QString& pageId) {
     auto it = m_stacks.find(pageId);
     if (it == m_stacks.end() || it->isEmpty()) return;
+    // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- never pop the root layer.
+    // popLayer is invoked from ComicsPage::onDetailBack / similar page-internal
+    // back paths; those should pop the deep entry and leave the root intact.
+    if (m_roots.contains(pageId) && it->size() == 1) return;
     it->pop();
     if (pageId == m_activeMode) emitBackAvailability();
 }
@@ -61,6 +75,12 @@ void PerModeNavController::goBack(const QString& pageId) {
 void PerModeNavController::resetMode(const QString& pageId) {
     auto& s = m_stacks[pageId];
     s.clear();
+    // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- re-seed the root if one was
+    // registered for this pageId. Without this, mode-pill double-tap on
+    // Comics would clear the stack and the next deep-nav push (e.g. opening
+    // a series tile) would land alone, leaving Back disabled.
+    auto rit = m_roots.find(pageId);
+    if (rit != m_roots.end()) s.push(*rit);
     if (pageId == m_activeMode) emitBackAvailability();
 }
 
