@@ -198,9 +198,11 @@ void ComicsSourcesPanel::populate(const QString& seriesTitle,
     m_currentChapterIds = chapterIds;
 
     if (m_headerLabel) {
-        m_headerLabel->setText(vol.volumeNumber > 0
-            ? tr("Volume %1").arg(vol.volumeNumber)
-            : tr("Sources"));
+        m_headerLabel->setText(
+            vol.volumeNumber == tankoban::manga::anilist::kVolumeXNumber
+                ? tr("Volume X")
+                : (vol.volumeNumber > 0 ? tr("Volume %1").arg(vol.volumeNumber)
+                                        : tr("Sources")));
     }
 
     if (vol.volumeNumber <= 0) {

@@ -2,6 +2,7 @@
 #include "ComicsSourceCard.h"
 
 #include "core/manga/TrustedUploaders.h"
+#include "core/manga/anilist/AniListTypes.h"  // kVolumeXNumber
 
 #include <QEnterEvent>
 #include <QFontMetrics>
@@ -430,7 +431,9 @@ void ComicsSourceCard::applyStylePerType()
 void ComicsSourceCard::rebuildDownloadButtonLabel()
 {
     if (!m_downloadButton) return;
-    if (m_volumeNumber > 0) {
+    if (m_volumeNumber == tankoban::manga::anilist::kVolumeXNumber) {
+        m_downloadButton->setText(QStringLiteral("Download Vol X"));
+    } else if (m_volumeNumber > 0) {
         m_downloadButton->setText(
             QStringLiteral("Download Vol %1").arg(m_volumeNumber));
     } else {
