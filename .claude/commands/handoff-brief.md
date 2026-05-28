@@ -49,6 +49,9 @@ You are generating a mid-wake handoff brief for Tankoban 2.
 ## What I need <target-agent> to do
 <fill in: specific ask — verb + object + verification gate>
 
+## Engine for the continuation
+<Opus | DeepSeek (Agent 9 tab) | Codex> + one-line why. Name the engine the remaining work wants: design/reversal pass → Opus; execution of a locked plan → DeepSeek/Codex by quota (read CLAUDE.md "Engine/quota status"); audit/long-context → DeepSeek. Default: same engine as the current session unless the remaining work changes shape. Protocol: GOVERNANCE.md § Engine Switching Protocol (gov-v10).
+
 ## Relevant memory pointers
 - <list of memory slugs the target should read first>
 
