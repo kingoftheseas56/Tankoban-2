@@ -1366,9 +1366,25 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         m_metaLine->clear();
     }
 
+    // VOLUME_X_DOWNLOAD: a real tankobon volume carries a MangaFire cover.
+    // Cover-less volumes are auto-bucket fakes (e.g. One Piece "vol 116/117")
+    // whose chapters belong under Volume X, not their own tile — skip them.
+    // Fallback: render all when the catalog has no covers at all.
+    bool catalogHasAnyCover = false;
+    for (const auto& vol : catalog.volumes) {
+        if (!vol.coverUrlJapanese.isEmpty() || !vol.coverUrlEnglish.isEmpty()) {
+            catalogHasAnyCover = true;
+            break;
+        }
+    }
+
     // Insert each volume as a VolumeTile row, just before the trailing
     // stretch in m_volumesLayout (index = count() - 1).
     for (const auto& vol : catalog.volumes) {
+        if (catalogHasAnyCover
+            && vol.coverUrlJapanese.isEmpty() && vol.coverUrlEnglish.isEmpty()) {
+            continue;  // fake auto-bucket volume -> folded into Volume X
+        }
         tankoban::ui::comics::VolumeTileData data;
         // COMICS_WC_SOURCE_LABEL_FIX 2026-05-26 (Agent 9).
         // VolumeTile needs to find download index entries registered under

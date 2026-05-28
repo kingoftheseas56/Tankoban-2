@@ -69,3 +69,38 @@ TEST(VolumeQualityClassifier, VolumeXChapterSpanEmptyIsZero) {
     EXPECT_EQ(span.first, 0);
     EXPECT_EQ(span.second, 0);
 }
+
+namespace {
+MangaVolume volCover(int n, int start, int end) {
+    MangaVolume v = vol(n, start, end);
+    v.coverUrlJapanese = QStringLiteral("http://cover/v%1.jpg").arg(n);
+    return v;
+}
+} // namespace
+
+// A cover-less catalog volume is a MangaFire auto-bucket that isn't a real
+// tankobon (e.g. One Piece "vol 116/117"). Its chapters must fold into Volume X,
+// and it must NOT be emitted as its own classified volume.
+TEST(VolumeQualityClassifier, CoverlessTrailingVolumesFoldIntoVolumeX) {
+    const auto out = VolumeQualityClassifier::classify(
+        { volCover(1, 1, 2), vol(2, 3, 4) },   // vol 2 has no cover -> fake
+        { chap(1, true), chap(2, true), chap(3, false), chap(4, false) });
+    ASSERT_EQ(out.size(), 2);            // real vol 1 + Volume X (NOT fake vol 2)
+    EXPECT_EQ(out[0].volumeNumber, 1);
+    EXPECT_FALSE(out[0].isVolumeX);
+    EXPECT_TRUE(out[1].isVolumeX);
+    EXPECT_EQ(out[1].chapterNumbers.size(), 2);  // ch 3 + 4 from the fake volume
+}
+
+// Fallback: when NO catalog volume carries a cover (some series), treat all as
+// real so we don't dump everything into Volume X. (Mirrors the legacy tests'
+// cover-less helper.)
+TEST(VolumeQualityClassifier, NoCoversAnywhereTreatsAllVolumesAsReal) {
+    const auto out = VolumeQualityClassifier::classify(
+        { vol(1, 1, 2), vol(2, 3, 4) },
+        { chap(1, true), chap(2, true), chap(3, true), chap(4, true) });
+    ASSERT_EQ(out.size(), 2);            // both volumes real, no Volume X
+    EXPECT_EQ(out[0].volumeNumber, 1);
+    EXPECT_EQ(out[1].volumeNumber, 2);
+    EXPECT_FALSE(out[1].isVolumeX);
+}

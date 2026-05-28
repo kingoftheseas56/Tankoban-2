@@ -27,11 +27,28 @@ QList<ClassifiedVolume> VolumeQualityClassifier::classify(
     std::sort(vols.begin(), vols.end(), [](const MangaVolume& a, const MangaVolume& b) {
         return a.volumeNumber < b.volumeNumber;
     });
-    int lastCatalogChapterEnd = 0;
+
+    // A real tankobon volume carries a MangaFire cover. Auto-bucketed "fake"
+    // volumes (chapters not yet collected into a tankobon — e.g. One Piece
+    // "vol 116/117") have no cover; their chapters belong in Volume X, not in a
+    // volume tile. Fallback: if the catalog carries NO covers at all, treat
+    // every volume as real so we don't dump the whole series into Volume X.
+    auto hasCover = [](const MangaVolume& v) {
+        return !v.coverUrlJapanese.isEmpty() || !v.coverUrlEnglish.isEmpty();
+    };
+    bool anyCover = false;
+    for (const auto& v : vols) if (hasCover(v)) { anyCover = true; break; }
+    auto isRealVolume = [&](const MangaVolume& v) {
+        return anyCover ? hasCover(v) : true;
+    };
+
+    int lastRealChapterEnd = 0;
     for (const auto& v : vols)
-        lastCatalogChapterEnd = std::max(lastCatalogChapterEnd, v.chapterRangeEnd);
+        if (isRealVolume(v))
+            lastRealChapterEnd = std::max(lastRealChapterEnd, v.chapterRangeEnd);
 
     for (const auto& v : vols) {
+        if (!isRealVolume(v)) continue;  // fake volume -> chapters fold into Volume X
         ClassifiedVolume cv;
         cv.volumeNumber = v.volumeNumber;
         bool allViolet = true;
@@ -53,7 +70,7 @@ QList<ClassifiedVolume> VolumeQualityClassifier::classify(
     volX.volumeNumber = tankoban::manga::anilist::kVolumeXNumber;
     volX.quality = VolumeQuality::Magazine;
     for (const auto& ch : chapters) {
-        if (static_cast<int>(ch.chapterNumber) > lastCatalogChapterEnd)
+        if (static_cast<int>(ch.chapterNumber) > lastRealChapterEnd)
             volX.chapterNumbers.append(ch.chapterNumber);
     }
     if (!volX.chapterNumbers.isEmpty()) {
