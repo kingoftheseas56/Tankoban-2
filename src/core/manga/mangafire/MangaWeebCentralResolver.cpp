@@ -138,7 +138,7 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         for (const auto& ch : chapters) {
             const int chapterNumber = normalizedChapterNumber(ch.chapterNumber);
             if (chapterNumber > 0 && !ch.id.isEmpty()) {
-                chapterRefs.append(ChapterRef{chapterNumber, ch.id});
+                chapterRefs.append(ChapterRef{chapterNumber, ch.id, ch.isVolumeScanned});
             }
         }
         m_chapterCache.insert(wcSeriesId, chapterRefs);
@@ -166,6 +166,22 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         for (const auto& pending : ready) {
             filterAndEmit(pending);
         }
+
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+        // After chapters land, check if a classifySeries() was waiting on
+        // this fetch. The pending classify's WC seriesId was resolved by
+        // the search→fetch pipeline; we now have the full chapter list with
+        // quality ticks in the cache.
+        if (!m_inflightClassifyMangaFireId.isEmpty()) {
+            // Find the mangaFire→WC mapping for the pending classify.
+            // The searchFinished handler patches the WeebCentral block on
+            // the MangaFire catalog entry, so the WC seriesId is discoverable
+            // from the pending mangaFire seriesId.
+            // For now, use the just-fetched wcSeriesId directly — it's the
+            // same one the classify fetch was waiting on.
+            runClassification(m_inflightClassifyMangaFireId, wcSeriesId,
+                              m_pendingClassifyVolumes);
+        }
     });
 
     connect(m_scraper, &MangaScraper::errorOccurred,
@@ -174,6 +190,8 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         m_pendingByMangafireSeriesId.clear();
         m_inflightSearch.clear();
         m_inflightFetch.clear();
+        m_inflightClassifyMangaFireId.clear();
+        m_pendingClassifyVolumes.clear();
 
         for (const auto& queue : allPending) {
             for (const auto& pending : queue) {
@@ -237,6 +255,73 @@ void MangaWeebCentralResolver::resolve(
 
     stepFetchChapters(pending);
 }
+
+// ---------------------------------------------------------------------------
+// VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+// ---------------------------------------------------------------------------
+
+void MangaWeebCentralResolver::classifySeries(
+    const tankoban::manga::MangaCatalog& catalog)
+{
+    const QString wcSeriesId = catalog.weebCentral.seriesId;
+
+    // Warm cache: classify from memory synchronously.
+    if (!wcSeriesId.isEmpty() && m_chapterCache.contains(wcSeriesId)) {
+        runClassification(catalog.seriesId, wcSeriesId, catalog.volumes);
+        return;
+    }
+
+    // Cache miss: piggyback on the existing search → fetch pipeline.
+    // Store volumes so chaptersReady can run classification when the
+    // chapter list lands in the cache.
+    m_inflightClassifyMangaFireId = catalog.seriesId;
+    m_pendingClassifyVolumes = catalog.volumes;
+
+    if (wcSeriesId.isEmpty()) {
+        if (m_scraper && m_inflightSearch.isEmpty()) {
+            m_inflightSearch = catalog.seriesId;
+            m_scraper->search(catalog.seriesTitle, 1);
+        }
+        return;
+    }
+
+    if (m_scraper && m_inflightFetch.isEmpty()) {
+        m_inflightFetch = wcSeriesId;
+        m_scraper->fetchChapters(wcSeriesId);
+    }
+}
+
+void MangaWeebCentralResolver::runClassification(
+    const QString& mangaFireSeriesId, const QString& wcSeriesId,
+    const QList<tankoban::manga::MangaVolume>& volumes)
+{
+    const auto it = m_chapterCache.constFind(wcSeriesId);
+    if (it == m_chapterCache.constEnd()) {
+        m_inflightClassifyMangaFireId.clear();
+        m_pendingClassifyVolumes.clear();
+        return;
+    }
+
+    // Convert ChapterRef → ChapterInfo for the classifier.
+    QList<ChapterInfo> chapters;
+    chapters.reserve(it.value().size());
+    for (const ChapterRef& ref : it.value()) {
+        ChapterInfo ci;
+        ci.chapterNumber = static_cast<double>(ref.number);
+        ci.isVolumeScanned = ref.isVolumeScanned;
+        chapters.append(ci);
+    }
+
+    const auto classified =
+        tankoban::manga::VolumeQualityClassifier::classify(volumes, chapters);
+
+    m_inflightClassifyMangaFireId.clear();
+    m_pendingClassifyVolumes.clear();
+
+    emit seriesClassified(mangaFireSeriesId, classified);
+}
+
+// ---------------------------------------------------------------------------
 
 void MangaWeebCentralResolver::stepFetchChapters(PendingResolvePtr pending)
 {

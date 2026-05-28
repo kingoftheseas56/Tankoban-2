@@ -13,6 +13,7 @@
 #pragma once
 
 #include "core/manga/MangaCatalogTypes.h"
+#include "core/manga/VolumeQualityClassifier.h"  // ClassifiedVolume
 
 #include <QHash>
 #include <QList>
@@ -47,6 +48,7 @@ public:
     struct ChapterRef {
         int number = 0;      // Parsed WeebCentral chapter number.
         QString id;          // Opaque WeebCentral chapter id for fetchPages().
+        bool isVolumeScanned = false;  // WeebCentral violet tick (volume-scan quality)
     };
 
     enum class SkipReason {
@@ -65,6 +67,14 @@ public:
                  int volumeNumber,
                  const ResolveKey& key);
 
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Classify every catalog volume as Clean or Magazine from the WeebCentral
+    // chapter-quality ticks, plus a trailing Volume X bucket for chapters past
+    // the last catalog volume. If the chapter cache is warm (prior resolve()
+    // call), emits seriesClassified synchronously; otherwise fetches chapters
+    // via the private scraper and emits asynchronously.
+    void classifySeries(const tankoban::manga::MangaCatalog& catalog);
+
     static QStringList filterChaptersToRange(const QList<ChapterRef>& chapters,
                                              int rangeStart,
                                              int rangeEnd,
@@ -76,6 +86,14 @@ signals:
     void skip(tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
               QString reasonCode);
 
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Emitted after classifySeries() completes. mangaFireSeriesId is the
+    // catalog slug; classified has one entry per catalog volume with member
+    // chapters plus a trailing Volume X when chapters exist past the last
+    // catalog volume.
+    void seriesClassified(const QString& mangaFireSeriesId,
+                          QList<tankoban::manga::ClassifiedVolume> classified);
+
 private:
     struct PendingResolve;
     using PendingResolvePtr = std::shared_ptr<PendingResolve>;
@@ -85,11 +103,25 @@ private:
     void emitSkip(PendingResolvePtr pending, SkipReason reason);
     void emitViable(PendingResolvePtr pending, const QStringList& chapterIds);
 
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Runs VolumeQualityClassifier against the cached chapter list for
+    // wcSeriesId, using volumes as the volume-boundary input. Emits
+    // seriesClassified on completion.
+    void runClassification(const QString& mangaFireSeriesId,
+                           const QString& wcSeriesId,
+                           const QList<tankoban::manga::MangaVolume>& volumes);
+
     QPointer<QNetworkAccessManager> m_nam;
     WeebCentralScraper*             m_scraper = nullptr;  // owned, private instance
 
     QHash<QString, QList<ChapterRef>> m_chapterCache; // WC seriesId -> chapter refs
     QHash<QString, QList<PendingResolvePtr>> m_pendingByMangafireSeriesId;
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // MangaFire seriesId waiting for chapter fetch before classification.
+    // Cleared when chaptersReady runs classification or on error.
+    QString m_inflightClassifyMangaFireId;
+    QList<tankoban::manga::MangaVolume> m_pendingClassifyVolumes;
 
     // The private WeebCentralScraper signal surface is request-id-less, so
     // serialize each async phase explicitly.
