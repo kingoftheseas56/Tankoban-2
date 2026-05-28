@@ -28,6 +28,11 @@ struct VolumePackRequest {
     int         volumeNumber = 0;
     QString     destinationPath; // canonical .cbz path on disk
     QStringList chapterIds;      // chapter ids in scrape order
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1). True when this volume is stitched
+    // from magazine (gray) chapters — Magazine volumes AND Volume X. Drives the
+    // .volx sidecar so the reader applies chapter-boundary pairing. Clean
+    // (all-violet) volumes leave it false and stitch with normal global pairing.
+    bool        needsChapterPairing = false;
 };
 
 // Source provider that synthesizes a vol cbz from WeebCentral chapter

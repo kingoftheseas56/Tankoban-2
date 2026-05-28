@@ -173,6 +173,7 @@ set(SOURCES
     src/core/manga/WeebCentralVolumePacker.cpp
     src/core/manga/ComicsPrePivotMigrator.cpp
     src/core/manga/TrustedUploaders.cpp
+    src/core/manga/VolumeQualityClassifier.cpp
     src/core/manga/MangaCatalogTypes.cpp
     src/core/manga/LocalMangaCatalogLoader.cpp
     src/core/manga/LocalMangaCatalogIndex.cpp
@@ -868,6 +869,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/anilist/test_anilist_parser.cpp
         tests/core/manga/anilist/test_anilist_cache.cpp
         tests/core/manga/mangafire/test_manga_weebcentral_resolver.cpp
+        tests/core/manga/test_weebcentral_chapter_quality.cpp
         src/core/manga/MangaScraper.h
         src/core/manga/WeebCentralScraper.cpp
         src/core/manga/mangafire/MangaFireCatalogClient.cpp
@@ -877,6 +879,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/mangaupdates/JapaneseTitlePicker.cpp
         tests/core/manga/test_trusted_uploaders.cpp
         src/core/manga/TrustedUploaders.cpp
+        tests/core/manga/test_volume_quality_classifier.cpp
+        src/core/manga/VolumeQualityClassifier.cpp
         tests/core/manga/wikidata/test_wikidata_cache.cpp
         tests/core/manga/wikipedia/test_wikipedia_resolver.cpp
         src/core/manga/MangaCatalogTypes.cpp

@@ -140,3 +140,92 @@ TEST(ComicReaderPairing, ForceSpreadOverrideBeatsAutoNormal)
     EXPECT_EQ(pairs[2].rightIndex, 2);
     EXPECT_TRUE(pairs[2].isSpread);
 }
+
+// ── VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1) ────────────────────────────
+// Synthesized Volume X cbzs stitch uncollected chapters that were never laid
+// out as a cohesive volume. Each chapter's first page must display alone
+// (cover-style) and the pages after it must pair fresh, regardless of the
+// previous chapter's page count.
+
+namespace {
+void markChapterStart(QVector<TwoPagePairingPage>& pages, int index)
+{
+    ASSERT_GE(index, 0);
+    ASSERT_LT(index, pages.size());
+    pages[index].isChapterStart = true;
+}
+} // namespace
+
+TEST(ComicReaderPairing, ChapterStartShowsAloneAndContentPairsFresh)
+{
+    // 0=vol cover, 1-2=ch0 content (even), 3=ch1 cover, 4-5=ch1 content.
+    auto state = pages(6);
+    markChapterStart(state, 3);
+    const auto pairs = buildTwoPagePairs(state, false);
+
+    ASSERT_EQ(pairs.size(), 4);
+    EXPECT_TRUE(pairs[0].coverAlone);
+    EXPECT_EQ(pairs[1].rightIndex, 1);
+    EXPECT_EQ(pairs[1].leftIndex, 2);
+
+    EXPECT_EQ(pairs[2].rightIndex, 3);
+    EXPECT_EQ(pairs[2].leftIndex, -1);
+    EXPECT_TRUE(pairs[2].coverAlone);
+
+    EXPECT_EQ(pairs[3].rightIndex, 4);
+    EXPECT_EQ(pairs[3].leftIndex, 5);
+}
+
+TEST(ComicReaderPairing, OddPriorChapterTailFallsSingleBeforeChapterCover)
+{
+    // 0=vol cover, 1-3=ch0 content (odd), 4=ch1 cover, 5-6=ch1 content.
+    auto state = pages(7);
+    markChapterStart(state, 4);
+    const auto pairs = buildTwoPagePairs(state, false);
+
+    ASSERT_EQ(pairs.size(), 5);
+    EXPECT_EQ(pairs[1].rightIndex, 1);
+    EXPECT_EQ(pairs[1].leftIndex, 2);
+
+    // ch0's odd tail page falls as a single — NOT paired into the ch1 cover.
+    EXPECT_EQ(pairs[2].rightIndex, 3);
+    EXPECT_TRUE(pairs[2].unpairedSingle);
+
+    EXPECT_EQ(pairs[3].rightIndex, 4);
+    EXPECT_TRUE(pairs[3].coverAlone);
+
+    EXPECT_EQ(pairs[4].rightIndex, 5);
+    EXPECT_EQ(pairs[4].leftIndex, 6);
+}
+
+TEST(ComicReaderPairing, ColorSpreadChapterCoverShowsAloneAndResetsParity)
+{
+    // 0=vol cover, 1-2=ch0, 3=ch1 cover that is itself a color spread, 4-5=ch1.
+    auto state = pages(6, {3});
+    markChapterStart(state, 3);
+    const auto pairs = buildTwoPagePairs(state, false);
+
+    ASSERT_EQ(pairs.size(), 4);
+    EXPECT_EQ(pairs[2].rightIndex, 3);
+    EXPECT_TRUE(pairs[2].isSpread);
+    EXPECT_EQ(pairs[2].leftIndex, -1);
+
+    // Content after the spread cover still pairs fresh.
+    EXPECT_EQ(pairs[3].rightIndex, 4);
+    EXPECT_EQ(pairs[3].leftIndex, 5);
+}
+
+TEST(ComicReaderPairing, ChapterStartNeverPairedAsLeftPartner)
+{
+    // 0=vol cover, 1=ch0 single content page, 2=ch1 cover.
+    auto state = pages(3);
+    markChapterStart(state, 2);
+    const auto pairs = buildTwoPagePairs(state, false);
+
+    ASSERT_EQ(pairs.size(), 3);
+    EXPECT_EQ(pairs[1].rightIndex, 1);
+    EXPECT_TRUE(pairs[1].unpairedSingle);  // not paired into the ch1 cover
+
+    EXPECT_EQ(pairs[2].rightIndex, 2);
+    EXPECT_TRUE(pairs[2].coverAlone);
+}

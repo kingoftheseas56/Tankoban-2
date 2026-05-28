@@ -945,6 +945,10 @@ void ComicReader::openBook(const QString& cbzPath,
     m_cbzPath = cbzPath;
     m_seriesCbzList = seriesCbzList;
     m_seriesName = seriesName;
+    // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). Volume X cbzs carry a
+    // ".volx" sidecar (WeebCentralVolumePacker). Re-evaluated per cbz so it
+    // tracks correctly across in-reader volume navigation.
+    m_isVolumeX = QFile::exists(cbzPath + QStringLiteral(".volx"));
     // J1: brief loading indicator before synchronous pageList call
     m_imageLabel->setText("Loading...");
     m_imageLabel->repaint();
@@ -1092,6 +1096,7 @@ QVector<TwoPagePairingPage> ComicReader::pairingPages() const
 {
     QVector<TwoPagePairingPage> pages;
     pages.reserve(m_pageMeta.size());
+    QString prevChapterToken;
     for (int i = 0; i < m_pageMeta.size(); ++i) {
         TwoPagePairingPage page;
         page.isSpread = m_pageMeta[i].isSpread;
@@ -1099,6 +1104,23 @@ QVector<TwoPagePairingPage> ComicReader::pairingPages() const
         if (it != m_spreadOverrides.end()) {
             page.hasSpreadOverride = true;
             page.spreadOverride = it.value();
+        }
+        // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). Volume X cbzs name
+        // pages "<chapter>_<page>.<ext>" (WeebCentralVolumePacker). A page is a
+        // chapter start when its chapter token differs from the previous page's;
+        // buildTwoPagePairs then shows it alone (cover-style) and pairs the rest
+        // of the chapter fresh. Page 0 (the volume cover) is never marked — the
+        // pairing already shows it alone. Gated on m_isVolumeX so normal volumes
+        // (real tankobon split into chapters that flow correctly) are untouched.
+        if (m_isVolumeX) {
+            const QString& fn = m_pageMeta[i].filename;
+            const int sep = fn.indexOf(QLatin1Char('_'));
+            const QString chapterToken = (sep > 0) ? fn.left(sep) : QString();
+            if (!chapterToken.isEmpty()) {
+                if (i > 0 && chapterToken != prevChapterToken)
+                    page.isChapterStart = true;
+                prevChapterToken = chapterToken;
+            }
         }
         pages.append(page);
     }

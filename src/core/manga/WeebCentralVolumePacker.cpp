@@ -7,6 +7,7 @@
 #include "MangaResult.h"            // PageInfo
 #include "PremiumArchiveValidator.h"
 #include "PremiumCoverExtractor.h"  // Phase 12
+#include "anilist/AniListTypes.h"   // kVolumeXNumber (VOLUME_X_CHAPTER_PAIRING)
 
 #include <QByteArray>
 #include <QChar>
@@ -285,6 +286,24 @@ void WeebCentralVolumePacker::finalizePack(const VolumePackRequest& req, const Q
         emit volumeFailed(req.seriesId, req.volumeNumber,
                           QStringLiteral("final_rename_failed"), req.destinationPath);
         return;
+    }
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1). Magazine-sourced volumes (any gray
+    // chapter) AND Volume X stitch chapters that were never laid out as a
+    // cohesive volume, so the reader must break pairing at each chapter
+    // boundary (cover-alone). Clean (all-violet) volumes are real tankobon
+    // scans split into chapters and flow correctly without breaks, so they get
+    // no marker. The caller sets needsChapterPairing from the volume's quality
+    // classification (was Volume-X-only before the quality-aware cutover). The
+    // marker is a sidecar beside the cbz (NOT inside it) because
+    // PremiumArchiveValidator rejects any non-image entry within a Premium cbz.
+    // The reader reads the chapter boundaries themselves from the
+    // <chapter>_<page> image filenames; this sidecar only carries the
+    // needs-pairing yes/no bit.
+    if (req.needsChapterPairing) {
+        QFile marker(req.destinationPath + QStringLiteral(".volx"));
+        if (marker.open(QIODevice::WriteOnly))
+            marker.close();
     }
 
     // Cleanup staging dir (best-effort).

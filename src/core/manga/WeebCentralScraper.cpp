@@ -270,6 +270,11 @@ QList<ChapterInfo> WeebCentralScraper::parseChaptersHtml(const QString& html, co
 
         QString rawInner = m.captured(2);
 
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1). Violet tick = volume-scanned;
+        // gray = magazine. Read BEFORE the <svg> block is stripped below.
+        // Discriminator confirmed in agents/audits/weebcentral_volume_tick_markup_2026-05-28.md.
+        ch.isVolumeScanned = rawInner.contains(QStringLiteral("stroke=\"#d8b4fe\""));
+
         // (1) Pull ISO date from <time>...</time> inner text into dateUpload.
         const auto timeMatch = timeBlockRe.match(rawInner);
         if (timeMatch.hasMatch()) {
