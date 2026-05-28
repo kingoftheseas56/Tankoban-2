@@ -45,6 +45,11 @@ public:
     void searchCatalog(const QString& query);
     void fetchSeriesMeta(const QString& imdbId);
 
+    // THEATRE_ANIME_CATALOG — the Kitsu id a series resolved to during an anime
+    // reroute, or -1 if the series isn't anime / wasn't rerouted. The play path
+    // uses it to fetch streams via Torrentio's "kitsu:<id>:<absoluteEp>" id.
+    int kitsuIdForSeries(const QString& imdbId) const;
+
     // Fetches the full MetaItem (preview + videos[] + trailer streams + links)
     // for any (imdbId, type) — used by StreamDetailView to light up richer
     // header + episode fields (cast, genres, runtime, episode thumbnails).
@@ -143,6 +148,7 @@ private:
     QNetworkAccessManager* m_fribbNam = nullptr;   // lazy; Fribb map refresh
     bool m_seriesAnimeRerouteAttempted = false;
     QSet<QString> m_animeRerouted;                 // imdbIds resolved via Kitsu
+    QHash<QString, int> m_animeKitsuId;            // imdbId -> resolved kitsu id
 
     // fetchMetaItem cache keyed by imdbId. Short TTL — detail view reopens
     // are hot and the payload is small; a minute is enough to coalesce

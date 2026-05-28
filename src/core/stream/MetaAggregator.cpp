@@ -528,6 +528,11 @@ void MetaAggregator::finalizeSeries(const QString& addonId, const QString& error
 
 // ── THEATRE_ANIME_CATALOG reroute ───────────────────────────────────────────
 
+int MetaAggregator::kitsuIdForSeries(const QString& imdbId) const
+{
+    return m_animeKitsuId.value(imdbId, -1);
+}
+
 AnimeIdMapCache* MetaAggregator::animeIdMap()
 {
     if (!m_animeIdMap) {
@@ -587,6 +592,7 @@ void MetaAggregator::emitSeriesResult(
         m_animeRerouted.insert(imdbId);
     } else {
         m_animeRerouted.remove(imdbId);
+        m_animeKitsuId.remove(imdbId);
     }
     if (!seasons.isEmpty()) {
         m_seriesCache[imdbId] =
@@ -655,8 +661,8 @@ void MetaAggregator::fetchAnimeKitsuMeta(
 
     *readyConn = connect(
         worker, &AddonTransport::resourceReady, this,
-        [this, imdbId, request, requireConfirm, fallback, handled, readyConn, failConn,
-         worker](const ResourceRequest& incoming, const QJsonObject& payload) {
+        [this, imdbId, kitsuId, request, requireConfirm, fallback, handled, readyConn,
+         failConn, worker](const ResourceRequest& incoming, const QJsonObject& payload) {
             if (*handled || !sameRequest(request, incoming)) {
                 return;
             }
@@ -671,8 +677,12 @@ void MetaAggregator::fetchAnimeKitsuMeta(
                 return;
             }
             const QMap<int, QList<StreamEpisode>> seasons = parseSeriesEpisodes(payload);
-            emitSeriesResult(imdbId, seasons.isEmpty() ? fallback : seasons,
-                             /*isAnime=*/!seasons.isEmpty());
+            if (seasons.isEmpty()) {
+                emitSeriesResult(imdbId, fallback, /*isAnime=*/false);
+            } else {
+                m_animeKitsuId.insert(imdbId, kitsuId);
+                emitSeriesResult(imdbId, seasons, /*isAnime=*/true);
+            }
         });
 
     *failConn = connect(

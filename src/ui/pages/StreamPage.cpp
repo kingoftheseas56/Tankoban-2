@@ -2417,10 +2417,20 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
 
     tankostream::stream::StreamLoadRequest req;
     req.type = (mediaType == "movie") ? QStringLiteral("movie") : QStringLiteral("series");
-    req.id = (mediaType == "movie")
-                 ? imdbId
-                 : imdbId + QLatin1Char(':') + QString::number(qMax(1, season))
-                          + QLatin1Char(':') + QString::number(qMax(1, episode));
+    // THEATRE_ANIME_CATALOG — anime series resolve to a Kitsu id; Torrentio
+    // serves their streams via "kitsu:<id>:<absoluteEpisode>" (no season).
+    // Falls back to the standard imdb:season:episode id for everything else.
+    const int kitsuId = (mediaType != QLatin1String("movie") && m_metaAggregator)
+                            ? m_metaAggregator->kitsuIdForSeries(imdbId)
+                            : -1;
+    if (mediaType == "movie") {
+        req.id = imdbId;
+    } else if (kitsuId > 0) {
+        req.id = QStringLiteral("kitsu:%1:%2").arg(kitsuId).arg(qMax(1, episode));
+    } else {
+        req.id = imdbId + QLatin1Char(':') + QString::number(qMax(1, season))
+                        + QLatin1Char(':') + QString::number(qMax(1, episode));
+    }
     disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError,
                this, nullptr);
     connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError, this,
