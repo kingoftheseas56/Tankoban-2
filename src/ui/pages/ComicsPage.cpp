@@ -2270,7 +2270,18 @@ void ComicsPage::refreshLibraryStrips()
                     gt.coverUrl = detailOpt->preview.coverThumbUrl;
                 }
             }
-            if (gt.coverPath.isEmpty() && m_bridge && !e.canonicalPath.isEmpty()) {
+            // COMICS_VOL1_THUMBNAIL_PRECEDENCE 2026-05-27 (Agent 1). Hemanth
+            // rule: library tile thumbnail is ALWAYS the series Volume 1 cover.
+            // The cbz file-thumb is extracted from whatever volume happens to
+            // be downloaded (e.g. One Piece Vol 99), whose first page may be an
+            // interior/chapter-title page, not a cover. So the cbz file-thumb +
+            // tyLibrary cover are now gated on gt.coverUrl.isEmpty() — they only
+            // fill in when no canonical (MangaFire Vol 1) cover URL resolved.
+            // TileCard renders coverPath over coverUrl when both are set, so
+            // leaving coverPath unset lets fetchPosterForTile paint the Vol 1
+            // URL. Fallback for series WITHOUT a catalog entry is preserved.
+            if (gt.coverUrl.isEmpty() && gt.coverPath.isEmpty()
+                && m_bridge && !e.canonicalPath.isEmpty()) {
                 const QFileInfo fi(e.canonicalPath);
                 if (fi.exists()) {
                     const QString fileKey = QDir::cleanPath(fi.absoluteFilePath())
@@ -2288,7 +2299,7 @@ void ComicsPage::refreshLibraryStrips()
                         gt.coverPath = fc;
                 }
             }
-            if (gt.coverPath.isEmpty() && m_tyLibrary) {
+            if (gt.coverUrl.isEmpty() && gt.coverPath.isEmpty() && m_tyLibrary) {
                 const auto rec = m_tyLibrary->get(e.sourceId, e.seriesId);
                 if (!rec.coverPath.isEmpty() && QFile::exists(rec.coverPath))
                     gt.coverPath = rec.coverPath;

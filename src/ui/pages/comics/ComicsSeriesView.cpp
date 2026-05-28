@@ -408,14 +408,16 @@ void ComicsSeriesView::buildUi()
     // (src/ui/pages/stream/StreamDetailView.cpp:395-487). Shape:
     //   actionRow  -- back link (left) + library button (right)
     //   heroBanner -- 140px solid block holding the series banner image
-    //   contentRow -- two columns (leftCol stretch=3, rightCol stretch=1)
+    //   contentRow -- two columns (leftCol stretch=3, rightCol stretch=2)
     //                 leftCol holds title + meta + description + volume table
     //                 rightCol holds m_sourcesPanel full-vertical
     // The prior full-bleed paintEvent wallpaper is GONE -- title text now
     // sits below the banner on a solid dark background. Mockup at
     // .superpowers/brainstorm/1608-1779095122/content/proposed-layout.html.
+    // Outer margins (16,8,16,8) match StreamDetailView.cpp:377 — Hemanth
+    // 2026-05-27 directive to size Comics sources panel to match Theatre.
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(24, 14, 24, 24);
+    outer->setContentsMargins(16, 8, 16, 8);
     outer->setSpacing(18);
 
     // Root QSS -- no wallpaper, solid dark background, label foreground colors,
@@ -707,7 +709,8 @@ void ComicsSeriesView::buildUi()
     // skeleton-pulse, auto-pick 300ms beat -- all UNCHANGED.
     m_sourcesPanel = new ComicsSourcesPanel(m_catalog, m_nyaa, this);
     m_sourcesPanel->setObjectName(QStringLiteral("ComicsSeriesSourcesPanel"));
-    m_sourcesPanel->setMinimumWidth(380);
+    // No setMinimumWidth — matches StreamDetailView's source panel (no min).
+    // Prior 380px floor was Comics-specific and unmatched by Theatre.
     m_sourcesPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentRow->addWidget(m_sourcesPanel, /*stretch*/ 2);
 
