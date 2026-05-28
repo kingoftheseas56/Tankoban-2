@@ -27,7 +27,10 @@ namespace {
 // returned empty and the SubtitlePopover only ever showed internal mkv
 // tracks + "Load from file..." for users who never manually installed
 // a subtitle addon — a Stremio-parity gap surfaced by Hemanth 2026-05-10.
-constexpr int kSchemaVersion = 4;
+// v5 (THEATRE_ANIME_CATALOG 2026-05-28): seed Anime Kitsu as a protected
+// default so existing installs reseed and the anime reroute can resolve its
+// meta endpoint. Prior seeds had no kitsu-capable meta addon.
+constexpr int kSchemaVersion = 5;
 
 QJsonObject manifestToJson(const AddonManifest& m)
 {
@@ -781,6 +784,40 @@ void AddonRegistry::seedDefaults()
         opensubs.manifest.resources = {subRes};
     }
     m_addons.push_back(opensubs);
+
+    // THEATRE_ANIME_CATALOG (2026-05-28) — Anime Kitsu, the Kitsu-keyed anime
+    // metadata catalog. Serves flat absolute-numbered episode lists for anime
+    // (One Piece as one continuous list, not 23 TMDB seasons). MetaAggregator
+    // reroutes Animation+Japan series here via an IMDb->Kitsu bridge. Keyed on
+    // kitsu/mal/anilist/anidb ids (NOT tt), so it never serves the tt-id
+    // candidate fan-out -- the reroute fetches its meta directly by kitsu id.
+    AddonDescriptor animeKitsu;
+    animeKitsu.transportUrl = QUrl(QStringLiteral("https://anime-kitsu.strem.fun/manifest.json"));
+    animeKitsu.flags.official = false;
+    animeKitsu.flags.enabled = true;
+    animeKitsu.flags.protectedAddon = true;  // load-bearing default for the anime reroute
+    animeKitsu.manifest.id = QStringLiteral("community.anime.kitsu");
+    animeKitsu.manifest.version = QStringLiteral("0.0.10");
+    animeKitsu.manifest.name = QStringLiteral("Anime Kitsu");
+    animeKitsu.manifest.types = {
+        QStringLiteral("anime"), QStringLiteral("series"), QStringLiteral("movie"),
+    };
+    {
+        ManifestResource metaRes;
+        metaRes.name = QStringLiteral("meta");
+        metaRes.hasTypes = true;
+        metaRes.types = {QStringLiteral("series"), QStringLiteral("movie"),
+                         QStringLiteral("anime")};
+        metaRes.hasIdPrefixes = true;
+        metaRes.idPrefixes = {QStringLiteral("kitsu"), QStringLiteral("mal"),
+                              QStringLiteral("anilist"), QStringLiteral("anidb")};
+
+        ManifestResource catalogRes;
+        catalogRes.name = QStringLiteral("catalog");
+
+        animeKitsu.manifest.resources = {metaRes, catalogRes};
+    }
+    m_addons.push_back(animeKitsu);
 }
 
 }

@@ -214,6 +214,8 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
     if (m_meta) {
         connect(m_meta, &MetaAggregator::seriesMetaReady,
                 this, &StreamDetailView::onSeriesMetaReady);
+        connect(m_meta, &MetaAggregator::animeCatalogActive,
+                this, &StreamDetailView::onAnimeCatalogActive);
         connect(m_meta, &MetaAggregator::metaItemReady,
                 this, &StreamDetailView::onMetaItemReady);
     }
@@ -241,6 +243,12 @@ void StreamDetailView::showEntry(const QString& imdbId,
     m_episodeTable->setRowCount(0);
     m_episodeTable->hide();
     m_seasonRow->hide();
+    // THEATRE_ANIME_CATALOG — reset anime state for the new entry; combo +
+    // label default to visible (onAnimeCatalogActive re-hides them if anime).
+    m_isAnime = false;
+    if (m_animeBadge) m_animeBadge->hide();
+    if (m_seasonLabel) m_seasonLabel->show();
+    if (m_seasonCombo) m_seasonCombo->show();
     if (m_movieActionRow) m_movieActionRow->hide();
     if (m_movieLocalChip) m_movieLocalChip->hide();
     if (m_movieDownloadChip) m_movieDownloadChip->hide();
@@ -474,6 +482,26 @@ void StreamDetailView::buildUI()
     m_titleLabel->setStyleSheet("color: #e0e0e0; font-size: 16px; font-weight: bold;");
     leftCol->addWidget(m_titleLabel);
 
+    // THEATRE_ANIME_CATALOG — "ANIME" pill under the title. Hidden by default;
+    // shown by onAnimeCatalogActive when the flat Kitsu catalog is in use.
+    m_animeBadge = new QLabel(tr("ANIME"), this);
+    m_animeBadge->setObjectName(QStringLiteral("StreamDetailAnimeBadge"));
+    m_animeBadge->setStyleSheet(
+        "#StreamDetailAnimeBadge {"
+        "  background: rgba(139,92,246,0.22);"
+        "  color: #c4b5fd;"
+        "  border: 1px solid rgba(139,92,246,0.45);"
+        "  border-radius: 4px; padding: 1px 7px;"
+        "  font-size: 10px; font-weight: 600; letter-spacing: 0.5px; }");
+    m_animeBadge->hide();
+    {
+        auto* badgeRow = new QHBoxLayout();
+        badgeRow->setContentsMargins(0, 0, 0, 0);
+        badgeRow->addWidget(m_animeBadge);
+        badgeRow->addStretch(1);
+        leftCol->addLayout(badgeRow);
+    }
+
     // STREAM_DETAIL_METADATA_POLISH 2026-05-06 — single inline metadata
     // line (Stremio parity). Replaces the earlier 5-chip row whose QSS
     // (padding 2px 10px, 11px font, 10px border-radius) intended small
@@ -628,9 +656,9 @@ void StreamDetailView::buildUI()
     seasonLayout->setContentsMargins(0, 4, 0, 4);
     seasonLayout->setSpacing(8);
 
-    auto* seasonLabel = new QLabel("Season:", m_seasonRow);
-    seasonLabel->setStyleSheet("color: rgba(255,255,255,0.6); font-size: 13px;");
-    seasonLayout->addWidget(seasonLabel);
+    m_seasonLabel = new QLabel("Season:", m_seasonRow);
+    m_seasonLabel->setStyleSheet("color: rgba(255,255,255,0.6); font-size: 13px;");
+    seasonLayout->addWidget(m_seasonLabel);
 
     m_seasonCombo = new QComboBox(m_seasonRow);
     m_seasonCombo->setFixedWidth(120);
@@ -1006,6 +1034,20 @@ void StreamDetailView::updateDownloadSelectedButton()
 
 // ─── Series metadata ─────────────────────────────────────────────────────────
 
+void StreamDetailView::onAnimeCatalogActive(const QString& imdbId, bool isAnime)
+{
+    if (imdbId != m_currentImdb)
+        return;
+    m_isAnime = isAnime;
+    if (m_animeBadge)
+        m_animeBadge->setVisible(isAnime);
+    // Anime uses one flat absolute-numbered list, so the season combo is
+    // meaningless — hide it (the episode table already shows the flat list).
+    // Download controls in the same row stay visible.
+    if (m_seasonLabel) m_seasonLabel->setVisible(!isAnime);
+    if (m_seasonCombo) m_seasonCombo->setVisible(!isAnime);
+}
+
 void StreamDetailView::onSeriesMetaReady(
     const QString& imdbId,
     const QMap<int, QList<StreamEpisode>>& seasons)
@@ -1054,6 +1096,11 @@ void StreamDetailView::onSeriesMetaReady(
     m_seasonCombo->blockSignals(false);
 
     m_seasonRow->show();
+    // THEATRE_ANIME_CATALOG — the flat Kitsu list has a single meaningless
+    // "Season 1"; hide the combo (the episode table already shows the flat
+    // list). Download controls in the same row stay visible.
+    if (m_seasonLabel) m_seasonLabel->setVisible(!m_isAnime);
+    if (m_seasonCombo) m_seasonCombo->setVisible(!m_isAnime);
     updateBulkDownloadButton();
 
     // Batch 6.2 — Calendar navigation: if a season/episode was staged by

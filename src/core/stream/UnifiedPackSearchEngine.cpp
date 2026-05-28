@@ -45,7 +45,8 @@ UnifiedPackSearchEngine::UnifiedPackSearchEngine(
 void UnifiedPackSearchEngine::search(const QString& imdbId,
                                      const QString& showName,
                                      int season,
-                                     const QString& sourceFilter) {
+                                     const QString& sourceFilter,
+                                     bool anime) {
     // Reentrance discipline (per code-review C1, 2026-05-16): if a prior
     // search is in flight, force-emit its terminal searchComplete so the
     // prior consumer is not left waiting. The prior search's in-flight
@@ -70,7 +71,7 @@ void UnifiedPackSearchEngine::search(const QString& imdbId,
 
     // Tankorent indexer fan-out via B1's searchPacks. Terminal signal is
     // packsAvailable; one emit per call.
-    m_aggregator->searchPacks(imdbId, showName, season, sourceFilter);
+    m_aggregator->searchPacks(imdbId, showName, season, sourceFilter, anime);
 }
 
 void UnifiedPackSearchEngine::onTankorentPacksAvailable(
