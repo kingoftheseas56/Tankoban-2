@@ -211,6 +211,13 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_wcResolver,
             &tankoban::manga::mangafire::MangaWeebCentralResolver::skip,
             this, &ComicsPage::onWcResolverSkip);
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Route classification verdicts directly to the series view for RAW tags
+    // and Volume X row rendering.
+    connect(m_wcResolver,
+            &tankoban::manga::mangafire::MangaWeebCentralResolver::seriesClassified,
+            m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::onSeriesClassified);
     m_mangaUpdatesClient = new tankoban::manga::mangaupdates::MangaUpdatesClient(
         m_anilistClient ? m_anilistClient->networkManager() : nullptr, this);
     m_volumeResolver = new tankoban::manga::mangaupdates::VolumeMetadataResolver(
@@ -3057,6 +3064,13 @@ void ComicsPage::onDownloadDispatchRequested(
         req.volumeNumber    = volumeNumber;
         req.destinationPath = destinationPath;
         req.chapterIds      = wcChapterIds;
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+        // Magazine + Volume X volumes need chapter-boundary pairing (.volx
+        // sidecar); clean volumes stitch without it.
+        req.needsChapterPairing =
+            m_tyVolumeSeriesView
+                ? m_tyVolumeSeriesView->isVolumeMagazineSourced(volumeNumber)
+                : false;
         rememberPendingVolumeDispatch(req.seriesId, volumeNumber,
                                       PendingVolumeSourceKind::WeebCentralPacker,
                                       anilistSeriesId, wcChapterIds);
@@ -3943,6 +3957,11 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
             qInfo("ComicsPage::dispatchCatalogResolve: catalog hit (%s -> slug=%s)",
                   qUtf8Printable(matchedBy), qUtf8Printable(slug));
             m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*local);
+            // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+            // Kick off async classification. Cache-hit resolves synchronously;
+            // cache-miss fetches chapters then emits seriesClassified, which
+            // re-renders with RAW tags + Volume X row.
+            if (m_wcResolver) m_wcResolver->classifySeries(*local);
             return;
         }
         qInfo("ComicsPage::dispatchCatalogResolve: slug=%s matched but loadFromFile failed",
@@ -3998,6 +4017,8 @@ void ComicsPage::onMangaFireCatalogReady(
         return;
     }
     m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*loaded);
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    if (m_wcResolver) m_wcResolver->classifySeries(*loaded);
 }
 
 void ComicsPage::onMangaFireCatalogFailed(const QString& title,

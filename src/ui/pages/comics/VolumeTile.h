@@ -32,6 +32,8 @@ struct VolumeTileData {
     QString publishDate;               // free-form, may be empty
     QString synopsis;                  // optional per-volume summary
     QString coverUrl;                  // initial cover; setCoverFromDisk overrides post-DL
+    bool    isRawScan = false;         // VOLUME_X_QUALITY: magazine-sourced → "RAW SCAN" badge
+    bool    upgradeAvailable = false;  // VOLUME_X_QUALITY: was Magazine, now Clean → re-download
 };
 
 struct VolumeTileState {
@@ -67,6 +69,8 @@ public:
     void setCoverFromPixmap(const QPixmap& pm);   // for async-fetch paint path
     void setStatusText(const QString& text);
     void setSelected(bool selected);
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    void setUpgradeAvailable(bool available);
 
     // Per-tile subscription. Non-owning. May be set after construction.
     void setMangaDownloadIndex(MangaDownloadIndex* idx);
@@ -85,6 +89,8 @@ signals:
     void downloadRequested(int volumeNumber);      // user clicked Download on NotStarted
     void cancelRequested(int volumeNumber);        // user clicked Cancel on Queued/Downloading
     void retryRequested(int volumeNumber);         // user clicked Retry on Failed
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    void upgradeRequested(int volumeNumber);       // user clicked Update on upgrade-available
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -114,6 +120,9 @@ private:
     QLabel*      m_coverLabel = nullptr;
     QLabel*      m_titleLabel = nullptr;
     QLabel*      m_synopsisLabel = nullptr;
+    QLabel*      m_rawScanBadge = nullptr;   // VOLUME_X_QUALITY: "RAW SCAN" amber badge
+    QPushButton* m_upgradeButton = nullptr;   // VOLUME_X_QUALITY: "UPDATE" button
+    bool         m_upgradeAvailable = false;  // VOLUME_X_QUALITY
     QLabel*      m_stateIconLabel = nullptr;
 };
 

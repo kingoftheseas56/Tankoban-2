@@ -1402,6 +1402,13 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
                               ? vol.coverUrlJapanese
                               : vol.coverUrlEnglish;
 
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+        // Tag magazine-sourced volumes with the RAW SCAN badge.
+        if (auto it = m_classifiedByVolume.constFind(vol.volumeNumber);
+            it != m_classifiedByVolume.constEnd()) {
+            data.isRawScan = (it->quality == tankoban::manga::VolumeQuality::Magazine);
+        }
+
         const int rowIndex = m_currentVolumeRows.size();
         Q_UNUSED(rowIndex);
         anilist::VolumeRow mappedRow;
@@ -1458,6 +1465,13 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
                     }
                 });
 
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+        // Upgrade click opens the Sources panel so the user can re-dispatch
+        // the download. The new dispatch picks up the Clean verdict via
+        // isVolumeMagazineSourced → needsChapterPairing=false.
+        connect(tile, &tankoban::ui::comics::VolumeTile::upgradeRequested,
+                this, &ComicsSeriesView::onVolumeRowActivated);
+
         m_volumeTiles.append(tile);
         m_volumeTilesByVolumeNumber.insert(vol.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
@@ -1468,6 +1482,53 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         if (!data.coverUrl.isEmpty()) {
             loadCoverUrlForVolume(data.coverUrl, vol.volumeNumber);
         }
+    }
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Append a Volume X row for the bleeding-edge tail bucket. This row
+    // carries the isRawScan badge (Volume X is always magazine quality)
+    // and a distinct "Volume X" title so the user can distinguish it from
+    // bound catalog volumes.
+    for (auto it = m_classifiedByVolume.constBegin();
+         it != m_classifiedByVolume.constEnd(); ++it) {
+        if (!it->isVolumeX) continue;
+
+        tankoban::ui::comics::VolumeTileData xData;
+        xData.sourceId     = QString::fromLatin1(kWeebCentralSourceId);
+        xData.seriesId     = catalog.seriesId;
+        xData.volumeNumber = tankoban::manga::anilist::kVolumeXNumber;
+        xData.title        = QStringLiteral("Volume X");
+        xData.chapterRange = QStringLiteral("ch %1-%2")
+                                 .arg(static_cast<int>(it->chapterNumbers.first()))
+                                 .arg(static_cast<int>(it->chapterNumbers.last()));
+        xData.isRawScan = true;  // Volume X is always magazine
+
+        auto* xTile = new tankoban::ui::comics::VolumeTile(xData, m_volumesHost);
+        tankoban::ui::comics::VolumeTileState xState;
+        xState.provenance = QStringLiteral("MangaFire");
+        xTile->setVolumeState(xState);
+        xTile->setMangaDownloadIndex(m_downloadIndex);
+
+        connect(xTile, &tankoban::ui::comics::VolumeTile::rowClicked,
+                this, &ComicsSeriesView::onVolumeRowActivated);
+        connect(xTile, &tankoban::ui::comics::VolumeTile::toggledShift,
+                this, [this](bool checked, bool shiftHeld) {
+                    auto* src = qobject_cast<tankoban::ui::comics::VolumeTile*>(sender());
+                    if (!src) return;
+                    const int vn = src->volumeNumber();
+                    if (checked) m_selectedRows.insert(vn);
+                    else         m_selectedRows.remove(vn);
+                    if (m_downloadSelectedBtn) {
+                        m_downloadSelectedBtn->setText(
+                            QStringLiteral("Download Selected (%1)").arg(m_selectedRows.size()));
+                        m_downloadSelectedBtn->setVisible(!m_selectedRows.isEmpty());
+                    }
+                });
+
+        m_volumeTiles.append(xTile);
+        m_volumeTilesByVolumeNumber.insert(tankoban::manga::anilist::kVolumeXNumber, xTile);
+        m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, xTile);
+        break;  // at most one Volume X
     }
 
     // Cache current identity for downstream slots (existing behavior).
@@ -1492,6 +1553,56 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // status icons on top of the rendered tiles.
     m_nextUnreadRow = -1;
 }
+
+// ---------------------------------------------------------------------------
+// VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+// ---------------------------------------------------------------------------
+
+void ComicsSeriesView::onSeriesClassified(
+    const QString& mangaFireSeriesId,
+    QList<tankoban::manga::ClassifiedVolume> classified)
+{
+    // Guard: stale classification for a different series.
+    if (mangaFireSeriesId != m_currentMangaCatalog.seriesId) return;
+
+    m_classifiedByVolume.clear();
+    for (const auto& cv : classified) {
+        m_classifiedByVolume.insert(cv.volumeNumber, cv);
+    }
+
+    // Re-render rows with classification applied. populateVolumeRowsFromCatalog
+    // reads m_classifiedByVolume to set RAW tags and append the Volume X row.
+    populateVolumeRowsFromCatalog(m_currentMangaCatalog);
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // After re-rendering, check each downloaded volume for upgrade eligibility:
+    // was packed as Magazine (.volx exists) but now classifies Clean → offer
+    // a re-download without the chapter-pairing sidecar.
+    for (auto* tile : m_volumeTiles) {
+        if (!tile) continue;
+        const auto& state = tile->volumeState();
+        if (state.cbzPath.isEmpty()) continue;
+
+        auto it = m_classifiedByVolume.constFind(tile->volumeNumber());
+        if (it == m_classifiedByVolume.constEnd()) continue;
+        if (it->quality != tankoban::manga::VolumeQuality::Clean) continue;
+
+        // .volx file exists → volume was previously packed as Magazine.
+        const QString volxPath = state.cbzPath + QStringLiteral(".volx");
+        if (QFile::exists(volxPath)) {
+            tile->setUpgradeAvailable(true);
+        }
+    }
+}
+
+bool ComicsSeriesView::isVolumeMagazineSourced(int volumeNumber) const
+{
+    auto it = m_classifiedByVolume.constFind(volumeNumber);
+    if (it == m_classifiedByVolume.constEnd()) return false;
+    return it->quality == tankoban::manga::VolumeQuality::Magazine;
+}
+
+// ---------------------------------------------------------------------------
 
 void ComicsSeriesView::setVolumeRows(const QList<anilist::VolumeRow>& rows)
 {

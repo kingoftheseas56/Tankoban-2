@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QStyle>
 #include <QStandardPaths>
@@ -355,11 +356,31 @@ void VolumeTile::buildUi()
     textLayout->setContentsMargins(0, 0, 0, 0);
     textLayout->setSpacing(5);
 
+    auto* titleRow = new QHBoxLayout();
+    titleRow->setContentsMargins(0, 0, 0, 0);
+    titleRow->setSpacing(8);
+
     m_titleLabel = new QLabel(displayTitleForVolume(m_data), this);
     m_titleLabel->setStyleSheet("color: #f0f0f0; font-size: 13px; font-weight: 700;");
     m_titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     m_titleLabel->setWordWrap(false);
-    textLayout->addWidget(m_titleLabel);
+    titleRow->addWidget(m_titleLabel);
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Amber badge for magazine-sourced volumes. Hidden by default; applyState()
+    // shows it when m_data.isRawScan is true.
+    m_rawScanBadge = new QLabel(QStringLiteral("RAW SCAN"), this);
+    m_rawScanBadge->setObjectName(QStringLiteral("VolumeTileRawScanBadge"));
+    m_rawScanBadge->setStyleSheet(
+        "QLabel#VolumeTileRawScanBadge {"
+        "  color: #d4a855; background: rgba(180,140,60,0.12);"
+        "  border: 1px solid rgba(180,140,60,0.30); border-radius: 3px;"
+        "  padding: 1px 6px; font-size: 10px; font-weight: 600; }");
+    m_rawScanBadge->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_rawScanBadge->setVisible(false);
+    titleRow->addWidget(m_rawScanBadge);
+    titleRow->addStretch(1);
+    textLayout->addLayout(titleRow);
 
     m_synopsisLabel = new QLabel(subtitleForVolume(m_data), this);
     m_synopsisLabel->setObjectName(QStringLiteral("VolumeTileSynopsis"));
@@ -381,6 +402,25 @@ void VolumeTile::buildUi()
     m_stateIconLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     layout->addWidget(m_stateIconLabel);
 
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Small "UPDATE" button shown when a magazine→clean upgrade is available.
+    m_upgradeButton = new QPushButton(QStringLiteral("UPDATE"), this);
+    m_upgradeButton->setObjectName(QStringLiteral("VolumeTileUpgradeButton"));
+    m_upgradeButton->setCursor(Qt::PointingHandCursor);
+    m_upgradeButton->setFlat(true);
+    m_upgradeButton->setStyleSheet(
+        "QPushButton#VolumeTileUpgradeButton {"
+        "  color: #66ffaa; background: rgba(80,200,120,0.15);"
+        "  border: 1px solid rgba(80,200,120,0.35); border-radius: 3px;"
+        "  padding: 3px 8px; font-size: 10px; font-weight: 700; }"
+        "QPushButton#VolumeTileUpgradeButton:hover {"
+        "  background: rgba(80,200,120,0.25); }");
+    m_upgradeButton->setVisible(false);
+    connect(m_upgradeButton, &QPushButton::clicked, this, [this]() {
+        emit upgradeRequested(m_data.volumeNumber);
+    });
+    layout->addWidget(m_upgradeButton);
+
     connect(m_checkbox, &QCheckBox::toggled, this, [this](bool checked) {
         const bool shiftHeld =
             QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
@@ -392,8 +432,21 @@ void VolumeTile::buildUi()
     applyState();
 }
 
+void VolumeTile::setUpgradeAvailable(bool available)
+{
+    m_upgradeAvailable = available;
+    if (m_upgradeButton) m_upgradeButton->setVisible(available);
+}
+
 void VolumeTile::applyState()
 {
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    if (m_rawScanBadge) {
+        m_rawScanBadge->setVisible(m_data.isRawScan);
+    }
+    if (m_upgradeButton) {
+        m_upgradeButton->setVisible(m_upgradeAvailable);
+    }
     refreshReadProgress();
     refreshCoverPixmap();
     refreshStateIcon();

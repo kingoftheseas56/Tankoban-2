@@ -24,6 +24,7 @@
 #include "core/manga/anilist/AniListTypes.h"
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/MangaResult.h"
+#include "core/manga/VolumeQualityClassifier.h"  // ClassifiedVolume, VolumeQuality
 
 class MangaSourceRegistry;
 
@@ -145,6 +146,19 @@ public slots:
     // populateVolumeRowsFromFandom; parameter type updated to MangaCatalog.
     void populateVolumeRowsFromCatalog(
         const tankoban::manga::MangaCatalog& catalog);
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Receives classification verdicts from MangaWeebCentralResolver. Stores
+    // them in m_classifiedByVolume and re-renders volume rows so RAW SCAN
+    // tags + Volume X row are applied.
+    void onSeriesClassified(const QString& mangaFireSeriesId,
+                            QList<tankoban::manga::ClassifiedVolume> classified);
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Returns true when the given volume is magazine-sourced (Magazine or
+    // Volume X quality). Used by ComicsPage to set needsChapterPairing on
+    // the VolumePackRequest before dispatch.
+    bool isVolumeMagazineSourced(int volumeNumber) const;
 
 signals:
     // Fired when user clicks Download on a volume row OR clicks a downloaded
@@ -378,6 +392,12 @@ private:
     QList<anilist::VolumeRow> m_currentVolumeRows;
     QString                   m_currentSeriesTitle;
     tankoban::manga::MangaCatalog m_currentMangaCatalog;
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
+    // Per-volume classification verdicts from the resolver. Populated by
+    // onSeriesClassified; consumed by populateVolumeRowsFromCatalog (RAW tags)
+    // and the download dispatch path (needsChapterPairing flag).
+    QHash<int, tankoban::manga::ClassifiedVolume> m_classifiedByVolume;
 
     // STREAM_PORT 2026-05-18 Task 6: index of the first volume the user
     // hasn't started reading (proxy: first row whose stashed cbz path is
