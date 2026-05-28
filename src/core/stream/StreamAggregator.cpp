@@ -18,6 +18,7 @@
 #include "addon/AddonTransport.h"
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
+#include "core/stream/AnimeCatalogResolver.h"
 
 // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1) - includes for the
 // indexer fan-out wrapped by searchPacks. Mirrors the set used by
@@ -681,6 +682,9 @@ namespace {
 
 constexpr int kPackSearchTimeoutMs = 30 * 1000;
 constexpr int kPackSearchPerIndexerLimit = 25;
+// THEATRE_ANIME_CATALOG — anime batch search needs a wider net (big batch
+// torrents bury individual titles); lift the per-indexer cap for that path.
+constexpr int kAnimeBatchPerIndexerLimit = 100;
 
 bool packSearchIndexerEnabled(const QString& id)
 {
@@ -694,14 +698,22 @@ bool packSearchIndexerEnabled(const QString& id)
 void StreamAggregator::searchPacks(const QString& imdbId,
                                    const QString& showName,
                                    int season,
-                                   const QString& sourceFilter)
+                                   const QString& sourceFilter,
+                                   bool anime)
 {
     if (!m_packNam) {
         m_packNam = new QNetworkAccessManager(this);
     }
 
+    // THEATRE_ANIME_CATALOG — anime is torrented as big multi-episode batches,
+    // never "Season N", and needs a wider net than the 25-cap. Broaden both.
+    const int perIndexerLimit =
+        anime ? kAnimeBatchPerIndexerLimit : kPackSearchPerIndexerLimit;
+
     QStringList queries;
-    if (season > 0) {
+    if (anime) {
+        queries = buildAnimePackQueries(showName);
+    } else if (season > 0) {
         queries << QStringLiteral("%1 S%2")
                        .arg(showName)
                        .arg(season, 2, 10, QLatin1Char('0'));
@@ -727,8 +739,8 @@ void StreamAggregator::searchPacks(const QString& imdbId,
     // self is a QPointer by value, this is needed for connect()'s receiver
     // argument and for indexer instantiation. No `&` capture - searchPacks's
     // stack frame is gone by the time async indexer callbacks fire.
-    auto dispatch = [ctx, self, this](const QString& id, TorrentIndexer* indexer,
-                                      const QString& query) {
+    auto dispatch = [ctx, self, this, perIndexerLimit](const QString& id,
+                                      TorrentIndexer* indexer, const QString& query) {
         if (!packSearchIndexerEnabled(id)) {
             indexer->deleteLater();
             return;
@@ -766,7 +778,7 @@ void StreamAggregator::searchPacks(const QString& imdbId,
                         self->finalizePackSearch(ctx);
                     }
                 });
-        indexer->search(query, kPackSearchPerIndexerLimit);
+        indexer->search(query, perIndexerLimit);
     };
 
     // THEATRE_SOURCE_PICKER 2026-05-17: gate each indexer by sourceFilter.

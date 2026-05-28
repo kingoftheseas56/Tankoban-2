@@ -64,8 +64,12 @@ public:
     // sourceFilter forwarded to StreamAggregator::searchPacks - "all" =
     // fan out to every Tankorent indexer (default); "<id>" = single
     // indexer. See StreamAggregator::searchPacks for valid id keys.
+    // THEATRE_ANIME_CATALOG — anime=true routes to StreamAggregator's broad
+    // batch-query strategy + wider per-indexer cap (anime is torrented in big
+    // multi-episode batches, not "Season N"). Defaults false (unchanged path).
     void search(const QString& imdbId, const QString& showName, int season,
-                const QString& sourceFilter = QStringLiteral("all"));
+                const QString& sourceFilter = QStringLiteral("all"),
+                bool anime = false);
 
 private slots:
     void onTankorentPacksAvailable(const QString& imdbId, int season,

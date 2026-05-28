@@ -85,3 +85,18 @@ TEST(AnimeIdMapCache, MissingFileIsStale) {
     AnimeIdMapCache cache(dir.path());
     EXPECT_TRUE(cache.isStale(60000));
 }
+
+// --- Task 5.1: anime batch-torrent query builder ---
+TEST(AnimePackQueries, BuildsBroadBatchForms) {
+    const QStringList q = tankostream::stream::buildAnimePackQueries("One Piece");
+    EXPECT_EQ(q.size(), 4);
+    EXPECT_TRUE(q.contains("One Piece"));
+    EXPECT_TRUE(q.contains("One Piece 1080p"));
+    EXPECT_TRUE(q.contains("One Piece Complete"));
+    EXPECT_TRUE(q.contains("One Piece Batch"));
+}
+TEST(AnimePackQueries, TrimsTitle) {
+    const QStringList q = tankostream::stream::buildAnimePackQueries("  Naruto  ");
+    EXPECT_TRUE(q.contains("Naruto"));
+    EXPECT_TRUE(q.contains("Naruto Batch"));
+}

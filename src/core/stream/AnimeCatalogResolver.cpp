@@ -46,4 +46,14 @@ bool confirmsKitsuMatch(const QString& wantedImdb, const QString& kitsuMetaImdb)
     return !wantedImdb.isEmpty() && wantedImdb == kitsuMetaImdb;
 }
 
+QStringList buildAnimePackQueries(const QString& title) {
+    const QString t = title.trimmed();
+    return {
+        t,
+        t + QStringLiteral(" 1080p"),
+        t + QStringLiteral(" Complete"),
+        t + QStringLiteral(" Batch"),
+    };
+}
+
 }  // namespace tankostream::stream

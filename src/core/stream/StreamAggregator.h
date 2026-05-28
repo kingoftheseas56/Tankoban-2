@@ -60,7 +60,8 @@ public:
     void searchPacks(const QString& imdbId,
                      const QString& showName,
                      int season,
-                     const QString& sourceFilter = QStringLiteral("all"));
+                     const QString& sourceFilter = QStringLiteral("all"),
+                     bool anime = false);
 
 signals:
     void streamsReady(const QList<tankostream::addon::Stream>& streams,

@@ -32,4 +32,10 @@ private:
 // both ids are non-empty and equal -- never trust a title hit alone.
 bool confirmsKitsuMatch(const QString& wantedImdb, const QString& kitsuMetaImdb);
 
+// Builds broad batch-torrent search queries for an anime title. Anime is
+// torrented as big multi-episode batches ("One Piece 1-1076 1080p"), never as
+// "Season N", so we search broad forms and let the indexer rank. Returns four
+// forms: bare title, "+1080p", "+Complete", "+Batch".
+QStringList buildAnimePackQueries(const QString& title);
+
 }  // namespace tankostream::stream
