@@ -1,8 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <QByteArray>
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
+
 #include "core/stream/AnimeCatalogResolver.h"
+#include "core/stream/AnimeIdMapCache.h"
 
 using tankostream::stream::AnimeIdMap;
+using tankostream::stream::AnimeIdMapCache;
 using tankostream::stream::confirmsKitsuMatch;
 using tankostream::stream::isAnimeSeries;
 
@@ -48,4 +55,33 @@ TEST(KitsuConfirm, MismatchOrEmptyRejected) {
     EXPECT_FALSE(confirmsKitsuMatch("tt0388629", "tt1234567"));
     EXPECT_FALSE(confirmsKitsuMatch("tt0388629", ""));
     EXPECT_FALSE(confirmsKitsuMatch("", "tt0388629"));
+}
+
+// --- Task 1.4: AnimeIdMapCache (file-backed, network-free) ---
+TEST(AnimeIdMapCache, LoadsCachedFileAndLooksUp) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QFile f(QDir(dir.path()).filePath(QStringLiteral("anime-id-map.json")));
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(QByteArrayLiteral(R"([{"imdb_id":"tt0388629","kitsu_id":12}])"));
+    f.close();
+    AnimeIdMapCache cache(dir.path());
+    EXPECT_EQ(cache.kitsuIdForImdb("tt0388629").value_or(-1), 12);
+}
+TEST(AnimeIdMapCache, SaveJsonPersistsAndReloads) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    AnimeIdMapCache cache(dir.path());
+    EXPECT_FALSE(cache.kitsuIdForImdb("tt0388629").has_value());
+    cache.saveJson(QByteArrayLiteral(R"([{"imdb_id":"tt0388629","kitsu_id":12}])"));
+    EXPECT_EQ(cache.kitsuIdForImdb("tt0388629").value_or(-1), 12);
+    // A fresh instance reads the persisted file from disk.
+    AnimeIdMapCache reopened(dir.path());
+    EXPECT_EQ(reopened.kitsuIdForImdb("tt0388629").value_or(-1), 12);
+}
+TEST(AnimeIdMapCache, MissingFileIsStale) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    AnimeIdMapCache cache(dir.path());
+    EXPECT_TRUE(cache.isStale(60000));
 }

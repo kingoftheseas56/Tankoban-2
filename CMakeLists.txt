@@ -235,6 +235,7 @@ set(SOURCES
     src/core/stream/CatalogAggregator.cpp
     src/core/stream/StreamAggregator.cpp
     src/core/stream/AnimeCatalogResolver.cpp
+    src/core/stream/AnimeIdMapCache.cpp
     src/core/stream/BulkSourceCollector.cpp
     src/core/stream/BulkPackVerifier.cpp
     src/core/stream/StreamPackParser.cpp
@@ -890,6 +891,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
         src/core/stream/AnimeCatalogResolver.cpp
+        src/core/stream/AnimeIdMapCache.cpp
         src/core/stream/StreamDownloadIndex.cpp
         src/core/stream/UnifiedProgressStore.cpp
         src/core/stream/PackClassifier.cpp
