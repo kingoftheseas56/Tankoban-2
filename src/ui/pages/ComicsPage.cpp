@@ -2133,6 +2133,21 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
+void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
+                                             const QString& seriesId,
+                                             const QString& displayTitle)
+{
+    if (sourceId.isEmpty() || seriesId.isEmpty()) return;
+    ComicsLibraryRecord rec;
+    rec.sourceId = sourceId;
+    rec.seriesId = seriesId;
+    rec.title    = displayTitle;
+    rec.origin   = QStringLiteral("manga_download_index");
+    // rootFolder + seriesFolderName are left empty; openSeriesByRecord
+    // only uses sourceId + seriesId + title to reconstruct a MangaResult.
+    openSeriesByRecord(rec);
+}
+
 void ComicsPage::refreshLibraryStrips()
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- rebuild DOWNLOADED +

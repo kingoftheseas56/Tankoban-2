@@ -354,10 +354,11 @@ private:
     // the cache has no entry yet) and routes to ComicsSeriesView.
     void openSeriesByAnilistId(int anilistId, const QString& fallbackTitle);
 
-    // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- click handler for
-    // WeebCentral-keyed library tiles (downloaded). Reconstructs a MangaResult
-    // from the ComicsLibraryRecord fields and routes to showSeries(MangaResult),
-    // bypassing the AniList resolution chain entirely.
+    // COMICS_CONTEXT_MENU 2026-05-28: thin public forwarder so
+    // ComicsDownloadsPage can navigate to series from context menu.
+    Q_INVOKABLE void openSeriesForDownloadEntry(const QString& sourceId, const QString& seriesId,
+                                                  const QString& displayTitle);
+
     void openSeriesByRecord(const ComicsLibraryRecord& record);
 
     // Shared projection used by both onScanFinished (first-scan path)
