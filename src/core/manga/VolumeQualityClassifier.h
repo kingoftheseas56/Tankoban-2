@@ -1,5 +1,6 @@
 #pragma once
 #include <QList>
+#include <utility>
 #include "MangaCatalogTypes.h"        // MangaVolume
 #include "MangaResult.h"              // ChapterInfo
 #include "anilist/AniListTypes.h"     // kVolumeXNumber
@@ -14,6 +15,11 @@ struct ClassifiedVolume {
     VolumeQuality quality      = VolumeQuality::Clean;
     QList<double> chapterNumbers;        // member chapters, ascending (for compilation)
 };
+
+// [rangeStart, rangeEnd] integer span covering a Volume X bucket's member
+// chapters: floor(min) .. ceil(max). {0,0} when the list is empty. Used to
+// drive MangaWeebCentralResolver::resolveChapterRange for the un-bound tail.
+std::pair<int, int> volumeXChapterSpan(const QList<double>& chapterNumbers);
 
 class VolumeQualityClassifier {
 public:

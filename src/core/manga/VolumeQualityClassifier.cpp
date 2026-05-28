@@ -1,7 +1,20 @@
 #include "VolumeQualityClassifier.h"
 #include <algorithm>
+#include <cmath>
 
 namespace tankoban::manga {
+
+std::pair<int, int> volumeXChapterSpan(const QList<double>& chapterNumbers)
+{
+    if (chapterNumbers.isEmpty()) return {0, 0};
+    double lo = chapterNumbers.first();
+    double hi = chapterNumbers.first();
+    for (double c : chapterNumbers) {
+        lo = std::min(lo, c);
+        hi = std::max(hi, c);
+    }
+    return {static_cast<int>(std::floor(lo)), static_cast<int>(std::ceil(hi))};
+}
 
 QList<ClassifiedVolume> VolumeQualityClassifier::classify(
     const QList<MangaVolume>& catalogVolumes,

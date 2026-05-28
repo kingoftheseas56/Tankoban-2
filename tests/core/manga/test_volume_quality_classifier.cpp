@@ -57,3 +57,15 @@ TEST(VolumeQualityClassifier, NoChaptersYieldsEmpty) {
     const auto out = VolumeQualityClassifier::classify({ vol(1, 1, 8) }, {});
     EXPECT_TRUE(out.isEmpty());
 }
+
+TEST(VolumeQualityClassifier, VolumeXChapterSpanFloorsMinCeilsMax) {
+    auto span = volumeXChapterSpan({1183.0, 1184.5});
+    EXPECT_EQ(span.first, 1183);   // floor(min)
+    EXPECT_EQ(span.second, 1185);  // ceil(max)
+}
+
+TEST(VolumeQualityClassifier, VolumeXChapterSpanEmptyIsZero) {
+    auto span = volumeXChapterSpan({});
+    EXPECT_EQ(span.first, 0);
+    EXPECT_EQ(span.second, 0);
+}
