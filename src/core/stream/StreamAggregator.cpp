@@ -667,6 +667,14 @@ struct StreamAggregator::PackSearchContext
     QSet<QString>        seenInfoHashes;
     QTimer* timeout = nullptr;
     bool    emitted = false;
+    // TANKORENT audit DEFECT 2 (2026-05-28) — monotonic search epoch. Each
+    // searchPacks() call bumps StreamAggregator::m_packEpoch and stamps it
+    // here. finalizePackSearch suppresses any ctx whose epoch is no longer
+    // current, so a superseded search (e.g. "All Sources" still in flight
+    // when the user switches to "Nyaa") cannot emit stale results that would
+    // bleed into the new search — its imdbId/season match the new search so
+    // the downstream imdbId/season guards alone would NOT catch it.
+    quint64 epoch = 0;
 };
 
 namespace {
@@ -711,6 +719,7 @@ void StreamAggregator::searchPacks(const QString& imdbId,
     auto ctx = std::make_shared<PackSearchContext>();
     ctx->imdbId = imdbId;
     ctx->season = season;
+    ctx->epoch  = ++m_packEpoch;  // DEFECT 2 — supersede any prior in-flight pack search
 
     QPointer<StreamAggregator> self(this);
 
@@ -811,6 +820,21 @@ void StreamAggregator::searchPacks(const QString& imdbId,
 void StreamAggregator::finalizePackSearch(std::shared_ptr<PackSearchContext> ctx)
 {
     if (!ctx || ctx->emitted) {
+        return;
+    }
+    // DEFECT 2 (2026-05-28) — suppress superseded searches. If a newer
+    // searchPacks() has bumped m_packEpoch since this ctx was created, its
+    // results are stale (e.g. the old "All Sources" fan-out finishing after
+    // the user switched to "Nyaa"). Mark emitted so captured lambdas no-op,
+    // but do NOT emit packsAvailable — that would bleed old-source rows into
+    // the current search.
+    if (ctx->epoch != m_packEpoch) {
+        ctx->emitted = true;
+        if (ctx->timeout) {
+            ctx->timeout->stop();
+            ctx->timeout->deleteLater();
+            ctx->timeout = nullptr;
+        }
         return;
     }
     ctx->emitted = true;

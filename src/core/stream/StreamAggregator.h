@@ -103,6 +103,12 @@ private:
     // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 - lazily-constructed NAM shared
     // across pack-search calls (mirrors TorrentPackPicker's m_nam pattern).
     QNetworkAccessManager* m_packNam = nullptr;
+
+    // TANKORENT audit DEFECT 2 (2026-05-28) - monotonic pack-search epoch.
+    // Bumped on every searchPacks(); finalizePackSearch suppresses any context
+    // whose epoch is stale so a superseded fan-out (same imdbId/season, e.g.
+    // a source-filter change) cannot bleed old results into the new search.
+    quint64 m_packEpoch = 0;
 };
 
 }

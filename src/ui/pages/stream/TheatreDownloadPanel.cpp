@@ -1301,10 +1301,32 @@ void TheatreDownloadPanel::onSourceComboChanged(int /*index*/) {
     m_sourceFilter = m_sourceCombo->currentData().toString();
     if (m_sourceFilter.isEmpty())
         m_sourceFilter = QStringLiteral("all");
-    // Source change takes effect on the NEXT search() call (panel
-    // dismiss + reopen). Re-firing mid-render would orphan an in-flight
-    // Tankorent fan-out + complicate the stale-callback guards in
-    // UnifiedPackSearchEngine::onTankorentPacksAvailable.
+
+    // TANKORENT audit DEFECT 2 (2026-05-28) — re-run the search immediately on
+    // source change. Previously this was a no-op (the change only took effect
+    // on dismiss+reopen), which was Hemanth's complaint #3: "no search button
+    // when I change the source." Auto-re-firing is now safe: StreamAggregator's
+    // m_packEpoch guard (added this fix) suppresses the prior in-flight fan-out
+    // so its results can't bleed into the new source's results. UnifiedPack-
+    // SearchEngine::search also force-completes the prior search on a new call.
+    //
+    // Guard: only re-fire when a show context is actually loaded (openFor ran).
+    // reset() flips the combo back to index 0 under a QSignalBlocker, so this
+    // slot does not fire during reset.
+    if (m_imdbId.isEmpty() || !m_searchEngine)
+        return;
+
+    m_packs.clear();
+    m_filteredPacks.clear();
+    m_tileChecked.clear();
+    m_lastToggledKey = 0;
+    m_lastToggledValid = false;
+    if (m_statusLine)
+        m_statusLine->setText(tr("Searching sources..."));
+    if (m_loadingBar) m_loadingBar->show();
+    rerenderPackList();  // clear visual rows now (mirror openFor's DEFECT 1 fix)
+
+    m_searchEngine->search(m_imdbId, m_showName, m_season, m_sourceFilter);
 }
 
 }  // namespace tankoban::stream::theatre
