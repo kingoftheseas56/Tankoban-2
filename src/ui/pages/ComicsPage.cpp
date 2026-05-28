@@ -931,7 +931,7 @@ void ComicsPage::buildUI()
         " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
         "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
     auto* searchLayout = new QHBoxLayout();
-    searchLayout->setContentsMargins(0, 12, 0, 0);
+    searchLayout->setContentsMargins(0, 20, 0, 0);
     searchLayout->setSpacing(8);
     searchLayout->addWidget(m_searchBar, 1);
 
@@ -1236,7 +1236,7 @@ void ComicsPage::buildUI()
 
     gridLayout->addWidget(seriesRow);
 
-    m_statusLabel = new QLabel("Add a comics folder to get started", gridPage);
+    m_statusLabel = new QLabel("Search to add comics to your library", gridPage);
     m_statusLabel->setObjectName("TileSubtitle");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
@@ -1349,8 +1349,8 @@ void ComicsPage::triggerScan()
     QStringList roots = m_bridge->rootFolders("comics");
     if (roots.isEmpty()) {
         // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- the empty-state
-        // legacy text "Add a comics folder to get started" assumed folder-
-        // import was the primary content path. With DOWNLOADED + BOOKMARKED
+        // text "Search to add comics to your library" directs the user
+        // at search (folder-import path is gone). With DOWNLOADED + BOOKMARKED
         // sections that no longer holds; m_progressKeyMap still gets cleared
         // because it's keyed off folder paths, but the landing strips are
         // refreshed via refreshLibraryStrips so a user with bookmarks but no

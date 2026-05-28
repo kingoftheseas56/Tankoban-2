@@ -564,7 +564,7 @@ void BooksPage::buildUI()
         " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
         "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
     auto* searchLayout = new QHBoxLayout();
-    searchLayout->setContentsMargins(0, 12, 0, 0);
+    searchLayout->setContentsMargins(0, 20, 0, 0);
     searchLayout->setSpacing(8);
     searchLayout->addWidget(m_searchBar, 1);
 
@@ -786,13 +786,13 @@ void BooksPage::buildUI()
 
     layout->addWidget(booksRow);
 
-    m_bookStatus = new QLabel("Add a books folder to get started", content);
+    m_bookStatus = new QLabel("Search for books to add to library", content);
     m_bookStatus->setObjectName("TileSubtitle");
     m_bookStatus->setAlignment(Qt::AlignCenter);
     m_bookStatus->setTextFormat(Qt::PlainText);
     m_bookStatus->setWordWrap(true);
     m_bookStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_bookStatus->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 40px;");
+    m_bookStatus->setStyleSheet("color: rgba(238,238,238,0.58); font-size: 14px; padding: 60px;");
     layout->addWidget(m_bookStatus);
 
     m_bookStrip = new TileStrip(content);
