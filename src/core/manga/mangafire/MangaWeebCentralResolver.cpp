@@ -362,11 +362,15 @@ void MangaWeebCentralResolver::runClassification(
     const auto classified =
         tankoban::manga::VolumeQualityClassifier::classify(volumes, chapters);
 
+    // Copy the id before clearing: mangaFireSeriesId is a const& that may
+    // alias m_inflightClassifyMangaFireId (the chaptersReady caller passes the
+    // member directly), so clearing first would empty the emitted string.
+    const QString emitId = mangaFireSeriesId;
     m_inflightClassifyMangaFireId.clear();
     m_pendingClassifyVolumes.clear();
     m_inflightClassifyWcSeriesId.clear();
 
-    emit seriesClassified(mangaFireSeriesId, classified);
+    emit seriesClassified(emitId, classified);
 }
 
 // ---------------------------------------------------------------------------

@@ -211,13 +211,11 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_wcResolver,
             &tankoban::manga::mangafire::MangaWeebCentralResolver::skip,
             this, &ComicsPage::onWcResolverSkip);
-    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
-    // Route classification verdicts directly to the series view for RAW tags
-    // and Volume X row rendering.
-    connect(m_wcResolver,
-            &tankoban::manga::mangafire::MangaWeebCentralResolver::seriesClassified,
-            m_tyVolumeSeriesView,
-            &tankoban::manga::comics::ComicsSeriesView::onSeriesClassified);
+    // NOTE: the seriesClassified -> ComicsSeriesView::onSeriesClassified wire
+    // lives below, AFTER m_tyVolumeSeriesView is constructed (~line 384).
+    // Connecting here (receiver still null) silently no-ops the connection,
+    // which is exactly what kept RAW-SCAN tags + the Volume X row from ever
+    // rendering even though classification fired correctly.
     m_mangaUpdatesClient = new tankoban::manga::mangaupdates::MangaUpdatesClient(
         m_anilistClient ? m_anilistClient->networkManager() : nullptr, this);
     m_volumeResolver = new tankoban::manga::mangaupdates::VolumeMetadataResolver(
@@ -403,6 +401,15 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::backRequested,
             this, &ComicsPage::onDetailBack);
+
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1). Route WeebCentral classification
+    // verdicts into the series view for RAW-SCAN tags + the Volume X row. MUST
+    // be here (not at m_wcResolver construction) — m_tyVolumeSeriesView does
+    // not exist yet up there, so the connection would silently no-op.
+    connect(m_wcResolver,
+            &tankoban::manga::mangafire::MangaWeebCentralResolver::seriesClassified,
+            m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::onSeriesClassified);
 
     // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): wire MangaSourceRegistry into the
     // series view so showSeries(MangaResult) can dispatch fetchDetail() to the
