@@ -65,6 +65,7 @@ struct MetaItemPreview {
 
     QString imdbRating;
     QStringList genres;
+    QString country;  // origin country (e.g. "Japan") -- anime detection signal
     QList<MetaLink> links;
 
     QList<Stream> trailerStreams;

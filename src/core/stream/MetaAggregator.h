@@ -17,7 +17,11 @@ namespace tankostream::addon {
 class AddonRegistry;
 }
 
+class QNetworkAccessManager;
+
 namespace tankostream::stream {
+
+class AnimeIdMapCache;
 
 struct StreamEpisode {
     int episode = 0;
@@ -84,6 +88,11 @@ signals:
     // so by the time Phase 3 lands, the fetch has already populated the cache.
     void metaItemReady(const tankostream::addon::MetaItem& item);
 
+    // THEATRE_ANIME_CATALOG — emitted with seriesMetaReady so the series view
+    // knows whether the flat Kitsu anime catalog was used (badge + hide season
+    // chips) vs the normal Cinemeta path.
+    void animeCatalogActive(const QString& imdbId, bool isAnime);
+
 private:
     struct PendingSearch {
         QString addonId;
@@ -101,6 +110,17 @@ private:
                             const QString& imdbId);
     void finalizeSeries(const QString& addonId, const QString& error);
 
+    // THEATRE_ANIME_CATALOG reroute helpers.
+    void rerouteSeriesToAnime(const QString& imdbId, const QString& title,
+                              const QMap<int, QList<StreamEpisode>>& cinemetaFallback);
+    void fetchAnimeKitsuMeta(int kitsuId, const QString& imdbId, bool requireConfirm,
+                             const QMap<int, QList<StreamEpisode>>& fallback);
+    void emitSeriesResult(const QString& imdbId,
+                          const QMap<int, QList<StreamEpisode>>& seasons, bool isAnime);
+    void maybeRefreshAnimeIdMap();
+    QUrl animeKitsuTransportUrl() const;
+    AnimeIdMapCache* animeIdMap();
+
     void dispatchMetaItemFetch(const QUrl& baseUrl,
                                const QString& imdbId,
                                const QString& type);
@@ -117,6 +137,12 @@ private:
     bool m_seriesResolved = false;
     QString m_lastSeriesError;
     QHash<QString, QPair<qint64, QMap<int, QList<StreamEpisode>>>> m_seriesCache;
+
+    // THEATRE_ANIME_CATALOG — IMDb->Kitsu bridge + reroute state.
+    AnimeIdMapCache* m_animeIdMap = nullptr;       // lazy-owned
+    QNetworkAccessManager* m_fribbNam = nullptr;   // lazy; Fribb map refresh
+    bool m_seriesAnimeRerouteAttempted = false;
+    QSet<QString> m_animeRerouted;                 // imdbIds resolved via Kitsu
 
     // fetchMetaItem cache keyed by imdbId. Short TTL — detail view reopens
     // are hot and the payload is small; a minute is enough to coalesce

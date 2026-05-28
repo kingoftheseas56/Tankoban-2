@@ -1,9 +1,14 @@
 #include "MetaAggregator.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QStandardPaths>
 
 #include <algorithm>
 #include <memory>
@@ -12,6 +17,8 @@
 #include "addon/AddonTransport.h"
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
+#include "core/stream/AnimeCatalogResolver.h"
+#include "core/stream/AnimeIdMapCache.h"
 
 using tankostream::addon::AddonDescriptor;
 using tankostream::addon::AddonRegistry;
@@ -120,6 +127,8 @@ MetaItemPreview parseFullMetaPreview(const QJsonObject& obj, const QString& type
         if (!genre.isEmpty()) out.genres.push_back(genre);
     }
 
+    out.country = obj.value(QStringLiteral("country")).toString().trimmed();
+
     for (const QJsonValue& l : obj.value(QStringLiteral("links")).toArray()) {
         const QJsonObject lo = l.toObject();
         tankostream::addon::MetaLink link;
@@ -204,6 +213,38 @@ QMap<int, QList<StreamEpisode>> parseSeriesEpisodes(const QJsonObject& payload)
     return out;
 }
 
+// THEATRE_ANIME_CATALOG — extract the imdb_id Anime Kitsu embeds in its meta
+// (top-level meta.imdb_id if present, else the first video's imdb_id). Used to
+// confirm a title-search Kitsu match round-trips to our tt id.
+QString kitsuMetaImdbId(const QJsonObject& payload)
+{
+    const QJsonObject meta = payload.value(QStringLiteral("meta")).toObject();
+    const QString top = meta.value(QStringLiteral("imdb_id")).toString().trimmed();
+    if (!top.isEmpty()) {
+        return top;
+    }
+    for (const QJsonValue& v : meta.value(QStringLiteral("videos")).toArray()) {
+        const QString vi =
+            v.toObject().value(QStringLiteral("imdb_id")).toString().trimmed();
+        if (!vi.isEmpty()) {
+            return vi;
+        }
+    }
+    return QString();
+}
+
+// Parses the numeric kitsu id out of a "kitsu:12" preview id; -1 if the id is
+// not kitsu-prefixed or has no integer body.
+int kitsuIdFromPreviewId(const QString& id)
+{
+    if (!id.startsWith(QStringLiteral("kitsu:"))) {
+        return -1;
+    }
+    bool ok = false;
+    const int n = id.mid(6).section(QLatin1Char(':'), 0, 0).toInt(&ok);
+    return ok ? n : -1;
+}
+
 }
 
 MetaAggregator::MetaAggregator(AddonRegistry* registry, QObject* parent)
@@ -270,6 +311,7 @@ void MetaAggregator::fetchSeriesMeta(const QString& imdbId)
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (now - cacheIt->first < kSeriesCacheTtlMs) {
             emit seriesMetaReady(imdbId, cacheIt->second);
+            emit animeCatalogActive(imdbId, m_animeRerouted.contains(imdbId));
             return;
         }
         m_seriesCache.erase(cacheIt);
@@ -297,6 +339,7 @@ void MetaAggregator::fetchSeriesMeta(const QString& imdbId)
     m_seriesPendingImdb = imdbId;
     m_seriesRemaining = candidates.size();
     m_seriesResolved = false;
+    m_seriesAnimeRerouteAttempted = false;
     m_lastSeriesError.clear();
 
     for (const AddonDescriptor& addon : candidates) {
@@ -417,11 +460,32 @@ void MetaAggregator::dispatchSeriesMeta(const QUrl& baseUrl,
             worker->deleteLater();
 
             const QMap<int, QList<StreamEpisode>> seasons = parseSeriesEpisodes(payload);
+
+            // THEATRE_ANIME_CATALOG — reroute Animation+Japan series to the flat
+            // Kitsu catalog. Detected from this same Cinemeta payload; the
+            // non-anime path below is byte-for-byte unchanged in behavior.
+            const QJsonObject meta = payload.value(QStringLiteral("meta")).toObject();
+            QStringList genres;
+            for (const QJsonValue& g : meta.value(QStringLiteral("genres")).toArray()) {
+                const QString gs = g.toString().trimmed();
+                if (!gs.isEmpty()) genres.push_back(gs);
+            }
+            const QString country =
+                meta.value(QStringLiteral("country")).toString().trimmed();
+            if (!m_seriesResolved && !m_seriesAnimeRerouteAttempted
+                && isAnimeSeries(genres, country)) {
+                m_seriesAnimeRerouteAttempted = true;
+                m_seriesResolved = true;  // claim resolution; reroute owns the async emit
+                const QString title =
+                    meta.value(QStringLiteral("name")).toString().trimmed();
+                rerouteSeriesToAnime(imdbId, title, seasons);
+                finalizeSeries(addonId, QString());
+                return;
+            }
+
             if (!m_seriesResolved && !seasons.isEmpty()) {
                 m_seriesResolved = true;
-                m_seriesCache[imdbId] =
-                    qMakePair(QDateTime::currentMSecsSinceEpoch(), seasons);
-                emit seriesMetaReady(imdbId, seasons);
+                emitSeriesResult(imdbId, seasons, /*isAnime=*/false);
             }
             finalizeSeries(addonId, QString());
         });
@@ -460,6 +524,172 @@ void MetaAggregator::finalizeSeries(const QString& addonId, const QString& error
                                     : m_lastSeriesError);
     m_lastSeriesError.clear();
     m_seriesPendingImdb.clear();
+}
+
+// ── THEATRE_ANIME_CATALOG reroute ───────────────────────────────────────────
+
+AnimeIdMapCache* MetaAggregator::animeIdMap()
+{
+    if (!m_animeIdMap) {
+        const QString dir = QDir(QStandardPaths::writableLocation(
+                                     QStandardPaths::AppDataLocation))
+                                .filePath(QStringLiteral("anime_catalog"));
+        m_animeIdMap = new AnimeIdMapCache(dir);
+    }
+    return m_animeIdMap;
+}
+
+QUrl MetaAggregator::animeKitsuTransportUrl() const
+{
+    if (!m_registry) {
+        return QUrl();
+    }
+    for (const AddonDescriptor& a : m_registry->list()) {
+        if (a.manifest.id == QStringLiteral("community.anime.kitsu")) {
+            return a.transportUrl;
+        }
+    }
+    return QUrl();
+}
+
+void MetaAggregator::maybeRefreshAnimeIdMap()
+{
+    AnimeIdMapCache* cache = animeIdMap();
+    // The Fribb list changes slowly; refresh at most daily.
+    if (!cache->isStale(24LL * 60LL * 60LL * 1000LL)) {
+        return;
+    }
+    if (!m_fribbNam) {
+        m_fribbNam = new QNetworkAccessManager(this);
+    }
+    QNetworkRequest req(QUrl(QStringLiteral(
+        "https://raw.githubusercontent.com/Fribb/anime-lists/master/"
+        "anime-list-mini.json")));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply* reply = m_fribbNam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            return;
+        }
+        const QByteArray body = reply->readAll();
+        if (!body.isEmpty()) {
+            animeIdMap()->saveJson(body);
+        }
+    });
+}
+
+void MetaAggregator::emitSeriesResult(
+    const QString& imdbId, const QMap<int, QList<StreamEpisode>>& seasons, bool isAnime)
+{
+    if (isAnime) {
+        m_animeRerouted.insert(imdbId);
+    } else {
+        m_animeRerouted.remove(imdbId);
+    }
+    if (!seasons.isEmpty()) {
+        m_seriesCache[imdbId] =
+            qMakePair(QDateTime::currentMSecsSinceEpoch(), seasons);
+        emit seriesMetaReady(imdbId, seasons);
+        emit animeCatalogActive(imdbId, isAnime);
+    } else {
+        emit seriesMetaError(imdbId, QStringLiteral("No episodes found"));
+        emit animeCatalogActive(imdbId, false);
+    }
+}
+
+void MetaAggregator::rerouteSeriesToAnime(
+    const QString& imdbId, const QString& title,
+    const QMap<int, QList<StreamEpisode>>& cinemetaFallback)
+{
+    // Kick a daily background refresh of the Fribb map (helps next time even if
+    // this lookup misses).
+    maybeRefreshAnimeIdMap();
+
+    const std::optional<int> kitsu = animeIdMap()->kitsuIdForImdb(imdbId);
+    if (kitsu.has_value()) {
+        // Trusted Fribb mapping — no per-show imdb confirm needed.
+        fetchAnimeKitsuMeta(*kitsu, imdbId, /*requireConfirm=*/false, cinemetaFallback);
+        return;
+    }
+
+    // Cache miss (e.g. a fresh airing not yet in the Fribb list). Fall back to a
+    // title search on Anime Kitsu, confirmed by the imdb_id it round-trips. If
+    // nothing confirms, degrade to the Cinemeta result (never worse than today).
+    searchByTitle(
+        title, QStringLiteral("series"),
+        [this, imdbId, cinemetaFallback](const QList<MetaItemPreview>& results,
+                                         const QString&) {
+            for (const MetaItemPreview& r : results) {
+                const int k = kitsuIdFromPreviewId(r.id);
+                if (k >= 0) {
+                    fetchAnimeKitsuMeta(k, imdbId, /*requireConfirm=*/true,
+                                        cinemetaFallback);
+                    return;
+                }
+            }
+            emitSeriesResult(imdbId, cinemetaFallback, /*isAnime=*/false);
+        });
+}
+
+void MetaAggregator::fetchAnimeKitsuMeta(
+    int kitsuId, const QString& imdbId, bool requireConfirm,
+    const QMap<int, QList<StreamEpisode>>& fallback)
+{
+    const QUrl baseUrl = animeKitsuTransportUrl();
+    if (baseUrl.isEmpty()) {
+        emitSeriesResult(imdbId, fallback, /*isAnime=*/false);
+        return;
+    }
+
+    ResourceRequest request;
+    request.resource = QStringLiteral("meta");
+    request.type = QStringLiteral("series");
+    request.id = QStringLiteral("kitsu:%1").arg(kitsuId);
+
+    auto* worker = new AddonTransport(this);
+    auto handled = std::make_shared<bool>(false);
+    auto readyConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn = std::make_shared<QMetaObject::Connection>();
+
+    *readyConn = connect(
+        worker, &AddonTransport::resourceReady, this,
+        [this, imdbId, request, requireConfirm, fallback, handled, readyConn, failConn,
+         worker](const ResourceRequest& incoming, const QJsonObject& payload) {
+            if (*handled || !sameRequest(request, incoming)) {
+                return;
+            }
+            *handled = true;
+            QObject::disconnect(*readyConn);
+            QObject::disconnect(*failConn);
+            worker->deleteLater();
+
+            if (requireConfirm
+                && !confirmsKitsuMatch(imdbId, kitsuMetaImdbId(payload))) {
+                emitSeriesResult(imdbId, fallback, /*isAnime=*/false);
+                return;
+            }
+            const QMap<int, QList<StreamEpisode>> seasons = parseSeriesEpisodes(payload);
+            emitSeriesResult(imdbId, seasons.isEmpty() ? fallback : seasons,
+                             /*isAnime=*/!seasons.isEmpty());
+        });
+
+    *failConn = connect(
+        worker, &AddonTransport::resourceFailed, this,
+        [this, imdbId, request, fallback, handled, readyConn, failConn, worker](
+            const ResourceRequest& incoming, const QString&) {
+            if (*handled || !sameRequest(request, incoming)) {
+                return;
+            }
+            *handled = true;
+            QObject::disconnect(*readyConn);
+            QObject::disconnect(*failConn);
+            worker->deleteLater();
+            emitSeriesResult(imdbId, fallback, /*isAnime=*/false);
+        });
+
+    worker->fetchResource(baseUrl, request);
 }
 
 // ── MetaItem fetch (Phase 3 prep; kicked off by Phase 1 Batch 1.1) ──────────
