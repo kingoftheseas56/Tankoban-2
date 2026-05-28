@@ -29,6 +29,10 @@ TEST(FictionDbClientParser, ParsesDuneBookPage) {
     EXPECT_FALSE(r.coverUrl.isEmpty());
     EXPECT_TRUE(r.coverUrl.contains("covers/"));
     EXPECT_FALSE(r.description.isEmpty());
+    // Full #description body, not the ~200-char SEO-capped og:description.
+    // "superbeing" is the last word of the body but past the og cut-off.
+    EXPECT_GT(r.description.size(), 200);
+    EXPECT_TRUE(r.description.contains("superbeing"));
     EXPECT_EQ(r.year.toStdString(), "1965");
     EXPECT_FALSE(r.isSeries);
     // Book page self-declares its series: "Dune Chronicles - 1".

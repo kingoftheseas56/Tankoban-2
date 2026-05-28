@@ -24,7 +24,7 @@ public:
     void toggle();
     bool isOpen() const { return m_open; }
 
-    // pageId in {"tankorent","tankolibrary","streamDownloads","comicsDownloads"}; empty string clears.
+    // pageId in {"tankorent","streamDownloads","comicsDownloads","booksDownloads"}; empty string clears.
     void setActiveSource(const QString& pageId);
 
     // Show/hide the Theatre/stream Downloads sidebar entry.
@@ -34,6 +34,9 @@ public:
     // Show/hide the Comics Downloads sidebar entry.
     // Only visible when the active mode is Comics.
     void setComicsDownloadsVisible(bool visible);
+
+    // Show/hide the Books Downloads sidebar entry. Only visible in Books mode.
+    void setBooksDownloadsVisible(bool visible);
 
 signals:
     void sourceClicked(const QString& pageId);
@@ -56,9 +59,9 @@ private:
     QGraphicsOpacityEffect* m_backdropOpacity = nullptr;
 
     QPushButton* m_btnTankorent = nullptr;
-    QPushButton* m_btnTankoLibrary = nullptr;
     QPushButton* m_btnStreamDownloads = nullptr;
     QPushButton* m_btnComicsDownloads = nullptr;
+    QPushButton* m_btnBooksDownloads = nullptr;
 
     QString m_activePageId;
     bool m_open = false;

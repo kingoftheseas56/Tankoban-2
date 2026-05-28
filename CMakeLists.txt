@@ -219,6 +219,7 @@ set(SOURCES
     src/ui/pages/books/BookCatalogueSearchWidget.cpp
     src/ui/pages/books/BookCatalogueDetailView.cpp
     src/ui/pages/books/BookSeriesDetailView.cpp
+    src/ui/pages/books/BooksDownloadsPage.cpp
     src/ui/pages/TankoLibraryPage.cpp
     src/ui/pages/tankolibrary/BookResultsGrid.cpp
     src/ui/pages/tankolibrary/TransfersView.cpp
@@ -421,6 +422,7 @@ set(HEADERS
     src/ui/pages/books/BookCatalogueSearchWidget.h
     src/ui/pages/books/BookCatalogueDetailView.h
     src/ui/pages/books/BookSeriesDetailView.h
+    src/ui/pages/books/BooksDownloadsPage.h
     src/ui/pages/TankoLibraryPage.h
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h

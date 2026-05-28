@@ -78,6 +78,7 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     }
     if (m_seriesDetailView) {
         m_seriesDetailView->setCatalogueStore(m_catalogueStore);
+        m_seriesDetailView->setNetwork(m_catalogueNam, m_catalogueCoverDir);
     }
     connect(m_catalogueStore, &BooksCatalogueLibraryStore::recordsChanged,
             this, &BooksPage::rebuildBookGrid);
@@ -97,23 +98,11 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
             });
     if (m_stack) m_stack->addWidget(m_catalogueSearchView);
 
-    // BOOKS_FICTIONDB_CATALOGUE — series tile → fetch the series → open the
-    // series-shape detail view with its books in order.
+    // BOOKS_FICTIONDB_CATALOGUE — series tile → open the series-shape detail
+    // view, which self-loads (fetch series + eagerly enrich each book's
+    // cover/synopsis/year via its own FictionDbClient, then renders once).
     connect(m_catalogueSearchView, &BookCatalogueSearchWidget::seriesPicked,
-            this, [this](const BookCatalogueResult& s) {
-                if (m_fictiondb && !s.seriesId.isEmpty())
-                    m_fictiondb->fetchSeries(s.seriesId);
-            });
-    if (m_fictiondb) {
-        connect(m_fictiondb, &FictionDbClient::seriesReady, this,
-                [this](const QString&, const QString& name,
-                       const QList<BookCatalogueResult>& books) {
-                    if (!m_seriesDetailView) return;
-                    const QString author = books.isEmpty() ? QString() : books.first().author;
-                    m_seriesDetailView->showSeries(name, author, QString(), books);
-                    if (m_stack) m_stack->setCurrentWidget(m_seriesDetailView);
-                });
-    }
+            this, [this](const BookCatalogueResult& s) { openSeries(s.seriesId); });
 
     // §5.2 (2026-05-27) — wire catalogue download lifecycle. Detail view emits
     // downloadRequested when the user clicks a source row; readRequested when
@@ -185,8 +174,25 @@ inline bool replyJsResident(QJsonObject& reply, const QString& jsFile,
 
 inline QString progressKeyFor(const QString& absPath)
 {
+    // MUST match BookBridge::progressKey — normalize backslashes before hashing
+    // so the key matches the one the reader saves progress under (else the
+    // continue-reading lookup misses on Windows paths).
+    QString norm = absPath;
+    norm.replace(QLatin1Char('\\'), QLatin1Char('/'));
     return QString(QCryptographicHash::hash(
-        absPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+        norm.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+}
+
+// Catalogue cover-cache path for a catalogueId — mirrors
+// BookCatalogueSearchWidget::coverPathFor + BookSeriesDetailView so a cover
+// downloaded by any of them is found by all (shared on-disk cache).
+inline QString coverCachePath(const QString& dir, const QString& catalogueId)
+{
+    if (dir.isEmpty() || catalogueId.isEmpty()) return {};
+    QString stem = catalogueId;
+    stem.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")),
+                 QStringLiteral("_"));
+    return dir + QLatin1Char('/') + stem + QStringLiteral(".jpg");
 }
 
 }  // namespace
@@ -865,6 +871,12 @@ void BooksPage::buildUI()
     m_bookStrip->setMinimumHeight(340);
     layout->addWidget(m_bookStrip);
 
+    // BOOKS_LIBRARY_CONTEXT_MENU — right-click any library tile (mirrors the
+    // Continue Reading strip handler).
+    m_bookStrip->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_bookStrip, &QWidget::customContextMenuRequested,
+            this, &BooksPage::showBookContextMenu);
+
     // ── List view (hidden by default, shown on V toggle) ──
     m_listView = new LibraryListView(content);
     m_listView->hide();
@@ -958,6 +970,8 @@ void BooksPage::buildUI()
                 m_catalogueDetailView->showBook(book, QString());
                 m_stack->setCurrentWidget(m_catalogueDetailView);
             });
+    connect(m_seriesDetailView, &BookSeriesDetailView::bookContextMenuRequested,
+            this, &BooksPage::onSeriesBookContextMenu);
     m_stack->addWidget(m_seriesDetailView);
 
     outerLayout->addWidget(m_stack, 1);
@@ -1020,6 +1034,9 @@ void BooksPage::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
     if (m_catalogueStore) m_catalogueStore->validateAll();
+    // Returning from the reader: reading progress was written to the JsonStore,
+    // not the store, so refresh the continue strip to pick it up.
+    refreshContinueStrip();
 }
 
 // §3.8 burn-the-ships backout (2026-05-27): rebuilds the library grid purely
@@ -1080,8 +1097,12 @@ void BooksPage::addCatalogueRecordTile(const CatalogueRecord& record)
     if (!record.author.isEmpty()) subtitleParts << record.author;
     if (!record.year.isEmpty()) subtitleParts << record.year;
     const QString subtitle = subtitleParts.join(QStringLiteral(" / "));
-    const QString cover = QFile::exists(record.cachedCoverPath) ? record.cachedCoverPath
-                                                                : QString();
+    QString cover = QFile::exists(record.cachedCoverPath) ? record.cachedCoverPath
+                                                          : QString();
+    if (cover.isEmpty()) {
+        const QString cached = coverCachePath(m_catalogueCoverDir, record.catalogueId);
+        if (QFile::exists(cached)) cover = cached;
+    }
 
     auto* card = new TileCard(cover, record.title, subtitle);
     card->setProperty("catalogueRecord", true);
@@ -1109,7 +1130,14 @@ void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount)
 {
     if (rep.seriesId.isEmpty()) return;
 
-    const QString cover = QFile::exists(rep.cachedCoverPath) ? rep.cachedCoverPath : QString();
+    // A series book downloaded via [Get] has no cachedCoverPath, but its cover
+    // was fetched into the shared catalogue cover cache during series-detail
+    // enrichment — fall back to that so the library series tile isn't blank.
+    QString cover = QFile::exists(rep.cachedCoverPath) ? rep.cachedCoverPath : QString();
+    if (cover.isEmpty()) {
+        const QString cached = coverCachePath(m_catalogueCoverDir, rep.catalogueId);
+        if (QFile::exists(cached)) cover = cached;
+    }
     const QString title = rep.seriesName.isEmpty() ? rep.title : rep.seriesName;
     QStringList subtitleParts;
     if (!rep.author.isEmpty()) subtitleParts << rep.author;
@@ -1122,11 +1150,9 @@ void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount)
     card->setProperty("fileCount", ownedCount);
     card->setProperty("newestMtime", rep.addedAt * 1000);
     connect(card, &TileCard::clicked, this, [this, card]() {
-        const QString seriesId = card->property("seriesId").toString();
-        // Reuse the search→series flow: fetch the full series, open the series
-        // detail view (owned books show Read, the rest Get).
-        if (m_fictiondb && !seriesId.isEmpty())
-            m_fictiondb->fetchSeries(seriesId);
+        // Reuse the search→series flow: open the series detail view, which
+        // self-loads + enriches (owned books show Read, the rest Get).
+        openSeries(card->property("seriesId").toString());
     });
     m_bookStrip->addTile(card);
 }
@@ -1403,10 +1429,25 @@ void BooksPage::refreshContinueStrip()
         return;
     }
 
-    QList<CatalogueRecord> inProgress;
+    // Reading progress lives in the reader's JsonStore ("books" domain), keyed
+    // by the path-hash, NOT on the CatalogueRecord (the record's readProgress
+    // is never written post §3.8). Read it from CoreBridge so the strip tracks
+    // actual reading. Payload (reader_state.js): scrollFraction (0–1),
+    // finished, updatedAt (ms).
+    struct InProgress { CatalogueRecord rec; double frac; qint64 updatedAt; };
+    QList<InProgress> inProgress;
     for (const CatalogueRecord& r : m_catalogueStore->all()) {
-        if (r.readProgress > 0.0 && r.readProgress < 1.0)
-            inProgress.append(r);
+        if (r.filePath.isEmpty() || !m_bridge) continue;
+        const QJsonObject p =
+            m_bridge->progress(QStringLiteral("books"), progressKeyFor(r.filePath));
+        if (p.isEmpty()) continue;
+        const double frac = p.value(QStringLiteral("scrollFraction"))
+            .toDouble(p.value(QStringLiteral("percent")).toDouble(0.0) / 100.0);
+        if (p.value(QStringLiteral("finished")).toBool(false)) continue;
+        if (frac <= 0.0 || frac >= 1.0) continue;
+        const qint64 updated =
+            static_cast<qint64>(p.value(QStringLiteral("updatedAt")).toDouble(0));
+        inProgress.append({r, frac, updated});
     }
 
     if (inProgress.isEmpty()) {
@@ -1415,14 +1456,19 @@ void BooksPage::refreshContinueStrip()
     }
 
     std::sort(inProgress.begin(), inProgress.end(),
-              [](const CatalogueRecord& a, const CatalogueRecord& b) {
-                  return a.lastReadAt > b.lastReadAt;
+              [](const InProgress& a, const InProgress& b) {
+                  return a.updatedAt > b.updatedAt;
               });
 
-    for (const CatalogueRecord& r : inProgress) {
-        const QString cover = QFile::exists(r.cachedCoverPath)
+    for (const InProgress& entry : inProgress) {
+        const CatalogueRecord& r = entry.rec;
+        QString cover = QFile::exists(r.cachedCoverPath)
             ? r.cachedCoverPath : QString();
-        const int pct = static_cast<int>(r.readProgress * 100.0);
+        if (cover.isEmpty()) {
+            const QString cached = coverCachePath(m_catalogueCoverDir, r.catalogueId);
+            if (QFile::exists(cached)) cover = cached;
+        }
+        const int pct = static_cast<int>(entry.frac * 100.0);
         QStringList subParts;
         if (!r.author.isEmpty()) subParts << r.author;
         subParts << QString("%1%").arg(pct);
@@ -1440,6 +1486,189 @@ void BooksPage::refreshContinueStrip()
     }
 
     m_continueSection->show();
+}
+
+// BOOKS_LIBRARY_CONTEXT_MENU (2026-05-28) — right-click menu on the library
+// grid. Branches on the tile's catalogueSeries / catalogueRecord property
+// (set in addLibrarySeriesTile / addCatalogueRecordTile). Mirrors the
+// Continue Reading strip handler (buildUI, m_continueStrip).
+void BooksPage::showBookContextMenu(const QPoint& pos)
+{
+    if (!m_bookStrip) return;
+    auto* card = m_bookStrip->tileAt(pos);
+    if (!card) return;
+
+    // ── Series-group tile ────────────────────────────────────────────────
+    if (card->property("catalogueSeries").toBool()) {
+        const QString seriesId = card->property("seriesId").toString();
+        if (seriesId.isEmpty()) return;
+        const QString title = card->property("tileTitle").toString();
+
+        auto* menu = ContextMenuHelper::createMenu(this);
+        auto* openAct   = menu->addAction(QStringLiteral("Open series"));
+        menu->addSeparator();
+        auto* removeAct = menu->addAction(QStringLiteral("Remove series from library"));
+
+        auto* chosen = menu->exec(m_bookStrip->mapToGlobal(pos));
+        if (chosen == openAct) {
+            if (m_seriesDetailView) {
+                m_seriesDetailView->loadSeries(seriesId);
+                if (m_stack) m_stack->setCurrentWidget(m_seriesDetailView);
+            }
+        } else if (chosen == removeAct) {
+            QStringList ids;
+            if (m_catalogueStore) ids = m_catalogueStore->catalogueIdsForSeries(seriesId);
+            removeFromLibrary(ids, title.isEmpty() ? QStringLiteral("this series") : title);
+        }
+        menu->deleteLater();
+        return;
+    }
+
+    // ── Owned-book tile ──────────────────────────────────────────────────
+    const QString catalogueId = card->property("catalogueId").toString();
+    if (catalogueId.isEmpty()) return;
+    showOwnedBookMenu(catalogueId, m_bookStrip->mapToGlobal(pos));
+}
+
+// Shared owned-book menu — used by the library grid and the series detail rows.
+void BooksPage::showOwnedBookMenu(const QString& catalogueId, const QPoint& globalPos)
+{
+    if (catalogueId.isEmpty() || !m_catalogueStore) return;
+    const auto rec = m_catalogueStore->recordFor(catalogueId);
+    if (!rec) return;
+    const QString filePath = rec->filePath;
+    const QString progKey  = progressKeyFor(filePath);
+    const bool fileOk = !filePath.isEmpty() && QFile::exists(filePath);
+
+    bool finished = false;
+    if (m_bridge && !filePath.isEmpty()) {
+        const QJsonObject prog = m_bridge->progress(QStringLiteral("books"), progKey);
+        finished = prog.value(QStringLiteral("finished")).toBool();
+    }
+
+    auto* menu = ContextMenuHelper::createMenu(this);
+    auto* readAct = menu->addAction(QStringLiteral("Read"));
+    readAct->setEnabled(fileOk);
+    auto* markAct = menu->addAction(finished ? QStringLiteral("Mark as unread")
+                                             : QStringLiteral("Mark as read"));
+    menu->addSeparator();
+    auto* renameAct = menu->addAction(QStringLiteral("Rename..."));
+    renameAct->setEnabled(fileOk);
+    auto* removeAct = menu->addAction(QStringLiteral("Remove from library"));
+    menu->addSeparator();
+    auto* revealAct = menu->addAction(QStringLiteral("Reveal in File Explorer"));
+    revealAct->setEnabled(!filePath.isEmpty());
+    auto* copyAct = menu->addAction(QStringLiteral("Copy path"));
+    copyAct->setEnabled(!filePath.isEmpty());
+
+    auto* chosen = menu->exec(globalPos);
+    if (chosen == readAct) {
+        if (fileOk) emit openBook(filePath);
+    } else if (chosen == markAct) {
+        if (m_bridge && !filePath.isEmpty()) {
+            QJsonObject prog = m_bridge->progress(QStringLiteral("books"), progKey);
+            prog[QStringLiteral("finished")] = !finished;
+            m_bridge->saveProgress(QStringLiteral("books"), progKey, prog);
+            refreshContinueStrip();
+        }
+    } else if (chosen == renameAct) {
+        QFileInfo fi(filePath);
+        const QString newName = QInputDialog::getText(
+            this, QStringLiteral("Rename"), QStringLiteral("New name:"),
+            QLineEdit::Normal, fi.completeBaseName());
+        if (!newName.isEmpty() && newName != fi.completeBaseName()) {
+            const QString newPath = fi.absolutePath() + QLatin1Char('/')
+                                  + newName + QLatin1Char('.') + fi.suffix();
+            if (QFile::rename(filePath, newPath)) {
+                CatalogueRecord updated = *rec;       // keep catalogueId, update path
+                updated.filePath = newPath;
+                m_catalogueStore->upsertRecord(updated);  // emits recordsChanged → rebuild
+            } else {
+                QMessageBox::warning(this, QStringLiteral("Rename failed"),
+                    QStringLiteral("Could not rename \"%1\". The file may be in use "
+                                   "by another program.").arg(fi.fileName()));
+            }
+        }
+    } else if (chosen == removeAct) {
+        removeFromLibrary({catalogueId}, rec->title);
+    } else if (chosen == revealAct) {
+        ContextMenuHelper::revealInExplorer(filePath);
+    } else if (chosen == copyAct) {
+        ContextMenuHelper::copyToClipboard(filePath);
+    }
+    menu->deleteLater();
+}
+
+// Right-click a book row inside the series detail view. Owned books get the
+// full owned-book menu (same as the grid); not-yet-owned books get a light
+// "Get" menu that routes to the movie-shape detail view (the §5.2 flow).
+void BooksPage::onSeriesBookContextMenu(const BookCatalogueResult& book,
+                                        const QPoint& globalPos)
+{
+    if (book.catalogueId.isEmpty()) return;
+
+    if (m_catalogueStore && m_catalogueStore->hasRecord(book.catalogueId)) {
+        showOwnedBookMenu(book.catalogueId, globalPos);
+        return;
+    }
+
+    auto* menu = ContextMenuHelper::createMenu(this);
+    auto* getAct  = menu->addAction(QStringLiteral("Get this book"));
+    auto* copyAct = menu->addAction(QStringLiteral("Copy title"));
+    auto* chosen = menu->exec(globalPos);
+    if (chosen == getAct) {
+        if (m_catalogueDetailView) {
+            m_catalogueDetailReturnToSeries = true;
+            m_catalogueDetailReturnToSearch = false;
+            m_catalogueDetailView->showBook(book, QString());
+            if (m_stack) m_stack->setCurrentWidget(m_catalogueDetailView);
+        }
+    } else if (chosen == copyAct) {
+        ContextMenuHelper::copyToClipboard(book.title);
+    }
+    menu->deleteLater();
+}
+
+// 3-way "ask each time" remove dialog, applied to one book or every owned book
+// of a series. Library-only drops the record (file stays); delete-file removes
+// the file too. recordsChanged → rebuildBookGrid handles the grid refresh.
+void BooksPage::removeFromLibrary(const QStringList& catalogueIds,
+                                  const QString& subjectLabel)
+{
+    if (!m_catalogueStore || catalogueIds.isEmpty()) return;
+
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("Remove from library"));
+    box.setIcon(QMessageBox::Question);
+    box.setText(catalogueIds.size() > 1
+        ? QStringLiteral("Remove \"%1\" (%2 books) from your library?")
+              .arg(subjectLabel).arg(catalogueIds.size())
+        : QStringLiteral("Remove \"%1\" from your library?").arg(subjectLabel));
+    box.setInformativeText(QStringLiteral(
+        "\"Remove from library only\" keeps the downloaded file(s) on disk."));
+    auto* recordOnlyBtn = box.addButton(QStringLiteral("Remove from library only"),
+                                        QMessageBox::AcceptRole);
+    auto* deleteFileBtn = box.addButton(
+        catalogueIds.size() > 1 ? QStringLiteral("Delete the files too")
+                                : QStringLiteral("Delete the file too"),
+        QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(recordOnlyBtn);
+    box.exec();
+
+    auto* clicked = box.clickedButton();
+    if (clicked != recordOnlyBtn && clicked != deleteFileBtn) return;  // cancel / closed
+    const bool deleteFiles = (clicked == deleteFileBtn);
+
+    for (const QString& id : catalogueIds) {
+        if (deleteFiles) {
+            const auto rec = m_catalogueStore->recordFor(id);
+            if (rec && !rec->filePath.isEmpty())
+                QFile::remove(rec->filePath);
+        }
+        m_catalogueStore->evictByCatalogueId(id);  // emits recordsChanged → rebuildBookGrid
+    }
+    refreshContinueStrip();  // a removed in-progress book also leaves Continue Reading
 }
 
 void BooksPage::restoreLayer(const tankoban::ui::LayerEntry& target)
@@ -1511,6 +1740,30 @@ CatalogueRecord BooksPage::buildRecordFromContext(
     return r;
 }
 
+void BooksPage::openSeries(const QString& seriesId)
+{
+    if (!m_seriesDetailView || seriesId.isEmpty()) return;
+    m_seriesDetailView->loadSeries(seriesId);
+    if (m_stack) m_stack->setCurrentWidget(m_seriesDetailView);
+}
+
+QList<BooksPage::ActiveDownloadInfo> BooksPage::activeDownloads() const
+{
+    QList<ActiveDownloadInfo> out;
+    out.reserve(m_activeDownloads.size());
+    for (auto it = m_activeDownloads.constBegin(); it != m_activeDownloads.constEnd(); ++it) {
+        const ActiveCatalogueDownload& ctx = it.value();
+        ActiveDownloadInfo info;
+        info.catalogueId = ctx.book.catalogueId;
+        info.title       = ctx.book.title;
+        info.author      = ctx.book.author;
+        info.coverPath   = ctx.coverPath;
+        info.percent     = ctx.percent;
+        out.append(info);
+    }
+    return out;
+}
+
 void BooksPage::onCatalogueDownloadRequested(const QString& sourceId,
                                              const BookResult& row,
                                              const QStringList& urls,
@@ -1580,6 +1833,7 @@ void BooksPage::onCatalogueDownloadRequested(const QString& sourceId,
     ctx.coverPath = coverPath;
     ctx.format   = row.format;
     m_activeDownloads.insert(handle, ctx);
+    emit downloadsChanged();
 
     if (m_catalogueDetailView)
         m_catalogueDetailView->notifyDownloadStarted(handle);
@@ -1589,11 +1843,15 @@ void BooksPage::onBookDownloadProgress(const QString& handle,
                                        qint64 bytesReceived,
                                        qint64 bytesTotal)
 {
-    if (!m_catalogueDetailView) return;
     int pct = 0;
     if (bytesTotal > 0)
         pct = static_cast<int>((bytesReceived * 100) / bytesTotal);
-    m_catalogueDetailView->notifyDownloadProgress(handle, pct);
+    if (auto it = m_activeDownloads.find(handle); it != m_activeDownloads.end()) {
+        it.value().percent = pct;
+        emit downloadsChanged();
+    }
+    if (m_catalogueDetailView)
+        m_catalogueDetailView->notifyDownloadProgress(handle, pct);
 }
 
 void BooksPage::onBookDownloadComplete(const QString& handle, const QString& filePath)
@@ -1610,6 +1868,7 @@ void BooksPage::onBookDownloadComplete(const QString& handle, const QString& fil
     ActiveCatalogueDownload ctx = it.value();
     ctx.filePath = filePath;
     m_activeDownloads.erase(it);
+    emit downloadsChanged();
 
     if (m_catalogueStore) {
         const CatalogueRecord record = BooksPage::buildRecordFromContext(ctx, filePath);
@@ -1632,6 +1891,7 @@ void BooksPage::onBookDownloadComplete(const QString& handle, const QString& fil
 void BooksPage::onBookDownloadFailed(const QString& handle, const QString& reason)
 {
     m_activeDownloads.remove(handle);
+    emit downloadsChanged();
     if (m_catalogueDetailView)
         m_catalogueDetailView->notifyDownloadFailed(handle, reason);
 }

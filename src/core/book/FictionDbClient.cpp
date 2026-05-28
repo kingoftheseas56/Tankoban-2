@@ -33,6 +33,55 @@ QString ogTag(const QString& html, const QString& prop)
     return m.hasMatch() ? m.captured(1).trimmed() : QString();
 }
 
+// Full synopsis from the book page's #description tab-pane. og:description is
+// SEO-capped at ~200 chars (cuts mid-sentence); this div carries the whole
+// multi-paragraph blurb. Returns empty if the div is absent (caller falls back
+// to og:description).
+QString descriptionBody(const QString& html)
+{
+    QRegularExpression divRe(
+        QStringLiteral("id=\"description\"[^>]*>(.*?)</div>"),
+        QRegularExpression::DotMatchesEverythingOption
+            | QRegularExpression::CaseInsensitiveOption);
+    const auto m = divRe.match(html);
+    if (!m.hasMatch()) return QString();
+
+    QString body = m.captured(1);
+    body.replace(QRegularExpression(QStringLiteral("<br\\s*/?>"),
+                                    QRegularExpression::CaseInsensitiveOption),
+                 QStringLiteral("\n"));
+    body.remove(QRegularExpression(QStringLiteral("<[^>]*>")));  // strip any other tags
+
+    // Decode the HTML entities that show up in prose.
+    static const QList<QPair<QString, QString>> ents = {
+        {QStringLiteral("&amp;"),    QStringLiteral("&")},
+        {QStringLiteral("&lt;"),     QStringLiteral("<")},
+        {QStringLiteral("&gt;"),     QStringLiteral(">")},
+        {QStringLiteral("&quot;"),   QStringLiteral("\"")},
+        {QStringLiteral("&#39;"),    QStringLiteral("'")},
+        {QStringLiteral("&#x27;"),   QStringLiteral("'")},
+        {QStringLiteral("&nbsp;"),   QStringLiteral(" ")},
+        {QStringLiteral("&hellip;"), QStringLiteral("…")},
+        {QStringLiteral("&mdash;"),  QStringLiteral("—")},
+        {QStringLiteral("&ndash;"),  QStringLiteral("–")},
+        {QStringLiteral("&rsquo;"),  QStringLiteral("’")},
+        {QStringLiteral("&lsquo;"),  QStringLiteral("‘")},
+        {QStringLiteral("&rdquo;"),  QStringLiteral("”")},
+        {QStringLiteral("&ldquo;"),  QStringLiteral("“")},
+    };
+    for (const auto& e : ents) body.replace(e.first, e.second);
+
+    // Normalize whitespace: the source indents each line, so blank "lines"
+    // between <br><br> paragraphs carry spaces/tabs and wouldn't collapse on
+    // newline-count alone. Strip whitespace around every newline first, then
+    // cap paragraph gaps at a single blank line, then collapse inline runs.
+    body.replace(QRegularExpression(QStringLiteral("[ \\t]*\\r?\\n[ \\t]*")),
+                 QStringLiteral("\n"));
+    body.replace(QRegularExpression(QStringLiteral("\\n{2,}")), QStringLiteral("\n\n"));
+    body.replace(QRegularExpression(QStringLiteral("[ \\t]{2,}")), QStringLiteral(" "));
+    return body.trimmed();
+}
+
 // "Herbert, Frank" -> "Frank Herbert"; passthrough if no comma.
 QString flipAuthor(const QString& raw)
 {
@@ -128,7 +177,10 @@ BookCatalogueResult FictionDbClient::parseBookPage(const QString& html, const QS
     }
     r.isbn = ogTag(html, QStringLiteral("isbn"));
     r.coverUrl = ogTag(html, QStringLiteral("image"));
-    r.description = ogTag(html, QStringLiteral("description"));
+    // Prefer the full #description body; og:description is SEO-capped at ~200 chars.
+    r.description = descriptionBody(html);
+    if (r.description.isEmpty())
+        r.description = ogTag(html, QStringLiteral("description"));
 
     // Year: JSON-LD style  "datePublished": "1965-01-15"
     QRegularExpression pubRe(QStringLiteral("datePublished\"\\s*:\\s*\"(\\d{4})"));

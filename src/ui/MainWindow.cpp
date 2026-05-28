@@ -9,6 +9,7 @@
 #include "pages/StreamPage.h"
 #include "pages/stream/StreamDownloadsPage.h"
 #include "pages/comics/ComicsDownloadsPage.h"
+#include "pages/books/BooksDownloadsPage.h"
 #include "pages/TankorentPage.h"
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
@@ -68,6 +69,7 @@ static constexpr const char *PAGE_TANKORENT    = "tankorent";
 static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
 static constexpr const char *PAGE_STREAM_DOWNLOADS = "streamDownloads";
 static constexpr const char *PAGE_COMICS_DOWNLOADS = "comicsDownloads";
+static constexpr const char *PAGE_BOOKS_DOWNLOADS = "booksDownloads";
 
 // ── Constructor ─────────────────────────────────────────────────────────────
 MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
@@ -927,6 +929,26 @@ void MainWindow::buildPageStack()
         activatePage(PAGE_COMICS);
     });
     dbg("4g5-comicsdownloadspage-created");
+
+    // BOOKS_DOWNLOADS_SIDEBAR_PAGE 2026-05-28 (Agent 2) — Books-mode Downloads
+    // page from SidebarDrawer's "Downloads" entry (Books-only). Downloading
+    // section from BooksPage::activeDownloads(); Downloaded from the catalogue store.
+    m_booksDownloadsPage = new BooksDownloadsPage(this);
+    m_booksDownloadsPage->setObjectName(PAGE_BOOKS_DOWNLOADS);
+    m_booksDownloadsPage->setBooksPage(booksPage);
+    m_booksDownloadsPage->setCatalogueStore(booksPage->catalogueStore());
+    m_pageStack->addWidget(m_booksDownloadsPage);
+    connect(m_booksDownloadsPage, &BooksDownloadsPage::backRequested, this, [this]() {
+        activatePage(PAGE_BOOKS);
+    });
+    connect(m_booksDownloadsPage, &BooksDownloadsPage::openSeriesRequested, this,
+            [this, booksPage](const QString& seriesId) {
+                activatePage(PAGE_BOOKS);
+                booksPage->openSeries(seriesId);
+            });
+    connect(m_booksDownloadsPage, &BooksDownloadsPage::openBookRequested,
+            this, &MainWindow::openBookReader);
+    dbg("4g6-booksdownloadspage-created");
     dbg("4h-pagestack-complete");
 }
 
@@ -1037,6 +1059,8 @@ void MainWindow::activatePage(const QString &pageId)
                     pageId == PAGE_STREAM || pageId == PAGE_STREAM_DOWNLOADS);
                 m_sidebar->setComicsDownloadsVisible(
                     pageId == PAGE_COMICS || pageId == PAGE_COMICS_DOWNLOADS);
+                m_sidebar->setBooksDownloadsVisible(
+                    pageId == PAGE_BOOKS || pageId == PAGE_BOOKS_DOWNLOADS);
             }
             break;
         }

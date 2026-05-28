@@ -252,6 +252,7 @@ private:
     StreamPage    *m_streamPage    = nullptr;
     StreamDownloadsPage *m_streamDownloadsPage = nullptr;
     ComicsDownloadsPage *m_comicsDownloadsPage = nullptr;
+    class BooksDownloadsPage *m_booksDownloadsPage = nullptr;
     TankorentPage *m_tankorentPage = nullptr;
     TorrentClient *m_torrentClient = nullptr;
     tankoban::queue::TransferQueue *m_transferQueue = nullptr;

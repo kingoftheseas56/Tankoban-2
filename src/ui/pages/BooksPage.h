@@ -54,10 +54,30 @@ public:
     QJsonObject devLibrarySnapshot() const;
     QJsonObject devLibrarySection() const;
 
+    // BOOKS_DOWNLOADS_SIDEBAR_PAGE (2026-05-28) — projection of an in-flight
+    // download for the Books Downloads page.
+    struct ActiveDownloadInfo {
+        QString catalogueId;
+        QString title;
+        QString author;
+        QString coverPath;
+        int     percent = 0;
+    };
+    QList<ActiveDownloadInfo> activeDownloads() const;
+    BooksCatalogueLibraryStore* catalogueStore() const { return m_catalogueStore; }
+    QString catalogueCoverDir() const { return m_catalogueCoverDir; }
+
+    // Open a series' detail view (used by the library grid tile + the Books
+    // Downloads page). Loads + switches the internal stack to the series view.
+    void openSeries(const QString& seriesId);
+
 signals:
     void openBook(const QString& filePath);
     void enteredLayer(const tankoban::ui::LayerEntry& entry);
     void exitedLayer();
+    // Fired on download start / progress / complete / fail so the Books
+    // Downloads page can refresh its in-progress section.
+    void downloadsChanged();
 
 public slots:
     void restoreLayer(const tankoban::ui::LayerEntry& target);
@@ -72,6 +92,13 @@ private slots:
     void applySearch();
     void refreshContinueStrip();
     void rebuildBookGrid();
+
+    // BOOKS_LIBRARY_CONTEXT_MENU (2026-05-28) — right-click menu on m_bookStrip
+    // tiles. Branches on the tile's catalogueSeries / catalogueRecord property.
+    void showBookContextMenu(const QPoint& pos);
+    // Right-click on a book row inside the series detail view.
+    void onSeriesBookContextMenu(const BookCatalogueResult& book,
+                                 const QPoint& globalPos);
 
     // §5.2 (2026-05-27) — catalogue download lifecycle. Detail view emits
     // downloadRequested when a source row gets clicked; BooksPage owns
@@ -98,6 +125,13 @@ private:
     void buildUI();
     void addCatalogueRecordTile(const CatalogueRecord& record);
     void addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount);
+    // Shared owned-book context menu (Read / Mark / Rename / Remove / Reveal /
+    // Copy), used by both the library grid and the series detail rows.
+    void showOwnedBookMenu(const QString& catalogueId, const QPoint& globalPos);
+    // Shared 3-way remove dialog (library-only / delete-file / cancel) applied
+    // to one book or every owned book of a series.
+    void removeFromLibrary(const QStringList& catalogueIds,
+                           const QString& subjectLabel);
     BookCatalogueResult catalogueRecordToResult(const CatalogueRecord& record) const;
     void loadSearchHistory();
     void saveSearchHistory();
@@ -154,6 +188,7 @@ private:
         QString coverPath;
         QString format;
         QString filePath;  // set on completion
+        int     percent = 0;  // latest progress %, updated in onBookDownloadProgress
     };
     QHash<QString, ActiveCatalogueDownload> m_activeDownloads;
     static CatalogueRecord buildRecordFromContext(
