@@ -123,6 +123,14 @@ private:
     QString m_inflightClassifyMangaFireId;
     QList<tankoban::manga::MangaVolume> m_pendingClassifyVolumes;
 
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, Opus, seam fix).
+    // The WeebCentral seriesId the pending classify is waiting on. Empty until
+    // known (a cold-open classify learns it from searchFinished). chaptersReady
+    // only runs classification when the just-fetched WC seriesId matches this,
+    // so a concurrent resolve fetch for a *different* series can never feed the
+    // wrong chapter list into the classifier.
+    QString m_inflightClassifyWcSeriesId;
+
     // The private WeebCentralScraper signal surface is request-id-less, so
     // serialize each async phase explicitly.
     QString m_inflightSearch; // MangaFire seriesId

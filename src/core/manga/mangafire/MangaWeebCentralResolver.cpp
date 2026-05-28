@@ -167,18 +167,14 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
             filterAndEmit(pending);
         }
 
-        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
-        // After chapters land, check if a classifySeries() was waiting on
-        // this fetch. The pending classify's WC seriesId was resolved by
-        // the search→fetch pipeline; we now have the full chapter list with
-        // quality ticks in the cache.
-        if (!m_inflightClassifyMangaFireId.isEmpty()) {
-            // Find the mangaFire→WC mapping for the pending classify.
-            // The searchFinished handler patches the WeebCentral block on
-            // the MangaFire catalog entry, so the WC seriesId is discoverable
-            // from the pending mangaFire seriesId.
-            // For now, use the just-fetched wcSeriesId directly — it's the
-            // same one the classify fetch was waiting on.
+        // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro; seam fix Opus).
+        // After chapters land, run a pending classifySeries() ONLY when the
+        // just-fetched WC seriesId is the one that classify is waiting on.
+        // Without this guard a concurrent resolve fetch for a different series
+        // would feed its chapter list into the classifier (wrong RAW-SCAN
+        // badges on the open series view).
+        if (!m_inflightClassifyMangaFireId.isEmpty()
+            && m_inflightClassifyWcSeriesId == wcSeriesId) {
             runClassification(m_inflightClassifyMangaFireId, wcSeriesId,
                               m_pendingClassifyVolumes);
         }
@@ -192,6 +188,7 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         m_inflightFetch.clear();
         m_inflightClassifyMangaFireId.clear();
         m_pendingClassifyVolumes.clear();
+        m_inflightClassifyWcSeriesId.clear();
 
         for (const auto& queue : allPending) {
             for (const auto& pending : queue) {
@@ -276,6 +273,9 @@ void MangaWeebCentralResolver::classifySeries(
     // chapter list lands in the cache.
     m_inflightClassifyMangaFireId = catalog.seriesId;
     m_pendingClassifyVolumes = catalog.volumes;
+    // Empty when wcSeriesId is unknown — searchFinished sets it once the
+    // name-search resolves the WeebCentral seriesId.
+    m_inflightClassifyWcSeriesId = wcSeriesId;
 
     if (wcSeriesId.isEmpty()) {
         if (m_scraper && m_inflightSearch.isEmpty()) {
@@ -299,6 +299,7 @@ void MangaWeebCentralResolver::runClassification(
     if (it == m_chapterCache.constEnd()) {
         m_inflightClassifyMangaFireId.clear();
         m_pendingClassifyVolumes.clear();
+        m_inflightClassifyWcSeriesId.clear();
         return;
     }
 
@@ -317,6 +318,7 @@ void MangaWeebCentralResolver::runClassification(
 
     m_inflightClassifyMangaFireId.clear();
     m_pendingClassifyVolumes.clear();
+    m_inflightClassifyWcSeriesId.clear();
 
     emit seriesClassified(mangaFireSeriesId, classified);
 }
