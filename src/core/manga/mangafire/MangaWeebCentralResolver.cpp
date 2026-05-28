@@ -260,6 +260,17 @@ void MangaWeebCentralResolver::resolve(
             break;
         }
     }
+    resolveChapterRange(catalog, volumeNumber, rangeStart, rangeEnd, key);
+}
+
+void MangaWeebCentralResolver::resolveChapterRange(
+    const tankoban::manga::MangaCatalog& catalog,
+    int volumeNumber,
+    int rangeStart,
+    int rangeEnd,
+    const ResolveKey& key)
+{
+    Q_UNUSED(volumeNumber);
 
     if (rangeStart <= 0 || rangeEnd < rangeStart) {
         emit skip(key, reasonCode(SkipReason::NoChapterOverlap));

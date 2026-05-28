@@ -248,6 +248,10 @@ private slots:
     void onMangaFireCatalogFailed(const QString& title, const QString& reason);
     void onWcResolveRequested(const QString& mangaFireSeriesId,
                               int volumeNumber);
+    void onWcResolveRangeRequested(const QString& mangaFireSeriesId,
+                                   int volumeNumber,
+                                   int rangeStart,
+                                   int rangeEnd);
     void onWcResolverViable(
         tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
         QStringList chapterIds);

@@ -424,6 +424,9 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRequested,
             this, &ComicsPage::onWcResolveRequested);
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRangeRequested,
+            this, &ComicsPage::onWcResolveRangeRequested);
     // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
     // series (anilistId=0) can't bookmark via the AniList-keyed path. Wire
     // the best-effort search-by-title enrichment here.
@@ -3063,8 +3066,12 @@ void ComicsPage::onDownloadDispatchRequested(
         sanitised.replace(QRegularExpression(R"([<>:\"/\\|?*])"), QStringLiteral("_"));
         const QString seriesDir = roots.first() + QLatin1Char('/') + sanitised;
         QDir().mkpath(seriesDir);
-        const QString destinationPath = seriesDir + QStringLiteral("/Volume %1.cbz")
-                                                        .arg(volumeNumber, 2, 10, QChar('0'));
+        const QString volumeFileStem =
+            (volumeNumber == tankoban::manga::anilist::kVolumeXNumber)
+                ? QStringLiteral("Volume X")
+                : QStringLiteral("Volume %1").arg(volumeNumber, 2, 10, QChar('0'));
+        const QString destinationPath =
+            seriesDir + QLatin1Char('/') + volumeFileStem + QStringLiteral(".cbz");
 
         VolumePackRequest req;
         req.seriesId        = mangaFireSeriesId;
@@ -4076,6 +4083,43 @@ void ComicsPage::onWcResolveRequested(const QString& mangaFireSeriesId,
     m_currentWcResolveKey = key;
 
     m_wcResolver->resolve(*catalog, volumeNumber, key);
+}
+
+void ComicsPage::onWcResolveRangeRequested(const QString& mangaFireSeriesId,
+                                           int volumeNumber,
+                                           int rangeStart,
+                                           int rangeEnd)
+{
+    if (!m_wcResolver || rangeStart <= 0 || rangeEnd < rangeStart) {
+        return;
+    }
+
+    QString seriesId = mangaFireSeriesId.trimmed();
+    if (seriesId.isEmpty() && !m_currentDetailSeriesTitle.isEmpty()) {
+        seriesId = m_localCatalogIndex.slugForSeriesTitle(m_currentDetailSeriesTitle);
+    }
+    if (seriesId.isEmpty()) {
+        return;
+    }
+
+    const QString path = m_localCatalogIndex.filePathForSlug(seriesId);
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const auto catalog = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
+    if (!catalog.has_value() || !catalog->isValid()) {
+        return;
+    }
+
+    tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key;
+    key.seriesId = catalog->seriesId;
+    key.volumeNumber = volumeNumber;
+    key.requestSerial = ++m_wcResolveSerial;
+    m_currentWcResolveKey = key;
+
+    m_wcResolver->resolveChapterRange(*catalog, volumeNumber,
+                                      rangeStart, rangeEnd, key);
 }
 
 void ComicsPage::onWcResolverViable(

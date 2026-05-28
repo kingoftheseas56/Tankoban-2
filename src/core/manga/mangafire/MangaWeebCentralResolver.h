@@ -67,6 +67,16 @@ public:
                  int volumeNumber,
                  const ResolveKey& key);
 
+    // VOLUME_X_DOWNLOAD: resolve WeebCentral chapter ids for an EXPLICIT chapter
+    // range instead of a catalog-volume lookup. Used for the synthetic Volume X
+    // tile (volumeNumber == kVolumeXNumber), whose chapter range comes from the
+    // classified tail bucket, not catalog.volumes. Emits viable/skip with key.
+    void resolveChapterRange(const tankoban::manga::MangaCatalog& catalog,
+                             int volumeNumber,
+                             int rangeStart,
+                             int rangeEnd,
+                             const ResolveKey& key);
+
     // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
     // Classify every catalog volume as Clean or Magazine from the WeebCentral
     // chapter-quality ticks, plus a trailing Volume X bucket for chapters past

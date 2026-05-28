@@ -2291,6 +2291,40 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
         return;
     }
 
+    // VOLUME_X_DOWNLOAD: the synthetic Volume X tile is not in m_currentVolumeRows
+    // or the catalog, so resolve its sources from the classified tail bucket.
+    if (volumeNumber == tankoban::manga::anilist::kVolumeXNumber) {
+        const auto it = m_classifiedByVolume.constFind(volumeNumber);
+        if (it == m_classifiedByVolume.constEnd() || it->chapterNumbers.isEmpty()) {
+            return;
+        }
+        const auto span = tankoban::manga::volumeXChapterSpan(it->chapterNumbers);
+        if (span.first <= 0 || span.second < span.first) {
+            return;
+        }
+
+        tankoban::manga::anilist::VolumeRow stub;
+        stub.volumeNumber = volumeNumber;
+        stub.isVolumeX = true;
+        stub.chapterRangeStart = span.first;
+        stub.chapterRangeEnd = span.second;
+        for (double c : it->chapterNumbers) {
+            stub.chapterNumbers.append(QString::number(c, 'g', 12));
+        }
+
+        m_currentVolumeRows.append(stub);
+        const int row = m_currentVolumeRows.size() - 1;
+        populateSourcesForRow(row);
+        m_currentVolumeRows.removeLast();
+
+        const QString mangaFireSeriesId = m_currentMangaCatalog.isValid()
+            ? m_currentMangaCatalog.seriesId
+            : QString();
+        emit weebCentralResolveRangeRequested(mangaFireSeriesId, volumeNumber,
+                                              span.first, span.second);
+        return;
+    }
+
     for (int i = 0; i < m_currentVolumeRows.size(); ++i) {
         if (m_currentVolumeRows.at(i).volumeNumber != volumeNumber) {
             continue;
