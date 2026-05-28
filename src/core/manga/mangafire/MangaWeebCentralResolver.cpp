@@ -101,13 +101,28 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         const QString mangaFireSeriesId = m_inflightSearch;
         m_inflightSearch.clear();
 
+        // VOLUME_X_QUALITY seam fix (Opus): a cold-open classifySeries() with
+        // no known WC seriesId waits on this name-search. It is NOT in the
+        // resolve queue, so handle it alongside (or instead of) resolves.
+        const bool classifyWaiting =
+            (m_inflightClassifyMangaFireId == mangaFireSeriesId
+             && m_inflightClassifyWcSeriesId.isEmpty());
+
         auto queued = m_pendingByMangafireSeriesId.value(mangaFireSeriesId);
-        if (queued.isEmpty()) return;
+        if (queued.isEmpty() && !classifyWaiting) return;
 
         if (results.isEmpty() || results.first().id.isEmpty()) {
-            m_pendingByMangafireSeriesId.remove(mangaFireSeriesId);
-            for (const auto& pending : queued) {
-                emitSkip(pending, SkipReason::NoSeriesMatch);
+            if (!queued.isEmpty()) {
+                m_pendingByMangafireSeriesId.remove(mangaFireSeriesId);
+                for (const auto& pending : queued) {
+                    emitSkip(pending, SkipReason::NoSeriesMatch);
+                }
+            }
+            if (classifyWaiting) {
+                // No WeebCentral match → nothing to classify; drop the pending.
+                m_inflightClassifyMangaFireId.clear();
+                m_pendingClassifyVolumes.clear();
+                m_inflightClassifyWcSeriesId.clear();
             }
             return;
         }
@@ -124,6 +139,21 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
         }
         if (!liveQueue.isEmpty()) {
             stepFetchChapters(liveQueue.first());
+        }
+
+        // The cold-open classify now knows its WC seriesId. Record it, then
+        // either classify from cache or drive the chapter fetch. If a resolve
+        // above already started fetching this same series, m_inflightFetch is
+        // set and chaptersReady will classify when it lands (guard matches).
+        if (classifyWaiting) {
+            m_inflightClassifyWcSeriesId = wcSeriesId;
+            if (m_chapterCache.contains(wcSeriesId)) {
+                runClassification(m_inflightClassifyMangaFireId, wcSeriesId,
+                                  m_pendingClassifyVolumes);
+            } else if (m_scraper && m_inflightFetch.isEmpty()) {
+                m_inflightFetch = wcSeriesId;
+                m_scraper->fetchChapters(wcSeriesId);
+            }
         }
     });
 
@@ -177,6 +207,22 @@ MangaWeebCentralResolver::MangaWeebCentralResolver(QNetworkAccessManager* nam,
             && m_inflightClassifyWcSeriesId == wcSeriesId) {
             runClassification(m_inflightClassifyMangaFireId, wcSeriesId,
                               m_pendingClassifyVolumes);
+        } else if (!m_inflightClassifyMangaFireId.isEmpty()
+                   && !m_inflightClassifyWcSeriesId.isEmpty()
+                   && m_inflightFetch.isEmpty() && m_scraper) {
+            // VOLUME_X_QUALITY seam fix (Opus): the classify's own fetch was
+            // deferred because a different series held the fetch slot when
+            // classifySeries() was called. The slot is free now — drive it so
+            // the classify completes instead of stranding (badges would
+            // otherwise stay missing until the series view is reopened).
+            if (m_chapterCache.contains(m_inflightClassifyWcSeriesId)) {
+                runClassification(m_inflightClassifyMangaFireId,
+                                  m_inflightClassifyWcSeriesId,
+                                  m_pendingClassifyVolumes);
+            } else {
+                m_inflightFetch = m_inflightClassifyWcSeriesId;
+                m_scraper->fetchChapters(m_inflightClassifyWcSeriesId);
+            }
         }
     });
 
