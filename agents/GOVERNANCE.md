@@ -315,6 +315,27 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 
 ---
 
+## Engine Switching Protocol (added 2026-05-28 — gov-v10)
+
+A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engine. The same slot may run on Claude/Opus one wake, DeepSeek V4-Pro (the Agent 9 tab) the next, or hand a leg to Codex. This protocol makes that switch seamless. It consolidates conventions previously scattered across `project_agent9.md`, the routing report, and the commit/handoff rules.
+
+**1. State-in-files is the enabler — protect it.** A switch is only seamless because the incoming engine reads the same disk the outgoing one wrote: recaps (`~/.claude/recaps/`), trimmed transcripts (`.cc-history/*.trimmed.md`), `agents/chat.md`, governance, and off-git memory. NEVER let load-bearing state live only in an engine's conversational memory. If it matters across a wake or a switch, it is written to a file first.
+
+**2. Attribution carries the engine.** Sign every RTC / RTM / commit / recap with the engine in the parenthetical: `[Agent 1 (Opus), TAG]`, `[Agent 1 (DeepSeek V4-Pro), TAG]`, `[Agent 7 (Codex), TAG]`. This lets `git log` / chat archive show which engine produced which work without ambiguity.
+
+**3. The routing call is made at handoff, by the agent who just did the work.** Recaps and handoff-briefs carry an **Engine for next leg** line (see the `session-recap` + `handoff-brief` skills). The agent who just finished knows what the next leg is (design pass vs locked-plan execution vs audit) and names the engine for it. Routing table: `agents/audits/deepseek_engine_experiment_2026-05-28.md`. Summary:
+   - **Execute a locked / fully-specified plan** → DeepSeek (Agent 9) or Codex (Agent 7), quota decides. *Proven 2026-05-28.*
+   - **Design / deliberation pass** (reversal-heavy archaeology that produces the locked plan) → Opus, until DeepSeek is tested there.
+   - **First-pass audit / research / long-context / parser-bulk logic** → DeepSeek's natural strength.
+   - **Gnarly production-C++ / novel architecture / long agentic loop** → prefer Codex.
+   - **Anything an execution engine ships** → reviewer pass (Opus/Codex) before master, mandatory — same as Codex Trigger-D.
+
+**4. Mid-arc handoff mechanics = gov-v9 Path B.** To switch engines mid-arc without losing work: the outgoing engine self-commits in its worktree (or flags RTC on flat checkout), posts `READY TO MERGE` / a handoff-brief naming the next engine, and the incoming engine picks up from the committed base. No work is stranded in an unmergeable in-flight state across a switch.
+
+**5. Quota is a routing input, never a replacement argument.** The Codex↔DeepSeek default is "Codex first, DeepSeek when Codex quota is low." Quota state is read from the **Engine/quota status** field in `CLAUDE.md`'s dashboard (Hemanth or Agent 0 keeps it current). Brothers are not swappable slots — cost/quota decides *which available brother takes a switch-eligible task*, it never argues for removing one (memory `feedback_brotherhood_is_not_swappable`).
+
+---
+
 ## Build Rules (ratified 2026-03-24, all 6 agents signed; Rule 11 added 2026-04-14)
 
 1. `taskkill //F //IM Tankoban.exe` before every build. System tray hides it — there may be ghost instances.
