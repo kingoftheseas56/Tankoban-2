@@ -397,6 +397,52 @@ void MangaDownloadIndex::evictByChapter(const QString& sourceId,
     }
 }
 
+void MangaDownloadIndex::evictByVolume(const QString& sourceId,
+                                        const QString& seriesId,
+                                        int volumeNumber)
+{
+    if (sourceId.isEmpty() || seriesId.isEmpty() || volumeNumber <= 0)
+        return;
+
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        // Find every entry matching this volume and evict all served chapter
+        // keys + the m_byPath entry. A single volume entry may serve N chapters;
+        // remove all its chapter keys from m_byChapter and drop the m_byPath row.
+        QList<QString> pathsToRemove;
+        for (auto it = m_byPath.constBegin(); it != m_byPath.constEnd(); ++it) {
+            const Entry& e = it.value();
+            if (e.sourceId == sourceId &&
+                e.seriesId == seriesId &&
+                e.volumeNumber == volumeNumber) {
+                pathsToRemove.append(it.key());
+            }
+        }
+        for (const auto& pathKey : pathsToRemove) {
+            auto pIt = m_byPath.find(pathKey);
+            if (pIt == m_byPath.end()) continue;
+            for (const auto& sk : pIt->servedChapterKeys)
+                m_byChapter.remove(sk);
+            m_byPath.erase(pIt);
+        }
+        if (!pathsToRemove.isEmpty()) {
+            recomputeSeriesHasAnyLocked(sourceId, seriesId);
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        DebugLogBuffer::instance().info(QStringLiteral("manga-download-index"),
+            QStringLiteral("evictByVolume"),
+            QJsonObject{{QStringLiteral("sourceId"), sourceId},
+                        {QStringLiteral("seriesId"), seriesId},
+                        {QStringLiteral("volumeNumber"), volumeNumber}});
+        save();
+        emit entriesChanged();
+    }
+}
+
 void MangaDownloadIndex::validateAll()
 {
     // Snapshot keys+paths under lock; stat off-lock; collect missing; then
