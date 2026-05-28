@@ -207,6 +207,14 @@ signals:
     void weebCentralResolveRequested(const QString& mangaFireSeriesId,
                                      int volumeNumber);
 
+    // VOLUME_X_DOWNLOAD: like weebCentralResolveRequested but carries an explicit
+    // chapter range. Emitted for the synthetic Volume X tile, whose range comes
+    // from the classified tail bucket (not catalog.volumes).
+    void weebCentralResolveRangeRequested(const QString& mangaFireSeriesId,
+                                          int volumeNumber,
+                                          int rangeStart,
+                                          int rangeEnd);
+
     // STREAM_PORT 2026-05-18 Task 5: multi-volume bulk dispatch.
     // ComicsPage v1.x will route this through the default provider
     // (catalog if present, otherwise Tankoyomi) once bulk routing is wired.
