@@ -160,6 +160,10 @@ public slots:
     // the VolumePackRequest before dispatch.
     bool isVolumeMagazineSourced(int volumeNumber) const;
 
+    // COMICS_CONTEXT_MENU 2026-05-28: volume-tile right-click menu.
+    void showVolumeTileMenu(tankoban::ui::comics::VolumeTile* tile, const QPoint& pos);
+    void deleteVolumeDownload(int volumeNumber, const QString& cbzPath);
+
 signals:
     // Fired when user clicks Download on a volume row OR clicks a downloaded
     // row to open the reader. cbzPath is empty for the Download case (caller

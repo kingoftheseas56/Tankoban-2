@@ -10,6 +10,7 @@
 #include "core/manga/MangaScraper.h"
 #include "core/manga/PremiumCatalog.h"
 #include "ui/widgets/ComicsSeriesViewLoadingOverlay.h"
+#include "ui/ContextMenuHelper.h"
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -49,6 +50,7 @@
 #include <QStringList>
 #include <QScrollArea>
 #include <QTimer>
+#include <QMenu>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -1291,6 +1293,10 @@ void ComicsSeriesView::populateVolumeRows(const QList<anilist::VolumeRow>& rows,
         m_volumeTilesByVolumeNumber.insert(row.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
 
+        tile->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tile, &QWidget::customContextMenuRequested, this,
+                [this, tile](const QPoint& pos) { showVolumeTileMenu(tile, pos); });
+
         // Phase B regression fix 2026-05-23: populateVolumeRows used to rely on
         // paintVolumeCovers / paintVolumeCoversAsFallback (BookWalker-driven)
         // to trigger the actual cover fetch. Phase B deleted those paths along
@@ -1492,6 +1498,10 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         m_volumeTilesByVolumeNumber.insert(vol.volumeNumber, tile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, tile);
 
+        tile->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tile, &QWidget::customContextMenuRequested, this,
+                [this, tile](const QPoint& pos) { showVolumeTileMenu(tile, pos); });
+
         // Paint the catalog's own CDN cover URL for this volume. The async fetch
         // has a stale-series guard (m_currentSeriesKey) which correctly differentiates
         // catalog slugs ("mangafire:<slug>") from AniList/WeebCentral series.
@@ -1544,6 +1554,11 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         m_volumeTiles.append(xTile);
         m_volumeTilesByVolumeNumber.insert(tankoban::manga::anilist::kVolumeXNumber, xTile);
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, xTile);
+
+        xTile->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(xTile, &QWidget::customContextMenuRequested, this,
+                [this, xTile](const QPoint& pos) { showVolumeTileMenu(xTile, pos); });
+
         break;  // at most one Volume X
     }
 
@@ -2546,6 +2561,49 @@ QJsonObject ComicsSeriesView::devDispatchVolume(int volumeNumber, const QString&
     out[QStringLiteral("source")] = source;
     out[QStringLiteral("sourcesPanel")] = devSourcesSnapshot();
     return out;
+}
+
+void ComicsSeriesView::showVolumeTileMenu(tankoban::ui::comics::VolumeTile* tile,
+                                          const QPoint& pos)
+{
+    if (!tile) return;
+    const auto st = tile->volumeState();
+    const bool downloaded =
+        (st.state == tankoban::ui::comics::VolumeTileState::Complete)
+        && !st.cbzPath.isEmpty();
+    if (!downloaded) return;
+
+    QMenu* menu = ContextMenuHelper::createMenu(this);
+    QAction* del    = ContextMenuHelper::addDangerAction(menu, tr("Delete…"));
+    QAction* reveal = menu->addAction(tr("Reveal in File Explorer"));
+    QAction* copy   = menu->addAction(tr("Copy path"));
+    const bool fileExists = QFile::exists(st.cbzPath);
+    reveal->setEnabled(fileExists);
+    copy->setEnabled(fileExists);
+
+    QAction* chosen = menu->exec(tile->mapToGlobal(pos));
+    if (chosen == del)         deleteVolumeDownload(tile->volumeNumber(), st.cbzPath);
+    else if (chosen == reveal) ContextMenuHelper::revealInExplorer(st.cbzPath);
+    else if (chosen == copy)   ContextMenuHelper::copyToClipboard(st.cbzPath);
+    menu->deleteLater();
+}
+
+void ComicsSeriesView::deleteVolumeDownload(int volumeNumber, const QString& cbzPath)
+{
+    if (!m_downloadIndex) return;
+    const QString seriesId = m_currentMangaCatalog.seriesId;
+    const QString src = QString::fromLatin1(kWeebCentralSourceId);
+
+    const auto choice = ContextMenuHelper::confirmRemoveWithFile(
+        this, tr("Delete volume"),
+        tr("Remove this volume from your library?"));
+    if (choice == ContextMenuHelper::RemoveChoice::Cancel) return;
+
+    m_downloadIndex->evictByVolume(src, seriesId, volumeNumber);
+    if (choice == ContextMenuHelper::RemoveChoice::DeleteFile && !cbzPath.isEmpty()) {
+        QFile::remove(cbzPath);
+        QFile::remove(cbzPath + QStringLiteral(".volx"));
+    }
 }
 
 } // namespace tankoban::manga::comics
