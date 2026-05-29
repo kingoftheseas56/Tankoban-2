@@ -232,7 +232,15 @@ int BooksDownloadsPage::populateDownloaded()
             if (!r.seriesId.isEmpty()) {
                 if (seriesSeen.contains(r.seriesId)) continue;
                 seriesSeen.insert(r.seriesId);
-                const int owned = m_store->catalogueIdsForSeries(r.seriesId).size();
+                // Count only members actually on disk — a series that's merely
+                // shelved as want-to-read (no files) is not a "download".
+                int downloadedOwned = 0;
+                for (const QString& id : m_store->catalogueIdsForSeries(r.seriesId)) {
+                    if (auto rec = m_store->recordFor(id))
+                        if (!rec->filePath.isEmpty()) ++downloadedOwned;
+                }
+                if (downloadedOwned == 0) continue;
+                const int owned = downloadedOwned;
                 const QString title = r.seriesName.isEmpty() ? r.title : r.seriesName;
                 const QString sub = QStringLiteral("%1 book%2").arg(owned)
                                         .arg(owned == 1 ? QString() : QStringLiteral("s"));
@@ -245,6 +253,7 @@ int BooksDownloadsPage::populateDownloaded()
                 m_downloadedLayout->addWidget(makeRow(m_downloadedBody, cover, title, sub,
                     [this, seriesId]() { emit openSeriesRequested(seriesId); }));
             } else {
+                if (r.filePath.isEmpty()) continue;  // shelved-only, not downloaded
                 QString cover = QFile::exists(r.cachedCoverPath) ? r.cachedCoverPath : QString();
                 if (cover.isEmpty()) {
                     const QString cached = coverCachePath(m_coverDir, r.catalogueId);

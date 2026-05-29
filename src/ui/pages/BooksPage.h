@@ -8,6 +8,7 @@
 #include <QList>
 #include <QMap>
 #include <QPushButton>
+#include <QSet>
 #include <QSettings>
 #include <QSlider>
 #include <QStringList>
@@ -121,8 +122,17 @@ private slots:
     void onCatalogueReadRequested(const QString& catalogueId,
                                   const QString& filePath);
 
+    // Right-click "Add/Remove library" from the search storefront.
+    // Book: toggle a single file-less want-to-read record.
+    // Series: remove-all if any member is shelved, else fetch members + add all.
+    void onSearchBookLibraryToggle(const BookCatalogueResult& book);
+    void onSearchSeriesLibraryToggle(const BookCatalogueResult& seriesStub);
+
 private:
     void buildUI();
+    // Build a file-less "want to read" record (addedAt set, no filePath) from a
+    // catalogue result; used by the search-storefront add-to-library paths.
+    CatalogueRecord wishlistRecordFromResult(const BookCatalogueResult& b) const;
     void addCatalogueRecordTile(const CatalogueRecord& record);
     void addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount);
     // Shared owned-book context menu (Read / Mark / Rename / Remove / Reveal /
@@ -193,6 +203,10 @@ private:
     QHash<QString, ActiveCatalogueDownload> m_activeDownloads;
     static CatalogueRecord buildRecordFromContext(
         const ActiveCatalogueDownload& ctx, const QString& filePath);
+
+    // SeriesIds awaiting a fetchSeries reply to add all members to the library
+    // (right-click "Add series to library" from the search storefront).
+    QSet<QString> m_pendingSeriesLibraryAdd;
 
     LibraryListView* m_listView = nullptr;
     QPushButton* m_viewToggle = nullptr;

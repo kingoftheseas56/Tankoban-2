@@ -12,6 +12,7 @@ class BooksCatalogueLibraryStore;
 class FictionDbClient;
 class QLabel;
 class QNetworkAccessManager;
+class QPushButton;
 class QScrollArea;
 class QTimer;
 class QVBoxLayout;
@@ -65,6 +66,10 @@ private:
     };
 
     void buildUi();
+    // Add-whole-series-to-Library (want-to-read): shelves every member book as
+    // a file-less record; toggles to remove-all when the series is fully shelved.
+    void onAddSeriesToLibraryClicked();
+    void refreshAddSeriesButton();
     void setLoading(bool loading);
     void renderSeries(const QString& seriesName, const QString& author,
                       const QString& heroCoverPath,
@@ -104,6 +109,7 @@ private:
 
     QHash<QString, CachedSeries> m_cache;
 
+    QPushButton* m_addSeriesBtn = nullptr;
     QLabel* m_coverLabel = nullptr;
     QLabel* m_titleLabel = nullptr;
     QLabel* m_metaLabel = nullptr;

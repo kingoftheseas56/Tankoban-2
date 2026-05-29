@@ -1,13 +1,21 @@
 #include "BookCatalogueSearchWidget.h"
 
 #include "core/book/BookCatalogueAggregator.h"
+#include "core/book/BooksCatalogueLibraryStore.h"
+#include "core/book/FictionDbClient.h"
+#include "ui/ContextMenuHelper.h"
 #include "ui/pages/TileCard.h"
 #include "ui/pages/TileStrip.h"
+
+#include <QAction>
+#include <QMenu>
 
 #include <QDir>
 #include <QFile>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QSize>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -33,6 +41,13 @@ QString safeFileStem(QString value)
     return value;
 }
 
+// catalogueId is "fictiondb:<slug>"; recover the slug for fetchBook().
+QString slugOf(const QString& catalogueId)
+{
+    const QString prefix = QStringLiteral("fictiondb:");
+    return catalogueId.startsWith(prefix) ? catalogueId.mid(prefix.size()) : QString();
+}
+
 } // namespace
 
 BookCatalogueSearchWidget::BookCatalogueSearchWidget(BookCatalogueAggregator* aggregator,
@@ -52,6 +67,13 @@ BookCatalogueSearchWidget::BookCatalogueSearchWidget(BookCatalogueAggregator* ag
         connect(m_aggregator, &BookCatalogueAggregator::aggregateFailed,
                 this, &BookCatalogueSearchWidget::onCatalogueFailed);
     }
+
+    if (m_nam) {
+        m_coverClient = new FictionDbClient(m_nam, this);
+        connect(m_coverClient, &FictionDbClient::bookReady,
+                this, &BookCatalogueSearchWidget::onCoverBookReady);
+        // bookFailed: leave the placeholder; not worth a retry per tile.
+    }
 }
 
 void BookCatalogueSearchWidget::buildUi()
@@ -69,7 +91,7 @@ void BookCatalogueSearchWidget::buildUi()
 
     m_backButton = new QPushButton(QStringLiteral("< Books"), topRow);
     m_backButton->setObjectName(QStringLiteral("BookSearchBackButton"));
-    m_backButton->setFixedHeight(30);
+    m_backButton->setFixedHeight(36);
     m_backButton->setCursor(Qt::PointingHandCursor);
     m_backButton->setStyleSheet(QStringLiteral(
         "QPushButton#BookSearchBackButton { background: transparent; border: none;"
@@ -79,15 +101,52 @@ void BookCatalogueSearchWidget::buildUi()
             this, &BookCatalogueSearchWidget::backRequested);
     topLayout->addWidget(m_backButton);
 
-    m_statusLabel = new QLabel(topRow);
+    // Persistent search bar — stays on the results page so the user can refine
+    // the query without returning to the library grid. Submits go up through
+    // BooksPage (searchSubmitted) so the grid bar + history stay in sync.
+    m_searchInput = new QLineEdit(topRow);
+    m_searchInput->setObjectName(QStringLiteral("LibrarySearch"));
+    m_searchInput->setPlaceholderText(QStringLiteral("Search books catalogue"));
+    m_searchInput->setClearButtonEnabled(true);
+    m_searchInput->setFixedHeight(36);
+    m_searchInput->setStyleSheet(QStringLiteral(
+        "QLineEdit#LibrarySearch { background: rgba(255,255,255,0.07);"
+        " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
+        " color: #eee; padding: 4px 10px; font-size: 13px; }"
+        "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }"));
+    connect(m_searchInput, &QLineEdit::returnPressed, this, [this]() {
+        const QString q = m_searchInput->text().trimmed();
+        if (!q.isEmpty()) emit searchSubmitted(q);
+    });
+    topLayout->addWidget(m_searchInput, 1);
+
+    auto* searchBtn = new QPushButton(topRow);
+    searchBtn->setObjectName(QStringLiteral("BookSearchGoButton"));
+    searchBtn->setFixedSize(36, 36);
+    searchBtn->setCursor(Qt::PointingHandCursor);
+    searchBtn->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
+    searchBtn->setIconSize(QSize(18, 18));
+    searchBtn->setToolTip(QStringLiteral("Search"));
+    searchBtn->setStyleSheet(QStringLiteral(
+        "QPushButton#BookSearchGoButton { background: rgba(255,255,255,0.07);"
+        " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; }"
+        "QPushButton#BookSearchGoButton:hover { background: rgba(255,255,255,0.11); }"));
+    connect(searchBtn, &QPushButton::clicked, this, [this]() {
+        const QString q = m_searchInput->text().trimmed();
+        if (!q.isEmpty()) emit searchSubmitted(q);
+    });
+    topLayout->addWidget(searchBtn);
+    root->addWidget(topRow);
+
+    m_statusLabel = new QLabel(this);
     m_statusLabel->setObjectName(QStringLiteral("BookSearchStatus"));
     m_statusLabel->setTextFormat(Qt::PlainText);
     m_statusLabel->setWordWrap(true);
+    m_statusLabel->setContentsMargins(16, 0, 16, 0);
     m_statusLabel->setStyleSheet(QStringLiteral(
         "QLabel#BookSearchStatus { color: #999999; font-size: 13px;"
         " background: transparent; }"));
-    topLayout->addWidget(m_statusLabel, 1);
-    root->addWidget(topRow);
+    root->addWidget(m_statusLabel);
 
     m_scroll = new QScrollArea(this);
     m_scroll->setFrameShape(QFrame::NoFrame);
@@ -145,12 +204,59 @@ void BookCatalogueSearchWidget::buildUi()
     m_scroll->setWidget(content);
     root->addWidget(m_scroll, 1);
 
+    // Right-click a result tile to add/remove it from the library.
+    m_seriesStrip->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_seriesStrip, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& p) { showTileContextMenu(m_seriesStrip, p); });
+    m_booksStrip->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_booksStrip, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& p) { showTileContextMenu(m_booksStrip, p); });
+
     clearResults();
+}
+
+void BookCatalogueSearchWidget::showTileContextMenu(TileStrip* strip, const QPoint& pos)
+{
+    if (!strip) return;
+    TileCard* card = strip->tileAt(pos);
+    if (!card) return;
+
+    const QString catalogueId = card->property("catalogueId").toString();
+    const QString type = card->property("catalogueType").toString();
+    const auto it = m_resultsById.constFind(catalogueId);
+    if (it == m_resultsById.constEnd()) return;
+    const BookCatalogueResult result = it.value();
+
+    const bool isSeries = (type == QLatin1String("series"));
+    bool inLibrary = false;
+    if (m_store) {
+        inLibrary = isSeries
+            ? !m_store->catalogueIdsForSeries(result.seriesId).isEmpty()
+            : m_store->hasRecord(catalogueId);
+    }
+
+    QMenu* menu = ContextMenuHelper::createMenu(this);
+    const QString what = isSeries ? QStringLiteral("series ") : QString();
+    QAction* act = menu->addAction(inLibrary
+        ? QStringLiteral("Remove %1from library").arg(what)
+        : QStringLiteral("Add %1to library").arg(what));
+
+    connect(act, &QAction::triggered, this, [this, isSeries, result]() {
+        if (isSeries) emit seriesLibraryToggleRequested(result);
+        else          emit bookLibraryToggleRequested(result);
+    });
+
+    menu->exec(strip->mapToGlobal(pos));
+    menu->deleteLater();
 }
 
 void BookCatalogueSearchWidget::search(const QString& query)
 {
     m_currentQuery = query.trimmed();
+    // Reflect the active query in the results-page search bar (without firing
+    // another search — setText doesn't trigger our returnPressed handler).
+    if (m_searchInput && m_searchInput->text().trimmed() != m_currentQuery)
+        m_searchInput->setText(m_currentQuery);
     clearResults();
 
     if (m_currentQuery.isEmpty()) {
@@ -173,6 +279,7 @@ void BookCatalogueSearchWidget::clearResults()
 {
     m_pending = false;
     m_resultsById.clear();
+    m_coverCardBySlug.clear();   // drop any in-flight cover fetches from the prior query
     m_overflowSeries.clear();
     m_overflowBooks.clear();
     if (m_seriesStrip) m_seriesStrip->clear();
@@ -237,18 +344,17 @@ void BookCatalogueSearchWidget::onCatalogueResult(
     }
 
     // ── Status ──
+    // On a successful search the SERIES/BOOKS sections speak for themselves, so
+    // we don't surface a result-count line (Hemanth 2026-05-29: the "N series ·
+    // M books" header read as clutter). Only the genuinely-empty case keeps a
+    // message, since a blank page with no feedback is worse.
     if (seriesGroups.isEmpty() && standalones.isEmpty()) {
         m_statusLabel->setText(
-            QStringLiteral("No catalogue results for \"%1\"").arg(m_currentQuery));
+            QStringLiteral("No results for \"%1\"").arg(m_currentQuery));
+        m_statusLabel->show();
     } else {
-        QString parts;
-        if (!seriesGroups.isEmpty())
-            parts = QStringLiteral("%1 series").arg(seriesGroups.size());
-        if (!standalones.isEmpty()) {
-            if (!parts.isEmpty()) parts += QStringLiteral(" · ");
-            parts += QStringLiteral("%1 books").arg(standalones.size());
-        }
-        m_statusLabel->setText(parts + QStringLiteral(" for \"%1\"").arg(m_currentQuery));
+        m_statusLabel->clear();
+        m_statusLabel->hide();
     }
 }
 
@@ -333,8 +439,33 @@ void BookCatalogueSearchWidget::addBookCard(const BookCatalogueResult& book)
     });
     m_booksStrip->addTile(card);
 
-    if (thumb.isEmpty() && !book.coverUrl.isEmpty())
+    if (!thumb.isEmpty()) return;   // already cached on disk
+
+    if (!book.coverUrl.isEmpty()) {
         downloadCover(book.catalogueId, book.coverUrl, card);
+        return;
+    }
+
+    // No cover URL on the search-result stub — fetch the book's page to get
+    // one, then download. Keyed by slug so onCoverBookReady can find the card.
+    const QString slug = slugOf(book.catalogueId);
+    if (m_coverClient && !slug.isEmpty()) {
+        m_coverCardBySlug.insert(slug, card);
+        m_coverClient->fetchBook(slug);
+    }
+}
+
+void BookCatalogueSearchWidget::onCoverBookReady(const QString& bookId,
+                                                 const BookCatalogueResult& book)
+{
+    const auto it = m_coverCardBySlug.constFind(bookId);
+    if (it == m_coverCardBySlug.constEnd()) return;
+    TileCard* card = it.value();          // QPointer — null if the tile was cleared
+    m_coverCardBySlug.erase(it);
+    if (!card || book.coverUrl.isEmpty()) return;
+
+    const QString catalogueId = QStringLiteral("fictiondb:%1").arg(bookId);
+    downloadCover(catalogueId, book.coverUrl, card);
 }
 
 QString BookCatalogueSearchWidget::coverPathFor(const QString& catalogueId) const

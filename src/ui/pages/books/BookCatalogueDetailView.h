@@ -11,6 +11,7 @@
 class BookScraper;
 class BookSearchAggregator;
 class BooksCatalogueLibraryStore;
+class FictionDbClient;
 class QLabel;
 class QNetworkAccessManager;
 class QPushButton;
@@ -24,6 +25,13 @@ public:
     explicit BookCatalogueDetailView(QWidget* parent = nullptr);
 
     void setCatalogueStore(BooksCatalogueLibraryStore* store);
+    // Inject the shared network manager + cover-cache dir (same dir the search
+    // storefront + series view use, so covers are shared). Constructs a private
+    // FictionDbClient used to enrich a clicked book's synopsis/cover/year — the
+    // search result stub carries only title + author, so a book opened straight
+    // from the storefront has no synopsis until this fetch lands. A dedicated
+    // client keeps its bookReady stream off the aggregator's Top-N fetches.
+    void setNetwork(QNetworkAccessManager* nam, const QString& coverDir);
     void showBook(const BookCatalogueResult& book, const QString& coverPath);
 
     // BOOKS_STREMIO_PIVOT §5.2 (2026-05-27) — BooksPage owns BookDownloader
@@ -80,12 +88,27 @@ private:
     void clearRows(QWidget* rows);
     void setCover(const QString& coverPath);
 
+    // Metadata enrichment (synopsis / cover / year / pages) for a book opened
+    // from the search storefront. fetchBook lands here; we merge into the
+    // current book + repaint the hero, guarded by catalogueId so a stale reply
+    // from a previously-shown book is ignored.
+    void onBookMetaReady(const QString& bookId, const BookCatalogueResult& book);
+    void applyEnrichedMeta(const BookCatalogueResult& book);
+    QString enrichedCoverPathFor(const QString& catalogueId) const;
+    void downloadEnrichedCover(const QString& catalogueId, const QString& coverUrl);
+
     // §5.2 CTA state machine + click → resolve → emit dispatcher.
     void refreshPrimaryCta();
     void onPrimaryCtaClicked();
     void handleSourceRowClick(const QString& sourceId, const BookResult& result);
 
+    // Add-to-Library (want-to-read bookmark) — a book can be in the library
+    // without a downloaded file (record with addedAt but empty filePath).
+    void onAddToLibraryClicked();
+    void refreshAddLibraryButton();
+
     QPushButton* m_backButton = nullptr;
+    QPushButton* m_addLibraryBtn = nullptr;
     QPushButton* m_primaryCta = nullptr;
     QLabel* m_coverLabel = nullptr;
     QLabel* m_titleLabel = nullptr;
@@ -100,6 +123,11 @@ private:
     TankorentSearchService* m_tankorentService = nullptr;
     BookSearchAggregator* m_sourceAggregator = nullptr;
     QList<BookScraper*> m_sourceScrapers;
+
+    // Metadata enrichment — dedicated FictionDbClient + shared cover cache.
+    FictionDbClient* m_metaClient = nullptr;
+    QNetworkAccessManager* m_metaNam = nullptr;  // shared NAM for cover fetch
+    QString m_coverDir;
 
     BooksCatalogueLibraryStore* m_catalogueStore = nullptr;
     BookCatalogueResult m_currentBook;

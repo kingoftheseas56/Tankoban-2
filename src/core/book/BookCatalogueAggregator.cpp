@@ -13,6 +13,21 @@ QString slugOf(const QString& catalogueId)
     const QString prefix = QStringLiteral("fictiondb:");
     return catalogueId.startsWith(prefix) ? catalogueId.mid(prefix.size()) : QString();
 }
+
+// Drop a leading article so "The Godfather" ranks against "godfather" the same
+// way "Godfather" does. Without this, a query of "godfather" scores the real
+// "The Godfather" as a mere substring hit (100) — below every junk title that
+// literally starts with the word (200) — so the canonical book sinks out of
+// the visible top-N. Applied to both query and title before scoring.
+QString stripLeadingArticle(QString s)
+{
+    s = s.trimmed();
+    for (const QString& art : {QStringLiteral("the "), QStringLiteral("a "),
+                               QStringLiteral("an ")}) {
+        if (s.startsWith(art)) return s.mid(art.size()).trimmed();
+    }
+    return s;
+}
 }  // namespace
 
 BookCatalogueAggregator::BookCatalogueAggregator(FictionDbClient* fictiondb, QObject* parent)
@@ -130,14 +145,21 @@ void BookCatalogueAggregator::emitGrouped()
 QList<BookCatalogueResult> BookCatalogueAggregator::rerankBooks(
         const QString& query, QList<BookCatalogueResult> books)
 {
-    const QString q = query.trimmed().toLower();
-    auto score = [&q](const BookCatalogueResult& b) {
-        const QString t = b.title.toLower();
+    const QString rawQ = query.trimmed().toLower();
+    const QString q = stripLeadingArticle(rawQ);
+    auto score = [&q, &rawQ](const BookCatalogueResult& b) {
+        const QString t = stripLeadingArticle(b.title.toLower());
         int s = 0;
         if (t == q)               s = 300;
         else if (t.startsWith(q)) s = 200;
         else if (t.contains(q))   s = 100;
-        if (!b.author.isEmpty() && b.author.toLower().contains(q)) s += 25;
+        // Author signal: an exact author match means the user is searching by
+        // author, so rank those books strongly; a partial match is a mild nudge.
+        const QString a = b.author.toLower();
+        if (!a.isEmpty()) {
+            if (a == rawQ || a == q)  s += 120;
+            else if (a.contains(q))   s += 25;
+        }
         return s;
     };
     std::stable_sort(books.begin(), books.end(),

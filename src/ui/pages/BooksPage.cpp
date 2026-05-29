@@ -75,6 +75,7 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     m_catalogueStore->load();
     if (m_catalogueDetailView) {
         m_catalogueDetailView->setCatalogueStore(m_catalogueStore);
+        m_catalogueDetailView->setNetwork(m_catalogueNam, m_catalogueCoverDir);
     }
     if (m_seriesDetailView) {
         m_seriesDetailView->setCatalogueStore(m_catalogueStore);
@@ -87,8 +88,31 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
 
     m_catalogueSearchView = new BookCatalogueSearchWidget(
         m_catalogueAggregator, m_catalogueNam, m_catalogueCoverDir, this);
+    m_catalogueSearchView->setCatalogueStore(m_catalogueStore);
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::bookLibraryToggleRequested,
+            this, &BooksPage::onSearchBookLibraryToggle);
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::seriesLibraryToggleRequested,
+            this, &BooksPage::onSearchSeriesLibraryToggle);
+    // Series add-all path: fetchSeries(seriesId) lands here; if the seriesId is
+    // pending an add, shelf every member as a file-less want-to-read record.
+    if (m_fictiondb) {
+        connect(m_fictiondb, &FictionDbClient::seriesReady, this,
+                [this](const QString& seriesId, const QString&,
+                       const QList<BookCatalogueResult>& books) {
+            if (!m_pendingSeriesLibraryAdd.remove(seriesId) || !m_catalogueStore) return;
+            for (const BookCatalogueResult& b : books) {
+                if (b.catalogueId.isEmpty() || m_catalogueStore->hasRecord(b.catalogueId))
+                    continue;
+                m_catalogueStore->upsertRecord(wishlistRecordFromResult(b));
+            }
+        });
+    }
     connect(m_catalogueSearchView, &BookCatalogueSearchWidget::backRequested,
             this, &BooksPage::showGrid);
+    // Results-page search bar — re-run through showCatalogueSearchMode so the
+    // grid bar text + search history stay in sync with the refined query.
+    connect(m_catalogueSearchView, &BookCatalogueSearchWidget::searchSubmitted,
+            this, &BooksPage::showCatalogueSearchMode);
     connect(m_catalogueSearchView, &BookCatalogueSearchWidget::bookPicked,
             this, [this](const BookCatalogueResult& book, const QString& coverPath) {
                 if (!m_catalogueDetailView) return;
@@ -1175,6 +1199,59 @@ BookCatalogueResult BooksPage::catalogueRecordToResult(const CatalogueRecord& re
     result.seriesPosition = record.seriesPosition;
     result.seriesTotal = record.seriesTotal;
     return result;
+}
+
+CatalogueRecord BooksPage::wishlistRecordFromResult(const BookCatalogueResult& b) const
+{
+    CatalogueRecord r;
+    r.catalogueId    = b.catalogueId;
+    r.isbn           = b.isbn;
+    r.title          = b.title;
+    r.author         = b.author;
+    r.publisher      = b.publisher;
+    r.year           = b.year;
+    r.language       = b.language;
+    r.description    = b.description;
+    r.genres         = b.genres;
+    r.coverUrl       = b.coverUrl;
+    const QString cover = coverCachePath(m_catalogueCoverDir, b.catalogueId);
+    r.cachedCoverPath  = QFile::exists(cover) ? cover : QString();
+    r.seriesId       = b.seriesId;
+    r.seriesName     = b.seriesName;
+    r.seriesPosition = b.seriesPosition;
+    r.seriesTotal    = b.seriesTotal;
+    r.addedAt        = QDateTime::currentSecsSinceEpoch();
+    // No filePath — this is a want-to-read shelf entry, not a downloaded book.
+    return r;
+}
+
+void BooksPage::onSearchBookLibraryToggle(const BookCatalogueResult& book)
+{
+    if (!m_catalogueStore || book.catalogueId.isEmpty()) return;
+    if (m_catalogueStore->hasRecord(book.catalogueId))
+        m_catalogueStore->evictByCatalogueId(book.catalogueId);   // file (if any) stays
+    else
+        m_catalogueStore->upsertRecord(wishlistRecordFromResult(book));
+}
+
+void BooksPage::onSearchSeriesLibraryToggle(const BookCatalogueResult& seriesStub)
+{
+    if (!m_catalogueStore) return;
+    const QString seriesId = seriesStub.seriesId;
+    if (seriesId.isEmpty()) return;
+
+    const QList<QString> existing = m_catalogueStore->catalogueIdsForSeries(seriesId);
+    if (!existing.isEmpty()) {
+        // Any member shelved → treat as "in library" → remove all (files stay).
+        for (const QString& id : existing) m_catalogueStore->evictByCatalogueId(id);
+        m_pendingSeriesLibraryAdd.remove(seriesId);
+        return;
+    }
+    // None shelved → fetch members, then add-all on seriesReady (wired in ctor).
+    if (m_fictiondb) {
+        m_pendingSeriesLibraryAdd.insert(seriesId);
+        m_fictiondb->fetchSeries(seriesId);
+    }
 }
 
 void BooksPage::showGrid()

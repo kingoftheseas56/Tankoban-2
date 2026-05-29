@@ -4,18 +4,26 @@
 #include "core/book/BookScraper.h"
 #include "core/book/BookSearchAggregator.h"
 #include "core/book/BooksCatalogueLibraryStore.h"
+#include "core/book/FictionDbClient.h"
 #include "core/book/LibGenScraper.h"
 #include "core/book/TankorentBookScraper.h"
 
 #include <QApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QFrame>
 #include <QMouseEvent>
 #include <functional>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPixmap>
+#include <QPointer>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QStyle>
@@ -50,6 +58,20 @@ QString joinedMeta(const BookCatalogueResult& book)
     if (!book.pages.isEmpty()) parts << book.pages + QStringLiteral(" pages");
     if (!book.genres.isEmpty()) parts << book.genres.mid(0, 4).join(QStringLiteral(" / "));
     return parts.join(QStringLiteral(" / "));
+}
+
+// catalogueId is "fictiondb:<slug>"; recover the slug for fetchBook().
+QString slugOf(const QString& catalogueId)
+{
+    const QString prefix = QStringLiteral("fictiondb:");
+    return catalogueId.startsWith(prefix) ? catalogueId.mid(prefix.size()) : QString();
+}
+
+QString safeFileStem(QString value)
+{
+    value.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")),
+                  QStringLiteral("_"));
+    return value;
 }
 
 QString sourceRowMeta(const BookResult& result, const QString& fallbackAuthor)
@@ -100,6 +122,22 @@ void BookCatalogueDetailView::buildUi()
     connect(m_backButton, &QPushButton::clicked, this, &BookCatalogueDetailView::backRequested);
     actionLayout->addWidget(m_backButton, 0, Qt::AlignLeft);
     actionLayout->addStretch(1);
+
+    // Add-to-Library — a neutral (non-CTA) bookmark toggle. Lets the user shelf
+    // a book as "want to read" without downloading it now. Sits left of the
+    // primary download/read CTA.
+    m_addLibraryBtn = new QPushButton(QStringLiteral("Add to Library"), actionRow);
+    m_addLibraryBtn->setObjectName(QStringLiteral("BookDetailAddLibrary"));
+    m_addLibraryBtn->setMinimumSize(150, 38);
+    m_addLibraryBtn->setCursor(Qt::PointingHandCursor);
+    m_addLibraryBtn->setStyleSheet(QStringLiteral(
+        "QPushButton#BookDetailAddLibrary { background: rgba(255,255,255,0.04);"
+        " border: 1px solid rgba(255,255,255,0.16); border-radius: 4px;"
+        " color: #eeeeee; font-size: 14px; padding: 0 16px; }"
+        "QPushButton#BookDetailAddLibrary:hover { background: rgba(255,255,255,0.08); }"));
+    connect(m_addLibraryBtn, &QPushButton::clicked,
+            this, &BookCatalogueDetailView::onAddToLibraryClicked);
+    actionLayout->addWidget(m_addLibraryBtn, 0, Qt::AlignRight);
 
     // §5.2 (2026-05-27) — primary CTA. Three states:
     //   - Not in library, idle:        "Search for downloads" → re-fires picker
@@ -283,6 +321,29 @@ void BookCatalogueDetailView::setCatalogueStore(BooksCatalogueLibraryStore* stor
     refreshPrimaryCta();
 }
 
+void BookCatalogueDetailView::setNetwork(QNetworkAccessManager* nam,
+                                         const QString& coverDir)
+{
+    m_metaNam = nam;
+    m_coverDir = coverDir;
+    if (!m_metaClient && nam) {
+        m_metaClient = new FictionDbClient(nam, this);
+        connect(m_metaClient, &FictionDbClient::bookReady,
+                this, &BookCatalogueDetailView::onBookMetaReady);
+        // On failure, just clear the transient "Loading details…" placeholder
+        // (title + author from the stub are already shown).
+        connect(m_metaClient, &FictionDbClient::bookFailed, this,
+                [this](const QString& bookId, const QString&) {
+            if (slugOf(m_currentCatalogueId) != bookId) return;
+            if (m_descriptionLabel
+                && m_currentBook.description.trimmed().isEmpty()) {
+                m_descriptionLabel->clear();
+                m_descriptionLabel->hide();
+            }
+        });
+    }
+}
+
 void BookCatalogueDetailView::showBook(const BookCatalogueResult& book,
                                        const QString& coverPath)
 {
@@ -300,10 +361,36 @@ void BookCatalogueDetailView::showBook(const BookCatalogueResult& book,
     m_metaLabel->setText(meta);
     m_metaLabel->setVisible(!meta.isEmpty());
 
-    m_descriptionLabel->setText(book.description.trimmed());
-    m_descriptionLabel->setVisible(!book.description.trimmed().isEmpty());
+    const QString desc = book.description.trimmed();
+    m_descriptionLabel->setText(desc);
+    m_descriptionLabel->setVisible(!desc.isEmpty());
 
-    setCover(coverPath);
+    // Cover: prefer the passed path, else the shared cover cache (a sibling
+    // search/series view may have already fetched it).
+    QString effectiveCover = coverPath;
+    if (effectiveCover.isEmpty() || !QFile::exists(effectiveCover)) {
+        const QString cached = enrichedCoverPathFor(book.catalogueId);
+        if (!cached.isEmpty() && QFile::exists(cached)) {
+            effectiveCover = cached;
+            m_currentCoverPath = cached;
+        }
+    }
+    setCover(effectiveCover);
+
+    // Enrich on open: the search storefront hands us only title + author, so a
+    // book opened straight from search has no synopsis/year/cover. Fetch the
+    // full FictionDB book page (mirrors the series view's per-book enrichment).
+    // Skip when the synopsis is already present (e.g. opened from the series
+    // view, which enriches up front).
+    const QString slug = slugOf(book.catalogueId);
+    if (desc.isEmpty() && m_metaClient && !slug.isEmpty()) {
+        if (m_descriptionLabel) {
+            m_descriptionLabel->setText(QStringLiteral("Loading details…"));
+            m_descriptionLabel->setVisible(true);
+        }
+        m_metaClient->fetchBook(slug);
+    }
+
     resetSourceSections();
     startSourceSearch();
 
@@ -337,6 +424,90 @@ void BookCatalogueDetailView::setCover(const QString& coverPath)
     }
     m_coverLabel->setPixmap(QPixmap());
     m_coverLabel->setText(initial.isEmpty() ? QStringLiteral("?") : initial);
+}
+
+void BookCatalogueDetailView::onBookMetaReady(const QString& bookId,
+                                              const BookCatalogueResult& book)
+{
+    // Stale-guard: ignore if the user navigated to a different book since this
+    // fetch was issued (the dedicated client has no per-request generation).
+    if (slugOf(m_currentCatalogueId) != bookId) return;
+    applyEnrichedMeta(book);
+}
+
+void BookCatalogueDetailView::applyEnrichedMeta(const BookCatalogueResult& book)
+{
+    // Merge richer page data over the search stub, preserving non-empty stub
+    // fields (the search row already carries a normalized author).
+    if (!book.title.isEmpty())       m_currentBook.title       = book.title;
+    if (!book.author.isEmpty())      m_currentBook.author      = book.author;
+    if (!book.description.isEmpty()) m_currentBook.description = book.description;
+    if (!book.year.isEmpty())        m_currentBook.year        = book.year;
+    if (!book.isbn.isEmpty())        m_currentBook.isbn        = book.isbn;
+    if (!book.coverUrl.isEmpty())    m_currentBook.coverUrl    = book.coverUrl;
+    if (!book.seriesId.isEmpty())    m_currentBook.seriesId    = book.seriesId;
+    if (!book.seriesName.isEmpty())  m_currentBook.seriesName  = book.seriesName;
+    if (book.seriesPosition > 0)     m_currentBook.seriesPosition = book.seriesPosition;
+
+    m_titleLabel->setText(m_currentBook.title.isEmpty()
+        ? QStringLiteral("Untitled") : m_currentBook.title);
+    m_authorLabel->setText(m_currentBook.author.isEmpty()
+        ? QStringLiteral("Unknown author")
+        : QStringLiteral("by %1").arg(m_currentBook.author));
+
+    const QString meta = joinedMeta(m_currentBook);
+    m_metaLabel->setText(meta);
+    m_metaLabel->setVisible(!meta.isEmpty());
+
+    const QString desc = m_currentBook.description.trimmed();
+    m_descriptionLabel->setText(desc);
+    m_descriptionLabel->setVisible(!desc.isEmpty());
+
+    // Fetch a cover if none is on screen yet.
+    if ((m_currentCoverPath.isEmpty() || !QFile::exists(m_currentCoverPath))
+        && !m_currentBook.coverUrl.isEmpty()) {
+        downloadEnrichedCover(m_currentBook.catalogueId, m_currentBook.coverUrl);
+    }
+}
+
+QString BookCatalogueDetailView::enrichedCoverPathFor(const QString& catalogueId) const
+{
+    if (m_coverDir.isEmpty() || catalogueId.isEmpty()) return {};
+    return m_coverDir + QLatin1Char('/') + safeFileStem(catalogueId)
+         + QStringLiteral(".jpg");
+}
+
+void BookCatalogueDetailView::downloadEnrichedCover(const QString& catalogueId,
+                                                    const QString& coverUrl)
+{
+    if (!m_metaNam || catalogueId.isEmpty() || coverUrl.isEmpty()) return;
+    const QString path = enrichedCoverPathFor(catalogueId);
+    if (path.isEmpty()) return;
+
+    QNetworkRequest req{QUrl(coverUrl)};
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tankoban/1.0"));
+    req.setRawHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*");
+    req.setTransferTimeout(10000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+
+    QPointer<BookCatalogueDetailView> guard(this);
+    auto* reply = m_metaNam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [reply, path, catalogueId, guard]() {
+        reply->deleteLater();
+        if (!guard) return;
+        if (reply->error() != QNetworkReply::NoError) return;
+        const QByteArray data = reply->readAll();
+        if (data.isEmpty()) return;
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly)) { file.write(data); file.close(); }
+        // Only repaint if still showing the same book.
+        if (guard->m_currentCatalogueId == catalogueId) {
+            guard->m_currentCoverPath = path;
+            guard->setCover(path);
+        }
+    });
 }
 
 void BookCatalogueDetailView::resetSourceSections()
@@ -551,20 +722,30 @@ void BookCatalogueDetailView::renderSourceMessage(SourceSection& section,
 
 void BookCatalogueDetailView::refreshPrimaryCta()
 {
+    refreshAddLibraryButton();
+
     if (!m_primaryCta) return;
 
     const bool noBook = m_currentCatalogueId.isEmpty();
     m_primaryCta->setVisible(!noBook);
     if (noBook) return;
 
-    const bool inLibrary = m_catalogueStore
-        && m_catalogueStore->hasRecord(m_currentCatalogueId);
+    // "Read" requires an actual downloaded file — a want-to-read bookmark is in
+    // the library (hasRecord) but has no filePath, so it must still show the
+    // download CTA, not Read.
+    bool downloaded = false;
+    if (!m_activeFilePath.isEmpty()) {
+        downloaded = true;
+    } else if (m_catalogueStore) {
+        const auto rec = m_catalogueStore->recordFor(m_currentCatalogueId);
+        downloaded = rec && !rec->filePath.isEmpty();
+    }
 
     if (m_downloadInFlight) {
         m_primaryCta->setText(QStringLiteral("Downloading %1%").arg(m_downloadPct));
         m_primaryCta->setEnabled(false);
         m_primaryCta->setProperty("ctaState", QStringLiteral("downloading"));
-    } else if (inLibrary) {
+    } else if (downloaded) {
         m_primaryCta->setText(QStringLiteral("Read"));
         m_primaryCta->setEnabled(true);
         m_primaryCta->setProperty("ctaState", QStringLiteral("read"));
@@ -575,6 +756,55 @@ void BookCatalogueDetailView::refreshPrimaryCta()
     }
     m_primaryCta->style()->unpolish(m_primaryCta);
     m_primaryCta->style()->polish(m_primaryCta);
+}
+
+void BookCatalogueDetailView::refreshAddLibraryButton()
+{
+    if (!m_addLibraryBtn) return;
+    const bool noBook = m_currentCatalogueId.isEmpty();
+    m_addLibraryBtn->setVisible(!noBook);
+    if (noBook) return;
+
+    const bool inLibrary = m_catalogueStore
+        && m_catalogueStore->hasRecord(m_currentCatalogueId);
+    m_addLibraryBtn->setText(inLibrary
+        ? QStringLiteral("Remove from Library")
+        : QStringLiteral("Add to Library"));
+}
+
+void BookCatalogueDetailView::onAddToLibraryClicked()
+{
+    if (!m_catalogueStore || m_currentCatalogueId.isEmpty()) return;
+
+    if (m_catalogueStore->hasRecord(m_currentCatalogueId)) {
+        // Remove the shelf entry. evict leaves any downloaded file on disk.
+        m_catalogueStore->evictByCatalogueId(m_currentCatalogueId);
+    } else {
+        // Shelf as a want-to-read record: metadata + addedAt, no filePath.
+        CatalogueRecord r;
+        r.catalogueId    = m_currentBook.catalogueId;
+        r.isbn           = m_currentBook.isbn;
+        r.title          = m_currentBook.title;
+        r.author         = m_currentBook.author;
+        r.publisher      = m_currentBook.publisher;
+        r.year           = m_currentBook.year;
+        r.language       = m_currentBook.language;
+        r.description    = m_currentBook.description;
+        r.genres         = m_currentBook.genres;
+        r.coverUrl       = m_currentBook.coverUrl;
+        r.cachedCoverPath = (!m_currentCoverPath.isEmpty()
+                             && QFile::exists(m_currentCoverPath))
+                                ? m_currentCoverPath : QString();
+        r.seriesId       = m_currentBook.seriesId;
+        r.seriesName     = m_currentBook.seriesName;
+        r.seriesPosition = m_currentBook.seriesPosition;
+        r.seriesTotal    = m_currentBook.seriesTotal;
+        r.addedAt        = QDateTime::currentSecsSinceEpoch();
+        m_catalogueStore->upsertRecord(r);
+    }
+    // recordsChanged → refreshPrimaryCta (which refreshes this button too), but
+    // refresh now for immediate feedback in case signal ordering lags.
+    refreshAddLibraryButton();
 }
 
 void BookCatalogueDetailView::onPrimaryCtaClicked()

@@ -1,5 +1,6 @@
 #include "BookSeriesDetailView.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QHBoxLayout>
@@ -114,6 +115,22 @@ void BookSeriesDetailView::buildUi()
     connect(back, &QPushButton::clicked, this, &BookSeriesDetailView::backRequested);
     topLayout->addWidget(back);
     topLayout->addStretch(1);
+
+    // Add-whole-series-to-Library (want-to-read). Neutral styling — it's a
+    // bookmark, not the download CTA. Shelves every member book at once.
+    m_addSeriesBtn = new QPushButton(QStringLiteral("Add Series to Library"), topRow);
+    m_addSeriesBtn->setObjectName(QStringLiteral("BookSeriesAddLibrary"));
+    m_addSeriesBtn->setMinimumHeight(34);
+    m_addSeriesBtn->setCursor(Qt::PointingHandCursor);
+    m_addSeriesBtn->setStyleSheet(QStringLiteral(
+        "QPushButton#BookSeriesAddLibrary { background: rgba(255,255,255,0.04);"
+        " border: 1px solid rgba(255,255,255,0.16); border-radius: 4px;"
+        " color: #eeeeee; font-size: 13px; padding: 0 14px; }"
+        "QPushButton#BookSeriesAddLibrary:hover { background: rgba(255,255,255,0.08); }"));
+    m_addSeriesBtn->hide();   // shown once a series is rendered
+    connect(m_addSeriesBtn, &QPushButton::clicked,
+            this, &BookSeriesDetailView::onAddSeriesToLibraryClicked);
+    topLayout->addWidget(m_addSeriesBtn);
     root->addWidget(topRow);
 
     // Loading state (shown while enrichment is gathering book pages + covers).
@@ -376,9 +393,67 @@ void BookSeriesDetailView::renderSeries(const QString& seriesName, const QString
     rebuildRows();
 }
 
+void BookSeriesDetailView::refreshAddSeriesButton()
+{
+    if (!m_addSeriesBtn) return;
+    if (!m_store || m_books.isEmpty()) { m_addSeriesBtn->hide(); return; }
+
+    int inLib = 0;
+    for (const BookCatalogueResult& b : m_books)
+        if (m_store->hasRecord(b.catalogueId)) ++inLib;
+
+    const bool allIn = inLib == m_books.size();
+    m_addSeriesBtn->setText(allIn
+        ? QStringLiteral("Remove Series from Library")
+        : QStringLiteral("Add Series to Library"));
+    m_addSeriesBtn->show();
+}
+
+void BookSeriesDetailView::onAddSeriesToLibraryClicked()
+{
+    if (!m_store || m_books.isEmpty()) return;
+
+    int inLib = 0;
+    for (const BookCatalogueResult& b : m_books)
+        if (m_store->hasRecord(b.catalogueId)) ++inLib;
+    const bool allIn = inLib == m_books.size();
+
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    for (const BookCatalogueResult& b : m_books) {
+        if (b.catalogueId.isEmpty()) continue;
+        if (allIn) {
+            m_store->evictByCatalogueId(b.catalogueId);   // file (if any) stays on disk
+            continue;
+        }
+        if (m_store->hasRecord(b.catalogueId)) continue;  // already shelved/downloaded
+
+        CatalogueRecord r;
+        r.catalogueId    = b.catalogueId;
+        r.isbn           = b.isbn;
+        r.title          = b.title;
+        r.author         = b.author.isEmpty() ? m_author : b.author;
+        r.publisher      = b.publisher;
+        r.year           = b.year;
+        r.language       = b.language;
+        r.description    = b.description;
+        r.genres         = b.genres;
+        r.coverUrl       = b.coverUrl;
+        const QString cover = coverPathFor(b.catalogueId);
+        r.cachedCoverPath  = QFile::exists(cover) ? cover : QString();
+        r.seriesId       = b.seriesId.isEmpty() ? m_loadingSeriesId : b.seriesId;
+        r.seriesName     = b.seriesName.isEmpty() ? m_seriesName : b.seriesName;
+        r.seriesPosition = b.seriesPosition;
+        r.seriesTotal    = b.seriesTotal;
+        r.addedAt        = now;
+        m_store->upsertRecord(r);
+    }
+    // recordsChanged → rebuildRows → refreshAddSeriesButton (state flips).
+}
+
 void BookSeriesDetailView::rebuildRows()
 {
     if (!m_rowsLayout) return;
+    refreshAddSeriesButton();
     while (QLayoutItem* item = m_rowsLayout->takeAt(0)) {
         if (QWidget* w = item->widget()) w->deleteLater();
         delete item;
@@ -454,7 +529,14 @@ void BookSeriesDetailView::rebuildRows()
         tv->addStretch(1);
         h->addWidget(textCol, 1);
 
-        const bool onDisk = m_store && m_store->hasRecord(book.catalogueId);
+        // "Read" only when an actual file is on disk. A want-to-read shelf entry
+        // has a record but an empty filePath — it must still show "Get" (which
+        // opens the detail view to download), never "Read" with nothing to read.
+        QString filePath;
+        if (m_store) {
+            if (auto rec = m_store->recordFor(book.catalogueId)) filePath = rec->filePath;
+        }
+        const bool onDisk = !filePath.isEmpty();
         auto* btn = new QPushButton(row);
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFixedHeight(28);
@@ -464,8 +546,6 @@ void BookSeriesDetailView::rebuildRows()
                 "QPushButton { background: #2d8a4e; color: #fff; border: none;"
                 " border-radius: 4px; padding: 0 14px; font-size: 12px; }"
                 "QPushButton:hover { background: #34a05c; }"));
-            QString filePath;
-            if (auto rec = m_store->recordFor(book.catalogueId)) filePath = rec->filePath;
             const QString catalogueId = book.catalogueId;
             connect(btn, &QPushButton::clicked, this, [this, catalogueId, filePath] {
                 emit bookReadRequested(catalogueId, filePath);
