@@ -19,7 +19,8 @@
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/LayerEntry.h"
-#include "ui/pages/stream/StreamPlayerController.h"
+// THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — StreamPlayerController.h removed;
+// Theatre no longer constructs or references the streaming controller.
 #include "ui/pages/stream/StreamSourceChoice.h"
 
 class CoreBridge;
@@ -28,9 +29,8 @@ class QProgressBar;
 class TorrentClient;
 class TorrentEngine;
 struct StreamBulkGroupRecord;
-// STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy StreamEngine + abstract
-// IStreamEngine deleted. StreamServerEngine is the only backend.
-class StreamServerEngine;
+// THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — StreamServerEngine forward
+// declaration removed; the stream-server subprocess is no longer constructed.
 class StreamLibrary;
 class StreamLibraryLayout;
 class StreamDownloadIndex;
@@ -260,6 +260,17 @@ private:
     void onPlayRequested(const QString& imdbId, const QString& mediaType,
                          int season, int episode);
 
+    // THEATRE_DOWNLOAD_ONLY P1.1 (2026-05-29) — single reroute funnel for the
+    // play entry points in download-only Theatre. Owned-on-disk → play local
+    // (reuses the playLocalFileFromStreamRequested emit); not-owned → route to
+    // the existing download flow (never stream). When `picked` is non-null the
+    // not-owned branch downloads that exact picked source via
+    // onDirectDownloadRequested; otherwise it opens the per-episode download
+    // flow. Does not reimplement download logic.
+    void beginPlayOrDownload(const QString& imdbId, const QString& mediaType,
+                             int season, int episode,
+                             const tankostream::stream::StreamPickerChoice* picked = nullptr);
+
     // Stream-picker UX rework — user clicked a source card inside
     // StreamDetailView's right pane. Persists the choice and dispatches to
     // StreamPlayerController (takes over what StreamPickerDialog::accept
@@ -361,23 +372,16 @@ private:
     // playback or when the series has no next unwatched episode.
     void onStreamNextEpisodeShortcut();
 
-    void onBufferUpdate(const QString& statusText, double percent);
-    void onReadyToPlay(const QString& httpUrl);
-    void onStreamFailed(const QString& message);
-    // STREAM_LIFECYCLE_FIX Phase 2 Batch 2.2 — signature extended to carry
-    // the controller's StopReason. Replacement branch skips teardown +
-    // navigation (closes audit P0-1 source-switch reentrancy flash-to-browse).
-    // UserEnd branch runs the prior end-of-session teardown. Failure branch
-    // is observability-only — early-returns because onStreamFailed still
-    // drives the full failure UX; running teardown here too would hide the
-    // "Stream failed: msg" buffer-overlay text before its 3s display window.
-    void onStreamStopped(StreamPlayerController::StopReason reason);
+    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — the four StreamPlayerController
+    // signal handler slots (onBufferUpdate / onReadyToPlay / onStreamFailed /
+    // onStreamStopped) are removed along with the controller they served.
 
     CoreBridge*      m_bridge;
     TorrentClient*   m_torrentClient = nullptr;
     TorrentEngine*   m_torrentEngine;
 
-    StreamServerEngine* m_streamEngine = nullptr;
+    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — m_streamEngine member removed;
+    // the stream-server subprocess is no longer created.
     StreamLibrary*   m_library   = nullptr;
 
     // UI layers
@@ -488,10 +492,11 @@ private:
     QStringList m_bulkRetryItemKeys;
     bool m_bulkRetryMode = false;
 
-    // Player controller
-    StreamPlayerController* m_playerController = nullptr;
+    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — m_playerController member
+    // removed; the streaming controller is no longer constructed.
 
-    // Buffer overlay
+    // Buffer overlay — retained widget (no longer shown during playback); the
+    // unreachable next-episode overlay path still references it (dead code).
     QWidget* m_bufferOverlay = nullptr;
     QLabel*  m_bufferLabel   = nullptr;
     QPushButton* m_bufferCancelBtn = nullptr;
