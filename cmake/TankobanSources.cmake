@@ -391,10 +391,6 @@ set(HEADERS
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
     src/core/stream/MetaAggregator.h
-    # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy engine headers
-    # deleted along with their .cpp counterparts. StreamTypes.h holds the
-    # struct + enum definitions that used to live in StreamEngine.h.
-    src/core/stream/StreamTypes.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
     src/core/stream/addon/Manifest.h
