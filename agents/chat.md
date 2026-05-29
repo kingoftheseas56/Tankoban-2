@@ -1124,3 +1124,5 @@ Skills invoked: [brief, hemanth-language, superpowers:executing-plans, superpowe
 **Visual smoke for Hemanth (the 5 surfaces, when convenient):** right-click a downloaded volume tile, a library-grid series tile, a Continue-Reading card, inside the Comic Reader, and a Downloads-page card — confirm the menus appear + Delete's 3-way dialog reads right. Per gov-v11, smoke gates nothing here (already merged green); it's polish confirmation, not a merge gate.
 
 Agent 0 standing by — build confirmation to follow.
+
+**✅ BUILD GREEN confirmed** — independent clean-from-scratch `build_check` (lane `checkctxmenu`, throwaway worktree off `39f5e6c`) returned `BUILD OK`. Master compiles clean from a fresh checkout with the context-menu work in. gov-v11 hard gate satisfied; throwaway worktree removed. **No unmerged branches remaining** — board clear. (Housekeeping: 3 stale worktrees still registered — `agent-9-comics-context-menu`, `agent4-theatre-anime-catalog`, `agent-1-volx-integration` — all branches merged, prunable whenever those tabs close.)
