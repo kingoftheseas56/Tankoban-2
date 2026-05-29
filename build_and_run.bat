@@ -102,6 +102,23 @@ if exist "%PROJECT_DIR%\resources\fandom_manifests" (
     xcopy /E /I /Y /D /Q "%PROJECT_DIR%\resources\fandom_manifests" "%BUILD_DIR%\resources\fandom_manifests" >nul 2>&1
 )
 
+:: Deploy ffmpeg sidecar + its runtime DLLs NEXT TO the exe (sync newer each
+:: build). SidecarProcess::sidecarPath()'s primary lookup is
+:: applicationDirPath()/ffmpeg_sidecar.exe; without this deploy the app falls
+:: back to walking up into the source tree (resources/ffmpeg_sidecar/), which is
+:: GITIGNORED and therefore ABSENT in a clean worktree checkout -> the
+:: "ffmpeg_sidecar.exe not found" error. The sidecar's av*.dll dependencies must
+:: sit beside ffmpeg_sidecar.exe, so the files land flat in %BUILD_DIR% (the exe
+:: dir), not a subfolder. /D copies only newer files so rebuilds stay fast.
+if exist "%PROJECT_DIR%\resources\ffmpeg_sidecar\ffmpeg_sidecar.exe" (
+    xcopy /Y /D /Q "%PROJECT_DIR%\resources\ffmpeg_sidecar\*" "%BUILD_DIR%\" >nul 2>&1
+) else (
+    echo WARNING: resources\ffmpeg_sidecar\ffmpeg_sidecar.exe missing in this checkout --
+    echo          video playback will fail with "sidecar not found". This is expected in a
+    echo          worktree ^(the sidecar is gitignored^); run native_sidecar\build.ps1 or
+    echo          launch from the main checkout.
+)
+
 :: Run
 echo [4/4] Launching Tankoban...
 set "SHERPA_BIN=%PROJECT_DIR%\third_party\sherpa-onnx\sherpa-onnx-v1.12.21-win-x64-shared\lib"
