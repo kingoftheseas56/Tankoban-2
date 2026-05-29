@@ -1,22 +1,22 @@
 # Tankoban
 
-A unified media library + player for Windows. Watch videos, read comics + books, stream from Stremio addons, and manage torrents — all in one Qt6 desktop app.
+A unified media library for **Comics, Books, and Theatre** — read manga and comics, read ebooks and listen to audiobooks, and stream or download video, all in one Qt6 desktop app.
 
-> **Status:** active development, pre-1.0. Built for Windows 11 + MSVC 2022 + Qt 6.10. Public Releases pipeline live (`scripts/version-bump.ps1 -Version 0.X.Y` + tag push triggers `Tankoban-Setup-vX.Y.Z.exe` build).
+> **Status:** active development, pre-1.0.
+> **Windows** is the current build target (full build CI + a tag-driven installer pipeline are live).
+> **macOS** is a planned equal first-class target — cross-platform support is on the roadmap; today the app builds and runs on Windows only.
 
 ---
 
-## What's in the box
+## The three modes
 
-- **Video player** — native Qt6 player backed by an FFmpeg sidecar process. libplacebo HDR + tone-mapping for HDR10/Dolby Vision content, libass-rendered subtitles, A/V sync clock with stall pause/resume, mpv-grade frame pacing.
-- **Comic reader** — CBZ + CBR + folder-of-images. Double-page + scroll-strip modes. Mihon-grade UX with YACReader polish overlay.
-- **Book reader** — EPUB rendering with Edge TTS audiobook narration, audiobook-to-ebook chapter pairing, and per-show resume position.
-- **Stream mode** — Stremio addon protocol support. Browse catalogs from any Stremio addon, play torrents via the bundled Stremio `stream-server` runtime, continue-watching synced across modes.
-- **Tankorent** — local torrent client. libtorrent-rasterbar 2.0 backend, magnet links, DHT, sequential download for in-progress streaming.
-- **Tankoyomi** — manga discovery + download (WeebCentral, ReadComics).
-- **TankoLibrary** — book discovery + download (LibGen with EPUB-only filter; Anna's Archive scraper available, currently captcha-gated).
+Tankoban is organized around three modes. Each mode has a built-in reader/player and its own source-and-download capability beneath it.
 
-The apps share one library scanner + one continue-watching store, so a video paused at 15:32 on the Videos page picks up at 15:32 from the Stream page (and vice versa).
+- **Comics** — read manga and comics (CBZ, CBR, or folders of images) with double-page and scroll-strip modes. *Source:* **Tankoyomi** discovers and downloads series from manga sources (e.g. WeebCentral).
+- **Books** — read EPUBs, with Edge-TTS audiobook narration and audiobook↔ebook chapter pairing. *Source:* **TankoLibrary** discovers and downloads titles from shadow-library sources (e.g. LibGen).
+- **Theatre** — a Stremio-style experience for video: browse catalogs from Stremio addons, then stream or download. Playback runs on a native Qt6 player backed by an FFmpeg sidecar (libplacebo HDR tone-mapping, libass subtitles, A/V-sync clock). *Source:* **Tankorent**, an in-process libtorrent-rasterbar 2.0 engine (magnets, DHT, sequential download for in-progress streaming), plus the bundled Stremio `stream-server` runtime.
+
+All three modes share one library scanner and one continue-watching/-reading store, so progress follows you across the app — pause a stream and pick it up later from the same spot.
 
 ---
 
@@ -24,16 +24,16 @@ The apps share one library scanner + one continue-watching store, so a video pau
 
 ### End users
 
-Pre-built `Tankoban-Setup.exe` ships in a future release. Until then, build from source — see below.
+There is no public pre-built installer yet (pre-1.0). The release pipeline is live — a version tag builds `Tankoban-Setup-vX.Y.Z.exe` — but until a public release is cut, build from source (below). macOS builds are not available yet.
 
-### Developers / from source
+### Developers / from source (Windows)
 
 See [BUILD.md](BUILD.md) for the full guide. Short version:
 
 1. Install Qt 6.10.2 + MSVC 2022 Build Tools (manual one-time prereqs).
 2. Clone this repo.
 3. Run `setup.bat` once — it auto-clones vcpkg if needed, installs libtorrent + Boost + OpenSSL via `vcpkg.json`, and runs the first cmake configure (~30 min first run; cached after).
-4. After setup, normal dev cycle is `build_and_run.bat`.
+4. After setup, the normal dev cycle is `build_and_run.bat`.
 
 ---
 
@@ -44,25 +44,29 @@ High-level component map: [ARCHITECTURE.md](ARCHITECTURE.md). The TL;DR:
 ```
 Tankoban.exe (Qt6 GUI) ──── stdin/stdout JSON ──── ffmpeg_sidecar.exe (decode + render)
                        │
-                       ├── Stream mode  ─────────── stream-server.exe (Stremio runtime, subprocess)
+                       ├── Theatre  ────────────── stream-server.exe (Stremio runtime, subprocess)
                        │
-                       └── libtorrent-rasterbar (in-process: Tankorent + Stream torrents)
+                       └── libtorrent-rasterbar (in-process: Tankorent + Theatre torrents)
 ```
 
-A separate dev-control bridge (`tankoctl.exe`) is shipped for development smoke testing — gated behind a `--dev-control` flag, never advertised in production builds.
+The ~90% of the app that is pure Qt/C++ (Comics, Books, Theatre business logic, scrapers, library) is platform-independent; the Windows-specific surface is concentrated in the video decode/render layer (sidecar + player), which is the focus of the planned macOS port.
+
+A separate dev-control bridge (`tankoctl.exe`) ships for development smoke testing — gated behind a `--dev-control` flag, never advertised in production builds.
 
 ---
 
 ## Repository layout
 
 ```
-src/                    Qt6 main app source
+src/                    Qt6 main app source (core/ + ui/ + devtools/)
 native_sidecar/         FFmpeg sidecar process (separate cmake build)
+tests/                  GoogleTest suite (opt-in via -DTANKOBAN_BUILD_TESTS=ON)
 tools/                  Development tools (tankoctl console client)
 scripts/                Build + smoke + lint helpers
-resources/              Icons, QSS, embedded book/comic/video reader assets
-.github/workflows/      CI (lint; full Windows-build CI lands with vcpkg phase)
-agents/                 Internal multi-agent coordination scratchpad — see CONTRIBUTING.md for context
+resources/              Icons, QSS, embedded reader assets + runtime payloads
+docs/                   Project documentation — start at docs/README.md
+.github/workflows/      CI: build.yml (full Windows build), release.yml (installer), repo-consistency.yml (lint)
+agents/                 Internal multi-agent coordination state — see CONTRIBUTING.md; external readers can ignore it
 ```
 
 ---
@@ -71,7 +75,7 @@ agents/                 Internal multi-agent coordination scratchpad — see CON
 
 External contributors welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for code-style + PR conventions.
 
-The `agents/` directory holds internal state for an LLM-agent-driven development workflow. It's not load-bearing for outside contributors and can be ignored when reading the source.
+The `agents/` directory holds internal state for an LLM-agent-driven development workflow. It is not load-bearing for outside contributors and can be ignored when reading the source.
 
 ---
 
