@@ -15,9 +15,12 @@
 
 #include <QString>
 
+// THEATRE_DOWNLOAD_ONLY P2.4 (2026-05-29) — collapsed to local-file only.
+// The DirectUrl variant existed solely for the stream-server / addon direct-URL
+// playback path, which was removed when Theatre became download-only. Only the
+// local (downloaded-file) playback mode survives.
 enum class StreamPlaybackMode {
-    LocalHttp, // torrent-backed (magnet) path served via local HTTP
-    DirectUrl, // addon-provided direct URL (http/https/url kinds)
+    LocalHttp, // local downloaded-file playback
 };
 
 struct StreamFileResult {

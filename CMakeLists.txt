@@ -226,11 +226,10 @@ set(SOURCES
     src/core/stream/MetaAggregator.cpp
     # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy libtorrent stream
     # engine deleted (StreamEngine, StreamHttpServer, StreamPieceWaiter,
-    # StreamPrioritizer, StreamSeekClassifier, StreamSession). Stream mode
-    # runs exclusively against the Stremio stream-server subprocess.
-    src/core/stream/stremio/StreamServerProcess.cpp
-    src/core/stream/stremio/StreamServerClient.cpp
-    src/core/stream/stremio/StreamServerEngine.cpp
+    # StreamPrioritizer, StreamSeekClassifier, StreamSession).
+    # THEATRE_DOWNLOAD_ONLY P2.2 (2026-05-29) — the Stremio stream-server
+    # subprocess layer (StreamServerProcess/Client/Engine) deleted too;
+    # Theatre is download-only with local-file playback.
     src/core/stream/StreamLibrary.cpp
     src/core/stream/addon/AddonTransport.cpp
     src/core/stream/addon/AddonRegistry.cpp
@@ -262,7 +261,6 @@ set(SOURCES
     src/ui/pages/stream/StreamSourceChoice.cpp
     src/ui/pages/stream/StreamSourceCard.cpp
     src/ui/pages/stream/StreamSourceList.cpp
-    src/ui/pages/stream/StreamPlayerController.cpp
     src/ui/pages/stream/StreamContinueStrip.cpp
     src/ui/pages/stream/AddonManagerScreen.cpp
     src/ui/pages/stream/AddonDetailPanel.cpp
@@ -431,9 +429,6 @@ set(HEADERS
     # deleted along with their .cpp counterparts. StreamTypes.h holds the
     # struct + enum definitions that used to live in StreamEngine.h.
     src/core/stream/StreamTypes.h
-    src/core/stream/stremio/StreamServerProcess.h
-    src/core/stream/stremio/StreamServerClient.h
-    src/core/stream/stremio/StreamServerEngine.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
     src/core/stream/addon/Manifest.h
@@ -471,7 +466,6 @@ set(HEADERS
     src/ui/pages/stream/StreamSourceChoice.h
     src/ui/pages/stream/StreamSourceCard.h
     src/ui/pages/stream/StreamSourceList.h
-    src/ui/pages/stream/StreamPlayerController.h
     src/ui/pages/stream/StreamContinueStrip.h
     src/ui/pages/stream/AddonManagerScreen.h
     src/ui/pages/stream/AddonDetailPanel.h
@@ -683,52 +677,11 @@ if(WIN32)
     # Incremental linking for faster link times during development
     target_link_options(Tankoban PRIVATE /INCREMENTAL)
 
-    # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — copy Stremio stream-server
-    # subprocess bundle next to Tankoban.exe at post-build time. The stream-
-    # server is Stremio's open-source Node.js SEA (MIT licensed); Tankoban
-    # ships it byte-identical to upstream + an attribution file. Attempted
-    # 2026-04-25 to rebrand the binary via rcedit (VERSIONINFO + icon) but
-    # that corrupts the embedded Node.js SEA blob → segfault on launch; the
-    # Stremio branding shows in Windows Firewall dialog + Task Manager until
-    # we invest in rebuilding stream-server from upstream source with our own
-    # SEA construction (deferred, non-trivial). LICENSE.stream-server.txt
-    # ships alongside as MIT attribution.
-    # Required files:
-    #   stremio-runtime.exe (~22 MB)       Node.js SEA — BYTE-IDENTICAL TO UPSTREAM
-    #   server.js           (~6 MB)        webpacked stream-server JS
-    #   ffmpeg.exe / ffprobe.exe           stream-server probes content via these
-    #   av*-58.dll + misc                  ffmpeg 4.x shared libs (DO NOT reuse
-    #                                      Tankoban's own ffmpeg_sidecar/ 6.x DLLs —
-    #                                      major version mismatch)
-    #   vcruntime140*.dll                  MSVC runtime
-    #   LICENSE.stream-server.txt          MIT attribution for the upstream code
-    add_custom_command(TARGET Tankoban POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:Tankoban>/stream_server"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/stremio-runtime.exe"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/server.js"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/ffmpeg.exe"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/ffprobe.exe"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/avcodec-58.dll"
-            # avdevice-58.dll dropped 2026-04-24 (STREAM_SERVER_PIVOT Phase 2A).
-            # ffmpeg avdevice is for device-class inputs (-f dshow / v4l2 / decklink
-            # etc.) which stream-server never uses for playback. Saves ~1.5 MiB off
-            # the bundle. If stream-server fails to spawn with a DLL-load error on
-            # Windows, restore this line + the file under resources/stream_server/.
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/avfilter-7.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/avformat-58.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/avutil-56.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/postproc-55.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/swresample-3.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/swscale-5.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/vcruntime140_1.dll"
-            "${CMAKE_SOURCE_DIR}/resources/stream_server/LICENSE.stream-server.txt"
-            "$<TARGET_FILE_DIR:Tankoban>/stream_server/"
-        COMMENT "Copying Stremio stream-server bundle (MIT-licensed upstream) to build output"
-        VERBATIM
-    )
+    # THEATRE_DOWNLOAD_ONLY P2.3 (2026-05-29) — the Stremio stream-server
+    # subprocess bundle (stremio-runtime.exe + server.js + ffmpeg 4.x DLLs +
+    # LICENSE) and its POST_BUILD copy block were removed here. Theatre is
+    # download-only now, so nothing spawns the subprocess and the ~88 MB
+    # bundle no longer ships.
 
 endif()
 
@@ -751,9 +704,8 @@ add_custom_command(TARGET Tankoban POST_BUILD
 # URL extension. Without Qt's qwebp.dll plugin, QImageReader silently fails to
 # decode the response and the cover renders as a blank tile. The plugin lives
 # in Qt's optional qtimageformats addon (not in the default qt6sdk install), so
-# vendor it into resources/imageformats/ alongside the stream_server bundle
-# and deploy from there — keeps clones-and-builds hermetic with zero extra
-# setup per dev machine.
+# vendor it into resources/imageformats/ and deploy from there — keeps
+# clones-and-builds hermetic with zero extra setup per dev machine.
 add_custom_command(TARGET Tankoban POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "$<TARGET_FILE_DIR:Tankoban>/imageformats"
