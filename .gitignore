@@ -67,6 +67,16 @@ _*.csv
 _*/
 *.log
 
+# Smoke-test evidence — kept LOCAL, not committed (2026-05-29, Hemanth-approved).
+# Screenshots/captures are verification proof for the moment + Hemanth's eyeball;
+# the written audit .md describes what was seen. Avoids unbounded binary bloat in
+# the repo (was ~117MB). Existing tracked evidence stop-tracked in the same commit.
+agents/audits/smoke_evidence/
+agents/audits/evidence_*.png
+agents/audits/evidence_*.jpg
+agents/audits/evidence_*.jpeg
+agents/audits/evidence_*.bin
+
 # One-off diagnostic dumps agents generate at repo root (raw chat diffs, etc.)
 chat_diff*.txt
 *_raw.txt
