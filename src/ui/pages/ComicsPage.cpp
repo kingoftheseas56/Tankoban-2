@@ -1078,90 +1078,16 @@ void ComicsPage::buildUI()
         auto* card = m_continueStrip->tileAt(pos);
         if (!card) return;
 
-        QString filePath    = card->property("filePath").toString();
-        QString seriesPath  = card->property("seriesPath").toString();
-        QString seriesName  = card->property("seriesName").toString();
-
-        // Compute progress key for this file
+        QString filePath = card->property("filePath").toString();
         QString progKey = QString(QCryptographicHash::hash(
             filePath.toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
 
-        // Check finished state for toggle label
-        bool isFinished = false;
-        if (m_bridge) {
-            QJsonObject prog = m_bridge->progress("comics", progKey);
-            isFinished = prog.value("finished").toBool();
-        }
-
-        auto* menu = ContextMenuHelper::createMenu(this);
-
-        // 1. Continue reading
-        auto* continueAct = menu->addAction("Continue reading");
-
-        // 2. Open series (visible only if seriesPath exists)
-        QAction* openSeriesAct = nullptr;
-        if (!seriesPath.isEmpty()) {
-            openSeriesAct = menu->addAction("Open series");
-        }
-
-        menu->addSeparator();
-
-        // 3. Mark as unread / Mark as read
-        auto* markAct = menu->addAction(isFinished ? "Mark as unread" : "Mark as read");
-
-        // 4. Clear from Continue Reading
-        auto* clearAct = menu->addAction("Clear from Continue Reading");
-
-        menu->addSeparator();
-
-        // 5. Reveal in File Explorer
-        auto* revealAct = menu->addAction("Reveal in File Explorer");
-        revealAct->setEnabled(!filePath.isEmpty());
-
-        // 6. Copy path
-        auto* copyAct = menu->addAction("Copy path");
-        copyAct->setEnabled(!filePath.isEmpty());
-
-        menu->addSeparator();
-
-        // 7. Remove from library... (DANGER)
-        auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
-        removeAct->setEnabled(!seriesPath.isEmpty());
-
-        auto* chosen = menu->exec(m_continueStrip->mapToGlobal(pos));
-        if (chosen == continueAct) {
-            // Open the comic file directly
-            QDir dir(seriesPath);
-            QStringList files = dir.entryList(COMIC_EXTS, QDir::Files);
-            QCollator col;
-            col.setNumericMode(true);
-            std::sort(files.begin(), files.end(), [&col](const QString& a, const QString& b) {
-                return col.compare(a, b) < 0;
-            });
-            QStringList cbzList;
-            for (const auto& f : files)
-                cbzList.append(dir.absoluteFilePath(f));
-            emit openComic(filePath, cbzList, seriesName);
-        } else if (openSeriesAct && chosen == openSeriesAct) {
-            openSeriesByPath(seriesPath, seriesName,
-                             card->property("coverPath").toString());
-        } else if (chosen == markAct && m_bridge) {
-            QJsonObject prog = m_bridge->progress("comics", progKey);
-            prog["finished"] = !isFinished;
-            m_bridge->saveProgress("comics", progKey, prog);
-            refreshContinueStrip();
-        } else if (chosen == clearAct && m_bridge) {
-            m_bridge->clearProgress("comics", progKey);
-            refreshContinueStrip();
-        } else if (chosen == revealAct) {
-            ContextMenuHelper::revealInExplorer(filePath);
-        } else if (chosen == copyAct) {
-            ContextMenuHelper::copyToClipboard(filePath);
-        } else if (chosen == removeAct) {
-            if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                    "Remove this series from the library?\n" + seriesPath +
-                    "\nFiles will not be deleted from disk.")) {
-                triggerScan();
+        QMenu* menu = ContextMenuHelper::createMenu(this);
+        QAction* removeCr = menu->addAction(tr("Remove from Continue Reading"));
+        if (menu->exec(m_continueStrip->mapToGlobal(pos)) == removeCr) {
+            if (m_bridge) {
+                m_bridge->clearProgress("comics", progKey);
+                refreshContinueStrip();
             }
         }
         menu->deleteLater();
@@ -2205,6 +2131,21 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
     dispatchCatalogResolve(fandomSeriesSlugFromTitle(record.title),
                            /*titleHint*/record.title);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+}
+
+void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
+                                             const QString& seriesId,
+                                             const QString& displayTitle)
+{
+    if (sourceId.isEmpty() || seriesId.isEmpty()) return;
+    ComicsLibraryRecord rec;
+    rec.sourceId = sourceId;
+    rec.seriesId = seriesId;
+    rec.title    = displayTitle;
+    rec.origin   = QStringLiteral("manga_download_index");
+    // rootFolder + seriesFolderName are left empty; openSeriesByRecord
+    // only uses sourceId + seriesId + title to reconstruct a MangaResult.
+    openSeriesByRecord(rec);
 }
 
 void ComicsPage::refreshLibraryStrips()
@@ -3348,43 +3289,124 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
     auto* card = m_tileStrip->tileAt(pos);
     if (!card) return;
 
-    QString seriesPath = card->property("seriesPath").toString();
+    QString seriesKey  = card->property("seriesKey").toString();
     QString seriesName = card->property("seriesName").toString();
-    QString coverPath = card->property("coverPath").toString();
+    QString coverPath  = card->property("coverPath").toString();
+    int     anilistId  = card->property("anilistId").toInt();
 
-    // Check if all volumes in series are finished (for toggle label)
-    QDir dir(seriesPath);
-    QStringList cbzFiles = dir.entryList(COMIC_EXTS, QDir::Files);
-    QJsonObject allProg = m_bridge->allProgress("comics");
-    bool allFinished = !cbzFiles.isEmpty();
-    for (const auto& f : cbzFiles) {
-        QString id = QString(QCryptographicHash::hash(
-            dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
-        if (!allProg.value(id).toObject().value("finished").toBool()) {
-            allFinished = false;
-            break;
-        }
-    }
+    // Detect MangaDownloadIndex-backed tile vs folder-scanner tile.
+    const bool isMdiTile = !seriesKey.isEmpty();
 
     auto* menu = ContextMenuHelper::createMenu(this);
-    auto* openAct = menu->addAction("Open");
-    menu->addSeparator();
-    auto* markAct = menu->addAction(allFinished ? "Mark all as unread" : "Mark all as read");
-    menu->addSeparator();
-    auto* renameAct = menu->addAction("Rename series...");
-    auto* hideAct = menu->addAction("Hide series");
-    auto* revealAct = menu->addAction("Reveal in File Explorer");
-    revealAct->setEnabled(!seriesPath.isEmpty());
-    auto* copyAct = menu->addAction("Copy path");
-    copyAct->setEnabled(!seriesPath.isEmpty());
-    menu->addSeparator();
-    auto* removeAct = ContextMenuHelper::addDangerAction(menu, "Remove from library...");
-    removeAct->setEnabled(!seriesPath.isEmpty());
 
-    auto* chosen = menu->exec(m_tileStrip->mapToGlobal(pos));
+    // Open series
+    auto* openAct = menu->addAction(tr("Open series"));
+    menu->addSeparator();
+
+    // Mark as read/unread
+    QAction* markAct = nullptr;
+    if (!isMdiTile) {
+        QString seriesPath = card->property("seriesPath").toString();
+        QDir dir(seriesPath);
+        QStringList cbzFiles = dir.entryList(COMIC_EXTS, QDir::Files);
+        QJsonObject allProg = m_bridge ? m_bridge->allProgress("comics") : QJsonObject();
+        bool allFinished = !cbzFiles.isEmpty();
+        for (const auto& f : cbzFiles) {
+            QString id = QString(QCryptographicHash::hash(
+                dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+            if (!allProg.value(id).toObject().value("finished").toBool()) {
+                allFinished = false;
+                break;
+            }
+        }
+        markAct = menu->addAction(allFinished ? tr("Mark all as unread") : tr("Mark all as read"));
+    }
+
+    menu->addSeparator();
+
+    // Rename
+    QAction* renameAct = nullptr;
+    if (isMdiTile) {
+        renameAct = menu->addAction(tr("Rename…"));
+    } else {
+        renameAct = menu->addAction(tr("Rename series…"));
+    }
+
+    // Refresh metadata (D4 — MangaFire catalog re-resolve)
+    QAction* refreshAct = nullptr;
+    if (isMdiTile && !seriesName.isEmpty()) {
+        refreshAct = menu->addAction(tr("Refresh metadata"));
+    }
+
+    // Hide series (folder-based only)
+    QAction* hideAct = nullptr;
+    if (!isMdiTile) {
+        hideAct = menu->addAction(tr("Hide series"));
+    }
+
+    auto* revealAct = menu->addAction(tr("Reveal in File Explorer"));
+    auto* copyAct   = menu->addAction(tr("Copy path"));
+
+    // Resolve paths for enable/disable
+    QString displayPath;
+    if (isMdiTile && m_mangaDownloadIndex) {
+        const int sep = seriesKey.indexOf(QLatin1Char(':'));
+        if (sep > 0) {
+            const QString src = seriesKey.left(sep);
+            const QString sid = seriesKey.mid(sep + 1);
+            const auto entries = m_mangaDownloadIndex->entriesForSeries(src, sid);
+            if (!entries.isEmpty())
+                displayPath = QFileInfo(entries.first().canonicalPath).absolutePath();
+        }
+    } else {
+        displayPath = card->property("seriesPath").toString();
+    }
+    revealAct->setEnabled(!displayPath.isEmpty());
+    copyAct->setEnabled(!displayPath.isEmpty());
+
+    menu->addSeparator();
+
+    auto* removeAct = ContextMenuHelper::addDangerAction(menu, tr("Remove series…"));
+
+    QAction* chosen = menu->exec(m_tileStrip->mapToGlobal(pos));
+
     if (chosen == openAct) {
-        openSeriesByPath(seriesPath, seriesName, coverPath);
-    } else if (chosen == markAct) {
+        if (isMdiTile && m_mangaDownloadIndex) {
+            const int sep = seriesKey.indexOf(QLatin1Char(':'));
+            if (sep > 0) {
+                const QString src = seriesKey.left(sep);
+                const QString sid = seriesKey.mid(sep + 1);
+                const auto entries = m_mangaDownloadIndex->entriesForSeries(src, sid);
+                if (!entries.isEmpty()) {
+                    if (m_tyLibrary) {
+                        const auto rec = m_tyLibrary->get(src, sid);
+                        if (!rec.seriesId.isEmpty()) {
+                            openSeriesByRecord(rec);
+                            goto menu_done;
+                        }
+                    }
+                    if (anilistId > 0)
+                        openSeriesByAnilistId(anilistId, seriesName);
+                }
+            }
+        } else {
+            QString sp = card->property("seriesPath").toString();
+            openSeriesByPath(sp, seriesName, coverPath);
+        }
+    } else if (chosen == markAct && !isMdiTile && m_bridge) {
+        QString sp = card->property("seriesPath").toString();
+        QDir dir(sp);
+        QStringList cbzFiles = dir.entryList(COMIC_EXTS, QDir::Files);
+        QJsonObject allProg = m_bridge->allProgress("comics");
+        bool allFinished = !cbzFiles.isEmpty();
+        for (const auto& f : cbzFiles) {
+            QString id = QString(QCryptographicHash::hash(
+                dir.absoluteFilePath(f).toUtf8(), QCryptographicHash::Sha1).toHex().left(20));
+            if (!allProg.value(id).toObject().value("finished").toBool()) {
+                allFinished = false;
+                break;
+            }
+        }
         bool setFinished = !allFinished;
         for (const auto& f : cbzFiles) {
             QString id = QString(QCryptographicHash::hash(
@@ -3394,40 +3416,103 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
             m_bridge->saveProgress("comics", id, prog);
         }
     } else if (chosen == renameAct) {
-        QString dirName = QDir(seriesPath).dirName();
-        QString newName = QInputDialog::getText(this, "Rename series", "New name:", QLineEdit::Normal, dirName);
-        if (!newName.isEmpty() && newName != dirName) {
-            QString parentPath = QFileInfo(seriesPath).absolutePath();
-            QString oldPath = parentPath + "/" + dirName;
-            QString newPath = parentPath + "/" + newName.trimmed();
-            if (QFile::rename(oldPath, newPath)) {
-                triggerScan();
-            } else {
-                QMessageBox::warning(this, "Rename failed",
-                    "Could not rename \"" + dirName + "\".\n"
-                    "The folder may be in use by another program.");
+        if (isMdiTile && m_mangaDownloadIndex) {
+            const int sep = seriesKey.indexOf(QLatin1Char(':'));
+            if (sep > 0) {
+                const QString src = seriesKey.left(sep);
+                const QString sid = seriesKey.mid(sep + 1);
+                const auto entries = m_mangaDownloadIndex->entriesForSeries(src, sid);
+                if (!entries.isEmpty()) {
+                    QString oldDir = QFileInfo(entries.first().canonicalPath).absolutePath();
+                    QString oldName = QDir(oldDir).dirName();
+                    QString newName = QInputDialog::getText(this, tr("Rename series"),
+                        tr("New name:"), QLineEdit::Normal, oldName);
+                    if (!newName.isEmpty() && newName != oldName) {
+                        QString parentPath = QFileInfo(oldDir).absolutePath();
+                        QString newDir = parentPath + "/" + newName.trimmed();
+                        if (QDir().rename(oldDir, newDir)) {
+                            for (const auto& e : entries) {
+                                QString oldPath = e.canonicalPath;
+                                QString relPath = oldPath.mid(oldDir.length() + 1);
+                                QString newPath = newDir + "/" + relPath;
+                                m_mangaDownloadIndex->evictByChapter(e.sourceId, e.seriesId, e.chapterId);
+                                m_mangaDownloadIndex->registerChapter(e.sourceId, e.seriesId,
+                                    e.chapterId, newPath, e.fileSizeBytes);
+                            }
+                        } else {
+                            QMessageBox::warning(this, tr("Rename failed"),
+                                tr("Could not rename \"%1\".\nThe folder may be in use by another program.")
+                                    .arg(oldName));
+                        }
+                    }
+                }
+            }
+        } else {
+            QString sp = card->property("seriesPath").toString();
+            QString dirName = QDir(sp).dirName();
+            QString newName = QInputDialog::getText(this, tr("Rename series"),
+                tr("New name:"), QLineEdit::Normal, dirName);
+            if (!newName.isEmpty() && newName != dirName) {
+                QString parentPath = QFileInfo(sp).absolutePath();
+                QString oldPath = parentPath + "/" + dirName;
+                QString newPath = parentPath + "/" + newName.trimmed();
+                if (QFile::rename(oldPath, newPath)) {
+                    triggerScan();
+                } else {
+                    QMessageBox::warning(this, tr("Rename failed"),
+                        tr("Could not rename \"%1\".\nThe folder may be in use by another program.")
+                            .arg(dirName));
+                }
             }
         }
-    } else if (chosen == hideAct) {
+    } else if (chosen == refreshAct && isMdiTile) {
+        dispatchCatalogResolve(
+            fandomSeriesSlugFromTitle(seriesName), seriesName);
+    } else if (chosen == hideAct && !isMdiTile) {
+        QString sp = card->property("seriesPath").toString();
         QSettings settings("Tankoban", "Tankoban");
         QStringList hidden = settings.value("comics_hidden_series").toStringList();
-        if (!hidden.contains(seriesPath)) {
-            hidden.append(seriesPath);
+        if (!hidden.contains(sp)) {
+            hidden.append(sp);
             settings.setValue("comics_hidden_series", hidden);
         }
         card->hide();
         m_tileStrip->filterTiles(m_searchBar->text());
     } else if (chosen == revealAct) {
-        ContextMenuHelper::revealInExplorer(seriesPath);
+        ContextMenuHelper::revealInExplorer(displayPath);
     } else if (chosen == copyAct) {
-        ContextMenuHelper::copyToClipboard(seriesPath);
+        ContextMenuHelper::copyToClipboard(displayPath);
     } else if (chosen == removeAct) {
-        if (ContextMenuHelper::confirmRemove(this, "Remove from library",
-                "Remove this series from the library?\n" + seriesPath +
-                "\nFiles will not be deleted from disk.")) {
-            triggerScan();
+        if (isMdiTile && m_mangaDownloadIndex && !seriesKey.isEmpty()) {
+            const int sep = seriesKey.indexOf(QLatin1Char(':'));
+            if (sep > 0) {
+                const QString src = seriesKey.left(sep);
+                const QString sid = seriesKey.mid(sep + 1);
+                const auto entries = m_mangaDownloadIndex->entriesForSeries(src, sid);
+                const auto choice = ContextMenuHelper::confirmRemoveWithFile(
+                    this, tr("Remove series"),
+                    tr("Remove \"%1\" (%2 volume%3) from your library?")
+                        .arg(seriesName).arg(entries.size())
+                        .arg(entries.size() == 1 ? QString() : QStringLiteral("s")));
+                if (choice == ContextMenuHelper::RemoveChoice::Cancel) goto menu_done;
+                if (choice == ContextMenuHelper::RemoveChoice::DeleteFile) {
+                    for (const auto& e : entries) {
+                        QFile::remove(e.canonicalPath);
+                        QFile::remove(e.canonicalPath + QStringLiteral(".volx"));
+                    }
+                }
+                m_mangaDownloadIndex->evictBySeries(src, sid);
+            }
+        } else {
+            QString sp = card->property("seriesPath").toString();
+            if (ContextMenuHelper::confirmRemove(this, tr("Remove from library"),
+                    tr("Remove this series from the library?\n%1\nFiles will not be deleted from disk.")
+                        .arg(sp))) {
+                triggerScan();
+            }
         }
     }
+menu_done:
     menu->deleteLater();
 }
 

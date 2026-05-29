@@ -910,6 +910,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/ui/readers/test_comic_reader_pairing.cpp
         src/ui/pages/comics/VolumeTile.cpp
         src/core/manga/MangaDownloadIndex.cpp
+        tests/core/manga/test_manga_download_index.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

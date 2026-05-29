@@ -15,6 +15,12 @@ void copyToClipboard(const QString& text);
 // Show a Yes/No confirmation dialog. Returns true if user clicks Yes.
 bool confirmRemove(QWidget* parent, const QString& title, const QString& message);
 
+// 3-way remove dialog for items backed by a file on disk. Returns the choice.
+enum class RemoveChoice { Cancel, RemoveFromLibrary, DeleteFile };
+RemoveChoice confirmRemoveWithFile(QWidget* parent,
+                                   const QString& title,
+                                   const QString& message);
+
 // Create a styled context menu matching the groundwork's dark theme.
 // Caller owns the returned QMenu.
 QMenu* createMenu(QWidget* parent);

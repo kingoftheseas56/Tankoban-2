@@ -8,6 +8,8 @@
 #include <QAction>
 #include <QWidgetAction>
 #include <QLabel>
+#include <QPushButton>
+#include <QStyle>
 
 namespace ContextMenuHelper {
 
@@ -29,6 +31,40 @@ bool confirmRemove(QWidget* parent, const QString& title, const QString& message
 {
     return QMessageBox::question(parent, title, message,
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+}
+
+RemoveChoice confirmRemoveWithFile(QWidget* parent,
+                                   const QString& title,
+                                   const QString& message)
+{
+    QMessageBox box(parent);
+    box.setWindowTitle(title);
+    box.setText(message);
+    box.setIcon(QMessageBox::Warning);
+    box.setStyleSheet(
+        "QMessageBox { background: #1e1e1e; color: rgba(238,238,238,0.86); }"
+        "QPushButton {"
+        "  min-width: 80px; padding: 6px 16px;"
+        "  background: rgba(255,255,255,0.08);"
+        "  color: rgba(238,238,238,0.86);"
+        "  border: 1px solid rgba(255,255,255,0.12);"
+        "  border-radius: 4px;"
+        "}"
+        "QPushButton:hover { background: rgba(255,255,255,0.14); }"
+        "QPushButton[destructive=\"true\"] { color: #e53935; }");
+    QPushButton* libBtn = box.addButton(
+        QObject::tr("Remove from library only"), QMessageBox::AcceptRole);
+    QPushButton* fileBtn = box.addButton(
+        QObject::tr("Delete the file too"), QMessageBox::DestructiveRole);
+    fileBtn->setProperty("destructive", true);
+    fileBtn->style()->unpolish(fileBtn);
+    fileBtn->style()->polish(fileBtn);
+    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(cancel);
+    box.exec();
+    if (box.clickedButton() == libBtn)  return RemoveChoice::RemoveFromLibrary;
+    if (box.clickedButton() == fileBtn) return RemoveChoice::DeleteFile;
+    return RemoveChoice::Cancel;
 }
 
 QMenu* createMenu(QWidget* parent)

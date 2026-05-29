@@ -1,12 +1,16 @@
 #include "ComicsDownloadsPage.h"
 
 #include "core/manga/MangaDownloadIndex.h"
+#include "ui/ContextMenuHelper.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
@@ -297,6 +301,7 @@ void ComicsDownloadsPage::refresh()
 
     for (const auto& pair : cardList) {
         const SeriesCard& card = pair.second;
+        const QStringList& rawKeys = keyToSeriesKeys[pair.first];
 
         auto* cardFrame = new QFrame(m_sectionBody);
         cardFrame->setObjectName("ComicsDownloadsCard");
@@ -340,6 +345,80 @@ void ComicsDownloadsPage::refresh()
                 " font-size: 10pt; padding: 4px 8px; }");
             cardLayout->addWidget(rowLabel);
         }
+
+        // Context menu for this card group
+        cardFrame->setContextMenuPolicy(Qt::CustomContextMenu);
+        const QStringList storedRawKeys = rawKeys;
+        const QString storedDisplayTitle = card.displayTitle;
+        connect(cardFrame, &QWidget::customContextMenuRequested, this,
+                [this, cardFrame, storedRawKeys, storedDisplayTitle](const QPoint& pos) {
+            if (!m_mangaDownloadIndex) return;
+
+            // Collect all entries in this canonical group for delete/reveal/copy.
+            struct RowEntry { QString sourceId; QString seriesId; int volumeNumber; QString canonicalPath; };
+            QList<RowEntry> entries;
+            for (const auto& rk : storedRawKeys) {
+                const int sep = rk.indexOf(QLatin1Char(':'));
+                if (sep <= 0) continue;
+                const QString src = rk.left(sep);
+                const QString sid = rk.mid(sep + 1);
+                const auto ents = m_mangaDownloadIndex->entriesForSeries(src, sid);
+                for (const auto& e : ents)
+                    entries.append({e.sourceId, e.seriesId, e.volumeNumber, e.canonicalPath});
+            }
+            if (entries.isEmpty()) return;
+
+            QMenu* menu = ContextMenuHelper::createMenu(this);
+
+            // Open series — navigate to the series view
+            QAction* openAct = menu->addAction(tr("Open series"));
+
+            menu->addSeparator();
+
+            // Delete…
+            QAction* delAct = ContextMenuHelper::addDangerAction(menu, tr("Delete…"));
+
+            // Reveal / Copy — anchored on first entry's path
+            const QString firstPath = entries.first().canonicalPath;
+            const bool fileExists = !firstPath.isEmpty() && QFileInfo::exists(firstPath);
+            QAction* revealAct = menu->addAction(tr("Reveal in File Explorer"));
+            revealAct->setEnabled(fileExists);
+            QAction* copyAct = menu->addAction(tr("Copy path"));
+            copyAct->setEnabled(!firstPath.isEmpty());
+
+            QAction* chosen = menu->exec(cardFrame->mapToGlobal(pos));
+
+            if (chosen == openAct && m_comicsPage) {
+                if (!entries.isEmpty()) {
+                    const auto& e = entries.first();
+                    QMetaObject::invokeMethod(m_comicsPage, "openSeriesForDownloadEntry",
+                        Qt::DirectConnection,
+                        Q_ARG(QString, e.sourceId),
+                        Q_ARG(QString, e.seriesId),
+                        Q_ARG(QString, storedDisplayTitle));
+                }
+            } else if (chosen == delAct) {
+                const auto choice = ContextMenuHelper::confirmRemoveWithFile(
+                    this, tr("Delete downloads"),
+                    tr("Remove \"%1\" (%2 volume%3) from your library?")
+                        .arg(storedDisplayTitle).arg(entries.size())
+                        .arg(entries.size() == 1 ? QString() : QStringLiteral("s")));
+                if (choice == ContextMenuHelper::RemoveChoice::Cancel) goto dl_menu_done;
+                for (const auto& e : entries) {
+                    if (choice == ContextMenuHelper::RemoveChoice::DeleteFile) {
+                        QFile::remove(e.canonicalPath);
+                        QFile::remove(e.canonicalPath + QStringLiteral(".volx"));
+                    }
+                    m_mangaDownloadIndex->evictByVolume(e.sourceId, e.seriesId, e.volumeNumber);
+                }
+            } else if (chosen == revealAct) {
+                ContextMenuHelper::revealInExplorer(firstPath);
+            } else if (chosen == copyAct) {
+                ContextMenuHelper::copyToClipboard(firstPath);
+            }
+        dl_menu_done:
+            menu->deleteLater();
+        });
 
         m_sectionBodyLayout->addWidget(cardFrame);
     }

@@ -82,6 +82,10 @@ public:
     void evictBySeries(const QString& sourceId, const QString& seriesId);
     void evictByChapter(const QString& sourceId, const QString& seriesId,
                          const QString& chapterId);
+
+    // Evict a single volume's entry (and its served chapter keys). File on disk
+    // is NOT touched — caller removes the file for the "delete file too" path.
+    void evictByVolume(const QString& sourceId, const QString& seriesId, int volumeNumber);
     void validateAll();
 
     // Read API — mutex-guarded. Safe from any thread.
