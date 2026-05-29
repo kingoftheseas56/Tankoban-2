@@ -9,7 +9,13 @@ out_old*/
 
 # Per-lane build dirs (gov-v7 / TANKOBAN_BUILD_LANE — Codex commission 07da143).
 # Added 2026-05-22 after out_agent-4/ accumulated mid-build.
-out_agent-*/
+# 2026-05-29: broadened out_agent-*/ -> out_agent*/ — lane naming dropped the
+# hyphen (out_agent1/, out_agent7_comics_polish/, out_agent1-volx-test/), so the
+# old hyphen-anchored rule missed them and ~2200 build-artifact files got staged
+# into a single ".." commit (caught + reset before push). out_agent*/ + out_*/
+# catch every present and future lane dir.
+out_agent*/
+out_*/
 
 # Brainstorm-skill visual-companion mockups (per-session HTML files for the
 # in-browser brainstorm preview). Persist locally for reference but not tracked.
