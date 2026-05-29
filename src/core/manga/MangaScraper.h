@@ -22,6 +22,11 @@ public:
     virtual void fetchChapters(const QString& seriesId) = 0;
     virtual void fetchPages(const QString& chapterId) = 0;
 
+    // Fetch pages already grouped into MangaPlus facing-pairs (PageInfo.pageGroup
+    // set). Default falls back to the flat fetchPages for scrapers that have no
+    // paired endpoint (e.g. ReadComics). Result still arrives via pagesReady().
+    virtual void fetchPagesPaired(const QString& chapterId) { fetchPages(chapterId); }
+
     // NEW (v1 merger): fetch detail-page hero metadata (synopsis,
     // genres, year, status, hero cover URL) given a search-time
     // preview. Result delivered via detailReady(). Concrete scrapers

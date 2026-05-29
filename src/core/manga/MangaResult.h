@@ -29,6 +29,10 @@ Q_DECLARE_METATYPE(ChapterInfo)
 struct PageInfo {
     int     index = 0;
     QString imageUrl;
+    // MangaPlus (double_page_v2) facing-pair number. Pages sharing a pageGroup
+    // are one two-page view; the packer stitches a 2-image group into one wide
+    // spread. -1 = ungrouped (long_strip / flat fetch path).
+    int     pageGroup = -1;
 };
 Q_DECLARE_METATYPE(PageInfo)
 
