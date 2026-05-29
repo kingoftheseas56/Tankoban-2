@@ -73,6 +73,21 @@ TEST(AutoSourcePicker, UnknownRuntimeSkipsSizeGuardrail) {
     EXPECT_EQ(*idx, 0);
 }
 
+TEST(AutoSourcePicker, TieOnSeedersBreaksByReleaseType) {
+    QList<SourceCandidate> v {
+        c("Show S01E01 1080p WEBRip", 10, 1400000000LL, 3),
+        c("Show S01E01 1080p BluRay", 10, 1400000000LL, 3),
+    };
+    auto idx = AutoSourcePicker::pick(v, 24);
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(*idx, 1);  // BluRay (higher sourceScore) wins the tie
+}
+
+TEST(AutoSourcePicker, NegativeSizeTreatedAsUnknown) {
+    QList<SourceCandidate> v { c("Show S01E01 1080p", 5, -1LL, 3) };
+    EXPECT_TRUE(AutoSourcePicker::pick(v, 24).has_value());  // unknown size -> kept
+}
+
 TEST(AutoSourcePicker, EmptyListReturnsNone) {
     EXPECT_FALSE(AutoSourcePicker::pick({}, 24).has_value());
 }
