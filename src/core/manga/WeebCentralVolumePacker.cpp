@@ -22,6 +22,10 @@
 #include <QNetworkRequest>
 #include <QStandardPaths>
 #include <QUrl>
+#include <QImage>
+#include <QPainter>
+#include <QBuffer>
+#include <QMap>
 
 #include <memory>   // std::shared_ptr
 
@@ -167,8 +171,6 @@ void WeebCentralVolumePacker::startNextChapter(const VolumePackRequest& req,
             QObject::disconnect(*conn);
             delete conn;
 
-            // Download each page url to
-            //   stagingDir/<chapterIdx-0pad4>_<pageIdx-0pad4>.jpg
             const int total = pages.size();
             if (total == 0) {
                 emit volumeFailed(req.seriesId, req.volumeNumber,
@@ -176,23 +178,14 @@ void WeebCentralVolumePacker::startNextChapter(const VolumePackRequest& req,
                                   QStringLiteral("chapter returned 0 image URLs"));
                 return;
             }
-            // INLINE FIX vs plan literal: `finished` must outlive the outer
-            // pagesReady lambda because the per-image finished lambdas
-            // fire asynchronously after pagesReady returns. The plan's
-            // capture-by-reference would have been a use-after-scope-exit
-            // bug. shared_ptr<int> gives the counter heap lifetime,
-            // shared across all per-image lambdas of this chapter, and
-            // auto-frees when the last one fires.
-            auto finished = std::make_shared<int>(0);
-            // Also track whether we already emitted a terminal signal for
-            // this chapter, so that a second async failure does not emit
-            // a second volumeFailed for the same vol.
-            auto aborted = std::make_shared<bool>(false);
 
-            // PHASE 11: cap concurrent per-image GETs at ~6 in-flight to
-            // avoid burst-firing the WeebCentral CDN. v1 dispatches `total`
-            // requests in one event-loop tick, which can trigger upstream
-            // rate-limit on long chapters.
+            // Buffer every downloaded image by its flat index; stitch per group
+            // once all have arrived. shared_ptr gives heap lifetime across the
+            // async per-image finished lambdas.
+            auto bytesByIndex = std::make_shared<QMap<int, QByteArray>>();
+            auto finished = std::make_shared<int>(0);
+            auto aborted  = std::make_shared<bool>(false);
+
             for (int p = 0; p < total; ++p) {
                 if (!m_nam) {
                     if (!*aborted) {
@@ -208,8 +201,8 @@ void WeebCentralVolumePacker::startNextChapter(const VolumePackRequest& req,
                 httpReq.setRawHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
                 auto* reply = m_nam->get(httpReq);
                 connect(reply, &QNetworkReply::finished,
-                    this, [this, reply, stagingDir, chapterIdx, p, total,
-                           finished, aborted, req, totalChapters]() {
+                    this, [this, reply, p, total, pages, stagingDir, chapterIdx,
+                           totalChapters, bytesByIndex, finished, aborted, req]() {
                         reply->deleteLater();
                         if (*aborted) return;
                         if (reply->error() != QNetworkReply::NoError) {
@@ -227,33 +220,88 @@ void WeebCentralVolumePacker::startNextChapter(const VolumePackRequest& req,
                                               QString::number(data.size()));
                             return;
                         }
-                        const QString outName = QStringLiteral("%1_%2.jpg")
-                            .arg(chapterIdx, 4, 10, QChar('0'))
-                            .arg(p,          4, 10, QChar('0'));
-                        QFile f(stagingDir + QChar('/') + outName);
-                        if (!f.open(QIODevice::WriteOnly)) {
-                            *aborted = true;
-                            emit volumeFailed(req.seriesId, req.volumeNumber,
-                                              QStringLiteral("write_failed"), outName);
-                            return;
-                        }
-                        f.write(data);
-                        f.close();
+                        bytesByIndex->insert(p, data);
 
-                        ++(*finished);
-                        if (*finished == total) {
-                            // Chapter done; report progress + start next chapter.
-                            const double pct = static_cast<double>(chapterIdx + 1)
-                                             / static_cast<double>(totalChapters);
-                            emit volumeProgress(req.seriesId, req.volumeNumber, pct);
-                            startNextChapter(req, chapterIdx + 1, totalChapters, stagingDir);
+                        if (++(*finished) != total) return;
+
+                        // All images in; stitch per facing-pair group, in
+                        // document order. One output file per group.
+                        QMap<int, QList<int>> groupToIndices;  // pageGroup -> flat indices (ordered)
+                        QList<int> groupOrder;                 // first-seen order of groups
+                        for (int i = 0; i < pages.size(); ++i) {
+                            const int g = pages.at(i).pageGroup >= 0
+                                              ? pages.at(i).pageGroup
+                                              : i;  // ungrouped: each its own group
+                            if (!groupToIndices.contains(g)) groupOrder.append(g);
+                            groupToIndices[g].append(i);
                         }
+
+                        int seq = 0;
+                        for (const int g : groupOrder) {
+                            const QList<int>& members = groupToIndices[g];
+                            const QString outName = QStringLiteral("%1_%2.jpg")
+                                .arg(chapterIdx, 4, 10, QChar('0'))
+                                .arg(seq++,      4, 10, QChar('0'));
+                            const QString outPath = stagingDir + QChar('/') + outName;
+
+                            if (members.size() == 1) {
+                                // Single (cover / natively-wide spread): write bytes as-is.
+                                QFile f(outPath);
+                                if (!f.open(QIODevice::WriteOnly)) {
+                                    if (!*aborted) { *aborted = true;
+                                        emit volumeFailed(req.seriesId, req.volumeNumber,
+                                                          QStringLiteral("write_failed"), outName); }
+                                    return;
+                                }
+                                f.write(bytesByIndex->value(members.first()));
+                                f.close();
+                                continue;
+                            }
+
+                            // Pair: decode both halves and composite left-to-right
+                            // in document order (WeebCentral renders the group in
+                            // visual L->R order for the reader's RTL layout).
+                            QImage left, right;
+                            left.loadFromData(bytesByIndex->value(members.at(0)));
+                            right.loadFromData(bytesByIndex->value(members.at(1)));
+                            if (left.isNull() || right.isNull()) {
+                                // Fallback: a half failed to decode — write the
+                                // decodable one, or the raw first half, rather
+                                // than abort the whole volume.
+                                QFile f(outPath);
+                                if (f.open(QIODevice::WriteOnly)) {
+                                    f.write(bytesByIndex->value(members.first()));
+                                    f.close();
+                                }
+                                continue;
+                            }
+                            const int h = qMax(left.height(), right.height());
+                            const int w = left.width() + right.width();
+                            QImage combined(w, h, QImage::Format_RGB32);
+                            combined.fill(Qt::white);
+                            QPainter painter(&combined);
+                            painter.drawImage(QPoint(0, (h - left.height()) / 2), left);
+                            painter.drawImage(QPoint(left.width(), (h - right.height()) / 2), right);
+                            painter.end();
+                            if (!combined.save(outPath, "JPEG", 92)) {
+                                if (!*aborted) { *aborted = true;
+                                    emit volumeFailed(req.seriesId, req.volumeNumber,
+                                                      QStringLiteral("stitch_save_failed"), outName); }
+                                return;
+                            }
+                        }
+
+                        const double pct = static_cast<double>(chapterIdx + 1)
+                                         / static_cast<double>(totalChapters);
+                        emit volumeProgress(req.seriesId, req.volumeNumber, pct);
+                        startNextChapter(req, chapterIdx + 1, totalChapters, stagingDir);
                     });
             }
         });
 
-    // Plan adaptation: fetchPages takes ONE arg, NOT (seriesId, chapterId).
-    m_scraper->fetchPages(chapterId);
+    // Plan adaptation: fetch in MangaPlus paired mode so PageInfo.pageGroup is
+    // populated and we can stitch facing-pairs into one spread image.
+    m_scraper->fetchPagesPaired(chapterId);
 }
 
 void WeebCentralVolumePacker::finalizePack(const VolumePackRequest& req, const QString& stagingDir)
