@@ -44,6 +44,32 @@ static constexpr double SPREAD_RATIO = 1.08;
 static constexpr int TWO_PAGE_GUTTER_PX = 0;  // B3: physical gap between paired pages
 #define m_isDoublePage (m_readerMode == ReaderMode::DoublePage)
 #define m_isScrollStrip (m_readerMode == ReaderMode::ScrollStrip)
+
+namespace {
+// Detects a stitched-from-chapters compilation by its page naming. The HTTP
+// volume packers (WeebCentralVolumePacker / the MangaFire packer) emit pages
+// "<chapter>_<page>.<ext>" (both zero-padded), so a cbz with >=2 distinct
+// chapter prefixes under that strict pattern is a compilation that needs
+// chapter-boundary pairing. Real tankobon scans use free-form names
+// (e.g. "One Piece - c0054 (v007) - p001 [VIZ] [1r0n].jpg") that never match
+// the pattern, so they keep normal global pairing. Verified 2026-05-29 against
+// real 1r0n torrent volumes (no match) + WeebCentral/MangaFire packs (match).
+bool pagesAreStitchedCompilation(const QStringList& pageNames)
+{
+    static const QRegularExpression kPackerName(
+        QStringLiteral("^(\\d+)_\\d+\\.[A-Za-z0-9]+$"));
+    QString firstChapter;
+    for (const QString& full : pageNames) {
+        const QString base = full.section(QLatin1Char('/'), -1);
+        const auto m = kPackerName.match(base);
+        if (!m.hasMatch()) continue;
+        const QString chapter = m.captured(1);
+        if (firstChapter.isEmpty()) firstChapter = chapter;
+        else if (chapter != firstChapter) return true;  // >=2 distinct chapters
+    }
+    return false;
+}
+} // namespace
 static constexpr double COUPLING_MIN_CONFIDENCE = 0.12;
 static constexpr int COUPLING_PROBE_MAX_PAGES = 8;
 static constexpr int COUPLING_MAX_SAMPLES = 4;
@@ -953,6 +979,15 @@ void ComicReader::openBook(const QString& cbzPath,
     m_imageLabel->setText("Loading...");
     m_imageLabel->repaint();
     m_pageNames = ArchiveReader::pageList(cbzPath);
+    // VOLUME_X_QUALITY 2026-05-29 (Agent 1). A volume is a stitched compilation
+    // when its pages carry the packer "<chapter>_<page>" naming across multiple
+    // chapters, OR it carries the explicit .volx sidecar (back-compat for packs
+    // written before content-detection). Compilations get chapter-boundary
+    // pairing + a book-mode default; real tankobon scans do not. Content
+    // detection means existing pre-.volx downloads (e.g. MangaFire-packed
+    // volumes) are fixed without a re-download.
+    m_isStitchedCompilation =
+        m_isVolumeX || pagesAreStitchedCompilation(m_pageNames);
     m_currentPage = 0;
     m_currentPixmap = QPixmap();
     m_secondPixmap = QPixmap();
@@ -994,6 +1029,14 @@ void ComicReader::openBook(const QString& cbzPath,
     m_volBtn->setVisible(multiVolume);
 
     applySeriesSettings();  // D11: restore portrait width, mode, coupling phase — must precede button visibility
+    // VOLUME_X_QUALITY 2026-05-29 (Agent 1). Stitched compilations (magazine /
+    // Volume X) are laid out for two-page reading — their double-page spreads
+    // and per-chapter pairing only resolve correctly in book mode. Force
+    // DoublePage on open regardless of the restored per-series mode; real
+    // tankobon volumes keep whatever mode the user saved. Placed before the
+    // ScrollStrip plumbing block below so no strip canvas is built.
+    if (m_isStitchedCompilation)
+        m_readerMode = ReaderMode::DoublePage;
     m_hudPinned = (m_readerMode == ReaderMode::DoublePage); // A2: DoublePage = pinned HUD
 
     // First-volume init fix 2026-05-03 — applySeriesSettings flips
@@ -1105,14 +1148,15 @@ QVector<TwoPagePairingPage> ComicReader::pairingPages() const
             page.hasSpreadOverride = true;
             page.spreadOverride = it.value();
         }
-        // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1). Volume X cbzs name
-        // pages "<chapter>_<page>.<ext>" (WeebCentralVolumePacker). A page is a
-        // chapter start when its chapter token differs from the previous page's;
-        // buildTwoPagePairs then shows it alone (cover-style) and pairs the rest
-        // of the chapter fresh. Page 0 (the volume cover) is never marked — the
-        // pairing already shows it alone. Gated on m_isVolumeX so normal volumes
-        // (real tankobon split into chapters that flow correctly) are untouched.
-        if (m_isVolumeX) {
+        // VOLUME_X_CHAPTER_PAIRING 2026-05-27 (Agent 1); broadened 2026-05-29.
+        // Stitched compilations name pages "<chapter>_<page>.<ext>" (the volume
+        // packers). A page is a chapter start when its chapter token differs
+        // from the previous page's; buildTwoPagePairs then shows it alone
+        // (cover-style) and pairs the rest of the chapter fresh. Page 0 (the
+        // volume cover) is never marked — the pairing already shows it alone.
+        // Gated on m_isStitchedCompilation so real tankobon (free-form page
+        // names, normal global pairing) are untouched.
+        if (m_isStitchedCompilation) {
             const QString& fn = m_pageMeta[i].filename;
             const int sep = fn.indexOf(QLatin1Char('_'));
             const QString chapterToken = (sep > 0) ? fn.left(sep) : QString();
