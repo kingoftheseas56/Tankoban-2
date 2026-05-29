@@ -354,10 +354,14 @@ void StreamDetailView::showEntry(const QString& imdbId,
         if (m_movieActionRow) m_movieActionRow->show();
         refreshMovieLocalChip();
         refreshMovieDownloadState();
-        // Stream-picker UX rework — for movies, auto-trigger the source load
-        // on detail open (matches Stremio). StreamPage listens on
-        // playRequested, runs StreamAggregator::load, and backfills the
-        // right pane via setStreamSources.
+        // THEATRE_DOWNLOAD_SIMPLIFY P4 — the visible Sources pane was removed,
+        // so there is no longer a list to "auto-load on detail open". We still
+        // emit playRequested(movie) because StreamPage's streamsReady path calls
+        // setStreamSources(), which caches m_lastChoices and enables the movie
+        // Download button (a silent top-seeded auto-pick). setStreamSourcesLoading()
+        // is kept only for its side effect of disabling the Download button until
+        // the choices arrive; its source-list write is now a no-op on the hidden
+        // list. This does NOT auto-download — the StreamPage movie path never did.
         setStreamSourcesLoading();
         emit playRequested(imdbId, QStringLiteral("movie"), 0, 0);
     } else if (m_meta) {
@@ -776,11 +780,11 @@ void StreamDetailView::buildUI()
     m_episodeTable->horizontalHeader()->setSectionResizeMode(kColAction,    QHeaderView::Fixed);
     m_episodeTable->setColumnWidth(kColCheckbox, 32);
     m_episodeTable->setColumnWidth(kColEpisode,  36);
-    m_episodeTable->setColumnWidth(kColThumb,    76);   // 64px thumb + 12px padding
+    m_episodeTable->setColumnWidth(kColThumb,    118);  // 102px thumb (~1.6x) + 16px padding
     m_episodeTable->setColumnWidth(kColProgress, 80);
     m_episodeTable->setColumnWidth(kColStatus,   60);
     m_episodeTable->setColumnWidth(kColAction,   36);
-    m_episodeTable->verticalHeader()->setDefaultSectionSize(64);
+    m_episodeTable->verticalHeader()->setDefaultSectionSize(84);
     m_episodeTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_episodeTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_episodeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -826,27 +830,40 @@ void StreamDetailView::buildUI()
     // stretch=0 in the Expanding-policy fight for leftover space.
     leftCol->addStretch();
 
-    contentRow->addLayout(leftCol, 3);
+    contentRow->addLayout(leftCol, 5);
 
-    // Right column: Sources pane. TheatreDownloadPanel is mounted beside it.
+    // THEATRE_DOWNLOAD_SIMPLIFY P4 — the inline right-hand "Sources" pane was
+    // removed; the episode table now reclaims the bulk of the row width
+    // (left:right stretch raised from 3:2 to 5:2). The QStackedLayout host
+    // (m_rightPaneStack) is KEPT — and still added to contentRow — because
+    // StreamPage mounts the season-pack TheatreDownloadPanel into it and slides
+    // that panel in/out over m_sourcesPanel; collapsing the stack to zero width
+    // would break the season Download slide-in panel (explicitly out of scope
+    // for this cleanup). The sources page itself is now an empty placeholder so
+    // the panel slide-in/out still has its counterpart widget.
     m_rightPaneStack = new QWidget(this);
     m_rightPaneStack->setObjectName(QStringLiteral("DetailRightPaneStack"));
     auto* rightStackLayout = new QStackedLayout(m_rightPaneStack);
     rightStackLayout->setContentsMargins(0, 0, 0, 0);
     rightStackLayout->setStackingMode(QStackedLayout::StackAll);
 
+    // Empty placeholder page (no Sources header / list) — keeps the stack page
+    // count and the slide-in target valid while the visible pane is gone.
     m_sourcesPanel = new QWidget(m_rightPaneStack);
     m_sourcesPanel->setObjectName(QStringLiteral("DetailSourcesPanel"));
-    auto* rightCol = new QVBoxLayout(m_sourcesPanel);
-    rightCol->setContentsMargins(0, 0, 0, 0);
-    rightCol->setSpacing(6);
+    rightStackLayout->addWidget(m_sourcesPanel);
 
-    m_sourcesHeader = new QLabel(tr("Sources"), m_sourcesPanel);
-    m_sourcesHeader->setStyleSheet(
-        "color: #e5e7eb; font-size: 13px; font-weight: 600; padding: 0 2px;");
-    rightCol->addWidget(m_sourcesHeader);
+    // m_sourcesHeader is retained (constructed off-layout, never shown) so the
+    // member stays non-null for devSnapshot() and the header decl is harmless.
+    m_sourcesHeader = new QLabel(tr("Sources"), this);
+    m_sourcesHeader->hide();
 
+    // m_sourcesList is retained (constructed off-layout, never shown) so the
+    // setStreamSources*/placeholder/toast passthroughs and the four source
+    // signal re-emits stay wired without a visible pane. The list is parented
+    // to m_sourcesPanel so it is owned + destroyed with the view.
     m_sourcesList = new tankostream::stream::StreamSourceList(m_sourcesPanel);
+    m_sourcesList->hide();
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::sourceActivated,
             this, &StreamDetailView::sourceActivated);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::addToTankorentRequested,
@@ -855,9 +872,11 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::directDownloadRequested);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::autoLaunchCancelRequested,
             this, &StreamDetailView::autoLaunchCancelRequested);
-    rightCol->addWidget(m_sourcesList, 1);
 
-    rightStackLayout->addWidget(m_sourcesPanel);
+    // m_rightPaneStack is still added to contentRow so the TheatreDownloadPanel
+    // (mounted into it by StreamPage) can slide in from the right and have room
+    // to render. Stretch 2 (vs the left column's 5) keeps the season-pack panel
+    // functional while the episode table takes the lion's share of the width.
     contentRow->addWidget(m_rightPaneStack, 2);
 
     root->addLayout(contentRow, 1);
@@ -901,6 +920,15 @@ void StreamDetailView::setStreamSources(
 
 void StreamDetailView::setStreamSourcesError(const QString& message)
 {
+    // THEATRE_DOWNLOAD_SIMPLIFY P4 — the Sources pane is gone, so route the
+    // error text (8 StreamPage callers use this as the generic "show an error"
+    // surface for auto-download / bulk failures) to the always-present status
+    // label instead of the now-hidden source list. The list write is kept
+    // (guarded, harmless) so devSnapshot + any residual reads stay consistent.
+    if (m_statusLabel && !message.isEmpty()) {
+        m_statusLabel->setText(message);
+        m_statusLabel->show();
+    }
     if (m_sourcesList) m_sourcesList->setError(message);
     if (m_movieDownloadBtn) m_movieDownloadBtn->setEnabled(false);
     refreshMovieDownloadState();
@@ -1169,7 +1197,7 @@ void StreamDetailView::populateEpisodeTable(int season)
     for (const auto& ep : episodes) {
         const int row = m_episodeTable->rowCount();
         m_episodeTable->insertRow(row);
-        m_episodeTable->setRowHeight(row, 64);
+        m_episodeTable->setRowHeight(row, 84);
 
         // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — col 0 checkbox cell. State synced
         // to m_selectedEpisodes via stateChanged slot below. Default unchecked
@@ -1244,14 +1272,15 @@ void StreamDetailView::populateEpisodeTable(int season)
         numItem->setData(Qt::UserRole + 1, season);
         m_episodeTable->setItem(row, kColEpisode, numItem);
 
-        // Column 1 — thumbnail (64x36). QLabel as cell widget: disk-cache
-        // hit paints synchronously; miss kicks an async download via NAM.
+        // Column 1 — thumbnail (102x58, ~1.6x of the prior 64x36). QLabel as
+        // cell widget: disk-cache hit paints synchronously; miss kicks an async
+        // download via NAM.
         auto* thumbHolder = new QWidget(m_episodeTable);
         auto* thumbLayout = new QHBoxLayout(thumbHolder);
         thumbLayout->setContentsMargins(6, 0, 6, 0);
         thumbLayout->setSpacing(0);
         auto* thumbLabel = new QLabel(thumbHolder);
-        thumbLabel->setFixedSize(64, 36);
+        thumbLabel->setFixedSize(102, 58);
         thumbLabel->setAlignment(Qt::AlignCenter);
         thumbLabel->setStyleSheet(
             "QLabel { background: rgba(255,255,255,0.05);"
@@ -1279,7 +1308,7 @@ void StreamDetailView::populateEpisodeTable(int season)
         auto* tLabel = new QLabel(ep.title, titleCell);
         tLabel->setWordWrap(false);
         tLabel->setStyleSheet(
-            "color: #e0e0e0; font-size: 12px; font-weight: 500; background: transparent;");
+            "color: #e0e0e0; font-size: 13px; font-weight: 500; background: transparent;");
         tLabel->setTextFormat(Qt::PlainText);
         titleLayout->addWidget(tLabel);
 
@@ -1287,14 +1316,17 @@ void StreamDetailView::populateEpisodeTable(int season)
             auto* oLabel = new QLabel(ep.overview, titleCell);
             oLabel->setWordWrap(true);
             oLabel->setStyleSheet(
-                "color: rgba(255,255,255,0.45); font-size: 10px;"
+                "color: rgba(255,255,255,0.45); font-size: 11px;"
                 "  font-style: italic; background: transparent;");
             oLabel->setTextFormat(Qt::PlainText);
-            // 2-line clamp via QFontMetrics — consistent with Batch 3.3's
-            // description approach. Overflow is silently clipped (no toggle
-            // here; episode rows aren't interactive beyond click-to-play).
+            // THEATRE_DOWNLOAD_SIMPLIFY P4 — synopsis bumped to 11px and the
+            // clamp raised from 2 to 3 wrapped lines now that the taller (84px)
+            // rows have the vertical room. QFontMetrics reads the (larger)
+            // label font, so the 3-line height tracks the new size. Overflow is
+            // silently clipped (no toggle; episode rows aren't interactive
+            // beyond click-to-play).
             const QFontMetrics fm(oLabel->font());
-            oLabel->setMaximumHeight(fm.lineSpacing() * 2);
+            oLabel->setMaximumHeight(fm.lineSpacing() * 3);
             titleLayout->addWidget(oLabel);
         } else {
             titleLayout->addStretch();
@@ -2974,18 +3006,18 @@ void StreamDetailView::applyEpisodeThumbnail(QLabel* target, const QString& imag
     QPixmap pm(imagePath);
     if (pm.isNull()) return;
 
-    // Scale-to-fill with smooth transform and center-crop to 64x36 so
+    // Scale-to-fill with smooth transform and center-crop to 102x58 so
     // landscape thumbnails don't distort. Target size matches the fixed
-    // QLabel size set during row construction.
-    const QPixmap scaled = pm.scaled(64, 36, Qt::KeepAspectRatioByExpanding,
+    // QLabel size set during row construction (~1.6x of the prior 64x36).
+    const QPixmap scaled = pm.scaled(102, 58, Qt::KeepAspectRatioByExpanding,
                                      Qt::SmoothTransformation);
-    if (scaled.width() == 64 && scaled.height() == 36) {
+    if (scaled.width() == 102 && scaled.height() == 58) {
         target->setPixmap(scaled);
         return;
     }
-    const int cx = (scaled.width()  - 64) / 2;
-    const int cy = (scaled.height() - 36) / 2;
-    target->setPixmap(scaled.copy(cx, cy, 64, 36));
+    const int cx = (scaled.width()  - 102) / 2;
+    const int cy = (scaled.height() - 58) / 2;
+    target->setPixmap(scaled.copy(cx, cy, 102, 58));
 }
 
 void StreamDetailView::fetchEpisodeThumbnail(const QString& imdbId,
