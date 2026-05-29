@@ -4,6 +4,14 @@
 # asking Agent 0 to archive. Debounced once per day per congress via .claude/.congress-warned-<N> markers.
 # Target runtime: < 100ms. Always exit 0 — never block prompt submission.
 
+# Engine guard (2026-05-29, Agent 1 — multi-model brotherhood infra). Same
+# rationale as session-brief.sh: a non-Anthropic endpoint (DeepSeek / Agent 9)
+# rejects injected additionalContext as a `system`-role messages entry (400).
+# Emit nothing when routed off api.anthropic.com; Anthropic sessions unaffected.
+case "${ANTHROPIC_BASE_URL:-}" in
+  *deepseek*) exit 0 ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT" 2>/dev/null || exit 0
 

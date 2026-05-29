@@ -4,6 +4,18 @@
 # Stdout from SessionStart hooks is injected into the session as a system-reminder.
 # Target runtime: < 500ms total. Always exit 0 — never block session start.
 
+# Engine guard (2026-05-29, Agent 1 — multi-model brotherhood infra).
+# When this session is routed to a non-Anthropic endpoint via ANTHROPIC_BASE_URL
+# (e.g. DeepSeek / Agent 9), SessionStart additionalContext is rejected by the
+# stricter endpoint: it arrives as a `system`-role entry in the messages array,
+# which only api.anthropic.com tolerates. DeepSeek returns
+# `400 ... messages[1].role: unknown variant system`. Emit nothing there so the
+# DeepSeek window starts clean. Anthropic sessions (ANTHROPIC_BASE_URL empty or
+# api.anthropic.com) are unaffected. Hooks inherit the Claude Code env.
+case "${ANTHROPIC_BASE_URL:-}" in
+  *deepseek*) exit 0 ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT" 2>/dev/null || exit 0
 
