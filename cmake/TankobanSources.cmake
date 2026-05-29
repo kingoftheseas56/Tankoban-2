@@ -209,6 +209,7 @@ set(SOURCES
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/StreamDownloadIndex.cpp
     src/core/stream/QualityScorer.cpp
+    src/core/stream/AutoSourcePicker.cpp
     src/core/stream/UnifiedProgressStore.cpp
     src/core/stream/StreamRescueScanner.cpp
     src/core/stream/StreamBulkPlan.cpp
@@ -410,6 +411,7 @@ set(HEADERS
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/StreamDownloadIndex.h
     src/core/stream/QualityScorer.h
+    src/core/stream/AutoSourcePicker.h
     src/core/stream/UnifiedProgressStore.h
     src/core/stream/StreamRescueScanner.h
     src/core/stream/StreamBulkPlan.h

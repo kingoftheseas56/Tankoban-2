@@ -14,6 +14,7 @@
 // StreamPage; Theatre is download-only. Includes removed (files still on
 // disk pending Phase 2 deletion).
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/stream/AutoSourcePicker.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/torrent/TorrentEngine.h"
 #include "stream/StreamLibraryLayout.h"
@@ -3074,7 +3075,7 @@ void StreamPage::onSelectedEpisodesDownloadRequested(int season, const QList<int
 void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
 {
     if (!m_detailView) return;
-    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, QList<int>{episode});
+    startAutoDownload(m_detailView->currentImdb(), QStringLiteral("series"), season, episode);
 }
 
 // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie auto-dispatch fast
@@ -3216,6 +3217,112 @@ void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPick
     config.season          = season;
     // F9 fix 2026-05-19: pass magnet URI so startDownload can self-defend.
     config.magnetUri       = choice.magnetUri;
+
+    m_torrentClient->startDownload(hash, config);
+}
+
+// THEATRE_DOWNLOAD_SIMPLIFY P1.T2 (2026-05-29) — silent auto-download entry.
+// Mirrors onPlayRequested's one-shot streamsReady idiom (StreamPage.cpp ~2308-
+// 2400): disconnect any prior handler, connect a fresh self-disconnecting
+// lambda, build the Torrentio request id, then load(). The handler runs the
+// auto-pick + startDownload in finishAutoDownloadPick().
+void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaType,
+                                   int season, int episode)
+{
+    if (!m_streamAggregator || !m_torrentClient || imdbId.isEmpty())
+        return;
+
+    m_pendingAuto = PendingAutoDownload{};
+    m_pendingAuto.active         = true;
+    m_pendingAuto.imdbId         = imdbId;
+    m_pendingAuto.mediaType      = mediaType;
+    m_pendingAuto.season         = season;
+    m_pendingAuto.episode        = episode;
+    m_pendingAuto.runtimeMinutes = 0;  // unknown -> AutoSourcePicker skips size guardrail
+
+    disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
+               this, nullptr);
+    connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady, this,
+        [this](const QList<tankostream::addon::Stream>& streams,
+               const QHash<QString, QString>& addonsById) {
+            disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
+                       this, nullptr);
+            finishAutoDownloadPick(streams, addonsById);
+        });
+
+    tankostream::stream::StreamLoadRequest req;
+    req.type = (mediaType == "movie") ? QStringLiteral("movie") : QStringLiteral("series");
+    const int kitsuId = (mediaType != QLatin1String("movie") && m_metaAggregator)
+                            ? m_metaAggregator->kitsuIdForSeries(imdbId)
+                            : -1;
+    if (mediaType == "movie") {
+        req.id = imdbId;
+    } else if (kitsuId > 0) {
+        req.id = QStringLiteral("kitsu:%1:%2").arg(kitsuId).arg(qMax(1, episode));
+    } else {
+        req.id = imdbId + QLatin1Char(':') + QString::number(qMax(1, season))
+                        + QLatin1Char(':') + QString::number(qMax(1, episode));
+    }
+    m_streamAggregator->load(req);
+}
+
+// One-shot streamsReady handler for an active auto-download. Converts the
+// Torrentio results into AutoSourcePicker candidates, picks the best 1080p,
+// resolves the infoHash, and starts the download stamped theatre:<imdbId>.
+void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>& streams,
+                                        const QHash<QString, QString>& addonsById)
+{
+    if (!m_pendingAuto.active) return;
+    const PendingAutoDownload ctx = m_pendingAuto;
+    m_pendingAuto.active = false;  // consume
+
+    const auto choices = tankostream::stream::buildPickerChoices(streams, addonsById);
+
+    QList<tankostream::stream::SourceCandidate> cands;
+    cands.reserve(choices.size());
+    for (const auto& c : choices) {
+        tankostream::stream::SourceCandidate sc;
+        sc.title       = c.displayTitle;
+        sc.seeders     = c.seeders;
+        sc.sizeBytes   = c.sizeBytes;
+        sc.qualitySort = c.qualitySort;
+        cands.append(sc);
+    }
+
+    const std::optional<int> picked =
+        tankostream::stream::AutoSourcePicker::pick(cands, ctx.runtimeMinutes);
+    if (!picked.has_value()) {
+        // No acceptable 1080p source. (P1.T4 refines this into a tile state;
+        // for now surface it in the sources panel.)
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("No 1080p source found"));
+        return;
+    }
+
+    const tankostream::stream::StreamPickerChoice& chosen = choices.at(*picked);
+
+    QString hash = chosen.infoHash;
+    if (hash.isEmpty() && !chosen.magnetUri.isEmpty())
+        hash = m_torrentClient->resolveMetadata(chosen.magnetUri);
+    if (hash.isEmpty()) {
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("Could not resolve source"));
+        return;
+    }
+
+    // Remember what this download is for (P1.T3 reads this to wire progress).
+    m_autoDownloadByHash.insert(hash, ctx);
+
+    AddTorrentConfig config;
+    config.category        = QStringLiteral("videos");
+    config.destinationPath = m_torrentClient->defaultPaths().value(QStringLiteral("videos"));
+    config.contentLayout   = QStringLiteral("original");
+    config.streamGroupId   = QStringLiteral("theatre:%1").arg(ctx.imdbId);
+    config.sequential      = false;
+    config.startPaused     = false;
+    config.imdbId          = ctx.imdbId;
+    config.season          = (ctx.mediaType == QLatin1String("movie")) ? 0 : ctx.season;
+    config.magnetUri       = chosen.magnetUri;
 
     m_torrentClient->startDownload(hash, config);
 }
@@ -4058,11 +4165,6 @@ void StreamPage::beginPlayOrDownload(const QString& imdbId,
         return;
     }
 
-    // No specific source chosen â€” open the per-episode/movie download flow
-    // exactly as the [Download] affordance does. Series episodes route to the
-    // bulk single-episode collector; movies fall through to the source-picker
-    // panel (theatreDownloadRequested wiring) which the user can drive.
-    if (mediaType == QLatin1String("series") && season > 0 && episode > 0) {
-        onSingleEpisodeDownloadRequested(season, episode);
-    }
+    // THEATRE_DOWNLOAD_SIMPLIFY P1.T2 — silent auto-download (episode or movie).
+    startAutoDownload(imdbId, mediaType, season, episode);
 }

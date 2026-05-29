@@ -317,6 +317,28 @@ private:
     // user-selected stream instead of the auto-picked top-seeded.
     void onDirectDownloadRequested(const tankostream::stream::StreamPickerChoice& choice);
 
+    // THEATRE_DOWNLOAD_SIMPLIFY P1.T2 (2026-05-29) — silent auto-download.
+    // Clicking Download fetches Torrentio sources, auto-picks the best 1080p
+    // via AutoSourcePicker, and starts the torrent stamped streamGroupId=
+    // theatre:<imdbId> (keeps it off the Tankorent page). No picker, no list.
+    struct PendingAutoDownload {
+        bool    active        = false;
+        QString imdbId;
+        QString mediaType;    // "series" | "movie"
+        int     season        = 0;
+        int     episode       = 0;
+        int     runtimeMinutes = 0;  // 0 = unknown -> size guardrail skipped
+    };
+    PendingAutoDownload m_pendingAuto;
+    // infoHash -> what that download is for (used by the P1.T3 progress/
+    // completion wiring to map a torrent back to its episode).
+    QHash<QString, PendingAutoDownload> m_autoDownloadByHash;
+
+    void startAutoDownload(const QString& imdbId, const QString& mediaType,
+                           int season, int episode);
+    void finishAutoDownloadPick(const QList<tankostream::addon::Stream>& streams,
+                                const QHash<QString, QString>& addonsById);
+
     // Internal helper used by the three slots above. episodeFilter non-empty
     // restricts the dispatch to those episode numbers only (whole-season when empty).
     void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
