@@ -2208,6 +2208,13 @@ void TankorentPage::refreshTransfers()
         if (!t.streamGroupId.isEmpty())
             continue;
 
+        // THEATRE_DOWNLOAD_SIMPLIFY P2.T5 (2026-05-29) — show-bound downloads
+        // (Theatre/stream: non-empty imdbId) are managed by their mode's UI and
+        // must not appear in the standalone Tankorent page. Manual torrent adds
+        // have an empty imdbId and still render here.
+        if (!t.imdbId.isEmpty())
+            continue;
+
         const QString hashKey = t.infoHash.toLower();
         if (!hashKey.isEmpty()) {
             activeByHash.insert(hashKey, t);

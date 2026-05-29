@@ -43,6 +43,7 @@ struct TorrentInfo {
     qint64  totalWanted = 0;
     qint64  addedAt     = 0;
     QString streamGroupId;
+    QString imdbId;        // show binding ("tt..." / kitsu seriesId); empty = standalone torrent. Theatre/stream downloads set this; manual Tankorent adds leave it empty. Used to keep show-bound downloads off the Tankorent page.
     bool    sequential     = false;
     bool    forceStarted   = false;
     int     queuePosition  = -1;

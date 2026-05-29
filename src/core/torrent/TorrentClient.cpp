@@ -2959,6 +2959,7 @@ QList<TorrentInfo> TorrentClient::listActive() const
                                  ? row.addedAt.toMSecsSinceEpoch()
                                  : 0;
         info.streamGroupId = row.streamGroupId;
+        info.imdbId        = row.imdbId;
         info.sequential    = row.sequential;
         info.errorMessage  = row.errorMessage;
         info.legacyNoMagnet = row.legacyNoMagnet;  // Phase 4.1 — surfaces in Tankorent transfers row "Needs re-add"
