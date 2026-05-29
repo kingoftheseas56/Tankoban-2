@@ -1608,6 +1608,13 @@ ComicsPage::ContinueLabels ComicsPage::continueLabelsForRecord(
         ? QStringLiteral("Page %1/%2").arg(page + 1).arg(pageCount)
         : QStringLiteral("Page %1").arg(page + 1);
 
+    // Volume X cbzs are named "Volume X.cbz" (no digit), so the numeric volRe
+    // below misses them and the tile fell back to a bare "Page X/Y". Surface the
+    // synthetic-volume label explicitly, matching the series-view tile.
+    if (chapterName.compare(QStringLiteral("Volume X"), Qt::CaseInsensitive) == 0) {
+        return { rec.title, QStringLiteral("Vol X - %1").arg(pageLabel) };
+    }
+
     static const QRegularExpression volRe(
         QStringLiteral("(?:^|[\\s_-])(?:v|vol(?:ume)?)\\s*(\\d{1,3})\\b"),
         QRegularExpression::CaseInsensitiveOption);
@@ -3187,7 +3194,10 @@ void ComicsPage::refreshContinueStrip()
                 QStringLiteral("(?:^|[\\s_-])(?:v|vol(?:ume)?)\\s*(\\d{1,3})\\b"),
                 QRegularExpression::CaseInsensitiveOption);
             const auto volMatch = volRe.match(fileBase);
-            if (volMatch.hasMatch()) {
+            if (fileBase.compare(QStringLiteral("Volume X"), Qt::CaseInsensitive) == 0) {
+                // Volume X has no digit for volRe to catch — label it explicitly.
+                subtitle = QStringLiteral("Vol X - %1").arg(pageLabel);
+            } else if (volMatch.hasMatch()) {
                 bool ok = false;
                 const int vol = volMatch.captured(1).toInt(&ok);
                 if (ok && vol > 0) {
