@@ -1647,16 +1647,40 @@ int ComicsPage::anilistIdForDownloadEntry(const QString& sourceId,
     // non-routable tile (still renders title + cover, click is a no-op).
     if (sourceId.isEmpty() || seriesId.isEmpty()) return 0;
 
-    if (sourceId == QLatin1String("tankoyomi_premium") && m_premiumCatalog) {
-        if (auto entry = m_premiumCatalog->entryById(seriesId)) {
-            return entry->anilistId;
-        }
-    }
-
+    // 1. "anilist_<N>" synthesized slug carries the id directly. Checked FIRST
+    //    so a stale/zero Premium-catalog entry can't shadow the real id.
     if (seriesId.startsWith(QLatin1String("anilist_"))) {
         bool ok = false;
         const int n = seriesId.mid(QStringLiteral("anilist_").size()).toInt(&ok);
         if (ok && n > 0) return n;
+    }
+
+    // 2. Premium catalog entry by id.
+    if (sourceId == QLatin1String("tankoyomi_premium") && m_premiumCatalog) {
+        if (auto entry = m_premiumCatalog->entryById(seriesId)) {
+            if (entry->anilistId > 0) return entry->anilistId;
+        }
+    }
+
+    // 3. MangaFire catalog slug → catalog anilistId, SOURCE-AGNOSTIC.
+    //    COMICS_LIBRARY_DEDUP 2026-05-29 (Agent 1). A WeebCentral-packed or
+    //    MangaFire download registers its seriesId as the MangaFire slug
+    //    ("one-piece") regardless of sourceId ("weebcentral" vs
+    //    "mangafire_catalog"). resolveDisplayTitle only consults the catalog
+    //    when sourceId=="mangafire_catalog", so a "weebcentral:one-piece" bucket
+    //    resolved to neither an id nor a title and split into its own
+    //    "raw:weebcentral:one-piece" group — duplicating the series tile.
+    //    Resolving the catalog slug here (any source) collapses every source's
+    //    bucket for the same series onto one "anilist:<id>" canonical key, with
+    //    no dependency on a bookmark existing.
+    {
+        const QString jsonPath = m_localCatalogIndex.filePathForSlug(seriesId);
+        if (!jsonPath.isEmpty()) {
+            const auto cat =
+                tankoban::manga::LocalMangaCatalogLoader::loadFromFile(jsonPath);
+            if (cat.has_value() && cat->anilistId > 0)
+                return cat->anilistId;
+        }
     }
 
     return 0;
