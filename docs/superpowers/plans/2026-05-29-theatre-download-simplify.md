@@ -495,3 +495,27 @@ git commit -m "[Agent 4 (Opus), THEATRE_DOWNLOAD_SIMPLIFY]: P4.T7 — delete Tor
 **Type consistency:** `SourceCandidate{title,seeders,sizeBytes,qualitySort}` defined Task 1, mapped from `StreamPickerChoice` (fields `displayTitle/seeders/sizeBytes/qualitySort` per `StreamSourceChoice.h`) in Task 2. `AutoSourcePicker::pick(QList<SourceCandidate>, int)→optional<int>` used consistently. `streamGroupId="theatre:<imdbId>"` stamp defined Task 2, relied on Task 5. `TransferQueue`/`addMagnetForShow` reused as-is (no signature invention).
 
 **Open verification carried into execution (not gaps):** whether `TorrentInfo` exposes `imdbId` (Task 5 Step 2 greps before acting); whether single-episode progress wiring already exists (Task 3 Step 1 greps before adding). Both are guarded with a grep-first step, not assumptions.
+
+---
+
+## EXECUTION ADDENDUM (discovered 2026-05-29 during P1.T2/T3 grounding) — READ BEFORE T3/T5
+
+**Status:** P1.T1 DONE (`88bd12a`+`8819d5c`). P1.T2 committed (`263c2f2`) but needs the streamGroupId correction below in T3.
+
+**Key discovery — the progress/completion lifecycle is ALREADY WIRED in `TorrentClient`, gated on an EMPTY `streamGroupId`:**
+- `TorrentClient::onMetadataReady` (~3340-3358) registers a Pending episode/movie when `row->imdbId` is set.
+- `TorrentClient::onPieceFinished` (3361-3416) parses the torrent's filenames via `StreamPackParser::parsePack(files, imdbId, season)` to derive each episode, then calls `m_streamDownloadIndex->updateEpisodeProgress(imdbId, season, episode, pct)`. **This drives the `EpisodeTile` 3-state chip already** (tile subscribes to `entryStateChanged`).
+- `onTorrentFinished` → `registerEpisode`/`registerMovie` (Complete + real path) — same parse-based episode derivation.
+- **THE GATE (TorrentClient.cpp:3373-3379):** these fire only when `row->imdbId` is non-empty **AND `row->streamGroupId` is EMPTY** (non-empty streamGroupId → early-return, "bulk-cohort path handles its own progress").
+
+**Consequence — T2's `streamGroupId="theatre:<imdbId>"` stamp is WRONG.** It suppresses the very progress tracking we need. **T3 must change `finishAutoDownloadPick` to leave `config.streamGroupId` EMPTY** (matching `onDirectDownloadRequested`). With imdbId set + streamGroupId empty, the whole lifecycle (pending → progress → complete → tile) works for free — T3 is then mostly **verify via build + live smoke** (now end-to-end testable: A0's `ffmpeg_sidecar` deploy fix `b7acc97` is in, so completed downloads play).
+
+**Re-home mode separation to `imdbId` (this becomes the PRIMARY mechanism, not belt-and-suspenders):** since Theatre downloads now carry empty streamGroupId, the existing `TankorentPage` filter (`if(!t.streamGroupId.isEmpty()) continue;`) no longer hides them. **P2.T5 must add `if(!t.imdbId.isEmpty()) continue;` to TankorentPage's render loop** (show-bound torrent = not Tankorent's). To avoid a regression window, fold this TankorentPage filter into the SAME build as the T3 stamp-removal (i.e., do T3 + T5 together).
+
+**Also fold into T3 (from T2 code-quality review of `263c2f2`):**
+- **I1:** `startAutoDownload` must `disconnect`+`connect` the `streamError` signal (mirror `onPlayRequested` ~2388-2399) with an auto-path handler that clears `m_pendingAuto.active` + shows the error. Currently absent.
+- **M1:** use `QLatin1String("movie")` consistently in `startAutoDownload` (one plain `"movie"` literal slipped in).
+- **M2/M4:** `m_autoDownloadByHash` is now **dead weight** — TorrentClient derives the episode via `parsePack`, so StreamPage doesn't need the hash→episode map. **Remove it** (and its insert in `finishAutoDownloadPick`) in T3.
+- **M3:** n/a once the streamGroupId stamp is removed.
+
+**Net effect:** T3 = (1) empty the streamGroupId stamp, (2) remove `m_autoDownloadByHash`, (3) add the I1 streamError handler + M1 fix, (4) add the TankorentPage `imdbId` filter (P2.T5), (5) one full build, (6) live end-to-end smoke: click Download on an episode → tile goes pending→%→Downloaded → click → plays from disk; confirm it does NOT appear in the Tankorent page. This collapses most of T3+T4+T5 into one verified build.
