@@ -10,6 +10,9 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QStyle>
+#include <QGridLayout>
+#include <QSpacerItem>
+#include <QSizePolicy>
 
 namespace ContextMenuHelper {
 
@@ -42,25 +45,44 @@ RemoveChoice confirmRemoveWithFile(QWidget* parent,
     box.setText(message);
     box.setIcon(QMessageBox::Warning);
     box.setStyleSheet(
-        "QMessageBox { background: #1e1e1e; color: rgba(238,238,238,0.86); }"
+        "QMessageBox { background: #1e1e1e; }"
+        "QLabel { color: rgba(238,238,238,0.86); font-size: 13px; }"
         "QPushButton {"
-        "  min-width: 80px; padding: 6px 16px;"
+        "  min-width: 128px; padding: 8px 14px; margin: 0 3px;"
         "  background: rgba(255,255,255,0.08);"
         "  color: rgba(238,238,238,0.86);"
         "  border: 1px solid rgba(255,255,255,0.12);"
-        "  border-radius: 4px;"
+        "  border-radius: 6px;"
         "}"
         "QPushButton:hover { background: rgba(255,255,255,0.14); }"
-        "QPushButton[destructive=\"true\"] { color: #e53935; }");
+        "QPushButton:default { border-color: rgba(255,255,255,0.30); }"
+        "QPushButton[destructive=\"true\"] {"
+        "  color: #ff6b6b; border-color: rgba(229,57,53,0.45);"
+        "}"
+        "QPushButton[destructive=\"true\"]:hover {"
+        "  background: rgba(229,57,53,0.16);"
+        "}");
+    // Shorter labels than the prose originals so three buttons fit without
+    // clipping. "Remove from library" keeps the file; "Delete file" (red) also
+    // removes it from disk.
     QPushButton* libBtn = box.addButton(
-        QObject::tr("Remove from library only"), QMessageBox::AcceptRole);
+        QObject::tr("Remove from library"), QMessageBox::AcceptRole);
     QPushButton* fileBtn = box.addButton(
-        QObject::tr("Delete the file too"), QMessageBox::DestructiveRole);
+        QObject::tr("Delete file"), QMessageBox::DestructiveRole);
     fileBtn->setProperty("destructive", true);
     fileBtn->style()->unpolish(fileBtn);
     fileBtn->style()->polish(fileBtn);
     QPushButton* cancel = box.addButton(QMessageBox::Cancel);
     box.setDefaultButton(cancel);
+    // QMessageBox sizes itself to the (short) message text, which squeezes the
+    // three buttons until their labels clip. Force a comfortable minimum width
+    // by spanning a spacer across the dialog's grid so every button renders in
+    // full.
+    if (auto* grid = qobject_cast<QGridLayout*>(box.layout())) {
+        grid->addItem(new QSpacerItem(460, 0, QSizePolicy::Minimum,
+                                      QSizePolicy::Expanding),
+                      grid->rowCount(), 0, 1, grid->columnCount());
+    }
     box.exec();
     if (box.clickedButton() == libBtn)  return RemoveChoice::RemoveFromLibrary;
     if (box.clickedButton() == fileBtn) return RemoveChoice::DeleteFile;
