@@ -36,11 +36,13 @@ def _to_isbn13(isbn):
 
 
 def _iso_date(text):
-    m = _DATE_RE.search(text or "")
-    if not m:
+    # A volume row carries the Japanese date then the English date; take the LAST
+    # match so englishReleaseDate is the English-edition date, not the Japanese one.
+    matches = _DATE_RE.findall(text or "")
+    if not matches:
         return ""
     try:
-        return datetime.strptime(m.group(1), "%B %d, %Y").date().isoformat()
+        return datetime.strptime(matches[-1], "%B %d, %Y").date().isoformat()
     except ValueError:
         return ""
 

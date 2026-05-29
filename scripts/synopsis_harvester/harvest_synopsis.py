@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from synopsis_harvester.wikipedia_volumes import parse_volume_table
 from synopsis_harvester.synopsis_sources import resolve_synopsis
 from synopsis_harvester.enrichment_writer import build_enrichment, write_enrichment
+from synopsis_harvester.clean import normalize_text, strip_series_boilerplate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WIKI_HEADERS = {"User-Agent": "TankobanSynopsisHarvester/1.0"}
@@ -67,6 +68,14 @@ def harvest(series_id, wiki_article=None, delay=0.7):
             "englishReleaseDate": wv.get("englishReleaseDate", ""),
             "synopsis": synopsis,
         })
+
+    # Clean: normalize each blurb, then strip the franchise marketing intro that
+    # the publisher prepends to every volume (so each row leads with real content).
+    for r in rows:
+        r["synopsis"] = normalize_text(r["synopsis"])
+    stripped = strip_series_boilerplate([r["synopsis"] for r in rows])
+    for r, s in zip(rows, stripped):
+        r["synopsis"] = s
 
     today = datetime.date.today().isoformat()
     doc = build_enrichment(series_id, anilist_id, title, rows, today)
