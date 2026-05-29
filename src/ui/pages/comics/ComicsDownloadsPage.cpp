@@ -9,10 +9,20 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
 #include <QMenu>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPixmap>
+#include <QPixmapCache>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
+#include <QSizePolicy>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -20,6 +30,73 @@
 
 // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9)
 #include "../ComicsPage.h"
+
+namespace {
+
+// Header-free flow layout (canonical Qt pattern; no Q_OBJECT needed because it
+// adds no signals/slots) — wraps child widgets left-to-right with fixed spacing
+// and reflows on resize via heightForWidth. Used for the volume-chip grid.
+class FlowLayout : public QLayout {
+public:
+    explicit FlowLayout(int hSpacing = 8, int vSpacing = 8)
+        : m_hSpace(hSpacing), m_vSpace(vSpacing) { setContentsMargins(0, 0, 0, 0); }
+    ~FlowLayout() override { QLayoutItem* it; while ((it = takeAt(0))) delete it; }
+
+    void addItem(QLayoutItem* item) override { m_items.append(item); }
+    int count() const override { return m_items.size(); }
+    QLayoutItem* itemAt(int i) const override { return m_items.value(i); }
+    QLayoutItem* takeAt(int i) override {
+        return (i >= 0 && i < m_items.size()) ? m_items.takeAt(i) : nullptr;
+    }
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return doLayout(QRect(0, 0, width, 0), true); }
+    void setGeometry(const QRect& rect) override { QLayout::setGeometry(rect); doLayout(rect, false); }
+    QSize sizeHint() const override { return minimumSize(); }
+    QSize minimumSize() const override {
+        QSize s;
+        for (QLayoutItem* item : m_items) s = s.expandedTo(item->minimumSize());
+        return s;
+    }
+
+private:
+    int doLayout(const QRect& rect, bool testOnly) const {
+        int x = rect.x(), y = rect.y(), lineHeight = 0;
+        for (QLayoutItem* item : m_items) {
+            const QSize hint = item->sizeHint();
+            int nextX = x + hint.width() + m_hSpace;
+            if (nextX - m_hSpace > rect.right() && lineHeight > 0) {
+                x = rect.x();
+                y += lineHeight + m_vSpace;
+                nextX = x + hint.width() + m_hSpace;
+                lineHeight = 0;
+            }
+            if (!testOnly)
+                item->setGeometry(QRect(QPoint(x, y), hint));
+            x = nextX;
+            lineHeight = qMax(lineHeight, hint.height());
+        }
+        return y + lineHeight - rect.y();
+    }
+
+    QList<QLayoutItem*> m_items;
+    int m_hSpace;
+    int m_vSpace;
+};
+
+// Host widget that forwards heightForWidth to its FlowLayout. A parent
+// QBoxLayout does NOT consult a child *layout's* heightForWidth, but it does
+// consult a child *widget's* (once the widget's size policy opts in) — so the
+// flow must live inside a widget or tall chip grids clip to one row.
+class FlowWidget : public QWidget {
+public:
+    using QWidget::QWidget;
+    int heightForWidth(int w) const override {
+        return layout() ? layout()->heightForWidth(w) : QWidget::heightForWidth(w);
+    }
+};
+
+} // namespace
 
 ComicsDownloadsPage::ComicsDownloadsPage(QWidget* parent)
     : QFrame(parent)
@@ -138,6 +215,65 @@ void ComicsDownloadsPage::updateEmptyState()
     m_emptyState->setVisible(!anyContent);
 }
 
+QWidget* ComicsDownloadsPage::makeCoverWidget(const QString& coverUrl, const QString& title)
+{
+    auto* pl = new QLabel;
+    pl->setObjectName("ComicsDownloadsCover");
+    pl->setFixedSize(110, 150);  // manga 2:3 native (feedback_bigger_manga_covers)
+    pl->setScaledContents(true);
+    pl->setAlignment(Qt::AlignCenter);
+    pl->setWordWrap(true);
+    pl->setStyleSheet(
+        "QLabel#ComicsDownloadsCover {"
+        "  border-top-left-radius: 12px; border-bottom-left-radius: 12px;"
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+        "    stop:0 rgba(255,255,255,0.10), stop:1 rgba(255,255,255,0.03));"
+        "  color: rgba(255,255,255,0.45); font-size: 9pt; padding: 6px;"
+        "}");
+    pl->setText(title);  // placeholder until art loads
+
+    if (coverUrl.isEmpty())
+        return pl;
+
+    // Sync hit from the process-global cache the series view also fills.
+    QPixmap cached;
+    if (QPixmapCache::find(coverUrl, &cached)) {
+        pl->setText(QString());
+        pl->setPixmap(cached.scaled(110, 150, Qt::KeepAspectRatioByExpanding,
+                                    Qt::SmoothTransformation));
+        return pl;
+    }
+
+    if (!m_coverNam)
+        m_coverNam = new QNetworkAccessManager(this);
+    QNetworkRequest req((QUrl(coverUrl)));
+    // Browser UA — Fandom (static.wikia.nocookie.net) 403s non-browser agents;
+    // mirrors ComicsSeriesView::loadCoverUrlForVolume.
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QString::fromLatin1(
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply* reply = m_coverNam->get(req);
+    QPointer<QLabel> guard(pl);  // auto-nulls if the card is torn down mid-fetch
+    connect(reply, &QNetworkReply::finished, this, [reply, coverUrl, guard]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError)
+            return;
+        QPixmap pm;
+        if (!pm.loadFromData(reply->readAll()))
+            return;
+        QPixmapCache::insert(coverUrl, pm);
+        if (guard) {
+            guard->setText(QString());
+            guard->setPixmap(pm.scaled(110, 150, Qt::KeepAspectRatioByExpanding,
+                                       Qt::SmoothTransformation));
+        }
+    });
+    return pl;
+}
+
 void ComicsDownloadsPage::refresh()
 {
     if (!m_sectionBodyLayout)
@@ -210,12 +346,10 @@ void ComicsDownloadsPage::refresh()
     struct SeriesCard {
         QString displayTitle;
         qint64  newestAddedAt = 0;
-        // Each row: Vol. N (Source) - filename (or Ch. N - filename for legacy)
-        struct Row {
-            QString label;       // "Vol. N (Source)" or "Ch. N (Source)"
-            QString fileName;    // bare filename, e.g. "One Piece v07.cbz"
-        };
-        QList<Row> rows;
+        // Deduped across all sources in the canonical group; rendered sorted as
+        // "Vol N" chips. Legacy (volumeNumber == 0) entries fall into chapterIds.
+        QSet<int>     volumeNumbers;
+        QSet<QString> chapterIds;
     };
     std::map<SeriesKey, SeriesCard> cards;
 
@@ -255,28 +389,14 @@ void ComicsDownloadsPage::refresh()
             if (it == rawSeriesEntries.constEnd())
                 continue;
 
-            const int sep = rawKey.indexOf(QLatin1Char(':'));
-            const QString srcId = (sep > 0) ? rawKey.left(sep) : QString();
-            const QString srcLabel = m_comicsPage
-                ? ComicsPage::resolveSourceLabel(srcId)
-                : srcId;
-
             for (const auto& e : *it) {
                 card.newestAddedAt = std::max(card.newestAddedAt, e.addedAt);
-
-                const QString bareName = QFileInfo(e.canonicalPath).fileName();
-                QString volOrChLabel;
-                if (e.volumeNumber > 0) {
-                    volOrChLabel = QStringLiteral("Vol. %1 (%2)").arg(e.volumeNumber).arg(srcLabel);
-                } else {
-                    // Legacy chapter entries.
-                    volOrChLabel = QStringLiteral("Ch. %1 (%2)").arg(e.chapterId).arg(srcLabel);
-                }
-
-                SeriesCard::Row row;
-                row.label    = volOrChLabel;
-                row.fileName = bareName;
-                card.rows.append(row);
+                // Dedup across sources; sorted at render. Legacy chapter entries
+                // (volumeNumber == 0) collect separately.
+                if (e.volumeNumber > 0)
+                    card.volumeNumbers.insert(e.volumeNumber);
+                else if (!e.chapterId.isEmpty())
+                    card.chapterIds.insert(e.chapterId);
             }
         }
 
@@ -303,48 +423,84 @@ void ComicsDownloadsPage::refresh()
         const SeriesCard& card = pair.second;
         const QStringList& rawKeys = keyToSeriesKeys[pair.first];
 
+        const QString coverUrl = m_comicsPage
+            ? m_comicsPage->resolveCanonicalSeriesCover(0, card.displayTitle)
+            : QString();
+
         auto* cardFrame = new QFrame(m_sectionBody);
         cardFrame->setObjectName("ComicsDownloadsCard");
         cardFrame->setStyleSheet(
             "QFrame#ComicsDownloadsCard {"
-            "  background: rgba(255,255,255,0.04);"
-            "  border-radius: 8px;"
-            "  padding: 12px;"
+            "  background: rgba(255,255,255,0.038);"
+            "  border: 1px solid rgba(255,255,255,0.08);"
+            "  border-radius: 12px;"
             "}");
-        auto* cardLayout = new QVBoxLayout(cardFrame);
-        cardLayout->setContentsMargins(14, 12, 14, 12);
-        cardLayout->setSpacing(6);
+        auto* h = new QHBoxLayout(cardFrame);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(0);
+
+        // Series cover on the left (110x150, manga 2:3).
+        h->addWidget(makeCoverWidget(coverUrl, card.displayTitle), 0, Qt::AlignTop);
+
+        auto* right = new QVBoxLayout();
+        right->setContentsMargins(16, 13, 16, 11);
+        right->setSpacing(3);
 
         // Series title (canonical display title).
         auto* titleLabel = new QLabel(card.displayTitle, cardFrame);
         titleLabel->setObjectName("ComicsDownloadsSeriesTitle");
         titleLabel->setStyleSheet(
-            "QLabel#ComicsDownloadsSeriesTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
-        cardLayout->addWidget(titleLabel);
+            "QLabel#ComicsDownloadsSeriesTitle { color: #ededed; font-size: 15px; font-weight: 600; }");
+        right->addWidget(titleLabel);
 
-        // Volume count line: "1 volume" / "2 volumes" / "5 volumes" (never "volumes / chapters").
-        const int entryCount = card.rows.size();
+        // Volume count line: "1 volume" / "2 volumes" (never "volumes / chapters").
+        const int entryCount = card.volumeNumbers.size() + card.chapterIds.size();
         const QString countText = (entryCount == 1)
             ? tr("1 volume")
             : tr("%1 volumes").arg(entryCount);
         auto* countLabel = new QLabel(countText, cardFrame);
         countLabel->setObjectName("ComicsDownloadsCount");
         countLabel->setStyleSheet(
-            "QLabel#ComicsDownloadsCount { color: rgba(255,255,255,0.50); font-size: 9pt; }");
-        cardLayout->addWidget(countLabel);
+            "QLabel#ComicsDownloadsCount { color: rgba(255,255,255,0.55); font-size: 12px; }");
+        right->addWidget(countLabel);
 
-        // Per-volume/chapter rows: Vol. N (Source) - filename
-        for (const auto& row : card.rows) {
-            const QString rowText = row.label
-                + QStringLiteral(" - ")
-                + row.fileName;
-            auto* rowLabel = new QLabel(rowText, cardFrame);
-            rowLabel->setObjectName("ComicsDownloadsEntryRow");
-            rowLabel->setStyleSheet(
-                "QLabel#ComicsDownloadsEntryRow { color: rgba(255,255,255,0.75);"
-                " font-size: 10pt; padding: 4px 8px; }");
-            cardLayout->addWidget(rowLabel);
+        // Sorted, de-duplicated "Vol N" chips in a wrapping grid (FlowLayout).
+        QList<int> vols = card.volumeNumbers.values();
+        std::sort(vols.begin(), vols.end());
+        QStringList chs = card.chapterIds.values();
+        std::sort(chs.begin(), chs.end());
+
+        const QString chipStyle =
+            "QLabel#ComicsDownloadsVolChip {"
+            "  background: rgba(255,255,255,0.06);"
+            "  border: 1px solid rgba(255,255,255,0.10);"
+            "  border-radius: 7px; padding: 4px 11px;"
+            "  color: rgba(255,255,255,0.88); font-size: 13px;"
+            "}";
+        auto* chipHost = new FlowWidget(cardFrame);
+        auto* chipFlow = new FlowLayout(/*hSpacing=*/8, /*vSpacing=*/8);
+        for (int n : vols) {
+            auto* chip = new QLabel(chipHost);
+            chip->setObjectName("ComicsDownloadsVolChip");
+            chip->setStyleSheet(chipStyle);
+            chip->setText(QStringLiteral("<span style=\"color:#8c8c8c;\">Vol</span> %1").arg(n));
+            chipFlow->addWidget(chip);
         }
+        for (const QString& c : chs) {
+            auto* chip = new QLabel(chipHost);
+            chip->setObjectName("ComicsDownloadsVolChip");
+            chip->setStyleSheet(chipStyle);
+            chip->setText(QStringLiteral("<span style=\"color:#8c8c8c;\">Ch</span> %1").arg(c.toHtmlEscaped()));
+            chipFlow->addWidget(chip);
+        }
+        chipHost->setLayout(chipFlow);
+        QSizePolicy chipSp(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        chipSp.setHeightForWidth(true);
+        chipHost->setSizePolicy(chipSp);
+        right->addSpacing(6);
+        right->addWidget(chipHost);
+
+        h->addLayout(right, 1);
 
         // Context menu for this card group
         cardFrame->setContextMenuPolicy(Qt::CustomContextMenu);

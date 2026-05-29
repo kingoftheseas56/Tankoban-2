@@ -18,6 +18,8 @@ class QLabel;
 class QPushButton;
 class QScrollArea;
 class QVBoxLayout;
+class QWidget;
+class QNetworkAccessManager;
 class MangaDownloadIndex;
 class ComicsPage;
 
@@ -46,9 +48,14 @@ private slots:
 private:
     void buildUi();
     void updateEmptyState();
+    // Series cover (110x150, manga 2:3 native per feedback_bigger_manga_covers).
+    // coverUrl resolved via ComicsPage::resolveCanonicalSeriesCover; loaded with
+    // the ComicsSeriesView QPixmapCache-by-URL pattern. Empty -> title placeholder.
+    QWidget* makeCoverWidget(const QString& coverUrl, const QString& title);
 
     MangaDownloadIndex* m_mangaDownloadIndex = nullptr;
     ComicsPage*         m_comicsPage         = nullptr;
+    QNetworkAccessManager* m_coverNam        = nullptr;
 
     QPushButton*  m_backBtn       = nullptr;
     QLabel*       m_titleLabel    = nullptr;
