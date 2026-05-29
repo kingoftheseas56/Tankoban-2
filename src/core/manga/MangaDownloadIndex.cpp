@@ -443,6 +443,46 @@ void MangaDownloadIndex::evictByVolume(const QString& sourceId,
     }
 }
 
+void MangaDownloadIndex::evictByPath(const QString& canonicalPath)
+{
+    if (canonicalPath.isEmpty()) return;
+
+    QString sourceId, seriesId;
+    bool changed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        // Match on the Entry.canonicalPath field (robust to whatever key scheme
+        // m_byPath uses), then drop its served chapter keys + the row.
+        QString matchKey;
+        for (auto it = m_byPath.constBegin(); it != m_byPath.constEnd(); ++it) {
+            if (it.value().canonicalPath == canonicalPath) {
+                matchKey = it.key();
+                break;
+            }
+        }
+        if (matchKey.isEmpty()) return;
+        auto pIt = m_byPath.find(matchKey);
+        if (pIt == m_byPath.end()) return;
+        sourceId = pIt->sourceId;
+        seriesId = pIt->seriesId;
+        for (const auto& sk : pIt->servedChapterKeys)
+            m_byChapter.remove(sk);
+        m_byPath.erase(pIt);
+        recomputeSeriesHasAnyLocked(sourceId, seriesId);
+        changed = true;
+    }
+
+    if (changed) {
+        DebugLogBuffer::instance().info(QStringLiteral("manga-download-index"),
+            QStringLiteral("evictByPath"),
+            QJsonObject{{QStringLiteral("path"), canonicalPath},
+                        {QStringLiteral("sourceId"), sourceId},
+                        {QStringLiteral("seriesId"), seriesId}});
+        save();
+        emit entriesChanged();
+    }
+}
+
 void MangaDownloadIndex::validateAll()
 {
     // Snapshot keys+paths under lock; stat off-lock; collect missing; then

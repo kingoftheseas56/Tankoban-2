@@ -86,6 +86,13 @@ public:
     // Evict a single volume's entry (and its served chapter keys). File on disk
     // is NOT touched — caller removes the file for the "delete file too" path.
     void evictByVolume(const QString& sourceId, const QString& seriesId, int volumeNumber);
+
+    // Evict the entry registered at an exact cbz path, regardless of its
+    // sourceId. Used by the delete-volume flow, which knows the file path but
+    // not necessarily the source the volume was packed from (mangafire_catalog
+    // / weebcentral / premium). File on disk is NOT touched. No-op if no entry
+    // matches the path.
+    void evictByPath(const QString& canonicalPath);
     void validateAll();
 
     // Read API — mutex-guarded. Safe from any thread.

@@ -2609,20 +2609,34 @@ void ComicsSeriesView::showVolumeTileMenu(tankoban::ui::comics::VolumeTile* tile
 
 void ComicsSeriesView::deleteVolumeDownload(int volumeNumber, const QString& cbzPath)
 {
+    Q_UNUSED(volumeNumber);
     if (!m_downloadIndex) return;
-    const QString seriesId = m_currentMangaCatalog.seriesId;
-    const QString src = QString::fromLatin1(kWeebCentralSourceId);
 
     const auto choice = ContextMenuHelper::confirmRemoveWithFile(
         this, tr("Delete volume"),
         tr("Remove this volume from your library?"));
     if (choice == ContextMenuHelper::RemoveChoice::Cancel) return;
 
-    m_downloadIndex->evictByVolume(src, seriesId, volumeNumber);
+    // Evict by the exact file path, not a guessed source. A volume's index
+    // entry can be sourced from mangafire_catalog / weebcentral / premium; the
+    // old hardcoded-weebcentral evictByVolume missed mangafire-packed volumes
+    // (e.g. One Piece Vol 114), so the entry stayed registered and the tile
+    // never reverted to undownloaded.
+    if (!cbzPath.isEmpty())
+        m_downloadIndex->evictByPath(cbzPath);
+
     if (choice == ContextMenuHelper::RemoveChoice::DeleteFile && !cbzPath.isEmpty()) {
         QFile::remove(cbzPath);
         QFile::remove(cbzPath + QStringLiteral(".volx"));
     }
+
+    // Re-render so the just-deleted volume's tile reverts to undownloaded. The
+    // download state is re-read per volume from m_downloadIndex during render,
+    // so the now-evicted entry drops its cbzPath -> tile loses the completed
+    // tick and a click re-opens the Sources panel for re-download. Without this
+    // the tile kept its stale Complete state and the volume couldn't be
+    // re-downloaded (bug reported 2026-05-29).
+    populateVolumeRowsFromCatalog(m_currentMangaCatalog);
 }
 
 } // namespace tankoban::manga::comics
