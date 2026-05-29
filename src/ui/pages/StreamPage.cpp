@@ -2236,6 +2236,20 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
 void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType,
                                   int season, int episode)
 {
+    // THEATRE_DOWNLOAD_SIMPLIFY (2026-05-29): a SERIES episode click is a
+    // download/play intent → funnel to download-or-play-local (owned → play
+    // from disk; otherwise silent auto-pick best 1080p + download). No source
+    // picker. MOVIES fall through to the existing source-load below: movie
+    // detail-open auto-fires playRequested(movie,0,0), so auto-downloading
+    // here would wrongly download on mere open — the movie's own Download
+    // button handles movie downloads.
+    if (mediaType != QLatin1String("movie")) {
+        qInfo().noquote() << "[auto-dl] series click -> beginPlayOrDownload imdb="
+                          << imdbId << "s" << season << "e" << episode;
+        beginPlayOrDownload(imdbId, mediaType, season, episode, nullptr);
+        return;
+    }
+
     // Build episode key for choice persistence
     QString epKey = (mediaType == "movie")
         ? StreamProgress::movieKey(imdbId)
@@ -3239,6 +3253,8 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     m_pendingAuto.season         = season;
     m_pendingAuto.episode        = episode;
     m_pendingAuto.runtimeMinutes = 0;  // unknown -> AutoSourcePicker skips size guardrail
+    qInfo().noquote() << "[auto-dl] startAutoDownload imdb=" << imdbId
+                      << "type=" << mediaType << "s" << season << "e" << episode;
 
     disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
                this, nullptr);
@@ -3292,6 +3308,8 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     m_pendingAuto.active = false;  // consume
 
     const auto choices = tankostream::stream::buildPickerChoices(streams, addonsById);
+    qInfo().noquote() << "[auto-dl] finishPick choices=" << choices.size()
+                      << "active=" << (m_pendingAuto.active ? "y" : "n");
 
     QList<tankostream::stream::SourceCandidate> cands;
     cands.reserve(choices.size());
@@ -3306,6 +3324,9 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
 
     const std::optional<int> picked =
         tankostream::stream::AutoSourcePicker::pick(cands, ctx.runtimeMinutes);
+    qInfo().noquote() << "[auto-dl] picked="
+                      << (picked.has_value() ? QString::number(*picked) : QStringLiteral("NONE"))
+                      << "of" << cands.size();
     if (!picked.has_value()) {
         // No acceptable 1080p source. (P1.T4 refines this into a tile state;
         // for now surface it in the sources panel.)
@@ -3340,6 +3361,8 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     config.season          = (ctx.mediaType == QLatin1String("movie")) ? 0 : ctx.season;
     config.magnetUri       = chosen.magnetUri;
 
+    qInfo().noquote() << "[auto-dl] startDownload hash=" << hash.left(12)
+                      << "imdb=" << ctx.imdbId << "season=" << config.season;
     m_torrentClient->startDownload(hash, config);
 }
 
