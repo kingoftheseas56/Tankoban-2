@@ -1605,10 +1605,9 @@ void ComicsSeriesView::onSeriesClassified(
     // reads m_classifiedByVolume to set RAW tags and append the Volume X row.
     populateVolumeRowsFromCatalog(m_currentMangaCatalog);
 
-    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
-    // After re-rendering, check each downloaded volume for upgrade eligibility:
-    // was packed as Magazine (.volx exists) but now classifies Clean → offer
-    // a re-download without the chapter-pairing sidecar.
+    // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro); backfill added
+    // 2026-05-29 (Agent 1). After re-rendering, reconcile each downloaded
+    // volume's ".volx" pairing sidecar against the authoritative classification.
     for (auto* tile : m_volumeTiles) {
         if (!tile) continue;
         const auto& state = tile->volumeState();
@@ -1616,11 +1615,31 @@ void ComicsSeriesView::onSeriesClassified(
 
         auto it = m_classifiedByVolume.constFind(tile->volumeNumber());
         if (it == m_classifiedByVolume.constEnd()) continue;
-        if (it->quality != tankoban::manga::VolumeQuality::Clean) continue;
 
-        // .volx file exists → volume was previously packed as Magazine.
         const QString volxPath = state.cbzPath + QStringLiteral(".volx");
-        if (QFile::exists(volxPath)) {
+        const bool needsPairing =
+            it->isVolumeX
+            || it->quality == tankoban::manga::VolumeQuality::Magazine;
+
+        if (needsPairing) {
+            // Backfill: a magazine / Volume X volume downloaded before the
+            // quality-aware .volx wiring (or via a path that never wrote it)
+            // has no sidecar, so the reader never applied chapter-boundary
+            // pairing or the book-mode default. Write it now from the
+            // authoritative classification — existing downloads are fixed
+            // without a re-download. Add-only (clean volumes are never given a
+            // sidecar here), so a stale/incomplete classification can never
+            // strip pairing off a correctly-packed volume. Quality is the right
+            // discriminator: clean volume scans are ALSO chapter-split packs, so
+            // a page-naming heuristic would wrongly break them.
+            if (!QFile::exists(volxPath)) {
+                QFile marker(volxPath);
+                if (marker.open(QIODevice::WriteOnly)) marker.close();
+            }
+        } else if (it->quality == tankoban::manga::VolumeQuality::Clean
+                   && QFile::exists(volxPath)) {
+            // Clean volume carrying a stale .volx (packed as Magazine before a
+            // reclassify) → offer a re-download without the pairing sidecar.
             tile->setUpgradeAvailable(true);
         }
     }

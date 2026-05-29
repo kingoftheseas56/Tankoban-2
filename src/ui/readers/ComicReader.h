@@ -496,10 +496,11 @@ private:
     // openBook so it stays correct when navigating between volumes.
     bool        m_isVolumeX = false;
     // VOLUME_X_QUALITY 2026-05-29 (Agent 1). True when the open cbz is a
-    // stitched-from-chapters compilation (magazine volume / Volume X), detected
-    // from "<chapter>_<page>" page naming OR the .volx sidecar. Drives
-    // chapter-boundary pairing breaks AND the book-mode default on open. Real
-    // tankobon scans leave it false. Re-evaluated per cbz in openBook.
+    // stitched-from-chapters compilation (magazine volume / Volume X), signalled
+    // by the ".volx" sidecar (written from the authoritative magazine/clean
+    // classification at download time + backfilled by ComicsSeriesView). Drives
+    // chapter-boundary pairing breaks AND the book-mode default on open. Clean
+    // volumes and real tankobon leave it false. Re-evaluated per cbz in openBook.
     bool        m_isStitchedCompilation = false;
 
     // Modes
