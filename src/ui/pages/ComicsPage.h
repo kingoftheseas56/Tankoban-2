@@ -141,6 +141,15 @@ public:
     QString resolveCanonicalSeriesCover(int anilistId,
                                         const QString& displayTitle) const;
 
+    // COMICS_CR_VOLUME_COVER 2026-05-29 (Agent 1) — resolve the cover for a
+    // SPECIFIC volume (the one shown in a Continue Reading tile). A WeebCentral-
+    // compiled volume's cbz first page is interior chapter art, not the cover,
+    // so the Continue strip must pull the real per-volume cover from the catalog.
+    // Returns that volume's coverUrlJapanese; falls back to Volume 1's cover;
+    // empty if the series isn't in the catalog (caller keeps the cbz thumbnail).
+    QString resolveReadVolumeCover(const QString& displayTitle,
+                                   int volumeNumber) const;
+
     // Static: map sourceId to human display label.
     // tankoyomi_premium → "Premium", mangafire_catalog → "MangaFire",
     // weebcentral → "WeebCentral", fallback: title-case with suffix stripping.

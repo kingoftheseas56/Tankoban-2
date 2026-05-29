@@ -1859,6 +1859,34 @@ QString ComicsPage::resolveCanonicalSeriesCover(int anilistId,
     return QString();
 }
 
+// COMICS_CR_VOLUME_COVER 2026-05-29 (Agent 1) — see header. Returns the given
+// volume's catalog cover, else Volume 1's, else empty.
+QString ComicsPage::resolveReadVolumeCover(const QString& displayTitle,
+                                           int volumeNumber) const
+{
+    if (displayTitle.isEmpty() || volumeNumber <= 0)
+        return QString();
+
+    const QString slug = m_localCatalogIndex.slugForSeriesTitle(displayTitle);
+    if (slug.isEmpty())
+        return QString();
+    const QString path = m_localCatalogIndex.filePathForSlug(slug);
+    if (path.isEmpty())
+        return QString();
+    const auto catalog = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
+    if (!catalog.has_value())
+        return QString();
+
+    QString vol1Cover;
+    for (const auto& vol : catalog->volumes) {
+        if (vol.volumeNumber == volumeNumber && !vol.coverUrlJapanese.isEmpty())
+            return vol.coverUrlJapanese;                 // the read volume's real cover
+        if (vol.volumeNumber == 1 && !vol.coverUrlJapanese.isEmpty())
+            vol1Cover = vol.coverUrlJapanese;            // series fallback
+    }
+    return vol1Cover;
+}
+
 void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
                                            int volumeNumber,
                                            const QString& cbzPath,
@@ -3106,6 +3134,7 @@ void ComicsPage::refreshContinueStrip()
         QString title;
         QString subtitle;
         QString coverPath;
+        int volumeNumber = 0;  // parsed from the read cbz; 0 if unknown
     };
     QList<ContinueItem> items;
 
@@ -3228,7 +3257,19 @@ void ComicsPage::refreshContinueStrip()
             }
         }
 
-        items.append({updatedAt, preferredFilePath, ref->seriesPath, title, subtitle, ref->coverPath});
+        // COMICS_CR_VOLUME_COVER 2026-05-29 (Agent 1). Parse the read volume
+        // number from the cbz basename so the tile can pull that volume's real
+        // catalog cover (a WeebCentral compilation's first page isn't the cover).
+        int crVolumeNumber = 0;
+        {
+            static const QRegularExpression crVolRe(
+                QStringLiteral("(?:^|[\\s_-])(?:v|vol(?:ume)?)\\s*(\\d{1,3})\\b"),
+                QRegularExpression::CaseInsensitiveOption);
+            const auto m = crVolRe.match(QFileInfo(preferredFilePath).completeBaseName());
+            if (m.hasMatch()) crVolumeNumber = m.captured(1).toInt();
+        }
+        items.append({updatedAt, preferredFilePath, ref->seriesPath, title, subtitle,
+                      ref->coverPath, crVolumeNumber});
     }
 
     if (items.isEmpty()) {
@@ -3265,12 +3306,21 @@ void ComicsPage::refreshContinueStrip()
     }
 
     for (const auto& item : deduped) {
-        auto* card = new TileCard(item.coverPath, item.title, item.subtitle);
+        // COMICS_CR_VOLUME_COVER 2026-05-29 (Agent 1). Prefer the read volume's
+        // real catalog cover over the cbz first-page thumbnail (which is interior
+        // chapter art for WeebCentral-compiled volumes like One Piece Vol 114).
+        // TileCard paints coverPath over coverUrl when both set, so leave
+        // coverPath empty when we have a catalog URL and let fetchPosterForTile
+        // paint it; keep the cbz thumbnail otherwise.
+        const QString volCoverUrl = resolveReadVolumeCover(item.title, item.volumeNumber);
+        auto* card = (!volCoverUrl.isEmpty())
+            ? new TileCard(QString(), item.title, item.subtitle)
+            : new TileCard(item.coverPath, item.title, item.subtitle);
         card->setProperty("filePath", item.filePath);
         card->setProperty("seriesPath", item.seriesPath);
         card->setProperty("seriesName", ScannerUtils::cleanMediaFolderTitle(
             QDir(item.seriesPath).dirName()));
-        card->setProperty("coverPath", item.coverPath);
+        card->setProperty("coverPath", volCoverUrl.isEmpty() ? item.coverPath : QString());
         connect(card, &TileCard::clicked, this, [this, card]() {
             QString path = card->property("filePath").toString();
             QString seriesPath = card->property("seriesPath").toString();
@@ -3288,6 +3338,8 @@ void ComicsPage::refreshContinueStrip()
             emit openComic(path, cbzList, seriesName);
         });
         m_continueStrip->addTile(card);
+        if (!volCoverUrl.isEmpty())
+            fetchPosterForTile(card, /*anilistId*/0, volCoverUrl);
     }
 
     m_continueSection->show();
