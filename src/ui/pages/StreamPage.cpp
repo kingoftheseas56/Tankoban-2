@@ -3251,11 +3251,11 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
         });
 
     tankostream::stream::StreamLoadRequest req;
-    req.type = (mediaType == "movie") ? QStringLiteral("movie") : QStringLiteral("series");
+    req.type = (mediaType == QLatin1String("movie")) ? QStringLiteral("movie") : QStringLiteral("series");
     const int kitsuId = (mediaType != QLatin1String("movie") && m_metaAggregator)
                             ? m_metaAggregator->kitsuIdForSeries(imdbId)
                             : -1;
-    if (mediaType == "movie") {
+    if (mediaType == QLatin1String("movie")) {
         req.id = imdbId;
     } else if (kitsuId > 0) {
         req.id = QStringLiteral("kitsu:%1:%2").arg(kitsuId).arg(qMax(1, episode));
@@ -3263,6 +3263,21 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
         req.id = imdbId + QLatin1Char(':') + QString::number(qMax(1, season))
                         + QLatin1Char(':') + QString::number(qMax(1, episode));
     }
+    // Surface a fetch error on the auto-download path (mirrors onPlayRequested's
+    // streamError wiring ~line 2388). Clears the pending state so the tile/UI
+    // doesn't hang waiting on a result that will never arrive.
+    disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError,
+               this, nullptr);
+    connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError, this,
+        [this](const QString& addonId, const QString& message) {
+            m_pendingAuto.active = false;
+            const QString shown = addonId.isEmpty()
+                ? message : QStringLiteral("[%1] %2").arg(addonId, message);
+            if (m_detailView)
+                m_detailView->setStreamSourcesError(
+                    QStringLiteral("Failed to fetch sources: ") + shown);
+        });
+
     m_streamAggregator->load(req);
 }
 
@@ -3310,14 +3325,15 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
         return;
     }
 
-    // Remember what this download is for (P1.T3 reads this to wire progress).
-    m_autoDownloadByHash.insert(hash, ctx);
-
     AddTorrentConfig config;
     config.category        = QStringLiteral("videos");
     config.destinationPath = m_torrentClient->defaultPaths().value(QStringLiteral("videos"));
     config.contentLayout   = QStringLiteral("original");
-    config.streamGroupId   = QStringLiteral("theatre:%1").arg(ctx.imdbId);
+    // Empty: lets TorrentClient's onMetadataReady/onPieceFinished/onTorrentFinished
+    // drive per-episode pending→progress→complete into StreamDownloadIndex (that
+    // path is gated on an EMPTY streamGroupId). Tankorent-page separation is done
+    // via the imdbId filter (P2.T5), not via this group id.
+    config.streamGroupId   = QString();
     config.sequential      = false;
     config.startPaused     = false;
     config.imdbId          = ctx.imdbId;

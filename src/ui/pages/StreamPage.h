@@ -330,9 +330,6 @@ private:
         int     runtimeMinutes = 0;  // 0 = unknown -> size guardrail skipped
     };
     PendingAutoDownload m_pendingAuto;
-    // infoHash -> what that download is for (used by the P1.T3 progress/
-    // completion wiring to map a torrent back to its episode).
-    QHash<QString, PendingAutoDownload> m_autoDownloadByHash;
 
     void startAutoDownload(const QString& imdbId, const QString& mediaType,
                            int season, int episode);
