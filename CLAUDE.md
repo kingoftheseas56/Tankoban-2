@@ -72,7 +72,7 @@ If you are tempted to give Hemanth a terminal command list longer than **one lin
 
 **Last successful smoke:** A1 AniList query extension Hemanth visual-verified on Death Note end-to-end 2026-05-22; A4 TORRENT_PERSISTENCE_COLLAPSE P5 269/269 tankoban_tests GREEN.
 
-**Live governance versions:** `gov-v11` / `contracts-v3` (see `agents/VERSIONS.md`).
+**Live governance versions:** `gov-v12` / `contracts-v3` (see `agents/VERSIONS.md`).
 
 **Engine/quota status:** Codex quota OK (default Codex for execution work; switch execution-shaped tasks to DeepSeek/Agent 9 when this reads "Codex LOW"). Opus = design/deliberation pass. Updated by Hemanth or Agent 0. Routing: gov-v10 Engine Switching Protocol.
 
