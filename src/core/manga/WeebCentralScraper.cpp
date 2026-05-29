@@ -363,6 +363,57 @@ QList<PageInfo> WeebCentralScraper::parsePagesHtml(const QString& html)
     return pages;
 }
 
+// ── Pages (MangaPlus paired) ──────────────────────────────────────────────
+void WeebCentralScraper::fetchPagesPaired(const QString& chapterId)
+{
+    QUrl url(BASE + "/chapters/" + chapterId + "/images");
+    QUrlQuery q;
+    q.addQueryItem("is_prev", "False");
+    q.addQueryItem("current_page", "1");
+    // double_page_v2 = "Double Page (MangaPlus)": cover-alone + correct
+    // right-to-left facing pairs, verified 2026-05-29.
+    q.addQueryItem("reading_style", "double_page_v2");
+    url.setQuery(q);
+
+    auto* reply = m_nam->get(makeRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit errorOccurred("Failed to fetch paired pages: " + reply->errorString());
+            return;
+        }
+        auto html = QString::fromUtf8(reply->readAll());
+        emit pagesReady(parsePagesPairedHtml(html));
+    });
+}
+
+QList<PageInfo> WeebCentralScraper::parsePagesPairedHtml(const QString& html)
+{
+    QList<PageInfo> pages;
+
+    // double_page_v2 markup: repeated `... page === N ...> <img src="...">`.
+    // Each match is one image tagged with its facing-pair group N. Document
+    // order is the visual left-to-right order WeebCentral renders.
+    static const QRegularExpression groupImgRe(
+        QStringLiteral(R"RE(page === (\d+)[^>]*>\s*<img\b[^>]*\bsrc="(https?://[^"]+\.(?:png|jpe?g|webp)(?:\?[^"]*)?)")RE"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+
+    auto it = groupImgRe.globalMatch(html);
+    int idx = 0;
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString url = m.captured(2);
+        if (url.contains(QLatin1String("/broken_image.")))
+            continue;
+        PageInfo p;
+        p.index     = idx++;
+        p.pageGroup = m.captured(1).toInt();
+        p.imageUrl  = url;
+        pages.append(p);
+    }
+    return pages;
+}
+
 // ── Detail (v1 merger) ──────────────────────────────────────────────────────
 void WeebCentralScraper::fetchDetail(const MangaResult& preview)
 {
