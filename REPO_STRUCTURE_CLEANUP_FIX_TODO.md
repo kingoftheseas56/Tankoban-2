@@ -60,11 +60,13 @@ Grounded in Agent 7 (Codex) audit `agents/audits/repo_structure_docs_github_2026
 
 ---
 
-## §5 — Hemanth ratification questions
+## §5 — Decisions (resolved 2026-05-29)
 
-1. **Root docs placement — keep at root or move under `docs/`?** Recommended: **keep `README.md` / `BUILD.md` / `ARCHITECTURE.md` / `CONTRIBUTING.md` / `LICENSE` at root** (GitHub surfaces them natively) and add `docs/README.md` as the map that links into the deeper tree. Moving them under `docs/` buys little and risks link breakage. Low-stakes; defaulting to keep-at-root unless you say otherwise.
-2. **README screenshot — now or later?** The audit recommends a screenshot/GIF as the first visual. Recommended: **defer it to after the next visual-stable point** so the landing image doesn't immediately rot. Your call on timing (it's a product/taste moment). Everything else in P1 proceeds without it.
-3. **GitHub repo description + topics — set them this pass?** Recommended: **yes**, in P1 — `Windows + macOS Qt6 desktop media library for comics, books, and theatre.` + topics (`qt6`, `cpp20`, `windows`, `macos`, `desktop-app`, `media-library`, `comics`, `epub`, `video-player`, `ffmpeg`, `libtorrent`, `stremio`, `cmake`, `vcpkg`). Cheap, improves discoverability. (Note: I broadened the audit's Windows-only description to include macOS per the locked equal-priority decision.)
+Hemanth standing directive: *"always your rec"* — these resolve to the recommended answers, and future calls within Agent 0's authority proceed on the rec without a ratification pause ([[feedback_no_rhetorical_ratification_pause]]). Genuinely product/strategic/irreversible calls still get surfaced.
+
+1. **Root docs placement — RESOLVED: keep at root.** `README.md` / `BUILD.md` / `ARCHITECTURE.md` / `CONTRIBUTING.md` / `LICENSE` stay at repo root (GitHub surfaces them natively); `docs/README.md` is the map that links into the deeper tree. (Hemanth-confirmed verbatim.)
+2. **README screenshot — RESOLVED: defer** to after the next visual-stable point so the landing image doesn't immediately rot. P1 ships without it; revisit as a product/taste moment later.
+3. **GitHub description + topics — RESOLVED: set in P1.** Description: `Windows + macOS Qt6 desktop media library for comics, books, and theatre.` Topics: `qt6`, `cpp20`, `windows`, `macos`, `desktop-app`, `media-library`, `comics`, `epub`, `video-player`, `ffmpeg`, `libtorrent`, `stremio`, `cmake`, `vcpkg`. (macOS added to the audit's Windows-only wording per the locked equal-priority decision.)
 
 ---
 
