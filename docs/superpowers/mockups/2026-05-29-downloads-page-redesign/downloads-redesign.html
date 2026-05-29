@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tankoban — Downloads page redesign mock-ups</title>
+<style>
+  :root{
+    --ink:#ededed;
+    --ink-dim:rgba(255,255,255,0.55);
+    --ink-faint:rgba(255,255,255,0.38);
+    --surface:rgba(255,255,255,0.038);
+    --surface-hover:rgba(255,255,255,0.065);
+    --hair:rgba(255,255,255,0.08);
+    --amber:#cf9645;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:"Segoe UI",-apple-system,system-ui,sans-serif;
+    background:#15120f;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    padding:26px 0 60px;
+  }
+  .page-head{max-width:1180px;margin:0 auto 18px;padding:0 24px;}
+  .page-head h1{font-size:19px;font-weight:600;margin:0 0 4px;letter-spacing:.2px;}
+  .page-head p{margin:0;color:var(--ink-dim);font-size:13px;line-height:1.5;max-width:760px;}
+  .page-head .note{margin-top:8px;color:var(--ink-faint);font-size:12px;}
+
+  /* tab bar */
+  .tabs{max-width:1180px;margin:18px auto 14px;padding:0 24px;display:flex;gap:8px;flex-wrap:wrap;}
+  .tab{
+    border:1px solid var(--hair);background:rgba(255,255,255,0.03);
+    color:var(--ink-dim);font-size:13px;font-weight:600;
+    padding:9px 16px;border-radius:9px;cursor:pointer;transition:all .12s;
+  }
+  .tab:hover{background:rgba(255,255,255,0.06);color:var(--ink);}
+  .tab.active{border-color:var(--amber);color:var(--amber);background:rgba(207,150,69,0.08);}
+
+  /* app frame */
+  .frame{
+    max-width:1180px;margin:0 auto;border-radius:14px;overflow:hidden;
+    border:1px solid rgba(255,255,255,0.07);
+    box-shadow:0 24px 70px rgba(0,0,0,0.5);
+    background:
+      radial-gradient(120% 90% at 70% -10%, #3a312a 0%, #271f1a 38%, #1b1613 70%, #140f0c 100%);
+    min-height:640px;
+  }
+  /* topbar */
+  .topbar{height:54px;display:flex;align-items:center;gap:14px;padding:0 18px;
+    border-bottom:1px solid rgba(255,255,255,0.05);}
+  .tb-pill{font-size:13px;color:var(--ink-dim);padding:6px 14px;border-radius:16px;border:1px solid transparent;}
+  .tb-pill.on{color:var(--amber);border-color:rgba(207,150,69,0.55);}
+  .tb-spacer{flex:1;}
+  .tb-glyph{width:30px;height:30px;border-radius:50%;border:1px solid var(--hair);display:flex;align-items:center;justify-content:center;color:var(--ink-dim);}
+
+  /* downloads header row */
+  .dl-head{display:flex;align-items:center;gap:16px;padding:18px 26px 4px;}
+  .back{border:1px solid var(--hair);background:rgba(0,0,0,0.25);color:var(--ink);
+    font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer;}
+  .dl-title{font-size:23px;font-weight:700;letter-spacing:.2px;}
+
+  .body{padding:8px 26px 30px;}
+  .section-label{font-size:10.5px;font-weight:700;letter-spacing:1.4px;color:var(--ink-faint);
+    margin:22px 2px 12px;}
+
+  /* ===== SIDE-POSTER LAYOUT ===== */
+  .card{background:var(--surface);border:1px solid var(--hair);border-radius:12px;margin-bottom:14px;overflow:hidden;}
+  .side{display:flex;gap:0;}
+  .side .poster{flex:0 0 auto;}
+  .side .right{flex:1;min-width:0;padding:15px 18px 10px;}
+  .show-title{font-size:15.5px;font-weight:600;color:var(--ink);}
+  .show-sub{font-size:12px;color:var(--ink-dim);margin-top:3px;}
+  .rows{margin-top:11px;}
+  .erow{display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:7px;cursor:pointer;transition:background .1s;}
+  .erow:hover{background:var(--surface-hover);}
+  .ecode{font-size:11.5px;color:var(--ink-faint);font-variant-numeric:tabular-nums;
+    min-width:52px;letter-spacing:.3px;}
+  .etitle{font-size:13.5px;color:rgba(255,255,255,0.86);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .more{font-size:12px;color:var(--ink-faint);padding:6px 10px;}
+
+  /* poster art (placeholder cover) */
+  .poster-art{position:relative;border-radius:0;overflow:hidden;
+    background:linear-gradient(155deg,#5a4c40 0%,#33291f 55%,#211913 100%);
+    display:flex;align-items:flex-end;}
+  .poster-art .mono{position:absolute;top:50%;left:50%;transform:translate(-50%,-58%);
+    font-size:46px;font-weight:800;color:rgba(255,255,255,0.10);letter-spacing:-1px;}
+  .poster-art .pcap{position:relative;z-index:1;font-size:10px;font-weight:600;
+    color:rgba(255,255,255,0.82);padding:8px 9px;line-height:1.25;
+    background:linear-gradient(0deg,rgba(0,0,0,0.55),transparent);width:100%;}
+  .side .poster-art{width:96px;height:144px;border-right:1px solid rgba(255,255,255,0.06);}
+
+  /* active progress */
+  .pbar{height:4px;border-radius:3px;background:rgba(255,255,255,0.10);margin-top:10px;overflow:hidden;}
+  .pbar > i{display:block;height:100%;background:rgba(255,255,255,0.55);}
+  .pmeta{font-size:11.5px;color:var(--ink-dim);margin-top:7px;}
+
+  /* ===== BANNER LAYOUT ===== */
+  .banner-card{background:var(--surface);border:1px solid var(--hair);border-radius:14px;margin-bottom:18px;overflow:hidden;}
+  .banner{position:relative;height:150px;display:flex;align-items:flex-end;gap:18px;padding:16px 20px;
+    background:linear-gradient(105deg,#4b3d31 0%,#2c2219 48%,#1c1510 100%);}
+  .banner::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(0deg,rgba(0,0,0,0.45),transparent 60%);pointer-events:none;}
+  .banner .poster-art{width:88px;height:132px;border-radius:9px;flex:0 0 auto;
+    box-shadow:0 8px 24px rgba(0,0,0,0.5);position:relative;z-index:1;}
+  .banner .btext{position:relative;z-index:1;padding-bottom:4px;}
+  .banner .btext .show-title{font-size:21px;font-weight:700;}
+  .banner .btext .show-sub{font-size:12.5px;margin-top:5px;}
+  .banner-card .rows{padding:8px 16px 12px;margin-top:0;}
+
+  .hint{max-width:1180px;margin:16px auto 0;padding:0 24px;color:var(--ink-faint);font-size:12px;}
+  .compare-note{display:inline-block;margin-top:2px;color:var(--ink-dim);}
+  .before{color:var(--ink-faint);font-size:12px;text-decoration:line-through;}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Tankoban — Downloads page redesign</h1>
+  <p>Same page, four looks. Top tabs switch <b>Theatre</b> vs <b>Comics</b> and <b>side-poster</b> vs <b>big-banner</b>.
+     Episode/volume rows are <b>title-only</b> — no torrent filenames. The <b>Active</b> (in-progress) and
+     <b>History</b> (finished) split is kept.</p>
+  <p class="note">Posters and episode titles shown are illustrative placeholders — in the real app they're pulled from the
+     same online catalog the show/series detail pages use, then cached. (Community's titles are real; they happened to be
+     inside the filenames.)</p>
+</div>
+
+<div class="tabs" id="tabs">
+  <button class="tab active" data-mode="theatre" data-layout="side">Theatre · Side poster</button>
+  <button class="tab" data-mode="theatre" data-layout="banner">Theatre · Big banner</button>
+  <button class="tab" data-mode="comics" data-layout="side">Comics · Side poster</button>
+  <button class="tab" data-mode="comics" data-layout="banner">Comics · Big banner</button>
+</div>
+
+<div class="frame" id="frame"></div>
+
+<div class="hint">
+  Tip: click any row — in the app that plays the file (Theatre) or opens the reader (Comics). The current page shows the
+  raw filename like <span class="before">Daredevil.Born.Again.S02E01_1080p_RHS.mkv</span> — this replaces it with the clean title.
+</div>
+
+<script>
+const DATA = {
+  theatre: {
+    rowMin: 52,
+    active: [
+      { title:"Invincible", mono:"I", sub:"Season 4 · 5 of 8 downloaded", pct:62,
+        meta:"2 downloading · 1 queued",
+        rows:[ {c:"S04E06", t:"All I Can Say Is I'm Sorry"}, {c:"S04E07", t:"What Have I Done?"} ] }
+    ],
+    history: [
+      { title:"Daredevil: Born Again", mono:"D", sub:"Season 2 · 8 episodes",
+        rows:[
+          {c:"S02E01", t:"Heaven's Half Hour"},
+          {c:"S02E02", t:"The Hollow of His Hand"},
+          {c:"S02E03", t:"Excessive Force"},
+          {c:"S02E04", t:"Sic Semper Systema"},
+          {c:"S02E05", t:"With Interest"},
+        ], more:"+ 3 more episodes" },
+      { title:"Community", mono:"C", sub:"Season 5 · 13 episodes",
+        rows:[
+          {c:"S05E01", t:"Repilot"},
+          {c:"S05E02", t:"Introduction to Teaching"},
+          {c:"S05E03", t:"Basic Intergluteal Numismatics"},
+          {c:"S05E04", t:"Cooperative Polygraphy"},
+          {c:"S05E05", t:"Geothermal Escapism"},
+        ], more:"+ 8 more episodes" },
+    ]
+  },
+  comics: {
+    rowMin: 64,
+    active: [
+      { title:"Chainsaw Man", mono:"C", sub:"3 of 11 volumes downloaded", pct:27,
+        meta:"1 downloading · 7 queued",
+        rows:[ {c:"Vol. 4", t:"Volume 4"}, {c:"Vol. 5", t:"Volume 5"} ] }
+    ],
+    history: [
+      { title:"Berserk", mono:"B", sub:"6 volumes",
+        rows:[
+          {c:"Vol. 1", t:"The Black Swordsman"},
+          {c:"Vol. 2", t:"The Guardians of Desire"},
+          {c:"Vol. 3", t:"The Guardians of Desire (2)"},
+          {c:"Vol. 4", t:"Volume 4"},
+          {c:"Vol. 5", t:"Volume 5"},
+        ], more:"+ 1 more volume" },
+      { title:"One Piece", mono:"O", sub:"4 volumes",
+        rows:[
+          {c:"Vol. 1", t:"Romance Dawn"},
+          {c:"Vol. 2", t:"Buggy the Clown"},
+          {c:"Vol. 3", t:"Don't Get Fooled Again"},
+          {c:"Vol. 4", t:"Volume 4"},
+        ] },
+    ]
+  }
+};
+
+function posterArt(show, big){
+  return `<div class="poster-art">
+      <div class="mono">${show.mono}</div>
+      <div class="pcap">${show.title}</div>
+    </div>`;
+}
+
+function rowsHtml(show){
+  let h = `<div class="rows">`;
+  for(const r of show.rows){
+    h += `<div class="erow"><span class="ecode">${r.c}</span><span class="etitle">${r.t}</span></div>`;
+  }
+  if(show.more) h += `<div class="more">${show.more}</div>`;
+  h += `</div>`;
+  return h;
+}
+
+function sideCard(show, active){
+  let right = `<div class="right">
+      <div class="show-title">${show.title}</div>
+      <div class="show-sub">${show.sub}</div>`;
+  if(active){
+    right += `<div class="pbar"><i style="width:${show.pct}%"></i></div>
+              <div class="pmeta">${show.meta}</div>`;
+  }
+  right += rowsHtml(show) + `</div>`;
+  return `<div class="card"><div class="side">${posterArt(show,false)}${right}</div></div>`;
+}
+
+function bannerCard(show, active){
+  let sub = show.sub;
+  let prog = active ? `<div class="pbar" style="max-width:340px"><i style="width:${show.pct}%"></i></div>
+                       <div class="pmeta">${show.meta}</div>` : "";
+  return `<div class="banner-card">
+      <div class="banner">
+        ${posterArt(show,true)}
+        <div class="btext"><div class="show-title">${show.title}</div>
+          <div class="show-sub">${sub}</div>${prog}</div>
+      </div>
+      ${rowsHtml(show)}
+    </div>`;
+}
+
+function render(mode, layout){
+  const d = DATA[mode];
+  const card = layout === "side" ? sideCard : bannerCard;
+  const pills = mode === "theatre"
+    ? `<span class="tb-pill">Comics</span><span class="tb-pill">Books</span><span class="tb-pill on">Theatre</span>`
+    : `<span class="tb-pill on">Comics</span><span class="tb-pill">Books</span><span class="tb-pill">Theatre</span>`;
+
+  let html = `
+    <div class="topbar">
+      <div class="tb-glyph">≡</div>
+      <div style="font-weight:700;font-size:15px;">Tankoban</div>
+      <div class="tb-spacer"></div>
+      ${pills}
+      <div class="tb-spacer"></div>
+      <div class="tb-glyph">+</div>
+    </div>
+    <div class="dl-head"><button class="back">‹ Back</button><div class="dl-title">Downloads</div></div>
+    <div class="body">`;
+
+  html += `<div class="section-label">ACTIVE</div>`;
+  for(const s of d.active) html += card(s, true);
+
+  html += `<div class="section-label">HISTORY</div>`;
+  for(const s of d.history) html += card(s, false);
+
+  html += `</div>`;
+  document.getElementById("frame").innerHTML = html;
+}
+
+document.getElementById("tabs").addEventListener("click", (e)=>{
+  const t = e.target.closest(".tab");
+  if(!t) return;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  render(t.dataset.mode, t.dataset.layout);
+});
+
+render("theatre","side");
+</script>
+</body>
+</html>

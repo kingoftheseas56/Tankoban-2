@@ -905,6 +905,7 @@ void MainWindow::buildPageStack()
     m_streamDownloadsPage->setTorrentClient(torrentClient);
     if (m_streamPage) {
         m_streamDownloadsPage->setStreamDownloadIndex(m_streamPage->streamDownloadIndex());
+        m_streamDownloadsPage->setMetaAggregator(m_streamPage->metaAggregator());
     }
     m_pageStack->addWidget(m_streamDownloadsPage);
     connect(m_streamDownloadsPage, &StreamDownloadsPage::backRequested, this, [this]() {

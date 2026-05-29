@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comics Downloads — volume area tidy-up</title>
+<style>
+  :root{
+    --ink:#ededed; --ink-dim:rgba(255,255,255,0.55); --ink-faint:rgba(255,255,255,0.38);
+    --surface:rgba(255,255,255,0.038); --hair:rgba(255,255,255,0.08); --amber:#cf9645;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:26px 0 60px;background:#15120f;color:var(--ink);
+    font-family:"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
+  .head{max-width:1080px;margin:0 auto 18px;padding:0 24px;}
+  .head h1{font-size:19px;font-weight:600;margin:0 0 4px;}
+  .head p{margin:0;color:var(--ink-dim);font-size:13px;line-height:1.5;max-width:760px;}
+  .tabs{max-width:1080px;margin:16px auto 14px;padding:0 24px;display:flex;gap:8px;flex-wrap:wrap;}
+  .tab{border:1px solid var(--hair);background:rgba(255,255,255,0.03);color:var(--ink-dim);
+    font-size:13px;font-weight:600;padding:9px 16px;border-radius:9px;cursor:pointer;}
+  .tab:hover{background:rgba(255,255,255,0.06);color:var(--ink);}
+  .tab.active{border-color:var(--amber);color:var(--amber);background:rgba(207,150,69,0.08);}
+  .frame{max-width:1080px;margin:0 auto;border-radius:14px;overflow:hidden;
+    border:1px solid rgba(255,255,255,0.07);box-shadow:0 24px 70px rgba(0,0,0,0.5);
+    background:radial-gradient(120% 90% at 70% -10%, #3a312a 0%, #271f1a 38%, #1b1613 70%, #140f0c 100%);
+    padding:22px 26px;}
+  .seclabel{font-size:10.5px;font-weight:700;letter-spacing:1.4px;color:var(--ink-faint);margin:0 2px 14px;}
+
+  .card{background:var(--surface);border:1px solid var(--hair);border-radius:12px;
+    display:flex;gap:0;margin-bottom:16px;overflow:hidden;}
+  .cover{flex:0 0 auto;width:110px;height:150px;
+    background:linear-gradient(155deg,#5a4c40,#33291f 55%,#211913);
+    display:flex;align-items:flex-end;position:relative;}
+  .cover .mono{position:absolute;top:50%;left:50%;transform:translate(-50%,-58%);
+    font-size:40px;font-weight:800;color:rgba(255,255,255,0.10);}
+  .cover .cap{position:relative;z-index:1;font-size:10px;font-weight:600;color:rgba(255,255,255,0.82);
+    padding:8px 9px;background:linear-gradient(0deg,rgba(0,0,0,0.55),transparent);width:100%;}
+  .right{flex:1;min-width:0;padding:15px 18px 15px;}
+  .title{font-size:15px;font-weight:600;color:var(--ink);}
+  .sub{font-size:12px;color:var(--ink-dim);margin-top:3px;}
+  .area{margin-top:13px;}
+
+  /* A — current (stacked rows) */
+  .stacked .row{font-size:13px;color:rgba(255,255,255,0.86);padding:6px 10px;}
+
+  /* B — chip grid (number only) */
+  .chips{display:flex;flex-wrap:wrap;gap:8px;}
+  .chip{min-width:38px;height:30px;padding:0 10px;display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);border-radius:7px;
+    font-size:13px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,0.88);cursor:default;}
+  .chip:hover{background:rgba(255,255,255,0.10);}
+
+  /* C — inline comma list */
+  .inline{font-size:13.5px;color:rgba(255,255,255,0.82);line-height:1.7;}
+  .inline b{color:var(--ink-dim);font-weight:600;font-size:12px;letter-spacing:.3px;
+    text-transform:uppercase;margin-right:8px;}
+
+  /* D — labelled chip ("Vol N") */
+  .chips.vl .chip{min-width:0;padding:0 12px;}
+  .chips.vl .chip .vl{font-size:10px;color:var(--ink-faint);margin-right:4px;}
+  .hint{max-width:1080px;margin:14px auto 0;padding:0 24px;color:var(--ink-faint);font-size:12px;}
+</style>
+</head>
+<body>
+<div class="head">
+  <h1>Comics Downloads — volume area tidy-up</h1>
+  <p>Same card you approved; just the volume area below the title changes. All treatments <b>sort ascending</b>
+     and <b>de-duplicate</b> (fixes the unsorted 7,116,99999,48… you saw — that was two sources concatenated).
+     Tabs switch the treatment.</p>
+</div>
+
+<div class="tabs" id="tabs">
+  <button class="tab active" data-v="b">B · Number chips (rec.)</button>
+  <button class="tab" data-v="d">D · "Vol N" chips</button>
+  <button class="tab" data-v="c">C · Inline list</button>
+  <button class="tab" data-v="a">A · Current (stacked)</button>
+</div>
+
+<div class="frame">
+  <div class="seclabel">DOWNLOADED</div>
+  <div id="cards"></div>
+</div>
+<div class="hint">Chips are display-only here (same as today's rows). The "99999" is your real test data — it just sorts to the end now instead of scrambling the list.</div>
+
+<script>
+const SHOWS = [
+  { title:"One Piece", mono:"O", vols:[7,116,99999,48,99,112,114] },
+  { title:"Grand Blue Dreaming", mono:"G", vols:[1] },
+  { title:"20th Century Boys", mono:"2", vols:[1] },
+];
+function sortedUnique(a){ return [...new Set(a)].sort((x,y)=>x-y); }
+
+function area(v, vols){
+  if(v==="a") return `<div class="area stacked">${vols.map(n=>`<div class="row">Volume ${n}</div>`).join("")}</div>`;
+  if(v==="b") return `<div class="area"><div class="chips">${vols.map(n=>`<div class="chip">${n}</div>`).join("")}</div></div>`;
+  if(v==="d") return `<div class="area"><div class="chips vl">${vols.map(n=>`<div class="chip"><span class="vl">Vol</span>${n}</div>`).join("")}</div></div>`;
+  if(v==="c") return `<div class="area inline"><b>Volumes</b>${vols.join(", ")}</div>`;
+}
+function render(v){
+  document.getElementById("cards").innerHTML = SHOWS.map(s=>{
+    const vols = sortedUnique(s.vols);
+    return `<div class="card">
+      <div class="cover"><div class="mono">${s.mono}</div><div class="cap">${s.title}</div></div>
+      <div class="right">
+        <div class="title">${s.title}</div>
+        <div class="sub">${vols.length} volume${vols.length===1?"":"s"}</div>
+        ${area(v, vols)}
+      </div></div>`;
+  }).join("");
+}
+document.getElementById("tabs").addEventListener("click",e=>{
+  const t=e.target.closest(".tab"); if(!t) return;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active"); render(t.dataset.v);
+});
+render("b");
+</script>
+</body>
+</html>

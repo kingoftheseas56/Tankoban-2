@@ -13,14 +13,21 @@
 // inline cancel/pause/resume controls deferred to v1.x.
 
 #include <QFrame>
+#include <QHash>
 #include <QString>
 
 class QLabel;
 class QPushButton;
 class QScrollArea;
 class QVBoxLayout;
+class QWidget;
+class QUrl;
+class QNetworkAccessManager;
 class TorrentClient;
 class StreamDownloadIndex;
+
+namespace tankostream::stream { class MetaAggregator; }
+namespace tankostream::addon { struct MetaItem; }
 
 class StreamDownloadsPage : public QFrame
 {
@@ -36,6 +43,12 @@ public:
     // pointer (if any) before binding the new one.
     void setTorrentClient(TorrentClient* client);
     void setStreamDownloadIndex(StreamDownloadIndex* index);
+
+    // THEATRE/COMICS Downloads redesign 2026-05-29 — read-time metadata
+    // enrichment source. fetchMetaItem(imdbId,"series") yields both the poster
+    // and per-episode titles; reentrant + 60s-cached, so safe to drive here
+    // without disturbing the detail-view series fetch.
+    void setMetaAggregator(tankostream::stream::MetaAggregator* agg);
 
 signals:
     // Topbar back-button click - MainWindow's slot returns to the
@@ -54,13 +67,31 @@ signals:
 private slots:
     void refreshActive();
     void refreshHistory();
+    void onMetaItemReady(const tankostream::addon::MetaItem& item);
 
 private:
     void buildUi();
     void updateEmptyState();
+    QWidget* makePosterWidget(const QString& imdbId, const QString& title);
+    void savePosterFrom(const QString& imdbId, const QUrl& posterUrl);
+
+    // Per-show widget handles, keyed by imdbId, so async metadata can repaint
+    // the right card after the synchronous (placeholder) render.
+    struct DownloadCardRefs {
+        QFrame*  card         = nullptr;
+        QWidget* posterWidget = nullptr;   // QLabel painting poster / placeholder
+        QLabel*  titleLabel   = nullptr;   // show title
+        // "<season>:<episode>" (or "movie") -> the clickable row button whose
+        // text is rebuilt to the real title on enrichment.
+        QHash<QString, QPushButton*> rowTitleByKey;
+    };
 
     TorrentClient*       m_torrentClient = nullptr;
     StreamDownloadIndex* m_streamDownloadIndex = nullptr;
+    tankostream::stream::MetaAggregator* m_metaAggregator = nullptr;
+    QNetworkAccessManager* m_posterNam = nullptr;
+    QHash<QString, DownloadCardRefs> m_historyCards;
+    QHash<QString, DownloadCardRefs> m_activeCards;
 
     QPushButton*  m_backBtn        = nullptr;
     QLabel*       m_titleLabel     = nullptr;

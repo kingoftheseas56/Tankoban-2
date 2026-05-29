@@ -2,7 +2,11 @@
 
 #include "core/torrent/TorrentClient.h"
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/stream/MetaAggregator.h"
+#include "core/stream/addon/MetaItem.h"
 
+#include <QDir>
+#include <QFile>
 #include <QFrame>
 #include <QFileInfo>
 #include <QHash>
@@ -11,15 +15,40 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSet>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace {
+
+// Mirrors the on-disk poster cache used by StreamLibraryLayout / StreamDetailView /
+// StreamSearchWidget / StreamContinueStrip: <GenericData>/Tankoban/data/stream_posters/<imdbId>.jpg.
+// The ".jpg" extension is load-bearing — those consumers enumerate "*.jpg" and
+// cleanupOrphanPosters only GCs .jpg files, so an extensionless file would be a
+// private, never-shared, never-collected cache.
+QString posterCachePath(const QString& imdbId)
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+           + QStringLiteral("/Tankoban/data/stream_posters/") + imdbId
+           + QStringLiteral(".jpg");
+}
+
+// " · " separator built from a code point so the source stays ASCII (the build
+// does not force MSVC /utf-8, so raw UTF-8 in literals would be misread).
+QString dotSep()
+{
+    return QStringLiteral("  ") + QChar(0x00B7) + QStringLiteral("  ");
+}
 
 QString prettifyFilenameTitle(QString text)
 {
@@ -215,6 +244,121 @@ void StreamDownloadsPage::setStreamDownloadIndex(StreamDownloadIndex* index)
     refreshHistory();
 }
 
+void StreamDownloadsPage::setMetaAggregator(tankostream::stream::MetaAggregator* agg)
+{
+    if (m_metaAggregator == agg)
+        return;
+    if (m_metaAggregator)
+        disconnect(m_metaAggregator, nullptr, this, nullptr);
+    m_metaAggregator = agg;
+    if (m_metaAggregator) {
+        connect(m_metaAggregator,
+                &tankostream::stream::MetaAggregator::metaItemReady,
+                this, &StreamDownloadsPage::onMetaItemReady,
+                Qt::UniqueConnection);
+    }
+    // Re-render so the enrichment fetch fires now that the provider exists.
+    refreshHistory();
+    refreshActive();
+}
+
+QWidget* StreamDownloadsPage::makePosterWidget(const QString& imdbId, const QString& title)
+{
+    auto* pl = new QLabel;
+    pl->setObjectName("StreamDownloadsPoster");
+    pl->setFixedSize(96, 144);
+    pl->setScaledContents(true);
+    pl->setAlignment(Qt::AlignCenter);
+    pl->setWordWrap(true);
+    pl->setStyleSheet(
+        "QLabel#StreamDownloadsPoster {"
+        "  border-top-left-radius: 12px; border-bottom-left-radius: 12px;"
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+        "    stop:0 rgba(255,255,255,0.10), stop:1 rgba(255,255,255,0.03));"
+        "  color: rgba(255,255,255,0.45); font-size: 9pt; padding: 6px;"
+        "}");
+
+    const QString path = posterCachePath(imdbId);
+    QPixmap pm;
+    if (QFile::exists(path) && pm.load(path)) {
+        pl->setPixmap(pm.scaled(96, 144, Qt::KeepAspectRatioByExpanding,
+                                Qt::SmoothTransformation));
+    } else {
+        pl->setText(title);  // placeholder until art loads
+    }
+    return pl;
+}
+
+void StreamDownloadsPage::savePosterFrom(const QString& imdbId, const QUrl& posterUrl)
+{
+    if (posterUrl.isEmpty() || QFile::exists(posterCachePath(imdbId)))
+        return;
+    if (!m_posterNam)
+        m_posterNam = new QNetworkAccessManager(this);
+    QNetworkRequest req(posterUrl);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply* reply = m_posterNam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, imdbId]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError)
+            return;
+        QPixmap pm;
+        if (!pm.loadFromData(reply->readAll()))
+            return;
+        const QString path = posterCachePath(imdbId);
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        pm.save(path, "JPG");
+        const QPixmap scaled = pm.scaled(96, 144, Qt::KeepAspectRatioByExpanding,
+                                         Qt::SmoothTransformation);
+        for (QHash<QString, DownloadCardRefs>* map : {&m_historyCards, &m_activeCards}) {
+            auto it = map->constFind(imdbId);
+            if (it != map->constEnd()) {
+                if (auto* lbl = qobject_cast<QLabel*>(it->posterWidget)) {
+                    lbl->setText(QString());
+                    lbl->setPixmap(scaled);
+                }
+            }
+        }
+    });
+}
+
+void StreamDownloadsPage::onMetaItemReady(const tankostream::addon::MetaItem& item)
+{
+    const QString imdbId = item.preview.id;
+    savePosterFrom(imdbId, item.preview.poster);
+
+    for (QHash<QString, DownloadCardRefs>* map : {&m_historyCards, &m_activeCards}) {
+        auto it = map->find(imdbId);
+        if (it == map->end())
+            continue;
+        DownloadCardRefs& refs = it.value();
+        if (!item.preview.name.isEmpty() && refs.titleLabel)
+            refs.titleLabel->setText(item.preview.name);
+
+        // Movie row (single entry) — enrich to the catalog name.
+        if (!item.preview.name.isEmpty()) {
+            auto mit = refs.rowTitleByKey.constFind(QStringLiteral("movie"));
+            if (mit != refs.rowTitleByKey.constEnd() && mit.value())
+                mit.value()->setText(item.preview.name);
+        }
+
+        for (const tankostream::addon::Video& v : item.videos) {
+            if (!v.seriesInfo.has_value() || v.title.isEmpty())
+                continue;
+            const int s = v.seriesInfo->season;
+            const int ep = v.seriesInfo->episode;
+            auto rit = refs.rowTitleByKey.constFind(QStringLiteral("%1:%2").arg(s).arg(ep));
+            if (rit != refs.rowTitleByKey.constEnd() && rit.value()) {
+                rit.value()->setText(QStringLiteral("S%1E%2")
+                                         .arg(s, 2, 10, QLatin1Char('0'))
+                                         .arg(ep, 2, 10, QLatin1Char('0'))
+                                     + dotSep() + v.title);
+            }
+        }
+    }
+}
+
 void StreamDownloadsPage::updateEmptyState()
 {
     if (!m_emptyState || !m_activeBody || !m_historyBody
@@ -236,6 +380,7 @@ void StreamDownloadsPage::refreshActive()
         if (auto* w = item->widget()) w->deleteLater();
         delete item;
     }
+    m_activeCards.clear();  // stored handles point at the widgets just torn down
 
     if (!m_torrentClient) {
         m_activeHeader->setVisible(false);
@@ -283,34 +428,17 @@ void StreamDownloadsPage::refreshActive()
     for (const QString& imdbId : imdbsSorted) {
         const QList<QJsonObject>& showGroups = byImdb[imdbId];
 
-        auto* card = new QFrame(m_activeBody);
-        card->setObjectName("StreamDownloadsActiveCard");
-        card->setStyleSheet(
-            "QFrame#StreamDownloadsActiveCard {"
-            "  background: rgba(255,255,255,0.04);"
-            "  border-radius: 8px;"
-            "  padding: 12px;"
-            "}");
-        auto* cardLayout = new QVBoxLayout(card);
-        cardLayout->setContentsMargins(14, 12, 14, 12);
-        cardLayout->setSpacing(6);
-
-        const QString showTitle = bestTitleFromGroups(showGroups, imdbId);
-        auto* showLabel = new QLabel(showTitle, card);
-        showLabel->setObjectName("StreamDownloadsShowTitle");
-        showLabel->setStyleSheet(
-            "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
-        cardLayout->addWidget(showLabel);
-
+        // Aggregate across this show's season groups into one progress summary.
+        QSet<int> seasons;
+        int total = 0, done = 0, active = 0, pending = 0, failed = 0;
         for (const QJsonObject& group : showGroups) {
             const int season = group.value(QStringLiteral("season")).toInt(
                 group.value(QStringLiteral("sourceIds")).toObject()
                      .value(QStringLiteral("season")).toInt(0));
+            if (season > 0) seasons.insert(season);
             const QJsonArray items = group.value(QStringLiteral("items")).toArray();
-
-            int total = items.size();
-            int done = 0, active = 0, pending = 0, failed = 0;
             for (const auto& v : items) {
+                ++total;
                 const QString state = v.toObject().value(QStringLiteral("itemState")).toString();
                 if (state == QLatin1String("Published") || state == QLatin1String("Completed"))
                     ++done;
@@ -321,23 +449,75 @@ void StreamDownloadsPage::refreshActive()
                 else
                     ++failed;
             }
-
-            auto* groupLabel = new QLabel(card);
-            const QString summary = tr("Season %1 - %2 of %3 done")
-                                        .arg(season > 0 ? QString::number(season) : QStringLiteral("?"))
-                                        .arg(done)
-                                        .arg(total);
-            QString statusLine = summary;
-            if (active > 0) statusLine += tr("  -  %1 active").arg(active);
-            if (pending > 0) statusLine += tr("  -  %1 queued").arg(pending);
-            if (failed > 0) statusLine += tr("  -  %1 stuck").arg(failed);
-            groupLabel->setText(statusLine);
-            groupLabel->setStyleSheet(
-                "color: rgba(255,255,255,0.75); font-size: 10pt; padding-top: 2px;");
-            cardLayout->addWidget(groupLabel);
         }
 
+        const QString showTitle = bestTitleFromGroups(showGroups, imdbId);
+
+        auto* card = new QFrame(m_activeBody);
+        card->setObjectName("StreamDownloadsActiveCard");
+        card->setStyleSheet(
+            "QFrame#StreamDownloadsActiveCard {"
+            "  background: rgba(255,255,255,0.038);"
+            "  border: 1px solid rgba(255,255,255,0.08);"
+            "  border-radius: 12px;"
+            "}");
+        auto* h = new QHBoxLayout(card);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(0);
+
+        DownloadCardRefs refs;
+        refs.card = card;
+        refs.posterWidget = makePosterWidget(imdbId, showTitle);
+        h->addWidget(refs.posterWidget, 0, Qt::AlignTop);
+
+        auto* right = new QVBoxLayout();
+        right->setContentsMargins(16, 13, 16, 13);
+        right->setSpacing(6);
+
+        refs.titleLabel = new QLabel(showTitle, card);
+        refs.titleLabel->setObjectName("StreamDownloadsShowTitle");
+        refs.titleLabel->setStyleSheet(
+            "QLabel#StreamDownloadsShowTitle { color: #ededed; font-size: 15px; font-weight: 600; }");
+        right->addWidget(refs.titleLabel);
+
+        auto* sub = new QLabel(card);
+        QString subText = tr("%1 of %2 downloaded").arg(done).arg(total);
+        if (seasons.size() == 1)
+            subText = tr("Season %1").arg(*seasons.begin()) + dotSep() + subText;
+        sub->setText(subText);
+        sub->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px;");
+        right->addWidget(sub);
+
+        // Grayscale progress bar — fill/empty via layout stretch (responsive).
+        auto* track = new QFrame(card);
+        track->setFixedHeight(4);
+        track->setStyleSheet("background: rgba(255,255,255,0.12); border-radius: 2px;");
+        auto* tl = new QHBoxLayout(track);
+        tl->setContentsMargins(0, 0, 0, 0);
+        tl->setSpacing(0);
+        auto* fill = new QFrame(track);
+        fill->setStyleSheet("background: rgba(255,255,255,0.55); border-radius: 2px;");
+        tl->addWidget(fill, done);
+        tl->addStretch(total > done ? total - done : 0);
+        right->addWidget(track);
+
+        QStringList parts;
+        if (active > 0) parts << tr("%1 downloading").arg(active);
+        if (pending > 0) parts << tr("%1 queued").arg(pending);
+        if (failed > 0) parts << tr("%1 stuck").arg(failed);
+        if (!parts.isEmpty()) {
+            auto* state = new QLabel(parts.join(dotSep()), card);
+            state->setStyleSheet("color: rgba(255,255,255,0.50); font-size: 11px;");
+            right->addWidget(state);
+        }
+
+        h->addLayout(right, 1);
+
+        m_activeCards.insert(imdbId, refs);
         m_activeBodyLayout->addWidget(card);
+
+        if (m_metaAggregator)
+            m_metaAggregator->fetchMetaItem(imdbId, QStringLiteral("series"));
     }
 
     updateEmptyState();
@@ -352,6 +532,7 @@ void StreamDownloadsPage::refreshHistory()
         if (auto* w = item->widget()) w->deleteLater();
         delete item;
     }
+    m_historyCards.clear();  // stored handles point at the widgets just torn down
 
     if (!m_streamDownloadIndex) {
         m_historyHeader->setVisible(false);
@@ -402,27 +583,44 @@ void StreamDownloadsPage::refreshHistory()
                       return a.episode < b.episode;
                   });
 
+        const bool isMovie = entries.first().type == QLatin1String("movie");
+        const QString showTitle = bestTitleFromEntries(entries, imdbId);
+
         auto* card = new QFrame(m_historyBody);
         card->setObjectName("StreamDownloadsHistoryCard");
         card->setStyleSheet(
             "QFrame#StreamDownloadsHistoryCard {"
-            "  background: rgba(255,255,255,0.04);"
-            "  border-radius: 8px;"
+            "  background: rgba(255,255,255,0.038);"
+            "  border: 1px solid rgba(255,255,255,0.08);"
+            "  border-radius: 12px;"
             "}");
-        auto* cardLayout = new QVBoxLayout(card);
-        cardLayout->setContentsMargins(14, 12, 14, 12);
-        cardLayout->setSpacing(4);
+        auto* h = new QHBoxLayout(card);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(0);
 
-        const QString showTitle = bestTitleFromEntries(entries, imdbId);
-        auto* showLabel = new QLabel(card);
-        showLabel->setObjectName("StreamDownloadsShowTitle");
-        const QString showHeader = entries.first().type == QLatin1String("movie")
-            ? showTitle
-            : tr("%1  -  %2 episodes").arg(showTitle).arg(entries.size());
-        showLabel->setText(showHeader);
-        showLabel->setStyleSheet(
-            "QLabel#StreamDownloadsShowTitle { color: #eeeeee; font-size: 12pt; font-weight: 600; }");
-        cardLayout->addWidget(showLabel);
+        DownloadCardRefs refs;
+        refs.card = card;
+        refs.posterWidget = makePosterWidget(imdbId, showTitle);
+        h->addWidget(refs.posterWidget, 0, Qt::AlignTop);
+
+        auto* right = new QVBoxLayout();
+        right->setContentsMargins(16, 13, 16, 11);
+        right->setSpacing(3);
+
+        refs.titleLabel = new QLabel(showTitle, card);
+        refs.titleLabel->setObjectName("StreamDownloadsShowTitle");
+        refs.titleLabel->setStyleSheet(
+            "QLabel#StreamDownloadsShowTitle { color: #ededed; font-size: 15px; font-weight: 600; }");
+        right->addWidget(refs.titleLabel);
+
+        auto* sub = new QLabel(card);
+        sub->setText(isMovie ? tr("Movie") : tr("%n episode(s)", "", entries.size()));
+        sub->setStyleSheet("color: rgba(255,255,255,0.55); font-size: 12px;");
+        right->addWidget(sub);
+
+        auto* rows = new QVBoxLayout();
+        rows->setContentsMargins(0, 8, 0, 0);
+        rows->setSpacing(2);
 
         for (const auto& e : entries) {
             auto* row = new QPushButton(card);
@@ -431,36 +629,50 @@ void StreamDownloadsPage::refreshHistory()
             row->setFlat(true);
             row->setStyleSheet(
                 "QPushButton#StreamDownloadsHistoryRow {"
-                "  text-align: left; padding: 6px 8px; color: rgba(255,255,255,0.85);"
-                "  font-size: 10pt; border: none; background: transparent;"
+                "  text-align: left; padding: 7px 10px; color: rgba(255,255,255,0.86);"
+                "  font-size: 13px; border: none; background: transparent;"
                 "}"
                 "QPushButton#StreamDownloadsHistoryRow:hover {"
-                "  background: rgba(255,255,255,0.06); border-radius: 4px;"
+                "  background: rgba(255,255,255,0.065); border-radius: 6px;"
                 "}");
-            QString rowLabel;
-            if (e.type == QLatin1String("movie")) {
-                rowLabel = QFileInfo(e.canonicalPath).fileName();
+
+            // Title-only. Placeholder = prettified filename; metaItemReady swaps
+            // in the real catalog title (rebuilding the SxxExx · title text).
+            const QString placeholder = prettifyFilenameTitle(e.canonicalPath);
+            if (isMovie) {
+                row->setText(placeholder.isEmpty() ? showTitle : placeholder);
+                refs.rowTitleByKey.insert(QStringLiteral("movie"), row);
             } else {
-                rowLabel = tr("S%1E%2  -  %3")
-                    .arg(e.season, 2, 10, QLatin1Char('0'))
-                    .arg(e.episode, 2, 10, QLatin1Char('0'))
-                    .arg(QFileInfo(e.canonicalPath).fileName());
+                row->setText(QStringLiteral("S%1E%2")
+                                 .arg(e.season, 2, 10, QLatin1Char('0'))
+                                 .arg(e.episode, 2, 10, QLatin1Char('0'))
+                             + dotSep() + placeholder);
+                refs.rowTitleByKey.insert(
+                    QStringLiteral("%1:%2").arg(e.season).arg(e.episode), row);
             }
-            row->setText(rowLabel);
 
             const QString canonicalPath = e.canonicalPath;
             const QString rowImdb = e.imdbId;
             const int rowSeason = e.season;
             const int rowEpisode = e.episode;
-            connect(row, &QPushButton::clicked, this, [this, canonicalPath, rowImdb, rowSeason, rowEpisode]() {
-                emit playLocalFileRequested(canonicalPath, rowImdb,
-                                            QFileInfo(canonicalPath).completeBaseName(),
-                                            rowSeason, rowEpisode);
-            });
-            cardLayout->addWidget(row);
+            connect(row, &QPushButton::clicked, this,
+                    [this, canonicalPath, rowImdb, rowSeason, rowEpisode]() {
+                        emit playLocalFileRequested(canonicalPath, rowImdb,
+                                                    QFileInfo(canonicalPath).completeBaseName(),
+                                                    rowSeason, rowEpisode);
+                    });
+            rows->addWidget(row);
         }
 
+        right->addLayout(rows);
+        h->addLayout(right, 1);
+
+        m_historyCards.insert(imdbId, refs);
         m_historyBodyLayout->addWidget(card);
+
+        if (m_metaAggregator)
+            m_metaAggregator->fetchMetaItem(
+                imdbId, isMovie ? QStringLiteral("movie") : QStringLiteral("series"));
     }
 
     updateEmptyState();
