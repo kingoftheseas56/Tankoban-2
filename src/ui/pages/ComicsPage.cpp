@@ -1662,27 +1662,11 @@ int ComicsPage::anilistIdForDownloadEntry(const QString& sourceId,
         }
     }
 
-    // 3. MangaFire catalog slug → catalog anilistId, SOURCE-AGNOSTIC.
-    //    COMICS_LIBRARY_DEDUP 2026-05-29 (Agent 1). A WeebCentral-packed or
-    //    MangaFire download registers its seriesId as the MangaFire slug
-    //    ("one-piece") regardless of sourceId ("weebcentral" vs
-    //    "mangafire_catalog"). resolveDisplayTitle only consults the catalog
-    //    when sourceId=="mangafire_catalog", so a "weebcentral:one-piece" bucket
-    //    resolved to neither an id nor a title and split into its own
-    //    "raw:weebcentral:one-piece" group — duplicating the series tile.
-    //    Resolving the catalog slug here (any source) collapses every source's
-    //    bucket for the same series onto one "anilist:<id>" canonical key, with
-    //    no dependency on a bookmark existing.
-    {
-        const QString jsonPath = m_localCatalogIndex.filePathForSlug(seriesId);
-        if (!jsonPath.isEmpty()) {
-            const auto cat =
-                tankoban::manga::LocalMangaCatalogLoader::loadFromFile(jsonPath);
-            if (cat.has_value() && cat->anilistId > 0)
-                return cat->anilistId;
-        }
-    }
-
+    // NOTE: MangaFire catalog JSONs frequently carry "anilistId": 0 (e.g.
+    // one-piece.json), so resolving the id from the catalog is unreliable. The
+    // canonical-key merge for catalog-slug series goes through the TITLE path
+    // in resolveDisplayTitle + the bookmark cross-ref instead — see
+    // COMICS_LIBRARY_DEDUP 2026-05-29 there.
     return 0;
 }
 
@@ -1739,8 +1723,18 @@ QString ComicsPage::resolveDisplayTitle(const QString& sourceId,
         }
     }
 
-    // 2. MangaFire local catalog.
-    if (sourceId == QLatin1String(MANGAFIRE_CATALOG_SOURCE_ID)) {
+    // 2. MangaFire local catalog — SOURCE-AGNOSTIC.
+    //    COMICS_LIBRARY_DEDUP 2026-05-29 (Agent 1). The seriesId IS the MangaFire
+    //    catalog slug ("one-piece") for BOTH "mangafire_catalog" AND
+    //    "weebcentral" downloads (WeebCentralVolumePacker registers with the
+    //    slug). Previously this lookup was gated on sourceId=="mangafire_catalog",
+    //    so a "weebcentral:one-piece" bucket resolved no title → resolveCanonical-
+    //    GroupKey fell to "raw:weebcentral:one-piece", a SEPARATE group from the
+    //    mangafire bucket's "anilist:30013" → One Piece showed twice. Resolving
+    //    the catalog title for any source lets the bookmark cross-ref collapse
+    //    every source's bucket onto one canonical key. filePathForSlug returns
+    //    empty for non-slug seriesIds (e.g. "anilist_30013"), so this is safe.
+    {
         const QString jsonPath = m_localCatalogIndex.filePathForSlug(seriesId);
         if (!jsonPath.isEmpty()) {
             const auto cat =
