@@ -251,6 +251,11 @@ MetaAggregator::MetaAggregator(AddonRegistry* registry, QObject* parent)
     : QObject(parent)
     , m_registry(registry)
 {
+    // Pre-fetch the Fribb IMDb->Kitsu map at startup so the cache is warm by
+    // the time the user opens their first anime. Without this, a cache miss
+    // on first open falls through to the title-search fallback which cannot
+    // query Anime Kitsu (its catalog has no search extra).
+    maybeRefreshAnimeIdMap();
 }
 
 void MetaAggregator::searchCatalog(const QString& query)
@@ -473,7 +478,8 @@ void MetaAggregator::dispatchSeriesMeta(const QUrl& baseUrl,
             const QString country =
                 meta.value(QStringLiteral("country")).toString().trimmed();
             if (!m_seriesResolved && !m_seriesAnimeRerouteAttempted
-                && isAnimeSeries(genres, country)) {
+                && isAnimeSeries(genres, country)
+                && seasons.size() >= 5) {
                 m_seriesAnimeRerouteAttempted = true;
                 m_seriesResolved = true;  // claim resolution; reroute owns the async emit
                 const QString title =
@@ -564,6 +570,10 @@ void MetaAggregator::maybeRefreshAnimeIdMap()
     if (!cache->isStale(24LL * 60LL * 60LL * 1000LL)) {
         return;
     }
+    // Don't stack concurrent fetches — one in-flight request is enough.
+    if (m_fribbReply && m_fribbReply->isRunning()) {
+        return;
+    }
     if (!m_fribbNam) {
         m_fribbNam = new QNetworkAccessManager(this);
     }
@@ -572,15 +582,25 @@ void MetaAggregator::maybeRefreshAnimeIdMap()
         "anime-list-mini.json")));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply* reply = m_fribbNam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            return;
+    m_fribbReply = m_fribbNam->get(req);
+    connect(m_fribbReply, &QNetworkReply::finished, this, [this]() {
+        if (m_fribbReply->error() == QNetworkReply::NoError) {
+            const QByteArray body = m_fribbReply->readAll();
+            if (!body.isEmpty()) {
+                animeIdMap()->saveJson(body);
+            }
         }
-        const QByteArray body = reply->readAll();
-        if (!body.isEmpty()) {
-            animeIdMap()->saveJson(body);
+        m_fribbReply->deleteLater();
+        m_fribbReply = nullptr;
+
+        // Retry any reroutes that were queued while the fetch was in-flight.
+        if (!m_pendingAnimeReroutes.isEmpty()) {
+            const auto pending = m_pendingAnimeReroutes;
+            m_pendingAnimeReroutes.clear();
+            for (const auto& p : pending) {
+                rerouteSeriesToAnime(p.imdbId, p.title, p.cinemetaFallback,
+                                     /*fromRetry=*/true);
+            }
         }
     });
 }
@@ -607,11 +627,15 @@ void MetaAggregator::emitSeriesResult(
 
 void MetaAggregator::rerouteSeriesToAnime(
     const QString& imdbId, const QString& title,
-    const QMap<int, QList<StreamEpisode>>& cinemetaFallback)
+    const QMap<int, QList<StreamEpisode>>& cinemetaFallback, bool fromRetry)
 {
     // Kick a daily background refresh of the Fribb map (helps next time even if
-    // this lookup misses).
-    maybeRefreshAnimeIdMap();
+    // this lookup misses). Skip on a retry: the fetch that triggered this retry
+    // just finished, so re-arming here would restart it on every failure and
+    // spin an endless fetch/re-queue loop when the endpoint is unreachable.
+    if (!fromRetry) {
+        maybeRefreshAnimeIdMap();
+    }
 
     const std::optional<int> kitsu = animeIdMap()->kitsuIdForImdb(imdbId);
     if (kitsu.has_value()) {
@@ -620,9 +644,19 @@ void MetaAggregator::rerouteSeriesToAnime(
         return;
     }
 
-    // Cache miss (e.g. a fresh airing not yet in the Fribb list). Fall back to a
-    // title search on Anime Kitsu, confirmed by the imdb_id it round-trips. If
-    // nothing confirms, degrade to the Cinemeta result (never worse than today).
+    // Cache miss. If a Fribb fetch is in-flight, queue this reroute to retry
+    // when it completes — don't fall through to the fragile title search while
+    // the authoritative mapping is literally on the wire. Never re-queue from a
+    // retry: the fetch already completed, so a still-empty cache means the map
+    // genuinely lacks this id — degrade to the title search below.
+    if (!fromRetry && m_fribbReply && m_fribbReply->isRunning()) {
+        m_pendingAnimeReroutes.append({imdbId, title, cinemetaFallback});
+        return;
+    }
+
+    // No fetch in-flight and not in cache — fall back to a title search on
+    // Anime Kitsu, confirmed by the imdb_id it round-trips. If nothing
+    // confirms, degrade to the Cinemeta result (never worse than today).
     searchByTitle(
         title, QStringLiteral("series"),
         [this, imdbId, cinemetaFallback](const QList<MetaItemPreview>& results,

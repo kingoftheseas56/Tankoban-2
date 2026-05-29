@@ -18,6 +18,7 @@ class AddonRegistry;
 }
 
 class QNetworkAccessManager;
+class QNetworkReply;
 
 namespace tankostream::stream {
 
@@ -117,7 +118,8 @@ private:
 
     // THEATRE_ANIME_CATALOG reroute helpers.
     void rerouteSeriesToAnime(const QString& imdbId, const QString& title,
-                              const QMap<int, QList<StreamEpisode>>& cinemetaFallback);
+                              const QMap<int, QList<StreamEpisode>>& cinemetaFallback,
+                              bool fromRetry = false);
     void fetchAnimeKitsuMeta(int kitsuId, const QString& imdbId, bool requireConfirm,
                              const QMap<int, QList<StreamEpisode>>& fallback);
     void emitSeriesResult(const QString& imdbId,
@@ -146,9 +148,17 @@ private:
     // THEATRE_ANIME_CATALOG — IMDb->Kitsu bridge + reroute state.
     AnimeIdMapCache* m_animeIdMap = nullptr;       // lazy-owned
     QNetworkAccessManager* m_fribbNam = nullptr;   // lazy; Fribb map refresh
+    QNetworkReply* m_fribbReply = nullptr;         // in-flight Fribb fetch
     bool m_seriesAnimeRerouteAttempted = false;
     QSet<QString> m_animeRerouted;                 // imdbIds resolved via Kitsu
     QHash<QString, int> m_animeKitsuId;            // imdbId -> resolved kitsu id
+
+    struct PendingAnimeReroute {
+        QString imdbId;
+        QString title;
+        QMap<int, QList<StreamEpisode>> cinemetaFallback;
+    };
+    QList<PendingAnimeReroute> m_pendingAnimeReroutes;
 
     // fetchMetaItem cache keyed by imdbId. Short TTL — detail view reopens
     // are hot and the payload is small; a minute is enough to coalesce
