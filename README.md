@@ -1,6 +1,6 @@
 # Tankoban
 
-A unified media library for **Comics, Books, and Theatre** — read manga and comics, read ebooks and listen to audiobooks, and stream or download video, all in one Qt6 desktop app.
+A unified media library for **Comics, Books, and Theatre** — read manga and comics, read ebooks and listen to audiobooks, and download video to watch locally, all in one Qt6 desktop app.
 
 > **Status:** active development, pre-1.0.
 > **Windows** is the current build target (full build CI + a tag-driven installer pipeline are live).
@@ -14,9 +14,9 @@ Tankoban is organized around three modes. Each mode has a built-in reader/player
 
 - **Comics** — read manga and comics (CBZ, CBR, or folders of images) with double-page and scroll-strip modes. *Source:* **Tankoyomi** discovers and downloads series from manga sources (e.g. WeebCentral).
 - **Books** — read EPUBs, with Edge-TTS audiobook narration and audiobook↔ebook chapter pairing. *Source:* **TankoLibrary** discovers and downloads titles from shadow-library sources (e.g. LibGen).
-- **Theatre** — a Stremio-style experience for video: browse catalogs from Stremio addons, then stream or download. Playback runs on a native Qt6 player backed by an FFmpeg sidecar (libplacebo HDR tone-mapping, libass subtitles, A/V-sync clock). *Source:* **Tankorent**, an in-process libtorrent-rasterbar 2.0 engine (magnets, DHT, sequential download for in-progress streaming), plus the bundled Stremio `stream-server` runtime.
+- **Theatre** — browse video catalogs (via Stremio addons) and **download** titles to watch locally — download-exclusive, the same shape as Comics and Books. Playback runs on a native Qt6 player backed by an FFmpeg sidecar (libplacebo HDR tone-mapping, libass subtitles, A/V-sync clock). *Source:* **Tankorent**, an in-process libtorrent-rasterbar 2.0 engine (magnets, DHT), plus the bundled Stremio `stream-server` runtime for catalog + source resolution.
 
-All three modes share one library scanner and one continue-watching/-reading store, so progress follows you across the app — pause a stream and pick it up later from the same spot.
+All three modes share one library scanner and one continue-watching/-reading store, so progress follows you across the app — stop partway through and pick up later from the same spot.
 
 ---
 
@@ -44,7 +44,7 @@ High-level component map: [ARCHITECTURE.md](ARCHITECTURE.md). The TL;DR:
 ```
 Tankoban.exe (Qt6 GUI) ──── stdin/stdout JSON ──── ffmpeg_sidecar.exe (decode + render)
                        │
-                       ├── Theatre  ────────────── stream-server.exe (Stremio runtime, subprocess)
+                       ├── Theatre  ────────────── stream-server.exe (Stremio catalog/source runtime, subprocess)
                        │
                        └── libtorrent-rasterbar (in-process: Tankorent + Theatre torrents)
 ```
