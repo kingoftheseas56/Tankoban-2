@@ -210,6 +210,7 @@ void SidebarDrawer::buildUi()
     };
 
     m_btnTankorent        = makeItem(tr("Tankorent"),    QStringLiteral(":/icons/magnet.svg"),   QStringLiteral("tankorent"));
+    m_btnTankorent->setVisible(false);  // P4.3 (2026-05-30): standalone Tankorent UI hidden; TankorentPage + search index kept for future streaming.
     m_btnStreamDownloads  = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("streamDownloads"));
     m_btnStreamDownloads->setVisible(false);  // Hidden by default; shown only in Theatre/stream mode
     m_btnComicsDownloads  = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("comicsDownloads"));
@@ -217,7 +218,7 @@ void SidebarDrawer::buildUi()
     m_btnBooksDownloads   = makeItem(tr("Downloads"),    QStringLiteral(":/icons/download.svg"), QStringLiteral("booksDownloads"));
     m_btnBooksDownloads->setVisible(false);  // Hidden by default; shown only in Books mode
 
-    layout->addWidget(m_btnTankorent);
+    // m_btnTankorent intentionally not added to the drawer (P4.3 — hidden).
     layout->addWidget(m_btnStreamDownloads);
     layout->addWidget(m_btnComicsDownloads);
     layout->addWidget(m_btnBooksDownloads);
