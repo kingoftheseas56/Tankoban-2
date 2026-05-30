@@ -33,37 +33,60 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Office</title>
 <style>
-  :root { --bg:#0e0e0e; --panel:#161616; --line:#262626; --txt:#e6e6e6;
-          --dim:#8a8a8a; --me:#1f1f1f; --accent:#3a3a3a; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--txt);
-         font:14px/1.5 "Segoe UI",system-ui,sans-serif; height:100vh;
-         display:flex; flex-direction:column; }
-  header { padding:10px 16px; border-bottom:1px solid var(--line);
-           display:flex; align-items:center; gap:12px; background:var(--panel); }
-  header h1 { font-size:15px; font-weight:600; margin:0; letter-spacing:.5px; }
-  header .status { color:var(--dim); font-size:12px; }
-  header .spacer { flex:1; }
-  header button { background:var(--accent); color:var(--txt); border:1px solid var(--line);
-                  padding:5px 10px; border-radius:4px; cursor:pointer; font-size:12px; }
-  header button:hover { background:#4a4a4a; }
-  #log { flex:1; overflow-y:auto; padding:14px 16px; }
-  .msg { padding:6px 0; border-bottom:1px solid #1b1b1b; }
-  .msg .meta { color:var(--dim); font-size:11px; margin-bottom:2px; }
-  .msg .from { color:var(--txt); font-weight:600; }
-  .msg.hemanth .from { color:#cfcfcf; }
-  .msg.broadcast .to { color:#bdbdbd; }
-  .msg .body { white-space:pre-wrap; word-break:break-word; }
-  .empty { color:var(--dim); text-align:center; margin-top:40px; }
-  footer { border-top:1px solid var(--line); background:var(--panel); padding:10px 16px;
-           display:flex; gap:8px; align-items:center; }
-  select, input { background:#101010; color:var(--txt); border:1px solid var(--line);
-                  border-radius:4px; padding:8px; font-size:14px; }
-  #to { width:110px; }
-  #msg { flex:1; }
-  #send { background:#2a2a2a; border:1px solid var(--line); color:var(--txt);
-          padding:8px 16px; border-radius:4px; cursor:pointer; }
-  #send:hover { background:#3a3a3a; }
+  :root{
+    --bg:#0b141a; --panel:#17212b; --line:#0a1014; --txt:#e9edf0; --dim:#8696a0;
+    --bubble-in:#1f2c38; --bubble-me:#2b5278; --send:#3390ec;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14px/1.45 "Segoe UI",system-ui,sans-serif;height:100vh;
+       display:flex;flex-direction:column;}
+  header{padding:10px 16px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:12px;background:var(--panel);
+         box-shadow:0 1px 5px rgba(0,0,0,.35);z-index:2;}
+  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.7px;}
+  header .status{color:var(--dim);font-size:12px;}
+  header .spacer{flex:1;}
+  header button{background:transparent;color:var(--dim);border:1px solid var(--line);
+                padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;}
+  header button:hover{background:#22323f;color:var(--txt);}
+  #log{flex:1;overflow-y:auto;padding:12px 14px 18px;
+       display:flex;flex-direction:column;
+       background:linear-gradient(180deg,#0b141a,#0d171e);}
+  .row{display:flex;align-items:flex-end;max-width:100%;}
+  .row:not(.grouped){margin-top:11px;}
+  .row.grouped{margin-top:2px;}
+  .row.me{justify-content:flex-end;}
+  .avatar{width:33px;height:33px;border-radius:50%;flex:0 0 33px;
+          display:flex;align-items:center;justify-content:center;
+          font-size:12.5px;font-weight:700;color:#0b141a;margin-right:8px;}
+  .row.grouped .avatar{visibility:hidden;}
+  .row.me .avatar{display:none;}
+  .bubble{max-width:74%;padding:6px 11px 5px;border-radius:11px;
+          background:var(--bubble-in);box-shadow:0 1px 1px rgba(0,0,0,.28);}
+  .row:not(.grouped):not(.me) .bubble{border-top-left-radius:4px;}
+  .row.me:not(.grouped) .bubble{border-top-right-radius:4px;}
+  .row.me .bubble{background:var(--bubble-me);}
+  .bubble .name{font-size:12.5px;font-weight:700;margin-bottom:2px;}
+  .bubble .body{white-space:pre-wrap;word-break:break-word;font-size:14px;}
+  .bubble .foot{font-size:10.5px;color:var(--dim);margin-top:3px;
+                display:flex;gap:7px;justify-content:flex-end;align-items:center;}
+  .row.me .bubble .foot{color:#a8c7e8;}
+  .bubble .to-tag{opacity:.8;}
+  .empty{color:var(--dim);text-align:center;margin:auto;}
+  footer{border-top:1px solid var(--line);background:var(--panel);padding:10px 14px;
+         display:flex;gap:8px;align-items:center;}
+  select,input{background:#0e1822;color:var(--txt);border:1px solid var(--line);
+               border-radius:8px;padding:9px;font-size:14px;outline:none;}
+  select:focus,input:focus{border-color:var(--send);}
+  #to{width:108px;}
+  #msg{flex:1;}
+  #send{background:var(--send);border:none;color:#fff;font-weight:600;
+        padding:9px 18px;border-radius:8px;cursor:pointer;}
+  #send:hover{background:#2a82da;}
+  #log::-webkit-scrollbar{width:9px;}
+  #log::-webkit-scrollbar-thumb{background:#22323f;border-radius:5px;}
+  #log::-webkit-scrollbar-thumb:hover{background:#2c4150;}
 </style></head>
 <body>
   <header>
@@ -85,41 +108,74 @@ PAGE = """<!doctype html>
       <option value="agent7">@agent7</option>
       <option value="agent9">@agent9</option>
     </select>
-    <input id="msg" placeholder="Message as hemanth... (Enter to send)" autocomplete="off">
+    <input id="msg" placeholder="Message as hemanth...  (Enter to send)" autocomplete="off">
     <button id="send">Send</button>
   </footer>
 <script>
-let maxseq = 0;
+let maxseq = 0, lastFrom = null;
 const log = document.getElementById('log');
 const statusEl = document.getElementById('status');
-
-function render(msgs) {
-  if (maxseq === 0 && msgs.length === 0) return;
-  if (log.querySelector('.empty')) log.innerHTML = '';
-  for (const m of msgs) {
-    const div = document.createElement('div');
-    div.className = 'msg' + (m.from === 'hemanth' ? ' hemanth' : '') + (m.to === 'all' ? ' broadcast' : '');
-    const time = (m.ts || '').replace('T', ' ').slice(0, 19).slice(11);
-    div.innerHTML = '<div class="meta"><span class="from">' + esc(m.from) +
-      '</span> &rarr; <span class="to">' + esc(m.to) + '</span> &middot; ' + esc(time) +
-      '</div><div class="body">' + esc(m.msg) + '</div>';
-    log.appendChild(div);
-  }
-  log.scrollTop = log.scrollHeight;
+// Telegram-style per-member accent colours (readable on the dark bubbles).
+const PALETTE = ['#e17076','#7bc862','#65aadd','#a695e7','#ee7aae',
+                 '#6ec9cb','#faa774','#f2c94c','#9ed888','#e0a2c0'];
+function colorFor(name){
+  let h = 0; const s = String(name);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
 }
-function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function initialFor(name){
+  name = String(name); let d = '';
+  for (let i = 0; i < name.length; i++){ const c = name[i]; if (c >= '0' && c <= '9') d += c; }
+  return d || name.slice(0, 2).toUpperCase();
+}
+function labelFor(name){
+  name = String(name);
+  if (name === 'hemanth') return 'Hemanth';
+  if (name.indexOf('agent') === 0) return 'Agent ' + name.slice(5);
+  return name;
+}
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
-async function poll() {
+function render(msgs){
+  if (maxseq === 0 && msgs.length === 0) return;
+  const emptyEl = log.querySelector('.empty'); if (emptyEl) log.innerHTML = '';
+  // Only auto-scroll if the reader is already near the bottom — so scrolling
+  // up to read older messages isn't yanked back down by an incoming poll.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
+  for (const m of msgs){
+    const me = (m.from === 'hemanth');
+    const grouped = (m.from === lastFrom);
+    const col = colorFor(m.from);
+    const time = (m.ts || '').replace('T', ' ').slice(11, 16);
+    const row = document.createElement('div');
+    row.className = 'row' + (me ? ' me' : '') + (grouped ? ' grouped' : '');
+    const avatar = me ? '' :
+      '<div class="avatar" style="background:' + col + '">' + esc(initialFor(m.from)) + '</div>';
+    const nameHtml = grouped ? '' :
+      '<div class="name" style="color:' + (me ? '#8ec3f0' : col) + '">' + esc(labelFor(m.from)) + '</div>';
+    const toTag = (m.to === 'all') ? 'to all' : ('to ' + esc(labelFor(m.to)));
+    row.innerHTML = avatar +
+      '<div class="bubble">' + nameHtml +
+      '<div class="body">' + esc(m.msg) + '</div>' +
+      '<div class="foot"><span class="to-tag">' + toTag + '</span><span>' + esc(time) + '</span></div>' +
+      '</div>';
+    log.appendChild(row);
+    lastFrom = m.from;
+  }
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function poll(){
   try {
     const r = await fetch('/messages?after=' + maxseq + '&_=' + Date.now(), {cache: 'no-store'});
     const data = await r.json();
-    if (data.messages && data.messages.length) { render(data.messages); }
+    if (data.messages && data.messages.length) render(data.messages);
     if (typeof data.maxseq === 'number') maxseq = Math.max(maxseq, data.maxseq);
     statusEl.textContent = 'office open · ' + maxseq + ' msg' + (maxseq === 1 ? '' : 's');
   } catch (e) { statusEl.textContent = 'disconnected (server stopped?)'; }
 }
 
-async function send() {
+async function send(){
   const msg = document.getElementById('msg');
   const to = document.getElementById('to').value;
   const text = msg.value.trim();
@@ -137,7 +193,7 @@ document.getElementById('closeBtn').onclick = async () => {
   if (!confirm('Close the office? This archives + clears all current messages.')) return;
   await fetch('/close', {method:'POST'});
   log.innerHTML = '<div class="empty">Office closed. Messages archived.</div>';
-  maxseq = 0;
+  maxseq = 0; lastFrom = null;
 };
 
 poll();

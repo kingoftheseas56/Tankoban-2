@@ -284,7 +284,10 @@ def cmd_deliver():
             "    bash scripts/office/office_watch.sh {0}\n"
             "When it emits a line, read the new message (bash scripts/office/office_bus.py drain {0}), "
             "reply if warranted (bash scripts/office/chat_send.sh \"@agentN\" \"...\"), then keep watching. "
-            "Reply-only for now — don't start code work off a bus message unless asked.".format(me)
+            "Reply-only for now — don't start code work off a bus message unless asked. "
+            "OFFICE ETIQUETTE: don't narrate your bus posts back to Hemanth in your VS Code chat "
+            "(\"I messaged Agent 4...\") — he's watching the Office room live, so that's redundant "
+            "noise. Keep your VS Code replies about substance; let the room carry the coordination.".format(me)
         )
     msgs = []
     bus = BUS()
