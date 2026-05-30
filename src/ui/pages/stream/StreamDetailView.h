@@ -27,6 +27,7 @@ class QTimer;
 // required because renderEpisodeStateChip uses StreamDownloadIndex::Entry::State
 // in its signature and EpisodeTileState::Provenance from the theatre tile.
 #include "core/stream/StreamDownloadIndex.h"
+#include "core/stream/EpisodeDisplayState.h"
 #include "ui/pages/stream/EpisodeTile.h"
 
 class CoreBridge;
@@ -326,6 +327,19 @@ private:
     // every tick and from populateEpisodeTable for the initial paint pass.
     void repaintActionIconForRow(int row, int episode, int season,
                                   const QHash<int, QPair<QString, int>>& cohortSnap);
+
+    // THEATRE_EPISODE_STATE_MODEL (2026-05-30) — disk-first per-episode state.
+    // The single derivation: disk (StreamDownloadIndex::bestEntryForEpisode +
+    // QFileInfo::exists) is the source of truth; the engine snapshot is
+    // consulted ONLY for not-on-disk episodes. Replaces the legacy cohort
+    // RowState cluster (resolveRowState / refreshEpisodeMarkers /
+    // refreshSubstrateStatesForActiveSeason / repaintActionIconForRow) which
+    // is removed in P1.T5.
+    tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode) const;
+    // Repaints ONE row's status cell + action control from episodeDisplayState.
+    void refreshEpisodeRow(int row, int season, int episode);
+    // Repaints every visible row of the active season via refreshEpisodeRow.
+    void refreshAllEpisodeRows();
 
     // Phase 3 Batch 3.1 — MetaItem arrival handler; paints hero image +
     // enriches the metadata chip row (runtime, genres) once fetchMetaItem

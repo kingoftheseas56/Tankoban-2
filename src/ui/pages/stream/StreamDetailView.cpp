@@ -136,12 +136,11 @@ std::optional<StreamDownloadIndex::Entry> substrateEpisodeEntry(
     if (!index || imdbId.isEmpty() || season <= 0 || episode <= 0)
         return std::nullopt;
 
-    const auto entries = index->entriesForImdb(imdbId);
-    for (const auto& e : entries) {
-        if (e.season == season && e.episode == episode)
-            return e;
-    }
-    return std::nullopt;
+    // THEATRE_DOWNLOAD_SIMPLIFY (2026-05-30) — was: first (hash-order) match,
+    // which could return a stale Pending (.tankoban-partial) entry over the
+    // final Complete one, painting "Queued" on a downloaded episode. Now
+    // resolves duplicates by authority (Complete > Downloading > Pending > Failed).
+    return index->bestEntryForEpisode(imdbId, season, episode);
 }
 
 QString tankorentInfoHashForSubstrateEntry(const StreamDownloadIndex::Entry& entry)
@@ -208,7 +207,9 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
     m_progressRefreshTimer->setInterval(1000);
     connect(m_progressRefreshTimer, &QTimer::timeout, this, [this]() {
         refreshMovieDownloadState();
-        refreshSubstrateStatesForActiveSeason();
+        // THEATRE_EPISODE_STATE_MODEL (2026-05-30) — disk-first per-row repaint
+        // (was refreshSubstrateStatesForActiveSeason, removed in P1.T5).
+        refreshAllEpisodeRows();
     });
 
     if (m_meta) {
@@ -761,7 +762,7 @@ void StreamDetailView::buildUI()
     m_episodeTable->setColumnWidth(kColThumb,    118);  // 102px thumb (~1.6x) + 16px padding
     m_episodeTable->setColumnWidth(kColProgress, 80);
     m_episodeTable->setColumnWidth(kColStatus,   60);
-    m_episodeTable->setColumnWidth(kColAction,   36);
+    m_episodeTable->setColumnWidth(kColAction,   64);  // holds the "Play" text button (downloaded) + icon glyphs
     m_episodeTable->verticalHeader()->setDefaultSectionSize(84);
     m_episodeTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_episodeTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -1320,39 +1321,21 @@ void StreamDetailView::populateEpisodeTable(int season)
     // is the authoritative one and doesn't need runtime re-sort.
     m_episodeTable->setSortingEnabled(false);
 
-    // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — paint per-row "on
-    // disk" icons after the rows are built. Cheap (single mutex-guarded
-    // hash lookup per row); safe pre-show.
-    refreshEpisodeMarkers();
-
-    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 12 — initial paint pass for
-    // action icons. Subsequent ticks via refreshEpisodeBulkProgress /
-    // streamBulkGroupsChanged signal.
-    const auto initialSnap = m_torrentClient
-        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
-        : QHash<int, QPair<QString, int>>();
-    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
-        QTableWidgetItem* numItem = m_episodeTable->item(row, kColEpisode);
-        if (!numItem) continue;
-        const int ep = numItem->data(Qt::UserRole).toInt();
-        if (ep <= 0) continue;
-        repaintActionIconForRow(row, ep, season, initialSnap);
-    }
-
-    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — paint per-row download-state from
-    // the TorrentClient bulk snapshot, and start the 1Hz poll timer if
-    // any bulk activity exists for this show+season. Self-stops in the
-    // slot when activity drains.
+    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — start/stop the 1Hz poll timer based on
+    // whether any bulk activity exists for this show+season (self-stops in the
+    // slot when activity drains). Its incidental paint is overwritten by the
+    // authoritative disk-first pass below. (Task 5 removes the cohort body.)
     refreshEpisodeBulkProgress();
 
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — initial paint of the
     // season-header morphing button for the newly-populated season.
     refreshSeasonHeaderButton();
 
-    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — paint substrate state for any
-    // rows the substrate already tracks (most common: re-entering a detail
-    // view where downloads were dispatched previously).
-    refreshSubstrateStatesForActiveSeason();
+    // THEATRE_EPISODE_STATE_MODEL (2026-05-30) — authoritative disk-first paint
+    // of every row's status text + action control. Replaces the legacy trio
+    // (refreshEpisodeMarkers + the repaintActionIconForRow loop +
+    // refreshSubstrateStatesForActiveSeason). Called LAST so disk wins.
+    refreshAllEpisodeRows();
 
     m_episodeTable->show();
 }
@@ -1394,6 +1377,130 @@ void StreamDetailView::onEpisodeActivated(int row, int /*col*/)
     // waiting for StreamPage's aggregator round-trip.
     setStreamSourcesLoading();
     emit playRequested(m_currentImdb, "series", season, episode);
+}
+
+// ─── THEATRE_EPISODE_STATE_MODEL (2026-05-30) — disk-first episode state ──────
+//
+// One derivation feeds both the status cell and the action control. Disk is the
+// single source of truth (a file on disk is Downloaded, full stop); the engine
+// snapshot is consulted ONLY for not-on-disk episodes. Replaces the legacy
+// cohort RowState cluster (deleted in P1.T5).
+
+tankostream::stream::EpisodeDisplayState
+StreamDetailView::episodeDisplayState(int season, int episode) const
+{
+    using tankostream::stream::EpisodeStateInputs;
+    EpisodeStateInputs in;
+
+    // Disk = source of truth. Resolve the AUTHORITATIVE entry (Complete over a
+    // stale .tankoban-partial Pending) and stat the real file. bestEntryForEpisode
+    // avoids filePathFor's duplicate-path hazard: a completed download whose final
+    // path shares the partial's filename never repoints m_byEpisode, so filePathFor
+    // can hand back a stale partial path that no longer exists.
+    if (m_downloadIndex && !m_currentImdb.isEmpty()) {
+        const auto best = m_downloadIndex->bestEntryForEpisode(m_currentImdb, season, episode);
+        if (best.has_value() && QFileInfo::exists(best->canonicalPath))
+            in.onDisk = true;
+    }
+    // Only consult the engine for NOT-on-disk episodes (disk already won otherwise).
+    if (!in.onDisk && m_torrentClient && !m_currentImdb.isEmpty()) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+        const auto it = snap.constFind(episode);
+        if (it != snap.constEnd()) {
+            in.hasTransfer = true;
+            const QString st = it.value().first;       // cohort state string
+            in.progressPct  = it.value().second;       // 0..100, -1 for terminal failure
+            in.paused = (st == QLatin1String("Paused"));
+            in.failed = (st == QLatin1String("Failed")
+                      || st == QLatin1String("MetadataFailed")
+                      || st == QLatin1String("PublishFailed")
+                      || st == QLatin1String("MissingSource"));
+        }
+    }
+    return tankostream::stream::deriveEpisodeDisplayState(in);
+}
+
+void StreamDetailView::refreshEpisodeRow(int row, int season, int episode)
+{
+    if (!m_episodeTable || row < 0 || row >= m_episodeTable->rowCount())
+        return;
+    using S = tankostream::stream::EpisodeDisplayState;
+    const S state = episodeDisplayState(season, episode);
+
+    // Progress % for in-progress states (cheap re-read of the in-process snapshot;
+    // clamped so a terminal -1 never leaks into the label).
+    int pct = 0;
+    if ((state == S::Downloading || state == S::Paused)
+        && m_torrentClient && !m_currentImdb.isEmpty()) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+        const auto it = snap.constFind(episode);
+        if (it != snap.constEnd())
+            pct = qMax(0, it.value().second);
+    }
+
+    // --- Status text cell (kColStatus) ---
+    if (auto* statusItem = m_episodeTable->item(row, kColStatus)) {
+        QString text;
+        switch (state) {
+        case S::Downloading:   text = tr("Downloading %1%").arg(pct); break;
+        case S::Paused:        text = tr("Paused %1%").arg(pct);      break;
+        case S::Failed:        text = tr("Failed");                   break;
+        case S::Downloaded:    text = QString();                      break;  // Play button carries it
+        case S::NotDownloaded: text = QString();                      break;
+        }
+        statusItem->setText(text);
+        statusItem->setTextAlignment(Qt::AlignCenter);
+    }
+
+    // --- Action control cell (kColAction) ---
+    auto* holder = m_episodeTable->cellWidget(row, kColAction);
+    if (!holder) return;
+    auto* btn = holder->findChild<QPushButton*>();
+    if (!btn) return;
+
+    btn->setProperty("episodeNum", episode);
+    if (state == S::Downloaded) {
+        // Play affordance: a text button. Relax the construction-time
+        // setFixedSize(24,24) so the label fits (kColAction is widened to hold it).
+        btn->setIcon(QIcon());
+        btn->setText(tr("Play"));
+        btn->setToolTip(tr("Play downloaded episode"));
+        btn->setMinimumSize(44, 24);
+        btn->setMaximumSize(QWIDGETSIZE_MAX, 24);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: rgba(255,255,255,0.10);"
+            "  border: 1px solid rgba(255,255,255,0.18); border-radius: 4px;"
+            "  color: #e0e0e0; font-size: 11px; padding: 2px 8px; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.16); }"));
+    } else {
+        // Icon affordance: restore the compact fixed glyph button.
+        btn->setText(QString());
+        btn->setFixedSize(24, 24);
+        btn->setStyleSheet(QStringLiteral("QPushButton { border: none; background: transparent; }"));
+        QString icon, tip;
+        switch (state) {
+        case S::NotDownloaded: icon = QStringLiteral(":/icons/download-arrow.svg"); tip = tr("Download episode"); break;
+        case S::Downloading:   icon = QStringLiteral(":/icons/pause-circle.svg");   tip = tr("Pause download");   break;
+        case S::Paused:        icon = QStringLiteral(":/icons/play-circle.svg");    tip = tr("Resume download");  break;
+        case S::Failed:        icon = QStringLiteral(":/icons/retry-arrow.svg");    tip = tr("Retry download");   break;
+        case S::Downloaded:    break;  // handled above
+        }
+        btn->setIcon(QIcon(icon));
+        btn->setToolTip(tip);
+    }
+}
+
+void StreamDetailView::refreshAllEpisodeRows()
+{
+    if (!m_episodeTable) return;
+    const int season = currentSeason();
+    if (season <= 0) return;
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        auto* numItem = m_episodeTable->item(row, kColEpisode);
+        if (!numItem) continue;
+        const int episode = numItem->data(Qt::UserRole).toInt();
+        if (episode > 0) refreshEpisodeRow(row, season, episode);
+    }
 }
 
 // STREAM_DOWNLOADED_LIBRARY Phase 4 (2026-05-10) — wire the download index
@@ -1582,8 +1689,7 @@ void StreamDetailView::refreshSubstrateStatesForActiveSeason()
     if (season <= 0)
         return;
 
-    const auto entries = m_downloadIndex->entriesForImdb(m_currentImdb);
-    if (entries.isEmpty())
+    if (!m_downloadIndex->hasAnyForImdb(m_currentImdb))
         return;
 
     using ProvT = tankoban::stream::theatre::EpisodeTileState::Provenance;
@@ -1594,17 +1700,19 @@ void StreamDetailView::refreshSubstrateStatesForActiveSeason()
             continue;
         const int episode = epItem->data(Qt::UserRole).toInt();
 
-        for (const auto& e : entries) {
-            if (e.season != season || e.episode != episode)
-                continue;
-            ProvT prov = ProvT::AddonBulk;
-            if (e.sourceGroupId.startsWith(QStringLiteral("tankorent:")))
-                prov = ProvT::Tankorent;
-            else if (e.sourceGroupId.isEmpty())
-                prov = ProvT::LocalScan;
-            renderEpisodeStateChip(row, e.state, e.progressPct, prov);
-            break;
-        }
+        // THEATRE_DOWNLOAD_SIMPLIFY (2026-05-30) — pick the authoritative entry
+        // among duplicates (Complete over stale Pending) instead of the first
+        // (hash-order) (season,episode) match, which painted "Queued" on
+        // fully-downloaded episodes.
+        const auto best = m_downloadIndex->bestEntryForEpisode(m_currentImdb, season, episode);
+        if (!best)
+            continue;
+        ProvT prov = ProvT::AddonBulk;
+        if (best->sourceGroupId.startsWith(QStringLiteral("tankorent:")))
+            prov = ProvT::Tankorent;
+        else if (best->sourceGroupId.isEmpty())
+            prov = ProvT::LocalScan;
+        renderEpisodeStateChip(row, best->state, best->progressPct, prov);
     }
 }
 
