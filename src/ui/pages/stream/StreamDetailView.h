@@ -442,13 +442,11 @@ private:
     // E1 UX refinement 2026-05-17 — click auto-dispatches the per-episode
     // highest-seeded torrent for the active season (restores the pre-E1
     // fast path that Codex's unified-button E1 had replaced with a panel
-    // open). The 10% pack-based flow lives on the adjacent m_packOptionsBtn.
+    // open). THEATRE_DOWNLOAD_SIMPLIFY P4.2 (2026-05-30): the adjacent
+    // Layers-3 pack-options button (m_packOptionsBtn → Tankorent pack picker)
+    // was removed from the series view; the Tankorent search engine +
+    // TheatreDownloadPanel class remain intact for future streaming revival.
     QPushButton*  m_downloadBtn = nullptr;
-
-    // Season-header secondary Layers-3 icon-only button adjacent to
-    // m_downloadBtn. Opens the TheatreDownloadPanel via the existing
-    // theatreDownloadRequested signal for pack-based advanced selection.
-    QPushButton*  m_packOptionsBtn = nullptr;
 
     // Season-header secondary button: visible only when m_selectedEpisodes
     // is non-empty. Label "Download Selected (N)".
