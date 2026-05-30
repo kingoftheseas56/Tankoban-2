@@ -25,6 +25,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/test_main.cpp
         tests/core/stream/test_quality_scorer.cpp
         tests/core/stream/test_auto_source_picker.cpp
+        tests/core/stream/test_episode_display_state.cpp
         tests/core/stream/test_anime_catalog_resolver.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_stream_pack_parser.cpp
@@ -102,6 +103,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/JsonStore.cpp
         src/core/stream/QualityScorer.cpp
         src/core/stream/AutoSourcePicker.cpp
+        src/core/stream/EpisodeDisplayState.cpp
         src/core/stream/AnimeCatalogResolver.cpp
         src/core/stream/AnimeIdMapCache.cpp
         src/core/stream/StreamDownloadIndex.cpp

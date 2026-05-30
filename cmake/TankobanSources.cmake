@@ -210,6 +210,7 @@ set(SOURCES
     src/core/stream/StreamDownloadIndex.cpp
     src/core/stream/QualityScorer.cpp
     src/core/stream/AutoSourcePicker.cpp
+    src/core/stream/EpisodeDisplayState.cpp
     src/core/stream/UnifiedProgressStore.cpp
     src/core/stream/StreamRescueScanner.cpp
     src/core/stream/StreamBulkPlan.cpp
