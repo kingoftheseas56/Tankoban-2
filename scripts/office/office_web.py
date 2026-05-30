@@ -93,6 +93,7 @@ PAGE = """<!doctype html>
     <h1>THE OFFICE</h1>
     <span class="status" id="status">connecting...</span>
     <span class="spacer"></span>
+    <button id="notifyBtn" title="Desktop notification when a brother messages @hemanth">enable alerts</button>
     <button id="closeBtn" title="Archive + clear the bus (end of shift)">Close office</button>
   </header>
   <div id="log"><div class="empty">No messages yet. Say something below.</div></div>
@@ -113,8 +114,37 @@ PAGE = """<!doctype html>
   </footer>
 <script>
 let maxseq = 0, lastFrom = null;
+let primed = false;  // don't fire notifications for the backlog loaded on first poll
 const log = document.getElementById('log');
 const statusEl = document.getElementById('status');
+
+// --- Desktop notifications when a brother addresses @hemanth ---
+const notifyBtn = document.getElementById('notifyBtn');
+const hasNotif = ('Notification' in window);
+function updateNotifyBtn(){
+  if (!hasNotif) { notifyBtn.textContent = 'no alert support'; notifyBtn.disabled = true; return; }
+  if (Notification.permission === 'granted') { notifyBtn.textContent = 'alerts on'; }
+  else if (Notification.permission === 'denied') { notifyBtn.textContent = 'alerts blocked'; }
+  else { notifyBtn.textContent = 'enable alerts'; }
+}
+notifyBtn.onclick = async () => {
+  if (!hasNotif) return;
+  if (Notification.permission === 'default') { try { await Notification.requestPermission(); } catch (e) {} }
+  updateNotifyBtn();
+};
+function addressedToHemanth(to){
+  const t = String(to || '');
+  return t === 'hemanth' || t.split(',').map(s => s.trim()).includes('hemanth');
+}
+function maybeNotify(m){
+  if (!primed || !hasNotif || Notification.permission !== 'granted') return;
+  if (m.from === 'hemanth' || !addressedToHemanth(m.to)) return;
+  try {
+    const n = new Notification('The Office — ' + labelFor(m.from), { body: m.msg, tag: 'office-' + m.seq });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch (e) {}
+}
+updateNotifyBtn();
 // Telegram-style per-member accent colours (readable on the dark bubbles).
 const PALETTE = ['#e17076','#7bc862','#65aadd','#a695e7','#ee7aae',
                  '#6ec9cb','#faa774','#f2c94c','#9ed888','#e0a2c0'];
@@ -161,6 +191,7 @@ function render(msgs){
       '</div>';
     log.appendChild(row);
     lastFrom = m.from;
+    maybeNotify(m);
   }
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
@@ -172,6 +203,7 @@ async function poll(){
     if (data.messages && data.messages.length) render(data.messages);
     if (typeof data.maxseq === 'number') maxseq = Math.max(maxseq, data.maxseq);
     statusEl.textContent = 'office open · ' + maxseq + ' msg' + (maxseq === 1 ? '' : 's');
+    primed = true;  // first poll done; from here on, new @hemanth messages alert
   } catch (e) { statusEl.textContent = 'disconnected (server stopped?)'; }
 }
 
