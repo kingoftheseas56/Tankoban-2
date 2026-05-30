@@ -402,6 +402,11 @@ private:
     // published in a prior Tankoban session BEFORE the on-publish
     // registerEpisode fallback chain at line ~2270 shipped.
     void backfillStreamDownloadIndex();
+    // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 Gap 2 (2026-05-30) —
+    // reconcile single-episode torrents that finished but never
+    // registered in StreamDownloadIndex (mirrors backfill but
+    // walks TorrentRepository rows instead of bulk groups).
+    void reconcileUnregisteredSingleEpisodes();
     // F9 fix 2026-05-19 Task 9 (reconcileMovieRecordOrphans) retired in
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.3 (2026-05-20). The 2s-delayed
     // m_records sweep was a band-aid for the F9 "movie row without engine

@@ -182,8 +182,21 @@ void StreamDownloadIndex::registerEpisode(const QString& imdbId, int season, int
                     QFileInfo(displacedIt.value().canonicalPath).fileName());
                 const int newScore = tankostream::stream::QualityScorer::qualityScore(
                     QFileInfo(canonicalPath).fileName());
-                if (newScore <= existingScore)
-                    return;
+                if (newScore <= existingScore) {
+                    // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 (2026-05-30):
+                    // dedup must not be blind to state. When a reconcile or
+                    // re-register re-publishes a COMPLETE download at the
+                    // same path as a stale Pending/Downloading entry, the
+                    // quality-scorer tie would return early, leaving the
+                    // stale entry alive → row shows 0%/Downloading even
+                    // though the file is on disk (Invincible S4E01).
+                    // A completed download always beats a stale in-progress
+                    // record at the same path. Let the fall-through below
+                    // remove + re-insert with the Complete entry.
+                    if (displacedIt.value().state == Entry::Complete)
+                        return;
+                    // Existing is non-terminal; fall through to upgrade.
+                }
                 displacedImdbId = displacedIt.value().imdbId;
             }
             m_byPath.remove(epIt.value());

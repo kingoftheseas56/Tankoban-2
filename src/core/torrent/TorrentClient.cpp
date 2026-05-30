@@ -15,6 +15,7 @@
 #include <QDate>    // Phase 4.5 — date-stamped legacy file .bak suffix
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 
@@ -258,6 +259,85 @@ QJsonObject normalizeStreamBulkGroup(const QString& key, QJsonObject group, bool
     }
 
     return group;
+}
+
+// THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 Gap 1 (2026-05-30) —
+// resolve the real on-disk path for a bulk item whose flat
+// destinationRoot/canonicalFilename path doesn't exist. Season-pack
+// torrents nest files in a subfolder (the torrent's own content
+// directory), so the flat computation always misses.
+//
+// Strategy 1: look up the torrent file list by infoHash and match
+// by filename (last component). Honor libtorrent's [\/] separator.
+// Strategy 2: bounded recursive search under destinationRoot.
+//
+// Returns the resolved absolute path, or empty if unresolved.
+QString resolveNestedStreamFilePath(const QString& destinationRoot,
+                                    const QString& canonicalFilename,
+                                    const QString& infoHash,
+                                    TorrentEngine* engine)
+{
+    if (destinationRoot.isEmpty() || canonicalFilename.isEmpty())
+        return {};
+
+    // Strategy 1 — torrent file list lookup.
+    if (engine && !infoHash.isEmpty()) {
+        const QJsonArray files = engine->torrentFiles(infoHash);
+        // libtorrent uses '/' as path separator on all platforms,
+        // but Windows builds may surface '\\' in some contexts.
+        // Normalize both sides before comparing.
+        const QString targetName =
+            QDir::fromNativeSeparators(canonicalFilename);
+        const QString fileNameOnly =
+            QFileInfo(targetName).fileName();  // last component
+
+        for (const auto& fv : files) {
+            const QJsonObject fo = fv.toObject();
+            const QString relName =
+                QDir::fromNativeSeparators(
+                    fo.value(QStringLiteral("name")).toString());
+            if (relName.isEmpty()) continue;
+
+            // Match by last component of the torrent file path.
+            if (QFileInfo(relName).fileName().compare(
+                    fileNameOnly, Qt::CaseInsensitive) == 0) {
+                const QString candidate =
+                    QDir::cleanPath(
+                        QDir(destinationRoot).filePath(relName));
+                if (QFileInfo::exists(candidate))
+                    return candidate;
+            }
+        }
+    }
+
+    // Strategy 2 — bounded recursive search (max depth 3).
+    // Only search directories, match filename case-insensitively.
+    {
+        QDirIterator it(destinationRoot,
+                        QDir::Dirs | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
+        int depth = 0;
+        const int maxDepth = 3;
+        const QString fileNameOnly =
+            QFileInfo(canonicalFilename).fileName();
+
+        while (it.hasNext()) {
+            it.next();
+            // Track depth: count '/' separators beyond the root.
+            const QString relative =
+                QDir(destinationRoot).relativeFilePath(it.filePath());
+            const int currentDepth =
+                relative.count(QLatin1Char('/')) + 1;
+            if (currentDepth > maxDepth) continue;
+
+            const QString candidate =
+                QDir(it.filePath()).filePath(fileNameOnly);
+            if (QFileInfo::exists(candidate))
+                return QDir::cleanPath(candidate);
+        }
+    }
+
+    return {};
 }
 
 QString canonicalPathForStreamBulkItem(const QJsonObject& group, const QJsonObject& item)
@@ -2053,6 +2133,11 @@ void TorrentClient::setStreamDownloadIndex(StreamDownloadIndex* idx)
     // backfill the moment the pointer arrives from MainWindow. Defensive
     // no-op if idx is null or m_streamBulkGroups is empty.
     backfillStreamDownloadIndex();
+    // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 Gap 2 (2026-05-30) —
+    // single-episode torrent reconcile: catch completed torrents that
+    // never registered (e.g. finished while the app was killed).
+    // Mirrors the bulk backfill but walks TorrentRepository rows.
+    reconcileUnregisteredSingleEpisodes();
 }
 
 void TorrentClient::backfillStreamDownloadIndex()
@@ -2134,22 +2219,42 @@ void TorrentClient::backfillStreamDownloadIndex()
                 continue;
             }
 
-            const QString destinationKey =
+            QString destinationKey =
                 item.value(QStringLiteral("destinationKey")).toString();
+            // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 (2026-05-30):
+            // season-pack torrents store the filename in canonicalFilename,
+            // not destinationKey (destinationKey is empty). Fall back so
+            // the file-resolution block below gets a path component to
+            // search with.
+            if (destinationKey.isEmpty())
+                destinationKey =
+                    item.value(QStringLiteral("canonicalFilename")).toString();
             if (destinationKey.isEmpty()) {
                 ++skippedUnresolved;
                 continue;
             }
-            const QString canonicalPath = QDir::cleanPath(
+            QString canonicalPath = QDir::cleanPath(
                 QDir(destinationRoot).filePath(destinationKey));
 
-            // Defensive: the file must actually exist before we register —
-            // otherwise the index would advertise a ghost entry and
-            // StreamDetailView's auto-play would fail-open into a missing
-            // local file. Better to leave the item unregistered and let
-            // the StreamRescueScanner pick it up via its on-disk walk if
-            // the file truly exists somewhere else.
-            const QFileInfo fi(canonicalPath);
+            // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 (2026-05-30):
+            // season-pack torrents nest files in a subfolder; the flat
+            // destinationRoot/destinationKey path misses. Resolve the
+            // real nested file before giving up.
+            QFileInfo fi(canonicalPath);
+            if (!fi.exists() || !fi.isFile()) {
+                const QString flatFilename =
+                    item.value(QStringLiteral("canonicalFilename")).toString();
+                const QString itemHash =
+                    item.value(QStringLiteral("infoHash")).toString();
+                const QString resolved = resolveNestedStreamFilePath(
+                    destinationRoot,
+                    flatFilename.isEmpty() ? destinationKey : flatFilename,
+                    itemHash, m_engine);
+                if (!resolved.isEmpty()) {
+                    canonicalPath = resolved;
+                    fi = QFileInfo(canonicalPath);
+                }
+            }
             if (!fi.exists() || !fi.isFile()) {
                 ++skippedNoFile;
                 continue;
@@ -2166,6 +2271,145 @@ void TorrentClient::backfillStreamDownloadIndex()
         qInfo("TorrentClient: backfillStreamDownloadIndex registered=%d "
               "alreadyIndexed=%d skippedNoFile=%d skippedUnresolved=%d",
               registered, skippedAlreadyIndexed, skippedNoFile, skippedUnresolved);
+    }
+}
+
+// THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 Gap 2 (2026-05-30) —
+// reconcile single-episode torrents that are complete on disk but
+// never got a Complete entry in StreamDownloadIndex. Mirrors
+// backfillStreamDownloadIndex but walks TorrentRepository rows
+// instead of bulk-cohort groups. Idempotent — re-running on an
+// up-to-date index is a cheap no-op.
+//
+// Single-episode Theatre downloads (dispatched via
+// singleEpisodeDownloadRequested → empty streamGroupId) carry
+// imdb/season in the repo row. At completion time,
+// publishTankorentItemsForTorrent is the primary path, but
+// re-launch (or an early-return guard) can leave them unregistered.
+// This reconcile catches those cases.
+void TorrentClient::reconcileUnregisteredSingleEpisodes()
+{
+    if (!m_streamDownloadIndex || !m_engine)
+        return;
+
+    const auto allRows = m_repo.listTorrents();
+    int registered = 0;
+    int skippedNoImdb = 0;
+    int skippedNotSeries = 0;
+    int skippedNoFile = 0;
+    int skippedAlreadyIndexed = 0;
+
+    for (const auto& row : allRows) {
+        // Completed/Seeding torrents only.
+        if (row.state != tankoban::torrent::TorrentState::Completed)
+            continue;
+        // Must have show binding.
+        if (row.imdbId.isEmpty()) {
+            ++skippedNoImdb;
+            continue;
+        }
+        // Series only — movies (season=0) are handled elsewhere
+        // (streamMovieDownloadSnapshot + publishTankorentItemsForTorrent).
+        if (row.season <= 0) {
+            ++skippedNotSeries;
+            continue;
+        }
+        // Stream identity gate: only "videos"-category torrents are
+        // stream/Theatre downloads. Comics/books/audiobook torrents
+        // with SxxExx-looking filenames (e.g. "Volume.S01E01.cbz")
+        // must NOT leak into the stream download index.
+        if (row.category != QLatin1String("videos")
+            && !row.category.isEmpty()) {
+            ++skippedNotSeries;
+            continue;
+        }
+        // Skip bulk-cohort items — those are backfillStreamDownloadIndex's
+        // domain (they carry a streamGroupId).
+        if (!row.streamGroupId.isEmpty())
+            continue;
+
+        const QJsonArray files = m_engine->torrentFiles(row.hash);
+        if (files.isEmpty()) {
+            ++skippedNoFile;
+            continue;
+        }
+
+        const tankostream::stream::ParsedPack pack =
+            tankostream::stream::StreamPackParser::parsePack(
+                files, row.imdbId, row.season);
+
+        if (pack.type != QStringLiteral("series") || pack.episodes.isEmpty()) {
+            // Single-file torrent that the parser couldn't classify as a
+            // series episode — fall back to a direct lookup: if there's
+            // exactly one video file in the torrent and the repo row has
+            // season>0, try to extract the episode number from the filename.
+            const QString savePath = row.savePath;
+            if (!savePath.isEmpty() && files.size() == 1) {
+                const QJsonObject firstFile = files.first().toObject();
+                const QString relName = firstFile.value("name").toString();
+                // Try parsing SxxExx from the filename.
+                static const QRegularExpression sxeRe(
+                    QStringLiteral(R"([Ss](\d{1,2})[Ee](\d{1,3}))"));
+                if (auto m = sxeRe.match(relName); m.hasMatch()) {
+                    const int epSeason = m.captured(1).toInt();
+                    const int epNum = m.captured(2).toInt();
+                    if (epSeason == row.season && epNum > 0) {
+                        const QString absPath =
+                            QDir(savePath).absoluteFilePath(relName);
+                        const QFileInfo fi(absPath);
+                        if (fi.exists() && fi.isFile()) {
+                            const QString sourceGroupId =
+                                QStringLiteral("tankorent:") + row.hash;
+                            // Check if already indexed.
+                            if (m_streamDownloadIndex
+                                    ->filePathFor(row.imdbId, epSeason, epNum)
+                                    .has_value()) {
+                                ++skippedAlreadyIndexed;
+                                continue;
+                            }
+                            m_streamDownloadIndex->registerEpisode(
+                                row.imdbId, epSeason, epNum, absPath,
+                                sourceGroupId, fi.size());
+                            ++registered;
+                            continue;
+                        }
+                    }
+                }
+            }
+            ++skippedNoFile;
+            continue;
+        }
+
+        const QString sourceGroupId =
+            QStringLiteral("tankorent:") + row.hash;
+        for (const auto& pf : pack.episodes) {
+            // Idempotent guard — skip if already present.
+            if (m_streamDownloadIndex
+                    ->filePathFor(row.imdbId, pf.season, pf.episode)
+                    .has_value()) {
+                ++skippedAlreadyIndexed;
+                continue;
+            }
+            const QString absPath =
+                QDir(row.savePath).absoluteFilePath(pf.relName);
+            const QFileInfo fi(absPath);
+            if (!fi.exists() || !fi.isFile()) {
+                ++skippedNoFile;
+                continue;
+            }
+            m_streamDownloadIndex->registerEpisode(
+                row.imdbId, pf.season, pf.episode, absPath,
+                sourceGroupId, fi.size());
+            ++registered;
+        }
+    }
+
+    if (registered > 0 || skippedNoFile > 0) {
+        qInfo("TorrentClient: reconcileUnregisteredSingleEpisodes "
+              "registered=%d alreadyIndexed=%d noImdb=%d notSeries=%d "
+              "noFile=%d",
+              registered, skippedAlreadyIndexed, skippedNoImdb,
+              skippedNotSeries, skippedNoFile);
     }
 }
 
@@ -3490,6 +3734,60 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
     } else if (hasTankorentBinding) {
         publishTankorentItemsForTorrent(infoHash);
     }
+
+    // THEATRE_DOWNLOAD_INDEX_REGISTRATION P1.6 Gap 2 (2026-05-30) —
+    // single-episode completion safety net. publishTankorentItemsForTorrent
+    // uses StreamPackParser which can miss single-file torrents with
+    // non-standard naming. This fallback walks the savePath for video
+    // files matching imdb + season, parses SxxExx from each filename,
+    // and registers any not already in the index. Idempotent — if the
+    // parser path above already registered, this is a cheap no-op.
+    if (m_streamDownloadIndex && !hasBulkGroup && !recordImdbId.isEmpty()) {
+        // Match the reconcileUnregisteredSingleEpisodes identity gate:
+        // category must be "videos" so non-stream torrents (comics, books,
+        // audiobooks) can't leak into the stream download index from this
+        // second door. streamGroupId is already empty (gated by !hasBulkGroup
+        // above — no empty check needed here, but the local var confirms).
+        if (category != QLatin1String("videos"))
+            goto afterSingleEpisodeSafetyNet;
+        const auto tRow = m_repo.getTorrent(infoHash);
+        if (tRow && tRow->season > 0 && !tRow->savePath.isEmpty()) {
+            static const QRegularExpression vidExt(
+                QStringLiteral(R"(\.(mkv|mp4|avi|mov|wmv|webm)$)"),
+                QRegularExpression::CaseInsensitiveOption);
+            static const QRegularExpression sxeRe(
+                QStringLiteral(R"([Ss](\d{1,2})[Ee](\d{1,3}))"));
+
+            QDirIterator it(tRow->savePath,
+                            QDir::Files | QDir::NoDotAndDotDot,
+                            QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                it.next();
+                const QString fname = it.fileName();
+                if (!vidExt.match(fname).hasMatch()) continue;
+                auto m = sxeRe.match(fname);
+                if (!m.hasMatch()) continue;
+                const int epSeason = m.captured(1).toInt();
+                if (epSeason != tRow->season) continue;
+                const int epNum = m.captured(2).toInt();
+                if (epNum <= 0) continue;
+                // Idempotent guard.
+                if (m_streamDownloadIndex
+                        ->filePathFor(recordImdbId, epSeason, epNum)
+                        .has_value())
+                    continue;
+
+                const QString sourceGroupId =
+                    QStringLiteral("tankorent:") + infoHash;
+                m_streamDownloadIndex->registerEpisode(
+                    recordImdbId, epSeason, epNum,
+                    it.filePath(), sourceGroupId,
+                    QFileInfo(it.filePath()).size());
+                break;  // one registration per completion event
+            }
+        }
+    }
+    afterSingleEpisodeSafetyNet:
 
     emit torrentCompleted(infoHash);
 
