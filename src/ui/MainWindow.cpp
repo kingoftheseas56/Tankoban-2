@@ -790,22 +790,32 @@ void MainWindow::buildPageStack()
     torrentClient->setTransferQueue(m_transferQueue);
     dbg("4e-torrentclient-created");
 
-    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire the stream-side
-    // download index into TorrentClient so onFileRenamed() registers each
-    // published bulk-episode file as it lands. Both objects exist by now
-    // (m_streamDownloadIndex was constructed at line ~180; TorrentClient just
-    // created above). Non-owning pointer; nullptr-tolerant on the receiver.
-    if (m_streamDownloadIndex)
-        torrentClient->setStreamDownloadIndex(m_streamDownloadIndex);
-
     // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — inject the SQLite
-    // repository the StreamDownloadIndex now reads from / writes through to.
-    // Triggers a one-time load() that rebuilds the in-memory byPath/byEpisode/
-    // imdbHasAny maps from the stream_downloads_index table populated by the
-    // Phase 1.6 first-boot importer (and kept in sync by the index's own
-    // per-mutation upserts going forward).
+    // repository FIRST, before the backfill/reconcile below. setRepository()
+    // triggers a one-time load() that rebuilds the in-memory byPath/byEpisode/
+    // imdbHasAny maps from the stream_downloads_index table.
+    //
+    // ORDERING IS LOAD-BEARING (fix 2026-05-30, Invincible S4E01): if
+    // setStreamDownloadIndex() (which runs backfillStreamDownloadIndex +
+    // reconcileUnregisteredSingleEpisodes) runs BEFORE this, two things break —
+    // (1) registerEpisode's persist is gated on m_repo, which is still null, so
+    // freshly-reconciled single-episode entries never reach the DB; and (2) the
+    // load() here then CLEARS those in-memory registrations and restores only the
+    // stale persisted rows. Net: completed single-episode downloads (no bulk
+    // stream-group to fall back on) vanish from the index and render as
+    // NotDownloaded. Repo-first → load() restores prior state, THEN reconcile
+    // registers on top and persists through the now-set repo. (See obs: register
+    // episode init-order fragility, 2026-05-30.)
     if (m_streamDownloadIndex)
         m_streamDownloadIndex->setRepository(&torrentClient->repository());
+
+    // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 2 — wire the stream-side
+    // download index into TorrentClient so onFileRenamed() registers each
+    // published bulk-episode file as it lands, and run the one-shot backfill +
+    // single-episode reconcile. The index's repo is set (above), so their
+    // registerEpisode calls both persist and survive any later load().
+    if (m_streamDownloadIndex)
+        torrentClient->setStreamDownloadIndex(m_streamDownloadIndex);
 
     // Stream page — m_streamPage cache (STREAM_ADD_TO_TANKORENT 2026-05-06)
     // so we can wire the magnet-handoff signal without a qobject_cast walk.

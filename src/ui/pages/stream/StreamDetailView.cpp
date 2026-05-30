@@ -1283,21 +1283,54 @@ StreamDetailView::episodeDisplayState(int season, int episode) const
     using tankostream::stream::EpisodeStateInputs;
     EpisodeStateInputs in;
 
-    // Authoritative index entry: completion truth + the real on-disk path. Resolve
-    // the AUTHORITATIVE entry (Complete over a stale .tankoban-partial Pending) —
-    // bestEntryForEpisode avoids filePathFor's duplicate-path hazard. NOTE: a file
-    // EXISTING is not completion — the engine pre-allocates the destination file
-    // when a download starts, so a 98% partial file is on disk. `complete` (the
-    // record's Complete state) is the completion signal; onDisk only confirms it.
+    // Authoritative index entry: the real on-disk path + a completion hint. The
+    // index `state` field is only a HINT — it is rebuilt each launch and can lag
+    // reality (a finished torrent can leave a Pending/Downloading record behind,
+    // e.g. a ghost re-dispatch stuck at 0% — the Invincible S4E01 bug). We take
+    // onDisk + the path from it, but the ACTIVE-TRANSFER decision is corroborated
+    // against the LIVE engine, never the cached state alone.
     if (m_downloadIndex && !m_currentImdb.isEmpty()) {
         const auto best = m_downloadIndex->bestEntryForEpisode(m_currentImdb, season, episode);
         if (best.has_value()) {
-            in.onDisk   = QFileInfo::exists(best->canonicalPath);
-            in.complete = (best->state == StreamDownloadIndex::Entry::Complete);
-            if (best->state == StreamDownloadIndex::Entry::Pending
-             || best->state == StreamDownloadIndex::Entry::Downloading)
-                in.hasTransfer = true;
+            in.onDisk      = QFileInfo::exists(best->canonicalPath);
+            in.complete    = (best->state == StreamDownloadIndex::Entry::Complete);
             in.progressPct = best->progressPct;
+            if (best->state == StreamDownloadIndex::Entry::Pending
+             || best->state == StreamDownloadIndex::Entry::Downloading) {
+                // Corroborate the cached in-progress state against the live torrent
+                // backing this entry. Only a torrent genuinely still downloading
+                // counts as an active transfer; a seeding/completed (or session-
+                // absent) torrent means the cached state is stale, so we let the
+                // on-disk file speak for itself (deriveEpisodeDisplayState treats a
+                // bare on-disk file as Downloaded).
+                const QString hash =
+                    best->sourceGroupId.startsWith(QLatin1String("tankorent:"))
+                        ? best->sourceGroupId.mid(QStringLiteral("tankorent:").size())
+                        : QString();
+                if (m_torrentClient) {
+                    for (const auto& ti : m_torrentClient->listActive()) {
+                        if (!hash.isEmpty()) {
+                            if (ti.infoHash.compare(hash, Qt::CaseInsensitive) != 0)
+                                continue;
+                        } else if (ti.imdbId.compare(m_currentImdb,
+                                                     Qt::CaseInsensitive) != 0) {
+                            continue;
+                        }
+                        const QString s = ti.stateString;
+                        if (s == QLatin1String("seeding")
+                         || s == QLatin1String("completed")) {
+                            in.complete = true;
+                        } else if (ti.progress < 1.0f
+                                && (s == QLatin1String("downloading")
+                                 || s == QLatin1String("checking")
+                                 || s == QLatin1String("metadata")
+                                 || s == QLatin1String("allocating")
+                                 || s == QLatin1String("paused"))) {
+                            in.hasTransfer = true;
+                        }
+                    }
+                }
+            }
         }
     }
     // ALWAYS consult the live engine snapshot (it carries the Paused flag + the
@@ -1310,6 +1343,12 @@ StreamDetailView::episodeDisplayState(int season, int episode) const
             const int pct    = qMax(0, it.value().second);  // 0..100 (-1 terminal -> 0)
             if (st == QLatin1String("Published") || st == QLatin1String("Completed")) {
                 in.complete = true;                          // engine confirms terminal success
+                in.onDisk   = true;                          // FIX: a Published season's files
+                                                             // are on disk by definition — do
+                                                             // not also demand a per-file index
+                                                             // entry (One Piece: snapshot
+                                                             // Published but index entry absent
+                                                             // this launch → was NotDownloaded).
             } else if (st == QLatin1String("Paused")) {
                 in.hasTransfer = true; in.paused = true; in.progressPct = pct;
             } else if (st == QLatin1String("Failed")
