@@ -31,26 +31,91 @@ def normalize_text(s):
     return s.strip()
 
 
-def strip_series_boilerplate(synopses):
-    """Remove the longest shared leading marketing intro across a series' volumes.
+def _majority_boilerplate(non_empty):
+    """Longest sentence-bounded prefix shared by a MAJORITY of the synopses.
 
-    Returns a new list, same order. Only strips when the shared prefix is a
-    substantial sentence-bounded intro (>= 30 chars), so unrelated short overlaps
-    are left alone.
+    A strict all-volumes common prefix is fragile: one volume with a different
+    opening (e.g. Bleach Vol 74's "Part-time student, full-time Soul Reaper...")
+    collapses the common prefix to nothing and disables stripping for the whole
+    series. Instead, take each volume's sentence-bounded openings as candidates
+    and keep the longest one that >=60% of volumes share. Tolerates outliers
+    while still only stripping a genuinely repeated marketing intro.
+    """
+    n = len(non_empty)
+    if n < 2:
+        return ""
+    threshold = max(2, (n * 6 + 9) // 10)  # ceil(0.6 * n), at least 2
+    best = ""
+    for cand_src in non_empty:
+        bounds = [m.end() for m in re.finditer(r"[.!?]\s", cand_src)]
+        for end in reversed(bounds):  # longest sentence-prefix of this candidate first
+            prefix = cand_src[:end].rstrip()
+            if len(prefix) < 30 or len(prefix) <= len(best):
+                continue
+            shared = sum(1 for s in non_empty if s.startswith(prefix))
+            if shared >= threshold:
+                best = prefix
+                break
+    return best
+
+
+def strip_shared_prefixes(synopses, min_share=3, min_len=40):
+    """Strip, per volume, the longest sentence-bounded opening shared by >=
+    min_share volumes.
+
+    Generalizes strip_series_boilerplate to SUB-MAJORITY boilerplate clusters:
+    a generic series blurb prepended to only a RANGE of volumes (e.g. Bleach
+    vols 48-74 all open with the same ~470-char "Part-time student, full-time
+    Soul Reaper..." intro before their real per-volume text) is 36% of the
+    series -- under the >=60% majority test, so strip_series_boilerplate misses
+    it. A 40+ char sentence-bounded opening shared by >=3 volumes is boilerplate,
+    not coincidence; strip it from each volume that carries it, exposing the real
+    per-volume tail. Never blanks a volume that is pure-boilerplate (keeps it for
+    the gate to flag as a gap).
+    """
+    non_empty = [s for s in synopses if s and s.strip()]
+    if len(non_empty) < min_share:
+        return list(synopses)
+    out = []
+    for s in synopses:
+        if not s:
+            out.append(s)
+            continue
+        bounds = [m.end() for m in re.finditer(r"[.!?]\s", s)]
+        best = ""
+        for end in reversed(bounds):  # longest sentence-prefix first
+            prefix = s[:end].rstrip()
+            if len(prefix) < min_len:
+                break
+            if sum(1 for o in non_empty if o.startswith(prefix)) >= min_share:
+                best = prefix
+                break
+        if best:
+            stripped = s[len(best):].lstrip(" -:").strip()
+            out.append(stripped if stripped else s)
+        else:
+            out.append(s)
+    return out
+
+
+def strip_series_boilerplate(synopses):
+    """Remove the leading marketing intro shared by a majority of the volumes.
+
+    Returns a new list, same order. Only strips a substantial sentence-bounded
+    intro (>= 30 chars) shared by >=60% of volumes, so unrelated short overlaps
+    are left alone and an outlier volume can't disable stripping for the rest.
     """
     non_empty = [s for s in synopses if s and s.strip()]
     if len(non_empty) < 2:
         return list(synopses)
-    lcp = os.path.commonprefix(non_empty)
-    # Trim the shared prefix back to its last sentence boundary so we never cut a word.
-    m = re.search(r"^(.*[.!?])\s", lcp)
-    boiler = m.group(1) if m else (lcp if len(lcp) >= 30 else "")
+    boiler = _majority_boilerplate(non_empty)
     if len(boiler) < 30:
         return list(synopses)
     out = []
     for s in synopses:
         if s and s.startswith(boiler):
-            out.append(s[len(boiler):].lstrip(" -:").strip())
+            stripped = s[len(boiler):].lstrip(" -:").strip()
+            out.append(stripped if stripped else s)  # never blank a volume out
         else:
             out.append(s)
     return out
