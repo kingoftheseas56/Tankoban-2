@@ -830,28 +830,13 @@ void StreamDetailView::buildUI()
     // stretch=0 in the Expanding-policy fight for leftover space.
     leftCol->addStretch();
 
-    contentRow->addLayout(leftCol, 5);
-
-    // THEATRE_DOWNLOAD_SIMPLIFY P4 — the inline right-hand "Sources" pane was
-    // removed; the episode table now reclaims the bulk of the row width
-    // (left:right stretch raised from 3:2 to 5:2). The QStackedLayout host
-    // (m_rightPaneStack) is KEPT — and still added to contentRow — because
-    // StreamPage mounts the season-pack TheatreDownloadPanel into it and slides
-    // that panel in/out over m_sourcesPanel; collapsing the stack to zero width
-    // would break the season Download slide-in panel (explicitly out of scope
-    // for this cleanup). The sources page itself is now an empty placeholder so
-    // the panel slide-in/out still has its counterpart widget.
-    m_rightPaneStack = new QWidget(this);
-    m_rightPaneStack->setObjectName(QStringLiteral("DetailRightPaneStack"));
-    auto* rightStackLayout = new QStackedLayout(m_rightPaneStack);
-    rightStackLayout->setContentsMargins(0, 0, 0, 0);
-    rightStackLayout->setStackingMode(QStackedLayout::StackAll);
-
-    // Empty placeholder page (no Sources header / list) — keeps the stack page
-    // count and the slide-in target valid while the visible pane is gone.
-    m_sourcesPanel = new QWidget(m_rightPaneStack);
-    m_sourcesPanel->setObjectName(QStringLiteral("DetailSourcesPanel"));
-    rightStackLayout->addWidget(m_sourcesPanel);
+    // THEATRE_DOWNLOAD_SIMPLIFY P4.1 — right pane (Tankorent season-pack UI)
+    // removed; episode list takes the full window width. m_rightPaneStack /
+    // m_sourcesPanel stay null; rightPaneStack() returns null so StreamPage's
+    // null-guarded panel wiring cleanly no-ops. The Tankorent SEARCH engine
+    // (m_unifiedPackSearchEngine / TankorentSearchService / TheatreDownloadPanel)
+    // is untouched.
+    contentRow->addLayout(leftCol, 1);
 
     // m_sourcesHeader is retained (constructed off-layout, never shown) so the
     // member stays non-null for devSnapshot() and the header decl is harmless.
@@ -860,9 +845,9 @@ void StreamDetailView::buildUI()
 
     // m_sourcesList is retained (constructed off-layout, never shown) so the
     // setStreamSources*/placeholder/toast passthroughs and the four source
-    // signal re-emits stay wired without a visible pane. The list is parented
-    // to m_sourcesPanel so it is owned + destroyed with the view.
-    m_sourcesList = new tankostream::stream::StreamSourceList(m_sourcesPanel);
+    // signal re-emits stay wired without a visible pane. Parented to this (not
+    // m_sourcesPanel, which is now null) so it is owned + destroyed with the view.
+    m_sourcesList = new tankostream::stream::StreamSourceList(this);
     m_sourcesList->hide();
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::sourceActivated,
             this, &StreamDetailView::sourceActivated);
@@ -872,12 +857,6 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::directDownloadRequested);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::autoLaunchCancelRequested,
             this, &StreamDetailView::autoLaunchCancelRequested);
-
-    // m_rightPaneStack is still added to contentRow so the TheatreDownloadPanel
-    // (mounted into it by StreamPage) can slide in from the right and have room
-    // to render. Stretch 2 (vs the left column's 5) keeps the season-pack panel
-    // functional while the episode table takes the lion's share of the width.
-    contentRow->addWidget(m_rightPaneStack, 2);
 
     root->addLayout(contentRow, 1);
 }
