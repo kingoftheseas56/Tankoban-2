@@ -111,7 +111,7 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s == 
 
 async function poll() {
   try {
-    const r = await fetch('/messages?after=' + maxseq);
+    const r = await fetch('/messages?after=' + maxseq + '&_=' + Date.now(), {cache: 'no-store'});
     const data = await r.json();
     if (data.messages && data.messages.length) { render(data.messages); }
     if (typeof data.maxseq === 'number') maxseq = Math.max(maxseq, data.maxseq);
@@ -168,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # Never let the browser serve a stale message list — the live poll
+        # depends on every /messages fetch hitting the server fresh.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(data)
 
