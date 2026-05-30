@@ -206,22 +206,51 @@ def cmd_send(sid, to_raw, msg):
     cmd_append(frm, to, "chat", "null", msg)  # prints seq
 
 
+import re
+
+# Auto-detect agent number from a wake-prompt / explicit "I am agent N" line.
+_AGENT_RE = re.compile(
+    r"(?:you'?re|you are|i am|office:\s*i am|wake up,?)\s+agent\s*#?\s*(\d+)", re.IGNORECASE
+)
+_AGENT_RE2 = re.compile(r"\bagent[\s-]*#?\s*(\d+)\b", re.IGNORECASE)
+
+
+def _detect_agent_num(prompt):
+    if not prompt:
+        return ""
+    m = _AGENT_RE.search(prompt) or _AGENT_RE2.search(prompt)
+    return m.group(1) if m else ""
+
+
 def cmd_deliver():
-    """Hook entrypoint. Reads hook JSON on stdin (has session_id), injects
-    unseen messages as additionalContext JSON, advances cursor. Always exit 0."""
+    """Hook entrypoint (UserPromptSubmit). Reads hook JSON on stdin (has
+    session_id + prompt), auto-binds identity from the prompt if this tab isn't
+    registered yet, injects unseen messages as additionalContext JSON, advances
+    cursor. Always exit 0 (never block prompt submission)."""
     # DeepSeek endpoint rejects injected context (system-role 400) — stay silent.
     base = os.environ.get("ANTHROPIC_BASE_URL", "")
     if "deepseek" in base.lower():
         return
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
-    sid = ""
-    try:
-        sid = json.loads(raw).get("session_id", "") if raw.strip() else ""
-    except json.JSONDecodeError:
-        sid = ""
+    sid, prompt = "", ""
+    if raw.strip():
+        try:
+            payload = json.loads(raw)
+            sid = payload.get("session_id", "")
+            prompt = payload.get("prompt", "")
+        except json.JSONDecodeError:
+            pass
     if not sid:
-        sid = os.environ.get("CLAUDE_SESSION_ID", "")
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID", os.environ.get("CLAUDE_SESSION_ID", ""))
+    if not sid:
+        return
     me = _agent_for(sid)
+    if not me:
+        # Auto-detect + explicit-fallback identity binding from the prompt text.
+        num = _detect_agent_num(prompt)
+        if num:
+            cmd_join(sid, num)
+            me = "agent" + str(num)
     if not me:
         return
     msgs = []

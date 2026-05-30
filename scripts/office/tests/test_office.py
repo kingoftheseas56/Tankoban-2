@@ -104,6 +104,16 @@ def main():
     )
     check(procd.stdout.strip() == "", "deliver: silent on deepseek endpoint")
 
+    # --- deliver auto-binds identity from wake prompt (unregistered session) ---
+    run(env, "append", "agent2", "agent3", "chat", "null", "hey player guy")
+    proc_ab = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"],
+        input=json.dumps({"session_id": "sess-new3", "prompt": "my brother, you're Agent 3 — wake up"}),
+        capture_output=True, text=True, env=env,
+    )
+    check(run(env, "whoami", "sess-new3") == "agent3", "deliver auto-binds sess-new3 -> agent3 from prompt")
+    check("hey player guy" in proc_ab.stdout, "deliver delivers to just-auto-bound agent3")
+
     # --- close: archive + clear ---
     out_close = run(env, "close")
     check("archived" in out_close, "close: reports archive")

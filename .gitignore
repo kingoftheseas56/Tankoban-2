@@ -120,6 +120,15 @@ sidecar_debug_live.log.*
 # Claude Code Exporter — auto-exported conversation transcripts (per-machine, never commit)
 .cc-history/
 
+# The Office — live agent comms bus (THE_OFFICE arc, 2026-05-30). Ephemeral
+# inter-agent chatter, per-machine, never tracked. The bus is the live "office
+# room"; chat.md stays the durable narrative log. Archives kept locally (dated)
+# but not committed; the bus_archive/ dir itself is tracked via a .gitkeep.
+agents/bus.jsonl
+agents/.bus_cursors/
+agents/bus_archive/*.jsonl
+.claude/.office_sessions.json
+
 # Root-level scratch convention (NOT the agent-scratch _*.{ext} convention above).
 # tmp_* + loose smoke/wiki PNG scratch at root — saved evidence belongs under
 # agents/audits/smoke_evidence/ via the smoke-package skill, not the repo root.
