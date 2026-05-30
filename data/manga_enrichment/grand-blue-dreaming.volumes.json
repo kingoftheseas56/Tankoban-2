@@ -1,141 +1,222 @@
 {
   "seriesId": "grand-blue-dreaming",
-  "anilistId": 0,
+  "anilistId": 87395,
   "title": "Grand Blue Dreaming",
-  "enrichmentBasis": "wikipedia_isbn_bn_harvest",
-  "lastVerifiedDate": "2026-05-29",
+  "enrichmentBasis": "congress_catalog_engine_v1",
+  "lastVerifiedDate": "2026-05-30",
   "volumes": [
     {
       "volumeNumber": 1,
       "englishTitle": "",
       "englishReleaseDate": "2018-07-10",
-      "synopsis": "INTO THE BLUE: After graduating from an all-boys' high school, Iori Kitahara moves away from home to go to college in a seaside town. He's eager to start a new chapter in his lifeÂ-one filled with dreams of reinventing himself, meeting beautiful girls, and reveling in his youth. But when his new abode is his uncle's dive shop, Iori's college debut doesn't turn out as glamorously as he planned! Can Iori keep himself afloat, or will the booze-fueled antics of his university's diving club wash him away?! A coming-of-age tale with beer, bums, and the Grand Blue!"
+      "synopsis": "INTO THE BLUE: After graduating from an all-boys' high school, Iori Kitahara moves away from home to go to college in a seaside town. He's eager to start a new chapter in his lifeÂ-one filled with dreams of reinventing himself, meeting beautiful girls, and reveling in his youth. But when his new abode is his uncle's dive shop, Iori's college debut doesn't turn out as glamorously as he planned! Can Iori keep himself afloat, or will the booze-fueled antics of his university's diving club wash him away?! A coming-of-age tale with beer, bums, and the Grand Blue!",
+      "isbn": "978-1-63236-666-5",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 2,
       "englishTitle": "",
       "englishReleaseDate": "2018-09-11",
-      "synopsis": "FIRST TIMES: Despite swimming about as well as a sack of hammers, Iori's been drafted into Izu University's diving club. The club's beer-soaked parties bring out his inner beast, but how will he do once he's actually underwater and face-to-face with the grandeur of the sea? And swimming ability might be the least of Iori's troubles when he awakens from the club's latest drunken revel next to a beautiful woman he doesn't recognize..."
+      "synopsis": "FIRST TIMES: Despite swimming about as well as a sack of hammers, Iori's been drafted into Izu University's diving club. The club's beer-soaked parties bring out his inner beast, but how will he do once he's actually underwater and face-to-face with the grandeur of the sea? And swimming ability might be the least of Iori's troubles when he awakens from the club's latest drunken revel next to a beautiful woman he doesn't recognize...",
+      "isbn": "978-1-63236-667-2",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 3,
       "englishTitle": "",
       "englishReleaseDate": "2018-11-27",
-      "synopsis": "RUMORS EVERYWHERE: The word around school is that Iori has a hot girlfriend--which couldn't be further from the truth. But pesky little concepts like \"truth\" don't matter to the male campus population: Iori's supposed good fortune has turned him into their most hated enemy, and he may not escape with his skin intact. Then, the diving club gets an unexpected new member--and she's a girl! But boy or girl, none of them will survive unscathed the greatest horror of college life: The mixer."
+      "synopsis": "RUMORS EVERYWHERE: The word around school is that Iori has a hot girlfriend--which couldn't be further from the truth. But pesky little concepts like \"truth\" don't matter to the male campus population: Iori's supposed good fortune has turned him into their most hated enemy, and he may not escape with his skin intact. Then, the diving club gets an unexpected new member--and she's a girl! But boy or girl, none of them will survive unscathed the greatest horror of college life: The mixer.",
+      "isbn": "978-1-63236-668-9",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 4,
       "englishTitle": "",
       "englishReleaseDate": "2019-02-19",
-      "synopsis": "GO SOUTH, YOUNG MAN: Having raised their funds for the diving license boot camp, Iori and the gang finally make their way to Okinawa. But their joy is short-lived, as what awaits them there is the bane of all morons: an exam. To combat this dread, the antics of this nudity-loving diving club are only going to escalate in response!"
+      "synopsis": "GO SOUTH, YOUNG MAN: Having raised their funds for the diving license boot camp, Iori and the gang finally make their way to Okinawa. But their joy is short-lived, as what awaits them there is the bane of all morons: an exam. To combat this dread, the antics of this nudity-loving diving club are only going to escalate in response!",
+      "isbn": "978-1-63236-740-2",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 5,
       "englishTitle": "",
       "englishReleaseDate": "2019-04-02",
-      "synopsis": "TRADITION! TRADITION...? The Okinawa training camp continues to be a rollercoaster of shenanigans, now with a curious misunderstanding threatening to shake the dynamic of the club members' relationships... And at last, the Miyakojima tradition of otori begins! Will the springtime of youth finally grace this nude diving comedy?!"
+      "synopsis": "TRADITION! TRADITION...? The Okinawa training camp continues to be a rollercoaster of shenanigans, now with a curious misunderstanding threatening to shake the dynamic of the club members' relationships... And at last, the Miyakojima tradition of otori begins! Will the springtime of youth finally grace this nude diving comedy?!",
+      "isbn": "978-1-63236-724-2",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 6,
       "englishTitle": "",
       "englishReleaseDate": "2019-05-21",
-      "synopsis": "MATING SEASON: With a ticket to the Oumi Women's University school festival on the line, a fierce competition unfolds between the guys. Who will take the prize and win the right to pick up chicks and/or go to the voice actress concert?! Passionate friendship and way-too-passionate familial love go full throttle in the latest volume of the raunchy SCUBA diving comedy--minus the diving, this time!"
+      "synopsis": "MATING SEASON: With a ticket to the Oumi Women's University school festival on the line, a fierce competition unfolds between the guys. Who will take the prize and win the right to pick up chicks and/or go to the voice actress concert?! Passionate friendship and way-too-passionate familial love go full throttle in the latest volume of the raunchy SCUBA diving comedy--minus the diving, this time!",
+      "isbn": "978-1-63236-725-9",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 7,
       "englishTitle": "",
       "englishReleaseDate": "2019-07-02",
-      "synopsis": "SISTER, SISTER: On a stormy night, Iori and Chisa are left to watch the house alone. Little do they know that a passionate, libido-charged evening is about to unfold. Meanwhile, Iori's little sister, Shiori Kitahara, makes an appearance, transforming Kohei into a jealous god of destruction. Brocons, siscons, and lolicons run amok in the nude diving comedy's little-sister arc!"
+      "synopsis": "SISTER, SISTER: On a stormy night, Iori and Chisa are left to watch the house alone. Little do they know that a passionate, libido-charged evening is about to unfold. Meanwhile, Iori's little sister, Shiori Kitahara, makes an appearance, transforming Kohei into a jealous god of destruction. Brocons, siscons, and lolicons run amok in the nude diving comedy's little-sister arc!",
+      "isbn": "978-1-63236-792-1",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 8,
       "englishTitle": "",
       "englishReleaseDate": "2019-10-29",
-      "synopsis": "SUMMERTIME BREWS: Summer break is right around the corner, but first, the college club must overcome the frenzy of lectures, reports, and labs. School is a place of study, after all. But if you thought the teachers at Izu U would be normal, then you've got another thing coming! It's a treacher- ous death match against Iori's associate professor, and both pride and academic credits are on the line..."
+      "synopsis": "SUMMERTIME BREWS: Summer break is right around the corner, but first, the college club must overcome the frenzy of lectures, reports, and labs. School is a place of study, after all. But if you thought the teachers at Izu U would be normal, then you've got another thing coming! It's a treacher- ous death match against Iori's associate professor, and both pride and academic credits are on the line...",
+      "isbn": "978-1-63236-837-9",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 9,
       "englishTitle": "",
       "englishReleaseDate": "2020-01-07",
-      "synopsis": "WORKING STIFF: If there's one thing college students want, it's money! After getting a job at a diner, Iori is reunited with Sakurako Busujima, the college girl he bumped heads with at the Oumi U school festival, and soon finds himself the victim of her harsh hazing and sadistic training. But then, like an angel from heaven, a pretty-faced boy appears to offer him a helping hand. Will Otoya-kun be the savior Iori so desperately needs?"
+      "synopsis": "WORKING STIFF: If there's one thing college students want, it's money! After getting a job at a diner, Iori is reunited with Sakurako Busujima, the college girl he bumped heads with at the Oumi U school festival, and soon finds himself the victim of her harsh hazing and sadistic training. But then, like an angel from heaven, a pretty-faced boy appears to offer him a helping hand. Will Otoya-kun be the savior Iori so desperately needs?",
+      "isbn": "978-1-63236-812-6",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 10,
       "englishTitle": "",
       "englishReleaseDate": "2020-04-28",
-      "synopsis": "KEEP DREAMING: With an actual date planned, Aina heads out into uncharted waters of a different sort with Iori. However, when it comes time to foot the bill, Iori and the club members descend into chaos... With a new diving trip in the works as well, and the usual Diving Club antics, will anyone have the time for romance?"
+      "synopsis": "KEEP DREAMING: With an actual date planned, Aina heads out into uncharted waters of a different sort with Iori. However, when it comes time to foot the bill, Iori and the club members descend into chaos... With a new diving trip in the works as well, and the usual Diving Club antics, will anyone have the time for romance?",
+      "isbn": "978-1-63236-910-9",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 11,
       "englishTitle": "",
       "englishReleaseDate": "2020-10-13",
-      "synopsis": "NO MAN'S ISLAND: The diving club's excursion to an uninhabited island has left everyone in uncharted territory. While at first glance the island seems a heavenly oasis, it turns out to be a little less uninhabited than expected. Everyone is in for much more than they bargained for, and their dreamy excursion begins to feel more and more like a nightmare..."
+      "synopsis": "NO MAN'S ISLAND: The diving club's excursion to an uninhabited island has left everyone in uncharted territory. While at first glance the island seems a heavenly oasis, it turns out to be a little less uninhabited than expected. Everyone is in for much more than they bargained for, and their dreamy excursion begins to feel more and more like a nightmare...",
+      "isbn": "978-1-63236-949-9",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 12,
       "englishTitle": "",
       "englishReleaseDate": "2021-03-09",
-      "synopsis": "INTERNATIONAL WATERS: The long awaited trip to Palau, the very stuff of the Grand Blueâs dreams, seems finally within sightâ¦until Iori goes home to get his passport. Flanked by his disapproving sister, and the unnerving distraction of a new guest in his family home, Ioriâs homecoming promises to be anything but smooth sailing to his dream diving destination."
+      "synopsis": "INTERNATIONAL WATERS: The long awaited trip to Palau, the very stuff of the Grand Blueâs dreams, seems finally within sightâ¦until Iori goes home to get his passport. Flanked by his disapproving sister, and the unnerving distraction of a new guest in his family home, Ioriâs homecoming promises to be anything but smooth sailing to his dream diving destination.",
+      "isbn": "978-1-64651-043-6",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 14,
       "englishTitle": "",
       "englishReleaseDate": "2021-10-26",
-      "synopsis": "FOOLS IN LOVE Now that Koheiâs aware of Ainaâs feelings for Iori, the crazy otakuâs taking every opportunity to push them together. What should have been a time for heartfelt confessions becomes a bizarre test of survival! With little time remaining before the gang heads back to Japan, will Aina take the plunge or get cold feet?"
+      "synopsis": "FOOLS IN LOVE Now that Koheiâs aware of Ainaâs feelings for Iori, the crazy otakuâs taking every opportunity to push them together. What should have been a time for heartfelt confessions becomes a bizarre test of survival! With little time remaining before the gang heads back to Japan, will Aina take the plunge or get cold feet?",
+      "isbn": "978-1-64651-142-6",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 15,
       "englishTitle": "",
       "englishReleaseDate": "2022-04-19",
-      "synopsis": "Summerâs coming to an end, which means itâs time for Iori and his pals to head back to class. Everyoneâs bummed that they didnât make any precious summer memories. So, they decide to hold a little party to pick up chicks. Unfortunately, Iori knows every girl at the get-together, and heâs the only one standing between them and some idiots looking to score!"
+      "synopsis": "Summerâs coming to an end, which means itâs time for Iori and his pals to head back to class. Everyoneâs bummed that they didnât make any precious summer memories. So, they decide to hold a little party to pick up chicks. Unfortunately, Iori knows every girl at the get-together, and heâs the only one standing between them and some idiots looking to score!",
+      "isbn": "978-1-64651-207-2",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 16,
       "englishTitle": "",
       "englishReleaseDate": "2022-06-14",
-      "synopsis": "OKINAWA ANTICS: After scoring a winning lottery ticket, Iori convinces Chisa to join him on an island getaway to Okinawa. A jealous Aina resolves to throw a wrench in any potential romance by tagging along in secretâ¦ and even ropes Kohei into her scheme! Itâs two days of botched love hotel bookings, a broken-hearted otaku, and even a little diving in this love duel for the ages!"
+      "synopsis": "OKINAWA ANTICS: After scoring a winning lottery ticket, Iori convinces Chisa to join him on an island getaway to Okinawa. A jealous Aina resolves to throw a wrench in any potential romance by tagging along in secretâ¦ and even ropes Kohei into her scheme! Itâs two days of botched love hotel bookings, a broken-hearted otaku, and even a little diving in this love duel for the ages!",
+      "isbn": "978-1-64651-402-1",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 17,
       "englishTitle": "",
       "englishReleaseDate": "2022-10-04",
-      "synopsis": "SAKURAKO STRIKES: Believing that Iori has hit it rich after winning the lottery, Sakurako seizes her chance to pounce. Aina then launches her own desperate defense as friends from both sides join the fray. With Sakurako glued to Ioriâs side, the Okinawa nights quickly reach a fever pitch. Who will emerge victorious in the war for the fickle Ioriâs affection?"
+      "synopsis": "SAKURAKO STRIKES: Believing that Iori has hit it rich after winning the lottery, Sakurako seizes her chance to pounce. Aina then launches her own desperate defense as friends from both sides join the fray. With Sakurako glued to Ioriâs side, the Okinawa nights quickly reach a fever pitch. Who will emerge victorious in the war for the fickle Ioriâs affection?",
+      "isbn": "978-1-64651-403-8",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 18,
       "englishTitle": "",
       "englishReleaseDate": "2023-02-21",
-      "synopsis": "A SISTERâS WRATH: Nanaka is left fuming after she learns that Chisa lied to her about traveling to Okinawa. Suspecting Iori of seducing her sister during the trip, the frighteningly overprotective Nanaka plots how to make Iori come clean. Meanwhile, Iori finds his resolve floundering in the face of Sakurakoâs relentless love attack. Will he make it out of this in one piece?"
+      "synopsis": "A SISTERâS WRATH: Nanaka is left fuming after she learns that Chisa lied to her about traveling to Okinawa. Suspecting Iori of seducing her sister during the trip, the frighteningly overprotective Nanaka plots how to make Iori come clean. Meanwhile, Iori finds his resolve floundering in the face of Sakurakoâs relentless love attack. Will he make it out of this in one piece?",
+      "isbn": "978-1-64651-699-5",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 19,
       "englishTitle": "",
       "englishReleaseDate": "2023-06-06",
-      "synopsis": "THE WEDDING PARTY After Chisa accidentally gets hypnotized into falling for Iori, Iori finds himself fighting for his life against his salty âbuddies.â He and the PAB crew then receive an invitation to Kaya Mizukiâs wedding reception, a formal event, which means the boys now face a terrifying prospect: actually keeping their clothes on!"
+      "synopsis": "THE WEDDING PARTY After Chisa accidentally gets hypnotized into falling for Iori, Iori finds himself fighting for his life against his salty âbuddies.â He and the PAB crew then receive an invitation to Kaya Mizukiâs wedding reception, a formal event, which means the boys now face a terrifying prospect: actually keeping their clothes on!",
+      "isbn": "978-1-64651-700-8",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 20,
       "englishTitle": "",
       "englishReleaseDate": "2024-11-19",
-      "synopsis": "AINA ATTACKS: Despite her best efforts, Aina has suffered one defeat after another in the war for Ioriâs affections. With spirits running high as Iori and the gang prepare to visit the famous âshark scrambleâ for their long-awaited dive, this might be Ainaâs best chance to turn the tide. Can she find the winning weapon in her arsenal of charms?"
+      "synopsis": "AINA ATTACKS: Despite her best efforts, Aina has suffered one defeat after another in the war for Ioriâs affections. With spirits running high as Iori and the gang prepare to visit the famous âshark scrambleâ for their long-awaited dive, this might be Ainaâs best chance to turn the tide. Can she find the winning weapon in her arsenal of charms?",
+      "isbn": "979-8-88877-046-7",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 21,
       "englishTitle": "",
       "englishReleaseDate": "2025-02-11",
-      "synopsis": "EROS MIDFIELDERA wardrobe malfunction brought Ainaâs late-game love-offensive to a grinding halt. But waitâ¦ Could this be a blessing in disguise? Kohei is determined to keep up the pressure, and heâll use every dirty tactic in the book to give Aina an assist. Yet Sakurako has her own lecherous designsâ\"and even fewer qualms!"
+      "synopsis": "EROS MIDFIELDERA wardrobe malfunction brought Ainaâs late-game love-offensive to a grinding halt. But waitâ¦ Could this be a blessing in disguise? Kohei is determined to keep up the pressure, and heâll use every dirty tactic in the book to give Aina an assist. Yet Sakurako has her own lecherous designsâ\"and even fewer qualms!",
+      "isbn": "979-8-88877-047-4",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 22,
       "englishTitle": "",
       "englishReleaseDate": "2025-06-24",
-      "synopsis": "QUESTIONS, QUESTIONS: Stumbling home after a late-night raid with the boys, Iori found himself face-to-face with Chisa, who stubbornly declared her refusal to break off their relationship. He and Chisa may just be a faux couple, but now a seed of doubt begins to grow. Could Chisa really have feelings for him? Even as Iori wrestles with this question, Sakurako prepares a final assault to make him hers..."
+      "synopsis": "QUESTIONS, QUESTIONS: Stumbling home after a late-night raid with the boys, Iori found himself face-to-face with Chisa, who stubbornly declared her refusal to break off their relationship. He and Chisa may just be a faux couple, but now a seed of doubt begins to grow. Could Chisa really have feelings for him? Even as Iori wrestles with this question, Sakurako prepares a final assault to make him hers...",
+      "isbn": "979-8-88877-048-1",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 23,
       "englishTitle": "",
       "englishReleaseDate": "2025-12-02",
-      "synopsis": "QUESTIONS, QUESTIONS: Stumbling home after a late-night raid with the boys, Iori found himself face-to-face with Chisa, who stubbornly declared her refusal to break off their relationship. He and Chisa may just be a faux couple, but now a seed of doubt begins to grow. Could Chisa really have feelings for him? Even as Iori wrestles with this question, Sakurako prepares a final assault to make him hers..."
+      "synopsis": "QUESTIONS, QUESTIONS: Stumbling home after a late-night raid with the boys, Iori found himself face-to-face with Chisa, who stubbornly declared her refusal to break off their relationship. He and Chisa may just be a faux couple, but now a seed of doubt begins to grow. Could Chisa really have feelings for him? Even as Iori wrestles with this question, Sakurako prepares a final assault to make him hers...",
+      "isbn": "979-8-88877-521-9",
+      "coverUrl": "",
+      "coverSource": ""
     }
-  ]
+  ],
+  "series": {
+    "coverUrl": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx87395-axsA49kSZp72.jpg",
+    "author": "Kenji Inoue",
+    "genres": [
+      "Comedy",
+      "Romance",
+      "Slice of Life",
+      "Sports"
+    ],
+    "status": "RELEASING",
+    "rating": 84,
+    "altTitles": [
+      "Grand Blue"
+    ]
+  }
 }

@@ -2,8 +2,8 @@
   "seriesId": "one-piece",
   "anilistId": 30013,
   "title": "One Piece",
-  "enrichmentBasis": "gemini_research_test_drive",
-  "lastVerifiedDate": "2026-05-26",
+  "enrichmentBasis": "congress_catalog_engine_v1",
+  "lastVerifiedDate": "2026-05-30",
   "volumes": [
     {
       "volumeNumber": 1,
@@ -21,7 +21,9 @@
         "8"
       ],
       "englishReleaseDate": "2003-06-30",
-      "synopsis": "Monkey D. Luffy, a young boy who gained rubber-like powers after eating a Devil Fruit, sets sail from Foosha Village to become the King of the Pirates. He battles the sea monster that took Shanks's arm, defeats the pirate Alvida, and arrives at Shells Town where he meets the bounty hunter Roronoa Zoro. Together they defeat the tyrannical Marine Captain Morgan, and Zoro joins Luffy's crew as his first mate, beginning their grand adventure on the high seas."
+      "synopsis": "Monkey D. Luffy, a young boy who gained rubber-like powers after eating a Devil Fruit, sets sail from Foosha Village to become the King of the Pirates. He battles the sea monster that took Shanks's arm, defeats the pirate Alvida, and arrives at Shells Town where he meets the bounty hunter Roronoa Zoro. Together they defeat the tyrannical Marine Captain Morgan, and Zoro joins Luffy's crew as his first mate, beginning their grand adventure on the high seas.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 2,
@@ -40,7 +42,9 @@
         "17"
       ],
       "englishReleaseDate": "2003-11-19",
-      "synopsis": "Luffy and Zoro cross paths with Nami, a skilled navigator and thief. Together, they confront the chaotic pirate Buggy to liberate the besieged Orange Town."
+      "synopsis": "Luffy and Zoro cross paths with Nami, a skilled navigator and thief. Together, they confront the chaotic pirate Buggy to liberate the besieged Orange Town.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 3,
@@ -59,7 +63,9 @@
         "26"
       ],
       "englishReleaseDate": "2004-03-17",
-      "synopsis": "Arriving in the peaceful Syrup Village, the expanding crew encounters Usopp, the local trickster. They soon uncover a deadly assassination plot threatening the village's wealthiest resident."
+      "synopsis": "Arriving in the peaceful Syrup Village, the expanding crew encounters Usopp, the local trickster. They soon uncover a deadly assassination plot threatening the village's wealthiest resident.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 4,
@@ -78,7 +84,9 @@
         "35"
       ],
       "englishReleaseDate": "2004-07-14",
-      "synopsis": "Luffy and his allies take a desperate stand on the village coastline to intercept an invading pirate fleet. Captain Kuro's true, ruthless nature is fully revealed during the conflict."
+      "synopsis": "Luffy and his allies take a desperate stand on the village coastline to intercept an invading pirate fleet. Captain Kuro's true, ruthless nature is fully revealed during the conflict.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 5,
@@ -97,7 +105,9 @@
         "44"
       ],
       "englishReleaseDate": "2004-11-17",
-      "synopsis": "After acquiring their first true ship, the Going Merry, the crew visits the floating restaurant Baratie. Here, they meet the martial artist chef Sanji amidst a sudden crisis."
+      "synopsis": "After acquiring their first true ship, the Going Merry, the crew visits the floating restaurant Baratie. Here, they meet the martial artist chef Sanji amidst a sudden crisis.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 6,
@@ -116,7 +126,9 @@
         "53"
       ],
       "englishReleaseDate": "2005-03-01",
-      "synopsis": "The notorious Don Krieg lays siege to the Baratie with his massive armada. Simultaneously, the Warlord Mihawk arrives, delivering a devastating but educational defeat to Zoro."
+      "synopsis": "The notorious Don Krieg lays siege to the Baratie with his massive armada. Simultaneously, the Warlord Mihawk arrives, delivering a devastating but educational defeat to Zoro.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 7,
@@ -135,7 +147,9 @@
         "62"
       ],
       "englishReleaseDate": "2005-07-05",
-      "synopsis": "Sanji's harrowing backstory of survival with his mentor Zeff is explored in deep detail. Meanwhile, Luffy engages in a brutal, weapon-breaking brawl with Don Krieg to save the restaurant."
+      "synopsis": "Sanji's harrowing backstory of survival with his mentor Zeff is explored in deep detail. Meanwhile, Luffy engages in a brutal, weapon-breaking brawl with Don Krieg to save the restaurant.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 8,
@@ -154,7 +168,9 @@
         "71"
       ],
       "englishReleaseDate": "2005-10-10",
-      "synopsis": "With Sanji officially joining the crew, the Straw Hats pursue a fleeing Nami to the East Blue's most dangerous territory. They arrive at Arlong Park, a settlement tyrannically ruled by fish-men."
+      "synopsis": "With Sanji officially joining the crew, the Straw Hats pursue a fleeing Nami to the East Blue's most dangerous territory. They arrive at Arlong Park, a settlement tyrannically ruled by fish-men.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 9,
@@ -174,7 +190,9 @@
         "81"
       ],
       "englishReleaseDate": "2006-01-03",
-      "synopsis": "The tragic truth of Nami's indentured servitude to Arlong is finally brought to light. Pushed to her absolute breaking point, she tearfully asks Luffy to save her village."
+      "synopsis": "The tragic truth of Nami's indentured servitude to Arlong is finally brought to light. Pushed to her absolute breaking point, she tearfully asks Luffy to save her village.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 10,
@@ -193,7 +211,9 @@
         "90"
       ],
       "englishReleaseDate": "2006-04-04",
-      "synopsis": "The Straw Hats launch a full-scale assault on Arlong Park to dismantle the fish-man regime. Luffy physically destroys the cartography room that represents Nami's lifelong suffering."
+      "synopsis": "The Straw Hats launch a full-scale assault on Arlong Park to dismantle the fish-man regime. Luffy physically destroys the cartography room that represents Nami's lifelong suffering.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 11,
@@ -212,7 +232,9 @@
         "99"
       ],
       "englishReleaseDate": "2006-07-05",
-      "synopsis": "Following Arlong's defeat, the crew makes a final stop in Loguetown, the city where the Pirate King was executed. They narrowly escape capture by Marine Captain Smoker and set a course for the Grand Line."
+      "synopsis": "Following Arlong's defeat, the crew makes a final stop in Loguetown, the city where the Pirate King was executed. They narrowly escape capture by Marine Captain Smoker and set a course for the Grand Line.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 12,
@@ -231,7 +253,9 @@
         "108"
       ],
       "englishReleaseDate": "2006-10-03",
-      "synopsis": "The crew successfully navigates Reverse Mountain and enters the treacherous Grand Line. They encounter the colossal whale Laboon and cross paths with mysterious bounty hunters."
+      "synopsis": "The crew successfully navigates Reverse Mountain and enters the treacherous Grand Line. They encounter the colossal whale Laboon and cross paths with mysterious bounty hunters.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 13,
@@ -250,7 +274,9 @@
         "117"
       ],
       "englishReleaseDate": "2007-01-02",
-      "synopsis": "Visiting Whisky Peak, the crew discovers the town is a front for the criminal syndicate Baroque Works. They learn that their new companion is secretly Princess Vivi of the Alabasta Kingdom."
+      "synopsis": "Visiting Whisky Peak, the crew discovers the town is a front for the criminal syndicate Baroque Works. They learn that their new companion is secretly Princess Vivi of the Alabasta Kingdom.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 14,
@@ -269,7 +295,9 @@
         "126"
       ],
       "englishReleaseDate": "2007-04-03",
-      "synopsis": "The crew docks at Little Garden, a prehistoric island locked in an eternal duel between two giant warriors. They are forced to battle the treacherous wax-manipulating agent, Mr. 3."
+      "synopsis": "The crew docks at Little Garden, a prehistoric island locked in an eternal duel between two giant warriors. They are forced to battle the treacherous wax-manipulating agent, Mr. 3.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 15,
@@ -289,7 +317,9 @@
         "136"
       ],
       "englishReleaseDate": "2007-08-07",
-      "synopsis": "When Nami contracts a lethal prehistoric illness, the crew is forced to detour to the winter territory of Drum Island. They desperately seek medical attention in a country currently devoid of doctors."
+      "synopsis": "When Nami contracts a lethal prehistoric illness, the crew is forced to detour to the winter territory of Drum Island. They desperately seek medical attention in a country currently devoid of doctors.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 16,
@@ -308,7 +338,9 @@
         "145"
       ],
       "englishReleaseDate": "2007-11-06",
-      "synopsis": "Luffy scales the Drum Rockies to find a cure, encountering the unique reindeer Tony Tony Chopper. The cowardly former king Wapol returns to violently reclaim his throne."
+      "synopsis": "Luffy scales the Drum Rockies to find a cure, encountering the unique reindeer Tony Tony Chopper. The cowardly former king Wapol returns to violently reclaim his throne.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 17,
@@ -328,7 +360,9 @@
         "155"
       ],
       "englishReleaseDate": "2008-03-04",
-      "synopsis": "Luffy blasts Wapol out of the country, liberating Drum Island from his tyrannical grip. Chopper overcomes his trauma to join the crew as their permanent physician."
+      "synopsis": "Luffy blasts Wapol out of the country, liberating Drum Island from his tyrannical grip. Chopper overcomes his trauma to join the crew as their permanent physician.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 18,
@@ -349,7 +383,9 @@
         "166"
       ],
       "englishReleaseDate": "2008-06-03",
-      "synopsis": "The Straw Hats finally reach Alabasta, where Luffy is briefly reunited with his older brother, Ace. They begin a grueling trek across the desert to stop the impending civil war."
+      "synopsis": "The Straw Hats finally reach Alabasta, where Luffy is briefly reunited with his older brother, Ace. They begin a grueling trek across the desert to stop the impending civil war.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 19,
@@ -369,7 +405,9 @@
         "176"
       ],
       "englishReleaseDate": "2008-10-07",
-      "synopsis": "Manipulation by Baroque Works pushes the rebel army to march on the capital city of Alubarna. Crocodile's insidious overarching plot to conquer the nation is set into unalterable motion."
+      "synopsis": "Manipulation by Baroque Works pushes the rebel army to march on the capital city of Alubarna. Crocodile's insidious overarching plot to conquer the nation is set into unalterable motion.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 20,
@@ -389,7 +427,9 @@
         "186"
       ],
       "englishReleaseDate": "2009-02-03",
-      "synopsis": "The crew splinters across the capital to intercept the elite Officer Agents of Baroque Works. They must prevent a massive bomb from detonating in the central plaza during the conflict."
+      "synopsis": "The crew splinters across the capital to intercept the elite Officer Agents of Baroque Works. They must prevent a massive bomb from detonating in the central plaza during the conflict.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 21,
@@ -408,7 +448,9 @@
         "195"
       ],
       "englishReleaseDate": "2009-06-02",
-      "synopsis": "Crocodile overpowers Luffy in the desert, leaving him for dead as the rebellion surges. The desperate one-on-one battles across the chaotic streets of Alubarna intensify."
+      "synopsis": "Crocodile overpowers Luffy in the desert, leaving him for dead as the rebellion surges. The desperate one-on-one battles across the chaotic streets of Alubarna intensify.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 22,
@@ -428,7 +470,9 @@
         "205"
       ],
       "englishReleaseDate": "2009-10-06",
-      "synopsis": "Luffy makes a miraculous recovery and returns to challenge the Warlord. He exploits Crocodile's critical weakness to water to land devastating blows."
+      "synopsis": "Luffy makes a miraculous recovery and returns to challenge the Warlord. He exploits Crocodile's critical weakness to water to land devastating blows.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 23,
@@ -449,7 +493,9 @@
         "216"
       ],
       "englishReleaseDate": "2009-12-01",
-      "synopsis": "The bloody civil war reaches its violent climax in the capital square. Luffy delivers a decisive, earth-shattering defeat to Crocodile deep within the royal tombs."
+      "synopsis": "The bloody civil war reaches its violent climax in the capital square. Luffy delivers a decisive, earth-shattering defeat to Crocodile deep within the royal tombs.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 24,
@@ -469,7 +515,9 @@
         "226"
       ],
       "englishReleaseDate": "2010-01-05",
-      "synopsis": "The crew bids a tearful farewell to Vivi and unexpectedly gains Nico Robin as an ally. They soon begin investigating widespread rumors regarding a mystical sky island."
+      "synopsis": "The crew bids a tearful farewell to Vivi and unexpectedly gains Nico Robin as an ally. They soon begin investigating widespread rumors regarding a mystical sky island.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 25,
@@ -489,7 +537,9 @@
         "236"
       ],
       "englishReleaseDate": "2010-01-05",
-      "synopsis": "Searching for a route into the sky, Luffy absorbs a beating from the cynic Bellamy. He subsequently crosses paths with the enigmatic pirate Blackbeard in Mock Town."
+      "synopsis": "Searching for a route into the sky, Luffy absorbs a beating from the cynic Bellamy. He subsequently crosses paths with the enigmatic pirate Blackbeard in Mock Town.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 26,
@@ -509,7 +559,9 @@
         "246"
       ],
       "englishReleaseDate": "2010-01-05",
-      "synopsis": "Riding the Knock Up Stream, the crew successfully arrives in the clouds of Skypiea. They are immediately branded as criminals and forced to navigate the lethal traps of Upper Yard."
+      "synopsis": "Riding the Knock Up Stream, the crew successfully arrives in the clouds of Skypiea. They are immediately branded as criminals and forced to navigate the lethal traps of Upper Yard.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 27,
@@ -528,7 +580,9 @@
         "255"
       ],
       "englishReleaseDate": "2010-01-05",
-      "synopsis": "A brutal three-way war erupts between the sky denizens, the native Shandians, and Eneru's divine enforcers. The Straw Hats are caught directly in the crossfire of this ancient feud."
+      "synopsis": "A brutal three-way war erupts between the sky denizens, the native Shandians, and Eneru's divine enforcers. The Straw Hats are caught directly in the crossfire of this ancient feud.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 28,
@@ -547,7 +601,9 @@
         "264"
       ],
       "englishReleaseDate": "2010-01-05",
-      "synopsis": "Eneru's terrifying survival game drastically thins the ranks of the combatants. The true, overwhelming extent of his lightning-based powers is finally demonstrated on the battlefield."
+      "synopsis": "Eneru's terrifying survival game drastically thins the ranks of the combatants. The true, overwhelming extent of his lightning-based powers is finally demonstrated on the battlefield.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 29,
@@ -568,7 +624,9 @@
         "275"
       ],
       "englishReleaseDate": "2010-02-02",
-      "synopsis": "The tragic geographical history of the golden city of Shandora is unveiled. Eneru systematically strikes down the remaining survivors with devastating, unblockable attacks."
+      "synopsis": "The tragic geographical history of the golden city of Shandora is unveiled. Eneru systematically strikes down the remaining survivors with devastating, unblockable attacks.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 30,
@@ -588,7 +646,9 @@
         "285"
       ],
       "englishReleaseDate": "2010-02-02",
-      "synopsis": "Luffy discovers his rubber physiology makes him naturally immune to Eneru's lightning. He mounts a desperate counterattack to stop the destruction of the sky islands."
+      "synopsis": "Luffy discovers his rubber physiology makes him naturally immune to Eneru's lightning. He mounts a desperate counterattack to stop the destruction of the sky islands.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 31,
@@ -608,7 +668,9 @@
         "295"
       ],
       "englishReleaseDate": "2010-02-02",
-      "synopsis": "A deep historical flashback explores the profound bond between the explorer Mont Blanc Noland and the Shandian warrior Kalgara. Their tragic separation echoes into the present conflict."
+      "synopsis": "A deep historical flashback explores the profound bond between the explorer Mont Blanc Noland and the Shandian warrior Kalgara. Their tragic separation echoes into the present conflict.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 32,
@@ -628,7 +690,9 @@
         "305"
       ],
       "englishReleaseDate": "2010-02-02",
-      "synopsis": "Luffy successfully strikes the grand golden bell, simultaneously defeating Eneru and ending the war. The resonant chime proves the existence of the city of gold to those on the sea below."
+      "synopsis": "Luffy successfully strikes the grand golden bell, simultaneously defeating Eneru and ending the war. The resonant chime proves the existence of the city of gold to those on the sea below.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 33,
@@ -649,7 +713,9 @@
         "316"
       ],
       "englishReleaseDate": "2010-02-02",
-      "synopsis": "Returning to the blue sea, the crew is cornered into a high-stakes pirate competition by Foxy the Silver Fox. They must risk their crewmates in a series of treacherous events."
+      "synopsis": "Returning to the blue sea, the crew is cornered into a high-stakes pirate competition by Foxy the Silver Fox. They must risk their crewmates in a series of treacherous events.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 34,
@@ -670,7 +736,9 @@
         "327"
       ],
       "englishReleaseDate": "2010-03-02",
-      "synopsis": "The crew arrives at the metropolis of Water 7 seeking shipwrights, only to learn the Going Merry is beyond repair. This devastating news threatens to tear the crew apart from within."
+      "synopsis": "The crew arrives at the metropolis of Water 7 seeking shipwrights, only to learn the Going Merry is beyond repair. This devastating news threatens to tear the crew apart from within.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 35,
@@ -689,7 +757,9 @@
         "336"
       ],
       "englishReleaseDate": "2010-03-02",
-      "synopsis": "Unable to accept the loss of the ship, Usopp challenges Luffy to a duel and officially leaves the crew. Simultaneously, an assassination attempt on the mayor throws the city into chaos."
+      "synopsis": "Unable to accept the loss of the ship, Usopp challenges Luffy to a duel and officially leaves the crew. Simultaneously, an assassination attempt on the mayor throws the city into chaos.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 36,
@@ -709,7 +779,9 @@
         "346"
       ],
       "englishReleaseDate": "2010-03-02",
-      "synopsis": "The covert government assassins known as CP9 reveal their true identities and superior powers. They successfully extort Nico Robin into surrendering to the World Government."
+      "synopsis": "The covert government assassins known as CP9 reveal their true identities and superior powers. They successfully extort Nico Robin into surrendering to the World Government.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 37,
@@ -730,7 +802,9 @@
         "357"
       ],
       "englishReleaseDate": "2010-03-02",
-      "synopsis": "As the massive Aqua Laguna storm strikes, the tragic shared history of Franky and Iceburg is revealed. Their mentor, the legendary shipwright Tom, was unjustly condemned by the government."
+      "synopsis": "As the massive Aqua Laguna storm strikes, the tragic shared history of Franky and Iceburg is revealed. Their mentor, the legendary shipwright Tom, was unjustly condemned by the government.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 38,
@@ -750,7 +824,9 @@
         "367"
       ],
       "englishReleaseDate": "2010-03-02",
-      "synopsis": "Sanji, Franky, and Usopp desperately infiltrate the speeding sea train to rescue Robin. The rest of the crew follows close behind aboard an experimental, uncontrolled locomotive."
+      "synopsis": "Sanji, Franky, and Usopp desperately infiltrate the speeding sea train to rescue Robin. The rest of the crew follows close behind aboard an experimental, uncontrolled locomotive.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 39,
@@ -770,7 +846,9 @@
         "377"
       ],
       "englishReleaseDate": "2010-04-06",
-      "synopsis": "The unified Straw Hats arrive at the heavily fortified judicial island of Enies Lobby. They prepare to wage an unprecedented war directly against the World Government's stronghold."
+      "synopsis": "The unified Straw Hats arrive at the heavily fortified judicial island of Enies Lobby. They prepare to wage an unprecedented war directly against the World Government's stronghold.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 40,
@@ -791,7 +869,9 @@
         "388"
       ],
       "englishReleaseDate": "2010-04-06",
-      "synopsis": "To overcome the superhuman martial arts of CP9, Luffy activates his blood-pumping Gear Second technique. The crew breaks through the outer defenses and confronts the assassins."
+      "synopsis": "To overcome the superhuman martial arts of CP9, Luffy activates his blood-pumping Gear Second technique. The crew breaks through the outer defenses and confronts the assassins.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 41,
@@ -812,7 +892,9 @@
         "399"
       ],
       "englishReleaseDate": "2010-05-04",
-      "synopsis": "A harrowing flashback details the annihilation of Robin's homeland, Ohara. To prove their unwavering loyalty, the crew openly burns the World Government flag in front of CP9."
+      "synopsis": "A harrowing flashback details the annihilation of Robin's homeland, Ohara. To prove their unwavering loyalty, the crew openly burns the World Government flag in front of CP9.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 42,
@@ -832,7 +914,9 @@
         "409"
       ],
       "englishReleaseDate": "2010-06-01",
-      "synopsis": "The crew splinters across the Tower of Justice to engage in intense, individualized combat. They must defeat the assassins to secure the physical keys to Robin's seastone cuffs."
+      "synopsis": "The crew splinters across the Tower of Justice to engage in intense, individualized combat. They must defeat the assassins to secure the physical keys to Robin's seastone cuffs.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 43,
@@ -852,7 +936,9 @@
         "419"
       ],
       "englishReleaseDate": "2010-07-06",
-      "synopsis": "Zoro, Sanji, and Nami push their physical and tactical limits to emerge victorious. The apocalyptic Buster Call fleet arrives, intent on turning Enies Lobby to ash."
+      "synopsis": "Zoro, Sanji, and Nami push their physical and tactical limits to emerge victorious. The apocalyptic Buster Call fleet arrives, intent on turning Enies Lobby to ash.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 44,
@@ -873,7 +959,9 @@
         "430"
       ],
       "englishReleaseDate": "2010-08-03",
-      "synopsis": "Luffy unleashes his full power to barely defeat the unmatched prodigy Rob Lucci. The Going Merry arrives in the crossfire for one final, miraculous rescue."
+      "synopsis": "Luffy unleashes his full power to barely defeat the unmatched prodigy Rob Lucci. The Going Merry arrives in the crossfire for one final, miraculous rescue.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 45,
@@ -893,7 +981,9 @@
         "440"
       ],
       "englishReleaseDate": "2010-09-07",
-      "synopsis": "Recuperating in Water 7, the crew's bounties skyrocket due to their actions. They meet Luffy's legendary Marine grandfather and depart on the newly built Thousand Sunny."
+      "synopsis": "Recuperating in Water 7, the crew's bounties skyrocket due to their actions. They meet Luffy's legendary Marine grandfather and depart on the newly built Thousand Sunny.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 46,
@@ -913,7 +1003,9 @@
         "450"
       ],
       "englishReleaseDate": "2010-10-05",
-      "synopsis": "The Thousand Sunny sails into the darkened waters of the Florian Triangle. They encounter the skeletal musician Brook and dock at the sprawling haunted ship, Thriller Bark."
+      "synopsis": "The Thousand Sunny sails into the darkened waters of the Florian Triangle. They encounter the skeletal musician Brook and dock at the sprawling haunted ship, Thriller Bark.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 47,
@@ -932,7 +1024,9 @@
         "459"
       ],
       "englishReleaseDate": "2010-11-02",
-      "synopsis": "The Warlord Gecko Moria utilizes his Devil Fruit to harvest the crew's shadows. He implants them into stitched corpses to power a massive, terrifying zombie army."
+      "synopsis": "The Warlord Gecko Moria utilizes his Devil Fruit to harvest the crew's shadows. He implants them into stitched corpses to power a massive, terrifying zombie army.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 48,
@@ -952,7 +1046,9 @@
         "469"
       ],
       "englishReleaseDate": "2010-12-07",
-      "synopsis": "Luffy’s stolen shadow is placed into the frozen corpse of the ancient giant Oars. The crew struggles to survive against a behemoth possessing their captain's fighting style."
+      "synopsis": "Luffy’s stolen shadow is placed into the frozen corpse of the ancient giant Oars. The crew struggles to survive against a behemoth possessing their captain's fighting style.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 49,
@@ -974,7 +1070,9 @@
         "481"
       ],
       "englishReleaseDate": "2011-01-04",
-      "synopsis": "Empowered by absorbing dozens of captured shadows, Luffy temporarily transforms into an unstoppable juggernaut. He confronts Moria and Oars to reclaim his crew's stolen souls before sunrise."
+      "synopsis": "Empowered by absorbing dozens of captured shadows, Luffy temporarily transforms into an unstoppable juggernaut. He confronts Moria and Oars to reclaim his crew's stolen souls before sunrise.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 50,
@@ -994,7 +1092,9 @@
         "491"
       ],
       "englishReleaseDate": "2011-02-01",
-      "synopsis": "Following Moria's defeat, the Warlord Kuma arrives to eliminate the exhausted survivors. Zoro makes a bloody sacrifice to protect Luffy, and Brook officially joins the crew."
+      "synopsis": "Following Moria's defeat, the Warlord Kuma arrives to eliminate the exhausted survivors. Zoro makes a bloody sacrifice to protect Luffy, and Brook officially joins the crew.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 51,
@@ -1015,7 +1115,9 @@
         "502"
       ],
       "englishReleaseDate": "2011-03-01",
-      "synopsis": "The crew arrives at the Sabaody Archipelago to coat their ship for underwater travel. They cross paths with a new generation of infamous pirates and the tyrannical celestial dragons."
+      "synopsis": "The crew arrives at the Sabaody Archipelago to coat their ship for underwater travel. They cross paths with a new generation of infamous pirates and the tyrannical celestial dragons.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 52,
@@ -1035,7 +1137,9 @@
         "512"
       ],
       "englishReleaseDate": "2011-04-05",
-      "synopsis": "Luffy punches a celestial dragon, triggering a massive Marine response led by Admiral Kizaru. Despite Rayleigh's intervention, Kuma systematically defeats and scatters the crew across the globe."
+      "synopsis": "Luffy punches a celestial dragon, triggering a massive Marine response led by Admiral Kizaru. Despite Rayleigh's intervention, Kuma systematically defeats and scatters the crew across the globe.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 53,
@@ -1055,7 +1159,9 @@
         "522"
       ],
       "englishReleaseDate": "2011-05-03",
-      "synopsis": "Luffy is exiled to the isolated island of Amazon Lily, ruled by the Warlord Boa Hancock. He learns of his brother Ace's impending execution and shifts his entire focus to a rescue mission."
+      "synopsis": "Luffy is exiled to the isolated island of Amazon Lily, ruled by the Warlord Boa Hancock. He learns of his brother Ace's impending execution and shifts his entire focus to a rescue mission.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 54,
@@ -1075,7 +1181,9 @@
         "532"
       ],
       "englishReleaseDate": "2011-06-07",
-      "synopsis": "With Hancock's assistance, Luffy infiltrates the impenetrable underwater prison, Impel Down. He navigates the hellish lower levels, encountering numerous old enemies and unexpected allies."
+      "synopsis": "With Hancock's assistance, Luffy infiltrates the impenetrable underwater prison, Impel Down. He navigates the hellish lower levels, encountering numerous old enemies and unexpected allies.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 55,
@@ -1095,7 +1203,9 @@
         "542"
       ],
       "englishReleaseDate": "2011-07-05",
-      "synopsis": "Fatally poisoned by the warden Magellan, Luffy undergoes a miraculous but agonizing recovery. He incites a massive riot, forming a chaotic alliance to break out of the facility."
+      "synopsis": "Fatally poisoned by the warden Magellan, Luffy undergoes a miraculous but agonizing recovery. He incites a massive riot, forming a chaotic alliance to break out of the facility.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 56,
@@ -1115,7 +1225,9 @@
         "552"
       ],
       "englishReleaseDate": "2011-08-02",
-      "synopsis": "The coalition of escapees violently bursts out of Impel Down and commandeers a Marine vessel. They sail directly into the epicenter of the Summit War just as the conflict begins."
+      "synopsis": "The coalition of escapees violently bursts out of Impel Down and commandeers a Marine vessel. They sail directly into the epicenter of the Summit War just as the conflict begins.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 57,
@@ -1135,7 +1247,9 @@
         "562"
       ],
       "englishReleaseDate": "2011-09-06",
-      "synopsis": "The legendary Whitebeard Pirates clash with the full centralized might of the Marine forces at Marineford. Luffy plummets into the chaotic battlefield, determined to save Ace at any cost."
+      "synopsis": "The legendary Whitebeard Pirates clash with the full centralized might of the Marine forces at Marineford. Luffy plummets into the chaotic battlefield, determined to save Ace at any cost.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 58,
@@ -1156,7 +1270,9 @@
         "573"
       ],
       "englishReleaseDate": "2011-10-04",
-      "synopsis": "Luffy pushes past his physical limits, navigating the battlefield and unlocking conqueror's Haki. Against overwhelming odds, he reaches the execution platform and successfully frees his brother."
+      "synopsis": "Luffy pushes past his physical limits, navigating the battlefield and unlocking conqueror's Haki. Against overwhelming odds, he reaches the execution platform and successfully frees his brother.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 59,
@@ -1177,7 +1293,9 @@
         "584"
       ],
       "englishReleaseDate": "2011-11-01",
-      "synopsis": "Tragedy strikes as Admiral Akainu murders Ace to protect Marine justice. This catastrophic event leads to Whitebeard's heroic final stand and the bloody conclusion of the war."
+      "synopsis": "Tragedy strikes as Admiral Akainu murders Ace to protect Marine justice. This catastrophic event leads to Whitebeard's heroic final stand and the bloody conclusion of the war.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 60,
@@ -1197,7 +1315,9 @@
         "594"
       ],
       "englishReleaseDate": "2011-12-13",
-      "synopsis": "A traumatized Luffy grieves in the aftermath of the war, reflecting deeply on his childhood with Ace and Sabo. He ultimately decides to delay the crew's reunion to prioritize rigorous training."
+      "synopsis": "A traumatized Luffy grieves in the aftermath of the war, reflecting deeply on his childhood with Ace and Sabo. He ultimately decides to delay the crew's reunion to prioritize rigorous training.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 61,
@@ -1216,7 +1336,9 @@
         "603"
       ],
       "englishReleaseDate": "2012-03-06",
-      "synopsis": "After two years of intense separation and training, the significantly stronger crew reunites at Sabaody. They successfully evade Marine capture and finally resume their journey toward the New World."
+      "synopsis": "After two years of intense separation and training, the significantly stronger crew reunites at Sabaody. They successfully evade Marine capture and finally resume their journey toward the New World.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 62,
@@ -1237,7 +1359,9 @@
         "614"
       ],
       "englishReleaseDate": "2012-05-01",
-      "synopsis": "The coated Thousand Sunny journeys deep beneath the ocean to Fish-Man Island. The crew immediately encounters severe racial tensions fomented by the extremist New Fish-Man Pirates."
+      "synopsis": "The coated Thousand Sunny journeys deep beneath the ocean to Fish-Man Island. The crew immediately encounters severe racial tensions fomented by the extremist New Fish-Man Pirates.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 63,
@@ -1259,7 +1383,9 @@
         "626"
       ],
       "englishReleaseDate": "2012-07-03",
-      "synopsis": "A poignant flashback reveals the tragic historical divide between humans and fish-men. The contrasting ideologies of the empathetic Queen Otohime and the militant Fisher Tiger are explored in depth."
+      "synopsis": "A poignant flashback reveals the tragic historical divide between humans and fish-men. The contrasting ideologies of the empathetic Queen Otohime and the militant Fisher Tiger are explored in depth.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 64,
@@ -1279,7 +1405,9 @@
         "636"
       ],
       "englishReleaseDate": "2012-09-04",
-      "synopsis": "The Straw Hats engage Hody Jones' massive extremist army in the central plaza. They utilize their new abilities to protect the royal family and dismantle the rebellion."
+      "synopsis": "The Straw Hats engage Hody Jones' massive extremist army in the central plaza. They utilize their new abilities to protect the royal family and dismantle the rebellion.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 65,
@@ -1299,7 +1427,9 @@
         "646"
       ],
       "englishReleaseDate": "2012-11-06",
-      "synopsis": "Luffy battles Hody underwater, pushing his new limits to stop the massive ship Noah from destroying the island. His victory bridges the long-standing gap of hatred."
+      "synopsis": "Luffy battles Hody underwater, pushing his new limits to stop the massive ship Noah from destroying the island. His victory bridges the long-standing gap of hatred.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 66,
@@ -1319,7 +1449,9 @@
         "656"
       ],
       "englishReleaseDate": "2013-03-05",
-      "synopsis": "The crew officially departs for the New World, immediately answering a mysterious distress call. They land on the perilous, atmospherically split island of Punk Hazard."
+      "synopsis": "The crew officially departs for the New World, immediately answering a mysterious distress call. They land on the perilous, atmospherically split island of Punk Hazard.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 67,
@@ -1340,7 +1472,9 @@
         "667"
       ],
       "englishReleaseDate": "2013-06-04",
-      "synopsis": "On the fire-and-ice island, the crew uncovers sinister biological experiments led by the scientist Caesar Clown. They encounter disembodied samurai and kidnapped children."
+      "synopsis": "On the fire-and-ice island, the crew uncovers sinister biological experiments led by the scientist Caesar Clown. They encounter disembodied samurai and kidnapped children.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 68,
@@ -1361,7 +1495,9 @@
         "678"
       ],
       "englishReleaseDate": "2013-09-03",
-      "synopsis": "Luffy forms a strategic alliance with Trafalgar Law to dismantle the underground artificial Devil Fruit trade. The combined crews prepare to take down the facility's defenses."
+      "synopsis": "Luffy forms a strategic alliance with Trafalgar Law to dismantle the underground artificial Devil Fruit trade. The combined crews prepare to take down the facility's defenses.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 69,
@@ -1383,7 +1519,9 @@
         "690"
       ],
       "englishReleaseDate": "2013-12-03",
-      "synopsis": "The alliance systematically sabotages Caesar’s manufacturing facilities while evading the lethal Shinokuni gas. Zoro and Sanji face off against Caesar's elite mutated enforcers."
+      "synopsis": "The alliance systematically sabotages Caesar’s manufacturing facilities while evading the lethal Shinokuni gas. Zoro and Sanji face off against Caesar's elite mutated enforcers.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 70,
@@ -1403,7 +1541,9 @@
         "700"
       ],
       "englishReleaseDate": "2014-03-04",
-      "synopsis": "Caesar is successfully captured, drawing the terrifying fury of the Warlord Donquixote Doflamingo. The pirate alliance immediately sets a course for the vibrant kingdom of Dressrosa."
+      "synopsis": "Caesar is successfully captured, drawing the terrifying fury of the Warlord Donquixote Doflamingo. The pirate alliance immediately sets a course for the vibrant kingdom of Dressrosa.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 71,
@@ -1424,7 +1564,9 @@
         "711"
       ],
       "englishReleaseDate": "2014-06-03",
-      "synopsis": "Luffy enters a brutal gladiator tournament to win back Ace's reincarnated Devil Fruit. Concurrently, Law enacts a tense hostage exchange that rapidly deteriorates into a trap."
+      "synopsis": "Luffy enters a brutal gladiator tournament to win back Ace's reincarnated Devil Fruit. Concurrently, Law enacts a tense hostage exchange that rapidly deteriorates into a trap.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 72,
@@ -1444,7 +1586,9 @@
         "721"
       ],
       "englishReleaseDate": "2014-09-02",
-      "synopsis": "The tragic reality of Dressrosa's living toys is revealed, exposing a decade of stolen memories. The local dwarven population prepares to launch an all-out rebellion against the regime."
+      "synopsis": "The tragic reality of Dressrosa's living toys is revealed, exposing a decade of stolen memories. The local dwarven population prepares to launch an all-out rebellion against the regime.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 73,
@@ -1464,7 +1608,9 @@
         "731"
       ],
       "englishReleaseDate": "2015-01-06",
-      "synopsis": "The coliseum tournament reaches its climax as powerful fighters clash. Luffy experiences an emotional reunion with his presumed-dead brother, Sabo, who takes his place in the ring."
+      "synopsis": "The coliseum tournament reaches its climax as powerful fighters clash. Luffy experiences an emotional reunion with his presumed-dead brother, Sabo, who takes his place in the ring.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 74,
@@ -1485,7 +1631,9 @@
         "742"
       ],
       "englishReleaseDate": "2015-04-07",
-      "synopsis": "Through sheer luck and terrifying facial expressions, Usopp knocks Sugar unconscious. This act breaks the toy curse, restoring the memories of thousands of enslaved citizens and fighters."
+      "synopsis": "Through sheer luck and terrifying facial expressions, Usopp knocks Sugar unconscious. This act breaks the toy curse, restoring the memories of thousands of enslaved citizens and fighters.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 75,
@@ -1505,7 +1653,9 @@
         "752"
       ],
       "englishReleaseDate": "2015-08-04",
-      "synopsis": "The freed gladiators swear their unwavering allegiance to Luffy. They storm the royal plateau to dismantle the Donquixote Family and dethrone the tyrannical Doflamingo."
+      "synopsis": "The freed gladiators swear their unwavering allegiance to Luffy. They storm the royal plateau to dismantle the Donquixote Family and dethrone the tyrannical Doflamingo.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 76,
@@ -1526,7 +1676,9 @@
         "763"
       ],
       "englishReleaseDate": "2015-11-03",
-      "synopsis": "Law’s tragic childhood and his deep, life-saving bond with Corazon are detailed in a harrowing flashback. The alliance breaches the upper palace levels to confront the Warlord directly."
+      "synopsis": "Law’s tragic childhood and his deep, life-saving bond with Corazon are detailed in a harrowing flashback. The alliance breaches the upper palace levels to confront the Warlord directly.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 77,
@@ -1548,7 +1700,9 @@
         "775"
       ],
       "englishReleaseDate": "2016-02-02",
-      "synopsis": "The supporting coliseum gladiators and Straw Hat crew members systematically defeat Doflamingo's elite executives. The sprawling battlefield is cleared for the final, decisive confrontation."
+      "synopsis": "The supporting coliseum gladiators and Straw Hat crew members systematically defeat Doflamingo's elite executives. The sprawling battlefield is cleared for the final, decisive confrontation.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 78,
@@ -1568,7 +1722,9 @@
         "785"
       ],
       "englishReleaseDate": "2016-05-03",
-      "synopsis": "Unable to pierce the Warlord's defenses, Luffy debuts his incredibly powerful Gear Fourth transformation. He ruthlessly pummels Doflamingo as the deadly birdcage constricts the island."
+      "synopsis": "Unable to pierce the Warlord's defenses, Luffy debuts his incredibly powerful Gear Fourth transformation. He ruthlessly pummels Doflamingo as the deadly birdcage constricts the island.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 79,
@@ -1588,7 +1744,9 @@
         "795"
       ],
       "englishReleaseDate": "2016-08-02",
-      "synopsis": "Doflamingo is finally defeated, shattering the birdcage and liberating Dressrosa. As the dust settles, the terrifying physical presence of the Emperor Kaido is revealed to the world."
+      "synopsis": "Doflamingo is finally defeated, shattering the birdcage and liberating Dressrosa. As the dust settles, the terrifying physical presence of the Emperor Kaido is revealed to the world.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 80,
@@ -1609,7 +1767,9 @@
         "806"
       ],
       "englishReleaseDate": "2016-11-01",
-      "synopsis": "The grateful fighters formally organize the Straw Hat Grand Fleet, swearing loyalty to a reluctant Luffy. The crew subsequently arrives at the walking elephant island of Zou."
+      "synopsis": "The grateful fighters formally organize the Straw Hat Grand Fleet, swearing loyalty to a reluctant Luffy. The crew subsequently arrives at the walking elephant island of Zou.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 81,
@@ -1629,7 +1789,9 @@
         "816"
       ],
       "englishReleaseDate": "2017-02-07",
-      "synopsis": "The profound loyalty of the Mink tribe is revealed in the aftermath of a devastating attack. The crew learns Sanji has been kidnapped and forced into a political marriage."
+      "synopsis": "The profound loyalty of the Mink tribe is revealed in the aftermath of a devastating attack. The crew learns Sanji has been kidnapped and forced into a political marriage.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 82,
@@ -1650,7 +1812,9 @@
         "827"
       ],
       "englishReleaseDate": "2017-05-02",
-      "synopsis": "The historical existence of the Road Poneglyphs—the keys to reaching Laugh Tale—is uncovered. Luffy organizes a small infiltration team and departs for Big Mom's territory, Whole Cake Island."
+      "synopsis": "The historical existence of the Road Poneglyphs—the keys to reaching Laugh Tale—is uncovered. Luffy organizes a small infiltration team and departs for Big Mom's territory, Whole Cake Island.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 83,
@@ -1671,7 +1835,9 @@
         "838"
       ],
       "englishReleaseDate": "2017-08-01",
-      "synopsis": "Luffy's rescue team navigates the bizarre, sugary, and deadly illusions of Big Mom’s archipelagic territory. They quickly encounter heavy resistance from her powerful children."
+      "synopsis": "Luffy's rescue team navigates the bizarre, sugary, and deadly illusions of Big Mom’s archipelagic territory. They quickly encounter heavy resistance from her powerful children.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 84,
@@ -1691,7 +1857,9 @@
         "848"
       ],
       "englishReleaseDate": "2017-11-07",
-      "synopsis": "Blackmailed and abused by his biological family, a desperate Sanji fights Luffy to force him to leave. Luffy refuses to strike back, vowing to wait for his cook's return."
+      "synopsis": "Blackmailed and abused by his biological family, a desperate Sanji fights Luffy to force him to leave. Luffy refuses to strike back, vowing to wait for his cook's return.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 85,
@@ -1711,7 +1879,9 @@
         "858"
       ],
       "englishReleaseDate": "2018-02-06",
-      "synopsis": "The sinister assassination plot behind the royal wedding is fully exposed, shattering Sanji's hopes. Realizing he was deceived, he desperately seeks out Luffy to ask for forgiveness."
+      "synopsis": "The sinister assassination plot behind the royal wedding is fully exposed, shattering Sanji's hopes. Realizing he was deceived, he desperately seeks out Luffy to ask for forgiveness.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 86,
@@ -1732,7 +1902,9 @@
         "869"
       ],
       "englishReleaseDate": "2018-05-01",
-      "synopsis": "Luffy forms a shaky alliance with Capone Bege to execute Big Mom at the tea party. The highly coordinated plan collapses into chaos when the Emperor's invulnerability proves too strong."
+      "synopsis": "Luffy forms a shaky alliance with Capone Bege to execute Big Mom at the tea party. The highly coordinated plan collapses into chaos when the Emperor's invulnerability proves too strong.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 87,
@@ -1752,7 +1924,9 @@
         "879"
       ],
       "englishReleaseDate": "2018-08-07",
-      "synopsis": "The coalition desperately flees from a rampaging, hungry Big Mom. They sacrifice ships, allies, and much of their energy just to escape the immediate vicinity of the collapsing chateau."
+      "synopsis": "The coalition desperately flees from a rampaging, hungry Big Mom. They sacrifice ships, allies, and much of their energy just to escape the immediate vicinity of the collapsing chateau.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 88,
@@ -1772,7 +1946,9 @@
         "889"
       ],
       "englishReleaseDate": "2018-11-06",
-      "synopsis": "Luffy engages in an exhaustive, hours-long duel within the Mirror World against Big Mom's strongest son, Katakuri. He pushes his observation Haki to its absolute limits to survive."
+      "synopsis": "Luffy engages in an exhaustive, hours-long duel within the Mirror World against Big Mom's strongest son, Katakuri. He pushes his observation Haki to its absolute limits to survive.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 89,
@@ -1793,7 +1969,9 @@
         "900"
       ],
       "englishReleaseDate": "2019-02-05",
-      "synopsis": "Luffy narrowly defeats Katakuri and escapes the Mirror World. The crew barely survives their exit from the Emperor's territory thanks to the heartbreaking sacrifice of the Sun Pirates."
+      "synopsis": "Luffy narrowly defeats Katakuri and escapes the Mirror World. The crew barely survives their exit from the Emperor's territory thanks to the heartbreaking sacrifice of the Sun Pirates.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 90,
@@ -1813,7 +1991,9 @@
         "910"
       ],
       "englishReleaseDate": "2019-05-07",
-      "synopsis": "Global leaders convene at the Reverie, revealing hidden revolutionary factions and the mysterious true ruler of the world, Imu. The Straw Hats arrive at the isolated borders of Wano."
+      "synopsis": "Global leaders convene at the Reverie, revealing hidden revolutionary factions and the mysterious true ruler of the world, Imu. The Straw Hats arrive at the isolated borders of Wano.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 91,
@@ -1834,7 +2014,9 @@
         "921"
       ],
       "englishReleaseDate": "2019-08-06",
-      "synopsis": "The scattered crew begins reuniting in Wano, witnessing firsthand the ecological and societal devastation. The oppressive rule of Emperor Kaido and the corrupt shogun Orochi becomes apparent."
+      "synopsis": "The scattered crew begins reuniting in Wano, witnessing firsthand the ecological and societal devastation. The oppressive rule of Emperor Kaido and the corrupt shogun Orochi becomes apparent.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 92,
@@ -1854,7 +2036,9 @@
         "931"
       ],
       "englishReleaseDate": "2019-11-05",
-      "synopsis": "Enraged by an attack on his friends, Luffy challenges Kaido directly but is swiftly and brutally defeated. He is thrown into the Udon labor camp to break his spirit."
+      "synopsis": "Enraged by an attack on his friends, Luffy challenges Kaido directly but is swiftly and brutally defeated. He is thrown into the Udon labor camp to break his spirit.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 93,
@@ -1875,7 +2059,9 @@
         "942"
       ],
       "englishReleaseDate": "2020-04-07",
-      "synopsis": "Zoro uncovers the dark mysteries of the Smiling towns in the capital. The former daimyo Yasuie sacrifices himself in a public execution to protect the growing samurai rebellion."
+      "synopsis": "Zoro uncovers the dark mysteries of the Smiling towns in the capital. The former daimyo Yasuie sacrifices himself in a public execution to protect the growing samurai rebellion.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 94,
@@ -1896,7 +2082,9 @@
         "953"
       ],
       "englishReleaseDate": "2020-08-04",
-      "synopsis": "Luffy masters the advanced application of Haki within the prison, turning his punishment into training. He successfully incites a massive inmate uprising, securing crucial manpower for the raid."
+      "synopsis": "Luffy masters the advanced application of Haki within the prison, turning his punishment into training. He successfully incites a massive inmate uprising, securing crucial manpower for the raid.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 95,
@@ -1917,7 +2105,9 @@
         "964"
       ],
       "englishReleaseDate": "2020-12-01",
-      "synopsis": "An unprecedented and terrifying pirate alliance forms between Kaido and Big Mom. The narrative shifts to an expansive flashback detailing the legendary, free-spirited youth of Kozuki Oden."
+      "synopsis": "An unprecedented and terrifying pirate alliance forms between Kaido and Big Mom. The narrative shifts to an expansive flashback detailing the legendary, free-spirited youth of Kozuki Oden.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 96,
@@ -1937,7 +2127,9 @@
         "974"
       ],
       "englishReleaseDate": "2021-04-06",
-      "synopsis": "Oden travels with Whitebeard and Roger, learning the true history of the world at Laugh Tale. Returning to Wano, he is betrayed and tragically executed by a boiling pot."
+      "synopsis": "Oden travels with Whitebeard and Roger, learning the true history of the world at Laugh Tale. Returning to Wano, he is betrayed and tragically executed by a boiling pot.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 97,
@@ -1957,7 +2149,9 @@
         "984"
       ],
       "englishReleaseDate": "2021-08-17",
-      "synopsis": "The combined samurai and pirate alliance launches a stealthy maritime raid on Onigashima. They successfully infiltrate Kaido’s island stronghold during the Fire Festival."
+      "synopsis": "The combined samurai and pirate alliance launches a stealthy maritime raid on Onigashima. They successfully infiltrate Kaido’s island stronghold during the Fire Festival.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 98,
@@ -1977,7 +2171,9 @@
         "994"
       ],
       "englishReleaseDate": "2021-12-07",
-      "synopsis": "Kaido brutally repels the attack of the Red Scabbards on the roof. Down below, the Straw Hats engage in chaotic, high-stakes battles against the Beast Pirates' executives."
+      "synopsis": "Kaido brutally repels the attack of the Red Scabbards on the roof. Down below, the Straw Hats engage in chaotic, high-stakes battles against the Beast Pirates' executives.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 99,
@@ -1997,7 +2193,9 @@
         "1004"
       ],
       "englishReleaseDate": "2022-05-03",
-      "synopsis": "The leading supernovas of the Worst Generation finally reach the rooftop. They launch a spectacular, combined assault on the seemingly invincible Emperors, Kaido and Big Mom."
+      "synopsis": "The leading supernovas of the Worst Generation finally reach the rooftop. They launch a spectacular, combined assault on the seemingly invincible Emperors, Kaido and Big Mom.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 100,
@@ -2018,7 +2216,9 @@
         "1015"
       ],
       "englishReleaseDate": "2022-08-02",
-      "synopsis": "Luffy discovers the technique of coating his attacks with advanced conqueror's Haki. This revelation enables him to briefly fight Kaido one-on-one before being overpowered and knocked off the island."
+      "synopsis": "Luffy discovers the technique of coating his attacks with advanced conqueror's Haki. This revelation enables him to briefly fight Kaido one-on-one before being overpowered and knocked off the island.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 101,
@@ -2038,7 +2238,9 @@
         "1025"
       ],
       "englishReleaseDate": "2022-12-06",
-      "synopsis": "The Straw Hats secure critical victories against Kaido's flying officers. Momonosuke utilizes Shinobu's powers to age into an adult dragon, preparing to carry Luffy back to the fight."
+      "synopsis": "The Straw Hats secure critical victories against Kaido's flying officers. Momonosuke utilizes Shinobu's powers to age into an adult dragon, preparing to carry Luffy back to the fight.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 102,
@@ -2058,7 +2260,9 @@
         "1035"
       ],
       "englishReleaseDate": "2023-04-04",
-      "synopsis": "Sanji awakens his latent genetic enhancements, and Zoro learns to fully control Enma. They push past their absolute limits to defeat Kaido's top commanders, Queen and King."
+      "synopsis": "Sanji awakens his latent genetic enhancements, and Zoro learns to fully control Enma. They push past their absolute limits to defeat Kaido's top commanders, Queen and King.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 103,
@@ -2079,7 +2283,9 @@
         "1046"
       ],
       "englishReleaseDate": "2023-07-04",
-      "synopsis": "Luffy seemingly dies but miraculously awakens the true nature of his Devil Fruit. He unveils the reality-bending, cartoonish powers of Gear 5 and the legendary Sun God Nika."
+      "synopsis": "Luffy seemingly dies but miraculously awakens the true nature of his Devil Fruit. He unveils the reality-bending, cartoonish powers of Gear 5 and the legendary Sun God Nika.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 104,
@@ -2098,7 +2304,9 @@
         "1055"
       ],
       "englishReleaseDate": "2023-11-07",
-      "synopsis": "Using a massive island-sized punch, Luffy definitively defeats Kaido, ending his decades-long tyrannical rule. Momonosuke assumes his rightful place as shogun, finally allowing Wano to heal."
+      "synopsis": "Using a massive island-sized punch, Luffy definitively defeats Kaido, ending his decades-long tyrannical rule. Momonosuke assumes his rightful place as shogun, finally allowing Wano to heal.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 105,
@@ -2118,7 +2326,9 @@
         "1065"
       ],
       "englishReleaseDate": "2024-03-12",
-      "synopsis": "Departing Wano as newly minted Emperors, the crew arrives at the futuristic Egghead Island. They encounter the brilliant Dr. Vegapunk and learn shocking truths about ancient technology."
+      "synopsis": "Departing Wano as newly minted Emperors, the crew arrives at the futuristic Egghead Island. They encounter the brilliant Dr. Vegapunk and learn shocking truths about ancient technology.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 106,
@@ -2139,7 +2349,9 @@
         "1076"
       ],
       "englishReleaseDate": "2024-07-02",
-      "synopsis": "The true history of Ohara's destruction is recontextualized through Vegapunk's memories. Concurrently, the World Government dispatches CP0 to assassinate the scientist, leading to renewed hostilities."
+      "synopsis": "The true history of Ohara's destruction is recontextualized through Vegapunk's memories. Concurrently, the World Government dispatches CP0 to assassinate the scientist, leading to renewed hostilities.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 107,
@@ -2161,7 +2373,9 @@
         "1088"
       ],
       "englishReleaseDate": "2024-11-05",
-      "synopsis": "Global conflicts erupt far away from Egghead as the legendary Garp assaults Blackbeard's stronghold to rescue Koby. This violent intervention leads to devastating personal consequences for the Marine hero."
+      "synopsis": "Global conflicts erupt far away from Egghead as the legendary Garp assaults Blackbeard's stronghold to rescue Koby. This violent intervention leads to devastating personal consequences for the Marine hero.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 108,
@@ -2183,7 +2397,9 @@
         "1100"
       ],
       "englishReleaseDate": "2025-03-04",
-      "synopsis": "A massive Marine fleet lays an inescapable siege to Egghead Island. Amidst the chaos, a heartbreaking flashback details Bartholomew Kuma's tragic life and his immense sacrifices for Bonney."
+      "synopsis": "A massive Marine fleet lays an inescapable siege to Egghead Island. Amidst the chaos, a heartbreaking flashback details Bartholomew Kuma's tragic life and his immense sacrifices for Bonney.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 109,
@@ -2203,7 +2419,9 @@
         "1110"
       ],
       "englishReleaseDate": "2025-07-01",
-      "synopsis": "A mindless Kuma miraculously arrives on Egghead to save Bonney from execution. The Five Elders physically deploy to the island in monstrous forms to brutally suppress the truth."
+      "synopsis": "A mindless Kuma miraculously arrives on Egghead to save Bonney from execution. The Five Elders physically deploy to the island in monstrous forms to brutally suppress the truth.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 110,
@@ -2224,7 +2442,9 @@
         "1121"
       ],
       "englishReleaseDate": "2025-11-11",
-      "synopsis": "Dr. Vegapunk’s pre-recorded worldwide broadcast exposes the hidden history of the sinking world. The Elders desperately ravage the island in an attempt to cut the transmission feed."
+      "synopsis": "Dr. Vegapunk’s pre-recorded worldwide broadcast exposes the hidden history of the sinking world. The Elders desperately ravage the island in an attempt to cut the transmission feed.",
+      "coverUrl": "",
+      "coverSource": ""
     },
     {
       "volumeNumber": 111,
@@ -2246,7 +2466,24 @@
         "1133"
       ],
       "englishReleaseDate": "2026-03-10",
-      "synopsis": "The Straw Hats manage to escape the ruins of Egghead and arrive at the land of the giants, Elbaf. They are immediately plunged into surreal mysteries, encountering the imprisoned prince Loki."
+      "synopsis": "The Straw Hats manage to escape the ruins of Egghead and arrive at the land of the giants, Elbaf. They are immediately plunged into surreal mysteries, encountering the imprisoned prince Loki.",
+      "coverUrl": "",
+      "coverSource": ""
     }
-  ]
+  ],
+  "series": {
+    "coverUrl": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx30013-BeslEMqiPhlk.jpg",
+    "author": "Eiichiro Oda",
+    "genres": [
+      "Action",
+      "Adventure",
+      "Comedy",
+      "Fantasy"
+    ],
+    "status": "RELEASING",
+    "rating": 88,
+    "altTitles": [
+      "ONE PIECE"
+    ]
+  }
 }
