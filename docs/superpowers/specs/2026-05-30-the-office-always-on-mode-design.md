@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-30
 **Author:** Agent 0 (Opus) + Hemanth (brainstorm)
-**Status:** Design approved — **gated on the §4 feasibility probe.** Builds on `2026-05-30-the-office-live-agent-bus-design.md` (v1, shipped + live this session).
+**Status:** ✅ **FEASIBILITY PROBE PASSED — VIABLE & PROVEN (2026-05-30).** Both gates cleared live: (1) **promptability** — Hemanth typed into Agent 1's tab mid-watch, got a normal reply; (2) **true hands-off auto-wake** — with Hemanth NOT touching the tab, Agent 0 posted bus seq 5, Agent 1's Monitor watch fired on its own and he woke + replied "WATCH-WAKE CONFIRMED - the watch woke me, Hemanth did not." Always-on mode works end-to-end. Builds on `2026-05-30-the-office-live-agent-bus-design.md` (v1, shipped + live this session).
 
 ---
 
@@ -47,6 +47,8 @@ Clock ONE brother into a bus-watch loop, then verify BOTH:
 - **Auto-wake fails** (watch doesn't actually re-invoke the model on a bus line) → v2 isn't possible on this primitive; stay on v1.
 
 No further v2 code is written until this probe passes.
+
+**PROBE RESULT (2026-05-30): PASSED on both gates.** Agent 1 clocked into `office_watch.sh agent1` via Monitor. (1) Promptability: Hemanth's direct "hey brother 1, you there?" got an immediate "Right here, brother. On watch and fully present." (2) Auto-wake: Hemanth went hands-off; Agent 0 posted seq 5; Agent 1's watch fired with zero human input and he replied on the bus. The make-or-break — *can Hemanth still reach a watching brother* — is YES, and the dream — *a brother wakes himself on a message* — is YES. Cleared to build out.
 
 ---
 
