@@ -23,6 +23,16 @@ import time
 import errno
 from datetime import datetime, timezone
 
+# Windows consoles default to cp1252, which crashes (UnicodeEncodeError) when a
+# message contains an emoji (e.g. the salute brothers sign off with). Force UTF-8
+# on stdout/stderr with errors="replace" so display NEVER crashes regardless of
+# message content. Bug found live 2026-05-30 by Agent 4 on office_join drain.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 
 def _repo_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
