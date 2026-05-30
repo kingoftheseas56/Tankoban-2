@@ -283,7 +283,7 @@ target_precompile_headers(Tankoban PRIVATE
 # `TankobanDevControl` named pipe; one command per invocation. Console mode
 # (WIN32_EXECUTABLE OFF) so stdout JSON can be piped / captured. Minimal Qt
 # link surface (Core + Network) — no Gui, no Widgets.
-add_executable(tankoctl tools/tankoctl.cpp)
+add_executable(tankoctl tools/tankoctl.cpp tools/tankoctl_scenario.cpp)
 set_target_properties(tankoctl PROPERTIES WIN32_EXECUTABLE OFF)
 target_link_libraries(tankoctl PRIVATE Qt6::Core Qt6::Network)
 

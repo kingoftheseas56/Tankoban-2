@@ -212,11 +212,17 @@
 #include <QStringList>
 #include <QTextStream>
 
+#include "tankoctl_scenario.h"
+
 namespace {
 
 constexpr const char* kSocketName = "TankobanDevControl";
 constexpr int kConnectTimeoutMs = 1000;
 constexpr int kIoTimeoutMs      = 60000;
+
+// Set by the `record <file> ...` wrapper in main(); when non-empty, sendCommand
+// appends the wire form of each issued command to this scenario file.
+QString g_recordPath;
 
 void printUsage(QTextStream& err)
 {
@@ -447,12 +453,16 @@ void printUsage(QTextStream& err)
         << "  (write-capable v1.9 commands require TANKOBAN_DEV_WRITE=1 on server env or return\n"
         << "   DEV_WRITE_DISABLED. This is a SEPARATE flag from D.5's TANKOBAN_DEV_UI_SIM.)\n"
         << "  Twelve spec-catalogue commands deferred — see DevControlServer.h v1.9 block.\n";
+    tankoctl_scenario::printUsage(err);
 }
 
 int sendCommand(const QString& cmd, const QJsonObject& payload)
 {
     QTextStream out(stdout);
     QTextStream err(stderr);
+
+    if (!g_recordPath.isEmpty())
+        tankoctl_scenario::appendRecordedStep(g_recordPath, cmd, payload);
 
     QLocalSocket sock;
     sock.connectToServer(QString::fromLatin1(kSocketName));
@@ -493,12 +503,28 @@ int sendCommand(const QString& cmd, const QJsonObject& payload)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    const QStringList a = app.arguments();
+    QStringList a = app.arguments();
     QTextStream err(stderr);
 
     if (a.size() < 2) {
         printUsage(err);
         return 64;
+    }
+
+    // P1 test-harness verbs (client-side orchestration over sendCommand).
+    if (a[1] == QLatin1String("expect"))   return tankoctl_scenario::runExpect(a);
+    if (a[1] == QLatin1String("run"))      return tankoctl_scenario::runScenario(a);
+    if (a[1] == QLatin1String("wait-for")) return tankoctl_scenario::runWaitFor(a);
+
+    // `record <file> <subcommand> [args...]` — capture the wrapped invocation's
+    // wire form into a replayable scenario, then run it through the normal path.
+    if (a[1] == QLatin1String("record")) {
+        if (a.size() < 4) {
+            err << "record requires <file> <subcommand> [args...]\n";
+            return 64;
+        }
+        g_recordPath = a[2];
+        a = QStringList{ a[0] } + a.mid(3);  // strip "record <file>"
     }
 
     const QString sub = a[1];

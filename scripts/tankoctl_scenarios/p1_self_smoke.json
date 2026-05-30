@@ -1,0 +1,10 @@
+{
+  "name": "p1-self-smoke",
+  "steps": [
+    { "cmd": "ping", "label": "bridge responds", "expect": [ { "path": "type", "op": "==", "value": "reply" } ] },
+    { "cmd": "ping", "label": "schema is v1.x", "expect": [ { "path": "schema", "op": "matches", "value": "^tankoban\\.dev\\.v1" } ] },
+    { "cmd": "ping", "label": "command set present", "expect": [ { "path": "commands", "op": "contains", "value": "comics_open_series" } ] },
+    { "cmd": "get-state", "label": "wait for reply then check", "wait_for": { "path": "type", "op": "==", "value": "reply", "timeout_ms": 3000 }, "expect": [ { "path": "type", "op": "==", "value": "reply" } ] },
+    { "cmd": "ping", "label": "seq echoed", "expect": [ { "path": "seq", "op": ">=", "value": "1" } ] }
+  ]
+}

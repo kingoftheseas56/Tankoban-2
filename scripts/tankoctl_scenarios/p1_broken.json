@@ -1,0 +1,8 @@
+{
+  "name": "p1-broken-on-purpose",
+  "steps": [
+    { "cmd": "ping", "label": "bridge responds", "expect": [ { "path": "type", "op": "==", "value": "reply" } ] },
+    { "cmd": "ping", "label": "WRONG schema (should fail here)", "expect": [ { "path": "schema", "op": "==", "value": "tankoban.dev.v2.0" } ] },
+    { "cmd": "ping", "label": "never reached without --keep-going", "expect": [ { "path": "type", "op": "==", "value": "reply" } ] }
+  ]
+}
