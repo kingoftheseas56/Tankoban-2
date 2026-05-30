@@ -123,6 +123,22 @@ public:
     QList<Entry> entriesForImdb(const QString& imdbId) const;
     QList<Entry> all() const;
 
+    // THEATRE_DOWNLOAD_SIMPLIFY (2026-05-30) — duplicate-safe episode lookup.
+    // The index can hold MORE THAN ONE entry for the same (imdbId,season,episode):
+    // a transient `.tankoban-partial/` Pending entry registered mid-download, plus
+    // the final Complete entry after the file moves to its library path (load()
+    // restores both from the repo). UI that reads entriesForImdb() and takes the
+    // first (hash-order) match can paint a stale Pending state ("Queued") over a
+    // fully-downloaded episode. bestEntryForEpisode() resolves duplicates by
+    // authority: Complete > Downloading > Pending > Failed, ties broken by higher
+    // progressPct then more-recent addedAt.
+    std::optional<Entry> bestEntryForEpisode(const QString& imdbId, int season,
+                                             int episode) const;
+    // Pure selection over a candidate list (no locking, no map access) — the
+    // testable core of bestEntryForEpisode. Public so tankoban_tests can cover
+    // the preference logic directly with hand-built candidate lists.
+    static std::optional<Entry> pickBestEntry(const QList<Entry>& candidates);
+
     // Static helper: convert any path to the canonical lookup key.
     // Public so callers building lookups in a hot loop can compute once.
     static QString computeCanonicalKey(const QString& anyPath);

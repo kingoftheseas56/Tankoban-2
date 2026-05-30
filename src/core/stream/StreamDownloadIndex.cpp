@@ -588,6 +588,50 @@ QList<StreamDownloadIndex::Entry> StreamDownloadIndex::entriesForImdb(const QStr
     return out;
 }
 
+// THEATRE_DOWNLOAD_SIMPLIFY (2026-05-30) — see header. Authority order
+// Complete > Downloading > Pending > Failed; ties → higher progressPct → newer.
+std::optional<StreamDownloadIndex::Entry>
+StreamDownloadIndex::pickBestEntry(const QList<Entry>& candidates)
+{
+    auto prio = [](Entry::State s) -> int {
+        switch (s) {
+        case Entry::Complete:    return 3;
+        case Entry::Downloading: return 2;
+        case Entry::Pending:     return 1;
+        case Entry::Failed:      return 0;
+        }
+        return 0;
+    };
+    const Entry* best = nullptr;
+    for (const Entry& e : candidates) {
+        if (!best) { best = &e; continue; }
+        const int ep = prio(e.state);
+        const int bp = prio(best->state);
+        if (ep != bp) { if (ep > bp) best = &e; continue; }
+        if (e.progressPct != best->progressPct) {
+            if (e.progressPct > best->progressPct) best = &e;
+            continue;
+        }
+        if (e.addedAt > best->addedAt) best = &e;
+    }
+    if (!best) return std::nullopt;
+    return *best;
+}
+
+std::optional<StreamDownloadIndex::Entry>
+StreamDownloadIndex::bestEntryForEpisode(const QString& imdbId, int season, int episode) const
+{
+    QList<Entry> matches;
+    {
+        QMutexLocker lock(&m_mutex);
+        for (const Entry& e : m_byPath) {
+            if (e.imdbId == imdbId && e.season == season && e.episode == episode)
+                matches.append(e);
+        }
+    }
+    return pickBestEntry(matches);
+}
+
 QList<StreamDownloadIndex::Entry> StreamDownloadIndex::all() const
 {
     QMutexLocker lock(&m_mutex);

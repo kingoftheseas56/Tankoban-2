@@ -117,3 +117,66 @@ TEST_F(StreamDownloadIndexStateTest, RegisterPendingMovieDefaultsTypeMovie)
     EXPECT_EQ(entries[0].episode, 0);
     EXPECT_EQ(entries[0].state, StreamDownloadIndex::Entry::Pending);
 }
+
+// THEATRE_DOWNLOAD_SIMPLIFY (2026-05-30) — duplicate-resolution: when an episode
+// has both a stale Pending (.tankoban-partial) entry and the final Complete
+// entry, pickBestEntry must return Complete (else the UI paints "Queued" over a
+// downloaded episode). Pure-logic, no repo needed.
+static StreamDownloadIndex::Entry mkPickEntry(StreamDownloadIndex::Entry::State state,
+                                              int progressPct, qint64 addedAt,
+                                              const QString& path)
+{
+    StreamDownloadIndex::Entry e;
+    e.imdbId = QStringLiteral("tt3322312");
+    e.season = 2;
+    e.episode = 4;
+    e.canonicalPath = path;
+    e.state = state;
+    e.progressPct = progressPct;
+    e.addedAt = addedAt;
+    return e;
+}
+
+TEST(StreamDownloadIndexPickBest, PrefersCompleteOverStalePending)
+{
+    QList<StreamDownloadIndex::Entry> cands {
+        mkPickEntry(StreamDownloadIndex::Entry::Pending, 0, 100,
+                    QStringLiteral("C:/dl/.tankoban-partial/x/Daredevil.S02E04.mkv")),
+        mkPickEntry(StreamDownloadIndex::Entry::Complete, 100, 200,
+                    QStringLiteral("C:/Media/TV/Daredevil/Daredevil.S02E04.mkv")),
+    };
+    const auto best = StreamDownloadIndex::pickBestEntry(cands);
+    ASSERT_TRUE(best.has_value());
+    EXPECT_EQ(best->state, StreamDownloadIndex::Entry::Complete);
+}
+
+TEST(StreamDownloadIndexPickBest, OrderIndependentForCompleteVsPending)
+{
+    QList<StreamDownloadIndex::Entry> cands {
+        mkPickEntry(StreamDownloadIndex::Entry::Complete, 100, 200,
+                    QStringLiteral("C:/Media/TV/Daredevil/Daredevil.S02E04.mkv")),
+        mkPickEntry(StreamDownloadIndex::Entry::Pending, 0, 100,
+                    QStringLiteral("C:/dl/.tankoban-partial/x/Daredevil.S02E04.mkv")),
+    };
+    const auto best = StreamDownloadIndex::pickBestEntry(cands);
+    ASSERT_TRUE(best.has_value());
+    EXPECT_EQ(best->state, StreamDownloadIndex::Entry::Complete);
+}
+
+TEST(StreamDownloadIndexPickBest, DownloadingBeatsPendingTieByProgress)
+{
+    QList<StreamDownloadIndex::Entry> cands {
+        mkPickEntry(StreamDownloadIndex::Entry::Pending, 0, 300, QStringLiteral("a")),
+        mkPickEntry(StreamDownloadIndex::Entry::Downloading, 40, 100, QStringLiteral("b")),
+        mkPickEntry(StreamDownloadIndex::Entry::Downloading, 70, 100, QStringLiteral("c")),
+    };
+    const auto best = StreamDownloadIndex::pickBestEntry(cands);
+    ASSERT_TRUE(best.has_value());
+    EXPECT_EQ(best->state, StreamDownloadIndex::Entry::Downloading);
+    EXPECT_EQ(best->progressPct, 70);
+}
+
+TEST(StreamDownloadIndexPickBest, EmptyCandidatesReturnsNullopt)
+{
+    EXPECT_FALSE(StreamDownloadIndex::pickBestEntry({}).has_value());
+}
