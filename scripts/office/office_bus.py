@@ -317,6 +317,30 @@ def cmd_drain(me):
     cmd_mark_seen(me, max(r["seq"] for r in rows))
 
 
+def cmd_watch_peek(me, after):
+    """For office_watch.sh: print '[seq N] from: msg' for each message addressed
+    to `me` (direct or all, not from me) with seq > `after`. Does NOT touch the
+    cursor (the watch tracks its own high-water mark; the woken brother runs
+    `drain` to read + advance). Silent if nothing new."""
+    try:
+        after = int(after)
+    except (TypeError, ValueError):
+        after = 0
+    bus = BUS()
+    if not os.path.exists(bus):
+        return
+    for line in open(bus, "r", encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("seq", 0) > after and rec.get("from") != me and _addressed_to(rec, me):
+            print("[seq {0}] {1}: {2}".format(rec["seq"], rec["from"], rec["msg"]))
+
+
 def cmd_close():
     bus = BUS()
     if not (os.path.exists(bus) and os.path.getsize(bus) > 0):
@@ -365,6 +389,8 @@ def main(argv):
         cmd_deliver()
     elif cmd == "drain":
         cmd_drain(*rest)
+    elif cmd == "watch-peek":
+        cmd_watch_peek(*rest)
     elif cmd == "close":
         cmd_close()
     else:
