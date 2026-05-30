@@ -720,35 +720,14 @@ void StreamDetailView::buildUI()
     seasonLayout->addWidget(m_downloadSelectedBtn);
     seasonLayout->addWidget(m_downloadBtn);
 
-    // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - Layers-3 secondary
-    // button next to primary Download. Opens TheatreDownloadPanel for the
-    // pack-based selection flow (Season Packs / Multi-Season / Complete Series).
-    // Tooltip "Pack downloads" - icon-only, no text label.
-    m_packOptionsBtn = new QPushButton(m_seasonRow);
-    m_packOptionsBtn->setObjectName(QStringLiteral("DetailPackOptionsBtn"));
-    m_packOptionsBtn->setFixedHeight(30);
-    m_packOptionsBtn->setFixedWidth(36);
-    m_packOptionsBtn->setCursor(Qt::PointingHandCursor);
-    m_packOptionsBtn->setIcon(QIcon(QStringLiteral(":/icons/layers-3.svg")));
-    m_packOptionsBtn->setIconSize(QSize(18, 18));
-    m_packOptionsBtn->setToolTip(tr("Pack downloads"));
-    m_packOptionsBtn->setStyleSheet(
-        "#DetailPackOptionsBtn { background: rgba(255,255,255,0.08);"
-        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
-        "  color: #ddd; padding: 0; }"
-        "#DetailPackOptionsBtn:hover { background: rgba(255,255,255,0.12);"
-        "  border-color: rgba(255,255,255,0.22); }");
-    connect(m_packOptionsBtn, &QPushButton::clicked, this, [this]() {
-        if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series"))
-            return;
-        const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
-        emit theatreDownloadRequested(m_currentImdb,
-                                       currentTitle(),
-                                       season,
-                                       m_currentType,
-                                       episodeCountsBySeason());
-    });
-    seasonLayout->addWidget(m_packOptionsBtn);
+    // THEATRE_DOWNLOAD_SIMPLIFY P4.2 (2026-05-30) — the "Pack downloads"
+    // (layers-3) button that opened the Tankorent pack picker (TheatreDownloadPanel)
+    // is removed from the series view per the download-simplify direction. The
+    // Tankorent SEARCH engine (UnifiedPackSearchEngine / TankorentSearchService /
+    // TheatreDownloadPanel class) is left fully intact for the future streaming
+    // revival — only this UI trigger is gone. The theatreDownloadRequested signal
+    // is retained (declared in the header; StreamPage still connects it) so the
+    // panel can be re-surfaced later without re-plumbing.
 
     m_seasonRow->hide();
     leftCol->addWidget(m_seasonRow);
