@@ -1306,14 +1306,24 @@ StreamDetailView::episodeDisplayState(int season, int episode) const
         const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
         const auto it = snap.constFind(episode);
         if (it != snap.constEnd()) {
-            in.hasTransfer = true;
-            const QString st = it.value().first;       // cohort state string
-            in.progressPct  = qMax(0, it.value().second);  // 0..100 (-1 terminal -> 0)
-            in.paused = (st == QLatin1String("Paused"));
-            in.failed = (st == QLatin1String("Failed")
-                      || st == QLatin1String("MetadataFailed")
-                      || st == QLatin1String("PublishFailed")
-                      || st == QLatin1String("MissingSource"));
+            const QString st = it.value().first;            // cohort state string
+            const int pct    = qMax(0, it.value().second);  // 0..100 (-1 terminal -> 0)
+            if (st == QLatin1String("Published") || st == QLatin1String("Completed")) {
+                in.complete = true;                          // engine confirms terminal success
+            } else if (st == QLatin1String("Paused")) {
+                in.hasTransfer = true; in.paused = true; in.progressPct = pct;
+            } else if (st == QLatin1String("Failed")
+                    || st == QLatin1String("MetadataFailed")
+                    || st == QLatin1String("PublishFailed")
+                    || st == QLatin1String("MissingSource")) {
+                in.hasTransfer = true; in.failed = true; in.progressPct = pct;
+            } else if (st == QLatin1String("Downloading")
+                    || st == QLatin1String("Pending")
+                    || st == QLatin1String("Publishing")) {
+                in.hasTransfer = true; in.progressPct = pct;
+            }
+            // Cancelled/Orphaned + other terminal-non-success: no active transfer
+            // (falls through to the on-disk check).
         }
     }
     return tankostream::stream::deriveEpisodeDisplayState(in);
@@ -1341,8 +1351,10 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode)
     if (auto* statusItem = m_episodeTable->item(row, kColStatus)) {
         QString text;
         switch (state) {
-        case S::Downloading:   text = tr("Downloading %1%").arg(pct); break;
-        case S::Paused:        text = tr("Paused %1%").arg(pct);      break;
+        // Just the percent — the action icon (pause vs resume) shows which it is,
+        // and the Status column is too narrow for the word + percent.
+        case S::Downloading:   text = QStringLiteral("%1%").arg(pct); break;
+        case S::Paused:        text = QStringLiteral("%1%").arg(pct); break;
         case S::Failed:        text = tr("Failed");                   break;
         case S::Downloaded:    text = QString();                      break;  // Play button carries it
         case S::NotDownloaded: text = QString();                      break;
