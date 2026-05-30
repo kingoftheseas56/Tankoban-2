@@ -253,7 +253,6 @@ void StreamDetailView::showEntry(const QString& imdbId,
     if (m_movieLocalChip) m_movieLocalChip->hide();
     if (m_movieDownloadChip) m_movieDownloadChip->hide();
     if (m_downloadBtn) m_downloadBtn->hide();
-    if (m_packOptionsBtn) m_packOptionsBtn->hide();
     m_lastChoices.clear();
     m_statusLabel->setText("Loading...");
     m_statusLabel->show();
@@ -1002,7 +1001,6 @@ void StreamDetailView::updateBulkDownloadButton()
         && season > 0
         && !m_seasons.value(season).isEmpty();
     m_downloadBtn->setVisible(visible);
-    if (m_packOptionsBtn) m_packOptionsBtn->setVisible(visible);
 }
 
 void StreamDetailView::updateDownloadSelectedButton()
@@ -2360,14 +2358,12 @@ void StreamDetailView::refreshSeasonHeaderButton()
     if (!m_downloadBtn) return;
     if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series")) {
         m_downloadBtn->setVisible(false);
-        if (m_packOptionsBtn) m_packOptionsBtn->setVisible(false);
         return;
     }
     int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
     m_downloadBtn->setText(tr("Download"));
     m_downloadBtn->setIcon(QIcon(QStringLiteral(":/icons/download-arrow.svg")));
     m_downloadBtn->setVisible(season > 0);
-    if (m_packOptionsBtn) m_packOptionsBtn->setVisible(season > 0);
 }
 
 // ─── F13 fix 2026-05-19: visibility-scoped progress refresh timer ────────────
