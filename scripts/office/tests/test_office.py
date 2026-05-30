@@ -71,6 +71,47 @@ def main():
     u2 = [json.loads(x) for x in run(env, "unseen", "agent2").splitlines() if x]
     check(any(r["msg"] == "two of you" for r in u2), "comma-list reaches agent2")
 
+    # --- send (resolves FROM from session) ---
+    run(env, "join", "sess-snd", "0")
+    run(env, "send", "sess-snd", "@agent4", "ping via send")
+    with open(env["OFFICE_BUS"], encoding="utf-8") as f:
+        last = json.loads([x for x in f if x.strip()][-1])
+    check(last["from"] == "agent0" and last["to"] == "agent4" and last["msg"] == "ping via send",
+          "send resolves FROM=agent0 -> agent4")
+
+    # --- deliver (reads stdin session_id, emits additionalContext, advances cursor) ---
+    proc = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"], input=json.dumps({"session_id": "sess-abc"}),
+        capture_output=True, text=True, env=env,
+    )  # sess-abc -> agent4
+    out = proc.stdout.strip()
+    payload = json.loads(out)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    check(payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit", "deliver: correct hookEventName")
+    check("ping via send" in ctx and "THE OFFICE" in ctx, "deliver: injects unseen msg text")
+    # second deliver -> nothing (cursor advanced)
+    proc2 = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"], input=json.dumps({"session_id": "sess-abc"}),
+        capture_output=True, text=True, env=env,
+    )
+    check(proc2.stdout.strip() == "", "deliver: nothing after cursor advanced")
+
+    # --- deliver guards: deepseek endpoint stays silent ---
+    env_ds = dict(env); env_ds["ANTHROPIC_BASE_URL"] = "https://api.deepseek.com"
+    procd = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"], input=json.dumps({"session_id": "sess-xyz"}),
+        capture_output=True, text=True, env=env_ds,
+    )
+    check(procd.stdout.strip() == "", "deliver: silent on deepseek endpoint")
+
+    # --- close: archive + clear ---
+    out_close = run(env, "close")
+    check("archived" in out_close, "close: reports archive")
+    check(not os.path.exists(env["OFFICE_BUS"]), "close: live bus removed")
+    arch = os.path.join(sand, "bus_archive")
+    check(os.path.isdir(arch) and any(f.endswith(".jsonl") for f in os.listdir(arch)),
+          "close: archive file written")
+
     print("RESULT:", "PASS" if fails == 0 else f"{fails} FAIL")
     sys.exit(1 if fails else 0)
 

@@ -186,9 +186,99 @@ def cmd_unseen(me):
                 print(json.dumps(rec, ensure_ascii=False))
 
 
+def _agent_for(sid):
+    path = SESSIONS()
+    if not sid or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            num = json.load(f).get(sid)
+    except (json.JSONDecodeError, OSError):
+        return ""
+    return "agent" + str(num) if num else ""
+
+
+def cmd_send(sid, to_raw, msg):
+    frm = _agent_for(sid)
+    if not frm:
+        sys.exit("office send: tab not registered — run office_join first")
+    to = to_raw[1:] if to_raw.startswith("@") else to_raw
+    cmd_append(frm, to, "chat", "null", msg)  # prints seq
+
+
+def cmd_deliver():
+    """Hook entrypoint. Reads hook JSON on stdin (has session_id), injects
+    unseen messages as additionalContext JSON, advances cursor. Always exit 0."""
+    # DeepSeek endpoint rejects injected context (system-role 400) — stay silent.
+    base = os.environ.get("ANTHROPIC_BASE_URL", "")
+    if "deepseek" in base.lower():
+        return
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    sid = ""
+    try:
+        sid = json.loads(raw).get("session_id", "") if raw.strip() else ""
+    except json.JSONDecodeError:
+        sid = ""
+    if not sid:
+        sid = os.environ.get("CLAUDE_SESSION_ID", "")
+    me = _agent_for(sid)
+    if not me:
+        return
+    msgs = []
+    bus = BUS()
+    if os.path.exists(bus):
+        cur = _cursor_val(me)
+        with open(bus, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("seq", 0) > cur and rec.get("from") != me and _addressed_to(rec, me):
+                    msgs.append(rec)
+    if not msgs:
+        return
+    maxseq = max(r["seq"] for r in msgs)
+    lines = "\n".join("  - {0}: {1}".format(r["from"], r["msg"]) for r in msgs)
+    cmd_mark_seen(me, maxseq)
+    ctx = ("[THE OFFICE] New message(s) for {0} "
+           "(reply: bash scripts/office/chat_send.sh \"@agentN\" \"...\"):\n{1}").format(me, lines)
+    out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx}}
+    print(json.dumps(out, ensure_ascii=False))
+
+
+def cmd_close():
+    bus = BUS()
+    if not (os.path.exists(bus) and os.path.getsize(bus) > 0):
+        print("office: already closed (no live bus)")
+        return
+    arch_dir = os.path.join(_dir(), "bus_archive")
+    os.makedirs(arch_dir, exist_ok=True)
+    day = datetime.now().strftime("%Y-%m-%d")
+    dest = os.path.join(arch_dir, day + ".jsonl")
+    n = 1
+    while os.path.exists(dest):
+        dest = os.path.join(arch_dir, "{0}-{1}.jsonl".format(day, n))
+        n += 1
+    with open(bus, "r", encoding="utf-8") as f:
+        count = sum(1 for x in f if x.strip())
+    os.replace(bus, dest)
+    cur = CURSORS()
+    if os.path.isdir(cur):
+        for fn in os.listdir(cur):
+            try:
+                os.remove(os.path.join(cur, fn))
+            except OSError:
+                pass
+    print("office: closed — archived {0} msg(s) to {1}; live bus cleared.".format(count, dest))
+
+
 def main(argv):
     if not argv:
-        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor> ...")
+        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|deliver|close> ...")
     cmd, rest = argv[0], argv[1:]
     if cmd == "append":
         cmd_append(*rest)
@@ -202,6 +292,12 @@ def main(argv):
         cmd_mark_seen(*rest)
     elif cmd == "cursor":
         cmd_cursor(*rest)
+    elif cmd == "send":
+        cmd_send(*rest)
+    elif cmd == "deliver":
+        cmd_deliver()
+    elif cmd == "close":
+        cmd_close()
     else:
         sys.exit("office_bus.py: unknown subcommand " + cmd)
 
