@@ -134,7 +134,8 @@ private:
     // catalogue result; used by the search-storefront add-to-library paths.
     CatalogueRecord wishlistRecordFromResult(const BookCatalogueResult& b) const;
     void addCatalogueRecordTile(const CatalogueRecord& record);
-    void addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount);
+    void addLibrarySeriesTile(const CatalogueRecord& rep, const QString& author,
+                              const QString& seriesName, int totalCount);
     // Shared owned-book context menu (Read / Mark / Rename / Remove / Reveal /
     // Copy), used by both the library grid and the series detail rows.
     void showOwnedBookMenu(const QString& catalogueId, const QPoint& globalPos);

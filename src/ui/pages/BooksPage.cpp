@@ -1079,21 +1079,38 @@ void BooksPage::rebuildBookGrid()
     const QList<CatalogueRecord> records = m_catalogueStore
         ? m_catalogueStore->all()
         : QList<CatalogueRecord>{};
-    // Group library records by series: one tile per series (first owned book is
-    // the representative), standalone tiles for the rest. A downloaded series
-    // book thus appears under its series, not as a one-off.
-    QSet<QString> seriesSeen;
+    // Group library records by series: one tile per series. The tile shows the
+    // series-wide author + the TOTAL book count in the series (seriesTotal from
+    // the catalogue), NOT just how many are downloaded — so a series tile reads
+    // the same whether you own 1 book or all of them. Author + name + total are
+    // merged across the group because a single downloaded record may have been
+    // persisted bare (no author) by an older download path; any sibling record
+    // carrying the metadata fills the gap. Standalone records render as one-offs.
+    struct SeriesAgg {
+        const CatalogueRecord* rep = nullptr;  // first-seen: drives cover + tile order
+        QString author;                        // first non-empty across the group
+        QString name;                          // first non-empty seriesName
+        int total = 0;                         // max seriesTotal across the group
+        int owned = 0;                         // fallback count if total is unknown
+    };
+    QHash<QString, SeriesAgg> seriesAgg;
+    QStringList seriesOrder;                    // stable first-seen tile placement
     for (const CatalogueRecord& record : records) {
-        if (!record.seriesId.isEmpty()) {
-            if (seriesSeen.contains(record.seriesId)) continue;
-            seriesSeen.insert(record.seriesId);
-            const int owned = m_catalogueStore
-                ? m_catalogueStore->catalogueIdsForSeries(record.seriesId).size()
-                : 1;
-            addLibrarySeriesTile(record, owned);
-        } else {
+        if (record.seriesId.isEmpty()) {
             addCatalogueRecordTile(record);
+            continue;
         }
+        SeriesAgg& a = seriesAgg[record.seriesId];
+        if (!a.rep) { a.rep = &record; seriesOrder << record.seriesId; }
+        if (a.author.isEmpty() && !record.author.isEmpty()) a.author = record.author;
+        if (a.name.isEmpty() && !record.seriesName.isEmpty()) a.name = record.seriesName;
+        a.total = qMax(a.total, record.seriesTotal);
+        ++a.owned;
+    }
+    for (const QString& seriesId : seriesOrder) {
+        const SeriesAgg& a = seriesAgg.value(seriesId);
+        addLibrarySeriesTile(*a.rep, a.author, a.name,
+                             a.total > 0 ? a.total : a.owned);
     }
 
     if (records.isEmpty()) {
@@ -1150,7 +1167,8 @@ void BooksPage::addCatalogueRecordTile(const CatalogueRecord& record)
     m_bookStrip->addTile(card);
 }
 
-void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount)
+void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, const QString& author,
+                                     const QString& seriesName, int totalCount)
 {
     if (rep.seriesId.isEmpty()) return;
 
@@ -1162,16 +1180,16 @@ void BooksPage::addLibrarySeriesTile(const CatalogueRecord& rep, int ownedCount)
         const QString cached = coverCachePath(m_catalogueCoverDir, rep.catalogueId);
         if (QFile::exists(cached)) cover = cached;
     }
-    const QString title = rep.seriesName.isEmpty() ? rep.title : rep.seriesName;
+    const QString title = seriesName.isEmpty() ? rep.title : seriesName;
     QStringList subtitleParts;
-    if (!rep.author.isEmpty()) subtitleParts << rep.author;
-    subtitleParts << QStringLiteral("%1 book%2").arg(ownedCount)
-                                                .arg(ownedCount == 1 ? QString() : QStringLiteral("s"));
+    if (!author.isEmpty()) subtitleParts << author;
+    subtitleParts << QStringLiteral("%1 book%2").arg(totalCount)
+                                                .arg(totalCount == 1 ? QString() : QStringLiteral("s"));
     auto* card = new TileCard(cover, title, subtitleParts.join(QStringLiteral(" / ")));
     card->setProperty("catalogueSeries", true);
     card->setProperty("seriesId", rep.seriesId);
     card->setProperty("tileTitle", title);
-    card->setProperty("fileCount", ownedCount);
+    card->setProperty("fileCount", totalCount);
     card->setProperty("newestMtime", rep.addedAt * 1000);
     connect(card, &TileCard::clicked, this, [this, card]() {
         // Reuse the search→series flow: open the series detail view, which
