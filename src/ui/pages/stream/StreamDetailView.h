@@ -263,42 +263,12 @@ private:
     // anchor the actions menu; non-Published branches ignore it.
     void onActionIconClicked(int episode, const QPoint& globalAnchorPos = QPoint());
 
-    // Post-NETFLIX_OVERHAUL P3 revision (2026-05-12) — builds + pops
-    // the row's actions menu (Remove/Cancel + Show alternate streams).
-    // Shared by onActionIconClicked's Published branch and
-    // onEpisodeContextMenu so right-click and left-click converge on
-    // one builder. Cancel label morphs to Remove for Published rows.
-    void showRowActionsMenu(int season, int episode, const QPoint& globalAnchorPos);
-
     // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — helpers used by onActionIconClicked.
     QString findInfoHashForEpisode(int season, int episode) const;
     QString findGroupIdForCohort(int season) const;
     // STREAM_DOWNLOADED_LIBRARY Phase 4 — right-click → "Show alternate
     // streams" context menu on the episode table.
     void onEpisodeContextMenu(const QPoint& pos);
-    // STREAM_DOWNLOADED_LIBRARY Phase 4 — repaint per-row on-disk markers.
-    // Called both at the tail of populateEpisodeTable() and in response to
-    // StreamDownloadIndex::entriesChanged so a bulk-completion lights up
-    // the rows in place.
-    void refreshEpisodeMarkers();
-
-    // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — shared chip render for the
-    // season-row table's kColStatus item. Mirrors EpisodeTile's state-driven
-    // chip contract so both surfaces converge on one look. Provenance-driven
-    // amber-tint lands in Task 20 once tone is ratified.
-    void renderEpisodeStateChip(
-        int row,
-        StreamDownloadIndex::Entry::State state,
-        int progressPct,
-        tankoban::stream::theatre::EpisodeTileState::Provenance provenance);
-
-    // PHASE3_CHIP_VISIBILITY_FIX 2026-05-19 — initial-paint helper. Walks the
-    // episode table, looks up each row's episode in the substrate, and calls
-    // renderEpisodeStateChip for tracked rows. Called from populateEpisodeTable,
-    // setStreamDownloadIndex, and onSeasonChanged so substrate state is visible
-    // on view-open, signal-wire, and season-switch (entryStateChanged covers
-    // subsequent in-flight transitions).
-    void refreshSubstrateStatesForActiveSeason();
     void refreshMovieLocalChip();
     void refreshMovieDownloadState();
     void updateProgressColumn();
@@ -309,37 +279,20 @@ private:
     // whenever a checkbox toggles or the season changes.
     void updateDownloadSelectedButton();
 
-    // Stream async-race follow-up 2026-05-18: mark the exact user action
-    // that is about to create a bulk cohort. The earlier stamp lived on a
-    // panel-open button, which could expire before the real dispatch.
-    void startBulkProgressGraceWindow();
-
-    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — refresh the per-row download-state
-    // text in the episode table's Status column from the TorrentClient
-    // bulk-snapshot for current imdb+season. 1Hz polled via m_bulkPollTimer
-    // while the detail view is visible. Falls through to the watched-
-    // checkmark when no bulk activity for the row.
-    void refreshEpisodeBulkProgress();
-
-    // STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 12 — paint helper. Combines
-    // Layer 3 index hit + Layer 2 cohort state into the right action-icon
-    // glyph for a single row. Called from refreshEpisodeBulkProgress on
-    // every tick and from populateEpisodeTable for the initial paint pass.
-    void repaintActionIconForRow(int row, int episode, int season,
-                                  const QHash<int, QPair<QString, int>>& cohortSnap);
-
     // THEATRE_EPISODE_STATE_MODEL (2026-05-30) — disk-first per-episode state.
-    // The single derivation: disk (StreamDownloadIndex::bestEntryForEpisode +
-    // QFileInfo::exists) is the source of truth; the engine snapshot is
-    // consulted ONLY for not-on-disk episodes. Replaces the legacy cohort
-    // RowState cluster (resolveRowState / refreshEpisodeMarkers /
-    // refreshSubstrateStatesForActiveSeason / repaintActionIconForRow) which
-    // is removed in P1.T5.
+    // The single derivation: a Complete record present on disk wins (bestEntry
+    // + QFileInfo::exists); the live engine snapshot supplies Downloading/Paused/
+    // Failed (an active transfer beats a pre-allocated partial file). Replaced
+    // the legacy cohort RowState cluster (resolveRowState / refreshEpisodeMarkers
+    // / refreshSubstrateStatesForActiveSeason / repaintActionIconForRow / the
+    // m_bulkPollTimer poll), all removed in P1.T5.
     tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode) const;
     // Repaints ONE row's status cell + action control from episodeDisplayState.
     void refreshEpisodeRow(int row, int season, int episode);
     // Repaints every visible row of the active season via refreshEpisodeRow.
     void refreshAllEpisodeRows();
+    // Episode-table row carrying `episode` in the active season (-1 if absent).
+    int rowForEpisode(int episode) const;
 
     // Phase 3 Batch 3.1 — MetaItem arrival handler; paints hero image +
     // enriches the metadata chip row (runtime, genres) once fetchMetaItem
@@ -525,27 +478,14 @@ private:
     // per-episode bulk-download state (V2 Phase 3).
     TorrentClient*         m_torrentClient = nullptr;
 
-    // STREAM_BULK_DOWNLOAD_V2 Phase 3 — 1Hz timer driving Status-column
-    // download-state repaints. Started in populateEpisodeTable when bulk
-    // activity exists for the show+season; idle otherwise.
-    QTimer*                m_bulkPollTimer = nullptr;
-
     // F13 fix 2026-05-19: periodic refresh of movie + episode download badges
     // during active downloads. The substrate's state-change signals only fire on
     // transitions (Pending→Downloading→Complete), not on per-piece progress, so
     // the badge would stay frozen at the dispatch-time percent without this poll.
     // Timer is started in showEvent + stopped in hideEvent; cheap (~1Hz against
     // in-process QHash). Connected to refreshMovieDownloadState +
-    // refreshSubstrateStatesForActiveSeason.
+    // refreshAllEpisodeRows + refreshSeasonHeaderButton.
     QTimer*                m_progressRefreshTimer = nullptr;
-
-    // STREAM_ASYNC_RACE_FIXES 2026-05-18 Task B - stamped when a download
-    // dispatch fires (movie or season-header pack). refreshEpisodeBulkProgress
-    // checks this to avoid stopping the poll timer during the cross-thread
-    // window where the torrent client hasn't yet registered the new bulk
-    // group in its snapshot. Default-constructed (invalid) until first
-    // dispatch.
-    QDateTime              m_lastBulkDispatchTime;
 
 private:
     void refreshLibraryButton();
