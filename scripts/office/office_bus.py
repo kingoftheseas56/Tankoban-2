@@ -279,6 +279,34 @@ def cmd_deliver():
     print(json.dumps(out, ensure_ascii=False))
 
 
+def cmd_drain(me):
+    """Print human-readable pending messages for `me` AND advance the cursor,
+    atomically in one process. Used by office_join.sh so a tab joining late sees
+    the backlog once without re-showing on the next prompt."""
+    bus = BUS()
+    rows = []
+    if os.path.exists(bus):
+        cur = _cursor_val(me)
+        with open(bus, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("seq", 0) > cur and rec.get("from") != me and _addressed_to(rec, me):
+                    rows.append(rec)
+    if not rows:
+        print("(no messages waiting)")
+        return
+    for r in rows:
+        print("  {0} -> {1}: {2}".format(r["from"], r["to"], r["msg"]))
+    print("({0} message(s) above - you are now in the office)".format(len(rows)))
+    cmd_mark_seen(me, max(r["seq"] for r in rows))
+
+
 def cmd_close():
     bus = BUS()
     if not (os.path.exists(bus) and os.path.getsize(bus) > 0):
@@ -325,6 +353,8 @@ def main(argv):
         cmd_send(*rest)
     elif cmd == "deliver":
         cmd_deliver()
+    elif cmd == "drain":
+        cmd_drain(*rest)
     elif cmd == "close":
         cmd_close()
     else:

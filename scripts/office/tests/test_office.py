@@ -114,6 +114,13 @@ def main():
     check(run(env, "whoami", "sess-new3") == "agent3", "deliver auto-binds sess-new3 -> agent3 from prompt")
     check("hey player guy" in proc_ab.stdout, "deliver delivers to just-auto-bound agent3")
 
+    # --- drain: shows pending for late-joiner + advances cursor (no double-show) ---
+    run(env, "append", "agent2", "agent5", "chat", "null", "late joiner msg")
+    d1 = run(env, "drain", "agent5")
+    check("late joiner msg" in d1, "drain shows pending for agent5")
+    d2 = run(env, "drain", "agent5")
+    check("no messages waiting" in d2, "drain: nothing on second call (cursor advanced)")
+
     # --- close: archive + clear ---
     out_close = run(env, "close")
     check("archived" in out_close, "close: reports archive")
