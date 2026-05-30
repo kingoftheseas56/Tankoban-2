@@ -126,6 +126,7 @@ sidecar_debug_live.log.*
 # but not committed; the bus_archive/ dir itself is tracked via a .gitkeep.
 agents/bus.jsonl
 agents/.bus_cursors/
+agents/.office_nudged/
 agents/bus_archive/*.jsonl
 .claude/.office_sessions.json
 

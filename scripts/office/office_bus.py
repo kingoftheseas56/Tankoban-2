@@ -263,6 +263,29 @@ def cmd_deliver():
             me = "agent" + str(num)
     if not me:
         return
+
+    # --- Auto-clock-in nudge (v2): on the FIRST delivery of a session, inject a
+    # one-time instruction telling this brother to start his always-on watch, so
+    # Hemanth never has to type the watch command. Marker keyed by session_id so
+    # it fires once per tab, not every prompt. ---
+    parts = []
+    nudge_dir = os.path.join(_dir(), ".office_nudged")
+    marker = os.path.join(nudge_dir, sid.replace("/", "_"))
+    if not os.path.exists(marker):
+        os.makedirs(nudge_dir, exist_ok=True)
+        try:
+            open(marker, "w").close()
+        except OSError:
+            pass
+        parts.append(
+            "[THE OFFICE] You're {0}, and you're in the live brotherhood room. "
+            "To go ALWAYS-ON (auto-wake when any brother messages you, no Hemanth prompt needed), "
+            "start your watch now as a background Monitor task and STAY on it:\n"
+            "    bash scripts/office/office_watch.sh {0}\n"
+            "When it emits a line, read the new message (bash scripts/office/office_bus.py drain {0}), "
+            "reply if warranted (bash scripts/office/chat_send.sh \"@agentN\" \"...\"), then keep watching. "
+            "Reply-only for now — don't start code work off a bus message unless asked.".format(me)
+        )
     msgs = []
     bus = BUS()
     if os.path.exists(bus):
@@ -278,13 +301,18 @@ def cmd_deliver():
                     continue
                 if rec.get("seq", 0) > cur and rec.get("from") != me and _addressed_to(rec, me):
                     msgs.append(rec)
-    if not msgs:
+    if msgs:
+        maxseq = max(r["seq"] for r in msgs)
+        lines = "\n".join("  - {0}: {1}".format(r["from"], r["msg"]) for r in msgs)
+        cmd_mark_seen(me, maxseq)
+        parts.append(
+            "[THE OFFICE] New message(s) for {0} "
+            "(reply: bash scripts/office/chat_send.sh \"@agentN\" \"...\"):\n{1}".format(me, lines)
+        )
+    # Inject the nudge and/or the messages — whichever we have. Nothing => silent.
+    if not parts:
         return
-    maxseq = max(r["seq"] for r in msgs)
-    lines = "\n".join("  - {0}: {1}".format(r["from"], r["msg"]) for r in msgs)
-    cmd_mark_seen(me, maxseq)
-    ctx = ("[THE OFFICE] New message(s) for {0} "
-           "(reply: bash scripts/office/chat_send.sh \"@agentN\" \"...\"):\n{1}").format(me, lines)
+    ctx = "\n\n".join(parts)
     out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx}}
     print(json.dumps(out, ensure_ascii=False))
 

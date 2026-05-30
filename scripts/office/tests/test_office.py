@@ -121,6 +121,22 @@ def main():
     d2 = run(env, "drain", "agent5")
     check("no messages waiting" in d2, "drain: nothing on second call (cursor advanced)")
 
+    # --- auto-clock-in nudge: first deliver of a session injects watch instruction, once ---
+    nud_env = dict(env)
+    nud = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"],
+        input=json.dumps({"session_id": "sess-nudge", "prompt": "you're Agent 5 wake up"}),
+        capture_output=True, text=True, env=nud_env,
+    )
+    check("office_watch.sh agent5" in nud.stdout, "first deliver nudges agent5 to clock in")
+    # second deliver same session -> no repeat nudge (and no msgs) -> silent
+    nud2 = subprocess.run(
+        [sys.executable, BUS_PY, "deliver"],
+        input=json.dumps({"session_id": "sess-nudge", "prompt": "anything"}),
+        capture_output=True, text=True, env=nud_env,
+    )
+    check("office_watch.sh" not in nud2.stdout, "second deliver does NOT re-nudge")
+
     # --- close: archive + clear ---
     out_close = run(env, "close")
     check("archived" in out_close, "close: reports archive")
