@@ -41,16 +41,50 @@ def fetch_wikipedia_html(article):
     return resp.text
 
 
+def resolve_volume_table(title, wiki_article=None):
+    """Locate the volume table for a series, returning (volumes, page_used).
+
+    Mid-size series carry the table on the main article; big series (One Piece,
+    Bleach, Death Note, Naruto) keep it on a dedicated "List of <title>
+    chapters" page. Try the explicit override / main article first, then the
+    conventional list-page titles. The first page that yields any volume rows
+    wins.
+    """
+    candidates = []
+    if wiki_article:
+        candidates.append(wiki_article)
+    if title:
+        candidates.append(title)
+        candidates.append(f"List of {title} chapters")
+        candidates.append(f"List of {title} volumes")
+    seen = set()
+    for cand in candidates:
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            html = fetch_wikipedia_html(cand)
+        except Exception:
+            continue
+        vols = parse_volume_table(html)
+        if vols:
+            return vols, cand
+    return [], None
+
+
 def harvest(series_id, wiki_article=None, delay=0.7):
     catalog = load_catalog(series_id)
     title = catalog.get("seriesTitle") or catalog.get("title") or series_id
     anilist_id = catalog.get("anilistId", 0)
     catalog_vol_nums = {int(v["number"]) for v in catalog.get("volumes", []) if "number" in v}
 
-    html = fetch_wikipedia_html(wiki_article or title)
-    wiki_vols = {v["volumeNumber"]: v for v in parse_volume_table(html)}
+    vols_list, used_page = resolve_volume_table(title, wiki_article)
+    wiki_vols = {v["volumeNumber"]: v for v in vols_list}
     if not wiki_vols:
-        sys.exit(f"no volume table parsed from Wikipedia for '{wiki_article or title}'")
+        sys.exit(f"no volume table parsed from Wikipedia for '{wiki_article or title}' "
+                 f"(tried main article + 'List of ... chapters/volumes')")
+    if used_page and used_page != (wiki_article or title):
+        print(f"[{series_id}] resolved volume table from Wikipedia page: {used_page}")
 
     session = requests.Session()
     target_nums = sorted(catalog_vol_nums or set(wiki_vols))
