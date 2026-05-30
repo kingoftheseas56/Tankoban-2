@@ -3584,11 +3584,22 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
                 m_mangaDownloadIndex->evictBySeries(src, sid);
             }
         } else {
+            // BUGFIX 2026-05-30 (Agent 1): non-MDI tiles cover BOTH bookmark-only
+            // series (anilistId>0, no local files) and folder-scanned series. The
+            // old body only called triggerScan() -- which re-adds folder series and
+            // NEVER drops a bookmark, so "Remove series..." silently did nothing for
+            // bookmarked titles (Berserk/Bleach/Yu Yu Hakusho/etc.). Now: drop the
+            // bookmark when there is one (the grid re-renders via bookmarksChanged ->
+            // refreshLibraryStrips); triggerScan stays only for genuine folder tiles.
             QString sp = card->property("seriesPath").toString();
+            const bool isBookmark = (anilistId > 0 && m_anilistCache
+                                     && m_anilistCache->isBookmarked(anilistId));
             if (ContextMenuHelper::confirmRemove(this, tr("Remove from library"),
-                    tr("Remove this series from the library?\n%1\nFiles will not be deleted from disk.")
-                        .arg(sp))) {
-                triggerScan();
+                    tr("Remove this series from the library?\nFiles will not be deleted from disk."))) {
+                if (isBookmark)
+                    m_anilistCache->removeBookmark(anilistId);
+                if (!sp.isEmpty())
+                    triggerScan();
             }
         }
     }

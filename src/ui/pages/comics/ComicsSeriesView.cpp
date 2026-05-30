@@ -1717,10 +1717,65 @@ void ComicsSeriesView::onLibraryButtonClicked()
     // Existing AniList-keyed bookmark toggle path.
     if (m_currentAnilistId > 0) {
         if (m_cache->isBookmarked(m_currentAnilistId)) {
+            // Remove from Library. A series may be BOOKMARKED and/or
+            // DOWNLOADED; the landing DOWNLOADED strip is driven by
+            // MangaDownloadIndex, so dropping the bookmark alone left a
+            // downloaded series stuck on the landing (bug 2026-05-30). Gather
+            // the series' download entries across sources, offer the same
+            // 3-way remove dialog as the per-volume delete, evict them, drop
+            // the bookmark, then navigate back. The landing refreshes via
+            // entriesChanged + bookmarksChanged (both wired in ComicsPage).
+            QStringList wantSeriesIds;
+            wantSeriesIds << QStringLiteral("anilist_%1").arg(m_currentAnilistId);
+            if (!m_currentMangaCatalog.seriesId.isEmpty())
+                wantSeriesIds << m_currentMangaCatalog.seriesId;
+
+            QList<MangaDownloadIndex::Entry> seriesEntries;
+            if (m_downloadIndex) {
+                QSet<QString> seenBuckets;
+                for (const auto& rep : m_downloadIndex->entriesForAllSeries()) {
+                    if (!wantSeriesIds.contains(rep.seriesId)) continue;
+                    const QString bucket = rep.sourceId + QLatin1Char(':') + rep.seriesId;
+                    if (seenBuckets.contains(bucket)) continue;
+                    seenBuckets.insert(bucket);
+                    seriesEntries += m_downloadIndex->entriesForSeries(rep.sourceId, rep.seriesId);
+                }
+            }
+
+            bool deleteFiles = false;
+            if (!seriesEntries.isEmpty()) {
+                const auto choice = ContextMenuHelper::confirmRemoveWithFile(
+                    this, tr("Remove from Library"),
+                    tr("Remove \"%1\" (%2 downloaded volume%3) from your library?")
+                        .arg(m_currentSeriesTitle)
+                        .arg(seriesEntries.size())
+                        .arg(seriesEntries.size() == 1 ? QString() : QStringLiteral("s")));
+                if (choice == ContextMenuHelper::RemoveChoice::Cancel)
+                    return;
+                deleteFiles = (choice == ContextMenuHelper::RemoveChoice::DeleteFile);
+            }
+
             m_cache->removeBookmark(m_currentAnilistId);
-        } else {
-            m_cache->addBookmark(m_currentAnilistId);
+
+            if (m_downloadIndex) {
+                QSet<QString> evicted;
+                for (const auto& e : seriesEntries) {
+                    if (deleteFiles && !e.canonicalPath.isEmpty()) {
+                        QFile::remove(e.canonicalPath);
+                        QFile::remove(e.canonicalPath + QStringLiteral(".volx"));
+                    }
+                    const QString bucket = e.sourceId + QLatin1Char(':') + e.seriesId;
+                    if (!evicted.contains(bucket)) {
+                        evicted.insert(bucket);
+                        m_downloadIndex->evictBySeries(e.sourceId, e.seriesId);
+                    }
+                }
+            }
+
+            emit backRequested();
+            return;
         }
+        m_cache->addBookmark(m_currentAnilistId);
         refreshLibraryButton();
         return;
     }
