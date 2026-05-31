@@ -86,3 +86,22 @@ def format_backup_reply(me, reply_class, body):
         if not re.search(r"owner to confirm|non-binding|backup read", body, re.IGNORECASE):
             body = "backup read (non-binding, owner to confirm): " + body
     return "{0} {1}".format(prefix, body)
+
+
+def _responder_cursor_path(me):
+    return os.path.join(office_bus._dir(), ".bus_responder_cursors", me + ".seq")
+
+
+def responder_cursor(me):
+    try:
+        with open(_responder_cursor_path(me), "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def set_responder_cursor(me, seq):
+    p = _responder_cursor_path(me)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(str(int(seq)))

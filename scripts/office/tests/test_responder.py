@@ -74,10 +74,24 @@ def test_format_backup_reply():
         check(True, "format: invalid class raises ValueError")
 
 
+def test_responder_cursor():
+    sand = tempfile.mkdtemp()
+    os.environ["OFFICE_DIR"] = sand   # office_bus._dir() honors this
+    me = "agent4"
+    check(R.responder_cursor(me) == 0, "cursor: default 0")
+    R.set_responder_cursor(me, 42)
+    check(R.responder_cursor(me) == 42, "cursor: persists 42")
+    real = os.path.join(sand, ".bus_cursors", "agent4.seq")
+    check(not os.path.exists(real), "cursor: responder does NOT touch the tab's agent cursor")
+    own = os.path.join(sand, ".bus_responder_cursors", "agent4.seq")
+    check(os.path.exists(own), "cursor: responder writes its OWN namespaced cursor")
+
+
 def main():
     test_should_suppress()
     test_is_candidate()
     test_format_backup_reply()
+    test_responder_cursor()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
