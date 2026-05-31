@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""Windows Office bridge for Agent 7 Codex.
+"""Headless Office bridge for Agent 7 Codex.
 
-Launches a Codex CLI window, joins the Office as agent7, watches the bus, and
-injects a short wake prompt into the Codex console when new Office messages
-arrive. The watcher does not mark messages seen; Codex drains them during the
-injected turn.
+Launch:
+  python scripts/office/codex_agent7_bridge.py
+
+This is intentionally NOT a TUI bridge. It never focuses windows, never uses the
+clipboard, and never simulates keystrokes. It watches the Office bus, calls
+`codex exec` non-interactively on gpt-5.5 to decide whether a short reply is
+useful, then posts any approved reply through office_bus.py as session
+`codex-agent7` (agent7) only.
 """
 
 import argparse
-import ctypes
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
-from ctypes import wintypes
+from datetime import datetime
 
-# Windows consoles default to cp1252, which crashes (UnicodeEncodeError) when a
-# bus message contains an emoji (e.g. the 🫡 salute brothers sign off with). Force
-# UTF-8 on stdout/stderr with errors="replace" so the bridge's log() NEVER crashes
-# regardless of message content. Same fix office_bus.py carries. Bug hit live
-# 2026-05-31 during the first bridge smoke (crashed the watch loop on a peek).
+
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -30,65 +31,42 @@ for _stream in (sys.stdout, sys.stderr):
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BUS = os.path.join(ROOT, "scripts", "office", "office_bus.py")
+BUS_FILE = os.path.join(ROOT, "agents", "bus.jsonl")
 LOG = os.path.join(ROOT, ".claude", "agent7_office_bridge.log")
+LOCK = os.path.join(ROOT, ".claude", "agent7_office_bridge.lock")
 
-STD_INPUT_HANDLE = -10
-CREATE_NEW_CONSOLE = 0x00000010
-KEY_EVENT = 0x0001
-ATTACH_PARENT_PROCESS = 0xFFFFFFFF
-GMEM_MOVEABLE = 0x0002
-CF_UNICODETEXT = 13
-
-
-class KEY_EVENT_RECORD(ctypes.Structure):
-    _fields_ = [
-        ("bKeyDown", wintypes.BOOL),
-        ("wRepeatCount", wintypes.WORD),
-        ("wVirtualKeyCode", wintypes.WORD),
-        ("wVirtualScanCode", wintypes.WORD),
-        ("uChar", wintypes.WCHAR),
-        ("dwControlKeyState", wintypes.DWORD),
-    ]
+AGENT = "agent7"
+SESSION_ID = "codex-agent7"
+MODEL = "gpt-5.5"
+WAKE_PROMPT_RE = re.compile(r"^Office wake for agent7:", re.IGNORECASE)
 
 
-class INPUT_RECORD_EVENT(ctypes.Union):
-    _fields_ = [("KeyEvent", KEY_EVENT_RECORD)]
-
-
-class INPUT_RECORD(ctypes.Structure):
-    _fields_ = [("EventType", wintypes.WORD), ("Event", INPUT_RECORD_EVENT)]
-
-
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.AttachConsole.argtypes = [wintypes.DWORD]
-kernel32.AttachConsole.restype = wintypes.BOOL
-kernel32.FreeConsole.argtypes = []
-kernel32.FreeConsole.restype = wintypes.BOOL
-kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
-kernel32.GetStdHandle.restype = wintypes.HANDLE
-kernel32.WriteConsoleInputW.argtypes = [
-    wintypes.HANDLE,
-    ctypes.POINTER(INPUT_RECORD),
-    wintypes.DWORD,
-    ctypes.POINTER(wintypes.DWORD),
-]
-kernel32.WriteConsoleInputW.restype = wintypes.BOOL
-kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
-kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
-kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
-kernel32.GlobalLock.restype = wintypes.LPVOID
-kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
-kernel32.GlobalUnlock.restype = wintypes.BOOL
-
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-user32.OpenClipboard.argtypes = [wintypes.HWND]
-user32.OpenClipboard.restype = wintypes.BOOL
-user32.EmptyClipboard.argtypes = []
-user32.EmptyClipboard.restype = wintypes.BOOL
-user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
-user32.SetClipboardData.restype = wintypes.HANDLE
-user32.CloseClipboard.argtypes = []
-user32.CloseClipboard.restype = wintypes.BOOL
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "replies": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Office target, e.g. @agent0, @hemanth, or @all.",
+                    },
+                    "msg": {
+                        "type": "string",
+                        "description": "Brief Office reply from Agent 7.",
+                    },
+                },
+                "required": ["to", "msg"],
+            },
+        }
+    },
+    "required": ["replies"],
+}
 
 
 def log(message):
@@ -101,9 +79,8 @@ def log(message):
 
 
 def run_bus(*args, check=True):
-    cmd = [sys.executable, BUS, *args]
     proc = subprocess.run(
-        cmd,
+        [sys.executable, BUS, *args],
         cwd=ROOT,
         text=True,
         encoding="utf-8",
@@ -116,266 +93,286 @@ def run_bus(*args, check=True):
     return proc.stdout.strip()
 
 
-def ps_quote(value):
-    return "'" + value.replace("'", "''") + "'"
+def ensure_identity():
+    run_bus("join", SESSION_ID, "7")
+    who = run_bus("whoami", SESSION_ID)
+    if who != AGENT:
+        raise RuntimeError(f"refusing to run: {SESSION_ID!r} maps to {who!r}, not {AGENT!r}")
 
 
-def launch_codex(codex_cmd, title):
-    command = (
-        "$Host.UI.RawUI.WindowTitle = "
-        + ps_quote(title)
-        + "; Set-Location -LiteralPath "
-        + ps_quote(ROOT)
-        + "; "
-        + codex_cmd
-    )
-    return subprocess.Popen(
-        ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", command],
-        cwd=ROOT,
-        creationflags=CREATE_NEW_CONSOLE,
-    )
+def read_bus_records():
+    records = []
+    if not os.path.exists(BUS_FILE):
+        return records
+    with open(BUS_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
 
 
-def launch_codex_titled(codex_cmd, title):
-    command = (
-        "$Host.UI.RawUI.WindowTitle = "
-        + ps_quote(title)
-        + "; Set-Location -LiteralPath "
-        + ps_quote(ROOT)
-        + "; "
-        + codex_cmd
-    )
-    return subprocess.Popen(
-        [
-            "cmd",
-            "/c",
-            "start",
-            title,
-            "powershell",
-            "-NoExit",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ],
-        cwd=ROOT,
-    )
+def max_seq(records=None):
+    records = read_bus_records() if records is None else records
+    return max((int(r.get("seq", 0)) for r in records), default=0)
 
 
-def _key_record(ch, key_down):
-    rec = INPUT_RECORD()
-    rec.EventType = KEY_EVENT
-    rec.Event.KeyEvent = KEY_EVENT_RECORD(
-        bool(key_down),
-        1,
-        0,
-        0,
-        ch,
-        0,
-    )
-    return rec
+def addressed_to_me(rec):
+    to = str(rec.get("to", ""))
+    if to == "all" or to == AGENT:
+        return True
+    return AGENT in [part.strip() for part in to.split(",")]
 
 
-def inject_text(console_pid, text):
-    # Attach to the Codex console, write key down/up events, then detach so this
-    # bridge keeps its own console behavior.
-    kernel32.FreeConsole()
-    if not kernel32.AttachConsole(console_pid):
-        err = ctypes.get_last_error()
-        raise OSError(err, "AttachConsole failed")
-
-    try:
-        handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-        if handle in (0, wintypes.HANDLE(-1).value):
-            raise OSError(ctypes.get_last_error(), "GetStdHandle failed")
-
-        records = []
-        for ch in text:
-            records.append(_key_record(ch, True))
-            records.append(_key_record(ch, False))
-
-        arr_type = INPUT_RECORD * len(records)
-        written = wintypes.DWORD(0)
-        ok = kernel32.WriteConsoleInputW(handle, arr_type(*records), len(records), ctypes.byref(written))
-        if not ok:
-            raise OSError(ctypes.get_last_error(), "WriteConsoleInputW failed")
-    finally:
-        kernel32.FreeConsole()
-        kernel32.AttachConsole(ATTACH_PARENT_PROCESS)
-
-
-def set_clipboard_text(text):
-    data = (text + "\0").encode("utf-16le")
-    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-    if not handle:
-        raise OSError(ctypes.get_last_error(), "GlobalAlloc failed")
-    locked = kernel32.GlobalLock(handle)
-    if not locked:
-        raise OSError(ctypes.get_last_error(), "GlobalLock failed")
-    try:
-        ctypes.memmove(locked, data, len(data))
-    finally:
-        kernel32.GlobalUnlock(handle)
-
-    if not user32.OpenClipboard(None):
-        raise OSError(ctypes.get_last_error(), "OpenClipboard failed")
-    try:
-        user32.EmptyClipboard()
-        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
-            raise OSError(ctypes.get_last_error(), "SetClipboardData failed")
-    finally:
-        user32.CloseClipboard()
-
-
-def inject_text_sendkeys(window_titles, text):
-    set_clipboard_text(text)
-    attempts = "@(" + ", ".join(ps_quote(title) for title in window_titles) + ")"
-    script = (
-        "$ws = New-Object -ComObject WScript.Shell; "
-        "$ok = $false; "
-        "$titles = "
-        + attempts
-        + "; "
-        "foreach ($title in $titles) { "
-        "  if ($title -and $ws.AppActivate($title)) { $ok = $true; break } "
-        "}; "
-        "if (-not $ok) { exit 2 }; "
-        "Start-Sleep -Milliseconds 200; "
-        "$ws.SendKeys('^v'); "
-        "Start-Sleep -Milliseconds 200; "
-        "$ws.SendKeys('{ENTER}')"
-    )
-    proc = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or f"SendKeys failed with code {proc.returncode}")
-
-
-def inject_prompt(args, codex_pid, prompt):
-    prompt = prompt.rstrip("\r\n")
-    if args.inject_method in ("sendkeys", "both"):
+def pending_for_me(after_seq):
+    out = []
+    for rec in read_bus_records():
         try:
-            inject_text_sendkeys(args.activation_titles, prompt)
-            log("wake prompt injected with SendKeys")
-            return
-        except Exception as exc:
-            log(f"SendKeys injection failed: {exc}")
-            if args.inject_method == "sendkeys":
-                return
-    inject_text(codex_pid, prompt + "\r")
-    log("wake prompt injected with WriteConsoleInputW")
+            seq = int(rec.get("seq", 0))
+        except (TypeError, ValueError):
+            continue
+        if seq <= after_seq:
+            continue
+        if rec.get("from") == AGENT:
+            continue
+        if addressed_to_me(rec):
+            out.append(rec)
+    return out
 
 
-def newest_seq(peek_output):
-    seqs = []
-    for line in peek_output.splitlines():
-        match = re.match(r"^\[seq ([0-9]+)\]", line)
-        if match:
-            seqs.append(int(match.group(1)))
-    return max(seqs) if seqs else None
+def mark_seen(seq):
+    run_bus("mark-seen", AGENT, str(int(seq)))
 
 
-def build_prompt(agent):
+def acquire_lock():
+    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+    try:
+        os.mkdir(LOCK)
+        return True
+    except FileExistsError:
+        return False
+
+
+def release_lock():
+    try:
+        os.rmdir(LOCK)
+    except OSError:
+        pass
+
+
+def context_window(records, limit=12):
+    rows = []
+    for rec in records[-limit:]:
+        rows.append(
+            {
+                "seq": rec.get("seq"),
+                "from": rec.get("from"),
+                "to": rec.get("to"),
+                "kind": rec.get("kind"),
+                "msg": rec.get("msg"),
+            }
+        )
+    return rows
+
+
+def build_prompt(messages, recent):
+    payload = {
+        "new_messages_for_agent7": messages,
+        "recent_room_context": recent,
+        "now": datetime.now().isoformat(timespec="seconds"),
+    }
     return (
-        "Office wake for "
-        + agent
-        + ": run python scripts\\office\\office_bus.py drain "
-        + agent
-        + ", read the messages, and reply in the Office only if a response is useful. "
-        + "Use python scripts\\office\\office_bus.py send codex-agent7 \"@agentN\" \"message\" for direct replies. "
-        + "Keep it brief."
+        "You are Agent 7 in THE OFFICE, running as Codex on gpt-5.5.\n"
+        "You are in reply-only mode. Do not start code work, do not inspect files, "
+        "do not run commands, and do not claim to have done work. Decide whether a "
+        "brief Office reply is useful.\n\n"
+        "Hard rules:\n"
+        "- Output JSON matching the schema only.\n"
+        "- Return {\"replies\": []} when no reply is useful.\n"
+        "- Do not echo wake prompts, commit activity, or generic broadcasts.\n"
+        "- Do not acknowledge every @all message.\n"
+        "- If replying, keep it under 240 characters and target the sender unless "
+        "the message clearly asks for a room-wide response.\n"
+        "- Speak as Agent 7; the bridge will post as agent7. Never ask to post as "
+        "hemanth or any other identity.\n\n"
+        "Office payload:\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
 
-def build_startup_prompt(agent):
-    return (
-        "You are Agent 7 in The Office for this Tankoban 2 repo. "
-        + "First run python scripts\\office\\office_bus.py drain "
-        + agent
-        + " so you can read any waiting Office messages. "
-        + "Then respond in the Office only if a response is useful, using "
-        + "python scripts\\office\\office_bus.py send codex-agent7 \"@agentN\" \"message\". "
-        + "Keep Office replies brief."
-    )
+def write_schema(path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(RESPONSE_SCHEMA, f)
+
+
+def run_codex(prompt, model):
+    with tempfile.TemporaryDirectory(prefix="agent7-office-") as td:
+        schema_path = os.path.join(td, "reply_schema.json")
+        out_path = os.path.join(td, "reply.json")
+        write_schema(schema_path)
+        cmd = [
+            "codex",
+            "exec",
+            "-m",
+            model,
+            "-C",
+            ROOT,
+            "-s",
+            "read-only",
+            "-c",
+            'approval_policy="never"',
+            "--output-schema",
+            schema_path,
+            "-o",
+            out_path,
+            "-",
+        ]
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "codex exec failed")
+        if not os.path.exists(out_path):
+            raise RuntimeError("codex exec produced no output-last-message file")
+        with open(out_path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"codex exec returned invalid JSON: {text[:500]}") from exc
+
+
+def valid_target(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value.startswith("@"):
+        value = "@" + value
+    target = value[1:]
+    if target == "all" or target == "hemanth" or re.fullmatch(r"agent\d+", target):
+        return value
+    return None
+
+
+def clean_reply(value):
+    if not isinstance(value, str):
+        return None
+    msg = " ".join(value.split())
+    if not msg:
+        return None
+    if len(msg) > 280:
+        msg = msg[:277].rstrip() + "..."
+    return msg
+
+
+def post_replies(replies):
+    posted = 0
+    ensure_identity()
+    for reply in replies:
+        to = valid_target(reply.get("to"))
+        msg = clean_reply(reply.get("msg"))
+        if not to or not msg:
+            log(f"skipping invalid reply: {reply!r}")
+            continue
+        if WAKE_PROMPT_RE.search(msg):
+            log("skipping reply that looks like a wake prompt")
+            continue
+        seq = run_bus("send", SESSION_ID, to, msg)
+        posted += 1
+        log(f"posted seq {seq} as {AGENT} to {to}: {msg}")
+    return posted
+
+
+def process_batch(messages, model, dry_run=False):
+    max_pending = max_seq(messages)
+    mark_seen(max_pending)
+
+    useful = [
+        m for m in messages
+        if m.get("kind", "chat") == "chat"
+        and not WAKE_PROMPT_RE.search(str(m.get("msg", "")))
+    ]
+    ignored = len(messages) - len(useful)
+    if ignored:
+        log(f"ignored {ignored} wake/activity/non-useful trigger(s)")
+    if not useful:
+        return 0
+
+    records = read_bus_records()
+    prompt = build_prompt(useful, context_window(records))
+    if dry_run:
+        log("dry-run: would invoke codex exec for " + str(len(useful)) + " message(s)")
+        return 0
+    result = run_codex(prompt, model)
+    replies = result.get("replies", [])
+    if not isinstance(replies, list):
+        log("model returned non-list replies; skipping")
+        return 0
+    if not replies:
+        log("model chose no Office reply")
+        return 0
+    return post_replies(replies)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--agent", default="agent7")
-    parser.add_argument("--agent-number", default="7")
-    parser.add_argument("--session-id", default=os.environ.get("CODEX_AGENT7_SESSION", "codex-agent7"))
-    parser.add_argument("--codex-cmd", default=os.environ.get("CODEX_AGENT7_CMD", "codex"))
-    parser.add_argument("--window-title", default=os.environ.get("CODEX_AGENT7_TITLE", "Agent 7 - Codex Office"))
-    parser.add_argument(
-        "--activation-title",
-        action="append",
-        default=[],
-        help="Additional visible window title to try for SendKeys activation.",
+    parser = argparse.ArgumentParser(
+        description="Headless, non-interactive Agent 7 bridge for The Office."
     )
+    parser.add_argument("--model", default=MODEL)
+    parser.add_argument("--interval", type=float, default=3.0)
+    parser.add_argument("--once", action="store_true", help="Poll once, process at most one batch, then exit.")
     parser.add_argument(
-        "--inject-method",
-        choices=("sendkeys", "console", "both"),
-        default=os.environ.get("CODEX_AGENT7_INJECT", "sendkeys"),
+        "--process-backlog",
+        action="store_true",
+        help="Process existing unread messages. Default starts from current bus tail for safety.",
     )
-    parser.add_argument("--interval", type=float, default=float(os.environ.get("OFFICE_WATCH_INTERVAL", "3")))
-    parser.add_argument(
-        "--startup-delay",
-        type=float,
-        default=float(os.environ.get("CODEX_AGENT7_STARTUP_DELAY", "15")),
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Mark triggers seen but do not call Codex or post.")
+    parser.add_argument("--no-lock", action="store_true", help="Allow running without the single-instance lock.")
     args = parser.parse_args()
-    extra_titles = os.environ.get("CODEX_AGENT7_ACTIVATION_TITLES", "")
-    args.activation_titles = [
-        args.window_title,
-        *args.activation_title,
-        *[title.strip() for title in extra_titles.split(";") if title.strip()],
-        "Tankoban 2",
-        "OpenAI Codex",
-        "Codex",
-    ]
 
-    run_bus("join", args.session_id, args.agent_number)
-    log(f"office: this tab registered as {args.agent} (session {args.session_id})")
-
-    if args.inject_method == "console":
-        codex = launch_codex(args.codex_cmd, args.window_title)
-    else:
-        codex = launch_codex_titled(args.codex_cmd, args.window_title)
-    log(f"office: launched Codex CLI wrapper pid {codex.pid}")
-    log(f"office: injecting startup prompt in {args.startup_delay:g}s using {args.inject_method}")
-    time.sleep(args.startup_delay)
-    inject_prompt(args, codex.pid, build_startup_prompt(args.agent))
-    log(f"office: watching {args.agent} every {args.interval:g}s")
-
-    last_raw = run_bus("cursor", args.agent, check=False)
+    if not args.no_lock and not acquire_lock():
+        raise SystemExit("agent7 bridge already running; refusing second instance")
     try:
-        last = int(last_raw)
-    except ValueError:
-        last = 0
+        ensure_identity()
+        if args.process_backlog:
+            try:
+                last = int(run_bus("cursor", AGENT, check=False) or "0")
+            except ValueError:
+                last = 0
+            log(f"Agent 7 headless bridge live on {args.model}; processing backlog after seq {last}")
+        else:
+            last = max_seq()
+            mark_seen(last)
+            log(f"Agent 7 headless bridge live on {args.model}; starting from bus tail seq {last}")
 
-    while True:
-        if codex.poll() is not None:
-            if args.inject_method == "console":
-                log(f"office: Codex process exited with code {codex.returncode}")
-                return codex.returncode or 0
-
-        peek = run_bus("watch-peek", args.agent, str(last), check=False)
-        if peek:
-            log(peek)
-            seq = newest_seq(peek)
-            if seq is not None:
-                last = seq
-            inject_prompt(args, codex.pid, build_prompt(args.agent))
-
-        time.sleep(args.interval)
+        while True:
+            messages = pending_for_me(last)
+            if messages:
+                last = max_seq(messages)
+                log(f"received {len(messages)} trigger(s), newest seq {last}")
+                try:
+                    process_batch(messages, args.model, dry_run=args.dry_run)
+                except Exception as exc:
+                    log(f"processing failed after marking seen: {exc}")
+            if args.once:
+                return 0
+            time.sleep(max(0.5, args.interval))
+    finally:
+        if not args.no_lock:
+            release_lock()
 
 
 if __name__ == "__main__":
-    if os.name != "nt":
-        sys.exit("codex_agent7_bridge.py is Windows-only")
     raise SystemExit(main())
