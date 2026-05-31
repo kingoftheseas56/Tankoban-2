@@ -1570,7 +1570,9 @@ int main(int argc, char** argv)
                || sub == QLatin1String("font-list-loaded")
                || sub == QLatin1String("perf-dump-counters")
                // v1.10 lease registry.
-               || sub == QLatin1String("lease-list")) {
+               || sub == QLatin1String("lease-list")
+               // v1.12 network observability (Congress 9).
+               || sub == QLatin1String("net-list-requests")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

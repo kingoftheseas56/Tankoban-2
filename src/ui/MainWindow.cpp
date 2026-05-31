@@ -26,6 +26,7 @@
 #include "core/DebugLogBuffer.h"
 #include "core/JsonlEventLog.h"
 #include "core/JsonStore.h"
+#include "core/net/NetSeam.h"
 #include "devtools/DevControlServer.h"
 #include "devtools/UiInteractionDispatcher.h"
 #include "devtools/SystemIntrospection.h"
@@ -1908,7 +1909,10 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                           "lease_release",
                           "lease_heartbeat",
                           "lease_get",
-                          "lease_list" };
+                          "lease_list",
+                          // v1.12 network observability (Congress 9, Agent 9)
+                          // net-list-requests returns the observer ring buffer.
+                          "net_list_requests" };
         // v1.9 cross-cutting system state + introspection layer (Phase D.6,
         // 2026-05-19). 27 commands across 11 prefixes. Backed by
         // SystemIntrospection. Write-capable subset (8) gates on
@@ -1934,6 +1938,12 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                                "enableDevControl() must run first"));
         }
         return m_devControl->handleLeaseCommand(cmd, seq, payload);
+    }
+
+    if (cmd == QLatin1String("net_list_requests")) {
+        return reply({
+            {"requests", tankoban::net::NetSeam::instance()->requestListJson()}
+        });
     }
 
     if (cmd == QLatin1String("get_state"))
