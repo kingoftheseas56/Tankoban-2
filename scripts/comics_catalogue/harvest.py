@@ -19,7 +19,7 @@ import time
 import urllib.request
 import ssl
 
-from parse_rco import parse_series
+from parse_rco import parse_series, parse_series_cover
 from edition_classify import is_collected, edition_tier
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -28,10 +28,13 @@ _BASE = "https://rcostation.xyz"
 _OUT_DIR = pathlib.Path("data/western_catalogue")
 
 
-def build_record(series_id: str, series_title: str, items: list[dict]) -> dict:
+def build_record(series_id: str, series_title: str, items: list[dict],
+                 series_cover: str = "") -> dict:
     """Pure assembly: parsed RCO items -> a base record holding only the
     collected editions, tier-sorted (compendium first). Single issues are
-    excluded from the primary editions list."""
+    excluded from the primary editions list. `series_cover` is the one
+    series-hero cover RCO exposes; the C++ loader maps it to each edition's
+    cover (RCO has no per-edition covers — see RECON_FINDINGS.md)."""
     collected = [it for it in items if is_collected(it["label"])]
     collected.sort(key=lambda it: edition_tier(it["label"]))  # stable
     editions = [
@@ -42,6 +45,7 @@ def build_record(series_id: str, series_title: str, items: list[dict]) -> dict:
         "seriesId": series_id,
         "seriesTitle": series_title,
         "source": "rco",
+        "seriesCover": series_cover,
         "editions": editions,
     }
 
@@ -58,7 +62,8 @@ def harvest_series(series_id: str, series_title: str, rco_name: str) -> dict:
     /Comic/<rco_name> path segment (capital-C scheme)."""
     html = _fetch(f"{_BASE}/Comic/{rco_name}")
     items = parse_series(html)
-    return build_record(series_id, series_title, items)
+    cover = parse_series_cover(html)
+    return build_record(series_id, series_title, items, series_cover=cover)
 
 
 def write_record(record: dict, out_dir: pathlib.Path = _OUT_DIR) -> pathlib.Path:

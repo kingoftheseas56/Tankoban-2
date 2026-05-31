@@ -1,5 +1,5 @@
 import pathlib
-from parse_rco import parse_series
+from parse_rco import parse_series, parse_series_cover
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "rco_series_invincible.html"
 
@@ -42,3 +42,14 @@ def test_only_item_links_not_series_links():
     # like /Comic/Invincible-Universe-Compendium must be excluded.
     for it in _items():
         assert it["href"].count("/") >= 3
+
+
+def test_parse_series_cover_extracts_image_src():
+    # RCO series page exposes ONE series-hero cover via <link rel="image_src">.
+    html = FIX.read_text(encoding="utf-8", errors="replace")
+    cover = parse_series_cover(html)
+    assert cover == "/Uploads/Etc/3-25-2016/42392826.jpg"
+
+
+def test_parse_series_cover_empty_when_absent():
+    assert parse_series_cover("<html><head></head></html>") == ""

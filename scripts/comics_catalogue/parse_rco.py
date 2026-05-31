@@ -38,3 +38,16 @@ def parse_series(html: str) -> list[dict]:
         seen.add(href)
         items.append({"label": slug_to_label(href), "href": href})
     return items
+
+
+# Series-hero cover: RCO exposes exactly ONE cover for the whole series via
+# <link rel="image_src" href="/Uploads/Etc/<date>/<id>.jpg">. There are NO
+# per-edition thumbnails on the series page (per-edition covers would need
+# per-edition page fetches, which are obfuscated). One shared cover per series.
+_COVER = re.compile(r'<link\s+rel="image_src"\s+href="([^"]+)"', re.IGNORECASE)
+
+
+def parse_series_cover(html: str) -> str:
+    """The series-hero cover path (one per series), or "" if absent."""
+    m = _COVER.search(html)
+    return m.group(1) if m else ""

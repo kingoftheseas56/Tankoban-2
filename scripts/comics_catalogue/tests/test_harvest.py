@@ -52,3 +52,14 @@ def test_empty_items_gives_empty_editions():
     rec = build_record("e", "E", [])
     assert rec["editions"] == []
     assert rec["seriesId"] == "e"
+
+
+def test_series_cover_carried_when_provided():
+    items = [{"label": "Omnibus 1", "href": "/Comic/Y/Omnibus-1"}]
+    rec = build_record("y", "Y", items, series_cover="/Uploads/Etc/x/42.jpg")
+    assert rec["seriesCover"] == "/Uploads/Etc/x/42.jpg"
+
+
+def test_series_cover_defaults_empty():
+    rec = build_record("y", "Y", [{"label": "Omnibus 1", "href": "/Comic/Y/Omnibus-1"}])
+    assert rec["seriesCover"] == ""
