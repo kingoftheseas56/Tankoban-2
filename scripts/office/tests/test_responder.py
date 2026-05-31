@@ -59,9 +59,25 @@ def test_is_candidate():
           "candidate: activity line -> never")
 
 
+def test_format_backup_reply():
+    out = R.format_backup_reply("agent1", "ack", "received, will pick up Phase 4")
+    check(out.startswith("[auto") and "agent1" in out.lower() and "ack" in out,
+          "format: marked with auto + agent + class")
+    check("received" in out, "format: body preserved")
+    nb = R.format_backup_reply("agent1", "nonbinding_assessment", "looks like option ii")
+    check("owner to confirm" in nb.lower() or "non-binding" in nb.lower() or "backup read" in nb.lower(),
+          "format: nonbinding_assessment carries a non-binding qualifier")
+    try:
+        R.format_backup_reply("agent1", "bogus", "x")
+        check(False, "format: invalid class should raise")
+    except ValueError:
+        check(True, "format: invalid class raises ValueError")
+
+
 def main():
     test_should_suppress()
     test_is_candidate()
+    test_format_backup_reply()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 

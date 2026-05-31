@@ -73,3 +73,16 @@ def is_candidate(rec, me):
         if re.search(r"\bagent\s*#?\s*" + re.escape(num) + r"\b", msg):
             return True
     return False
+
+
+def format_backup_reply(me, reply_class, body):
+    """Build the marked, honest backup message. Substantive classes get a
+    non-binding qualifier so the backup can never commit the real brother."""
+    if reply_class not in REPLY_CLASSES:
+        raise ValueError("unknown reply class: {0!r}".format(reply_class))
+    prefix = "[auto · {0}'s tab idle · {1}]".format(me, reply_class)
+    body = " ".join(str(body).split())
+    if reply_class in ("nonbinding_assessment", "decline_owner_confirmation_required"):
+        if not re.search(r"owner to confirm|non-binding|backup read", body, re.IGNORECASE):
+            body = "backup read (non-binding, owner to confirm): " + body
+    return "{0} {1}".format(prefix, body)
