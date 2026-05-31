@@ -87,11 +87,38 @@ def test_responder_cursor():
     check(os.path.exists(own), "cursor: responder writes its OWN namespaced cursor")
 
 
+def _sandbox_env():
+    sand = tempfile.mkdtemp()
+    os.environ["OFFICE_DIR"] = sand
+    os.environ["OFFICE_BUS"] = os.path.join(sand, "bus.jsonl")
+    os.environ["OFFICE_CURSORS"] = os.path.join(sand, "cursors")
+    os.environ["OFFICE_SESSIONS"] = os.path.join(sand, "sessions.json")
+    return sand
+
+
+def test_post_reply_and_recheck():
+    _sandbox_env()
+    import office_bus
+    office_bus.cmd_append("agent2", "agent4", "chat", "null", "agent4 need a hand?")  # seq 1
+    trigger = {"seq": 1, "frm": "agent2", "to": "agent4", "text": "agent4 need a hand?"}
+    # post a synthetic backup reply -> should append FROM agent4 TO agent2
+    R.post_reply("agent4", "@agent2", "[auto · agent4's tab idle · ack] on it", trigger, R._bus_records())
+    recs = R._bus_records()
+    last = recs[-1]
+    check(last["from"] == "agent4" and last["to"] == "agent2", "post: backup posts AS agent4 to the sender")
+    check(last["msg"].startswith("[auto"), "post: message carries the auto marker")
+    # pre-send recheck: agent4 has now 'answered' agent2 -> a second post_reply ABORTS
+    before = len(R._bus_records())
+    R.post_reply("agent4", "@agent2", "[auto] second attempt", trigger, R._bus_records())
+    check(len(R._bus_records()) == before, "post: pre-send recheck ABORTS when brother already answered")
+
+
 def main():
     test_should_suppress()
     test_is_candidate()
     test_format_backup_reply()
     test_responder_cursor()
+    test_post_reply_and_recheck()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
