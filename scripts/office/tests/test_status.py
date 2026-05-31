@@ -81,9 +81,12 @@ def test_compute_roster():
     check(by["agent1"]["present"] is False, "roster: agent1 stale (msg sec > window, no commit)")
     check(by["agent1"]["blocked"] is True, "roster: agent1 blocked surfaced")
     check(by["agent4"]["wake_alive"] is True, "roster: agent4 wake live (beat 5s)")
+    check(by["agent4"]["wake_state"] == "live", "roster: agent4 wake_state live")
     check(by["agent4"]["wake_age_sec"] == 5, "roster: agent4 wake age passed through")
     check(by["agent1"]["wake_alive"] is False, "roster: agent1 wake DEAD (beat 900s > window)")
+    check(by["agent1"]["wake_state"] == "down", "roster: agent1 wake_state down (stale beat)")
     check(by["agent7"]["wake_alive"] is False, "roster: agent7 wake dead (no heartbeat = never clocked in)")
+    check(by["agent7"]["wake_state"] == "unknown", "roster: agent7 wake_state UNKNOWN (no beat, not 'down')")
     check(by["agent7"]["wake_age_sec"] is None, "roster: agent7 wake age None (no beat)")
     check(by["agent4"]["status"] == "active", "roster: agent4 status=active (said 120s)")
     check(by["agent4"]["status_label"] == "active · said 2m ago",
@@ -91,8 +94,8 @@ def test_compute_roster():
     check(by["agent1"]["status"] == "cold", "roster: agent1 status=cold (said 99999s)")
     check("wake DOWN" in by["agent1"]["status_label"],
           "roster: agent1 label warns wake DOWN (heartbeat 900s > window)")
-    check(by["agent7"]["status"] == "cold" and by["agent7"]["status_label"] == "cold · no signal · wake DOWN",
-          "roster: agent7 no signal + no heartbeat -> cold/no-signal/wake-down")
+    check(by["agent7"]["status"] == "cold" and by["agent7"]["status_label"] == "cold · no signal",
+          "roster: agent7 no signal + no heartbeat -> cold/no-signal (NO false wake-DOWN)")
     check(by["agent7"]["wakeable"] is False, "roster: agent7 (codex) not wakeable")
     check(by["agent0"]["wakeable"] is True, "roster: agent0 (claude) wakeable")
     check([r["agent"] for r in roster] == sorted([r["agent"] for r in roster]),
@@ -116,8 +119,8 @@ def test_roster_cli():
     if data:
         keys = set(data[0].keys())
         need = {"agent", "role", "engine", "wakeable", "present", "wake_alive",
-                "wake_age_sec", "status", "status_label", "current_arc", "last_said",
-                "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
+                "wake_state", "wake_age_sec", "status", "status_label", "current_arc",
+                "last_said", "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
         check(need <= keys, "cli: each entry has all canonical keys")
 
 
@@ -165,24 +168,26 @@ def test_mirror_commit():
 def test_derive_status():
     # tiers: active <=300s, recent <=1800s, quiet <=7200s, else cold.
     # freshest signal across (last_said_sec, last_commit_sec) drives the grade.
-    tier, label = office_status.derive_status(120, 900, True)
+    tier, label = office_status.derive_status(120, 900, "live")
     check(tier == "active", "derive: freshest signal (said 120s) -> active")
     check(label == "active · said 2m ago", "derive: label names source+age, said wins")
-    tier, label = office_status.derive_status(5000, 600, True)
+    tier, label = office_status.derive_status(5000, 600, "live")
     check(tier == "recent", "derive: commit 600s is freshest -> recent")
     check(label == "recent · commit 10m ago", "derive: commit label")
-    tier, label = office_status.derive_status(4000, None, True)
+    tier, label = office_status.derive_status(4000, None, "live")
     check(tier == "quiet", "derive: said 4000s -> quiet")
-    tier, label = office_status.derive_status(99999, 99999, True)
+    tier, label = office_status.derive_status(99999, 99999, "live")
     check(tier == "cold", "derive: both >2h -> cold")
-    tier, label = office_status.derive_status(None, None, True)
+    tier, label = office_status.derive_status(None, None, "live")
     check(tier == "cold" and label == "cold · no signal", "derive: no signal -> cold/no-signal")
-    # wake-reachability folds into the label as an honest warning
-    tier, label = office_status.derive_status(120, None, False)
+    # wake-reachability folds in ONLY when we actually KNOW it's down (stale heartbeat)
+    tier, label = office_status.derive_status(120, None, "down")
     check(label == "active · said 2m ago · wake DOWN",
-          "derive: wake-dead appends ' · wake DOWN' even when active")
-    check(office_status.derive_status(120, None, True)[1].endswith("ago"),
+          "derive: wake-down appends ' · wake DOWN' even when active")
+    check(office_status.derive_status(120, None, "live")[1].endswith("ago"),
           "derive: wake-live label carries NO wake warning")
+    check("wake" not in office_status.derive_status(120, None, "unknown")[1],
+          "derive: wake-UNKNOWN carries NO 'wake DOWN' (no heartbeat data = don't overclaim)")
 
 
 def main():

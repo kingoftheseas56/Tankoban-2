@@ -106,6 +106,7 @@ PAGE = """<!doctype html>
   .wk svg{width:13px;height:13px;}
   .wk.live{color:var(--green);}
   .wk.down{color:var(--red);}
+  .wk.unknown{color:var(--txt2);opacity:.7;}
 
   /* ---- right pane: conversation ---- */
   #conv{display:flex;flex-direction:column;min-height:0;background:var(--deep);}
@@ -368,10 +369,15 @@ function renderRoster(list){
     const nudge = r.wakeable ? '' : '<span class="chip nudge" title="not auto-wakeable">nudge</span>';
     const blocked = r.blocked ? '<span class="chip blocked">blocked</span>' : '';
     // wake channel: live (watch beating) vs DOWN (deaf — can't be auto-woken)
-    const wake = r.wake_alive
-      ? '<span class="wk live" title="watch live — can hear new messages">' + SIGNAL_SVG + '</span>'
-      : '<span class="wk down" title="watch DOWN — can NOT be auto-woken; needs a prompt in its tab">' +
-        SIGNAL_SVG + 'deaf' + (r.wake_age_sec != null ? ' ' + ago(r.wake_age_sec) : '') + '</span>';
+    let wake;
+    if (r.wake_state === 'live')
+      wake = '<span class="wk live" title="watch live — can hear new messages">' + SIGNAL_SVG + '</span>';
+    else if (r.wake_state === 'down')
+      wake = '<span class="wk down" title="watch DOWN — can NOT be auto-woken; needs a prompt in its tab">' +
+             SIGNAL_SVG + 'deaf' + (r.wake_age_sec != null ? ' ' + ago(r.wake_age_sec) : '') + '</span>';
+    else
+      wake = '<span class="wk unknown" title="watch status unknown — no heartbeat yet (restart watch to report)">' +
+             SIGNAL_SVG + '?</span>';
     card.innerHTML =
       '<div class="ava">' + esc(initialFor(r.agent)) + '<span class="pdot ' + dotClass(r) + '"></span></div>' +
       '<div class="rmeta">' +

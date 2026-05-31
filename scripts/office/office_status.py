@@ -66,10 +66,11 @@ def freshest_signal(last_said_sec, last_commit_sec):
     return min(cands, key=lambda c: c[0])
 
 
-def derive_status(last_said_sec, last_commit_sec, wake_alive):
+def derive_status(last_said_sec, last_commit_sec, wake_state):
     """Grade a brother into a tier + an HONEST label that names the signal's
     source + age and folds in wake-reachability. Never claims certainty the
-    signals don't support (spec §2.1)."""
+    signals don't support (spec §2.1) — incl. NEVER claiming 'wake DOWN' when we
+    have no heartbeat data at all (that's 'unknown', not 'down')."""
     age, source = freshest_signal(last_said_sec, last_commit_sec)
     if age is None:
         tier, label = "cold", "cold · no signal"
@@ -80,7 +81,7 @@ def derive_status(last_said_sec, last_commit_sec, wake_alive):
                 tier = name
                 break
         label = "{0} · {1} {2} ago".format(tier, source, _ago(age))
-    if not wake_alive:
+    if wake_state == "down":  # only warn when a heartbeat EXISTED and went stale
         label += " · wake DOWN"
     return tier, label
 
@@ -164,7 +165,9 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
         present = any(s is not None and s <= presence_window for s in (bus_sec, com_sec))
         wake_age = heartbeats_by_agent.get(agent)
         wake_alive = wake_age is not None and wake_age <= heartbeat_window
-        status, status_label = derive_status(bus_sec, com_sec, wake_alive)
+        # 3-state honesty: no heartbeat data = "unknown" (we can't tell), NOT "down".
+        wake_state = "unknown" if wake_age is None else ("live" if wake_alive else "down")
+        status, status_label = derive_status(bus_sec, com_sec, wake_state)
         last_commit = None
         if c:
             last_commit = "{0} ({1})".format(c["subject"][:60], c["sha"])
@@ -175,6 +178,7 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
             "wakeable": wakeable,
             "present": present,
             "wake_alive": wake_alive,
+            "wake_state": wake_state,
             "wake_age_sec": wake_age,
             "status": status,
             "status_label": status_label,
