@@ -81,7 +81,14 @@ PAGE = """<!doctype html>
   .pdot{position:absolute;right:0;bottom:1px;width:13px;height:13px;border-radius:50%;
         border:2.5px solid var(--panel);background:#667781;}
   .pdot.active{background:var(--green);}
+  .pdot.recent{background:#5FA86B;}
+  .pdot.quiet{background:var(--warn);}
+  .pdot.cold{background:#667781;}
   .pdot.blocked{background:var(--red);animation:pulse 2s ease-in-out infinite;}
+  .rstatus{font-size:11px;color:var(--txt2);margin-top:3px;}
+  .rstatus.active,.rstatus.recent{color:#8FCF9C;}
+  .rstatus.quiet{color:var(--warn);}
+  .rstatus.cold{color:#6B7B86;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
   .rmeta{flex:1;min-width:0;}
   .rtop{display:flex;align-items:baseline;gap:7px;}
@@ -344,7 +351,7 @@ document.getElementById('closeBtn').onclick = async () => {
   maxseq = 0; lastFrom = null;
 };
 
-function dotClass(r){ return r.blocked ? 'blocked' : (r.present ? 'active' : ''); }
+function dotClass(r){ return r.blocked ? 'blocked' : (r.status || 'cold'); }
 function renderRoster(list){
   rlist.innerHTML = '';
   let present = 0;
@@ -371,6 +378,7 @@ function renderRoster(list){
         '<div class="rtop"><span class="rname">' + esc(labelFor(r.agent)) + '</span>' +
           '<span class="rrole">' + esc(r.role) + '</span><span class="rtime">' + t + '</span></div>' +
         '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + wake + '</div>' +
+        '<div class="rstatus ' + (r.status || 'cold') + '">' + esc(r.status_label || '') + '</div>' +
       '</div>';
     rlist.appendChild(card);
   }
