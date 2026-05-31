@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import office_bus  # noqa: E402  (shares bus path, schema, lock, append, close)
+import office_status  # noqa: E402  (derived-status engine; shares bus path)
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
 
@@ -87,6 +88,26 @@ PAGE = """<!doctype html>
   #log::-webkit-scrollbar{width:9px;}
   #log::-webkit-scrollbar-thumb{background:#22323f;border-radius:5px;}
   #log::-webkit-scrollbar-thumb:hover{background:#2c4150;}
+  #main{flex:1;display:flex;min-height:0;}
+  #roster{width:236px;flex:0 0 236px;background:#0e1822;border-right:1px solid var(--line);
+          overflow-y:auto;padding:8px 0;}
+  #roster .rhead{color:var(--dim);font-size:10.5px;letter-spacing:1.4px;padding:4px 14px 8px;}
+  .rcard{padding:8px 14px;border-bottom:1px solid #0c151c;display:flex;gap:9px;align-items:flex-start;}
+  .rdot{width:9px;height:9px;border-radius:50%;margin-top:4px;flex:0 0 9px;background:#3a4a57;}
+  .rdot.on{background:#6ec96e;box-shadow:0 0 6px #6ec96e88;}
+  .rmeta{flex:1;min-width:0;}
+  .rname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;}
+  .rrole{color:var(--dim);font-size:11px;margin-top:1px;}
+  .rline{color:#9fb0bd;font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rarc{color:#f2c94c;font-size:10.5px;}
+  .badge{font-size:9.5px;padding:1px 5px;border-radius:4px;font-weight:600;}
+  .badge.nudge{background:#3a2c12;color:#e0a24c;}
+  .badge.blocked{background:#3a1414;color:#e87676;}
+  .row.k-blocked .bubble{background:#2c1414;border-left:3px solid #e87676;}
+  .row.k-blocked .bubble .name::after{content:" · BLOCKER";color:#e87676;font-size:10px;}
+  .row.k-activity{margin-top:4px;}
+  .row.k-activity .bubble{background:transparent;border:1px dashed #243240;box-shadow:none;opacity:.82;}
+  .row.k-activity .bubble .name::after{content:" · committed";color:#6ec9cb;font-size:10px;}
 </style></head>
 <body>
   <header>
@@ -96,7 +117,10 @@ PAGE = """<!doctype html>
     <button id="notifyBtn" title="Desktop notification when a brother messages @hemanth">enable alerts</button>
     <button id="closeBtn" title="Archive + clear the bus (end of shift)">Close office</button>
   </header>
-  <div id="log"><div class="empty">No messages yet. Say something below.</div></div>
+  <div id="main">
+    <aside id="roster"><div class="rhead">BROTHERHOOD</div><div id="rlist"></div></aside>
+    <div id="log"><div class="empty">No messages yet. Say something below.</div></div>
+  </div>
   <footer>
     <select id="to">
       <option value="all">@all</option>
@@ -228,6 +252,45 @@ document.getElementById('closeBtn').onclick = async () => {
   maxseq = 0; lastFrom = null;
 };
 
+const rlist = document.getElementById('rlist');
+function ago(s){
+  if (s == null) return '';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm';
+  if (s < 86400) return Math.floor(s/3600) + 'h';
+  return Math.floor(s/86400) + 'd';
+}
+function renderRoster(list){
+  rlist.innerHTML = '';
+  for (const r of list){
+    const card = document.createElement('div');
+    card.className = 'rcard';
+    const bits = [];
+    if (r.last_said) bits.push('"' + esc(r.last_said) + '" ' + ago(r.last_said_sec));
+    else if (r.last_commit) bits.push('committed ' + ago(r.last_commit_sec));
+    const arc = r.current_arc ? '<span class="rarc">#' + esc(r.current_arc) + '</span>' : '';
+    const nudge = r.wakeable ? '' : '<span class="badge nudge" title="not auto-wakeable">nudge</span>';
+    const blocked = r.blocked ? '<span class="badge blocked">blocked</span>' : '';
+    card.innerHTML =
+      '<div class="rdot ' + (r.present ? 'on' : '') + '"></div>' +
+      '<div class="rmeta">' +
+        '<div class="rname">' + esc(labelFor(r.agent)) + ' ' + arc + ' ' + nudge + ' ' + blocked + '</div>' +
+        '<div class="rrole">' + esc(r.role) + '</div>' +
+        '<div class="rline">' + (bits.join(' · ') || '<span style="color:#5a6b78">idle</span>') + '</div>' +
+      '</div>';
+    rlist.appendChild(card);
+  }
+}
+async function pollRoster(){
+  try {
+    const r = await fetch('/roster?_=' + Date.now(), {cache:'no-store'});
+    const data = await r.json();
+    if (data.roster) renderRoster(data.roster);
+  } catch (e) {}
+}
+pollRoster();
+setInterval(pollRoster, 4000);
+
 poll();
 setInterval(poll, 1500);
 </script>
@@ -281,6 +344,13 @@ class Handler(BaseHTTPRequestHandler):
             allmsgs = _read_all_messages()
             maxseq = max((m.get("seq", 0) for m in allmsgs), default=0)
             self._send(200, json.dumps({"messages": msgs, "maxseq": maxseq}))
+            return
+        if self.path.startswith("/roster"):
+            try:
+                data = office_status.roster_now()
+            except Exception:
+                data = []
+            self._send(200, json.dumps({"roster": data}))
             return
         self._send(404, json.dumps({"error": "not found"}))
 
