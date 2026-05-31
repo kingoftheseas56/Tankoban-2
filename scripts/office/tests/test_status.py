@@ -85,6 +85,14 @@ def test_compute_roster():
     check(by["agent1"]["wake_alive"] is False, "roster: agent1 wake DEAD (beat 900s > window)")
     check(by["agent7"]["wake_alive"] is False, "roster: agent7 wake dead (no heartbeat = never clocked in)")
     check(by["agent7"]["wake_age_sec"] is None, "roster: agent7 wake age None (no beat)")
+    check(by["agent4"]["status"] == "active", "roster: agent4 status=active (said 120s)")
+    check(by["agent4"]["status_label"] == "active · said 2m ago",
+          "roster: agent4 honest label (wake live -> no warning)")
+    check(by["agent1"]["status"] == "cold", "roster: agent1 status=cold (said 99999s)")
+    check("wake DOWN" in by["agent1"]["status_label"],
+          "roster: agent1 label warns wake DOWN (heartbeat 900s > window)")
+    check(by["agent7"]["status"] == "cold" and by["agent7"]["status_label"] == "cold · no signal · wake DOWN",
+          "roster: agent7 no signal + no heartbeat -> cold/no-signal/wake-down")
     check(by["agent7"]["wakeable"] is False, "roster: agent7 (codex) not wakeable")
     check(by["agent0"]["wakeable"] is True, "roster: agent0 (claude) wakeable")
     check([r["agent"] for r in roster] == sorted([r["agent"] for r in roster]),
@@ -108,8 +116,8 @@ def test_roster_cli():
     if data:
         keys = set(data[0].keys())
         need = {"agent", "role", "engine", "wakeable", "present", "wake_alive",
-                "wake_age_sec", "current_arc", "last_said", "last_said_sec",
-                "last_commit", "last_commit_sec", "blocked"}
+                "wake_age_sec", "status", "status_label", "current_arc", "last_said",
+                "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
         check(need <= keys, "cli: each entry has all canonical keys")
 
 

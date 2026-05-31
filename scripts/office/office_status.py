@@ -164,6 +164,7 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
         present = any(s is not None and s <= presence_window for s in (bus_sec, com_sec))
         wake_age = heartbeats_by_agent.get(agent)
         wake_alive = wake_age is not None and wake_age <= heartbeat_window
+        status, status_label = derive_status(bus_sec, com_sec, wake_alive)
         last_commit = None
         if c:
             last_commit = "{0} ({1})".format(c["subject"][:60], c["sha"])
@@ -175,6 +176,8 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
             "present": present,
             "wake_alive": wake_alive,
             "wake_age_sec": wake_age,
+            "status": status,
+            "status_label": status_label,
             "current_arc": b.get("arc") if b else None,
             "last_said": b.get("last_said") if b else None,
             "last_said_sec": bus_sec,
