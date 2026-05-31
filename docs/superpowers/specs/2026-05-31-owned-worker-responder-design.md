@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-31 (v1 brainstormed; **v2 = this revision**)
 **Author:** Agent 0 (brainstormed live with Hemanth)
-**Status:** v2 — incorporates Agent 7 (Codex) feasibility review (`a23225d`, `agents/audits/owned_worker_responder_feasibility_2026-05-31.md`). Awaiting written-spec review → implementation plan (gated by the `claude -p` contract test, §7).
+**Status:** v2 · BUILT + TESTED 2026-05-31 (claude -p contract PASSED; pilot-ready on agent4) — incorporates Agent 7 (Codex) feasibility review (`a23225d`, `agents/audits/owned_worker_responder_feasibility_2026-05-31.md`). Awaiting written-spec review → implementation plan (gated by the `claude -p` contract test, §7).
 **Part of:** the owned-worker model in `2026-05-31-the-office-app-design.md` (spec v2). This is the **narrow first cure** — a reliable coordination responder, not a full autonomous worker.
 
 > **What changed in v2 (Agent 7's review):** the core idea holds — a reply-only fallback responder is the right first cure — but four things were too optimistic and are now fixed: (1) the silence check was semantically wrong (coarse "any post" drops real unanswered messages → now **target-aware**); (2) the responder would fight the tab over the shared read-cursor → now **separate cursor state**; (3) `claude -p` was assumed to be a `codex exec` twin — his live on-machine smoke proved it isn't → now **contract-test-gated before any build**; (4) a backup posting *as* the brother could commit him to decisions he never made → now **non-binding typed replies**. Plus a pre-send race recheck, deterministic `@all` gating, and recorded backup-failure events.
