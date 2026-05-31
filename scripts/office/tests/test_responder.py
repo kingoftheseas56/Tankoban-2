@@ -57,6 +57,10 @@ def test_is_candidate():
           "candidate: @all 'agent N' mention -> candidate")
     check(R.is_candidate({"from": "agent2", "to": "agent1", "kind": "activity", "msg": "committed"}, me) is False,
           "candidate: activity line -> never")
+    # cascade-guard: another responder's auto-reply addressed to me is NOT a candidate
+    check(R.is_candidate({"from": "agent2", "to": "agent1", "kind": "chat", "arc": "auto_reply",
+                          "msg": "[auto] backup read"}, me) is False,
+          "candidate: an auto_reply addressed to me -> NEVER (cascade-guard)")
 
 
 def test_format_backup_reply():
@@ -107,6 +111,9 @@ def test_post_reply_and_recheck():
     last = recs[-1]
     check(last["from"] == "agent4" and last["to"] == "agent2", "post: backup posts AS agent4 to the sender")
     check(last["msg"].startswith("[auto"), "post: message carries the auto marker")
+    check(last.get("arc") == "auto_reply", "post: backup carries arc=auto_reply machine-truth metadata")
+    # cascade-guard end-to-end: that posted auto_reply is NOT a candidate for another brother
+    check(R.is_candidate(last, "agent2") is False, "post: a posted auto_reply is never another brother's candidate")
     # pre-send recheck: agent4 has now 'answered' agent2 -> a second post_reply ABORTS
     before = len(R._bus_records())
     R.post_reply("agent4", "@agent2", "[auto] second attempt", trigger, R._bus_records())

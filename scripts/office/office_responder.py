@@ -57,8 +57,12 @@ def is_candidate(rec, me):
     """Is this message a fallback candidate for `me`? Direct/comma-list to me: always.
     @all: ONLY if it explicitly names me (@agentN or 'agent N') — a generic broadcast
     does NOT make every brother's responder fire (Agent 7's anti-fan-out gate).
-    Never my own posts; never non-chat kinds."""
+    Never my own posts; never non-chat kinds; never another responder's auto-reply."""
     if rec.get("from") == me:
+        return False
+    if rec.get("arc") == "auto_reply":
+        # A backup reply (any brother's) is machine-authored — never back it up.
+        # Without this, two idle brothers' responders ping-pong paid claude -p calls.
         return False
     if rec.get("kind") not in (None, "chat", "blocked"):
         return False
@@ -287,7 +291,9 @@ def post_reply(me, to, body, trigger, records):
         log(me, "REFUSING to post: session {0} maps to {1}, not {2}".format(session, who, me))
         return
     target = to[1:] if str(to).startswith("@") else to
-    office_bus.cmd_append(me, target, "chat", "null", body)
+    # arc="auto_reply" is machine-truth metadata (Agent 7's rec): kind stays "chat" so the
+    # UI renders it normally, but every responder skips it as a candidate (cascade-guard).
+    office_bus.cmd_append(me, target, "chat", "auto_reply", body)
     log(me, "seq {0}: POSTED as {1} to {2}".format(trigger["seq"], me, target))
 
 
