@@ -1,4 +1,5 @@
 #include "AddonTransport.h"
+#include "core/net/NetSeam.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -32,7 +33,7 @@ QString encodeComponent(const QString& value)
 
 AddonTransport::AddonTransport(QObject* parent)
     : QObject(parent)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-addon-transport")))
 {
 }
 

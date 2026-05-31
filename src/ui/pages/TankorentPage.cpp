@@ -1,5 +1,6 @@
 ﻿#include "TankorentPage.h"
 #include "core/CoreBridge.h"
+#include "core/net/NetSeam.h"
 #include "core/DebugLogBuffer.h"
 #include "core/TankorentSearchService.h"
 #include "core/TorrentIndexer.h"
@@ -515,7 +516,7 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
     qRegisterMetaType<TorrentResult>();
     qRegisterMetaType<QList<TorrentResult>>();
 
-    m_nam = new QNetworkAccessManager(this);
+    m_nam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("tankorent-page"));
 
     // Headless search service consumes the same QNAM the page already uses
     // for per-indexer networking. Wired to the 3-signal contract; the page

@@ -19,6 +19,7 @@
 #include <functional>
 
 #include "core/PosterCache.h"
+#include "core/net/NetSeam.h"
 #include "core/PosterFetcher.h"
 #include "core/stream/CatalogAggregator.h"
 #include "core/stream/addon/AddonRegistry.h"
@@ -152,7 +153,7 @@ CatalogBrowseScreen::CatalogBrowseScreen(AddonRegistry* registry, QWidget* paren
     : QWidget(parent)
     , m_registry(registry)
     , m_aggregator(new CatalogAggregator(registry, this))
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-catalog-browse")))
 {
     m_posterCacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
                        + QStringLiteral("/Tankoban/data/stream_posters");

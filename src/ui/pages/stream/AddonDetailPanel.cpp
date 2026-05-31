@@ -1,4 +1,5 @@
 #include "AddonDetailPanel.h"
+#include "core/net/NetSeam.h"
 
 #include <QCheckBox>
 #include <QDesktopServices>
@@ -85,7 +86,7 @@ QUrl configureUrlFor(const AddonDescriptor& descriptor)
 AddonDetailPanel::AddonDetailPanel(AddonRegistry* registry, QWidget* parent)
     : QFrame(parent)
     , m_registry(registry)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-addon-detail")))
 {
     setObjectName(QStringLiteral("StreamAddonDetailPanel"));
     setMinimumWidth(340);

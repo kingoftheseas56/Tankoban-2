@@ -19,6 +19,7 @@
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
 #include "core/stream/AnimeCatalogResolver.h"
+#include "core/net/NetSeam.h"
 
 // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1) - includes for the
 // indexer fan-out wrapped by searchPacks. Mirrors the set used by
@@ -702,7 +703,7 @@ void StreamAggregator::searchPacks(const QString& imdbId,
                                    bool anime)
 {
     if (!m_packNam) {
-        m_packNam = new QNetworkAccessManager(this);
+        m_packNam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-pack-search"));
     }
 
     // THEATRE_ANIME_CATALOG — anime is torrented as big multi-episode batches,

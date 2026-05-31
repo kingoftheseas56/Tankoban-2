@@ -1,6 +1,7 @@
 #include "StreamDownloadsPage.h"
 
 #include "core/torrent/TorrentClient.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/addon/MetaItem.h"
@@ -294,7 +295,7 @@ void StreamDownloadsPage::savePosterFrom(const QString& imdbId, const QUrl& post
     if (posterUrl.isEmpty() || QFile::exists(posterCachePath(imdbId)))
         return;
     if (!m_posterNam)
-        m_posterNam = new QNetworkAccessManager(this);
+        m_posterNam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-downloads-poster"));
     QNetworkRequest req(posterUrl);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);

@@ -1,6 +1,7 @@
 #include "StreamDetailView.h"
 
 #include "core/CoreBridge.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
@@ -93,7 +94,7 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
     , m_bridge(bridge)
     , m_meta(meta)
     , m_library(library)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-detail-view")))
 {
     m_heroCacheDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
                    + QStringLiteral("/Tankoban/data/stream_backgrounds");

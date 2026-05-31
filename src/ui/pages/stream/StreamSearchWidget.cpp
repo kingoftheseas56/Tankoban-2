@@ -1,6 +1,7 @@
 #include "StreamSearchWidget.h"
 
 #include "core/stream/MetaAggregator.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/StreamLibrary.h"
 #include "ui/pages/TileCard.h"
 #include "ui/pages/TileStrip.h"
@@ -24,7 +25,7 @@ StreamSearchWidget::StreamSearchWidget(MetaAggregator* meta, StreamLibrary* libr
     : QWidget(parent)
     , m_meta(meta)
     , m_library(library)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-search")))
 {
     m_posterCacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
                        + "/Tankoban/data/stream_posters";

@@ -18,6 +18,7 @@
 #include "addon/Descriptor.h"
 #include "addon/ResourcePath.h"
 #include "core/stream/AnimeCatalogResolver.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/AnimeIdMapCache.h"
 
 using tankostream::addon::AddonDescriptor;
@@ -575,7 +576,7 @@ void MetaAggregator::maybeRefreshAnimeIdMap()
         return;
     }
     if (!m_fribbNam) {
-        m_fribbNam = new QNetworkAccessManager(this);
+        m_fribbNam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-meta-fribb"));
     }
     QNetworkRequest req(QUrl(QStringLiteral(
         "https://raw.githubusercontent.com/Fribb/anime-lists/master/"

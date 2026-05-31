@@ -1,6 +1,7 @@
 #include "StreamLibraryLayout.h"
 
 #include "core/CoreBridge.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/stream/StreamLibrary.h"
@@ -25,7 +26,7 @@ StreamLibraryLayout::StreamLibraryLayout(CoreBridge* bridge, StreamLibrary* libr
     : QWidget(parent)
     , m_bridge(bridge)
     , m_library(library)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-library-layout")))
 {
     m_posterCacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
                        + "/Tankoban/data/stream_posters";

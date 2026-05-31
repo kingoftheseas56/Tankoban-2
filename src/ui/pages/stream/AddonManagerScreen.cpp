@@ -17,6 +17,7 @@
 #include <QVBoxLayout>
 
 #include "core/stream/addon/AddonRegistry.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/addon/Descriptor.h"
 #include "ui/dialogs/AddAddonDialog.h"
 #include "AddonDetailPanel.h"
@@ -112,7 +113,7 @@ private:
 AddonManagerScreen::AddonManagerScreen(AddonRegistry* registry, QWidget* parent)
     : QWidget(parent)
     , m_registry(registry)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-addon-manager")))
 {
     setObjectName(QStringLiteral("streamAddonManager"));
     buildUI();

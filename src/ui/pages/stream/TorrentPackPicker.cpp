@@ -1,4 +1,5 @@
 #include "ui/pages/stream/TorrentPackPicker.h"
+#include "core/net/NetSeam.h"
 
 #include "core/stream/QualityScorer.h"
 #include "core/TorrentIndexer.h"
@@ -79,7 +80,7 @@ TorrentPackPicker::TorrentPackPicker(const QString& imdbId,
     , m_imdbId(imdbId)
     , m_showName(showName)
     , m_season(season)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("stream-pack-picker")))
 {
     setWindowTitle(tr("Download via Tankorent - %1 %2")
                        .arg(showName)
