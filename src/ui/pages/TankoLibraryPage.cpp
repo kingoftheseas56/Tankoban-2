@@ -9,6 +9,7 @@
 #include "core/TankorentSearchService.h"
 #include "core/book/AbbScraper.h"
 #include "core/book/BookDownloader.h"
+#include "core/net/NetSeam.h"
 #include "core/torrent/TorrentClient.h"
 #include "ui/dialogs/AddTorrentDialog.h"   // AddTorrentConfig struct
 
@@ -237,7 +238,7 @@ TankoLibraryPage::TankoLibraryPage(CoreBridge* bridge,
     qRegisterMetaType<BookResult>();
     qRegisterMetaType<QList<BookResult>>();
 
-    m_nam = new QNetworkAccessManager(this);
+    m_nam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("book-tankolibrary"));
     setObjectName(QStringLiteral("TankoLibraryPage"));
 
     // Track B decision 2026-04-22: AA was wired in M2.3 (search path works

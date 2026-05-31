@@ -7,6 +7,7 @@
 #include "core/book/FictionDbClient.h"
 #include "core/book/LibGenScraper.h"
 #include "core/book/TankorentBookScraper.h"
+#include "core/net/NetSeam.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -90,7 +91,7 @@ QString sourceRowMeta(const BookResult& result, const QString& fallbackAuthor)
 
 BookCatalogueDetailView::BookCatalogueDetailView(QWidget* parent)
     : QWidget(parent)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("book-catalogue-detail")))
 {
     qRegisterMetaType<BookResult>("BookResult");
     qRegisterMetaType<QList<BookResult>>("QList<BookResult>");

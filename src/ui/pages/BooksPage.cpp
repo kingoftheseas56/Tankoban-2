@@ -14,6 +14,7 @@
 #include "core/book/BookDownloader.h"
 #include "core/book/BooksCatalogueLibraryStore.h"
 #include "core/book/CatalogueRecord.h"
+#include "core/net/NetSeam.h"
 
 #include "ui/ContextMenuHelper.h"
 #include "ui/MainWindow.h"
@@ -58,7 +59,7 @@ BooksPage::BooksPage(CoreBridge* bridge, QWidget* parent)
     buildUI();
 
     // ── Catalogue aggregator (BOOKS_STREMIO_PIVOT — catalogue search) ──
-    m_catalogueNam = new QNetworkAccessManager(this);
+    m_catalogueNam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("book-catalogue-search"));
     m_fictiondb = new FictionDbClient(m_catalogueNam, this);
     // BOOKS_FICTIONDB_CATALOGUE — series come from Top-N resolution over
     // FictionDB's free-text search (no enumerable series directory exists; the
