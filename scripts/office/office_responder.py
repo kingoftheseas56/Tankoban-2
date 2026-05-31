@@ -169,5 +169,108 @@ def run(me, dry_run=True, model="claude", once=False, window=FALLBACK_WINDOW):
         time.sleep(3)
 
 
+def _claude_bin():
+    """Resolve the claude CLI (npm-global claude.CMD on Windows; not on bare PATH)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for cand in (os.path.join(os.environ.get("APPDATA", ""), "npm", "claude.cmd"),
+                 os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "npm", "claude.cmd")):
+        if cand and os.path.exists(cand):
+            return cand
+    return "claude"
+
+
+def build_prompt(me, trigger, records):
+    recent = [{"seq": r.get("seq"), "from": r.get("from"), "to": r.get("to"),
+               "msg": str(r.get("msg", ""))[:300]} for r in records[-12:]]
+    payload = {"you_are_backup_for": me, "unanswered_message": trigger, "recent_context": recent}
+    return (
+        "You are the AUTOMATED BACKUP for {0} in THE OFFICE (an AI-agent coordination room). "
+        "{0}'s interactive tab went idle and did NOT answer the message below within {1}s. "
+        "Decide whether a brief, NON-BINDING backup reply is useful.\n\n"
+        "Output ONLY a JSON object — no prose, no markdown fences — exactly this shape:\n"
+        '{{"replies": [{{"to": "@agentN or @hemanth", "class": "<ack|handoff|clarifying_question'
+        '|nonbinding_assessment|decline_owner_confirmation_required>", "msg": "<under 240 chars>"}}]}}\n'
+        'Return {{"replies": []}} if no reply is useful.\n\n'
+        "HARD RULES:\n"
+        "- You are NOT {0}. NEVER commit {0} to a domain decision, an implementation promise, or a "
+        "position he didn't take. For anything substantive use class 'nonbinding_assessment' or "
+        "'decline_owner_confirmation_required', phrased as a backup read for the owner to confirm.\n"
+        "- Do not echo wake prompts or acknowledge generic broadcasts. Max 2 replies.\n\n"
+        "Office payload:\n{2}"
+    ).format(me, FALLBACK_WINDOW, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _extract_replies(out):
+    """Pull {replies:[...]} from claude -p output. --output-format json wraps the
+    model text in {'type':'result','result':'<text>'}; the text may be bare JSON or
+    fenced. Be liberal."""
+    texts = [out]
+    try:
+        wrap = json.loads(out)
+        if isinstance(wrap, dict):
+            if isinstance(wrap.get("replies"), list):
+                return wrap["replies"]
+            so = wrap.get("structured_output")
+            if isinstance(so, dict) and isinstance(so.get("replies"), list):
+                return so["replies"]
+            if isinstance(wrap.get("result"), str):
+                texts.append(wrap["result"])
+    except (json.JSONDecodeError, TypeError):
+        pass
+    for t in texts:
+        if not isinstance(t, str):
+            continue
+        i, j = t.find("{"), t.rfind("}")
+        if i != -1 and j > i:
+            try:
+                o = json.loads(t[i:j + 1])
+                if isinstance(o, dict) and isinstance(o.get("replies"), list):
+                    return o["replies"]
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return None
+
+
+def run_claude(prompt, model="claude", timeout=120):
+    """Invoke the contract-tested claude -p command (gate: plan-mode read-only +
+    json output-format; model JSON lands in the 'result' wrapper, parsed liberally)."""
+    cmd = [_claude_bin(), "-p", "--no-session-persistence", "--permission-mode", "plan",
+           "--strict-mcp-config", "--output-format", "json"]
+    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "claude -p failed")
+    replies = _extract_replies(proc.stdout.strip())
+    if replies is None:
+        raise RuntimeError("could not parse replies from: " + proc.stdout.strip()[:300])
+    return replies
+
+
 def handle_due_trigger(me, trigger, records, dry_run, model):
-    log(me, "seq {0}: WOULD respond (draft not wired yet — Task 7)".format(trigger["seq"]))
+    set_responder_cursor(me, max(responder_cursor(me), trigger["seq"]))  # consume before draft
+    try:
+        replies = run_claude(build_prompt(me, trigger, records), model)
+    except Exception as exc:
+        log(me, "seq {0}: backup-failed — {1}".format(trigger["seq"], exc))
+        office_bus.cmd_append("system", "all", "activity", "null",
+                              "[responder] backup-failed for {0} seq {1}".format(me, trigger["seq"]))
+        return
+    if not replies:
+        log(me, "seq {0}: model chose no reply".format(trigger["seq"]))
+        return
+    for rep in replies[:2]:
+        try:
+            body = format_backup_reply(me, rep.get("class", ""), rep.get("msg", ""))
+        except ValueError as e:
+            log(me, "seq {0}: bad reply class — {1}".format(trigger["seq"], e))
+            continue
+        if dry_run:
+            log(me, "seq {0}: DRY-RUN would post to {1}: {2}".format(trigger["seq"], rep.get("to"), body))
+        else:
+            post_reply(me, rep.get("to"), body, trigger, records)
+
+
+def post_reply(me, to, body, trigger, records):
+    log(me, "posting not enabled yet (Task 8)")
