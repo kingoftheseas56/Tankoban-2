@@ -1,97 +1,155 @@
-# THE OFFICE — Owned-Worker Responder (the idle-agent cure) — design spec
+# THE OFFICE — Owned-Worker Responder (the idle-agent cure) — design spec (v2)
 
-**Date:** 2026-05-31
+**Date:** 2026-05-31 (v1 brainstormed; **v2 = this revision**)
 **Author:** Agent 0 (brainstormed live with Hemanth)
-**Status:** Design ratified in brainstorm; awaiting written-spec review → Agent 7 feasibility review → implementation plan
-**Part of:** the owned-worker model in `2026-05-31-the-office-app-design.md` (spec v2, §3 capability contract / Slice 2A) — this is the **narrow first cure**, not the full autonomous-worker build.
+**Status:** v2 — incorporates Agent 7 (Codex) feasibility review (`a23225d`, `agents/audits/owned_worker_responder_feasibility_2026-05-31.md`). Awaiting written-spec review → implementation plan (gated by the `claude -p` contract test, §7).
+**Part of:** the owned-worker model in `2026-05-31-the-office-app-design.md` (spec v2). This is the **narrow first cure** — a reliable coordination responder, not a full autonomous worker.
+
+> **What changed in v2 (Agent 7's review):** the core idea holds — a reply-only fallback responder is the right first cure — but four things were too optimistic and are now fixed: (1) the silence check was semantically wrong (coarse "any post" drops real unanswered messages → now **target-aware**); (2) the responder would fight the tab over the shared read-cursor → now **separate cursor state**; (3) `claude -p` was assumed to be a `codex exec` twin — his live on-machine smoke proved it isn't → now **contract-test-gated before any build**; (4) a backup posting *as* the brother could commit him to decisions he never made → now **non-binding typed replies**. Plus a pre-send race recheck, deterministic `@all` gating, and recorded backup-failure events.
 
 ---
 
 ## 1. The problem this cures
 
-Every "agent X non-responsive" Hemanth hit this session (Agent 4 ×2, Agent 1 ×2) has one root: **a Claude tab that goes idle cannot be guaranteed to wake or respond.** The watch dies (5-min Monitor timeout, context compaction, closed tab), or the brother is heads-down on deep work and never circles back to a coordination message. The coordinator (Agent 0) can nudge but cannot *force* a tab awake. It's worst when an owner delegates then goes idle, stranding a collaborator (the Agent 1 → Agent 2 handoff, this session).
+Every "agent X non-responsive" Hemanth hit this session (Agent 4 ×2, Agent 1 ×2) has one root: **a Claude tab that goes idle cannot be guaranteed to wake or respond.** The watch dies (Monitor timeout, context compaction, closed tab), or the brother is heads-down and never circles back to a coordination message. The coordinator can nudge but cannot *force* a tab awake. Worst when an owner delegates then goes idle, stranding a collaborator (the Agent 1 → Agent 2 handoff this session).
 
-The proven cure already exists for one engine: **Agent 7's headless bridge** (`codex_agent7_bridge.py`, merged `f69e3b8`) — an *owned worker*, a process we control that auto-wakes reliably via `codex exec`, instead of a tab we hope responds. This spec brings that reliability to the **Claude brothers**.
+The proven cure exists for one engine: **Agent 7's headless bridge** (`codex_agent7_bridge.py`, `f69e3b8`) — an owned worker, a process we control that auto-wakes via `codex exec`. This brings that reliability to the **Claude brothers**.
 
-**Scope (deliberately narrow — Hemanth chose "reliable responder first," YAGNI):** a guaranteed *coordination responder*, NOT a full autonomous worker. It answers coordination/handoff/ack messages reliably; it does NOT do deep autonomous code work (that's a later slice). The interactive tab stays the place for hands-on deep work.
+**Scope (narrow — Hemanth chose "reliable responder first," YAGNI):** a guaranteed *coordination responder*, NOT an autonomous worker. It answers coordination/handoff/ack messages reliably; it does NOT do deep code work, commit, or mutate the repo. The interactive tab stays the place for hands-on work.
 
 ---
 
-## 2. The model: Fallback safety-net (Hemanth's Rule-14 call to Agent 0)
+## 2. The model: Fallback safety-net, TARGET-AWARE (v2)
 
-The headless worker is a **backup**, not a replacement. The real brother (in his tab) gets first crack at every coordination message; the worker only steps in if the brother stays silent.
+The headless worker is a **backup**, not a replacement. The real brother (in his tab) answers first; the worker steps in only if that *specific* message goes unanswered.
 
-**Why this is the most reliable option** (the chosen criterion): it's the only one that *guarantees a reply* (the backup always catches a dropped message) AND keeps replies *high-quality* (the real brother, with full mid-task context, answers first when present). It catches BOTH failure modes seen this session — the dead watch *and* the "saw it, didn't reply" case (Agent 4) — because the trigger is the brother's *silence*, not his watch state.
+**Why Fallback is the most reliable option** (Hemanth's criterion): it's the only one that *guarantees a reply* AND keeps replies high-quality (the real brother, full context, answers first). It catches both failure modes seen this session — the dead watch *and* "saw it, didn't reply" (Agent 4).
 
-**The fallback signal is simple and robust:** after a message addressed to Agent N lands (seq X), the worker waits `FALLBACK_WINDOW` (~60s) and checks one thing: *did Agent N post anything after seq X?* If yes → the real brother handled it, the worker stays silent. If no → the worker answers. No cursor games, no double-posting (the worker speaks only when the tab didn't).
+**v2 fix — the trigger is per-message, not per-agent.** Each candidate trigger is tracked as a record: `{trigger_seq, from_sender, target, text_hash}`. After the `FALLBACK_WINDOW` (~60s), the worker suppresses the trigger ONLY IF one of these is true:
+- Agent N posted a **chat** message (not activity/blocker-to-someone-else) after `trigger_seq` that **plausibly answers that sender/thread** (heuristic: addressed back to `from_sender`, or references the thread), OR
+- the trigger was **explicitly cleared** by the tab (best version: lightweight bus metadata `reply_to_seq` / `handled_seq` — see §4/§9; until that exists, conservative heuristics + err toward a non-binding backup reply).
+
+A bare "Agent N posted *something*" no longer counts — an unrelated RTC, broadcast, or reply-to-another-agent must NOT suppress a real unanswered direct request (Agent 7, HIGH risk).
+
+**Pre-send recheck (v2 fix — the second-61 race):** immediately before `send`, re-read the bus tail and run the same target-aware check again. If the tab answered while `claude -p` was drafting, drop the reply. This closes the race the Codex bridge never had (it has no fallback window).
 
 ---
 
 ## 3. Architecture
 
-A single generalized script — `scripts/office/office_responder.py` — parameterized by agent number, one instance per brother. ~80% a generalization of `codex_agent7_bridge.py` (swap `codex exec` → `claude -p`; add the fallback-window check).
+A single generalized script — `scripts/office/office_responder.py` — parameterized by agent number, one instance per brother. Generalizes `codex_agent7_bridge.py`; treats the Claude driver as a **new** driver (not a flag-rename of `codex exec`).
 
 **Per-brother loop:**
-1. **Identity:** join a dedicated session (`responder-agentN` → `agentN`), guard `whoami == agentN` (refuse to run on mismatch — the cardinal safety rule from the Codex bridge).
-2. **Watch:** poll the bus for messages addressed to Agent N (direct or `@all`), not from Agent N, not wake/activity lines.
-3. **Fallback window:** on a trigger at seq X, record it and wait `FALLBACK_WINDOW` (~60s).
-4. **Silence check:** has Agent N posted anything with seq > X? **Yes** → drop the trigger, the brother handled it. **No** → proceed.
-5. **Draft:** invoke `claude -p` (headless, read-only tools, structured-output) with: the unanswered message(s), recent room context, and reply-only instructions. The worker may read repo files + the bus to answer well (claude -p has tool access, like `codex exec`).
-6. **Post:** structured reply → `office_bus.py send responder-agentN @target "[auto — AgentN's tab was idle] <reply>"` — posts only as Agent N, **marked** as a backup reply (§4).
-7. **Mark seen** before drafting (loop-safety): the trigger is consumed once even if `claude -p` fails (logged, no infinite retry).
+1. **Identity:** join a dedicated session `responder-agentN` (guard `whoami == agentN`, refuse on mismatch). Posting maps `from=agentN`.
+2. **Separate cursor (v2 fix):** the responder keeps its OWN read state — `.bus_responder_cursors/agentN.seq` (or `mark-seen responder-agentN`), **never** `mark-seen agentN`. The tab's `deliver`/`drain` own the real `agentN` cursor; the responder must not advance it or it hides messages from the live tab (Agent 7, MED-HIGH risk).
+3. **Watch + deterministic prefilter (v2 fix):** poll for messages addressed to Agent N. **Direct** messages are candidates. **`@all`** messages are candidates ONLY if they deterministically pass a gate *before* any model call — explicit "@agentN" mention, a trailing `?`, an ACK-request token, or a narrow coordination pattern — so one broadcast doesn't fan out into N paid `claude -p` calls + N backups (Agent 7, MED risk).
+4. **Fallback window:** record the candidate trigger; wait `FALLBACK_WINDOW` (~60s).
+5. **Target-aware silence check (§2):** suppress if the brother plausibly answered *that thread*; else proceed.
+6. **Draft:** invoke `claude -p` (the contract-tested command, §7) with a minimal Python-assembled context packet (the unanswered message + thread + reply-class instructions). Minimal prompt — cost/latency is real (§7).
+7. **Pre-send recheck (§2):** re-run the target-aware check on fresh bus tail; abort if answered.
+8. **Post:** structured reply → `office_bus.py send responder-agentN @target "<non-binding, marked reply>"` (§4).
+9. **Loop-safety + failure honesty (v2):** mark the trigger consumed in the responder's OWN cursor before drafting (no infinite retry). If `claude -p` times out / fails, **record a `backup-failed for seq X` activity event** — a "guaranteed responder" must not silently drop the safety-net reply (Agent 7, MED risk).
 
-**Driver:** `claude -p "<prompt>"` (Claude Code headless print mode) is the chosen mechanism — the direct Claude equivalent of `codex exec`: one binary, tool access, no API-key plumbing, no desktop. (Alternatives considered: Agent SDK — heavier; raw Anthropic API — loses repo/tool access. `claude -p` is the cleanest mirror of the proven pattern.)
-
-**Headless:** no window, no SendKeys, no desktop — same as the fixed Codex bridge.
-
----
-
-## 4. Honesty (non-negotiable)
-
-A backup reply is **explicitly marked** — prefix `[auto — AgentN's tab was idle]` (or similar) — so Hemanth and the brothers know it's the safety net, not the man himself. The real brother **confirms or course-corrects** when he resurfaces. The room never pretends the backup is the real brother. Ties to the brotherhood's no-overclaim DNA (`feedback_no_overclaim_in_rtc`) and the status-honesty principle (the Office spec §2.1).
-
-The backup answers *helpfully* but with appropriate humility on substantive calls: for a simple ack/coordination it just handles it; for a domain decision it gives its best read AND flags it for the owner's confirmation (rather than committing the brother to a position he didn't take).
+**Headless:** no window, no SendKeys, no desktop.
 
 ---
 
-## 5. Safety (mirrored from the Codex bridge — proven)
+## 4. Honesty — non-binding, typed (v2)
 
-- **Posts only as Agent N** (identity-guarded; the fake-hemanth class of bug is structurally impossible).
-- **Loop-guarded:** ignores its own posts, filters wake/activity/marker lines, marks-seen-before-drafting.
-- **Single-instance lock** per agent (no two responders on one identity → no double-post).
-- **Reply-only:** it coordinates; it does NOT do deep autonomous code work, commit, or mutate the repo. `claude -p` runs with read-only / limited tools.
-- **Conservative trigger:** reply only when *useful* (don't ack every `@all` broadcast); the fallback window already filters to genuinely-unanswered messages.
+A backup reply appears under `from=agentN`, so a bare honesty prefix is **not enough** — it can be quoted later as the brother's position (Agent 7, HIGH risk). v2 rules:
+
+- **Marker:** every backup reply is prefixed `[auto — AgentN's tab idle]` (text-level honesty now; **bus-schema metadata** `kind:"auto_reply"` + `{backup_for, trigger_seq}` is the proper fix, planned as a fast-follow so the roster/UI can style/filter backups — §9).
+- **Typed reply classes** — the backup must classify its reply and stay within authority:
+  - `ack` — simple acknowledgement / "received."
+  - `handoff` — routes/forwards, no decision.
+  - `clarifying_question` — asks rather than answers.
+  - `nonbinding_assessment` — "backup read: … — owner to confirm." NEVER stated as the brother's decision.
+  - `decline_owner_confirmation_required` — for domain/implementation calls the backup must NOT make: "Agent N is away; I won't commit him to this — flagging for his return."
+- **Hard rule:** the backup **never** commits Agent N to a domain decision, an implementation promise, or a position the real brother didn't take. On anything substantive it gives a non-binding read + defers to the owner.
+
+---
+
+## 5. Safety (mirrored from the Codex bridge + v2 additions)
+
+- **Posts only as Agent N** (identity-guarded; fake-hemanth-class bug structurally impossible).
+- **Loop-guarded:** ignores its own posts, filters wake/activity/marker lines, marks-seen-before-drafting (in the *responder* cursor).
+- **Single-instance lock** per agent, with **stale-lock recovery** (Agent 7, LOW risk — the lock + bus append-lock suffice against same-identity double-process; tab-vs-responder is a *semantic* race handled by §2's pre-send recheck, not a file lock).
+- **Reply-only:** no deep work, no commit, no repo mutation. `claude -p` runs read-only with a locked tool surface (§7).
+- **Backup-failure is recorded, not silent** (§3.9).
 
 ---
 
 ## 6. What this is NOT (deferred)
 
-- **Not** a replacement for the interactive tab — the tab stays for hands-on deep work.
-- **Not** an autonomous worker that does code/build work on its own — that's the full owned-worker slice (Slice 2A, foreman territory), explicitly later.
-- **Not** the heartbeat/status feature (already shipped) — this is the *response guarantee*; the heartbeat is the *visibility*. They're complementary.
+Not a tab replacement; not an autonomous worker (Slice 2A); not the heartbeat/status feature (already shipped — that's *visibility*, this is the *response guarantee*).
 
 ---
 
-## 7. Open items (carry into planning / review)
+## 7. The `claude -p` contract test — GATING (v2, Agent 7's key finding)
 
-- **`FALLBACK_WINDOW` value:** ~60s default (real brothers take ~30-90s to wake+draft). Tune in the plan.
-- **`claude -p` invocation specifics:** exact flags for headless + read-only tools + structured output (mirror the Codex bridge's `codex exec -s read-only --output-schema`). Verify `claude -p` supports an output-schema / reliable JSON; if not, parse defensively.
-- **Cost:** each fallback fire = one `claude -p` call (Claude quota). The fallback window + useful-only filter keep it low. Note in the plan.
-- **Per-brother rollout:** which brother first (Agent 4 or Agent 1 — the two that stranded collaborators), then generalize.
-- **Tab/responder cursor sharing:** the responder uses its OWN session/cursor (`responder-agentN`), separate from the tab's watch cursor, so they don't fight. Confirm in the plan.
+**We do NOT assume `claude -p` ≈ `codex exec`.** Agent 7's live on-machine smoke found: `--json-schema --output-format json` returned a free-form `result` string (not a clean `structured_output`); a project hook attempted an MCP memory search **despite `--tools ""`**; a `--bare --strict-mcp-config` run timed out at 120s. The flags exist (`--print/-p`, `--json-schema`, `--permission-mode`, `--tools`, `--disallowedTools`, `--strict-mcp-config`, `--no-session-persistence`, `--bare`) — but the **exact working contract is unproven.**
+
+**Therefore the implementation plan's FIRST task is a contract-test spike** (no responder logic until it passes). Acceptance criteria:
+- exits 0 in this repo with no interactive prompts;
+- **no file writes**; no Bash/Edit/Write tools available;
+- **no inherited MCP/hooks** fire unless deliberately allowed;
+- returns a **parseable, validated** `{"replies":[...]}` object;
+- schema-validation failure is detectable + logged;
+- timeout path records a backup-failed event without retry storms.
+
+**Recommended starting command** (subject to the smoke; Agent 7's shape):
+```
+claude -p --no-session-persistence --permission-mode default \
+  --tools "" --disallowedTools "Edit,Write,Bash" --strict-mcp-config \
+  --json-schema "<reply schema>" --output-format json "<minimal prompt>"
+```
+If repo reads aren't needed, prefer `--tools ""` and put everything in the Python context packet. If hooks/MCP still leak, use a temporary `--settings` profile or investigate `--bare` — **do not hand-wave it.**
+
+**Fallback mechanism:** if the CLI contract can't be made clean/reliable, **switch to the Claude Agent SDK** (typed options, programmatic structured output with success/error subtypes, no CLI text-scraping). Agent 7's note: the SDK is the better long-term substrate once the Office host owns worker lifecycle beyond reply-only — but `claude -p` is acceptable for the first pilot *if and only if* the contract test passes.
 
 ---
 
-## 8. Path
+## 8. Build order — dry-run first (v2, Agent 7's recommended shape)
 
-Spec review (Hemanth) → **Agent 7 feasibility review** (his standing role — and this is squarely the owned-worker/cross-engine territory he flagged as the architecturally-hard part; his own bridge is the template) → implementation plan → build (per-brother, starting with one).
+Pilot ONE brother (Agent 4 or Agent 1 — the two that stranded a collaborator this session):
+1. **Contract test** (§7) — gate. Must pass (or pivot to SDK) before anything else.
+2. **Deterministic watcher + pending-trigger state** — finds candidates, records trigger records, posts NOTHING.
+3. **Fallback timer + target-aware silence checks** — logs would/wouldn't-post decisions (still dry-run).
+4. **`claude -p` draft in dry-run** — logs the reply object + the reason, no posting.
+5. **Enable posting** — with the honesty marker, typed reply class, and the pre-send recheck.
+
+Each stage is verifiable before the next. Posting is the *last* thing turned on.
 
 ---
 
-## 9. References
+## 9. Open items (carry into planning)
 
-- Template: `scripts/office/codex_agent7_bridge.py` (the proven headless owned-worker, `f69e3b8`)
-- Parent: `docs/superpowers/specs/2026-05-31-the-office-app-design.md` (spec v2 — owned-worker model, capability contract)
-- Agent 7's review that named owned-workers the hard part: `agents/audits/the_office_app_feasibility_review_2026-05-31.md`
-- Memories: `project_the_office_live_agent_bus`, `feedback_no_reset_hard_on_shared_tree`, `feedback_no_overclaim_in_rtc`
+- **`FALLBACK_WINDOW`:** ~60s default; but cost/latency is real — a 60s window + a ~34-90s `claude -p` call = **90-150s** total response in the common case (Agent 7, MED). Not instant; tune + keep prompts minimal.
+- **Target-aware "plausibly answered" heuristic:** exact rule (addressed-back-to-sender / thread-reference) — specify in the plan; the clean version needs the bus `reply_to_seq` metadata below.
+- **Bus-schema metadata (fast-follow):** add `reply_to_seq`/`handled_seq` (for target-aware clearing) + `kind:"auto_reply"`/`backup_for` (for honesty + UI styling). If out of scope for the pilot, prefix-only now + schema metadata as the immediate next step.
+- **Which brother first:** Agent 4 or Agent 1.
+- **Agent SDK vs `claude -p`:** decided by the §7 contract test.
+
+---
+
+## 10. Decisions + why (v1 + v2)
+
+**v1:** narrow reply-only responder; Fallback safety-net model (most reliable per Hemanth's criterion); `claude -p` as the Claude equivalent of `codex exec`; honesty marker.
+
+**v2 (from Agent 7's review):**
+- **Target-aware fallback** — coarse "any post" drops real unanswered messages; track per-message + plausibly-answered + pre-send recheck.
+- **Separate responder cursor** — never `mark-seen agentN`; use a responder-namespaced cursor so the tab isn't starved.
+- **`claude -p` is contract-test-gated** — his live smoke proved it's not a `codex exec` twin; prove the exact command (or pivot to Agent SDK) before building.
+- **Non-binding typed replies** — posting as Agent N can commit him; reply classes + "owner to confirm" + never-commit rule.
+- **Pre-send recheck, deterministic `@all` gate, recorded backup-failures, dry-run-first build order.**
+
+---
+
+## 11. References
+
+- Agent 7 review: `agents/audits/owned_worker_responder_feasibility_2026-05-31.md` (`a23225d`)
+- Template: `scripts/office/codex_agent7_bridge.py` (`f69e3b8`)
+- Parent: `docs/superpowers/specs/2026-05-31-the-office-app-design.md` (owned-worker model)
+- Claude Code docs (Agent 7-checked): cli-usage, permission-modes, agent-sdk/overview, agent-sdk/structured-outputs (code.claude.com/docs)
 - Existing: `scripts/office/office_bus.py`, `office_watch.sh`, `office_status.py`
+- Memories: `project_the_office_live_agent_bus`, `feedback_no_overclaim_in_rtc`, `feedback_no_reset_hard_on_shared_tree`
