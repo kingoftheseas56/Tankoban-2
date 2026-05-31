@@ -13,8 +13,9 @@ _NOISE = re.compile(r"\b(tpb|hc|hardcover|paperback)\b", re.IGNORECASE)
 def normalize_title(title: str) -> str:
     if not title:
         return ""
-    t = title.split(":")[0]          # drop subtitle after first colon
-    t = _PUNCT.sub(" ", t)
-    t = _NOISE.sub("", t)
+    # Punctuation (incl. ':' '(' ')' '.') -> space; do NOT truncate at the colon
+    # (an edition title like "Invincible: Compendium One" must keep both halves).
+    t = _PUNCT.sub(" ", title)
+    t = _NOISE.sub(" ", t)
     t = _WS.sub(" ", t).strip().lower()
     return t

@@ -11,14 +11,17 @@ Tier: lower = stronger collected-edition signal. 99 = single issue / unknown
 import re
 
 # Ordered by signal strength. First match wins.
+# Non-letter lookarounds (NOT \b): RCO labels prefix collected editions with an
+# underscore, e.g. "_TPB 25", "_The Lost Year Compendium" — and "_" is a word
+# char, so \b would NOT fire before it. Lookarounds on [a-zA-Z] match regardless.
 _RULES = [
-    (re.compile(r"\bcompendium\b", re.I), 0),
-    (re.compile(r"\bomnibus\b", re.I), 1),
-    (re.compile(r"\b(tpb|trade paperback|complete collection)\b", re.I), 2),
-    (re.compile(r"\b(deluxe|absolute|library edition)\b", re.I), 3),
-    (re.compile(r"\bvol\.?\b|\bvolume\b", re.I), 4),  # ambiguous, soft-collected
+    (re.compile(r"(?<![a-z])compendium(?![a-z])", re.I), 0),
+    (re.compile(r"(?<![a-z])omnibus(?![a-z])", re.I), 1),
+    (re.compile(r"(?<![a-z])(?:tpb|trade paperback|complete collection)(?![a-z])", re.I), 2),
+    (re.compile(r"(?<![a-z])(?:deluxe|absolute|library edition)(?![a-z])", re.I), 3),
+    (re.compile(r"(?<![a-z])(?:vol\.?|volume)(?![a-z])", re.I), 4),  # ambiguous, soft-collected
 ]
-_ISSUE = re.compile(r"\bissue\b|#\s*\d", re.I)
+_ISSUE = re.compile(r"(?<![a-z])issue(?![a-z])|#\s*\d", re.I)
 
 
 def edition_tier(label: str) -> int:
