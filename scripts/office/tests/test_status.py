@@ -104,11 +104,34 @@ def test_roster_cli():
         check(need <= keys, "cli: each entry has all canonical keys")
 
 
+def _sandbox_env():
+    sand = tempfile.mkdtemp()
+    env = dict(os.environ)
+    env["OFFICE_DIR"] = sand
+    env["OFFICE_BUS"] = os.path.join(sand, "bus.jsonl")
+    env["OFFICE_CURSORS"] = os.path.join(sand, "cursors")
+    env["OFFICE_SESSIONS"] = os.path.join(sand, "sessions.json")
+    return env
+
+
+def test_flag_subcommand():
+    env = _sandbox_env()
+    BUS_PY = os.path.join(HERE, "..", "office_bus.py")
+    subprocess.run([sys.executable, BUS_PY, "join", "sess-b", "4"], env=env)
+    subprocess.run([sys.executable, BUS_PY, "flag", "sess-b", "blocked on HTTP preload"], env=env)
+    with open(env["OFFICE_BUS"], encoding="utf-8") as f:
+        rec = json.loads([x for x in f if x.strip()][-1])
+    check(rec["kind"] == "blocked", "flag: posts kind=blocked")
+    check(rec["from"] == "agent4" and rec["to"] == "all", "flag: from resolved, to=all")
+    check(rec["msg"] == "blocked on HTTP preload", "flag: message body intact")
+
+
 def main():
     test_parse_agent_commits()
     test_bus_activity()
     test_compute_roster()
     test_roster_cli()
+    test_flag_subcommand()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 

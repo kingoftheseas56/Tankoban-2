@@ -200,11 +200,12 @@ function render(msgs){
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
   for (const m of msgs){
     const me = (m.from === 'hemanth');
+    const kind = m.kind || 'chat';
     const grouped = (m.from === lastFrom);
     const col = colorFor(m.from);
     const time = (m.ts || '').replace('T', ' ').slice(11, 16);
     const row = document.createElement('div');
-    row.className = 'row' + (me ? ' me' : '') + (grouped ? ' grouped' : '');
+    row.className = 'row' + (me ? ' me' : '') + (grouped ? ' grouped' : '') + (kind !== 'chat' ? ' k-' + kind : '');
     const avatar = me ? '' :
       '<div class="avatar" style="background:' + col + '">' + esc(initialFor(m.from)) + '</div>';
     const nameHtml = grouped ? '' :

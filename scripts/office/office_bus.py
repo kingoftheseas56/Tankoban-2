@@ -216,6 +216,15 @@ def cmd_send(sid, to_raw, msg):
     cmd_append(frm, to, "chat", "null", msg)  # prints seq
 
 
+def cmd_flag(sid, msg):
+    """Post a BLOCKER to the room (the honesty / real-talk lane): kind='blocked',
+    to='all', so it surfaces distinctly + marks the brother blocked in the roster."""
+    frm = _agent_for(sid)
+    if not frm:
+        sys.exit("office flag: tab not registered — run office_join first")
+    cmd_append(frm, "all", "blocked", "null", msg)  # prints seq
+
+
 import re
 
 # Auto-detect agent number from a wake-prompt / explicit "I am agent N" line.
@@ -400,7 +409,7 @@ def cmd_close():
 
 def main(argv):
     if not argv:
-        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|deliver|close> ...")
+        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|deliver|drain|watch-peek|mirror-commit|close> ...")
     cmd, rest = argv[0], argv[1:]
     if cmd == "append":
         cmd_append(*rest)
@@ -416,6 +425,8 @@ def main(argv):
         cmd_cursor(*rest)
     elif cmd == "send":
         cmd_send(*rest)
+    elif cmd == "flag":
+        cmd_flag(*rest)
     elif cmd == "deliver":
         cmd_deliver()
     elif cmd == "drain":
