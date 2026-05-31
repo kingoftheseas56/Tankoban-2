@@ -92,6 +92,23 @@ def format_backup_reply(me, reply_class, body):
     return "{0} {1}".format(prefix, body)
 
 
+def _responder_hb_path(me):
+    return os.path.join(office_bus._dir(), ".office_responder_heartbeats", me + ".beat")
+
+
+def responder_heartbeat(me):
+    """Touch this brother's responder-beat file each loop. The roster reads its
+    freshness to show 'backup armed' — so the net being live is VISIBLE, the same
+    way the watch heartbeat shows the wake channel is alive."""
+    p = _responder_hb_path(me)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
 def _responder_cursor_path(me):
     return os.path.join(office_bus._dir(), ".bus_responder_cursors", me + ".seq")
 
@@ -149,6 +166,7 @@ def run(me, dry_run=True, model="claude", once=False, window=FALLBACK_WINDOW):
     log(me, "fallback responder live (dry_run={0}, window={1}s) from seq {2}".format(dry_run, window, last))
     pending = []  # list of (trigger, due_epoch)
     while True:
+        responder_heartbeat(me)   # prove the backup net is watching this brother
         now = int(time.time())
         records = _bus_records()
         for t in find_candidates(records, me, last):

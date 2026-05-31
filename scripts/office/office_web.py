@@ -102,6 +102,7 @@ PAGE = """<!doctype html>
   .chip{font-size:11px;padding:1px 8px;border-radius:10px;font-weight:600;flex:0 0 auto;}
   .chip.blocked{background:var(--red);color:#0B141A;}
   .chip.nudge{background:#3B4A54;color:var(--txt2);}
+  .chip.backup{background:#10403A;color:var(--green);}
   .wk{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:600;flex:0 0 auto;}
   .wk svg{width:13px;height:13px;}
   .wk.live{color:var(--green);}
@@ -368,6 +369,9 @@ function renderRoster(list){
     const arc = r.current_arc ? '<span class="rarc">#' + esc(r.current_arc) + '</span>' : '';
     const nudge = r.wakeable ? '' : '<span class="chip nudge" title="not auto-wakeable">nudge</span>';
     const blocked = r.blocked ? '<span class="chip blocked">blocked</span>' : '';
+    // backup net: an owned-worker responder is watching this brother — a dropped
+    // message still gets a marked, non-binding reply even when his tab is dark.
+    const backup = r.responder_alive ? '<span class="chip backup" title="backup responder armed — a dropped message still gets a marked, non-binding reply">backup</span>' : '';
     // wake channel: live (watch beating) vs DOWN (deaf — can't be auto-woken)
     let wake;
     if (r.wake_state === 'live')
@@ -383,7 +387,7 @@ function renderRoster(list){
       '<div class="rmeta">' +
         '<div class="rtop"><span class="rname">' + esc(labelFor(r.agent)) + '</span>' +
           '<span class="rrole">' + esc(r.role) + '</span><span class="rtime">' + t + '</span></div>' +
-        '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + wake + '</div>' +
+        '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + backup + wake + '</div>' +
         '<div class="rstatus ' + (r.status || 'cold') + '">' + esc(r.status_label || '') + '</div>' +
       '</div>';
     rlist.appendChild(card);

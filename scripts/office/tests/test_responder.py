@@ -91,6 +91,17 @@ def test_responder_cursor():
     check(os.path.exists(own), "cursor: responder writes its OWN namespaced cursor")
 
 
+def test_responder_heartbeat():
+    sand = tempfile.mkdtemp()
+    os.environ["OFFICE_DIR"] = sand
+    me = "agent3"
+    R.responder_heartbeat(me)
+    p = os.path.join(sand, ".office_responder_heartbeats", "agent3.beat")
+    check(os.path.exists(p), "heartbeat: responder writes its own beat file")
+    with open(p, "r", encoding="utf-8") as f:
+        check(f.read().strip().isdigit(), "heartbeat: beat file holds an epoch int (roster reads its freshness)")
+
+
 def _sandbox_env():
     sand = tempfile.mkdtemp()
     os.environ["OFFICE_DIR"] = sand
@@ -125,6 +136,7 @@ def main():
     test_is_candidate()
     test_format_backup_reply()
     test_responder_cursor()
+    test_responder_heartbeat()
     test_post_reply_and_recheck()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)

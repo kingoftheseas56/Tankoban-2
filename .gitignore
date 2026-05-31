@@ -130,7 +130,10 @@ agents/.office_nudged/
 agents/.office_heartbeats/
 agents/.bus_responder_cursors/
 agents/.responder_*.lock/
+agents/.office_responder_heartbeats/
+agents/.office_responder_pids
 agents/bus_archive/*.jsonl
+scripts/office/responder_*.log
 .claude/.office_sessions.json
 
 # Root-level scratch convention (NOT the agent-scratch _*.{ext} convention above).

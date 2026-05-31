@@ -71,7 +71,10 @@ def test_compute_roster():
     # heartbeats: agent4's watch is live (beat 5s ago), agent1's is dead (beat 900s
     # ago), agent7 has no entry at all (never clocked in).
     heartbeats = {"agent4": 5, "agent1": 900}
-    roster = office_status.compute_roster(commits, busby, now, heartbeats, presence_window=1800)
+    # responder net: armed + watching agent4 (beat 4s ago); not armed for anyone else.
+    responder_hb = {"agent4": 4}
+    roster = office_status.compute_roster(commits, busby, now, heartbeats, presence_window=1800,
+                                          responder_hb_by_agent=responder_hb)
     by = {r["agent"]: r for r in roster}
     check(by["agent4"]["present"] is True, "roster: agent4 present (recent msg+commit)")
     check(by["agent4"]["current_arc"] == "NETSEAM", "roster: agent4 arc")
@@ -88,6 +91,9 @@ def test_compute_roster():
     check(by["agent7"]["wake_alive"] is False, "roster: agent7 wake dead (no heartbeat = never clocked in)")
     check(by["agent7"]["wake_state"] == "unknown", "roster: agent7 wake_state UNKNOWN (no beat, not 'down')")
     check(by["agent7"]["wake_age_sec"] is None, "roster: agent7 wake age None (no beat)")
+    check(by["agent4"]["responder_alive"] is True, "roster: agent4 responder armed (beat 4s)")
+    check(by["agent1"]["responder_alive"] is False, "roster: agent1 NO responder (no responder beat)")
+    check(by["agent7"]["responder_alive"] is False, "roster: agent7 NO responder (none armed)")
     check(by["agent4"]["status"] == "active", "roster: agent4 status=active (said 120s)")
     check(by["agent4"]["status_label"] == "active · said 2m ago",
           "roster: agent4 honest label (wake live -> no warning)")
@@ -119,8 +125,9 @@ def test_roster_cli():
     if data:
         keys = set(data[0].keys())
         need = {"agent", "role", "engine", "wakeable", "present", "wake_alive",
-                "wake_state", "wake_age_sec", "status", "status_label", "current_arc",
-                "last_said", "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
+                "wake_state", "wake_age_sec", "responder_alive", "status", "status_label",
+                "current_arc", "last_said", "last_said_sec", "last_commit", "last_commit_sec",
+                "blocked"}
         check(need <= keys, "cli: each entry has all canonical keys")
 
 
