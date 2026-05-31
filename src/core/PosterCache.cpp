@@ -26,9 +26,11 @@ QPixmap PosterCache::get(const QString& key) const
     QMutexLocker locker(&m_mutex);
     const auto it = m_cache.constFind(key);
     if (it == m_cache.constEnd()) {
+        ++m_misses;
         return {};
     }
 
+    ++m_hits;
     touchLocked(key);
     return it.value();
 }
@@ -41,6 +43,7 @@ void PosterCache::put(const QString& key, const QPixmap& pixmap)
 
     QMutexLocker locker(&m_mutex);
     m_cache.insert(key, pixmap);
+    ++m_puts;
     touchLocked(key);
     trimLocked();
 }
@@ -131,5 +134,19 @@ void PosterCache::trimLocked()
     while (m_lruOrder.size() > kCapacity) {
         const QString oldest = m_lruOrder.takeFirst();
         m_cache.remove(oldest);
+        ++m_evictions;
     }
+}
+
+PosterCache::Stats PosterCache::stats() const
+{
+    QMutexLocker locker(&m_mutex);
+    Stats s;
+    s.hits      = m_hits;
+    s.misses    = m_misses;
+    s.evictions = m_evictions;
+    s.puts      = m_puts;
+    s.size      = m_cache.size();
+    s.capacity  = kCapacity;
+    return s;
 }

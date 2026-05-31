@@ -167,6 +167,7 @@
 //   tankoctl jsonstore-set <path> <jsonObject>     (WRITE flag)
 //   tankoctl cache-list
 //   tankoctl cache-clear <layer>                   (WRITE flag)
+//   tankoctl cache-get-stats                       (poster LRU hits/misses/evictions/hit_rate)
 //   tankoctl scanner-get-status
 //   tankoctl scanner-list-watched
 //   tankoctl log-tail <component> [n]              (sidecar|telemetry|events|ipc|tankoctl)
@@ -1561,6 +1562,7 @@ int main(int argc, char** argv)
                || sub == QLatin1String("app-get-window-list")
                || sub == QLatin1String("app-get-shortcut-table")
                || sub == QLatin1String("cache-list")
+               || sub == QLatin1String("cache-get-stats")
                || sub == QLatin1String("scanner-get-status")
                || sub == QLatin1String("scanner-list-watched")
                || sub == QLatin1String("theme-get-palette")

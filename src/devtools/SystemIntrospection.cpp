@@ -2,6 +2,7 @@
 
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
+#include "core/PosterCache.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
@@ -212,9 +213,10 @@ QStringList SystemIntrospection::commandList()
         // jsonstore-* (2)
         QStringLiteral("jsonstore_get"),
         QStringLiteral("jsonstore_set"),
-        // cache-* (2)
+        // cache-* (3)
         QStringLiteral("cache_clear"),
         QStringLiteral("cache_list"),
+        QStringLiteral("cache_get_stats"),
         // scanner-* (2)
         QStringLiteral("scanner_get_status"),
         QStringLiteral("scanner_list_watched"),
@@ -539,6 +541,37 @@ bool SystemIntrospection::handleCache(const QString& cmd, const QJsonObject& p, 
             result["reason"] = QStringLiteral("layer lacks public clear API in v1.9 — see cache-list note");
         }
         mergeReply(r, result);
+        return true;
+    }
+
+    if (cmd == QLatin1String("cache_get_stats")) {
+        // v1.11 (TANKOCTL_TEST_HARNESS P2): real poster-cache hit/miss counters,
+        // closing one of the v1.9 deferred-12 (cache-list still notes "no public
+        // accessor" for the other layers — only the poster LRU is wired here).
+        //
+        // COUNTING SEMANTIC (honest caveat for test authors): counters are
+        // decode-path-INCLUSIVE, not one-per-logical-lookup. PosterCache::
+        // decodeFileAsync() does its own internal get() after the caller's get(),
+        // so a single cold tile paint records TWO misses (caller miss + decode
+        // miss), while a warm repaint records ONE hit. Net: `misses` is inflated
+        // relative to `hits` and `hit_rate` skews low. Assert on direction/
+        // presence (hit_rate >= threshold, size > 0, evictions == 0), not on an
+        // exact misses == tile-count identity. Surfaced in the reply `note` is
+        // intentionally omitted to keep the shape stable; see this comment.
+        const PosterCache::Stats s = PosterCache::instance().stats();
+        const qint64 lookups = s.hits + s.misses;
+        const double hitRate = lookups > 0 ? double(s.hits) / double(lookups) : 0.0;
+        mergeReply(r, QJsonObject{
+            {"layer",     QStringLiteral("poster")},
+            {"hits",      double(s.hits)},
+            {"misses",    double(s.misses)},
+            {"lookups",   double(lookups)},
+            {"hit_rate",  hitRate},
+            {"evictions", double(s.evictions)},
+            {"puts",      double(s.puts)},
+            {"size",      s.size},
+            {"capacity",  s.capacity},
+        });
         return true;
     }
 

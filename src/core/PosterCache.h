@@ -28,6 +28,19 @@ public:
                          std::function<void(QPixmap)> callback,
                          const QSize& scaledSize = QSize());
 
+    // Session hit/miss/eviction counters for the dev-control bridge
+    // (tankoctl cache-get-stats). Cheap atomically-meaningless ints guarded
+    // by the same mutex as the cache itself.
+    struct Stats {
+        qint64 hits = 0;
+        qint64 misses = 0;
+        qint64 evictions = 0;
+        qint64 puts = 0;
+        int    size = 0;
+        int    capacity = 0;
+    };
+    Stats stats() const;
+
 private:
     PosterCache() = default;
 
@@ -39,4 +52,9 @@ private:
     mutable QMutex m_mutex;
     mutable QList<QString> m_lruOrder;
     QHash<QString, QPixmap> m_cache;
+
+    mutable qint64 m_hits = 0;
+    mutable qint64 m_misses = 0;
+    qint64 m_evictions = 0;
+    qint64 m_puts = 0;
 };

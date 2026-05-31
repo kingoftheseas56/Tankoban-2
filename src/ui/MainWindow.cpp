@@ -1920,7 +1920,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         for (const QString& c : SystemIntrospection::commandList())
             cmds.append(c);
         return reply({
-            {"schema",     "tankoban.dev.v1.10"},
+            {"schema",     "tankoban.dev.v1.11"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
