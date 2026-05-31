@@ -10,28 +10,35 @@ def _items():
 
 def test_parses_unique_items_with_label_and_href():
     items = _items()
-    # Fixture has 165 unique item slugs (each appears twice on the page: cover +
-    # text link). Parser must dedupe.
-    assert len(items) == 165
+    # Invincible fixture: 145 issues (0-144) + 25 TPBs = 170 unique item slugs.
+    # Each appears twice on the page (cover link + text link) -> parser dedupes.
+    assert len(items) == 170
     assert all("label" in it and "href" in it for it in items)
 
 
 def test_slug_becomes_human_label():
-    items = _items()
-    by_href = {it["href"]: it for it in items}
-    assert by_href["/Comic/Invincible/Compendium-1"]["label"] == "Compendium 1"
+    by_href = {it["href"]: it for it in _items()}
     assert by_href["/Comic/Invincible/Issue-1"]["label"] == "Issue 1"
-    assert by_href["/Comic/Invincible/Ultimate-Collection-Vol-1"]["label"] == \
-        "Ultimate Collection Vol 1"
+    assert by_href["/Comic/Invincible/TPB-1-Family-matters"]["label"] == \
+        "TPB 1 Family matters"
+    assert by_href["/Comic/Invincible/TPB-25-The-End-of-All-Things-Part-Two"]["label"] == \
+        "TPB 25 The End of All Things Part Two"
 
 
 def test_surfaces_collected_editions():
+    # This series page's collected editions are its 25 TPBs (the Compendium is a
+    # SEPARATE series page, /Comic/Invincible-Universe-Compendium, not an item here).
     labels = [it["label"] for it in _items()]
-    assert any("compendium" in l.lower() for l in labels)
-    assert any("ultimate collection" in l.lower() for l in labels)
+    assert sum(1 for l in labels if l.lower().startswith("tpb")) == 25
 
 
 def test_no_duplicate_hrefs():
-    items = _items()
-    hrefs = [it["href"] for it in items]
+    hrefs = [it["href"] for it in _items()]
     assert len(hrefs) == len(set(hrefs))
+
+
+def test_only_item_links_not_series_links():
+    # Only two-segment item links (/Comic/<series>/<item>); bare series links
+    # like /Comic/Invincible-Universe-Compendium must be excluded.
+    for it in _items():
+        assert it["href"].count("/") >= 3
