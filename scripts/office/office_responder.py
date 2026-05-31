@@ -105,3 +105,69 @@ def set_responder_cursor(me, seq):
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
         f.write(str(int(seq)))
+
+
+def _bus_records():
+    bus = office_bus.BUS()
+    out = []
+    if os.path.exists(bus):
+        with open(bus, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return out
+
+
+def find_candidates(records, me, after_seq):
+    out = []
+    for r in records:
+        if int(r.get("seq", 0)) <= after_seq:
+            continue
+        if is_candidate(r, me):
+            out.append({"seq": int(r["seq"]), "frm": r.get("from"),
+                        "to": r.get("to"), "text": r.get("msg", "")})
+    return out
+
+
+def log(me, msg):
+    print("[responder {0}] {1}".format(me, msg), flush=True)
+
+
+def run(me, dry_run=True, model="claude", once=False, window=FALLBACK_WINDOW):
+    """Watch loop. Dry-run logs would-post decisions and posts nothing."""
+    last = responder_cursor(me) or max((int(r.get("seq", 0)) for r in _bus_records()), default=0)
+    set_responder_cursor(me, last)
+    log(me, "fallback responder live (dry_run={0}, window={1}s) from seq {2}".format(dry_run, window, last))
+    pending = []  # list of (trigger, due_epoch)
+    while True:
+        now = int(time.time())
+        records = _bus_records()
+        for t in find_candidates(records, me, last):
+            last = max(last, t["seq"])
+            pending.append((t, now + window))
+            log(me, "candidate seq {0} from {1}: '{2}' — waiting {3}s for the real brother".format(
+                t["seq"], t["frm"], t["text"][:50], window))
+        set_responder_cursor(me, last)
+        still = []
+        for t, due in pending:
+            if now < due:
+                still.append((t, due))
+                continue
+            sup, reason = should_suppress(t, records, me)
+            if sup:
+                log(me, "seq {0}: SUPPRESS — {1}".format(t["seq"], reason))
+            else:
+                handle_due_trigger(me, t, records, dry_run, model)
+        pending = still
+        if once:
+            return
+        time.sleep(3)
+
+
+def handle_due_trigger(me, trigger, records, dry_run, model):
+    log(me, "seq {0}: WOULD respond (draft not wired yet — Task 7)".format(trigger["seq"]))
