@@ -96,7 +96,7 @@ The safety setup that lets Hemanth walk away — "holding area + auto-check + st
 
 ## 8. Phasing — thin slice first, no painted corners
 
-- **Slice 1 — The legible, reliable room.** Upgrade the Python+HTML surface (own standalone Chromium window) over today's Claude tabs. Contains: derived-status clarity engine + reliable delivery + catch-and-mirror off-channel + cheap-context wake-briefings + the honesty surface. **This is the trust foundation.** No Electron, no owned workers, no foreman yet.
+- **Slice 1 — The legible, reliable room. ✅ SHIPPED 2026-05-31.** Upgrade the Python+HTML surface (own standalone Chromium window) over today's Claude tabs. Contains: derived-status clarity engine + reliable delivery + catch-and-mirror off-channel + cheap-context wake-briefings + the honesty surface. **This is the trust foundation.** No Electron, no owned workers, no foreman yet.
 - **Slice 2 — Foreman A + Electron.** First owned SDK worker + the per-arc foreman loop on one real arc. Electron desktop shell enters here (wraps the same HTML), giving a real always-there window + Node backend to host owned workers.
 - **Slice 3 — Foreman B + lifecycle.** Whole-room toggle, entry-gate, Agent-0 exit-supervisor, MCP traffic-cop, and the holding-area / green-check / stop-button safety setup.
 - **Slice 4 — Cross-engine.** Owned Codex/DeepSeek/Gemini workers fed context directly (sidesteps the injected-context DeepSeek rejects and the flaky auto-wake from Congress 9). **Pull in Agent 7's proposed cross-engine solutions when detailing this slice** — they likely slot under this umbrella.
