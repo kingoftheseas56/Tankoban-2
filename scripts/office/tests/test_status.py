@@ -83,10 +83,32 @@ def test_compute_roster():
           "roster: stable sorted order")
 
 
+def test_roster_cli():
+    # The CLI must run against the REAL repo and emit a JSON list with the
+    # canonical keys for every roster agent. (Integration smoke, not values.)
+    BUS_PY_DIR = os.path.join(HERE, "..")
+    proc = subprocess.run(
+        [sys.executable, os.path.join(BUS_PY_DIR, "office_status.py"), "roster"],
+        capture_output=True, text=True,
+    )
+    check(proc.returncode == 0, "cli: roster exits 0")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        data = None
+    check(isinstance(data, list) and len(data) >= 9, "cli: roster prints JSON list of >=9 brothers")
+    if data:
+        keys = set(data[0].keys())
+        need = {"agent", "role", "engine", "wakeable", "present", "current_arc",
+                "last_said", "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
+        check(need <= keys, "cli: each entry has all canonical keys")
+
+
 def main():
     test_parse_agent_commits()
     test_bus_activity()
     test_compute_roster()
+    test_roster_cli()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 

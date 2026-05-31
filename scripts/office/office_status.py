@@ -123,3 +123,51 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
             "blocked": bool(b.get("blocked")) if b else False,
         })
     return sorted(result, key=lambda r: r["agent"])
+
+
+def _git_log_text(repo=None, limit=200):
+    repo = repo or office_bus._repo_root()
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo, "log", "-n", str(limit),
+             "--pretty=format:%ct%x09%h%x09%s"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        return r.stdout if r.returncode == 0 else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _bus_records():
+    bus = office_bus.BUS()
+    out = []
+    if os.path.exists(bus):
+        with open(bus, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return out
+
+
+def roster_now(now_epoch=None):
+    import time
+    now_epoch = int(time.time()) if now_epoch is None else now_epoch
+    commits = parse_agent_commits(_git_log_text(), now_epoch)
+    busby = bus_activity(_bus_records(), now_epoch)
+    return compute_roster(commits, busby, now_epoch)
+
+
+def main(argv):
+    if not argv or argv[0] != "roster":
+        sys.exit("usage: office_status.py roster")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    print(json.dumps(roster_now(), ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
