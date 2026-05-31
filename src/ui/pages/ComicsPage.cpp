@@ -2314,6 +2314,7 @@ void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
         blob[QStringLiteral("seriesId")]    = catalog->seriesId;
         blob[QStringLiteral("seriesTitle")] = catalog->seriesTitle;
         blob[QStringLiteral("enteredFrom")] = QStringLiteral("western");
+        blob[QStringLiteral("jsonPath")]    = jsonPath;  // exact reload on restore
         emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"),
                                           catalog->seriesTitle, blob));
     }
@@ -2343,6 +2344,21 @@ void ComicsPage::showWesternMode()
 {
     if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(false);
     if (m_westernTabBtn) m_westernTabBtn->setChecked(true);
+
+    // Push a nav layer when entering the Western grid (user-initiated only —
+    // m_inNavRestore suppresses re-emit during Back/restore). Without this,
+    // Back from a Western detail would pop straight to manga home; with it, the
+    // back-stack is library -> westernGrid -> seriesView, so Back from a Western
+    // series returns to the Western grid, and Back again to manga home.
+    // Skip the push if already on the Western grid (avoids duplicate layers on
+    // repeated pill clicks).
+    const bool alreadyWestern = (m_stack && m_westernStackIndex >= 0
+                                 && m_stack->currentIndex() == m_westernStackIndex);
+    if (!m_inNavRestore && !alreadyWestern) {
+        emit enteredLayer(makeComicsLayer(QStringLiteral("westernGrid"),
+                                          tr("Western"), QJsonObject{}));
+    }
+
     refreshWesternGrid();
     if (m_stack && m_westernStackIndex >= 0)
         m_stack->setCurrentIndex(m_westernStackIndex);
@@ -3859,7 +3875,31 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
         return;
     }
 
+    if (kind == QStringLiteral("westernGrid")) {
+        // m_inNavRestore is active (rollback above) so showWesternMode won't
+        // re-push its own layer. Re-renders the Western browse grid.
+        showWesternMode();
+        return;
+    }
+
     if (kind == QStringLiteral("seriesView") && m_tyVolumeSeriesView) {
+        // Western detail restore: re-render via the Western loader, NOT the manga
+        // dispatchCatalogResolve path (no enrichment bleed). Must precede the
+        // anilistId / library-record branches — a Western series has anilistId=0
+        // and no Tankoyomi record, so it would otherwise fall through to a silent
+        // no-render. m_inNavRestore is active, so openWesternSeriesFromJson won't
+        // re-emit its layer.
+        if (blob.value(QStringLiteral("enteredFrom")).toString() == QStringLiteral("western")) {
+            QString jsonPath = blob.value(QStringLiteral("jsonPath")).toString();
+            if (jsonPath.isEmpty()) {
+                const QString sid = blob.value(QStringLiteral("seriesId")).toString();
+                if (!sid.isEmpty())
+                    jsonPath = QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                                   .absoluteFilePath(sid + QStringLiteral(".json"));
+            }
+            openWesternSeriesFromJson(jsonPath);
+            return;
+        }
         const int anilistId        = blob.value(QStringLiteral("anilistId")).toInt(0);
         const QString seriesTitle  = blob.value(QStringLiteral("seriesTitle")).toString();
         if (anilistId > 0) {
