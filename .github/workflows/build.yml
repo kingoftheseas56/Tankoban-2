@@ -61,6 +61,10 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+      - name: NetSeam gate — no raw QNetworkAccessManager outside the factory (Congress 9)
+        shell: pwsh
+        run: ./scripts/netseam-gate.ps1
+
       - name: CMake configure (preset default — vcpkg installs deps)
         run: cmake --preset default
         env:

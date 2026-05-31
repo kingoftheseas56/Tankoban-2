@@ -11,6 +11,7 @@
 #include "core/manga/PremiumCatalog.h"
 #include "core/manga/TorrentRequestLedger.h"
 #include "core/manga/TorrentVolumeProvider.h"
+#include "core/net/NetSeam.h"
 #include "core/manga/MangaTransferCoordinator.h"
 #include "core/manga/MangaResult.h"
 #include "core/manga/MangaScraper.h"
@@ -179,7 +180,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // scraper registry. Scraper registry is retained because MangaDownloader
     // still drives WeebCentral chapter downloads; the search widget now
     // bypasses scrapers entirely (Phase 9 AniList backbone).
-    m_nam = new QNetworkAccessManager(this);
+    m_nam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("comics-page"));
     m_sourceRegistry = new MangaSourceRegistry(m_nam, this);
 
     // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- new providers. AniList

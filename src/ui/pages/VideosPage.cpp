@@ -10,6 +10,7 @@
 #include "core/library/VideoCategoryStore.h"
 #include "core/PosterCache.h"
 #include "core/PosterFetcher.h"
+#include "core/net/NetSeam.h"
 #include "core/stream/MetaAggregator.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/addon/MetaItem.h"
@@ -1019,7 +1020,7 @@ void VideosPage::installFolderTileContextMenu(
             const QString destPath = posterPath(showPath);
             const QPoint globalPos = strip->mapToGlobal(pos);
 
-            if (!m_nam) m_nam = new QNetworkAccessManager(this);
+            if (!m_nam) m_nam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("videos-page"));
             QPointer<TileCard> cardGuard(card);
             QPointer<VideosPage> selfGuard(this);
             QNetworkAccessManager* nam = m_nam;
