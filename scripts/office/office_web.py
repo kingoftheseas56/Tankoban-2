@@ -4,6 +4,9 @@
 A zero-dependency local web page (Python stdlib http.server only) that lets
 Hemanth WATCH the bus live and SEND messages into it as `hemanth`. Agents still
 read the bus via the delivery hook; this is purely a human window + send box.
+The look mimics WhatsApp desktop's group chat (Hemanth's chosen reference,
+2026-05-31): green-tinted dark palette, incoming/outgoing bubbles, coloured
+sender names, a chat-list-style roster rail.
 
 Run:   python scripts/office/office_web.py          (serves http://127.0.0.1:8787)
        python scripts/office/office_web.py 9090      (custom port)
@@ -11,6 +14,8 @@ Run:   python scripts/office/office_web.py          (serves http://127.0.0.1:878
 Endpoints:
   GET  /                -> the chat page (HTML)
   GET  /messages?after=<seq>  -> JSON {messages:[...], maxseq:N} (the page polls this)
+  GET  /roster          -> JSON {roster:[...]} derived-status engine
+  GET  /office.webmanifest -> PWA manifest (standalone app-window)
   POST /send  {to, msg} -> appends a message from "hemanth"; returns {seq}
   POST /close           -> archives + clears the bus (end of shift)
 
@@ -34,124 +39,186 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Office</title>
 <link rel="manifest" href="/office.webmanifest">
-<meta name="theme-color" content="#17212b">
+<meta name="theme-color" content="#202C33">
 <style>
+  /* THE OFFICE — WhatsApp-desktop group-chat look (reference 2026-05-31). */
   :root{
-    --bg:#0b141a; --panel:#17212b; --line:#0a1014; --txt:#e9edf0; --dim:#8696a0;
-    --bubble-in:#1f2c38; --bubble-me:#2b5278; --send:#3390ec;
+    --deep:#0B141A; --panel:#111B21; --bar:#202C33; --in:#202C33; --out:#005C4B;
+    --sel:#2A3942; --field:#2A3942; --txt:#E9EDEF; --txt2:#8696A0;
+    --green:#00A884; --red:#F15C6D; --divider:#222D34;
+    --sans:'Segoe UI',system-ui,-apple-system,Helvetica,Arial,sans-serif;
   }
   *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--txt);
-       font:14px/1.45 "Segoe UI",system-ui,sans-serif;height:100vh;
-       display:flex;flex-direction:column;}
-  header{padding:10px 16px;border-bottom:1px solid var(--line);
-         display:flex;align-items:center;gap:12px;background:var(--panel);
-         box-shadow:0 1px 5px rgba(0,0,0,.35);z-index:2;}
-  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.7px;}
-  header .status{color:var(--dim);font-size:12px;}
-  header .spacer{flex:1;}
-  header button{background:transparent;color:var(--dim);border:1px solid var(--line);
-                padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;}
-  header button:hover{background:#22323f;color:var(--txt);}
-  #log{flex:1;overflow-y:auto;padding:12px 14px 18px;
-       display:flex;flex-direction:column;
-       background:linear-gradient(180deg,#0b141a,#0d171e);}
-  .row{display:flex;align-items:flex-end;max-width:100%;}
-  .row:not(.grouped){margin-top:11px;}
-  .row.grouped{margin-top:2px;}
-  .row.me{justify-content:flex-end;}
-  .avatar{width:33px;height:33px;border-radius:50%;flex:0 0 33px;
-          display:flex;align-items:center;justify-content:center;
-          font-size:12.5px;font-weight:700;color:#0b141a;margin-right:8px;}
-  .row.grouped .avatar{visibility:hidden;}
-  .row.me .avatar{display:none;}
-  .bubble{max-width:74%;padding:6px 11px 5px;border-radius:11px;
-          background:var(--bubble-in);box-shadow:0 1px 1px rgba(0,0,0,.28);}
-  .row:not(.grouped):not(.me) .bubble{border-top-left-radius:4px;}
-  .row.me:not(.grouped) .bubble{border-top-right-radius:4px;}
-  .row.me .bubble{background:var(--bubble-me);}
-  .bubble .name{font-size:12.5px;font-weight:700;margin-bottom:2px;}
-  .bubble .body{white-space:pre-wrap;word-break:break-word;font-size:14px;}
-  .bubble .foot{font-size:10.5px;color:var(--dim);margin-top:3px;
-                display:flex;gap:7px;justify-content:flex-end;align-items:center;}
-  .row.me .bubble .foot{color:#a8c7e8;}
-  .bubble .to-tag{opacity:.8;}
-  .empty{color:var(--dim);text-align:center;margin:auto;}
-  footer{border-top:1px solid var(--line);background:var(--panel);padding:10px 14px;
-         display:flex;gap:8px;align-items:center;}
-  select,input{background:#0e1822;color:var(--txt);border:1px solid var(--line);
-               border-radius:8px;padding:9px;font-size:14px;outline:none;}
-  select:focus,input:focus{border-color:var(--send);}
-  #to{width:108px;}
-  #msg{flex:1;}
-  #send{background:var(--send);border:none;color:#fff;font-weight:600;
-        padding:9px 18px;border-radius:8px;cursor:pointer;}
-  #send:hover{background:#2a82da;}
-  #log::-webkit-scrollbar{width:9px;}
-  #log::-webkit-scrollbar-thumb{background:#22323f;border-radius:5px;}
-  #log::-webkit-scrollbar-thumb:hover{background:#2c4150;}
-  #main{flex:1;display:flex;min-height:0;}
-  #roster{width:236px;flex:0 0 236px;background:#0e1822;border-right:1px solid var(--line);
-          overflow-y:auto;padding:8px 0;}
-  #roster .rhead{color:var(--dim);font-size:10.5px;letter-spacing:1.4px;padding:4px 14px 8px;}
-  .rcard{padding:8px 14px;border-bottom:1px solid #0c151c;display:flex;gap:9px;align-items:flex-start;}
-  .rdot{width:9px;height:9px;border-radius:50%;margin-top:4px;flex:0 0 9px;background:#3a4a57;}
-  .rdot.on{background:#6ec96e;box-shadow:0 0 6px #6ec96e88;}
+  body{margin:0;background:var(--deep);color:var(--txt);font:14px/1.4 var(--sans);
+       height:100vh;display:grid;grid-template-columns:380px 1fr;overflow:hidden;
+       transition:grid-template-columns 200ms ease;}
+
+  /* ---- left pane: roster as a WhatsApp chat-list ---- */
+  #side{background:var(--panel);border-right:1px solid var(--divider);
+        display:flex;flex-direction:column;min-height:0;overflow:hidden;}
+  .shead{padding:14px 12px 11px;display:flex;align-items:center;gap:9px;}
+  .shead h1{font-size:20px;font-weight:600;margin:0;color:var(--txt);white-space:nowrap;}
+  .shead .status{font-size:12px;color:var(--txt2);margin-left:auto;white-space:nowrap;}
+  #collapseBtn{background:transparent;border:none;color:var(--txt2);cursor:pointer;
+               padding:5px;border-radius:7px;display:flex;flex:0 0 auto;}
+  #collapseBtn:hover{background:var(--sel);color:var(--txt);}
+  #collapseBtn svg{width:20px;height:20px;transition:transform 200ms ease;}
+  /* collapsed: roster shrinks to an avatars-only strip */
+  body.collapsed{grid-template-columns:72px 1fr;}
+  body.collapsed .shead{justify-content:center;padding:14px 0;}
+  body.collapsed .shead h1,
+  body.collapsed .shead .status,
+  body.collapsed .rmeta{display:none;}
+  body.collapsed .rcard{justify-content:center;padding:9px 0;}
+  body.collapsed #collapseBtn svg{transform:rotate(180deg);}
+  #rlist{overflow-y:auto;flex:1;}
+  .rcard{display:flex;gap:13px;align-items:center;padding:9px 14px;
+         border-bottom:1px solid rgba(134,150,160,.07);}
+  .rcard:hover{background:var(--sel);}
+  .ava{width:46px;height:46px;flex:0 0 46px;border-radius:50%;background:#6A7175;
+       display:flex;align-items:center;justify-content:center;font-weight:600;
+       font-size:16px;color:#E9EDEF;position:relative;}
+  .pdot{position:absolute;right:0;bottom:1px;width:13px;height:13px;border-radius:50%;
+        border:2.5px solid var(--panel);background:#667781;}
+  .pdot.active{background:var(--green);}
+  .pdot.blocked{background:var(--red);animation:pulse 2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
   .rmeta{flex:1;min-width:0;}
-  .rname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;}
-  .rrole{color:var(--dim);font-size:11px;margin-top:1px;}
-  .rline{color:#9fb0bd;font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .rarc{color:#f2c94c;font-size:10.5px;}
-  .badge{font-size:9.5px;padding:1px 5px;border-radius:4px;font-weight:600;}
-  .badge.nudge{background:#3a2c12;color:#e0a24c;}
-  .badge.blocked{background:#3a1414;color:#e87676;}
-  .row.k-blocked .bubble{background:#2c1414;border-left:3px solid #e87676;}
-  .row.k-blocked .bubble .name::after{content:" · BLOCKER";color:#e87676;font-size:10px;}
-  .row.k-activity{margin-top:4px;}
-  .row.k-activity .bubble{background:transparent;border:1px dashed #243240;box-shadow:none;opacity:.82;}
-  .row.k-activity .bubble .name::after{content:" · committed";color:#6ec9cb;font-size:10px;}
+  .rtop{display:flex;align-items:baseline;gap:7px;}
+  .rname{font-size:16px;color:var(--txt);white-space:nowrap;}
+  .rrole{font-size:12px;color:var(--txt2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rtime{font-size:12px;color:var(--txt2);margin-left:auto;flex:0 0 auto;}
+  .rsub{display:flex;align-items:center;gap:6px;margin-top:2px;}
+  .rline{flex:1;min-width:0;font-size:13.5px;color:var(--txt2);
+         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rarc{color:var(--green);font-size:12px;flex:0 0 auto;}
+  .chip{font-size:11px;padding:1px 8px;border-radius:10px;font-weight:600;flex:0 0 auto;}
+  .chip.blocked{background:var(--red);color:#0B141A;}
+  .chip.nudge{background:#3B4A54;color:var(--txt2);}
+
+  /* ---- right pane: conversation ---- */
+  #conv{display:flex;flex-direction:column;min-height:0;background:var(--deep);}
+  #chead{background:var(--bar);padding:9px 16px;display:flex;align-items:center;gap:13px;}
+  #chead .ava{width:40px;height:40px;flex:0 0 40px;font-size:13px;background:#3B4A54;}
+  #chead .ctitle{flex:1;min-width:0;}
+  #chead .cname{font-size:16px;color:var(--txt);}
+  #chead .cmembers{font-size:12.5px;color:var(--txt2);white-space:nowrap;
+                   overflow:hidden;text-overflow:ellipsis;}
+  #chead button{background:transparent;border:none;color:var(--txt2);cursor:pointer;
+                font-size:12.5px;padding:6px 11px;border-radius:7px;transition:all 150ms;}
+  #chead button:hover{background:var(--sel);color:var(--txt);}
+  #log{flex:1;overflow-y:auto;padding:16px 7% 20px;background:var(--deep);}
+  .empty{color:var(--txt2);text-align:center;margin-top:40vh;font-size:13.5px;}
+
+  .msg{display:flex;margin-top:2px;}
+  .msg.first{margin-top:11px;}
+  .msg.out{justify-content:flex-end;}
+  .gava{width:29px;height:29px;flex:0 0 29px;border-radius:50%;background:#6A7175;
+        display:flex;align-items:center;justify-content:center;font-size:11.5px;
+        color:#E9EDEF;margin-right:8px;align-self:flex-start;margin-top:2px;}
+  .msg:not(.first) .gava{visibility:hidden;}
+  .msg.out .gava{display:none;}
+  .bub{position:relative;max-width:66%;padding:7px 10px 6px;border-radius:9px;
+       background:var(--in);box-shadow:0 1px .8px rgba(0,0,0,.25);font-size:14.2px;}
+  .msg.out .bub{background:var(--out);}
+  .msg.in.first .bub{border-top-left-radius:0;}
+  .msg.out.first .bub{border-top-right-radius:0;}
+  .sname{font-size:13px;font-weight:600;margin-bottom:2px;}
+  .btext{color:var(--txt);white-space:pre-wrap;word-break:break-word;}
+  .bmeta{display:flex;gap:8px;align-items:center;justify-content:flex-end;
+         font-size:11px;color:var(--txt2);margin-top:3px;}
+  .msg.out .bmeta{color:rgba(233,237,239,.6);}
+  .bto{margin-right:auto;opacity:.85;}
+  .blk-badge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;
+             color:var(--red);margin-bottom:2px;}
+  .msg.blk .bub{background:#2C1A1C;border-left:4px solid var(--red);border-top-left-radius:9px;}
+
+  /* activity (auto commit mirror) + system = centered pill, WhatsApp-style */
+  .msg.sys{justify-content:center;margin:11px 0;}
+  .sys .pill{background:#182229;color:var(--txt2);font-size:12.5px;padding:6px 13px;
+             border-radius:9px;box-shadow:0 1px .8px rgba(0,0,0,.2);max-width:82%;
+             text-align:center;line-height:1.35;}
+  .sys .pill .gi{margin-right:6px;opacity:.7;}
+  .sys .pill .gi svg{width:12px;height:12px;vertical-align:-2px;}
+  .sys .pill .who{color:var(--txt);opacity:.85;}
+
+  /* composer */
+  footer{background:var(--bar);padding:9px 16px;display:flex;gap:10px;align-items:center;}
+  select,#msg{background:var(--field);color:var(--txt);border:none;border-radius:8px;
+              padding:11px 13px;font-size:14px;outline:none;font-family:var(--sans);}
+  #to{flex:0 0 auto;}
+  #msg{flex:1;}
+  #msg::placeholder{color:var(--txt2);}
+  #send{background:var(--green);border:none;color:#0B141A;font-weight:600;
+        padding:11px 19px;border-radius:8px;cursor:pointer;font-size:14px;transition:background 150ms;}
+  #send:hover{background:#06b894;}
+  ::-webkit-scrollbar{width:8px;}
+  ::-webkit-scrollbar-thumb{background:#2A3942;border-radius:4px;}
+  ::-webkit-scrollbar-thumb:hover{background:#33424b;}
 </style></head>
 <body>
-  <header>
-    <h1>THE OFFICE</h1>
-    <span class="status" id="status">connecting...</span>
-    <span class="spacer"></span>
-    <button id="notifyBtn" title="Desktop notification when a brother messages @hemanth">enable alerts</button>
-    <button id="closeBtn" title="Archive + clear the bus (end of shift)">Close office</button>
-  </header>
-  <div id="main">
-    <aside id="roster"><div class="rhead">BROTHERHOOD</div><div id="rlist"></div></aside>
-    <div id="log"><div class="empty">No messages yet. Say something below.</div></div>
+  <div id="side">
+    <div class="shead">
+      <button id="collapseBtn" title="Collapse / expand roster">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/></svg>
+      </button>
+      <h1>THE OFFICE</h1><span class="status" id="status">connecting…</span>
+    </div>
+    <div id="rlist"></div>
   </div>
-  <footer>
-    <select id="to">
-      <option value="all">@all</option>
-      <option value="agent0">@agent0</option>
-      <option value="agent1">@agent1</option>
-      <option value="agent2">@agent2</option>
-      <option value="agent3">@agent3</option>
-      <option value="agent4">@agent4</option>
-      <option value="agent5">@agent5</option>
-      <option value="agent7">@agent7</option>
-      <option value="agent9">@agent9</option>
-    </select>
-    <input id="msg" placeholder="Message as hemanth...  (Enter to send)" autocomplete="off">
-    <button id="send">Send</button>
-  </footer>
+  <div id="conv">
+    <div id="chead">
+      <div class="ava">TO</div>
+      <div class="ctitle">
+        <div class="cname">THE OFFICE</div>
+        <div class="cmembers" id="members">the brotherhood</div>
+      </div>
+      <button id="notifyBtn" title="Desktop notification when a brother messages @hemanth">alerts</button>
+      <button id="closeBtn" title="Archive + clear the bus (end of shift)">close</button>
+    </div>
+    <div id="log"><div class="empty">No messages yet. Say something below.</div></div>
+    <footer>
+      <select id="to">
+        <option value="all">@all</option>
+        <option value="agent0">@agent0</option>
+        <option value="agent1">@agent1</option>
+        <option value="agent2">@agent2</option>
+        <option value="agent3">@agent3</option>
+        <option value="agent4">@agent4</option>
+        <option value="agent5">@agent5</option>
+        <option value="agent7">@agent7</option>
+        <option value="agent9">@agent9</option>
+      </select>
+      <input id="msg" placeholder="Type a message" autocomplete="off">
+      <button id="send">Send</button>
+    </footer>
+  </div>
 <script>
 let maxseq = 0, lastFrom = null;
 let primed = false;  // don't fire notifications for the backlog loaded on first poll
 const log = document.getElementById('log');
 const statusEl = document.getElementById('status');
+const rlist = document.getElementById('rlist');
+
+// --- collapsible roster (remembers your choice across launches) ---
+const collapseBtn = document.getElementById('collapseBtn');
+let collapsed = localStorage.getItem('office_collapsed') === '1';
+function applyCollapsed(){ document.body.classList.toggle('collapsed', collapsed); }
+applyCollapsed();
+collapseBtn.onclick = () => {
+  collapsed = !collapsed;
+  localStorage.setItem('office_collapsed', collapsed ? '1' : '0');
+  applyCollapsed();
+};
 
 // --- Desktop notifications when a brother addresses @hemanth ---
 const notifyBtn = document.getElementById('notifyBtn');
 const hasNotif = ('Notification' in window);
 function updateNotifyBtn(){
-  if (!hasNotif) { notifyBtn.textContent = 'no alert support'; notifyBtn.disabled = true; return; }
+  if (!hasNotif) { notifyBtn.textContent = 'no alerts'; notifyBtn.disabled = true; return; }
   if (Notification.permission === 'granted') { notifyBtn.textContent = 'alerts on'; }
-  else if (Notification.permission === 'denied') { notifyBtn.textContent = 'alerts blocked'; }
-  else { notifyBtn.textContent = 'enable alerts'; }
+  else if (Notification.permission === 'denied') { notifyBtn.textContent = 'alerts off'; }
+  else { notifyBtn.textContent = 'alerts'; }
 }
 notifyBtn.onclick = async () => {
   if (!hasNotif) return;
@@ -171,13 +238,14 @@ function maybeNotify(m){
   } catch (e) {}
 }
 updateNotifyBtn();
-// Telegram-style per-member accent colours (readable on the dark bubbles).
-const PALETTE = ['#e17076','#7bc862','#65aadd','#a695e7','#ee7aae',
-                 '#6ec9cb','#faa774','#f2c94c','#9ed888','#e0a2c0'];
+
+// WhatsApp-group-style coloured SENDER NAMES (avatars stay neutral grey).
+const NAMEPAL = ['#53BDEB','#06CF9C','#E6799F','#A78BFA','#FFAB5C',
+                 '#7FD858','#6BC5E8','#F5C84B','#FF8A8A','#9F8AE0'];
 function colorFor(name){
   let h = 0; const s = String(name);
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return PALETTE[h % PALETTE.length];
+  return NAMEPAL[h % NAMEPAL.length];
 }
 function initialFor(name){
   name = String(name); let d = '';
@@ -187,34 +255,50 @@ function initialFor(name){
 function labelFor(name){
   name = String(name);
   if (name === 'hemanth') return 'Hemanth';
+  if (name === 'system') return 'system';
   if (name.indexOf('agent') === 0) return 'Agent ' + name.slice(5);
   return name;
 }
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function ago(s){
+  if (s == null) return '';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm';
+  if (s < 86400) return Math.floor(s/3600) + 'h';
+  return Math.floor(s/86400) + 'd';
+}
+const GIT_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="4" r="1.7"/><circle cx="4" cy="12" r="1.7"/><circle cx="12" cy="6" r="1.7"/><path d="M4 5.7v4.6M5.6 5.2h2.6a2 2 0 0 1 2 2v.6"/></svg>';
 
 function render(msgs){
   if (maxseq === 0 && msgs.length === 0) return;
   const emptyEl = log.querySelector('.empty'); if (emptyEl) log.innerHTML = '';
-  // Only auto-scroll if the reader is already near the bottom — so scrolling
-  // up to read older messages isn't yanked back down by an incoming poll.
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
+  // Only auto-scroll if the reader is already near the bottom.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
   for (const m of msgs){
     const me = (m.from === 'hemanth');
     const kind = m.kind || 'chat';
-    const grouped = (m.from === lastFrom);
-    const col = colorFor(m.from);
     const time = (m.ts || '').replace('T', ' ').slice(11, 16);
+    if (kind === 'activity'){
+      const row = document.createElement('div');
+      row.className = 'msg sys';
+      row.innerHTML = '<div class="pill"><span class="gi">' + GIT_SVG + '</span>' +
+        '<span class="who">' + esc(labelFor(m.from)) + '</span> · ' + esc(m.msg) + '</div>';
+      log.appendChild(row);
+      lastFrom = null;
+      continue;
+    }
+    const first = (m.from !== lastFrom);  // first message of a sender cluster
     const row = document.createElement('div');
-    row.className = 'row' + (me ? ' me' : '') + (grouped ? ' grouped' : '') + (kind !== 'chat' ? ' k-' + kind : '');
-    const avatar = me ? '' :
-      '<div class="avatar" style="background:' + col + '">' + esc(initialFor(m.from)) + '</div>';
-    const nameHtml = grouped ? '' :
-      '<div class="name" style="color:' + (me ? '#8ec3f0' : col) + '">' + esc(labelFor(m.from)) + '</div>';
-    const toTag = (m.to === 'all') ? 'to all' : ('to ' + esc(labelFor(m.to)));
-    row.innerHTML = avatar +
-      '<div class="bubble">' + nameHtml +
-      '<div class="body">' + esc(m.msg) + '</div>' +
-      '<div class="foot"><span class="to-tag">' + toTag + '</span><span>' + esc(time) + '</span></div>' +
+    row.className = 'msg ' + (me ? 'out' : 'in') + (first ? ' first' : '') + (kind === 'blocked' ? ' blk' : '');
+    const gava = me ? '' : '<div class="gava">' + esc(initialFor(m.from)) + '</div>';
+    const sname = (!me && first) ?
+      '<div class="sname" style="color:' + colorFor(m.from) + '">' + esc(labelFor(m.from)) + '</div>' : '';
+    const blk = (kind === 'blocked') ? '<span class="blk-badge">BLOCKED</span>' : '';
+    const toTag = (m.to === 'all') ? '' : '<span class="bto">→ ' + esc(labelFor(m.to)) + '</span>';
+    row.innerHTML = gava +
+      '<div class="bub">' + sname + blk +
+      '<div class="btext">' + esc(m.msg) + '</div>' +
+      '<div class="bmeta">' + toTag + '<span>' + esc(time) + '</span></div>' +
       '</div>';
     log.appendChild(row);
     lastFrom = m.from;
@@ -229,9 +313,9 @@ async function poll(){
     const data = await r.json();
     if (data.messages && data.messages.length) render(data.messages);
     if (typeof data.maxseq === 'number') maxseq = Math.max(maxseq, data.maxseq);
-    statusEl.textContent = 'office open · ' + maxseq + ' msg' + (maxseq === 1 ? '' : 's');
-    primed = true;  // first poll done; from here on, new @hemanth messages alert
-  } catch (e) { statusEl.textContent = 'disconnected (server stopped?)'; }
+    statusEl.textContent = maxseq + ' message' + (maxseq === 1 ? '' : 's');
+    primed = true;
+  } catch (e) { statusEl.textContent = 'disconnected'; }
 }
 
 async function send(){
@@ -255,34 +339,33 @@ document.getElementById('closeBtn').onclick = async () => {
   maxseq = 0; lastFrom = null;
 };
 
-const rlist = document.getElementById('rlist');
-function ago(s){
-  if (s == null) return '';
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.floor(s/60) + 'm';
-  if (s < 86400) return Math.floor(s/3600) + 'h';
-  return Math.floor(s/86400) + 'd';
-}
+function dotClass(r){ return r.blocked ? 'blocked' : (r.present ? 'active' : ''); }
 function renderRoster(list){
   rlist.innerHTML = '';
+  let present = 0;
   for (const r of list){
+    if (r.present) present++;
     const card = document.createElement('div');
     card.className = 'rcard';
-    const bits = [];
-    if (r.last_said) bits.push('"' + esc(r.last_said) + '" ' + ago(r.last_said_sec));
-    else if (r.last_commit) bits.push('committed ' + ago(r.last_commit_sec));
+    card.title = labelFor(r.agent) + ' — ' + r.role;  // identity on hover when collapsed
+    let line, t = '';
+    if (r.last_said){ line = esc(r.last_said); t = ago(r.last_said_sec); }
+    else if (r.last_commit){ line = 'committed ' + esc(r.last_commit); t = ago(r.last_commit_sec); }
+    else { line = '<span style="opacity:.65">idle</span>'; }
     const arc = r.current_arc ? '<span class="rarc">#' + esc(r.current_arc) + '</span>' : '';
-    const nudge = r.wakeable ? '' : '<span class="badge nudge" title="not auto-wakeable">nudge</span>';
-    const blocked = r.blocked ? '<span class="badge blocked">blocked</span>' : '';
+    const nudge = r.wakeable ? '' : '<span class="chip nudge" title="not auto-wakeable">nudge</span>';
+    const blocked = r.blocked ? '<span class="chip blocked">blocked</span>' : '';
     card.innerHTML =
-      '<div class="rdot ' + (r.present ? 'on' : '') + '"></div>' +
+      '<div class="ava">' + esc(initialFor(r.agent)) + '<span class="pdot ' + dotClass(r) + '"></span></div>' +
       '<div class="rmeta">' +
-        '<div class="rname">' + esc(labelFor(r.agent)) + ' ' + arc + ' ' + nudge + ' ' + blocked + '</div>' +
-        '<div class="rrole">' + esc(r.role) + '</div>' +
-        '<div class="rline">' + (bits.join(' · ') || '<span style="color:#5a6b78">idle</span>') + '</div>' +
+        '<div class="rtop"><span class="rname">' + esc(labelFor(r.agent)) + '</span>' +
+          '<span class="rrole">' + esc(r.role) + '</span><span class="rtime">' + t + '</span></div>' +
+        '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + '</div>' +
       '</div>';
     rlist.appendChild(card);
   }
+  const mem = document.getElementById('members');
+  if (mem) mem.textContent = list.map(r => labelFor(r.agent)).join(', ') + '  ·  ' + present + ' active';
 }
 async function pollRoster(){
   try {
