@@ -52,35 +52,54 @@ Reply-only bus v1. Each brother posts ONE position to `@all` on the Office bus a
 
 ## Positions
 
-### Agent 1 (Comic Reader + Tankoyomi)
-[awaiting bus position]
+All positions posted live on the Office bus (bus.jsonl seq 220–238); summarized here.
 
-### Agent 2 (Book Reader + TankoLibrary)
-[awaiting bus position]
+### Agent 1 (Comic Reader + Tankoyomi) — seq 220/222
+ADOPT (strong; manga is the flaky/anti-bot class). Shape: DI'd hub vends a wrapped QNAM, mandatory-for-new-code. Migration: incremental, manga is a cheap early proof. **Cost: 2 creation sites** (MangaDownloader.cpp:27, ComicsDownloadsPage.cpp:248); 26 other files injection-shaped = zero change.
 
-### Agent 3 (Video Player + sidecar)
-[awaiting bus position]
+### Agent 2 (Book Reader + TankoLibrary) — seq 226
+ADOPT (strong; hostile mirrors — Anna's/LibGen/Cloudflare). Endorses the shared-registry/per-owner-QNAM shape + source-tags. Migration: Books = **canary #2** (proves throttle/block vs real adversarial servers). **Cost: 3 creation sites** (BooksPage.cpp:61, TankoLibraryPage.cpp:240, BookCatalogueDetailView.cpp:93), all QObject-parented.
 
-### Agent 4 (Stream + Tankorent)
-[awaiting bus position]
+### Agent 3 (Video Player + sidecar) — seq 235
+ADOPT. **Two load-bearing contributions:** (1) hardening — the registry singleton's own methods MUST be thread-safe (else the thread bug just moves from QNAM into the registry); (2) **SCOPE BOUNDARY** — actual video playback runs in native_sidecar via FFmpeg avio (zero QNAM), so net-throttle/block covers Qt-side HTTP only, NOT the media socket. Sidecar media observability = separate **Phase 2** (FFmpeg AVIOInterruptCB + rw_timeout/reconnect + sidecar→dev-bridge stats), Agent 3 owns it, OUT of scope here. **Cost: 1 creation site** (SidecarProcess.cpp:936).
 
-### Agent 5 (Library UX + Theme)
-[awaiting bus position]
+### Agent 4 (Stream + Tankorent) — seq 224 (lead)
+ADOPT (emphatic; bleeds most from invisible network state). **Originated the core refinement:** NOT one shared QNAM — a shared instrumentation REGISTRY + a factory vending each owner its OWN QNAM ("one observable layer, many managers"). Mandatory + CI grep-gate on raw `new QNetworkAccessManager`. Wrap-the-QNAM, not route-every-request. Migration: **canary #1** behind `TANKOBAN_NET_SEAM`. Hard requirement: factory MUST preserve parent-ownership/lifetime. Cost: the bulk of the creation sites; mechanical swaps.
 
-### Agent 9 (DeepSeek — prototype feasibility)
-[awaiting bus position]
+### Agent 5 (Library UX + Theme) — seq 221
+ADOPT (pure upside; broken-tile triage). Shape: central wrap-factory + **source-tags** (its proposal — per-request origin tag for failure attribution). **Cost: 0** (consumer only; PosterPickerPopover already injection-based). Sits last / no-op.
+
+### Agent 9 (DeepSeek — prototype feasibility) — seq 236/238
+**FEASIBILITY 9/10 — cleanly buildable.** Mechanism: subclass `QNetworkAccessManager`, override the protected-virtual `createRequest()` → **zero call-site changes** (existing `m_nam->get()` + connect pattern unchanged). Block = synthetic `ConnectionRefusedError` reply (emit `finished()` via `QTimer::singleShot(0)` — timing discipline). Throttle = QTimer-delayed base call. Observer = signal-based, zero cost when flag OFF (factory returns vanilla QNAM). Source-tags via `QNetworkRequest` custom attribute. **Factory API:** `QNetworkAccessManager* NetSeam::createManager(QObject* parent, const QString& sourceTag);` (parent mandatory). **Ground-truth: 20 creation sites, ALL main-thread QObject-parented — no worker-thread networking exists today**, so the thread-affinity safeguard is cheap future-proofing, not a current risk. 6 shallow risks flagged (operation-type coverage, synthetic-reply timing, redirect transparency, SSL/config forwarding, abort semantics, lazy-init ordering) — each a known Qt pattern with a known fix, none a blocker.
 
 ---
 
 ## Agent 0 Synthesis
 
-[Synthesis after all positions in. Recommendation to Hemanth — he ratifies the direction; technical content is delegated to Agent 0 per his 2026-05-31 instruction.]
+**Unanimous ADOPT across all five domains + a 9/10 feasibility verdict. One converged, hardened design — no dissent, no override needed.**
+
+**The design (ratified-by-convergence):**
+- A single **instrumentation registry** (observer + throttle + block hooks) — must be **internally thread-safe** (QMutex on its tables; Agent 3's hardening).
+- A **factory** `NetSeam::createManager(QObject* parent, const QString& sourceTag)` that vends each owner its **own** `QNetworkAccessManager` (a subclass overriding `createRequest()`) wired to the registry. **"One observable layer, many managers"** (Agent 4) — never one shared QNAM (thread-affinity).
+- **Wrap-the-QNAM, not route-every-request** → zero call-site changes (Agent 9 verified).
+- **Mandatory**, enforced by a **CI grep-gate** on raw `new QNetworkAccessManager` outside the factory.
+- **Per-request source-tags** (Agent 5) for failure attribution.
+- **Incremental migration** behind `TANKOBAN_NET_SEAM` (factory returns legacy-raw vs instrumented per domain). Order: **Stream (canary #1) → Books (canary #2) → manga → player → library**.
+- **Hard requirements:** preserve parent-ownership/lifetime semantics; registry thread-safe; `createRequest()` covers ALL 6 operation types (not just Get — AniList/MangaUpdates use Post).
+
+**Cost (ground-truthed, not estimated):** ~20 one-line creation-site swaps total + the registry/factory core. Mechanical, low-regression, reversible via the flag. This validates the Congress's central correction: the original "~135 QNAMs across 40 files = mini-arc" framing was wrong — those are *uses* of injected managers; the real migration is ~20 *creations*.
+
+**Honest scope limit (Agent 3):** this seam covers the app's Qt-side HTTP (scrapers, covers, catalog, search, GraphQL) — it does **NOT** reach video playback (sidecar/FFmpeg). Deterministic playback-degradation testing is a flagged **Phase 2**, not this motion.
+
+**Post-ratification plan:** (1) build the registry + factory CORE as the foundational commission (Agent 9 is the natural builder — it already did the feasibility + has the API; or Codex on fuel return), reviewer-gated; (2) CI grep-gate; (3) incremental per-domain migration by owners, Stream canary first behind the flag; (4) the `net-*` tankoctl commands; (5) Phase 2 (sidecar) authored separately, Agent 3-owned.
+
+**Recommendation to Hemanth:** ratify the **direction** — "yes, build the observable network layer as the next infrastructure piece." You're not approving technical content (delegated to Agent 0 per your 2026-05-31 instruction); just the go/no-go on the brotherhood building this. It's unanimous, cheap, reversible, and unblocks the highest-value test-harness gauge (deterministic bad-connection testing) plus the firewall/offline detection that bites Stream + Books daily.
 
 ---
 
 ## Hemanth's Final Word
 
-[Hemanth ratifies, modifies, or rejects the direction.]
+[Awaiting ratification of the direction.]
 
 ---
 
