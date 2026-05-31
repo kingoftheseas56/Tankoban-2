@@ -273,4 +273,61 @@ def handle_due_trigger(me, trigger, records, dry_run, model):
 
 
 def post_reply(me, to, body, trigger, records):
-    log(me, "posting not enabled yet (Task 8)")
+    # Pre-send recheck (Agent 7's second-61 race): re-read the bus, re-run the
+    # target-aware check; if the real brother answered while we were drafting, abort.
+    fresh = _bus_records()
+    sup, reason = should_suppress(trigger, fresh, me)
+    if sup:
+        log(me, "seq {0}: ABORT post — brother answered during draft ({1})".format(trigger["seq"], reason))
+        return
+    session = "responder-" + me
+    office_bus.cmd_join(session, me[len("agent"):])     # session -> agentN identity
+    who = office_bus._agent_for(session)
+    if who != me:
+        log(me, "REFUSING to post: session {0} maps to {1}, not {2}".format(session, who, me))
+        return
+    target = to[1:] if str(to).startswith("@") else to
+    office_bus.cmd_append(me, target, "chat", "null", body)
+    log(me, "seq {0}: POSTED as {1} to {2}".format(trigger["seq"], me, target))
+
+
+def _lock_path(me):
+    return os.path.join(office_bus._dir(), ".responder_" + me + ".lock")
+
+
+def acquire_lock(me):
+    p = _lock_path(me)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    try:
+        os.mkdir(p)
+        return True
+    except FileExistsError:
+        return False
+
+
+def release_lock(me):
+    try:
+        os.rmdir(_lock_path(me))
+    except OSError:
+        pass
+
+
+def main(argv):
+    import argparse
+    ap = argparse.ArgumentParser(description="Owned-worker fallback responder for one Claude brother.")
+    ap.add_argument("agent", help="e.g. agent4")
+    ap.add_argument("--live", action="store_true", help="actually post (default is dry-run)")
+    ap.add_argument("--window", type=int, default=FALLBACK_WINDOW)
+    ap.add_argument("--no-lock", action="store_true")
+    a = ap.parse_args(argv)
+    if not a.no_lock and not acquire_lock(a.agent):
+        raise SystemExit("responder already running for " + a.agent)
+    try:
+        run(a.agent, dry_run=not a.live, window=a.window)
+    finally:
+        if not a.no_lock:
+            release_lock(a.agent)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
