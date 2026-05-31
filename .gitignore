@@ -127,6 +127,7 @@ sidecar_debug_live.log.*
 agents/bus.jsonl
 agents/.bus_cursors/
 agents/.office_nudged/
+agents/.office_heartbeats/
 agents/bus_archive/*.jsonl
 .claude/.office_sessions.json
 

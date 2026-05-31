@@ -18,13 +18,22 @@ ME="${1:-}"
 [ -z "$ME" ] && { echo "usage: office_watch.sh <agentN>" >&2; exit 1; }
 INTERVAL="${OFFICE_WATCH_INTERVAL:-3}"
 
+# Heartbeat: each loop we refresh this brother's beat file. The roster reads its
+# freshness to show "wake: live" vs "wake: DOWN" — so a dead watch (the brother
+# can't hear new messages) is VISIBLE instead of discovered when a chat stalls.
+HB_DIR="${OFFICE_DIR:-$HERE/../../agents}/.office_heartbeats"
+mkdir -p "$HB_DIR" 2>/dev/null
+beat(){ date +%s > "$HB_DIR/$ME.beat" 2>/dev/null; }
+
 # Track the highest seq we've already announced so we don't repeat. Seed from the
 # agent's current cursor so a freshly-clocked-in brother doesn't re-announce the
 # whole backlog (he saw that via drain at join).
 LAST="$(python "$HERE/office_bus.py" cursor "$ME" 2>/dev/null || echo 0)"
 
 echo "[office-watch] $ME on watch (interval ${INTERVAL}s, from seq ${LAST}) — waiting for messages..."
+beat
 while true; do
+  beat  # prove the wake channel is alive this tick
   # Ask the bus for the max seq of unseen-for-me messages above LAST.
   NEW="$(python "$HERE/office_bus.py" watch-peek "$ME" "$LAST" 2>/dev/null)"
   if [ -n "$NEW" ]; then

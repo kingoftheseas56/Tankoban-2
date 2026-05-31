@@ -34,6 +34,8 @@ ROSTER = [
 ]
 
 PRESENCE_WINDOW_SEC = 1800  # 30 min: active if a bus msg OR commit within this
+HEARTBEAT_WINDOW_SEC = 25    # wake channel is "live" if the watch beat within this
+                             # (office_watch.sh beats every ~3s; missing/stale = deaf)
 
 _AGENT_TAG = re.compile(r"^\[Agent\s*#?\s*(\d+)", re.IGNORECASE)
 
@@ -97,8 +99,15 @@ def bus_activity(records, now_epoch):
 
 
 def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
-                   roster=ROSTER, presence_window=PRESENCE_WINDOW_SEC):
-    """Merge static roster + git + bus into the canonical status list."""
+                   heartbeats_by_agent=None, roster=ROSTER,
+                   presence_window=PRESENCE_WINDOW_SEC,
+                   heartbeat_window=HEARTBEAT_WINDOW_SEC):
+    """Merge static roster + git + bus + watch heartbeats into the canonical list.
+
+    wake_alive distinguishes "this brother's watch is alive and can hear new
+    messages" from "present" (did something recently). A brother can be present
+    (committed 5m ago) yet wake-dead (watch died) = deaf to new pings."""
+    heartbeats_by_agent = heartbeats_by_agent or {}
     result = []
     for agent, role, engine, wakeable in roster:
         c = commits_by_agent.get(agent)
@@ -106,6 +115,8 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
         bus_sec = b.get("sec") if b else None
         com_sec = c.get("sec") if c else None
         present = any(s is not None and s <= presence_window for s in (bus_sec, com_sec))
+        wake_age = heartbeats_by_agent.get(agent)
+        wake_alive = wake_age is not None and wake_age <= heartbeat_window
         last_commit = None
         if c:
             last_commit = "{0} ({1})".format(c["subject"][:60], c["sha"])
@@ -115,6 +126,8 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
             "engine": engine,
             "wakeable": wakeable,
             "present": present,
+            "wake_alive": wake_alive,
+            "wake_age_sec": wake_age,
             "current_arc": b.get("arc") if b else None,
             "last_said": b.get("last_said") if b else None,
             "last_said_sec": bus_sec,
@@ -154,12 +167,36 @@ def _bus_records():
     return out
 
 
+def _heartbeats_dir():
+    return os.path.join(office_bus._dir(), ".office_heartbeats")
+
+
+def _heartbeats(now_epoch):
+    """{('agent'+N): age_sec} from the watch heartbeat files' mtimes. Missing
+    file => agent absent from the dict => wake_alive False (never clocked in)."""
+    out = {}
+    hb = _heartbeats_dir()
+    if not os.path.isdir(hb):
+        return out
+    for fn in os.listdir(hb):
+        if not fn.endswith(".beat"):
+            continue
+        agent = fn[:-5]
+        try:
+            mtime = os.path.getmtime(os.path.join(hb, fn))
+        except OSError:
+            continue
+        out[agent] = max(0, now_epoch - int(mtime))
+    return out
+
+
 def roster_now(now_epoch=None):
     import time
     now_epoch = int(time.time()) if now_epoch is None else now_epoch
     commits = parse_agent_commits(_git_log_text(), now_epoch)
     busby = bus_activity(_bus_records(), now_epoch)
-    return compute_roster(commits, busby, now_epoch)
+    heartbeats = _heartbeats(now_epoch)
+    return compute_roster(commits, busby, now_epoch, heartbeats)
 
 
 def main(argv):

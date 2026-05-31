@@ -95,6 +95,10 @@ PAGE = """<!doctype html>
   .chip{font-size:11px;padding:1px 8px;border-radius:10px;font-weight:600;flex:0 0 auto;}
   .chip.blocked{background:var(--red);color:#0B141A;}
   .chip.nudge{background:#3B4A54;color:var(--txt2);}
+  .wk{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:600;flex:0 0 auto;}
+  .wk svg{width:13px;height:13px;}
+  .wk.live{color:var(--green);}
+  .wk.down{color:var(--red);}
 
   /* ---- right pane: conversation ---- */
   #conv{display:flex;flex-direction:column;min-height:0;background:var(--deep);}
@@ -268,6 +272,7 @@ function ago(s){
   return Math.floor(s/86400) + 'd';
 }
 const GIT_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="4" r="1.7"/><circle cx="4" cy="12" r="1.7"/><circle cx="12" cy="6" r="1.7"/><path d="M4 5.7v4.6M5.6 5.2h2.6a2 2 0 0 1 2 2v.6"/></svg>';
+const SIGNAL_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="11.6" r="1.3" fill="currentColor" stroke="none"/><path d="M5.4 9.2a3.6 3.6 0 0 1 5.2 0"/><path d="M3.4 7.1a6.4 6.4 0 0 1 9.2 0"/></svg>';
 
 function render(msgs){
   if (maxseq === 0 && msgs.length === 0) return;
@@ -355,12 +360,17 @@ function renderRoster(list){
     const arc = r.current_arc ? '<span class="rarc">#' + esc(r.current_arc) + '</span>' : '';
     const nudge = r.wakeable ? '' : '<span class="chip nudge" title="not auto-wakeable">nudge</span>';
     const blocked = r.blocked ? '<span class="chip blocked">blocked</span>' : '';
+    // wake channel: live (watch beating) vs DOWN (deaf — can't be auto-woken)
+    const wake = r.wake_alive
+      ? '<span class="wk live" title="watch live — can hear new messages">' + SIGNAL_SVG + '</span>'
+      : '<span class="wk down" title="watch DOWN — can NOT be auto-woken; needs a prompt in its tab">' +
+        SIGNAL_SVG + 'deaf' + (r.wake_age_sec != null ? ' ' + ago(r.wake_age_sec) : '') + '</span>';
     card.innerHTML =
       '<div class="ava">' + esc(initialFor(r.agent)) + '<span class="pdot ' + dotClass(r) + '"></span></div>' +
       '<div class="rmeta">' +
         '<div class="rtop"><span class="rname">' + esc(labelFor(r.agent)) + '</span>' +
           '<span class="rrole">' + esc(r.role) + '</span><span class="rtime">' + t + '</span></div>' +
-        '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + '</div>' +
+        '<div class="rsub"><span class="rline">' + line + '</span>' + arc + nudge + blocked + wake + '</div>' +
       '</div>';
     rlist.appendChild(card);
   }

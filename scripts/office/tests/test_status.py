@@ -68,7 +68,10 @@ def test_compute_roster():
         "agent4": {"last_said": "throttle ready", "arc": "NETSEAM", "sec": 120, "blocked": False},
         "agent1": {"last_said": "stuck", "arc": "COMICS", "sec": 99999, "blocked": True},
     }
-    roster = office_status.compute_roster(commits, busby, now, presence_window=1800)
+    # heartbeats: agent4's watch is live (beat 5s ago), agent1's is dead (beat 900s
+    # ago), agent7 has no entry at all (never clocked in).
+    heartbeats = {"agent4": 5, "agent1": 900}
+    roster = office_status.compute_roster(commits, busby, now, heartbeats, presence_window=1800)
     by = {r["agent"]: r for r in roster}
     check(by["agent4"]["present"] is True, "roster: agent4 present (recent msg+commit)")
     check(by["agent4"]["current_arc"] == "NETSEAM", "roster: agent4 arc")
@@ -77,6 +80,11 @@ def test_compute_roster():
     check(by["agent4"]["last_commit_sec"] == 300, "roster: commit age passed through")
     check(by["agent1"]["present"] is False, "roster: agent1 stale (msg sec > window, no commit)")
     check(by["agent1"]["blocked"] is True, "roster: agent1 blocked surfaced")
+    check(by["agent4"]["wake_alive"] is True, "roster: agent4 wake live (beat 5s)")
+    check(by["agent4"]["wake_age_sec"] == 5, "roster: agent4 wake age passed through")
+    check(by["agent1"]["wake_alive"] is False, "roster: agent1 wake DEAD (beat 900s > window)")
+    check(by["agent7"]["wake_alive"] is False, "roster: agent7 wake dead (no heartbeat = never clocked in)")
+    check(by["agent7"]["wake_age_sec"] is None, "roster: agent7 wake age None (no beat)")
     check(by["agent7"]["wakeable"] is False, "roster: agent7 (codex) not wakeable")
     check(by["agent0"]["wakeable"] is True, "roster: agent0 (claude) wakeable")
     check([r["agent"] for r in roster] == sorted([r["agent"] for r in roster]),
@@ -99,8 +107,9 @@ def test_roster_cli():
     check(isinstance(data, list) and len(data) >= 9, "cli: roster prints JSON list of >=9 brothers")
     if data:
         keys = set(data[0].keys())
-        need = {"agent", "role", "engine", "wakeable", "present", "current_arc",
-                "last_said", "last_said_sec", "last_commit", "last_commit_sec", "blocked"}
+        need = {"agent", "role", "engine", "wakeable", "present", "wake_alive",
+                "wake_age_sec", "current_arc", "last_said", "last_said_sec",
+                "last_commit", "last_commit_sec", "blocked"}
         check(need <= keys, "cli: each entry has all canonical keys")
 
 
