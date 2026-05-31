@@ -51,3 +51,25 @@ def should_suppress(trigger, bus_records, me):
         if sender in _to_list(r.get("to")):
             return True, "answered: {0} -> {1} at seq {2}".format(me, sender, r.get("seq"))
     return False, "no plausible answer from {0} to {1}".format(me, sender)
+
+
+def is_candidate(rec, me):
+    """Is this message a fallback candidate for `me`? Direct/comma-list to me: always.
+    @all: ONLY if it explicitly names me (@agentN or 'agent N') — a generic broadcast
+    does NOT make every brother's responder fire (Agent 7's anti-fan-out gate).
+    Never my own posts; never non-chat kinds."""
+    if rec.get("from") == me:
+        return False
+    if rec.get("kind") not in (None, "chat", "blocked"):
+        return False
+    to = str(rec.get("to", ""))
+    if me in _to_list(to):
+        return True
+    if to == "all":
+        msg = str(rec.get("msg", "")).lower()
+        num = me[len("agent"):]
+        if "@" + me in msg:
+            return True
+        if re.search(r"\bagent\s*#?\s*" + re.escape(num) + r"\b", msg):
+            return True
+    return False

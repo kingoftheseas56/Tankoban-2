@@ -43,8 +43,25 @@ def test_should_suppress():
     check(sup5 is True, "suppress: comma-list including sender counts as answer")
 
 
+def test_is_candidate():
+    me = "agent1"
+    check(R.is_candidate({"from": "agent2", "to": "agent1", "kind": "chat", "msg": "hi"}, me) is True,
+          "candidate: direct to me")
+    check(R.is_candidate({"from": "agent1", "to": "agent2", "kind": "chat", "msg": "x"}, me) is False,
+          "candidate: my own post is never a candidate")
+    check(R.is_candidate({"from": "agent0", "to": "all", "kind": "chat", "msg": "general question?"}, me) is False,
+          "candidate: @all without my mention -> NOT (avoid fan-out)")
+    check(R.is_candidate({"from": "agent0", "to": "all", "kind": "chat", "msg": "@agent1 your call?"}, me) is True,
+          "candidate: @all explicitly mentioning me -> candidate")
+    check(R.is_candidate({"from": "agent0", "to": "all", "kind": "chat", "msg": "agent 1 please confirm"}, me) is True,
+          "candidate: @all 'agent N' mention -> candidate")
+    check(R.is_candidate({"from": "agent2", "to": "agent1", "kind": "activity", "msg": "committed"}, me) is False,
+          "candidate: activity line -> never")
+
+
 def main():
     test_should_suppress()
+    test_is_candidate()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
