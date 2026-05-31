@@ -154,6 +154,29 @@ def test_mirror_commit():
     check(rec2["from"] == "system", "mirror: untagged commit -> from=system")
 
 
+def test_derive_status():
+    # tiers: active <=300s, recent <=1800s, quiet <=7200s, else cold.
+    # freshest signal across (last_said_sec, last_commit_sec) drives the grade.
+    tier, label = office_status.derive_status(120, 900, True)
+    check(tier == "active", "derive: freshest signal (said 120s) -> active")
+    check(label == "active · said 2m ago", "derive: label names source+age, said wins")
+    tier, label = office_status.derive_status(5000, 600, True)
+    check(tier == "recent", "derive: commit 600s is freshest -> recent")
+    check(label == "recent · commit 10m ago", "derive: commit label")
+    tier, label = office_status.derive_status(4000, None, True)
+    check(tier == "quiet", "derive: said 4000s -> quiet")
+    tier, label = office_status.derive_status(99999, 99999, True)
+    check(tier == "cold", "derive: both >2h -> cold")
+    tier, label = office_status.derive_status(None, None, True)
+    check(tier == "cold" and label == "cold · no signal", "derive: no signal -> cold/no-signal")
+    # wake-reachability folds into the label as an honest warning
+    tier, label = office_status.derive_status(120, None, False)
+    check(label == "active · said 2m ago · wake DOWN",
+          "derive: wake-dead appends ' · wake DOWN' even when active")
+    check(office_status.derive_status(120, None, True)[1].endswith("ago"),
+          "derive: wake-live label carries NO wake warning")
+
+
 def main():
     test_parse_agent_commits()
     test_bus_activity()
@@ -161,6 +184,7 @@ def main():
     test_roster_cli()
     test_flag_subcommand()
     test_mirror_commit()
+    test_derive_status()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 

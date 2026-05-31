@@ -37,6 +37,53 @@ PRESENCE_WINDOW_SEC = 1800  # 30 min: active if a bus msg OR commit within this
 HEARTBEAT_WINDOW_SEC = 25    # wake channel is "live" if the watch beat within this
                              # (office_watch.sh beats every ~3s; missing/stale = deaf)
 
+# Graded status tiers (seconds): the freshest signal's age picks the tier.
+STATUS_TIERS = (("active", 300), ("recent", 1800), ("quiet", 7200))  # else "cold"
+
+
+def _ago(sec):
+    """Seconds -> compact human age ('2m', '3h', '4d'). Mirrors the GUI's ago()."""
+    if sec is None:
+        return ""
+    if sec < 60:
+        return "{0}s".format(int(sec))
+    if sec < 3600:
+        return "{0}m".format(int(sec // 60))
+    if sec < 86400:
+        return "{0}h".format(int(sec // 3600))
+    return "{0}d".format(int(sec // 86400))
+
+
+def freshest_signal(last_said_sec, last_commit_sec):
+    """Return (age_sec, source) for the most-recent signal, or (None, None)."""
+    cands = []
+    if last_said_sec is not None:
+        cands.append((last_said_sec, "said"))
+    if last_commit_sec is not None:
+        cands.append((last_commit_sec, "commit"))
+    if not cands:
+        return (None, None)
+    return min(cands, key=lambda c: c[0])
+
+
+def derive_status(last_said_sec, last_commit_sec, wake_alive):
+    """Grade a brother into a tier + an HONEST label that names the signal's
+    source + age and folds in wake-reachability. Never claims certainty the
+    signals don't support (spec §2.1)."""
+    age, source = freshest_signal(last_said_sec, last_commit_sec)
+    if age is None:
+        tier, label = "cold", "cold · no signal"
+    else:
+        tier = "cold"
+        for name, bound in STATUS_TIERS:
+            if age <= bound:
+                tier = name
+                break
+        label = "{0} · {1} {2} ago".format(tier, source, _ago(age))
+    if not wake_alive:
+        label += " · wake DOWN"
+    return tier, label
+
 _AGENT_TAG = re.compile(r"^\[Agent\s*#?\s*(\d+)", re.IGNORECASE)
 
 
