@@ -11,13 +11,18 @@ start "The Office (server)" cmd /c "python scripts\office\office_web.py 8787"
 :: Give the server a moment to bind the port before the window loads.
 ping -n 2 127.0.0.1 >nul
 
-:: Prefer Edge (ships on every Win11), then Chrome, then default browser.
+:: Open in a STANDALONE app-window. A dedicated --user-data-dir is REQUIRED:
+:: without it, if Edge/Chrome is already running, the launch hands off to the
+:: existing instance and ignores --app (you get a blank/normal window). The
+:: dedicated profile forces a fresh instance that honours app-mode, and it
+:: persists window size/position across launches.
 set "EDGE=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
 set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+set "OFFICE_PROFILE=%LOCALAPPDATA%\TheOffice\chromium"
 if exist "%EDGE%" (
-  start "" "%EDGE%" --app=%OFFICE_URL%
+  start "" "%EDGE%" --app=%OFFICE_URL% --user-data-dir="%OFFICE_PROFILE%" --no-first-run --no-default-browser-check
 ) else if exist "%CHROME%" (
-  start "" "%CHROME%" --app=%OFFICE_URL%
+  start "" "%CHROME%" --app=%OFFICE_URL% --user-data-dir="%OFFICE_PROFILE%" --no-first-run --no-default-browser-check
 ) else (
   start "" %OFFICE_URL%
 )
