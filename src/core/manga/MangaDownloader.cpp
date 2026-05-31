@@ -1,6 +1,7 @@
 #include "MangaDownloader.h"
 #include "MangaScraper.h"
 #include "core/JsonStore.h"
+#include "core/net/NetSeam.h"
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -24,7 +25,7 @@
 MangaDownloader::MangaDownloader(JsonStore* store, QObject* parent)
     : QObject(parent)
     , m_store(store)
-    , m_nam(new QNetworkAccessManager(this))
+    , m_nam(tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("manga-download")))
 {
     loadRecords();
 }

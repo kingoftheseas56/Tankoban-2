@@ -1,6 +1,7 @@
 #include "ComicsDownloadsPage.h"
 
 #include "core/manga/MangaDownloadIndex.h"
+#include "core/net/NetSeam.h"
 #include "ui/ContextMenuHelper.h"
 
 #include <QDateTime>
@@ -245,7 +246,7 @@ QWidget* ComicsDownloadsPage::makeCoverWidget(const QString& coverUrl, const QSt
     }
 
     if (!m_coverNam)
-        m_coverNam = new QNetworkAccessManager(this);
+        m_coverNam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("comics-downloads-cover"));
     QNetworkRequest req((QUrl(coverUrl)));
     // Browser UA — Fandom (static.wikia.nocookie.net) 403s non-browser agents;
     // mirrors ComicsSeriesView::loadCoverUrlForVolume.
