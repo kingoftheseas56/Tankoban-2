@@ -1912,7 +1912,15 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                           "lease_list",
                           // v1.12 network observability (Congress 9, Agent 9)
                           // net-list-requests returns the observer ring buffer.
-                          "net_list_requests" };
+                          // net-block-host / net-unblock-host / net-throttle-set
+                          // / net-throttle-clear are write-gated (DEV_WRITE=1).
+                          // net-list-rules is read-only.
+                          "net_list_requests",
+                          "net_block_host",
+                          "net_unblock_host",
+                          "net_list_rules",
+                          "net_throttle_set",
+                          "net_throttle_clear" };
         // v1.9 cross-cutting system state + introspection layer (Phase D.6,
         // 2026-05-19). 27 commands across 11 prefixes. Backed by
         // SystemIntrospection. Write-capable subset (8) gates on
@@ -1944,6 +1952,85 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         return reply({
             {"requests", tankoban::net::NetSeam::instance()->requestListJson()}
         });
+    }
+
+    if (cmd == QLatin1String("net_list_rules")) {
+        QJsonArray blockArr, throttleArr;
+        const auto blocks = tankoban::net::NetSeam::instance()->listBlockRules();
+        for (const auto& r : blocks) {
+            QJsonObject o;
+            o["host"] = r.host;
+            o["enabled"] = r.enabled;
+            blockArr.append(o);
+        }
+        const auto throttles = tankoban::net::NetSeam::instance()->listThrottleRules();
+        for (const auto& r : throttles) {
+            QJsonObject o;
+            o["host"] = r.host.isEmpty()
+                ? QStringLiteral("*") : r.host;
+            o["latencyMs"] = r.latencyMs;
+            throttleArr.append(o);
+        }
+        return reply({
+            {"blockRules", blockArr},
+            {"throttleRules", throttleArr}
+        });
+    }
+
+    // ── Write-gated net commands (net_block_host / net_unblock_host /
+    //     net_throttle_set / net_throttle_clear) ──
+    if (cmd == QLatin1String("net_block_host")
+        || cmd == QLatin1String("net_unblock_host")
+        || cmd == QLatin1String("net_throttle_set")
+        || cmd == QLatin1String("net_throttle_clear"))
+    {
+        const QByteArray write = qgetenv("TANKOBAN_DEV_WRITE");
+        if (write != "1") {
+            return err("DEV_WRITE_DISABLED",
+                QStringLiteral("write-capable command '%1' requires "
+                               "TANKOBAN_DEV_WRITE=1").arg(cmd));
+        }
+
+        const QString host = payload.value(
+            QStringLiteral("host")).toString().trimmed().toLower();
+
+        if (cmd == QLatin1String("net_block_host")) {
+            if (host.isEmpty())
+                return err("BAD_REQUEST", "payload.host required");
+            tankoban::net::NetSeam::instance()->setBlockRule({host, true});
+            return reply({{"blocked", host}});
+        }
+
+        if (cmd == QLatin1String("net_unblock_host")) {
+            if (host.isEmpty())
+                return err("BAD_REQUEST", "payload.host required");
+            tankoban::net::NetSeam::instance()->clearBlockRule(host);
+            return reply({{"unblocked", host}});
+        }
+
+        if (cmd == QLatin1String("net_throttle_set")) {
+            if (host.isEmpty())
+                return err("BAD_REQUEST", "payload.host required");
+            const int latencyMs = payload.value(
+                QStringLiteral("latencyMs")).toInt(-1);
+            if (latencyMs < 0)
+                return err("BAD_REQUEST",
+                    "payload.latencyMs required (non-negative int)");
+            tankoban::net::NetSeam::instance()->setThrottleRule(
+                {host, latencyMs});
+            return reply({{"throttled", host}, {"latencyMs", latencyMs},
+                          {"enforced", false},
+                          {"note", QStringLiteral("rule recorded + listable; "
+                              "real latency injection is NYI (follow-on) — see "
+                              "the throttle note in NetSeam.cpp createRequest()")}});
+        }
+
+        if (cmd == QLatin1String("net_throttle_clear")) {
+            if (host.isEmpty())
+                return err("BAD_REQUEST", "payload.host required");
+            tankoban::net::NetSeam::instance()->clearThrottleRule(host);
+            return reply({{"throttleCleared", host}});
+        }
     }
 
     if (cmd == QLatin1String("get_state"))

@@ -1493,6 +1493,37 @@ int main(int argc, char** argv)
             }
             payload["value"] = (v == QLatin1String("true"));
         }
+    } else if (sub == QLatin1String("net-block-host")) {
+        if (a.size() < 3) {
+            err << "net-block-host requires <host>\n";
+            return 64;
+        }
+        payload["host"] = a[2];
+    } else if (sub == QLatin1String("net-unblock-host")) {
+        if (a.size() < 3) {
+            err << "net-unblock-host requires <host>\n";
+            return 64;
+        }
+        payload["host"] = a[2];
+    } else if (sub == QLatin1String("net-throttle-set")) {
+        if (a.size() < 4) {
+            err << "net-throttle-set requires <host|global> <latency-ms>\n";
+            return 64;
+        }
+        payload["host"] = a[2];
+        bool ok = false;
+        const int ms = a[3].toInt(&ok);
+        if (!ok || ms < 0) {
+            err << "net-throttle-set latency-ms must be a non-negative integer\n";
+            return 64;
+        }
+        payload["latencyMs"] = ms;
+    } else if (sub == QLatin1String("net-throttle-clear")) {
+        if (a.size() < 3) {
+            err << "net-throttle-clear requires <host|global>\n";
+            return 64;
+        }
+        payload["host"] = a[2];
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -1572,7 +1603,8 @@ int main(int argc, char** argv)
                // v1.10 lease registry.
                || sub == QLatin1String("lease-list")
                // v1.12 network observability (Congress 9).
-               || sub == QLatin1String("net-list-requests")) {
+               || sub == QLatin1String("net-list-requests")
+               || sub == QLatin1String("net-list-rules")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";

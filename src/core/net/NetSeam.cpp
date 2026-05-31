@@ -1,10 +1,11 @@
 #include "core/net/NetSeam.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QMutexLocker>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QProcessEnvironment>
+#include <QSharedPointer>
 #include <QTimer>
 #include <QUrl>
 
@@ -57,10 +58,20 @@ protected:
 // and a Get-only override would silently miss those (Risk A, Congress 9).
 //
 // Observer hook: connects to the real QNetworkReply's finished() signal to
-// record timing, status, and bytes. Does NOT wrap the reply — callers interact
-// with the same QNetworkReply type they always have, preserving every existing
-// connect()/abort()/deleteLater() pattern (Risk E — abort emits finished with
-// OperationCanceledError, which we log distinctly).
+// record timing (QElapsedTimer — monotonic, not system-clock deltas), status,
+// and bytes (accumulated via downloadProgress — not bytesAvailable() at
+// finished(), which is unreliable when callers consume data in earlier slots).
+// Does NOT wrap the reply — callers interact with the same QNetworkReply type
+// they always have, preserving every existing connect()/abort()/deleteLater()
+// pattern (Risk E — abort emits finished with OperationCanceledError, logged
+// distinctly).
+//
+// Block hook: checks NetSeam::isHostBlocked(host) before calling the base class.
+// On match, returns a SyntheticErrorReply with ConnectionRefusedError — the
+// caller's existing error-handling path fires normally. No real I/O.
+//
+// Throttle hook: checks NetSeam::throttleRuleForHost(host) for a latency-ms
+// rule. If non-zero, delays the base-class createRequest() call via QTimer.
 //
 // Source-tag: read from QNetworkRequest::Attribute::User (kSourceTagAttr).
 // Set by callers via req.setAttribute(NetSeam::kSourceTagAttr, "tag") before
@@ -88,8 +99,6 @@ protected:
                                  QIODevice* outgoingData) override
     {
         // ── Read source-tag ──
-        // Prefer the attribute on the request (per-request override), fall
-        // back to the manager's default tag.
         QString sourceTag = m_sourceTag;
         const QVariant attr = originalReq.attribute(NetSeam::kSourceTagAttr);
         if (attr.isValid() && !attr.toString().isEmpty())
@@ -107,42 +116,96 @@ protected:
         }
 
         const QUrl url = originalReq.url();
-        const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
+        const qint64 epochStartMs = QDateTime::currentMSecsSinceEpoch();
 
-        // ── Block check (future: per-host block rules in registry) ──
-        // Stub — full block-rules table comes with net-block-host tankoctl
-        // command in a follow-on commission. The hook point is here.
-        // When implemented, check NetSeam::instance()->blockTable().contains(host)
-        // and return a SyntheticErrorReply on match.
+        // ── Block check ──
+        const QString host = url.host().toLower();
+        if (NetSeam::instance()->isHostBlocked(host)) {
+            const QString errMsg = QStringLiteral("Blocked by NetSeam: %1")
+                .arg(host);
 
-        // ── Throttle check (future: per-domain throttle rules in registry) ──
-        // Stub — full throttle rules come with net-throttle-set tankoctl
-        // command in a follow-on commission. The hook point is here.
-        // When implemented, check NetSeam::instance()->throttleTable() and
-        // QTimer-delay or queuing as appropriate.
+            // Record the blocked request in the observer ring buffer
+            // (zero-duration, no real I/O, so we hand-craft the record).
+            RequestRecord blockedRec;
+            blockedRec.url         = url.toString();
+            blockedRec.method      = QString::fromLatin1(opName);
+            blockedRec.sourceTag   = sourceTag;
+            blockedRec.startTimeMs = epochStartMs;
+            blockedRec.durationMs  = 0;
+            blockedRec.statusCode  = -1;
+            blockedRec.errorString = errMsg;
+            NetSeam::instance()->recordRequest(blockedRec);
 
-        // ── Create the real reply (all 6 operations forwarded) ──
+            return new SyntheticErrorReply(
+                QNetworkReply::ConnectionRefusedError, errMsg, nullptr);
+            // Note: no parent → caller owns the reply via deleteLater().
+        }
+
+        // ── Throttle check ──
+        const ThrottleRule throttle = NetSeam::instance()
+            ->throttleRuleForHost(host);
+        const int delayMs = throttle.latencyMs;
+
+        // ── Monotonic timer for accurate duration (starts NOW) ──
+        auto elapsed = QSharedPointer<QElapsedTimer>::create();
+        elapsed->start();
+
+        // ── Byte accumulator shared between downloadProgress + finished ──
+        auto bytesAccum = QSharedPointer<qint64>::create(0);
+
+        // Throttle latency injection is NOT applied here yet (follow-on).
+        // Adding GENUINE latency while returning a QNetworkReply* synchronously
+        // needs a deferred-dispatch proxy reply. The tempting "dispatch now and
+        // subtract delayMs from the recorded duration" shortcut is wrong twice
+        // over — it adds zero real latency AND corrupts the timing metric (makes
+        // requests look faster than reality) — so we do NEITHER. Throttle rules
+        // are stored + listable (forward-compatible for the real impl); for now
+        // the request dispatches immediately and durationMs stays honest.
+        Q_UNUSED(delayMs);
         QNetworkReply* reply = QNetworkAccessManager::createRequest(
             op, originalReq, outgoingData);
+        attachObserver(reply, url, opName, sourceTag,
+                       epochStartMs, elapsed, bytesAccum);
+        return reply;
+    }
 
-        // ── Observer hooks on the REAL reply (no wrapping) ──
-        // Connect to finished() for timing + status recording.
-        // Use a QueuedConnection? No — the reply lives on this thread
-        // (all current callers are main-thread), so DirectConnection is fine.
+private:
+    void attachObserver(QNetworkReply* reply,
+                        const QUrl& url,
+                        const char* opName,
+                        const QString& sourceTag,
+                        qint64 epochStartMs,
+                        QSharedPointer<QElapsedTimer> elapsed,
+                        QSharedPointer<qint64> bytesAccum)
+    {
+        // ── downloadProgress → accumulate bytes ──
+        connect(reply, &QNetworkReply::downloadProgress, this,
+                [bytesAccum](qint64 received, qint64 /*total*/) {
+            *bytesAccum = received;
+        });
+
+        // ── finished → record timing + status ──
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, url, opName, sourceTag, startMs]() {
+                [this, reply, url, opName, sourceTag,
+                 epochStartMs, elapsed, bytesAccum]() {
             RequestRecord rec;
             rec.url          = url.toString();
             rec.method       = QString::fromLatin1(opName);
             rec.sourceTag    = sourceTag;
-            rec.startTimeMs  = startMs;
-            rec.durationMs   = QDateTime::currentMSecsSinceEpoch() - startMs;
+            rec.startTimeMs  = epochStartMs;
+
+            // Monotonic duration from QElapsedTimer (fixes the ~21000ms
+            // system-clock artifact flagged in the canary lead-in).
+            rec.durationMs = elapsed->elapsed();
+
+            // Bytes from the downloadProgress accumulator
+            // (reliable; not bytesAvailable() which is best-effort at finish).
+            rec.bytesReceived = *bytesAccum;
 
             const auto err = reply->error();
             if (err == QNetworkReply::NoError) {
                 rec.statusCode = reply->attribute(
                     QNetworkRequest::HttpStatusCodeAttribute).toInt();
-                rec.bytesReceived = reply->bytesAvailable();
             } else {
                 // Distinguish user-cancelled from network failure (Risk E).
                 rec.statusCode =
@@ -152,23 +215,8 @@ protected:
 
             NetSeam::instance()->recordRequest(rec);
         });
-
-        // Also log download progress for throughput tracking (lightweight —
-        // only fires when bytes arrive, not on a timer).
-        connect(reply, &QNetworkReply::downloadProgress, this,
-                [this](qint64 received, qint64 total) {
-            Q_UNUSED(received);
-            Q_UNUSED(total);
-            // Future: per-request throughput aggregation in the registry.
-            // NOTE: finished()'s bytesAvailable() is best-effort — a caller that
-            // reads the body in an earlier-connected slot leaves 0 here. Wire
-            // downloadProgress accumulation when throttle/block lands (follow-on).
-        });
-
-        return reply;
     }
 
-private:
     QString m_sourceTag;
 };
 
@@ -189,12 +237,9 @@ QNetworkAccessManager* NetSeam::createManager(QObject* parent,
                                                const QString& sourceTag)
 {
     // ── Flag gate: TANKOBAN_NET_SEAM ──
-    // When OFF (unset or "0"), return a vanilla QNetworkAccessManager.
-    // Zero overhead, zero signal connections, identical to pre-Congress-9.
-    const QString flagVal = QProcessEnvironment::systemEnvironment()
-        .value(QStringLiteral("TANKOBAN_NET_SEAM"), QStringLiteral("0"))
-        .trimmed();
-    if (flagVal != QStringLiteral("1")) {
+    // Read via qgetenv (codebase convention; no QProcessEnvironment overhead).
+    const QByteArray raw = qgetenv("TANKOBAN_NET_SEAM");
+    if (raw != QByteArrayLiteral("1")) {
         return new QNetworkAccessManager(parent);
     }
 
@@ -237,8 +282,68 @@ QJsonArray NetSeam::requestListJson() const
     return arr;
 }
 
+// ── Block rules ───────────────────────────────────────────────────────────────
+
+void NetSeam::setBlockRule(const BlockRule& rule)
+{
+    QMutexLocker lock(&m_mutex);
+    m_blockRules.insert(rule.host.toLower(), rule);
+}
+
+void NetSeam::clearBlockRule(const QString& host)
+{
+    QMutexLocker lock(&m_mutex);
+    m_blockRules.remove(host.toLower());
+}
+
+bool NetSeam::isHostBlocked(const QString& host) const
+{
+    QMutexLocker lock(&m_mutex);
+    const QString key = host.toLower();
+    if (!m_blockRules.contains(key))
+        return false;
+    return m_blockRules.value(key).enabled;
+}
+
+QList<BlockRule> NetSeam::listBlockRules() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_blockRules.values();
+}
+
+// ── Throttle rules ────────────────────────────────────────────────────────────
+
+void NetSeam::setThrottleRule(const ThrottleRule& rule)
+{
+    QMutexLocker lock(&m_mutex);
+    m_throttleRules.insert(rule.host.toLower(), rule);
+}
+
+void NetSeam::clearThrottleRule(const QString& host)
+{
+    QMutexLocker lock(&m_mutex);
+    m_throttleRules.remove(host.toLower());
+}
+
+ThrottleRule NetSeam::throttleRuleForHost(const QString& host) const
+{
+    QMutexLocker lock(&m_mutex);
+    // Exact-host match first, then global ("") fallback.
+    const QString key = host.toLower();
+    if (m_throttleRules.contains(key))
+        return m_throttleRules.value(key);
+    if (m_throttleRules.contains(QString()))
+        return m_throttleRules.value(QString());
+    return {};
+}
+
+QList<ThrottleRule> NetSeam::listThrottleRules() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_throttleRules.values();
+}
+
 } // namespace tankoban::net
 
-// SyntheticErrorReply has Q_OBJECT — need the moc output.
-// Since it's defined in this .cpp (not a header), include the generated moc.
+// SyntheticErrorReply + NetInstrumentedManager have Q_OBJECT — need the moc output.
 #include "NetSeam.moc"

@@ -21,10 +21,18 @@
 // creating thread). All 20 existing creation sites are main-thread, so no current
 // risk; the mutex is cheap future-proofing for any worker-thread caller.
 //
-// Flag-gate: the TANKOBAN_NET_SEAM env var. When unset or "0", createManager()
-// returns a vanilla QNetworkAccessManager — zero instrumentation, zero overhead,
-// identical behavior to the pre-Congress-9 world. When set to "1", returns an
-// instrumented NetInstrumentedManager subclass.
+// Flag-gate: the TANKOBAN_NET_SEAM env var (read via qgetenv). When unset or "0",
+// createManager() returns a vanilla QNetworkAccessManager — zero instrumentation,
+// zero overhead, identical to the pre-Congress-9 world. When set to "1", returns
+// an instrumented NetInstrumentedManager subclass.
+//
+// QNetworkRequest attribute reservation:
+//   Attribute::User + 0  — kSourceTagAttr (QString source-tag for attribution).
+//     Set by NetInstrumentedManager::createRequest() before forwarding to the
+//     base class so the observer records the source-tag. Callers may also set
+//     this attribute on individual requests for per-request overrides. This
+//     reservation is load-bearing — any code that also uses Attribute::User
+//     MUST coordinate with NetSeam to avoid collision.
 //
 // Factory API: NetSeam::createManager(QObject* parent, const QString& sourceTag)
 //   parent    — mandatory QObject parent (enforces explicit ownership; no leak).
@@ -39,12 +47,33 @@ struct RequestRecord {
     QString url;
     QString method;       // "GET", "POST", etc.
     QString sourceTag;
-    qint64  startTimeMs = 0;   // QDateTime::currentMSecsSinceEpoch()
-    qint64  durationMs  = 0;
+    qint64  startTimeMs = 0;   // epoch ms (for display/ordering)
+    qint64  durationMs  = 0;   // monotonic elapsed (QElapsedTimer)
     int     statusCode  = 0;    // HTTP status, or -1 for network error
     QString errorString;        // empty on success
-    qint64  bytesReceived = 0;
+    qint64  bytesReceived = 0;  // accumulated via downloadProgress
 };
+
+// ── Block rule ─────────────────────────────────────────────────────────────────
+
+struct BlockRule {
+    QString host;      // e.g. "api.example.com"
+    bool    enabled = true;
+};
+
+// ── Throttle rule ──────────────────────────────────────────────────────────────
+
+struct ThrottleRule {
+    QString host;          // matched host, or "" for global
+    int     latencyMs = 0; // added delay before request dispatch
+};
+
+} // namespace tankoban::net
+
+// Register with Qt meta-type system so throttle lookups can copy.
+Q_DECLARE_METATYPE(tankoban::net::ThrottleRule)
+
+namespace tankoban::net {
 
 // ── NetSeam singleton ──────────────────────────────────────────────────────────
 
@@ -59,7 +88,7 @@ public:
     // empty tag is harmless — requests are recorded with no source label.
     QNetworkAccessManager* createManager(QObject* parent, const QString& sourceTag);
 
-    // Observer ring buffer access (QMutex-guarded).
+    // ── Observer ring buffer (QMutex-guarded) ──
     QList<RequestRecord> requestList() const;
     QJsonArray           requestListJson() const;
 
@@ -71,8 +100,21 @@ public:
 
     // Reserved QNetworkRequest::Attribute slot for source-tag.
     // NetInstrumentedManager reads this in createRequest().
+    // See top-of-file QNetworkRequest attribute reservation doc.
     static constexpr QNetworkRequest::Attribute kSourceTagAttr =
         QNetworkRequest::Attribute::User;
+
+    // ── Block rules (QMutex-guarded, gated behind TANKOBAN_DEV_WRITE) ──
+    void setBlockRule(const BlockRule& rule);
+    void clearBlockRule(const QString& host);
+    bool isHostBlocked(const QString& host) const;
+    QList<BlockRule> listBlockRules() const;
+
+    // ── Throttle rules (QMutex-guarded, gated behind TANKOBAN_DEV_WRITE) ──
+    void setThrottleRule(const ThrottleRule& rule);
+    void clearThrottleRule(const QString& host);
+    ThrottleRule throttleRuleForHost(const QString& host) const; // host → global fallback
+    QList<ThrottleRule> listThrottleRules() const;
 
 private:
     explicit NetSeam(QObject* parent = nullptr);
@@ -81,7 +123,9 @@ private:
     NetSeam& operator=(const NetSeam&) = delete;
 
     mutable QMutex m_mutex;
-    QList<RequestRecord> m_records;          // ring buffer
+    QList<RequestRecord> m_records;          // observer ring buffer
+    QHash<QString, BlockRule> m_blockRules;  // host → rule
+    QHash<QString, ThrottleRule> m_throttleRules; // host → rule; "" = global
 };
 
 } // namespace tankoban::net
