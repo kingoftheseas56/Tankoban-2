@@ -47,6 +47,10 @@ struct MangaVolume {
     // MangaFire-specific raw chapter strings (e.g. "0.01", "5.5") preserved verbatim.
     QString      chapterStartRaw;
     QString      chapterEndRaw;
+    // Western catalogue (COMICS_WESTERN_CATALOGUE 2026-05-31, Agent 2): source
+    // page href for a collected edition (RCO /Comic/<slug>/<item>); empty for
+    // manga. Carried for the GetComics download path (Task 8). Additive only.
+    QString      sourceHref;
 };
 
 // Schema version stamp. Bumping this constant invalidates all on-disk caches.

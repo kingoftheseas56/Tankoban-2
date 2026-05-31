@@ -26,6 +26,7 @@
 #include "core/manga/mangaupdates/VolumeMetadataResolver.h"
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/LocalMangaCatalogLoader.h"
+#include "core/manga/WesternCatalogLoader.h"
 #include "core/manga/mangafire/MangaFireCatalogClient.h"
 #include "core/manga/mangafire/MangaWeebCentralResolver.h"
 #include "core/torrent/TorrentClient.h"
@@ -1271,6 +1272,47 @@ void ComicsPage::buildUI()
     connect(m_seriesView, &SeriesView::issueSelected, this, &ComicsPage::openComic);
     m_stack->addWidget(m_seriesView);
 
+    // ── Manga / Western mode toggle (top chrome, COMICS_WESTERN_CATALOGUE
+    //    Task 7 2026-05-31, Agent 2). Mode-pill aesthetic: gray/black/white,
+    //    no color, no icon (feedback_no_color_no_emoji). Manga is the default
+    //    left state and its path is untouched; Western is the additive shelf. ──
+    {
+        const QString pillQss = QStringLiteral(
+            "QPushButton#ComicsModePill {"
+            "  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);"
+            "  border-radius: 6px; color: rgba(238,238,238,0.70); padding: 5px 16px; font-size: 13px; }"
+            "QPushButton#ComicsModePill:hover { border: 1px solid rgba(255,255,255,0.25); }"
+            "QPushButton#ComicsModePill:checked {"
+            "  background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.34); color: #fff; }");
+
+        m_mangaTabBtn = new QPushButton(tr("Manga"));
+        m_mangaTabBtn->setObjectName("ComicsModePill");
+        m_mangaTabBtn->setCheckable(true);
+        m_mangaTabBtn->setChecked(true);
+        m_mangaTabBtn->setCursor(Qt::PointingHandCursor);
+        m_mangaTabBtn->setStyleSheet(pillQss);
+
+        m_westernTabBtn = new QPushButton(tr("Western"));
+        m_westernTabBtn->setObjectName("ComicsModePill");
+        m_westernTabBtn->setCheckable(true);
+        m_westernTabBtn->setCursor(Qt::PointingHandCursor);
+        m_westernTabBtn->setStyleSheet(pillQss);
+
+        connect(m_mangaTabBtn,   &QPushButton::clicked, this, &ComicsPage::showMangaMode);
+        connect(m_westernTabBtn, &QPushButton::clicked, this, &ComicsPage::showWesternMode);
+
+        auto* modeRow = new QHBoxLayout();
+        modeRow->setContentsMargins(20, 12, 20, 0);
+        modeRow->setSpacing(8);
+        modeRow->addWidget(m_mangaTabBtn);
+        modeRow->addWidget(m_westernTabBtn);
+        modeRow->addStretch();
+        layout->addLayout(modeRow);
+    }
+
+    // Western browse grid as its own m_stack screen (index captured).
+    buildWesternScreen();
+
     layout->addWidget(m_stack, 1);
 }
 
@@ -2185,6 +2227,125 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
     dispatchCatalogResolve(fandomSeriesSlugFromTitle(record.title),
                            /*titleHint*/record.title);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+}
+
+// ── COMICS_WESTERN_CATALOGUE Task 7 (2026-05-31, Agent 2) ───────────────────
+// Western browse shelf. A separate browse grid (its own m_stack screen) lists
+// the curated Western series from data/western_catalogue/*.json; opening one
+// renders its collected editions through the SAME ComicsSeriesView tile path
+// that manga uses — but render-only, guarded against the manga enrichment path.
+
+void ComicsPage::buildWesternScreen()
+{
+    auto* scroll = new QScrollArea();
+    scroll->setObjectName("WesternGridScroll");
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setStyleSheet("QScrollArea#WesternGridScroll { background: transparent; border: none; }");
+
+    auto* page = new QWidget();
+    page->setObjectName("WesternGridPage");
+    page->setStyleSheet("QWidget#WesternGridPage { background: transparent; }");
+    auto* v = new QVBoxLayout(page);
+    v->setContentsMargins(20, 20, 20, 20);
+    v->setSpacing(16);
+
+    auto* heading = new QLabel(tr("WESTERN COMICS"), page);
+    heading->setObjectName("LibraryHeading");
+    v->addWidget(heading);
+
+    m_westernGrid = new TileStrip(page);
+    m_westernGrid->setMode(QStringLiteral("fixedGrid"));
+    v->addWidget(m_westernGrid);
+    v->addStretch();
+
+    // Single-click opens the Western series (collected-edition detail view).
+    connect(m_westernGrid, &TileStrip::tileSingleClicked, this, [this](TileCard* card) {
+        if (!card) return;
+        openWesternSeriesFromJson(card->property("westernJsonPath").toString());
+    });
+
+    scroll->setWidget(page);
+    m_westernScroll = scroll;
+    m_westernStackIndex = m_stack->addWidget(scroll);
+}
+
+void ComicsPage::refreshWesternGrid()
+{
+    if (!m_westernGrid) return;
+    m_westernGrid->clear();
+
+    const QString dirPath = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
+    QDir dir(dirPath);
+    const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.json"),
+                                            QDir::Files, QDir::Name);
+    for (const QString& f : files) {
+        const QString path = dir.absoluteFilePath(f);
+        const auto cat = tankoban::manga::WesternCatalogLoader::loadFromFile(path);
+        if (!cat.has_value()) continue;
+
+        // Shared series hero cover (may be empty -> TileCard shows a text tile;
+        // cover-tolerant by design until per-edition covers land).
+        const QString cover = cat->volumes.isEmpty()
+                                  ? QString()
+                                  : cat->volumes.first().coverUrlJapanese;
+        auto* card = new TileCard(cover, cat->seriesTitle, tr("Western"));
+        card->setProperty("westernJsonPath", path);
+        card->setProperty("seriesName", cat->seriesTitle);
+        m_westernGrid->addTile(card);
+    }
+}
+
+void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
+{
+    if (jsonPath.isEmpty() || !m_tyVolumeSeriesView) return;
+    const auto catalog = tankoban::manga::WesternCatalogLoader::loadFromFile(jsonPath);
+    if (!catalog.has_value()) {
+        qInfo("ComicsPage::openWesternSeriesFromJson: loadFromFile failed for %s",
+              qUtf8Printable(jsonPath));
+        return;
+    }
+
+    // Nav entry so the topbar Back chevron works (mirrors openSeriesByRecord,
+    // Western enteredFrom blob).
+    if (!m_inNavRestore) {
+        QJsonObject blob;
+        blob[QStringLiteral("seriesId")]    = catalog->seriesId;
+        blob[QStringLiteral("seriesTitle")] = catalog->seriesTitle;
+        blob[QStringLiteral("enteredFrom")] = QStringLiteral("western");
+        emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"),
+                                          catalog->seriesTitle, blob));
+    }
+    m_enteredDetailFrom        = Mode::Library;
+    m_mode                     = Mode::TankoyomiDetail;
+    m_currentDetailAnilistId   = 0;   // no AniList id => the enrichment path has nothing to chase
+    m_currentDetailSeriesTitle = catalog->seriesTitle;
+
+    // GUARD (Agent 1, domain owner): render DIRECTLY. Do NOT route through
+    // showSeries()/dispatchCatalogResolve() — those auto-fire AniList +
+    // mangafire resolution (COMICS_WC_AUTOENRICH), which would bleed MANGA
+    // enrichment onto a Western comic. populateVolumeRowsFromCatalog is
+    // pure-render/no-network (its own header comment confirms it), so the
+    // direct call is clean. Download wiring (source-routed) is Task 8.
+    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*catalog);
+    m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+}
+
+void ComicsPage::showMangaMode()
+{
+    if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(true);
+    if (m_westernTabBtn) m_westernTabBtn->setChecked(false);
+    if (m_stack) m_stack->setCurrentIndex(0);
+}
+
+void ComicsPage::showWesternMode()
+{
+    if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(false);
+    if (m_westernTabBtn) m_westernTabBtn->setChecked(true);
+    refreshWesternGrid();
+    if (m_stack && m_westernStackIndex >= 0)
+        m_stack->setCurrentIndex(m_westernStackIndex);
 }
 
 void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,

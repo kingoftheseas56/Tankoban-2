@@ -370,6 +370,18 @@ private:
 
     void openSeriesByRecord(const ComicsLibraryRecord& record);
 
+    // COMICS_WESTERN_CATALOGUE Task 7 (2026-05-31, Agent 2) — Western shelf.
+    // buildWesternScreen() adds the browse grid as a new m_stack screen;
+    // refreshWesternGrid() (re)scans data/western_catalogue/*.json into tiles;
+    // openWesternSeriesFromJson() does the GUARDED render-only open (direct
+    // populateVolumeRowsFromCatalog, never showSeries — no AniList/mangafire
+    // enrichment bleed onto a Western comic); show*Mode() drive the toggle.
+    void buildWesternScreen();
+    void refreshWesternGrid();
+    void openWesternSeriesFromJson(const QString& jsonPath);
+    void showMangaMode();
+    void showWesternMode();
+
     // Shared projection used by both onScanFinished (first-scan path)
     // and rebuildTiles (full-rebuild path). Keeps the two sites in sync.
     static SeriesInfo seriesInfoFromRecord(const ComicsLibraryRecord& r);
@@ -532,6 +544,18 @@ private:
     tankoban::manga::NyaaRuntimeSource*      m_nyaaRuntime   = nullptr;
     tankoban::manga::WeebCentralVolumePacker* m_weebCentralPacker = nullptr;
     tankoban::manga::comics::ComicsSeriesView* m_tyVolumeSeriesView = nullptr;
+
+    // COMICS_WESTERN_CATALOGUE Task 7 (2026-05-31, Agent 2). Western browse grid
+    // as a separate m_stack screen + a Manga/Western toggle in the top chrome.
+    // Western series render through the SAME m_tyVolumeSeriesView (render-only,
+    // no enrichment) via WesternCatalogLoader -> populateVolumeRowsFromCatalog.
+    // Manga path is untouched — Western is purely additive (own loader, own dir,
+    // own screen). m_westernStackIndex captured from addWidget (index-agnostic).
+    TileStrip*   m_westernGrid       = nullptr;
+    QScrollArea* m_westernScroll     = nullptr;
+    QPushButton* m_mangaTabBtn       = nullptr;
+    QPushButton* m_westernTabBtn     = nullptr;
+    int          m_westernStackIndex = -1;
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
     // index. Scans data/mangafire_catalog/*.json at construction; consulted
