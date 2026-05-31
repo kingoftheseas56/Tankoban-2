@@ -1,6 +1,7 @@
 #include "ui/player/SidecarProcess.h"
 
 #include "core/DebugLogBuffer.h"
+#include "core/net/NetSeam.h"
 
 #include <QCoreApplication>
 #include <QJsonDocument>
@@ -933,7 +934,7 @@ int SidecarProcess::sendSetSubtitleUrl(const QUrl& url, int offsetPx, int delayM
     const int pendingOffset = offsetPx;
     const int pendingDelay = delayMs;
 
-    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+    if (!m_nam) m_nam = tankoban::net::NetSeam::instance()->createManager(this, QStringLiteral("player-subtitle-dl"));
 
     QNetworkRequest req(url);
     req.setTransferTimeout(15000);
