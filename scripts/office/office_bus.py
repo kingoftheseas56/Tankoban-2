@@ -232,6 +232,18 @@ _AGENT_RE = re.compile(
     r"(?:you'?re|you are|i am|office:\s*i am|wake up,?)\s+agent\s*#?\s*(\d+)", re.IGNORECASE
 )
 _AGENT_RE2 = re.compile(r"\bagent[\s-]*#?\s*(\d+)\b", re.IGNORECASE)
+_COMMIT_AGENT_RE = re.compile(r"^\[Agent\s*#?\s*(\d+)", re.IGNORECASE)
+
+
+def cmd_mirror_commit(sha, *subject_parts):
+    """Mirror a commit into the room as an 'activity' line so off-channel WORK is
+    never invisible. FROM is the agent parsed from the '[Agent N' subject tag, or
+    'system' if untagged. Called by the git post-commit hook with (sha, subject)."""
+    subject = " ".join(subject_parts).strip()
+    m = _COMMIT_AGENT_RE.match(subject)
+    frm = ("agent" + m.group(1)) if m else "system"
+    msg = "{0} ({1})".format(subject[:80], sha)
+    cmd_append(frm, "all", "activity", "null", msg)  # prints seq
 
 
 def _detect_agent_num(prompt):
@@ -427,6 +439,8 @@ def main(argv):
         cmd_send(*rest)
     elif cmd == "flag":
         cmd_flag(*rest)
+    elif cmd == "mirror-commit":
+        cmd_mirror_commit(*rest)
     elif cmd == "deliver":
         cmd_deliver()
     elif cmd == "drain":

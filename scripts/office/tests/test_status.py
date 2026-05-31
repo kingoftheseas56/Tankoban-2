@@ -126,12 +126,32 @@ def test_flag_subcommand():
     check(rec["msg"] == "blocked on HTTP preload", "flag: message body intact")
 
 
+def test_mirror_commit():
+    env = _sandbox_env()
+    BUS_PY = os.path.join(HERE, "..", "office_bus.py")
+    # mirror-commit takes (sha, subject) so it's testable without a real commit.
+    subprocess.run([sys.executable, BUS_PY, "mirror-commit", "abc1234",
+                    "[Agent 4, stream] fix preload race"], env=env)
+    with open(env["OFFICE_BUS"], encoding="utf-8") as f:
+        rec = json.loads([x for x in f if x.strip()][-1])
+    check(rec["kind"] == "activity", "mirror: posts kind=activity")
+    check(rec["from"] == "agent4", "mirror: from = agent parsed from [Agent N tag")
+    check("abc1234" in rec["msg"], "mirror: msg includes short sha")
+    # Untagged commit -> from 'system', still mirrored.
+    subprocess.run([sys.executable, BUS_PY, "mirror-commit", "def5678",
+                    "merge branch master"], env=env)
+    with open(env["OFFICE_BUS"], encoding="utf-8") as f:
+        rec2 = json.loads([x for x in f if x.strip()][-1])
+    check(rec2["from"] == "system", "mirror: untagged commit -> from=system")
+
+
 def main():
     test_parse_agent_commits()
     test_bus_activity()
     test_compute_roster()
     test_roster_cli()
     test_flag_subcommand()
+    test_mirror_commit()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
