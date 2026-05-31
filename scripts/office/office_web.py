@@ -33,6 +33,8 @@ PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Office</title>
+<link rel="manifest" href="/office.webmanifest">
+<meta name="theme-color" content="#17212b">
 <style>
   :root{
     --bg:#0b141a; --panel:#17212b; --line:#0a1014; --txt:#e9edf0; --dim:#8696a0;
@@ -344,6 +346,14 @@ class Handler(BaseHTTPRequestHandler):
             allmsgs = _read_all_messages()
             maxseq = max((m.get("seq", 0) for m in allmsgs), default=0)
             self._send(200, json.dumps({"messages": msgs, "maxseq": maxseq}))
+            return
+        if self.path.startswith("/office.webmanifest"):
+            path = os.path.join(HERE, "office.webmanifest")
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._send(200, f.read(), "application/manifest+json")
+            except OSError:
+                self._send(404, json.dumps({"error": "no manifest"}))
             return
         if self.path.startswith("/roster"):
             try:
