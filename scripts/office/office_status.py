@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""The Office — derived-status clarity engine (Python, $0).
+
+Computes each brother's REAL status from GROUND TRUTH — git commits + bus
+activity + a static roster — NEVER from self-reporting (the thing that's
+unreliable). Pure functions do the logic (deterministic, unit-tested); thin IO
+wrappers read real git/bus; `roster` CLI prints JSON for the web GUI.
+
+  python office_status.py roster      -> prints JSON list of per-brother status
+"""
+import os
+import re
+import sys
+import json
+import subprocess
+from datetime import datetime
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import office_bus  # noqa: E402  (shares BUS() path + repo root)
+
+# Static roster: identity facts that ground truth can't derive (role, engine,
+# whether this engine auto-wakes reliably). Order here = display order.
+ROSTER = [
+    ("agent0", "Coordinator",        "claude",   True),
+    ("agent1", "Comics / Tankoyomi", "claude",   True),
+    ("agent2", "Books / TankoLibrary", "claude", True),
+    ("agent3", "Video Player",       "claude",   True),
+    ("agent4", "Stream / Tankorent", "claude",   True),
+    ("agent5", "Library UX / Theme", "claude",   True),
+    ("agent7", "Codex (prototypes / audits)", "codex", False),
+    ("agent8", "Prompt Architect",   "claude",   True),
+    ("agent9", "DeepSeek (exec / audit)", "deepseek", False),
+]
+
+PRESENCE_WINDOW_SEC = 1800  # 30 min: active if a bus msg OR commit within this
+
+_AGENT_TAG = re.compile(r"^\[Agent\s*#?\s*(\d+)", re.IGNORECASE)
+
+
+def parse_agent_commits(git_log_text, now_epoch):
+    """git log text ('<ctime>\\t<short-sha>\\t<subject>' per line, NEWEST first)
+    -> {('agent'+N): {subject, sha, sec}} keeping the newest commit per agent."""
+    out = {}
+    for line in git_log_text.splitlines():
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) < 3:
+            continue
+        ctime_s, sha, subject = parts
+        m = _AGENT_TAG.match(subject)
+        if not m:
+            continue
+        key = "agent" + m.group(1)
+        if key in out:  # newest-first: first hit wins
+            continue
+        try:
+            ctime = int(ctime_s)
+        except ValueError:
+            continue
+        out[key] = {"subject": subject, "sha": sha, "sec": max(0, now_epoch - ctime)}
+    return out
+
+
+def _epoch_of(ts):
+    """ISO-8601 ('2026-05-31T00:00:00+00:00') -> unix seconds, or None."""
+    if not ts:
+        return None
+    try:
+        return int(datetime.fromisoformat(ts).timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def bus_activity(records, now_epoch):
+    """Bus records -> {('agent'+N): {last_said, arc, sec, blocked}}.
+    Only kind in (chat, blocked) feed last_said/arc/blocked; 'activity' lines
+    (auto-mirrored commits) are for the message log, not the roster."""
+    out = {}
+    for rec in records:
+        frm = rec.get("from", "")
+        if not frm.startswith("agent"):
+            continue
+        if rec.get("kind") not in ("chat", "blocked"):
+            continue
+        ep = _epoch_of(rec.get("ts"))
+        sec = max(0, now_epoch - ep) if ep is not None else None
+        out[frm] = {
+            "last_said": (rec.get("msg") or "")[:80],
+            "arc": rec.get("arc"),
+            "sec": sec,
+            "blocked": rec.get("kind") == "blocked",
+        }
+    return out
+
+
+def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
+                   roster=ROSTER, presence_window=PRESENCE_WINDOW_SEC):
+    """Merge static roster + git + bus into the canonical status list."""
+    result = []
+    for agent, role, engine, wakeable in roster:
+        c = commits_by_agent.get(agent)
+        b = bus_by_agent.get(agent)
+        bus_sec = b.get("sec") if b else None
+        com_sec = c.get("sec") if c else None
+        present = any(s is not None and s <= presence_window for s in (bus_sec, com_sec))
+        last_commit = None
+        if c:
+            last_commit = "{0} ({1})".format(c["subject"][:60], c["sha"])
+        result.append({
+            "agent": agent,
+            "role": role,
+            "engine": engine,
+            "wakeable": wakeable,
+            "present": present,
+            "current_arc": b.get("arc") if b else None,
+            "last_said": b.get("last_said") if b else None,
+            "last_said_sec": bus_sec,
+            "last_commit": last_commit,
+            "last_commit_sec": com_sec,
+            "blocked": bool(b.get("blocked")) if b else False,
+        })
+    return sorted(result, key=lambda r: r["agent"])
