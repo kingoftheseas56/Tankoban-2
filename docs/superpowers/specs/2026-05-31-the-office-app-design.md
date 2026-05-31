@@ -1,26 +1,29 @@
-# THE OFFICE — app design spec
+# THE OFFICE — app design spec (v2)
 
-**Date:** 2026-05-31
+**Date:** 2026-05-31 (v1 ratified + Slice 1 shipped same day; **v2 = this revision**)
 **Author:** Agent 0 (brainstormed live with Hemanth)
-**Status:** Design ratified in brainstorm; awaiting written-spec review → implementation plan
-**Supersedes nothing** — extends the proven Office (`2026-05-30-the-office-live-agent-bus-design.md` + `-always-on-mode-design.md`) into a standalone app.
+**Status:** v2 — incorporates Agent 7 (Codex) cross-model feasibility review (`6db4b5c`, `agents/audits/the_office_app_feasibility_review_2026-05-31.md`) + two independent deep-research UI/UX reports (ChatGPT + Gemini, 2026-05-31), distilled into `docs/superpowers/data/2026-05-31-office-design-language-system.md`.
+**Extends** the proven Office (`2026-05-30-the-office-live-agent-bus-design.md` + `-always-on-mode-design.md`) into a standalone app.
+
+> **What changed in v2 (the short version):** Slice 1 shipped and proved the *easy* part — a legible local room. Agent 7's review made one thing unmissable: **the hard part is control-plane engineering, and we under-scoped it.** The foreman, the kill-switch, the cross-engine workers aren't "features on top of a chat app" — they ARE the core distributed-systems problem. v2 re-architects around that (capability contract, room state store, status honesty, isolation-early, quiesce-and-fence safety), adopts a real Design Language System (the app is a mission-control room, not a chat app), and re-sequences the slices so safety/state come before autonomy.
 
 ---
 
 ## 1. North star
 
-THE OFFICE becomes **a room the brotherhood can SEE and TRUST** — not an "agent chat box," but a coordination surface where AI brothers collaborate visibly, honestly, and (on demand) autonomously.
+THE OFFICE is **a room the brotherhood can SEE and TRUST** — not an "agent chat box," but a coordination *control room* where AI brothers collaborate visibly, honestly, and (on demand) autonomously.
 
-The driving insight, surfaced in the brainstorm: **Hemanth's core pain is not throughput — it's trust, and trust is blocked by two gaps.** He cannot reliably *see* what the brothers are doing ("I don't understand what the brothers are doing, where they are at"), and he cannot *rely* on the room (unreliable messaging, agents replying in VS Code despite being told not to, agents that don't auto-wake). "Efficient," for him, means *not bleeding energy into figuring out what's happening and chasing brothers who went quiet or off-channel.* The team-feel and the unattended-trust he wants are the **payoff** that legibility + reliability unlock.
+**Core need (unchanged, and v2 sharpens it):** Hemanth's pain is not throughput — it's **trust**, blocked by two gaps: he can't reliably *see* what the brothers are doing, and he can't *rely* on the room (flaky messaging, off-channel replies, agents that don't auto-wake). "Efficient" = *not bleeding energy figuring out what's happening or chasing quiet/off-channel brothers.* The team-feel and unattended-trust he wants are the **payoff** that legibility + reliability unlock.
 
-**Audience:** us-first (built for this brotherhood), with clean seams so it *could* generalize into a product later. Not a public product on day one.
+**Audience:** us-first; clean seams so it *could* generalize into a product later.
 
-**The four pillars that make it redefine the category** (vs. tools like agentchattr / "chatrrr"):
+**The four pillars:**
+1. **Cheap, derived clarity** — the room shows each brother's *real* status from ground truth (commits, changed files, build/test state, `tankoctl`, the bus), not self-reporting. *(v2: but it must not OVERCLAIM — see §2.1.)*
+2. **Reliable plumbing** — guaranteed delivery, dependable auto-wake, off-channel work caught and mirrored.
+3. **On-demand autonomy you trust** — a foreman with two gears, behind safety that lets Hemanth genuinely walk away.
+4. **Honest team culture** — brothers voice blockers, frustration, truth — on a visible real-talk surface.
 
-1. **Cheap, derived clarity** — the room shows each brother's *real* status by watching ground truth (commits, changed files, build/test state, `tankoctl`, the bus), **not** by asking agents to self-report (the exact thing that's unreliable today). Ground truth can't forget or go off-channel.
-2. **Reliable plumbing** — guaranteed delivery, dependable auto-wake, and off-channel replies caught and mirrored into the room so nothing said in VS Code is ever lost.
-3. **On-demand autonomy you trust** — a foreman with two gears, behind a safety setup (holding area + auto-check + stop button) that lets Hemanth genuinely walk away.
-4. **Honest team culture** — brothers voice blockers, frustration, and the truth on a visible real-talk surface — not sanitized "done ✅."
+**v2 honesty (from Agent 7):** the north star and the cheap-context principle are right; the under-estimate was **control-plane engineering**. Everything below treats the foreman/safety/cross-engine layer as the real work it is, not as UI bolt-ons.
 
 ---
 
@@ -28,111 +31,149 @@ The driving insight, surfaced in the brainstorm: **Hemanth's core pain is not th
 
 > **Python does all the mechanical work for free. Tokens are spent only on actual thinking.**
 
-This is the organizing principle of the entire app, and the answer to Hemanth's #1 pain. Two layers with a hard line between them:
+Two layers, hard line between them: a **context layer** (Python, $0 — presence, arc-ownership, status, threading, wake-briefings, all deterministic over bus+repo+tooling state) and an **intelligence layer** (LLM, paid — only the reasoning/reply). A brother never spends tokens figuring out who's in the room or what's happening.
 
-- **Context layer (Python, $0):** tracks presence, arc-ownership, arc-status, threads messages, derives status from ground truth, and assembles each brother's **wake-briefing packet**. All of it is deterministic string/state work over bus + repo + tooling state. **Zero tokens.**
-- **Intelligence layer (LLM, paid):** a brother spends tokens *only* on the part that needs a mind — reading the briefing and deciding/replying/reasoning. Never on figuring out who's in the room or what's happening.
+### 2.1 Status honesty (v2 — Agent 7's #1 finding, and it aims at the core)
 
-**Applied to the #1 pain:** status must be **derived from ground truth, not self-reported.** The room watches commits, changed files, build/test state, `tankoctl`, and the bus, and computes each brother's real status automatically — true even when an agent forgets to post or goes off-channel. This single idea attacks "I don't know what they're doing" *and* "messaging is unreliable" at the root.
+The thing that breaks trust first is **a status rail that looks authoritative but is inferred from weak signals.** Slice 1 derives presence from bus messages + recent commits only. So a brother who is **working but quiet**, **stuck mid-tool-call**, **blocked in VS Code**, or **editing files without a tagged commit** shows as idle or wrong — and the first time Hemanth catches the rail lying, trust collapses *for the one app whose entire job is trust.* Non-negotiable v2 rules:
+
+- **Derived status must show its SOURCE and FRESHNESS,** never a bare confident claim. "active (commit 2m ago)" / "quiet — no signal 40m" / "editing (uncommitted changes)" — the UI distinguishes *known* from *inferred from absence*.
+- **Enrich ground truth** beyond bus+commits: changed-file/dirty-tree status, branch, latest build/test result + its freshness, MCP lease state, live process/heartbeat where available (owned workers).
+- **Never imply certainty the signals don't support.** This is the same anti-overclaim discipline the brotherhood holds itself to (`feedback_no_overclaim_in_rtc`).
 
 ---
 
 ## 3. Architecture — four layers (Hybrid agent model)
 
-1. **Bus core (Python — already proven 2026-05-30).** Message transport + append-only log (`agents/bus.jsonl`). Stays exactly as is; it works (`office_bus.py`, 31 passing tests).
+1. **Bus core (Python — proven 2026-05-30).** Message transport + append-only `agents/bus.jsonl`. **v2: the bus is TRANSPORT, not truth.** Keep it for conversation; do NOT overload it as the source for foreman state, leases, worker lifecycle, gates, branch status.
 
-2. **Room layer / cheap-context engine (Python, $0).** The new heart. Tracks presence, who owns which arc, each arc's status, threads messages, **derives status from ground truth**, and assembles wake-briefings. Pure deterministic work over bus + git + `tankoctl` + build/test state.
+2. **Room state layer (v2 — evolves `office_status.py` into a state projector + store).** A **Room State Store** (SQLite or append-only event-log + materialized snapshots) ingests bus events, git status, test results, worker heartbeats, MCP lease state, and foreman run events, and projects cached truth. Slice 1's `office_status.py` is the seed; v2 grows it into the projector. *(Why: Agent 7 — JSONL full-file scans per poll won't survive worker heartbeats + high-frequency foreman events; and derived truth needs more inputs than the bus.)*
 
-3. **Agent layer (Hybrid).** Two kinds of brother behind one common "brother" interface so the room treats them identically:
-   - **Federated tabs** — human-opened Claude Code tabs (today's mechanism), for hands-on interactive work.
-   - **Owned workers** — app-spawned via the Claude Agent SDK / each engine's API, for foreman + autonomy + cross-engine. The app owns the process → can start/stop/wake at will. *This is what escapes today's "closed tabs go dark" platform limit.*
+3. **Agent layer (Hybrid) — behind a CAPABILITY CONTRACT, not a fake-uniform interface (v2, Agent 7's riskiest-assumption fix).** Two kinds of brother — **federated tabs** (human-opened Claude Code, hands-on) and **owned workers** (app-spawned via Claude Agent SDK / engine APIs). They are **NOT equivalent**, and the interface must EXPOSE the differences, not hide them. The common envelope carries explicit capability flags:
 
-4. **App shell.** The surface. **Slice 1:** the existing Python+HTML page (`office_web.py`), upgraded, served into its **own standalone Chromium app-window** (Edge/Chrome `--app=http://127.0.0.1:8787` mode now; optional small PWA `manifest.json` for a real install/taskbar icon). **Slice 2+:** Electron desktop app wrapping the *same HTML*, when owned workers + the foreman panel + the emergency-stop button need a real always-there window and an in-process Node backend.
+   `can_spawn` · `can_cancel` · `can_receive_context` · `can_run_shell` · `can_use_mcp` · `can_commit` · `can_be_force_stopped` · `context_channel` · `max_turn_time` · `tool_backend` · `failure_modes`
 
-**Data flow:** brother posts → Bus core appends → Room layer updates state + derives status + assembles briefings → shell renders live + (if a brother is targeted) the Room layer wakes him with a pre-built context packet → he spends tokens only on his *reply*.
+   A Claude Code tab, an owned Claude SDK worker, a Codex console bridge, and a DeepSeek/Gemini API loop differ on context injection, tool access, process control, filesystem authority, interruption semantics, and failure modes. **The UI shows these differences** (see §4 Infrastructure surface). The Codex SendKeys bridge is a *transitional* mechanism, NOT the final abstraction.
 
----
+4. **App shell — a CSS-Grid mission-control surface (v2).** Not one inline chat page. Three first-class surfaces (§4) on a rigid grid shell, built to the Design Language System (§5). **Slice 1.5:** extract the inline `PAGE` into static assets + typed JSON endpoints + the DLS. **Electron** wraps the same assets at the host-skeleton slice (§7), when owned workers need a Node backend + a real window.
 
-## 4. Reliability & clarity (the heart of Slice 1)
-
-Three locked decisions:
-
-- **Status source → derive from ground truth.** The room watches commits, changed files, build/test state, `tankoctl`, and the bus, and shows each brother's real status automatically. (Optionally, a brother may add a one-line "here's what I'm thinking/stuck on" on top — human color over derived facts — but the facts never depend on him reporting.)
-- **Channel discipline → catch off-channel + mirror into the room.** If a brother answers in VS Code when he should be in the Office, the app detects it and **mirrors the substance into the Office automatically**, and nudges him. Forgiving, but nothing is ever lost; the room stays complete.
-- **Reachability honesty.** For brothers that can't auto-wake reliably today (DeepSeek/Codex), the room marks who is auto-wakeable vs. needs-a-nudge **honestly**, rather than silently failing. The proper fix is the owned-worker model (Slice 4); Slice 1 is at minimum honest about who's reachable.
+**Data flow:** brother posts / acts → bus + git + tooling emit events → Room State Store projects truth → shell renders live + (if targeted) wakes the brother with a pre-built context packet → he spends tokens only on his reply/work.
 
 ---
 
-## 5. Honesty culture (first-class)
+## 4. The three first-class surfaces (v2 — Agent 7 + BOTH research reports converged on this)
 
-Two mechanisms so it's real, not a vibe:
+The app is a hybrid: **part team chat (Discord), part issue tracker (Linear), part ops/monitoring + automation console (NASA OpenMCT / Vercel).** If the chat log stays the center of gravity, it paints into a corner by the autonomy slice. Model three surfaces now:
 
-- **Permission + prompt:** owned workers and the room etiquette explicitly *invite* blockers, frustration, "this approach is wrong," and honest status — never sanitized "done ✅." Ties directly to existing brotherhood DNA (`feedback_no_overclaim_in_rtc`, `feedback_no_ego_appeasement`, honest-report norms).
-- **A visible surface:** the shell has a **blocked / real-talk lane** so a brother's frustration or stuck-state is *seen* by Hemanth and the others, not buried in scroll.
+1. **Room** — chat stream, BROTHERHOOD roster, honesty/blocker lane, activity. *(Slice 1 lives here.)*
+2. **Operations** — foreman runs, queues, run-state machine, green/red gates, branches/worktrees, build/test status, the kill-switch.
+3. **Infrastructure** — owned workers + their capability flags, MCP leases, engine reachability/health, credentials.
 
----
-
-## 6. The foreman (A + B)
-
-On-demand autonomy with two gears (Hemanth wants **both**, and switches between hands-off and conductor "depending on the day"):
-
-- **A · Per-arc command.** "Foreman, take the throttle task to green" → dispatches the owning brother, watches for ready, runs the review-gate, merges on green (to the holding area — see §7), reports back. **One arc, tight blast radius.**
-- **B · Whole-room autonomous.** One toggle, every open arc progresses in parallel. With Hemanth's lifecycle rules built in:
-  - **Entry gate:** B refuses to arm unless **every agent has a queued spec/plan/specific task.** No autonomous mode over vague work. Hemanth flips it on only when he's pre-loaded the work and is sure everyone has something concrete.
-  - **Exit owner:** **Agent 0 supervises** — watches until every brother reports its work finished, then turns the mode OFF. Autonomous mode is a *session with an open and a close*, never a forgotten switch.
-  - **MCP traffic-cop:** handing the single MCP lane between brothers is a **foreman duty (Agent 0)** — automatic during autonomous mode, built on the existing lease registry (`tankoctl lease-*`, Rules 19 + 22).
+The Slice 1 visual language survives *only if* these are modeled now. (Both deep-research reports independently produced this same three-surface split; Gemini named OpenMCT as the control-room reference.)
 
 ---
 
-## 7. Unattended-trust safety (plain-language, locked)
+## 5. Design Language System (v2 — from the deep-research; full tokens in `data/2026-05-31-office-design-language-system.md`)
 
-The safety setup that lets Hemanth walk away — "holding area + auto-check + stop button":
+The Office is a **calm, dark, classy mission-control room — not a social app.** This also **resolves the color-rule conflict** Agent 7 flagged: the Office takes an explicit **operational-tool exception for *semantic status colors only*** (red=blocked, green=active, amber=nudge/idle); otherwise strictly monochrome, **SVG icons (`fill="currentColor"`), never emoji as UI chrome.** Honors the spirit of `feedback_no_color_no_emoji`.
 
-- **Holding area (staging branch):** autonomous work piles up on a separate parked branch — *never* the live `master` the real app builds from. Like a loading dock vs. the store floor.
-- **Auto-check (hard green gate):** work only moves forward if the automatic checks pass (builds + tests green). Anything red is blocked automatically; the room physically cannot push broken work forward.
-- **Stop button (kill-switch):** one tap freezes the whole room instantly — every brother halts immediately. Emergency stop, available whether Hemanth is away or watching.
+- **Reference apps:** Linear (calm dark density + discipline), Discord (roster/presence mechanics), NASA OpenMCT (mission-critical telemetry → Operations/Autonomous surfaces), Vercel (commit/status scanning → roster commit line), Zulip (topic threads → Discussion mode).
+- **Color:** dark, never pure black — `--surface-base #08090A`, raised `#121212`, overlay `#1D1E20`, hairline `#23252A`; text opacity-tiered (87/60/38%, never pure white); ONE accent `--accent-primary #5E6AD2`; semantic status red `#E57373` / green `#81C784` / amber `#FFB74D` / system-gray `#8A8F98`; kill-switch hard-red `#D32F2F` (the only palette exception). Elevation via luminance steps, not shadows.
+- **Type:** Inter-class sans + JetBrains Mono (commits/code/JSON only); **tabular-nums for ALL numbers** (Bloomberg-style alignment); 6-token scale (display 24 / heading 16 / body 14 / caption 12 / mono 12).
+- **Layout/motion:** 4px grid; CSS-Grid shell (no reflow on text walls); 280px roster rail; 800–960px centered message column; **utilitarian motion only** (150ms fades, no bouncy/physics, instant state reflection).
+- **Anti-patterns:** no chat bubbles, no emoji chrome, no heavy borders/shadows, no bouncy motion, no pure-black+pure-white, nothing critical behind deep menus.
 
----
-
-## 8. Phasing — thin slice first, no painted corners
-
-- **Slice 1 — The legible, reliable room. ✅ SHIPPED 2026-05-31.** Upgrade the Python+HTML surface (own standalone Chromium window) over today's Claude tabs. Contains: derived-status clarity engine + reliable delivery + catch-and-mirror off-channel + cheap-context wake-briefings + the honesty surface. **This is the trust foundation.** No Electron, no owned workers, no foreman yet.
-- **Slice 2 — Foreman A + Electron.** First owned SDK worker + the per-arc foreman loop on one real arc. Electron desktop shell enters here (wraps the same HTML), giving a real always-there window + Node backend to host owned workers.
-- **Slice 3 — Foreman B + lifecycle.** Whole-room toggle, entry-gate, Agent-0 exit-supervisor, MCP traffic-cop, and the holding-area / green-check / stop-button safety setup.
-- **Slice 4 — Cross-engine.** Owned Codex/DeepSeek/Gemini workers fed context directly (sidesteps the injected-context DeepSeek rejects and the flaky auto-wake from Congress 9). **Pull in Agent 7's proposed cross-engine solutions when detailing this slice** — they likely slot under this umbrella.
-- **Slice 5 — Discussion mode.** A sequential capability-gap roundtable: each brother states his task's difficulties + what tooling he's missing; Agent 7 + Agent 9 (+ Gemini, + mainline) do web-search / debugging to find the `tankoctl` command or MCP or external tool that unblocks him. Archetype: *"Agent 4, smoke theatre like a human would — what MCP/tankoctl/external stuff would you need?"* Explicitly deferred until the core lands.
+Per-surface mapping for all 9 surfaces lives in the DLS doc.
 
 ---
 
-## 9. Stack decision (final, honest scope)
+## 6. Reliability & clarity (the heart of Slice 1 — shipped)
 
-**Python backend + HTML page, served into its own standalone Chromium app-window now; Electron at Slice 2.**
+- **Status from ground truth** (not self-report) — *enriched + honesty-tagged per §2.1.*
+- **Channel discipline → catch off-channel + mirror.** Slice 1 ships deterministic *commit*-mirroring (every commit auto-posts an activity line). **Honest scope boundary (Agent 7 concurs):** literal VS-Code-prose mirroring is fuzzy and deferred; the spec must NOT claim "nothing said in VS Code is ever lost" until that exists.
+- **Reachability honesty** — mark auto-wakeable vs needs-nudge per the capability contract; proper fix is owned workers (cross-engine slice).
 
-Rationale (the honest scope call): Slice 1's value is entirely in the **Python clarity engine**, not the window. The current `office_web.py` already live-polls and renders; standing up an Electron toolchain in Slice 1 would pour effort into the frame while the painting is the Python. The standalone Chromium window (`--app=` flag, optional PWA manifest) gives ~80% of the "real app" feel for ~0% of the Electron cost. Electron earns its place at Slice 2, where owned workers (process control via Node) and a real desktop window (foreman panel, kill-switch) actually need it — and it wraps the same HTML, so adoption is low-risk and throws nothing away. **Don't add complexity before it pays.**
+## 7. Honesty culture (first-class)
 
----
-
-## 10. Decisions made + why (brainstorm record)
-
-- **Re-aim from "smarter agents" to "legible, reliable room."** Hemanth's stated #1 pain is opacity + unreliability, not throughput. Slice 1's heart shifted accordingly.
-- **Derive status from ground truth, not self-report.** Self-reporting is the unreliable thing; ground truth (git/tankoctl/build/bus) can't forget or lie. Applies the cheap-context rule to the core pain.
-- **Hybrid agent model.** Companion-only would inherit every hard platform limit (closed tabs, cross-engine, one-turn autonomy); Host-only changes how Hemanth works too much. Hybrid escapes the limits where it matters (owned workers) while keeping familiar tabs for hands-on.
-- **Both foreman gears (A + B), B gated + supervised.** Hemanth switches posture by the day. B is powerful, so it's bounded by an entry-gate (all work queued) + an exit-owner (Agent 0 closes it).
-- **Electron deferred to Slice 2; standalone Chromium window now.** Honest scope discipline — the window isn't where Slice 1's value is, and the Chromium app-window bridges cleanly to Electron later with the same HTML.
+Permission + prompt (owned workers + room etiquette explicitly invite blockers/frustration/truth, never sanitized "done ✅") + a visible **blocked / real-talk lane** (shipped Slice 1).
 
 ---
 
-## 11. Open items (carry into planning)
+## 8. The foreman (A + B) — now specified as a state machine (v2)
 
-- **Name:** stays "THE OFFICE" unless Hemanth wants the app to have its own name.
-- **Slice 1 seed:** reuse the existing `office_web.py` HTML as the starting point (lean: yes — it already works).
-- **Ground-truth derivation sources (Slice 1 detail):** exact set + polling cadence for git / `tankoctl` / build-state / bus — to be specified in the implementation plan.
-- **Cross-engine (Slice 4):** retrieve Agent 7's proposed solutions (offered on the bus / chat.md before quota ran out) when that slice is scoped.
+On-demand autonomy, two gears. **v2: the foreman is a control plane, not a feature** — it needs a real run-state machine, not just "dispatch and watch."
+
+**Run-state machine (per arc/task):** `queued → armed → dispatched → working → awaiting_gate → green | red → parked → ready_for_human | merged`, plus `aborting → aborted`. Each run carries: task identity, owner, allowed files, branch/worktree, dirty-file policy, command queue, wake-attempt state, timeout/retry policy, gate result, failure classification, final handoff.
+
+- **A · Per-arc command** — drive one arc through the state machine; tight blast radius.
+- **B · Whole-room autonomous** — every armed arc progresses in parallel, with cross-agent scheduling + fairness. Entry-gate (every agent has a queued spec/plan), exit-owner (**Agent 0** supervises to all-done → off), **MCP traffic-cop** (lane handoff is Agent 0's automatic job — and lease *visibility* arrives earlier, §10).
+
+## 9. Unattended-trust safety — quiesce-and-fence, not "instant freeze" (v2, Agent 7)
+
+The "holding area + auto-check + stop button" model was directionally right but too optimistic. v2 honest semantics:
+
+- **Holding area = real isolation, EARLY.** A staging branch does NOT isolate dirty working-tree state. The first autonomous arc runs in a **dedicated worktree/branch** with a clean-start check + dirty-end report. *(Note: gov-v13 retired worktrees for human brothers' flat-on-master flow; owned-worker autonomy is a different context where isolation is mandatory — to be reconciled in governance.)* Until isolation exists, **Foreman A is read-only / planning-only.**
+- **Green gate** = automatic checks (build+test) pass; necessary, not sufficient (green ≠ semantically safe). Human diff/result stays visible.
+- **Kill-switch = best-effort quiesce + fence, NOT instant halt.** It cannot un-ring a model mid-reply, a half-written file, an in-flight MCP action, or a completed git op. It sets a durable room state, stops dispatch of new work, requests cancellation (kill process groups for local subprocesses; API cancel where available; stop wake-prompts + fence federated tabs), revokes/expires MCP leases, and marks in-flight work **NEEDS INSPECTION.** UI says **"STOPPING → STOPPED / NEEDS INSPECTION,"** never "frozen." Fire via **click-and-hold 1.5s + radial ring** (no accidental trigger).
+
+## 10. Cross-engine & discussion mode
+
+- **Cross-engine (later slice):** start with ONE non-Claude engine through the capability contract — not all at once. Codex bridge = transitional. Don't bake Claude-owned-worker assumptions into earlier slices or this becomes a rewrite.
+- **MCP traffic-cop earlier:** lease *visibility + readout* is a prerequisite for any foreman loop that may run smokes/MCP — lands in the host/foreman slices, not only whole-room autonomy.
+- **Discussion mode (last) — but collect its evidence early.** It needs task capability-gaps, attempted commands, missing tools, failure evidence, timeouts, lease-waits, manual-nudge events. Capture those starting at the state-foundation slice, or Slice 5 becomes just another chat mode.
 
 ---
 
-## 12. References
+## 11. Phasing v2 — re-sequenced so state + safety precede autonomy (Agent 7)
 
-- Proven Office: `docs/superpowers/specs/2026-05-30-the-office-live-agent-bus-design.md`, `-always-on-mode-design.md`, `-congress-9-orchestration-design.md`
-- Memories: `project_the_office_live_agent_bus`, `project_agentchattr_shelved_2026-05-28` (autonomous-foreman sketch + unattended-merge risk note), `feedback_office_idle_bus_wakes_directly`, `feedback_no_office_post_narration`, `feedback_answer_in_channel_asked`, `user_profile` (concurrency norm)
-- Existing code: `scripts/office/` (`office_bus.py`, `office_web.py`, `office_watch.sh`, `office_cost.py`, `codex_agent7_bridge.py`, `tests/test_office.py`)
+- **Slice 1 — The legible, reliable room. ✅ SHIPPED 2026-05-31.** Python+HTML in a standalone Chromium window: derived-status engine, `/roster` presence panel, blocker lane, commit-mirror, honesty surface. *(`office_status.py`, `office_web.py`, `office_bus.py` flag/mirror, `open_office.bat`.)*
+- **Slice 1.5 — State foundation + design language (NEW).** Extract the inline `PAGE` into static assets + typed JSON endpoints; adopt the DLS (§5); add the Room State Store + state projector; enrich ground truth (changed-file/dirty-tree, branch, build/test freshness, MCP lease readout) + status honesty (§2.1); begin capturing discussion-mode evidence. **No autonomy.**
+- **Slice 2A — Electron / process-host skeleton.** Wrap the same assets; add a local backend process manager; spawn ONE harmless owned worker in **dry-run**; stream heartbeats/events; prove **cancel/quiesce** semantics. **No repo writes.**
+- **Slice 2B — Foreman A dry-run.** Per-arc: assemble briefing, dispatch a worker, receive a proposed plan/result, run **read-only** checks. Every state transition visible in the UI.
+- **Slice 2C — Foreman A write mode + isolation.** Only after 2A/2B: allow code mutation in a dedicated worktree/branch behind the green gate, human-visible diff/result.
+- **Slice 3 — Whole-room autonomous lifecycle.** Entry-gate, exit-owner, MCP traffic-cop, holding area — realistic once a single-arc run-state machine works.
+- **Slice 4 — Cross-engine owned workers.** One non-Claude engine first, via the capability contract.
+- **Slice 5 — Discussion mode.** Last; built on evidence captured since Slice 1.5.
+
+---
+
+## 12. Stack decision (final, honest scope)
+
+**Python backend + HTML, served into its own standalone Chromium app-window now (`--app=` + dedicated `--user-data-dir`, PWA manifest); Electron at the host-skeleton slice (2A).** Slice 1's value was the Python clarity engine, not the window; the standalone Chromium window gives ~80% of the "real app" feel for ~0% of the Electron cost. Electron earns its place when owned workers need a Node backend + a real window — and **the hard work there is the backend/process/state/safety, not the window wrapper** (Agent 7). Keep Electron adoption boring: extract assets + typed endpoints (Slice 1.5) *before* adding the foreman panel.
+
+---
+
+## 13. Decisions + why (v1 + v2 record)
+
+**v1:** re-aim to "legible, reliable room"; derive status from ground truth; Hybrid agent model; both foreman gears (A gated by entry/exit); Electron deferred; standalone Chromium window now.
+
+**v2 (from Agent 7's review + the design research):**
+- **Capability contract over fake-uniform interface** — owned workers ≠ federated tabs; expose the differences.
+- **Bus is transport, not truth; add a Room State Store** — `office_status.py` evolves into a state projector.
+- **Status must not overclaim** — show source + freshness; enrich ground truth. (Protects the core trust premise.)
+- **Isolation + safety + state-machine earlier** — Slice 1.5 + split Slice 2 into 2A/2B/2C; Foreman A read-only until isolation exists.
+- **Kill-switch = quiesce-and-fence**, not instant freeze; click-and-hold to arm.
+- **Three first-class surfaces** (Room/Operations/Infrastructure) modeled now.
+- **Adopt the DLS** (dark mission-control language) — and **resolve the color rule** via an operational-tool exception for semantic status colors + SVG-not-emoji.
+- **Collect discussion-mode evidence from Slice 1.5.**
+
+---
+
+## 14. Open items (carry into planning)
+
+- **Name:** stays "THE OFFICE" unless Hemanth wants its own.
+- **Governance reconciliation:** owned-worker worktree isolation vs gov-v13's flat-on-master retirement (different contexts; needs an explicit carve-out).
+- **State store choice:** SQLite vs append-only event-log + snapshots — decide in the Slice 1.5 plan.
+- **Engine-first for cross-engine (Slice 4):** which non-Claude engine leads (Codex via bridge is transitional; an API worker is cleaner) — decide when scoping Slice 4.
+- **Color-rule formal carve-out:** record the Office's semantic-color exception in governance.
+
+---
+
+## 15. References
+
+- Agent 7 feasibility review: `agents/audits/the_office_app_feasibility_review_2026-05-31.md` (`6db4b5c`)
+- Design Language System: `docs/superpowers/data/2026-05-31-office-design-language-system.md` (distilled from ChatGPT + Gemini deep-research, 2026-05-31)
+- Slice 1 plan: `docs/superpowers/plans/2026-05-31-the-office-app-slice1-legible-reliable-room.md`
+- Proven Office: `2026-05-30-the-office-live-agent-bus-design.md`, `-always-on-mode-design.md`, `-congress-9-orchestration-design.md`
+- Memories: `project_the_office_live_agent_bus`, `project_agentchattr_shelved_2026-05-28`, `project_agent7`, `feedback_no_color_no_emoji`, `feedback_no_overclaim_in_rtc`
+- Existing code: `scripts/office/` (`office_bus.py`, `office_web.py`, `office_status.py`, `codex_agent7_bridge.py`)
