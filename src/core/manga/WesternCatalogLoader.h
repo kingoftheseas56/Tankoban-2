@@ -34,6 +34,7 @@
 
 #include "MangaCatalogTypes.h"
 
+#include <QJsonObject>
 #include <QString>
 #include <optional>
 
@@ -48,6 +49,10 @@ public:
     //   - top-level "seriesId" is missing or empty
     //   - top-level "editions" array is missing or empty
     static std::optional<MangaCatalog> loadFromFile(const QString& filePath);
+
+    // Maps a schema-v2 Western JSON object -> MangaCatalog. Shared by loadFromFile
+    // (disk) and the live search path (in-memory). cat.seriesId empty => invalid.
+    static MangaCatalog loadFromJsonObject(const QJsonObject& obj);
 
     // Canonical data directory: <repo-root>/data/western_catalogue/.
     // Same repo-root derivation as LocalMangaCatalogLoader::canonicalDataDir().

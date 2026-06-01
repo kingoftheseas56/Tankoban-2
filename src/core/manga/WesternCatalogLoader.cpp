@@ -35,37 +35,25 @@ QString tierLabel(int tier) {
 
 } // namespace
 
-std::optional<MangaCatalog> WesternCatalogLoader::loadFromFile(const QString& filePath) {
-    QFile f(filePath);
-    if (!f.exists() || !f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return std::nullopt;
-    }
+MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
+{
+    const QString seriesId = obj.value(QStringLiteral("seriesId")).toString();
+    if (seriesId.isEmpty()) return {};
 
-    QJsonParseError err{};
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-        return std::nullopt;
-    }
-
-    const QJsonObject root = doc.object();
-
-    const QString seriesId = root.value(QStringLiteral("seriesId")).toString();
-    if (seriesId.isEmpty()) return std::nullopt;
-
-    const QJsonArray editionsArr = root.value(QStringLiteral("editions")).toArray();
-    if (editionsArr.isEmpty()) return std::nullopt;
+    const QJsonArray editionsArr = obj.value(QStringLiteral("editions")).toArray();
+    if (editionsArr.isEmpty()) return {};
 
     MangaCatalog cat;
     cat.seriesId       = seriesId;
-    cat.seriesTitle    = root.value(QStringLiteral("seriesTitle")).toString();
-    cat.source         = root.value(QStringLiteral("source")).toString();
-    cat.seriesSynopsis = root.value(QStringLiteral("synopsis")).toString();
-    cat.status         = root.value(QStringLiteral("status")).toString();
-    cat.author         = root.value(QStringLiteral("author")).toString();
-    cat.studio         = root.value(QStringLiteral("publisher")).toString();  // publisher reuses 'studio' slot
-    cat.publishedYearStart = root.value(QStringLiteral("yearStart")).toInt();
-    cat.publishedYearEnd   = root.value(QStringLiteral("yearEnd")).toInt();
-    const QJsonArray genresArr = root.value(QStringLiteral("genres")).toArray();
+    cat.seriesTitle    = obj.value(QStringLiteral("seriesTitle")).toString();
+    cat.source         = obj.value(QStringLiteral("source")).toString();
+    cat.seriesSynopsis = obj.value(QStringLiteral("synopsis")).toString();
+    cat.status         = obj.value(QStringLiteral("status")).toString();
+    cat.author         = obj.value(QStringLiteral("author")).toString();
+    cat.studio         = obj.value(QStringLiteral("publisher")).toString();  // publisher reuses 'studio' slot
+    cat.publishedYearStart = obj.value(QStringLiteral("yearStart")).toInt();
+    cat.publishedYearEnd   = obj.value(QStringLiteral("yearEnd")).toInt();
+    const QJsonArray genresArr = obj.value(QStringLiteral("genres")).toArray();
     cat.genres.clear();
     for (const auto& g : genresArr) {
         const QString s = g.toString().trimmed();
@@ -78,7 +66,7 @@ std::optional<MangaCatalog> WesternCatalogLoader::loadFromFile(const QString& fi
     // text tile. The harvester emits seriesCover in a parallel change; we accept
     // either an absolute URL (pass through) or a host-relative /Uploads/... path
     // (absolutise against the RCO host so VolumeTile can fetch it).
-    QString seriesCover = root.value(QStringLiteral("seriesCover")).toString().trimmed();
+    QString seriesCover = obj.value(QStringLiteral("seriesCover")).toString().trimmed();
     if (!seriesCover.isEmpty() && seriesCover.startsWith(QLatin1Char('/'))) {
         seriesCover = QStringLiteral("https://rcostation.xyz") + seriesCover;
     }
@@ -99,6 +87,19 @@ std::optional<MangaCatalog> WesternCatalogLoader::loadFromFile(const QString& fi
         cat.volumes.append(std::move(vol));
     }
 
+    return cat;
+}
+
+std::optional<MangaCatalog> WesternCatalogLoader::loadFromFile(const QString& filePath) {
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        qInfo("WesternCatalogLoader::loadFromFile: open failed for %s", qUtf8Printable(filePath));
+        return std::nullopt;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    if (!doc.isObject()) return std::nullopt;
+    MangaCatalog cat = loadFromJsonObject(doc.object());
+    if (cat.seriesId.isEmpty()) return std::nullopt;
     return cat;
 }
 
