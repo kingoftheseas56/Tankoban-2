@@ -262,8 +262,14 @@ endif()
 option(TANKOBAN_INPROCESS_POC "Build the in-process player POC path" OFF)
 if(TANKOBAN_INPROCESS_POC)
     set(FFMPEG_POC_ROOT "C:/tools/ffmpeg-master-latest-win64-gpl-shared")
-    target_sources(Tankoban PRIVATE src/ui/player/InProcessProbe.cpp)
-    target_include_directories(Tankoban PRIVATE "${FFMPEG_POC_ROOT}/include")
+    # Phase 1: self-contained in-process player + the sidecar's header-light
+    # frame ring writer (shared byte layout with the main app's ShmFrameReader).
+    target_sources(Tankoban PRIVATE
+        src/ui/player/InProcessPlayer.cpp
+        native_sidecar/src/ring_buffer.cpp)
+    target_include_directories(Tankoban PRIVATE
+        "${FFMPEG_POC_ROOT}/include"
+        "${CMAKE_SOURCE_DIR}/native_sidecar/src")
     target_link_libraries(Tankoban PRIVATE
         "${FFMPEG_POC_ROOT}/lib/avformat.lib"
         "${FFMPEG_POC_ROOT}/lib/avcodec.lib"

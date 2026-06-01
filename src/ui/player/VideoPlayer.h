@@ -35,6 +35,7 @@ class SubtitleOverlay;
 class SubtitlePopover;
 class AudioPopover;
 class SettingsPopover;
+class InProcessPlayer;   // TANKOBAN_INPROCESS_POC — in-process player POC
 
 class VideoPlayer : public QWidget {
     Q_OBJECT
@@ -524,6 +525,17 @@ private:
     IPlayerBackend* m_backend   = nullptr;
     ShmFrameReader* m_reader    = nullptr;
     FrameCanvas*    m_canvas    = nullptr;
+
+    // TANKOBAN_INPROCESS_POC — when the env flag is set, openFile routes to an
+    // in-process decode path (InProcessPlayer) feeding m_reader/m_canvas via an
+    // in-process SHM ring, bypassing the sidecar entirely. Default OFF; the
+    // shipping sidecar path is untouched. m_inproc is created lazily on first
+    // POC open. Both members compile in always (no ifdef in the class body) to
+    // keep the header ABI simple; m_inProcessPoc just stays false when the POC
+    // build flag is off.
+    bool             m_inProcessPoc = false;
+    InProcessPlayer* m_inproc       = nullptr;
+    void openFileInProcessPoc(const QString& filePath);
 
     // Batch 1.2 — master A/V clock. VideoPlayer owns it; FrameCanvas gets
     // a pointer via setSyncClock() in buildUI(). Today only FrameCanvas
