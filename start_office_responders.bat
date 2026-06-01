@@ -11,10 +11,10 @@ REM Options:  start_office_responders.bat 1 4     (limit to those brothers)
 REM           start_office_responders.bat --dry-run   (watch + log only, posts nothing)
 
 REM 1) Open the Office app-window (reuses the proven launcher: server + app-mode).
-call "%~dp0..\..\open_office.bat"
+call "%~dp0open_office.bat"
 
 REM 2) Arm the backup net (this BLOCKS, keeping the net live while the window is open).
-python "%~dp0office_responders.py" %*
+python "%~dp0scripts\office\office_responders.py" %*
 echo.
 echo [net stood down] You can close this window.
 pause
