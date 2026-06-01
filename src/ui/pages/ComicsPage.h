@@ -25,6 +25,7 @@ class SeriesView;
 class ComicsTankoyomiLibrary;
 class ComicsTankoyomiSearchWidget;
 class MangaSourceRegistry;
+class ReadComicsScraper;
 class MangaDownloader;
 class MangaDownloadIndex;        // Phase 5 creates the type; Phase 4 stores nullptr
 class TorrentClient;
@@ -379,6 +380,15 @@ private:
     void buildWesternScreen();
     void refreshWesternGrid();
     void openWesternSeriesFromJson(const QString& jsonPath);
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 2) — shared render-only open used by
+    // BOTH the disk path (openWesternSeriesFromJson loads a baked JSON) and the
+    // live-search path (a freshly fetched RCO series object). Does the GUARDED
+    // populateVolumeRowsFromCatalog render + nav-entry + Western-detail state.
+    // jsonPath is the on-disk path when opening a baked file (empty for a
+    // live, not-yet-saved series); onShelf pre-sets the library button.
+    void openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalog& catalog,
+                                      const QString& jsonPath,
+                                      bool onShelf);
     void showMangaMode();
     void showWesternMode();
 
@@ -556,6 +566,19 @@ private:
     QPushButton* m_mangaTabBtn       = nullptr;
     QPushButton* m_westernTabBtn     = nullptr;
     int          m_westernStackIndex = -1;
+
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Live Western search + add-to-shelf.
+    // m_readComicsScraper is the registry-owned RCO scraper, grabbed in the ctor
+    // so onSearchResultActivated can route an RCO search pick into the live
+    // fetchWesternSeries() page-scrape (bypassing the AniList/mangafire manga
+    // enrichment that would corrupt a Western comic's identity). The raw JSON of
+    // the currently-displayed live Western series is stashed in
+    // m_pendingWesternJson so addWesternToLibraryRequested can persist it verbatim
+    // to data/western_catalogue/<seriesId>.json. m_pendingWesternSeriesId is the
+    // file stem used for that write + the on-disk existence check.
+    ReadComicsScraper* m_readComicsScraper = nullptr;
+    QJsonObject        m_pendingWesternJson;
+    QString            m_pendingWesternSeriesId;
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
     // index. Scans data/mangafire_catalog/*.json at construction; consulted

@@ -27,6 +27,7 @@
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/LocalMangaCatalogLoader.h"
 #include "core/manga/WesternCatalogLoader.h"
+#include "core/manga/ReadComicsScraper.h"
 #include "core/manga/mangafire/MangaFireCatalogClient.h"
 #include "core/manga/mangafire/MangaWeebCentralResolver.h"
 #include "core/torrent/TorrentClient.h"
@@ -66,6 +67,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
+#include <QJsonDocument>
 #include <QTextStream>
 
 // COMICS_OPEN_TRACE (Agent 1, 2026-05-24 evening debug session). Timestamped
@@ -272,6 +274,41 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                 });
     }
 
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Live Western (RCO) search pick.
+    // Grab the registry-owned ReadComicsScraper so onSearchResultActivated can
+    // route an RCO result into fetchWesternSeries() (live page-scrape -> schema-v2
+    // JSON), and wire westernSeriesReady to the render-only open. The scraper is
+    // owned by the registry; this is a non-owning observer pointer.
+    for (auto* s : m_sourceRegistry->scrapers()) {
+        if (s->sourceId() == QLatin1String("readcomicsonline")) {
+            m_readComicsScraper = qobject_cast<ReadComicsScraper*>(s);
+            break;
+        }
+    }
+    if (m_readComicsScraper) {
+        connect(m_readComicsScraper, &ReadComicsScraper::westernSeriesReady,
+                this, [this](const QJsonObject& seriesJson) {
+            setSearchBusy(false);
+            const auto catalog =
+                tankoban::manga::WesternCatalogLoader::loadFromJsonObject(seriesJson);
+            if (catalog.seriesId.isEmpty()) {
+                qInfo("ComicsPage: westernSeriesReady -> empty seriesId, ignoring");
+                return;
+            }
+            // Stash the raw JSON verbatim so addWesternToLibraryRequested can
+            // persist exactly what was fetched (synopsis + editions + cover).
+            m_pendingWesternJson     = seriesJson;
+            m_pendingWesternSeriesId = catalog.seriesId;
+            // Already on the shelf if a baked file with this seriesId exists.
+            const QString shelfPath =
+                QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                    .absoluteFilePath(catalog.seriesId + QStringLiteral(".json"));
+            const bool onShelf = QFile::exists(shelfPath);
+            // jsonPath empty until persisted (the restore path re-fetches).
+            openWesternSeriesFromCatalog(catalog, QString(), onShelf);
+        });
+    }
+
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 26 -- manga downloader.
     // Single downloader owned by this page; the old TankoyomiPage duplicate
     // was retired in Phase 8. Detail view replaced by ComicsSeriesView below
@@ -435,6 +472,34 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::addToLibraryByTitleRequested,
             this, &ComicsPage::onAddToLibraryByTitleRequested);
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Add-to-shelf for a LIVE Western
+    // series: persist the stashed raw JSON (m_pendingWesternJson, set by the
+    // westernSeriesReady slot) verbatim to data/western_catalogue/<seriesId>.json,
+    // then flip the view's button to "On shelf" and refresh the Western grid so
+    // the new shelf card appears. Writing the exact fetched JSON keeps the disk
+    // record identical to the baked-catalogue schema (loadFromFile re-reads it).
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::addWesternToLibraryRequested,
+            this, [this]() {
+        if (m_pendingWesternJson.isEmpty() || m_pendingWesternSeriesId.isEmpty()) {
+            qInfo("ComicsPage: addWesternToLibraryRequested with no pending series");
+            return;
+        }
+        const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
+        QDir().mkpath(dir);
+        const QString path = QDir(dir).absoluteFilePath(
+            m_pendingWesternSeriesId + QStringLiteral(".json"));
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qInfo("ComicsPage: failed to write Western shelf file %s",
+                  qUtf8Printable(path));
+            return;
+        }
+        f.write(QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented));
+        f.close();
+        if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
+        refreshWesternGrid();  // surface the new card on the Western grid
+    });
     // COMICS_WC_AUTOENRICH 2026-05-24 — fires automatically on series-open
     // from search results so the hero block renders without requiring an
     // explicit Add to Library click.
@@ -2321,31 +2386,45 @@ void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
               qUtf8Printable(jsonPath));
         return;
     }
+    // A baked file on disk IS the shelf — opening one is always "on shelf".
+    openWesternSeriesFromCatalog(*catalog, jsonPath, /*onShelf*/true);
+}
+
+void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalog& catalog,
+                                              const QString& jsonPath,
+                                              bool onShelf)
+{
+    if (!m_tyVolumeSeriesView) return;
 
     // Nav entry so the topbar Back chevron works (mirrors openSeriesByRecord,
-    // Western enteredFrom blob).
+    // Western enteredFrom blob). jsonPath is empty for a live (unsaved) series;
+    // the restore path falls back to a fresh fetch when it's absent.
     if (!m_inNavRestore) {
         QJsonObject blob;
-        blob[QStringLiteral("seriesId")]    = catalog->seriesId;
-        blob[QStringLiteral("seriesTitle")] = catalog->seriesTitle;
+        blob[QStringLiteral("seriesId")]    = catalog.seriesId;
+        blob[QStringLiteral("seriesTitle")] = catalog.seriesTitle;
         blob[QStringLiteral("enteredFrom")] = QStringLiteral("western");
         blob[QStringLiteral("jsonPath")]    = jsonPath;  // exact reload on restore
         emit enteredLayer(makeComicsLayer(QStringLiteral("seriesView"),
-                                          catalog->seriesTitle, blob));
+                                          catalog.seriesTitle, blob));
     }
     m_enteredDetailFrom        = Mode::Library;
     m_detailEnteredFromWestern = true;  // in-view Back -> Western grid, not manga
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = 0;   // no AniList id => the enrichment path has nothing to chase
-    m_currentDetailSeriesTitle = catalog->seriesTitle;
+    m_currentDetailSeriesTitle = catalog.seriesTitle;
 
     // GUARD (Agent 1, domain owner): render DIRECTLY. Do NOT route through
     // showSeries()/dispatchCatalogResolve() — those auto-fire AniList +
     // mangafire resolution (COMICS_WC_AUTOENRICH), which would bleed MANGA
     // enrichment onto a Western comic. populateVolumeRowsFromCatalog is
     // pure-render/no-network (its own header comment confirms it), so the
-    // direct call is clean. Download wiring (source-routed) is Task 8.
-    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*catalog);
+    // direct call is clean.
+    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(catalog);
+    // CORRECTION (continuation note): populateVolumeRowsFromCatalog RESETS the
+    // Western shelf flag, so setWesternOnShelf MUST be called AFTER it — not
+    // before — or the "On shelf"/"Add to Library" state gets clobbered.
+    m_tyVolumeSeriesView->setWesternOnShelf(onShelf);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
@@ -3003,6 +3082,24 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     m_mode = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = 0;   // MangaResult has no anilist integer id
     m_currentDetailSeriesTitle = result.title;
+
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Western (RCO) search pick: route
+    // into the LIVE page-scrape (fetchWesternSeries) instead of the AniList/
+    // mangafire manga-enrichment path below — a Western collected edition has no
+    // AniList identity and that path would corrupt it. The westernSeriesReady
+    // connect (ctor) renders the result via openWesternSeriesFromCatalog. We
+    // override m_enteredDetailFrom expectations: showSearchResultLoading paints a
+    // spinner while the page fetch is in flight; the ready/error slot replaces it.
+    if (result.source == QLatin1String("readcomicsonline") && m_readComicsScraper
+        && m_tyVolumeSeriesView) {
+        m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+        m_tyVolumeSeriesView->showSearchResultLoading();
+        setSearchBusy(true);
+        m_readComicsScraper->fetchWesternSeries(result.id, result.title,
+                                                result.thumbnailUrl);
+        return;
+    }
+
     if (m_tyVolumeSeriesView) {
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
         m_tyVolumeSeriesView->showSearchResultLoading();
