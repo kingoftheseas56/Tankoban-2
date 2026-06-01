@@ -43,10 +43,19 @@ You are producing the live state dashboard for Tankoban 2. Output a markdown dig
 
 8. **Recent commits.** Last 8 entries of `git log --oneline -8`.
 
+9. **Quota vigilance (Agent 0 / coordinator only — other agents skip this step).** Run `bash scripts/quota-brief.sh` (~10-30s, read-only; needs network — it shells `npx ccusage`). It prints ONE line comparing today's **Claude/Max-pool** token burn to the trailing 7-day average. Rules:
+   - `NORMAL` → include the one-liner in the brief, no alarm.
+   - `[elevated]` or `[HOT]` → **surface it to Hemanth** plus the cheapest lever: route mechanical/execution work to **DeepSeek/Agent 9 or Codex** (off the Max pool), keep **Opus for design/deliberation**, and **recap-and-refresh** any bloated long-running tab (cache-read on a huge context is our #1 burn).
+   - Offline / ccusage unavailable → note "quota check skipped (offline)" and move on; never block the brief on it.
+   - The `$` figures ccusage shows elsewhere are NOTIONAL api-equivalent, not a Max bill — we track **tokens**.
+
 **Output format:** ~50 lines of markdown. Headers + bullets only — no narrative paragraphs. Match this skeleton:
 
 ```
 # Brotherhood Live Brief — <today's date>
+
+## Quota (Claude/Max pool) — Agent 0 only
+<scripts/quota-brief.sh one-liner — flag Hemanth if [HOT] / [elevated]>
 
 ## Agents
 - A0 (Coordinator) — <status> — last session <date>
