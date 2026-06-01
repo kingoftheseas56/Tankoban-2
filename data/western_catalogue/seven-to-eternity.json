@@ -1,0 +1,38 @@
+{
+  "seriesId": "seven-to-eternity",
+  "seriesTitle": "Seven to Eternity",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/9-22-2016/1246221534264.jpg",
+  "editions": [
+    {
+      "label": "Deluxe Edition Part 6",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-6",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Part 5",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-5",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Part 4",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-4",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Part 3",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-3",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Part 2",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-2",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Part 1",
+      "href": "/Comic/Seven-To-Eternity/Deluxe-Edition-Part-1",
+      "formatTier": 3
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "seriesId": "southern-bastards",
+  "seriesTitle": "Southern Bastards",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/11-18-2015/4293812sou.jpg",
+  "editions": [
+    {
+      "label": "TPB 2",
+      "href": "/Comic/Southern-Bastards/TPB-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1",
+      "href": "/Comic/Southern-Bastards/TPB-1",
+      "formatTier": 2
+    }
+  ]
+}

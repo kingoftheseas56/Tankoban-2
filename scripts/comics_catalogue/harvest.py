@@ -25,7 +25,10 @@ from edition_classify import is_collected, edition_tier
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 _BASE = "https://rcostation.xyz"
-_OUT_DIR = pathlib.Path("data/western_catalogue")
+# Anchor output at repo-root/data/western_catalogue regardless of CWD
+# (harvest.py lives at <repo>/scripts/comics_catalogue/). The C++ loader reads
+# from repo-root; a CWD-relative path silently wrote to scripts/.../data once.
+_OUT_DIR = pathlib.Path(__file__).resolve().parents[2] / "data" / "western_catalogue"
 
 
 def build_record(series_id: str, series_title: str, items: list[dict],
@@ -83,10 +86,27 @@ def write_record(record: dict, out_dir: pathlib.Path = _OUT_DIR) -> pathlib.Path
     return path
 
 
-# v1 blockbuster seed set: (seriesId, displayTitle, rco /Comic/<name> segment).
-# Locked at plan time; expand later.
+# Blockbuster-first seed set (project_catalog_scope_top500): (seriesId,
+# displayTitle, rco /Comic/<name> segment). Each slug was recon-verified
+# (recon_slugs.py) to resolve AND yield >=2 collected editions.
+# NOTE: several marquee titles (Walking Dead, Saga, Sandman, Hellboy, Fables,
+# The Boys) list ONLY single issues on their primary /Comic/<slug> page; their
+# collected editions live under non-obvious sibling slugs that can't be guessed
+# reliably -> deferred to a proper RCO catalogue-discovery pass.
 _SEED = [
     ("invincible", "Invincible", "Invincible"),
+    ("spawn", "Spawn", "Spawn"),
+    ("preacher", "Preacher", "Preacher"),
+    ("watchmen", "Watchmen", "Watchmen"),
+    ("deadly-class", "Deadly Class", "Deadly-Class"),
+    ("chew", "Chew", "Chew"),
+    ("sweet-tooth", "Sweet Tooth", "Sweet-Tooth"),
+    ("descender", "Descender", "Descender"),
+    ("the-wicked-the-divine", "The Wicked + The Divine", "The-Wicked-The-Divine"),
+    ("nailbiter", "Nailbiter", "Nailbiter"),
+    ("southern-bastards", "Southern Bastards", "Southern-Bastards"),
+    ("seven-to-eternity", "Seven to Eternity", "Seven-to-Eternity"),
+    ("gideon-falls", "Gideon Falls", "Gideon-Falls"),
 ]
 
 

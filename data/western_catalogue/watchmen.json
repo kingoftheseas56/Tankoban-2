@@ -1,0 +1,28 @@
+{
+  "seriesId": "watchmen",
+  "seriesTitle": "Watchmen",
+  "source": "rco",
+  "seriesCover": "https://2.bp.blogspot.com/-fYlAnkXy99M/VqHph1fBtVI/AAAAAAAABXw/rVgjDUWFGPY/s1600-Ic42/6.jpg",
+  "editions": [
+    {
+      "label": "TPB Part 4",
+      "href": "/Comic/Watchmen/TPB-Part-4",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB Part 3",
+      "href": "/Comic/Watchmen/TPB-Part-3",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB Part 2",
+      "href": "/Comic/Watchmen/TPB-Part-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB Part 1",
+      "href": "/Comic/Watchmen/TPB-Part-1",
+      "formatTier": 2
+    }
+  ]
+}

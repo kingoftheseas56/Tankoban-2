@@ -1,0 +1,43 @@
+{
+  "seriesId": "deadly-class",
+  "seriesTitle": "Deadly Class",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/3-8-2016/1931201152Untitled-1.jpg",
+  "editions": [
+    {
+      "label": "TPB 3",
+      "href": "/Comic/Deadly-Class/TPB-3",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 2",
+      "href": "/Comic/Deadly-Class/TPB-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1",
+      "href": "/Comic/Deadly-Class/TPB-1",
+      "formatTier": 2
+    },
+    {
+      "label": "Deluxe Edition Teen Age Riot Part 4",
+      "href": "/Comic/Deadly-Class/Deluxe-Edition-Teen-Age-Riot-Part-4",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Teen Age Riot Part 3",
+      "href": "/Comic/Deadly-Class/Deluxe-Edition-Teen-Age-Riot-Part-3",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Teen Age Riot Part 2",
+      "href": "/Comic/Deadly-Class/Deluxe-Edition-Teen-Age-Riot-Part-2",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition Teen Age Riot Part 1",
+      "href": "/Comic/Deadly-Class/Deluxe-Edition-Teen-Age-Riot-Part-1",
+      "formatTier": 3
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "seriesId": "the-wicked-the-divine",
+  "seriesTitle": "The Wicked + The Divine",
+  "source": "rco",
+  "seriesCover": "https://2.bp.blogspot.com/-1mCu36t9hsI/VoORVazX0rI/AAAAAAAAAu0/sQQVPDg81hs/s1600-Ic42/5.jpg",
+  "editions": [
+    {
+      "label": "TPB 2",
+      "href": "/Comic/The-Wicked-The-Divine/TPB-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1",
+      "href": "/Comic/The-Wicked-The-Divine/TPB-1",
+      "formatTier": 2
+    }
+  ]
+}

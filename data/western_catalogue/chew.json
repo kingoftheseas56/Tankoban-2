@@ -1,0 +1,68 @@
+{
+  "seriesId": "chew",
+  "seriesTitle": "Chew",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/11-23-2015/12842821.jpg",
+  "editions": [
+    {
+      "label": "TPB 9 Chicken Tenders",
+      "href": "/Comic/Chew/TPB-9-Chicken-Tenders",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 8 Family Recipes",
+      "href": "/Comic/Chew/TPB-8-Family-Recipes",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 7 Bad Apples",
+      "href": "/Comic/Chew/TPB-7-Bad-Apples",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 6 Space Cakes",
+      "href": "/Comic/Chew/TPB-6-Space-Cakes",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 5 Major League Chew",
+      "href": "/Comic/Chew/TPB-5-Major-League-Chew",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 4 Flambe",
+      "href": "/Comic/Chew/TPB-4-Flambe",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 3 Just Desserts Bonus",
+      "href": "/Comic/Chew/TPB-3-Just-Desserts-Bonus",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 3 Just Desserts",
+      "href": "/Comic/Chew/TPB-3-Just-Desserts",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 2 International Flavor Bonus",
+      "href": "/Comic/Chew/TPB-2-International-Flavor-Bonus",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 2 International Flavor",
+      "href": "/Comic/Chew/TPB-2-International-Flavor",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1 Taster s Choise Bonus",
+      "href": "/Comic/Chew/TPB-1-Taster-s-Choise-Bonus",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1 Taster s Choise",
+      "href": "/Comic/Chew/TPB-1-Taster-s-Choise",
+      "formatTier": 2
+    }
+  ]
+}

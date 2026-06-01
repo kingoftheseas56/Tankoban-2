@@ -1,0 +1,38 @@
+{
+  "seriesId": "sweet-tooth",
+  "seriesTitle": "Sweet Tooth",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/11-10-2015/9158681tooth.jpg",
+  "editions": [
+    {
+      "label": "TPB 6",
+      "href": "/Comic/Sweet-Tooth/TPB-6",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 5",
+      "href": "/Comic/Sweet-Tooth/TPB-5",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 4",
+      "href": "/Comic/Sweet-Tooth/TPB-4",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 3",
+      "href": "/Comic/Sweet-Tooth/TPB-3",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 2",
+      "href": "/Comic/Sweet-Tooth/TPB-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB 1",
+      "href": "/Comic/Sweet-Tooth/TPB-1",
+      "formatTier": 2
+    }
+  ]
+}

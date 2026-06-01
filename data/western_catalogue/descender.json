@@ -1,0 +1,18 @@
+{
+  "seriesId": "descender",
+  "seriesTitle": "Descender",
+  "source": "rco",
+  "seriesCover": "https://2.bp.blogspot.com/-06nbyREWy5U/VpdbkBcC6WI/AAAAAAAABI0/bCvGgAeHXAI/s1600-Ic42/6.jpg",
+  "editions": [
+    {
+      "label": "TPB 2",
+      "href": "/Comic/Descender/TPB-2",
+      "formatTier": 2
+    },
+    {
+      "label": "TPB",
+      "href": "/Comic/Descender/TPB",
+      "formatTier": 2
+    }
+  ]
+}

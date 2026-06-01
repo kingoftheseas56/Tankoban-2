@@ -1,0 +1,43 @@
+{
+  "seriesId": "gideon-falls",
+  "seriesTitle": "Gideon Falls",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/3-8-2018/83341843071402.jpg",
+  "editions": [
+    {
+      "label": "Deluxe Edition 2 Part 3",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-2-Part-3",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 2 Part 2",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-2-Part-2",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 2 Part 1",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-2-Part-1",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 1 Part 4",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-1-Part-4",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 1 Part 3",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-1-Part-3",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 1 Part 2",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-1-Part-2",
+      "formatTier": 3
+    },
+    {
+      "label": "Deluxe Edition 1 Part 1",
+      "href": "/Comic/Gideon-Falls/Deluxe-Edition-1-Part-1",
+      "formatTier": 3
+    }
+  ]
+}
