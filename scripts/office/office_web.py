@@ -177,9 +177,10 @@ PAGE = """<!doctype html>
   #to{flex:0 0 auto;}
   #msg{flex:1;}
   #msg::placeholder{color:var(--txt2);}
-  #send{background:var(--green);border:none;color:#0B141A;font-weight:600;
+  #send,#rollcall{background:var(--green);border:none;color:#0B141A;font-weight:600;
         padding:11px 19px;border-radius:8px;cursor:pointer;font-size:14px;transition:background 150ms;}
-  #send:hover{background:#06b894;}
+  #send:hover,#rollcall:hover{background:#06b894;}
+  #rollcall{background:#3B4A54;color:var(--txt);}
   ::-webkit-scrollbar{width:8px;}
   ::-webkit-scrollbar-thumb{background:#2A3942;border-radius:4px;}
   ::-webkit-scrollbar-thumb:hover{background:#33424b;}
@@ -219,6 +220,7 @@ PAGE = """<!doctype html>
         <option value="agent9">@agent9</option>
       </select>
       <input id="msg" placeholder="Type a message" autocomplete="off">
+      <button id="rollcall" title="Ask every brother to check in">Roll call</button>
       <button id="send">Send</button>
     </footer>
   </div>
@@ -361,6 +363,13 @@ async function send(){
   } catch (e) { statusEl.textContent = 'send failed'; }
 }
 document.getElementById('send').onclick = send;
+document.getElementById('rollcall').onclick = async () => {
+  try {
+    await fetch('/rollcall', {method:'POST'});
+    pollAsks();
+    poll();
+  } catch (e) { statusEl.textContent = 'roll call failed'; }
+};
 document.getElementById('msg').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 document.getElementById('closeBtn').onclick = async () => {
   if (!confirm('Close the office? This archives + clears all current messages.')) return;
@@ -577,6 +586,16 @@ class Handler(BaseHTTPRequestHandler):
                 sys.stdout = old
             seq = buf.getvalue().strip()
             self._send(200, json.dumps({"seq": seq}))
+            return
+        if self.path == "/rollcall":
+            buf = io.StringIO()
+            old = sys.stdout
+            sys.stdout = buf
+            try:
+                office_bus.cmd_rollcall("hemanth", "1,2,3,4,5")
+            finally:
+                sys.stdout = old
+            self._send(200, json.dumps({"ok": True}))
             return
         if self.path == "/close":
             import io

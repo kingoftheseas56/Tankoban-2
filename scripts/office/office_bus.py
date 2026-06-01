@@ -246,6 +246,13 @@ def cmd_ack(frm, ask_seq, *note_parts):
     cmd_append(frm, asker, "ack", str(ask_seq), note)
 
 
+def cmd_rollcall(frm, nums="1,2,3,4,5"):
+    """Post one direct check-in ask to each requested brother."""
+    for n in [x.strip() for x in str(nums).split(",") if x.strip()]:
+        target = n if n.startswith("agent") else "agent" + n
+        cmd_append(frm, target, "chat", "null", "roll-call: check in (reply or office_ack.sh)")
+
+
 import re
 
 # Auto-detect agent number from a wake-prompt / explicit "I am agent N" line.
@@ -442,7 +449,7 @@ def cmd_close():
 
 def main(argv):
     if not argv:
-        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|ack|deliver|drain|watch-peek|mirror-commit|close> ...")
+        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|ack|rollcall|deliver|drain|watch-peek|mirror-commit|close> ...")
     cmd, rest = argv[0], argv[1:]
     if cmd == "append":
         cmd_append(*rest)
@@ -462,6 +469,8 @@ def main(argv):
         cmd_flag(*rest)
     elif cmd == "ack":
         cmd_ack(*rest)
+    elif cmd == "rollcall":
+        cmd_rollcall(*rest)
     elif cmd == "mirror-commit":
         cmd_mirror_commit(*rest)
     elif cmd == "deliver":

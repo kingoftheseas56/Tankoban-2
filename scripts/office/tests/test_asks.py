@@ -133,11 +133,26 @@ def test_escalation_tick_posts():
     check(again == 0, "tick: re-running does not double-post the same level")
 
 
+def test_rollcall():
+    _sandbox()
+    import office_bus
+
+    office_bus.cmd_rollcall("hemanth", "1,2,3")
+    recs = A._bus_records()
+    asks = [r for r in recs if r.get("kind") == "chat" and r.get("from") == "hemanth"]
+    tos = {r["to"] for r in asks}
+    check(tos == {"agent1", "agent2", "agent3"},
+          "rollcall: posts one check-in ask per brother in the set")
+    live = {(a["ask_seq"], a["to_agent"]) for a in A.compute_asks(recs, 1_000_000, now_age={r["seq"]: 5 for r in asks})}
+    check(len(live) == 3, "rollcall: each check-in is a tracked ask")
+
+
 def main():
     test_compute_asks()
     test_due_escalations()
     test_ack_event()
     test_escalation_tick_posts()
+    test_rollcall()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
