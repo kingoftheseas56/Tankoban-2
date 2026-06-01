@@ -77,6 +77,16 @@ PAGE = """<!doctype html>
   body.collapsed .rcard{justify-content:center;padding:9px 0;}
   body.collapsed #collapseBtn svg{transform:rotate(180deg);}
   #rlist{overflow-y:auto;flex:1;}
+  .asklane{border-top:1px solid var(--divider);padding:8px 10px;max-height:34vh;overflow:auto;}
+  .asklane h4{font-size:11px;color:var(--txt2);letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px;}
+  .ask{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0;}
+  .ask .who{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ask .age{flex:0 0 auto;opacity:.55;font-size:10px;}
+  .ask .st{flex:0 0 auto;font-size:10.5px;font-weight:600;padding:1px 8px;border-radius:10px;}
+  .st.open,.st.acked{background:#3B4A54;color:var(--txt2);}
+  .st.owed{background:#5A4A10;color:#F0C451;}
+  .st.escalated_a0,.st.escalated_hemanth{background:var(--red);color:#0B141A;}
+  .st.answered{background:#10403A;color:var(--green);}
   .rcard{display:flex;gap:13px;align-items:center;padding:9px 14px;
          border-bottom:1px solid rgba(134,150,160,.07);}
   .rcard:hover{background:var(--sel);}
@@ -183,6 +193,7 @@ PAGE = """<!doctype html>
       <h1>THE OFFICE</h1><span class="status" id="status">connecting…</span>
     </div>
     <div id="rlist"></div>
+    <div class="asklane"><h4>Open Asks</h4><div id="asks"></div></div>
   </div>
   <div id="conv">
     <div id="chead">
@@ -410,6 +421,30 @@ async function pollRoster(){
 pollRoster();
 setInterval(pollRoster, 4000);
 
+function renderAsks(list){
+  const el = document.getElementById('asks');
+  if(!el) return;
+  if(!list.length){ el.innerHTML = '<div style="opacity:.5;font-size:12px">no open asks</div>'; return; }
+  el.innerHTML = list.map(a => {
+    const lbl = {open:'open',acked:'acked',owed:'owed',escalated_a0:'escalated A0',
+                 escalated_hemanth:'escalated H',answered:'answered'}[a.state] || a.state;
+    const age = a.age_sec < 90 ? a.age_sec + 's' : Math.round(a.age_sec / 60) + 'm';
+    return '<div class="ask"><span class="who">' + esc(labelFor(a.from)) + ' -> ' +
+      esc(labelFor(a.to_agent)) + ': ' + esc((a.text || '').slice(0, 48)) + '</span>' +
+      '<span class="st ' + esc(a.state) + '">' + esc(lbl) + '</span>' +
+      '<span class="age">' + esc(age) + '</span></div>';
+  }).join('');
+}
+async function pollAsks(){
+  try {
+    const r = await fetch('/asks?_=' + Date.now(), {cache:'no-store'});
+    const data = await r.json();
+    if(data.asks) renderAsks(data.asks);
+  } catch (e) {}
+}
+pollAsks();
+setInterval(pollAsks, 4000);
+
 poll();
 setInterval(poll, 1500);
 </script>
@@ -508,6 +543,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 data = []
             self._send(200, json.dumps({"roster": data}))
+            return
+        if self.path.startswith("/asks"):
+            try:
+                data = office_asks.asks_now()
+            except Exception:
+                data = []
+            self._send(200, json.dumps({"asks": data}))
             return
         self._send(404, json.dumps({"error": "not found"}))
 

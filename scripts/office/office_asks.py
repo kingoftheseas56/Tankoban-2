@@ -155,7 +155,8 @@ def _bus_records():
 def asks_now(now_epoch=None):
     import time
     now_epoch = int(time.time()) if now_epoch is None else now_epoch
-    return compute_asks(_bus_records(), now_epoch)
+    rows = compute_asks(_bus_records(), now_epoch)
+    return [r for r in rows if r["state"] != "answered" or r["age_sec"] <= ANSWERED_GRACE_SEC]
 
 
 def main(argv):
