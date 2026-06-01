@@ -116,8 +116,9 @@ def call_deepseek(packet, cfg):
         "ANTHROPIC_MODEL": cfg["deepseek"]["model"],
         "ANTHROPIC_DEFAULT_OPUS_MODEL": cfg["deepseek"]["model"],
     })
+    cli = "claude.cmd" if sys.platform == "win32" else "claude"
     proc = subprocess.run(
-        ["claude", "-p", packet, "--model", cfg["deepseek"]["model"]],
+        [cli, "-p", packet, "--model", cfg["deepseek"]["model"]],
         cwd=scratch, env=env, capture_output=True, text=True,
         timeout=cfg["timeouts"]["deepseek"])
     return proc.stdout.strip()
@@ -126,8 +127,9 @@ def call_deepseek(packet, cfg):
 def call_codex(packet, cfg):
     if os.environ.get("ENGINE_DRY_RUN") == "1":
         return "DRY:codex:" + packet[:20]
+    cli = "codex.cmd" if sys.platform == "win32" else "codex"
     proc = subprocess.run(
-        ["codex", "exec", packet],
+        [cli, "exec", packet],
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=cfg["timeouts"]["codex"])
     return parse_codex(proc.stdout)

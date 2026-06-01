@@ -20,3 +20,10 @@ Status / spend:             python scripts/engines/engine.py status
 - Keys come from env only: DEEPSEEK_API_KEY, GEMINI_API_KEY. Never commit them.
 - Packets must be tiny (small-context rule); oversized packets are refused.
 - Hard cap ~25 calls/wake, soft ~8/task. Hitting the hard cap STOPS and asks.
+
+## Live smoke 2026-06-01
+
+DeepSeek grunt: produced correct `clampVolume` (ternary with correct bounds).
+Codex review: `APPROVE: Correctly clamps values below 0 to 0, above 100 to 100, and preserves in-range values.`
+No key leakage in ledger. Both calls logged, 2/25 wake cap.
+Platform fix: `claude.cmd` / `codex.cmd` on Windows (Python subprocess requires .cmd extension).
