@@ -1,0 +1,11 @@
+{
+  "id": "Q1426726",
+  "claims": {
+    "P31":  [{"mainsnak": {"datavalue": {"value": {"id": "Q14406742"}}}}],
+    "P50":  [{"mainsnak": {"datavalue": {"value": {"id": "Q357331"}}}}],
+    "P110": [{"mainsnak": {"datavalue": {"value": {"id": "Q5176580"}}}}],
+    "P123": [{"mainsnak": {"datavalue": {"value": {"id": "Q1057217"}}}}],
+    "P136": [{"mainsnak": {"datavalue": {"value": {"id": "Q1535153"}}}}],
+    "P577": [{"mainsnak": {"datavalue": {"value": {"time": "+2003-01-01T00:00:00Z"}}}}]
+  }
+}
