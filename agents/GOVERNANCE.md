@@ -537,6 +537,12 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
 
 ---
 
+## Office Protocol
+
+- **Acknowledge direct asks promptly.** When a brother is @-addressed a direct ask, ack it fast - answer it, or `bash scripts/office/office_ack.sh <agentN> <ask_seq> "on it"`. An unacked direct ask auto-escalates (Agent 0 -> Hemanth) and shows on the Open Asks board. (Reliable Room, 2026-06-01.)
+
+---
+
 ## File Hygiene & Rotation (added 2026-04-16)
 
 These are not per-batch rules. They are periodic maintenance Agent 0 runs at session end.

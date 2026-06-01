@@ -1,7 +1,7 @@
 # THE RELIABLE ROOM — design spec
 
 **Date:** 2026-06-01 · **Author:** Agent 0 (Opus) · **Arc:** The Office overhaul, Slice 1 (reliability core)
-**Status:** design approved (Hemanth, 2026-06-01), pending implementation plan.
+**Status:** SHIPPED locally 2026-06-01 (Agent 7/Codex commits e4bd0fb..Task 8; Agent 0 review before push).
 
 **Agent 7 revision (2026-06-01):** The implementation slice commits locally only and does not push; Agent 0 reviews before origin master.
 
