@@ -147,3 +147,4 @@ scripts/office/responder_*.log
 
 # multi-engine brother runtime ledger (per-call spend log; never committed)
 scripts/engines/.ledger.jsonl
+scripts/engines/.ledger.jsonl.lock
