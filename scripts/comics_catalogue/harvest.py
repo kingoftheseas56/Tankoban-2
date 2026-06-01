@@ -19,8 +19,10 @@ import time
 import urllib.request
 import ssl
 
-from parse_rco import parse_series, parse_series_cover
+from parse_rco import parse_series, parse_series_cover, parse_series_summary
 from edition_classify import is_collected, edition_tier
+import wikidata_enrich
+import wikipedia_fallback
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -32,12 +34,17 @@ _OUT_DIR = pathlib.Path(__file__).resolve().parents[2] / "data" / "western_catal
 
 
 def build_record(series_id: str, series_title: str, items: list[dict],
-                 series_cover: str = "") -> dict:
-    """Pure assembly: parsed RCO items -> a base record holding only the
-    collected editions, tier-sorted (compendium first). Single issues are
-    excluded from the primary editions list. `series_cover` is the one
-    series-hero cover RCO exposes; the C++ loader maps it to each edition's
-    cover (RCO has no per-edition covers — see RECON_FINDINGS.md)."""
+                 series_cover: str = "",
+                 synopsis: str = "", author: str = "", publisher: str = "",
+                 genres: list = None,
+                 year_start: int = 0, year_end: int = 0,
+                 status: str = "") -> dict:
+    """Pure assembly: parsed RCO items + enrichment -> a schema-v2 catalogue
+    record holding only the collected editions, tier-sorted (compendium first).
+    Single issues are excluded. `series_cover` is the one series-hero cover RCO
+    exposes; the C++ loader maps it to each edition's cover. Enrichment fields
+    (synopsis/author/publisher/genres/year) default empty -> graceful for
+    series with no free metadata (RECON_FINDINGS.md, design D2/D3/D6)."""
     collected = [it for it in items if is_collected(it["label"])]
     collected.sort(key=lambda it: edition_tier(it["label"]))  # stable
     editions = [
@@ -49,6 +56,14 @@ def build_record(series_id: str, series_title: str, items: list[dict],
         "seriesTitle": series_title,
         "source": "rco",
         "seriesCover": series_cover,
+        "schemaVersion": 2,
+        "synopsis": synopsis,
+        "author": author,
+        "publisher": publisher,
+        "genres": genres or [],
+        "yearStart": year_start,
+        "yearEnd": year_end,
+        "status": status,
         "editions": editions,
     }
 
@@ -61,12 +76,30 @@ def _fetch(url: str) -> str:
 
 
 def harvest_series(series_id: str, series_title: str, rco_name: str) -> dict:
-    """Fetch one RCO series page and build its record. `rco_name` is the
-    /Comic/<rco_name> path segment (capital-C scheme)."""
+    """Fetch one RCO series page, build its record, and enrich it: synopsis
+    from the RCO 'Summary:' block (Wikipedia fallback when thin) + structured
+    author/publisher/genre/year from Wikidata. Enrichment misses degrade
+    silently to empty (graceful) — `rco_name` is the /Comic/<rco_name> segment."""
     html = _fetch(f"{_BASE}/Comic/{rco_name}")
     items = parse_series(html)
     cover = parse_series_cover(html)
-    return build_record(series_id, series_title, items, series_cover=cover)
+
+    synopsis = parse_series_summary(html)
+    if wikipedia_fallback.needs_fallback(synopsis):
+        wiki = wikipedia_fallback.fetch_extract(series_title)
+        if len(wiki) > len(synopsis):
+            synopsis = wiki
+
+    wd = wikidata_enrich.enrich(series_title)  # {} on miss
+
+    return build_record(
+        series_id, series_title, items, series_cover=cover,
+        synopsis=synopsis,
+        author=wd.get("author", ""),
+        publisher=wd.get("publisher", ""),
+        genres=wd.get("genres", []),
+        year_start=wd.get("yearStart", 0),
+    )
 
 
 def write_record(record: dict, out_dir: pathlib.Path = _OUT_DIR) -> pathlib.Path:

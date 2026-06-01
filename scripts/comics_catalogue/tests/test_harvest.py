@@ -63,3 +63,31 @@ def test_series_cover_carried_when_provided():
 def test_series_cover_defaults_empty():
     rec = build_record("y", "Y", [{"label": "Omnibus 1", "href": "/Comic/Y/Omnibus-1"}])
     assert rec["seriesCover"] == ""
+
+
+def test_build_record_bakes_enrichment_fields():
+    items = [{"label": "TPB 1 Family matters", "href": "/Comic/X/TPB-1"}]
+    rec = build_record(
+        "x", "X", items,
+        series_cover="/Uploads/x.jpg",
+        synopsis="A teenage superhero grows up.",
+        author="Robert Kirkman",
+        publisher="Image Comics",
+        genres=["superhero comics"],
+        year_start=2003,
+    )
+    assert rec["synopsis"] == "A teenage superhero grows up."
+    assert rec["author"] == "Robert Kirkman"
+    assert rec["publisher"] == "Image Comics"
+    assert rec["genres"] == ["superhero comics"]
+    assert rec["yearStart"] == 2003
+    assert rec["schemaVersion"] == 2
+
+
+def test_build_record_enrichment_defaults_empty():
+    rec = build_record("y", "Y", [{"label": "Omnibus 1", "href": "/Comic/Y/Omnibus-1"}])
+    assert rec["synopsis"] == ""
+    assert rec["author"] == ""
+    assert rec["genres"] == []
+    assert rec["yearStart"] == 0
+    assert rec["schemaVersion"] == 2
