@@ -1161,6 +1161,7 @@ void ComicsPage::buildUI()
         m_tileStrip->setDensity(val);
         if (m_continueStrip) m_continueStrip->setDensity(val);
         if (m_bookmarkedStrip) m_bookmarkedStrip->setDensity(val);
+        if (m_westernGrid) m_westernGrid->setDensity(val);
     });
     seriesLayout->addWidget(m_densitySlider);
 
@@ -2257,6 +2258,8 @@ void ComicsPage::buildWesternScreen()
 
     m_westernGrid = new TileStrip(page);
     m_westernGrid->setMode(QStringLiteral("fixedGrid"));
+    const int westernDensity = QSettings("Tankoban", "Tankoban").value("grid_cover_size", 1).toInt();
+    m_westernGrid->setDensity(qBound(0, westernDensity, 2));
     v->addWidget(m_westernGrid);
     v->addStretch();
 
