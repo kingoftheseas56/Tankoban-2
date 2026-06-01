@@ -5,6 +5,14 @@
 cd /d "%~dp0"
 set "OFFICE_URL=http://127.0.0.1:8787"
 
+:: Self-cleaning: stop any already-running Office server(s) first, so we never pile
+:: up duplicate processes on port 8787 and a fresh start always loads current code.
+:: Targets ONLY office_web.py python procs (not other python tooling).
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*office_web.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
+:: Let the OS release the port before we re-bind it.
+ping -n 2 127.0.0.1 >nul
+
 :: Start the server in its own console window (so this script can launch the UI).
 start "The Office (server)" cmd /c "python scripts\office\office_web.py 8787"
 
