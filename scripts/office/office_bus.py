@@ -225,6 +225,27 @@ def cmd_flag(sid, msg):
     cmd_append(frm, "all", "blocked", "null", msg)  # prints seq
 
 
+def cmd_ack(frm, ask_seq, *note_parts):
+    """Acknowledge a direct ask by seq, addressed back to the original asker."""
+    note = " ".join(note_parts).strip() or "ack"
+    asker = "all"
+    bus = BUS()
+    if os.path.exists(bus):
+        with open(bus, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if str(rec.get("seq")) == str(ask_seq):
+                    asker = rec.get("from", "all")
+                    break
+    cmd_append(frm, asker, "ack", str(ask_seq), note)
+
+
 import re
 
 # Auto-detect agent number from a wake-prompt / explicit "I am agent N" line.
@@ -421,7 +442,7 @@ def cmd_close():
 
 def main(argv):
     if not argv:
-        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|deliver|drain|watch-peek|mirror-commit|close> ...")
+        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|ack|deliver|drain|watch-peek|mirror-commit|close> ...")
     cmd, rest = argv[0], argv[1:]
     if cmd == "append":
         cmd_append(*rest)
@@ -439,6 +460,8 @@ def main(argv):
         cmd_send(*rest)
     elif cmd == "flag":
         cmd_flag(*rest)
+    elif cmd == "ack":
+        cmd_ack(*rest)
     elif cmd == "mirror-commit":
         cmd_mirror_commit(*rest)
     elif cmd == "deliver":

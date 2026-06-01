@@ -2,6 +2,7 @@
 """Tests for office_asks.py pure logic. Mirrors test_status.py: check()/main()."""
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
@@ -91,9 +92,34 @@ def test_due_escalations():
     check(dm == [(20, "agent3", "agent0")], "due: comma-list idempotency is per addressee")
 
 
+def _sandbox():
+    sand = tempfile.mkdtemp()
+    os.environ["OFFICE_DIR"] = sand
+    os.environ["OFFICE_BUS"] = os.path.join(sand, "bus.jsonl")
+    os.environ["OFFICE_CURSORS"] = os.path.join(sand, "cursors")
+    os.environ["OFFICE_SESSIONS"] = os.path.join(sand, "sessions.json")
+    return sand
+
+
+def test_ack_event():
+    _sandbox()
+    import office_bus
+
+    office_bus.cmd_append("agent2", "agent1", "chat", "null", "X?")
+    office_bus.cmd_ack("agent1", "1", "on it")
+    recs = A._bus_records()
+    last = recs[-1]
+    check(last["kind"] == "ack" and last["from"] == "agent1" and str(last["arc"]) == "1",
+          "ack: cmd_ack appends kind=ack from the brother, arc=ask_seq")
+    check(last["to"] == "agent2", "ack: ack is addressed back to the asker")
+    by = {(a["ask_seq"], a["to_agent"]): a for a in A.compute_asks(recs, 1_000_000, now_age={1: 9999})}
+    check(by[(1, "agent1")]["state"] == "acked", "ack: projection closes escalation clock")
+
+
 def main():
     test_compute_asks()
     test_due_escalations()
+    test_ack_event()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
