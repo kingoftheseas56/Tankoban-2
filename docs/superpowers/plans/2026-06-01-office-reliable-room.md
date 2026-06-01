@@ -1,7 +1,19 @@
 # The Reliable Room — Implementation Plan
 
+**Agent 7 revision (2026-06-01):** Execute locally on `master`, commit per task, and do **not push**. Agent 0 must review before origin master. This supersedes any older "push at the end" wording below.
+
+**Agent 7 revision (2026-06-01):** `office_ack.sh` takes `office_ack.sh <agentN> <ask_seq> [note]` because the Office must know which brother is accepting responsibility. The older spec shorthand without `<agentN>` is incorrect.
+
+**Agent 7 revision (2026-06-01):** Escalation idempotency is per `(ask_seq, to_agent)`, not just ask seq. Comma-list direct asks create multiple obligations; escalation events use `arc="<ask_seq>:<to_agent>"`. Ack remains `arc="<ask_seq>"` because the ack's `from` identifies the addressee.
+
+**Agent 7 revision (2026-06-01):** A direct answer is terminal and no separate ack is required. The behavioral contract is "ack or answer promptly," not double-message bureaucracy.
+
+**Agent 7 revision (2026-06-01):** The deterministic escalation guarantee is live while `office_web.py` is running. A future daemon/service can make escalation always-on; this slice keeps Hemanth's current one-window model.
+
+**Agent 7 revision (2026-06-01):** Scope is restricted to `scripts/office/`, `agents/GOVERNANCE.md`, and the Reliable Room plan/spec. Do not edit root responder `.bat` files or `.gitignore` in this slice; root launcher cleanup is deferred unless scope is expanded.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> **Governance:** gov-v13 — flat-on-master, NO worktree. Commit per task. Push at the end (busy shared tree; rebase-if-needed, NEVER `reset --hard`).
+> **Governance:** gov-v13 — flat-on-master, NO worktree. Commit per task. Do not push; Agent 0 reviews before origin master. Busy shared tree: stage only explicit Office/spec/governance files, and NEVER `reset --hard`.
 
 **Goal:** Make every direct ask in the Office reach a visible terminal state — acknowledged → answered, or escalated to Agent 0 then Hemanth — 100% deterministically, with no LLM in the guarantee path.
 
@@ -678,18 +690,17 @@ git commit -m "feat(office): roll-call command + GUI button (T6)"
 ### Task 7: Retire the `claude -p` responder + remove the overpromising backup chip
 
 **Files:**
-- Delete: `scripts/office/office_responder.py`, `office_responders.py`, `office_responder_contract_check.py`, `start_office_responders.bat`, `stop_office_responders.bat`, `scripts/office/tests/test_responder.py`
+- Delete: `scripts/office/office_responder.py`, `scripts/office/office_responders.py`, `scripts/office/office_responder_contract_check.py`, `scripts/office/tests/test_responder.py`
 - Modify: `scripts/office/office_status.py` (remove responder heartbeat + `responder_alive`)
 - Modify: `scripts/office/office_web.py` (remove the `backup` chip)
 - Modify: `scripts/office/tests/test_status.py` (drop `responder_alive` assertions)
-- Modify: `.gitignore` (remove responder-only ignore lines)
+- Deferred unless scope expands: root responder `.bat` launchers and `.gitignore` responder-only ignore lines.
 
 - [ ] **Step 1: Delete the retired responder files**
 
 ```bash
 git rm scripts/office/office_responder.py scripts/office/office_responders.py \
        scripts/office/office_responder_contract_check.py \
-       start_office_responders.bat stop_office_responders.bat \
        scripts/office/tests/test_responder.py
 ```
 
@@ -699,7 +710,7 @@ git rm scripts/office/office_responder.py scripts/office/office_responders.py \
 
 - [ ] **Step 4: Update `test_status.py`** — remove the `responder_hb`/`responder_alive` lines from `test_compute_roster` and the `"responder_alive"` key from the canonical-keys set in `test_roster_cli`.
 
-- [ ] **Step 5: Update `.gitignore`** — remove `agents/.office_responder_heartbeats/`, `agents/.office_responder_pids`, and `scripts/office/responder_*.log` lines.
+- [ ] **Step 5: Defer root launcher and `.gitignore` cleanup** — this implementation is scoped to `scripts/office/`, `agents/GOVERNANCE.md`, and the Reliable Room plan/spec. Root `.bat` files and `.gitignore` can be cleaned in a later Office hygiene slice.
 
 - [ ] **Step 6: Run both suites + compile**
 
@@ -713,7 +724,8 @@ Expected: both suites `0 failure(s)`; `OK`.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A scripts/office .gitignore
+git add scripts/office/office_status.py scripts/office/office_web.py scripts/office/tests/test_status.py
+git add -u scripts/office/office_responder.py scripts/office/office_responders.py scripts/office/office_responder_contract_check.py scripts/office/tests/test_responder.py
 git commit -m "chore(office): retire claude -p responder + overpromising backup chip (T7)"
 ```
 
@@ -762,7 +774,7 @@ Expected: both suites green; `posted escalations: 1`; `state after ack: acked`; 
 ```bash
 git add agents/GOVERNANCE.md docs/superpowers/specs/2026-06-01-office-reliable-room-design.md
 git commit -m "docs(office): ack governance line + mark Reliable Room shipped (T8)"
-git push origin master   # rebase-if-needed; NEVER reset --hard (shared tree)
+# Do not push. Agent 0 reviews before origin master.
 ```
 
 ---

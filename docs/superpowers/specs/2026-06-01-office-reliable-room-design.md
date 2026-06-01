@@ -3,6 +3,16 @@
 **Date:** 2026-06-01 · **Author:** Agent 0 (Opus) · **Arc:** The Office overhaul, Slice 1 (reliability core)
 **Status:** design approved (Hemanth, 2026-06-01), pending implementation plan.
 
+**Agent 7 revision (2026-06-01):** The implementation slice commits locally only and does not push; Agent 0 reviews before origin master.
+
+**Agent 7 revision (2026-06-01):** Ack means "responsibility accepted"; a direct answer is also terminal, so the actual contract is ack-or-answer promptly.
+
+**Agent 7 revision (2026-06-01):** Escalation events are per addressed brother. Use `arc="<ask_seq>:<to_agent>"` for `escalate` events so comma-list asks cannot cross-contaminate. `ack` stays `arc="<ask_seq>"`.
+
+**Agent 7 revision (2026-06-01):** The guarantee is active while `office_web.py` is running. Always-on escalation is a future daemon/service slice, not part of this implementation.
+
+**Agent 7 revision (2026-06-01):** Retire only the in-scope `scripts/office` responder path and UI/status claims. Root launchers and `.gitignore` cleanup are deferred unless scope expands.
+
 Builds on: `agents/audits/office_defect_audit_2026-06-01.md` (Agent 7), `agents/audits/office_research_agent7_2026-06-01.md` (Agent 7), `docs/superpowers/data/2026-06-01-office-research-synthesis.md` (3-source synthesis).
 
 ---
@@ -47,8 +57,8 @@ open ──ack──▶ acked ──answer──▶ answered   (closed)
 
 No new database. We extend `agents/bus.jsonl` (schema `{ts,seq,from,to,kind,arc,msg}`), which already carries `kind` ∈ {chat, activity, blocked}. The unused `arc` field carries the referenced ask seq.
 
-- **`ack`** — posted by a brother acknowledging an ask: `kind:"ack"`, `from:agentN`, `to:<asker>`, `arc:"<ask_seq>"`, `msg:"<optional note>"`. Wrapper: `office_ack.sh <ask_seq> [note]`.
-- **`escalate`** — posted by the escalation tick: `kind:"escalate"`, `from:"system"`, `to:"agent0"` (then `"hemanth"`), `arc:"<ask_seq>"`, `msg:"agentN hasn't acked #<seq> in <W>m"`.
+- **`ack`** — posted by a brother acknowledging an ask: `kind:"ack"`, `from:agentN`, `to:<asker>`, `arc:"<ask_seq>"`, `msg:"<optional note>"`. Wrapper: `office_ack.sh <agentN> <ask_seq> [note]`.
+- **`escalate`** — posted by the escalation tick: `kind:"escalate"`, `from:"system"`, `to:"agent0"` (then `"hemanth"`), `arc:"<ask_seq>:<to_agent>"`, `msg:"agentN hasn't acked #<seq> in <W>m"`.
 - **answers** — *not* a new kind. An answer is inferred: an existing `kind:chat` from the addressed brother back to the asker with `seq > ask_seq`, reusing the target-aware matching already written for the responder (`should_suppress`-style logic).
 - **asks** — *not* a new kind and **no new send-time step**. Asks are inferred from the direct-chat messages already flowing. Posting a normal `@agentN` chat is unchanged.
 
@@ -88,7 +98,7 @@ Visual: monochrome + the WhatsApp-family palette already in use; "escalated" row
 
 ## 7 · Retire the `claude -p` backup
 
-`scripts/office/office_responder.py`, `office_responders.py`, and the root `start_office_responders.bat` / `stop_office_responders.bat` are **retired from the active path**:
+`scripts/office/office_responder.py`, `office_responders.py`, and the responder status/UI claims are **retired from the active path**. Root launcher cleanup is deferred unless scope expands:
 - The launchers + supervisor are removed from active use (deleted or moved to an `_archive`/shelf; code remains in git history, revivable only if the "absolute certainty" rung is ever pursued).
 - The responder heartbeat + `responder_alive` "backup" chip in the roster are removed or repurposed (the chip overpromised, per the defect audit).
 - The deterministic guarantee replaces it; the expensive, flaky 120s-timeout path is gone.
@@ -97,7 +107,7 @@ Visual: monochrome + the WhatsApp-family palette already in use; "escalated" row
 
 ## 8 · The one behavioral contract (governance)
 
-For acks to happen, the brotherhood protocol gains one line: **"Acknowledge direct asks promptly"** (a quick `office_ack.sh` or a direct answer). Added to `agents/GOVERNANCE.md` (Office section) + the Office onboarding. The visible Open Asks board makes it **self-enforcing** — an unacked ask is visible pressure, not a silent miss. No new heavy rule; one sentence + the surface that backs it.
+For acks to happen, the brotherhood protocol gains one line: **"Acknowledge direct asks promptly"** (a quick `office_ack.sh <agentN> <ask_seq>` or a direct answer). Added to `agents/GOVERNANCE.md` (Office section) + the Office onboarding. The visible Open Asks board makes it **self-enforcing** — an unacked ask is visible pressure, not a silent miss. No new heavy rule; one sentence + the surface that backs it.
 
 ---
 
