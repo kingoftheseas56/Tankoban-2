@@ -4,7 +4,7 @@
 Spec: docs/superpowers/specs/2026-06-01-multi-engine-brother-design.md
 Keys come from environment only (DEEPSEEK_API_KEY, GEMINI_API_KEY). Never logged.
 """
-import os, sys, json, time
+import os, sys, json, time, subprocess, tempfile, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "engines.config.json")
@@ -101,3 +101,101 @@ def parse_codex(stdout):
             break
         answer.append(ln)
     return "\n".join(answer).strip()
+
+
+def call_deepseek(packet, cfg):
+    if os.environ.get("ENGINE_DRY_RUN") == "1":
+        return "DRY:deepseek:" + packet[:20]
+    scratch = tempfile.mkdtemp(prefix="ds_engine_")
+    env = dict(os.environ)
+    env.update({
+        "CLAUDE_CONFIG_DIR": os.path.join(scratch, ".cfg"),
+        "ANTHROPIC_BASE_URL": cfg["deepseek"]["base_url"],
+        "ANTHROPIC_AUTH_TOKEN": require_key("DEEPSEEK_API_KEY"),
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_MODEL": cfg["deepseek"]["model"],
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": cfg["deepseek"]["model"],
+    })
+    proc = subprocess.run(
+        ["claude", "-p", packet, "--model", cfg["deepseek"]["model"]],
+        cwd=scratch, env=env, capture_output=True, text=True,
+        timeout=cfg["timeouts"]["deepseek"])
+    return proc.stdout.strip()
+
+
+def call_codex(packet, cfg):
+    if os.environ.get("ENGINE_DRY_RUN") == "1":
+        return "DRY:codex:" + packet[:20]
+    proc = subprocess.run(
+        ["codex", "exec", packet],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        timeout=cfg["timeouts"]["codex"])
+    return parse_codex(proc.stdout)
+
+
+def call_gemini(packet, cfg):
+    if os.environ.get("ENGINE_DRY_RUN") == "1":
+        return "DRY:gemini:" + packet[:20]
+    key = require_key("GEMINI_API_KEY")
+    url = cfg["gemini"]["url"].format(model=cfg["gemini"]["model"]) + "?key=" + key
+    body = json.dumps({"contents": [{"parts": [{"text": packet}]}]}).encode()
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=cfg["timeouts"]["gemini"]) as resp:
+        return parse_gemini(json.load(resp))
+
+
+def dispatch(cmd, packet, task, purpose, cfg):
+    guard_packet(packet, cfg)
+    if cmd == "grunt":
+        out = call_deepseek(packet, cfg); name = "deepseek"
+    elif cmd == "review":
+        out = call_codex(packet, cfg); name = "codex"
+    elif cmd == "read":
+        if not cfg["gemini"].get("enabled"):
+            raise RuntimeError("Gemini disabled (reliability gate not passed). "
+                               "Read directly on Claude, or run gemini_gate.py.")
+        out = call_gemini(packet, cfg); name = "gemini"
+    else:
+        raise ValueError(f"unknown command: {cmd}")
+    log_call(name, len(out), purpose, task)
+    return out
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="Multi-engine brother helper")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("grunt", "review", "read"):
+        p = sub.add_parser(name)
+        p.add_argument("--task", required=True)
+        p.add_argument("--purpose", default="")
+        p.add_argument("packet")
+    sub.add_parser("wake-start")
+    sub.add_parser("status")
+    args = ap.parse_args(argv)
+    cfg = load_config()
+
+    if args.cmd == "wake-start":
+        mark_wake(); print("wake marked"); return 0
+    if args.cmd == "status":
+        calls = [r for r in ledger_rows_since_wake() if r.get("event") == "call"]
+        tot = sum(r.get("tokens", 0) for r in calls)
+        print(f"calls this wake: {len(calls)}/{cfg['caps']['per_wake_hard']} "
+              f"| out-chars: {tot}")
+        for r in calls:
+            print(f"  {r['engine']:9} task={r['task']:6} {r['purpose']}")
+        return 0
+
+    ok, msg = check_cap(args.task, cfg)
+    if msg:
+        print(msg, file=sys.stderr)
+    if not ok:
+        return 2
+    out = dispatch(args.cmd, args.packet, args.task, args.purpose, cfg)
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

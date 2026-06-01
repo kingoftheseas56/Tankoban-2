@@ -103,5 +103,33 @@ class ParserTest(unittest.TestCase):
         sample = "banner\ncodex\nline one\nline two\ntokens used\n42\n"
         self.assertEqual(engine.parse_codex(sample), "line one\nline two")
 
+class DispatchTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
+        self.tmp.close()
+        engine.LEDGER_PATH = self.tmp.name
+        open(self.tmp.name, "w").close()
+        os.environ["ENGINE_DRY_RUN"] = "1"
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+        os.environ.pop("ENGINE_DRY_RUN", None)
+
+    def test_grunt_dry_runs_and_logs(self):
+        out = engine.dispatch("grunt", "tiny packet", "T1", "p", CFG)
+        self.assertTrue(out.startswith("DRY:deepseek"))
+        calls = [r for r in engine.ledger_rows_since_wake() if r.get("event") == "call"]
+        self.assertEqual(calls[-1]["engine"], "deepseek")
+
+    def test_review_dry_runs(self):
+        out = engine.dispatch("review", "diff", "T1", "p", CFG)
+        self.assertTrue(out.startswith("DRY:codex"))
+
+    def test_read_blocked_when_gemini_disabled(self):
+        cfg = dict(CFG)
+        cfg["gemini"] = {"enabled": False}
+        with self.assertRaises(RuntimeError):
+            engine.dispatch("read", "blob", "T1", "p", cfg)
+
 if __name__ == "__main__":
     unittest.main()
