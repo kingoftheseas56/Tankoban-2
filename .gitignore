@@ -144,3 +144,6 @@ scripts/office/responder_*.log
 /tmp_*
 /wiki-*.png
 /deathnote-*.png
+
+# multi-engine brother runtime ledger (per-call spend log; never committed)
+scripts/engines/.ledger.jsonl
