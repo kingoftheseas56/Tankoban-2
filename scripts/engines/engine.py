@@ -10,6 +10,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "engines.config.json")
 LEDGER_PATH = os.path.join(HERE, ".ledger.jsonl")
 LOCK_PATH = LEDGER_PATH + ".lock"
+ENV_PATH = os.path.join(HERE, ".env")
+
+
+def _load_dotenv(path=None):
+    """Fill engine keys from a gitignored scripts/engines/.env (KEY=value lines)
+    so every brother's tab works with no per-session export. The REAL environment
+    always wins — the file only sets what is currently unset."""
+    path = path or ENV_PATH
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key, val = key.strip(), val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
 
 
 @contextlib.contextmanager
@@ -215,6 +234,7 @@ def dispatch(cmd, packet, task, purpose, cfg):
 
 
 def main(argv=None):
+    _load_dotenv()
     import argparse
     ap = argparse.ArgumentParser(description="Multi-engine brother helper")
     sub = ap.add_subparsers(dest="cmd", required=True)

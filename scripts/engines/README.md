@@ -18,9 +18,20 @@ Status / spend:             python scripts/engines/engine.py status
 - think  -> design / judgment / identity / important code         -> keep on Claude
 
 ## Contract
-- Keys come from env only: DEEPSEEK_API_KEY, GEMINI_API_KEY. Never commit them.
+- Keys come from env OR a gitignored `scripts/engines/.env` (auto-loaded; real env wins). Never commit them.
 - Packets must be tiny (small-context rule); oversized packets are refused.
 - Hard cap ~25 calls/wake, soft ~8/task. Hitting the hard cap STOPS and asks.
+
+## Writing good packets (the muscle has NO project context — by design)
+The bare grunt/read engines run context-starved (clean scratch dir, no CLAUDE.md)
+to stay cheap and fast. So the packet must be **self-contained**. Lessons from live use:
+- Plain prose, not code-pseudo. Describe the behavior step by step.
+- Avoid loaded trigger words ("classifier", "ML") that pull the engine off-task.
+- Spell out the exact output you want ("output ONLY the function in a code block").
+- One small job per call. Need a bit of context? Paste the ONE relevant snippet —
+  never the whole file/repo (that's the slow timeout path).
+- Always verify what comes back. DeepSeek can diverge on fuzzy packets; the verify
+  gate is what catches it before it touches code.
 
 ## Live smoke 2026-06-01
 

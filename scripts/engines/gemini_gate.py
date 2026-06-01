@@ -19,6 +19,7 @@ CASES = [
 
 
 def main():
+    engine._load_dotenv()
     cfg = engine.load_config()
     cfg["gemini"]["enabled"] = True  # force-enable for the probe only
     engine.require_key("GEMINI_API_KEY")

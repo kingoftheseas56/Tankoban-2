@@ -137,6 +137,27 @@ class ParserTest(unittest.TestCase):
         sample = "banner\ncodex\nline one\nline two\ntokens used\n42\n"
         self.assertEqual(engine.parse_codex(sample), "line one\nline two")
 
+class DotenvTest(unittest.TestCase):
+    def test_loads_unset_keys_only(self):
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".env")
+        with os.fdopen(fd, "w") as f:
+            f.write("# comment\n\nFROM_FILE_KEY=file-val\nALREADY_SET_KEY=file-should-not-win\n")
+        os.environ.pop("FROM_FILE_KEY", None)
+        os.environ["ALREADY_SET_KEY"] = "env-wins"
+        try:
+            engine._load_dotenv(path)
+            self.assertEqual(os.environ.get("FROM_FILE_KEY"), "file-val")
+            self.assertEqual(os.environ.get("ALREADY_SET_KEY"), "env-wins")
+        finally:
+            os.unlink(path)
+            os.environ.pop("FROM_FILE_KEY", None)
+            os.environ.pop("ALREADY_SET_KEY", None)
+
+    def test_missing_file_is_noop(self):
+        engine._load_dotenv("/no/such/.env")  # must not raise
+
+
 class DispatchTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
