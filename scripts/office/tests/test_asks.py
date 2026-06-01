@@ -62,8 +62,38 @@ def test_compute_asks():
     check(a6[(10, "agent1")]["state"] == "escalated_a0", "ask: legacy escalation arc remains readable")
 
 
+def test_due_escalations():
+    now = 1_000_000
+    base = [rec(10, "agent2", "agent1", "chat", "X?")]
+    check(A.due_escalations(base, now, 300, 300, now_age={10: 50}) == [],
+          "due: young ask -> nothing due")
+
+    d = A.due_escalations(base, now, 300, 300, now_age={10: 400})
+    check(d == [(10, "agent1", "agent0")], "due: overdue ask -> escalate to agent0")
+
+    e0 = base + [rec(11, "system", "agent0", "escalate", "...", arc="10:agent1")]
+    check(A.due_escalations(e0, now, 300, 300, now_age={10: 400}) == [],
+          "due: agent0 escalation already posted -> idempotent")
+    d2 = A.due_escalations(e0, now, 300, 300, now_age={10: 700})
+    check(d2 == [(10, "agent1", "hemanth")], "due: past second window -> escalate to hemanth")
+
+    eh = e0 + [rec(12, "system", "hemanth", "escalate", "...", arc="10:agent1")]
+    check(A.due_escalations(eh, now, 300, 300, now_age={10: 700}) == [],
+          "due: hemanth escalation already posted -> idempotent")
+
+    ack = base + [rec(13, "agent1", "agent2", "ack", "ok", arc="10")]
+    check(A.due_escalations(ack, now, 300, 300, now_age={10: 9999}) == [],
+          "due: acked ask never escalates")
+
+    multi = [rec(20, "agent2", "agent1,agent3", "chat", "both?"),
+             rec(21, "system", "agent0", "escalate", "agent1 missed", arc="20:agent1")]
+    dm = A.due_escalations(multi, now, 300, 300, now_age={20: 400})
+    check(dm == [(20, "agent3", "agent0")], "due: comma-list idempotency is per addressee")
+
+
 def main():
     test_compute_asks()
+    test_due_escalations()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 

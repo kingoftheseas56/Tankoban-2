@@ -120,6 +120,17 @@ def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
     return sorted(out, key=lambda x: (x["state"] == "answered", -x["age_sec"], x["ask_seq"], x["to_agent"]))
 
 
+def due_escalations(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None):
+    """Return [(ask_seq, to_agent, level)] for newly due escalation events."""
+    due = []
+    for ask in compute_asks(records, now_epoch, window, escalate2, now_age):
+        if ask["state"] == "owed":
+            due.append((ask["ask_seq"], ask["to_agent"], "agent0"))
+        elif ask["state"] == "escalated_a0" and ask["age_sec"] >= window + escalate2:
+            due.append((ask["ask_seq"], ask["to_agent"], "hemanth"))
+    return due
+
+
 def _bus_records():
     import sys
     here = os.path.dirname(os.path.abspath(__file__))
