@@ -121,6 +121,10 @@ def call_deepseek(packet, cfg):
         [cli, "-p", packet, "--model", cfg["deepseek"]["model"]],
         cwd=scratch, env=env, capture_output=True, text=True,
         timeout=cfg["timeouts"]["deepseek"])
+    if proc.returncode != 0:
+        tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"
+        raise RuntimeError(
+            f"DeepSeek (claude) exited {proc.returncode}: {tail}")
     return proc.stdout.strip()
 
 
@@ -132,6 +136,10 @@ def call_codex(packet, cfg):
         [cli, "exec", packet],
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=cfg["timeouts"]["codex"])
+    if proc.returncode != 0:
+        tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"
+        raise RuntimeError(
+            f"Codex exited {proc.returncode}: {tail}")
     return parse_codex(proc.stdout)
 
 
@@ -139,10 +147,11 @@ def call_gemini(packet, cfg):
     if os.environ.get("ENGINE_DRY_RUN") == "1":
         return "DRY:gemini:" + packet[:20]
     key = require_key("GEMINI_API_KEY")
-    url = cfg["gemini"]["url"].format(model=cfg["gemini"]["model"]) + "?key=" + key
+    url = cfg["gemini"]["url"].format(model=cfg["gemini"]["model"])
     body = json.dumps({"contents": [{"parts": [{"text": packet}]}]}).encode()
     req = urllib.request.Request(url, data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "x-goog-api-key": key})
     with urllib.request.urlopen(req, timeout=cfg["timeouts"]["gemini"]) as resp:
         return parse_gemini(json.load(resp))
 

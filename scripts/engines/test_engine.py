@@ -1,4 +1,5 @@
 import os, json, tempfile, unittest, importlib.util
+from unittest.mock import patch, MagicMock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("engine", os.path.join(HERE, "engine.py"))
@@ -6,6 +7,15 @@ engine = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(engine)
 
 CFG = {"caps": {"per_wake_hard": 3, "per_task_soft": 2, "max_packet_chars": 100}}
+
+# Full config for live-caller tests (needs deepseek/codex/gemini/timeouts keys).
+CFG_FULL = {
+    "caps": {"per_wake_hard": 3, "per_task_soft": 2, "max_packet_chars": 100},
+    "deepseek": {"base_url": "https://api.deepseek.com/anthropic", "model": "test"},
+    "codex": {"model": "test"},
+    "gemini": {"url": "https://example.com/{model}:generateContent", "model": "test", "enabled": True},
+    "timeouts": {"deepseek": 30, "codex": 30, "gemini": 30},
+}
 
 class CapTest(unittest.TestCase):
     def setUp(self):
@@ -130,6 +140,27 @@ class DispatchTest(unittest.TestCase):
         cfg["gemini"] = {"enabled": False}
         with self.assertRaises(RuntimeError):
             engine.dispatch("read", "blob", "T1", "p", cfg)
+
+    @patch("engine.subprocess.run")
+    def test_grunt_nonzero_returncode_raises(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="claude: error")
+        os.environ.pop("ENGINE_DRY_RUN", None)
+        os.environ["DEEPSEEK_API_KEY"] = "sk-test"
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                engine.call_deepseek("packet", CFG_FULL)
+            self.assertIn("exited 1", str(ctx.exception))
+            self.assertIn("claude: error", str(ctx.exception))
+        finally:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+
+    @patch("engine.subprocess.run")
+    def test_codex_nonzero_returncode_raises(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="codex: fatal")
+        os.environ.pop("ENGINE_DRY_RUN", None)
+        with self.assertRaises(RuntimeError) as ctx:
+            engine.call_codex("packet", CFG_FULL)
+        self.assertIn("exited 2", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()
