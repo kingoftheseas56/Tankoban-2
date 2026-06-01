@@ -45,5 +45,25 @@ class CapTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIsNone(msg)
 
+class GuardTest(unittest.TestCase):
+    def test_packet_too_big_raises(self):
+        with self.assertRaises(ValueError):
+            engine.guard_packet("x" * 101, CFG)
+
+    def test_packet_ok(self):
+        engine.guard_packet("small", CFG)  # no raise
+
+    def test_missing_key_raises(self):
+        os.environ.pop("FAKE_KEY_XYZ", None)
+        with self.assertRaises(RuntimeError):
+            engine.require_key("FAKE_KEY_XYZ")
+
+    def test_present_key_returns(self):
+        os.environ["FAKE_KEY_XYZ"] = "sk-test"
+        try:
+            self.assertEqual(engine.require_key("FAKE_KEY_XYZ"), "sk-test")
+        finally:
+            os.environ.pop("FAKE_KEY_XYZ", None)
+
 if __name__ == "__main__":
     unittest.main()

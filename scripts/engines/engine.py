@@ -64,3 +64,18 @@ def check_cap(task, cfg):
         return (True, f"WARN: per-task soft cap {soft} reached for task '{task}' "
                       f"({task_count}). Continuing, but check scope.")
     return (True, None)
+
+
+def require_key(env_name):
+    key = os.environ.get(env_name, "").strip()
+    if not key:
+        raise RuntimeError(f"{env_name} not set in environment. "
+                           f"Refusing to call (key hygiene).")
+    return key
+
+
+def guard_packet(packet, cfg):
+    limit = cfg["caps"]["max_packet_chars"]
+    if len(packet) > limit:
+        raise ValueError(f"packet {len(packet)} chars exceeds limit {limit}. "
+                         f"Hand a SMALLER slice (small-context rule).")
