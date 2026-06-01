@@ -22,16 +22,19 @@ Status / spend:             python scripts/engines/engine.py status
 - Packets must be tiny (small-context rule); oversized packets are refused.
 - Hard cap ~25 calls/wake, soft ~8/task. Hitting the hard cap STOPS and asks.
 
-## Writing good packets (the muscle has NO project context — by design)
+## Writing good packets (the engine has NO project context — by design)
 The bare grunt/read engines run context-starved (clean scratch dir, no CLAUDE.md)
-to stay cheap and fast. So the packet must be **self-contained**. Lessons from live use:
-- Plain prose, not code-pseudo. Describe the behavior step by step.
-- Avoid loaded trigger words ("classifier", "ML") that pull the engine off-task.
+to stay cheap and fast. So the packet must be **self-contained**:
 - Spell out the exact output you want ("output ONLY the function in a code block").
 - One small job per call. Need a bit of context? Paste the ONE relevant snippet —
   never the whole file/repo (that's the slow timeout path).
-- Always verify what comes back. DeepSeek can diverge on fuzzy packets; the verify
-  gate is what catches it before it touches code.
+- Always verify what comes back; the verify/review gate catches divergence before
+  it touches code.
+
+Multiline packets are fine (fed via stdin as of 2026-06-01). NOTE: an earlier
+"use single-line plain prose, avoid trigger words" guideline was a misdiagnosis of
+the multiline-truncation bug Agent 1 found — the engine was only ever receiving the
+first line. That's fixed; clarity still helps, but newlines are no longer the enemy.
 
 ## Live smoke 2026-06-01
 
