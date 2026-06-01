@@ -95,8 +95,8 @@ def test_due_escalations():
 def test_since_seq_baseline():
     now = 1_000_000
     records = [
-        rec(10, "agent2", "agent1", "chat", "old ask"),
-        rec(11, "agent2", "agent1", "chat", "new ask"),
+        rec(10, "agent2", "agent1", "chat", "old ask?"),
+        rec(11, "agent2", "agent1", "chat", "new ask?"),
     ]
     asks = A.compute_asks(records, now, 300, 300, now_age={10: 400, 11: 400}, since_seq=10)
     keys = {(a["ask_seq"], a["to_agent"]) for a in asks}
@@ -151,7 +151,7 @@ def test_escalation_tick_startup_baseline_blocks_backfill():
     import office_bus
     import office_web
 
-    office_bus.cmd_append("agent2", "agent1", "chat", "null", "old before startup")
+    office_bus.cmd_append("agent2", "agent1", "chat", "null", "old before startup?")
     baseline = office_web._max_bus_seq()
     old_start = office_web.OFFICE_START_SEQ
     office_web.OFFICE_START_SEQ = baseline
@@ -159,7 +159,7 @@ def test_escalation_tick_startup_baseline_blocks_backfill():
         posted = office_web.escalate_tick_once(window=0, escalate2=999999)
         check(posted == 0, "tick: startup baseline does not backfill old asks")
 
-        office_bus.cmd_append("agent2", "agent1", "chat", "null", "new after startup")
+        office_bus.cmd_append("agent2", "agent1", "chat", "null", "new after startup?")
         posted2 = office_web.escalate_tick_once(window=0, escalate2=999999)
         recs = A._bus_records()
         esc = [r for r in recs if r.get("kind") == "escalate"]
@@ -184,10 +184,48 @@ def test_rollcall():
     check(len(live) == 3, "rollcall: each check-in is a tracked ask")
 
 
+def test_is_request():
+    check(A._is_request("can you review this?"), "req: question mark -> request")
+    check(A._is_request("A) which? B) when? ready when you call it"),
+          "req: '?' anywhere (multi-part, not at end) -> request")
+    check(A._is_request("please take a look"), "req: 'please' phrase -> request")
+    check(A._is_request("wdyt"), "req: 'wdyt' phrase -> request")
+    check(A._is_request("[ask] go ahead"), "req: explicit [ask] tag -> request")
+    check(not A._is_request("APPROVED, great work"), "req: plain approval -> not a request")
+    check(not A._is_request("MERGED to master"), "req: ship note -> not a request")
+    check(not A._is_request("review closed, all green"), "req: statement w/ 'review' -> not a request")
+    check(not A._is_request("can you believe it? [fyi]"), "req: [fyi] overrides the heuristic")
+    check(A._is_request("[ask] [fyi] which one?"), "req: explicit [ask] beats a conflicting [fyi]")
+    check(not A._is_request(""), "req: empty -> not a request")
+    check(not A._is_request(None), "req: None -> not a request")
+
+
+def test_request_filter():
+    now = 1_000_000
+    # A pure statement to a brother must NOT create an obligation.
+    stmt = [rec(40, "agent0", "agent9", "chat", "APPROVED — great work brother")]
+    check(A.compute_asks(stmt, now, now_age={40: 9999}) == [],
+          "filter: a statement/FYI to a brother creates no ask (the #708 bug)")
+    # A real question still creates one.
+    q = [rec(41, "agent0", "agent9", "chat", "can you re-run the suite?")]
+    qa = {(x["ask_seq"], x["to_agent"]) for x in A.compute_asks(q, now, now_age={41: 50})}
+    check((41, "agent9") in qa, "filter: a real question still creates an ask")
+    # hemanth: an UNtagged question to him creates no obligation (he watches live).
+    toh = [rec(42, "agent0", "hemanth", "chat", "should we ship?")]
+    check(A.compute_asks(toh, now, now_age={42: 9999}) == [],
+          "filter: an untagged message to hemanth creates no obligation (he watches live)")
+    # hemanth: an EXPLICIT [ask] to him IS tracked (so a needed reply can escalate).
+    toh_ask = [rec(43, "agent0", "hemanth", "chat", "[ask] go/no-go on shipping?")]
+    ka = {(x["ask_seq"], x["to_agent"]) for x in A.compute_asks(toh_ask, now, now_age={43: 50})}
+    check((43, "hemanth") in ka, "filter: an explicit [ask] to hemanth IS tracked")
+
+
 def main():
     test_compute_asks()
     test_due_escalations()
     test_since_seq_baseline()
+    test_is_request()
+    test_request_filter()
     test_ack_event()
     test_escalation_tick_posts()
     test_escalation_tick_startup_baseline_blocks_backfill()

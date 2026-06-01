@@ -43,6 +43,38 @@ def _is_addressee(name):
     return str(name).startswith("agent") or name == "hemanth"
 
 
+def _is_explicit_ask(text):
+    """An authoritative opt-in marker — a deliberate, must-track request."""
+    t = str(text or "").strip().lower()
+    return "[ask]" in t or "[needs-reply]" in t
+
+
+def _is_request(text):
+    """Return True if text needs a reply (a real ask), False for statements/FYIs.
+
+    Explicit [ask]/[fyi] tags are authoritative; the heuristic is the backstop.
+    NOTE: a bare imperative with no '?' (e.g. "Review this", "Re-run the suite")
+    is ambiguous against statements ("review closed") and is NOT auto-detected —
+    tag those [ask]. This keeps false-positives near zero at the cost of needing
+    one tag for the rare unmarked imperative ask.
+    """
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    if _is_explicit_ask(t):
+        return True  # explicit ask wins even if [fyi] also present (never drop a deliberate ask)
+    if "[fyi]" in t:
+        return False
+    if "?" in t:  # a question mark ANYWHERE (multi-part asks don't end in '?')
+        return True
+    for phrase in ("can you", "could you", "can u", "could u", "please", "pls",
+                   "wdyt", "let me know", "go/no-go", "go or no go",
+                   "take a look", "need you", "needs your"):
+        if phrase in t:
+            return True
+    return False
+
+
 def _escalation_matches(arc, ask_seq, to_agent):
     arc = str(arc or "")
     return arc == "{0}:{1}".format(ask_seq, to_agent) or arc == str(ask_seq)
@@ -62,10 +94,15 @@ def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
             continue
         if rec.get("to") == "all":
             continue
+        if not _is_request(rec.get("msg")):
+            continue  # only real asks create obligations; statements/FYIs don't
         frm = rec.get("from")
+        explicit = _is_explicit_ask(rec.get("msg"))
         for who in _to_list(rec.get("to")):
             if who == frm or not _is_addressee(who):
                 continue
+            if who == "hemanth" and not explicit:
+                continue  # hemanth watches live; only an explicit [ask] to him is tracked
             asks.append({
                 "ask_seq": _seq(rec),
                 "from": frm,

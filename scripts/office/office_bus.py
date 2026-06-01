@@ -250,7 +250,7 @@ def cmd_rollcall(frm, nums="1,2,3,4,5"):
     """Post one direct check-in ask to each requested brother."""
     for n in [x.strip() for x in str(nums).split(",") if x.strip()]:
         target = n if n.startswith("agent") else "agent" + n
-        cmd_append(frm, target, "chat", "null", "roll-call: check in (reply or office_ack.sh)")
+        cmd_append(frm, target, "chat", "null", "roll-call: check in [ask] (reply or office_ack.sh)")
 
 
 import re
