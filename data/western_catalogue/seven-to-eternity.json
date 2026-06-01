@@ -3,6 +3,17 @@
   "seriesTitle": "Seven to Eternity",
   "source": "rco",
   "seriesCover": "/Uploads/Etc/9-22-2016/1246221534264.jpg",
+  "schemaVersion": 2,
+  "synopsis": "Image Comics is an American comic book publisher. These are the ongoing and limited series publications it has released under its own brand and imprints such as Todd McFarlane Productions, Desperado Publishing, Beckett Comics, and Top Cow Productions.",
+  "author": "Matt Hollingsworth, Jerome Opeña",
+  "publisher": "",
+  "genres": [
+    "fantasy",
+    "New Weird"
+  ],
+  "yearStart": 0,
+  "yearEnd": 0,
+  "status": "",
   "editions": [
     {
       "label": "Deluxe Edition Part 6",

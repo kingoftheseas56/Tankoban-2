@@ -3,6 +3,18 @@
   "seriesTitle": "Watchmen",
   "source": "rco",
   "seriesCover": "https://2.bp.blogspot.com/-fYlAnkXy99M/VqHph1fBtVI/AAAAAAAABXw/rVgjDUWFGPY/s1600-Ic42/6.jpg",
+  "schemaVersion": 2,
+  "synopsis": "Moore, renowned for many other of the genre's finest creations (Saga of the Swamp Thing, V for Vendetta, and From Hell, with Eddie Campbell) first put out Watchmen in 12 issues for DC in 1986-87. It won a comic award at the time (the 1987 Jack Kirby Comics Industry Awards for Best Writer/Artist combination) and has continued to gather praise since. The story concerns a group called the Crimebusters and a plot to kill and discredit them.",
+  "author": "Alan Moore, Dave Gibbons",
+  "publisher": "DC Comics",
+  "genres": [
+    "alternate history comics",
+    "superhero comics",
+    "fantasy"
+  ],
+  "yearStart": 1986,
+  "yearEnd": 0,
+  "status": "",
   "editions": [
     {
       "label": "TPB Part 4",
