@@ -16,7 +16,7 @@ Read these in this order:
 ## Block 2 (5 min): What are you walking into?
 
 3. **`agents/STATUS.md`** — read your assigned agent's row (or, if observing, read all rows). Each row has Status / Current task / Active files / Blockers / Next.
-4. **The fix TODO file for your subsystem** at the repo root — e.g. `BOOK_READER_FIX_TODO.md`, `COMIC_READER_FIX_TODO.md`. The CLAUDE.md dashboard's "Active Fix TODOs" table tells you which file is yours and what phase it's at.
+4. **The fix TODO file for your subsystem** at the repo root — e.g. `agents/todos/BOOK_READER_FIX_TODO.md`, `agents/todos/COMIC_READER_FIX_TODO.md`. The CLAUDE.md dashboard's "Active Fix TODOs" table tells you which file is yours and what phase it's at.
 
 **You now know:** what your subsystem's current work is, what's shipped vs in flight, and what comes next.
 

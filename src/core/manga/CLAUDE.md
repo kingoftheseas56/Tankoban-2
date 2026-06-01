@@ -4,7 +4,7 @@ This file auto-loads when any agent reads a file under `src/core/manga/` (Claude
 
 ## Domain owner
 
-**Agent 1** (Comic Reader + Tankoyomi as source-side ingestion into Comics mode). Tankoyomi ownership inherited from Agent 4B on 2026-05-14. Standing polish mode on `COMIC_READER_FIX_TODO.md` Phase 6 — **no new UI/UX without explicit Hemanth ratification**.
+**Agent 1** (Comic Reader + Tankoyomi as source-side ingestion into Comics mode). Tankoyomi ownership inherited from Agent 4B on 2026-05-14. Standing polish mode on `agents/todos/COMIC_READER_FIX_TODO.md` Phase 6 — **no new UI/UX without explicit Hemanth ratification**.
 
 ## Active arc — COMICS_TANKOYOMI_STREAM_MERGER
 
