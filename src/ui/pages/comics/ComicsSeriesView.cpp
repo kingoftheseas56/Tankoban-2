@@ -462,6 +462,10 @@ void ComicsSeriesView::buildUi()
         "  font-size: 13px;"
         "  background: transparent;"
         "}"
+        // COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Western about-block
+        // gray-on-dark QSS — no color, no emoji, matches house style.
+        "QLabel#WesternAboutMeta { color: rgba(238,238,238,0.62); font-size: 13px; }"
+        "QLabel#WesternAboutSynopsis { color: rgba(238,238,238,0.82); font-size: 14px; }"
         "QWidget#ComicsSeriesHeroTagsRow {"
         "  background: transparent;"
         "}"
@@ -1355,6 +1359,11 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         m_currentSeriesKey = QStringLiteral("mangafire:%1").arg(catalog.seriesId);
     }
     m_currentMangaCatalog = catalog;
+
+    // COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Render the about-block header
+    // (synopsis + "author · publisher · year · genre") DIRECTLY — never routed
+    // through showSeries / dispatchCatalogResolve (Guard #3 no-auto-enrich).
+    updateAboutBlock(catalog);
 
     // Tear down existing tiles.
     qDeleteAll(m_volumeTiles);
@@ -2692,6 +2701,55 @@ void ComicsSeriesView::deleteVolumeDownload(int volumeNumber, const QString& cbz
     // the tile kept its stale Complete state and the volume couldn't be
     // re-downloaded (bug reported 2026-05-29).
     populateVolumeRowsFromCatalog(m_currentMangaCatalog);
+}
+
+// COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Western catalogue about-block
+// header — synopsis + "author · publisher · year · genre" meta line rendered
+// DIRECTLY from populateVolumeRowsFromCatalog (never routed through showSeries /
+// dispatchCatalogResolve — Guard #3 no-auto-enrich).
+
+void ComicsSeriesView::buildAboutBlock()
+{
+    if (m_aboutBlock) return;
+    m_aboutBlock = new QWidget(this);
+    m_aboutBlock->setObjectName(QStringLiteral("WesternAboutBlock"));
+    auto* v = new QVBoxLayout(m_aboutBlock);
+    v->setContentsMargins(0, 0, 0, 12);
+    v->setSpacing(6);
+    m_aboutMeta = new QLabel(m_aboutBlock);
+    m_aboutMeta->setObjectName(QStringLiteral("WesternAboutMeta"));
+    m_aboutMeta->setWordWrap(true);
+    m_aboutSynopsis = new QLabel(m_aboutBlock);
+    m_aboutSynopsis->setObjectName(QStringLiteral("WesternAboutSynopsis"));
+    m_aboutSynopsis->setWordWrap(true);
+    v->addWidget(m_aboutMeta);
+    v->addWidget(m_aboutSynopsis);
+    // Insert at the top of the volumes column, above the edition rows.
+    if (m_volumesLayout)
+        m_volumesLayout->insertWidget(0, m_aboutBlock);
+}
+
+void ComicsSeriesView::updateAboutBlock(const tankoban::manga::MangaCatalog& catalog)
+{
+    buildAboutBlock();
+    // Western-only: this path (populateVolumeRowsFromCatalog) is shared with the
+    // manga catalog-tile flow, and manga already renders its synopsis in the hero
+    // block (m_synopsis) — showing the about-block for manga would duplicate it.
+    // Western catalogue records carry source=="rco" (COMICS_WESTERN_RICHNESS).
+    if (catalog.source != QStringLiteral("rco")) {
+        if (m_aboutBlock) m_aboutBlock->setVisible(false);
+        return;
+    }
+    QStringList meta;
+    if (!catalog.author.isEmpty())  meta << catalog.author;
+    if (!catalog.studio.isEmpty())  meta << catalog.studio;       // publisher
+    if (catalog.publishedYearStart) meta << QString::number(catalog.publishedYearStart);
+    if (!catalog.genres.isEmpty())  meta << catalog.genres.join(QStringLiteral(", "));
+    m_aboutMeta->setText(meta.join(QStringLiteral("  \xC2\xB7  ")));
+    m_aboutMeta->setVisible(!meta.isEmpty());
+    m_aboutSynopsis->setText(catalog.seriesSynopsis);
+    m_aboutSynopsis->setVisible(!catalog.seriesSynopsis.isEmpty());
+    m_aboutBlock->setVisible(!meta.isEmpty() || !catalog.seriesSynopsis.isEmpty());
 }
 
 } // namespace tankoban::manga::comics

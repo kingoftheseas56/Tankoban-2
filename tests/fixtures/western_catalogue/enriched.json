@@ -1,0 +1,17 @@
+{
+  "seriesId": "invincible",
+  "seriesTitle": "Invincible",
+  "source": "rco",
+  "seriesCover": "/Uploads/Etc/x.jpg",
+  "schemaVersion": 2,
+  "synopsis": "A teenage superhero grows up.",
+  "author": "Robert Kirkman, Cory Walker",
+  "publisher": "Image Comics",
+  "genres": ["superhero comics", "coming-of-age"],
+  "yearStart": 2003,
+  "yearEnd": 2018,
+  "status": "FINISHED",
+  "editions": [
+    {"label": "TPB 1 Family Matters", "href": "/Comic/Invincible/TPB-1", "formatTier": 2}
+  ]
+}

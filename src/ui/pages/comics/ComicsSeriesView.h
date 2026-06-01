@@ -405,6 +405,16 @@ private:
     QString                   m_currentSeriesTitle;
     tankoban::manga::MangaCatalog m_currentMangaCatalog;
 
+    // COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Western catalogue about-block
+    // header — synopsis + "author · publisher · year · genre" meta line rendered
+    // above the volume edition rows. Rendered DIRECTLY from populateVolumeRowsFromCatalog
+    // (never routed through showSeries / dispatchCatalogResolve — Guard #3 no-auto-enrich).
+    QWidget*  m_aboutBlock     = nullptr;   // Western catalog about-block (synopsis + meta)
+    QLabel*   m_aboutSynopsis  = nullptr;
+    QLabel*   m_aboutMeta      = nullptr;   // "Author · Publisher · Year · Genre"
+    void buildAboutBlock();                 // lazy-construct the about-block widgets
+    void updateAboutBlock(const tankoban::manga::MangaCatalog& catalog);
+
     // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
     // Per-volume classification verdicts from the resolver. Populated by
     // onSeriesClassified; consumed by populateVolumeRowsFromCatalog (RAW tags)

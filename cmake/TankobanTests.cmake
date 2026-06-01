@@ -81,6 +81,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/MangaScraper.h
         src/core/manga/WeebCentralScraper.cpp
         src/core/manga/mangafire/MangaFireCatalogClient.cpp
+        tests/core/manga/test_western_catalog_loader.cpp
         tests/core/manga/MangaUpdatesStatusParserTest.cpp
         tests/core/manga/MangaUpdatesDisambiguatorTest.cpp
         tests/core/manga/mangaupdates/test_japanese_title_picker.cpp
@@ -93,6 +94,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/wikipedia/test_wikipedia_resolver.cpp
         src/core/manga/MangaCatalogTypes.cpp
         src/core/manga/LocalMangaCatalogLoader.cpp
+        src/core/manga/WesternCatalogLoader.cpp
         src/core/manga/LocalMangaCatalogIndex.cpp
         src/core/manga/mangafire/MangaWeebCentralResolver.cpp
         src/core/manga/wikidata/WikidataCache.cpp

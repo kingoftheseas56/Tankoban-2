@@ -61,6 +61,16 @@ std::optional<MangaCatalog> WesternCatalogLoader::loadFromFile(const QString& fi
     cat.source         = root.value(QStringLiteral("source")).toString();
     cat.seriesSynopsis = root.value(QStringLiteral("synopsis")).toString();
     cat.status         = root.value(QStringLiteral("status")).toString();
+    cat.author         = root.value(QStringLiteral("author")).toString();
+    cat.studio         = root.value(QStringLiteral("publisher")).toString();  // publisher reuses 'studio' slot
+    cat.publishedYearStart = root.value(QStringLiteral("yearStart")).toInt();
+    cat.publishedYearEnd   = root.value(QStringLiteral("yearEnd")).toInt();
+    const QJsonArray genresArr = root.value(QStringLiteral("genres")).toArray();
+    cat.genres.clear();
+    for (const auto& g : genresArr) {
+        const QString s = g.toString().trimmed();
+        if (!s.isEmpty()) cat.genres.append(s);
+    }
     cat.schemaVersion  = kMangaCatalogSchemaVersion;
 
     // Cover-tolerant: one shared series hero cover painted on every edition tile
