@@ -252,6 +252,36 @@ if(WIN32)
 
 endif()
 
+# ── In-Process Player POC (2026-06-01, Agent 3) ──────────────────────────────
+# Phase 0 build-seam spike: prove FFmpeg's libavformat/libavcodec link into the
+# main MSVC Tankoban target and run in-process. Entirely gated by
+# TANKOBAN_INPROCESS_POC (default OFF) so normal builds are untouched. Phase 1+
+# will add the sidecar decode/audio/sync sources + InProcessPlayer under the
+# same gate. The .lib import files + runtime DLLs come from the SAME FFmpeg the
+# sidecar already uses, so versions are consistent.
+option(TANKOBAN_INPROCESS_POC "Build the in-process player POC path" OFF)
+if(TANKOBAN_INPROCESS_POC)
+    set(FFMPEG_POC_ROOT "C:/tools/ffmpeg-master-latest-win64-gpl-shared")
+    target_sources(Tankoban PRIVATE src/ui/player/InProcessProbe.cpp)
+    target_include_directories(Tankoban PRIVATE "${FFMPEG_POC_ROOT}/include")
+    target_link_libraries(Tankoban PRIVATE
+        "${FFMPEG_POC_ROOT}/lib/avformat.lib"
+        "${FFMPEG_POC_ROOT}/lib/avcodec.lib"
+        "${FFMPEG_POC_ROOT}/lib/avutil.lib"
+        "${FFMPEG_POC_ROOT}/lib/swscale.lib"
+        "${FFMPEG_POC_ROOT}/lib/swresample.lib")
+    target_compile_definitions(Tankoban PRIVATE TANKOBAN_INPROCESS_POC=1)
+    if(WIN32)
+        foreach(dll avformat-62 avcodec-62 avutil-60 swscale-9 swresample-6)
+            add_custom_command(TARGET Tankoban POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FFMPEG_POC_ROOT}/bin/${dll}.dll" "$<TARGET_FILE_DIR:Tankoban>/"
+                VERBATIM)
+        endforeach()
+    endif()
+    message(STATUS "TANKOBAN_INPROCESS_POC ON -- in-process FFmpeg link enabled")
+endif()
+
 include(${CMAKE_SOURCE_DIR}/cmake/TankobanRuntimeAssets.cmake)
 
 # ── Precompiled headers (cuts compile time for Qt/STL heavy includes) ────────

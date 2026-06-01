@@ -145,6 +145,19 @@ int main(int argc, char *argv[])
 #endif
 
     QApplication app(argc, argv);
+
+#ifdef TANKOBAN_INPROCESS_POC
+    // In-Process Player POC — Phase 0 build-seam probe. Inert unless the env
+    // flag is set. Proves FFmpeg links + runs in-process before any orchestration
+    // is built. Path comes from TANKOBAN_INPROCESS_POC_FILE (env, UTF-8) so no
+    // non-ASCII path literal lives in source (Rule 16).
+    if (qEnvironmentVariableIsSet("TANKOBAN_INPROCESS_POC")) {
+        extern void inproc_probe(const char* path);
+        const QByteArray pocFile = qgetenv("TANKOBAN_INPROCESS_POC_FILE");
+        if (!pocFile.isEmpty()) inproc_probe(pocFile.constData());
+    }
+#endif
+
     // TANKOBAN_BETA_DATA_NAMESPACE 2026-05-07 — beta builds persist user
     // data (settings, JsonStore, library, posters) under
     // %APPDATA%\TankobanBeta\ instead of %APPDATA%\Tankoban\, so a
