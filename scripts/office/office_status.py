@@ -149,19 +149,15 @@ def bus_activity(records, now_epoch):
 def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
                    heartbeats_by_agent=None, roster=ROSTER,
                    presence_window=PRESENCE_WINDOW_SEC,
-                   heartbeat_window=HEARTBEAT_WINDOW_SEC,
-                   responder_hb_by_agent=None):
+                   heartbeat_window=HEARTBEAT_WINDOW_SEC):
     """Merge static roster + git + bus + watch heartbeats into the canonical list.
 
     wake_alive distinguishes "this brother's watch is alive and can hear new
     messages" from "present" (did something recently). A brother can be present
     (committed 5m ago) yet wake-dead (watch died) = deaf to new pings.
 
-    responder_alive is separate again: it means the OWNED-WORKER backup net is
-    watching this brother (a fresh responder heartbeat) — so a dropped message
-    will still get a marked, non-binding reply even when his tab is dark."""
+    """
     heartbeats_by_agent = heartbeats_by_agent or {}
-    responder_hb_by_agent = responder_hb_by_agent or {}
     result = []
     for agent, role, engine, wakeable in roster:
         c = commits_by_agent.get(agent)
@@ -173,8 +169,6 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
         wake_alive = wake_age is not None and wake_age <= heartbeat_window
         # 3-state honesty: no heartbeat data = "unknown" (we can't tell), NOT "down".
         wake_state = "unknown" if wake_age is None else ("live" if wake_alive else "down")
-        resp_age = responder_hb_by_agent.get(agent)
-        responder_alive = resp_age is not None and resp_age <= heartbeat_window
         status, status_label = derive_status(bus_sec, com_sec, wake_state)
         last_commit = None
         if c:
@@ -188,7 +182,6 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
             "wake_alive": wake_alive,
             "wake_state": wake_state,
             "wake_age_sec": wake_age,
-            "responder_alive": responder_alive,
             "status": status,
             "status_label": status_label,
             "current_arc": b.get("arc") if b else None,
@@ -253,39 +246,13 @@ def _heartbeats(now_epoch):
     return out
 
 
-def _responder_heartbeats_dir():
-    return os.path.join(office_bus._dir(), ".office_responder_heartbeats")
-
-
-def _responder_heartbeats(now_epoch):
-    """{('agent'+N): age_sec} from the responder-beat files' mtimes — i.e. which
-    brothers the owned-worker backup net is currently watching. Missing file =>
-    no responder armed for that brother."""
-    out = {}
-    hb = _responder_heartbeats_dir()
-    if not os.path.isdir(hb):
-        return out
-    for fn in os.listdir(hb):
-        if not fn.endswith(".beat"):
-            continue
-        agent = fn[:-5]
-        try:
-            mtime = os.path.getmtime(os.path.join(hb, fn))
-        except OSError:
-            continue
-        out[agent] = max(0, now_epoch - int(mtime))
-    return out
-
-
 def roster_now(now_epoch=None):
     import time
     now_epoch = int(time.time()) if now_epoch is None else now_epoch
     commits = parse_agent_commits(_git_log_text(), now_epoch)
     busby = bus_activity(_bus_records(), now_epoch)
     heartbeats = _heartbeats(now_epoch)
-    responder_hb = _responder_heartbeats(now_epoch)
-    return compute_roster(commits, busby, now_epoch, heartbeats,
-                          responder_hb_by_agent=responder_hb)
+    return compute_roster(commits, busby, now_epoch, heartbeats)
 
 
 def main(argv):
