@@ -336,9 +336,14 @@ void ReadComicsScraper::fetchWesternSeries(const QString& seriesSlug,
 {
     QUrl url(BASE + "/Comic/" + seriesSlug);
     auto* reply = m_nam->get(makeRequest(url));
+    // Lifetime-independent cleanup: the slot below uses `this` as context, so if
+    // THIS scraper is destroyed before the request finishes, that slot (and its
+    // deleteLater) is disconnected and the reply would leak. This self-targeted
+    // connect deletes the reply regardless of scraper lifetime. (Codex review,
+    // 2026-06-01 — applies to the Wikipedia reply below too.)
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, seriesSlug, title, coverFromSearch]() {
-        reply->deleteLater();
 
         QJsonObject obj;
         // seriesId: lowercase slug, '/'+space -> '-' (matches baked file naming).
@@ -376,9 +381,9 @@ void ReadComicsScraper::fetchWesternSeries(const QString& seriesSlug,
         QUrl wikiUrl("https://en.wikipedia.org/api/rest_v1/page/summary/"
                      + QString::fromUtf8(QUrl::toPercentEncoding(wikiTitle)));
         auto* wreply = m_nam->get(makeRequest(wikiUrl));
+        connect(wreply, &QNetworkReply::finished, wreply, &QObject::deleteLater);
         connect(wreply, &QNetworkReply::finished, this,
                 [this, wreply, obj, summary]() mutable {
-            wreply->deleteLater();
             QString chosen = summary;
             if (wreply->error() == QNetworkReply::NoError) {
                 const auto doc = QJsonDocument::fromJson(wreply->readAll());
