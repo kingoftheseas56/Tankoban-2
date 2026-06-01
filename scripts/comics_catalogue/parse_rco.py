@@ -10,6 +10,7 @@ structured per-item field — confirmed by two research reports).
 This parser only extracts the item LIST. Reader-page scans are obfuscated
 (21wiz.com/s.js) and are NOT used — downloads come from GetComics.
 """
+import html as _html
 import re
 
 # Match item links: /Comic/<Series>/<Item> with optional ?id=... query.
@@ -51,3 +52,19 @@ def parse_series_cover(html: str) -> str:
     """The series-hero cover path (one per series), or "" if absent."""
     m = _COVER.search(html)
     return m.group(1) if m else ""
+
+
+# RCO series 'Summary:' block: <span class="info">Summary:</span> <p>...prose...</p>
+_SUMMARY = re.compile(
+    r'<span class="info">\s*Summary:\s*</span>\s*<p>(.*?)</p>',
+    re.S | re.IGNORECASE)
+
+
+def parse_series_summary(page_html: str) -> str:
+    """Extract the RCO series 'Summary:' prose block (already present in the
+    fetched series-page HTML), stripped + unescaped. "" if absent."""
+    m = _SUMMARY.search(page_html)
+    if not m:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", m.group(1))
+    return re.sub(r"\s+", " ", _html.unescape(text)).strip()

@@ -1,5 +1,5 @@
 import pathlib
-from parse_rco import parse_series, parse_series_cover
+from parse_rco import parse_series, parse_series_cover, parse_series_summary
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "rco_series_invincible.html"
 
@@ -53,3 +53,15 @@ def test_parse_series_cover_extracts_image_src():
 
 def test_parse_series_cover_empty_when_absent():
     assert parse_series_cover("<html><head></head></html>") == ""
+
+
+def test_parse_series_summary_extracts_rco_block():
+    html = FIX.read_text(encoding="utf-8", errors="replace")
+    summary = parse_series_summary(html)
+    assert summary.startswith("Girls, acne, homework, supervillains")
+    assert "Mark Grayson" in summary
+    assert "<" not in summary  # tags stripped
+
+
+def test_parse_series_summary_missing_returns_empty():
+    assert parse_series_summary("<html><body>no summary here</body></html>") == ""
