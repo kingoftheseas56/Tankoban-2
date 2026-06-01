@@ -28,12 +28,17 @@ This is the **bounded, high-value, low-risk brick** — deliberately the smaller
 
 ## 4. The engine roster + locked roles
 
+**The whole system in four words (Hemanth's framing, canonical):**
+> **Claude = the person. Codex = the brain. DeepSeek = the muscle. Gemini = the memory.**
+
+The person has the identity and makes the calls; the brain reasons, debugs, and keeps it on track; the muscle does the heavy lifting; the memory holds and recalls the huge context so the others don't have to carry it.
+
 | Engine | Role | Why this engine | Quota posture |
 |---|---|---|---|
 | **Claude (Opus/Sonnet)** | **IS the brother** — memory, identity, judgment, planning, the important coding | Identity lives where the memory lives | Max plan; reserve for thinking + load-bearing code |
 | **DeepSeek V4-Pro/Flash** | **Grunt** — file edits, bulk parsing, boilerplate, mechanical refactors | Proven workhorse (Agent 9 = days of it); ~50× cheaper than Opus | Dirt cheap — absorb the volume |
-| **Codex (gpt-5.5)** | **Auditor** — reviews load-bearing calls/diffs, signs off APPROVE/REJECT | Different-model eyes; orthogonal blind spots | Tight quota — use **sparingly**, sign-off only |
-| **Gemini 2.5 Flash** | **Reader (conditional 4th)** — chew a big log/file, hand back only the relevant slice | Cheap + huge context → frees Claude's context (serves the quota lesson) | ~free; wire in only if it stays reliable |
+| **Codex (gpt-5.5)** | **The guardrail (most critical of the four)** — reviews load-bearing decisions/diffs (APPROVE/REJECT) AND does **systematic debugging + solution-finding (diagnosis)**. Does NOT implement — he keeps the workflow on track, others execute his findings. | Different-model eyes; orthogonal blind spots = the one engine that catches what an all-Claude/DeepSeek pipeline misses | Tight quota → use **deliberately at quality gates, not on trivia** — but he is the backbone, NOT a rationed luxury |
+| **Gemini 2.5 Flash** | **The memory (conditional 4th)** — holds + recalls huge context: chew a big log/file/history, hand back only the relevant slice | Cheap + huge context window → frees the person's context (serves the quota lesson) | ~free; wire in only if it stays reliable |
 
 ### Governance line (settles the roster muddle)
 - **Engine = the wire used as a bare tool.** Agent 4's Claude calls the DeepSeek/Codex/Gemini *wire*, no persona attached.
@@ -45,9 +50,11 @@ This is the **bounded, high-value, low-risk brick** — deliberately the smaller
 Claude (the brother) is the **planner and the router** — he self-dispatches. The decision rule he applies, per unit of work:
 
 1. **Is it grunt?** (mechanical edit, bulk parse, boilerplate, well-templated refactor) → **DeepSeek.**
-2. **Does a load-bearing decision/diff need a second set of eyes before it lands?** → **Codex** (sparing).
+2. **Does a load-bearing decision/diff need a guardrail pass before it lands, OR am I stuck on a bug / hunting the right fix?** → **Codex** — he reviews AND debugs/diagnoses. This is the *quality checkpoint of the whole flow*, not an optional extra. Run it on anything load-bearing; skip it only on trivia.
 3. **Do I need to read something huge before I can think?** (giant log, long file) → **Gemini** reader-extract, *if* available; else Claude reads it directly.
 4. **Is it design / judgment / identity / the important code?** → **keep on Claude himself.**
+
+**Division of labor at the bug-fix boundary:** Codex *finds* the solution (systematic debugging, root-cause, the right approach); DeepSeek or Claude *implements* it; Codex *reviews* the implementation. Codex is the brain that keeps the workflow on track — he diagnoses and signs off, he does not type the production code.
 
 The brother decides because he is the one holding the plan and the memory. Routing is not a fixed pipeline — it's per-task judgment, the same judgment Agent 0 exercises today, now living inside the brother.
 
