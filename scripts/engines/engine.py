@@ -177,9 +177,11 @@ def call_deepseek(packet, cfg):
         "ANTHROPIC_DEFAULT_OPUS_MODEL": cfg["deepseek"]["model"],
     })
     cli = "claude.cmd" if sys.platform == "win32" else "claude"
+    # Feed the packet via STDIN, not argv: a multiline arg passed to the Windows
+    # .cmd shim gets truncated at the first newline (caught by Agent 1 2026-06-01).
     proc = subprocess.run(
-        [cli, "-p", packet, "--model", cfg["deepseek"]["model"]],
-        cwd=scratch, env=env, capture_output=True, text=True,
+        [cli, "-p", "--model", cfg["deepseek"]["model"]],
+        input=packet, cwd=scratch, env=env, capture_output=True, text=True,
         timeout=cfg["timeouts"]["deepseek"])
     if proc.returncode != 0:
         tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"
@@ -192,9 +194,12 @@ def call_codex(packet, cfg):
     if os.environ.get("ENGINE_DRY_RUN") == "1":
         return "DRY:codex:" + packet[:20]
     cli = "codex.cmd" if sys.platform == "win32" else "codex"
+    # Feed the packet via STDIN, not argv: codex exec reads the prompt from stdin,
+    # and a multiline argv gets truncated at the first newline through the Windows
+    # .cmd shim (caught by Agent 1 2026-06-01).
     proc = subprocess.run(
-        [cli, "exec", packet],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        [cli, "exec"],
+        input=packet, capture_output=True, text=True,
         timeout=cfg["timeouts"]["codex"])
     if proc.returncode != 0:
         tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"

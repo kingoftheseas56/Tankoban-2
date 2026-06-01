@@ -207,6 +207,26 @@ class DispatchTest(unittest.TestCase):
             engine.call_codex("packet", CFG_FULL)
         self.assertIn("exited 2", str(ctx.exception))
 
+    @patch("engine.subprocess.run")
+    def test_packet_fed_via_stdin_not_argv(self, mock_run):
+        """Multiline packets ride stdin (input=), never argv — a multiline arg to
+        the Windows .cmd shim truncates at the first newline. Regression: Agent 1."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\ncodex\nok", stderr="")
+        os.environ.pop("ENGINE_DRY_RUN", None)
+        ml = "line one\nline two\nline three"
+        os.environ["DEEPSEEK_API_KEY"] = "sk-test"
+        try:
+            engine.call_deepseek(ml, CFG_FULL)
+            args, kwargs = mock_run.call_args
+            self.assertEqual(kwargs.get("input"), ml, "deepseek: packet via stdin")
+            self.assertNotIn(ml, args[0], "deepseek: packet NOT in argv")
+        finally:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+        engine.call_codex(ml, CFG_FULL)
+        args, kwargs = mock_run.call_args
+        self.assertEqual(kwargs.get("input"), ml, "codex: packet via stdin")
+        self.assertNotIn(ml, args[0], "codex: packet NOT in argv")
+
     def test_ledger_lock_context_manager(self):
         with engine._ledger_lock():
             self.assertTrue(os.path.exists(engine.LOCK_PATH))
