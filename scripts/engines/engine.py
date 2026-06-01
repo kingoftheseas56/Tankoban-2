@@ -54,7 +54,10 @@ def _read_ledger():
         for line in f:
             line = line.strip()
             if line:
-                rows.append(json.loads(line))
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass  # skip torn/incomplete lines
     return rows
 
 

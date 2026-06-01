@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reliability gate for Gemini-as-reader. Runs N reader-extracts against known
 answers; flips engines.config.json gemini.enabled true iff all pass."""
-import os, sys, json, importlib.util
+import os, sys, json, tempfile, importlib.util
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("engine", os.path.join(HERE, "engine.py"))
@@ -22,20 +22,30 @@ def main():
     cfg = engine.load_config()
     cfg["gemini"]["enabled"] = True  # force-enable for the probe only
     engine.require_key("GEMINI_API_KEY")
+    engine.mark_wake()  # scope gate calls under their own wake marker
     passed = 0
     for prompt, want in CASES:
         try:
             got = engine.call_gemini(prompt, cfg).strip()
         except Exception as e:
             print(f"FAIL (error): {e}"); continue
-        ok = want in got
+        engine.log_call("gemini", len(got), "gate-probe", "GATE")
+        ok = got == want  # exact match — '1200' must not pass '200'
         print(f"{'PASS' if ok else 'FAIL'}: want '{want}' got '{got[:40]}'")
         passed += ok
     flip = passed == len(CASES)
     path = engine.CONFIG_PATH
     disk = json.load(open(path))
     disk["gemini"]["enabled"] = flip
-    json.dump(disk, open(path, "w"), indent=2)
+    # Atomic write: temp file + os.replace to avoid truncation on crash
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(disk, f, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     print(f"\nGemini reliability: {passed}/{len(CASES)} -> "
           f"gemini.enabled = {flip}")
     return 0 if flip else 1

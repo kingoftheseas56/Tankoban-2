@@ -57,6 +57,14 @@ class CapTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIsNone(msg)
 
+    def test_torn_lines_are_skipped(self):
+        with open(self.tmp.name, "w") as f:
+            f.write('{"event":"call","engine":"d","tokens":1,"task":"T1","agent":"test-agent"}\n')
+            f.write('this is torn garbage\n')
+            f.write('{"event":"call","engine":"c","tokens":2,"task":"T1","agent":"test-agent"}\n')
+        rows = engine._read_ledger()
+        self.assertEqual(len(rows), 2)
+
     def test_per_agent_isolation(self):
         # Brother A logs 3 calls (at hard cap).
         for _ in range(3):
