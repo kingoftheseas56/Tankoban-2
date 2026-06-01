@@ -41,6 +41,11 @@ public:
     void search(const QString& query);   // entry point from ComicsPage's search bar
     void clearResults();                  // when Back is clicked
 
+    // Mode-aware source. ComicsPage sets "readcomicsonline" on the Western shelf,
+    // "weebcentral" (default) on the manga shelf. Both sources' searchFinished
+    // are connected in the ctor; this selects which one search() dispatches to.
+    void setActiveSourceId(const QString& sourceId);
+
 signals:
     void backRequested();
     // Tasks 9+10: replaces seriesActivated(MediaPreview). ComicsPage routes
@@ -58,6 +63,7 @@ private:
     QNetworkAccessManager* m_nam            = nullptr;  // non-owning
 
     QString m_currentQuery;
+    QString m_activeSourceId = QStringLiteral("weebcentral");
 
     QPushButton* m_backBtn      = nullptr;
     QLabel*      m_statusLabel  = nullptr;

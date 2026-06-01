@@ -36,9 +36,13 @@ ComicsTankoyomiSearchWidget::ComicsTankoyomiSearchWidget(
     buildUI();
 
     if (m_sourceRegistry) {
-        if (auto* scraper = m_sourceRegistry->find(QStringLiteral("weebcentral"))) {
-            connect(scraper, &MangaScraper::searchFinished,
-                    this,    &ComicsTankoyomiSearchWidget::onSearchFinished);
+        for (const QString& id : { QStringLiteral("weebcentral"),
+                                   QStringLiteral("readcomicsonline") }) {
+            if (auto* scraper = m_sourceRegistry->find(id)) {
+                connect(scraper, &MangaScraper::searchFinished,
+                        this,    &ComicsTankoyomiSearchWidget::onSearchFinished,
+                        Qt::UniqueConnection);
+            }
         }
     }
 }
@@ -106,9 +110,9 @@ void ComicsTankoyomiSearchWidget::search(const QString& query)
         return;
     }
 
-    auto* scraper = m_sourceRegistry->find(QStringLiteral("weebcentral"));
+    auto* scraper = m_sourceRegistry->find(m_activeSourceId);
     if (!scraper) {
-        qWarning() << "[ComicsTankoyomiSearchWidget] weebcentral scraper not found";
+        qWarning() << "[ComicsTankoyomiSearchWidget] scraper not found:" << m_activeSourceId;
         m_statusLabel->setText(QStringLiteral("Search unavailable"));
         return;
     }
@@ -116,6 +120,11 @@ void ComicsTankoyomiSearchWidget::search(const QString& query)
     clearResults();
     m_statusLabel->setText(QStringLiteral("Searching... (%1)").arg(query));
     scraper->search(query, /*limit=*/60);
+}
+
+void ComicsTankoyomiSearchWidget::setActiveSourceId(const QString& sourceId)
+{
+    m_activeSourceId = sourceId;
 }
 
 void ComicsTankoyomiSearchWidget::clearResults()
