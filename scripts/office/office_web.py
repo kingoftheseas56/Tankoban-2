@@ -25,11 +25,16 @@ the hook share one source of truth (schema, locking, archive).
 import os
 import sys
 import json
+import io
+import threading
+import time as _time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import office_bus  # noqa: E402  (shares bus path, schema, lock, append, close)
+import office_asks  # noqa: E402  (deterministic ask/ack/escalation projection)
 import office_status  # noqa: E402  (derived-status engine; shares bus path)
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
@@ -427,6 +432,36 @@ def _read_all_messages():
     return out
 
 
+def escalate_tick_once(window=None, escalate2=None):
+    """Post newly due escalation events. Deterministic; no LLM calls."""
+    w = office_asks.WINDOW_SEC if window is None else window
+    e2 = office_asks.ESCALATE2_SEC if escalate2 is None else escalate2
+    recs = office_asks._bus_records()
+    now = int(_time.time())
+    posted = 0
+    for ask_seq, who, level in office_asks.due_escalations(recs, now, w, e2):
+        msg = "{0} hasn't acknowledged ask #{1} in time - needs attention".format(who, ask_seq)
+        arc = "{0}:{1}".format(ask_seq, who)
+        buf = io.StringIO()
+        old = sys.stdout
+        sys.stdout = buf
+        try:
+            office_bus.cmd_append("system", level, "escalate", arc, msg)
+        finally:
+            sys.stdout = old
+        posted += 1
+    return posted
+
+
+def _escalation_loop():
+    while True:
+        try:
+            escalate_tick_once()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+        _time.sleep(30)
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json"):
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -517,6 +552,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    threading.Thread(target=_escalation_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("The Office GUI -> http://127.0.0.1:{0}  (Ctrl+C to stop)".format(PORT))
     try:

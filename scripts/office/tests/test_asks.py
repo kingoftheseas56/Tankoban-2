@@ -116,10 +116,28 @@ def test_ack_event():
     check(by[(1, "agent1")]["state"] == "acked", "ack: projection closes escalation clock")
 
 
+def test_escalation_tick_posts():
+    _sandbox()
+    import office_bus
+    import office_web
+
+    office_bus.cmd_append("agent2", "agent1", "chat", "null", "X?")
+    posted = office_web.escalate_tick_once(window=0, escalate2=999999)
+    check(posted == 1, "tick: an overdue unacked ask posts one escalate event")
+    recs = A._bus_records()
+    esc = [r for r in recs if r.get("kind") == "escalate"]
+    check(esc and esc[0]["to"] == "agent0" and str(esc[0]["arc"]) == "1:agent1",
+          "tick: escalation is addressed to agent0, arc=ask_seq:addressee")
+
+    again = office_web.escalate_tick_once(window=0, escalate2=999999)
+    check(again == 0, "tick: re-running does not double-post the same level")
+
+
 def main():
     test_compute_asks()
     test_due_escalations()
     test_ack_event()
+    test_escalation_tick_posts()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)
 
