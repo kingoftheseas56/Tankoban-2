@@ -4,11 +4,41 @@
 Spec: docs/superpowers/specs/2026-06-01-multi-engine-brother-design.md
 Keys come from environment only (DEEPSEEK_API_KEY, GEMINI_API_KEY). Never logged.
 """
-import os, sys, json, time, subprocess, tempfile, urllib.request
+import os, sys, json, time, subprocess, tempfile, urllib.request, contextlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "engines.config.json")
 LEDGER_PATH = os.path.join(HERE, ".ledger.jsonl")
+LOCK_PATH = LEDGER_PATH + ".lock"
+
+
+@contextlib.contextmanager
+def _ledger_lock():
+    """Cross-process file lock so cap-check + log are atomic."""
+    fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if sys.platform == "win32":
+            import msvcrt
+            try:
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _agent_id():
+    return os.environ.get("ENGINE_AGENT") or os.environ.get("AGENT_ID") or "solo"
 
 
 def load_config():
@@ -30,24 +60,28 @@ def _read_ledger():
 
 def ledger_rows_since_wake():
     rows = _read_ledger()
+    agent = _agent_id()
     last = 0
     for i, r in enumerate(rows):
-        if r.get("event") == "wake-start":
+        if r.get("event") == "wake-start" and r.get("agent") == agent:
             last = i + 1
-    return rows[last:]
+    # Only return rows for THIS agent (skip rows tagged for other brothers).
+    return [r for r in rows[last:] if r.get("agent") == agent]
 
 
 def log_call(engine_name, tokens, purpose, task):
     row = {"event": "call", "ts": int(time.time()),
            "engine": engine_name, "tokens": tokens,
-           "purpose": purpose, "task": task}
+           "purpose": purpose, "task": task,
+           "agent": _agent_id()}
     with open(LEDGER_PATH, "a") as f:
         f.write(json.dumps(row) + "\n")
 
 
 def mark_wake():
     with open(LEDGER_PATH, "a") as f:
-        f.write(json.dumps({"event": "wake-start", "ts": int(time.time())}) + "\n")
+        f.write(json.dumps({"event": "wake-start", "ts": int(time.time()),
+                            "agent": _agent_id()}) + "\n")
 
 
 def check_cap(task, cfg):
@@ -198,13 +232,16 @@ def main(argv=None):
             print(f"  {r['engine']:9} task={r['task']:6} {r['purpose']}")
         return 0
 
-    ok, msg = check_cap(args.task, cfg)
-    if msg:
-        print(msg, file=sys.stderr)
-    if not ok:
-        return 2
-    out = dispatch(args.cmd, args.packet, args.task, args.purpose, cfg)
-    print(out)
+    # Lock across cap-check + log_call so concurrent agents can't both pass
+    # the hard cap before either has written their log row.
+    with _ledger_lock():
+        ok, msg = check_cap(args.task, cfg)
+        if msg:
+            print(msg, file=sys.stderr)
+        if not ok:
+            return 2
+        out = dispatch(args.cmd, args.packet, args.task, args.purpose, cfg)
+        print(out)
     return 0
 
 

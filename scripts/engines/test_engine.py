@@ -23,9 +23,11 @@ class CapTest(unittest.TestCase):
         self.tmp.close()
         engine.LEDGER_PATH = self.tmp.name
         open(self.tmp.name, "w").close()  # empty ledger
+        os.environ["ENGINE_AGENT"] = "test-agent"
 
     def tearDown(self):
         os.unlink(self.tmp.name)
+        os.environ.pop("ENGINE_AGENT", None)
 
     def test_wake_marker_resets_count(self):
         for _ in range(2):
@@ -54,6 +56,20 @@ class CapTest(unittest.TestCase):
         ok, msg = engine.check_cap("T1", CFG)
         self.assertTrue(ok)
         self.assertIsNone(msg)
+
+    def test_per_agent_isolation(self):
+        # Brother A logs 3 calls (at hard cap).
+        for _ in range(3):
+            engine.log_call("deepseek", 10, "x", "T1")
+        # Brother B's wake-start + cap check should be independent.
+        os.environ["ENGINE_AGENT"] = "brother-b"
+        engine.mark_wake()
+        rows = engine.ledger_rows_since_wake()
+        calls = [r for r in rows if r.get("event") == "call"]
+        self.assertEqual(len(calls), 0)
+        ok, _ = engine.check_cap("T1", CFG)
+        self.assertTrue(ok)
+        os.environ["ENGINE_AGENT"] = "test-agent"  # restore
 
 class GuardTest(unittest.TestCase):
     def test_packet_too_big_raises(self):
@@ -161,6 +177,13 @@ class DispatchTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             engine.call_codex("packet", CFG_FULL)
         self.assertIn("exited 2", str(ctx.exception))
+
+    def test_ledger_lock_context_manager(self):
+        with engine._ledger_lock():
+            self.assertTrue(os.path.exists(engine.LOCK_PATH))
+        # Lock file remains on disk (the fd is closed, not the file removed).
+        self.assertTrue(os.path.exists(engine.LOCK_PATH))
+        os.unlink(engine.LOCK_PATH)
 
 if __name__ == "__main__":
     unittest.main()
