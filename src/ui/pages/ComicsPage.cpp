@@ -489,6 +489,13 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         QDir().mkpath(dir);
         const QString path = QDir(dir).absoluteFilePath(
             m_pendingWesternSeriesId + QStringLiteral(".json"));
+        // Skip-if-present (spec §8 locked default): never clobber an existing
+        // shelf entry (incl. the baked 13). The button is already gated on
+        // !onShelf, so this is belt-and-suspenders against any re-entry path.
+        if (QFile::exists(path)) {
+            if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
+            return;
+        }
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             qInfo("ComicsPage: failed to write Western shelf file %s",
