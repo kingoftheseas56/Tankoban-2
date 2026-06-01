@@ -4,6 +4,7 @@ One Claude brain (the brother), three engines on tap. Spec:
 `docs/superpowers/specs/2026-06-01-multi-engine-brother-design.md`.
 
 ## Use it
+Set your identity first:    $env:ENGINE_AGENT="agentN"   (per-brother cap isolation; defaults to "solo" if unset)
 At wake start (once):       python scripts/engines/engine.py wake-start
 Grunt (DeepSeek):           python scripts/engines/engine.py grunt  --task T1 --purpose "write fn" "<tiny packet>"
 Review (Codex):             python scripts/engines/engine.py review --task T1 --purpose "sign off" "<diff + ask>"
