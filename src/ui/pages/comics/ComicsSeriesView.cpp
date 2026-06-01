@@ -999,6 +999,7 @@ void ComicsSeriesView::clearView()
     m_currentSeriesTitle.clear();
     m_currentVolumeRows.clear();
     m_currentMangaCatalog = tankoban::manga::MangaCatalog{};
+    m_westernOnShelf = false;  // COMICS_WESTERN_ADD 2026-06-01: reset per-series
 
     m_title->clear();
     if (m_heroCoverLabel) m_heroCoverLabel->clear();
@@ -1361,6 +1362,12 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     }
     m_currentMangaCatalog = catalog;
 
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Reset on-shelf flag for each
+    // catalog open so the button defaults to "Add to Library" until ComicsPage
+    // calls setWesternOnShelf(true) for already-shelved series.
+    m_westernOnShelf = false;
+    refreshLibraryButton();
+
     // COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Render the about-block header
     // (synopsis + "author · publisher · year · genre") DIRECTLY — never routed
     // through showSeries / dispatchCatalogResolve (Guard #3 no-auto-enrich).
@@ -1700,9 +1707,32 @@ void ComicsSeriesView::renderEmpty(const QString& reason)
     m_metaLine->clear();
 }
 
+void ComicsSeriesView::setWesternOnShelf(bool onShelf)
+{
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Called by ComicsPage after
+    // westernSeriesReady fires; tells the view whether the series is already
+    // on the shelf so the button can be pre-set correctly before the user
+    // interacts. Also called from onLibraryButtonClicked() after a successful
+    // add to flip the button to "On shelf" immediately.
+    m_westernOnShelf = onShelf;
+    refreshLibraryButton();
+}
+
 void ComicsSeriesView::refreshLibraryButton()
 {
     if (!m_libraryButton) return;
+
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Western (RCO) series bypass:
+    // the shelf state is tracked by m_westernOnShelf (set externally by
+    // ComicsPage), not by AniListCache bookmarks. "On shelf" is inert;
+    // "Add to Library" is enabled. This branch fires whenever the currently
+    // loaded catalog is a Western one, regardless of AniList state.
+    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+        m_libraryButton->setText(m_westernOnShelf ? tr("On shelf") : tr("Add to Library"));
+        m_libraryButton->setEnabled(!m_westernOnShelf);
+        return;
+    }
+
     const bool hasSeries  = (m_currentAnilistId > 0);
     const bool bookmarked = (m_cache && hasSeries) ? m_cache->isBookmarked(m_currentAnilistId) : false;
     // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
@@ -1723,6 +1753,20 @@ void ComicsSeriesView::refreshLibraryButton()
 
 void ComicsSeriesView::onLibraryButtonClicked()
 {
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Western (RCO) series branch —
+    // fires BEFORE the AniList path so it never touches AniListCache for
+    // series that have no AniList backing. The button is already disabled
+    // when m_westernOnShelf is true (see refreshLibraryButton), so this
+    // branch only runs for the "Add to Library" case.
+    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+        if (!m_westernOnShelf) {
+            emit addWesternToLibraryRequested();
+            m_westernOnShelf = true;
+            refreshLibraryButton();
+        }
+        return;
+    }
+
     if (!m_cache) return;
     // Existing AniList-keyed bookmark toggle path.
     if (m_currentAnilistId > 0) {

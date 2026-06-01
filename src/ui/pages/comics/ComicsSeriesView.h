@@ -109,6 +109,12 @@ public:
     // PHASE 9: called by ComicsPage when navigating away.
     void clearView();
 
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Western live series: true =>
+    // this series is already on the shelf, so the library button reads
+    // "On shelf" and is inert. False => "Add to Library" (enabled). Called
+    // by ComicsPage after westernSeriesReady arrives.
+    void setWesternOnShelf(bool onShelf);
+
     // PHASE 12: post-download cbz-extracted cover replaces the AniList-loaded
     // thumb in the volume row's Cover cell. seriesId may be a real catalog
     // seriesId or the synthesized "anilist_<N>" slug; we match by parsing the
@@ -246,6 +252,11 @@ signals:
     // render the same hero block (banner, poster, synopsis, tags) the
     // bookmarked path does, without committing to the library.
     void enrichSeriesByTitleRequested(const QString& title);
+
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Emitted when the user clicks
+    // "Add to Library" on a live-fetched Western (RCO) series. ComicsPage
+    // writes the JSON to the shelf folder and refreshes the grid.
+    void addWesternToLibraryRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -432,6 +443,12 @@ private:
     int m_currentAnilistId   = 0;
     int m_nextRequestId      = 1;
     bool m_libraryButtonSawPress = false;
+
+    // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Tracks whether the currently
+    // displayed Western (RCO) series is already on the shelf. Set via
+    // setWesternOnShelf(); cleared in clearView() + populateVolumeRowsFromCatalog
+    // (each series open starts fresh). Drives refreshLibraryButton() label.
+    bool m_westernOnShelf = false;
 
     // Loading overlay (retained for async cover-image spinner).
     // BookWalker VolumeCoverResolver removed (COMICS_MANGAFIRE_PIVOT Phase B.2);
