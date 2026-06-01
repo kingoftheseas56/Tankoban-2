@@ -464,6 +464,7 @@ void ComicsSeriesView::buildUi()
         "}"
         // COMICS_WESTERN_RICHNESS 2026-06-01 (Agent 9). Western about-block
         // gray-on-dark QSS — no color, no emoji, matches house style.
+        "QLabel#WesternAboutTitle { color: rgba(238,238,238,0.96); font-size: 26px; font-weight: 600; }"
         "QLabel#WesternAboutMeta { color: rgba(238,238,238,0.62); font-size: 13px; }"
         "QLabel#WesternAboutSynopsis { color: rgba(238,238,238,0.82); font-size: 14px; }"
         "QWidget#ComicsSeriesHeroTagsRow {"
@@ -2716,6 +2717,10 @@ void ComicsSeriesView::buildAboutBlock()
     auto* v = new QVBoxLayout(m_aboutBlock);
     v->setContentsMargins(0, 0, 0, 12);
     v->setSpacing(6);
+    m_aboutTitle = new QLabel(m_aboutBlock);
+    m_aboutTitle->setObjectName(QStringLiteral("WesternAboutTitle"));
+    m_aboutTitle->setWordWrap(true);
+    v->addWidget(m_aboutTitle);
     m_aboutMeta = new QLabel(m_aboutBlock);
     m_aboutMeta->setObjectName(QStringLiteral("WesternAboutMeta"));
     m_aboutMeta->setWordWrap(true);
@@ -2740,6 +2745,8 @@ void ComicsSeriesView::updateAboutBlock(const tankoban::manga::MangaCatalog& cat
         if (m_aboutBlock) m_aboutBlock->setVisible(false);
         return;
     }
+    m_aboutTitle->setText(catalog.seriesTitle);
+    m_aboutTitle->setVisible(!catalog.seriesTitle.isEmpty());
     QStringList meta;
     if (!catalog.author.isEmpty())  meta << catalog.author;
     if (!catalog.studio.isEmpty())  meta << catalog.studio;       // publisher

@@ -607,6 +607,11 @@ private:
     // search results vs back to library) and the "enteredFrom" hint
     // captured in the tankoyomiDetail nav-state blob.
     Mode m_enteredDetailFrom = Mode::Library;
+    // COMICS_WESTERN_RICHNESS 2026-06-01. True while viewing a Western-catalogue
+    // series detail, so the in-view "← Back" (onDetailBack) returns to the
+    // Western grid instead of the manga library. Set in openWesternSeriesFromJson,
+    // cleared on any grid land (showLibraryMode/showWesternMode) + after onDetailBack.
+    bool m_detailEnteredFromWestern = false;
 
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — restoreNavState
     // raises this flag so the mode-flipper slots it invokes (showLibraryMode,

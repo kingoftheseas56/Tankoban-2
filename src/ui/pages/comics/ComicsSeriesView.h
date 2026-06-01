@@ -409,7 +409,8 @@ private:
     // header — synopsis + "author · publisher · year · genre" meta line rendered
     // above the volume edition rows. Rendered DIRECTLY from populateVolumeRowsFromCatalog
     // (never routed through showSeries / dispatchCatalogResolve — Guard #3 no-auto-enrich).
-    QWidget*  m_aboutBlock     = nullptr;   // Western catalog about-block (synopsis + meta)
+    QWidget*  m_aboutBlock     = nullptr;   // Western catalog about-block (title + synopsis + meta)
+    QLabel*   m_aboutTitle     = nullptr;   // series title (Western path skips the hero title)
     QLabel*   m_aboutSynopsis  = nullptr;
     QLabel*   m_aboutMeta      = nullptr;   // "Author · Publisher · Year · Genre"
     void buildAboutBlock();                 // lazy-construct the about-block widgets

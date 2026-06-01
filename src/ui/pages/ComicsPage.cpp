@@ -2100,11 +2100,16 @@ void ComicsPage::fetchPosterForTile(TileCard* card, int anilistId,
         outPath = posterCacheDir + QStringLiteral("/anilist_%1.jpg")
                                        .arg(anilistId);
     } else {
-        // MangaFire Volume 1 cover — key cache entry by URL hash.
-        const QByteArray urlKey = QUrl(coverUrl).toString().toUtf8().toBase64(
-            QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-        outPath = posterCacheDir + QStringLiteral("/mangafire_")
-                  + QString::fromLatin1(urlKey.left(40))
+        // Cover keyed by a FULL hash of the URL. A truncated base64 prefix
+        // collided across same-host URLs: every rcostation /Uploads/... cover
+        // shares a >30-char prefix, so base64(url).left(40) was IDENTICAL for
+        // all of them -> every Western cover collapsed to one cache file (all
+        // showed whichever downloaded first). MD5 hex of the full URL is
+        // collision-free. (COMICS_WESTERN_RICHNESS cover-dup fix 2026-06-01.)
+        const QByteArray urlKey = QCryptographicHash::hash(
+            coverUrl.toUtf8(), QCryptographicHash::Md5).toHex();
+        outPath = posterCacheDir + QStringLiteral("/cover_")
+                  + QString::fromLatin1(urlKey)
                   + QStringLiteral(".jpg");
     }
 
@@ -2329,6 +2334,7 @@ void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
                                           catalog->seriesTitle, blob));
     }
     m_enteredDetailFrom        = Mode::Library;
+    m_detailEnteredFromWestern = true;  // in-view Back -> Western grid, not manga
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = 0;   // no AniList id => the enrichment path has nothing to chase
     m_currentDetailSeriesTitle = catalog->seriesTitle;
@@ -2738,6 +2744,10 @@ void ComicsPage::resetToRoot()
 
 void ComicsPage::showLibraryMode()
 {
+    // Landing on the manga library clears any stale Western-detail flag (e.g.
+    // user opened a Western series then tapped the Manga pill instead of Back),
+    // so a subsequent manga-detail Back doesn't wrongly route to the Western grid.
+    m_detailEnteredFromWestern = false;
     // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- the previous PHASE 0 push of
     // a fresh "library" layer on every transition into Library mode has been
     // removed. MainWindow now seeds Comics with a persistent library root
@@ -3047,7 +3057,10 @@ void ComicsPage::onDetailBack()
     // before the mode flip so the controller state matches what is about
     // to become visible.
     if (!m_inNavRestore) emit exitedLayer();
-    if (m_enteredDetailFrom == Mode::SearchResults && m_searchTakeover) {
+    if (m_detailEnteredFromWestern) {
+        // Western-catalogue detail -> back to the Western grid (not manga lib).
+        showWesternMode();
+    } else if (m_enteredDetailFrom == Mode::SearchResults && m_searchTakeover) {
         m_mode = Mode::SearchResults;
         m_stack->setCurrentWidget(m_searchTakeover);
     } else {
@@ -3057,6 +3070,7 @@ void ComicsPage::onDetailBack()
     m_currentDetailSeriesTitle.clear();
     if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->clearView();
     m_enteredDetailFrom = Mode::Library;
+    m_detailEnteredFromWestern = false;
 }
 
 void ComicsPage::onVolumeMetadataResolved(int anilistId, int volumeCount, int chapterCount)
