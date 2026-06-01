@@ -2433,6 +2433,8 @@ void ComicsPage::showMangaMode()
     if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(true);
     if (m_westernTabBtn) m_westernTabBtn->setChecked(false);
     if (m_stack) m_stack->setCurrentIndex(0);
+    // Top search bar searches manga (WeebCentral) while on the manga shelf.
+    if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("weebcentral"));
 }
 
 void ComicsPage::showWesternMode()
@@ -2457,6 +2459,10 @@ void ComicsPage::showWesternMode()
     refreshWesternGrid();
     if (m_stack && m_westernStackIndex >= 0)
         m_stack->setCurrentIndex(m_westernStackIndex);
+    // Top search bar searches comics (RCO) while on the Western shelf — this is
+    // what makes a Western search query hit readcomicsonline and surface comic
+    // results whose source == "readcomicsonline" (routed live in onSearchResultActivated).
+    if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("readcomicsonline"));
 }
 
 void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
