@@ -22,14 +22,24 @@ def main():
     cfg = engine.load_config()
     cfg["gemini"]["enabled"] = True  # force-enable for the probe only
     engine.require_key("GEMINI_API_KEY")
-    engine.mark_wake()  # scope gate calls under their own wake marker
+    # Do NOT call mark_wake() — gate probes must NOT reset the caller's cap
+    # counter. log_call per probe is sufficient for budget visibility.
     passed = 0
     for prompt, want in CASES:
-        try:
-            got = engine.call_gemini(prompt, cfg).strip()
-        except Exception as e:
-            print(f"FAIL (error): {e}"); continue
-        engine.log_call("gemini", len(got), "gate-probe", "GATE")
+        # Mirror dispatch()'s critical-section pattern: check cap + call +
+        # log under one lock so concurrent agents can't both sneak past.
+        with engine._ledger_lock():
+            ok_flag, msg = engine.check_cap("GEMINI_GATE", cfg)
+            if msg:
+                print(msg, file=sys.stderr)
+            if not ok_flag:
+                print("GEMINI GATE STOPPED: cap exhausted — gate cannot proceed.", file=sys.stderr)
+                return 2
+            try:
+                got = engine.call_gemini(prompt, cfg).strip()
+            except Exception as e:
+                print(f"FAIL (error): {e}"); continue
+            engine.log_call("gemini", len(got), "gate-probe", "GEMINI_GATE")
         ok = got == want  # exact match — '1200' must not pass '200'
         print(f"{'PASS' if ok else 'FAIL'}: want '{want}' got '{got[:40]}'")
         passed += ok

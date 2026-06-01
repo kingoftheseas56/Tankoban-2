@@ -193,5 +193,36 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue(os.path.exists(engine.LOCK_PATH))
         os.unlink(engine.LOCK_PATH)
 
+
+class GateTest(unittest.TestCase):
+    """Prove the Gemini gate does NOT reset the caller's cap counter."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
+        self.tmp.close()
+        engine.LEDGER_PATH = self.tmp.name
+        open(self.tmp.name, "w").close()
+        os.environ["ENGINE_AGENT"] = "solo"
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+        os.environ.pop("ENGINE_AGENT", None)
+
+    def test_gate_probe_does_not_write_wake_marker(self):
+        # Simulate existing calls from the solo user.
+        engine.log_call("deepseek", 10, "existing work", "T1")
+        engine.log_call("codex", 5, "existing review", "T1")
+        calls_before = len(
+            [r for r in engine.ledger_rows_since_wake()
+             if r.get("event") == "call"])
+        self.assertEqual(calls_before, 2)
+        # The gate probe logs a gemini call but does NOT call mark_wake.
+        engine.log_call("gemini", 3, "gate-probe", "GEMINI_GATE")
+        calls_after = len(
+            [r for r in engine.ledger_rows_since_wake()
+             if r.get("event") == "call"])
+        # Still 3 calls (2 original + 1 gate probe); wake markers unchanged.
+        self.assertEqual(calls_after, 3)
+
 if __name__ == "__main__":
     unittest.main()

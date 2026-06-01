@@ -38,6 +38,10 @@ def _ledger_lock():
 
 
 def _agent_id():
+    # ENGINE_AGENT/AGENT_ID is a cooperative guardrail for trusted brothers
+    # sharing one machine to catch runaway call loops — NOT a security boundary
+    # against adversarial agents (it is caller-settable via env).  Two brothers
+    # both defaulting to "solo" will collide; Task 9 wires per-brother ids.
     return os.environ.get("ENGINE_AGENT") or os.environ.get("AGENT_ID") or "solo"
 
 
