@@ -79,3 +79,25 @@ def guard_packet(packet, cfg):
     if len(packet) > limit:
         raise ValueError(f"packet {len(packet)} chars exceeds limit {limit}. "
                          f"Hand a SMALLER slice (small-context rule).")
+
+
+def parse_gemini(data):
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def parse_codex(stdout):
+    """codex exec prints a banner, then a lone 'codex' line, then the answer,
+    then 'tokens used'. Extract the answer between them."""
+    lines = stdout.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "codex":
+            start = i + 1  # last 'codex' marker wins
+    if start is None:
+        return stdout.strip()
+    answer = []
+    for ln in lines[start:]:
+        if ln.strip() == "tokens used":
+            break
+        answer.append(ln)
+    return "\n".join(answer).strip()

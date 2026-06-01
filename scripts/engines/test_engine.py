@@ -65,5 +65,43 @@ class GuardTest(unittest.TestCase):
         finally:
             os.environ.pop("FAKE_KEY_XYZ", None)
 
+GEMINI_FIXTURE = {
+    "candidates": [
+        {"content": {"parts": [{"text": "3.2"}], "role": "model"},
+         "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"totalTokenCount": 159},
+    "modelVersion": "gemini-2.5-flash",
+}
+
+CODEX_FIXTURE = """Reading additional input from stdin...
+OpenAI Codex v0.131.0
+--------
+workdir: C:\\Users\\Suprabha\\Desktop\\Tankoban 2
+model: gpt-5.5
+--------
+user
+Review this C++ function...
+codex
+APPROVE clamps values below 0 to 0, above 100 to 100, and returns in-range values unchanged.
+tokens used
+15,018
+"""
+
+class ParserTest(unittest.TestCase):
+    def test_parse_gemini(self):
+        self.assertEqual(engine.parse_gemini(GEMINI_FIXTURE), "3.2")
+
+    def test_parse_codex_extracts_answer(self):
+        out = engine.parse_codex(CODEX_FIXTURE)
+        self.assertEqual(
+            out,
+            "APPROVE clamps values below 0 to 0, above 100 to 100, "
+            "and returns in-range values unchanged.")
+
+    def test_parse_codex_multiline_answer(self):
+        sample = "banner\ncodex\nline one\nline two\ntokens used\n42\n"
+        self.assertEqual(engine.parse_codex(sample), "line one\nline two")
+
 if __name__ == "__main__":
     unittest.main()
