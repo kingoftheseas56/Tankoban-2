@@ -67,6 +67,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QTextStream>
 
@@ -485,10 +486,29 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             qInfo("ComicsPage: addWesternToLibraryRequested with no pending series");
             return;
         }
+        // Validate (NOT strip) the REMOTE-derived seriesId as a safe filename
+        // stem matching the baked-catalogue naming ([a-z0-9-], dash-separated).
+        // Rejecting rather than stripping avoids BOTH path traversal (no '\\',
+        // '/', ':', '.', '..') AND collisions (stripping 'a.b' -> 'ab' could
+        // false-match a different series' file). (Codex review, 2026-06-01.)
+        // Validate the id AS-IS (no toLower/normalisation — that would collapse
+        // distinct ids onto one file). fetchWesternSeries already emits a
+        // lowercased, dash-separated seriesId, so a well-formed series passes
+        // unchanged and the filename is exactly the validated value.
+        const QString& id = m_pendingWesternSeriesId;
+        static const QRegularExpression safeIdRe(QStringLiteral("^[a-z0-9][a-z0-9-]*$"));
+        if (!safeIdRe.match(id).hasMatch()) {
+            qInfo("ComicsPage: unsafe Western seriesId '%s', refusing to write",
+                  qUtf8Printable(id));
+            return;
+        }
         const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
-        QDir().mkpath(dir);
-        const QString path = QDir(dir).absoluteFilePath(
-            m_pendingWesternSeriesId + QStringLiteral(".json"));
+        if (!QDir().mkpath(dir)) {
+            qInfo("ComicsPage: failed to create Western catalogue dir %s",
+                  qUtf8Printable(dir));
+            return;
+        }
+        const QString path = QDir(dir).absoluteFilePath(id + QStringLiteral(".json"));
         // Skip-if-present (spec §8 locked default): never clobber an existing
         // shelf entry (incl. the baked 13). The button is already gated on
         // !onShelf, so this is belt-and-suspenders against any re-entry path.
@@ -496,14 +516,17 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
             return;
         }
-        QFile f(path);
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        // Atomic write (QSaveFile temp + commit): a failed/partial write can never
+        // leave a corrupt shelf JSON, and commit() is the single success point —
+        // we only mark on-shelf / refresh the grid AFTER it succeeds.
+        const QByteArray bytes =
+            QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented);
+        QSaveFile f(path);
+        if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) {
             qInfo("ComicsPage: failed to write Western shelf file %s",
                   qUtf8Printable(path));
-            return;
+            return;   // do NOT mark on-shelf on a failed write
         }
-        f.write(QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented));
-        f.close();
         if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
         refreshWesternGrid();  // surface the new card on the Western grid
     });
