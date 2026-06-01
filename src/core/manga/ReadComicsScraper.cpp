@@ -1,4 +1,6 @@
 #include "ReadComicsScraper.h"
+#include "WesternSeriesParse.h"
+namespace western = tankoban::manga::western;
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -324,5 +326,69 @@ void ReadComicsScraper::fetchDetail(const MangaResult& preview)
         detail.cachedChapters = ReadComicsScraper::parseChaptersHtml(html, preview.id);
 
         emit self->detailReady(detail);
+    });
+}
+
+// ── Western series fetch (live page -> schema-v2 JSON) ─────────────────────
+void ReadComicsScraper::fetchWesternSeries(const QString& seriesSlug,
+                                           const QString& title,
+                                           const QString& coverFromSearch)
+{
+    QUrl url(BASE + "/Comic/" + seriesSlug);
+    auto* reply = m_nam->get(makeRequest(url));
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, seriesSlug, title, coverFromSearch]() {
+        reply->deleteLater();
+
+        QJsonObject obj;
+        // seriesId: lowercase slug, '/'+space -> '-' (matches baked file naming).
+        QString id = seriesSlug.toLower();
+        id.replace(QRegularExpression(R"([\s/]+)"), "-");
+        obj["seriesId"]      = id;
+        obj["seriesTitle"]   = title.isEmpty() ? western::slugToLabel("/x/" + seriesSlug) : title;
+        obj["source"]        = QStringLiteral("rco");
+        obj["schemaVersion"] = 2;
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // Degrade: still emit a minimal record (cover from search, no editions)
+            // so the UI shows the series rather than a hung overlay.
+            obj["seriesCover"] = coverFromSearch;
+            obj["synopsis"]    = QString();
+            obj["editions"]    = QJsonArray();
+            emit westernSeriesReady(obj);
+            return;
+        }
+
+        const QString html = QString::fromUtf8(reply->readAll());
+        const QString cover = western::parseSeriesCover(html);
+        obj["seriesCover"] = cover.isEmpty() ? coverFromSearch : cover;
+        obj["editions"]    = western::buildEditions(western::parseSeriesItems(html));
+
+        const QString summary = western::parseSeriesSummary(html);
+        if (!western::needsSummaryFallback(summary)) {
+            obj["synopsis"] = summary;
+            emit westernSeriesReady(obj);
+            return;
+        }
+        // Lean fallback: a single Wikipedia "(comics)" attempt. Full suffix-ladder
+        // + Wikidata metadata are the later richness pass (out of scope here).
+        const QString wikiTitle = (title.isEmpty() ? id : title) + " (comics)";
+        QUrl wikiUrl("https://en.wikipedia.org/api/rest_v1/page/summary/"
+                     + QString::fromUtf8(QUrl::toPercentEncoding(wikiTitle)));
+        auto* wreply = m_nam->get(makeRequest(wikiUrl));
+        connect(wreply, &QNetworkReply::finished, this,
+                [this, wreply, obj, summary]() mutable {
+            wreply->deleteLater();
+            QString chosen = summary;
+            if (wreply->error() == QNetworkReply::NoError) {
+                const auto doc = QJsonDocument::fromJson(wreply->readAll());
+                const QString extract = doc.object().value("extract").toString();
+                const QString type    = doc.object().value("type").toString();
+                if (!extract.isEmpty() && type != QLatin1String("disambiguation"))
+                    chosen = extract;
+            }
+            obj["synopsis"] = chosen;
+            emit westernSeriesReady(obj);
+        });
     });
 }

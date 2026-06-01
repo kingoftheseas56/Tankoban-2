@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MangaScraper.h"
+#include <QJsonObject>
 
 class ReadComicsScraper : public MangaScraper
 {
@@ -17,6 +18,17 @@ public:
     void fetchChapters(const QString& seriesSlug) override;
     void fetchPages(const QString& chapterId) override;
     void fetchDetail(const MangaResult& preview) override;
+
+    // Live Western-catalogue fetch: GET /Comic/<slug>, classify collected
+    // editions + pull synopsis, assemble a schema-v2 Western JSON object, emit
+    // westernSeriesReady. title + coverFromSearch come from the search result
+    // (used as fallbacks when the page parse is thin).
+    void fetchWesternSeries(const QString& seriesSlug,
+                            const QString& title,
+                            const QString& coverFromSearch);
+
+signals:
+    void westernSeriesReady(const QJsonObject& seriesJson);
 
 private:
     static QList<ChapterInfo> parseChaptersHtml(const QString& html, const QString& slug);
