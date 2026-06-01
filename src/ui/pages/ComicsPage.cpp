@@ -2288,15 +2288,22 @@ void ComicsPage::refreshWesternGrid()
         const auto cat = tankoban::manga::WesternCatalogLoader::loadFromFile(path);
         if (!cat.has_value()) continue;
 
-        // Shared series hero cover (may be empty -> TileCard shows a text tile;
-        // cover-tolerant by design until per-edition covers land).
-        const QString cover = cat->volumes.isEmpty()
-                                  ? QString()
-                                  : cat->volumes.first().coverUrlJapanese;
-        auto* card = new TileCard(cover, cat->seriesTitle, tr("Western"));
+        // Shared series hero cover. The cover is a REMOTE url (rcostation
+        // /Uploads absolutised by the loader, or an absolute blogspot url),
+        // not a local file -- so it can't go through TileCard's ctor thumbPath
+        // (QPixmap(path) only loads local files; a url fails silently -> blank
+        // box). Mirror the manga grid: construct with an empty placeholder,
+        // then async-fetch + cache the url via fetchPosterForTile, which calls
+        // setThumbPath when the download lands. Empty cover -> text-tile
+        // placeholder stays (cover-tolerant by design).
+        const QString coverUrl = cat->volumes.isEmpty()
+                                     ? QString()
+                                     : cat->volumes.first().coverUrlJapanese;
+        auto* card = new TileCard(QString(), cat->seriesTitle, tr("Western"));
         card->setProperty("westernJsonPath", path);
         card->setProperty("seriesName", cat->seriesTitle);
         m_westernGrid->addTile(card);
+        if (!coverUrl.isEmpty()) fetchPosterForTile(card, 0, coverUrl);
     }
 }
 
