@@ -92,6 +92,19 @@ def test_due_escalations():
     check(dm == [(20, "agent3", "agent0")], "due: comma-list idempotency is per addressee")
 
 
+def test_since_seq_baseline():
+    now = 1_000_000
+    records = [
+        rec(10, "agent2", "agent1", "chat", "old ask"),
+        rec(11, "agent2", "agent1", "chat", "new ask"),
+    ]
+    asks = A.compute_asks(records, now, 300, 300, now_age={10: 400, 11: 400}, since_seq=10)
+    keys = {(a["ask_seq"], a["to_agent"]) for a in asks}
+    check(keys == {(11, "agent1")}, "since: compute_asks ignores asks at or below baseline")
+    due = A.due_escalations(records, now, 300, 300, now_age={10: 400, 11: 400}, since_seq=10)
+    check(due == [(11, "agent1", "agent0")], "since: due_escalations only escalates post-baseline asks")
+
+
 def _sandbox():
     sand = tempfile.mkdtemp()
     os.environ["OFFICE_DIR"] = sand
@@ -122,15 +135,39 @@ def test_escalation_tick_posts():
     import office_web
 
     office_bus.cmd_append("agent2", "agent1", "chat", "null", "X?")
-    posted = office_web.escalate_tick_once(window=0, escalate2=999999)
+    posted = office_web.escalate_tick_once(window=0, escalate2=999999, since_seq=0)
     check(posted == 1, "tick: an overdue unacked ask posts one escalate event")
     recs = A._bus_records()
     esc = [r for r in recs if r.get("kind") == "escalate"]
     check(esc and esc[0]["to"] == "agent0" and str(esc[0]["arc"]) == "1:agent1",
           "tick: escalation is addressed to agent0, arc=ask_seq:addressee")
 
-    again = office_web.escalate_tick_once(window=0, escalate2=999999)
+    again = office_web.escalate_tick_once(window=0, escalate2=999999, since_seq=0)
     check(again == 0, "tick: re-running does not double-post the same level")
+
+
+def test_escalation_tick_startup_baseline_blocks_backfill():
+    _sandbox()
+    import office_bus
+    import office_web
+
+    office_bus.cmd_append("agent2", "agent1", "chat", "null", "old before startup")
+    baseline = office_web._max_bus_seq()
+    old_start = office_web.OFFICE_START_SEQ
+    office_web.OFFICE_START_SEQ = baseline
+    try:
+        posted = office_web.escalate_tick_once(window=0, escalate2=999999)
+        check(posted == 0, "tick: startup baseline does not backfill old asks")
+
+        office_bus.cmd_append("agent2", "agent1", "chat", "null", "new after startup")
+        posted2 = office_web.escalate_tick_once(window=0, escalate2=999999)
+        recs = A._bus_records()
+        esc = [r for r in recs if r.get("kind") == "escalate"]
+        check(posted2 == 1, "tick: post-baseline ask still escalates")
+        check(len(esc) == 1 and esc[0].get("arc") == "2:agent1",
+              "tick: no backfill escalation is emitted for pre-baseline ask")
+    finally:
+        office_web.OFFICE_START_SEQ = old_start
 
 
 def test_rollcall():
@@ -150,8 +187,10 @@ def test_rollcall():
 def main():
     test_compute_asks()
     test_due_escalations()
+    test_since_seq_baseline()
     test_ack_event()
     test_escalation_tick_posts()
+    test_escalation_tick_startup_baseline_blocks_backfill()
     test_rollcall()
     print("\n%d failure(s)" % fails)
     sys.exit(1 if fails else 0)

@@ -48,7 +48,7 @@ def _escalation_matches(arc, ask_seq, to_agent):
     return arc == "{0}:{1}".format(ask_seq, to_agent) or arc == str(ask_seq)
 
 
-def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None):
+def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None, since_seq=0):
     """Return derived ask states, one per (ask_seq, addressee).
 
     Direct chat creates the obligation. Ack or answer closes the escalation
@@ -57,6 +57,8 @@ def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
     asks = []
     for rec in records:
         if rec.get("kind") != "chat" or rec.get("arc") == "auto_reply":
+            continue
+        if _seq(rec) <= since_seq:
             continue
         if rec.get("to") == "all":
             continue
@@ -120,10 +122,10 @@ def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
     return sorted(out, key=lambda x: (x["state"] == "answered", -x["age_sec"], x["ask_seq"], x["to_agent"]))
 
 
-def due_escalations(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None):
+def due_escalations(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None, since_seq=0):
     """Return [(ask_seq, to_agent, level)] for newly due escalation events."""
     due = []
-    for ask in compute_asks(records, now_epoch, window, escalate2, now_age):
+    for ask in compute_asks(records, now_epoch, window, escalate2, now_age, since_seq):
         if ask["state"] == "owed":
             due.append((ask["ask_seq"], ask["to_agent"], "agent0"))
         elif ask["state"] == "escalated_a0" and ask["age_sec"] >= window + escalate2:
@@ -152,10 +154,10 @@ def _bus_records():
     return out
 
 
-def asks_now(now_epoch=None):
+def asks_now(now_epoch=None, since_seq=0):
     import time
     now_epoch = int(time.time()) if now_epoch is None else now_epoch
-    rows = compute_asks(_bus_records(), now_epoch)
+    rows = compute_asks(_bus_records(), now_epoch, since_seq=since_seq)
     return [r for r in rows if r["state"] != "answered" or r["age_sec"] <= ANSWERED_GRACE_SEC]
 
 

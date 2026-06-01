@@ -39,6 +39,11 @@ import office_status  # noqa: E402  (derived-status engine; shares bus path)
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
 
+
+def _max_bus_seq():
+    return max((m.get("seq", 0) for m in _read_all_messages()), default=0)
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -472,14 +477,18 @@ def _read_all_messages():
     return out
 
 
-def escalate_tick_once(window=None, escalate2=None):
+OFFICE_START_SEQ = _max_bus_seq()
+
+
+def escalate_tick_once(window=None, escalate2=None, since_seq=None):
     """Post newly due escalation events. Deterministic; no LLM calls."""
     w = office_asks.WINDOW_SEC if window is None else window
     e2 = office_asks.ESCALATE2_SEC if escalate2 is None else escalate2
+    baseline = OFFICE_START_SEQ if since_seq is None else since_seq
     recs = office_asks._bus_records()
     now = int(_time.time())
     posted = 0
-    for ask_seq, who, level in office_asks.due_escalations(recs, now, w, e2):
+    for ask_seq, who, level in office_asks.due_escalations(recs, now, w, e2, since_seq=baseline):
         msg = "{0} hasn't acknowledged ask #{1} in time - needs attention".format(who, ask_seq)
         arc = "{0}:{1}".format(ask_seq, who)
         buf = io.StringIO()
@@ -551,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/asks"):
             try:
-                data = office_asks.asks_now()
+                data = office_asks.asks_now(since_seq=OFFICE_START_SEQ)
             except Exception:
                 data = []
             self._send(200, json.dumps({"asks": data}))
