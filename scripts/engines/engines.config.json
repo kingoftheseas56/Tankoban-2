@@ -9,7 +9,7 @@
   "gemini": {
     "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
     "model": "gemini-2.5-flash",
-    "enabled": false
+    "enabled": true
   },
   "caps": {
     "per_wake_hard": 25,
