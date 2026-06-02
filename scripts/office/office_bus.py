@@ -452,7 +452,12 @@ def cmd_watch_peek(me, after):
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if rec.get("seq", 0) > after and rec.get("from") != me and _addressed_to(rec, me):
+        # Skip commit-mirror "activity" lines: they're FYI (still shown in the web
+        # room + injected at prompt-time by deliver), but they must NOT WAKE a
+        # watching brother — only real messages (chat/summon/blocked/ack) tap a
+        # brother on the shoulder. Cuts the per-commit wake-noise across all watchers.
+        if (rec.get("seq", 0) > after and rec.get("from") != me
+                and rec.get("kind") != "activity" and _addressed_to(rec, me)):
             print("[seq {0}] {1}: {2}".format(rec["seq"], rec["from"], rec["msg"]))
 
 
