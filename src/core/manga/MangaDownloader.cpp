@@ -642,7 +642,7 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         if (source == "weebcentral")
             req.setRawHeader("Referer", "https://weebcentral.com/");
         else if (source == "readcomicsonline")
-            req.setRawHeader("Referer", "https://readcomicsonline.ru/");
+            req.setRawHeader("Referer", "https://rcostation.xyz/");  // live host (was dead .ru)
 
         auto* reply = m_nam->get(req);
         connect(reply, &QNetworkReply::finished, this,

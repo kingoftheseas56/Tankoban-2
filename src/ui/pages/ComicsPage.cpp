@@ -347,11 +347,31 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // DOWNLOADING chip on Tankoyomi-origin tiles from the downloader's state
     // stream.
     connect(m_mangaDownloader, &MangaDownloader::downloadUpdated,
-            this, [this](const QString&) { refreshTileChips(); });
+            this, [this](const QString& recordId) {
+        refreshTileChips();
+        updateWesternMangaStatus(recordId);   // RCO Western status (no-op otherwise)
+    });
     connect(m_mangaDownloader, &MangaDownloader::downloadCompleted,
             this, [this](const QString&) { refreshTileChips(); });
     connect(m_mangaDownloader, &MangaDownloader::chapterCompleted,
             this, &ComicsPage::onChapterCompleted);
+    // COMICS_WESTERN RCO-as-source (2026-06-03): a completed RCO chapter that is
+    // the in-flight Western download flips the Western tile to Read (via the
+    // proven provider path) + updates the Sources panel. Separate connect from
+    // onChapterCompleted (which registers Tankoyomi-library chapters and skips
+    // Western shelf series — they are not in m_tyLibrary).
+    connect(m_mangaDownloader, &MangaDownloader::chapterCompleted, this,
+            [this](const QString& source, const QString& seriesTitle,
+                   const QString& /*chapterId*/, const QString& finalPath, qint64) {
+        if (source != QLatin1String("readcomicsonline")) return;
+        if (m_pendingWesternSeriesId.isEmpty() || m_pendingWesternDownloadVolume <= 0) return;
+        if (seriesTitle != m_currentDetailSeriesTitle || finalPath.isEmpty()) return;
+        onProviderVolumeCompleted(m_pendingWesternSeriesId, m_pendingWesternDownloadVolume,
+            finalPath, static_cast<int>(PendingVolumeSourceKind::WesternGetComics));
+        if (m_tyVolumeSeriesView)
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(
+                m_westernDownloadEdition, tr("Downloaded - open to read"));
+    });
 
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 -- on-disk
     // chapter index. Persists at <appDataDir>/manga_downloads_index.json.
@@ -1003,23 +1023,28 @@ void ComicsPage::wireWesternDownloader()
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::downloadWesternEditionRequested,
             this,
-            [this](int volumeNumber, const QString& editionTitle, const QString& tierLabel) {
-        if (!m_westernDownloader || m_pendingWesternSeriesId.isEmpty()) {
-            qInfo("ComicsPage: downloadWesternEditionRequested ignored — "
-                  "no active Western series or downloader not ready");
+            [this](int volumeNumber, const QString& editionTitle,
+                   const QString& /*tierLabel*/, const QString& sourceHref) {
+        // RCO-as-source (2026-06-03): the Western download now runs through the
+        // existing MangaDownloader page->cbz pipeline (RCO reader pages,
+        // descrambled by ReadComicsPageParse), NOT GetComics. The edition's RCO
+        // item href IS the chapter to fetch.
+        if (!m_mangaDownloader || m_pendingWesternSeriesId.isEmpty() || sourceHref.isEmpty()) {
+            qInfo("ComicsPage: Western download ignored — no downloader/series/href");
+            if (m_tyVolumeSeriesView)
+                m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
             return;
         }
 
-        // Snapshot the live page state ONCE up front (Codex review 2026-06-02):
-        // the shelf write + requestVolume below must agree on the same series
-        // even if a synchronous UI mutation (refreshWesternGrid, etc.) touches a
-        // member mid-lambda. Use these copies, not the members, from here on.
+        // Snapshot the live page state ONCE up front (the shelf write + dispatch
+        // must agree on the same series even if a synchronous UI mutation touches
+        // a member mid-lambda). Use these copies, not the members, from here on.
         const QString     seriesId    = m_pendingWesternSeriesId;
         const QJsonObject seriesJson  = m_pendingWesternJson;
         const QString     seriesTitle = m_currentDetailSeriesTitle;
 
-        // Compute destination path: use the comics-root from TorrentClient if
-        // available, otherwise fall back next to the Western data dir.
+        // Compute destination path: comics-root from TorrentClient if available,
+        // otherwise fall back next to the Western data dir.
         QString comicsRoot;
         if (m_torrentClient) {
             comicsRoot = m_torrentClient->defaultPaths().value(QStringLiteral("comics"));
@@ -1039,15 +1064,13 @@ void ComicsPage::wireWesternDownloader()
 
         const QString destPath = QDir(comicsRoot).absoluteFilePath(safeTitle);
         if (!QDir().mkpath(destPath)) {
-            qInfo("ComicsPage: failed to mkpath Western dest %s",
-                  qUtf8Printable(destPath));
+            qInfo("ComicsPage: failed to mkpath Western dest %s", qUtf8Printable(destPath));
             return;
         }
 
         // Auto-add the series to the Western shelf before downloading — mirrors
         // addWesternToLibraryRequested so the shelf card appears without an
-        // explicit "Add to Library" click. Idempotent: writing the same JSON
-        // a second time is harmless (QSaveFile overwrites).
+        // explicit "Add to Library" click. Idempotent (QSaveFile overwrites).
         const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
         const QString shelfPath =
             QDir(dir).absoluteFilePath(seriesId + QStringLiteral(".json"));
@@ -1064,32 +1087,30 @@ void ComicsPage::wireWesternDownloader()
             }
         }
 
-        // Year for the GetComics match year-bonus. The Western JSON schema field
-        // is "yearStart" (what WesternCatalogLoader reads into publishedYearStart);
-        // accept a couple of aliases defensively. 0 is fine — the matcher's hard
-        // gates don't depend on it; year only adds a ranking/tie-break bonus.
-        int year = 0;
-        for (const char* k : {"yearStart", "year", "publishedYear"}) {
-            const auto v = seriesJson.value(QLatin1String(k));
-            if (v.isDouble()) { year = static_cast<int>(v.toDouble()); if (year > 0) break; }
-        }
+        // chapterId for the RCO scraper = the edition href minus the "/Comic/"
+        // prefix ("Invincible/TPB-1-Family-matters"). fetchPages rebuilds the
+        // reader URL from it and ReadComicsPageParse descrambles the pages.
+        QString chapterId = sourceHref;
+        if (chapterId.startsWith(QLatin1String("/Comic/")))
+            chapterId.remove(0, QStringLiteral("/Comic/").size());
 
-        // COLLECTED-EDITION search (2026-06-02): GetComics carries these series
-        // only as collected editions (Compendium/Collection/Omnibus), never the
-        // per-TPB label. So the search SUBJECT is the SERIES TITLE — searching the
-        // bare edition label ("TPB 1 Family matters") returns zero. editionTitle
-        // is kept only for the log line.
-        qInfo("ComicsPage: Western download requested — series=%s title=\"%s\" "
-              "edition=\"%s\" vol=%d dest=%s",
-              qUtf8Printable(seriesId),
-              qUtf8Printable(seriesTitle),
-              qUtf8Printable(editionTitle),
-              volumeNumber,
-              qUtf8Printable(destPath));
+        ChapterInfo ch;
+        ch.id     = chapterId;
+        ch.name   = editionTitle;
+        ch.source = QStringLiteral("readcomicsonline");
 
-        m_westernDownloadEdition.clear();   // new download — matched edition unknown yet
-        m_westernDownloader->requestVolume(seriesId, volumeNumber,
-                                           seriesTitle, year, tierLabel, destPath);
+        m_westernDownloadEdition       = editionTitle;
+        m_pendingWesternDownloadVolume = volumeNumber;
+        if (m_tyVolumeSeriesView)
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(editionTitle, tr("Downloading..."));
+
+        qInfo("ComicsPage: RCO Western download — series=%s chapterId=%s vol=%d dest=%s",
+              qUtf8Printable(seriesId), qUtf8Printable(chapterId),
+              volumeNumber, qUtf8Printable(destPath));
+
+        m_westernDownloadRecordId = m_mangaDownloader->startDownload(
+            seriesTitle, QStringLiteral("readcomicsonline"),
+            { ch }, destPath, QStringLiteral("cbz"));
     });
 
     // --- volumeResolved: surface the matched collected edition in the panel ---
@@ -3076,6 +3097,37 @@ void ComicsPage::openSeriesByPath(const QString& seriesPath, const QString& seri
     }
     m_seriesView->showSeries(seriesPath, seriesName, coverPath);
     m_stack->setCurrentIndexAnimated(1);
+}
+
+void ComicsPage::updateWesternMangaStatus(const QString& recordId)
+{
+    // Route a MangaDownloader progress tick for the in-flight Western (RCO)
+    // download to the Sources panel + the clicked volume tile. No-op for any
+    // other record (manga/Tankoyomi downloads).
+    if (recordId.isEmpty() || recordId != m_westernDownloadRecordId) return;
+    if (!m_mangaDownloader || !m_tyVolumeSeriesView) return;
+
+    for (const MangaDownloadRecord& rec : m_mangaDownloader->listActive()) {
+        if (rec.id != recordId) continue;
+        const ChapterDownload* ch = rec.chapters.isEmpty() ? nullptr : &rec.chapters.first();
+        const bool errored = rec.status == QLatin1String("error")
+                          || (ch && ch->status == QLatin1String("error"));
+        if (errored) {
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
+            if (m_pendingWesternDownloadVolume > 0)
+                m_tyVolumeSeriesView->setVolumeStatusText(m_pendingWesternDownloadVolume, tr("Failed"));
+            return;
+        }
+        int pct = 0;
+        if (ch && ch->totalImages > 0)
+            pct = (ch->downloadedImages * 100) / ch->totalImages;
+        const QString panelLine = pct <= 0 ? tr("Finding...") : tr("Downloading %1%").arg(pct);
+        m_tyVolumeSeriesView->updateWesternDownloadStatus(m_westernDownloadEdition, panelLine);
+        if (m_pendingWesternDownloadVolume > 0)
+            m_tyVolumeSeriesView->setVolumeStatusText(m_pendingWesternDownloadVolume,
+                pct <= 0 ? QStringLiteral("...") : QStringLiteral("%1%").arg(pct));
+        return;
+    }
 }
 
 void ComicsPage::onChapterCompleted(const QString& source, const QString& seriesTitle,

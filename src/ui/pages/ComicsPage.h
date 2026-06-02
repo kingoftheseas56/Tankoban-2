@@ -334,6 +334,10 @@ private:
     void onChapterCompleted(const QString& source, const QString& seriesTitle,
                             const QString& chapterId, const QString& finalPath,
                             qint64 fileSize);
+    // COMICS_WESTERN RCO-as-source (2026-06-03): route a MangaDownloader
+    // downloadUpdated tick for the in-flight Western download to the Sources
+    // panel + volume tile (percent / Finding / No download found on error).
+    void updateWesternMangaStatus(const QString& recordId);
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 — assemble tiles from
     // folder-origin SeriesInfo (held inside m_tileStrip after scan) plus
     // Tankoyomi-origin records from m_tyLibrary->all(). Called from
@@ -623,6 +627,12 @@ private:
     // Sources-panel status keeps showing it across progress ticks. Empty until
     // resolve confirms; reset implicitly when the next download starts.
     QString            m_westernDownloadEdition;
+    // COMICS_WESTERN RCO-as-source (2026-06-03): the in-flight Western download
+    // now runs through MangaDownloader (RCO reader pages -> cbz). Track the
+    // record id + the clicked volume so MangaDownloader's downloadUpdated/
+    // chapterCompleted signals route status to the right Sources-panel + tile.
+    QString            m_westernDownloadRecordId;
+    int                m_pendingWesternDownloadVolume = 0;
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
     // index. Scans data/mangafire_catalog/*.json at construction; consulted

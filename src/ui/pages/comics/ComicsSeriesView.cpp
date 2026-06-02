@@ -2545,20 +2545,22 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
         // Fall back to empty strings when the volume has no record (graceful).
         QString editionTitle;
         QString tierLabel;
+        QString sourceHref;
         for (const tankoban::manga::MangaVolume& vol : m_currentMangaCatalog.volumes) {
             if (vol.volumeNumber == volumeNumber) {
                 editionTitle = vol.titleEnglish;
                 tierLabel    = vol.groupingLabel;
+                sourceHref   = vol.sourceHref;   // "/Comic/<slug>/<item>" — the RCO chapter
                 break;
             }
         }
         // Show a live download status surface immediately (the panel was dead for
         // Western before — Hemanth: "no sources for downloading"). ComicsPage
-        // updates this as resolve/progress/complete/fail signals arrive.
+        // updates this as the MangaDownloader progress/complete signals arrive.
         if (m_sourcesPanel) {
             m_sourcesPanel->setWesternDownloadStatus(QString(), tr("Finding..."));
         }
-        emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel);
+        emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel, sourceHref);
         return;
     }
 

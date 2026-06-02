@@ -1,5 +1,6 @@
 #include "ReadComicsScraper.h"
 #include "WesternSeriesParse.h"
+#include "ReadComicsPageParse.h"
 namespace western = tankoban::manga::western;
 
 #include <QNetworkAccessManager>
@@ -192,14 +193,13 @@ QList<ChapterInfo> ReadComicsScraper::parseChaptersHtml(const QString& html, con
     return chapters;
 }
 
-// ── Pages (reader — dead on plain HTTP, kept best-effort) ────────────────────
+// ── Pages (reader — descrambled via ReadComicsPageParse) ─────────────────────
 void ReadComicsScraper::fetchPages(const QString& chapterId)
 {
-    // chapterId format: "slug/item-slug". Reader images on rcostation are
-    // injected at runtime by an external obfuscation script (21wiz.com/s.js)
-    // and are invisible to a plain HTTP fetch — parsePagesHtml returns empty.
-    // Kept wired so the source degrades gracefully rather than erroring; the
-    // Western catalogue path downloads via GetComics, not RCO's reader.
+    // chapterId format: "slug/item-slug". rcostation scrambles its blogspot
+    // page-image URLs at runtime (rguard.min.js); parsePagesHtml now recovers
+    // them via the ported gallery-dl descramble (ReadComicsPageParse). This is
+    // the Western download page-source (RCO pages -> MangaDownloader -> cbz).
     QUrl url(BASE + "/Comic/" + chapterId);
 
     auto* reply = m_nam->get(makeRequest(url));
@@ -219,34 +219,16 @@ void ReadComicsScraper::fetchPages(const QString& chapterId)
     });
 }
 
-QList<PageInfo> ReadComicsScraper::parsePagesHtml(const QString& html, const QString& slug, const QString& issue)
+QList<PageInfo> ReadComicsScraper::parsePagesHtml(const QString& html,
+                                                  const QString& /*slug*/,
+                                                  const QString& /*issue*/)
 {
-    QList<PageInfo> pages;
-
-    // Legacy readcomicsonline shape: var pages = [{"page_image":"01.jpg"}, ...].
-    // rcostation obfuscates this (21wiz); the match simply fails → empty list.
-    static const QRegularExpression pagesRe(
-        R"(var\s+pages\s*=\s*(\[.*?\]);)",
-        QRegularExpression::DotMatchesEverythingOption);
-
-    auto m = pagesRe.match(html);
-    if (!m.hasMatch()) return pages;
-
-    auto doc = QJsonDocument::fromJson(m.captured(1).toUtf8());
-    auto arr = doc.array();
-
-    for (int i = 0; i < arr.size(); ++i) {
-        auto obj = arr[i].toObject();
-        QString pageImage = obj.value("page_image").toString();
-        if (pageImage.isEmpty()) continue;
-
-        PageInfo p;
-        p.index    = i;
-        p.imageUrl = BASE + "/uploads/manga/" + slug + "/chapters/" + issue + "/" + pageImage;
-        pages.append(p);
-    }
-
-    return pages;
+    // rcostation obfuscates the page-image list (rguard.min.js v1.5.8): the
+    // legacy `var pages=[...]` shape is gone and always returned empty on the
+    // live host. Recover the real blogspot URLs via the ported gallery-dl
+    // descramble (ReadComicsPageParse — pure + unit-tested). slug/issue are no
+    // longer needed: the descrambled URLs are absolute.
+    return tankoban::manga::readcomics::parseReaderPages(html);
 }
 
 // ── Detail (v1 merger) ──────────────────────────────────────────────────────
