@@ -1,0 +1,341 @@
+{
+  "summary": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
+  "agentCount": 105,
+  "logs": [
+    "Q: Find free, no-signup comic-reading WEBSITES usable as a programmatic source for …",
+    "Decomposed into 6 angles: Reddit/FMHY community recommendations, FMHY wiki + best free comic site lists, Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions, Image-delivery / scrapeability technical detail, rcostation obfuscation pattern + comparable sites, Self-host ingestion sources (Kavita/Komga/readarr/comic APIs)",
+    "FMHY wiki + best free comic site lists: 6 results",
+    "rcostation obfuscation pattern + comparable sites: 6 results",
+    "Image-delivery / scrapeability technical detail: 6 results",
+    "Image-delivery / scrapeability technical detail: 3 novel (3 filtered)",
+    "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions: 6 results",
+    "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions: 4 novel (2 filtered)",
+    "Reddit/FMHY community recommendations: 6 results",
+    "Reddit/FMHY community recommendations: 2 novel (4 filtered)",
+    "Self-host ingestion sources (Kavita/Komga/readarr/comic APIs): 6 results",
+    "Self-host ingestion sources (Kavita/Komga/readarr/comic APIs): 1 novel (5 filtered)",
+    "Fetched 22 sources → 103 claims → verifying top 25",
+    "\"readcomiconline.li (a readcomicsonline-family/rela…\": 0-3 ✗",
+    "\"An actively-maintained Go tool (comics-downloader,…\": 0-3 ✗",
+    "\"Multiple open-source comic scrapers target ReadCom…\": 2-1 ✓",
+    "\"A general-purpose CLI comic scraper (Girbons/comic…\": 1-2 ✗",
+    "\"What GetComics exposes are 'download links' (whole…\": 3-0 ✓",
+    "\"comick.io exposes a programmatically-accessible AP…\": 0-3 ✗",
+    "\"The readcomicsonline.ru domain (the source behind …\": 2-1 ✓",
+    "\"The maintainers of the keiyoushi/extensions-source…\": 3-0 ✓",
+    "\"Chapter page images on comick.io are obtainable pr…\": 1-2 ✗",
+    "\"The Read Comics Online extension issue was closed …\": 1-2 ✗",
+    "\"The ReadComicOnline source (keiyoushi extension) i…\": 1-2 ✗",
+    "\"Instead of serving real comic page images to a scr…\": 0-3 ✗",
+    "\"Multiple users on Mihon get a 'No pages found' err…\": 0-3 ✗",
+    "\"XOXO Comics is a comic site with a maintained Tach…\": 1-2 ✗",
+    "\"The XOXO Comics extension breakage was an extensio…\": 1-2 ✗",
+    "\"GetComics serves complete comic files as downloada…\": 3-0 ✓",
+    "\"readcomiconline.to (the readcomicsonline-family si…\": 3-0 ✓",
+    "\"getcomics.org (a.k.a. getcomics.info) is programma…\": 1-2 ✗",
+    "\"The CAPTCHA on readcomicsonline.to triggers repeat…\": 0-3 ✗",
+    "\"A known open-source scraper (gallery-dl) has a ded…\": 3-0 ✓",
+    "\"The readcomiconline-scraper no longer functions be…\": 0-3 ✗",
+    "\"GetComics delivers comics as full CBR/CBZ archive …\": 3-0 ✓",
+    "\"GetComics' only per-page 'READ ONLINE' viewing opt…\": 3-0 ✓",
+    "\"FMHY's top recommended free Western comic-reading …\": 2-1 ✓",
+    "\"FMHY lists BatCave (batcave.biz) as a free Western…\": 3-0 ✓",
+    "Verify done: 25 claims → 11 confirmed, 14 killed"
+  ],
+  "result": {
+    "question": "Find free, no-signup comic-reading WEBSITES usable as a programmatic source for a desktop comics app, as an alternative to readcomicsonline (now rcostation.xyz). rcostation has a huge catalogue + good metadata BUT hides page-image URLs behind a JS obfuscation script (21wiz / rguard.min.js; images live on blogspot but URLs are built at runtime), making page scraping very hard. I need a BETTER alternative meeting ALL of: (1) catalogue as extensive as readcomicsonline — large Western/American comics coverage (Marvel/DC/Image/indie), manga a bonus; (2) THE MAKE-OR-BREAK: page-image URLs must be obtainable from a plain HTTP request (in HTML, a JSON/AJAX endpoint, or a predictable URL pattern) — NOT hidden behind heavy JS obfuscation, NOT requiring a headless browser, NOT served only via MEGA/Mediafire/torrents, NOT behind login/paywall/captcha; (3) basic per-series metadata (title, cover, issue/chapter/volume list; synopsis/year/publisher a bonus); (4) free, no account required. For EACH candidate report: site name + current URL (+ mirrors); catalogue size/breadth; HOW page images are served (directly fetchable vs obfuscated/JS-built/DRM/hotlink-IP/UA-locked/MEGA — be specific, cite evidence); metadata available; signup/captcha/Cloudflare anti-bot?; any public API or known open-source SCRAPER (GitHub repos, Tachiyomi/Mihon/Kavita/Komga extensions, Python scrapers); and a scrapeability verdict EASY/MEDIUM/HARD with why. PRIORITISE REDDIT as a source — people ask this exact question constantly there and answers are current: search and cite r/Piracy (esp. the megathread + FMHY \"Free Media Heck Yeah\" wiki at fmhy.net), r/megalinks, r/DataHoarder, r/comicbooks, r/manga, r/selfhosted, r/Tachiyomi / r/mihonapp; threads like \"readcomicsonline alternatives\", \"best free comic reading site\", \"scrape comics site\", \"comic site with API\"; and GitHub comic-site scrapers. Quote/link the specific threads/wiki entries used. OUTPUT: a ranked shortlist (best first) of 5-10 candidate sites with the fields above, then a final recommendation of the top 1-2 that best balance catalogue breadth with EASY/MEDIUM scrapeability of the actual page images, explicitly flagging any site whose images are as locked-down as rcostation's.",
+    "summary": "The verified evidence does NOT surface a confirmed drop-in replacement for rcostation.xyz that satisfies all four criteria (extensive Western catalogue + plainly-fetchable per-page images + basic metadata + free/no-signup). Every candidate that would have been a clean win — comicextra.net/readallcomics.com via the Go comics-downloader, comick.io's API, XOXO Comics' Mihon extension, and GetComics-as-plain-HTML — FAILED adversarial verification and is reported only as refuted. What survives is mostly cautionary: GetComics (the most-corroborated alternative) is an archive-download source (CBR/CBZ via TeraBox/Rootz/VikingFile/PixelDrain/MEGA/Mediafire), not a per-page-image source, and its only \"Read Online\" path redirects straight back to readcomicsonline.ru — so it inherits rather than solves rcostation's obfuscation problem. The rest of the readcomicsonline/readcomiconline family is either dead (readcomicsonline.ru returns HTTP 521 and is labeled \"closed and dead\" by Mihon maintainers as of 2025-09-07) or hard-locked (readcomiconline.to/.li behind Cloudflare + a recurring AreYouHuman CAPTCHA that even gallery-dl can only clear via a manual human solve). FMHY — the wiki the question prioritised — still lists ReadComicOnline at rcostation.xyz as its #1 free Western reader, offering no clearly-superior alternative (its runners-up are BatCave, flagged \"May Require VPN,\" and GetComics, a download site). Net: based on verified claims, no surviving candidate is confirmed EASY/MEDIUM for per-page-image scraping with rcostation-class catalogue breadth; the most promising direction is a delivery-MODEL pivot toward GetComics-style whole-archive (CBR/CBZ) ingestion rather than per-page streaming, accepting its ad-redirect/file-host friction.",
+    "findings": [
+      {
+        "claim": "GetComics is the most-corroborated alternative, but it uses a fundamentally different (archive-download) delivery model — not per-page image URLs. It serves whole comics as .CBR/.CBZ/.zip archives via third-party file hosts (TeraBox, Rootz, VikingFile, PixelDrain, MEGA, Mediafire), not as inline fetchable page images.",
+        "confidence": "high",
+        "vote": "3-0 (across claims [1],[4],[7])",
+        "sources": [
+          "https://getcomics.org/",
+          "https://github.com/Jupiee/getcomics-api",
+          "https://github.com/csandman/get-comics",
+          "https://getcomics.org/how-to-download"
+        ],
+        "evidence": "Primary-source code (Jupiee/getcomics-api Schemas/schemas.py) exposes only Title/Year/Cover/Size/Description/DownloadLinks; scraper.py extracts only div.aio-pulse download buttons and the series cover img — NO per-page image loop. Live 2026 GetComics pages (Daredevil #1 2026, Good as Dead TPB) show buttons DOWNLOAD NOW/TERABOX/ROOTZ/VIKINGFILE/PIXELDRAIN/MEGA/FILEQ and state files are 'packed on .CBR and/or .CBZ file formats.' Official /how-to-download confirms filehost delivery (Userscloud/Mega/Mediafire/Zippyshare) requiring a reader app + 7-Zip. At least 6 independent OSS scrapers (csandman/get-comics, UlucKaymak/getcomics-downloader, Theuniquejimmy, DiverseBloom780, Gink3/ComicScraper, Girbons/comics-downloader) all treat it as an archive source, never per-page scraping. This overlaps the question's own disqualifier ('NOT served only via MEGA/Mediafire/torrents'), but the archive model is a genuinely different (and for some use-cases easier) problem class than runtime-JS page obfuscation."
+      },
+      {
+        "claim": "GetComics does NOT independently solve rcostation's obfuscated-page-image problem: its only per-page 'READ ONLINE' viewing option routes directly to readcomicsonline.ru — the exact site (now rcostation.xyz) the research seeks to replace — so it inherits the obfuscation rather than offering an independent fetchable page-image source.",
+        "confidence": "high",
+        "vote": "3-0 (claim [8])",
+        "sources": [
+          "https://getcomics.org/",
+          "https://getcomics.org/dc/absolute-superman-18-2026/",
+          "https://getcomics.org/dc/dc-marvel-superman-spider-man-1-2026/"
+        ],
+        "evidence": "Two live 2026 GetComics pages were fetched: the 'Read Online' button on absolute-superman-18-2026 links to https://readcomicsonline.ru/comic/absolute-superman-2024/18, and on dc-marvel-superman-spider-man-1-2026 links to https://readcomicsonline.ru/comic/dc-marvel-superman-spiderman-2026/1. Both route to readcomicsonline.ru, which the question states is the same site now hosted as rcostation.xyz. GetComics has no native in-browser per-page reader of its own. Scope note: this applies ONLY to the READ ONLINE viewing path; GetComics' direct CBR/CBZ download links do NOT inherit the obfuscation problem (see prior finding)."
+      },
+      {
+        "claim": "ReadComicsOnline (readcomicsonline.ru, rcostation's lineage) was historically scrapeable — multiple open-source scrapers named it as their direct target (acgonzales/comickaze, FishiTM/ReadComicsOnline-Downloader), predating the current 21wiz/rguard JS obfuscation.",
+        "confidence": "high",
+        "vote": "2-1 (claim [0])",
+        "sources": [
+          "https://github.com/topics/comics-scraper",
+          "https://github.com/acgonzales/comickaze",
+          "https://github.com/FishiTM/ReadComicsOnline-Downloader"
+        ],
+        "evidence": "acgonzales/comickaze README states verbatim 'A package to search and download comics on ReadComicsOnline.ru' with example URL https://readcomicsonline.ru/comic/batman-the-adventures-continue-2020; FishiTM/ReadComicsOnline-Downloader is a confirmed Python repo described as 'Simple Python Script To Download From readcomicsonline.ru Site.' CORRECTION to original claim: the third repo cited (Girbons/comics-scraper) does NOT target readcomicsonline.ru (it targets comicextra.com, mangareader.net, mangahere.cc, readcomiconline.to — the no-'s' SIBLING site). So the verified count is TWO repos, not three. Practical relevance is limited: these scrapers predate rcostation's current runtime-JS page-image obfuscation, so they demonstrate historical, not current, scrapeability."
+      },
+      {
+        "claim": "The readcomicsonline.ru domain (Mihon/Tachiyomi 'Read Comics Online' extension source) is unreliable/dead: it returned HTTP 521 with Cloudflare 'Always Online' Wayback snapshots, and Mihon maintainers officially classified it 'Source is down — the source website is closed and dead' (as of 2025-09-07). It should NOT be relied on as a stable scrape source.",
+        "confidence": "high",
+        "vote": "2-1 / 3-0 (claims [2],[3])",
+        "sources": [
+          "https://github.com/keiyoushi/extensions-source/issues/10428"
+        ],
+        "evidence": "keiyoushi/extensions-source issue #10428 ('Read Comics Online is Down', opened 2025-09-07, closed not planned) shows HTTP 521, the verbatim Cloudflare 'Always Online' offline-snapshot message for readcomicsonline.ru, and exactly one applied label: 'Source is down' / 'The source website is closed and dead.' Point-in-time claim, correctly dated. CAVEAT: current (Apr-May 2026) uptime is MIXED/intermittent (updownradar 'up'; downornot 'degraded'; Fandom Pulse 'dead URL') — i.e. unreliable, not provably permanently dead. Also distinct from rcostation.xyz, which remains the LIVE successor catalogue — this finding does not assert rcostation itself is down."
+      },
+      {
+        "claim": "The readcomiconline.to/.li family (sibling of rcostation) is HARD to scrape: it gates automated access behind a Cloudflare challenge PLUS a recurring 'AreYouHuman' CAPTCHA. gallery-dl has a dedicated readcomiconline extractor module but cannot bypass the gate automatically — it pauses for a manual human CAPTCHA-solve / browser-cookie workaround. Recommend AGAINST it as a candidate.",
+        "confidence": "high",
+        "vote": "3-0 (claims [5],[6])",
+        "sources": [
+          "https://github.com/mikf/gallery-dl/issues/279",
+          "https://github.com/mikf/gallery-dl/discussions/2625",
+          "https://github.com/mikf/gallery-dl/blob/master/gallery_dl/extractor/readcomiconline.py"
+        ],
+        "evidence": "gallery-dl issue #279 (2019) shows the Cloudflare challenge; discussion #2625 (2022) shows redirect to https://readcomiconline.li/Special/AreYouHuman?reUrl=... with 'solve the CAPTCHA to continue.' The extractor source readcomiconline.py detects '/AreYouHuman' redirects and emits 'Visit this URL in your browser, solve the CAPTCHA, and press ENTER to continue' — i.e. it deliberately pauses for a human; it does NOT auto-solve. Corroborated 2019->2022->2024/2025 across issues #6070, #6335, #2481, Suwayomi #271, cloudflare-scrape #372. NUANCE: gate is intermittent (IP/cookie/UA-dependent; issue #7890 July 2025 saw HTTP 200 with no CAPTCHA), so it is a recurring barrier rather than an invariable wall — but unattended bulk scraping is not reliable. CITATION DEFECTS (do not change verdict): the AreYouHuman quote actually lives in discussion #2625, not issue #279; one decorative quote in claim [6] could not be located but the substance is proven by the extractor source code."
+      },
+      {
+        "claim": "FMHY (the priority wiki named in the question) offers NO clearly-superior free Western comic-reading alternative: its #1 listed reader is still ReadComicOnline at the rcostation.xyz mirror — the exact site to be replaced. Its runners-up are BatCave (batcave.biz, flagged 'May Require VPN') and GetComics (a download site).",
+        "confidence": "medium",
+        "vote": "2-1 / 3-0 (claims [9],[10])",
+        "sources": [
+          "https://fmhy.net/reading",
+          "https://fmhy.net/readingpiracyguide",
+          "https://batcave.biz/"
+        ],
+        "evidence": "Live fetch of fmhy.net/reading (June 2026) lists the Comics section in order: (1) **[ReadComicOnline](https://rcostation.xyz/)** — listed FIRST; (2) **[BatCave](https://batcave.biz/)** - May Require VPN; (3) GetComics (getcomics.org, 'Download Comics'). Both canonical FMHY reading URLs contain the verbatim BatCave 'May Require VPN' line. Source is secondary (a curated wiki, not primary site behavior), hence medium confidence. BatCave is an under-evaluated lead: it is a live free comic reader (corroborated by pi.fyi/TikTok community posts) but its page-image delivery mechanism, anti-bot posture, and catalogue breadth were NOT verified here — and the VPN flag implies geo/IP friction. Note the question's FMHY claim about a formal star 'top pick' marker could not be confirmed (GitHub wiki page errored); only listing order is substantiated."
+      }
+    ],
+    "caveats": "EVIDENCE IS LOPSIDEDLY NEGATIVE: the adversarial verification REFUTED every candidate that would have been a clean win, so this report cannot recommend a confirmed EASY/MEDIUM per-page-image replacement. Specifically refuted (treat as NOT viable on current evidence): (a) the Go tool Girbons/comics-downloader scraping comicextra.net/readallcomics.com as plain fetchable page images (0-3); (b) comick.io having a programmatically-accessible API / cURL-fetchable chapter images (0-3 and 1-2 — note comick.io is manga-focused anyway, weak for the Western/Marvel/DC catalogue requirement); (c) XOXO Comics being a viable Western source via its Mihon extension (1-2); (d) getcomics.org being scrapeable via plain HTML with no anti-bot barrier (1-2 — its file URLs sit behind ad-redirect 'Skip This Ad' safelinks and rotating mirror hosts). TIME-SENSITIVITY: piracy-site status is highly volatile — readcomicsonline.ru's death is intermittent/disputed (mixed Apr-May 2026 signals), mirror domains rotate, and the readcomiconline CAPTCHA gate is IP/cookie/UA-dependent rather than constant; any candidate must be re-probed live before integration. CITATION HYGIENE: two supporting quotes for the readcomiconline finding were misattributed across gallery-dl thread numbers (substance still proven by extractor source code), and the GetComics 'host set' (DATANODES) rotates per post. SOURCE QUALITY: the strongest findings rest on primary sources (GitHub repo code, live site fetches, the Mihon issue tracker); the FMHY ranking finding rests on a secondary curated wiki. Critically, NONE of the surviving candidates was verified to serve per-page images via a plain HTTP request the way the make-or-break criterion demands — the closest viable direction is a delivery-MODEL change (whole-archive CBR/CBZ ingestion à la GetComics), which trades the obfuscation problem for an ad-redirect/file-host-parsing problem and forfeits in-app per-page streaming.\"\n",
+    "openQuestions": [
+      "BatCave (batcave.biz) is FMHY's #2 Western reader but was never evaluated for the make-or-break criterion: HOW does it serve page images (plain HTML/JSON/predictable URL vs JS-obfuscated like rcostation)? What is its catalogue breadth, anti-bot posture, and the real scope of the 'May Require VPN' flag (geo-block vs IP-ban)? This is the single most promising unexamined lead.",
+      "If a whole-archive (CBR/CBZ) ingestion model is acceptable, what is the most reliable programmatic path through GetComics' ad-redirect/safelink layer to the underlying file-host download URL without a headless browser — and which mirror host (PixelDrain/Datanodes/direct) is most consistently scriptable and not IP/UA-locked?",
+      "Does any non-readcomicsonline-family site combine rcostation-class WESTERN catalogue breadth (Marvel/DC/Image/indie) WITH plainly-fetchable per-page image URLs? Every Western reader verified here either inherits rcostation's obfuscation, is dead, or is CAPTCHA-walled — the search space for a true EASY/MEDIUM Western per-page candidate remains effectively unsolved.",
+      "Could the rcostation 21wiz/rguard.min.js obfuscation itself be reverse-engineered into a deterministic URL-builder (the page-image URLs are constructed at runtime but ultimately resolve to blogspot CDN paths) — making the existing huge-catalogue source usable without a headless browser, rather than hunting for a replacement at all?"
+    ],
+    "refuted": [
+      {
+        "claim": "An actively-maintained Go tool (comics-downloader, release v0.33.9 dated Feb 28 2024) successfully scrapes comicextra.net and readallcomics.com with no caveat markers, demonstrating both Western-comic sites serve page images via plain fetchable requests that a non-headless HTTP scraper can resolve.",
+        "vote": "0-3",
+        "source": "https://github.com/Girbons/comics-downloader"
+      },
+      {
+        "claim": "readcomiconline.li (a readcomicsonline-family/relative site) is flagged with a warning marker in the tool, indicating it has issues or limitations for scraping — consistent with the research question's premise that the rco family hides images behind anti-scrape JS.",
+        "vote": "0-3",
+        "source": "https://github.com/Girbons/comics-downloader"
+      },
+      {
+        "claim": "A general-purpose CLI comic scraper (Girbons/comics-scraper) targets four distinct sites including ComicExtra and ReadComics, showing multiple Western/manga sites were scrapeable via a Python tool that downloads to PDF.",
+        "vote": "1-2",
+        "source": "https://github.com/topics/comics-scraper"
+      },
+      {
+        "claim": "comick.io exposes a programmatically-accessible API with a large, active third-party tooling ecosystem (22 repos under the 'comick' topic: PHP API class, a Next.js RESTful scraper API, browser download extensions, an offline reader, and an API proxy), indicating it is a viable programmatic comic/manga source.",
+        "vote": "0-3",
+        "source": "https://github.com/topics/comick"
+      },
+      {
+        "claim": "Chapter page images on comick.io are obtainable programmatically via plain HTTP (cURL) without a headless browser — the ComickIoAPI PHP class fetches chapter images and downloads them, requiring only PHP 7.4+ with cURL, not JS rendering or a browser.",
+        "vote": "1-2",
+        "source": "https://github.com/topics/comick"
+      },
+      {
+        "claim": "The Read Comics Online extension issue was closed as 'not planned', meaning the maintainers will take no action to fix or restore the source — confirming it is treated as permanently defunct.",
+        "vote": "1-2",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/10428"
+      },
+      {
+        "claim": "The ReadComicOnline source (keiyoushi extension) is deliberately/actively breaking the Mihon/Tachiyomi extension's page-image scraping to force users onto its own website, per a project contributor.",
+        "vote": "1-2",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/9333"
+      },
+      {
+        "claim": "Instead of serving real comic page images to a scraper, the source returns an identical placeholder image directing the reader to view the comic on the site itself.",
+        "vote": "0-3",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/9333"
+      },
+      {
+        "claim": "Multiple users on Mihon get a 'No pages found' error when opening issues from this readcomics-family source, i.e. page-image URLs are not obtainable via the plain extension request.",
+        "vote": "0-3",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/9333"
+      },
+      {
+        "claim": "XOXO Comics is a comic site with a maintained Tachiyomi/Mihon scraping extension (in the Keiyoushi extensions-source repo, version 1.4.5), confirming it is a viable programmatic source candidate for Western/American comics.",
+        "vote": "1-2",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/8"
+      },
+      {
+        "claim": "The XOXO Comics extension breakage was an extension-specific parsing/code issue, not site-side anti-bot blocking, since the site loads fine in a plain webview.",
+        "vote": "1-2",
+        "source": "https://github.com/keiyoushi/extensions-source/issues/8"
+      },
+      {
+        "claim": "getcomics.org (a.k.a. getcomics.info) is programmatically scrapeable via plain HTML parsing — the tool extracts comic links directly from the site's pages and can save them to a links_<DateTime>.json file, with no documented Cloudflare/CAPTCHA/login/anti-bot barrier.",
+        "vote": "1-2",
+        "source": "https://github.com/csandman/get-comics"
+      },
+      {
+        "claim": "The CAPTCHA on readcomicsonline.to triggers repeatedly during bulk scraping (roughly every 3 issues), so a single solve is not durable and the scrape cannot run unattended.",
+        "vote": "0-3",
+        "source": "https://github.com/mikf/gallery-dl/issues/279"
+      },
+      {
+        "claim": "The readcomiconline-scraper no longer functions because the site added server-side anti-scraping protections, demonstrating that readcomiconline (sibling of rcostation.xyz) is now HARD to scrape.",
+        "vote": "0-3",
+        "source": "https://github.com/kkohoutek/readcomiconline-scraper/blob/main/README.md"
+      }
+    ],
+    "sources": [
+      {
+        "url": "https://github.com/Girbons/comics-downloader",
+        "quality": "primary",
+        "angle": "Reddit/FMHY community recommendations",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/topics/comics-scraper",
+        "quality": "primary",
+        "angle": "Reddit/FMHY community recommendations",
+        "claimCount": 5
+      },
+      {
+        "url": "https://fmhy.net/reading",
+        "quality": "secondary",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/edimusxero/Comic-Grabber",
+        "quality": "blog",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/Jupiee/getcomics-api",
+        "quality": "primary",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/fmhy/FMHY/wiki/%F0%9F%93%97-Books---Comics---Manga",
+        "quality": "secondary",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/KotatsuApp/kotatsu-parsers/issues/1417",
+        "quality": "forum",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/topics/comick",
+        "quality": "primary",
+        "angle": "FMHY wiki + best free comic site lists",
+        "claimCount": 5
+      },
+      {
+        "url": "https://deepwiki.com/keiyoushi/extensions/5.1-manga-and-comic-sources",
+        "quality": "secondary",
+        "angle": "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/10428",
+        "quality": "primary",
+        "angle": "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/6811",
+        "quality": "forum",
+        "angle": "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/4814",
+        "quality": "forum",
+        "angle": "Open-source scrapers / Tachiyomi-Mihon-Kavita-Komga extensions",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/9333",
+        "quality": "primary",
+        "angle": "Image-delivery / scrapeability technical detail",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/8",
+        "quality": "primary",
+        "angle": "Image-delivery / scrapeability technical detail",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/csandman/get-comics",
+        "quality": "primary",
+        "angle": "Image-delivery / scrapeability technical detail",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/keiyoushi/extensions-source/issues/4115",
+        "quality": "forum",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/Xonshiz/comic-dl/issues/299",
+        "quality": "forum",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/mikf/gallery-dl/issues/279",
+        "quality": "primary",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/FlareSolverr/FlareSolverr",
+        "quality": "primary",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/kkohoutek/readcomiconline-scraper/blob/main/README.md",
+        "quality": "primary",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 4
+      },
+      {
+        "url": "https://getcomics.org/",
+        "quality": "primary",
+        "angle": "rcostation obfuscation pattern + comparable sites",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/m4xy07/ReadAllComics-to-PDF-Downloader",
+        "quality": "secondary",
+        "angle": "Self-host ingestion sources (Kavita/Komga/readarr/comic APIs)",
+        "claimCount": 5
+      }
+    ],
+    "stats": {
+      "angles": 6,
+      "sourcesFetched": 22,
+      "claimsExtracted": 103,
+      "claimsVerified": 25,
+      "confirmed": 11,
+      "killed": 14,
+      "afterSynthesis": 6,
+      "urlDupes": 8,
+      "budgetDropped": 6,
+      "agentCalls": 105
+    }
+  }
+}
