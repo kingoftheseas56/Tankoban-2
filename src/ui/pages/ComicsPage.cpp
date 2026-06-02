@@ -1009,6 +1009,14 @@ void ComicsPage::wireWesternDownloader()
             return;
         }
 
+        // Snapshot the live page state ONCE up front (Codex review 2026-06-02):
+        // the shelf write + requestVolume below must agree on the same series
+        // even if a synchronous UI mutation (refreshWesternGrid, etc.) touches a
+        // member mid-lambda. Use these copies, not the members, from here on.
+        const QString     seriesId    = m_pendingWesternSeriesId;
+        const QJsonObject seriesJson  = m_pendingWesternJson;
+        const QString     seriesTitle = m_currentDetailSeriesTitle;
+
         // Compute destination path: use the comics-root from TorrentClient if
         // available, otherwise fall back next to the Western data dir.
         QString comicsRoot;
@@ -1021,12 +1029,12 @@ void ComicsPage::wireWesternDownloader()
         }
 
         // Sanitise the series title to a safe directory name.
-        QString safeTitle = m_currentDetailSeriesTitle;
+        QString safeTitle = seriesTitle;
         static const QRegularExpression kUnsafeDirChars(
             QStringLiteral("[\\\\/:*?\"<>|]"));
         safeTitle.replace(kUnsafeDirChars, QStringLiteral("_"));
         safeTitle = safeTitle.trimmed();
-        if (safeTitle.isEmpty()) safeTitle = m_pendingWesternSeriesId;
+        if (safeTitle.isEmpty()) safeTitle = seriesId;
 
         const QString destPath = QDir(comicsRoot).absoluteFilePath(safeTitle);
         if (!QDir().mkpath(destPath)) {
@@ -1041,11 +1049,11 @@ void ComicsPage::wireWesternDownloader()
         // a second time is harmless (QSaveFile overwrites).
         const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
         const QString shelfPath =
-            QDir(dir).absoluteFilePath(m_pendingWesternSeriesId + QStringLiteral(".json"));
-        if (!m_pendingWesternJson.isEmpty() && !QFile::exists(shelfPath)) {
+            QDir(dir).absoluteFilePath(seriesId + QStringLiteral(".json"));
+        if (!seriesJson.isEmpty() && !QFile::exists(shelfPath)) {
             QDir().mkpath(dir);
             const QByteArray bytes =
-                QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented);
+                QJsonDocument(seriesJson).toJson(QJsonDocument::Indented);
             QSaveFile sf(shelfPath);
             if (sf.open(QIODevice::WriteOnly) &&
                 sf.write(bytes) == bytes.size() &&
@@ -1055,24 +1063,22 @@ void ComicsPage::wireWesternDownloader()
             }
         }
 
-        // Year comes from m_currentDetailSeriesTitle's catalog — retrieve it
-        // from the series view's current catalog via m_pendingWesternJson year field.
+        // Year for the GetComics match year-bonus. The Western JSON schema field
+        // is "yearStart" (what WesternCatalogLoader reads into publishedYearStart);
+        // accept a couple of aliases defensively. 0 is fine — the matcher's hard
+        // gates don't depend on it; year only adds a ranking/tie-break bonus.
         int year = 0;
-        const auto yearVal = m_pendingWesternJson.value(QStringLiteral("year"));
-        if (yearVal.isDouble()) year = static_cast<int>(yearVal.toDouble());
-        if (year <= 0) {
-            const auto publishedVal =
-                m_pendingWesternJson.value(QStringLiteral("publishedYear"));
-            if (publishedVal.isDouble())
-                year = static_cast<int>(publishedVal.toDouble());
+        for (const char* k : {"yearStart", "year", "publishedYear"}) {
+            const auto v = seriesJson.value(QLatin1String(k));
+            if (v.isDouble()) { year = static_cast<int>(v.toDouble()); if (year > 0) break; }
         }
 
         qInfo("ComicsPage: Western download requested — series=%s vol=%d dest=%s",
-              qUtf8Printable(m_pendingWesternSeriesId),
+              qUtf8Printable(seriesId),
               volumeNumber,
               qUtf8Printable(destPath));
 
-        m_westernDownloader->requestVolume(m_pendingWesternSeriesId, volumeNumber,
+        m_westernDownloader->requestVolume(seriesId, volumeNumber,
                                            editionTitle, year, tierLabel, destPath);
     });
 
