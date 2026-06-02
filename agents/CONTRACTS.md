@@ -224,7 +224,7 @@ The brotherhood's 21-skill discipline (per `CLAUDE.md` § Required Skills & Prot
 ### Format
 
 ```
-READY TO COMMIT - [Agent N, Tag]: <message> | Skills invoked: [/skill1, /skill2, /skill3] | files: <paths>
+READY TO COMMIT - [Agent N, Tag]: <message> | Skills invoked: [/skill1, /skill2, /skill3] | Done-when: <acceptance criteria> | files: <paths>
 ```
 
 - ASCII delimiters per Rule 16 (` | ` between sections; commas inside the list).
@@ -232,6 +232,10 @@ READY TO COMMIT - [Agent N, Tag]: <message> | Skills invoked: [/skill1, /skill2,
 - Order does not matter; deduplicate if a skill fired multiple times.
 - Trivial RTCs (per § Trivial vs Non-trivial below) MAY omit the field entirely — the hook will not nag.
 - Field placement is **between** the message body and `| files:` (which stays terminal so commit-sweeper's regex anchor stays stable).
+
+### Done-when — the Definition of Done (added 2026-06-02)
+
+Non-trivial RTCs SHOULD carry a `Done-when:` field — a one-line written statement of what "done" means for this work (the acceptance criteria the reviewer + Agent 0 verify the diff against). This is the intent half of the Review Gate (`GOVERNANCE.md` § Review Gate): a reviewer with no written DoD checks "code against code, not code against intent." If the work came from a plan / fix-TODO, the `Done-when` is a one-line distillation of that plan's Acceptance Criteria; for ad-hoc work, state it fresh. Example: `Done-when: Western series view shows cover + sources gate within 1 frame, no Loading hang on editionless series`. Same placement rule (before terminal `| files:`), same trivial-exemption, same honest-under-listing-over-padding ethic as Skills invoked.
 
 ### Trivial vs Non-trivial
 

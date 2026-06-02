@@ -583,3 +583,14 @@ Some rules are too important to leave to "the model will follow CLAUDE.md." Writ
 3. **agents/ weight** — build binaries (`.dll/.lib/.exe/.so/.bin`) or >10 MB files tracked under `agents/`.
 
 Behavioral/judgment rules (Hemanth-language, "don't menu Hemanth", commit cadence) CANNOT be mechanically gated and stay convention-enforced above. This gate is the floor for the rules that, if broken, are catastrophic (a leaked key) or silently rot the system (a dangling pointer). **Extend it only when a new rule is both must-hold AND deterministically checkable** — don't dilute it with judgment calls. Run locally: `powershell -NoProfile -File scripts/governance-gate.ps1`.
+
+## Review Gate — verify against a written Definition of Done (added 2026-06-02)
+
+Cross-model review (Codex/Agent 9 reviewing a brother's diff) is necessary but INSUFFICIENT on its own. Per deep-research 2026-06-02: a reviewer without a written specification checks "code against code, not code against intent" — it shares blind spots with the author and cannot flag what was never specified. Diversity (a different model) reduces correlated error; a written spec eliminates the circularity. **Both are required**, and we had only the diversity half.
+
+So every non-trivial review checks the diff against a **Definition of Done (DoD)** — the written acceptance criteria — not just for code correctness:
+
+1. **The work carries its intent.** A plan / fix-TODO already has an Acceptance Criteria section; that IS the DoD. For ad-hoc work, the RTC carries a `Done-when:` field (see `CONTRACTS.md`).
+2. **The review handoff includes the DoD.** When you hand a diff to a reviewer (Codex/Agent 9), give them the DoD and ask them to confirm the diff SATISFIES each criterion AND flag anything the diff does that the DoD never asked for. Package it with `/codex-review`.
+3. **Producer != reviewer.** Never let the model that produced the code be its only reviewer — a model silently endorses ~1-in-3 of its own semantic-drift bugs while able to articulate the exact defect (deep-research 2026-06-02). The reviewer is always a different model/agent.
+4. **Honesty:** this is convention-strength — "I checked against the DoD" is judgment and cannot be CI-gated. What IS mechanical: the `/codex-review` handoff template REQUIRES a DoD, so the reviewer always has the intent in hand. Pairs with the must-hold CI gate above (gate = catastrophic/rot caught mechanically; Review Gate = "plausible-but-wrong / off-intent" caught by a different model checking written criteria).
