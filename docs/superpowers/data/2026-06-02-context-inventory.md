@@ -41,5 +41,19 @@ src/ui/pages/{comics,stream,tankolibrary,tankorent,tankoyomi}, src/ui/player.
 | docs/superpowers/specs | 62 | 1.4M |
 | docs/superpowers/plans | 81 | 4.2M |
 
-## Read (post-refactor numbers appended in Task 8)
-_(to be filled after execution)_
+## After-refactor (2026-06-02)
+
+| Thing | Before | After |
+|---|---|---|
+| `CLAUDE.md` kernel | 185 lines / 28K | **108 lines** (churn + reference moved out) |
+| `agents/_archive/` | 120 MB | **3.9 MB** (stray 115MB libmpv binary reclaimed) |
+| memory freshness | 0/183 typed | **183 OK, 0 missing, 0 stale** |
+| dangling kernel pointers | — | **0** |
+
+**New files created:** `agents/STATUS.md` (live state, 38L) · `agents/ACTIVE_TODOS.md` (24L) · `agents/BUILD.md` (full tooling, 19L) · `agents/routes.yml` (owner+task→files router, 36L) · `scripts/memory_lint.py` (freshness linter).
+
+**What moved where:** the mutable 30-Second Dashboard → STATUS.md; Active Fix TODOs table → ACTIVE_TODOS.md; full tiered skills catalog → GOVERNANCE.md (Tier-1 kept in kernel); full Build Quick Reference → BUILD.md (3 essentials kept). The load-bearing HEMANTH'S ROLE block stayed in the kernel intact.
+
+**Deliberately NOT done:** `.git` history bloat (would need shared-history rewrite — too risky); the 156MB of untracked smoke PNGs (brotherhood evidence, left in place, harmless to repo); compiled-context/task-packs (Codex's higher-build idea — revisit after this proves out).
+
+**Backups (off-git, recoverable):** `~/tankoban_context_backup_2026-06-02/{audits,_archive,memory_predfreshness}`.
