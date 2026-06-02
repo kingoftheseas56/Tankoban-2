@@ -65,6 +65,10 @@ jobs:
         shell: pwsh
         run: ./scripts/netseam-gate.ps1
 
+      - name: Governance gate — must-hold invariants (no leaked secrets / routes.yml resolves / agents weight)
+        shell: pwsh
+        run: ./scripts/governance-gate.ps1
+
       - name: CMake configure (preset default — vcpkg installs deps)
         run: cmake --preset default
         env:

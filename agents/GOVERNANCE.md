@@ -573,3 +573,13 @@ These are not per-batch rules. They are periodic maintenance Agent 0 runs at ses
 ### STATUS.md header
 
 - Two fields at top: `Last header touch` (Agent 0 bumps on any non-section edit), `Last agent-section touch` (any agent bumps when they overwrite their own block, per Rule 12).
+
+## Must-hold invariants — CI-enforced (governance gate, added 2026-06-02)
+
+Some rules are too important to leave to "the model will follow CLAUDE.md." Written rules AND PreToolUse hooks are both dodgeable — subagents skip the parent session's hooks, Bash heredoc/redirect writes evade name-based Write/Edit gates, and a model can edit its own hook config (all Anthropic-acknowledged, 2026-06; see deep-research 2026-06-02). So the brotherhood's **must-hold, mechanically-checkable** invariants are backed by a deterministic CI BLOCK: `scripts/governance-gate.ps1`, run in `.github/workflows/build.yml` (sibling to the NetSeam gate). It fails the build on:
+
+1. **Leaked secrets** — any API-key-shaped string (`sk-…`, `sk-ant-…`, `AIzaSy…`) in a tracked file. Secrets live in env / a gitignored `.env` ONLY.
+2. **routes.yml drift** — `agents/routes.yml` pointing at a file that no longer exists (doc-vs-code rot as files move).
+3. **agents/ weight** — build binaries (`.dll/.lib/.exe/.so/.bin`) or >10 MB files tracked under `agents/`.
+
+Behavioral/judgment rules (Hemanth-language, "don't menu Hemanth", commit cadence) CANNOT be mechanically gated and stay convention-enforced above. This gate is the floor for the rules that, if broken, are catastrophic (a leaked key) or silently rot the system (a dangling pointer). **Extend it only when a new rule is both must-hold AND deterministically checkable** — don't dilute it with judgment calls. Run locally: `powershell -NoProfile -File scripts/governance-gate.ps1`.
