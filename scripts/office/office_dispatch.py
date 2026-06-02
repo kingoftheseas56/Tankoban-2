@@ -83,6 +83,9 @@ CAP_WINDOW = int(os.environ.get("OFFICE_SPAWN_CAP_WINDOW", "3600"))    # window 
 LOCK_STALE = int(os.environ.get("OFFICE_LOCK_STALE", "1800"))         # stale per-target lock (s)
 ACTIVE_WINDOW = int(os.environ.get("OFFICE_ACTIVE_WINDOW", "90"))     # recent bus post => live (s)
 ACK_TIMEOUT = int(os.environ.get("OFFICE_ACK_TIMEOUT", "90"))         # wait for a live-routed brother to reply (s)
+ACK_KINDS = ("chat", "ack", "blocked")                               # post kinds that count as a real reply (NOT 'activity')
+FALLBACK_RETRY = int(os.environ.get("OFFICE_FALLBACK_RETRY", "30"))   # held-fallback retry backoff (s)
+FALLBACK_MAX_TRIES = int(os.environ.get("OFFICE_FALLBACK_MAX_TRIES", "10"))  # surface to Hemanth after N held attempts
 MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "opus")  # summoned brothers wake as their real self, not a cheap shadow
 
 
@@ -288,9 +291,16 @@ def resolve_pending(pending, bus_records, now):
     """Re-evaluate live-routed summons. A pending is RESOLVED (dropped) when its target
     posted anything with seq > the summon seq (he answered / is clearly alive). Otherwise,
     once `now` passes the deadline it goes to fallback (a background spawn). Returns
-    (still_open, to_fallback) — both lists. Pure: no side effects."""
+    (still_open, to_fallback) — both lists. Pure: no side effects.
+
+    Only a REAL reply counts as an ack: kinds in ACK_KINDS (chat/ack/blocked). An
+    'activity' line (commit-mirror) is NOT an ack — watch-peek skips activity, so it
+    never woke him; counting it would let a brother's own commit cancel his own
+    un-delivered summon (the black-hole this whole mechanism exists to prevent)."""
     max_posted = {}
     for r in bus_records:
+        if r.get("kind") not in ACK_KINDS:
+            continue
         frm = r.get("from")
         s = r.get("seq")
         if isinstance(s, int) and (frm not in max_posted or s > max_posted[frm]):
@@ -306,21 +316,44 @@ def resolve_pending(pending, bus_records, now):
     return still, fallback
 
 
+def reconcile_fallback(fallback, spawn_results, now, retry_delay, max_tries):
+    """After attempting each fallback spawn, decide what stays pending. `spawn_results`
+    is aligned with `fallback`: True = spawned (resolved), False = HELD (per-target lock
+    busy / spawn cap reached / OSError). A HELD entry is KEPT — deadline bumped to
+    now+retry_delay, tries+1 — so it RETRIES instead of being silently dropped (the bug
+    that re-opened the black-hole). After max_tries held attempts it's surfaced to the
+    summoner (gave_up) rather than retried forever. Returns (kept_pending, gave_up)."""
+    kept, gave_up = [], []
+    for p, ok in zip(fallback, spawn_results):
+        if ok:
+            continue  # spawned -> resolved
+        tries = p.get("tries", 0) + 1
+        if tries >= max_tries:
+            gave_up.append(p)
+        else:
+            kept.append({**p, "deadline": now + retry_delay, "tries": tries})
+    return kept, gave_up
+
+
 # ── pending-summons persistence (survives a dispatcher restart) ──────────────
 def PENDING_FILE():
     return os.path.join(_dir(), ".office_pending.jsonl")
 
 
 def _load_pending():
+    out = []
     try:
-        out = []
         for line in open(PENDING_FILE(), encoding="utf-8"):
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 out.append(json.loads(line))
-        return out
-    except (OSError, ValueError):
-        return []
+            except (json.JSONDecodeError, ValueError):
+                continue  # skip ONE corrupt line; don't wipe ALL fallback memory
+    except OSError:
+        pass
+    return out
 
 
 def _save_pending(pending):
@@ -429,13 +462,21 @@ def main():
             # heartbeat / closed tab) falls back to a background spawn past its deadline.
             if pending:
                 still, fallback = resolve_pending(pending, list(_iter_bus()), time.time())
+                spawn_results = []
                 for p in fallback:
                     print("[office-dispatch] summon #{0} -> {1}: no reply in {2}s — falling back to a background spawn".format(
                         p["seq"], p["target"], ACK_TIMEOUT))
                     sys.stdout.flush()
-                    _spawn_for(p["target"], p["frm"], p["seq"], p["task"])
-                if fallback or len(still) != len(pending):
-                    pending = still
+                    spawn_results.append(_spawn_for(p["target"], p["frm"], p["seq"], p["task"]))
+                # a HELD fallback (lock busy / cap / error) stays pending + retries — never
+                # silently dropped; surfaced to the summoner only after FALLBACK_MAX_TRIES.
+                kept, gave_up = reconcile_fallback(fallback, spawn_results, time.time(), FALLBACK_RETRY, FALLBACK_MAX_TRIES)
+                for p in gave_up:
+                    _post("system", p["frm"], "(summon #{0} to {1} could NOT be delivered after {2} attempts — he may be unreachable; please check him directly)".format(
+                        p["seq"], p["target"], FALLBACK_MAX_TRIES))
+                new_pending = still + kept
+                if new_pending != pending:
+                    pending = new_pending
                     _save_pending(pending)
         except Exception as ex:  # never let the loop die
             print("[office-dispatch] error: {0}".format(ex))
