@@ -92,6 +92,10 @@ CAP_WINDOW = int(os.environ.get("OFFICE_SPAWN_CAP_WINDOW", "3600"))    # window 
 LOCK_STALE = int(os.environ.get("OFFICE_LOCK_STALE", "1800"))         # stale per-target lock (s)
 ACTIVE_WINDOW = int(os.environ.get("OFFICE_ACTIVE_WINDOW", "90"))     # recent bus post => live (s)
 ACK_TIMEOUT = int(os.environ.get("OFFICE_ACK_TIMEOUT", "90"))         # wait for a live-routed brother to reply (s)
+
+# Brothers that run their OWN engines (Codex / DeepSeek) — MUST NOT be spawned via
+# `claude -p`.  Summoning them is a courier job for Hemanth, not the dispatcher.
+NON_CLAUDE_BROTHERS = frozenset({"agent7", "agent9"})
 ACK_KINDS = ("chat", "ack", "blocked")                               # post kinds that count as a real reply (NOT 'activity')
 FALLBACK_RETRY = int(os.environ.get("OFFICE_FALLBACK_RETRY", "30"))   # held-fallback retry backoff (s)
 FALLBACK_MAX_TRIES = int(os.environ.get("OFFICE_FALLBACK_MAX_TRIES", "10"))  # surface to Hemanth after N held attempts
@@ -292,6 +296,8 @@ def classify_summon(frm, target, arc, is_live):
         return ("skip_badtarget", "must target exactly one brother, got '{0}'".format(target))
     if target == frm:
         return ("skip_self", "don't summon yourself")
+    if target in NON_CLAUDE_BROTHERS:
+        return ("refuse_nonclaude", "{0} runs his own engine — courier Hemanth to open his tab".format(target))
     if is_live:
         return ("route_live", "live tab / recently active — routed to his watch")
     return ("spawn", "idle/closed — spawn a background brother")
@@ -435,6 +441,9 @@ def _dispatch(rec):
         _post("system", frm, "(summon #{0} skipped: must target exactly one brother, got '{1}')".format(seq, target))
         return None
     if action == "skip_self":
+        return None
+    if action == "refuse_nonclaude":
+        _post("system", frm, "(summon #{0}: {1} runs his own engine (Codex/DeepSeek) — bg spawn unavailable; open his tab or courier via Hemanth)".format(seq, target))
         return None
     if action == "route_live":
         # DON'T forget it: record a pending entry so a wrong "live" guess (zombie

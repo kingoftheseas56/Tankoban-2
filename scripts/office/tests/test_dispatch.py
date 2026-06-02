@@ -47,6 +47,12 @@ def test_classify_summon():
     check(a == "route_live", "classify: a live target routes to his watch")
     a, _ = D.classify_summon("agent0", "agent2", None, is_live=False)
     check(a == "spawn", "classify: a non-live target spawns a background brother")
+    # #5 wrong-engine guard: agent7 (Codex) / agent9 (DeepSeek) run their OWN engines —
+    # must NEVER be spawned as a claude -p impostor, regardless of live state.
+    a, _ = D.classify_summon("agent0", "agent7", None, is_live=False)
+    check(a == "refuse_nonclaude", "classify: agent7 (Codex) refused — not a claude -p brother")
+    a, _ = D.classify_summon("agent0", "agent9", None, is_live=True)
+    check(a == "refuse_nonclaude", "classify: agent9 (DeepSeek) refused even if 'live'")
 
 
 def test_resolve_pending():
