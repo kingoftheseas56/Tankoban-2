@@ -28,14 +28,40 @@
 
 // ── Single-instance IPC ─────────────────────────────────────────────────────
 
-static const char *INSTANCE_SERVER_NAME = "TankobanSingleInstance";
+// Profile id from the optional TANKOBAN_INSTANCE_ID env var, restricted to a
+// pipe/settings/path-safe charset ([A-Za-z0-9_-], the same convention as build
+// lanes) so a malformed value can't break QLocalServer::listen() or QSettings
+// keys. Empty → default (dev/agent) identity, i.e. unchanged behaviour.
+static QString sanitizedInstanceId()
+{
+    QString id;
+    const QString raw = qEnvironmentVariable("TANKOBAN_INSTANCE_ID").trimmed();
+    for (const QChar c : raw) {
+        const char a = c.toLatin1();
+        if ((a >= 'A' && a <= 'Z') || (a >= 'a' && a <= 'z') ||
+            (a >= '0' && a <= '9') || a == '_' || a == '-')
+            id.append(c);
+    }
+    return id;
+}
+
+// The single-instance guard is scoped by the profile id. A named profile (e.g. a
+// personal copy launched with TANKOBAN_INSTANCE_ID=personal) gets its OWN guard,
+// so it can run ALONGSIDE the default dev/agent build instead of one
+// raising-and-exiting the other. Empty → "TankobanSingleInstance" (unchanged).
+static QString instanceServerName()
+{
+    const QString id = sanitizedInstanceId();
+    return id.isEmpty() ? QStringLiteral("TankobanSingleInstance")
+                        : QStringLiteral("TankobanSingleInstance-") + id;
+}
 
 /// Try to signal an existing instance to come to front.
 /// Returns true if a live instance acknowledged (caller should exit).
 static bool signalExistingInstance()
 {
     QLocalSocket socket;
-    socket.connectToServer(INSTANCE_SERVER_NAME);
+    socket.connectToServer(instanceServerName());
     if (!socket.waitForConnected(500))
         return false;
 
@@ -52,7 +78,7 @@ static bool signalExistingInstance()
 
     // Connected but no ack — stale pipe from a crashed run.
     // Remove it so we can take over.
-    QLocalServer::removeServer(INSTANCE_SERVER_NAME);
+    QLocalServer::removeServer(instanceServerName());
     return false;
 }
 
@@ -60,10 +86,10 @@ static bool signalExistingInstance()
 static QLocalServer *createInstanceServer(MainWindow *window)
 {
     auto *server = new QLocalServer(window);
-    if (!server->listen(INSTANCE_SERVER_NAME)) {
+    if (!server->listen(instanceServerName())) {
         // Stale pipe — remove and retry
-        QLocalServer::removeServer(INSTANCE_SERVER_NAME);
-        server->listen(INSTANCE_SERVER_NAME);
+        QLocalServer::removeServer(instanceServerName());
+        server->listen(instanceServerName());
     }
 
     QObject::connect(server, &QLocalServer::newConnection, window, [server, window]() {
@@ -145,6 +171,14 @@ int main(int argc, char *argv[])
 #endif
 
     QApplication app(argc, argv);
+
+    // TANKOBAN_INSTANCE_ID — optional named profile for a coexisting copy (e.g. a
+    // personal build launched with TANKOBAN_INSTANCE_ID=personal). Sanitized once
+    // here (shared with instanceServerName()); used below to scope identity
+    // (QSettings + window title) and the window/taskbar icon. Empty (dev/agent
+    // builds) → unchanged behaviour.
+    const QString instanceId = sanitizedInstanceId();
+
     // TANKOBAN_BETA_DATA_NAMESPACE 2026-05-07 — beta builds persist user
     // data (settings, JsonStore, library, posters) under
     // %APPDATA%\TankobanBeta\ instead of %APPDATA%\Tankoban\, so a
@@ -152,15 +186,44 @@ int main(int argc, char *argv[])
     // schema state. Define is set at build time via
     // -DTANKOBAN_BETA=ON in CMake; dev builds leave it undefined.
 #ifdef TANKOBAN_BETA_DATA_NAMESPACE
-    app.setApplicationName("TankobanBeta");
-    app.setOrganizationName("TankobanBeta");
-    app.setApplicationDisplayName("Tankoban Beta");
+    // Beta base identity, further namespaced by profile so a profiled beta copy
+    // is isolated too (keeps the "when set, identity is namespaced" contract
+    // true regardless of build variant).
+    if (!instanceId.isEmpty()) {
+        app.setApplicationName(QStringLiteral("TankobanBeta-") + instanceId);
+        app.setOrganizationName(QStringLiteral("TankobanBeta-") + instanceId);
+        app.setApplicationDisplayName(QStringLiteral("Tankoban Beta (") + instanceId + QStringLiteral(")"));
+    } else {
+        app.setApplicationName("TankobanBeta");
+        app.setOrganizationName("TankobanBeta");
+        app.setApplicationDisplayName("Tankoban Beta");
+    }
 #else
-    app.setApplicationName("Tankoban");
-    app.setOrganizationName("Tankoban");
+    // A named profile isolates QSettings/identity from the default dev namespace
+    // and shows the profile in the window title; pair with TANKOBAN_DATA_DIR to
+    // isolate the library/download store. Empty → "Tankoban" (unchanged).
+    if (!instanceId.isEmpty()) {
+        app.setApplicationName(QStringLiteral("Tankoban-") + instanceId);
+        app.setOrganizationName(QStringLiteral("Tankoban-") + instanceId);
+        app.setApplicationDisplayName(QStringLiteral("Tankoban (") + instanceId + QStringLiteral(")"));
+    } else {
+        app.setApplicationName("Tankoban");
+        app.setOrganizationName("Tankoban");
+    }
 #endif
     app.setApplicationVersion("0.1.0");
     app.setWindowIcon(QIcon(":/icons/tankoban_app_icon.png"));
+
+    // A named profile (personal copy) shows a distinct window/taskbar icon so it
+    // is never confused with the dev/agent build when both are open. Loaded from
+    // profile_icon.png next to the exe (deployed by MyTankoban.bat); falls back
+    // to the default app icon when the file is absent.
+    if (!instanceId.isEmpty()) {
+        const QString profIcon = QCoreApplication::applicationDirPath()
+                               + QStringLiteral("/profile_icon.png");
+        if (QFileInfo::exists(profIcon))
+            app.setWindowIcon(QIcon(profIcon));
+    }
 
     // WEEBCENTRAL_IDENTITY_PIVOT post-pivot fix 2026-05-19: bump QPixmapCache
     // from its Qt-default 10 MB to 64 MB. Comics series view paints 43+
