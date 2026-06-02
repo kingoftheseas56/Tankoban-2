@@ -11,8 +11,12 @@
 # TIGHT LEASH (enforced by prompt + the TANKOBAN_BG_SESSION flag):
 #   - posts results, never commits/pushes to master
 #   - cannot summon/wake another brother (no chains)
-# Model: OFFICE_BROTHER_MODEL (default 'sonnet' — cheap for background helpers;
-#        override to 'opus' for heavier reasoning).
+# Model: a summoned brother wakes as his REAL reasoning self (Opus) — brothers are
+#        brothers, not cheap model slots. OFFICE_BROTHER_MODEL overrides (e.g. to
+#        'sonnet') for the rare, deliberately-cheap background helper. NOTE: Agent 7
+#        (Codex) and Agent 9 (DeepSeek) run their OWN engines via scripts/engines/ and
+#        should not be spun up through `claude -p` — per-brother engine routing is the
+#        next layer; today's Claude brothers (0-5, 8) wake on Opus.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -22,7 +26,7 @@ ME="${1:-}"; FROM="${2:-}"; SEQ="${3:-}"; TASK="${4:-}"; LOCKDIR="${5:-}"
 cleanup(){ [ -n "$LOCKDIR" ] && rmdir "$LOCKDIR" 2>/dev/null; }
 trap cleanup EXIT
 
-MODEL="${OFFICE_BROTHER_MODEL:-sonnet}"
+MODEL="${OFFICE_BROTHER_MODEL:-opus}"
 N="${ME#agent}"
 RECAP_DIR="$HOME/.claude/recaps/agent-$N"
 RECAP=""

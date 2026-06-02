@@ -83,7 +83,7 @@ CAP_WINDOW = int(os.environ.get("OFFICE_SPAWN_CAP_WINDOW", "3600"))    # window 
 LOCK_STALE = int(os.environ.get("OFFICE_LOCK_STALE", "1800"))         # stale per-target lock (s)
 ACTIVE_WINDOW = int(os.environ.get("OFFICE_ACTIVE_WINDOW", "90"))     # recent bus post => live (s)
 ACK_TIMEOUT = int(os.environ.get("OFFICE_ACK_TIMEOUT", "90"))         # wait for a live-routed brother to reply (s)
-MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "sonnet")
+MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "opus")  # summoned brothers wake as their real self, not a cheap shadow
 
 
 def _now_iso():
