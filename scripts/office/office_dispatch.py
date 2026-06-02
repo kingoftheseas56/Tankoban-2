@@ -382,12 +382,16 @@ def _save_pending(pending):
 
 
 # ── spawn (shared by the idle path AND the ack-timeout fallback) ──────────────
-def _spawn_for(target, frm, seq, task):
+def _spawn_for(target, frm, seq, task, quiet=False):
     """Spawn `target` as a background brother under the per-target lock + spawn cap.
-    Returns True if spawned, False if held (lock busy or cap reached)."""
+    Returns True if spawned, False if held (lock busy or cap reached). `quiet` suppresses
+    the held/cap/error bus notice — used by the ack-timeout fallback RETRIES, which would
+    otherwise re-post 'already handling' every FALLBACK_RETRY while a brother stays busy
+    (the give-up after FALLBACK_MAX_TRIES is the single surfacing instead)."""
     lockdir = os.path.join(LOCK_DIR(), target + ".lock")
     if not _acquire_target_lock(lockdir):
-        _post("system", frm, "(summon #{0}: {1} is already handling a summon — try again when he's free)".format(seq, target))
+        if not quiet:
+            _post("system", frm, "(summon #{0}: {1} is already handling a summon — try again when he's free)".format(seq, target))
         return False
 
     # cap: count + write the "start" row SYNCHRONOUSLY under the ledger lock, so a
@@ -396,7 +400,8 @@ def _spawn_for(target, frm, seq, task):
     try:
         if _spawn_count_recent() >= SPAWN_CAP:
             _release_target_lock(lockdir)
-            _post("system", frm, "(summon #{0} held: spawn cap {1}/{2}s reached — ask Hemanth)".format(seq, SPAWN_CAP, CAP_WINDOW))
+            if not quiet:
+                _post("system", frm, "(summon #{0} held: spawn cap {1}/{2}s reached — ask Hemanth)".format(seq, SPAWN_CAP, CAP_WINDOW))
             return False
         _write_start_row(target, frm, seq, task)
     finally:
@@ -417,7 +422,8 @@ def _spawn_for(target, frm, seq, task):
         return True
     except OSError as ex:
         _release_target_lock(lockdir)
-        _post("system", frm, "(summon #{0}: failed to spawn {1}: {2})".format(seq, target, ex))
+        if not quiet:
+            _post("system", frm, "(summon #{0}: failed to spawn {1}: {2})".format(seq, target, ex))
         return False
 
 
@@ -562,7 +568,10 @@ def main():
                     print("[office-dispatch] summon #{0} -> {1}: no reply in {2}s — falling back to a background spawn".format(
                         p["seq"], p["target"], ACK_TIMEOUT))
                     sys.stdout.flush()
-                    spawn_results.append(_spawn_for(p["target"], p["frm"], p["seq"], p["task"]))
+                    # quiet=True: a fallback that stays HELD (target busy) must not re-post
+                    # 'already handling' every retry — the give-up after FALLBACK_MAX_TRIES
+                    # is the single surfacing (kills the bus-seq-883+ retry spam).
+                    spawn_results.append(_spawn_for(p["target"], p["frm"], p["seq"], p["task"], quiet=True))
                 # a HELD fallback (lock busy / cap / error) stays pending + retries — never
                 # silently dropped; surfaced to the summoner only after FALLBACK_MAX_TRIES.
                 kept, gave_up = reconcile_fallback(fallback, spawn_results, time.time(), FALLBACK_RETRY, FALLBACK_MAX_TRIES)
