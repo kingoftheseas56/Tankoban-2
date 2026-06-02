@@ -47,6 +47,23 @@ TEST(GetComicsParse, ScoreMatchPrefersRightTitleYearTier) {
     EXPECT_EQ(scoreMatch(wanted, year, tier, "Batman Year One"), 0);  // no overlap
 }
 
+// Hard-gate false-positive rejections (Codex review 2026-06-02).
+TEST(GetComicsParse, ScoreMatchHardGatesRejectFalsePositives) {
+    const QString wanted = "Invincible Compendium Vol. 1";
+    // Wrong SERIES that shares "invincible" + year but is a different book:
+    // rejected because the tier "compendium" is absent (gate 1).
+    EXPECT_EQ(scoreMatch(wanted, 2011, "Compendium", "Invincible Iron Man Vol 1 (2011)"), 0);
+    // Wrong VOLUME (Vol 2) of the right series+tier+year: rejected because the
+    // wanted volume token "1" is absent (gate 2 — year must not satisfy volume).
+    EXPECT_EQ(scoreMatch(wanted, 2011, "Compendium", "Invincible Compendium Vol 2 (2011)"), 0);
+    // The exact edition still passes.
+    EXPECT_GT(scoreMatch(wanted, 2011, "Compendium", "Invincible Compendium Vol 1 (2011)"), 0);
+    // Tier must match on a WORD BOUNDARY, not a substring: "CompendiumX" rejected.
+    EXPECT_EQ(scoreMatch(wanted, 2011, "Compendium", "Invincible CompendiumX Vol 1 (2011)"), 0);
+    // The "Vol" tier (dropped as a noise token) still gates via boundary match.
+    EXPECT_GT(scoreMatch("Spawn Vol 1", 0, "Vol", "Spawn Vol 1 (1992)"), 0);
+}
+
 TEST(GetComicsParse, PickBestMatchFailSafe) {
     QList<SearchResult> results = {
         {"Invincible Compendium Vol 1 (2011)", "https://getcomics.org/p/inv-comp-1"},
@@ -56,4 +73,13 @@ TEST(GetComicsParse, PickBestMatchFailSafe) {
     // No confident match -> empty (fail safe).
     QList<SearchResult> junk = {{"Batman Year One", "u1"}, {"Spawn Origins", "u2"}};
     EXPECT_TRUE(pickBestMatch("Invincible Compendium Vol. 1", 2011, "Compendium", junk).postUrl.isEmpty());
+}
+
+// Ambiguous tie -> empty (fail safe): two equally-scoring gated-pass posts must
+// not be guessed between (Codex review 2026-06-02).
+TEST(GetComicsParse, PickBestMatchTieReturnsEmpty) {
+    QList<SearchResult> tie = {
+        {"Invincible Compendium Vol 1", "u1"},   // no year -> both score equally
+        {"Invincible Compendium Vol 1", "u2"}};
+    EXPECT_TRUE(pickBestMatch("Invincible Compendium Vol. 1", 0, "Compendium", tie).postUrl.isEmpty());
 }

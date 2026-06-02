@@ -39,6 +39,15 @@ const QStringList& priority() {
                                   QStringLiteral("mega")};
     return p;
 }
+
+// A token that looks like a publication year (4 digits, 1900-2099). Excluded
+// from the volume-number identity gate — a year must never satisfy a volume
+// number (Codex review 2026-06-02).
+bool isYearToken(const QString& t) {
+    bool ok = false;
+    const int n = t.toInt(&ok);
+    return ok && t.size() == 4 && n >= 1900 && n <= 2099;
+}
 } // namespace
 
 QList<DownloadLink> extractDownloads(const QString& postHtml) {
@@ -100,6 +109,13 @@ QList<SearchResult> parseSearchResults(const QString& searchHtml) {
     return out;
 }
 
+// HARD IDENTITY GATES, not a score floor (Codex review 2026-06-02). A score
+// floor let a wrong-series ("Invincible Iron Man Vol 1") or wrong-volume
+// ("...Compendium Vol 2") candidate pass by sharing common tokens + the year.
+// Now EVERY distinctive token of the wanted edition must be present, the format
+// tier must match, and the year is never allowed to stand in for a volume
+// number. Any gate miss => 0 (rejected). Fail-safe: a near-miss returns no
+// download rather than the wrong one.
 int scoreMatch(const QString& editionTitle, int year,
                const QString& tierLabel, const QString& candidateTitle) {
     const QStringList want = tokens(editionTitle);
@@ -107,35 +123,56 @@ int scoreMatch(const QString& editionTitle, int year,
     const QString cand = candidateTitle.toLower();
     const QStringList candToks = tokens(candidateTitle);
     const QSet<QString> candSet(candToks.begin(), candToks.end());
+    const QString tier = tierLabel.toLower();
 
-    int shared = 0;
-    for (const QString& w : want)
-        if (candSet.contains(w)) ++shared;
-    if (shared == 0) return 0;                       // no series overlap -> reject
+    // Gate 1 — format tier (Compendium/Omnibus/TPB/...) must appear as a WHOLE
+    // WORD, not a substring (Codex review 2026-06-02 r2: "contains" let
+    // "compendium" match inside "CompendiumX"). A word-boundary match also
+    // handles the "Vol" tier correctly, which tokens() drops as a noise word so
+    // a token-set check would wrongly reject every Vol-tier edition.
+    if (!tier.isEmpty()) {
+        const QRegularExpression tierRe(
+            QStringLiteral("\\b") + QRegularExpression::escape(tier) + QStringLiteral("\\b"));
+        if (!tierRe.match(cand).hasMatch()) return 0;
+    }
 
-    int score = shared * 10;
-    if (year > 0 && cand.contains(QString::number(year))) score += 8;   // year match
-    if (!tierLabel.isEmpty() && cand.contains(tierLabel.toLower())) score += 6;  // tier match
+    // Gate 2 — every wanted token must be present in the candidate, EXCEPT the
+    // tier token (gated above) and any year-like token. This forces both the
+    // series identity (e.g. "invincible") AND the volume number (e.g. "1") to
+    // match — so "Invincible Iron Man" fails (missing nothing? it shares
+    // "invincible" but lacks "compendium" -> caught by gate 1) and
+    // "Compendium Vol 2" fails (missing the wanted volume "1").
+    for (const QString& w : want) {
+        if (w == tier) continue;
+        if (isYearToken(w)) continue;
+        if (!candSet.contains(w)) return 0;
+    }
+
+    // Eligible — score only to rank among gated-pass candidates + drive tie
+    // detection in pickBestMatch. Year match breaks ties toward the right printing.
+    int score = want.size() * 10;
+    if (year > 0 && cand.contains(QString::number(year))) score += 8;
+    if (!tier.isEmpty()) score += 6;   // tier already confirmed present by gate 1
     return score;
 }
 
 SearchResult pickBestMatch(const QString& editionTitle, int year,
                            const QString& tierLabel,
                            const QList<SearchResult>& results) {
-    // Confidence floor: at least half the edition's significant tokens must be
-    // shared (encoded as score >= ceil(half)*10). Fail safe — empty if unsure.
-    const int wantCount = tokens(editionTitle).size();
-    if (wantCount == 0) return {};
-    const int minShared = (wantCount + 1) / 2;
-    const int floor = minShared * 10;
-
+    // Only gated-pass candidates (scoreMatch > 0) are eligible. Among them take
+    // the unique top score; an AMBIGUOUS TIE (>=2 sharing the top score) returns
+    // empty — fail safe, never guess between two equally-plausible posts.
     SearchResult best;
     int bestScore = 0;
+    int bestCount = 0;
     for (const auto& r : results) {
         const int s = scoreMatch(editionTitle, year, tierLabel, r.title);
-        if (s > bestScore) { bestScore = s; best = r; }
+        if (s == 0) continue;
+        if (s > bestScore) { bestScore = s; best = r; bestCount = 1; }
+        else if (s == bestScore) { ++bestCount; }
     }
-    return (bestScore >= floor) ? best : SearchResult{};
+    if (bestScore == 0 || bestCount > 1) return {};
+    return best;
 }
 
 } // namespace tankoban::manga::getcomics
