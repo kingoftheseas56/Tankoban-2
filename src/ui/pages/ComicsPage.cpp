@@ -1000,9 +1000,15 @@ void ComicsPage::showEvent(QShowEvent* e)
 // Mirrors StreamPage.cpp's eventFilter at :1873-1889.
 bool ComicsPage::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == m_searchBar) {
+    // Shared-recipe generalisation (2026-06-02): track which bar has focus so
+    // positionSearchHistoryDropdown + setSearchBusy always target the right bar.
+    QLineEdit* bar = (obj == m_searchBar)       ? m_searchBar :
+                     (obj == m_westernSearchBar) ? m_westernSearchBar : nullptr;
+    if (bar) {
         if (event->type() == QEvent::FocusIn) {
-            if (m_searchBar->text().trimmed().isEmpty()) {
+            m_activeSearchBar  = bar;
+            m_activeSearchBusy = (bar == m_searchBar) ? m_searchBusy : m_westernSearchBusy;
+            if (bar->text().trimmed().isEmpty()) {
                 showSearchHistoryDropdown();
             }
         } else if (event->type() == QEvent::FocusOut) {
@@ -1037,91 +1043,28 @@ void ComicsPage::buildUI()
     gridLayout->setSpacing(24);
 
     // ── 1. Search bar (full width, top) ──
-    m_searchBar = new QLineEdit(gridPage);
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 \u2014 repurposed from
-    // local library filter to Tankoyomi-search entry point. Press Enter
-    // to fan-out across scrapers and flip into the search-takeover view.
-    m_searchBar->setPlaceholderText("Search Manga");
-    m_searchBar->setClearButtonEnabled(true);
-    m_searchBar->setObjectName("LibrarySearch");
-    m_searchBar->setFixedHeight(36);
-    m_searchBar->setStyleSheet(
-        "QLineEdit#LibrarySearch { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
-        " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
-        "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
-    auto* searchLayout = new QHBoxLayout();
-    searchLayout->setContentsMargins(0, 20, 0, 0);
-    searchLayout->setSpacing(8);
-    searchLayout->addWidget(m_searchBar, 1);
-
-    // Busy spinner — indeterminate QProgressBar (range 0..0) animates
-    // natively; 16x16 sits between input + search button. Mirrors
-    // StreamPage.cpp:1230-1242. Held as QWidget* in the header so the
-    // header doesn't need <QProgressBar>.
-    auto* busy = new QProgressBar();
-    busy->setRange(0, 0);
-    busy->setTextVisible(false);
-    busy->setFixedSize(16, 16);
-    busy->setObjectName("ComicsSearchBusy");
-    busy->setStyleSheet(
-        "#ComicsSearchBusy { background: transparent; border: none; }"
-        "#ComicsSearchBusy::chunk { background: rgba(255,255,255,0.5); }");
-    busy->hide();
-    searchLayout->addWidget(busy);
-    m_searchBusy = busy;
-
-    // Magnifying-glass search button (icon-only, 36×36). Reuses the
-    // search.svg Agent 4 shipped this wake at :/icons/search.svg.
-    m_searchBtn = new QPushButton();
-    m_searchBtn->setFixedHeight(36);
-    m_searchBtn->setFixedWidth(36);
-    m_searchBtn->setCursor(Qt::PointingHandCursor);
-    m_searchBtn->setObjectName("ComicsSearchBtn");
-    m_searchBtn->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
-    m_searchBtn->setIconSize(QSize(18, 18));
-    m_searchBtn->setToolTip(tr("Search"));
-    connect(m_searchBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_searchBar) return;
-        const QString q = m_searchBar->text().trimmed();
-        if (q.isEmpty()) return;
-        showSearchMode(q);
-    });
-    searchLayout->addWidget(m_searchBtn);
-
-    gridLayout->addLayout(searchLayout);
+    // Shared-recipe builder (2026-06-02): constructs full manga-parity chrome
+    // (input + busy spinner + search icon button) and wires all handlers.
+    // Replaces the previous inline block; the tooltip, timer, Ctrl+F, and Esc
+    // blocks that follow are unchanged.
+    {
+        QWidget* mangaSearchRow = buildSearchRow(
+            m_searchBar, m_searchBusy, m_searchBtn,
+            QStringLiteral("Search Manga"),
+            QStringLiteral("weebcentral"));
+        // Preserve the 20px top margin that the old inline searchLayout carried.
+        mangaSearchRow->setContentsMargins(0, 20, 0, 0);
+        gridLayout->addWidget(mangaSearchRow);
+    }
 
     m_searchBar->setToolTip(tr("Press Enter or click the search icon to search Tankoyomi sources"));
 
-    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 — search bar
-    // repurpose. textChanged still updates the activeSearch style hint
-    // so the input still highlights while typing, but the debounce timer
-    // no longer drives applySearch (that hook is preserved for the
-    // GLOBAL_NAV_HISTORY restore + hide-series flows). Enter flips into
-    // the search-takeover surface via showSearchMode().
+    // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 - search bar
+    // repurpose. textChanged + returnPressed are now wired inside buildSearchRow.
+    // The debounce timer is kept for future use / GLOBAL_NAV_HISTORY restore.
     m_searchTimer = new QTimer(this);
     m_searchTimer->setSingleShot(true);
     m_searchTimer->setInterval(250);
-    connect(m_searchBar, &QLineEdit::textChanged, this, [this]() {
-        const bool hasText = !m_searchBar->text().trimmed().isEmpty();
-        m_searchBar->setProperty("activeSearch", hasText);
-        m_searchBar->style()->unpolish(m_searchBar);
-        m_searchBar->style()->polish(m_searchBar);
-
-        // Stream-bar parity: hide the history dropdown while typing (the user
-        // is composing a new query, irrelevant past queries would obscure it);
-        // re-show when the input is cleared and still focused.
-        if (hasText) {
-            hideSearchHistoryDropdown();
-        } else if (m_searchBar->hasFocus()) {
-            showSearchHistoryDropdown();
-        }
-    });
-    connect(m_searchBar, &QLineEdit::returnPressed, this, [this]() {
-        const QString q = m_searchBar->text().trimmed();
-        if (q.isEmpty()) return;
-        hideSearchHistoryDropdown();
-        showSearchMode(q);
-    });
 
     // Stream/Theatre-parity search history (2026-05-22): load persisted
     // queries, construct the floating dropdown widget once, install the
@@ -2336,6 +2279,87 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
 }
 
 // ── COMICS_WESTERN_CATALOGUE Task 7 (2026-05-31, Agent 2) ───────────────────
+// Shared-recipe search row builder (2026-06-02, Agent 5).
+// Constructs the standard Comics search chrome (input + busy spinner + icon
+// button) that is reused by BOTH the manga shelf and the Western shelf.
+// All three live widget pointers are written to the out-params before return.
+// The returned QWidget* container is parented to this (ComicsPage) so it
+// auto-destructs with the page; each caller adds it to its own layout.
+QWidget* ComicsPage::buildSearchRow(QLineEdit*& outBar,
+                                    QWidget*&   outBusy,
+                                    QPushButton*& outBtn,
+                                    const QString& placeholder,
+                                    const QString& sourceId)
+{
+    auto* container = new QWidget(this);
+    auto* hbox = new QHBoxLayout(container);
+    hbox->setContentsMargins(0, 0, 0, 0);
+    hbox->setSpacing(8);
+
+    auto* bar = new QLineEdit(container);
+    bar->setObjectName(QStringLiteral("LibrarySearch"));
+    bar->setPlaceholderText(placeholder);
+    bar->setClearButtonEnabled(true);
+    bar->setFixedHeight(36);
+    bar->setStyleSheet(
+        "QLineEdit#LibrarySearch { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 6px; color: #eee; padding: 4px 10px; font-size: 13px; }"
+        "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
+    hbox->addWidget(bar, 1);
+
+    auto* busyWidget = new QProgressBar(container);
+    busyWidget->setRange(0, 0);
+    busyWidget->setTextVisible(false);
+    busyWidget->setFixedSize(16, 16);
+    busyWidget->setObjectName(QStringLiteral("ComicsSearchBusy"));
+    busyWidget->setStyleSheet(
+        "#ComicsSearchBusy { background: transparent; border: none; }"
+        "#ComicsSearchBusy::chunk { background: rgba(255,255,255,0.5); }");
+    busyWidget->hide();
+    hbox->addWidget(busyWidget);
+
+    auto* btn = new QPushButton(container);
+    btn->setFixedSize(36, 36);
+    btn->setCursor(Qt::PointingHandCursor);
+    btn->setObjectName(QStringLiteral("ComicsSearchBtn"));
+    btn->setIcon(QIcon(QStringLiteral(":/icons/search.svg")));
+    btn->setIconSize(QSize(18, 18));
+    btn->setToolTip(tr("Search"));
+    hbox->addWidget(btn);
+
+    // Write out-params before capturing bar by value in lambdas.
+    outBar  = bar;
+    outBusy = busyWidget;
+    outBtn  = btn;
+
+    // Capture bar by value (local copy) so each search row's lambdas
+    // reference its OWN QLineEdit, not the out-param reference.
+    const QString sid = sourceId;
+    auto submit = [this, bar, sid]() {
+        const QString q = bar->text().trimmed();
+        if (q.isEmpty()) return;
+        if (m_searchTakeover) m_searchTakeover->setActiveSourceId(sid);
+        hideSearchHistoryDropdown();
+        showSearchMode(q);
+    };
+
+    connect(btn, &QPushButton::clicked,    this, submit);
+    connect(bar, &QLineEdit::returnPressed, this, submit);
+    connect(bar, &QLineEdit::textChanged,   this, [this, bar]() {
+        const bool hasText = !bar->text().trimmed().isEmpty();
+        bar->setProperty("activeSearch", hasText);
+        bar->style()->unpolish(bar);
+        bar->style()->polish(bar);
+        if (hasText) {
+            hideSearchHistoryDropdown();
+        } else if (bar->hasFocus()) {
+            showSearchHistoryDropdown();
+        }
+    });
+
+    bar->installEventFilter(this);
+    return container;
+}
 // Western browse shelf. A separate browse grid (its own m_stack screen) lists
 // the curated Western series from data/western_catalogue/*.json; opening one
 // renders its collected editions through the SAME ComicsSeriesView tile path
@@ -2357,33 +2381,16 @@ void ComicsPage::buildWesternScreen()
     v->setContentsMargins(20, 20, 20, 20);
     v->setSpacing(16);
 
-    auto* heading = new QLabel(tr("WESTERN COMICS"), page);
-    heading->setObjectName("LibraryHeading");
-    v->addWidget(heading);
-
-    // Live RCO search on the Western shelf. Mirrors the manga LibrarySearch bar
-    // (same QSS objectName) but drives the source-aware search flow with
-    // readcomicsonline active, so Enter searches comics and surfaces results
-    // whose source == "readcomicsonline" (routed live in onSearchResultActivated).
-    m_westernSearchBar = new QLineEdit(page);
-    m_westernSearchBar->setObjectName("LibrarySearch");
-    m_westernSearchBar->setPlaceholderText(tr("Search Comics"));
-    m_westernSearchBar->setClearButtonEnabled(true);
-    m_westernSearchBar->setFixedHeight(36);
-    m_westernSearchBar->setStyleSheet(
-        "QLineEdit#LibrarySearch { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
-        " border-radius: 8px; padding: 0 12px; color: #fff; }"
-        "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
-    connect(m_westernSearchBar, &QLineEdit::returnPressed, this, [this]() {
-        const QString q = m_westernSearchBar->text().trimmed();
-        if (q.isEmpty()) return;
-        // Belt-and-suspenders: ensure the shared search takeover targets RCO even
-        // if the user reached this bar via a path that skipped showWesternMode.
-        if (m_searchTakeover)
-            m_searchTakeover->setActiveSourceId(QStringLiteral("readcomicsonline"));
-        showSearchMode(q);
-    });
-    v->addWidget(m_westernSearchBar);
+        // Shared-recipe builder (2026-06-02): Western bar gets full manga parity
+    // (spinner + search icon + history dropdown). Heading removed for
+    // top-rhythm parity with the manga shelf (pills already label the shelf).
+    {
+        QWidget* westernSearchRow = buildSearchRow(
+            m_westernSearchBar, m_westernSearchBusy, m_westernSearchBtn,
+            QStringLiteral("Search Comics"),
+            QStringLiteral("readcomicsonline"));
+        v->addWidget(westernSearchRow);
+    }
 
     m_westernGrid = new TileStrip(page);
     m_westernGrid->setMode(QStringLiteral("fixedGrid"));
@@ -2964,8 +2971,10 @@ void ComicsPage::clearSearchHistory()
 
 void ComicsPage::setSearchBusy(bool busy)
 {
-    if (!m_searchBusy) return;
-    m_searchBusy->setVisible(busy);
+    // Shared-recipe: toggle the busy widget for whichever bar is active.
+    QWidget* busyWidget = m_activeSearchBusy ? m_activeSearchBusy : m_searchBusy;
+    if (!busyWidget) return;
+    busyWidget->setVisible(busy);
 }
 
 void ComicsPage::buildSearchHistoryDropdown()
@@ -3000,11 +3009,14 @@ void ComicsPage::buildSearchHistoryDropdown()
 
 void ComicsPage::positionSearchHistoryDropdown()
 {
-    if (!m_searchHistoryDropdown || !m_searchBar) return;
+    if (!m_searchHistoryDropdown) return;
+    // Shared-recipe: anchor to the bar that currently has focus (or manga bar).
+    QLineEdit* bar = m_activeSearchBar ? m_activeSearchBar : m_searchBar;
+    if (!bar) return;
     const QPoint topLeft =
-        m_searchBar->mapTo(this, QPoint(0, m_searchBar->height() + 2));
+        bar->mapTo(this, QPoint(0, bar->height() + 2));
     m_searchHistoryDropdown->setGeometry(
-        topLeft.x(), topLeft.y(), m_searchBar->width(),
+        topLeft.x(), topLeft.y(), bar->width(),
         m_searchHistoryDropdown->sizeHint().height());
 }
 
@@ -3054,7 +3066,9 @@ void ComicsPage::showSearchHistoryDropdown()
         queryBtn->setStyleSheet(kRowBtnStyle);
         queryBtn->setFocusPolicy(Qt::NoFocus);
         connect(queryBtn, &QPushButton::clicked, this, [this, q]() {
-            if (m_searchBar) m_searchBar->setText(q);
+            // Shared-recipe: set text on whichever bar has focus.
+            QLineEdit* bar = m_activeSearchBar ? m_activeSearchBar : m_searchBar;
+            if (bar) bar->setText(q);
             // Re-enter the same submit path used by Enter / search button.
             showSearchMode(q);
             hideSearchHistoryDropdown();
@@ -3934,7 +3948,8 @@ void ComicsPage::onTileContextMenu(const QPoint& pos)
             settings.setValue("comics_hidden_series", hidden);
         }
         card->hide();
-        m_tileStrip->filterTiles(m_searchBar->text());
+        // Shared-recipe guard: only filter the manga grid when on manga shelf.
+        m_tileStrip->filterTiles(m_stack && m_stack->currentIndex() == 0 ? m_searchBar->text() : QString());
     } else if (chosen == revealAct) {
         ContextMenuHelper::revealInExplorer(displayPath);
     } else if (chosen == copyAct) {

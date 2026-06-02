@@ -377,6 +377,16 @@ private:
     // openWesternSeriesFromJson() does the GUARDED render-only open (direct
     // populateVolumeRowsFromCatalog, never showSeries — no AniList/mangafire
     // enrichment bleed onto a Western comic); show*Mode() drive the toggle.
+    // Shared-recipe search row builder (2026-06-02). Constructs the full
+    // manga-parity chrome (input + busy spinner + search icon button) and
+    // wires all handlers. Each caller receives the three live widget pointers
+    // via out-params and gets back a container QWidget* to add to its layout.
+    QWidget* buildSearchRow(QLineEdit*& outBar,
+                            QWidget*&   outBusy,
+                            QPushButton*& outBtn,
+                            const QString& placeholder,
+                            const QString& sourceId);
+
     void buildWesternScreen();
     void refreshWesternGrid();
     void openWesternSeriesFromJson(const QString& jsonPath);
@@ -561,12 +571,19 @@ private:
     // no enrichment) via WesternCatalogLoader -> populateVolumeRowsFromCatalog.
     // Manga path is untouched — Western is purely additive (own loader, own dir,
     // own screen). m_westernStackIndex captured from addWidget (index-agnostic).
-    TileStrip*   m_westernGrid       = nullptr;
-    QScrollArea* m_westernScroll     = nullptr;
-    QLineEdit*   m_westernSearchBar  = nullptr;   // live RCO search on the Western shelf
-    QPushButton* m_mangaTabBtn       = nullptr;
-    QPushButton* m_westernTabBtn     = nullptr;
-    int          m_westernStackIndex = -1;
+    TileStrip*   m_westernGrid        = nullptr;
+    QScrollArea* m_westernScroll      = nullptr;
+    QLineEdit*   m_westernSearchBar   = nullptr;   // live RCO search on the Western shelf
+    QWidget*     m_westernSearchBusy  = nullptr;   // spinner for Western bar (parity with manga)
+    QPushButton* m_westernSearchBtn   = nullptr;   // search icon button for Western bar
+    QPushButton* m_mangaTabBtn        = nullptr;
+    QPushButton* m_westernTabBtn      = nullptr;
+    int          m_westernStackIndex  = -1;
+
+    // Shared-recipe search bar: tracks which bar has focus so the
+    // shared history dropdown + busy widget target the right bar.
+    QLineEdit*   m_activeSearchBar    = nullptr;
+    QWidget*     m_activeSearchBusy   = nullptr;
 
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Live Western search + add-to-shelf.
     // m_readComicsScraper is the registry-owned RCO scraper, grabbed in the ctor
