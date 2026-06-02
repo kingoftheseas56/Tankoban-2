@@ -94,6 +94,12 @@ def _next_seq(bus):
 
 
 def cmd_append(frm, to, kind, arc, msg):
+    # No-chain hardening (Codex review 2026-06-02): ANY summon issued from a
+    # background brother session is force-stamped arc="bg" here — not just in
+    # cmd_summon — so the dispatcher refuses it even if a bg session calls raw
+    # `append ... summon ...` to try to forge a chainable summon.
+    if kind == "summon" and os.environ.get("TANKOBAN_BG_SESSION"):
+        arc = "bg"
     bus = BUS()
     os.makedirs(os.path.dirname(bus), exist_ok=True)
     lk = _lock(bus)
@@ -216,6 +222,30 @@ def cmd_send(sid, to_raw, msg):
     cmd_append(frm, to, "chat", "null", msg)  # prints seq
 
 
+def cmd_summon(frm, to_raw, *task_parts):
+    """Post a work SUMMON to a brother: kind='summon'. The dispatcher
+    (office_dispatch.py) routes it — wake his live tab, or spawn him as a
+    background headless session if his tab is idle. `frm` is the summoning agent
+    id (explicit, e.g. agent0); `to_raw` is the target (agentN / @agentN)."""
+    to = to_raw[1:] if to_raw.startswith("@") else to_raw
+    task = " ".join(task_parts).strip()
+    if not task:
+        sys.exit("office summon: empty task")
+    # Stamp the origin: a summon issued from inside a background brother session is
+    # marked arc="bg" so the dispatcher can refuse it (no chains). Tab summons stay "null".
+    arc = "bg" if os.environ.get("TANKOBAN_BG_SESSION") else "null"
+    cmd_append(frm, to, "summon", arc, task)  # prints seq
+
+
+def cmd_summon_send(sid, to_raw, *task_parts):
+    """Tab-facing summon: resolves `from` from the calling tab's session
+    (mirrors cmd_send). Used by office_summon.sh so a brother summons in one line."""
+    frm = _agent_for(sid)
+    if not frm:
+        sys.exit("office summon: tab not registered — run office_join first")
+    cmd_summon(frm, to_raw, *task_parts)
+
+
 def cmd_flag(sid, msg):
     """Post a BLOCKER to the room (the honesty / real-talk lane): kind='blocked',
     to='all', so it surfaces distinctly + marks the brother blocked in the roster."""
@@ -286,6 +316,11 @@ def cmd_deliver():
     session_id + prompt), auto-binds identity from the prompt if this tab isn't
     registered yet, injects unseen messages as additionalContext JSON, advances
     cursor. Always exit 0 (never block prompt submission)."""
+    # Background brother sessions (spawned by office_dispatch.py) are one-shot
+    # workers — they must NOT auto-join the office session map or get the clock-in
+    # nudge. Identified by the env flag the spawner sets.
+    if os.environ.get("TANKOBAN_BG_SESSION"):
+        return
     # DeepSeek endpoint rejects injected context (system-role 400) — stay silent.
     base = os.environ.get("ANTHROPIC_BASE_URL", "")
     if "deepseek" in base.lower():
@@ -449,7 +484,7 @@ def cmd_close():
 
 def main(argv):
     if not argv:
-        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|flag|ack|rollcall|deliver|drain|watch-peek|mirror-commit|close> ...")
+        sys.exit("usage: office_bus.py <append|join|whoami|unseen|mark-seen|cursor|send|summon|summon-send|flag|ack|rollcall|deliver|drain|watch-peek|mirror-commit|close> ...")
     cmd, rest = argv[0], argv[1:]
     if cmd == "append":
         cmd_append(*rest)
@@ -465,6 +500,10 @@ def main(argv):
         cmd_cursor(*rest)
     elif cmd == "send":
         cmd_send(*rest)
+    elif cmd == "summon":
+        cmd_summon(*rest)
+    elif cmd in ("summon-send", "summon_send"):
+        cmd_summon_send(*rest)
     elif cmd == "flag":
         cmd_flag(*rest)
     elif cmd == "ack":

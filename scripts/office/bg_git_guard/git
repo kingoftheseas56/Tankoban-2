@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# bg-git-guard — structural tight-leash for background brother sessions.
+#
+# Installed on PATH (ahead of the real git) by spawn_brother.sh so a summoned
+# BACKGROUND brother can READ/inspect the repo but cannot commit/merge/push to
+# master or otherwise rewrite history/refs or touch the remote. Read-only
+# subcommands (status/diff/log/show/branch/config-get/rev-parse/...) pass through
+# to the real git. The leash is "post results, don't merge" — editing files is
+# fine (left uncommitted for a live brother to review); committing is not.
+#
+# This is defense-in-depth on top of the prompt rule, NOT a full sandbox.
+sub="${1:-}"
+case "$sub" in
+  commit|push|merge|rebase|reset|revert|cherry-pick|am|apply|\
+  checkout|switch|restore|stash|clean|update-ref|filter-branch|\
+  worktree|fetch|pull|clone|gc|"format-patch"|"update-index"|prune)
+    echo "bg-git-guard: 'git $sub' is blocked for background brother sessions" \
+         "(tight leash: post results, don't commit/merge/push). Leave changes" \
+         "uncommitted for a live brother to review." >&2
+    exit 97
+    ;;
+esac
+
+# Resolve the REAL git: prefer REAL_GIT (exported by spawn_brother before it
+# shadowed git), else the first git on PATH that is NOT this guard dir.
+GIT="${REAL_GIT:-}"
+if [ -z "$GIT" ] || [ ! -x "$GIT" ]; then
+  self_dir="$(cd "$(dirname "$0")" && pwd)"
+  GIT=""
+  OLDIFS="$IFS"; IFS=':'
+  for d in $PATH; do
+    [ "$d" = "$self_dir" ] && continue
+    if [ -x "$d/git" ]; then GIT="$d/git"; break; fi
+  done
+  IFS="$OLDIFS"
+fi
+[ -z "$GIT" ] && { echo "bg-git-guard: real git not found on PATH" >&2; exit 98; }
+exec "$GIT" "$@"

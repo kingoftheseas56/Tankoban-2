@@ -135,6 +135,11 @@ agents/.office_responder_pids
 agents/bus_archive/*.jsonl
 scripts/office/responder_*.log
 .claude/.office_sessions.json
+# Mini-congress reachability (arc 1, 2026-06-02) — background-brother spawn runtime.
+agents/.office_spawns.jsonl
+agents/.office_spawn_logs/
+agents/.office_spawn_locks/
+agents/.office_dispatch.seq
 
 # Root-level scratch convention (NOT the agent-scratch _*.{ext} convention above).
 # tmp_* + loose smoke/wiki PNG scratch at root — saved evidence belongs under
