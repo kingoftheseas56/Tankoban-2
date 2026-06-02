@@ -150,3 +150,9 @@ scripts/engines/.ledger.jsonl
 scripts/engines/.ledger.jsonl.lock
 # multi-engine brother secrets (engine API keys; NEVER committed)
 scripts/engines/.env
+
+# Stray build binaries must never live under agents/ (a 115MB libmpv-2.dll got
+# archived there 2026-06; reclaimed). Build binaries belong in resources/ (gitignored).
+agents/**/*.dll
+agents/**/*.lib
+agents/**/*.exe
