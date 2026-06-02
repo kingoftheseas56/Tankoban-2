@@ -3253,6 +3253,10 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     m_pendingAuto.season         = season;
     m_pendingAuto.episode        = episode;
     m_pendingAuto.runtimeMinutes = 0;  // unknown -> AutoSourcePicker skips size guardrail
+    // Capture the show title now (the detail view shows the requested show at
+    // click time) so the picker's show-identity gate survives any later
+    // navigation while the async source fetch is in flight.
+    m_pendingAuto.showTitle      = m_detailView ? m_detailView->currentTitle() : QString();
     qInfo().noquote() << "[auto-dl] startAutoDownload imdb=" << imdbId
                       << "type=" << mediaType << "s" << season << "e" << episode;
 
@@ -3323,7 +3327,7 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     }
 
     const std::optional<int> picked =
-        tankostream::stream::AutoSourcePicker::pick(cands, ctx.runtimeMinutes);
+        tankostream::stream::AutoSourcePicker::pick(cands, ctx.showTitle, ctx.runtimeMinutes);
     qInfo().noquote() << "[auto-dl] picked="
                       << (picked.has_value() ? QString::number(*picked) : QStringLiteral("NONE"))
                       << "of" << cands.size();

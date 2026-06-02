@@ -328,6 +328,8 @@ private:
         int     season        = 0;
         int     episode       = 0;
         int     runtimeMinutes = 0;  // 0 = unknown -> size guardrail skipped
+        QString showTitle;    // captured at request time for AutoSourcePicker's
+                              // show-identity gate (never download the wrong show)
     };
     PendingAutoDownload m_pendingAuto;
 
