@@ -1,6 +1,6 @@
-# Tankoban 2 — Session Bootstrap & State Dashboard
+# Tankoban 2 — Session Bootstrap (Kernel)
 
-This file auto-loads into every Claude Code session in this directory. The dashboard block is **state** (refreshed by Agent 0 at every phase-boundary commit per Rule 13). Rules and protocols live in `agents/GOVERNANCE.md` — this file does not duplicate them.
+This file auto-loads into every Claude Code session in this directory. It is the **kernel** — stable role / rules-pointers / routing only. Mutable state lives in `agents/STATUS.md`; rules + protocols in `agents/GOVERNANCE.md`; the owner-per-domain + task→files router in `agents/routes.yml`. This file does not duplicate them.
 
 ---
 
@@ -44,37 +44,13 @@ If you are tempted to give Hemanth a terminal command list longer than **one lin
 
 ---
 
-## 30-Second State Dashboard
+## Live state
 
-**Next major arc — COMICS_TANKOYOMI_STREAM_MERGER (vision locked 2026-05-14, Agent 1 owns):** Comics-mode absorbs Tankoyomi; Stream-mode shape becomes the BLUEPRINT for the series view + in-library downloads. Brainstorm + Codex review-and-expand-in-place gate (Rule 20, gov-v4) queued behind Hemanth's next Agent 1 wake. Full arc context auto-loads from `src/ui/pages/comics/CLAUDE.md` + `src/core/manga/CLAUDE.md` when files in those subtrees are read.
-
-**As of:** 2026-05-22 ~9:30pm IST (Agent 0). Three load-bearing arcs landed this wake. (1) **Four-commit /build infra hardening on origin** — `9a199a7` lease-check hook verb-position bypass + `4c5a1e7` lane-scoped process kill + `88a7592` CMake mtime reconfigure guard + `2aca3fb` ninja state reset on failure. Closes the 341-target rebuild-loop class structurally; worst case after any future build failure is now one slow rebuild, never a forever loop. (2) **Trim-cc-history pipeline shipped end-to-end** — `8a30322` v1 → `e42b8cc` v2 parser-based → `7a733c8` auto-trim Stop hook → `5896c76` session-recap v4 making trimmed transcript primary at wake-start. Wake-prompt v4 flow live-tested this wake. (3) **gov-v7 lease registry primary** (Codex `210ba32`/`07da143`/`4c5a1e7`/`88a7592`/`2aca3fb`) — Rule 19 + Rule 22 cut over to `tankoctl lease-*` as source of truth, with `TANKOBAN_BUILD_LANE=<lane>` per-lane build dirs eliminating cross-agent ninja interference. Concurrent agent work today: A1 fandom catalog (LocalFandomCatalogLoader + Index + ComicsPage wire-up) + AniList query extension (Hemanth visual-verified on Death Note end-to-end) + ComicsCatalogScreen new widget; A2 BOOKS_STREMIO_PIVOT P4.4 + P4.5 landed via HELP traffic; A4 TANKORENT_CINEMATA P1 PIVOT (4 reverts retiring the purple [Find sources] button) + TORRENT_PERSISTENCE_COLLAPSE P5 closed (269/269 tankoban_tests GREEN) + SEQUENTIAL_DOWNLOADS plan authored not executed; A5 THEATRE_BULK_PICKER_SHIFT_RANGE (`03da08a`) + COMICS_SEARCH_BAR_PARITY (`068e675`) shipped. **Agent 4 has three escalating chat.md pings about absorbing build cost** (role-creep: edit src/ then leave the build for Hemanth); indirect reinforcement ceiling hit, next move is theirs. **Outstanding hygiene flags from `/repo-health`:** chat.md 3722 lines / 1679KB past `/rotate-chat` trigger; 13 large source files past refactor threshold (Codex item #6 backlog).
-
-**Active agents:**
-- **Agent 1** (Comic Reader + Tankoyomi as source-side ingestion into Comics mode) — VERY ACTIVE this wake: fandom catalog work + AniList query extension shipped (Hemanth-verified Death Note) + ComicsCatalogScreen new widget. Owns the **COMICS_TANKOYOMI_STREAM_MERGER** arc (vision-locked, brainstorm pending). Tankoyomi inherited from Agent 4B 2026-05-14. Standing polish mode on `agents/todos/COMIC_READER_FIX_TODO.md` Phase 6. Full domain context auto-loads from `src/ui/pages/comics/CLAUDE.md` + `src/core/manga/CLAUDE.md` + `src/ui/pages/tankoyomi/CLAUDE.md` on file reads.
-- **Agent 2** (Book Reader + TankoLibrary as source-side ingestion into Books mode) — owns the **BOOKS_STREMIO_PIVOT** arc (vision locked 2026-05-20). P4.4 + P4.5 landed today. TankoLibrary inherited from Agent 4B 2026-05-20. Full domain context auto-loads from `src/core/book/CLAUDE.md` + `src/ui/pages/tankolibrary/CLAUDE.md` on file reads.
-- **Agent 3** (Video Player) — IDLE. **MPV_CUTOVER CLOSED 2026-05-05**; single-backend ffmpeg sidecar restored. HEMANTH-DRIVEN MODE reverted 2026-05-16; normal autonomy resumed. Full domain context auto-loads from `src/ui/player/CLAUDE.md` + `native_sidecar/CLAUDE.md` on file reads.
-- **Agent 4** (Stream mode + Tankorent) — VERY ACTIVE this wake. Scope expanded 2026-05-20 at Agent 4B's departure. Today: TANKORENT_CINEMATA P1 PIVOT (4 reverts + close-out) + TORRENT_PERSISTENCE_COLLAPSE P5 close-out (9 per-task commits) + SEQUENTIAL_DOWNLOADS plan authored not executed. **Three chat.md pings about build-cost role-creep on receipt** (`fbdc87a` general + `7d06f97` direct + a third earlier). Active arcs: **STREAM_SERVER_PIVOT** + **TORRENT_PERSISTENCE_COLLAPSE** + **TANKORENT_CINEMATA**. `SIDECAR_DISPATCHER_NON_BLOCKING_FIX` authored awaiting §5 ratification. Full domain context auto-loads from `src/ui/pages/stream/CLAUDE.md` + `src/core/stream/CLAUDE.md` + `src/core/torrent/CLAUDE.md` + `src/ui/pages/tankorent/CLAUDE.md` on file reads.
-- **Agent 4B** (Sources) — **DEPARTED 2026-05-20.** Do not summon. Sources DOMAIN survives but the AGENT slot retires; every Source lives with its mode-owner — Tankoyomi → Agent 1, Tankorent → Agent 4, TankoLibrary → Agent 2. Memory: `project_agent4b_departure_2026-05-20.md`.
-- **Agent 5** (Library UX + Theme) — ACTIVE this wake: THEATRE_BULK_PICKER_SHIFT_RANGE + COMICS_SEARCH_BAR_PARITY shipped. THEME_SYSTEM_FIX_TODO P3 queued; SOURCES_SIDEBAR smoke pending. Has dirty `PerModeNavController.{cpp,h}` from in-flight NAV_BACK_ROOT_SEED work.
-- **Agent 6** (Reviewer) — DECOMMISSIONED 2026-04-16 (do not summon; READY FOR REVIEW lines retired).
-- **Agent 7** (Codex prototypes + audits + **voice of reason in The Office**) — Trigger taxonomy: A/B/C/D Codex-only (prototype / audit / implementation); E = Agent N Jrs (parallel Claude tab dispatch). Codex Trigger D for surgical/novel/independent-perspective work; Trigger E for pattern-match fan-out where the template is already set. **NEW STANDING ROLE (2026-05-31):** cross-model **reviewer of SUBSTANTIAL plans** + **the Office's voice of feasibility & realism** — given to him because he's a *different model* (orthogonal blind spots vs the all-Claude brotherhood). Calibration: **substantial plans only, AGENT-INITIATED** — any brother pings @agent7 in The Office to request review when his plan warrants it (self-calibrating; Agent 0 doesn't gate). Live NOW via courier; Office-native presence = `codex_agent7_bridge.py` (smoke-proven 2026-05-31). Inaugural review (Office app spec) `6db4b5c` → drove spec v2 `44ed7eb`. Memory `project_agent7`.
-- **Agent 8** (Prompt Architect) — ON-DEMAND, woken by Hemanth in a new tab. Persona at `.claude/agents/prompt-architect.md`.
-- **Agent 9** (DeepSeek V4-Pro) — ON-DEMAND, woken via `C:\Users\Suprabha\Desktop\start_agent9_vscode.bat` (VS Code tab, confirmed working 2026-05-28) or `start_agent9.bat` (terminal CLI). New brother as of 2026-05-25. **SAME ROLE as Agent 7 (Codex)** — prototype reference / comparative audit / Trigger-D scoped-src/ implementation. **Routing posture (upgraded 2026-05-28 after the Volume X experiment): summon Agent 9 PROACTIVELY for execution-shaped work** (locked plans / scoped src/ / first-pass audits) — no longer gated behind low-Codex-quota; quota still decides Codex-vs-DeepSeek when both fit. PROVEN: shipped the Volume X integration clean in ONE pass (217 TUs compile, 18/18 tests, zero design deviations, posted READY TO MERGE not self-merge) — the exact work Opus deferred. Routing report: `agents/audits/deepseek_engine_experiment_2026-05-28.md`. Two guardrails hold (honesty anchors, not brakes): (1) the **design/deliberation pass stays on Opus** until DeepSeek is tested there; (2) **reviewer pass before master, mandatory** — same as Codex Trigger-D. Role-peer equivalence, not a capability tier; the documented long-agentic-loop / production-C++ deltas are a per-task "prefer Codex when both are available + quota allows" judgment, not a scope cap. Persona at `.claude/agents/audit-junior.md`. Memory `project_agent9.md` + setup recipe `reference_deepseek_vscode_tab_setup.md`. Cost profile ~₹1-3K/month medium activity.
-
-**READY TO COMMIT backlog:** ~10-15 narrative RTC lines unswept since `f323f6f`; per the post-hoc close-out pattern that landed last sweep, every referenced src/ file is already in HEAD via per-task commits earlier in each wake — next `/commit-sweep` likely lands a sweep marker only with N=0.
-
-**Open congresses:** none (Congress 8 archived 2026-04-23).
-
-**Open HELP requests:** none.
-
-**Blocked:** none.
-
-**Last successful smoke:** A1 AniList query extension Hemanth visual-verified on Death Note end-to-end 2026-05-22; A4 TORRENT_PERSISTENCE_COLLAPSE P5 269/269 tankoban_tests GREEN.
-
-**Live governance versions:** `gov-v13` / `contracts-v3` (see `agents/VERSIONS.md`).
-
-**Engine/quota status:** Codex quota OK (default Codex for execution work; switch execution-shaped tasks to DeepSeek/Agent 9 when this reads "Codex LOW"). Opus = design/deliberation pass. Updated by Hemanth or Agent 0. Routing: gov-v10 Engine Switching Protocol.
+Current who/what/where — the dashboard, per-agent activity, RTC backlog, open
+congresses/HELP/blocked, last smoke, governance versions, engine/quota status —
+lives in **`agents/STATUS.md`** (mutable; refreshed by Agent 0 at phase boundaries,
+Rule 13). This kernel stays stable; STATUS churns. Read STATUS when you need the
+current picture; the canonical owner-per-domain map is `agents/routes.yml`.
 
 ---
 
