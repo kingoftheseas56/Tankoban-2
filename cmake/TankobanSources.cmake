@@ -176,6 +176,7 @@ set(SOURCES
     src/core/book/BookSeriesIndexBuilder.cpp
     src/core/book/BookCatalogueAggregator.cpp
     src/core/net/NetSeam.cpp
+    src/core/net/HttpFileDownloader.cpp
     src/ui/dialogs/MangaTransferDialog.cpp
     src/ui/dialogs/AddAddonDialog.cpp
     src/ui/pages/comics/SidecarMeta.cpp
@@ -381,6 +382,7 @@ set(HEADERS
     src/core/book/BookDownloader.h
     src/core/book/BookSearchAggregator.h
     src/core/net/NetSeam.h
+    src/core/net/HttpFileDownloader.h
     src/ui/dialogs/MangaTransferDialog.h
     src/ui/dialogs/AddAddonDialog.h
     src/ui/pages/comics/SidecarMeta.h
