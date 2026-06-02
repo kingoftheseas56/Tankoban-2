@@ -66,6 +66,9 @@ namespace {
 const QSize kVolumeThumbSize(76, 108);
 constexpr int kVolumeRowHeight = 124;
 const QSize kHeroCoverSize(90, 135);
+// COMICS_WESTERN_ADD 2026-06-02 — Western series view uses a larger, more
+// prominent hero cover (the manga shelf keeps its tuned 90x135). Same 2:3 ratio.
+const QSize kWesternHeroCoverSize(150, 225);
 
 // Tag names that AniList classifies as "Theme-Other-Demographic" — these
 // land in the meta strip in a future v1.x extension, not the hero chip
@@ -1033,7 +1036,13 @@ void ComicsSeriesView::clearView()
     m_selectedRows.clear();
     m_lastBulkAnchorVolume = -1;
     if (m_downloadSelectedBtn) m_downloadSelectedBtn->hide();
-    if (m_sourcesPanel) m_sourcesPanel->clear();
+    if (m_sourcesPanel) {
+        m_sourcesPanel->clear();
+        m_sourcesPanel->setVisible(true);  // re-show; Western-editionless hides it per-populate
+    }
+    // Reset the hero cover to the manga size; populateVolumeRowsFromCatalog bumps
+    // it for Western. Keeps the manga AniList path (no populate) at 90x135.
+    if (m_heroCoverLabel) m_heroCoverLabel->setFixedSize(kHeroCoverSize);
     refreshLibraryButton();
 }
 
@@ -1362,6 +1371,16 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     }
     m_currentMangaCatalog = catalog;
 
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Western series view uses a larger,
+    // more prominent hero cover than the manga shelf. Set BEFORE the hero paint
+    // below so the async applyHeroCoverPixmap scales to this size; clearView
+    // resets it to the manga size for the next series.
+    if (m_heroCoverLabel) {
+        m_heroCoverLabel->setFixedSize(catalog.source == QLatin1String("rco")
+                                           ? kWesternHeroCoverSize
+                                           : kHeroCoverSize);
+    }
+
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 1). Reset on-shelf flag for each
     // catalog open so the button defaults to "Add to Library" until ComicsPage
     // calls setWesternOnShelf(true) for already-shelved series.
@@ -1625,6 +1644,14 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     }
     if (m_westernNoEditionsLabel) {
         m_westernNoEditionsLabel->setVisible(westernNoEditions);
+    }
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). For an editionless Western series
+    // the right-hand Sources panel is dead weight (no volume to source) and left
+    // the page looking half-empty. Hide it so the left column reclaims the full
+    // width; clearView re-shows it for the next series. Shown for manga + any
+    // Western series that DOES have editions.
+    if (m_sourcesPanel) {
+        m_sourcesPanel->setVisible(!westernNoEditions);
     }
 
     // No next-unread highlight on the MangaFire catalog path in v1 — that
@@ -2269,7 +2296,9 @@ void ComicsSeriesView::applyBannerPixmap(const QPixmap& pm)
 void ComicsSeriesView::applyHeroCoverPixmap(const QPixmap& pm)
 {
     if (!m_heroCoverLabel || pm.isNull()) return;
-    const QPixmap scaled = pm.scaled(kHeroCoverSize,
+    // Scale to the label's CURRENT fixed size (not the hardcoded manga size) so
+    // the Western shelf's larger hero cover fills correctly. Manga keeps 90x135.
+    const QPixmap scaled = pm.scaled(m_heroCoverLabel->size(),
                                      Qt::KeepAspectRatio,
                                      Qt::SmoothTransformation);
     m_heroCoverLabel->setPixmap(scaled);
