@@ -40,8 +40,13 @@ MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
     const QString seriesId = obj.value(QStringLiteral("seriesId")).toString();
     if (seriesId.isEmpty()) return {};
 
+    // NOTE: empty `editions` is VALID, not a reject. A live-searched series whose
+    // RCO page lists only single issues (the marquee titles — Saga/Hellboy/etc.,
+    // whose collected editions live under sibling slugs) yields zero collected
+    // editions, but still has a synopsis/cover worth showing. Rejecting here made
+    // the pick handler silently swallow it and hang on "Loading" (2026-06-02).
+    // The series page renders with an empty-editions state instead. (spec §8.)
     const QJsonArray editionsArr = obj.value(QStringLiteral("editions")).toArray();
-    if (editionsArr.isEmpty()) return {};
 
     MangaCatalog cat;
     cat.seriesId       = seriesId;

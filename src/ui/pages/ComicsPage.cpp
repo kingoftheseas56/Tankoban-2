@@ -293,7 +293,12 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             const auto catalog =
                 tankoban::manga::WesternCatalogLoader::loadFromJsonObject(seriesJson);
             if (catalog.seriesId.isEmpty()) {
-                qInfo("ComicsPage: westernSeriesReady -> empty seriesId, ignoring");
+                // Defense-in-depth: only reachable now if the fetched JSON is
+                // truly malformed (no seriesId). Never leave the series-view
+                // "Loading" overlay up — bounce back to the Western grid so the
+                // user is not stranded (2026-06-02 hang fix).
+                qInfo("ComicsPage: westernSeriesReady -> empty/invalid series, returning to grid");
+                showWesternMode();
                 return;
             }
             // Stash the raw JSON verbatim so addWesternToLibraryRequested can

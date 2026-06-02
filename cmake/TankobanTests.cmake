@@ -128,6 +128,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/WeebCentralPairedParseTest.cpp
         src/core/manga/WesternSeriesParse.cpp
         tests/core/manga/WesternSeriesParseTest.cpp
+        src/core/manga/WesternCatalogLoader.cpp
+        tests/core/manga/WesternCatalogLoaderTest.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
