@@ -62,9 +62,10 @@ EOF
 cd "$REPO" || exit 1
 
 # Structural leash (Codex review 2026-06-02): even under --dangerously-skip-permissions,
-# a background brother must not commit/push/merge. Resolve the REAL git, then shadow
-# `git` with a guard shim on PATH that blocks state-changing subcommands.
-REAL_GIT="$(command -v git 2>/dev/null)"; export REAL_GIT
+# a background brother must not commit/push/merge. Two layers: (1) a git PATH-shim
+# that blocks state-changing subcommands (defense-in-depth — casual bypasses only),
+# and (2) the real structural block, a pre-commit hook gated on TANKOBAN_BG_SESSION
+# (installed by open_office.bat) that refuses ANY commit from a bg session.
 export PATH="$HERE/bg_git_guard:$PATH"
 
 printf '%s' "$PROMPT" | TANKOBAN_BG_SESSION=1 ENGINE_AGENT="$ME" \

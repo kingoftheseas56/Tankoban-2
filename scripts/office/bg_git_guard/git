@@ -9,7 +9,24 @@
 # fine (left uncommitted for a live brother to review); committing is not.
 #
 # This is defense-in-depth on top of the prompt rule, NOT a full sandbox.
-sub="${1:-}"
+# Find the real subcommand by skipping git's GLOBAL options (and their values) so
+# `git -C . commit`, `git -c x=y commit`, `git --git-dir=... push` can't slip past.
+sub=""
+i=1
+while [ $i -le $# ]; do
+  a="$(eval "echo \${$i}")"
+  case "$a" in
+    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix)
+      i=$((i + 2)); continue ;;                 # global option that takes a separate value
+    --*=*|-c*|--exec-path=*)
+      i=$((i + 1)); continue ;;                 # --opt=value form
+    -*)
+      i=$((i + 1)); continue ;;                 # any other global flag (no value)
+    *)
+      sub="$a"; break ;;                         # first non-option = the subcommand
+  esac
+done
+
 case "$sub" in
   commit|push|merge|rebase|reset|revert|cherry-pick|am|apply|\
   checkout|switch|restore|stash|clean|update-ref|filter-branch|\
@@ -21,18 +38,17 @@ case "$sub" in
     ;;
 esac
 
-# Resolve the REAL git: prefer REAL_GIT (exported by spawn_brother before it
-# shadowed git), else the first git on PATH that is NOT this guard dir.
-GIT="${REAL_GIT:-}"
-if [ -z "$GIT" ] || [ ! -x "$GIT" ]; then
-  self_dir="$(cd "$(dirname "$0")" && pwd)"
-  GIT=""
-  OLDIFS="$IFS"; IFS=':'
-  for d in $PATH; do
-    [ "$d" = "$self_dir" ] && continue
-    if [ -x "$d/git" ]; then GIT="$d/git"; break; fi
-  done
-  IFS="$OLDIFS"
-fi
+# Resolve the REAL git as the first `git` on PATH that is NOT this guard dir. We do
+# NOT read a REAL_GIT env var (spawn_brother no longer exports one) so the bg
+# session isn't handed a labelled bypass. Casual-bypass defense-in-depth; the hard
+# block on commits is the pre-commit hook (installed by open_office.bat).
+self_dir="$(cd "$(dirname "$0")" && pwd)"
+GIT=""
+OLDIFS="$IFS"; IFS=':'
+for d in $PATH; do
+  [ "$d" = "$self_dir" ] && continue
+  if [ -x "$d/git" ]; then GIT="$d/git"; break; fi
+done
+IFS="$OLDIFS"
 [ -z "$GIT" ] && { echo "bg-git-guard: real git not found on PATH" >&2; exit 98; }
 exec "$GIT" "$@"

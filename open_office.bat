@@ -5,6 +5,11 @@
 cd /d "%~dp0"
 set "OFFICE_URL=http://127.0.0.1:8787"
 
+:: Install the background-brother pre-commit guard (mini-congress reachability,
+:: 2026-06-02): refuses commits from a TANKOBAN_BG_SESSION so a summoned background
+:: brother can never land on master. Idempotent; a no-op for normal dev sessions.
+if exist "scripts\office\git_hooks\pre-commit" copy /Y "scripts\office\git_hooks\pre-commit" ".git\hooks\pre-commit" >nul 2>&1
+
 :: Self-cleaning: stop any already-running Office server(s) + dispatcher first, so we
 :: never pile up duplicate processes and a fresh start always loads current code.
 :: Targets ONLY office_web.py / office_dispatch.py python procs (not other tooling).

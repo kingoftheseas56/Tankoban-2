@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Structural tight-leash for the Office mini-congress (2026-06-02): a BACKGROUND
+# brother session (spawned by office_dispatch.py, env TANKOBAN_BG_SESSION=1) must
+# never create a commit — it posts results and leaves edits for a live brother to
+# review/merge. This hook fires no matter HOW git is invoked (PATH, absolute path,
+# global options), so it's the real structural block behind the bg_git_guard shim.
+#
+# Normal sessions (no TANKOBAN_BG_SESSION) are unaffected — this is a no-op for them.
+# Versioned at scripts/office/git_hooks/pre-commit; installed into .git/hooks by
+# open_office.bat (idempotent) so it survives and is reproducible.
+if [ -n "${TANKOBAN_BG_SESSION:-}" ]; then
+  echo "pre-commit: background brother sessions cannot commit (tight leash: post results, don't merge)." >&2
+  echo "            Leave your changes uncommitted — a live brother will review and land them." >&2
+  exit 1
+fi
+exit 0
