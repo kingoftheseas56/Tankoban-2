@@ -2418,6 +2418,7 @@ void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTit
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = anilistId;
     m_currentDetailSeriesTitle = preview.title;
+    m_detailEnteredFromWestern = false;  // manga open -> in-view Back goes to manga lib, not the Western grid (Codex review 2026-06-02)
     m_tyVolumeSeriesView->showSeries(preview);
     dispatchCatalogResolve(fandomSeriesSlugFromTitle(preview.title),
                            /*titleHint*/preview.title);
@@ -2457,6 +2458,7 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
     m_mode                     = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = 0;   // WeebCentral record has no AniList integer id
     m_currentDetailSeriesTitle = record.title;
+    m_detailEnteredFromWestern = false;  // manga open -> in-view Back goes to manga lib, not the Western grid (Codex review 2026-06-02)
     m_tyVolumeSeriesView->showSeries(result);
     dispatchCatalogResolve(fandomSeriesSlugFromTitle(record.title),
                            /*titleHint*/record.title);
@@ -3399,6 +3401,10 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     m_enteredDetailFrom = Mode::SearchResults;
     m_mode = Mode::TankoyomiDetail;
     m_currentDetailAnilistId   = 0;   // MangaResult has no anilist integer id
+    // Default: a search pick is NOT Western (the RCO branch below re-sets this
+    // true via openWesternSeriesFromCatalog when the live fetch lands). Keeps the
+    // in-view Back routing accurate (Codex review 2026-06-02).
+    m_detailEnteredFromWestern = false;
     m_currentDetailSeriesTitle = result.title;
 
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Western (RCO) search pick: route
@@ -4343,6 +4349,7 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
         const int anilistId        = blob.value(QStringLiteral("anilistId")).toInt(0);
         const QString seriesTitle  = blob.value(QStringLiteral("seriesTitle")).toString();
         if (anilistId > 0) {
+            m_detailEnteredFromWestern = false;  // manga restore -> in-view Back goes to manga lib, not the Western grid (Codex r3 2026-06-02)
             m_enteredDetailFrom = (blob.value(QStringLiteral("enteredFrom")).toString() == QStringLiteral("search")
                                     ? Mode::SearchResults : Mode::Library);
             m_mode = Mode::TankoyomiDetail;
@@ -4366,6 +4373,7 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
         if (!seriesId.isEmpty() && m_tyLibrary) {
             const auto rec = m_tyLibrary->get(sourceId, seriesId);
             if (!rec.seriesId.isEmpty()) {
+                m_detailEnteredFromWestern = false;  // manga restore -> in-view Back goes to manga lib, not the Western grid (Codex r3 2026-06-02)
                 m_enteredDetailFrom = (blob.value(QStringLiteral("enteredFrom")).toString() == QStringLiteral("search")
                                         ? Mode::SearchResults : Mode::Library);
                 m_mode = Mode::TankoyomiDetail;
@@ -4754,6 +4762,30 @@ QJsonObject ComicsPage::devDownloadWesternEdition(int volumeNumber)
     if (!m_tyVolumeSeriesView) {
         return QJsonObject{{QStringLiteral("ok"),    false},
                            {QStringLiteral("error"), QStringLiteral("series view not ready")}};
+    }
+    // Codex review: don't report ok:true unless we actually trigger a real
+    // Western download. Verify (a) the currently-shown series IS the Western one
+    // (not a manga series with a stale m_pendingWesternSeriesId), and (b) the
+    // requested edition exists in it — else populateSourcesForVolume would either
+    // do nothing or hit the manga path.
+    if (!m_detailEnteredFromWestern) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"), QStringLiteral("current series is not Western")}};
+    }
+    const QJsonArray vols = devSeriesSnapshot()
+                                .value(QStringLiteral("series")).toObject()
+                                .value(QStringLiteral("volumes")).toArray();
+    bool editionExists = false;
+    for (const auto& v : vols) {
+        if (v.toObject().value(QStringLiteral("volume")).toInt(-1) == volumeNumber) {
+            editionExists = true;
+            break;
+        }
+    }
+    if (!editionExists) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("edition %1 not found in current series").arg(volumeNumber)}};
     }
     // populateSourcesForVolume on an rco catalog emits downloadWesternEditionRequested,
     // which the ComicsPage lambda routes to m_westernDownloader->requestVolume — the
