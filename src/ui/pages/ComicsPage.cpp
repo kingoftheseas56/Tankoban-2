@@ -2652,6 +2652,22 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
 {
     if (!m_tyVolumeSeriesView) return;
 
+    // Make THIS the current Western series so an edition Download knows what to
+    // fetch — for BOTH the live-search path (the westernSeriesReady slot pre-set
+    // these before calling) AND the baked shelf-open path (jsonPath non-empty:
+    // load the JSON here). Before this fix, m_pendingWesternSeriesId was set only
+    // on live search, so Download silently no-oped for a series opened from the
+    // shelf (2026-06-02). For the live path jsonPath is empty and the slot's
+    // m_pendingWesternJson is preserved.
+    m_pendingWesternSeriesId = catalog.seriesId;
+    if (!jsonPath.isEmpty()) {
+        QFile jf(jsonPath);
+        if (jf.open(QIODevice::ReadOnly)) {
+            const QJsonDocument doc = QJsonDocument::fromJson(jf.readAll());
+            if (doc.isObject()) m_pendingWesternJson = doc.object();
+        }
+    }
+
     // Nav entry so the topbar Back chevron works (mirrors openSeriesByRecord,
     // Western enteredFrom blob). jsonPath is empty for a live (unsaved) series;
     // the restore path falls back to a fresh fetch when it's absent.
