@@ -161,3 +161,11 @@ scripts/engines/.env
 agents/**/*.dll
 agents/**/*.lib
 agents/**/*.exe
+
+# Night Watch runtime (not source)
+agents/night_ops/.loop.*
+agents/night_ops/.foreman.*
+agents/night_ops/*.log
+agents/night_ops/STOP
+agents/night_ops/staged/
+agents/night_ops/inflight/
