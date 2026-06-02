@@ -1,0 +1,36 @@
+# Context router — "for THIS kind of task, read THESE files; ignore the rest unless blocked."
+# The canonical owner-per-domain map + the just-in-time reading list. Kernel (CLAUDE.md)
+# points here. Keep entries to real, current files; subtree CLAUDE.md auto-loads on dir reads.
+domains:
+  comics:
+    owner: agent1
+    read: [src/ui/pages/comics/CLAUDE.md, src/core/manga/CLAUDE.md, src/ui/pages/tankoyomi/CLAUDE.md]
+    todos: [agents/todos/COMIC_READER_FIX_TODO.md]
+    verify: build_check.bat
+  books:
+    owner: agent2
+    read: [src/core/book/CLAUDE.md, src/ui/pages/tankolibrary/CLAUDE.md]
+    todos: [agents/todos/BOOK_READER_FIX_TODO.md, agents/todos/TANKOLIBRARY_FIX_TODO.md]
+    verify: build_check.bat
+  player:
+    owner: agent3
+    read: [src/ui/player/CLAUDE.md, native_sidecar/CLAUDE.md]
+    verify: build_check.bat
+  stream:
+    owner: agent4
+    read: [src/ui/pages/stream/CLAUDE.md, src/core/stream/CLAUDE.md, src/core/torrent/CLAUDE.md, src/ui/pages/tankorent/CLAUDE.md]
+    todos: [agents/todos/STREAM_SERVER_PIVOT_TODO.md, agents/todos/TANKORENT_QUALITY_AND_QUEUE_TODO.md]
+    verify: build_check.bat
+  theme_library_ux:
+    owner: agent5
+    todos: [agents/todos/THEME_SYSTEM_FIX_TODO.md]
+    verify: build_check.bat
+  governance:
+    owner: agent0
+    read: [agents/GOVERNANCE.md, agents/VERSIONS.md, agents/CONTRACTS.md]
+  state:
+    owner: agent0
+    read: [agents/STATUS.md, agents/ACTIVE_TODOS.md]
+  build_tooling:
+    owner: agent0
+    read: [agents/BUILD.md]
