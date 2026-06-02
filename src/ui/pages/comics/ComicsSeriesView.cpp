@@ -1600,6 +1600,16 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // download-linkage refresh in a future task will overlay highlight +
     // status icons on top of the rendered tiles.
     m_nextUnreadRow = -1;
+
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Dismiss the "Loading" overlay once
+    // rows are built when NO async cover fetch is in flight. showSearchResultLoading
+    // raises the overlay and the per-cover finished handler hides it when the
+    // counter drains to 0 — but a series that queues ZERO cover loads (a live
+    // Western series with no collected editions => no volumes, or an all-covers-
+    // cached catalog) never runs that handler, so the overlay would hang on
+    // "Loading" forever. Hiding here closes that gap; when covers ARE in flight
+    // (m_pendingMediaLoads > 0) the async path still owns the hide (unchanged).
+    if (m_pendingMediaLoads == 0) hideLoadingOverlay();
 }
 
 // ---------------------------------------------------------------------------

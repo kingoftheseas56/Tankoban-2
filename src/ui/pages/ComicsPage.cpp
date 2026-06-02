@@ -1041,7 +1041,7 @@ void ComicsPage::buildUI()
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 19 \u2014 repurposed from
     // local library filter to Tankoyomi-search entry point. Press Enter
     // to fan-out across scrapers and flip into the search-takeover view.
-    m_searchBar->setPlaceholderText("Search for Comics & Manga");
+    m_searchBar->setPlaceholderText("Search Manga");
     m_searchBar->setClearButtonEnabled(true);
     m_searchBar->setObjectName("LibrarySearch");
     m_searchBar->setFixedHeight(36);
@@ -2367,7 +2367,7 @@ void ComicsPage::buildWesternScreen()
     // whose source == "readcomicsonline" (routed live in onSearchResultActivated).
     m_westernSearchBar = new QLineEdit(page);
     m_westernSearchBar->setObjectName("LibrarySearch");
-    m_westernSearchBar->setPlaceholderText(tr("Search Western comics — add any series"));
+    m_westernSearchBar->setPlaceholderText(tr("Search Comics"));
     m_westernSearchBar->setClearButtonEnabled(true);
     m_westernSearchBar->setFixedHeight(36);
     m_westernSearchBar->setStyleSheet(
