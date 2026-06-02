@@ -77,26 +77,51 @@ void WesternVolumeDownloader::requestVolume(const QString& seriesId,
     // Announce "resolving" state immediately.
     emit volumeProgress(seriesId, volumeNumber, 0);
 
-    // Record state and enqueue the resolve key.
+    // Record state and enqueue for the (serialised) resolve step.
     ReqState state;
     state.key             = {seriesId, volumeNumber};
     state.editionTitle    = editionTitle;
+    state.year            = year;
+    state.tierLabel       = tierLabel;
     state.destinationPath = destinationPath;
     m_states.insert(key, state);
 
-    m_pendingKeys.append({seriesId, volumeNumber});
-    m_resolver.resolve(editionTitle, year, tierLabel);
+    m_resolveQueue.append({seriesId, volumeNumber});
+    pumpResolveQueue();
+}
+
+// ── serialised resolve pump ─────────────────────────────────────────────────
+
+void WesternVolumeDownloader::pumpResolveQueue()
+{
+    // At most one resolve in flight — GetComicsResolver does not serialise and
+    // its signals carry no identity, so we serialise here to keep onResolved
+    // unambiguous (Codex review 2026-06-02).
+    if (m_resolveInFlight || m_resolveQueue.isEmpty()) return;
+
+    // Skip any queued keys whose state was already removed (defensive).
+    while (!m_resolveQueue.isEmpty()) {
+        const ReqKey rk = m_resolveQueue.takeFirst();
+        const QString key = stateKey(rk.seriesId, rk.volumeNumber);
+        if (!m_states.contains(key)) continue;
+        const ReqState& st = m_states[key];
+        m_activeResolveKey = rk;
+        m_resolveInFlight  = true;
+        m_resolver.resolve(st.editionTitle, st.year, st.tierLabel);
+        return;
+    }
 }
 
 // ── resolver callbacks ────────────────────────────────────────────────────────
 
 void WesternVolumeDownloader::onResolved(const EditionDownload& dl)
 {
-    if (m_pendingKeys.isEmpty()) return;  // defensive
-    const ReqKey rk  = m_pendingKeys.takeFirst();
+    if (!m_resolveInFlight) return;  // defensive — no resolve was in flight
+    const ReqKey rk   = m_activeResolveKey;
     const QString key = stateKey(rk.seriesId, rk.volumeNumber);
+    m_resolveInFlight = false;       // this resolve is done; allow the next
 
-    ReqState* state = &m_states[key];
+    if (!m_states.contains(key)) { pumpResolveQueue(); return; }
 
     // Forward cover if available.
     if (!dl.coverUrl.isEmpty())
@@ -104,80 +129,92 @@ void WesternVolumeDownloader::onResolved(const EditionDownload& dl)
 
     // ── Magnet path ──────────────────────────────────────────────────────────
     if (dl.best.kind == QLatin1String("magnet") && m_torrent) {
+        // Duplicate-infoHash guard (Codex review): if another active request
+        // already owns this infoHash, fail this one rather than overwrite the
+        // hash->key map and orphan the first.
+        const QString destinationPath = m_states[key].destinationPath;
         const QString infoHash =
             m_torrent->addMagnetHeadless(dl.best.url,
                                          QStringLiteral("comics"),
-                                         state->destinationPath);
+                                         destinationPath);
         if (infoHash.isEmpty()) {
+            // Remove state BEFORE emitting (Codex review r2): a synchronous retry
+            // from the volumeFailed handler must not hit the in-progress guard.
+            m_states.remove(key);
             emit volumeFailed(rk.seriesId, rk.volumeNumber,
                               QStringLiteral("magnet add failed"));
-            m_states.remove(key);
+            pumpResolveQueue();
             return;
         }
-        state->infoHash = infoHash;
+        if (m_hashToKey.contains(infoHash)) {
+            m_states.remove(key);
+            emit volumeFailed(rk.seriesId, rk.volumeNumber,
+                              QStringLiteral("this torrent is already downloading for another edition"));
+            pumpResolveQueue();
+            return;
+        }
+        m_states[key].infoHash = infoHash;
         m_hashToKey.insert(infoHash, rk);
-        // Progress will be driven by onTorrentUpdated.
         emit volumeProgress(rk.seriesId, rk.volumeNumber, 1);
+        pumpResolveQueue();          // resolve done — start the next queued resolve
         return;
     }
 
     // ── DDL path ─────────────────────────────────────────────────────────────
-    // Walk dl.links in pickBest priority order (they are already ordered
-    // as found; pickBest selected the first usable one, but for retries we
-    // try ALL links). Skip the best link if it was a magnet but we have no
-    // torrent client — fall through to the rest of the list.
-    QList<getcomics::DownloadLink> links = dl.links;
-    // Filter magnets when no torrent client is available.
-    if (!m_torrent) {
-        QList<getcomics::DownloadLink> filtered;
-        for (const auto& lnk : std::as_const(links)) {
-            if (lnk.kind != QLatin1String("magnet"))
-                filtered.append(lnk);
-        }
-        links = filtered;
-    }
+    // Try ALL non-magnet links in order (pickBest priority); fall through on
+    // each failure. Magnets are skipped here (no torrent client / not best).
+    QList<getcomics::DownloadLink> links;
+    for (const auto& lnk : std::as_const(dl.links))
+        if (lnk.kind != QLatin1String("magnet"))
+            links.append(lnk);
 
     if (links.isEmpty()) {
+        m_states.remove(key);   // remove before emit (Codex review r2 — retry-safe)
         emit volumeFailed(rk.seriesId, rk.volumeNumber,
                           QStringLiteral("no usable download links"));
-        m_states.remove(key);
+        pumpResolveQueue();
         return;
     }
 
-    state->remainingLinks = links;
-    state->ddlLinkIndex   = 0;
-    tryNextDdlLink(*state);
+    m_states[key].remainingLinks = links;
+    m_states[key].ddlLinkIndex   = 0;
+    pumpResolveQueue();              // resolve done — let the next resolve start
+    tryNextDdlLink(key);             // downloads run concurrently with later resolves
 }
 
 void WesternVolumeDownloader::onResolveFailed(const QString& reason)
 {
-    if (m_pendingKeys.isEmpty()) return;
-    const ReqKey rk  = m_pendingKeys.takeFirst();
+    if (!m_resolveInFlight) return;
+    const ReqKey rk   = m_activeResolveKey;
     const QString key = stateKey(rk.seriesId, rk.volumeNumber);
+    m_resolveInFlight = false;
     m_states.remove(key);
     emit volumeFailed(rk.seriesId, rk.volumeNumber, reason);
+    pumpResolveQueue();
 }
 
 // ── DDL helpers ───────────────────────────────────────────────────────────────
 
-void WesternVolumeDownloader::tryNextDdlLink(ReqState& state)
+void WesternVolumeDownloader::tryNextDdlLink(const QString& key)
 {
-    const ReqKey rk  = state.key;
-    const QString key = stateKey(rk.seriesId, rk.volumeNumber);
+    // Operate BY KEY (Codex review): never hold a ReqState& across an erase.
+    if (!m_states.contains(key)) return;
+    ReqState& state   = m_states[key];
+    const ReqKey rk   = state.key;                 // copy for emits + post-erase use
+    const QString destFolder = state.destinationPath;
+    const QString editionTitle = state.editionTitle;
 
     while (state.ddlLinkIndex < state.remainingLinks.size()) {
-        const auto& link = state.remainingLinks.at(state.ddlLinkIndex);
+        const getcomics::DownloadLink link = state.remainingLinks.at(state.ddlLinkIndex);  // copy
         ++state.ddlLinkIndex;
 
-        // Skip magnet links in the DDL path (we would have taken the magnet
-        // branch above if m_torrent were available).
-        if (link.kind == QLatin1String("magnet")) continue;
+        if (link.kind == QLatin1String("magnet")) continue;   // DDL path only
 
         const QString destFile =
-            QDir(state.destinationPath).absoluteFilePath(
-                sanitiseName(state.editionTitle) + QStringLiteral(".cbz"));
+            QDir(destFolder).absoluteFilePath(
+                sanitiseName(editionTitle) + QStringLiteral(".cbz"));
 
-        // Create an HttpFileDownloader as a child of this (auto-cleaned up).
+        // HttpFileDownloader as a child of this (auto-cleaned up if this dies).
         auto* dl = new tankoban::net::HttpFileDownloader(m_nam, this);
 
         connect(dl, &tankoban::net::HttpFileDownloader::progress,
@@ -190,25 +227,26 @@ void WesternVolumeDownloader::tryNextDdlLink(ReqState& state)
 
         connect(dl, &tankoban::net::HttpFileDownloader::finished,
                 this, [this, rk, key, dl](const QString& path) {
+                    dl->disconnect(this);     // no re-entry through this downloader
                     dl->deleteLater();
                     m_states.remove(key);
                     emit volumeCompleted(rk.seriesId, rk.volumeNumber, path);
                 });
 
         connect(dl, &tankoban::net::HttpFileDownloader::failed,
-                this, [this, rk, key, dl](const QString& /*reason*/) {
+                this, [this, key, dl](const QString& /*reason*/) {
+                    dl->disconnect(this);
                     dl->deleteLater();
-                    // Try the next link if any remain.
-                    if (m_states.contains(key)) {
-                        tryNextDdlLink(m_states[key]);
-                    }
+                    // Try the next link if the request is still alive (by key).
+                    if (m_states.contains(key))
+                        tryNextDdlLink(key);
                 });
 
         dl->start(link.url, destFile);
         return;  // handed off; wait for finished/failed
     }
 
-    // All links exhausted.
+    // All links exhausted — rk/key already copied, safe to erase then emit.
     m_states.remove(key);
     emit volumeFailed(rk.seriesId, rk.volumeNumber,
                       QStringLiteral("all downloads failed"));

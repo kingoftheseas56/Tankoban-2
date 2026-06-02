@@ -17,16 +17,16 @@ namespace tankoban::manga {
 // Western edition download provider. Mirrors TorrentVolumeProvider's signal
 // shape so ComicsPage::onProviderVolumeCompleted reuses it verbatim.
 //
-// Concurrency: GetComicsResolver is shared (one instance). Concurrent
-// requestVolume() calls are correlated via a QHash<ReqKey,ReqState> keyed by
-// (seriesId, volumeNumber). The resolver's resolved/resolveFailed signals carry
-// no per-call identity, so we use a FIFO queue: each requestVolume() appends to
-// m_pendingKeys; the resolver's slot always dequeues the front entry. This
-// means concurrent requests for DIFFERENT volumes are safe (queue order matches
-// resolve dispatch order because GetComicsResolver serialises HTTP internally —
-// it processes one request at a time and emits before accepting the next). If
-// two concurrent requests for the SAME (seriesId,vol) arrive, the second is
-// no-oped with a volumeFailed rather than overwriting the first in-flight state.
+// Concurrency (Codex review 2026-06-02): GetComicsResolver is shared and does
+// NOT serialise — concurrent resolve() calls can complete OUT OF ORDER and its
+// resolved/resolveFailed signals carry no per-call identity. So we SERIALISE the
+// resolve step ourselves: at most one resolve is in flight (m_resolveInFlight);
+// requestVolume() enqueues onto m_resolveQueue and pumpResolveQueue() starts the
+// next only after the prior resolved/failed arrives. The in-flight request is
+// m_activeResolveKey, so the resolver slot is unambiguous (no FIFO mis-attach).
+// DOWNLOADS (magnet/DDL) after resolve still run concurrently — correlated by
+// infoHash (magnet) or per-downloader lambda (DDL). A duplicate (seriesId,vol)
+// request is rejected; a duplicate active infoHash is rejected.
 class WesternVolumeDownloader : public QObject {
     Q_OBJECT
 public:
@@ -43,6 +43,8 @@ public:
     struct ReqState {
         ReqKey  key;
         QString editionTitle;
+        int     year = 0;          // resolve args stashed so pumpResolveQueue can fire later
+        QString tierLabel;
         QString destinationPath;
         // For magnet path:
         QString infoHash;
@@ -84,17 +86,22 @@ private:
     // Returns empty string if nothing found.
     static QString findArchiveIn(const QString& dirPath);
 
-    // Start the next DDL link for the given request. Assumes state is in
-    // m_states and remainingLinks is non-empty.
-    void tryNextDdlLink(ReqState& state);
+    // Start the next DDL link for the given request (operates BY KEY and copies
+    // emit data before any erase — never holds a ReqState& across removal).
+    void tryNextDdlLink(const QString& key);
+
+    // Start the next queued resolve if none is in flight (serialises resolves).
+    void pumpResolveQueue();
 
     QNetworkAccessManager* m_nam     = nullptr;
     TorrentClient*         m_torrent = nullptr;
     GetComicsResolver      m_resolver;
 
-    // FIFO queue of keys in the order requestVolume() was called (one entry
-    // per pending resolve call; dequeued by onResolved/onResolveFailed).
-    QList<ReqKey>            m_pendingKeys;
+    // Serialised resolve step: at most one resolve in flight. m_resolveQueue
+    // holds keys awaiting resolve; m_activeResolveKey is the one in flight.
+    QList<ReqKey>            m_resolveQueue;
+    ReqKey                   m_activeResolveKey;
+    bool                     m_resolveInFlight = false;
 
     // Full state for every in-flight request, keyed by stateKey(seriesId,vol).
     // Entries inserted in requestVolume(), removed on terminate.
