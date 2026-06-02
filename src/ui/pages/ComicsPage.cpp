@@ -2926,34 +2926,56 @@ void ComicsPage::showLibraryMode()
 // Stream's `stream/searchHistory` so the two modes don't cross-pollinate
 // past queries (Agent 1 guardrail at handoff).
 
+// Per-shelf history routing (2026-06-02). The active list/key follow which bar
+// has focus: the Western bar uses a separate QSettings key so its history never
+// mixes with the manga shelf's (Hemanth smoke: the two were sharing one store).
+QStringList& ComicsPage::activeSearchHistory()
+{
+    return (m_activeSearchBar && m_activeSearchBar == m_westernSearchBar)
+               ? m_westernSearchHistory
+               : m_searchHistory;
+}
+
+QString ComicsPage::activeSearchHistoryKey() const
+{
+    return (m_activeSearchBar && m_activeSearchBar == m_westernSearchBar)
+               ? QStringLiteral("comics/westernSearchHistory")
+               : QStringLiteral("comics/searchHistory");
+}
+
 void ComicsPage::loadSearchHistory()
 {
     QSettings s;
     m_searchHistory = s.value(QStringLiteral("comics/searchHistory")).toStringList();
     if (m_searchHistory.size() > kMaxSearchHistory)
         m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+    m_westernSearchHistory =
+        s.value(QStringLiteral("comics/westernSearchHistory")).toStringList();
+    if (m_westernSearchHistory.size() > kMaxSearchHistory)
+        m_westernSearchHistory = m_westernSearchHistory.mid(0, kMaxSearchHistory);
 }
 
 void ComicsPage::saveSearchHistory()
 {
     QSettings s;
-    s.setValue(QStringLiteral("comics/searchHistory"), m_searchHistory);
+    s.setValue(activeSearchHistoryKey(), activeSearchHistory());
 }
 
 void ComicsPage::pushSearchHistory(const QString& query)
 {
     const QString q = query.trimmed();
     if (q.isEmpty()) return;
-    m_searchHistory.removeAll(q);
-    m_searchHistory.prepend(q);
-    if (m_searchHistory.size() > kMaxSearchHistory)
-        m_searchHistory = m_searchHistory.mid(0, kMaxSearchHistory);
+    QStringList& hist = activeSearchHistory();
+    hist.removeAll(q);
+    hist.prepend(q);
+    if (hist.size() > kMaxSearchHistory)
+        hist = hist.mid(0, kMaxSearchHistory);
     saveSearchHistory();
 }
 
 void ComicsPage::removeSearchHistoryEntry(const QString& query)
 {
-    m_searchHistory.removeAll(query);
+    activeSearchHistory().removeAll(query);
     saveSearchHistory();
     // Rebuild the open dropdown so the row disappears immediately.
     if (m_searchHistoryDropdown && m_searchHistoryDropdown->isVisible()) {
@@ -2963,8 +2985,9 @@ void ComicsPage::removeSearchHistoryEntry(const QString& query)
 
 void ComicsPage::clearSearchHistory()
 {
-    if (m_searchHistory.isEmpty()) return;
-    m_searchHistory.clear();
+    QStringList& hist = activeSearchHistory();
+    if (hist.isEmpty()) return;
+    hist.clear();
     saveSearchHistory();
     hideSearchHistoryDropdown();
 }
@@ -3033,12 +3056,14 @@ void ComicsPage::showSearchHistoryDropdown()
         delete item;
     }
 
-    if (m_searchHistory.isEmpty()) {
+    // Per-shelf: show the history for whichever bar has focus.
+    const QStringList& hist = activeSearchHistory();
+    if (hist.isEmpty()) {
         m_searchHistoryDropdown->hide();
         return;
     }
 
-    const int rows = qMin(m_searchHistory.size(), kMaxSearchHistory);
+    const int rows = qMin(hist.size(), kMaxSearchHistory);
     const char* kRowBtnStyle =
         "QPushButton { background: transparent; color: #d0d0d0; border: none;"
         "  text-align: left; padding: 6px 10px; font-size: 12px; }"
@@ -3054,7 +3079,7 @@ void ComicsPage::showSearchHistoryDropdown()
         "QPushButton:hover { color: #fff; }";
 
     for (int i = 0; i < rows; ++i) {
-        const QString q = m_searchHistory.at(i);
+        const QString q = hist.at(i);
 
         auto* row = new QWidget(m_searchHistoryList);
         auto* rowLayout = new QHBoxLayout(row);

@@ -502,8 +502,13 @@ private:
     QFrame*          m_searchHistoryDropdown   = nullptr;
     QWidget*         m_searchHistoryList       = nullptr;
     QTimer*          m_searchHistoryHideTimer  = nullptr;
-    QStringList      m_searchHistory;
+    QStringList      m_searchHistory;          // manga shelf
+    QStringList      m_westernSearchHistory;   // Western shelf (kept separate)
     static constexpr int kMaxSearchHistory = 10;
+    // Per-shelf history routing: the active list/key follow which bar has focus
+    // (m_activeSearchBar). Manga and Western histories never cross-pollinate.
+    QStringList& activeSearchHistory();
+    QString      activeSearchHistoryKey() const;
     SeriesView*      m_seriesView = nullptr;
     QPushButton*     m_viewToggle = nullptr;
     QSlider*         m_densitySlider = nullptr;
