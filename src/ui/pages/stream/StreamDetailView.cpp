@@ -25,6 +25,8 @@
 #include <QIcon>
 #include <QImage>
 #include <QLinearGradient>
+#include <QLineEdit>
+#include <QIntValidator>
 #include <QMenu>
 #include <QMessageBox>
 #include <QModelIndex>
@@ -578,6 +580,26 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::onSeasonChanged);
     seasonLayout->addWidget(m_seasonCombo);
 
+    // Episode-number jump/filter (2026-06-02, Hemanth ask) — for long anime like
+    // One Piece (1000+ eps) where scrolling the list is impractical. Typing an
+    // episode number collapses the list to matching rows + scrolls to the first;
+    // clearing restores the full list.
+    m_episodeSearch = new QLineEdit(m_seasonRow);
+    m_episodeSearch->setObjectName(QStringLiteral("EpisodeSearch"));
+    m_episodeSearch->setPlaceholderText(tr("Go to episode #"));
+    m_episodeSearch->setClearButtonEnabled(true);
+    m_episodeSearch->setFixedWidth(150);
+    m_episodeSearch->setFixedHeight(28);
+    m_episodeSearch->setValidator(new QIntValidator(0, 1000000, m_episodeSearch));
+    m_episodeSearch->setStyleSheet(
+        "QLineEdit { background: rgba(255,255,255,0.07);"
+        "  border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
+        "  color: #ccc; padding: 2px 8px; font-size: 12px; }"
+        "QLineEdit:focus { border-color: rgba(255,255,255,0.25); }");
+    connect(m_episodeSearch, &QLineEdit::textChanged,
+            this, &StreamDetailView::filterEpisodesByNumber);
+    seasonLayout->addWidget(m_episodeSearch);
+
     m_downloadBtn = new QPushButton(tr("Download"), m_seasonRow);
     m_downloadBtn->setObjectName(QStringLiteral("DetailDownloadBtn"));
     m_downloadBtn->setFixedHeight(30);
@@ -1046,6 +1068,11 @@ void StreamDetailView::populateEpisodeTable(int season)
     // on why. Clear rows before rebuild.
     m_episodeTable->setRowCount(0);
 
+    // Reset the episode-number filter on (re)populate so a new season shows all
+    // rows and the search box doesn't lie about what's visible.
+    if (m_episodeSearch && !m_episodeSearch->text().isEmpty())
+        m_episodeSearch->clear();
+
     auto episodes = m_seasons.value(season);
     QJsonObject allProgress = m_bridge->allProgress("stream");
 
@@ -1451,6 +1478,29 @@ void StreamDetailView::refreshAllEpisodeRows()
         if (!numItem) continue;
         const int episode = numItem->data(Qt::UserRole).toInt();
         if (episode > 0) refreshEpisodeRow(row, season, episode);
+    }
+}
+
+void StreamDetailView::filterEpisodesByNumber(const QString& text)
+{
+    if (!m_episodeTable) return;
+    const QString needle = text.trimmed();
+    int firstVisible = -1;
+    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+        bool show = true;
+        if (!needle.isEmpty()) {
+            const auto* numItem = m_episodeTable->item(row, kColEpisode);
+            const QString epStr = numItem ? numItem->text() : QString();
+            // Prefix match so typing narrows toward the target
+            // ("116" -> 116, 1160-1169, 1164; "1164" -> just 1164).
+            show = epStr.startsWith(needle);
+        }
+        m_episodeTable->setRowHidden(row, !show);
+        if (show && firstVisible < 0) firstVisible = row;
+    }
+    if (firstVisible >= 0) {
+        if (auto* it = m_episodeTable->item(firstVisible, kColEpisode))
+            m_episodeTable->scrollToItem(it, QAbstractItemView::PositionAtTop);
     }
 }
 

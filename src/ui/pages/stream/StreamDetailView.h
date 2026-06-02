@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QHash>
 #include <QLabel>
+#include <QLineEdit>
 #include <QJsonObject>
 #include <QPair>
 #include <QPushButton>
@@ -291,6 +292,10 @@ private:
     void refreshEpisodeRow(int row, int season, int episode);
     // Repaints every visible row of the active season via refreshEpisodeRow.
     void refreshAllEpisodeRows();
+    // Episode-number jump/filter — hides rows whose episode number doesn't start
+    // with `text` (empty = show all) + scrolls to the first match. For long anime
+    // (One Piece, 1000+ eps) where scrolling the list is impractical.
+    void filterEpisodesByNumber(const QString& text);
     // Episode-table row carrying `episode` in the active season (-1 if absent).
     int rowForEpisode(int episode) const;
 
@@ -430,6 +435,7 @@ private:
     QWidget*      m_seasonRow     = nullptr;
     QLabel*       m_seasonLabel   = nullptr;  // hidden for anime (flat list)
     QComboBox*    m_seasonCombo   = nullptr;
+    QLineEdit*    m_episodeSearch = nullptr;  // jump-to-episode-number filter
     // THEATRE_ANIME_CATALOG — true when the flat Kitsu catalog is active for
     // the current series; hides the (meaningless) season combo.
     bool          m_isAnime       = false;
