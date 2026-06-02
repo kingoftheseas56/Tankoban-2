@@ -511,6 +511,25 @@ void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
     armAutoPickIfEligible();
 }
 
+void ComicsSourcesPanel::showComingSoon()
+{
+    // COMICS_WESTERN_ADD 2026-06-02 — honest affordance for Western editions:
+    // downloads come from GetComics in a later arc, so we neither search the
+    // manga indexers nor pretend sources exist.
+    clearCards();
+    if (m_statusLabel) {
+        m_statusLabel->setText(tr("Downloading Western comics is coming soon"));
+        m_statusLabel->show();
+    }
+    if (m_statusSubLabel) {
+        m_statusSubLabel->setText(tr("This edition will be downloadable in a future update."));
+        m_statusSubLabel->show();
+    }
+    if (m_scroll) {
+        m_scroll->hide();
+    }
+}
+
 void ComicsSourcesPanel::setEmpty()
 {
     clearCards();

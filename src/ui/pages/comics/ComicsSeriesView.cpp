@@ -1588,11 +1588,43 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // to MangaFire Volume 1's cover URL when available. Volume rows still
     // show their own per-volume covers (set in the loop above); this only
     // touches the top-of-page hero block.
+    bool heroPainted = false;
     for (const auto& vol : catalog.volumes) {
         if (vol.volumeNumber == 1 && !vol.coverUrlJapanese.isEmpty()) {
             loadHeroCoverUrl(vol.coverUrlJapanese);
+            heroPainted = true;
             break;
         }
+    }
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). An editionless live Western series
+    // has no volume #1 to carry the hero cover, so fall back to the series-level
+    // cover (WesternCatalogLoader sets it from the RCO page cover / search
+    // thumbnail). Manga catalogs leave seriesCover empty, so this no-ops for them
+    // (loadHeroCoverUrl also guards empty URLs); the volume-1 branch above keeps
+    // owning the manga + edition-bearing hero unchanged.
+    if (!heroPainted && !catalog.seriesCover.isEmpty()) {
+        loadHeroCoverUrl(catalog.seriesCover);
+    }
+
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Editionless Western series (marquee
+    // titles whose collected editions live under sibling slugs we don't yet
+    // discover) get an explicit empty-state in the volumes column so the page
+    // reads as intentional rather than unfinished (spec §8). Lazily created,
+    // shown only for an rco series with zero edition tiles, hidden otherwise. It
+    // is NOT in m_volumeTiles, so the qDeleteAll teardown above never frees it.
+    const bool westernNoEditions =
+        (catalog.source == QLatin1String("rco")) && m_volumeTiles.isEmpty();
+    if (westernNoEditions && !m_westernNoEditionsLabel && m_volumesLayout && m_volumesHost) {
+        m_westernNoEditionsLabel =
+            new QLabel(tr("No collected editions found yet."), m_volumesHost);
+        m_westernNoEditionsLabel->setObjectName(QStringLiteral("WesternNoEditions"));
+        m_westernNoEditionsLabel->setWordWrap(true);
+        m_westernNoEditionsLabel->setStyleSheet(
+            QStringLiteral("color: rgba(255,255,255,0.5); padding: 12px 2px;"));
+        m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, m_westernNoEditionsLabel);
+    }
+    if (m_westernNoEditionsLabel) {
+        m_westernNoEditionsLabel->setVisible(westernNoEditions);
     }
 
     // No next-unread highlight on the MangaFire catalog path in v1 — that
@@ -2457,6 +2489,17 @@ void ComicsSeriesView::populateSourcesForRow(int row)
 void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
 {
     if (volumeNumber <= 0 || !m_sourcesPanel) {
+        return;
+    }
+
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Western (RCO) editions download via
+    // GetComics in a future arc, NOT the manga WeebCentral/Nyaa pipeline below.
+    // Firing weebCentralResolveRequested + the Nyaa torrent search for a Western
+    // collected edition returned junk/no results, so gate it off with an honest
+    // "coming soon" panel. The tile-selection highlight already ran in
+    // onVolumeRowActivated, so the edition still visibly selects.
+    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+        m_sourcesPanel->showComingSoon();
         return;
     }
 

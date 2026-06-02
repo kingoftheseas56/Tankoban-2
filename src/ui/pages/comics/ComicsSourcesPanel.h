@@ -89,6 +89,11 @@ public:
     void setContext(int volumeNumber, const QString& volumeTitle);
     void appendWeebCentralRow(int volumeNumber, const QStringList& chapterIds);
 
+    // COMICS_WESTERN_ADD 2026-06-02 — Western (RCO) editions download via GetComics
+    // in a future arc, not the manga (WeebCentral/Nyaa) pipeline. Shown instead of
+    // firing those bogus searches when a Western edition is selected.
+    void showComingSoon();
+
     QJsonObject devSnapshot() const;
     bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);
 

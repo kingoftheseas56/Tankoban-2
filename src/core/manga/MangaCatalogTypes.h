@@ -95,6 +95,12 @@ struct MangaCatalog {
     double              malScoreRaw = 0.0;      // 0.0 if unknown
     QString             source;                 // e.g. "mangafire_ingest.py v1"
     QString             notes;
+    // COMICS_WESTERN_ADD 2026-06-02 - additive, no schema-version bump.
+    // Series-level hero cover for the Western/RCO path. Manga loaders leave this
+    // empty (per-volume covers carry the hero there); the Western loader needs it
+    // so an editionless series still has a cover for the hero band + grid tile,
+    // since there is no volume row to carry it onto.
+    QString             seriesCover;
     // COMICS_WC_VOLUME_WIRING 2026-05-24 - additive, no schema-version bump.
     WeebCentralCacheBlock weebCentral;
     bool isValid() const { return !seriesId.isEmpty() && !volumes.isEmpty(); }

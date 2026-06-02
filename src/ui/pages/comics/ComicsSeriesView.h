@@ -424,6 +424,7 @@ private:
     QLabel*   m_aboutTitle     = nullptr;   // series title (Western path skips the hero title)
     QLabel*   m_aboutSynopsis  = nullptr;
     QLabel*   m_aboutMeta      = nullptr;   // "Author · Publisher · Year · Genre"
+    QLabel*   m_westernNoEditionsLabel = nullptr;  // editionless Western empty-state (spec §8)
     void buildAboutBlock();                 // lazy-construct the about-block widgets
     void updateAboutBlock(const tankoban::manga::MangaCatalog& catalog);
 

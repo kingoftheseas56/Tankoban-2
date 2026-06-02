@@ -2425,9 +2425,15 @@ void ComicsPage::refreshWesternGrid()
         // then async-fetch + cache the url via fetchPosterForTile, which calls
         // setThumbPath when the download lands. Empty cover -> text-tile
         // placeholder stays (cover-tolerant by design).
-        const QString coverUrl = cat->volumes.isEmpty()
-                                     ? QString()
-                                     : cat->volumes.first().coverUrlJapanese;
+        // Prefer the series-level cover (set by WesternCatalogLoader, survives an
+        // empty editions list); fall back to volume 1's cover for legacy baked
+        // files that predate the seriesCover field. (2026-06-02 — editionless
+        // series like The Walking Dead otherwise show a blank grid tile.)
+        const QString coverUrl = !cat->seriesCover.isEmpty()
+                                     ? cat->seriesCover
+                                     : (cat->volumes.isEmpty()
+                                            ? QString()
+                                            : cat->volumes.first().coverUrlJapanese);
         auto* card = new TileCard(QString(), cat->seriesTitle, tr("Western"));
         card->setProperty("westernJsonPath", path);
         card->setProperty("seriesName", cat->seriesTitle);
@@ -3136,7 +3142,14 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     // in-page state change so NavHistory captures the SearchResults state
     // (mode=searchResults + query) into the current entry and pushes a
     // fresh tankoyomiDetail entry for the target.
-    if (!m_inNavRestore) {
+    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Do NOT push this generic
+    // enteredFrom="search" layer for an RCO result: the async westernSeriesReady
+    // slot -> openWesternSeriesFromCatalog pushes its own enteredFrom="western"
+    // layer when the fetch lands, so pushing here too left TWO seriesView entries
+    // on the nav stack — the topbar Back chevron then restored the stale
+    // anilistId=0 "search" layer (silent no-render, needing two Back presses).
+    // The manga branch below still pushes its layer as before.
+    if (!m_inNavRestore && result.source != QLatin1String("readcomicsonline")) {
         QJsonObject blob;
         blob[QStringLiteral("seriesId")]    = result.id;
         blob[QStringLiteral("seriesTitle")] = result.title;

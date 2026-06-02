@@ -75,6 +75,10 @@ MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
     if (!seriesCover.isEmpty() && seriesCover.startsWith(QLatin1Char('/'))) {
         seriesCover = QStringLiteral("https://rcostation.xyz") + seriesCover;
     }
+    // Stash the (absolutised) series-level cover so it survives an empty editions
+    // list — an editionless live series has no volume to carry it onto, and the
+    // hero band + grid tile read this field directly. (2026-06-02.)
+    cat.seriesCover = seriesCover;
 
     cat.volumes.reserve(editionsArr.size());
     int ordinal = 1;
