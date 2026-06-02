@@ -17,6 +17,7 @@ class HttpFileDownloader : public QObject {
     Q_OBJECT
 public:
     explicit HttpFileDownloader(QNetworkAccessManager* nam, QObject* parent = nullptr);
+    ~HttpFileDownloader() override;   // aborts + cleans up an in-flight download
     void start(const QString& url, const QString& destPath);
     void cancel();
 
@@ -29,6 +30,7 @@ private:
     QNetworkAccessManager* m_nam   = nullptr;
     QNetworkReply*         m_reply = nullptr;  // non-owning while in flight; deleteLater in handler
     QFile*                 m_file  = nullptr;  // owned by this; cleaned up in handler
+    bool                   m_writeFailed = false;  // a chunk write came up short (disk full) -> fail
 };
 
 } // namespace tankoban::net
