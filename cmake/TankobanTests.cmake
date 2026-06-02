@@ -131,6 +131,8 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/WesternSeriesParseTest.cpp
         src/core/manga/GetComicsParse.cpp
         tests/core/manga/GetComicsParseTest.cpp
+        src/core/manga/ReadComicsPageParse.cpp
+        tests/core/manga/ReadComicsPageParseTest.cpp
         src/core/manga/WesternCatalogLoader.cpp
         tests/core/manga/WesternCatalogLoaderTest.cpp
     )
