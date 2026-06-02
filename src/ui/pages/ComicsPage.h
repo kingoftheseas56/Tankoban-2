@@ -563,6 +563,7 @@ private:
     // own screen). m_westernStackIndex captured from addWidget (index-agnostic).
     TileStrip*   m_westernGrid       = nullptr;
     QScrollArea* m_westernScroll     = nullptr;
+    QLineEdit*   m_westernSearchBar  = nullptr;   // live RCO search on the Western shelf
     QPushButton* m_mangaTabBtn       = nullptr;
     QPushButton* m_westernTabBtn     = nullptr;
     int          m_westernStackIndex = -1;

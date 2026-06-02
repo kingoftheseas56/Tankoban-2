@@ -2356,6 +2356,30 @@ void ComicsPage::buildWesternScreen()
     heading->setObjectName("LibraryHeading");
     v->addWidget(heading);
 
+    // Live RCO search on the Western shelf. Mirrors the manga LibrarySearch bar
+    // (same QSS objectName) but drives the source-aware search flow with
+    // readcomicsonline active, so Enter searches comics and surfaces results
+    // whose source == "readcomicsonline" (routed live in onSearchResultActivated).
+    m_westernSearchBar = new QLineEdit(page);
+    m_westernSearchBar->setObjectName("LibrarySearch");
+    m_westernSearchBar->setPlaceholderText(tr("Search Western comics — add any series"));
+    m_westernSearchBar->setClearButtonEnabled(true);
+    m_westernSearchBar->setFixedHeight(36);
+    m_westernSearchBar->setStyleSheet(
+        "QLineEdit#LibrarySearch { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);"
+        " border-radius: 8px; padding: 0 12px; color: #fff; }"
+        "QLineEdit#LibrarySearch:focus { border: 1px solid rgba(255,255,255,0.3); }");
+    connect(m_westernSearchBar, &QLineEdit::returnPressed, this, [this]() {
+        const QString q = m_westernSearchBar->text().trimmed();
+        if (q.isEmpty()) return;
+        // Belt-and-suspenders: ensure the shared search takeover targets RCO even
+        // if the user reached this bar via a path that skipped showWesternMode.
+        if (m_searchTakeover)
+            m_searchTakeover->setActiveSourceId(QStringLiteral("readcomicsonline"));
+        showSearchMode(q);
+    });
+    v->addWidget(m_westernSearchBar);
+
     m_westernGrid = new TileStrip(page);
     m_westernGrid->setMode(QStringLiteral("fixedGrid"));
     const int westernDensity = QSettings("Tankoban", "Tankoban").value("grid_cover_size", 1).toInt();
