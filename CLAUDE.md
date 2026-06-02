@@ -54,6 +54,8 @@ current picture; the canonical owner-per-domain map is `agents/routes.yml`.
 
 See `agents/GOVERNANCE.md` "Session Start — Reading Order". Slimmed 2026-04-16: VERSIONS.md + this kernel are always-required; everything else is conditional (route via `agents/routes.yml`).
 
+At wake read only YOUR latest recap + its trimmed transcript — not the recap archive. Older recaps + chat history are searchable on demand (grep / claude-mem), not auto-read.
+
 For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into the brotherhood's governance.
 
 ---
