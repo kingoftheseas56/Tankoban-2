@@ -32,6 +32,7 @@ class TorrentClient;
 namespace tankoban::manga {
     class NyaaRuntimeSource;
     class WeebCentralVolumePacker;
+    class WesternVolumeDownloader;
     namespace anilist {
         class AniListClient;
         class AniListCache;
@@ -399,6 +400,11 @@ private:
     void openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalog& catalog,
                                       const QString& jsonPath,
                                       bool onShelf);
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Connects all signals from
+    // m_westernDownloader into ComicsPage slots and wires
+    // m_tyVolumeSeriesView::downloadWesternEditionRequested -> request slot.
+    // Called once from setTorrentClient() after m_westernDownloader is constructed.
+    void wireWesternDownloader();
     void showMangaMode();
     void showWesternMode();
 
@@ -427,7 +433,8 @@ private:
     enum class PendingVolumeSourceKind {
         Catalog = 0,
         NyaaRuntime = 1,
-        WeebCentralPacker = 2
+        WeebCentralPacker = 2,
+        WesternGetComics = 3
     };
     struct PendingVolumeDispatch {
         PendingVolumeSourceKind kind = PendingVolumeSourceKind::Catalog;
@@ -602,6 +609,11 @@ private:
     ReadComicsScraper* m_readComicsScraper = nullptr;
     QJsonObject        m_pendingWesternJson;
     QString            m_pendingWesternSeriesId;
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). GetComics resolve + download
+    // provider. Constructed lazily in setTorrentClient() (alongside
+    // TorrentVolumeProvider) so the magnet path has a live TorrentClient.
+    // DDL path works without a TorrentClient (nam is always available).
+    tankoban::manga::WesternVolumeDownloader* m_westernDownloader = nullptr;
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
     // index. Scans data/mangafire_catalog/*.json at construction; consulted

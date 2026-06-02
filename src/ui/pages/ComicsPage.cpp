@@ -27,6 +27,7 @@
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/LocalMangaCatalogLoader.h"
 #include "core/manga/WesternCatalogLoader.h"
+#include "core/manga/WesternVolumeDownloader.h"
 #include "core/manga/ReadComicsScraper.h"
 #include "core/manga/mangafire/MangaFireCatalogClient.h"
 #include "core/manga/mangafire/MangaWeebCentralResolver.h"
@@ -101,6 +102,7 @@ static const QStringList COMIC_EXTS = {"*.cbz", "*.cbr", "*.rar"};
 static constexpr const char* TANKOYOMI_PREMIUM_SOURCE_ID = "tankoyomi_premium";
 static constexpr const char* WEEBCENTRAL_PACKER_SOURCE_ID = "weebcentral";
 static constexpr const char* MANGAFIRE_CATALOG_SOURCE_ID = "mangafire_catalog";
+static constexpr const char* GETCOMICS_SOURCE_ID = "getcomics";
 
 namespace {
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
@@ -977,6 +979,162 @@ void ComicsPage::setTorrentClient(TorrentClient* client)
     // not-yet-discovered peers will be picked up by addMagnet's tracker
     // bootstrap as usual).
     m_premiumProvider->replayLedger();
+
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). WesternVolumeDownloader is
+    // constructed here so the magnet path has a live TorrentClient. Mirror of
+    // TorrentVolumeProvider lazy-wire above: guard against double-construction on
+    // hypothetical future re-wire; use the shared NetSeam QNAM.
+    if (!m_westernDownloader) {
+        m_westernDownloader = new tankoban::manga::WesternVolumeDownloader(
+            m_nam, client, this);
+        wireWesternDownloader();
+    }
+}
+
+// COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1).
+// Wire the WesternVolumeDownloader signals and connect the series-view trigger.
+// Called once from setTorrentClient() after m_westernDownloader is non-null.
+void ComicsPage::wireWesternDownloader()
+{
+    Q_ASSERT(m_westernDownloader);
+
+    // --- Download trigger: series view emits, we call requestVolume ---
+    connect(m_tyVolumeSeriesView,
+            &tankoban::manga::comics::ComicsSeriesView::downloadWesternEditionRequested,
+            this,
+            [this](int volumeNumber, const QString& editionTitle, const QString& tierLabel) {
+        if (!m_westernDownloader || m_pendingWesternSeriesId.isEmpty()) {
+            qInfo("ComicsPage: downloadWesternEditionRequested ignored — "
+                  "no active Western series or downloader not ready");
+            return;
+        }
+
+        // Compute destination path: use the comics-root from TorrentClient if
+        // available, otherwise fall back next to the Western data dir.
+        QString comicsRoot;
+        if (m_torrentClient) {
+            comicsRoot = m_torrentClient->defaultPaths().value(QStringLiteral("comics"));
+        }
+        if (comicsRoot.isEmpty()) {
+            comicsRoot = QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                             .absoluteFilePath(QStringLiteral("../western_downloads"));
+        }
+
+        // Sanitise the series title to a safe directory name.
+        QString safeTitle = m_currentDetailSeriesTitle;
+        static const QRegularExpression kUnsafeDirChars(
+            QStringLiteral("[\\\\/:*?\"<>|]"));
+        safeTitle.replace(kUnsafeDirChars, QStringLiteral("_"));
+        safeTitle = safeTitle.trimmed();
+        if (safeTitle.isEmpty()) safeTitle = m_pendingWesternSeriesId;
+
+        const QString destPath = QDir(comicsRoot).absoluteFilePath(safeTitle);
+        if (!QDir().mkpath(destPath)) {
+            qInfo("ComicsPage: failed to mkpath Western dest %s",
+                  qUtf8Printable(destPath));
+            return;
+        }
+
+        // Auto-add the series to the Western shelf before downloading — mirrors
+        // addWesternToLibraryRequested so the shelf card appears without an
+        // explicit "Add to Library" click. Idempotent: writing the same JSON
+        // a second time is harmless (QSaveFile overwrites).
+        const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
+        const QString shelfPath =
+            QDir(dir).absoluteFilePath(m_pendingWesternSeriesId + QStringLiteral(".json"));
+        if (!m_pendingWesternJson.isEmpty() && !QFile::exists(shelfPath)) {
+            QDir().mkpath(dir);
+            const QByteArray bytes =
+                QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented);
+            QSaveFile sf(shelfPath);
+            if (sf.open(QIODevice::WriteOnly) &&
+                sf.write(bytes) == bytes.size() &&
+                sf.commit()) {
+                if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
+                refreshWesternGrid();
+            }
+        }
+
+        // Year comes from m_currentDetailSeriesTitle's catalog — retrieve it
+        // from the series view's current catalog via m_pendingWesternJson year field.
+        int year = 0;
+        const auto yearVal = m_pendingWesternJson.value(QStringLiteral("year"));
+        if (yearVal.isDouble()) year = static_cast<int>(yearVal.toDouble());
+        if (year <= 0) {
+            const auto publishedVal =
+                m_pendingWesternJson.value(QStringLiteral("publishedYear"));
+            if (publishedVal.isDouble())
+                year = static_cast<int>(publishedVal.toDouble());
+        }
+
+        qInfo("ComicsPage: Western download requested — series=%s vol=%d dest=%s",
+              qUtf8Printable(m_pendingWesternSeriesId),
+              volumeNumber,
+              qUtf8Printable(destPath));
+
+        m_westernDownloader->requestVolume(m_pendingWesternSeriesId, volumeNumber,
+                                           editionTitle, year, tierLabel, destPath);
+    });
+
+    // --- volumeCompleted: register in index + flip tile to Read ---
+    connect(m_westernDownloader,
+            &tankoban::manga::WesternVolumeDownloader::volumeCompleted,
+            this,
+            [this](const QString& seriesId, int volNumber, const QString& cbzPath) {
+        onProviderVolumeCompleted(seriesId, volNumber, cbzPath,
+            static_cast<int>(PendingVolumeSourceKind::WesternGetComics));
+    }, Qt::QueuedConnection);
+
+    // --- volumeProgress: paint percent on the tile ---
+    connect(m_westernDownloader,
+            &tankoban::manga::WesternVolumeDownloader::volumeProgress,
+            this,
+            [this](const QString& seriesId, int volNumber, int percent) {
+        // Only update the tile when this series is currently displayed.
+        if (!m_tyVolumeSeriesView) return;
+        const bool isCurrentSeries =
+            !m_pendingWesternSeriesId.isEmpty() &&
+            seriesId == m_pendingWesternSeriesId;
+        if (!isCurrentSeries) return;
+        // Reuse setVolumeStatusText to show "N%" on the tile while in flight.
+        const QString label = percent <= 0
+            ? QStringLiteral("Finding...")
+            : QStringLiteral("%1%").arg(percent);
+        m_tyVolumeSeriesView->setVolumeStatusText(volNumber, label);
+    }, Qt::QueuedConnection);
+
+    // --- volumeFailed: surface error text on the tile ---
+    connect(m_westernDownloader,
+            &tankoban::manga::WesternVolumeDownloader::volumeFailed,
+            this,
+            [this](const QString& seriesId, int volNumber, const QString& reason) {
+        // Delegate to the shared failed path (records in dispatch map if any,
+        // updates tile status).
+        onProviderVolumeFailed(seriesId, volNumber,
+                               QStringLiteral("resolve_failed"),
+                               reason,
+                               static_cast<int>(PendingVolumeSourceKind::WesternGetComics));
+    }, Qt::QueuedConnection);
+
+    // --- coverReady: paint per-edition cover on the tile ---
+    connect(m_westernDownloader,
+            &tankoban::manga::WesternVolumeDownloader::coverReady,
+            this,
+            [this](const QString& seriesId, int volNumber, const QString& coverUrl) {
+        if (!m_tyVolumeSeriesView || coverUrl.isEmpty()) return;
+        const bool isCurrentSeries =
+            !m_pendingWesternSeriesId.isEmpty() &&
+            seriesId == m_pendingWesternSeriesId;
+        if (!isCurrentSeries) return;
+        // loadCoverUrlForVolume is private in ComicsSeriesView; use the existing
+        // setVolumeCoverFromDisk path when the URL is a local path, else call
+        // the public async loader via a tankoctl-style NAM fetch is not exposed.
+        // For now we log and accept that a follow-up can wire
+        // loadCoverUrlForVolume as a public slot if desired.
+        Q_UNUSED(volNumber);
+        qInfo("ComicsPage: coverReady for Western series=%s vol=%d url=%s",
+              qUtf8Printable(seriesId), volNumber, qUtf8Printable(coverUrl));
+    }, Qt::QueuedConnection);
 }
 
 void ComicsPage::showEvent(QShowEvent* e)
@@ -2016,6 +2174,12 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
             // of "WeebCentral" for volumes packed by WeebCentralVolumePacker.
             sourceId = QString::fromLatin1(WEEBCENTRAL_PACKER_SOURCE_ID);
             break;
+        case PendingVolumeSourceKind::WesternGetComics:
+            // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Western volumes
+            // are attributed to GetComics so the downloads index and downloads
+            // page can display the correct source label.
+            sourceId = QString::fromLatin1(GETCOMICS_SOURCE_ID);
+            break;
     }
 
     if (anilistId <= 0) {
@@ -2024,7 +2188,8 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
 
     if (m_mangaDownloadIndex &&
         (kind == PendingVolumeSourceKind::NyaaRuntime ||
-         kind == PendingVolumeSourceKind::WeebCentralPacker)) {
+         kind == PendingVolumeSourceKind::WeebCentralPacker ||
+         kind == PendingVolumeSourceKind::WesternGetComics)) {
         m_mangaDownloadIndex->registerVolume(sourceId, seriesId, volumeNumber, cbzPath,
                                              QFileInfo(cbzPath).size(), chapterIds);
     }
@@ -2033,9 +2198,17 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
         kind == PendingVolumeSourceKind::WeebCentralPacker &&
         seriesId == m_currentWcResolveKey.seriesId &&
         volumeNumber == m_currentWcResolveKey.volumeNumber;
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Western volumes have no
+    // AniList id (m_currentDetailAnilistId == 0); match them by seriesId
+    // against m_pendingWesternSeriesId (the live series currently open).
+    const bool currentWesternVolume =
+        kind == PendingVolumeSourceKind::WesternGetComics &&
+        !m_pendingWesternSeriesId.isEmpty() &&
+        seriesId == m_pendingWesternSeriesId;
     if (m_tyVolumeSeriesView &&
         ((anilistId > 0 && m_tyVolumeSeriesView->currentAnilistId() == anilistId) ||
-         currentMangaFireVolume)) {
+         currentMangaFireVolume ||
+         currentWesternVolume)) {
         m_tyVolumeSeriesView->setVolumeDownloadState(volumeNumber, cbzPath, true);
     }
 
@@ -2079,9 +2252,14 @@ void ComicsPage::onProviderVolumeFailed(const QString& seriesId,
         kind == PendingVolumeSourceKind::WeebCentralPacker &&
         seriesId == m_currentWcResolveKey.seriesId &&
         volumeNumber == m_currentWcResolveKey.volumeNumber;
+    const bool currentWesternVolume =
+        kind == PendingVolumeSourceKind::WesternGetComics &&
+        !m_pendingWesternSeriesId.isEmpty() &&
+        seriesId == m_pendingWesternSeriesId;
     if (m_tyVolumeSeriesView &&
         ((anilistId > 0 && m_tyVolumeSeriesView->currentAnilistId() == anilistId) ||
-         currentMangaFireVolume)) {
+         currentMangaFireVolume ||
+         currentWesternVolume)) {
         m_tyVolumeSeriesView->setVolumeStatusText(volumeNumber, QStringLiteral("Failed"));
     }
 

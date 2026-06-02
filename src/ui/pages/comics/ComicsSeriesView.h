@@ -258,6 +258,15 @@ signals:
     // writes the JSON to the shelf folder and refreshes the grid.
     void addWesternToLibraryRequested();
 
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Emitted when the user
+    // selects an edition in a Western (RCO) series view. ComicsPage routes
+    // this to WesternVolumeDownloader::requestVolume(). editionTitle and
+    // tierLabel come from the matched MangaVolume (titleEnglish / groupingLabel).
+    // The caller derives the year from m_currentMangaCatalog.publishedYearStart.
+    void downloadWesternEditionRequested(int volumeNumber,
+                                         const QString& editionTitle,
+                                         const QString& tierLabel);
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 

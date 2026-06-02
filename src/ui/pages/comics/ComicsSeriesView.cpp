@@ -2525,14 +2525,26 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
         return;
     }
 
-    // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Western (RCO) editions download via
-    // GetComics in a future arc, NOT the manga WeebCentral/Nyaa pipeline below.
-    // Firing weebCentralResolveRequested + the Nyaa torrent search for a Western
-    // collected edition returned junk/no results, so gate it off with an honest
-    // "coming soon" panel. The tile-selection highlight already ran in
-    // onVolumeRowActivated, so the edition still visibly selects.
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Western (RCO) editions now
+    // download via WesternVolumeDownloader (GetComics resolve + magnet/DDL).
+    // Emit the signal so ComicsPage routes to the provider; keep the
+    // tile-selection highlight that already ran in onVolumeRowActivated.
+    // Volumes already downloaded / in progress are handled by the existing
+    // Complete-state path at the top of onVolumeRowActivated (cbzPath non-empty
+    // => openVolume emitted, never reaching here).
     if (m_currentMangaCatalog.source == QLatin1String("rco")) {
-        m_sourcesPanel->showComingSoon();
+        // Look up the matching catalog volume for its edition metadata.
+        // Fall back to empty strings when the volume has no record (graceful).
+        QString editionTitle;
+        QString tierLabel;
+        for (const tankoban::manga::MangaVolume& vol : m_currentMangaCatalog.volumes) {
+            if (vol.volumeNumber == volumeNumber) {
+                editionTitle = vol.titleEnglish;
+                tierLabel    = vol.groupingLabel;
+                break;
+            }
+        }
+        emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel);
         return;
     }
 
