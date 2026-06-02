@@ -622,7 +622,7 @@ void VideoPlayer::teardownUi()
     if (m_brightnessPopover && m_brightnessPopover->isOpen()) m_brightnessPopover->hide();  // Task 9
 }
 
-void VideoPlayer::stopPlayback(bool isIntentional)
+void VideoPlayer::stopPlayback(bool isIntentional, bool asyncTeardown)
 {
     // User-close path (isIntentional=true, default) — full teardown:
     // UI + sidecar process + identity state. Crash-recovery-style stops
@@ -649,10 +649,19 @@ void VideoPlayer::stopPlayback(bool isIntentional)
         // mid-write, the process stayed alive and audio kept playing until
         // app exit (when ~SidecarProcess hit its existing wait+kill backstop).
         // 500ms covers the typical ~50-100ms graceful-exit window with
-        // headroom; force-kill on timeout. Synchronous block on the GUI
-        // thread is acceptable here — close-button latency budget tolerates
-        // half a second.
-        m_backend->ensureTerminated(500);
+        // headroom; force-kill on timeout.
+        //
+        // STABILITY_SWEEP 2026-06-02 (Agent 3, P1) — the in-app close path
+        // (closeVideoPlayer) passes asyncTeardown=true so this no longer blocks
+        // the GUI thread for up to 500ms on every return-to-library. The async
+        // backstop kills the sidecar at the same deadline without freezing the
+        // UI; audio death timing is identical (graceful exit, or kill at 500ms).
+        // The app-exit path (closeEvent) keeps the synchronous wait because the
+        // event loop stops on quit() before a queued backstop could fire.
+        if (asyncTeardown)
+            m_backend->ensureTerminatedAsync(500);
+        else
+            m_backend->ensureTerminated(500);
     }
 
     // PLAYER_LIFECYCLE_FIX Phase 3 Batch 3.1 + 3.2 — intentional stop

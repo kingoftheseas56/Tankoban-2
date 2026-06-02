@@ -100,6 +100,10 @@ public:
     // for the destructor-on-app-exit case.
     void ensureTerminated(int timeoutMs = 500) override;
 
+    // STABILITY_SWEEP 2026-06-02 (Agent 3, P1) — non-blocking close backstop
+    // for the in-app close path. See IPlayerBackend::ensureTerminatedAsync.
+    void ensureTerminatedAsync(int timeoutMs = 500) override;
+
     // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence.
     // Sends `stop` and stores onComplete to fire when the sidecar emits
     // its matching `stop_ack` (emitted after teardown_decode completes,

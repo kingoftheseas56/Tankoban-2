@@ -1637,8 +1637,13 @@ void MainWindow::openVideoFromCli(const QString& filePath)
 
 void MainWindow::closeVideoPlayer()
 {
-    // Stop playback (kills audio)
-    m_videoPlayer->stopPlayback();
+    // Stop playback (kills audio). STABILITY_SWEEP 2026-06-02 (Agent 3, P1) —
+    // asyncTeardown=true: the in-app close hides + reuses the player, so the
+    // event loop stays alive and the sidecar teardown runs via a non-blocking
+    // kill backstop instead of a synchronous up-to-500ms GUI freeze. Audio
+    // still dies on the same deadline. (closeEvent's app-exit stopPlayback()
+    // stays synchronous — the loop stops on quit() there.)
+    m_videoPlayer->stopPlayback(/*isIntentional=*/true, /*asyncTeardown=*/true);
 
     // Exit fullscreen if we're in it
     if (isFullScreen()) {

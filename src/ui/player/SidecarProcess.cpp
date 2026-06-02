@@ -121,6 +121,31 @@ void SidecarProcess::ensureTerminated(int timeoutMs)
     }
 }
 
+void SidecarProcess::ensureTerminatedAsync(int timeoutMs)
+{
+    // STABILITY_SWEEP 2026-06-02 (Agent 3, P1) — non-blocking sibling of
+    // ensureTerminated(). The caller (VideoPlayer::stopPlayback on the in-app
+    // close path) has already issued sendStop() + sendShutdown(), so the
+    // sidecar is halting audio + exiting. Rather than freeze the GUI thread on
+    // waitForFinished, arm a one-shot kill backstop: if the process hasn't
+    // exited on its own by timeoutMs, force-kill it. Audio dies at the SAME
+    // moment as the synchronous path (graceful exit ~50-100ms, or kill at
+    // timeoutMs) — only the GUI-thread block is removed. onProcessFinished
+    // (m_intentionalShutdown is set by sendShutdown) reaps the exit without
+    // emitting processCrashed. The app-exit path keeps the synchronous
+    // ensureTerminated() + ~SidecarProcess destructor backstop because the
+    // event loop stops on QApplication::quit() (a queued timer would never
+    // fire there).
+    if (m_process->state() == QProcess::NotRunning) return;
+    QPointer<SidecarProcess> guard(this);
+    QTimer::singleShot(timeoutMs, this, [guard]() {
+        if (!guard) return;
+        if (guard->m_process->state() == QProcess::NotRunning) return;
+        debugLog("[Sidecar] ensureTerminatedAsync backstop — force-killing un-exited sidecar");
+        guard->m_process->kill();
+    });
+}
+
 void SidecarProcess::start()
 {
     QString path = sidecarPath();

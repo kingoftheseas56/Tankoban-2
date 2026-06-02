@@ -62,7 +62,16 @@ public:
     // all identity state so a post-stop `onSidecarReady` event cannot re-
     // open the just-closed file (audit P1-5). Default preserves existing
     // call-site semantics — all present callers are user-close paths.
-    void stopPlayback(bool isIntentional = true);
+    //
+    // asyncTeardown (STABILITY_SWEEP 2026-06-02 P1): when true, the sidecar is
+    // torn down via the non-blocking ensureTerminatedAsync() backstop instead
+    // of the synchronous ensureTerminated() — eliminates the up-to-500ms GUI
+    // freeze on the in-app close path (closeVideoPlayer, which hides + reuses
+    // the player so the event loop stays alive to fire the kill backstop).
+    // Default false keeps the synchronous teardown for the app-exit path
+    // (closeEvent → quit() stops the loop, so a queued kill would never fire —
+    // the ~SidecarProcess destructor is the backstop there).
+    void stopPlayback(bool isIntentional = true, bool asyncTeardown = false);
 
     // Persistence mode — gates the three "videos"-domain bridge reads/writes
     // inside VideoPlayer (resume position read, progress write, track-

@@ -60,6 +60,17 @@ public:
     // appropriate for the destructor-on-app-exit case.
     virtual void ensureTerminated(int timeoutMs = 500) = 0;
 
+    // STABILITY_SWEEP 2026-06-02 (Agent 3, P1) — non-blocking sibling of
+    // ensureTerminated(). sendShutdown() has already told the backend to halt
+    // audio + exit; this arms a one-shot force-kill backstop at timeoutMs
+    // WITHOUT blocking the GUI thread. Audio dies at the same moment as the
+    // synchronous path (graceful exit, or kill at timeoutMs) — only the freeze
+    // is removed. Requires a live event loop for the backstop to fire, so it
+    // is for the in-app close path (player hidden + reused); app-exit keeps the
+    // synchronous ensureTerminated()/destructor backstop. Default no-op so a
+    // backend that doesn't need it inherits a safe nothing.
+    virtual void ensureTerminatedAsync(int /*timeoutMs*/ = 500) {}
+
     // Edge-case fallback used by VideoPlayer when sendStopWithCallback times
     // out (backend hang). Kills any running process synchronously, then starts
     // a fresh backend. After this returns, the caller relies on `ready` event
