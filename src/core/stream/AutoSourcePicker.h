@@ -24,6 +24,21 @@ public:
     static std::optional<int> pick(const QList<SourceCandidate>& candidates,
                                    int runtimeMinutes = 0);
 
+    // Show-identity gate (DOWNLOAD BUG 2026-06-02): when showTitle is non-empty,
+    // candidates whose release title lacks the show's significant tokens are
+    // rejected BEFORE ranking — so a One Piece request can never download a
+    // 'Community' pack just because it is better-seeded. Empty showTitle = no gate
+    // (identical to the runtime-only overload above).
+    static std::optional<int> pick(const QList<SourceCandidate>& candidates,
+                                   const QString& showTitle,
+                                   int runtimeMinutes = 0);
+
+    // True iff every significant token of showTitle appears as a whole word in
+    // candidateTitle (both normalized: lowercased, separators->space). Stopwords
+    // and 1-char tokens are ignored; an all-stopword show title never blocks.
+    static bool   titleMatchesShow(const QString& candidateTitle,
+                                   const QString& showTitle);
+
     static bool   isCamRip(const QString& title);
     static double impliedBitrateMbps(qint64 sizeBytes, int runtimeMinutes);
 

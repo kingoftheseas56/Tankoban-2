@@ -1,5 +1,7 @@
 #include "core/stream/AutoSourcePicker.h"
 #include <QRegularExpression>
+#include <QSet>
+#include <QStringList>
 #include <algorithm>
 #include "core/stream/QualityScorer.h"
 
@@ -21,7 +23,44 @@ double AutoSourcePicker::impliedBitrateMbps(qint64 sizeBytes, int runtimeMinutes
          / (static_cast<double>(runtimeMinutes) * 60.0) / 1.0e6;
 }
 
+bool AutoSourcePicker::titleMatchesShow(const QString& candidateTitle,
+                                        const QString& showTitle) {
+    auto norm = [](const QString& s) {
+        static const QRegularExpression nonAlnum(QStringLiteral("[^a-z0-9]+"));
+        QString t = s.toLower();
+        t.replace(nonAlnum, QStringLiteral(" "));
+        return t.simplified();
+    };
+    const QString show = norm(showTitle);
+    if (show.isEmpty()) return true;  // nothing to gate on
+
+    static const QSet<QString> kStop = {
+        QStringLiteral("the"),    QStringLiteral("a"),      QStringLiteral("an"),
+        QStringLiteral("of"),     QStringLiteral("and"),    QStringLiteral("to"),
+        QStringLiteral("in"),     QStringLiteral("season"), QStringLiteral("series")};
+
+    const QStringList candWords =
+        norm(candidateTitle).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    const QSet<QString> candSet(candWords.begin(), candWords.end());
+
+    int significant = 0;
+    int matched = 0;
+    for (const QString& w : show.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        if (w.size() < 2 || kStop.contains(w)) continue;  // skip noise tokens
+        ++significant;
+        if (candSet.contains(w)) ++matched;
+    }
+    if (significant == 0) return true;     // show title was all stopwords/short
+    return matched == significant;          // every significant show token present
+}
+
 std::optional<int> AutoSourcePicker::pick(const QList<SourceCandidate>& candidates,
+                                          int runtimeMinutes) {
+    return pick(candidates, QString(), runtimeMinutes);  // no show gate
+}
+
+std::optional<int> AutoSourcePicker::pick(const QList<SourceCandidate>& candidates,
+                                          const QString& showTitle,
                                           int runtimeMinutes) {
     // Step 1 - hard filters.
     QList<int> survivors;
@@ -30,6 +69,9 @@ std::optional<int> AutoSourcePicker::pick(const QList<SourceCandidate>& candidat
         if (cand.qualitySort != kRequiredQualitySort) continue;  // 1080p only
         if (cand.seeders <= 0) continue;                          // dead torrent
         if (isCamRip(cand.title)) continue;                       // camcorder rip
+        // Show-identity gate: never pick a release that isn't the requested
+        // show, no matter how well-seeded (the One Piece -> Community bug).
+        if (!showTitle.isEmpty() && !titleMatchesShow(cand.title, showTitle)) continue;
         survivors.append(i);
     }
     if (survivors.isEmpty()) return std::nullopt;                 // no source found

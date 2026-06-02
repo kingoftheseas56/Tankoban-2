@@ -91,3 +91,44 @@ TEST(AutoSourcePicker, NegativeSizeTreatedAsUnknown) {
 TEST(AutoSourcePicker, EmptyListReturnsNone) {
     EXPECT_FALSE(AutoSourcePicker::pick({}, 24).has_value());
 }
+
+// ── Show-identity gate (DOWNLOAD BUG 2026-06-02) ────────────────────────────
+// Clicking Download on One Piece downloaded 'Community' because the picker
+// ranked by seeders/quality and never checked the result was the right show.
+// pick(candidates, showTitle, runtime) rejects candidates whose release title
+// lacks the show's significant tokens BEFORE ranking.
+
+TEST(AutoSourcePicker, TitleGateSkipsWrongShowEvenIfBetterSeeded) {
+    QList<SourceCandidate> v {
+        c("Community.S01-S06.COMPLETE.1080p.BluRay.x265-POIASD", 5000, 50000000000LL, 3),
+        c("One Piece - 1164 [1080p].mkv",                         800,  1400000000LL,  3),
+    };
+    auto idx = AutoSourcePicker::pick(v, QStringLiteral("One Piece"), 24);
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(*idx, 1) << "must skip the better-seeded Community pack and pick One Piece";
+}
+
+TEST(AutoSourcePicker, TitleGateReturnsNoneWhenNoCandidateMatchesShow) {
+    QList<SourceCandidate> v {
+        c("Community.S01-S06.COMPLETE.1080p.BluRay.x265", 5000, 50000000000LL, 3),
+        c("Friends.S01.1080p.BluRay.x265",                4000, 40000000000LL, 3),
+    };
+    EXPECT_FALSE(AutoSourcePicker::pick(v, QStringLiteral("One Piece"), 24).has_value());
+}
+
+TEST(AutoSourcePicker, TitleMatchesShowNormalizesSeparatorsAndTokens) {
+    EXPECT_TRUE(AutoSourcePicker::titleMatchesShow(
+        QStringLiteral("One.Piece.1164.1080p.WEB-DL"), QStringLiteral("One Piece")));
+    EXPECT_TRUE(AutoSourcePicker::titleMatchesShow(
+        QStringLiteral("[Erai-raws] One Piece - 1164 [1080p]"), QStringLiteral("One Piece")));
+    EXPECT_FALSE(AutoSourcePicker::titleMatchesShow(
+        QStringLiteral("Community.S01-S06.COMPLETE.1080p"), QStringLiteral("One Piece")));
+    EXPECT_FALSE(AutoSourcePicker::titleMatchesShow(  // shares only the stop-ish 'one'
+        QStringLiteral("One.Tree.Hill.S01.1080p"), QStringLiteral("One Piece")));
+}
+
+TEST(AutoSourcePicker, EmptyShowTitleSkipsGate) {
+    QList<SourceCandidate> v { c("Anything 1080p", 1000, 1400000000LL, 3) };
+    EXPECT_TRUE(AutoSourcePicker::pick(v, 24).has_value());            // int overload
+    EXPECT_TRUE(AutoSourcePicker::pick(v, QString(), 24).has_value()); // empty gate
+}
