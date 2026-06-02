@@ -44,6 +44,13 @@ public:
     void close();
     bool isOpen() const;
 
+    // Durability / self-heal (TORRENT_DB_DURABILITY 2026-06-02).
+    // Probe a SQLite file with PRAGMA quick_check on a throwaway connection.
+    // Returns true iff the file opens and reports "ok" (healthy). A malformed
+    // file ("database disk image is malformed") returns false. Static + reusable
+    // so the manga/book SQLite stores can adopt the same pre-open guard.
+    static bool databaseFileIsHealthy(const QString& dbFilePath);
+
     // Schema meta — schema_version, migration_completed_at, legacy_first_clean_boot_at, etc.
     int schemaVersion();
     void setSchemaVersion(int version);
@@ -95,7 +102,18 @@ public:
     std::vector<StreamDownloadRow> listStreamDownloads();
     std::vector<StreamDownloadRow> listStreamDownloadsByImdb(const QString& imdbId, int season);
 
+signals:
+    // Emitted by open() when a malformed DB was detected, backed up, and
+    // replaced with a fresh empty schema. Consumers (the download index)
+    // should rebuild-from-disk since persisted state was reset.
+    void databaseRecovered();
+
 private:
+    // Self-heal a malformed DB at open time: backs the file (+ -wal/-shm
+    // sidecars) up to <db>.corrupt-<timestamp>, then leaves the path clear for
+    // a fresh open(). Returns true if the backup succeeded. (TORRENT_DB_DURABILITY)
+    bool backupCorruptDatabase(const QString& dbFilePath);
+
     QString m_connectionName;
     QSqlDatabase m_db;
     bool m_open = false;

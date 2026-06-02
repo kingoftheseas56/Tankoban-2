@@ -9,6 +9,9 @@
 
 #include "TorrentRepository.h"
 
+#include <QAtomicInt>
+#include <QDateTime>
+#include <QFile>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStringList>
@@ -137,6 +140,24 @@ TorrentRepository::~TorrentRepository() {
 
 // ─── lifecycle ───────────────────────────────────────────────────────────────
 
+namespace {
+
+// PRAGMA quick_check on an OPEN connection. A healthy DB returns a single row
+// "ok"; a malformed DB ("database disk image is malformed") returns error rows
+// or fails to exec — both map to false. quick_check is chosen over the
+// exhaustive integrity_check for a fast per-launch gate.
+bool connectionQuickCheckOk(QSqlDatabase& db) {
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("PRAGMA quick_check")))
+        return false;
+    if (!q.next())
+        return false;
+    return q.value(0).toString().compare(QStringLiteral("ok"),
+                                         Qt::CaseInsensitive) == 0;
+}
+
+}  // namespace
+
 bool TorrentRepository::open(const QString& dbFilePath) {
     if (m_open) return true;
 
@@ -148,6 +169,36 @@ bool TorrentRepository::open(const QString& dbFilePath) {
         return false;
     }
 
+    // Durability self-heal (TORRENT_DB_DURABILITY 2026-06-02). SQLite opens a
+    // malformed file without complaint — the corruption only surfaces on the
+    // first real query, which is what let a bad torrents.db survive into the
+    // boot reconcile and hammer the UI thread into "Not Responding". Detect it
+    // up front and recover: back the bad file up, recreate a fresh schema, and
+    // signal the index layer to rebuild-from-disk.
+    bool recovered = false;
+    if (!connectionQuickCheckOk(m_db)) {
+        qWarning() << "[TorrentRepository] torrents.db failed quick_check "
+                      "(malformed); backing up + recreating:" << dbFilePath;
+        m_db.close();
+        QSqlDatabase::removeDatabase(m_connectionName);
+        if (!backupCorruptDatabase(dbFilePath)) {
+            qWarning() << "[TorrentRepository] could not move corrupt DB aside; "
+                          "aborting open";
+            return false;
+        }
+        // Reopen onto the now-clear path — a fresh empty file.
+        m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                         m_connectionName);
+        m_db.setDatabaseName(dbFilePath);
+        if (!m_db.open()) {
+            qWarning() << "[TorrentRepository] reopen after recovery failed:"
+                       << m_db.lastError().text();
+            QSqlDatabase::removeDatabase(m_connectionName);
+            return false;
+        }
+        recovered = true;
+    }
+
     m_open = true;
     if (!initSchema()) {
         qWarning() << "[TorrentRepository] initSchema failed; closing DB";
@@ -155,7 +206,54 @@ bool TorrentRepository::open(const QString& dbFilePath) {
         return false;
     }
 
+    if (recovered)
+        emit databaseRecovered();
+
     return true;
+}
+
+bool TorrentRepository::databaseFileIsHealthy(const QString& dbFilePath) {
+    static QAtomicInt probeCounter{0};
+    const QString conn = QStringLiteral("TorrentRepoHealthProbe_%1")
+                             .arg(probeCounter.fetchAndAddRelaxed(1));
+    bool healthy = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                    conn);
+        db.setDatabaseName(dbFilePath);
+        if (db.open()) {
+            healthy = connectionQuickCheckOk(db);
+            db.close();
+        }
+    }  // db destroyed here, before removeDatabase, to avoid "still in use"
+    QSqlDatabase::removeDatabase(conn);
+    return healthy;
+}
+
+bool TorrentRepository::backupCorruptDatabase(const QString& dbFilePath) {
+    const QString suffix =
+        QStringLiteral(".corrupt-")
+        + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
+
+    // Move the main DB file out of the way, plus its WAL/SHM sidecars so the
+    // fresh open() starts from a clean slate (a stale -wal could re-corrupt).
+    const QStringList parts = {
+        dbFilePath,
+        dbFilePath + QStringLiteral("-wal"),
+        dbFilePath + QStringLiteral("-shm"),
+    };
+    bool mainMoved = false;
+    for (const QString& p : parts) {
+        if (!QFile::exists(p)) continue;
+        const QString dst = p + suffix;
+        QFile::remove(dst);  // clear any prior backup colliding on the stamp
+        if (QFile::rename(p, dst)) {
+            if (p == dbFilePath) mainMoved = true;
+        } else {
+            qWarning() << "[TorrentRepository] failed to move" << p << "->" << dst;
+        }
+    }
+    return mainMoved;
 }
 
 namespace {

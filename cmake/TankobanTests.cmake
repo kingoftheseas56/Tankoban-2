@@ -42,6 +42,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/torrent/test_legacy_importer_groups.cpp
         tests/core/torrent/test_legacy_importer_downloads.cpp
         tests/core/torrent/test_legacy_importer_orchestrator.cpp
+        tests/core/torrent/test_torrent_repository_durability.cpp
         src/core/torrent/TorrentRepository.cpp
         src/core/torrent/LegacyImporter.cpp
         # Per-show transfer lane queue (TANKORENT_QUALITY_AND_QUEUE Phase 1)
