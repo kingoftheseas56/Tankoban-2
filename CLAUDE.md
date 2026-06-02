@@ -90,6 +90,8 @@ Long-term memory: `C:\Users\Suprabha\.claude\projects\c--Users-Suprabha-Desktop-
 
 Archived memories: `memory/_archive/INDEX.md`. Quarterly audit per File Hygiene section in `agents/GOVERNANCE.md`.
 
+Memory freshness: each fact carries `status` (active/superseded) + `last_verified` (YYYY-MM-DD) so a recalled memory shows its own age before you act on it. Audit staleness with `python scripts/memory_lint.py` (flags missing fields + facts >120d unverified).
+
 ---
 
 ## New Agent / Consultant Onboarding
