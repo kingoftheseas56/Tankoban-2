@@ -144,6 +144,7 @@ set(SOURCES
     src/core/manga/LocalMangaCatalogLoader.cpp
     src/core/manga/WesternCatalogLoader.cpp
     src/core/manga/WesternSeriesParse.cpp
+    src/core/manga/GetComicsParse.cpp
     src/core/manga/LocalMangaCatalogIndex.cpp
     src/core/manga/mangafire/MangaFireCatalogClient.cpp
     src/core/manga/mangafire/MangaWeebCentralResolver.cpp
