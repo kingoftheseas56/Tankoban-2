@@ -133,6 +133,9 @@ public:
     QJsonObject devSelectVolume(int row);
     QJsonObject devSourcesSnapshot() const;
     QJsonObject devDispatchVolume(int volumeNumber, const QString& source);
+    // v1.11 — read-only tile accessor for the Western download smoke harness.
+    const tankoban::ui::comics::VolumeTile* tileForVolume(int volumeNumber) const;
+
 
 public slots:
     void setVolumeDownloadState(int volumeNumber, const QString& cbzPath,

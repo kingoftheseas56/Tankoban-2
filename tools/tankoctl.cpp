@@ -265,6 +265,12 @@ void printUsage(QTextStream& err)
         << "  comics-dispatch-volume <seriesId|anilistId> <volume> [--source kind|index]\n"
         << "                           dispatch active volume source\n"
         << "  comics-get-sources       current Comics sources panel snapshot\n"
+        << "  comics-open-western-series <seriesId>\n"
+        << "                           open a baked Western series from data/western_catalogue/\n"
+        << "  comics-download-western-edition <volumeNumber>\n"
+        << "                           trigger download of edition #N of the open Western series\n"
+        << "  comics-get-western-download-state [<volumeNumber>]\n"
+        << "                           volume rows + tile download state for the open Western series\n"
         << "\n"
         << "  v1.3 stream-side bridge expansion (Agent 4, 2026-05-19):\n"
         << "  stream-open-detail <imdbId>\n"
@@ -695,6 +701,35 @@ int main(int argc, char** argv)
                 return 64;
             }
             payload["source"] = a[++i];
+        }
+    } else if (sub == QLatin1String("comics-open-western-series")) {
+        if (a.size() < 3) {
+            err << "comics-open-western-series requires <seriesId>\n";
+            return 64;
+        }
+        payload["seriesId"] = a[2];
+    } else if (sub == QLatin1String("comics-download-western-edition")) {
+        if (a.size() < 3) {
+            err << "comics-download-western-edition requires <volumeNumber>\n";
+            return 64;
+        }
+        bool ok = false;
+        const int volume = a[2].toInt(&ok);
+        if (!ok || volume <= 0) {
+            err << "comics-download-western-edition volumeNumber must be a positive integer\n";
+            return 64;
+        }
+        payload["volumeNumber"] = volume;
+    } else if (sub == QLatin1String("comics-get-western-download-state")) {
+        // volumeNumber is optional; omit to get all volumes.
+        if (a.size() >= 3) {
+            bool ok = false;
+            const int volume = a[2].toInt(&ok);
+            if (!ok || volume <= 0) {
+                err << "comics-get-western-download-state volumeNumber must be a positive integer\n";
+                return 64;
+            }
+            payload["volumeNumber"] = volume;
         }
     } else if (sub == QLatin1String("stream-open-detail")) {
         // v1.3 stream-side bridge expansion (Agent 4, 2026-05-19).

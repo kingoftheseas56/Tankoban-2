@@ -2755,6 +2755,12 @@ QJsonObject ComicsSeriesView::devSourcesSnapshot() const
     return m_sourcesPanel ? m_sourcesPanel->devSnapshot() : QJsonObject{};
 }
 
+const tankoban::ui::comics::VolumeTile*
+ComicsSeriesView::tileForVolume(int volumeNumber) const
+{
+    return m_volumeTilesByVolumeNumber.value(volumeNumber, nullptr);
+}
+
 QJsonObject ComicsSeriesView::devDispatchVolume(int volumeNumber, const QString& source)
 {
     QJsonObject out;

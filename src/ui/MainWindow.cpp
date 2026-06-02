@@ -1792,6 +1792,10 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                          "comics_open_series","comics_open_chapter",
                          "comics_search_tankoyomi","comics_get_downloads",
                          "comics_dispatch_volume","comics_get_sources",
+                         // v1.11 Western download smoke harness (2026-06-02).
+                         "comics_open_western_series",
+                         "comics_download_western_edition",
+                         "comics_get_western_download_state",
                          // v1.3 books-side bridge (Phase D.1, 2026-05-19).
                          "books_get_state","books_get_library",
                          "books_refresh_library","books_search_library",
@@ -2270,6 +2274,36 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         if (!comics)
             return err("INTERNAL", "ComicsPage not initialized");
         return reply(comics->devSourcesSnapshot());
+    }
+
+    // v1.11 Western download smoke harness (2026-06-02).
+    if (cmd == QLatin1String("comics_open_western_series")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const QString seriesId = payload.value("seriesId").toString();
+        if (seriesId.isEmpty())
+            return err("BAD_REQUEST", "payload.seriesId required");
+        activatePage(QStringLiteral("comics"));
+        return reply(comics->devOpenWesternSeries(seriesId));
+    }
+
+    if (cmd == QLatin1String("comics_download_western_edition")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const int volumeNumber = payload.value("volumeNumber").toInt();
+        if (volumeNumber <= 0)
+            return err("BAD_REQUEST", "payload.volumeNumber must be a positive integer");
+        return reply(comics->devDownloadWesternEdition(volumeNumber));
+    }
+
+    if (cmd == QLatin1String("comics_get_western_download_state")) {
+        auto* comics = comicsPage();
+        if (!comics)
+            return err("INTERNAL", "ComicsPage not initialized");
+        const int volumeNumber = payload.value("volumeNumber").toInt(0);
+        return reply(comics->devWesternDownloadState(volumeNumber));
     }
 
     if (cmd == QLatin1String("dump_ui")) {

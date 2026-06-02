@@ -36,6 +36,7 @@
 #include "comics/ComicsTankoyomiSearchWidget.h"
 #include "comics/ComicsSeriesView.h"
 #include "comics/ComicsSourcesPanel.h"
+#include "comics/VolumeTile.h"
 
 #include "ui/ContextMenuHelper.h"
 #include "ui/readers/comic_progress_key.h"
@@ -4707,6 +4708,111 @@ QJsonObject ComicsPage::devSourcesSnapshot() const
     if (!m_tyVolumeSeriesView)
         return QJsonObject{{QStringLiteral("sources"), QJsonValue::Null}};
     return QJsonObject{{QStringLiteral("sources"), m_tyVolumeSeriesView->devSourcesSnapshot()}};
+}
+
+// -----------------------------------------------------------------------
+// v1.11 Western download smoke harness (2026-06-02).
+// Three headless commands so a smoke harness can open a baked Western series,
+// trigger an edition download, and poll volume state without touching the UI.
+// -----------------------------------------------------------------------
+
+QJsonObject ComicsPage::devOpenWesternSeries(const QString& seriesId)
+{
+    if (seriesId.trimmed().isEmpty()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("seriesId required")}};
+    }
+    const QString path =
+        QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+            .absoluteFilePath(seriesId + QLatin1String(".json"));
+    if (!QFile::exists(path)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("catalogue file not found: ") + path}};
+    }
+    openWesternSeriesFromJson(path);
+    // openWesternSeriesFromJson sets m_pendingWesternSeriesId + m_currentDetailSeriesTitle.
+    const int editionCount = m_tyVolumeSeriesView
+        ? m_tyVolumeSeriesView->devSnapshot().value(QStringLiteral("tileCount")).toInt()
+        : 0;
+    return QJsonObject{{QStringLiteral("ok"),           true},
+                       {QStringLiteral("seriesId"),     m_pendingWesternSeriesId},
+                       {QStringLiteral("seriesTitle"),  m_currentDetailSeriesTitle},
+                       {QStringLiteral("editionCount"), editionCount}};
+}
+
+QJsonObject ComicsPage::devDownloadWesternEdition(int volumeNumber)
+{
+    if (m_pendingWesternSeriesId.isEmpty()) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"), QStringLiteral("no western series open")}};
+    }
+    if (volumeNumber <= 0) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"), QStringLiteral("volumeNumber must be positive")}};
+    }
+    if (!m_tyVolumeSeriesView) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"), QStringLiteral("series view not ready")}};
+    }
+    // populateSourcesForVolume on an rco catalog emits downloadWesternEditionRequested,
+    // which the ComicsPage lambda routes to m_westernDownloader->requestVolume — the
+    // real download path. This mirrors the user clicking a volume row.
+    m_tyVolumeSeriesView->populateSourcesForVolume(volumeNumber);
+    return QJsonObject{{QStringLiteral("ok"),           true},
+                       {QStringLiteral("seriesId"),     m_pendingWesternSeriesId},
+                       {QStringLiteral("volumeNumber"), volumeNumber}};
+}
+
+QJsonObject ComicsPage::devWesternDownloadState(int volumeNumber) const
+{
+    // devSeriesSnapshot guards on m_mode == TankoyomiDetail; openWesternSeriesFromCatalog
+    // sets that mode, so this works for an open Western series.
+    QJsonObject series = devSeriesSnapshot();
+    if (series.value(QStringLiteral("series")).isNull()) {
+        return QJsonObject{{QStringLiteral("ok"),    false},
+                           {QStringLiteral("error"), QStringLiteral("no series view active")}};
+    }
+
+    QJsonObject out;
+    out[QStringLiteral("ok")]          = true;
+    out[QStringLiteral("seriesId")]    = m_pendingWesternSeriesId;
+    out[QStringLiteral("seriesTitle")] = m_currentDetailSeriesTitle;
+
+    // Augment each volume row with the full VolumeTileState fields that
+    // volumeRowJson omits (state enum, statusText, progressPct).
+    QJsonArray volumes = series.value(QStringLiteral("series"))
+                               .toObject()
+                               .value(QStringLiteral("volumes"))
+                               .toArray();
+    if (m_tyVolumeSeriesView) {
+        for (int i = 0; i < volumes.size(); ++i) {
+            QJsonObject row = volumes.at(i).toObject();
+            const int vol = row.value(QStringLiteral("volume")).toInt(-1);
+            if (vol <= 0) { volumes.replace(i, row); continue; }
+            const auto* tile = m_tyVolumeSeriesView->tileForVolume(vol);
+            if (tile) {
+                const auto st = tile->volumeState();
+                row[QStringLiteral("tileState")]   = static_cast<int>(st.state);
+                row[QStringLiteral("statusText")]  = st.statusText;
+                row[QStringLiteral("progressPct")] = st.progressPct;
+            }
+            volumes.replace(i, row);
+        }
+    }
+
+    // Optionally filter to a single volume when the caller passes one.
+    if (volumeNumber > 0) {
+        QJsonArray filtered;
+        for (const QJsonValue& v : std::as_const(volumes)) {
+            if (v.toObject().value(QStringLiteral("volume")).toInt(-1) == volumeNumber)
+                filtered.append(v);
+        }
+        out[QStringLiteral("volumes")] = filtered;
+    } else {
+        out[QStringLiteral("volumes")] = volumes;
+    }
+    return out;
 }
 
 // -----------------------------------------------------------------------

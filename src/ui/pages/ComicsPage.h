@@ -113,6 +113,10 @@ public:
     QJsonObject devDownloadsSnapshot() const;
     QJsonObject devDispatchVolume(const QString& seriesId, int volumeNumber, const QString& source);
     QJsonObject devSourcesSnapshot() const;
+    // v1.11 Western download smoke harness (2026-06-02).
+    QJsonObject devOpenWesternSeries(const QString& seriesId);
+    QJsonObject devDownloadWesternEdition(int volumeNumber);
+    QJsonObject devWesternDownloadState(int volumeNumber) const;
 
     // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) — non-owning accessor
     // so MainWindow can wire the shared MangaDownloadIndex into ComicsDownloadsPage.
