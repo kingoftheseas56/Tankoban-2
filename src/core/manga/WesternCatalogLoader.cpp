@@ -93,6 +93,14 @@ MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
         vol.groupingLabel    = tierLabel(eo.value(QStringLiteral("formatTier")).toInt(99));
         vol.sourceHref       = eo.value(QStringLiteral("href")).toString();
         vol.coverUrlJapanese = seriesCover;  // shared hero cover (may be empty)
+        // Per-edition cover (Task 5): harvester emits "cover" when the GetComics
+        // post has its own cover image. Absolutise host-relative /... paths against
+        // https://getcomics.org (same pattern as seriesCover above, different host).
+        QString editionCover = eo.value(QStringLiteral("cover")).toString().trimmed();
+        if (!editionCover.isEmpty() && editionCover.startsWith(QLatin1Char('/'))) {
+            editionCover = QStringLiteral("https://getcomics.org") + editionCover;
+        }
+        vol.coverUrlEdition = editionCover;
         cat.volumes.append(std::move(vol));
     }
 

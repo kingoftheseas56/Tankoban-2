@@ -51,6 +51,10 @@ struct MangaVolume {
     // page href for a collected edition (RCO /Comic/<slug>/<item>); empty for
     // manga. Carried for the GetComics download path (Task 8). Additive only.
     QString      sourceHref;
+    // Per-edition cover URL (Task 5, 2026-06-02): filled by GetComics resolver/
+    // harvester when the edition has its own cover image. Empty => fall back to
+    // the shared series cover in coverUrlJapanese. Manga loaders leave this empty.
+    QString      coverUrlEdition;
 };
 
 // Schema version stamp. Bumping this constant invalidates all on-disk caches.

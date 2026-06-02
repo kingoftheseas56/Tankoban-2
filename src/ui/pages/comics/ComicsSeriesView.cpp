@@ -1456,9 +1456,13 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         }
         // MangaFire volumes carry a direct CDN cover URL in coverUrlJapanese
         // (mapped from JSON "coverUrl"); fall back to English cover if present.
-        data.coverUrl     = !vol.coverUrlJapanese.isEmpty()
-                              ? vol.coverUrlJapanese
-                              : vol.coverUrlEnglish;
+        // Per-edition cover (Task 5, 2026-06-02): prefer edition-specific cover
+        // when present (GetComics post image); empty => existing shared-series path.
+        data.coverUrl     = !vol.coverUrlEdition.isEmpty()
+                              ? vol.coverUrlEdition
+                              : (!vol.coverUrlJapanese.isEmpty()
+                                   ? vol.coverUrlJapanese
+                                   : vol.coverUrlEnglish);
 
         // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
         // Tag magazine-sourced volumes with the RAW SCAN badge.
