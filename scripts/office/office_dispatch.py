@@ -544,6 +544,19 @@ def main():
             # heartbeat / closed tab) falls back to a background spawn past its deadline.
             if pending:
                 still, fallback = resolve_pending(pending, list(_iter_bus()), time.time())
+                # false-escalation guard (bus seq 827): a brother can go LIVE (fresh
+                # heartbeat) in the window AFTER his route-time liveness check failed but
+                # BEFORE this deadline — a heads-down brother working without posting an ack.
+                # Re-check _is_live right before the fallback fires; if he's live NOW, abort
+                # the escalation silently and keep waiting, rather than duplicate-spawn a
+                # background copy of a brother who's already alive at the keyboard.
+                ready = []
+                for p in fallback:
+                    if _is_live(p["target"]):
+                        still.append(p)          # live now -> keep pending, don't escalate
+                    else:
+                        ready.append(p)
+                fallback = ready
                 spawn_results = []
                 for p in fallback:
                     print("[office-dispatch] summon #{0} -> {1}: no reply in {2}s — falling back to a background spawn".format(
