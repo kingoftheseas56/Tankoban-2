@@ -220,12 +220,54 @@ def test_request_filter():
     check((43, "hemanth") in ka, "filter: an explicit [ask] to hemanth IS tracked")
 
 
+def test_escalation_hygiene():
+    """Track C #13 (sentence-final '?'), #14 (no-rush), #15 (owed-ask expiry)."""
+    now = 1_000_000
+
+    # #13 - a tracked-but-non-question ask is owed but must NOT escalate.
+    phrase = [rec(50, "agent2", "agent1", "chat", "please take a look")]
+    tracked = {(x["ask_seq"], x["to_agent"]): x
+               for x in A.compute_asks(phrase, now, 300, 300, now_age={50: 400})}
+    check(tracked[(50, "agent1")]["state"] == "owed",
+          "hygiene/#13: a 'please' ask is still tracked as owed")
+    check(A.due_escalations(phrase, now, 300, 300, now_age={50: 400}) == [],
+          "hygiene/#13: a non-'?' ask fires no escalation")
+
+    q = [rec(51, "agent2", "agent1", "chat", "can you review?")]
+    check(A.due_escalations(q, now, 300, 300, now_age={51: 400}) == [(51, "agent1", "agent0")],
+          "hygiene/#13: a '?'-ending ask escalates")
+
+    tagged = [rec(52, "agent2", "agent1", "chat", "[ask] re-run the suite")]
+    check(A.due_escalations(tagged, now, 300, 300, now_age={52: 400}) == [(52, "agent1", "agent0")],
+          "hygiene/#13: an explicit [ask] escalates without a '?'")
+
+    # #14 - 'no rush' / equivalents suppress escalation entirely.
+    nr = [rec(53, "agent2", "agent1", "chat", "can you review? no rush")]
+    check(A.due_escalations(nr, now, 300, 300, now_age={53: 400}) == [],
+          "hygiene/#14: 'no rush' suppresses escalation even with a '?'")
+    nh = [rec(54, "agent2", "agent1", "chat", "[ask] take your time but fix it")]
+    check(A.due_escalations(nh, now, 300, 300, now_age={54: 400}) == [],
+          "hygiene/#14: a deferred ([ask] + no-rush) ask is suppressed")
+
+    # #15 - owed-ask expiry: past window+expire the ask is silently dropped.
+    fresh = [rec(55, "agent2", "agent1", "chat", "still pending?")]
+    check(A.due_escalations(fresh, now, 300, 300, now_age={55: 800}, expire=600)
+          == [(55, "agent1", "agent0")],
+          "hygiene/#15: within window+expire an owed ask still escalates")
+    check(A.due_escalations(fresh, now, 300, 300, now_age={55: 1000}, expire=600) == [],
+          "hygiene/#15: past window+expire the ask expires silently")
+    e0 = fresh + [rec(56, "system", "agent0", "escalate", "...", arc="55:agent1")]
+    check(A.due_escalations(e0, now, 300, 300, now_age={55: 1000}, expire=600) == [],
+          "hygiene/#15: an expired ask is not re-escalated to hemanth")
+
+
 def main():
     test_compute_asks()
     test_due_escalations()
     test_since_seq_baseline()
     test_is_request()
     test_request_filter()
+    test_escalation_hygiene()
     test_ack_event()
     test_escalation_tick_posts()
     test_escalation_tick_startup_baseline_blocks_backfill()

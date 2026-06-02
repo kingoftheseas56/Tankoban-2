@@ -12,6 +12,9 @@ from datetime import datetime
 WINDOW_SEC = int(os.environ.get("OFFICE_ASK_WINDOW_SEC", "300"))
 ESCALATE2_SEC = int(os.environ.get("OFFICE_ASK_ESCALATE2_SEC", "300"))
 ANSWERED_GRACE_SEC = int(os.environ.get("OFFICE_ASK_ANSWERED_GRACE_SEC", "120"))
+# #15 owed-ask expiry: once an ask has been owed (past `window`) for this long
+# without an ack, the escalation is silently dropped rather than re-escalated.
+EXPIRE_SEC = int(os.environ.get("OFFICE_ASK_EXPIRE_SEC", "600"))  # 10 minutes
 
 
 def _to_list(to):
@@ -73,6 +76,41 @@ def _is_request(text):
         if phrase in t:
             return True
     return False
+
+
+def _has_no_rush(text):
+    """#14 - True if the ask explicitly defers urgency ('no rush' & equivalents)."""
+    t = str(text or "").lower()
+    for phrase in ("no rush", "no hurry", "no urgency", "not urgent",
+                   "take your time", "no pressure", "whenever you get a chance",
+                   "when you get a chance", "whenever you have a moment",
+                   "no worries if"):
+        if phrase in t:
+            return True
+    return False
+
+
+def _escalatable(text):
+    """Gate for FIRING an escalation - stricter than _is_request (which only
+    decides ask *tracking*). An escalate event is noisy, so it fires only for a
+    genuine, non-deferred ask:
+
+      #13  the text ends with '?' (sentence-final), OR carries an explicit
+           [ask]/[needs-reply] tag. Plain chat/posts never escalate.
+      #14  a 'no rush'/'no hurry'/equivalent ask is suppressed entirely, even
+           when a '?' or [ask] tag is present.
+
+    The ask is still tracked on the dashboard via compute_asks; this only
+    suppresses the automatic escalate-to-agent0/hemanth ladder.
+    """
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    if _has_no_rush(t):       # #14 - no-rush wins over '?'/[ask]
+        return False
+    if _is_explicit_ask(t):   # deliberate opt-in escalates without needing '?'
+        return True
+    return t.rstrip().endswith("?")  # #13 - sentence-final question only
 
 
 def _escalation_matches(arc, ask_seq, to_agent):
@@ -159,10 +197,23 @@ def compute_asks(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
     return sorted(out, key=lambda x: (x["state"] == "answered", -x["age_sec"], x["ask_seq"], x["to_agent"]))
 
 
-def due_escalations(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC, now_age=None, since_seq=0):
-    """Return [(ask_seq, to_agent, level)] for newly due escalation events."""
+def due_escalations(records, now_epoch, window=WINDOW_SEC, escalate2=ESCALATE2_SEC,
+                    now_age=None, since_seq=0, expire=EXPIRE_SEC):
+    """Return [(ask_seq, to_agent, level)] for newly due escalation events.
+
+    Three escalation-hygiene gates (Track C #13/#14/#15):
+      #13  only genuine asks escalate - text ends with '?' or an explicit [ask]
+           tag (see _escalatable); plain chat/posts generate no escalate events.
+      #14  a 'no rush'/'no hurry'/equivalent ask is suppressed entirely.
+      #15  an ask owed past `expire` seconds without an ack is silently dropped
+           (no further escalation), rather than re-escalated.
+    """
     due = []
     for ask in compute_asks(records, now_epoch, window, escalate2, now_age, since_seq):
+        if ask["age_sec"] >= window + expire:
+            continue  # #15 - owed too long with no ack; expire silently
+        if not _escalatable(ask["text"]):
+            continue  # #13 + #14 - not a genuine, non-deferred ask
         if ask["state"] == "owed":
             due.append((ask["ask_seq"], ask["to_agent"], "agent0"))
         elif ask["state"] == "escalated_a0" and ask["age_sec"] >= window + escalate2:
