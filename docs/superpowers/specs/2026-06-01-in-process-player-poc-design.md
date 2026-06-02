@@ -112,3 +112,24 @@ A full in-process player design — subtitles (libass), HDR/libplacebo, seeking,
 ---
 
 *Per brotherhood governance: this spec is the decision-gate artifact. Implementation proceeds via the writing-plans skill after Hemanth reviews this document.*
+
+---
+
+## OUTCOME / DECISION (2026-06-01) — ARC RETIRED, SIDECAR RETAINED
+
+**Built + smoked end-to-end:** Phase 0 (FFmpeg links into the main MSVC app — `a6f4812`), Phase 1 (in-process video renders — `d1aee9f`, Agent 3), Phase 1.5 (D3D11VA hwaccel + audio-master-clock A/V sync — Agent 9, reviewer-passed by Agent 3, build-verified GREEN in `out_inproc`).
+
+**Empirical result (Hemanth smoke, Intel UHD 620, One Piece S01E01 + Community S05E04 HEVC-10bit + Daredevil S02E03):**
+- In-process playback **works** and is **smooth in steady state**, across H.264 and HEVC-10bit, with GPU decode confirmed (`hw=d3d11va`) and zero decode drops.
+- **It did NOT fix the stutter.** The original symptom persists in-process: a ~30s choppy startup ramp + occasional steady-state fluctuations. Decode telemetry was healthy *throughout* (drops=0, full fps) — proving the stutter is NOT decode, NOT the cross-process boundary, NOT A/V sync, NOT software-decode.
+- **Real culprit identified by elimination:** the **present/display cadence** (`FrameCanvas` frame-pacing — 24fps-on-60Hz, no display-resample) + **disk-read warmup** at startup. Both are *shared* by the sidecar and in-process paths, so the boundary was never the cause.
+
+**Decision (Hemanth):** Retire the in-process arc; keep the ffmpeg sidecar player. Rationale:
+- The headline benefit (stutter fix) is not delivered by in-process.
+- In-process would **lose crash isolation** — costly for an app that decodes arbitrary/partial downloaded files (a partial file literally crashed the demuxer during testing; in-process that takes the whole app down).
+- Reaching feature parity (subtitles/HDR/seek/tracks/OSD) would be a months-long rewrite of mature, shipping sidecar code.
+- Benefits beyond ONENESS (simpler IPC, lower control latency, cross-platform foundation) are real but long-term, and don't outweigh the above now.
+
+**Reverted from master** (this commit) but fully recoverable: Phase 0/1 at `a6f4812`/`d1aee9f`; Agent 9's Phase 1.5 in the working-tree history / `out_inproc`. Recommended **next arc (separate):** frame-pacing fix in the present path (display-resample-style cadence) + startup pre-buffering — both benefit the *shipping sidecar player today*, and would carry over to any future in-process build for the CROSS_PLATFORM_BACKEND arc.
+
+**Process lesson:** eye-verdicts on a cold-cache startup misled us repeatedly this session; smoothness must be measured against present-cadence telemetry (`FrameCanvas` `[PERF] timer_interval` + skipped-present count), not the decode `[PERF]`, and judged past the startup transient.

@@ -1,9 +1,6 @@
 #include "ui/player/VideoPlayer.h"
 #include "ui/player/KeyBindings.h"
 #include "ui/player/SidecarProcess.h"
-#ifdef TANKOBAN_INPROCESS_POC
-#include "ui/player/InProcessPlayer.h"
-#endif
 #include "ui/player/ShmFrameReader.h"
 #include "ui/player/FrameCanvas.h"
 #include "ui/player/VolumeHud.h"
@@ -187,13 +184,6 @@ VideoPlayer::VideoPlayer(CoreBridge* bridge, QWidget* parent)
     // dual-backend support was cut.
     m_backend = new SidecarProcess(this);
     m_reader  = new ShmFrameReader();
-#ifdef TANKOBAN_INPROCESS_POC
-    // POC: when the env flag is set, openFile routes to the in-process path.
-    // The sidecar backend is still constructed (harmless) but never driven.
-    m_inProcessPoc = qEnvironmentVariableIsSet("TANKOBAN_INPROCESS_POC");
-    if (m_inProcessPoc)
-        debugLog("[VideoPlayer] IN-PROCESS POC mode active (sidecar bypassed)");
-#endif
 
     buildUI();
 
@@ -342,15 +332,6 @@ void VideoPlayer::openFile(const QString& filePath,
     }
     m_pendingFile = filePath;
     m_paused = false;
-
-#ifdef TANKOBAN_INPROCESS_POC
-    // POC fork: bypass the sidecar + first-frame watchdog entirely. Decode
-    // in-process and feed m_reader/m_canvas via an in-process SHM ring.
-    if (m_inProcessPoc) {
-        openFileInProcessPoc(filePath);
-        return;
-    }
-#endif
 
     // STREAM_PLAYER_DIAGNOSTIC_FIX Phase 2.2 — arm 30s first-frame watchdog.
     // Single-shot; teardownUi above already stop()ped any prior-session
@@ -555,12 +536,6 @@ void VideoPlayer::teardownUi()
     // The process-teardown portion — sendStop + sendShutdown, or the
     // new sendStopWithCallback fence — is handled by each caller per
     // its own lifecycle needs.
-
-#ifdef TANKOBAN_INPROCESS_POC
-    // POC: stop the in-process decode thread on any teardown (close or
-    // file-switch) so it never streams into a detached ring.
-    if (m_inproc) { m_inproc->stop(); }
-#endif
 
     // Batch 6.1 — cancel any pending crash-recovery respawn. User-driven
     // stop / new-file-open supersedes in-flight auto-restart.
@@ -1129,31 +1104,6 @@ void VideoPlayer::onFirstFrame(const QJsonObject& payload)
     m_canvas->attachShm(m_reader);
     m_canvas->startPolling();
 }
-
-#ifdef TANKOBAN_INPROCESS_POC
-void VideoPlayer::openFileInProcessPoc(const QString& filePath)
-{
-    debugLog("[VideoPlayer] in-process POC open: " + filePath);
-    // teardownUi() already ran in openFile; also stop any prior in-process
-    // decode + detach the shared reader before re-attaching.
-    m_canvas->stopPolling();
-    m_reader->detach();
-    if (m_inproc) { m_inproc->stop(); delete m_inproc; m_inproc = nullptr; }
-
-    m_inproc = new InProcessPlayer(this);
-    if (!m_inproc->openFile(filePath)) {
-        debugLog("[VideoPlayer] in-process POC: open failed");
-        return;
-    }
-    if (!m_reader->attach(m_inproc->shmName(), m_inproc->slotCount(), m_inproc->slotBytes())) {
-        debugLog("[VideoPlayer] in-process POC: SHM attach failed");
-        return;
-    }
-    m_canvas->attachShm(m_reader);
-    m_canvas->startPolling();
-    debugLog("[VideoPlayer] in-process POC: streaming via " + m_inproc->shmName());
-}
-#endif
 
 void VideoPlayer::onTimeUpdate(double positionSec, double durationSec)
 {
