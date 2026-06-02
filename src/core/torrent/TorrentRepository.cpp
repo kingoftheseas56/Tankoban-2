@@ -156,6 +156,34 @@ bool connectionQuickCheckOk(QSqlDatabase& db) {
                                          Qt::CaseInsensitive) == 0;
 }
 
+// Connection-level durability PRAGMAs (TORRENT_DB_DURABILITY Part 2). Set per
+// open() — synchronous + busy_timeout are per-connection (not persisted in the
+// file), journal_mode=WAL is persisted but reasserted for clarity.
+//   WAL              — readers don't block the writer; far more crash-tolerant
+//                      than the default rollback journal.
+//   synchronous=NORMAL — the WAL sweet spot: durable across an app crash /
+//                      taskkill, only the last txn is at risk on OS/power loss
+//                      (never corrupts). FULL would fsync every commit for no
+//                      corruption-safety gain under WAL.
+//   busy_timeout=5000 — wait up to 5s on a locked DB instead of failing instantly
+//                      (defends against a transient second connection: dev +
+//                      personal instances, or a leaked probe connection).
+void applyConnectionPragmas(QSqlDatabase& db) {
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("PRAGMA journal_mode=WAL"))) {
+        qWarning() << "[TorrentRepository] could not set WAL:"
+                   << q.lastError().text();
+    } else if (q.next()
+               && q.value(0).toString().compare(QStringLiteral("wal"),
+                                                 Qt::CaseInsensitive) != 0) {
+        qWarning() << "[TorrentRepository] journal_mode is"
+                   << q.value(0).toString() << "not wal (file locked?)";
+    }
+    q.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+    q.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
+    q.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
+}
+
 }  // namespace
 
 bool TorrentRepository::open(const QString& dbFilePath) {
@@ -198,6 +226,8 @@ bool TorrentRepository::open(const QString& dbFilePath) {
         }
         recovered = true;
     }
+
+    applyConnectionPragmas(m_db);
 
     m_open = true;
     if (!initSchema()) {
@@ -351,7 +381,18 @@ bool TorrentRepository::initSchema() {
 }
 
 void TorrentRepository::close() {
-    if (m_db.isOpen()) m_db.close();
+    if (m_db.isOpen()) {
+        // Checkpoint + truncate the WAL on a clean exit so the next launch
+        // starts from a single consolidated DB file with an empty WAL — this
+        // shrinks the window where a force-kill (taskkill /F) can interrupt a
+        // checkpoint mid-write and corrupt the main DB. (TORRENT_DB_DURABILITY P2)
+        { QSqlQuery cp(m_db); cp.exec(QStringLiteral("PRAGMA wal_checkpoint(TRUNCATE)")); }
+        m_db.close();
+    }
+    // Drop the member's handle to the connection BEFORE removeDatabase so Qt
+    // doesn't warn "connection is still in use" (the teardown-ordering warning
+    // Agent 0 observed at shutdown).
+    m_db = QSqlDatabase();
     if (QSqlDatabase::contains(m_connectionName)) {
         QSqlDatabase::removeDatabase(m_connectionName);
     }

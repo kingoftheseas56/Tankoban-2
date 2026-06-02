@@ -23,9 +23,12 @@
 #include <QDir>
 #include <QFile>
 #include <QSignalSpy>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QVariant>
 
 namespace {
 
@@ -133,4 +136,42 @@ TEST_F(TorrentRepoDurabilityTest, DatabaseFileIsHealthyDistinguishesMalformedFro
         fresh.close();
     }
     EXPECT_TRUE(TorrentRepository::databaseFileIsHealthy(freshPath));
+}
+
+// Part 2 (WAL hardening): the DB is WAL mode, and a close() (which now
+// checkpoint-truncates the WAL) followed by reopen preserves data without
+// corruption.
+TEST_F(TorrentRepoDurabilityTest, WalModePersistsAndSurvivesReopen) {
+    const QString path = dbPath();
+    const QString hash =
+        QStringLiteral("cccccccccccccccccccccccccccccccccccccccc");
+    {
+        TorrentRepository repo;
+        ASSERT_TRUE(repo.open(path));
+        ASSERT_TRUE(repo.upsertTorrent(sampleRow(hash)));
+        repo.close();  // checkpoint(TRUNCATE) on a clean exit
+    }
+
+    // journal_mode is a persisted, file-level setting — observable from a fresh
+    // independent connection.
+    {
+        const QString conn = QStringLiteral("walprobe_durability");
+        {
+            QSqlDatabase db =
+                QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+            db.setDatabaseName(path);
+            ASSERT_TRUE(db.open());
+            QSqlQuery q(db);
+            ASSERT_TRUE(q.exec(QStringLiteral("PRAGMA journal_mode")));
+            ASSERT_TRUE(q.next());
+            EXPECT_EQ(q.value(0).toString().toLower(), QStringLiteral("wal"));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(conn);
+    }
+
+    // Data survived close+checkpoint+reopen — no loss, no corruption.
+    TorrentRepository repo2;
+    ASSERT_TRUE(repo2.open(path));
+    EXPECT_TRUE(repo2.hasTorrent(hash));
 }
