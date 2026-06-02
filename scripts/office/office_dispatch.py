@@ -25,6 +25,7 @@ import sys
 import json
 import time
 import errno
+import atexit
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -76,6 +77,14 @@ def CURSOR_FILE():
     return os.path.join(_dir(), ".office_dispatch.seq")
 
 
+def DISPATCH_LOCK():
+    return os.path.join(_dir(), ".office_dispatch.lock")
+
+
+def DISPATCH_BEAT():
+    return os.path.join(HB_DIR(), "dispatcher.beat")
+
+
 INTERVAL = int(os.environ.get("OFFICE_DISPATCH_INTERVAL", "3"))
 LIVE_WINDOW = int(os.environ.get("OFFICE_LIVE_WINDOW", "15"))          # heartbeat freshness (s)
 SPAWN_CAP = int(os.environ.get("OFFICE_SPAWN_CAP", "5"))               # max spawns / window
@@ -87,6 +96,7 @@ ACK_KINDS = ("chat", "ack", "blocked")                               # post kind
 FALLBACK_RETRY = int(os.environ.get("OFFICE_FALLBACK_RETRY", "30"))   # held-fallback retry backoff (s)
 FALLBACK_MAX_TRIES = int(os.environ.get("OFFICE_FALLBACK_MAX_TRIES", "10"))  # surface to Hemanth after N held attempts
 MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "opus")  # summoned brothers wake as their real self, not a cheap shadow
+DISPATCH_STALE = int(os.environ.get("OFFICE_DISPATCH_STALE", "30"))  # dispatcher beat/lock stale threshold (s)
 
 
 def _now_iso():
@@ -439,7 +449,68 @@ def _dispatch(rec):
     return None
 
 
+# ── dispatcher self-supervision (singleton + heartbeat) ──────────────────────
+def _dispatcher_beat():
+    """Stamp the dispatcher's own heartbeat so the roster + the night-watch foreman can
+    SEE it's alive and restart it if not — a dead dispatcher must never be invisible
+    (every closed-tab summon depends on it)."""
+    try:
+        os.makedirs(HB_DIR(), exist_ok=True)
+        tmp = DISPATCH_BEAT() + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(str(int(time.time())))
+        os.replace(tmp, DISPATCH_BEAT())
+    except OSError:
+        pass
+
+
+def _acquire_dispatch_singleton():
+    """Atomic mkdir singleton so TWO dispatchers can't run at once (which would
+    double-spawn every summon + split the cap). Reclaims a stale lock left by a crash or
+    host restart. Returns True if we own it, False if another LIVE dispatcher holds it."""
+    lock = DISPATCH_LOCK()
+    os.makedirs(_dir(), exist_ok=True)
+    try:
+        os.mkdir(lock)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+        try:
+            age = time.time() - os.path.getmtime(lock)
+        except OSError:
+            age = 0
+        if age <= DISPATCH_STALE:
+            return False  # another dispatcher refreshed it recently — it's alive
+        shutil.rmtree(lock, ignore_errors=True)  # stale: reclaim
+        try:
+            os.mkdir(lock)
+        except OSError:
+            return False
+    try:
+        with open(os.path.join(lock, "pid"), "w") as f:
+            f.write("{0} {1}".format(os.getpid(), _now_iso()))
+    except OSError:
+        pass
+    return True
+
+
+def _refresh_dispatch_lock():
+    try:
+        os.utime(DISPATCH_LOCK(), None)
+    except OSError:
+        pass
+
+
+def _release_dispatch_singleton():
+    shutil.rmtree(DISPATCH_LOCK(), ignore_errors=True)
+
+
 def main():
+    if not _acquire_dispatch_singleton():
+        print("[office-dispatch] another dispatcher already holds the singleton — exiting")
+        sys.stdout.flush()
+        return
+    atexit.register(_release_dispatch_singleton)
     cur = _read_cursor()
     if cur is None:
         cur = _max_seq()  # seed at startup so we never re-process the backlog
@@ -449,6 +520,8 @@ def main():
         cur, INTERVAL, SPAWN_CAP, CAP_WINDOW, ACK_TIMEOUT))
     sys.stdout.flush()
     while True:
+        _dispatcher_beat()        # prove we're alive — roster + night-watch foreman watch this
+        _refresh_dispatch_lock()  # keep the singleton fresh so a peer doesn't reclaim us
         try:
             for rec in _new_summons(cur):
                 p = _dispatch(rec)

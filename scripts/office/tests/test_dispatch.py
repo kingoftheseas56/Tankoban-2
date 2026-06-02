@@ -130,6 +130,27 @@ def test_load_pending_skips_corrupt_line():
             os.environ["OFFICE_DIR"] = old
 
 
+def test_dispatch_singleton():
+    # #9: two dispatchers must not run at once (would double-spawn every summon).
+    import tempfile
+    d = tempfile.mkdtemp()
+    old = os.environ.get("OFFICE_DIR")
+    os.environ["OFFICE_DIR"] = d
+    try:
+        check(D._acquire_dispatch_singleton(), "singleton: first acquire succeeds")
+        check(not D._acquire_dispatch_singleton(), "singleton: a fresh lock blocks a second dispatcher")
+        os.utime(D.DISPATCH_LOCK(), (1, 1))  # force-stale (epoch 1970)
+        check(D._acquire_dispatch_singleton(), "singleton: a STALE lock is reclaimed (crash recovery)")
+        D._release_dispatch_singleton()
+        check(D._acquire_dispatch_singleton(), "singleton: re-acquire after release")
+        D._release_dispatch_singleton()
+    finally:
+        if old is None:
+            os.environ.pop("OFFICE_DIR", None)
+        else:
+            os.environ["OFFICE_DIR"] = old
+
+
 def main():
     test_recently_active()
     test_classify_summon()
@@ -137,6 +158,7 @@ def main():
     test_resolve_pending_ignores_activity()
     test_reconcile_fallback()
     test_load_pending_skips_corrupt_line()
+    test_dispatch_singleton()
     print("\n{0}".format("ALL PASS" if fails == 0 else "{0} FAILED".format(fails)))
     sys.exit(1 if fails else 0)
 
