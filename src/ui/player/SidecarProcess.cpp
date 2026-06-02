@@ -138,9 +138,10 @@ void SidecarProcess::start()
     // m_process->write() before the process is fully started queue in QProcess's
     // internal buffer and flush on started — no command loss.
     //
-    // Carve-out: ensureTerminated()'s waitForFinished + resetAndRestart()'s
-    // waitForFinished are intentional sync waits (CLOSE_AUDIO_CONTINUES_FIX
-    // 2026-04-26 Hemanth-shipped) and stay sync. P4.5 only fixes start().
+    // Carve-out: ensureTerminated()'s waitForFinished is an intentional sync
+    // wait (CLOSE_AUDIO_CONTINUES_FIX 2026-04-26 Hemanth-shipped) and stays
+    // sync. P4.5 only fixed start(); STABILITY_SWEEP 2026-06-02 made
+    // resetAndRestart() async (was a 2s GUI freeze on the file-switch timeout).
     m_process->start(path, QStringList());
 }
 
@@ -240,17 +241,40 @@ int SidecarProcess::sendStopWithCallback(std::function<void()> onComplete,
 
 void SidecarProcess::resetAndRestart()
 {
-    if (m_process->state() != QProcess::NotRunning) {
-        debugLog("[Sidecar] resetAndRestart: killing hung process");
-        m_intentionalShutdown = true;
-        m_process->kill();
-        m_process->waitForFinished(2000);
-    }
     // Clear any stale pending-stop state — the process that would have
-    // sent stop_ack is gone.
+    // sent stop_ack is gone (or about to be).
     m_pendingStopSeq = -1;
     m_pendingStopCallback = {};
     m_pendingStopTimeoutCallback = {};
+
+    if (m_process->state() != QProcess::NotRunning) {
+        // STABILITY_SWEEP 2026-06-02 (Agent 3, P0) — async kill. This path
+        // fires from VideoPlayer's stop_ack-timeout fallback (a hung sidecar
+        // during file-switch); the prior waitForFinished(2000) here stacked a
+        // 2-second HARD GUI freeze on top of the 2s stop_ack timeout that
+        // triggers it. VideoPlayer already treats resetAndRestart() as
+        // fire-and-forget — it relies on onSidecarReady to fire the deferred
+        // open once the fresh sidecar is up — so we defer the fresh start() to
+        // onProcessFinished instead of blocking the GUI thread to reap the old
+        // process. m_restartAfterExit carries the deferral.
+        debugLog("[Sidecar] resetAndRestart: killing hung process (async)");
+        m_intentionalShutdown = true;
+        m_restartAfterExit = true;
+        m_process->kill();
+        // Backstop: QProcess::finished is reliable after kill() on Windows,
+        // but if it somehow never arrives, force the restart at the same 2s
+        // mark the old synchronous wait used so a stuck file-switch still
+        // recovers — non-blocking via QTimer.
+        QPointer<SidecarProcess> guard(this);
+        QTimer::singleShot(2000, this, [guard]() {
+            if (!guard || !guard->m_restartAfterExit) return;
+            debugLog("[Sidecar] resetAndRestart backstop fired — finished never arrived; forcing restart");
+            guard->m_restartAfterExit = false;
+            guard->start();
+        });
+        return;
+    }
+    // Already idle — start a fresh sidecar immediately.
     start();
 }
 
@@ -750,6 +774,17 @@ void SidecarProcess::onProcessFinished(int exitCode, QProcess::ExitStatus status
     debugLog(QString("[Sidecar] process finished: exit=%1 status=%2 intentional=%3")
              .arg(exitCode).arg(status == QProcess::NormalExit ? "normal" : "crash")
              .arg(wasIntentional ? "yes" : "no"));
+    // STABILITY_SWEEP 2026-06-02 (Agent 3, P0) — async resetAndRestart
+    // completion. resetAndRestart() killed a hung sidecar without blocking and
+    // armed m_restartAfterExit; now that the old process is reaped, launch the
+    // fresh sidecar. This is an armed restart, not a crash — don't emit
+    // processCrashed (which would trigger the crash-recovery toast/backoff).
+    if (m_restartAfterExit) {
+        m_restartAfterExit = false;
+        debugLog("[Sidecar] armed restart — starting fresh sidecar after async kill");
+        start();
+        return;
+    }
     if (!wasIntentional)
         emit processCrashed(exitCode, status);
 }

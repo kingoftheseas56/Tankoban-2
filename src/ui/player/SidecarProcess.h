@@ -253,6 +253,13 @@ private:
     // shutdown or a crash that should trigger auto-restart.
     bool m_intentionalShutdown = false;
 
+    // STABILITY_SWEEP 2026-06-02 (Agent 3, P0) — armed when resetAndRestart()
+    // kills a hung sidecar WITHOUT blocking (async). onProcessFinished sees
+    // this set and launches the fresh sidecar once the old process is reaped,
+    // replacing the prior synchronous waitForFinished(2000) GUI freeze on the
+    // stop_ack-timeout file-switch fallback path.
+    bool m_restartAfterExit = false;
+
     // PLAYER_LIFECYCLE_FIX Phase 2 — same-process stop/open fence state.
     // m_pendingStopSeq == -1 means no stop awaiting ack. Any other value
     // is the seq of the in-flight stop; stop_ack with matching seqAck
