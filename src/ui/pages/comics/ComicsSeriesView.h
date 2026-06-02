@@ -141,6 +141,13 @@ public slots:
     void setVolumeDownloadState(int volumeNumber, const QString& cbzPath,
                                 bool downloaded);
     void setVolumeStatusText(int volumeNumber, const QString& statusText);
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Forward a Western (GetComics)
+    // download status into the Sources panel — editionFound is the matched
+    // collected edition (empty while searching), statusLine the live state.
+    // ComicsPage drives this from WesternVolumeDownloader's resolve/progress/
+    // complete/fail signals so the panel reflects exactly what is happening.
+    void updateWesternDownloadStatus(const QString& editionFound,
+                                     const QString& statusLine);
     void populateSourcesForVolume(int volumeNumber);
     void onWeebCentralViable(int volumeNumber, const QStringList& chapterIds);
 

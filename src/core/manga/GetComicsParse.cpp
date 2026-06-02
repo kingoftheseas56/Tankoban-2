@@ -20,19 +20,6 @@ QString classifyKind(const QString& href, const QString& text) {
     return QString();
 }
 
-// Lowercase alnum tokens, dropping common edition-noise words so the series
-// name carries the match (year handled separately).
-QStringList tokens(const QString& s) {
-    static const QRegularExpression nonAlnum(QStringLiteral("[^a-z0-9]+"));
-    static const QSet<QString> noise = {
-        QStringLiteral("vol"), QStringLiteral("volume"), QStringLiteral("the"),
-        QStringLiteral("edition"), QStringLiteral("collection")};
-    QStringList out;
-    for (const QString& w : s.toLower().split(nonAlnum, Qt::SkipEmptyParts))
-        if (!noise.contains(w)) out.push_back(w);
-    return out;
-}
-
 const QStringList& priority() {
     static const QStringList p = {QStringLiteral("magnet"), QStringLiteral("main_server"),
                                   QStringLiteral("pixeldrain"), QStringLiteral("mediafire"),
@@ -47,6 +34,71 @@ bool isYearToken(const QString& t) {
     bool ok = false;
     const int n = t.toInt(&ok);
     return ok && t.size() == 4 && n >= 1900 && n <= 2099;
+}
+
+// A pure-number token (any run of digits) — dropped from series identity so a
+// volume/range number never participates in the series-name comparison.
+bool isNumberToken(const QString& t) {
+    for (const QChar c : t) if (!c.isDigit()) return false;
+    return !t.isEmpty();
+}
+
+// Edition-noise + collected-edition tier words. Stripped from series identity
+// (so "Invincible Compendium Vol. 1" reduces to {invincible}) and, separately,
+// detected as collected-edition MARKERS in isCollectedEditionOf.
+const QSet<QString>& identityNoise() {
+    static const QSet<QString> noise = {
+        // grammatical noise
+        QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"),
+        QStringLiteral("of"), QStringLiteral("and"),
+        // volume/edition framing
+        QStringLiteral("vol"), QStringLiteral("volume"), QStringLiteral("edition"),
+        QStringLiteral("editions"), QStringLiteral("part"), QStringLiteral("parts"),
+        // collected-edition tier words (also markers)
+        QStringLiteral("compendium"), QStringLiteral("omnibus"),
+        QStringLiteral("collection"), QStringLiteral("collected"),
+        QStringLiteral("complete"), QStringLiteral("deluxe"),
+        QStringLiteral("book"), QStringLiteral("books"),
+        QStringLiteral("tpb"), QStringLiteral("tpbs"),
+        QStringLiteral("hc"), QStringLiteral("hardcover"),
+        QStringLiteral("paperback"), QStringLiteral("set"), QStringLiteral("box")};
+    return noise;
+}
+
+// Decode the HTML entities GetComics emits in post titles. Numeric (&#NNNN;) +
+// the few named ones that appear, so display and identity matching see real text.
+QString decodeEntities(QString s) {
+    static const QRegularExpression numeric(QStringLiteral("&#(x?[0-9a-fA-F]+);"));
+    QString out;
+    int last = 0;
+    auto it = numeric.globalMatch(s);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        out += s.mid(last, m.capturedStart() - last);
+        const QString cap = m.captured(1);
+        bool ok = false;
+        const uint cp = cap.startsWith(QLatin1Char('x'), Qt::CaseInsensitive)
+                            ? cap.mid(1).toUInt(&ok, 16)
+                            : cap.toUInt(&ok, 10);
+        if (ok && cp) {
+            if (cp <= 0xFFFF) {
+                out += QChar(static_cast<char16_t>(cp));
+            } else {
+                const char32_t c = cp;
+                out += QString::fromUcs4(&c, 1);
+            }
+        } else {
+            // Unparseable numeric entity — preserve it verbatim rather than drop.
+            out += m.captured(0);
+        }
+        last = m.capturedEnd();
+    }
+    out += s.mid(last);
+    out.replace(QLatin1String("&amp;"),  QLatin1String("&"));
+    out.replace(QLatin1String("&quot;"), QLatin1String("\""));
+    out.replace(QLatin1String("&#039;"), QLatin1String("'"));
+    out.replace(QLatin1String("&apos;"), QLatin1String("'"));
+    return out;
 }
 } // namespace
 
@@ -104,74 +156,85 @@ QList<SearchResult> parseSearchResults(const QString& searchHtml) {
         seen.insert(url);
         QString title = m.captured(2);
         title.remove(QRegularExpression(QStringLiteral("<[^>]+>")));
-        out.push_back({title.trimmed(), url});
+        out.push_back({decodeEntities(title.trimmed()), url});
     }
     return out;
 }
 
-// HARD IDENTITY GATES, not a score floor (Codex review 2026-06-02). A score
-// floor let a wrong-series ("Invincible Iron Man Vol 1") or wrong-volume
-// ("...Compendium Vol 2") candidate pass by sharing common tokens + the year.
-// Now EVERY distinctive token of the wanted edition must be present, the format
-// tier must match, and the year is never allowed to stand in for a volume
-// number. Any gate miss => 0 (rejected). Fail-safe: a near-miss returns no
-// download rather than the wrong one.
-int scoreMatch(const QString& editionTitle, int year,
-               const QString& tierLabel, const QString& candidateTitle) {
-    const QStringList want = tokens(editionTitle);
-    if (want.isEmpty()) return 0;
-    const QString cand = candidateTitle.toLower();
-    const QStringList candToks = tokens(candidateTitle);
-    const QSet<QString> candSet(candToks.begin(), candToks.end());
-    const QString tier = tierLabel.toLower();
-
-    // Gate 1 — format tier (Compendium/Omnibus/TPB/...) must appear as a WHOLE
-    // WORD, not a substring (Codex review 2026-06-02 r2: "contains" let
-    // "compendium" match inside "CompendiumX"). A word-boundary match also
-    // handles the "Vol" tier correctly, which tokens() drops as a noise word so
-    // a token-set check would wrongly reject every Vol-tier edition.
-    if (!tier.isEmpty()) {
-        const QRegularExpression tierRe(
-            QStringLiteral("\\b") + QRegularExpression::escape(tier) + QStringLiteral("\\b"));
-        if (!tierRe.match(cand).hasMatch()) return 0;
+QStringList identityTokens(const QString& title) {
+    static const QRegularExpression nonAlnum(QStringLiteral("[^a-z0-9]+"));
+    QStringList out;
+    for (const QString& w : title.toLower().split(nonAlnum, Qt::SkipEmptyParts)) {
+        if (identityNoise().contains(w)) continue;
+        if (isYearToken(w) || isNumberToken(w)) continue;
+        out.push_back(w);
     }
-
-    // Gate 2 — every wanted token must be present in the candidate, EXCEPT the
-    // tier token (gated above) and any year-like token. This forces both the
-    // series identity (e.g. "invincible") AND the volume number (e.g. "1") to
-    // match — so "Invincible Iron Man" fails (missing nothing? it shares
-    // "invincible" but lacks "compendium" -> caught by gate 1) and
-    // "Compendium Vol 2" fails (missing the wanted volume "1").
-    for (const QString& w : want) {
-        if (w == tier) continue;
-        if (isYearToken(w)) continue;
-        if (!candSet.contains(w)) return 0;
-    }
-
-    // Eligible — score only to rank among gated-pass candidates + drive tie
-    // detection in pickBestMatch. Year match breaks ties toward the right printing.
-    int score = want.size() * 10;
-    if (year > 0 && cand.contains(QString::number(year))) score += 8;
-    if (!tier.isEmpty()) score += 6;   // tier already confirmed present by gate 1
-    return score;
+    return out;
 }
 
-SearchResult pickBestMatch(const QString& editionTitle, int year,
-                           const QString& tierLabel,
-                           const QList<SearchResult>& results) {
-    // Only gated-pass candidates (scoreMatch > 0) are eligible. Among them take
-    // the unique top score; an AMBIGUOUS TIE (>=2 sharing the top score) returns
-    // empty — fail safe, never guess between two equally-plausible posts.
+namespace {
+// A collected-edition MARKER in the candidate: a tier keyword as a whole word
+// (Compendium / Omnibus / Collection / Complete / Deluxe / Book / TPB / HC).
+// Distinguishes a collected edition from a single issue ("Spawn #375") which has
+// none. Deliberately NOT keyed on a bare number range — a publication-year span
+// like "(2009-2013)" would false-positive a single issue; every real collected
+// edition carries one of these tier words, so the keyword signal is enough.
+bool hasCollectedMarker(const QString& candLower) {
+    static const QRegularExpression tierRe(QStringLiteral(
+        "\\b(compendium|omnibus|collection|collected|complete|deluxe|"
+        "book|books|tpb|tpbs|hardcover|hc|edition)\\b"));
+    return tierRe.match(candLower).hasMatch();
+}
+
+// Tier rank: the more canonical/complete the collected form, the higher. Picks
+// "Compendium" over a raw issue-run when both qualify for the same series.
+int tierRank(const QString& candLower) {
+    struct T { const char* w; int bonus; };
+    static const T tiers[] = {
+        {"compendium", 60}, {"omnibus", 50}, {"complete", 40},
+        {"collected", 35}, {"collection", 35}, {"deluxe", 30},
+        {"hardcover", 25}, {"hc", 25}, {"books", 20}, {"book", 20},
+        {"tpbs", 15}, {"tpb", 15}, {"edition", 10}};
+    int best = 0;
+    for (const T& t : tiers) {
+        const QRegularExpression re(
+            QStringLiteral("\\b") + QLatin1String(t.w) + QStringLiteral("\\b"));
+        if (re.match(candLower).hasMatch()) best = std::max(best, t.bonus);
+    }
+    return best > 0 ? best : 5;   // range-only collected edition
+}
+} // namespace
+
+bool isCollectedEditionOf(const QString& seriesTitle, const QString& candidateTitle) {
+    const QStringList series = identityTokens(seriesTitle);
+    if (series.isEmpty()) return false;
+    const QStringList cand = identityTokens(candidateTitle);
+    // Gate 1 — series identity must match EXACTLY: same set, no extra series
+    // words (rejects "Invincible Iron Man", "Spawn Origins"), none missing.
+    const QSet<QString> seriesSet(series.begin(), series.end());
+    const QSet<QString> candSet(cand.begin(), cand.end());
+    if (seriesSet != candSet) return false;
+    // Gate 2 — it must be a COLLECTED edition, not a single issue.
+    return hasCollectedMarker(candidateTitle.toLower());
+}
+
+SearchResult pickBestCollectedEdition(const QString& seriesTitle, int year,
+                                      const QList<SearchResult>& results) {
+    // Rank qualifiers by collected-edition tier (+ year tie-break). Take the
+    // UNIQUE top; an ambiguous tie (>=2 sharing the top rank) returns empty —
+    // fail safe, never guess between two equally-canonical collected editions.
     SearchResult best;
-    int bestScore = 0;
+    int bestRank = 0;
     int bestCount = 0;
     for (const auto& r : results) {
-        const int s = scoreMatch(editionTitle, year, tierLabel, r.title);
-        if (s == 0) continue;
-        if (s > bestScore) { bestScore = s; best = r; bestCount = 1; }
-        else if (s == bestScore) { ++bestCount; }
+        if (!isCollectedEditionOf(seriesTitle, r.title)) continue;
+        const QString candLower = r.title.toLower();
+        int rank = 100 + tierRank(candLower);
+        if (year > 0 && candLower.contains(QString::number(year))) rank += 8;
+        if (rank > bestRank) { bestRank = rank; best = r; bestCount = 1; }
+        else if (rank == bestRank) { ++bestCount; }
     }
-    if (bestScore == 0 || bestCount > 1) return {};
+    if (bestRank == 0 || bestCount > 1) return {};
     return best;
 }
 

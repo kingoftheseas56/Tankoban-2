@@ -89,10 +89,15 @@ public:
     void setContext(int volumeNumber, const QString& volumeTitle);
     void appendWeebCentralRow(int volumeNumber, const QStringList& chapterIds);
 
-    // COMICS_WESTERN_ADD 2026-06-02 — Western (RCO) editions download via GetComics
-    // in a future arc, not the manga (WeebCentral/Nyaa) pipeline. Shown instead of
-    // firing those bogus searches when a Western edition is selected.
-    void showComingSoon();
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 — Western (RCO) editions download via
+    // GetComics (collected editions), NOT the manga (WeebCentral/Nyaa) pipeline.
+    // A single live status surface replaces the indexer rows: editionFound is the
+    // matched collected edition (empty while still searching); statusLine is the
+    // live state ("Finding...", "Downloading 42%", "Downloaded - open to read",
+    // "No download found"). Called on volume-select and updated as the download
+    // progresses, so the user always sees exactly what is happening + what was
+    // found (honest about the collected-edition unit).
+    void setWesternDownloadStatus(const QString& editionFound, const QString& statusLine);
 
     QJsonObject devSnapshot() const;
     bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);

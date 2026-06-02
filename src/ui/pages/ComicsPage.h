@@ -618,6 +618,11 @@ private:
     // TorrentVolumeProvider) so the magnet path has a live TorrentClient.
     // DDL path works without a TorrentClient (nam is always available).
     tankoban::manga::WesternVolumeDownloader* m_westernDownloader = nullptr;
+    // The collected edition matched for the in-flight Western download (e.g.
+    // "Invincible Compendium Vol. 1 - 3"), surfaced via volumeResolved so the
+    // Sources-panel status keeps showing it across progress ticks. Empty until
+    // resolve confirms; reset implicitly when the next download starts.
+    QString            m_westernDownloadEdition;
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Local MangaFire catalog
     // index. Scans data/mangafire_catalog/*.json at construction; consulted

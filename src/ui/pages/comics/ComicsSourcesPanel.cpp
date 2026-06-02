@@ -511,19 +511,26 @@ void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
     armAutoPickIfEligible();
 }
 
-void ComicsSourcesPanel::showComingSoon()
+void ComicsSourcesPanel::setWesternDownloadStatus(const QString& editionFound,
+                                                  const QString& statusLine)
 {
-    // COMICS_WESTERN_ADD 2026-06-02 — honest affordance for Western editions:
-    // downloads come from GetComics in a later arc, so we neither search the
-    // manga indexers nor pretend sources exist.
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 — live GetComics download status. The
+    // main label names the GetComics source / the matched collected edition; the
+    // sub label carries the live state. Reuses the existing status labels (no new
+    // card type) and keeps the indexer scroll hidden — Western has one source.
     clearCards();
+    if (m_headerLabel) {
+        m_headerLabel->setText(tr("Download"));
+    }
     if (m_statusLabel) {
-        m_statusLabel->setText(tr("Downloading Western comics is coming soon"));
+        m_statusLabel->setText(editionFound.isEmpty()
+                                   ? tr("GetComics")
+                                   : editionFound);
         m_statusLabel->show();
     }
     if (m_statusSubLabel) {
-        m_statusSubLabel->setText(tr("This edition will be downloadable in a future update."));
-        m_statusSubLabel->show();
+        m_statusSubLabel->setText(statusLine);
+        m_statusSubLabel->setVisible(!statusLine.isEmpty());
     }
     if (m_scroll) {
         m_scroll->hide();

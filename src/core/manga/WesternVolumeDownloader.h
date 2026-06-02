@@ -42,7 +42,7 @@ public:
 
     struct ReqState {
         ReqKey  key;
-        QString editionTitle;
+        QString seriesTitle;       // search subject for GetComics (collected-edition match)
         int     year = 0;          // resolve args stashed so pumpResolveQueue can fire later
         QString tierLabel;
         QString destinationPath;
@@ -58,13 +58,14 @@ public:
                             QObject*               parent = nullptr);
     ~WesternVolumeDownloader() override;
 
-    // editionTitle/year/tier come from the Western edition; destinationPath is
-    // the per-series comics folder (guaranteed non-empty by caller per Agent 4
-    // contract). coverUrl from resolve is forwarded via coverReady so the UI
-    // can paint the per-edition cover.
+    // seriesTitle is the SERIES name (the GetComics search subject — collected
+    // editions are matched on series identity, not the per-TPB label); year/tier
+    // are match hints; destinationPath is the per-series comics folder
+    // (guaranteed non-empty by caller per Agent 4 contract). coverUrl from
+    // resolve is forwarded via coverReady so the UI can paint the edition cover.
     void requestVolume(const QString& seriesId,
                        int            volumeNumber,
-                       const QString& editionTitle,
+                       const QString& seriesTitle,
                        int            year,
                        const QString& tierLabel,
                        const QString& destinationPath);
@@ -74,6 +75,10 @@ signals:
     void volumeCompleted(const QString& seriesId, int volumeNumber, const QString& cbzPath);
     void volumeFailed(const QString& seriesId, int volumeNumber, const QString& reason);
     void coverReady(const QString& seriesId, int volumeNumber, const QString& coverUrl);
+    // The collected edition we matched on GetComics (e.g. "Invincible Compendium
+    // Vol. 1 - 3") — emitted once resolve confirms a download, so the UI can show
+    // EXACTLY what is being fetched (honest about the collected-edition unit).
+    void volumeResolved(const QString& seriesId, int volumeNumber, const QString& editionTitle);
 
 private slots:
     void onResolved(const tankoban::manga::EditionDownload& dl);

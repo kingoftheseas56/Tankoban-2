@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 
@@ -16,6 +17,23 @@ namespace tankoban::manga {
 static QString stateKey(const QString& seriesId, int vol)
 {
     return seriesId + QLatin1Char(':') + QString::number(vol);
+}
+
+// True if the file begins with a known comic-archive magic number — ZIP (.cbz)
+// or RAR (.cbr). Guards the DDL path against a hoster that serves an HTML
+// landing page instead of the file (e.g. a MEGA / Mediafire interstitial):
+// HttpFileDownloader would otherwise save that HTML as a bogus ".cbz" and we
+// would report a finished comic that is unreadable (smoke 2026-06-02).
+static bool looksLikeArchive(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QByteArray head = f.read(4);
+    f.close();
+    if (head.size() < 4) return false;
+    if (head.startsWith("PK"))   return true;   // ZIP family (CBZ)
+    if (head.startsWith("Rar!")) return true;   // RAR (CBR)
+    return false;
 }
 
 // Replace any character that is unsafe in a filename with '_'.
@@ -60,7 +78,7 @@ WesternVolumeDownloader::~WesternVolumeDownloader() = default;
 
 void WesternVolumeDownloader::requestVolume(const QString& seriesId,
                                              int            volumeNumber,
-                                             const QString& editionTitle,
+                                             const QString& seriesTitle,
                                              int            year,
                                              const QString& tierLabel,
                                              const QString& destinationPath)
@@ -80,7 +98,7 @@ void WesternVolumeDownloader::requestVolume(const QString& seriesId,
     // Record state and enqueue for the (serialised) resolve step.
     ReqState state;
     state.key             = {seriesId, volumeNumber};
-    state.editionTitle    = editionTitle;
+    state.seriesTitle     = seriesTitle;
     state.year            = year;
     state.tierLabel       = tierLabel;
     state.destinationPath = destinationPath;
@@ -107,7 +125,7 @@ void WesternVolumeDownloader::pumpResolveQueue()
         const ReqState& st = m_states[key];
         m_activeResolveKey = rk;
         m_resolveInFlight  = true;
-        m_resolver.resolve(st.editionTitle, st.year, st.tierLabel);
+        m_resolver.resolve(st.seriesTitle, st.year, st.tierLabel);
         return;
     }
 }
@@ -126,6 +144,11 @@ void WesternVolumeDownloader::onResolved(const EditionDownload& dl)
     // Forward cover if available.
     if (!dl.coverUrl.isEmpty())
         emit coverReady(rk.seriesId, rk.volumeNumber, dl.coverUrl);
+
+    // Surface the matched collected-edition title so the UI can show exactly
+    // what is being downloaded (it is the collected edition, not the per-TPB).
+    if (!dl.matchedTitle.isEmpty())
+        emit volumeResolved(rk.seriesId, rk.volumeNumber, dl.matchedTitle);
 
     // ── Magnet path ──────────────────────────────────────────────────────────
     if (dl.best.kind == QLatin1String("magnet") && m_torrent) {
@@ -202,7 +225,8 @@ void WesternVolumeDownloader::tryNextDdlLink(const QString& key)
     ReqState& state   = m_states[key];
     const ReqKey rk   = state.key;                 // copy for emits + post-erase use
     const QString destFolder = state.destinationPath;
-    const QString editionTitle = state.editionTitle;
+    // The DDL file is named after the series (the collected edition is the unit).
+    const QString seriesTitle = state.seriesTitle;
 
     while (state.ddlLinkIndex < state.remainingLinks.size()) {
         const getcomics::DownloadLink link = state.remainingLinks.at(state.ddlLinkIndex);  // copy
@@ -212,7 +236,7 @@ void WesternVolumeDownloader::tryNextDdlLink(const QString& key)
 
         const QString destFile =
             QDir(destFolder).absoluteFilePath(
-                sanitiseName(editionTitle) + QStringLiteral(".cbz"));
+                sanitiseName(seriesTitle) + QStringLiteral(".cbz"));
 
         // HttpFileDownloader as a child of this (auto-cleaned up if this dies).
         auto* dl = new tankoban::net::HttpFileDownloader(m_nam, this);
@@ -229,6 +253,14 @@ void WesternVolumeDownloader::tryNextDdlLink(const QString& key)
                 this, [this, rk, key, dl](const QString& path) {
                     dl->disconnect(this);     // no re-entry through this downloader
                     dl->deleteLater();
+                    // Content guard: a hoster may serve an HTML landing page (MEGA
+                    // / Mediafire interstitial) rather than the archive. Discard it
+                    // and try the next link instead of reporting a bogus comic.
+                    if (!looksLikeArchive(path)) {
+                        QFile::remove(path);
+                        if (m_states.contains(key)) tryNextDdlLink(key);
+                        return;
+                    }
                     m_states.remove(key);
                     emit volumeCompleted(rk.seriesId, rk.volumeNumber, path);
                 });

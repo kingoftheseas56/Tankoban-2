@@ -64,6 +64,12 @@ void HttpFileDownloader::start(const QString& url, const QString& destPath)
     req.setRawHeader("User-Agent", kUserAgent);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
+    // Stall guard (2026-06-02): abort if no data transfers for 30s. Without it a
+    // hoster that holds the connection open after the body never fires finished,
+    // hanging the caller forever (seen in the Western DDL link walk). This is a
+    // per-stall timeout, not a total cap, so a slow-but-progressing large file is
+    // unaffected.
+    req.setTransferTimeout(30000);
 
     m_reply = m_nam->get(req);
 

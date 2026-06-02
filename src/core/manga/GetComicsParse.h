@@ -34,16 +34,38 @@ QString parsePostCover(const QString& postHtml);
 // Parse a getcomics.org/?s= results page into {title, postUrl}, first-seen order.
 QList<SearchResult> parseSearchResults(const QString& searchHtml);
 
-// Confidence score (>=0) for a candidate post title vs the wanted edition.
-// Higher = better. 0 means no meaningful overlap.
-int scoreMatch(const QString& editionTitle, int year,
-               const QString& tierLabel, const QString& candidateTitle);
+// COLLECTED-EDITION matching (2026-06-02, Agent 1). GetComics indexes these
+// series as coarse collected editions (Compendium / Omnibus / Collection /
+// Complete / Deluxe), NOT the granular per-TPB volumes the RCO catalogue lists
+// — verified live: "Invincible" carries only "Invincible Compendium Vol. 1-3",
+// never the 25 individual TPBs. So the download unit is the collected edition,
+// matched STRICTLY on series identity (Hemanth: miss rather than grab wrong).
 
-// The best result whose score clears the confidence floor, or an empty
-// SearchResult (postUrl.isEmpty()) if none is confident enough. FAIL SAFE:
-// when unsure, returns empty rather than a wrong post.
-SearchResult pickBestMatch(const QString& editionTitle, int year,
-                           const QString& tierLabel,
-                           const QList<SearchResult>& results);
+// The series-identity tokens of a title: lowercased alnum tokens with edition
+// noise (the/a/of/and), tier words (vol/compendium/omnibus/collection/...),
+// 4-digit year tokens, and pure-number tokens removed. Two titles name the same
+// series iff these token SETS are equal.
+QStringList identityTokens(const QString& title);
+
+// True iff candidateTitle is a COLLECTED EDITION of exactly seriesTitle:
+//  (1) identityTokens(candidate) == identityTokens(series) — set equality, no
+//      extra or missing series words. Rejects a different series sharing a word
+//      ("Invincible Iron Man", "Invincible Universe", "The Invincible Red Sonja")
+//      AND a same-series sub-named edition ("Spawn Origins Collection" has the
+//      extra word "origins" → missed, the accepted strict trade).
+//  (2) candidate carries a collected-edition marker — a tier keyword
+//      (Compendium/Omnibus/Collection/Complete/Deluxe/Book/TPB/HC) — rejecting
+//      single issues ("Spawn #375"). A bare number range is NOT a marker: a
+//      publication-year span like "(2009-2013)" would false-positive an issue,
+//      and every real collected edition carries a tier word anyway.
+bool isCollectedEditionOf(const QString& seriesTitle, const QString& candidateTitle);
+
+// The single best collected edition of seriesTitle among results, or an empty
+// SearchResult (postUrl.isEmpty()) if none qualifies OR the top is an ambiguous
+// tie. FAIL SAFE: when unsure, returns empty rather than a wrong post. Ranks
+// qualifiers by collected-edition tier (Compendium > Omnibus > ... > TPB) with a
+// year-match tie-break, so the most canonical collected form wins.
+SearchResult pickBestCollectedEdition(const QString& seriesTitle, int year,
+                                      const QList<SearchResult>& results);
 
 } // namespace tankoban::manga::getcomics

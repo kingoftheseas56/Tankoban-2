@@ -2457,6 +2457,14 @@ void ComicsSeriesView::setVolumeStatusText(int volumeNumber, const QString& stat
     tile->setStatusText(statusText);
 }
 
+void ComicsSeriesView::updateWesternDownloadStatus(const QString& editionFound,
+                                                   const QString& statusLine)
+{
+    if (m_sourcesPanel) {
+        m_sourcesPanel->setWesternDownloadStatus(editionFound, statusLine);
+    }
+}
+
 void ComicsSeriesView::onVolumeCellClicked(int /*row*/, int /*column*/)
 {
     // Task 16: deprecated. VolumeTile owns its click handling (openRequested /
@@ -2543,6 +2551,12 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
                 tierLabel    = vol.groupingLabel;
                 break;
             }
+        }
+        // Show a live download status surface immediately (the panel was dead for
+        // Western before — Hemanth: "no sources for downloading"). ComicsPage
+        // updates this as resolve/progress/complete/fail signals arrive.
+        if (m_sourcesPanel) {
+            m_sourcesPanel->setWesternDownloadStatus(QString(), tr("Finding..."));
         }
         emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel);
         return;

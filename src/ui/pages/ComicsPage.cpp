@@ -1074,14 +1074,34 @@ void ComicsPage::wireWesternDownloader()
             if (v.isDouble()) { year = static_cast<int>(v.toDouble()); if (year > 0) break; }
         }
 
-        qInfo("ComicsPage: Western download requested — series=%s vol=%d dest=%s",
+        // COLLECTED-EDITION search (2026-06-02): GetComics carries these series
+        // only as collected editions (Compendium/Collection/Omnibus), never the
+        // per-TPB label. So the search SUBJECT is the SERIES TITLE — searching the
+        // bare edition label ("TPB 1 Family matters") returns zero. editionTitle
+        // is kept only for the log line.
+        qInfo("ComicsPage: Western download requested — series=%s title=\"%s\" "
+              "edition=\"%s\" vol=%d dest=%s",
               qUtf8Printable(seriesId),
+              qUtf8Printable(seriesTitle),
+              qUtf8Printable(editionTitle),
               volumeNumber,
               qUtf8Printable(destPath));
 
+        m_westernDownloadEdition.clear();   // new download — matched edition unknown yet
         m_westernDownloader->requestVolume(seriesId, volumeNumber,
-                                           editionTitle, year, tierLabel, destPath);
+                                           seriesTitle, year, tierLabel, destPath);
     });
+
+    // --- volumeResolved: surface the matched collected edition in the panel ---
+    connect(m_westernDownloader,
+            &tankoban::manga::WesternVolumeDownloader::volumeResolved,
+            this,
+            [this](const QString& seriesId, int /*volNumber*/, const QString& editionTitle) {
+        if (!m_tyVolumeSeriesView) return;
+        if (m_pendingWesternSeriesId.isEmpty() || seriesId != m_pendingWesternSeriesId) return;
+        m_westernDownloadEdition = editionTitle;
+        m_tyVolumeSeriesView->updateWesternDownloadStatus(editionTitle, tr("Downloading..."));
+    }, Qt::QueuedConnection);
 
     // --- volumeCompleted: register in index + flip tile to Read ---
     connect(m_westernDownloader,
@@ -1090,6 +1110,11 @@ void ComicsPage::wireWesternDownloader()
             [this](const QString& seriesId, int volNumber, const QString& cbzPath) {
         onProviderVolumeCompleted(seriesId, volNumber, cbzPath,
             static_cast<int>(PendingVolumeSourceKind::WesternGetComics));
+        if (m_tyVolumeSeriesView && !m_pendingWesternSeriesId.isEmpty()
+            && seriesId == m_pendingWesternSeriesId) {
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(
+                m_westernDownloadEdition, tr("Downloaded - open to read"));
+        }
     }, Qt::QueuedConnection);
 
     // --- volumeProgress: paint percent on the tile ---
@@ -1104,10 +1129,15 @@ void ComicsPage::wireWesternDownloader()
             seriesId == m_pendingWesternSeriesId;
         if (!isCurrentSeries) return;
         // Reuse setVolumeStatusText to show "N%" on the tile while in flight.
-        const QString label = percent <= 0
+        const QString tileLabel = percent <= 0
             ? QStringLiteral("Finding...")
             : QStringLiteral("%1%").arg(percent);
-        m_tyVolumeSeriesView->setVolumeStatusText(volNumber, label);
+        m_tyVolumeSeriesView->setVolumeStatusText(volNumber, tileLabel);
+        // Mirror into the Sources panel (keeps the matched edition label).
+        const QString panelLine = percent <= 0
+            ? tr("Finding...")
+            : tr("Downloading %1%").arg(percent);
+        m_tyVolumeSeriesView->updateWesternDownloadStatus(m_westernDownloadEdition, panelLine);
     }, Qt::QueuedConnection);
 
     // --- volumeFailed: surface error text on the tile ---
@@ -1121,6 +1151,12 @@ void ComicsPage::wireWesternDownloader()
                                QStringLiteral("resolve_failed"),
                                reason,
                                static_cast<int>(PendingVolumeSourceKind::WesternGetComics));
+        if (m_tyVolumeSeriesView && !m_pendingWesternSeriesId.isEmpty()
+            && seriesId == m_pendingWesternSeriesId) {
+            // Strict matcher: a miss is the expected fail-safe, not an error.
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(
+                QString(), tr("No download found"));
+        }
     }, Qt::QueuedConnection);
 
     // --- coverReady: paint per-edition cover on the tile ---
