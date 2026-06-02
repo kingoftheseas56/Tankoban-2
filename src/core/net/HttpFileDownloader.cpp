@@ -32,7 +32,8 @@ void HttpFileDownloader::start(const QString& url, const QString& destPath)
         return;
     }
 
-    QNetworkRequest req(QUrl(url));
+    const QUrl requestUrl(url);                 // named var: avoids the most-vexing-parse
+    QNetworkRequest req(requestUrl);            // (QNetworkRequest req(QUrl(url)) parses as a fn decl)
     req.setRawHeader("User-Agent", kUserAgent);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
