@@ -81,11 +81,33 @@ LIVE_WINDOW = int(os.environ.get("OFFICE_LIVE_WINDOW", "15"))          # heartbe
 SPAWN_CAP = int(os.environ.get("OFFICE_SPAWN_CAP", "5"))               # max spawns / window
 CAP_WINDOW = int(os.environ.get("OFFICE_SPAWN_CAP_WINDOW", "3600"))    # window (s)
 LOCK_STALE = int(os.environ.get("OFFICE_LOCK_STALE", "1800"))         # stale per-target lock (s)
+ACTIVE_WINDOW = int(os.environ.get("OFFICE_ACTIVE_WINDOW", "90"))     # recent bus post => live (s)
+ACK_TIMEOUT = int(os.environ.get("OFFICE_ACK_TIMEOUT", "90"))         # wait for a live-routed brother to reply (s)
 MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "sonnet")
 
 
 def _now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _epoch(ts):
+    try:
+        return int(datetime.fromisoformat(ts).timestamp())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _recently_active(agent, now, window, bus_records):
+    """A brother who POSTED to the bus within `window`s counts as live even with no
+    fresh heartbeat — covers a busy brother who never started (or lost) his watch, so
+    he is never needlessly duplicate-spawned."""
+    latest = 0
+    for r in bus_records:
+        if r.get("from") == agent:
+            t = _epoch(r.get("ts", ""))
+            if t > latest:
+                latest = t
+    return bool(latest) and (now - latest) < window
 
 
 # ── cursor ───────────────────────────────────────────────────────────────────
@@ -246,30 +268,78 @@ def _post(frm, to, msg):
         pass
 
 
-def _dispatch(rec):
-    target = (rec.get("to") or "").strip()
-    frm = rec.get("from", "?")
-    seq = rec.get("seq")
-    task = rec.get("msg", "")
-
-    if rec.get("arc") == "bg":
-        _post("system", frm, "(summon #{0} refused: background brothers can't summon others — no chains)".format(seq))
-        return
+# ── pure routing logic (unit-testable, no side effects) ──────────────────────
+def classify_summon(frm, target, arc, is_live):
+    """Pure routing decision for a summon. Returns (action, reason). Side-effect-free
+    so it is unit-testable; _dispatch() acts on the verdict."""
+    target = (target or "").strip()
+    if arc == "bg":
+        return ("refuse_chain", "background brothers can't summon others")
     if not target.startswith("agent") or "," in target or target in ("all", ""):
-        _post("system", frm, "(summon #{0} skipped: must target exactly one brother, got '{1}')".format(seq, target))
-        return
+        return ("skip_badtarget", "must target exactly one brother, got '{0}'".format(target))
     if target == frm:
-        return  # don't summon yourself
-    if _is_live(target):
-        print("[office-dispatch] summon #{0} -> {1}: live tab, routed to his watch".format(seq, target))
-        sys.stdout.flush()
-        return
+        return ("skip_self", "don't summon yourself")
+    if is_live:
+        return ("route_live", "live tab / recently active — routed to his watch")
+    return ("spawn", "idle/closed — spawn a background brother")
 
-    # no-double: claim the per-target lock first (reclaim if stale)
+
+def resolve_pending(pending, bus_records, now):
+    """Re-evaluate live-routed summons. A pending is RESOLVED (dropped) when its target
+    posted anything with seq > the summon seq (he answered / is clearly alive). Otherwise,
+    once `now` passes the deadline it goes to fallback (a background spawn). Returns
+    (still_open, to_fallback) — both lists. Pure: no side effects."""
+    max_posted = {}
+    for r in bus_records:
+        frm = r.get("from")
+        s = r.get("seq")
+        if isinstance(s, int) and (frm not in max_posted or s > max_posted[frm]):
+            max_posted[frm] = s
+    still, fallback = [], []
+    for p in pending:
+        if max_posted.get(p["target"], -1) > p["seq"]:
+            continue  # answered / alive -> resolved
+        if now >= p["deadline"]:
+            fallback.append(p)
+        else:
+            still.append(p)
+    return still, fallback
+
+
+# ── pending-summons persistence (survives a dispatcher restart) ──────────────
+def PENDING_FILE():
+    return os.path.join(_dir(), ".office_pending.jsonl")
+
+
+def _load_pending():
+    try:
+        out = []
+        for line in open(PENDING_FILE(), encoding="utf-8"):
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+        return out
+    except (OSError, ValueError):
+        return []
+
+
+def _save_pending(pending):
+    os.makedirs(_dir(), exist_ok=True)
+    tmp = PENDING_FILE() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for p in pending:
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    os.replace(tmp, PENDING_FILE())
+
+
+# ── spawn (shared by the idle path AND the ack-timeout fallback) ──────────────
+def _spawn_for(target, frm, seq, task):
+    """Spawn `target` as a background brother under the per-target lock + spawn cap.
+    Returns True if spawned, False if held (lock busy or cap reached)."""
     lockdir = os.path.join(LOCK_DIR(), target + ".lock")
     if not _acquire_target_lock(lockdir):
         _post("system", frm, "(summon #{0}: {1} is already handling a summon — try again when he's free)".format(seq, target))
-        return
+        return False
 
     # cap: count + write the "start" row SYNCHRONOUSLY under the ledger lock, so a
     # burst of summons can't all pass the cap before any ledger row is recorded.
@@ -278,7 +348,7 @@ def _dispatch(rec):
         if _spawn_count_recent() >= SPAWN_CAP:
             _release_target_lock(lockdir)
             _post("system", frm, "(summon #{0} held: spawn cap {1}/{2}s reached — ask Hemanth)".format(seq, SPAWN_CAP, CAP_WINDOW))
-            return
+            return False
         _write_start_row(target, frm, seq, task)
     finally:
         _ledger_unlock(lk)
@@ -295,9 +365,45 @@ def _dispatch(rec):
         )
         print("[office-dispatch] summon #{0} -> {1}: spawned background brother".format(seq, target))
         sys.stdout.flush()
+        return True
     except OSError as ex:
         _release_target_lock(lockdir)
         _post("system", frm, "(summon #{0}: failed to spawn {1}: {2})".format(seq, target, ex))
+        return False
+
+
+def _dispatch(rec):
+    """Route a single summon. Returns a PENDING entry dict when the summon was routed to
+    a (supposedly) live brother — the main loop ack-or-fallback-checks it later — else None."""
+    target = (rec.get("to") or "").strip()
+    frm = rec.get("from", "?")
+    seq = rec.get("seq")
+    task = rec.get("msg", "")
+
+    # liveness = fresh heartbeat OR a recent bus post (so a busy-but-live brother with
+    # no watch isn't duplicate-spawned, and the routing self-heals via fallback either way)
+    live = _is_live(target) or _recently_active(target, time.time(), ACTIVE_WINDOW, list(_iter_bus()))
+    action, reason = classify_summon(frm, target, rec.get("arc"), live)
+
+    if action == "refuse_chain":
+        _post("system", frm, "(summon #{0} refused: background brothers can't summon others — no chains)".format(seq))
+        return None
+    if action == "skip_badtarget":
+        _post("system", frm, "(summon #{0} skipped: must target exactly one brother, got '{1}')".format(seq, target))
+        return None
+    if action == "skip_self":
+        return None
+    if action == "route_live":
+        # DON'T forget it: record a pending entry so a wrong "live" guess (zombie
+        # heartbeat / heads-down tab) self-heals to a background spawn after the deadline.
+        print("[office-dispatch] summon #{0} -> {1}: {2}; fallback-spawn if no reply in {3}s".format(
+            seq, target, reason, ACK_TIMEOUT))
+        sys.stdout.flush()
+        return {"target": target, "seq": seq, "frm": frm, "task": task,
+                "deadline": time.time() + ACK_TIMEOUT}
+    # action == "spawn"
+    _spawn_for(target, frm, seq, task)
+    return None
 
 
 def main():
@@ -305,16 +411,32 @@ def main():
     if cur is None:
         cur = _max_seq()  # seed at startup so we never re-process the backlog
         _write_cursor(cur)
-    print("[office-dispatch] watching for summons (from seq {0}, interval {1}s, cap {2}/{3}s)".format(
-        cur, INTERVAL, SPAWN_CAP, CAP_WINDOW))
+    pending = _load_pending()
+    print("[office-dispatch] watching for summons (from seq {0}, interval {1}s, cap {2}/{3}s, ack {4}s)".format(
+        cur, INTERVAL, SPAWN_CAP, CAP_WINDOW, ACK_TIMEOUT))
     sys.stdout.flush()
     while True:
         try:
             for rec in _new_summons(cur):
-                _dispatch(rec)
+                p = _dispatch(rec)
+                if p:
+                    pending.append(p)
+                    _save_pending(pending)
                 # advance + persist the cursor PER summon, so a crash can't replay it
                 cur = max(cur, rec.get("seq", cur))
                 _write_cursor(cur)
+            # ack-or-fallback: a live-routed summon the target never answered (zombie
+            # heartbeat / closed tab) falls back to a background spawn past its deadline.
+            if pending:
+                still, fallback = resolve_pending(pending, list(_iter_bus()), time.time())
+                for p in fallback:
+                    print("[office-dispatch] summon #{0} -> {1}: no reply in {2}s — falling back to a background spawn".format(
+                        p["seq"], p["target"], ACK_TIMEOUT))
+                    sys.stdout.flush()
+                    _spawn_for(p["target"], p["frm"], p["seq"], p["task"])
+                if fallback or len(still) != len(pending):
+                    pending = still
+                    _save_pending(pending)
         except Exception as ex:  # never let the loop die
             print("[office-dispatch] error: {0}".format(ex))
             sys.stdout.flush()
