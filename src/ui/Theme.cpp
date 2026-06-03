@@ -1124,6 +1124,20 @@ ModeBlobs accentBlobsForMode(Mode mode)
 
 QIcon tintedSvgIcon(const QString& path, const QColor& tint, int size)
 {
+    // Rendered-icon cache — keyed by (path, tint, size). The disk read +
+    // QSvgRenderer + QPainter rasterize below all run on the GUI thread; without
+    // a cache every refreshModeButtonIcon() (and any future per-paint caller)
+    // re-reads the SVG off disk and re-rasterizes it. The icon set is tiny (one
+    // sun.svg re-tinted to a handful of mode text-colors at fixed sizes), so the
+    // keyed cache turns repeat renders into a hash lookup. GUI-thread-only by
+    // construction (QPixmap/QPainter require it), so no lock is needed; the
+    // bounded keyspace means no eviction is needed either.
+    static QHash<QString, QIcon> cache;
+    const QString key = path + QLatin1Char('|') + tint.name(QColor::HexArgb)
+                      + QLatin1Char('|') + QString::number(size);
+    const auto cached = cache.constFind(key);
+    if (cached != cache.constEnd()) return cached.value();
+
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return QIcon();
     QString svg = QString::fromUtf8(f.readAll());
@@ -1137,7 +1151,11 @@ QIcon tintedSvgIcon(const QString& path, const QColor& tint, int size)
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     renderer.render(&painter);
-    return QIcon(pix);
+    painter.end();
+
+    const QIcon icon(pix);
+    cache.insert(key, icon);
+    return icon;
 }
 
 } // namespace Theme

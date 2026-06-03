@@ -22,7 +22,10 @@ private slots:
     void onModeButtonClicked();
 
 private:
-    void refreshModeButtonIcon();
+    // Caller passes the already-known mode so this does not re-open QSettings;
+    // each click reads the mode once (in onModeButtonClicked / the ctor) and
+    // hands it down, preserving fresh-read sync with dev-bridge theme changes.
+    void refreshModeButtonIcon(Theme::Mode mode);
 
     QPushButton* m_modeBtn = nullptr;
 };

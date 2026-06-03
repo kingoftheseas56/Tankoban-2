@@ -28,15 +28,15 @@ ThemePicker::ThemePicker(QWidget* parent)
     m_modeBtn->setFixedSize(28, 24);
     m_modeBtn->setCursor(Qt::PointingHandCursor);
     m_modeBtn->setIconSize(QSize(16, 16));
-    refreshModeButtonIcon();
+    refreshModeButtonIcon(Theme::loadMode());
     connect(m_modeBtn, &QPushButton::clicked, this, &ThemePicker::onModeButtonClicked);
     layout->addWidget(m_modeBtn, 0, Qt::AlignVCenter);
 }
 
-void ThemePicker::refreshModeButtonIcon()
+void ThemePicker::refreshModeButtonIcon(Theme::Mode mode)
 {
     if (!m_modeBtn) return;
-    const Theme::Mode cur = Theme::loadMode();
+    const Theme::Mode cur = mode;
 
     // Sun icon for all 5 modes (Dark/Nord/Solarized/Gruvbox/Catppuccin) —
     // moon swap was used when Light was a Mode; Light is currently removed
@@ -82,5 +82,8 @@ void ThemePicker::onModeButtonClicked()
     if (auto* app = qobject_cast<QApplication*>(QApplication::instance())) {
         Theme::applyTheme(*app, next);
     }
-    refreshModeButtonIcon();
+    // Pass the mode we just set — refreshModeButtonIcon no longer re-opens
+    // QSettings, so this click path now opens it once (the saveMode write)
+    // plus the single loadMode read above, not the former double read.
+    refreshModeButtonIcon(next);
 }
