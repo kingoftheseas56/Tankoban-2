@@ -8,8 +8,11 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QThread>
+#include <QTimer>
 #include <QUrl>
+
+#include <algorithm>
+#include <utility>
 
 namespace tankoban::manga::mangaupdates {
 
@@ -89,16 +92,25 @@ MangaUpdatesClient::MangaUpdatesClient(QNetworkAccessManager* nam, QObject* pare
 
 MangaUpdatesClient::~MangaUpdatesClient() = default;
 
-void MangaUpdatesClient::throttleIfNeeded()
+// Non-blocking 1-req/sec throttle. The old shape slept the calling thread
+// (QThread::msleep), freezing the GUI for up to 1s per lookup because this
+// client lives on ComicsPage's UI thread. Instead we compute the next free
+// slot and defer the actual network call with a single-shot QTimer. Back-to-
+// back calls advance m_nextAllowedMs by kThrottleMs each, so a burst drains in
+// call order, spaced 1 req/sec, without ever blocking the GUI thread. The timer
+// is parented to `this` (auto-cancelled on destruction) and the deferred lambda
+// re-checks m_nam defensively in case the NAM disappears before the slot fires.
+void MangaUpdatesClient::scheduleThrottled(std::function<void()> dispatch)
 {
-    // PHASE 7+: this blocks the caller briefly; keep parity with the
-    // AniListClient throttle until both clients move to queued dispatch.
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 elapsed = now - m_lastRequestMs;
-    if (elapsed < kThrottleMs && m_lastRequestMs != 0) {
-        QThread::msleep(static_cast<unsigned long>(kThrottleMs - elapsed));
+    const qint64 slot = std::max(now, m_nextAllowedMs);
+    const qint64 delay = slot - now;
+    m_nextAllowedMs = slot + kThrottleMs;
+    if (delay <= 0) {
+        dispatch();
+    } else {
+        QTimer::singleShot(static_cast<int>(delay), this, std::move(dispatch));
     }
-    m_lastRequestMs = QDateTime::currentMSecsSinceEpoch();
 }
 
 void MangaUpdatesClient::searchByTitle(const QString& query, int requestId)
@@ -107,20 +119,24 @@ void MangaUpdatesClient::searchByTitle(const QString& query, int requestId)
         emit searchFailed(requestId, QStringLiteral("no network manager"));
         return;
     }
-    throttleIfNeeded();
+    scheduleThrottled([this, query, requestId]() {
+        if (!m_nam) {
+            emit searchFailed(requestId, QStringLiteral("no network manager"));
+            return;
+        }
+        QJsonObject body;
+        body.insert(QStringLiteral("search"), query);
+        body.insert(QStringLiteral("page"), 1);
+        body.insert(QStringLiteral("per_page"), kSearchPerPage);
 
-    QJsonObject body;
-    body.insert(QStringLiteral("search"), query);
-    body.insert(QStringLiteral("page"), 1);
-    body.insert(QStringLiteral("per_page"), kSearchPerPage);
+        QNetworkRequest req{QUrl(QString::fromLatin1(kSearchUrl))};
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Tankoban/1.0 (+tankoyomi)"));
 
-    QNetworkRequest req{QUrl(QString::fromLatin1(kSearchUrl))};
-    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Tankoban/1.0 (+tankoyomi)"));
-
-    auto* reply = m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    reply->setProperty(kPropRequestId, requestId);
-    connect(reply, &QNetworkReply::finished, this, &MangaUpdatesClient::onSearchReplyFinished);
+        auto* reply = m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+        reply->setProperty(kPropRequestId, requestId);
+        connect(reply, &QNetworkReply::finished, this, &MangaUpdatesClient::onSearchReplyFinished);
+    });
 }
 
 void MangaUpdatesClient::seriesById(qint64 seriesId, int requestId)
@@ -129,15 +145,19 @@ void MangaUpdatesClient::seriesById(qint64 seriesId, int requestId)
         emit seriesFailed(requestId, QStringLiteral("no network manager"));
         return;
     }
-    throttleIfNeeded();
+    scheduleThrottled([this, seriesId, requestId]() {
+        if (!m_nam) {
+            emit seriesFailed(requestId, QStringLiteral("no network manager"));
+            return;
+        }
+        const QString url = QString::fromLatin1(kSeriesUrlPrefix) + QString::number(seriesId);
+        QNetworkRequest req{QUrl(url)};
+        req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Tankoban/1.0 (+tankoyomi)"));
 
-    const QString url = QString::fromLatin1(kSeriesUrlPrefix) + QString::number(seriesId);
-    QNetworkRequest req{QUrl(url)};
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Tankoban/1.0 (+tankoyomi)"));
-
-    auto* reply = m_nam->get(req);
-    reply->setProperty(kPropRequestId, requestId);
-    connect(reply, &QNetworkReply::finished, this, &MangaUpdatesClient::onSeriesReplyFinished);
+        auto* reply = m_nam->get(req);
+        reply->setProperty(kPropRequestId, requestId);
+        connect(reply, &QNetworkReply::finished, this, &MangaUpdatesClient::onSeriesReplyFinished);
+    });
 }
 
 void MangaUpdatesClient::onSearchReplyFinished()

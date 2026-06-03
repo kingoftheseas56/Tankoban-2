@@ -7,6 +7,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
+
 class QNetworkAccessManager;
 class QNetworkReply;
 
@@ -34,10 +36,13 @@ private slots:
     void onSeriesReplyFinished();
 
 private:
-    void throttleIfNeeded();
+    // Non-blocking 1-req/sec throttle — see scheduleThrottled in the .cpp.
+    // Defers each request to its next free slot via a single-shot QTimer
+    // instead of sleeping the GUI thread (the old QThread::msleep froze the UI).
+    void scheduleThrottled(std::function<void()> dispatch);
 
     QPointer<QNetworkAccessManager> m_nam;
-    qint64 m_lastRequestMs = 0;
+    qint64 m_nextAllowedMs = 0;  // earliest ms-since-epoch the next request may dispatch
 };
 
 } // namespace tankoban::manga::mangaupdates

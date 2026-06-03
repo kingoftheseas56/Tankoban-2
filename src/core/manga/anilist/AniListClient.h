@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
+
 class QNetworkAccessManager;
 class QNetworkReply;
 
@@ -64,10 +66,15 @@ private slots:
     void onSeriesReplyFinished();
 
 private:
-    void throttleIfNeeded();
+    // Non-blocking 1-req/sec throttle. Schedules `dispatch` for the next free
+    // slot via a single-shot QTimer instead of sleeping the GUI thread (the
+    // old QThread::msleep froze the UI up to 1s per metadata lookup). Rapid
+    // back-to-back calls are spaced kMinIntervalMs apart by advancing
+    // m_nextAllowedMs, so the queue drains in call order without blocking.
+    void scheduleThrottled(std::function<void()> dispatch);
 
     QPointer<QNetworkAccessManager> m_nam;
-    qint64 m_lastRequestMs = 0;  // simple 1-req/sec throttle
+    qint64 m_nextAllowedMs = 0;  // earliest ms-since-epoch the next request may dispatch
 
     // requestId is threaded through QNetworkReply::setProperty("anilist_requestId", id) -- see .cpp.
 };

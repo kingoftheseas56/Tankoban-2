@@ -10,8 +10,11 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QThread>
+#include <QTimer>
 #include <QUrl>
+
+#include <algorithm>
+#include <utility>
 
 namespace tankoban::manga::anilist {
 
@@ -120,18 +123,25 @@ QNetworkAccessManager* AniListClient::networkManager() const
     return m_nam.data();
 }
 
-// PHASE 7+: when wiring into the search-widget UI thread, replace the
-// QThread::msleep here with a single-shot QTimer + pending-call queue so
-// we don't freeze the UI when the throttle triggers. Phase 1 keeps the
-// simple-blocking shape per plan.
-void AniListClient::throttleIfNeeded()
+// Non-blocking 1-req/sec throttle. The old shape slept the calling thread
+// (QThread::msleep), which froze the GUI for up to 1s per metadata lookup
+// because both clients live on ComicsPage's UI thread. Instead we compute the
+// next free slot and defer the actual network post with a single-shot QTimer.
+// Back-to-back calls advance m_nextAllowedMs by kMinIntervalMs each, so a burst
+// drains in call order, spaced 1 req/sec, without ever blocking the GUI thread.
+// The QTimer is parented to `this`, so it is auto-cancelled if the client dies
+// before the slot fires; the deferred lambda re-checks m_nam defensively.
+void AniListClient::scheduleThrottled(std::function<void()> dispatch)
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 elapsed = now - m_lastRequestMs;
-    if (m_lastRequestMs > 0 && elapsed < kMinIntervalMs) {
-        QThread::msleep(static_cast<unsigned long>(kMinIntervalMs - elapsed));
+    const qint64 slot = std::max(now, m_nextAllowedMs);
+    const qint64 delay = slot - now;
+    m_nextAllowedMs = slot + kMinIntervalMs;
+    if (delay <= 0) {
+        dispatch();
+    } else {
+        QTimer::singleShot(static_cast<int>(delay), this, std::move(dispatch));
     }
-    m_lastRequestMs = QDateTime::currentMSecsSinceEpoch();
 }
 
 void AniListClient::searchByTitle(const QString& query, int requestId)
@@ -140,20 +150,24 @@ void AniListClient::searchByTitle(const QString& query, int requestId)
         emit searchFailed(requestId, QStringLiteral("network manager unavailable"));
         return;
     }
-    throttleIfNeeded();
+    scheduleThrottled([this, query, requestId]() {
+        if (!m_nam) {
+            emit searchFailed(requestId, QStringLiteral("network manager unavailable"));
+            return;
+        }
+        QJsonObject variables;
+        variables["search"] = query;
+        const QByteArray body = makeRequestBody(kSearchQuery, variables);
 
-    QJsonObject variables;
-    variables["search"] = query;
-    const QByteArray body = makeRequestBody(kSearchQuery, variables);
+        QNetworkRequest req(QUrl(QString::fromLatin1(kEndpoint)));
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        req.setRawHeader("Accept", "application/json");
 
-    QNetworkRequest req(QUrl(QString::fromLatin1(kEndpoint)));
-    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    req.setRawHeader("Accept", "application/json");
-
-    auto* reply = m_nam->post(req, body);
-    reply->setProperty("anilist_requestId", requestId);
-    connect(reply, &QNetworkReply::finished,
-            this, &AniListClient::onSearchReplyFinished);
+        auto* reply = m_nam->post(req, body);
+        reply->setProperty("anilist_requestId", requestId);
+        connect(reply, &QNetworkReply::finished,
+                this, &AniListClient::onSearchReplyFinished);
+    });
 }
 
 void AniListClient::seriesById(int anilistId, int requestId)
@@ -162,20 +176,24 @@ void AniListClient::seriesById(int anilistId, int requestId)
         emit seriesFailed(requestId, QStringLiteral("network manager unavailable"));
         return;
     }
-    throttleIfNeeded();
+    scheduleThrottled([this, anilistId, requestId]() {
+        if (!m_nam) {
+            emit seriesFailed(requestId, QStringLiteral("network manager unavailable"));
+            return;
+        }
+        QJsonObject variables;
+        variables["id"] = anilistId;
+        const QByteArray body = makeRequestBody(kSeriesQuery, variables);
 
-    QJsonObject variables;
-    variables["id"] = anilistId;
-    const QByteArray body = makeRequestBody(kSeriesQuery, variables);
+        QNetworkRequest req(QUrl(QString::fromLatin1(kEndpoint)));
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        req.setRawHeader("Accept", "application/json");
 
-    QNetworkRequest req(QUrl(QString::fromLatin1(kEndpoint)));
-    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    req.setRawHeader("Accept", "application/json");
-
-    auto* reply = m_nam->post(req, body);
-    reply->setProperty("anilist_requestId", requestId);
-    connect(reply, &QNetworkReply::finished,
-            this, &AniListClient::onSeriesReplyFinished);
+        auto* reply = m_nam->post(req, body);
+        reply->setProperty("anilist_requestId", requestId);
+        connect(reply, &QNetworkReply::finished,
+                this, &AniListClient::onSeriesReplyFinished);
+    });
 }
 
 void AniListClient::onSearchReplyFinished()
