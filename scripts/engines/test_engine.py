@@ -265,5 +265,56 @@ class GateTest(unittest.TestCase):
         # Still 3 calls (2 original + 1 gate probe); wake markers unchanged.
         self.assertEqual(calls_after, 3)
 
+# call_gemini_visual (the `see` lane) — base class authored by DeepSeek as a
+# coding-muscle `grunt` proof 2026-06-03; empty-file case added by Agent 0 (Codex P2).
+class VisualTest(unittest.TestCase):
+    def setUp(self):
+        self._saved_dry_run = os.environ.get('ENGINE_DRY_RUN')
+        os.environ.pop('ENGINE_DRY_RUN', None)
+
+    def tearDown(self):
+        if self._saved_dry_run is not None:
+            os.environ['ENGINE_DRY_RUN'] = self._saved_dry_run
+        else:
+            os.environ.pop('ENGINE_DRY_RUN', None)
+
+    def test_dry_run_returns_prefixed_string(self):
+        os.environ['ENGINE_DRY_RUN'] = '1'
+        result = engine.call_gemini_visual(['dummy.png'], 'test prompt', {})
+        self.assertTrue(result.startswith('DRY:gemini-visual:'))
+
+    def test_empty_image_paths_raises_valueerror(self):
+        with self.assertRaises(ValueError):
+            engine.call_gemini_visual([], 'test prompt', {})
+
+    def test_unsupported_extension_raises_valueerror(self):
+        f = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
+        try:
+            f.close()
+            with self.assertRaises(ValueError):
+                engine.call_gemini_visual([f.name], 'test prompt', {})
+        finally:
+            os.unlink(f.name)
+
+    def test_total_bytes_exceeds_4mb_raises_valueerror(self):
+        f = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+        try:
+            f.write(b'\x00' * (4 * 1024 * 1024 + 1))
+            f.flush(); f.close()
+            with self.assertRaises(ValueError):
+                engine.call_gemini_visual([f.name], 'test prompt', {})
+        finally:
+            os.unlink(f.name)
+
+    def test_empty_image_file_raises_valueerror(self):  # Codex P2
+        f = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+        try:
+            f.close()  # 0 bytes, supported extension
+            with self.assertRaises(ValueError):
+                engine.call_gemini_visual([f.name], 'test prompt', {})
+        finally:
+            os.unlink(f.name)
+
+
 if __name__ == "__main__":
     unittest.main()

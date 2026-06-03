@@ -255,7 +255,7 @@ def call_gemini_visual(image_paths, prompt, cfg):
     if not image_paths:
         raise ValueError("see: at least one --image is required")
     parts = [{"text": prompt}]
-    total = 0
+    total_b64 = 0
     for p in image_paths:
         ext = os.path.splitext(p)[1].lower()
         mime = _GEMINI_MIME.get(ext)
@@ -265,13 +265,17 @@ def call_gemini_visual(image_paths, prompt, cfg):
                 f"(allowed: {sorted(_GEMINI_MIME)})")
         with open(p, "rb") as f:
             raw = f.read()
-        total += len(raw)
-        if total > _GEMINI_INLINE_LIMIT:
+        if not raw:
+            raise ValueError(f"see: image {p} is empty (0 bytes)")  # P2 (Codex)
+        b64 = base64.b64encode(raw).decode()
+        # The 4 MB inline cap applies to the base64 payload actually sent, not the
+        # raw bytes (base64 inflates ~33%) — caught by Codex review 2026-06-03 (P1).
+        total_b64 += len(b64)
+        if total_b64 > _GEMINI_INLINE_LIMIT:
             raise ValueError(
-                f"see: inline images exceed 4 MB total ({total} bytes) — "
-                f"use fewer/smaller images (Files API not wired)")
-        parts.append({"inline_data": {"mime_type": mime,
-                                      "data": base64.b64encode(raw).decode()}})
+                f"see: inline images exceed the 4 MB base64 cap ({total_b64} chars) "
+                f"— use fewer/smaller images (Files API not wired)")
+        parts.append({"inline_data": {"mime_type": mime, "data": b64}})
     return _gemini_request(parts, cfg)
 
 

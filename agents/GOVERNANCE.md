@@ -10,7 +10,16 @@ This is the rulebook. Every agent reads this **only when their `Governance seen`
 The brotherhood is **Agents 0–5 (Claude).** Codex, DeepSeek, and Gemini are no longer brother-personas — they are **standing tools any mainline brother summons directly.**
 
 - **Agent 7 (Codex) and Agent 9 (DeepSeek) are RETIRED as personas** (2026-06-03 — see `agents/THE_PASSING_2026-06-03.md`). They do not wake, hold a roster slot, or appear in Congress / routing. Their *powers* pass to Agents 0–5.
-- **Codex / DeepSeek / Gemini are summoned as bare tools** via `scripts/engines/engine.py` (or `codex exec -` directly for Codex). Any brother may call them to: get a second pair of eyes (review), audit, take an independent perspective, or grind bulk/mechanical work. This is the inheritance of 7's gate and 9's reach.
+- **Codex / DeepSeek / Gemini are summoned as bare tools** via `scripts/engines/engine.py` (or `codex exec -` directly for Codex). This is the inheritance of 7's gate and 9's reach. The verbs (all proven live 2026-06-03):
+
+  | Verb | Engine | Role | Use it for |
+  |---|---|---|---|
+  | `review` | Codex | **Brain** | cross-model review of your diff vs a written DoD; gnarly/novel production-C++; architecture 2nd opinion |
+  | `grunt` | DeepSeek | **Coding muscle** | the *routine* coding within an implementation — **you (Claude) keep the important/architectural parts and hand DeepSeek the rest** |
+  | `read` | Gemini | **Memory** | long-context text research, web-grounded synthesis, summarize big docs |
+  | `see` | Gemini | **Eyes** | look at screenshots / comic pages / PDFs — visual-smoke assist ("does this look right"); the one thing Codex/DeepSeek can't do. `see --image <path> "<prompt>"` |
+
+  Example: `python scripts/engines/engine.py review --task <t> --purpose "<why>" "<diff+DoD>"`. Lanes are defaults; override with a one-line reason. Caps + token ledger at `scripts/engines/.ledger.jsonl`. Full design: `docs/superpowers/specs/2026-06-03-engine-roles-integration-design.md`.
 - **The producer≠reviewer cross-model review gate is now a REFLEX, not a ritual.** When a brother finishes non-trivial work — especially threading / async / novel logic — he summons a *different* engine to review his diff against a written Definition of Done (see the Definition-of-Done section below; package with `/codex-review`). Still mandatory for the work-classes that required it (execution-engine output, threading behavior changes). The reviewer must be a different model than the author.
 - **Triggers A/B/C/D (the old Codex triggers) are folded into this single cross-engine summon reflex.** **Trigger E (Claude Jr fan-out) is UNCHANGED** — it remains the parallelism mechanism.
 - **The Office (live bus + foreman + reachability) is RETIRED / dormant.** It existed to coordinate brothers when no human was in the loop; with Hemanth hands-on, that need is gone. The code is archived (`scripts/_archive/office/`), **re-armable** if a future unattended autonomous run is wanted. Do NOT run `open_office.bat` or restart the dispatcher.
