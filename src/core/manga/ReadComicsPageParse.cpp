@@ -30,7 +30,7 @@ QString baeu(const QString& urlIn, const QString& rootIn)
     const QString sep   = (q < 0) ? QString() : QStringLiteral("?");
     const QString query = (q < 0) ? QString() : url.mid(q + 1);
 
-    const bool s0 = path.contains(QLatin1String("=s0"));
+    const bool s0 = path.endsWith(QLatin1String("=s0"));   // suffix, not substring
     path.chop(s0 ? 3 : 6);                                  // strip =s0 / =s1600
     path = path.mid(15, 33 - 15) + path.mid(50);            // step1: [15:33] + [50:]
     path = path.left(path.size() - 11) + path.right(2);     // step2: [:-11] + [-2:]
@@ -51,13 +51,7 @@ QList<PageInfo> parseReaderPages(const QString& html)
     if (!rootM.hasMatch()) return pages;            // not the obfuscated reader -> empty
     const QString root = rootM.captured(1);
 
-    // array var name: after `var pth = '...';` comes `var <NAME> = '`
-    static const QRegularExpression varRe(QStringLiteral(R"rx(var pth = '[^']*';\s*var (\w+)\s*=\s*')rx"));
-    const auto varM = varRe.match(html);
-    if (!varM.hasMatch()) return pages;
-    const QString var = varM.captured(1);
-
-    // junk-token replacements: l = l.replace(/X/g, 'Y')
+    // junk-token replacements: l = l.replace(/X/g, 'Y') (the first is page-randomized)
     QList<QPair<QString, QString>> repls;
     static const QRegularExpression replRe(
         QStringLiteral(R"rx(l = l\.replace\(/([^/]+)/g, ["']([^"']*)["']\))rx"));
@@ -67,15 +61,24 @@ QList<PageInfo> parseReaderPages(const QString& html)
         repls.append({m.captured(1), m.captured(2)});
     }
 
-    // each token: html.split(var)[2:], take the `= '...'` string
-    static const QRegularExpression tokRe(QStringLiteral(R"rx(= '([^']*)')rx"));
-    const QStringList parts = html.split(var);
+    // PAGE IMAGES: the reader stores each page as a repeated `htp = '<scrambled>';`
+    // (hi-res; `pth = '...'` is the lo-res twin) then `_xxx.push(htp)`. Extract
+    // every htp assignment and descramble it. The init `var htp = 'rcox'`
+    // descrambles to a non-https sentinel and is filtered out. (The earlier
+    // split-on-var approach grabbed the wrong, recurring variable and pulled in
+    // garbage tokens that hung the downloader — smoke 2026-06-03.)
+    static const QRegularExpression htpRe(QStringLiteral(R"rx(htp = '([^']*)')rx"));
+    auto it = htpRe.globalMatch(html);
     int idx = 0;
-    for (int i = 2; i < parts.size(); ++i) {
-        const auto m = tokRe.match(parts.at(i));
-        if (!m.hasMatch()) continue;
-        const QString url = baeu(applyReplacements(m.captured(1), repls), root);
-        if (!url.startsWith(QLatin1String("https://"))) continue;   // skip junk
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString raw = m.captured(1);
+        // The `var htp = 'rcox'` init (and any stray short assignment) is far
+        // shorter than a real scrambled blogspot URL (~200 chars) and would
+        // otherwise descramble to a bare "blogspot.com/=s1600". Skip by length.
+        if (raw.size() < 40) continue;
+        const QString url = baeu(applyReplacements(raw, repls), root);
+        if (!url.startsWith(QLatin1String("https://2.bp.blogspot.com/"))) continue;
         PageInfo p;
         p.index    = idx++;
         p.imageUrl = url;

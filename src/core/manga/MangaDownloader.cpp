@@ -644,6 +644,12 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
         else if (source == "readcomicsonline")
             req.setRawHeader("Referer", "https://rcostation.xyz/");  // live host (was dead .ru)
 
+        // Per-stall timeout (2026-06-03): a page that mis-descrambles to a bad
+        // blogspot URL (or a hoster that stalls) must fail fast and let the next
+        // page proceed — without this a single hung fetch stalls the whole volume
+        // (seen in the RCO smoke). Not a total cap; resets on transferred bytes.
+        req.setTransferTimeout(30000);
+
         auto* reply = m_nam->get(req);
         connect(reply, &QNetworkReply::finished, this,
             [this, reply, recordId, chapterIdx, filePath, pageIdx, attempt, downloadNext]() {
