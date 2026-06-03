@@ -36,3 +36,30 @@ A5's recorder and A4's sources/streaming reboot (rqbit + heavy torrent I/O = a m
 
 ## Read-vs-build line (shared honesty)
 Truth-faster does NOT write the fix. The UHD-620 HW-decode architecture is still ours to build. The flight recorder is the missing *diagnosis* piece that's cost us days — not the cure.
+
+---
+
+## AUTHORITATIVE DEEP-RESEARCH PASS — VERIFIED (wf_47a14f83, 2026-06-03)
+106 agents · 24 sources fetched · 109 claims → 25 adversarially verified · **25 confirmed, 0 refuted**. Verdict: **adopt, don't invent** — exactly the proven-reference-point Hemanth asked for.
+
+**OBSERVABILITY = rock-solid, vendor-official, do-FIRST (all 3-0 verified):**
+- **ETW** is the universal low-overhead trace source under the entire stack (PresentMon, WPR, WPA, GPUView, XPerf, CapFrameX). Decades-mature. [learn.microsoft.com WPR; presentmon.com]
+- **WPR memory/circular-buffer mode IS the "always-on trace ring + snapshot" mechanism** — events ride in-RAM, materialize to ETL only at `-stop`/merge. CLI-driven (`wpr -start <profile> … wpr -stop x.etl "desc"`), no GUI → directly agent-drivable. *This is literally the flight-recorder Hemanth imagined, already built into Windows.* [devblogs.microsoft.com/performance-diagnostics; learn.microsoft.com WPR cmdline]
+- **Intel PresentMon (MIT, open-source)** — per-frame CPU/GPU/Display durations + latencies + dropped-frame, traced from swap-chain ETW without hooking the app → **answers the HW-vs-SW decode question cold**; per-frame CSV; ships a continuous-telemetry Service (backend) + frontends. [github.com/GameTechDev/PresentMon]
+- **CapFrameX / OCAT** = proven OSS frontends on PresentMon — and **CapFrameX already ships an MCP server for AI clients** (the agent-readable angle is already a real community direction). [github.com/CXWorld/CapFrameX]
+- **GPUView** — CPU-bound vs GPU-bound per frame from the ETL (16ms v-sync fit). [learn.microsoft.com profiling-directx]
+- **Sysinternals ProcDump** = snapshot-on-anomaly, purpose-built: auto-dump on **hung window (5s, Task Manager's definition)**, CPU spike, unhandled exception, or **perf-counter threshold** (e.g. `handle count > 10000`). CLI. *This is the auto-fire-on-HANG_DETECTED A3 wanted — it's a built-in ProcDump trigger.* [learn.microsoft.com/sysinternals/procdump]
+- **UMDH** (heap leak via snapshot-diff) + **VMMap** (scriptable memory census; handle census = Handle.exe/Process Explorer). [learn.microsoft.com]
+
+**ACTUATION = real + has precedent, but the WINDOWS-NATIVE fencing is under-researched (report's honest weak half):**
+- Only the **isolation principle survived hard verification**: Anthropic's official computer-use runs the agent in a **minimal-privilege container/VM** (their documented guardrail #1). [github.com/anthropics/anthropic-quickstarts computer-use-demo]
+- Strong primary sources were FETCHED but not in the verified top-25 (budget): **browser-use** (79k★ LLM-drives-browser), **Playwright MCP**, **mitmproxy** + **mitmproxy-mcp** (HTTP capture/replay), and Anthropic's own **Claude Code sandboxing / sandbox-runtime / permissions** docs. Material exists; it just wasn't adversarially confirmed in this pass.
+- **Caveat (on the record):** Anthropic's reference is Linux/X11/VNC — does NOT transfer directly to Windows 11.
+
+**Open questions the research itself surfaced (gate items before building the actuation half):**
+1. Windows-native isolation equivalent — **Windows Sandbox / Hyper-V VM / restricted token / AppContainer+Job Objects** — none citation-confirmed yet.
+2. Concrete browser+proxy read-vs-write fencing (Playwright MCP capabilities, mitmproxy flows) — needs a dedicated follow-up pass.
+3. **How the agent PROGRAMMATICALLY reads the traces** (vs the human GUIs) — is there a scriptable trace API (Microsoft **TraceProcessing** .NET lib, PresentMon CSV/MCP)? *This is the make-or-break for "flight recorder an agent reads without you reproducing."*
+4. For our libtorrent/ffmpeg+Qt6 workload: which ETW providers + WPR profiles to combine into one ring, and the buffer/overhead tradeoffs for continuous capture.
+
+**What this means for the arc:** OBSERVABILITY is proven, safe, and buildable now (adopt WPR-ring + PresentMon + ProcDump-on-anomaly + a trace-parsing layer). ACTUATION is real and worth doing but its Windows-native fence + browser/proxy design need one more focused research pass before we commit. That ordering (observe first, fence-then-actuate second) is exactly A4's split — and now it's evidence-backed, not assumed.
