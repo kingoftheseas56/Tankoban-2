@@ -29,6 +29,7 @@
 #include "core/manga/WesternCatalogLoader.h"
 #include "core/manga/WesternVolumeDownloader.h"
 #include "core/manga/ReadComicsScraper.h"
+#include "core/manga/ReadAllComicsScraper.h"
 #include "core/manga/mangafire/MangaFireCatalogClient.h"
 #include "core/manga/mangafire/MangaWeebCentralResolver.h"
 #include "core/torrent/TorrentClient.h"
@@ -48,6 +49,7 @@
 #include <QNetworkRequest>
 #include <QStandardPaths>
 #include <QPointer>
+#include <memory>
 #include <QCoreApplication>
 #include <QPushButton>
 #include <QScopedValueRollback>
@@ -286,7 +288,8 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     for (auto* s : m_sourceRegistry->scrapers()) {
         if (s->sourceId() == QLatin1String("readcomicsonline")) {
             m_readComicsScraper = qobject_cast<ReadComicsScraper*>(s);
-            break;
+        } else if (s->sourceId() == QLatin1String("readallcomics")) {
+            m_readAllComicsScraper = qobject_cast<ReadAllComicsScraper*>(s);
         }
     }
     if (m_readComicsScraper) {
@@ -355,15 +358,17 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             this, [this](const QString&) { refreshTileChips(); });
     connect(m_mangaDownloader, &MangaDownloader::chapterCompleted,
             this, &ComicsPage::onChapterCompleted);
-    // COMICS_WESTERN RCO-as-source (2026-06-03): a completed RCO chapter that is
-    // the in-flight Western download flips the Western tile to Read (via the
-    // proven provider path) + updates the Sources panel. Separate connect from
-    // onChapterCompleted (which registers Tankoyomi-library chapters and skips
-    // Western shelf series — they are not in m_tyLibrary).
+    // COMICS_WESTERN readallcomics-as-page-source (2026-06-03): a completed
+    // readallcomics chapter that is the in-flight Western download flips the
+    // Western tile to Read (via the proven provider path) + updates the Sources
+    // panel. Separate connect from onChapterCompleted (which registers
+    // Tankoyomi-library chapters and skips Western shelf series — they are not
+    // in m_tyLibrary). The rco catalog drives browse; readallcomics drives the
+    // actual page fetch, so a finished Western download arrives under that source.
     connect(m_mangaDownloader, &MangaDownloader::chapterCompleted, this,
             [this](const QString& source, const QString& seriesTitle,
                    const QString& /*chapterId*/, const QString& finalPath, qint64) {
-        if (source != QLatin1String("readcomicsonline")) return;
+        if (source != QLatin1String("readallcomics")) return;
         if (m_pendingWesternSeriesId.isEmpty() || m_pendingWesternDownloadVolume <= 0) return;
         if (seriesTitle != m_currentDetailSeriesTitle || finalPath.isEmpty()) return;
         onProviderVolumeCompleted(m_pendingWesternSeriesId, m_pendingWesternDownloadVolume,
@@ -1087,30 +1092,22 @@ void ComicsPage::wireWesternDownloader()
             }
         }
 
-        // chapterId for the RCO scraper = the edition href minus the "/Comic/"
-        // prefix ("Invincible/TPB-1-Family-matters"). fetchPages rebuilds the
-        // reader URL from it and ReadComicsPageParse descrambles the pages.
-        QString chapterId = sourceHref;
-        if (chapterId.startsWith(QLatin1String("/Comic/")))
-            chapterId.remove(0, QStringLiteral("/Comic/").size());
+        // rcostation's reader pages are browser-locked (dead descramble), so the
+        // clicked rco issue is cross-mapped to its readallcomics counterpart for
+        // the actual page fetch. Issue number comes from the edition title
+        // ("Invincible #144" -> 144), falling back to the volume row number.
+        double issueNumber = volumeNumber;
+        static const QRegularExpression kIssueNum(QStringLiteral(R"(#\s*(\d+(?:\.\d+)?))"));
+        const auto inm = kIssueNum.match(editionTitle);
+        if (inm.hasMatch())
+            issueNumber = inm.captured(1).toDouble();
 
-        ChapterInfo ch;
-        ch.id     = chapterId;
-        ch.name   = editionTitle;
-        ch.source = QStringLiteral("readcomicsonline");
+        qInfo("ComicsPage: Western download — series=%s edition=%s issue=%g vol=%d dest=%s",
+              qUtf8Printable(seriesId), qUtf8Printable(editionTitle),
+              issueNumber, volumeNumber, qUtf8Printable(destPath));
 
-        m_westernDownloadEdition       = editionTitle;
-        m_pendingWesternDownloadVolume = volumeNumber;
-        if (m_tyVolumeSeriesView)
-            m_tyVolumeSeriesView->updateWesternDownloadStatus(editionTitle, tr("Downloading..."));
-
-        qInfo("ComicsPage: RCO Western download — series=%s chapterId=%s vol=%d dest=%s",
-              qUtf8Printable(seriesId), qUtf8Printable(chapterId),
-              volumeNumber, qUtf8Printable(destPath));
-
-        m_westernDownloadRecordId = m_mangaDownloader->startDownload(
-            seriesTitle, QStringLiteral("readcomicsonline"),
-            { ch }, destPath, QStringLiteral("cbz"));
+        startWesternIssueDownload(seriesTitle, issueNumber, editionTitle,
+                                  volumeNumber, destPath);
     });
 
     // --- volumeResolved: surface the matched collected edition in the panel ---
@@ -1199,6 +1196,112 @@ void ComicsPage::wireWesternDownloader()
         qInfo("ComicsPage: coverReady for Western series=%s vol=%d url=%s",
               qUtf8Printable(seriesId), volNumber, qUtf8Printable(coverUrl));
     }, Qt::QueuedConnection);
+}
+
+// COMICS_WESTERN_DOWNLOAD 2026-06-03 (Agent 1). Normalize a Western series title
+// for cross-source matching: drop a "(Publisher: …)" / "(2003)" suffix, lower-
+// case, keep alphanumerics + single spaces. "Invincible (Publisher: Image
+// Comics)" and "Invincible" both normalize to "invincible".
+static QString normalizeWesternTitle(const QString& raw)
+{
+    QString s = raw;
+    static const QRegularExpression kParen(QStringLiteral(R"(\s*\([^)]*\))"));
+    s.remove(kParen);
+    s = s.toLower();
+    static const QRegularExpression kNonAlnum(QStringLiteral(R"([^a-z0-9]+)"));
+    s.replace(kNonAlnum, QStringLiteral(" "));
+    return s.trimmed();
+}
+
+// COMICS_WESTERN_DOWNLOAD 2026-06-03 (Agent 1). Cross-map the clicked rco issue
+// to its readallcomics counterpart, then drive the existing page->cbz pipeline.
+// Chain: search(series) -> pick best category -> fetchChapters -> match issue
+// number -> startDownload(source="readallcomics"). The readallcomics scraper is
+// a distinct object from the rco browse scraper, so connecting its signals here
+// does not disturb the catalog browse path; one-shot connections (disconnected
+// on the first terminal event) keep concurrent requests from cross-firing.
+void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double issueNumber,
+                                           const QString& editionTitle, int volumeNumber,
+                                           const QString& destPath)
+{
+    if (!m_readAllComicsScraper || !m_mangaDownloader) {
+        if (m_tyVolumeSeriesView)
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
+        return;
+    }
+
+    m_westernDownloadEdition       = editionTitle;
+    m_pendingWesternDownloadVolume = volumeNumber;
+    if (m_tyVolumeSeriesView)
+        m_tyVolumeSeriesView->updateWesternDownloadStatus(editionTitle, tr("Finding source..."));
+
+    auto* scraper = m_readAllComicsScraper;
+
+    auto searchConn = std::make_shared<QMetaObject::Connection>();
+    auto chapConn   = std::make_shared<QMetaObject::Connection>();
+    auto errConn    = std::make_shared<QMetaObject::Connection>();
+    auto cleanup = [searchConn, chapConn, errConn]() {
+        QObject::disconnect(*searchConn);
+        QObject::disconnect(*chapConn);
+        QObject::disconnect(*errConn);
+    };
+    auto fail = [this](const QString& why) {
+        qInfo("ComicsPage: Western readallcomics resolve failed — %s", qUtf8Printable(why));
+        if (m_tyVolumeSeriesView)
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
+    };
+
+    *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
+        [cleanup, fail](const QString& msg) { cleanup(); fail(msg); });
+
+    *searchConn = connect(scraper, &MangaScraper::searchFinished, this,
+        [this, scraper, chapConn, cleanup, fail, seriesTitle, issueNumber, editionTitle, destPath]
+        (const QList<MangaResult>& results) {
+            if (results.isEmpty()) { cleanup(); fail("no series match"); return; }
+
+            // Pick the best series: exact normalized-title match beats a prefix
+            // overlap beats the first result (publisher-disambiguation tolerant).
+            const QString want = normalizeWesternTitle(seriesTitle);
+            QString slug = results.first().id;
+            int bestScore = -1;
+            for (const auto& r : results) {
+                const QString got = normalizeWesternTitle(r.title);
+                const int score = (got == want) ? 2
+                                : (got.startsWith(want) || want.startsWith(got)) ? 1 : 0;
+                if (score > bestScore) { bestScore = score; slug = r.id; }
+            }
+
+            *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
+                [this, cleanup, fail, issueNumber, editionTitle, seriesTitle, destPath]
+                (const QList<ChapterInfo>& chapters) {
+                    cleanup();
+                    ChapterInfo match;
+                    bool found = false;
+                    for (const auto& c : chapters) {
+                        if (qAbs(c.chapterNumber - issueNumber) < 0.001) {
+                            match = c; found = true; break;
+                        }
+                    }
+                    if (!found) {
+                        fail(QStringLiteral("issue %1 not found on readallcomics").arg(issueNumber));
+                        return;
+                    }
+
+                    ChapterInfo ch;
+                    ch.id     = match.id;                       // readallcomics issue-slug
+                    ch.name   = editionTitle;
+                    ch.source = QStringLiteral("readallcomics");
+                    if (m_tyVolumeSeriesView)
+                        m_tyVolumeSeriesView->updateWesternDownloadStatus(
+                            editionTitle, tr("Downloading..."));
+                    m_westernDownloadRecordId = m_mangaDownloader->startDownload(
+                        seriesTitle, QStringLiteral("readallcomics"),
+                        { ch }, destPath, QStringLiteral("cbz"));
+                });
+            scraper->fetchChapters(slug);
+        });
+
+    scraper->search(seriesTitle, 60);
 }
 
 void ComicsPage::showEvent(QShowEvent* e)

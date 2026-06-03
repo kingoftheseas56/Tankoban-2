@@ -26,6 +26,7 @@ class ComicsTankoyomiLibrary;
 class ComicsTankoyomiSearchWidget;
 class MangaSourceRegistry;
 class ReadComicsScraper;
+class ReadAllComicsScraper;
 class MangaDownloader;
 class MangaDownloadIndex;        // Phase 5 creates the type; Phase 4 stores nullptr
 class TorrentClient;
@@ -413,6 +414,12 @@ private:
     // m_tyVolumeSeriesView::downloadWesternEditionRequested -> request slot.
     // Called once from setTorrentClient() after m_westernDownloader is constructed.
     void wireWesternDownloader();
+    // COMICS_WESTERN_DOWNLOAD 2026-06-03 (Agent 1). Cross-map a clicked rco issue
+    // to its readallcomics counterpart (search series -> match issue number ->
+    // fetch plain pages) and drive the page->cbz pipeline under "readallcomics".
+    void startWesternIssueDownload(const QString& seriesTitle, double issueNumber,
+                                   const QString& editionTitle, int volumeNumber,
+                                   const QString& destPath);
     void showMangaMode();
     void showWesternMode();
 
@@ -615,6 +622,14 @@ private:
     // to data/western_catalogue/<seriesId>.json. m_pendingWesternSeriesId is the
     // file stem used for that write + the on-disk existence check.
     ReadComicsScraper* m_readComicsScraper = nullptr;
+    // COMICS_WESTERN_DOWNLOAD 2026-06-03 (Agent 1). rcostation's catalog is rich
+    // and stays the browse source, but its reader pages are browser-locked
+    // (dead descramble). readallcomics serves the SAME comics issue-by-issue as
+    // plain images — it is the working page-fetch source. On a download click we
+    // cross-map the clicked rco issue (series title + issue number) to a
+    // readallcomics issue slug, then drive the existing page->cbz pipeline under
+    // source "readallcomics". Registry-owned; grabbed in the ctor.
+    ReadAllComicsScraper* m_readAllComicsScraper = nullptr;
     QJsonObject        m_pendingWesternJson;
     QString            m_pendingWesternSeriesId;
     // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). GetComics resolve + download

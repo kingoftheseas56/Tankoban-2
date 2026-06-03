@@ -643,6 +643,8 @@ void MangaDownloader::downloadImages(const QString& recordId, int chapterIdx,
             req.setRawHeader("Referer", "https://weebcentral.com/");
         else if (source == "readcomicsonline")
             req.setRawHeader("Referer", "https://rcostation.xyz/");  // live host (was dead .ru)
+        else if (source == "readallcomics")
+            req.setRawHeader("Referer", "https://readallcomics.com/");
 
         // Per-stall timeout (2026-06-03): a page that mis-descrambles to a bad
         // blogspot URL (or a hoster that stalls) must fail fast and let the next

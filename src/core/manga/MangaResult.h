@@ -44,5 +44,6 @@ inline QString mangaSourceDisplayName(const QString& key)
 {
     if (key == QLatin1String("weebcentral"))      return QStringLiteral("WeebCentral");
     if (key == QLatin1String("readcomicsonline")) return QStringLiteral("ReadComicsOnline");
+    if (key == QLatin1String("readallcomics"))    return QStringLiteral("ReadAllComics");
     return key;
 }

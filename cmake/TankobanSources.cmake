@@ -123,6 +123,7 @@ set(SOURCES
     src/ui/dialogs/HistoryDialog.cpp
     src/core/manga/WeebCentralScraper.cpp
     src/core/manga/ReadComicsScraper.cpp
+    src/core/manga/ReadAllComicsScraper.cpp
     src/core/manga/MangaSeriesDetail.cpp
     src/core/manga/MangaSourceRegistry.cpp
     src/core/manga/ComicsLibraryRecord.cpp
@@ -348,6 +349,7 @@ set(HEADERS
     src/core/manga/MangaPosterCache.h
     src/core/manga/WeebCentralScraper.h
     src/core/manga/ReadComicsScraper.h
+    src/core/manga/ReadAllComicsScraper.h
     src/core/manga/MangaDownloader.h
     src/core/manga/MangaDownloadIndex.h
     src/core/manga/PremiumCatalog.h
