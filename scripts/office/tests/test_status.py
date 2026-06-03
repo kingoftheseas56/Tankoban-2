@@ -67,11 +67,18 @@ def test_compute_roster():
     busby = {
         "agent4": {"last_said": "throttle ready", "arc": "NETSEAM", "sec": 120, "blocked": False},
         "agent1": {"last_said": "stuck", "arc": "COMICS", "sec": 99999, "blocked": True},
+        # Track C #11 fixture — brothers with NO heartbeat (absent from `heartbeats`)
+        # but a bus post: agent9 chatted 60s ago (reachable via presence), agent8 last
+        # chatted 300s ago (older than the 90s activity window => still unknown).
+        "agent9": {"last_said": "audit done", "arc": None, "sec": 60, "blocked": False},
+        "agent8": {"last_said": "old note", "arc": None, "sec": 300, "blocked": False},
     }
     # heartbeats: agent4's watch is live (beat 5s ago), agent1's is dead (beat 900s
-    # ago), agent7 has no entry at all (never clocked in).
+    # ago), agent7/agent8/agent9 have no entry at all (never clocked in).
     heartbeats = {"agent4": 5, "agent1": 900}
-    roster = office_status.compute_roster(commits, busby, now, heartbeats, presence_window=1800)
+    roster = office_status.compute_roster(commits, busby, now, heartbeats,
+                                          presence_window=1800, liveness_window=30,
+                                          activity_window=90)
     by = {r["agent"]: r for r in roster}
     check(by["agent4"]["present"] is True, "roster: agent4 present (recent msg+commit)")
     check(by["agent4"]["current_arc"] == "NETSEAM", "roster: agent4 arc")
@@ -88,6 +95,18 @@ def test_compute_roster():
     check(by["agent7"]["wake_alive"] is False, "roster: agent7 wake dead (no heartbeat = never clocked in)")
     check(by["agent7"]["wake_state"] == "unknown", "roster: agent7 wake_state UNKNOWN (no beat, not 'down')")
     check(by["agent7"]["wake_age_sec"] is None, "roster: agent7 wake age None (no beat)")
+    # Track C #11 — activity fallback for heartbeat-less brothers (Codex/DeepSeek, or
+    # a watch that never clocked in). Recent bus post => reachable, never false-dead.
+    check(by["agent9"]["wake_alive"] is True,
+          "roster #11: agent9 no-beat but chatted 60s -> reachable via presence")
+    check(by["agent9"]["wake_state"] == "active",
+          "roster #11: agent9 wake_state=active (bus-recent, no heartbeat)")
+    check(by["agent9"]["wake_age_sec"] is None,
+          "roster #11: agent9 wake age None (no beat) even when active")
+    check(by["agent8"]["wake_alive"] is False,
+          "roster #11: agent8 no-beat + stale chat (300s > 90s window) -> not reachable")
+    check(by["agent8"]["wake_state"] == "unknown",
+          "roster #11: agent8 wake_state unknown (activity too old, NOT 'down')")
     check(by["agent4"]["status"] == "active", "roster: agent4 status=active (said 120s)")
     check(by["agent4"]["status_label"] == "active · said 2m ago",
           "roster: agent4 honest label (wake live -> no warning)")
@@ -189,6 +208,8 @@ def test_derive_status():
           "derive: wake-live label carries NO wake warning")
     check("wake" not in office_status.derive_status(120, None, "unknown")[1],
           "derive: wake-UNKNOWN carries NO 'wake DOWN' (no heartbeat data = don't overclaim)")
+    check("wake" not in office_status.derive_status(120, None, "active")[1],
+          "derive: wake-ACTIVE (#11 presence) carries NO 'wake DOWN' (reachable, not down)")
 
 
 def main():

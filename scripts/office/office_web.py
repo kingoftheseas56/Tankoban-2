@@ -402,6 +402,11 @@ function renderRoster(list){
     let wake;
     if (r.wake_state === 'live')
       wake = '<span class="wk live" title="watch live — can hear new messages">' + SIGNAL_SVG + '</span>';
+    else if (r.wake_state === 'active')
+      // Track C #11 — no watch heartbeat, but posted to the bus recently: reachable
+      // via presence (e.g. Codex/DeepSeek run no office_watch). Green, but labelled.
+      wake = '<span class="wk live" title="no watch heartbeat, but posted to the bus recently — reachable via presence (e.g. Codex/DeepSeek run no office_watch)">' +
+             SIGNAL_SVG + 'active</span>';
     else if (r.wake_state === 'down')
       wake = '<span class="wk down" title="watch DOWN — can NOT be auto-woken; needs a prompt in its tab">' +
              SIGNAL_SVG + 'deaf' + (r.wake_age_sec != null ? ' ' + ago(r.wake_age_sec) : '') + '</span>';

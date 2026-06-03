@@ -34,8 +34,20 @@ ROSTER = [
 ]
 
 PRESENCE_WINDOW_SEC = 1800  # 30 min: active if a bus msg OR commit within this
-HEARTBEAT_WINDOW_SEC = 25    # wake channel is "live" if the watch beat within this
-                             # (office_watch.sh beats every ~3s; missing/stale = deaf)
+
+# Track C #10 — ONE liveness window for the whole Office. The roster (here) and the
+# dispatcher (office_dispatch.py) BOTH read OFFICE_LIVENESS_SEC, so they can never
+# disagree on who's reachable. The old split (roster 25s vs dispatcher 15s) let the
+# roster call a brother "live" while the dispatcher spawned a clone of the same brother.
+LIVENESS_WINDOW_SEC = int(os.environ.get("OFFICE_LIVENESS_SEC", "30"))
+# ^ wake channel is "live" if the watch beat within this (office_watch.sh beats every
+#   ~3s; missing/stale = deaf).
+
+# Track C #11 — activity fallback. A brother with NO heartbeat file at all (never
+# clocked in, or an engine like Codex/DeepSeek that runs no office_watch) is NOT dead
+# if he posted to the bus this recently. Default mirrors the dispatcher's
+# recent-post-is-live window (OFFICE_ACTIVE_WINDOW=90) so the roster agrees with routing.
+ACTIVITY_FALLBACK_SEC = int(os.environ.get("OFFICE_ACTIVITY_FALLBACK_SEC", "90"))
 
 # Graded status tiers (seconds): the freshest signal's age picks the tier.
 STATUS_TIERS = (("active", 300), ("recent", 1800), ("quiet", 7200))  # else "cold"
@@ -149,13 +161,18 @@ def bus_activity(records, now_epoch):
 def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
                    heartbeats_by_agent=None, roster=ROSTER,
                    presence_window=PRESENCE_WINDOW_SEC,
-                   heartbeat_window=HEARTBEAT_WINDOW_SEC):
+                   liveness_window=LIVENESS_WINDOW_SEC,
+                   activity_window=ACTIVITY_FALLBACK_SEC):
     """Merge static roster + git + bus + watch heartbeats into the canonical list.
 
     wake_alive distinguishes "this brother's watch is alive and can hear new
     messages" from "present" (did something recently). A brother can be present
     (committed 5m ago) yet wake-dead (watch died) = deaf to new pings.
 
+    Track C #11: when a brother has NO heartbeat at all (never clocked in, or an
+    engine like Codex/DeepSeek that runs no office_watch), a bus post within
+    activity_window still counts as reachable (wake_state "active") rather than
+    being mislabelled dead — mirrors the dispatcher's _recently_active predicate.
     """
     heartbeats_by_agent = heartbeats_by_agent or {}
     result = []
@@ -166,9 +183,22 @@ def compute_roster(commits_by_agent, bus_by_agent, now_epoch,
         com_sec = c.get("sec") if c else None
         present = any(s is not None and s <= presence_window for s in (bus_sec, com_sec))
         wake_age = heartbeats_by_agent.get(agent)
-        wake_alive = wake_age is not None and wake_age <= heartbeat_window
-        # 3-state honesty: no heartbeat data = "unknown" (we can't tell), NOT "down".
-        wake_state = "unknown" if wake_age is None else ("live" if wake_alive else "down")
+        if wake_age is not None:
+            # We have a heartbeat file: fresh => live, stale => honestly "down".
+            wake_alive = wake_age <= liveness_window
+            wake_state = "live" if wake_alive else "down"
+        elif bus_sec is not None and bus_sec <= activity_window:
+            # Track C #11 — no heartbeat at all, but a recent bus post proves he's
+            # reachable (covers Codex/DeepSeek who run no office_watch, and a brother
+            # whose watch never clocked in this session). The GUI renders this as
+            # "live (active)" — never a dead/grey "?".
+            wake_alive = True
+            wake_state = "active"
+        else:
+            # 3-state honesty: no heartbeat AND no recent activity = "unknown" (we
+            # can't tell), NEVER "down" (that would overclaim a failure we can't see).
+            wake_alive = False
+            wake_state = "unknown"
         status, status_label = derive_status(bus_sec, com_sec, wake_state)
         last_commit = None
         if c:

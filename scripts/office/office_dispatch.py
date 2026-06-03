@@ -17,7 +17,7 @@ Guardrails (tight leash):
   (background brothers post results, never merge — prompt + a git PATH-shim in spawn_brother.sh.)
 
 Run by open_office.bat alongside office_web.py. Path/tuning env mirrors office_bus.py:
-  OFFICE_DIR, OFFICE_BUS, OFFICE_DISPATCH_INTERVAL, OFFICE_LIVE_WINDOW,
+  OFFICE_DIR, OFFICE_BUS, OFFICE_DISPATCH_INTERVAL, OFFICE_LIVENESS_SEC,
   OFFICE_SPAWN_CAP, OFFICE_SPAWN_CAP_WINDOW, OFFICE_LOCK_STALE, OFFICE_BROTHER_MODEL.
 """
 import os
@@ -73,6 +73,10 @@ def LEDGER():
     return os.path.join(_dir(), ".office_spawns.jsonl")
 
 
+def DELIVERY_LOG():
+    return os.path.join(_dir(), ".office_delivery.log")
+
+
 def CURSOR_FILE():
     return os.path.join(_dir(), ".office_dispatch.seq")
 
@@ -86,7 +90,7 @@ def DISPATCH_BEAT():
 
 
 INTERVAL = int(os.environ.get("OFFICE_DISPATCH_INTERVAL", "3"))
-LIVE_WINDOW = int(os.environ.get("OFFICE_LIVE_WINDOW", "15"))          # heartbeat freshness (s)
+LIVENESS_WINDOW_SEC = int(os.environ.get("OFFICE_LIVENESS_SEC", "30"))  # Track C #10: ONE Office-wide liveness window (office_status.py roster reads the SAME env) — watch-heartbeat freshness (s)
 SPAWN_CAP = int(os.environ.get("OFFICE_SPAWN_CAP", "5"))               # max spawns / window
 CAP_WINDOW = int(os.environ.get("OFFICE_SPAWN_CAP_WINDOW", "3600"))    # window (s)
 LOCK_STALE = int(os.environ.get("OFFICE_LOCK_STALE", "1800"))         # stale per-target lock (s)
@@ -112,6 +116,21 @@ def _epoch(ts):
         return int(datetime.fromisoformat(ts).timestamp())
     except (TypeError, ValueError):
         return 0
+
+
+def _fate(seq, to, fate, detail=""):
+    """Append one durable JSONL fate record for a summon — its trail through the
+    dispatcher (queued -> routed/refused/skipped -> spawn_attempt -> spawn_ok/held/error,
+    plus fallback_fire/retry/gave_up). Answers 'what happened to this summon?' after the
+    fact: did the target receive it, did the spawn fail, why was it held. Append-only
+    (.office_delivery.log); best-effort — a logging failure must NEVER break dispatch."""
+    rec = {"ts": _now_iso(), "seq": seq, "to": to, "fate": fate, "detail": detail}
+    try:
+        os.makedirs(_dir(), exist_ok=True)
+        with open(DELIVERY_LOG(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _recently_active(agent, now, window, bus_records):
@@ -184,7 +203,7 @@ def _is_live(agent):
     try:
         with open(p) as f:
             beat = int(f.read().strip())
-        return (time.time() - beat) < LIVE_WINDOW
+        return (time.time() - beat) < LIVENESS_WINDOW_SEC
     except (OSError, ValueError):
         return False
 
@@ -388,8 +407,10 @@ def _spawn_for(target, frm, seq, task, quiet=False):
     the held/cap/error bus notice — used by the ack-timeout fallback RETRIES, which would
     otherwise re-post 'already handling' every FALLBACK_RETRY while a brother stays busy
     (the give-up after FALLBACK_MAX_TRIES is the single surfacing instead)."""
+    _fate(seq, target, "spawn_attempt", "from={0} quiet={1}".format(frm, quiet))
     lockdir = os.path.join(LOCK_DIR(), target + ".lock")
     if not _acquire_target_lock(lockdir):
+        _fate(seq, target, "spawn_held", "per-target lock busy ({0} already handling)".format(target))
         if not quiet:
             _post("system", frm, "(summon #{0}: {1} is already handling a summon — try again when he's free)".format(seq, target))
         return False
@@ -400,6 +421,7 @@ def _spawn_for(target, frm, seq, task, quiet=False):
     try:
         if _spawn_count_recent() >= SPAWN_CAP:
             _release_target_lock(lockdir)
+            _fate(seq, target, "spawn_held", "spawn cap {0}/{1}s reached".format(SPAWN_CAP, CAP_WINDOW))
             if not quiet:
                 _post("system", frm, "(summon #{0} held: spawn cap {1}/{2}s reached — ask Hemanth)".format(seq, SPAWN_CAP, CAP_WINDOW))
             return False
@@ -419,9 +441,11 @@ def _spawn_for(target, frm, seq, task, quiet=False):
         )
         print("[office-dispatch] summon #{0} -> {1}: spawned background brother".format(seq, target))
         sys.stdout.flush()
+        _fate(seq, target, "spawn_ok", "background brother spawned (model={0})".format(MODEL))
         return True
     except OSError as ex:
         _release_target_lock(lockdir)
+        _fate(seq, target, "spawn_error", str(ex))
         if not quiet:
             _post("system", frm, "(summon #{0}: failed to spawn {1}: {2})".format(seq, target, ex))
         return False
@@ -434,6 +458,7 @@ def _dispatch(rec):
     frm = rec.get("from", "?")
     seq = rec.get("seq")
     task = rec.get("msg", "")
+    _fate(seq, target, "queued", "from={0} task={1!r}".format(frm, (task or "")[:60]))
 
     # liveness = fresh heartbeat OR a recent bus post (so a busy-but-live brother with
     # no watch isn't duplicate-spawned, and the routing self-heals via fallback either way)
@@ -441,19 +466,24 @@ def _dispatch(rec):
     action, reason = classify_summon(frm, target, rec.get("arc"), live)
 
     if action == "refuse_chain":
+        _fate(seq, target, "refused", reason)
         _post("system", frm, "(summon #{0} refused: background brothers can't summon others — no chains)".format(seq))
         return None
     if action == "skip_badtarget":
+        _fate(seq, target, "skipped", reason)
         _post("system", frm, "(summon #{0} skipped: must target exactly one brother, got '{1}')".format(seq, target))
         return None
     if action == "skip_self":
+        _fate(seq, target, "skipped", reason)
         return None
     if action == "refuse_nonclaude":
+        _fate(seq, target, "refused", reason)
         _post("system", frm, "(summon #{0}: {1} runs his own engine (Codex/DeepSeek) — bg spawn unavailable; open his tab or courier via Hemanth)".format(seq, target))
         return None
     if action == "route_live":
         # DON'T forget it: record a pending entry so a wrong "live" guess (zombie
         # heartbeat / heads-down tab) self-heals to a background spawn after the deadline.
+        _fate(seq, target, "routed_live", "{0}; fallback-spawn if no reply in {1}s".format(reason, ACK_TIMEOUT))
         print("[office-dispatch] summon #{0} -> {1}: {2}; fallback-spawn if no reply in {3}s".format(
             seq, target, reason, ACK_TIMEOUT))
         sys.stdout.flush()
@@ -568,6 +598,8 @@ def main():
                     print("[office-dispatch] summon #{0} -> {1}: no reply in {2}s — falling back to a background spawn".format(
                         p["seq"], p["target"], ACK_TIMEOUT))
                     sys.stdout.flush()
+                    _fate(p["seq"], p["target"], "fallback_fire", "no ack in {0}s (try {1}) — escalating to background spawn".format(
+                        ACK_TIMEOUT, p.get("tries", 0)))
                     # quiet=True: a fallback that stays HELD (target busy) must not re-post
                     # 'already handling' every retry — the give-up after FALLBACK_MAX_TRIES
                     # is the single surfacing (kills the bus-seq-883+ retry spam).
@@ -575,7 +607,12 @@ def main():
                 # a HELD fallback (lock busy / cap / error) stays pending + retries — never
                 # silently dropped; surfaced to the summoner only after FALLBACK_MAX_TRIES.
                 kept, gave_up = reconcile_fallback(fallback, spawn_results, time.time(), FALLBACK_RETRY, FALLBACK_MAX_TRIES)
+                for p in kept:
+                    _fate(p["seq"], p["target"], "retry", "held — retry in {0}s (try {1}/{2})".format(
+                        FALLBACK_RETRY, p.get("tries"), FALLBACK_MAX_TRIES))
                 for p in gave_up:
+                    _fate(p["seq"], p["target"], "gave_up", "undelivered after {0} attempts — surfaced to {1}".format(
+                        FALLBACK_MAX_TRIES, p["frm"]))
                     _post("system", p["frm"], "(summon #{0} to {1} could NOT be delivered after {2} attempts — he may be unreachable; please check him directly)".format(
                         p["seq"], p["target"], FALLBACK_MAX_TRIES))
                 new_pending = still + kept
