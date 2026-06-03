@@ -10,11 +10,14 @@
 #include <QPixmapCache>
 #include <QStringList>
 #include <QTimer>
+#include <optional>
+
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
 #include "core/JsonlEventLog.h"
 #include "core/manga/ComicsPrePivotMigrator.h"
 #include "ui/MainWindow.h"
+#include "devtools/HangWatchdog.h"
 #include "ui/Theme.h"
 
 #ifdef Q_OS_WIN
@@ -297,6 +300,12 @@ int main(int argc, char *argv[])
     MainWindow window(&bridge);
     dbg("5-mainwindow-created");
 
+    // OBS-2a (Track D observability) — heartbeat watchdog. Declared at function
+    // scope AFTER `window` so it destructs FIRST: stop()+join the off-GUI worker
+    // while `window` and the parented heartbeat QTimer are still alive. Started
+    // only under --dev-control (below), so production builds carry no watchdog.
+    std::optional<HangWatchdog> hangWatchdog;
+
     // Single-instance: claim the local socket so subsequent launches signal us.
     QLocalServer* instanceServer = createInstanceServer(&window);
     Q_UNUSED(instanceServer);  // window-parented, dies with window
@@ -309,6 +318,8 @@ int main(int argc, char *argv[])
     const bool devControlEnv  = qEnvironmentVariableIntValue("TANKOBAN_DEV_CONTROL") == 1;
     if (devControlFlag || devControlEnv) {
         window.enableDevControl();
+        hangWatchdog.emplace(&window);   // OBS-2a — off-GUI heartbeat -> out/HANG_DETECTED.json on a >750ms GUI stall
+        hangWatchdog->start();
         dbg("6a-devcontrol-enabled");
     }
 
