@@ -4,7 +4,7 @@
 Spec: docs/superpowers/specs/2026-06-01-multi-engine-brother-design.md
 Keys come from environment only (DEEPSEEK_API_KEY, GEMINI_API_KEY). Never logged.
 """
-import os, sys, json, time, subprocess, tempfile, urllib.request, contextlib
+import os, sys, json, time, subprocess, tempfile, urllib.request, urllib.error, contextlib, base64
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "engines.config.json")
@@ -182,6 +182,7 @@ def call_deepseek(packet, cfg):
     proc = subprocess.run(
         [cli, "-p", "--model", cfg["deepseek"]["model"]],
         input=packet, cwd=scratch, env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
         timeout=cfg["timeouts"]["deepseek"])
     if proc.returncode != 0:
         tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"
@@ -200,6 +201,7 @@ def call_codex(packet, cfg):
     proc = subprocess.run(
         [cli, "exec"],
         input=packet, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
         timeout=cfg["timeouts"]["codex"])
     if proc.returncode != 0:
         tail = proc.stderr.strip()[-200:] if proc.stderr else "(no stderr)"
@@ -208,20 +210,72 @@ def call_codex(packet, cfg):
     return parse_codex(proc.stdout)
 
 
+# Gemini multimodal mime map (the types generateContent accepts inline).
+_GEMINI_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".heic": "image/heic", ".heif": "image/heif"}
+_GEMINI_INLINE_LIMIT = 4 * 1024 * 1024  # 4 MB total inline cap; above this -> Files API
+
+
+def _gemini_request(parts, cfg):
+    """POST one contents[].parts[] payload to generateContent, with retry on
+    transient 503/429 (Gemini Flash returns 503 under load — caught live
+    2026-06-03). Auth via x-goog-api-key header."""
+    key = require_key("GEMINI_API_KEY")
+    url = cfg["gemini"]["url"].format(model=cfg["gemini"]["model"])
+    body = json.dumps({"contents": [{"parts": parts}]}).encode()
+    last = None
+    for attempt in range(4):
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json", "x-goog-api-key": key})
+        try:
+            with urllib.request.urlopen(req, timeout=cfg["timeouts"]["gemini"]) as resp:
+                return parse_gemini(json.load(resp))
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (429, 503) and attempt < 3:
+                time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s backoff
+                continue
+            raise
+    raise last
+
+
 def call_gemini(packet, cfg):
     if os.environ.get("ENGINE_DRY_RUN") == "1":
         return "DRY:gemini:" + packet[:20]
-    key = require_key("GEMINI_API_KEY")
-    url = cfg["gemini"]["url"].format(model=cfg["gemini"]["model"])
-    body = json.dumps({"contents": [{"parts": [{"text": packet}]}]}).encode()
-    req = urllib.request.Request(url, data=body,
-                                 headers={"Content-Type": "application/json",
-                                          "x-goog-api-key": key})
-    with urllib.request.urlopen(req, timeout=cfg["timeouts"]["gemini"]) as resp:
-        return parse_gemini(json.load(resp))
+    return _gemini_request([{"text": packet}], cfg)
 
 
-def dispatch(cmd, packet, task, purpose, cfg):
+def call_gemini_visual(image_paths, prompt, cfg):
+    """`see` lane — text prompt + one or more inline images. Gemini is the only
+    engine with eyes (Codex/DeepSeek are text). Images ride as base64 inline_data
+    parts; total must stay under the 4 MB inline cap (Files API above that)."""
+    if os.environ.get("ENGINE_DRY_RUN") == "1":
+        return "DRY:gemini-visual:" + (prompt or "")[:20]
+    if not image_paths:
+        raise ValueError("see: at least one --image is required")
+    parts = [{"text": prompt}]
+    total = 0
+    for p in image_paths:
+        ext = os.path.splitext(p)[1].lower()
+        mime = _GEMINI_MIME.get(ext)
+        if not mime:
+            raise ValueError(
+                f"see: unsupported image type '{ext}' for {p} "
+                f"(allowed: {sorted(_GEMINI_MIME)})")
+        with open(p, "rb") as f:
+            raw = f.read()
+        total += len(raw)
+        if total > _GEMINI_INLINE_LIMIT:
+            raise ValueError(
+                f"see: inline images exceed 4 MB total ({total} bytes) — "
+                f"use fewer/smaller images (Files API not wired)")
+        parts.append({"inline_data": {"mime_type": mime,
+                                      "data": base64.b64encode(raw).decode()}})
+    return _gemini_request(parts, cfg)
+
+
+def dispatch(cmd, packet, task, purpose, cfg, images=None, log=True):
     guard_packet(packet, cfg)
     if cmd == "grunt":
         out = call_deepseek(packet, cfg); name = "deepseek"
@@ -232,13 +286,31 @@ def dispatch(cmd, packet, task, purpose, cfg):
             raise RuntimeError("Gemini disabled (reliability gate not passed). "
                                "Read directly on Claude, or run gemini_gate.py.")
         out = call_gemini(packet, cfg); name = "gemini"
+    elif cmd == "see":
+        if not cfg["gemini"].get("enabled"):
+            raise RuntimeError("Gemini disabled (reliability gate not passed). "
+                               "Run gemini_gate.py to enable.")
+        out = call_gemini_visual(images, packet, cfg); name = "gemini"
     else:
         raise ValueError(f"unknown command: {cmd}")
-    log_call(name, len(out), purpose, task)
+    # log defaults True so a direct dispatch() call records its own row (tests +
+    # the gate rely on this). main() passes log=False because it has already
+    # reserved the cap slot under the lock before calling out-of-lock.
+    if log:
+        log_call(name, len(out), purpose, task)
     return out
 
 
 def main(argv=None):
+    # Windows console is cp1252 and crashes on engine output containing arrows /
+    # emoji / non-Latin1 (caught live 2026-06-03 on a Gemini `see` reply). Mirror
+    # office_bus.py's reconfigure so any engine's UTF-8 output prints cleanly.
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     _load_dotenv()
     import argparse
     ap = argparse.ArgumentParser(description="Multi-engine brother helper")
@@ -248,6 +320,12 @@ def main(argv=None):
         p.add_argument("--task", required=True)
         p.add_argument("--purpose", default="")
         p.add_argument("packet")
+    ps = sub.add_parser("see")  # Gemini visual: text prompt + inline image(s)
+    ps.add_argument("--task", required=True)
+    ps.add_argument("--purpose", default="")
+    ps.add_argument("--image", action="append", required=True,
+                    help="image path (repeatable for multiple images)")
+    ps.add_argument("packet", help="the text prompt about the image(s)")
     sub.add_parser("wake-start")
     sub.add_parser("status")
     args = ap.parse_args(argv)
@@ -264,16 +342,25 @@ def main(argv=None):
             print(f"  {r['engine']:9} task={r['task']:6} {r['purpose']}")
         return 0
 
-    # Lock across cap-check + log_call so concurrent agents can't both pass
-    # the hard cap before either has written their log row.
+    # CONCURRENCY FIX 2026-06-03: hold the lock ONLY for the atomic cap-check +
+    # slot reservation, then run the (possibly multi-minute) engine call OUTSIDE
+    # the lock. The old code ran dispatch() INSIDE the lock, so one long call
+    # serialized every other engine call globally and deadlocked concurrent
+    # callers (EDEADLK) — it broke Agent 3's live DeepSeek review. Reserving the
+    # row under the lock keeps the no-overshoot guarantee; tokens=0 marks it a
+    # reservation (cap counts rows, not tokens — token size is informational).
+    engine_name = {"grunt": "deepseek", "review": "codex",
+                   "read": "gemini", "see": "gemini"}[args.cmd]
     with _ledger_lock():
         ok, msg = check_cap(args.task, cfg)
         if msg:
             print(msg, file=sys.stderr)
         if not ok:
             return 2
-        out = dispatch(args.cmd, args.packet, args.task, args.purpose, cfg)
-        print(out)
+        log_call(engine_name, 0, args.purpose, args.task)  # reserve the slot
+    out = dispatch(args.cmd, args.packet, args.task, args.purpose, cfg,
+                   images=getattr(args, "image", None), log=False)
+    print(out)
     return 0
 
 
