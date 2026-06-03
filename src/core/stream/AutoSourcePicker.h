@@ -12,6 +12,16 @@ struct SourceCandidate {
     int     seeders = 0;
     qint64  sizeBytes = 0;
     int     qualitySort = 0;  // 5=2160p 4=1440p 3=1080p 2=720p 1=480p 0=unknown
+
+    // DOWNLOAD BUG 2026-06-03 — text the show-identity gate matches against.
+    // `title` is the cleaned one-line display name, but some addons (NyaaSi /
+    // anime-shaped Torrentio) put a stats badge ("[2176 seeders | 1.34 GB |
+    // NyaaSi]") there instead of the filename, so gating on `title` rejected every
+    // One Piece result ("No 1080p source found"). matchText carries the full
+    // raw identity blob (name + description + fileNameHint + …) so the gate can
+    // find the show name wherever the addon stashed it. Empty == fall back to
+    // `title` (preserves every existing caller + test that only sets `title`).
+    QString matchText;
 };
 
 // Silent best-source selection for Theatre's one-tap download.

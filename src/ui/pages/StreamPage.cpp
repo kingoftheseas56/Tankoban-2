@@ -3359,27 +3359,55 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     qInfo().noquote() << "[auto-dl] finishPick choices=" << choices.size()
                       << "active=" << (m_pendingAuto.active ? "y" : "n");
 
+    // DOWNLOAD BUG 2026-06-03 — build the show-identity match text from the RAW
+    // stream fields, not the cleaned displayTitle. NyaaSi / anime-shaped addons
+    // put a stats badge ("[2176 seeders | 1.34 GB | NyaaSi]") in displayTitle,
+    // which lacks the show name and made the gate reject every real One Piece result
+    // ("No 1080p source found"). The raw blob carries the filename wherever the
+    // addon stashed it (name / description / fileNameHint / parsedFilename), so
+    // titleMatchesShow can find "One Piece". displayTitle stays the CAM/tiebreak
+    // title (its job in the picker is unchanged).
+    auto identityBlob = [](const tankostream::stream::StreamPickerChoice& ch) {
+        return QStringList{
+            ch.displayTitle,
+            ch.stream.name,
+            ch.stream.description,
+            ch.stream.source.fileNameHint,
+            ch.fileNameHint,
+            ch.stream.behaviorHints.filename,
+            ch.stream.behaviorHints.other
+                .value(QStringLiteral("parsedFilename")).toString(),
+        }.join(QLatin1Char('\n'));
+    };
+
     QList<tankostream::stream::SourceCandidate> cands;
     cands.reserve(choices.size());
     for (const auto& c : choices) {
         tankostream::stream::SourceCandidate sc;
         sc.title       = c.displayTitle;
+        sc.matchText    = identityBlob(c);
         sc.seeders     = c.seeders;
         sc.sizeBytes   = c.sizeBytes;
         sc.qualitySort = c.qualitySort;
         cands.append(sc);
     }
 
-    // DOWNLOAD BUG 2026-06-02 — diagnostic: dump every candidate with whether
-    // it would pass the show-identity gate. If the pick still fails, this tells
-    // us conclusively whether real One Piece titles are being wrongly rejected
-    // (gate too strict) vs the choices being the wrong show entirely
-    // (correlation still broken — wrong streams reached this handler).
-    for (const auto& ch : choices)
+    // DOWNLOAD BUG 2026-06-02/06-03 — diagnostic: dump every candidate with
+    // whether it passes the show-identity gate against the RAW identity blob
+    // (what pick() now uses) vs the old displayTitle. If the pick still fails,
+    // this shows conclusively whether real One Piece titles are being wrongly
+    // rejected (gate too strict / blob missing the name) vs the choices being
+    // the wrong show entirely (correlation broken — wrong streams reached here).
+    for (const auto& ch : choices) {
+        const QString blob = identityBlob(ch);
         qInfo().noquote() << "[auto-dl] cand q=" << ch.qualitySort << "seed=" << ch.seeders
-                          << "gate=" << tankostream::stream::AutoSourcePicker::titleMatchesShow(
+                          << "gateBlob=" << tankostream::stream::AutoSourcePicker::titleMatchesShow(
+                                            blob, ctx.showTitle)
+                          << "gateOld=" << tankostream::stream::AutoSourcePicker::titleMatchesShow(
                                             ch.displayTitle, ctx.showTitle)
-                          << "title=" << ch.displayTitle.left(80);
+                          << "title=" << ch.displayTitle.left(60)
+                          << "| blob=" << blob.simplified().left(100);
+    }
 
     const std::optional<int> picked =
         tankostream::stream::AutoSourcePicker::pick(cands, ctx.showTitle, ctx.runtimeMinutes);

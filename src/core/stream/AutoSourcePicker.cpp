@@ -71,7 +71,12 @@ std::optional<int> AutoSourcePicker::pick(const QList<SourceCandidate>& candidat
         if (isCamRip(cand.title)) continue;                       // camcorder rip
         // Show-identity gate: never pick a release that isn't the requested
         // show, no matter how well-seeded (the One Piece -> Community bug).
-        if (!showTitle.isEmpty() && !titleMatchesShow(cand.title, showTitle)) continue;
+        // DOWNLOAD BUG 2026-06-03 — gate on matchText (full raw identity blob)
+        // when present; some addons put a stats badge in `title`, which lacks
+        // the show name and rejected every real result. Falls back to `title`
+        // so callers/tests that only set `title` are unaffected.
+        const QString& idText = cand.matchText.isEmpty() ? cand.title : cand.matchText;
+        if (!showTitle.isEmpty() && !titleMatchesShow(idText, showTitle)) continue;
         survivors.append(i);
     }
     if (survivors.isEmpty()) return std::nullopt;                 // no source found
