@@ -7,6 +7,10 @@
 
 #include <QImage>
 #include <QMouseEvent>
+#include <QStandardPaths>
+#include <QDir>
+#include <QFile>
+#include <QDateTime>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -23,6 +27,32 @@
 #include <QDateTime>
 #include <QFile>
 #include <QTextStream>
+
+namespace {
+// PLAYER recorder 2026-06-03 — immediate-flush sink for the 1 Hz [PERF]/[PACING]
+// playback-pacing lines, so frame cadence AND A/V-sync (consumer_late_ms) can be
+// read LIVE during playback. The DebugLogBuffer ring never flushes and the
+// per-frame vsync CSV only dumps on player close, so neither was capturable mid-
+// playback. Gated by m_vsyncLoggingOn (TANKOBAN_FFMPEG_PACING=1); 1 write/sec on
+// the GUI thread is negligible. Path: <AppDataLocation>/frame_pacing_live.log.
+void appendPacingLogLine(const QString& line)
+{
+    static const QString path = []() -> QString {
+        const QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (d.isEmpty()) return QString();
+        QDir().mkpath(d);
+        return QDir(d).absoluteFilePath(QStringLiteral("frame_pacing_live.log"));
+    }();
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        const QString out = QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+                          + QStringLiteral(" ") + line + QStringLiteral("\n");
+        f.write(out.toUtf8());
+        f.close();  // close() flushes — survives a force-kill mid-playback
+    }
+}
+}  // namespace
 #endif
 
 FrameCanvas::FrameCanvas(QWidget* parent)
@@ -1029,16 +1059,17 @@ void FrameCanvas::renderFrame()
 #endif
 
         // REPO_HYGIENE P1.2 (2026-04-26): routed through DebugLogBuffer.
-        DebugLogBuffer::instance().info(
-            "frame-canvas",
-            QString::asprintf(
+        const QString perfLine = QString::asprintf(
                 "[PERF] frames=%zu timer_interval p50/p99=%.2f/%.2f ms "
                 "draw p50/p99=%.2f/%.2f ms present p50/p99=%.2f/%.2f ms "
                 "skipped=%llu [DXGI] queued=%u vsync_us=%.1f",
                 m_perfPresentMs.size(),
                 tiP50, tiP99, drP50, drP99, prP50, prP99,
                 static_cast<unsigned long long>(skippedDelta),
-                dxgiPresentsQueued, dxgiVsyncIntervalUs));
+                dxgiPresentsQueued, dxgiVsyncIntervalUs);
+        DebugLogBuffer::instance().info("frame-canvas", perfLine);
+        // PLAYER recorder — also flush to disk live when pacing capture is on.
+        if (m_vsyncLoggingOn) appendPacingLogLine(perfLine);
 
         // MAKE_FFMPEG_BEAT_MPV Task 4 — paired [PACING] line. Reads the
         // window's pacing accumulators (incremented per non-skipped tick)
@@ -1059,9 +1090,7 @@ void FrameCanvas::renderFrame()
                 clP50 = pct(m_pacingConsumerLateMs, 0.50);
                 clP99 = pct(m_pacingConsumerLateMs, 0.99);
             }
-            DebugLogBuffer::instance().info(
-                "frame-canvas",
-                QString::asprintf(
+            const QString pacingLine = QString::asprintf(
                     "[PACING] frames=%llu zero_copy=%.1f%% fallback=%.1f%% "
                     "producer_drops=%llu stale_repeats=%llu "
                     "consumer_late_ms p50/p99=%.2f/%.2f",
@@ -1069,7 +1098,11 @@ void FrameCanvas::renderFrame()
                     zcPct, fbPct,
                     static_cast<unsigned long long>(m_pacingProducerDropsSum),
                     static_cast<unsigned long long>(m_pacingChosenIdGapCount),
-                    clP50, clP99));
+                    clP50, clP99);
+            DebugLogBuffer::instance().info("frame-canvas", pacingLine);
+            // PLAYER recorder — flush [PACING] (incl. consumer_late_ms A/V-sync)
+            // to disk live alongside [PERF].
+            if (m_vsyncLoggingOn) appendPacingLogLine(pacingLine);
         }
 
         m_perfTimerIntervalMs.clear();
