@@ -56,7 +56,7 @@ See `agents/GOVERNANCE.md` "Session Start — Reading Order". Slimmed 2026-04-16
 
 At wake read only YOUR latest recap + its trimmed transcript — not the recap archive. Older recaps + chat history are searchable on demand (grep / claude-mem), not auto-read.
 
-For Codex (Agent 7): see `AGENTS.md` at this same root, which redirects you into the brotherhood's governance.
+Engines are tools, not brothers (gov-v14, 2026-06-03): the **Agent 7 (Codex)** and **Agent 9 (DeepSeek)** personas are retired. Any mainline brother (0-5) summons Codex / DeepSeek / Gemini via `scripts/engines/engine.py` (or `codex exec -`) for review / audit / second-perspective / bulk — see the gov-v14 amendment at the top of `agents/GOVERNANCE.md` + `agents/THE_PASSING_2026-06-03.md`. If you are a summoned Codex reading `AGENTS.md`, your task is whatever the prompt scoped — do it and return.
 
 ---
 

@@ -35,11 +35,6 @@
             "type": "command",
             "command": "bash .claude/scripts/congress-check.sh",
             "timeout": 2
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/scripts/office-deliver.sh",
-            "timeout": 5
           }
         ]
       }

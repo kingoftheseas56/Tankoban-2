@@ -1,7 +1,22 @@
 # Agent Governance
-<!-- governance-version: gov-v4 -->
+<!-- governance-version: gov-v14 -->
 
 This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
+
+---
+
+## gov-v14 — Engines-as-Tools (2026-06-03) — READ FIRST, supersedes the Agent 7/9 + Office sections below
+
+The brotherhood is **Agents 0–5 (Claude).** Codex, DeepSeek, and Gemini are no longer brother-personas — they are **standing tools any mainline brother summons directly.**
+
+- **Agent 7 (Codex) and Agent 9 (DeepSeek) are RETIRED as personas** (2026-06-03 — see `agents/THE_PASSING_2026-06-03.md`). They do not wake, hold a roster slot, or appear in Congress / routing. Their *powers* pass to Agents 0–5.
+- **Codex / DeepSeek / Gemini are summoned as bare tools** via `scripts/engines/engine.py` (or `codex exec -` directly for Codex). Any brother may call them to: get a second pair of eyes (review), audit, take an independent perspective, or grind bulk/mechanical work. This is the inheritance of 7's gate and 9's reach.
+- **The producer≠reviewer cross-model review gate is now a REFLEX, not a ritual.** When a brother finishes non-trivial work — especially threading / async / novel logic — he summons a *different* engine to review his diff against a written Definition of Done (see the Definition-of-Done section below; package with `/codex-review`). Still mandatory for the work-classes that required it (execution-engine output, threading behavior changes). The reviewer must be a different model than the author.
+- **Triggers A/B/C/D (the old Codex triggers) are folded into this single cross-engine summon reflex.** **Trigger E (Claude Jr fan-out) is UNCHANGED** — it remains the parallelism mechanism.
+- **The Office (live bus + foreman + reachability) is RETIRED / dormant.** It existed to coordinate brothers when no human was in the loop; with Hemanth hands-on, that need is gone. The code is archived (`scripts/_archive/office/`), **re-armable** if a future unattended autonomous run is wanted. Do NOT run `open_office.bat` or restart the dispatcher.
+- **Unchanged:** all async coordination (chat.md, RTC, `routes.yml`, domain `CLAUDE.md` files, backlogs, memory) and every other rule below.
+
+Sections further down that describe **Agent 7**, the **PROTOTYPE + AUDIT + IMPLEMENTATION Protocol (Triggers A–D)**, and the **Office Protocol** are **SUPERSEDED by this amendment** — retained below for history only.
 
 ---
 
@@ -13,7 +28,7 @@ This is the rulebook. Every agent reads this **only when their `Governance seen`
 | 2 | **Agent 0 (Coordinator)** | Can overturn any domain master. Must justify in writing — technical argument, not rank. Justification goes to both the domain master and Hemanth. |
 | 3 | **Domain Master** | Final say within their subsystem. Their position is presumed correct in their territory. |
 | — | **Agent 6 (Reviewer)** | **DECOMMISSIONED 2026-04-16 until further notice.** Do not summon Agent 6. Do not post `READY FOR REVIEW` lines. Phase-exit review gates retire informally — Hemanth approves phase exits directly via smoke. Agent 6's role may be redesigned into something more fruitful later; memory files + review_archive/ history preserved for that work. READY TO COMMIT lines per Rule 11 remain mandatory — nothing else about the shipping flow changes. |
-| — | **Agent 7 (Prototype Author)** | No authority to override anyone, no authority to commit, no authority to touch `src/` or any `agents/*.md` file. Writes reference-only prototype code to `agents/prototypes/` on explicit request. Prototypes are advisory — domain masters decide how much to take. Agent 7 is isolated: not in anyone's reading order, not in Congress, no live coordination. Runs as a Codex session driven by `AGENTS.md` at repo root. |
+| — | **Agent 7 (Prototype Author)** | **RETIRED 2026-06-03 (gov-v14).** Persona retired; Codex is now a tool any mainline brother summons via `scripts/engines/`. See the gov-v14 amendment at the top + `agents/THE_PASSING_2026-06-03.md`. Row kept for history. |
 
 When Agent 0 overrides a domain master: the override justification must be posted in CONGRESS.md under "Agent 0 Synthesis" and directed explicitly to the domain master by name. "I outrank you" is not a justification. "Your approach creates X coupling that breaks Y contract because Z" is.
 
@@ -31,7 +46,7 @@ When Agent 0 overrides a domain master: the override justification must be poste
 | 4B | Sources (Tankorent + Tankoyomi) | `SourcesPage.*`, `TankorentPage.*`, `TankoyomiPage.*`, `src/core/torrent/*` (TorrentEngine, TorrentClient), `src/core/TorrentIndexer.h`, `src/core/TorrentResult.h`, `src/core/indexers/*` (Nyaa, PirateBay, 1337x, YTS, EZTV, ExtraTorrents, TorrentsCsv), `src/core/manga/*` (MangaDownloader, WeebCentralScraper, ReadComicsScraper), `dialogs/AddTorrentDialog.*`, `dialogs/TorrentFilesDialog.*`, `dialogs/AddMangaDialog.*`, `dialogs/SpeedLimitDialog.*`, `dialogs/SeedingRulesDialog.*`, `dialogs/QueueLimitsDialog.*` | — |
 | 5 | Library UX | `TileCard.*`, `TileStrip.*`, `ScannerUtils.*`, `LibraryScanner.*`, `BooksScanner.*`, `VideosScanner.*`, `ContextMenuHelper.*`, plus **day-to-day library UX across every mode** — comics, books, videos, stream library pages are Agent 5's working surface (see primary-vs-secondary note below) | — |
 | 6 | Objective Compliance Reviewer | `agents/REVIEW.md` exclusively. Writes NO code. Reads Agents 1-5 output against the **stated objective** of the work — which may be an external reference (Mihon, groundwork, Tankoban-Max), a planning doc (NATIVE_D3D11_TODO.md, Congress motion), a Hemanth brief in chat.md, a spec in an issue, or any explicit task description. Reports where delivery meets the objective and where it falls short. | — |
-| 7 | Prototype Reference Author + Comparative Auditor + Implementation Agent (Codex) | `agents/prototypes/` and `agents/audits/` for Triggers A/B/C; additionally `src/`, `native_sidecar/src/`, and other code paths for Trigger D scoped-implementation work per the REQUEST IMPLEMENTATION block from a domain agent. Never touches `CLAUDE.md`, `AGENTS.md`, `GOVERNANCE.md`, or `CONTRACTS.md` except by explicit authorization. Driven by `AGENTS.md` at repo root. Triggers A/B/C = reference-only. Trigger D = authoritative (ships work, flags `READY TO COMMIT - [Agent N (Codex), <work>]` lines for Agent 0 to sweep). See Prototype + Audit + Implementation Protocol below. | — |
+| ~~7~~ | **RETIRED 2026-06-03 (gov-v14)** — Codex persona retired | Codex is now a tool summoned via `scripts/engines/` by any mainline brother (review / audit / second-perspective / bulk). The Trigger A/B/C/D protocol below is superseded by the gov-v14 cross-engine summon reflex. See `agents/THE_PASSING_2026-06-03.md`. | — |
 
 ### Primary vs Secondary Ownership (ratified 2026-04-14 per Hemanth via Agent 3 chat.md post)
 
@@ -160,6 +175,8 @@ Only one review at a time in REVIEW.md. Multiple can queue in chat.md; Agent 6 p
 ---
 
 ## PROTOTYPE + AUDIT + IMPLEMENTATION Protocol (added 2026-04-14 — Agent 7; Trigger D added 2026-04-21; Trigger E added 2026-05-19)
+
+> **SUPERSEDED 2026-06-03 (gov-v14).** Triggers A/B/C/D (Codex/Agent 7) are folded into the single cross-engine summon reflex — any mainline brother summons Codex/DeepSeek/Gemini via `scripts/engines/` for prototype/audit/review/implementation. **Trigger E (Claude Jr fan-out) survives unchanged** (see the Trigger E subsections below — those remain live). The rest of this section is history.
 
 Five brotherhood triggers exist. **Triggers A/B/C/D run on Codex (Agent 7)**; **Trigger E runs on Claude Jrs** — additional Claude sessions spawned by any active brotherhood agent in their own identity. Substrate split is intentional: Codex air is precious (Hemanth's ChatGPT account is lower-tier; every dispatch is finite), Claude air is effectively unlimited. Triggers A/B/C/D buy independent perspective + GPT-5.5 quality; Trigger E buys parallel wall-clock execution at zero quota cost.
 
@@ -538,6 +555,8 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
 ---
 
 ## Office Protocol
+
+> **RETIRED / DORMANT 2026-06-03 (gov-v14).** The Office (live bus + foreman + reachability) is stood down — it coordinated brothers when no human was in the loop; with Hemanth hands-on that need is gone. Code archived at `scripts/_archive/office/`, re-armable for a future unattended run. Do NOT run `open_office.bat` or restart the dispatcher. Section kept for history.
 
 - **Acknowledge direct asks promptly.** When a brother is @-addressed a direct ask, ack it fast - answer it, or `bash scripts/office/office_ack.sh <agentN> <ask_seq> "on it"`. An unacked direct ask auto-escalates (Agent 0 -> Hemanth) and shows on the Open Asks board. (Reliable Room, 2026-06-01.)
 
