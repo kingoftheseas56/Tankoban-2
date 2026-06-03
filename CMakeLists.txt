@@ -244,6 +244,19 @@ if(WIN32)
     # Incremental linking for faster link times during development
     target_link_options(Tankoban PRIVATE /INCREMENTAL)
 
+    # OBS-0 (Track D observability) — emit a PDB for the optimized Release binary
+    # so agent stack walks / procdump dumps resolve to symbol names instead of
+    # Tankoban.exe+0xADDR (the freeze-hunt blocker). /O2 codegen is UNCHANGED
+    # (CMAKE_CXX_FLAGS_RELEASE stays /O2 /Ob2 /DNDEBUG); /Zi only adds the debug
+    # side-channel and /DEBUG writes the PDB. Option A per the OBS-0 spec: do NOT
+    # add /OPT:REF or /OPT:ICF — they silently disable the /INCREMENTAL above
+    # (LNK4075) and force full ~915s links. Spec:
+    # docs/superpowers/specs/observability/OBS-0-pdb-symbols.md
+    if(MSVC)
+        target_compile_options(Tankoban PRIVATE $<$<CONFIG:Release>:/Zi>)
+        target_link_options(Tankoban PRIVATE $<$<CONFIG:Release>:/DEBUG>)
+    endif()
+
     # THEATRE_DOWNLOAD_ONLY P2.3 (2026-05-29) — the Stremio stream-server
     # subprocess bundle (stremio-runtime.exe + server.js + ffmpeg 4.x DLLs +
     # LICENSE) and its POST_BUILD copy block were removed here. Theatre is
