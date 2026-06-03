@@ -1392,6 +1392,27 @@ void TankoLibraryPage::populateGridThumbnails()
     if (!m_grid) return;
     const QList<BookResult> view = filteredResults();
     auto* libgen = qobject_cast<LibGenScraper*>(scraperFor(QStringLiteral("libgen")));
+
+    // Cover-cache disk index — built ONCE per refresh instead of globbing the
+    // cache dir for every tile. The old per-row existingCachedCoverPath() call
+    // ran a QDir::entryInfoList scan for each of N rows (O(N) directory scans
+    // on the GUI thread). Here we scan the dir a single time and map stem ->
+    // absolute path. Keyed by QFileInfo::baseName() (text before the first dot)
+    // which equals the cover key, since keys (md5 hex / URL slugs) never contain
+    // dots; first-by-name wins to match the prior entryInfoList(QDir::Name) order.
+    QHash<QString, QString> diskCovers;
+    {
+        const QFileInfoList cacheFiles = QDir(tankoLibraryCoverCacheDir())
+            .entryInfoList(QStringList() << QStringLiteral("*.*"),
+                           QDir::Files | QDir::Readable, QDir::Name);
+        diskCovers.reserve(cacheFiles.size());
+        for (const QFileInfo& fi : cacheFiles) {
+            const QString stem = fi.baseName();
+            if (!diskCovers.contains(stem))
+                diskCovers.insert(stem, fi.absoluteFilePath());
+        }
+    }
+
     for (int i = 0; i < view.size(); ++i) {
         const BookResult& r = view[i];
         // TANKOLIBRARY_ABB Track B2 — use coverKeyFor() which falls back to
@@ -1405,7 +1426,9 @@ void TankoLibraryPage::populateGridThumbnails()
             continue;
         }
         // Fast path 2: disk cache (prior session or detail-view fetch).
-        const QString cached = existingCachedCoverPath(key);
+        // Looked up from the one-shot diskCovers index above (was a per-row
+        // existingCachedCoverPath() glob).
+        const QString cached = diskCovers.value(key);
         if (!cached.isEmpty()) {
             QPixmap pix;
             if (pix.load(cached) && !pix.isNull()) {

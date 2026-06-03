@@ -6,6 +6,8 @@
 #include <QMutex>
 #include <QObject>
 #include <QString>
+#include <QByteArray>
+#include <QFuture>
 #include <optional>
 
 #include "CatalogueRecord.h"
@@ -27,7 +29,10 @@
 // Threadsafe — const APIs are mutex-guarded for cross-thread reads. Mutating
 // methods (upsertRecord / evict / validateAll / updateReadProgress) execute
 // synchronously on the calling thread, acquire m_mutex around map mutations,
-// then call save() and emit recordsChanged() OFF the lock.
+// then emit recordsChanged() OFF the lock. save() serializes the current state
+// synchronously under m_mutex but hands the actual disk write to a single
+// coalescing background task (m_saveMutex / m_saveFuture) so the GUI thread
+// never blocks on file I/O; the destructor drains any in-flight write.
 // (BooksScanner reference dropped 2026-05-27 — class removed in
 // BOOKS_STREMIO_PIVOT §3.8 backout; this store is the sole library data source now.)
 class BooksCatalogueLibraryStore : public QObject
@@ -38,6 +43,10 @@ public:
     // dataDir is the folder under which books_catalogue_library.json lives.
     // Production callsite passes CoreBridge::dataDir(); tests pass a QTemporaryDir.
     explicit BooksCatalogueLibraryStore(const QString& dataDir, QObject* parent = nullptr);
+
+    // Drains any in-flight async save so the background writer never touches a
+    // destroyed store (the writer captures `this`).
+    ~BooksCatalogueLibraryStore() override;
 
     // ── Mutate ────────────────────────────────────────────────────────────
     // Upsert (insert or replace by catalogueId). Updates all three derived maps
@@ -89,4 +98,14 @@ private:
     QHash<QString, CatalogueRecord> m_byId;
     QHash<QString, QSet<QString>>   m_bySeries;       // seriesId -> {catalogueId}
     QHash<QString, QString>         m_byFilePath;     // filePath -> catalogueId
+
+    // Async-save coalescing writer (see save() in the .cpp). save() serializes
+    // the current state under m_mutex, then a single background task writes the
+    // newest pending bytes to disk so the GUI thread never blocks on file I/O.
+    // m_saveMutex guards the writer's pending/in-flight state, independent of
+    // m_mutex (never held together). m_pendingSaveBytes empty == nothing queued.
+    QMutex        m_saveMutex;
+    QByteArray    m_pendingSaveBytes;
+    bool          m_saveInFlight = false;
+    QFuture<void> m_saveFuture;
 };

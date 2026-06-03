@@ -40,6 +40,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFileInfo>
+#include <QtConcurrent/QtConcurrent>
 #include <QShortcut>
 #include <QPushButton>
 #include <QIcon>
@@ -1016,7 +1017,14 @@ void BooksPage::buildUI()
 
     auto* f5Shortcut = new QShortcut(QKeySequence(Qt::Key_F5), this);
     connect(f5Shortcut, &QShortcut::activated, this, [this]() {
-        if (m_catalogueStore) m_catalogueStore->validateAll();
+        // validateAll() stats every record's file on disk — run it off the GUI
+        // thread so a manual F5 refresh never hitches. Eviction emits
+        // recordsChanged() via AutoConnection, which queues back to this thread.
+        // Mirrors StreamLibraryLayout::showEvent (StreamLibraryLayout.cpp:102).
+        if (m_catalogueStore) {
+            BooksCatalogueLibraryStore* store = m_catalogueStore;
+            (void) QtConcurrent::run([store]() { store->validateAll(); });
+        }
     });
 
     auto* refreshShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_R), this);
@@ -1048,7 +1056,11 @@ void BooksPage::buildUI()
 
 void BooksPage::activate()
 {
-    if (m_catalogueStore) m_catalogueStore->validateAll();
+    // Off-thread disk validation (see showEvent / StreamLibraryLayout.cpp:102).
+    if (m_catalogueStore) {
+        BooksCatalogueLibraryStore* store = m_catalogueStore;
+        (void) QtConcurrent::run([store]() { store->validateAll(); });
+    }
 }
 
 // §3.8 burn-the-ships backout (2026-05-27) — orphan-record check on show
@@ -1058,7 +1070,15 @@ void BooksPage::activate()
 void BooksPage::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    if (m_catalogueStore) m_catalogueStore->validateAll();
+    // §6.2 orphan-record check: validateAll() walks every record and stats its
+    // file path on disk. Run it off the GUI thread (mirrors
+    // StreamLibraryLayout::showEvent, StreamLibraryLayout.cpp:102) so opening
+    // Books never hitches on a large library. Eviction emits recordsChanged()
+    // via the default AutoConnection, which Qt queues back to the GUI thread.
+    if (m_catalogueStore) {
+        BooksCatalogueLibraryStore* store = m_catalogueStore;
+        (void) QtConcurrent::run([store]() { store->validateAll(); });
+    }
     // Returning from the reader: reading progress was written to the JsonStore,
     // not the store, so refresh the continue strip to pick it up.
     refreshContinueStrip();
