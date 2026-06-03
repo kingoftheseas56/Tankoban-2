@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QMouseEvent>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -580,15 +581,35 @@ void FrameCanvas::stopWaitableLoop()
 
     m_waitableStop.store(true);
 
-    // Closing the handle wakes WaitForSingleObjectEx with WAIT_FAILED on
-    // older kernels or simply unblocks on a timeout (we use 100ms as the
-    // worst-case wait). Join is bounded by that 100ms in the worst case.
-    HANDLE h = static_cast<HANDLE>(m_waitableHandle);
-    m_waitableHandle = nullptr;
-    if (h) CloseHandle(h);
+    // PLAYER_HANG_FIX 2026-06-03 — wake the wait thread if it is parked in
+    // the backpressure cv.wait_for so it observes the stop flag and exits
+    // before join(). This is independent of the GUI event loop, which is NOT
+    // running during teardown (stopWaitableLoop is called from tearDownD3D on
+    // the GUI thread) — so a renderFrame posted just before stop may never
+    // run, and the wait thread must be released by this notify, not by the
+    // handshake completing.
+    {
+        std::lock_guard<std::mutex> lk(m_renderHandshakeMutex);
+        m_renderHandshakeDone = true;
+    }
+    m_renderHandshakeCv.notify_all();
 
+    // PLAYER_HANG_FIX 2026-06-03 (Codex review P0) — JOIN BEFORE CloseHandle.
+    // Closing the waitable handle while the worker thread may be parked inside
+    // WaitForSingleObjectEx(h, ...) on it is documented undefined behavior
+    // (synchapi WaitForSingleObjectEx remarks), and nulling m_waitableHandle
+    // concurrently with the worker's read of it is a C++ data race. The wait
+    // carries a 100 ms timeout, so once m_waitableStop is set the worker
+    // observes it and exits within <=100 ms on its own — no early CloseHandle
+    // is needed to wake it. Join first; only then, with no other thread able
+    // to touch the handle, close and null it.
     if (m_waitableThread.joinable()) {
         m_waitableThread.join();
+    }
+
+    if (m_waitableHandle) {
+        CloseHandle(static_cast<HANDLE>(m_waitableHandle));
+        m_waitableHandle = nullptr;
     }
 }
 
@@ -612,8 +633,31 @@ void FrameCanvas::waitableLoop()
         // not a Q_INVOKABLE slot, so the string-name overload can't see
         // it. Qt's queued-connection metadata works fine with a lambda
         // that captures the member-function call.
+        //
+        // PLAYER_HANG_FIX 2026-06-03 — backpressure. Arm the handshake,
+        // post renderFrame, then BLOCK on the cv until renderFrame has
+        // run (incl. Present) or stop is requested or a 100ms safety
+        // timeout elapses. Without this block the wait thread re-armed
+        // WaitForSingleObjectEx before Present consumed the frame-latency
+        // slot, so the handle was still signaled, the wait returned
+        // instantly, and the loop busy-spun flooding the Qt event queue
+        // until the GUI thread stopped responding. Blocking until the
+        // present completes lets the handle unsignal, so the next wait
+        // paces to vsync (60 Hz) instead of spinning.
+        {
+            std::lock_guard<std::mutex> lk(m_renderHandshakeMutex);
+            m_renderHandshakeDone = false;
+        }
         QMetaObject::invokeMethod(this, [this]() { renderFrame(); },
                                    Qt::QueuedConnection);
+        {
+            std::unique_lock<std::mutex> lk(m_renderHandshakeMutex);
+            m_renderHandshakeCv.wait_for(
+                lk, std::chrono::milliseconds(100), [this]() {
+                    return m_renderHandshakeDone
+                        || m_waitableStop.load(std::memory_order_relaxed);
+                });
+        }
     }
 }
 
@@ -711,6 +755,28 @@ bool FrameCanvas::ensureBackBufferView()
 
 void FrameCanvas::renderFrame()
 {
+    // PLAYER_HANG_FIX 2026-06-03 — release the waitable-thread backpressure
+    // handshake on EVERY exit path (early returns at !swapChain /
+    // !ensureBackBufferView / skip-tick / device-lost, plus normal completion
+    // after Present). A scope guard fires in its destructor regardless of
+    // which return is taken. When renderFrame is driven by the QTimer(16)
+    // fallback (waitable unavailable) there is no cv waiter, so the notify is
+    // a harmless no-op.
+    struct HandshakeNotifier {
+        std::mutex&              mtx;
+        std::condition_variable& cv;
+        bool&                    done;
+        ~HandshakeNotifier() {
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                done = true;
+            }
+            cv.notify_one();
+        }
+    } handshakeNotifier{ m_renderHandshakeMutex,
+                         m_renderHandshakeCv,
+                         m_renderHandshakeDone };
+
     if (!m_swapChain || !m_context) {
         return;
     }

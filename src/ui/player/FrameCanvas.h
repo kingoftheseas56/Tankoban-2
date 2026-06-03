@@ -6,6 +6,8 @@
 #include <QSize>
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <vector>
 
 #include "VsyncTimingLogger.h"
@@ -334,6 +336,20 @@ private:
     void*                     m_waitableHandle = nullptr;
     std::thread               m_waitableThread;
     std::atomic<bool>         m_waitableStop{false};
+    // PLAYER_HANG_FIX 2026-06-03 — backpressure handshake between the waitable
+    // thread and the GUI-thread renderFrame. Without it, waitableLoop posted
+    // renderFrame via Qt::QueuedConnection then re-waited immediately; because
+    // Present(1,0) is deferred to the GUI thread the DXGI frame-latency handle
+    // stayed signaled, WaitForSingleObjectEx returned instantly every loop,
+    // and the wait thread busy-spun flooding the Qt event queue until the GUI
+    // thread stopped responding (Intel UHD 620 + CPU frame path). The wait
+    // thread now blocks on this cv until renderFrame completes (or stop / a
+    // 100ms safety timeout) before re-arming the wait. A condition_variable —
+    // NOT Qt::BlockingQueuedConnection — because stopWaitableLoop() runs on the
+    // GUI thread and join()s, so a blocking invoke would deadlock at teardown.
+    std::mutex                m_renderHandshakeMutex;
+    std::condition_variable   m_renderHandshakeCv;
+    bool                      m_renderHandshakeDone = false;
     void startWaitableLoop();
     void stopWaitableLoop();
     void waitableLoop();
