@@ -49,6 +49,15 @@ FrameCanvas::FrameCanvas(QWidget* parent)
     m_renderTimer.setTimerType(Qt::PreciseTimer);
     m_renderTimer.setInterval(16);
     connect(&m_renderTimer, &QTimer::timeout, this, &FrameCanvas::renderFrame);
+
+    // PLAYER diagnostics 2026-06-03 — TANKOBAN_FFMPEG_PACING=1 auto-enables the
+    // per-frame vsync timing capture (dumped to m_vsyncDumpPath on close) so
+    // stutter can be diagnosed without the Ctrl+Shift+V keybinding, which is
+    // unreliable to drive headlessly. Honors the long-standing env gate noted
+    // in the header. Off by default — zero cost in normal runs.
+    if (qEnvironmentVariableIntValue("TANKOBAN_FFMPEG_PACING") == 1) {
+        m_vsyncLoggingOn = true;
+    }
 #endif
     m_canvasSizeDebounce.setSingleShot(true);
     m_canvasSizeDebounce.setInterval(75);
@@ -658,6 +667,19 @@ void FrameCanvas::waitableLoop()
                         || m_waitableStop.load(std::memory_order_relaxed);
                 });
         }
+
+        // PLAYER_HANG_FIX 2026-06-03 (Codex stutter review) — no-Present
+        // backoff. If renderFrame took an error/teardown path that did NOT
+        // reach Present() (!swapChain / !ensureBackBufferView / device-lost),
+        // the DXGI frame-latency handle was never consumed and is still
+        // signaled, so re-arming WaitForSingleObjectEx immediately would
+        // busy-spin a core. Sleep ~one frame interval first so a transient
+        // error state can't peg the CPU. Normal ticks Present() every time
+        // (the lag-skip was removed), so this never fires in steady playback.
+        if (!m_waitableStop.load(std::memory_order_relaxed)
+            && !m_renderPresented.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
     }
 }
 
@@ -777,6 +799,11 @@ void FrameCanvas::renderFrame()
                          m_renderHandshakeCv,
                          m_renderHandshakeDone };
 
+    // PLAYER_HANG_FIX 2026-06-03 — assume no Present until one actually runs;
+    // set true after Present() below. The wait thread reads this to decide
+    // whether to back off (no-Present error tick) or re-arm normally.
+    m_renderPresented.store(false, std::memory_order_relaxed);
+
     if (!m_swapChain || !m_context) {
         return;
     }
@@ -795,34 +822,15 @@ void FrameCanvas::renderFrame()
     }
     m_perfInvocationTimer.restart();
 
-    // Batch 1.2 — lag-aware skip. When the prior tick saw sustained lag,
-    // skip this tick's Present(): the previously-presented frame stays on
-    // screen for one vsync while the render pipeline catches up, and we
-    // don't waste GPU work drawing into a back buffer that won't reach the
-    // display on time. The interval timer still restarts so the next
-    // sample's latency measurement references this tick's wall clock.
-    // A telemetry sample is recorded with frameSkipped=true and no DXGI
-    // stats (swap chain wasn't Presented → GetFrameStatistics is stale).
-    if (m_skipNextPresent) {
-        m_skipNextPresent = false;
-        ++m_framesSkippedTotal;
-        m_intervalTimer.restart();
-        if (m_vsyncLoggingOn) {
-            // Still capture clock state on skip samples so the CSV shows
-            // whether velocity is drifting during the skip window. Skip
-            // tick = no frame chosen; chosen_frame_id=0, fallback_used=0,
-            // producer_drops_since_last=0, consumer_late_ms=0 (Batch 2.2:
-            // no consume happened on this tick).
-            const double ema = m_syncClock ? m_syncClock->latencyEmaMs() : 0.0;
-            const double vel = m_syncClock ? m_syncClock->getClockVelocity() : 1.0;
-            m_vsyncLogger.recordSampleFromSwapChain(
-                nullptr, 0.0, /*frameSkipped=*/true, ema, vel,
-                /*chosenFrameId=*/0, /*fallbackUsed=*/false,
-                /*producerDropsSinceLast=*/0, /*consumerLateMs=*/0.0,
-                /*zeroCopyActive=*/(m_importedD3DTex != nullptr));
-        }
-        return;
-    }
+    // PLAYER_HANG_FIX 2026-06-03 (Codex stutter review) — the OBS-style
+    // "lag-skip" (skip this tick's Present() under sustained lag) was REMOVED.
+    // It is invalid under the DXGI-waitable render loop: a skipped Present()
+    // does not consume the frame-latency signal, so the handle stays signaled,
+    // the wait thread re-arms instantly and busy-spins (~71% of a core seen on
+    // UHD 620), and the screen stays stuck on the last frame. Every valid
+    // waitable tick MUST consume the signal with a Present(). Clock-based
+    // frame selection (consumeShmFrame, pts<=audio clock) already paces the
+    // display; the skip heuristic only caused stutter + spin.
 
     // Batch 2.1 — reset per-tick frame-selection telemetry so a tick where
     // consumeShmFrame never ran (zero-copy D3D11 path or no new frame in
@@ -874,6 +882,15 @@ void FrameCanvas::renderFrame()
         }
     }
 
+    // PLAYER_HANG_FIX 2026-06-03 (Codex hardening) — mark presented only when
+    // Present() actually SUCCEEDED. A non-device-lost Present failure may not
+    // consume the DXGI frame-latency slot, so treat it as a no-Present tick and
+    // let the wait thread back off rather than re-arm on a still-signaled
+    // handle. (Device-lost already returned above.)
+    if (SUCCEEDED(hr)) {
+        m_renderPresented.store(true, std::memory_order_relaxed);
+    }
+
     // Batch 1.1 — compute present-to-present interval and derive frame
     // latency (overage vs the expected frame interval). First sample has no
     // prior timestamp → latency = 0 and we seed the timer. Subsequent
@@ -894,19 +911,10 @@ void FrameCanvas::renderFrame()
         m_syncClock->reportFrameLatency(frameLatencyMs);
     }
 
-    // Batch 1.2 — sustained-lag → skip-next (OBS obs-video.c:814-827
-    // pattern adapted). OBS can fast-forward multiple intervals at once;
-    // we only ship one Present() per tick, so the adapted semantic is
-    // single-skip: let the render pipeline catch up by pausing Present()
-    // for one vsync rather than piling up calls.
-    if (frameLatencyMs > kLagThresholdMs) {
-        if (++m_lagTickCount >= kLagSustainTicks) {
-            m_skipNextPresent = true;
-            m_lagTickCount = 0;
-        }
-    } else {
-        m_lagTickCount = 0;
-    }
+    // PLAYER_HANG_FIX 2026-06-03 (Codex stutter review) — the lag-skip arming
+    // that set m_skipNextPresent was REMOVED with the skip block above.
+    // frameLatencyMs is still computed and reported to SyncClock for telemetry,
+    // but it no longer drives a Present()-skipping decision.
 
     // Phase 6 — vsync timing telemetry. Owns its own swap chain → DXGI
     // GetFrameStatistics returns valid stats every Present, unlike

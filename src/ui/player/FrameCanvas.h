@@ -350,6 +350,14 @@ private:
     std::mutex                m_renderHandshakeMutex;
     std::condition_variable   m_renderHandshakeCv;
     bool                      m_renderHandshakeDone = false;
+    // PLAYER_HANG_FIX 2026-06-03 (Codex stutter review) — true iff the last
+    // renderFrame actually reached Present() (consumed the DXGI frame-latency
+    // signal). On the error/teardown no-Present paths (!swapChain / !RTV /
+    // device-lost) it stays false so the wait thread backs off ~one frame
+    // instead of busy-spinning on the still-signaled handle. Ordering is
+    // provided by m_renderHandshakeMutex (set in renderFrame before the
+    // handshake notify; read in waitableLoop after cv.wait_for re-locks).
+    std::atomic<bool>         m_renderPresented{false};
     void startWaitableLoop();
     void stopWaitableLoop();
     void waitableLoop();
