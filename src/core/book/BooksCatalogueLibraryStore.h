@@ -60,7 +60,18 @@ public:
 
     // Drop all records whose filePath does not exist on disk anymore.
     // Mirror of StreamDownloadIndex::validateAll. Called on BooksPage::showEvent.
+    // Runs synchronously on the calling thread (dev-bridge handlers call it
+    // directly to report a post-validation count); UI callers must go through
+    // validateAllAsync() so the lifetime is owned by the store, not the widget.
     void validateAll();
+
+    // Off-GUI-thread validateAll() whose lifetime the store owns: launches a
+    // single background worker (the future is drained in the dtor, so it can
+    // never run through a destroyed store — the B5 fix for the old
+    // BooksPage-side fire-and-forget QtConcurrent::run([store]{...}) UAF) and
+    // coalesces overlapping requests, so a burst of showEvent/activate/F5
+    // triggers can't stack concurrent disk sweeps.
+    void validateAllAsync();
 
     // Update per-record read state. Persists. Emits recordReadStateChanged.
     void updateReadProgress(const QString& catalogueId,
@@ -108,4 +119,14 @@ private:
     QByteArray    m_pendingSaveBytes;
     bool          m_saveInFlight = false;
     QFuture<void> m_saveFuture;
+
+    // Async validateAll coalescing worker (see validateAllAsync() in the .cpp),
+    // mirroring the save writer's in-flight/pending/future shape. m_validateMutex
+    // guards this trio, independent of m_mutex/m_saveMutex (never held together).
+    // The dtor drains m_validateFuture BEFORE m_saveFuture because validateAll()
+    // can evict -> save(), so a validate task may launch a fresh save.
+    QMutex        m_validateMutex;
+    bool          m_validateInFlight = false;
+    bool          m_validatePending = false;
+    QFuture<void> m_validateFuture;
 };

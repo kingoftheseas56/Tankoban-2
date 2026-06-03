@@ -40,7 +40,6 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFileInfo>
-#include <QtConcurrent/QtConcurrent>
 #include <QShortcut>
 #include <QPushButton>
 #include <QIcon>
@@ -1020,11 +1019,10 @@ void BooksPage::buildUI()
         // validateAll() stats every record's file on disk — run it off the GUI
         // thread so a manual F5 refresh never hitches. Eviction emits
         // recordsChanged() via AutoConnection, which queues back to this thread.
-        // Mirrors StreamLibraryLayout::showEvent (StreamLibraryLayout.cpp:102).
-        if (m_catalogueStore) {
-            BooksCatalogueLibraryStore* store = m_catalogueStore;
-            (void) QtConcurrent::run([store]() { store->validateAll(); });
-        }
+        // validateAllAsync() owns the worker lifetime (drained in the store dtor)
+        // and coalesces overlapping triggers — the B5 fix for the old
+        // fire-and-forget QtConcurrent::run([store]{...}) raw-pointer UAF.
+        if (m_catalogueStore) m_catalogueStore->validateAllAsync();
     });
 
     auto* refreshShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_R), this);
@@ -1056,11 +1054,9 @@ void BooksPage::buildUI()
 
 void BooksPage::activate()
 {
-    // Off-thread disk validation (see showEvent / StreamLibraryLayout.cpp:102).
-    if (m_catalogueStore) {
-        BooksCatalogueLibraryStore* store = m_catalogueStore;
-        (void) QtConcurrent::run([store]() { store->validateAll(); });
-    }
+    // Off-thread disk validation; store-owned lifetime + coalescing (B5). See
+    // validateAllAsync() in BooksCatalogueLibraryStore.
+    if (m_catalogueStore) m_catalogueStore->validateAllAsync();
 }
 
 // §3.8 burn-the-ships backout (2026-05-27) — orphan-record check on show
@@ -1071,14 +1067,11 @@ void BooksPage::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
     // §6.2 orphan-record check: validateAll() walks every record and stats its
-    // file path on disk. Run it off the GUI thread (mirrors
-    // StreamLibraryLayout::showEvent, StreamLibraryLayout.cpp:102) so opening
-    // Books never hitches on a large library. Eviction emits recordsChanged()
-    // via the default AutoConnection, which Qt queues back to the GUI thread.
-    if (m_catalogueStore) {
-        BooksCatalogueLibraryStore* store = m_catalogueStore;
-        (void) QtConcurrent::run([store]() { store->validateAll(); });
-    }
+    // file path on disk. Run it off the GUI thread (validateAllAsync, B5) so
+    // opening Books never hitches on a large library — the store owns the worker
+    // lifetime (dtor-drained) and coalesces overlapping triggers. Eviction emits
+    // recordsChanged() via the default AutoConnection, queued back to this thread.
+    if (m_catalogueStore) m_catalogueStore->validateAllAsync();
     // Returning from the reader: reading progress was written to the JsonStore,
     // not the store, so refresh the continue strip to pick it up.
     refreshContinueStrip();

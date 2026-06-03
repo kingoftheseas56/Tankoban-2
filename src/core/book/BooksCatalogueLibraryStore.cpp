@@ -1,5 +1,6 @@
 #include "BooksCatalogueLibraryStore.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -19,6 +20,19 @@ BooksCatalogueLibraryStore::BooksCatalogueLibraryStore(const QString& dataDir,
 
 BooksCatalogueLibraryStore::~BooksCatalogueLibraryStore()
 {
+    // B5: drain the async validate worker FIRST. validateAll() can evict records,
+    // and eviction enqueues a save() — so a still-running validate task could
+    // launch a fresh save AFTER we've already waited on the save future. Waiting
+    // on validate first guarantees every save it could trigger is queued before
+    // we drain the writer below. Copy the future out under its lock, then wait
+    // WITHOUT holding the lock (the worker needs the lock to make progress).
+    QFuture<void> vfut;
+    {
+        QMutexLocker vlk(&m_validateMutex);
+        vfut = m_validateFuture;
+    }
+    vfut.waitForFinished();
+
     // The async save writer captures `this`; block until it finishes so it
     // never writes through a destroyed store. Any bytes queued after the writer
     // started are flushed by its internal drain loop before it returns. Copy the
@@ -125,6 +139,39 @@ void BooksCatalogueLibraryStore::validateAll()
         if (!QFileInfo::exists(abs)) toEvict.append(p.id);
     }
     for (const auto& id : toEvict) evictByCatalogueId(id);
+}
+
+void BooksCatalogueLibraryStore::validateAllAsync()
+{
+    // Mirror of the save() writer's coalescing pattern: at most one validate
+    // worker runs at a time; a request that arrives while one is in flight just
+    // sets m_validatePending so the active worker loops once more. The future is
+    // stored under m_validateMutex (in lock-step with m_validateInFlight) so the
+    // dtor can drain it. The launch decision + QtConcurrent dispatch + future
+    // store all happen inside one m_validateMutex section; QtConcurrent::run only
+    // enqueues here and the worker body blocks on m_validateMutex until we
+    // release, so dispatching under the lock cannot deadlock.
+    QMutexLocker vlk(&m_validateMutex);
+    m_validatePending = true;
+    if (m_validateInFlight) return;
+    m_validateInFlight = true;
+    m_validateFuture = QtConcurrent::run([this]() {
+        for (;;) {
+            {
+                QMutexLocker dlk(&m_validateMutex);
+                if (!m_validatePending) {
+                    m_validateInFlight = false;
+                    return;
+                }
+                m_validatePending = false;
+            }
+            // The synchronous body snapshots under m_mutex and stats off-lock; it
+            // is idempotent and safe to run concurrently with a direct
+            // (dev-bridge) validateAll() call — evictByCatalogueId() no-ops on an
+            // already-removed id.
+            validateAll();
+        }
+    });
 }
 
 void BooksCatalogueLibraryStore::updateReadProgress(const QString& catalogueId,
@@ -273,10 +320,32 @@ void BooksCatalogueLibraryStore::save()
                 out = m_pendingSaveBytes;
                 m_pendingSaveBytes.clear();
             }
-            QSaveFile f(path);
-            if (f.open(QIODevice::WriteOnly)) {
-                f.write(out);
-                f.commit();
+            // B4 hardening: a silently-dropped write used to be invisible. Now we
+            // check open/write/commit and retry ONCE — covers the common Windows
+            // transient (an AV scanner briefly locking the temp file). We do NOT
+            // re-queue the bytes on persistent failure: a failing path (disk full,
+            // permission) would spin this loop hot, and the state self-heals anyway
+            // because every save() serializes FULL state, so the next save rewrites
+            // everything. On final failure we log loudly so the drop is diagnosable.
+            QString lastErr;
+            bool wrote = false;
+            for (int attempt = 0; attempt < 2 && !wrote; ++attempt) {
+                QSaveFile f(path);
+                if (f.open(QIODevice::WriteOnly) &&
+                    f.write(out) == out.size() &&
+                    f.commit()) {
+                    wrote = true;
+                } else {
+                    // QSaveFile auto-cancels (removes the temp file) on destruction
+                    // when not committed, so a failed attempt leaves no litter.
+                    lastErr = f.errorString();
+                }
+            }
+            if (!wrote) {
+                qWarning().noquote()
+                    << "[BooksCatalogueLibraryStore] save failed after retry:"
+                    << path << "-" << lastErr
+                    << "(bytes for this write dropped; state self-heals on next save)";
             }
         }
     });
