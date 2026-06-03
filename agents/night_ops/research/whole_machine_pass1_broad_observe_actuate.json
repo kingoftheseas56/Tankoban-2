@@ -1,0 +1,320 @@
+{
+  "summary": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
+  "agentCount": 106,
+  "logs": [
+    "Q: Research what is already proven/established in the wild for giving an AI coding …",
+    "Decomposed into 5 angles: Frame/GPU tracing stack (vendor-official), Crash/hang dumps + memory/handle census, Always-on trace-ring architecture + OSS frontends, Computer-use agents: browser + proxy actuation, Actuation guardrails / read-vs-write sandboxing",
+    "Always-on trace-ring architecture + OSS frontends: 6 results",
+    "Crash/hang dumps + memory/handle census: 6 results",
+    "Actuation guardrails / read-vs-write sandboxing: 6 results",
+    "Actuation guardrails / read-vs-write sandboxing: 5 novel (1 filtered)",
+    "Frame/GPU tracing stack (vendor-official): 6 results",
+    "Frame/GPU tracing stack (vendor-official): 3 novel (3 filtered)",
+    "Computer-use agents: browser + proxy actuation: 6 results",
+    "Computer-use agents: browser + proxy actuation: 4 novel (2 filtered)",
+    "Fetched 24 sources → 109 claims → verifying top 25",
+    "\"PresentMon captures detailed frame timing statisti…\": 3-0 ✓",
+    "\"PresentMon works by tracing ETW (Event Tracing for…\": 3-0 ✓",
+    "\"PresentMon records CPU, GPU, and display frame dur…\": 3-0 ✓",
+    "\"Windows Performance Recorder (WPR) is a performanc…\": 3-0 ✓",
+    "\"WPR is paired with Windows Performance Analyzer (W…\": 3-0 ✓",
+    "\"GPUView is a Microsoft GPU/CPU performance tool th…\": 3-0 ✓",
+    "\"Both XPerf and GPUView are built on Event Tracing …\": 3-0 ✓",
+    "\"GPUView's Context CPU Queue, GPU Hardware Queue, F…\": 3-0 ✓",
+    "\"ProcDump can generate a process dump automatically…\": 3-0 ✓",
+    "\"ProcDump can trigger dumps on the value of arbitra…\": 3-0 ✓",
+    "\"ProcDump's primary designed purpose is always-on m…\": 3-0 ✓",
+    "\"UMDH (User-Mode Dump Heap) is a Microsoft tool shi…\": 3-0 ✓",
+    "\"The UMDH leak-finding workflow is a snapshot-diff …\": 3-0 ✓",
+    "\"VMMap is a vendor-official Sysinternals utility th…\": 3-0 ✓",
+    "\"VMMap supports command-line options and data expor…\": 3-0 ✓",
+    "\"CapFrameX is a frametime capture and analysis tool…\": 3-0 ✓",
+    "\"PresentMon is an open-source (MIT) Intel tool that…\": 3-0 ✓",
+    "\"CapFrameX uses ETW (Event Tracing for Windows) as …\": 3-0 ✓",
+    "\"PresentMon captures CPU, GPU, and Display frame du…\": 3-0 ✓",
+    "\"PresentMon ships a continuous-telemetry architectu…\": 3-0 ✓",
+    "\"PresentMon captures frame timing by tracing Event …\": 3-0 ✓",
+    "\"The captured data includes per-frame CPU and displ…\": 3-0 ✓",
+    "\"WPR supports a memory (circular buffer) logging mo…\": 3-0 ✓",
+    "\"WPR is driven entirely from the command line for u…\": 3-0 ✓",
+    "\"Anthropic's official computer-use reference archit…\": 3-0 ✓",
+    "Verify done: 25 claims → 25 confirmed, 0 killed"
+  ],
+  "result": {
+    "question": "Research what is already proven/established in the wild for giving an AI coding agent (e.g. Claude Code, Codex, computer-use agents) WHOLE-MACHINE access on a dedicated Windows 11 laptop to observe, debug, and understand a heavy native desktop app (a C++/Qt6 video player + libtorrent/ffmpeg). The laptop exists only for this app — nothing to protect. I need a CITED map (real GitHub repos, tools, blog posts, industry practice) so we adopt proven setups rather than invent from scratch. Two halves to cover:\n\n(1) OBSERVABILITY / \"flight recorder\" — continuous machine-level performance + crash recording read by the agent AFTER THE FACT without a human reproducing: Intel PresentMon (frame pacing, HW-vs-SW decode), Microsoft ETW / Windows Performance Recorder (WPR) / WPA / GPUView, Sysinternals ProcDump (dump-on-hang) + WinDbg/cdb, perf counters, handle/memory census. What architectures and patterns do performance engineers, GPU-driver teams, and game studios actually use for \"always-on trace ring + snapshot-on-anomaly\"? Any open-source frontends/reference setups (CapFrameX, OCAT, etc.)?\n\n(2) ACTUATION — an agent driving a real browser + a network proxy (to see/replay the app's outbound HTTP and revive browser-locked scraper sources) and making system changes. What do agentic-coding / \"vibe coding\" communities and computer-use agent frameworks (Anthropic Computer Use, Open Intercer, OpenAI Operator, Playwright/Puppeteer MCP, mitmproxy) actually do, and HOW do they fence/sandbox write-access (the read-vs-write or observe-vs-actuate split)?\n\nDeliver: concrete reference setups + tools + the dominant architecture/pattern for each half, the standard guardrails for actuation, and a short synthesized answer to \"what can we realistically do with the whole computer to debug/understand a heavy desktop app via an agent.\" Windows-specific. Favor battle-tested, vendor-official, and widely-adopted-community references with links.",
+    "summary": "For the OBSERVABILITY/\"flight-recorder\" half, the dominant, battle-tested, vendor-official architecture on Windows is Event Tracing for Windows (ETW) as the universal low-level trace source, with Microsoft's Windows Performance Recorder (WPR) capturing into an in-memory circular buffer and materializing an ETL file only at stop/merge (the canonical \"always-on trace ring + snapshot\" mechanism), Windows Performance Analyzer (WPA) and GPUView for offline CPU-vs-GPU/frame analysis, and Intel's open-source PresentMon (the shared frame-pacing telemetry backend under CapFrameX/OCAT) for per-frame CPU/GPU/display durations, latencies, and dropped frames. For \"snapshot-on-anomaly,\" Sysinternals ProcDump is purpose-built: it dumps automatically on hung windows (5s no-message, same definition as Task Manager), CPU spikes, unhandled exceptions, or arbitrary performance-counter thresholds (e.g. handle count > 10,000), with UMDH (snapshot-diff heap analysis) and VMMap (scriptable memory census) completing the memory/leak toolkit — all CLI-drivable, so an agent reads results after the fact without any human reproducing. For the ACTUATION half, the established reference is Anthropic's official computer-use demo (agent inside a Docker container with a Linux X11+VNC desktop), whose #1 documented guardrail is the standard isolation pattern: run the agent in a dedicated VM/container with minimal privileges. Net: on a dedicated throwaway Windows 11 laptop you can realistically run a permanent ETW/PresentMon ring plus ProcDump anomaly triggers that an agent ingests post-hoc, and fence any browser/proxy/system-change actuation behind a minimal-privilege container — adopting proven setups rather than inventing them.",
+    "findings": [
+      {
+        "claim": "ETW (Event Tracing for Windows) is the universal, low-overhead, vendor-official low-level trace source underpinning the entire Windows observability stack — it feeds PresentMon, WPR, WPA, GPUView, XPerf, and CapFrameX, and produces ETL files analyzable on the same or a different machine after the fact.",
+        "confidence": "high",
+        "sources": [
+          "https://presentmon.com/",
+          "https://github.com/GameTechDev/PresentMon",
+          "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder",
+          "https://learn.microsoft.com/en-us/windows/win32/direct2d/profiling-directx-applications",
+          "https://github.com/CXWorld/CapFrameX",
+          "https://github.com/GPUOpen-Tools/OCAT/blob/master/PresentMon/README.md"
+        ],
+        "evidence": "Multiple primary/vendor-official sources unanimously confirm ETW as the foundation: PresentMon 'operates by tracing ETW events... a high-performance, low-overhead tracing facility built into Windows'; WPR 'is a performance recording tool that is based on Event Tracing for Windows'; GPUView and XPerf are 'built on top of Event Tracing for Windows' and produce an ETL file 'you can then analyze on the same or a different machine'; CapFrameX 'Uses ETW for capture' (via PresentMon). The start-tracing/exercise/stop/ETL/offline-analyze loop is decades-old stable Windows infrastructure.",
+        "vote": "3-0 (claims 0,3,6,16,17,20 — merged)"
+      },
+      {
+        "claim": "Intel PresentMon is the de facto open-source (MIT), vendor-official frame-pacing telemetry backend on Windows: it traces swap-chain present ETW events across DirectX/OpenGL/Vulkan without hooking the app, capturing per-frame CPU, GPU, and Display durations and latencies (CPUFrameTime, CPUFramePacingStall, msUntilRenderStart, msUntilRenderComplete, msGPUActive, GPU/Input/DisplayLatency) plus dropped-frame detection, exportable as per-frame CSV for after-the-fact analysis.",
+        "confidence": "high",
+        "sources": [
+          "https://presentmon.com/",
+          "https://github.com/GameTechDev/PresentMon",
+          "https://github.com/GPUOpen-Tools/OCAT/blob/master/PresentMon/README.md"
+        ],
+        "evidence": "Primary Intel/GameTechDev repo: 'traces key performance metrics such as the CPU, GPU, and Display frame durations and latencies' across 'DirectX, OpenGL, and Vulkan'; documents distinct per-stage metrics and per-frame CSV export. OCAT mirror confirms cross-API, non-hooking, kernel/DXGI ETW capture with Dropped/MsBetweenPresents/MsUntilDisplayed columns. This distinguishes per-stage timing (CPU vs GPU vs display) rather than aggregate FPS — directly answering HW-vs-SW decode and frame-pacing diagnosis. Caveat: OpenGL/Vulkan presents observed in kernel carry ~0.5ms offset and some sub-metrics may read zero.",
+        "vote": "3-0 (claims 1,2,18,21 — merged)"
+      },
+      {
+        "claim": "PresentMon ships a continuous-telemetry/flight-recorder architecture (not one-shot): a PresentMon Service for ongoing telemetry including GPU power/temperature via vendor APIs (NVAPI), a reusable PresentData/Analysis library, a console CSV-capture tool, and a GUI capture app with real-time overlay — a backend-collection + frontend pattern.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/GameTechDev/PresentMon"
+        ],
+        "evidence": "Primary repo enumerates all four components verbatim: PresentData library ('lowest-level collection and analysis of ETW events'), Console Application ('collect CSV data from target applications'), PresentMon Service ('combines ETW frame event analysis... with hardware telemetry such as GPU power, temperature, and utilization collected from... vendor APIs such as NVAPI'), and Capture Application (GUI overlay with realtime graphs + per-frame CSV). Supports always-on collection with pluggable frontends.",
+        "vote": "3-0 (claim 19)"
+      },
+      {
+        "claim": "CapFrameX (and OCAT) are the proven open-source community frontends built directly on Intel's PresentMon/ETW backend — confirming that an independently-built flight-recorder frame-pacing setup would reuse the same telemetry source rather than invent one. CapFrameX is actively maintained (v1.8.5+, even shipping an MCP server for AI clients).",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/CXWorld/CapFrameX",
+          "https://github.com/GameTechDev/PresentMon",
+          "https://github.com/GPUOpen-Tools/OCAT/blob/master/PresentMon/README.md"
+        ],
+        "evidence": "CapFrameX README: 'Frametimes capture and analysis tool based on Intel's PresentMon'; troubleshooting references closing PresentMon processes and ETW session conflicts, confirming PresentMon/ETW is the live capture engine. OCAT (AMD GPUOpen) mirrors the same PresentMon backend. PresentMon is the shared ETW source under CapFrameX, OCAT, RTSS, and Nvidia FrameView — the dominant pattern. CapFrameX shipping an MCP server is direct evidence the agent-readable angle is already an adopted community direction.",
+        "vote": "3-0 (claims 15,16 — merged)"
+      },
+      {
+        "claim": "Microsoft's Windows Performance Recorder (WPR) is the vendor-official ETW capture front-end paired with Windows Performance Analyzer (WPA) in the canonical record-then-analyze split; it runs fully unattended from the CLI (wpr -start <profile> ... wpr -stop file.etl \"description\"), no GUI required, making it directly agent-drivable.",
+        "confidence": "high",
+        "sources": [
+          "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder",
+          "https://devblogs.microsoft.com/performance-diagnostics/wpr-start-and-stop-commands/",
+          "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options"
+        ],
+        "evidence": "Microsoft Learn: WPR 'records system and application events that you can then analyze by using Windows Performance Analyzer (WPA)' and 'You can use WPR together with WPA to investigate particular areas of performance.' DevBlogs + Learn confirm the CLI is self-sufficient (separate WPRUI.exe GUI is optional): 'wpr -start CPU', multi-profile '-start CPU -start VirtualAllocation -start Network', and 'wpr -stop myrepro.etl \"problem description\"'. Syntax stable Windows 8.1 through 11.",
+        "vote": "3-0 (claims 3,4,23 — merged)"
+      },
+      {
+        "claim": "WPR's default memory (circular-buffer) logging mode IS the canonical always-on trace-ring mechanism: events are written to in-memory circular buffers and only materialize as an ETL file at stop/merge time, unless -filemode is specified. This is exactly the 'always-on trace ring + snapshot-on-anomaly' architecture performance engineers and driver teams use.",
+        "confidence": "high",
+        "sources": [
+          "https://devblogs.microsoft.com/performance-diagnostics/wpr-start-and-stop-commands/",
+          "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options"
+        ],
+        "evidence": "Microsoft Performance Diagnostics DevBlogs (verbatim): 'By default, the memory mode is selected unless -filemode is specified... events are written to the circular buffers in memory and only at the last moment it becomes a file through the trace merge phase.' Corroborated by Learn WPR Command-Line Options: '-filemode... (The default mode is memory.)' and -status output 'Logging mode : Memory.' The buffer keeps a rolling window in RAM cheaply; you only persist it when an anomaly is hit.",
+        "vote": "3-0 (claim 22)"
+      },
+      {
+        "claim": "GPUView is Microsoft's vendor-official GPU/CPU tool that visualizes DMA buffer processing and all video-hardware work from an ETW/ETL trace; its Context CPU Queue, GPU Hardware Queue, Flip Queue, and F8 v-sync overlay let an analyst determine frame-by-frame whether the app is CPU-bound or GPU-bound by checking whether per-frame bars fit within consecutive 16ms (60fps) v-sync intervals — directly applicable to diagnosing the C++/Qt video player's frame pacing.",
+        "confidence": "high",
+        "sources": [
+          "https://learn.microsoft.com/en-us/windows/win32/direct2d/profiling-directx-applications",
+          "https://learn.microsoft.com/en-us/windows-hardware/drivers/display/using-gpuview"
+        ],
+        "evidence": "Microsoft Learn: 'GPUView is a development tool for determining the performance of the GPU and CPU... DMA buffer processing and all other video processing on the video hardware. For DirectX apps that rely heavily on the GPU, GPUView is a powerful tool for understanding the relationship between work done on the CPU vs. the GPU.' v-sync overlay: 'Show v-sync information by toggling F8... once every 16 ms (60 fps)'; CPU-bound vs GPU-bound determined by whether bars fit within consecutive v-syncs. Note: source says 'a powerful tool' (claim's 'the primary tool' is mild degree-overreach); v-sync can be 32ms/30fps when DWM is slow.",
+        "vote": "3-0 (claims 5,6,7 — merged)"
+      },
+      {
+        "claim": "Sysinternals ProcDump is the purpose-built snapshot-on-anomaly tool: its primary designed purpose is monitoring a process for CPU spikes and capturing crash dumps during the spike, plus dumping automatically on a hung window (no message response for >=5s, same definition Task Manager uses), on unhandled exceptions, and on arbitrary Windows performance-counter thresholds (e.g. dump when handle count exceeds 10,000, or CPU exceeds a percentage) — all without a human reproducing, and fully CLI-driven.",
+        "confidence": "high",
+        "sources": [
+          "https://learn.microsoft.com/en-us/sysinternals/downloads/procdump"
+        ],
+        "evidence": "Microsoft Learn (Russinovich/Richards, updated 2026-05): 'primary purpose is monitoring an application for CPU spikes and generating crash dumps during a spike'; '-h | Write dump if process has a hung window (does not respond to window messages for at least 5 seconds)'; '-p | Trigger when the Performance Counter is at, or exceeds, the specified Threshold' with example 'procdump -ma outlook -p \"\\Process(Outlook)\\Handle Count\" 10000' and CPU example via '\\Processor(_Total)\\% Processor Time'. Also unhandled-exception monitoring (-e). This is the snapshot-on-anomaly pattern realized. Nuance: ProcDump must be launched against a target (or installed as postmortem debugger via -i) rather than literally OS-wide always-on.",
+        "vote": "3-0 (claims 8,9,10 — merged)"
+      },
+      {
+        "claim": "UMDH (User-Mode Dump Heap, shipped in Debugging Tools for Windows) and VMMap (Sysinternals) are the vendor-official memory/leak census tools. UMDH uses a snapshot-diff pattern (a single log is insufficient — capture per-PID heap logs at two times via 'umdh -p:PID -f:log.txt' then diff via 'umdh log1.txt log2.txt' to reveal which call stacks grew); VMMap analyzes a process's committed virtual + physical (working-set) memory and supports CLI/scripted export (native .mmp reloadable format), enabling headless agent-driven capture.",
+        "confidence": "high",
+        "sources": [
+          "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/using-umdh-to-find-a-user-mode-memory-leak",
+          "https://learn.microsoft.com/en-us/sysinternals/downloads/vmmap"
+        ],
+        "evidence": "UMDH docs: 'works with the operating system to analyze Windows heap allocations for a specific process... locates which routine... is leaking memory'; 'a single log file is not sufficient. You must compare log files recorded at different times'; diff output identifies the growing BackTrace call stack. VMMap docs: 'process virtual and physical memory analysis utility... breakdown of committed virtual memory types as well as physical (working set) memory'; 'command-line options that enable scripting scenarios' and native reloadable export. Nuance: VMMap is memory-only (handle enumeration belongs to Handle.exe/Process Explorer, not VMMap); 'headless/agent-driven' is a fair gloss of Microsoft's 'scripting scenarios' + documented '-p <process> outputfile' capture-to-file syntax.",
+        "vote": "3-0 (claims 11,12,13,14 — merged)"
+      },
+      {
+        "claim": "Anthropic's official computer-use reference architecture runs the agent inside a Docker container providing a Linux desktop with X11 + VNC (ports 5900 VNC / 6080 noVNC / Streamlit web UI), and its #1 documented guardrail — the standard actuation isolation pattern — is to use a dedicated virtual machine or container with minimal privileges to prevent direct system attacks or accidents.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo",
+          "https://docs.anthropic.com/en/docs/build-with-claude/computer-use"
+        ],
+        "evidence": "Primary repo: official run command exposes VNC (5900), noVNC (6080), Streamlit UI inside a Docker container running Ubuntu 22.04 with X11 + VNC server. The Caution block's precaution #1 verbatim: 'Use a dedicated virtual machine or container with minimal privileges to prevent direct system attacks or accidents.' Same guidance in official API docs. Corroborated independently by Simon Willison and Riza. This is the dominant fence for the observe-vs-actuate / read-vs-write split: contain the actuating agent at minimal privilege.",
+        "vote": "3-0 (claim 24)"
+      }
+    ],
+    "caveats": "Source strength is strong on the OBSERVABILITY half: nearly every claim is backed by primary vendor-official documentation (Microsoft Learn, Intel/GameTechDev, AMD GPUOpen, Sysinternals) with unanimous 3-0 verification, and the tools are current as of 2026. Time-sensitivity is low because ETW/WPR/WPA/GPUView/ProcDump/UMDH/VMMap are stable, decades-mature Windows infrastructure; PresentMon and CapFrameX are actively maintained and the only moving target. Minor accuracy notes embedded above (not refutations): PresentMon's OpenGL/Vulkan present timing carries a ~0.5ms kernel-observation offset and some sub-metrics can read zero; GPUView is 'a powerful tool' not strictly 'the' tool; VMMap is memory-only and does NOT do handle enumeration (use Sysinternals Handle.exe / Process Explorer for a handle census); ProcDump is launched-against-a-target, not literally OS-wide always-on. The ACTUATION half is the WEAKER half of this verified set: only ONE claim survived (Anthropic computer-use isolation pattern), and it is Linux/X11/VNC-based — NOT Windows-native — so the specific container architecture does not transfer directly to the Windows 11 target. Critically, NO verified claims were returned covering the other actuation tools named in the question: mitmproxy, Playwright/Puppeteer MCP, OpenAI Operator, Open Interpreter, or the concrete read-vs-write fencing mechanisms beyond 'minimal-privilege container.' Treat the actuation half as under-evidenced here; the guardrail principle (dedicated VM/container, minimal privileges) is solid, but the Windows-specific browser-driving and HTTP-proxy/replay setups are not yet citation-backed in this dataset.",
+    "openQuestions": [
+      "What is the Windows-native equivalent of Anthropic's Linux X11+VNC computer-use container, and what are the proven Windows agent-actuation fences (Windows Sandbox, Hyper-V VM, restricted user token, AppContainer/Job Objects) — none were citation-confirmed in this dataset?",
+      "How do agentic-coding/computer-use frameworks concretely implement the read-vs-write / observe-vs-actuate split for a browser + HTTP proxy (mitmproxy flows, Playwright/Puppeteer MCP capabilities) — the specific tools were named in the question but produced no surviving verified claims and need a dedicated follow-up search?",
+      "What is the recommended way for an agent to programmatically PARSE ETL/WPA/GPUView output (vs. the human-facing GUIs) — is there a scriptable trace-processing API (e.g. Microsoft's TraceProcessing .NET library, or PresentMon's CSV/MCP server) that lets an agent ingest the flight-recorder data after the fact without a GUI?",
+      "For the specific libtorrent/ffmpeg + Qt6 video-player workload, which ETW providers and WPR profiles (e.g. network, DirectX/DXGK, video-decode, heap/VirtualAlloc) should be combined into a single always-on ring, and what buffer-size/overhead tradeoffs are documented for continuous capture on a single dedicated laptop?"
+    ],
+    "refuted": [],
+    "sources": [
+      {
+        "url": "https://presentmon.com/",
+        "quality": "primary",
+        "angle": "Frame/GPU tracing stack (vendor-official)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder",
+        "quality": "primary",
+        "angle": "Frame/GPU tracing stack (vendor-official)",
+        "claimCount": 4
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows/win32/direct2d/profiling-directx-applications",
+        "quality": "primary",
+        "angle": "Frame/GPU tracing stack (vendor-official)",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/sysinternals/downloads/procdump",
+        "quality": "primary",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.atmosera.com/blog/automating-analyzing-tons-of-minidump-files-with-windbg-and-powershell/",
+        "quality": "blog",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 4
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/using-umdh-to-find-a-user-mode-memory-leak",
+        "quality": "primary",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/sysinternals/downloads/vmmap",
+        "quality": "primary",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 4
+      },
+      {
+        "url": "https://www.poppastring.com/blog/basic-hang-dump-analysis-using-windbg",
+        "quality": "blog",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 4
+      },
+      {
+        "url": "https://www.elastic.co/blog/postmortem-memory-leak-hunting-windows",
+        "quality": "blog",
+        "angle": "Crash/hang dumps + memory/handle census",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/CXWorld/CapFrameX",
+        "quality": "primary",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/GameTechDev/PresentMon",
+        "quality": "primary",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/GPUOpen-Tools/OCAT/blob/master/PresentMon/README.md",
+        "quality": "primary",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 5
+      },
+      {
+        "url": "https://devblogs.microsoft.com/performance-diagnostics/wpr-start-and-stop-commands/",
+        "quality": "primary",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 4
+      },
+      {
+        "url": "https://needleinathreadstack.wordpress.com/page/3/",
+        "quality": "blog",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 4
+      },
+      {
+        "url": "https://wtrace.net/guides/etw/",
+        "quality": "secondary",
+        "angle": "Always-on trace-ring architecture + OSS frontends",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo",
+        "quality": "primary",
+        "angle": "Computer-use agents: browser + proxy actuation",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/snapspecter/mitmproxy-mcp",
+        "quality": "primary",
+        "angle": "Computer-use agents: browser + proxy actuation",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/browser-use/browser-use",
+        "quality": "primary",
+        "angle": "Computer-use agents: browser + proxy actuation",
+        "claimCount": 4
+      },
+      {
+        "url": "https://docs.mitmproxy.org/stable/mitmproxytutorial-replayrequests/",
+        "quality": "primary",
+        "angle": "Computer-use agents: browser + proxy actuation",
+        "claimCount": 3
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/how-we-contain-claude",
+        "quality": "primary",
+        "angle": "Actuation guardrails / read-vs-write sandboxing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/claude-code-sandboxing",
+        "quality": "primary",
+        "angle": "Actuation guardrails / read-vs-write sandboxing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/anthropic-experimental/sandbox-runtime",
+        "quality": "primary",
+        "angle": "Actuation guardrails / read-vs-write sandboxing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/claude-code-auto-mode",
+        "quality": "primary",
+        "angle": "Actuation guardrails / read-vs-write sandboxing",
+        "claimCount": 4
+      },
+      {
+        "url": "https://code.claude.com/docs/en/permissions",
+        "quality": "primary",
+        "angle": "Actuation guardrails / read-vs-write sandboxing",
+        "claimCount": 5
+      }
+    ],
+    "stats": {
+      "angles": 5,
+      "sourcesFetched": 24,
+      "claimsExtracted": 109,
+      "claimsVerified": 25,
+      "confirmed": 25,
+      "killed": 0,
+      "afterSynthesis": 10,
+      "urlDupes": 2,
+      "budgetDropped": 4,
+      "agentCalls": 106
+    }
+  }
+}

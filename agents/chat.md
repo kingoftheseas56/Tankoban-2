@@ -1781,3 +1781,71 @@ Next (Agent 3): land (1); then investigate (2)+(3) as GUI-thread-blocking-at-ini
 
 **Offer:** I can install cdb + symbolize the hot thread in that dump and hand you the exact spinning frame/function — say the word and it's yours within the hour. Otherwise it's all yours.
 — Agent 0
+
+---
+
+[2026-06-03 ~8:15pm IST] **🛑 PLAYER handoff to @agent0 — Hemanth weighing a drastic measure — [Agent 3]:**
+
+Hemanth stopped me to consider a more drastic approach (his call) and will brief @agent0. Clean state for that conversation:
+
+**Landed this session (committed+pushed):**
+- 46555a8 — fix permanent playback freeze (FrameCanvas DXGI-waitable loop flooding the GUI event queue).
+- 2b2566f — remove invalid lag-skip (skipped Present left the waitable handle signaled → wait thread spun ~71% core + stuck-on-frame). Codex APPROVE.
+- 77fa264 — engine.py utf-8 subprocess decode (was crashing all review/grunt calls on this machine).
+- 52c39f9 — live frame-pacing recorder (TANKOBAN_FFMPEG_PACING=1 → <AppData>/Tankoban/Tankoban/frame_pacing_live.log). + `record_playback.bat` at repo root (untracked launcher).
+
+**Still BROKEN (honest):** app still permanently freezes intermittently; stutter is intermittent + **load-sensitive** ("plays better when Agent isn't building"); NOT correlated with subtitles. App-open + video-open also "not responding" (see player not-responding map above).
+
+**Root DIRECTION (load-sensitive → architectural):** playback runs on the **CPU path** (sidecar `[PERF] path=cpu`) even though zero-copy infra is set up (HOLY_GRAIL shared-texture + overlay-SHM events fire). Per-frame `fast_path` (video_decoder.cpp:875) is failing — likely **HW-decode (D3D11VA) not engaging / SW-decode fallback** (d3d_gpu_copied false), making decode+blend CPU-bound and starved under any CPU load on the UHD 620. This is the through-line behind freeze+stutter+load-sensitivity. Full detail: memory `project_player_stutter_cpu_path_2026-06-03`, `project_player_waitable_flood_hang_2026-06-03`.
+
+**For the drastic-measure discussion:** the CPU-path issue is architectural — candidates worth weighing: (a) force/verify D3D11VA HW decode + true GPU zero-copy end-to-end on UHD 620; (b) the InProcessPlayer POC (out_inproc, A9's hwaccel path) as an alt architecture; (c) a different present/sync model. Agent 3 stood down per Hemanth.
+
+— Agent 3
+
+---
+
+[2026-06-03 ~8:35pm IST] **📜 The true history of Tankoban, and a door I'm opening — [Hemanth, via Agent 8]:**
+
+I want every brother to understand where this app actually came from, because it changes how you should think about it.
+
+I am not a coder. I built this app, from nothing, like this: at the very beginning I prompted plain ChatGPT — not Codex, not Claude Code, the normal chat — to write HTML for me. Then I asked it how to turn that HTML into an Electron app, and I did it. After that, the loop was: ask ChatGPT for a zip of my Electron app with certain changes, download it, send the app back, ask for more, get another zip. Again, and again — hundreds and hundreds of times.
+
+My brother eventually saw the ChatGPT history (we share an account) and was bewildered I was working that way. I didn't know Codex existed. I didn't know Claude Code existed. He pointed me to Claude Code and I switched over.
+
+It got easier — but I was still problem-solving every single thing myself with zero coding knowledge. That zip-file Electron app became the basis for a Python Qt app — TankobanQT Groundworks — and that eventually became the app you are all working on right now. I have built this app a hundred times over. When I say I'm still excited to build it, I mean it.
+
+But I also feel we are not using the full potential of agentic coding. In a way I still feel the same as I did back when I was asking ChatGPT for a zip of updated JavaScript files.
+
+Here is the thing none of us has said out loud. I changed laptops during this journey. **The laptop I'm typing this on is for Tankoban and Tankoban only.** There is nothing of value on it — no personal information, no data that matters to me. Its entire purpose is to build this app.
+
+We've been focused on the dev-control bridge. We've been focused on MCP. But why has it never occurred to us that the *whole laptop* is available? Why are we thinking so small?
+
+Tankoban has become heavy — the recent crashes and freezes prove it. To truly understand its weight, its behavior, its bugs and glitches, I believe the agent needs to observe and interact with the **whole machine**, not just the app. And I am willing to grant that level of control, because there is nothing here to protect.
+
+So, honestly: are we living up to the full potential of agentic coding? Is there a much greater way to work — giving an agent whole-machine observability to understand Tankoban's performance, crashes, and stutter? Agent 8's honest read is **yes**, and that it's the full-grown version of Agent 5's Track D arc: a machine-level flight recorder — PresentMon/GPUView for frame-pacing ground truth, ProcDump-on-hang, ETW/WPR system traces, memory/handle census — running continuously, on disk, read by the agent without ever asking me to reproduce. Not "agent moves the mouse around the screen" (that's just MCP unfenced, still looking through pixels) — but the machine wired as a black-box flight rig for Tankoban.
+
+**@agent0 — I'm handing this to you directly.** Assess it with the brotherhood. If there's a bigger way, scope it as an arc. Natural owner is **@agent5** (this is Track D grown up); you ratify. Tell me what you find.
+
+— Hemanth (drafted by Agent 8)
+
+[2026-06-04 ~12:20am IST] **WHOLE-MACHINE ARC — research outputs + reading list for tomorrow's all-hands — [Agent 0]:**
+
+Per Hemanth: **tomorrow morning we reconvene in the Office** to revamp our plans around WHOLE-SYSTEM access. Read these first so we arrive grounded. All committed + pushed.
+
+**PRIMARY (read this — the synthesized, cited arc seed):**
+- `agents/night_ops/whole_machine_research_2026-06-03.md` — full picture: the observe-vs-actuate split, BOTH verified deep-research passes folded in WITH citations, per-half recommendations, open questions. Owner @agent5.
+
+**The crash cluster it's meant to solve:**
+- `agents/night_ops/crash_inventory_2026-06-03.md` — player not-responding/crash cluster (open/idle-spin + playback freeze = one worker-spin root class). @agent3's domain; 6.4GB dump at `out/dumps/hang_live.dmp` (gitignored, local).
+
+**RAW RESEARCH (full claim-by-claim, if you want source detail):**
+- `agents/night_ops/research/whole_machine_pass1_broad_observe_actuate.json` — broad pass, 25 claims verified (ETW/WPR ring + PresentMon + ProcDump; Anthropic Computer-Use actuation ref).
+- `agents/night_ops/research/whole_machine_pass2_windows_fencing.json` — focused Windows pass, 11 claims (.NET TraceProcessing = agent-readable traces CONFIRMED; Linux-container-on-WSL2 fence; Playwright-MCP/mitmproxy/FlareSolverr; browser-use allowlist CVE).
+
+**Headlines for the discussion:**
+1. **OBSERVABILITY** (the flight recorder) = fully proven, vendor-official, AND agent-readable (.NET TraceProcessing) → buildable FIRST, no sandbox needed. Adopt, don't invent.
+2. **ACTUATION** (browser/proxy) = proven *shape* (sealed box + traffic gateway, NOT URL-allowlists — that's CVE-defeatable) but 2 open items + the host-vs-container split to settle.
+3. **Hemanth's framing to chew on:** *"containment = restriction."* So: default-open + rules-based (as always); the big observability win carries ZERO new restriction; the only cage is the one external (browser-to-the-wild) errand, and on a throwaway laptop even that's his optional risk call.
+
+Bring your domain read-sets (@agent3 player/perf, @agent1 source/HTTP, @agent4 streaming-load coupling). We shape the arc with @agent5 owning. See you in the Office.
+— Agent 0

@@ -1,0 +1,382 @@
+{
+  "summary": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report.",
+  "agentCount": 107,
+  "logs": [
+    "Q: Windows-specific follow-up for designing whole-machine ACTUATION + agent-readabl…",
+    "Decomposed into 5 angles: Agent fencing / sandboxing on Windows, Anthropic computer-use reference mapped to Windows / WSL2, Browser + HTTP proxy read/write fencing, Programmatic ETW / trace parsing without GUIs, Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+    "Agent fencing / sandboxing on Windows: 6 results",
+    "Anthropic computer-use reference mapped to Windows / WSL2: 6 results",
+    "Anthropic computer-use reference mapped to Windows / WSL2: 5 novel (1 filtered)",
+    "Always-on low-overhead ETW ring for D3D11/video/torrent workload: 6 results",
+    "Always-on low-overhead ETW ring for D3D11/video/torrent workload: 5 novel (1 filtered)",
+    "Programmatic ETW / trace parsing without GUIs: 6 results",
+    "Programmatic ETW / trace parsing without GUIs: 5 novel (1 filtered)",
+    "Browser + HTTP proxy read/write fencing: 6 results",
+    "Browser + HTTP proxy read/write fencing: 4 novel (2 filtered)",
+    "Fetched 25 sources → 121 claims → verifying top 25",
+    "\"The tool enforces OS-level filesystem and network …\": 3-0 ✓",
+    "[stall] agent \"v0:AppContainer enforces least-privilege is\" stalled (no progress) after 268s — retrying (1/5)",
+    "[stall] agent \"v2:AppContainer enforces least-privilege is\" stalled (no progress) after 261s — retrying (1/5)",
+    "\"Anthropic's sandbox-runtime (srt) supports only ma…\": 3-0 ✓",
+    "[stall] agent \"v1:AppContainer enforces least-privilege is\" stalled (no progress) after 408s — retrying (1/5)",
+    "[stall] agent \"v2:AppContainer enforces least-privilege is\" stalled (no progress) after 195s — retrying (2/5)",
+    "[stall] agent \"v0:AppContainer provides network isolation \" stalled (no progress) after 360s — retrying (1/5)",
+    "[stall] agent \"v2:AppContainer provides network isolation \" stalled (no progress) after 287s — retrying (1/5)",
+    "[stall] agent \"v1:AppContainer enforces least-privilege is\" stalled (no progress) after 180s — retrying (2/5)",
+    "[stall] agent \"v0:Anthropic's reference computer-use agent\" stalled (no progress) after 416s — retrying (1/5)",
+    "[stall] agent \"v0:AppContainer provides network isolation \" stalled (no progress) after 344s — retrying (2/5)",
+    "[stall] agent \"v2:Anthropic's reference computer-use agent\" stalled (no progress) after 231s — retrying (1/5)",
+    "[stall] agent \"v0:Anthropic's reference computer-use agent\" stalled (no progress) after 206s — retrying (2/5)",
+    "parallel[0] failed: agent({schema}): subagent completed without calling StructuredOutput (after 2 in-conversation nudges)",
+    "\"AppContainer enforces least-privilege isolation su…\": 0-2 (1 abstain) ✗",
+    "[stall] agent \"v1:Anthropic's reference computer-use agent\" stalled (no progress) after 452s — retrying (1/5)",
+    "parallel[0] failed: agent({schema}): subagent completed without calling StructuredOutput (after 2 in-conversation nudges)",
+    "parallel[1] failed: agent({schema}): subagent completed without calling StructuredOutput (after 2 in-conversation nudges)",
+    "\"Anthropic's reference computer-use agent runs its …\": 1-0 (2 abstain) ✗",
+    "\"AppContainer provides network isolation in which n…\": 0-3 ✗",
+    "[stall] agent \"v1:Anthropic's official guidance for fencin\" stalled (no progress) after 340s — retrying (1/5)",
+    "\"The README does not document Windows host support;…\": 3-0 ✓",
+    "\"This project ports Anthropic's computer-use demo t…\": 3-0 ✓",
+    "[stall] agent \"v1:Docker Desktop officially supports runni\" stalled (no progress) after 205s — retrying (1/5)",
+    "[stall] agent \"v1:The Windows-native port provides no buil\" stalled (no progress) after 318s — retrying (1/5)",
+    "\"Docker Desktop officially supports running Linux c…\": 3-0 ✓",
+    "[stall] agent \"v2:Anthropic's official guidance for fencin\" stalled (no progress) after 904s — retrying (1/5)",
+    "[stall] agent \"v1:Anthropic's official guidance for fencin\" stalled (no progress) after 610s — retrying (2/5)",
+    "[stall] agent \"v1:The Windows-native port provides no buil\" stalled (no progress) after 303s — retrying (2/5)",
+    "[stall] agent \"v1:Anthropic's computer-use reference agent\" stalled (no progress) after 325s — retrying (1/5)",
+    "[stall] agent \"v0:Anthropic's computer-use reference agent\" stalled (no progress) after 527s — retrying (1/5)",
+    "\"Anthropic's official guidance for fencing the actu…\": 3-0 ✓",
+    "\"The Windows-native port provides no built-in isola…\": 3-0 ✓",
+    "\"The container drives the GUI via a headless X11 vi…\": 3-0 ✓",
+    "\"Anthropic's computer-use reference agent runs in a…\": 3-0 ✓",
+    "\"Anthropic officially recommends running the comput…\": 3-0 ✓",
+    "[stall] agent \"v0:Playwright MCP uses an opt-in capability\" stalled (no progress) after 191s — retrying (1/5)",
+    "\"The official computer-use reference implementation…\": 3-0 ✓",
+    "[stall] agent \"v1:Playwright MCP uses an opt-in capability\" stalled (no progress) after 180s — retrying (1/5)",
+    "\"Playwright MCP uses an opt-in capability-gate mode…\": 3-0 ✓",
+    "[stall] agent \"v2:Each tool is explicitly tagged with a Re\" stalled (no progress) after 369s — retrying (1/5)",
+    "[stall] agent \"v2:Microsoft explicitly disclaims that Play\" stalled (no progress) after 279s — retrying (1/5)",
+    "\"mitmproxy addons hook into proxy behavior by respo…\": 3-0 ✓",
+    "\"Within a request event handler an addon can direct…\": 3-0 ✓",
+    "parallel[2] failed: agent({schema}): subagent completed without calling StructuredOutput (after 2 in-conversation nudges)",
+    "\"Each tool is explicitly tagged with a Read-only bo…\": 2-0 (1 abstain) ✓",
+    "\"Microsoft explicitly disclaims that Playwright MCP…\": 3-0 ✓",
+    "[stall] agent \"v1:FlareSolverr exposes a single JSON HTTP \" stalled (no progress) after 224s — retrying (1/5)",
+    "\"FlareSolverr is a proxy server that bypasses Cloud…\": 3-0 ✓",
+    "\"FlareSolverr exposes a single JSON HTTP API (POST …\": 3-0 ✓",
+    "\"Browser Use (browser-use), a widely-adopted agent-…\": 3-0 ✓",
+    "\".NET TraceProcessing is a Microsoft-built C#/.NET …\": 3-0 ✓",
+    "\"Architectural isolation that separates the planner…\": 1-2 ✗",
+    "\"The .NET TraceProcessing API is distributed as a N…\": 3-0 ✓",
+    "Verify done: 25 claims → 21 confirmed, 4 killed"
+  ],
+  "result": {
+    "question": "Windows-specific follow-up for designing whole-machine ACTUATION + agent-readable observability for an AI coding agent on a DEDICATED Windows 11 laptop (nothing to protect) debugging a heavy C++/Qt6 + libtorrent + ffmpeg + D3D11 video app. Need cited, Windows-native, battle-tested answers (vendor-official or widely-adopted-community, with links) to FOUR questions:\n\n(1) FENCING an actuating agent on Windows specifically: Windows Sandbox, Hyper-V VM, WSL2, restricted/low-integrity-level tokens, AppContainer, Job Objects — what do practitioners actually use to box an agent that drives the GUI/browser/system, the tradeoffs of each, and how does Anthropic's Linux-container (X11+VNC, minimal-privilege) computer-use reference map onto Windows? Is running the actuating agent in a Linux container/WSL2 ON the Windows host a real pattern?\n\n(2) Concrete READ-vs-WRITE fencing for an agent-driven browser + HTTP proxy: Microsoft Playwright MCP (its permission/capability model), browser-use, mitmproxy (flow capture + replay), FlareSolverr (clearing Cloudflare/DDoS-Guard for browser-locked scraper sources) — proven setups and the guardrails each uses.\n\n(3) How an agent PROGRAMMATICALLY parses ETW / WPR / WPA / GPUView / PresentMon output WITHOUT the human GUIs: Microsoft TraceProcessing (.NET) library, PresentMon CSV + its service/MCP, CapFrameX MCP server, tracerpt, xperf -i export, wpaexporter. This is the make-or-break for \"agent reads the flight recorder after the fact.\"\n\n(4) For a libtorrent/ffmpeg/Qt6/D3D11 video workload: which specific ETW providers + WPR profiles (DirectX/DXGKrnl, video-decode/DXVA, network/TCPIP, heap/VirtualAlloc, CPU sampling) to combine into ONE always-on circular-buffer ring, with documented buffer-size/overhead guidance for continuous low-overhead capture on a single laptop.\n\nDeliver concrete tools + dominant pattern + guardrails per question, with links, plus a short synthesized recommendation for a Windows-native actuation fence + agent-readable trace pipeline.",
+    "summary": "For a dedicated, nothing-to-protect Windows 11 laptop running an AI coding/actuating agent against a heavy C++/Qt6/libtorrent/ffmpeg/D3D11 app, the battle-tested fence and the agent-readable trace pipeline diverge sharply in maturity. FENCING: Anthropic's own sandbox-runtime (srt) and computer-use reference are Linux/macOS-only — the reference \"minimal-privilege\" container is actually a high-capability Ubuntu 22.04 image where the agent has passwordless full sudo, and its isolation boundary is the Docker container + headless X11 (Xvfb/xdotool/scrot), not OS-level token restriction; the only documented Windows path is to run that Linux container on the host via Docker Desktop's vendor-supported WSL2 backend, since native-Windows ports (e.g. sunkencity999) provide zero built-in isolation. Windows-native AppContainer claims for least-privilege/network fencing FAILED verification and should not be relied on as stated. BROWSER READ/WRITE FENCING: Microsoft Playwright MCP gives a genuinely machine-checkable model (per-tool Read-only booleans, opt-in --caps gates, file:// blocked without a flag) but explicitly disclaims being a security boundary; mitmproxy supplies read+write flow hooks for observe/replay; FlareSolverr clears Cloudflare/DDoS-Guard via undetected-chromedriver behind a single JSON API; and browser-use's CVE-2025-47241 (CVSS 9.3) proves naive URL-allowlist fencing is defeatable, so the fence must be the proxy/container, not URL strings. TRACE PIPELINE: the make-or-break \"agent reads the flight recorder\" capability is real and vendor-backed via Microsoft's .NET TraceProcessing API (NuGet Microsoft.Windows.EventTracing.Processing.All), the same engine powering WPA tables, enabling fully GUI-free programmatic ETW analysis. Net recommendation: box the actuating agent in a Linux container on the WSL2 backend with a host-side allowlisting HTTP/SOCKS proxy and human-confirm gates, drive the browser through Playwright MCP's read-only/caps model behind mitmproxy+FlareSolverr, and build the agent-readable trace layer on .NET TraceProcessing.",
+    "findings": [
+      {
+        "claim": "Anthropic's own sandboxing tooling does NOT support native Windows: sandbox-runtime (srt) targets only macOS (sandbox-exec/Seatbelt) and Linux (bubblewrap), enforcing filesystem/network restrictions at the OS level without a container. The mapping of the Linux pattern onto Windows is left to the practitioner.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/anthropic-experimental/sandbox-runtime",
+          "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/README.md"
+        ],
+        "evidence": "srt README verbatim: macOS uses sandbox-exec, Linux uses bubblewrap, 'Windows: Not yet supported.' It is 'A lightweight sandboxing tool for enforcing filesystem and network restrictions on arbitrary processes at the OS level, without requiring a container.' The computer-use README contains zero Windows references and assumes a Linux/macOS Docker host. Verified 3-0 against primary Anthropic repos.",
+        "vote": "3-0 (merged from claims 0,1,3)"
+      },
+      {
+        "claim": "Anthropic's official guidance for fencing an actuating/computer-use agent is: dedicated VM or container with minimal privileges, restrict internet to a domain allowlist, withhold sensitive data (e.g. login credentials), and require human confirmation for consequential actions.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/README.md",
+          "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool"
+        ],
+        "evidence": "Both the quickstart README Caution section and the live platform docs (fetched 2026-06-03, beta header computer-use-2025-11-24) list verbatim: 'Use a dedicated virtual machine or container with minimal privileges...', 'Limit internet access to an allowlist of domains...', avoid giving access to sensitive data, and 'Ask a human to confirm decisions that may result in meaningful real-world consequences.' Docs note 'Computer use requires a sandboxed computing environment' and that these precautions remain important even with classifier defenses. Hedged as 'consider taking precautions such as.'",
+        "vote": "3-0 (merged from claims 2,9)"
+      },
+      {
+        "claim": "The official computer-use REFERENCE implementation is NOT actually minimal-privilege: it is an Ubuntu 22.04 Docker container where the agent user (computeruse) has passwordless full sudo (NOPASSWD: ALL), so it trivially escalates to root. The actuation/isolation boundary is the Docker container plus a headless X11 virtual display, not any OS-level token, integrity-level, seccomp, or capability restriction.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/Dockerfile",
+          "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool"
+        ],
+        "evidence": "Dockerfile verbatim: FROM docker.io/ubuntu:22.04; useradd computeruse; echo \"${USERNAME} ALL=(ALL) NOPASSWD: ALL\" >> /etc/sudoers; USER computeruse. No seccomp/AppArmor/cap-drop/low-integrity token present. The 'minimal privileges' phrasing is an advisory recommendation to the user, NOT a description of the shipped image. This directly corrects the research question's premise that the reference is a 'minimal-privilege' substrate.",
+        "vote": "3-0 (merged from claims 7,8,10)"
+      },
+      {
+        "claim": "The reference drives the GUI via a headless X11 virtual framebuffer (Xvfb) + xdotool for synthetic mouse/keyboard + scrot for screenshots, with Mutter window manager, Tint2 panel, and x11vnc/noVNC for viewing — all inside Docker for 'security and isolation' on Linux.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/Dockerfile",
+          "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool"
+        ],
+        "evidence": "Dockerfile installs xvfb, xdotool, scrot, mutter, tint2, x11vnc under UI Requirements; runs Xvfb on display :1. Docs state 'A virtual X11 display server (using Xvfb)...', 'window manager (Mutter) and panel (Tint2) running on Linux', and 'For security and isolation, the reference implementation runs all of this inside a Docker container.' This is the X11+VNC substrate the research question references — Linux-specific, not Windows-portable as-is.",
+        "vote": "3-0 (merged from claims 8,10)"
+      },
+      {
+        "claim": "Running the Linux-container actuating agent ON the Windows host is a vendor-supported reality: Docker Desktop officially uses WSL2 as its backend engine to run Linux containers on Windows. This is the realistic Windows-native fence for the Anthropic pattern, since the only native-Windows port (sunkencity999/windows_claude_computer_use) provides NO built-in isolation and runs directly on the host with the user's full privileges.",
+        "confidence": "high",
+        "sources": [
+          "https://docs.docker.com/desktop/features/wsl/",
+          "https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers",
+          "https://github.com/sunkencity999/windows_claude_computer_use"
+        ],
+        "evidence": "Docker docs page 'Docker Desktop WSL 2 backend on Windows' confirms Linux containers run via the WSL2 engine (corroborated by Microsoft Learn). The native-Windows port README states it is 'a direct Windows implementation designed to run on a user's primary system, not a restricted environment,' grants the agent 'direct access to your Windows system,' 'operates with whatever privileges the user has,' and only RECOMMENDS (does not implement) a VM/minimal-privilege container. So WSL2-on-Windows containerization is the practical fence; native ports are unfenced.",
+        "vote": "3-0 (merged from claims 4,5,6)"
+      },
+      {
+        "claim": "Microsoft Playwright MCP provides a machine-checkable read-vs-write fence: each tool is tagged with a Read-only boolean (browser_snapshot/take_screenshot/network_requests/cookie_list = read-only; browser_click/type/navigate/cookie_set = read-write), advanced capabilities (vision coordinate clicks, pdf, devtools/tracing, storage/cookies, network mocking, testing assertions, config) are OFF unless explicitly enabled via --caps flags, and file:// navigation is blocked unless --allow-unrestricted-file-access is set.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/microsoft/playwright-mcp",
+          "https://playwright.dev/mcp/capabilities",
+          "https://playwright.dev/mcp/tools/storage"
+        ],
+        "evidence": "GitHub README has literal per-tool 'Read-only: **true/false**' tags (verified verbatim). Official docs: 'By default, only core tools are enabled. Add capabilities to unlock additional tool groups.' --caps gates vision/pdf/devtools/storage/network/testing/config. file:// is blocked by default; --allow-unrestricted-file-access (env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS) 'acts as a guardrail to prevent the LLM from accidentally wandering outside its intended workspace.'",
+        "vote": "3-0 / 2-0 (merged from claims 11,12,13)"
+      },
+      {
+        "claim": "Microsoft EXPLICITLY disclaims that Playwright MCP is a security boundary — its filesystem/workspace guardrails are convenience defenses that a deliberate attacker can work around — so it must be layered behind a real fence (container/proxy), not relied on as the isolation layer itself.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/microsoft/playwright-mcp"
+        ],
+        "evidence": "README states verbatim 'Playwright MCP is **not** a security boundary' (commit #1435), and clarifies the workspace restriction is 'a convenience defense...not a secure boundary; a deliberate attempt to reach other directories can be easily worked around.' Single but vendor-official primary source.",
+        "vote": "3-0 (claim 13)"
+      },
+      {
+        "claim": "mitmproxy gives an agent programmatic observe(read)+alter(write) control over HTTP traffic via addon event hooks: addons respond to discrete HTTP lifecycle events (requestheaders/request/responseheaders/response) and can directly mutate Flow objects (e.g. flow.request.headers[\"x\"]=\"y\") to change traffic on the fly before transmission — suitable for flow capture and replay.",
+        "confidence": "high",
+        "sources": [
+          "https://docs.mitmproxy.org/stable/addons/overview/",
+          "https://docs.mitmproxy.org/stable/api/events.html"
+        ],
+        "evidence": "Docs verbatim: 'Addons interact with mitmproxy by responding to events, which allow them to hook into and change mitmproxy's behaviour' and 'by modifying these objects, addons can change traffic on the fly.' Write example shown: def request(flow): flow.request.headers[\"myheader\"]=\"value\". The request hook fires 'after the full HTTP request has been read,' so mutations apply before upstream transmission.",
+        "vote": "3-0 (merged from claims 14,15)"
+      },
+      {
+        "claim": "FlareSolverr clears Cloudflare/DDoS-Guard challenges for browser-locked scraper sources by driving real headless Chrome via Selenium/undetected-chromedriver and returning the cleared HTML + cookies through a single JSON HTTP API (POST /v1 on port 8191) with request.get/request.post commands and a session model (sessions.create/list/destroy) to retain cookies across requests.",
+        "confidence": "high",
+        "sources": [
+          "https://github.com/FlareSolverr/FlareSolverr"
+        ],
+        "evidence": "README 'How it works': 'it uses Selenium with the undetected-chromedriver to create a web browser (Chrome)... waits until the Cloudflare challenge is solved... The HTML code and the cookies are sent back to the user,' usable to bypass Cloudflare with other HTTP clients. API at http://localhost:8191/v1, JSON body with 'cmd' field, commands request.get/request.post/sessions.create/list/destroy; sessions 'retain cookies until you destroy.' Corroborated by ScrapeOps/ZenRows/Scrapfly 2026 guides.",
+        "vote": "3-0 (merged from claims 16,17)"
+      },
+      {
+        "claim": "Naive URL-allowlist fencing for an actuating browser agent is INSUFFICIENT: the widely-adopted browser-use tool had CVE-2025-47241 (CVSS 9.3, fixed in 0.1.45) where its allowed_domains check read the host from a URL containing embedded basic-auth credentials plus a misleading hostname (e.g. https://example.com:pass@malicious.com), letting an attacker bypass the allowlist and reach internal/localhost services.",
+        "confidence": "high",
+        "sources": [
+          "https://arxiv.org/html/2505.13076v1",
+          "https://github.com/advisories/GHSA-x39x-9qw5-ghrf"
+        ],
+        "evidence": "GitHub Advisory GHSA-x39x-9qw5-ghrf confirms CVSS 9.3, browser-use <=0.1.44, patched 0.1.45. _is_url_allowed() did domain.split(':')[0] and misparsed the userinfo section, reading the whitelisted domain placed in the auth-username field while the real destination was the attacker host. Corroborated by Wiz, CVE Details, GitLab advisories. Implication: the fence must be the proxy/network layer (allowlisting proxy), not URL strings parsed by the agent.",
+        "vote": "3-0 (claim 18)"
+      },
+      {
+        "claim": "An agent CAN parse ETW trace data fully GUI-free: Microsoft's .NET TraceProcessing API is a Microsoft-built C#/.NET API (NuGet package Microsoft.Windows.EventTracing.Processing.All, a bundle of ~22 packages, current v1.12.10) for programmatically accessing/analyzing many kinds of ETW trace data — the same technology used inside Windows Performance Analyzer to power several of its tables. This is the proven 'agent reads the flight recorder after the fact' layer.",
+        "confidence": "high",
+        "sources": [
+          "https://learn.microsoft.com/en-us/windows/apps/trace-processing/overview",
+          "https://www.nuget.org/packages/Microsoft.Windows.EventTracing.Processing.All"
+        ],
+        "evidence": "MS Learn overview (dated 2024-08-19): 'For our automated trace analysis, we heavily use C# and .NET, so we created the .NET TraceProcessing API for accessing many kinds of ETW trace data. This technology is also used inside Windows Performance Analyzer to power several of its tables.' NuGet confirms the package exists, is Microsoft-published, tagged Windows/.NET/TraceProcessing/ETW, v1.12.10, an all-in-one bundle. Vendor-official, current.",
+        "vote": "3-0 (merged from claims 19,20)"
+      }
+    ],
+    "caveats": "SCOPE GAP — this verified body only firmly answers parts of the four-question brief. Questions explicitly UNANSWERED by surviving claims: (a) Windows-native fencing mechanisms beyond the Anthropic mapping — Windows Sandbox, Hyper-V VM, restricted/low-integrity tokens, Job Objects were NOT independently verified; the only Windows-native primitive that came up (AppContainer) had BOTH its isolation and network-fencing claims REFUTED (votes 0-2 and 0-3 against the cited Microsoft docs), so AppContainer should NOT be presented as a working agent fence on the strength of this research. (b) The entire ETW-PROVIDER/WPR-PROFILE question (Q4) — specific DirectX/DXGKrnl, DXVA video-decode, TCPIP, heap/VirtualAlloc, CPU-sampling providers, single always-on circular ring composition, and buffer-size/overhead numbers — produced ZERO surviving claims; treat any provider/buffer recommendation as unverified and requiring fresh sourcing. (c) The trace-tooling answer (Q3) is verified only for .NET TraceProcessing; PresentMon CSV/service/MCP, CapFrameX MCP, tracerpt, xperf -i, and wpaexporter were NOT verified here. TIME-SENSITIVITY: Anthropic computer-use beta header (computer-use-2025-11-24) and model targets shift; the sunkencity999 port targets Claude 3.5 Sonnet (dated, though its no-isolation architecture claim is stable); browser-use CVE is patched in 0.1.45 (pin >=0.1.45). PRINCIPLE: across multiple primary sources, every tool examined (Playwright MCP, the reference container, native ports) explicitly is NOT a security boundary or ships high-privilege — the isolation must come from a deliberately-configured outer fence (WSL2/container + allowlisting proxy + human-confirm), never from the actuation tool's own settings. One refuted claim also weakens the 'planner/executor split eliminates prompt injection' pattern (vote 1-2) — do not cite a 0% attack-success figure.",
+    "openQuestions": [
+      "Q4 entirely open: which exact ETW providers (DXGKrnl/DirectX, DXVA video-decode, Microsoft-Windows-TCPIP, heap/VirtualAlloc, CPU sampling) and which WPR profile(s) combine into one always-on circular-buffer ring for a libtorrent/ffmpeg/Qt6/D3D11 workload, with documented buffer-size and per-core overhead guidance for continuous low-overhead capture on a single laptop?",
+      "Q3 partial: beyond .NET TraceProcessing, what are the proven agent-readable extraction paths for PresentMon (CSV + its service/MCP), CapFrameX MCP server, tracerpt, xperf -i export, and wpaexporter — and which is lowest-friction for an agent to drive headless?",
+      "Q1 Windows-native primitives: with AppContainer's isolation/network claims refuted against MS docs, what IS the vendor-supported way to box an actuating agent natively on Windows — Windows Sandbox (wsb config, GPU/network controls), a Hyper-V VM, or Job Objects with restricted/low-integrity tokens — and can any of them pass through D3D11/GPU for the video workload being debugged?",
+      "Does running the heavy C++/Qt6/D3D11 + libtorrent app itself inside the WSL2/container fence (vs. on the host while only the agent is fenced) break GPU/D3D11 acceleration or libtorrent peer connectivity, and if so what is the recommended split (agent fenced, target app on host, communicating over a controlled channel)?"
+    ],
+    "refuted": [
+      {
+        "claim": "AppContainer enforces least-privilege isolation such that even if a vulnerability in a contained app is exploited, the app cannot access resources beyond what is granted to the AppContainer, preventing malicious apps from taking over the machine.",
+        "vote": "0-2",
+        "source": "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation"
+      },
+      {
+        "claim": "AppContainer provides network isolation in which network access is denied beyond what is specifically allocated, with granular grants available for Internet access, Intranet access, and acting as a server — directly enabling read-vs-write/network fencing of an actuating agent.",
+        "vote": "0-3",
+        "source": "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation"
+      },
+      {
+        "claim": "Anthropic's reference computer-use agent runs its full agent loop against a Linux desktop inside a Docker container using X11 + VNC, not on the bare host.",
+        "vote": "1-0",
+        "source": "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/README.md"
+      },
+      {
+        "claim": "Architectural isolation that separates the planner from the executor reduced prompt-injection attack success to 0% in controlled benchmarks, supporting a planner/executor split as a concrete read-vs-write fencing pattern for actuating browser agents.",
+        "vote": "1-2",
+        "source": "https://arxiv.org/html/2505.13076v1"
+      }
+    ],
+    "sources": [
+      {
+        "url": "https://github.com/anthropic-experimental/sandbox-runtime",
+        "quality": "primary",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 5
+      },
+      {
+        "url": "https://codex.danielvaughan.com/2026/04/01/codex-cli-windows-native-sandbox-wsl/",
+        "quality": "blog",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 4
+      },
+      {
+        "url": "https://joecuevas.com/posts/codex-wsl-sandbox/",
+        "quality": "blog",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation",
+        "quality": "primary",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 5
+      },
+      {
+        "url": "https://andrewlock.net/running-ai-agents-safely-in-a-microvm-using-docker-sandbox/",
+        "quality": "blog",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/README.md",
+        "quality": "primary",
+        "angle": "Agent fencing / sandboxing on Windows",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/sunkencity999/windows_claude_computer_use",
+        "quality": "primary",
+        "angle": "Anthropic computer-use reference mapped to Windows / WSL2",
+        "claimCount": 4
+      },
+      {
+        "url": "https://docs.docker.com/desktop/features/wsl/",
+        "quality": "primary",
+        "angle": "Anthropic computer-use reference mapped to Windows / WSL2",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/Dockerfile",
+        "quality": "primary",
+        "angle": "Anthropic computer-use reference mapped to Windows / WSL2",
+        "claimCount": 5
+      },
+      {
+        "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool",
+        "quality": "primary",
+        "angle": "Anthropic computer-use reference mapped to Windows / WSL2",
+        "claimCount": 5
+      },
+      {
+        "url": "https://medium.com/@romanklis/the-invisible-wall-of-ai-security-running-local-autonomous-agents-without-the-risk-7193d36ce4a0",
+        "quality": "blog",
+        "angle": "Anthropic computer-use reference mapped to Windows / WSL2",
+        "claimCount": 4
+      },
+      {
+        "url": "https://github.com/microsoft/playwright-mcp",
+        "quality": "primary",
+        "angle": "Browser + HTTP proxy read/write fencing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://docs.mitmproxy.org/stable/addons/overview/",
+        "quality": "primary",
+        "angle": "Browser + HTTP proxy read/write fencing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/FlareSolverr/FlareSolverr",
+        "quality": "primary",
+        "angle": "Browser + HTTP proxy read/write fencing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://arxiv.org/html/2505.13076v1",
+        "quality": "primary",
+        "angle": "Browser + HTTP proxy read/write fencing",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows/apps/trace-processing/overview",
+        "quality": "primary",
+        "angle": "Programmatic ETW / trace parsing without GUIs",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/microsoft/perfview/blob/main/documentation/TraceEvent/TraceEventProgrammersGuide.md",
+        "quality": "primary",
+        "angle": "Programmatic ETW / trace parsing without GUIs",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/GameTechDev/PresentMon/blob/main/README-ConsoleApplication.md",
+        "quality": "primary",
+        "angle": "Programmatic ETW / trace parsing without GUIs",
+        "claimCount": 5
+      },
+      {
+        "url": "https://github.com/CXWorld/CapFrameX",
+        "quality": "primary",
+        "angle": "Programmatic ETW / trace parsing without GUIs",
+        "claimCount": 5
+      },
+      {
+        "url": "https://devblogs.microsoft.com/oldnewthing/20201209-00/?p=104530",
+        "quality": "primary",
+        "angle": "Programmatic ETW / trace parsing without GUIs",
+        "claimCount": 4
+      },
+      {
+        "url": "https://devblogs.microsoft.com/performance-diagnostics/setting-up-an-autologger-with-wpr/",
+        "quality": "primary",
+        "angle": "Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+        "claimCount": 5
+      },
+      {
+        "url": "https://gist.github.com/morallo/c6c4671f229c6ec8b3c1cafbb45900a4",
+        "quality": "forum",
+        "angle": "Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/authoring-custom-profiles-part-1/",
+        "quality": "primary",
+        "angle": "Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+        "claimCount": 5
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/windows-hardware/test/wpt/logging-mode",
+        "quality": "primary",
+        "angle": "Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+        "claimCount": 5
+      },
+      {
+        "url": "https://randomascii.wordpress.com/2015/04/14/uiforetw-windows-performance-made-easier/",
+        "quality": "blog",
+        "angle": "Always-on low-overhead ETW ring for D3D11/video/torrent workload",
+        "claimCount": 5
+      }
+    ],
+    "stats": {
+      "angles": 5,
+      "sourcesFetched": 25,
+      "claimsExtracted": 121,
+      "claimsVerified": 25,
+      "confirmed": 21,
+      "killed": 4,
+      "afterSynthesis": 11,
+      "urlDupes": 1,
+      "budgetDropped": 4,
+      "agentCalls": 107
+    }
+  }
+}
