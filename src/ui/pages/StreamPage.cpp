@@ -2323,10 +2323,19 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
     disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
                this, nullptr);
 
+    // DOWNLOAD BUG 2026-06-02 — same correlation token as the auto-download
+    // path. The play one-shot is armed BEFORE load() runs, so the token is
+    // held in a shared_ptr captured by value and filled from the load() return
+    // below. The lambda discards any emit whose token != the current load
+    // generation (a late streamsReady from a superseded play/source-load).
+    auto playToken = std::make_shared<quint64>(0);
+
     connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady, this,
-        [this, savedChoiceKey, seriesBingeGroup, autoLaunchEligible](
+        [this, savedChoiceKey, seriesBingeGroup, autoLaunchEligible, playToken](
             const QList<tankostream::addon::Stream>& streams,
             const QHash<QString, QString>& addonsById) {
+            if (m_streamAggregator->currentLoadToken() != *playToken)
+                return;
             disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
                        this, nullptr);
 
@@ -2412,7 +2421,9 @@ void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType
             }
         });
 
-    m_streamAggregator->load(req);
+    // DOWNLOAD BUG 2026-06-02 — fill the correlation token captured by the
+    // one-shot above so it can discard a stale emit from a superseded load().
+    *playToken = m_streamAggregator->load(req);
 }
 
 // Phase 2 Batch 2.4 â€” auto-launch orchestration.
@@ -2502,10 +2513,18 @@ void StreamPage::startNextEpisodePrefetch(const QString& imdbId,
             disconnect(m_streamAggregator,
                        &tankostream::stream::StreamAggregator::streamsReady,
                        this, nullptr);
+            // DOWNLOAD BUG 2026-06-02 — same correlation token guard as the
+            // play/auto-download paths. The prefetch one-shot is armed before
+            // its load(), so the token rides in a shared_ptr filled from the
+            // load() return below; a stale emit from a superseded load() is
+            // discarded instead of feeding the wrong show into the prefetch.
+            auto prefetchToken = std::make_shared<quint64>(0);
             connect(m_streamAggregator,
                     &tankostream::stream::StreamAggregator::streamsReady, this,
-                [this](const QList<tankostream::addon::Stream>& streams,
+                [this, prefetchToken](const QList<tankostream::addon::Stream>& streams,
                        const QHash<QString, QString>& addonsById) {
+                    if (m_streamAggregator->currentLoadToken() != *prefetchToken)
+                        return;
                     disconnect(m_streamAggregator,
                                &tankostream::stream::StreamAggregator::streamsReady,
                                this, nullptr);
@@ -2516,7 +2535,7 @@ void StreamPage::startNextEpisodePrefetch(const QString& imdbId,
             req.type = QStringLiteral("series");
             req.id   = imdbId + QLatin1Char(':') + QString::number(qMax(1, next.first))
                               + QLatin1Char(':') + QString::number(qMax(1, next.second));
-            m_streamAggregator->load(req);
+            *prefetchToken = m_streamAggregator->load(req);
         });
 
     m_metaAggregator->fetchSeriesMeta(imdbId);
@@ -3246,6 +3265,20 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     if (!m_streamAggregator || !m_torrentClient || imdbId.isEmpty())
         return;
 
+    // DOWNLOAD BUG 2026-06-02 — in-flight dedup. Rapid identical Download
+    // clicks (the logs show 2-6 startAutoDownload within seconds) used to
+    // re-arm the shared streamsReady one-shot and call load() again, which
+    // reset() mid-flight and let a late stale emit deliver the wrong show's
+    // streams. If the SAME request is already in flight, ignore the re-click.
+    if (m_pendingAuto.active
+        && m_pendingAuto.imdbId == imdbId
+        && m_pendingAuto.season == season
+        && m_pendingAuto.episode == episode) {
+        qInfo().noquote() << "[auto-dl] dedup: ignoring re-click for in-flight imdb="
+                          << imdbId << "s" << season << "e" << episode;
+        return;
+    }
+
     m_pendingAuto = PendingAutoDownload{};
     m_pendingAuto.active         = true;
     m_pendingAuto.imdbId         = imdbId;
@@ -3265,6 +3298,12 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady, this,
         [this](const QList<tankostream::addon::Stream>& streams,
                const QHash<QString, QString>& addonsById) {
+            // DOWNLOAD BUG 2026-06-02 — ignore a stale emit from a superseded
+            // load(). Without this, a late streamsReady from an EARLIER request
+            // fires this one-shot carrying the WRONG show's streams; the picker
+            // show-gate then rejects them all -> "No 1080p source found".
+            if (m_streamAggregator->currentLoadToken() != m_pendingAuto.token)
+                return;
             disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamsReady,
                        this, nullptr);
             finishAutoDownloadPick(streams, addonsById);
@@ -3283,6 +3322,8 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
         req.id = imdbId + QLatin1Char(':') + QString::number(qMax(1, season))
                         + QLatin1Char(':') + QString::number(qMax(1, episode));
     }
+    qInfo().noquote() << "[auto-dl] req.id=" << req.id
+                      << "showTitle=" << m_pendingAuto.showTitle;
     // Surface a fetch error on the auto-download path (mirrors onPlayRequested's
     // streamError wiring ~line 2388). Clears the pending state so the tile/UI
     // doesn't hang waiting on a result that will never arrive.
@@ -3298,7 +3339,10 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
                     QStringLiteral("Failed to fetch sources: ") + shown);
         });
 
-    m_streamAggregator->load(req);
+    // DOWNLOAD BUG 2026-06-02 — capture the generation token load() stamped so
+    // the one-shot above can discard a late emit from a superseded load().
+    // Set AFTER m_pendingAuto fields are populated.
+    m_pendingAuto.token = m_streamAggregator->load(req);
 }
 
 // One-shot streamsReady handler for an active auto-download. Converts the
@@ -3325,6 +3369,17 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
         sc.qualitySort = c.qualitySort;
         cands.append(sc);
     }
+
+    // DOWNLOAD BUG 2026-06-02 — diagnostic: dump every candidate with whether
+    // it would pass the show-identity gate. If the pick still fails, this tells
+    // us conclusively whether real One Piece titles are being wrongly rejected
+    // (gate too strict) vs the choices being the wrong show entirely
+    // (correlation still broken — wrong streams reached this handler).
+    for (const auto& ch : choices)
+        qInfo().noquote() << "[auto-dl] cand q=" << ch.qualitySort << "seed=" << ch.seeders
+                          << "gate=" << tankostream::stream::AutoSourcePicker::titleMatchesShow(
+                                            ch.displayTitle, ctx.showTitle)
+                          << "title=" << ch.displayTitle.left(80);
 
     const std::optional<int> picked =
         tankostream::stream::AutoSourcePicker::pick(cands, ctx.showTitle, ctx.runtimeMinutes);

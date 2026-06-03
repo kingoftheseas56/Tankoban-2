@@ -287,11 +287,19 @@ private:
     // the legacy cohort RowState cluster (resolveRowState / refreshEpisodeMarkers
     // / refreshSubstrateStatesForActiveSeason / repaintActionIconForRow / the
     // m_bulkPollTimer poll), all removed in P1.T5.
-    tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode) const;
+    tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode, const QHash<int, QPair<QString,int>>& snap) const;
     // Repaints ONE row's status cell + action control from episodeDisplayState.
-    void refreshEpisodeRow(int row, int season, int episode);
+    void refreshEpisodeRow(int row, int season, int episode, const QHash<int, QPair<QString,int>>& snap);
     // Repaints every visible row of the active season via refreshEpisodeRow.
     void refreshAllEpisodeRows();
+    // PERF (2026-06-02): on-screen-only refresh + self-stopping 1Hz timer.
+    // visibleRowRange returns the inclusive [first,last] viewport row span
+    // (+/-1 overscan); anyVisibleRowInFlight fetches the cohort snapshot ONCE
+    // and reports whether any visible row is Downloading/Paused; the timer
+    // self-stops when nothing visible is in flight (re-armed on state changes).
+    void visibleRowRange(int* first, int* last) const;
+    bool anyVisibleRowInFlight() const;
+    void maybeStopProgressTimer();
     // Episode-number jump/filter — hides rows whose episode number doesn't start
     // with `text` (empty = show all) + scrolls to the first match. For long anime
     // (One Piece, 1000+ eps) where scrolling the list is impractical.

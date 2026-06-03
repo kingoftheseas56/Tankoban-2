@@ -42,6 +42,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSize>
 #include <QStandardPaths>
 #include <QStackedLayout>
@@ -119,6 +120,8 @@ StreamDetailView::StreamDetailView(CoreBridge* bridge,
         refreshMovieDownloadState();
         refreshAllEpisodeRows();
         refreshSeasonHeaderButton();
+        // PERF (2026-06-02): self-stop once no visible row is in flight.
+        maybeStopProgressTimer();
     });
 
     if (m_meta) {
@@ -710,6 +713,11 @@ void StreamDetailView::buildUI()
     m_episodeTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_episodeTable, &QWidget::customContextMenuRequested,
             this, &StreamDetailView::onEpisodeContextMenu);
+    // PERF (2026-06-02): repaint on scroll so rows revealed by scrolling a long
+    // list (One Piece 1000+ eps) derive their correct state — refreshAllEpisodeRows
+    // is now viewport-scoped, so newly-visible rows would otherwise stay stale.
+    connect(m_episodeTable->verticalScrollBar(), &QScrollBar::valueChanged,
+            this, [this](int){ refreshAllEpisodeRows(); });
     m_episodeTable->hide();
     leftCol->addWidget(m_episodeTable, 1);
 
@@ -1306,7 +1314,7 @@ void StreamDetailView::onEpisodeActivated(int row, int /*col*/)
 // cohort RowState cluster (deleted in P1.T5).
 
 tankostream::stream::EpisodeDisplayState
-StreamDetailView::episodeDisplayState(int season, int episode) const
+StreamDetailView::episodeDisplayState(int season, int episode, const QHash<int, QPair<QString,int>>& snap) const
 {
     using tankostream::stream::EpisodeStateInputs;
     EpisodeStateInputs in;
@@ -1363,8 +1371,9 @@ StreamDetailView::episodeDisplayState(int season, int episode) const
     }
     // ALWAYS consult the live engine snapshot (it carries the Paused flag + the
     // live %, and an active transfer must beat a pre-allocated on-disk file).
-    if (m_torrentClient && !m_currentImdb.isEmpty()) {
-        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+    // PERF: the cohort snapshot is fetched ONCE per pass by the caller and
+    // threaded in — no per-row streamBulkSnapshotForImdbSeason scan here.
+    if (!snap.isEmpty()) {
         const auto it = snap.constFind(episode);
         if (it != snap.constEnd()) {
             const QString st = it.value().first;            // cohort state string
@@ -1396,19 +1405,18 @@ StreamDetailView::episodeDisplayState(int season, int episode) const
     return tankostream::stream::deriveEpisodeDisplayState(in);
 }
 
-void StreamDetailView::refreshEpisodeRow(int row, int season, int episode)
+void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const QHash<int, QPair<QString,int>>& snap)
 {
     if (!m_episodeTable || row < 0 || row >= m_episodeTable->rowCount())
         return;
     using S = tankostream::stream::EpisodeDisplayState;
-    const S state = episodeDisplayState(season, episode);
+    const S state = episodeDisplayState(season, episode, snap);
 
-    // Progress % for in-progress states (cheap re-read of the in-process snapshot;
-    // clamped so a terminal -1 never leaks into the label).
+    // Progress % for in-progress states — O(1) lookup into the cohort snapshot
+    // threaded in by the caller (clamped so a terminal -1 never leaks into the
+    // label). PERF: no per-row streamBulkSnapshotForImdbSeason scan here.
     int pct = 0;
-    if ((state == S::Downloading || state == S::Paused)
-        && m_torrentClient && !m_currentImdb.isEmpty()) {
-        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season);
+    if (state == S::Downloading || state == S::Paused) {
         const auto it = snap.constFind(episode);
         if (it != snap.constEnd())
             pct = qMax(0, it.value().second);
@@ -1473,12 +1481,74 @@ void StreamDetailView::refreshAllEpisodeRows()
     if (!m_episodeTable) return;
     const int season = currentSeason();
     if (season <= 0) return;
-    for (int row = 0; row < m_episodeTable->rowCount(); ++row) {
+    // PERF (2026-06-02): fetch the cohort snapshot ONCE per pass and thread it
+    // through episodeDisplayState/refreshEpisodeRow; repaint only on-screen rows
+    // (One Piece = 1000+ rows; a full-table O(rows) snapshot/SQL scan per 1Hz
+    // tick on the GUI thread froze the app).
+    const auto snap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    int first = 0, last = m_episodeTable->rowCount() - 1;
+    visibleRowRange(&first, &last);
+    if (first < 0 || last < first) return;
+    for (int row = first; row <= last; ++row) {
         auto* numItem = m_episodeTable->item(row, kColEpisode);
         if (!numItem) continue;
         const int episode = numItem->data(Qt::UserRole).toInt();
-        if (episode > 0) refreshEpisodeRow(row, season, episode);
+        if (episode > 0) refreshEpisodeRow(row, season, episode, snap);
     }
+}
+
+// PERF (2026-06-02): inclusive [first,last] span of rows currently in the
+// viewport, with one row of overscan each side so a partially-revealed row at
+// the edge paints correctly. Falls back to [0, rowCount-1] when rowAt() can't
+// resolve (empty/short table).
+void StreamDetailView::visibleRowRange(int* first, int* last) const
+{
+    *first = 0; *last = -1;
+    if (!m_episodeTable) return;
+    const int rc = m_episodeTable->rowCount();
+    if (rc == 0) return;
+    const int top = m_episodeTable->rowAt(0);
+    const int bot = m_episodeTable->rowAt(m_episodeTable->viewport()->height() - 1);
+    int f = (top < 0) ? 0 : top;
+    int l = (bot < 0) ? rc - 1 : bot;
+    f = qMax(0, f - 1);
+    l = qMin(rc - 1, l + 1);
+    *first = f; *last = l;
+}
+
+// PERF (2026-06-02): does any VISIBLE row need a live progress tick? Fetches the
+// cohort snapshot once and checks only the viewport span. Drives the timer gate.
+bool StreamDetailView::anyVisibleRowInFlight() const
+{
+    if (!m_episodeTable) return false;
+    const int season = currentSeason();
+    if (season <= 0) return false;
+    const auto snap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    int first = 0, last = -1; visibleRowRange(&first, &last);
+    if (last < first) return false;
+    using S = tankostream::stream::EpisodeDisplayState;
+    for (int row = first; row <= last; ++row) {
+        auto* numItem = m_episodeTable->item(row, kColEpisode);
+        if (!numItem) continue;
+        const int ep = numItem->data(Qt::UserRole).toInt();
+        if (ep <= 0) continue;
+        const S st = episodeDisplayState(season, ep, snap);
+        if (st == S::Downloading || st == S::Paused) return true;
+    }
+    return false;
+}
+
+// PERF (2026-06-02): self-stop the 1Hz poll when nothing visible is in flight.
+// Re-armed by the state-change handlers (entriesChanged/entryStateChanged/
+// streamBulkGroupsChanged/torrentCompleted) and showEvent.
+void StreamDetailView::maybeStopProgressTimer()
+{
+    if (m_progressRefreshTimer && m_progressRefreshTimer->isActive() && !anyVisibleRowInFlight())
+        m_progressRefreshTimer->stop();
 }
 
 void StreamDetailView::filterEpisodesByNumber(const QString& text)
@@ -1524,9 +1594,13 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
         // QtConcurrent on home open, spec §10.4).
         connect(m_downloadIndex, &StreamDownloadIndex::entriesChanged, this,
                 [this]() {
+                    if (m_currentImdb.isEmpty() || !isVisible()) return;
                     refreshAllEpisodeRows();
                     refreshMovieLocalChip();
                     refreshMovieDownloadState();
+                    // PERF (2026-06-02): re-arm the gated 1Hz poll on real state change.
+                    if (anyVisibleRowInFlight() && m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+                        m_progressRefreshTimer->start();
                 },
                 Qt::QueuedConnection);
         connect(m_downloadIndex, &StreamDownloadIndex::entryStateChanged, this,
@@ -1534,6 +1608,9 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
                     if (imdbId != m_currentImdb) return;
                     if (season == 0 && episode == 0) { refreshMovieDownloadState(); return; }
                     if (season == currentSeason()) refreshAllEpisodeRows();
+                    // PERF (2026-06-02): re-arm the gated 1Hz poll on real state change.
+                    if (anyVisibleRowInFlight() && isVisible() && m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+                        m_progressRefreshTimer->start();
                 },
                 Qt::QueuedConnection);
         // Repaint immediately if the table already has rows from a prior
@@ -1565,7 +1642,11 @@ void StreamDetailView::onEpisodeContextMenu(const QPoint& pos)
     if (episode <= 0 || season <= 0 || m_currentImdb.isEmpty()) return;
 
     using S = tankostream::stream::EpisodeDisplayState;
-    const S state = episodeDisplayState(season, episode);
+    // PERF (2026-06-02): cohort snapshot fetched once and threaded through.
+    const auto snap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    const S state = episodeDisplayState(season, episode, snap);
 
     QMenu menu(this);
     QAction* cancelAct = nullptr;
@@ -1613,7 +1694,12 @@ void StreamDetailView::onEpisodeContextMenu(const QPoint& pos)
             QDesktopServices::openUrl(
                 QUrl::fromLocalFile(QFileInfo(best->canonicalPath).absolutePath()));
     }
-    refreshEpisodeRow(row, season, episode);
+    // Re-fetch a fresh snapshot — the actions above (cancel/delete/evict) may
+    // have mutated engine/index state, so the pre-menu snap is stale here.
+    const auto postSnap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    refreshEpisodeRow(row, season, episode, postSnap);
 }
 
 void StreamDetailView::refreshMovieLocalChip()
@@ -1761,6 +1847,9 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                 this, [this](const QString& /*groupId*/) {
                     refreshAllEpisodeRows();
                     refreshMovieDownloadState();
+                    // PERF (2026-06-02): re-arm the gated 1Hz poll on real state change.
+                    if (anyVisibleRowInFlight() && isVisible() && m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+                        m_progressRefreshTimer->start();
                 }, Qt::QueuedConnection);
         connect(m_torrentClient, &TorrentClient::torrentAdded,
                 this, [this](const QString& /*infoHash*/) {
@@ -1781,6 +1870,9 @@ void StreamDetailView::setTorrentClient(TorrentClient* client)
                     // badge from 'Downloading 99%' to 'Downloaded'.
                     refreshMovieDownloadState();
                     refreshAllEpisodeRows();
+                    // PERF (2026-06-02): re-arm the gated 1Hz poll on real state change.
+                    if (anyVisibleRowInFlight() && isVisible() && m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+                        m_progressRefreshTimer->start();
                 }, Qt::QueuedConnection);
     }
     refreshMovieDownloadState();
@@ -1851,7 +1943,11 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& /*globalAn
     if (season <= 0 || m_currentImdb.isEmpty() || episode <= 0) return;
 
     using S = tankostream::stream::EpisodeDisplayState;
-    switch (episodeDisplayState(season, episode)) {
+    // PERF (2026-06-02): cohort snapshot fetched once and threaded through.
+    const auto snap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    switch (episodeDisplayState(season, episode, snap)) {
     case S::Downloaded:
         // Play from disk — same path as a row click (re-checks disk + evicts
         // a vanished file before falling back to streams).
@@ -1884,7 +1980,12 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& /*globalAn
         emit singleEpisodeDownloadRequested(season, episode);
         break;
     }
-    refreshEpisodeRow(rowForEpisode(episode), season, episode);
+    // Re-fetch a fresh snapshot — pause/resume/setStreamBulkItemPaused above
+    // mutate the cohort state, so the pre-action snap is stale for this repaint.
+    const auto postSnap = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
+        : QHash<int, QPair<QString,int>>();
+    refreshEpisodeRow(rowForEpisode(episode), season, episode, postSnap);
 }
 
 // ─── STREAM_DOWNLOADS_NETFLIX_OVERHAUL Task 13 — season-header morphing slots ─
@@ -2001,7 +2102,12 @@ void StreamDetailView::refreshSeasonHeaderButton()
 void StreamDetailView::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    if (m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
+    // PERF (2026-06-02): one immediate on-screen refresh, then arm the 1Hz poll
+    // ONLY if a visible row is actually downloading/paused. The gate self-stops
+    // it again once nothing visible is in flight (maybeStopProgressTimer).
+    refreshAllEpisodeRows();
+    refreshMovieDownloadState();
+    if (anyVisibleRowInFlight() && m_progressRefreshTimer && !m_progressRefreshTimer->isActive())
         m_progressRefreshTimer->start();
 }
 

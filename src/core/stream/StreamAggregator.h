@@ -36,7 +36,18 @@ public:
     explicit StreamAggregator(tankostream::addon::AddonRegistry* registry,
                               QObject* parent = nullptr);
 
-    void load(const StreamLoadRequest& request);
+    // DOWNLOAD BUG 2026-06-02 — load() now returns the monotonic generation
+    // token it stamped (m_loadGeneration, bumped inside load() right after
+    // reset()). Callers that arm a one-shot on the SHARED streamsReady signal
+    // capture this token and gate their handler on currentLoadToken()==token,
+    // so a late streamsReady from a SUPERSEDED load() (rapid re-clicks) cannot
+    // deliver the wrong show's streams to the currently-connected one-shot.
+    quint64 load(const StreamLoadRequest& request);
+
+    // Generation of the most recent load() — see load() above. Used by
+    // StreamPage's auto-download / play / prefetch one-shots to discard stale
+    // responses correlated to an earlier request.
+    quint64 currentLoadToken() const { return m_loadGeneration; }
 
     // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 (Task B1) - season-pack indexer
     // fan-out, exposed for the new UnifiedPackSearchEngine (Task B2). Wraps
@@ -90,6 +101,23 @@ private:
     void onAddonFailed(const QString& addonId, const QString& message);
     void completeOne();
     void reset();
+    // DOWNLOAD BUG 2026-06-03 (review fix) — the SINGLE terminal emit path for
+    // streamsReady. Always queues the emit to the NEXT event-loop turn rather
+    // than firing synchronously, and drops it if a newer load() has superseded
+    // `generation`. Two reasons it must never fire synchronously inside load():
+    //   (1) Callers arm their one-shot before load() returns and fill the
+    //       correlation token FROM load()'s return value; a synchronous emit
+    //       would fire while that token is still 0 and be wrongly discarded
+    //       (the result for the CURRENT request lost, leaving the UI waiting).
+    //   (2) dispatchRequests() runs inside load(), and AddonTransport can emit
+    //       resourceFailed SYNCHRONOUSLY (invalid URL from a persisted addon) —
+    //       so completeOne() could otherwise reach this emit before load()
+    //       returns. Queuing makes the post-return ordering unconditional.
+    // streams/addonsById are taken by value and captured into the queued lambda
+    // so a subsequent reset()/load() can't mutate them out from under the emit.
+    void emitStreamsReadyDeferred(quint64 generation,
+                                  QList<tankostream::addon::Stream> streams,
+                                  QHash<QString, QString> addonsById);
     void finalizePackSearch(std::shared_ptr<PackSearchContext> ctx);
 
     tankostream::addon::AddonRegistry* m_registry = nullptr;
@@ -100,6 +128,14 @@ private:
     QSet<QString> m_seenIdentityKeys;
     QList<tankostream::addon::Stream> m_streams;
     int m_pendingResponses = 0;
+
+    // DOWNLOAD BUG 2026-06-02 — monotonic request token. Bumped on every
+    // load() (right after reset()) and returned to the caller so a one-shot
+    // streamsReady handler can correlate the emit back to ITS request and
+    // ignore stale emits from a superseded load(). Defends against the rapid
+    // re-click race where a late streamsReady from an earlier load() fires the
+    // currently-armed one-shot carrying the wrong request's streams.
+    quint64 m_loadGeneration = 0;
 
     // THEATRE_DOWNLOAD_OVERHAUL 2026-05-16 - lazily-constructed NAM shared
     // across pack-search calls (mirrors TorrentPackPicker's m_nam pattern).

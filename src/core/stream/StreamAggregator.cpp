@@ -504,22 +504,27 @@ StreamAggregator::StreamAggregator(AddonRegistry* registry, QObject* parent)
 {
 }
 
-void StreamAggregator::load(const StreamLoadRequest& request)
+quint64 StreamAggregator::load(const StreamLoadRequest& request)
 {
     reset();
+    // DOWNLOAD BUG 2026-06-02 — stamp the new generation immediately after the
+    // reset() that zeroed mid-flight state. The returned token lets the caller
+    // gate its one-shot streamsReady handler against currentLoadToken() so a
+    // late emit from a SUPERSEDED load() (rapid re-clicks) is discarded.
+    ++m_loadGeneration;
     m_request = request;
 
     if (!m_registry || request.type.isEmpty() || request.id.isEmpty()) {
-        emit streamsReady({}, {});
-        return;
+        emitStreamsReadyDeferred(m_loadGeneration, {}, {});  // review fix — never emit synchronously
+        return m_loadGeneration;
     }
 
     const QList<AddonDescriptor> addons =
         m_registry->findByResourceType(QStringLiteral("stream"), request.type);
 
     if (addons.isEmpty()) {
-        emit streamsReady({}, {});
-        return;
+        emitStreamsReadyDeferred(m_loadGeneration, {}, {});  // review fix — never emit synchronously
+        return m_loadGeneration;
     }
 
     for (const AddonDescriptor& addon : addons) {
@@ -532,17 +537,63 @@ void StreamAggregator::load(const StreamLoadRequest& request)
     }
 
     dispatchRequests();
+    return m_loadGeneration;
+}
+
+void StreamAggregator::emitStreamsReadyDeferred(quint64 generation,
+                                                QList<Stream> streams,
+                                                QHash<QString, QString> addonsById)
+{
+    // See the header for why this is always queued rather than emitted
+    // synchronously. The queued lambda is bound to `this` as its context object,
+    // so Qt discards it automatically if the aggregator is destroyed before it
+    // runs (no use-after-free).
+    QMetaObject::invokeMethod(this,
+        [this, generation, streams = std::move(streams),
+         addonsById = std::move(addonsById)]() {
+            if (generation != m_loadGeneration)
+                return;  // superseded by a newer load() — drop the stale emit
+            emit streamsReady(streams, addonsById);
+        },
+        Qt::QueuedConnection);
 }
 
 void StreamAggregator::dispatchRequests()
 {
+    // DOWNLOAD BUG 2026-06-03 (review fix) — capture the generation this dispatch
+    // belongs to. A reply from a worker launched by a SUPERSEDED load() (rapid
+    // re-clicks) must be dropped at the source: without this, a stale reply with
+    // the same request shape lands in the CURRENT generation's m_streams and
+    // decrements m_pendingResponses, corrupting accumulation and firing an early
+    // streamsReady that the handler-side token gate would then wrongly accept
+    // (the current generation IS still active). Correlating here closes the gap
+    // that gating only at the handler left open. Mirrors searchPacks()'s epoch
+    // suppression already in this file.
+    const quint64 gen = m_loadGeneration;
+
+    // DOWNLOAD BUG 2026-06-03 (review fix) — count EVERY addon we are about to
+    // dispatch BEFORE firing any request. AddonTransport::fetchResource() can
+    // emit resourceFailed SYNCHRONOUSLY (invalid URL from a persisted addon), so
+    // incrementing m_pendingResponses one-at-a-time inside the dispatch loop let
+    // an early addon's synchronous failure drive the counter to 0 before later
+    // addons were dispatched — firing a premature streamsReady (empty), and then
+    // a SECOND one when the rest completed. Pre-counting makes the terminal emit
+    // fire exactly once, after the last completion. Iterating a separate id list
+    // (not the map) also avoids any mutate-during-iteration hazard if a
+    // synchronous reply touches m_pendingByAddon.
+    QList<QString> toDispatch;
     for (auto it = m_pendingByAddon.begin(); it != m_pendingByAddon.end(); ++it) {
-        PendingAddon& addon = it.value();
-        if (addon.inFlight) {
-            continue;
-        }
-        addon.inFlight = true;
-        ++m_pendingResponses;
+        if (it.value().inFlight) continue;
+        it.value().inFlight = true;
+        toDispatch.append(it.key());
+    }
+    if (toDispatch.isEmpty()) return;
+    m_pendingResponses += toDispatch.size();
+
+    for (const QString& addonId : toDispatch) {
+        auto addonIt = m_pendingByAddon.find(addonId);
+        if (addonIt == m_pendingByAddon.end()) continue;  // defensive
+        PendingAddon& addon = addonIt.value();
 
         ResourceRequest req;
         req.resource = QStringLiteral("stream");
@@ -551,18 +602,29 @@ void StreamAggregator::dispatchRequests()
         req.extra = m_request.extra;
 
         auto* worker = new AddonTransport(this);
-        const QString addonId = addon.addonId;
         auto handled = std::make_shared<bool>(false);
         auto readyConn = std::make_shared<QMetaObject::Connection>();
         auto failConn = std::make_shared<QMetaObject::Connection>();
 
+        // Drop a stale-generation reply (and reap its worker) before it can touch
+        // current state; otherwise apply the existing same-request guard.
+        auto dropIfStale = [this, gen, handled, readyConn, failConn, worker]() -> bool {
+            if (gen == m_loadGeneration)
+                return false;
+            *handled = true;
+            QObject::disconnect(*readyConn);
+            QObject::disconnect(*failConn);
+            worker->deleteLater();
+            return true;
+        };
+
         *readyConn = connect(worker, &AddonTransport::resourceReady, this,
-            [this, req, addonId, handled, readyConn, failConn, worker](
+            [this, req, addonId, handled, readyConn, failConn, worker, dropIfStale](
                 const ResourceRequest& incoming,
                 const QJsonObject& payload) {
-                if (*handled || !sameRequest(req, incoming)) {
-                    return;
-                }
+                if (*handled) return;
+                if (dropIfStale()) return;
+                if (!sameRequest(req, incoming)) return;
                 *handled = true;
                 QObject::disconnect(*readyConn);
                 QObject::disconnect(*failConn);
@@ -571,12 +633,12 @@ void StreamAggregator::dispatchRequests()
             });
 
         *failConn = connect(worker, &AddonTransport::resourceFailed, this,
-            [this, req, addonId, handled, readyConn, failConn, worker](
+            [this, req, addonId, handled, readyConn, failConn, worker, dropIfStale](
                 const ResourceRequest& incoming,
                 const QString& message) {
-                if (*handled || !sameRequest(req, incoming)) {
-                    return;
-                }
+                if (*handled) return;
+                if (dropIfStale()) return;
+                if (!sameRequest(req, incoming)) return;
                 *handled = true;
                 QObject::disconnect(*readyConn);
                 QObject::disconnect(*failConn);
@@ -636,11 +698,22 @@ void StreamAggregator::onAddonFailed(const QString& addonId, const QString& mess
 
 void StreamAggregator::completeOne()
 {
+    // DOWNLOAD BUG 2026-06-02 (defense-in-depth) — a stale late completion from
+    // a superseded load() (reset() zeroed m_pendingResponses mid-flight) could
+    // otherwise drive the counter negative and re-emit streamsReady against the
+    // wrong request. Bail before decrementing if there is nothing outstanding.
+    if (m_pendingResponses <= 0) {
+        m_pendingResponses = 0;
+        return;
+    }
     --m_pendingResponses;
     if (m_pendingResponses > 0) {
         return;
     }
-    emit streamsReady(m_streams, m_addonsById);
+    // DOWNLOAD BUG 2026-06-03 (review fix) — deferred + generation-guarded so a
+    // SYNCHRONOUS resourceFailed (invalid addon URL) during dispatchRequests()
+    // can't fire streamsReady inside load() before the caller stores its token.
+    emitStreamsReadyDeferred(m_loadGeneration, m_streams, m_addonsById);
 }
 
 void StreamAggregator::reset()

@@ -330,6 +330,11 @@ private:
         int     runtimeMinutes = 0;  // 0 = unknown -> size guardrail skipped
         QString showTitle;    // captured at request time for AutoSourcePicker's
                               // show-identity gate (never download the wrong show)
+        // DOWNLOAD BUG 2026-06-02 — generation token returned by
+        // StreamAggregator::load(). The one-shot streamsReady handler gates on
+        // currentLoadToken()==token so a late emit from a SUPERSEDED load()
+        // (rapid Download re-clicks) can't deliver the wrong show's streams.
+        quint64 token = 0;
     };
     PendingAutoDownload m_pendingAuto;
 
