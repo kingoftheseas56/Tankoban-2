@@ -1941,7 +1941,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         for (const QString& c : SystemIntrospection::commandList())
             cmds.append(c);
         return reply({
-            {"schema",     "tankoban.dev.v1.11"},
+            {"schema",     "tankoban.dev.v1.13"},
             {"appVersion", QApplication::applicationVersion()},
             {"commands",   cmds},
             {"features",   QJsonArray{}}
@@ -2672,7 +2672,8 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
             || cmd.startsWith(QLatin1String("theme_"))
             || cmd.startsWith(QLatin1String("font_"))
             || cmd.startsWith(QLatin1String("perf_"))
-            || cmd.startsWith(QLatin1String("dev_"));
+            || cmd.startsWith(QLatin1String("dev_"))
+            || cmd.startsWith(QLatin1String("diag_"));
         if (isSysCmd) {
             if (!m_systemIntrospection) {
                 return err("INTERNAL",

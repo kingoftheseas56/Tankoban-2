@@ -71,6 +71,10 @@ private:
     bool handleFont(const QString& cmd, const QJsonObject& p, QJsonObject& r);
     bool handlePerf(const QString& cmd, const QJsonObject& p, QJsonObject& r);
     bool handleDev(const QString& cmd, const QJsonObject& p, QJsonObject& r);
+    // diag-* (v1.13 observability cluster) — read-only introspection of live
+    // runtime state. timer-census enumerates every GUI-thread timer (QTimer
+    // objects + raw startTimer/QBasicTimer ids). No state members.
+    bool handleDiag(const QString& cmd, const QJsonObject& p, QJsonObject& r);
 
     QPointer<MainWindow> m_window;
 

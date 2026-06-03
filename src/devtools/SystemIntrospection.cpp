@@ -6,6 +6,7 @@
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
+#include <QAbstractEventDispatcher>
 #include <QApplication>
 #include <QDateTime>
 #include <QDialog>
@@ -25,6 +26,8 @@
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QThread>
+#include <QTimer>
 #include <QVariant>
 #include <QWidget>
 
@@ -240,6 +243,8 @@ QStringList SystemIntrospection::commandList()
         // dev-* (2)
         QStringLiteral("dev_inject_error"),
         QStringLiteral("dev_toggle_feature"),
+        // diag-* (1) — v1.13 observability cluster
+        QStringLiteral("diag_timer_census"),
     };
 }
 
@@ -266,6 +271,7 @@ bool SystemIntrospection::dispatch(const QString& cmd,
     if (cmd.startsWith(QLatin1String("font_")))      return handleFont(cmd, payload, reply);
     if (cmd.startsWith(QLatin1String("perf_")))      return handlePerf(cmd, payload, reply);
     if (cmd.startsWith(QLatin1String("dev_")))       return handleDev(cmd, payload, reply);
+    if (cmd.startsWith(QLatin1String("diag_")))      return handleDiag(cmd, payload, reply);
     return false;
 }
 
@@ -1077,4 +1083,54 @@ bool SystemIntrospection::handleDev(const QString& cmd, const QJsonObject& p, QJ
 
     setError(r, "UNKNOWN_CMD", QStringLiteral("dev-* command '%1' not handled").arg(cmd));
     return true;
+}
+
+// ── diag-* ────────────────────────────────────────────────────────────────────
+
+// Read-only enumeration of every live GUI-thread timer — QTimer objects PLUS
+// raw startTimer()/QBasicTimer ids (only the event-dispatcher sees the latter).
+// One call surfaces e.g. a StreamDetailView 1000 ms repeating refresh timer
+// that should have been paused. Pure in-memory reads, no I/O.
+bool SystemIntrospection::handleDiag(const QString& cmd, const QJsonObject&, QJsonObject& r)
+{
+    if (cmd == QLatin1String("diag_timer_census")) {
+        auto typeName = [](Qt::TimerType t){ return t==Qt::PreciseTimer?QStringLiteral("PreciseTimer")
+            : t==Qt::CoarseTimer?QStringLiteral("CoarseTimer"):QStringLiteral("VeryCoarseTimer"); };
+        QJsonArray timers; int qc=0, rc=0; QSet<int> activeQTimerIds; QSet<const QTimer*> seen;
+        // (a) QTimer objects — build the roots list correctly (QWidgetList<<qApp does NOT compile):
+        QList<QObject*> roots;
+        for (QWidget* w : QApplication::topLevelWidgets()) roots.append(w);
+        roots.append(qApp);                                   // catches qApp-parented / unparented QTimers
+        for (QObject* root : roots)
+            for (QTimer* t : root->findChildren<QTimer*>()) {
+                if (seen.contains(t)) continue; seen.insert(t);
+                QObject* o = t->parent() ? t->parent() : t;
+                if (t->isActive()) activeQTimerIds.insert(t->timerId());   // guard: inactive timerId()==-1
+                timers.append(QJsonObject{{"source","qtimer"},{"timer_id",t->timerId()},
+                    {"interval_ms",t->interval()},{"single_shot",t->isSingleShot()},{"active",t->isActive()},
+                    {"timer_type",typeName(t->timerType())},{"owner_object_name",o->objectName()},
+                    {"owner_class_name",QString::fromLatin1(o->metaObject()->className())}}); ++qc;
+            }
+        // (b) raw startTimer()/QBasicTimer ids NOT backed by a QTimer:
+        QAbstractEventDispatcher* d = QAbstractEventDispatcher::instance(QThread::currentThread());
+        if (!d) { setError(r,"INTERNAL",QStringLiteral("no event dispatcher for GUI thread")); return true; }
+        QSet<QObject*> recv; recv.insert(qApp); for (QWidget* w : QApplication::allWidgets()) recv.insert(w);
+        for (QObject* o : recv)
+#if QT_VERSION < QT_VERSION_CHECK(7,0,0)
+            for (const auto& ti : d->registeredTimers(o)) { if (activeQTimerIds.contains(ti.timerId)) continue;
+                timers.append(QJsonObject{{"source","raw"},{"timer_id",ti.timerId},{"interval_ms",ti.interval},
+                    {"single_shot",false},{"active",true},{"timer_type",typeName(ti.timerType)},
+                    {"owner_object_name",o->objectName()},{"owner_class_name",QString::fromLatin1(o->metaObject()->className())}}); ++rc; }
+#else  // Qt7+: timersForObject(); interval is std::chrono::nanoseconds, id is Qt::TimerId
+            for (const auto& ti : d->timersForObject(o)) { const int id=int(qToUnderlying(ti.timerId));
+                if (activeQTimerIds.contains(id)) continue;
+                timers.append(QJsonObject{{"source","raw"},{"timer_id",id},
+                    {"interval_ms",int(std::chrono::duration_cast<std::chrono::milliseconds>(ti.interval).count())},
+                    {"single_shot",false},{"active",true},{"timer_type",typeName(ti.timerType)},
+                    {"owner_object_name",o->objectName()},{"owner_class_name",QString::fromLatin1(o->metaObject()->className())}}); ++rc; }
+#endif
+        mergeReply(r, QJsonObject{{"thread","main"},{"qtimer_count",qc},{"raw_timer_count",rc},{"timers",timers}});
+        return true;
+    }
+    setError(r,"UNKNOWN_CMD",QStringLiteral("diag-* command '%1' not handled").arg(cmd)); return true;
 }

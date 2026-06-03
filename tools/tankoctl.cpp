@@ -1639,7 +1639,9 @@ int main(int argc, char** argv)
                || sub == QLatin1String("lease-list")
                // v1.12 network observability (Congress 9).
                || sub == QLatin1String("net-list-requests")
-               || sub == QLatin1String("net-list-rules")) {
+               || sub == QLatin1String("net-list-rules")
+               // v1.13 observability cluster — diag-* no-payload reads.
+               || sub == QLatin1String("diag-timer-census")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";
