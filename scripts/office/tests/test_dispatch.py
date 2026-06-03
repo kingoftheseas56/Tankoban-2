@@ -157,8 +157,20 @@ def test_dispatch_singleton():
             os.environ["OFFICE_DIR"] = old
 
 
+def test_validate_model():
+    # Track C #18 — typo'd model must not ride into `claude -p --model <garbage>`.
+    check(D._validate_model("opus") == "opus", "model: opus tier passes")
+    check(D._validate_model("sonnet") == "sonnet", "model: sonnet tier passes")
+    check(D._validate_model("haiku") == "haiku", "model: haiku tier passes")
+    check(D._validate_model("claude-opus-4-8") == "claude-opus-4-8", "model: full claude-* id passes")
+    check(D._validate_model("opsu") == "opus", "model: typo -> opus fallback")
+    check(D._validate_model("") == "opus", "model: empty -> opus fallback")
+    check(D._validate_model("gpt-4o") == "opus", "model: non-claude -> opus fallback")
+
+
 def main():
     test_recently_active()
+    test_validate_model()
     test_classify_summon()
     test_resolve_pending()
     test_resolve_pending_ignores_activity()

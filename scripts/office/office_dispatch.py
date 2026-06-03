@@ -103,7 +103,25 @@ NON_CLAUDE_BROTHERS = frozenset({"agent7", "agent9"})
 ACK_KINDS = ("chat", "ack", "blocked")                               # post kinds that count as a real reply (NOT 'activity')
 FALLBACK_RETRY = int(os.environ.get("OFFICE_FALLBACK_RETRY", "30"))   # held-fallback retry backoff (s)
 FALLBACK_MAX_TRIES = int(os.environ.get("OFFICE_FALLBACK_MAX_TRIES", "10"))  # surface to Hemanth after N held attempts
-MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "opus")  # summoned brothers wake as their real self, not a cheap shadow
+# Track C #18 — validate the summon model up front. A typo'd OFFICE_BROTHER_MODEL
+# (e.g. "opsu") otherwise burns a spawn-cap slot + per-target lock on a
+# `claude -p --model <garbage>` that just errors out; this also sanitizes the value
+# that rides into spawn_brother.sh's --model "$MODEL".
+_MODEL_TIERS = frozenset({"opus", "sonnet", "haiku"})
+
+
+def _validate_model(m):
+    """Accept a short tier (opus/sonnet/haiku) or any full claude-* model id; fall
+    back to 'opus' for anything else (typo / non-claude / empty)."""
+    return m if (m in _MODEL_TIERS or m.startswith("claude-")) else "opus"
+
+
+_RAW_MODEL = os.environ.get("OFFICE_BROTHER_MODEL", "opus")
+MODEL = _validate_model(_RAW_MODEL)  # summoned brothers wake as their real self, not a cheap shadow
+if MODEL != _RAW_MODEL:
+    print("[office-dispatch] OFFICE_BROTHER_MODEL={0!r} is not a known tier {1} or a claude-* id — falling back to 'opus'".format(
+        _RAW_MODEL, sorted(_MODEL_TIERS)))
+    sys.stdout.flush()
 DISPATCH_STALE = int(os.environ.get("OFFICE_DISPATCH_STALE", "30"))  # dispatcher beat/lock stale threshold (s)
 
 
