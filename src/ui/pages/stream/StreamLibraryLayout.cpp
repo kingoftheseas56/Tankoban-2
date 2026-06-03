@@ -15,6 +15,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QSettings>
 #include <QShowEvent>
 #include <QStandardPaths>
@@ -438,13 +439,31 @@ void StreamLibraryLayout::downloadPoster(const QString& imdbId, const QString& p
 
 void StreamLibraryLayout::cleanupOrphanPosters()
 {
-    QDir dir(m_posterCacheDir);
-    if (!dir.exists()) return;
+    // A005 (night-watch app-heaviness, 2026-06-03) — the orphan sweep is a
+    // QDir::entryList + per-file QFile::remove loop: bounded O(N-orphan) but
+    // fully synchronous I/O that previously ran on the GUI thread during every
+    // library refresh(). Move it off-thread so a refresh never hitches.
+    //
+    // Capture the cache dir + library pointer by value: StreamLibrary::has()
+    // is mutex-protected (safe off-thread) and the library outlives this
+    // widget. A QPointer guard leashes the job to this widget's lifetime so a
+    // teardown mid-sweep bails fast — we never dereference the widget across
+    // the thread boundary, so the by-value captures are what keep it safe.
+    // Mirrors the showEvent() validateAll fire-and-forget pattern above.
+    const QString cacheDir = m_posterCacheDir;
+    StreamLibrary* library = m_library;
+    QPointer<StreamLibraryLayout> guard(this);
+    (void) QtConcurrent::run([cacheDir, library, guard]() {
+        if (guard.isNull() || !library) return;
+        QDir dir(cacheDir);
+        if (!dir.exists()) return;
 
-    QStringList files = dir.entryList({"*.jpg"}, QDir::Files);
-    for (const QString& file : files) {
-        QString imdbId = QFileInfo(file).baseName(); // "tt1234567"
-        if (!m_library->has(imdbId))
-            QFile::remove(dir.filePath(file));
-    }
+        const QStringList files = dir.entryList({"*.jpg"}, QDir::Files);
+        for (const QString& file : files) {
+            if (guard.isNull()) return; // widget gone mid-sweep — stop early
+            const QString imdbId = QFileInfo(file).baseName(); // "tt1234567"
+            if (!library->has(imdbId))
+                QFile::remove(dir.filePath(file));
+        }
+    });
 }
