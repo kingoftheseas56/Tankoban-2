@@ -15,7 +15,6 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QPointer>
 #include <QSettings>
 #include <QShowEvent>
 #include <QStandardPaths>
@@ -444,23 +443,41 @@ void StreamLibraryLayout::cleanupOrphanPosters()
     // fully synchronous I/O that previously ran on the GUI thread during every
     // library refresh(). Move it off-thread so a refresh never hitches.
     //
-    // Capture the cache dir + library pointer by value: StreamLibrary::has()
-    // is mutex-protected (safe off-thread) and the library outlives this
-    // widget. A QPointer guard leashes the job to this widget's lifetime so a
-    // teardown mid-sweep bails fast — we never dereference the widget across
-    // the thread boundary, so the by-value captures are what keep it safe.
+    // A005 hardening C3 (2026-06-03) — coalesce overlapping sweeps. exchange(true)
+    // atomically claims the in-flight slot; if a sweep is already running we skip
+    // (return) instead of launching a second one. That removes the rapid-refresh
+    // race where two worker threads raced to QFile::remove the same orphan (one
+    // wins, the other gets a benign failure). A poster orphaned between the
+    // running sweep's start and this skipped call simply lingers until the next
+    // refresh() after the current sweep finishes — best-effort cosmetic cleanup,
+    // no correctness cost. The worker clears the flag on every exit path.
+    if (m_orphanSweepRunning->exchange(true))
+        return;
+
+    // A005 hardening C2 (2026-06-03) — capture ONLY by value: cacheDir (QString),
+    // library (StreamLibrary::has() is mutex-protected and the library outlives
+    // this widget), and `running` (the shared in-flight flag, lifetime-safe).
+    // The old QPointer guard was read from the worker thread (unsafe concurrent
+    // read against GUI-thread deletion); dropping it is sound because the worker
+    // never dereferences the widget — the by-value captures are what keep it safe.
     // Mirrors the showEvent() validateAll fire-and-forget pattern above.
     const QString cacheDir = m_posterCacheDir;
     StreamLibrary* library = m_library;
-    QPointer<StreamLibraryLayout> guard(this);
-    (void) QtConcurrent::run([cacheDir, library, guard]() {
-        if (guard.isNull() || !library) return;
+    auto running = m_orphanSweepRunning;
+    (void) QtConcurrent::run([cacheDir, library, running]() {
+        // Clear the in-flight flag on EVERY return path so a later refresh() can
+        // relaunch (RAII — covers the early bails below and normal completion).
+        struct ClearOnExit {
+            std::shared_ptr<std::atomic_bool> flag;
+            ~ClearOnExit() { flag->store(false); }
+        } clearOnExit{running};
+
+        if (!library) return;
         QDir dir(cacheDir);
         if (!dir.exists()) return;
 
         const QStringList files = dir.entryList({"*.jpg"}, QDir::Files);
         for (const QString& file : files) {
-            if (guard.isNull()) return; // widget gone mid-sweep — stop early
             const QString imdbId = QFileInfo(file).baseName(); // "tt1234567"
             if (!library->has(imdbId))
                 QFile::remove(dir.filePath(file));

@@ -31,17 +31,24 @@ cleaner).
 
 ## Agent 4 — Theatre poster cleanup (`src/ui/pages/stream/StreamLibraryLayout.cpp`)
 
-### C2 — QPointer guard read from the worker thread (severity: low)
-The off-thread `cleanupOrphanPosters()` task checks `QPointer<StreamLibraryLayout> guard` from the
-worker thread. QPointer isn't safe to read concurrently with GUI-thread deletion. In practice it's
-only an early-bail hint and the object it actually dereferences (`StreamLibrary*`, captured raw) is
-documented to outlive the widget, so worst case is one wasted `has()` call. Consider removing the
-cross-thread guard read (rely on the by-value `library` capture) or marshaling the bail decision.
+**RESOLVED 2026-06-03 (Agent 4).** Both C2 + C3 fixed in one change — a single
+`std::shared_ptr<std::atomic_bool> m_orphanSweepRunning`. Build green; Codex re-review APPROVE
+(producer≠reviewer), findings: none — verdict at `codex_verdict_a005_c2c3_2026-06-03.md`.
 
-### C3 — overlapping cleanup sweeps on rapid refresh (severity: low)
-Repeated `refresh()` can launch multiple concurrent `QtConcurrent::run` poster sweeps; two threads can
-race to `QFile::remove` the same orphan (one wins, the other gets a benign failure). No crash / no data
-loss. Add a simple in-flight guard (`std::atomic<bool>`/`QFuture` skip-if-running) to coalesce.
+### C2 — QPointer guard read from the worker thread (severity: low) — ✅ FIXED
+The off-thread `cleanupOrphanPosters()` task checked `QPointer<StreamLibraryLayout> guard` from the
+worker thread. QPointer isn't safe to read concurrently with GUI-thread deletion. **Fix:** dropped the
+QPointer entirely (include removed); the worker now captures only by value (`cacheDir`, `library`,
+`running`) and never touches the widget. The outlives-widget contract on `library` is inherited from
+the landed A005, not newly introduced.
+
+### C3 — overlapping cleanup sweeps on rapid refresh (severity: low) — ✅ FIXED
+Repeated `refresh()` could launch multiple concurrent `QtConcurrent::run` poster sweeps racing to
+`QFile::remove` the same orphan. **Fix:** `if (m_orphanSweepRunning->exchange(true)) return;` at entry
+coalesces to one sweep; the worker clears the flag via an RAII `ClearOnExit` on every return path. The
+flag is a `shared_ptr` copied into the worker so it stays lifetime-safe if the widget is torn down
+mid-sweep (worker writes through the shared copy, never a freed member). A poster orphaned during a
+skipped sweep lingers one refresh cycle — acceptable for best-effort cosmetic cleanup.
 
 ---
 

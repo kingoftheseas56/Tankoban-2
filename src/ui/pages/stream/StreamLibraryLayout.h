@@ -5,6 +5,9 @@
 #include <QLabel>
 #include <QSlider>
 
+#include <atomic>
+#include <memory>
+
 class CoreBridge;
 class StreamLibrary;
 class StreamDownloadIndex;
@@ -69,4 +72,15 @@ private:
     QLabel*    m_emptyLabel   = nullptr;
 
     QString m_posterCacheDir;
+
+    // A005 hardening C3 (2026-06-03) — coalesces overlapping orphan sweeps so a
+    // rapid refresh() burst can't launch multiple concurrent QtConcurrent poster
+    // sweeps racing to QFile::remove the same orphan. A shared_ptr (not a plain
+    // member) so the flag OUTLIVES this widget if a sweep is still running at
+    // teardown: the worker clears it through the shared copy it captured, never
+    // writing through a freed member. This shared atomic also replaces the old
+    // cross-thread QPointer guard read (C2) — the worker now touches only
+    // by-value captures, so nothing is read across the GUI/worker boundary.
+    std::shared_ptr<std::atomic_bool> m_orphanSweepRunning =
+        std::make_shared<std::atomic_bool>(false);
 };
