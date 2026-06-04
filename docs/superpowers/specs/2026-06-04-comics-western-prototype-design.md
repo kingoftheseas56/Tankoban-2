@@ -1,7 +1,7 @@
-# Comics-Western Prototype — Design Spec (Foundation)
+# Comics-Western Prototype — Design Spec
 
-**Date:** 2026-06-04 · **Author:** Agent 1 (Comics) · **Companion mockups:** `.superpowers/brainstorm/723-1780587859/`
-**Status:** **FOUNDATION LOCKED.** Discovery/home, download loop, cover-fallback, reader reuse, and first-slice scope are **OPEN — resume brainstorm next session** (see §6). Not yet ready for `writing-plans`.
+**Date:** 2026-06-04 (rev 2026-06-05) · **Author:** Agent 1 (Comics) · **Companion mockups:** `.superpowers/brainstorm/`
+**Status:** **DESIGN COMPLETE.** UI mirrors the manga screens 1:1; the data/source layer (GCD + Open Library + GetComics) and the two comics-specific gaps (cover-fallback, GetComics fetch) are decided (§6). Ready for the Codex review gate (§7) → `writing-plans`.
 
 ---
 
@@ -68,16 +68,26 @@ The Stremio spine already exists from the Tankoyomi volume-pivot + Western arc. 
 ## 5. Architecture principle
 Fat app shell + thin data/source adapters. The brain (GCD+OL) and source (GetComics/RCO) sit behind interfaces; the UI (series view, volume tile, sources panel) is unit-agnostic and already built. Adding a future source = one adapter, not a rewrite.
 
-## 6. OPEN — resume brainstorm next session
-These are intentionally undecided; this spec is the foundation, not the full design:
-1. **Discovery / home** — how the user finds & adds a series. Candidate: mirror the manga "search-to-add" + library grid + continue-reading strip. (GCD search → result cards → series page → add to library.)
-2. **Download loop** — tap volume → GetComics search → resolve through ad-redirect → `.cbz` → MangaDownloadIndex → reader. Includes the GetComics-redirect automation (§3.2 gap).
-3. **Cover-fallback** — when Open Library has no cover: generate a title-card cover / scrape GCD or GetComics / neutral placeholder (§3.1 gap).
-4. **Reader reuse** — confirm the existing comic reader (COMIC_READER_FIX_TODO Phase 6) is reused as-is for TPB `.cbz`.
-5. **Scope / first vertical slice** — the first end-to-end flow to prove (candidate: Saga — search → series page → download Vol 1 → read).
+## 6. Discovery, loop, reader, cover-fallback, scope (DECIDED 2026-06-05)
+Governing principle (Hemanth): **comics mirrors manga screen-for-screen; only the data/source layer and the comics-specific gaps below differ.**
+
+### 6.1 Discovery / home — same as manga
+Identical to the manga home (`ComicsPage` `FadingStackedWidget`): home (index 0) = library grid + Continue-reading strip; search bar → search takeover → result cards → series page; ＋Library adds a series (downloading any volume auto-adds it). The existing Western browse-grid screen (`m_westernStackIndex`) is reused. No comics-specific divergence.
+
+### 6.2 Reader — same as manga (reuse as-is)
+Reuse the existing comic reader (`COMIC_READER_FIX_TODO` Phase 6) unchanged to read the TPB `.cbz`. No new reader.
+
+### 6.3 Download loop — same as manga UX, GetComics as the source
+UX identical to manga: tap volume → progress in the `VolumeTile` row → opens in the reader on completion; `MangaDownloadIndex` tracks state. The one new mechanism (Agent 1-owned engineering, no UX change): fetch from **GetComics** — resolve the post for `<series> <volume>` → follow the download/safelink through the ad-redirect/file-host layer (headless-browser fallback if JS-gated) → land the `.cbz` on the existing download/index path. **RCO read-online** stays the fallback (headless-browser image pull, §3.2).
+
+### 6.4 Cover-fallback — generated title-card
+Open Library cover coverage is partial. When a volume has no OL cover, **generate a title-card cover locally** (series-art tint + "SERIES · Vol N"). Deterministic, instant, no extra network round-trip. (Chosen over cover-scraping to keep it offline/instant.)
+
+### 6.5 Scope — first vertical slice = Saga, end-to-end
+Prove ONE series fully before widening: **Saga** — search → series page (GCD volumes + OL covers + title-card fallback) → download Vol 1 (GetComics) → read (existing reader). Thin but complete loop. Widen to more series once the slice is green.
 
 ## 7. Process gate (gov-v14)
-Per `src/ui/pages/comics/CLAUDE.md`: before `/superpowers:writing-plans`, summon **Codex** (via `scripts/engines/`) to review-and-expand this brainstorm in place (orthogonal-model review). One pass, then writing-plans. The remaining OPEN items (§6) must be brainstormed and folded in first.
+Per `src/ui/pages/comics/CLAUDE.md`: the design is now complete. Before `/superpowers:writing-plans`, summon **Codex** (via `scripts/engines/`) to review-and-expand this brainstorm in place (orthogonal-model review). One pass, then writing-plans.
 
 ## 8. References
 - `agents/audits/comic_metadata_brain_verdict_2026-06-04.md`, `agents/audits/comic_source_quality_bakeoff_2026-06-04.md`
