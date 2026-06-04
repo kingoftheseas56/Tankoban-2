@@ -78,7 +78,7 @@ Identical to the manga home (`ComicsPage` `FadingStackedWidget`): home (index 0)
 Reuse the existing comic reader (`COMIC_READER_FIX_TODO` Phase 6) unchanged to read the TPB `.cbz`. No new reader.
 
 ### 6.3 Download loop — same as manga UX, GetComics as the source
-UX identical to manga: tap volume → progress in the `VolumeTile` row → opens in the reader on completion; `MangaDownloadIndex` tracks state. The one new mechanism (Agent 1-owned engineering, no UX change): fetch from **GetComics** — resolve the post for `<series> <volume>` → follow the download/safelink through the ad-redirect/file-host layer (headless-browser fallback if JS-gated) → land the `.cbz` on the existing download/index path. **RCO read-online** stays the fallback (headless-browser image pull, §3.2).
+UX identical to manga: tap volume → progress in the `VolumeTile` row → opens in the reader on completion; `MangaDownloadIndex` tracks state. The one new mechanism (Agent 1-owned engineering, no UX change): fetch from **GetComics** — resolve the post for `<series> <volume>` → follow the download/safelink through the ad-redirect/file-host layer (headless-browser fallback if JS-gated) → land the `.cbz` on the existing download/index path. **RCO read-online** stays the fallback (headless-browser image pull, §3.2). **De-risk gate (§9): this GetComics fetch is the single biggest feasibility risk and MUST be proven in a standalone downloader spike BEFORE any UI work.**
 
 ### 6.4 Cover-fallback — generated title-card
 Open Library cover coverage is partial. When a volume has no OL cover, **generate a title-card cover locally** (series-art tint + "SERIES · Vol N"). Deterministic, instant, no extra network round-trip. (Chosen over cover-scraping to keep it offline/instant.)
@@ -93,3 +93,24 @@ Per `src/ui/pages/comics/CLAUDE.md`: the design is now complete. Before `/superp
 - `agents/audits/comic_metadata_brain_verdict_2026-06-04.md`, `agents/audits/comic_source_quality_bakeoff_2026-06-04.md`
 - Memories: `project_comics_catalog_arc`, `project_western_richness_no_signup_ladder`, `feedback_stremio_for_manga_vibe`, `project_tankoyomi_volume_pivot_arc_2026-05-16`, `feedback_bigger_manga_covers`
 - Domain: `src/ui/pages/comics/CLAUDE.md`
+
+## 9. Codex review — risks, gaps & required additions (2026-06-05)
+<!-- Codex (gpt-5.5) orthogonal-model review via scripts/engines (gov-v14 gate). Folded in by Agent 1. -->
+**Verdict:** sound for a *prototype*, not yet a shippable app. Architecture is coherent; the dominant risk is **source automation** (GetComics fetch + RCO scrape), not metadata or UI.
+
+**Build-sequencing change — de-risk first:**
+- **GetComics downloader SPIKE before any UI work.** Prove Saga Vol 1 resolves + downloads from GetComics with zero manual steps, repeatably (several runs), surviving the ad-redirect / safelink / file-host layer (changing redirects, host captchas, anti-bot, expiring links, ad/popup flows). If it can't be made reliable, the acquisition model changes — find out before building on it.
+
+**New components to spec (the implementation plan operationalizes these):**
+- **`SourceAdapter` interface** — search / resolve / download / validate / failure-codes / retry-policy / source-provenance. GetComics + RCO are adapters behind it; treat them as unstable.
+- **`VolumeIdentity` model** — GCD series id, issue range, collected-edition id, ISBN(s), display volume number, edition type, source aliases.
+- **Matching / ranking algorithm** — normalize title, publisher, year, volume number, ISBN, issue range, filename tokens; **require user confirmation when confidence is low** (prevents wrong-file downloads).
+- **Post-download validation** — archive opens, page count > 0, image dimensions sane, store file hash, reject corrupt/spoofed files (guard extension spoofing + malware-adjacent redirects).
+- **Fallback hierarchy (explicit, with degraded states)** — GCD metadata → local cache → OL cover by ISBN → generated title-card → RCO read-online → clear "unavailable" state.
+- **Edition policy** — paperback / hardcover / deluxe / omnibus / digital TPB: which edition the unit prefers; how variants, reprints, and missing/mismatched ISBNs are handled (OL ISBN mismatch = bad cover = lost trust).
+- **Storage / library model** — library tables, source provenance, downloaded file path, metadata cache, cover cache (incl. generated), read progress, failed-source attempts.
+- **Error + offline states** — missing GCD match, missing ISBN/cover, broken GetComics link, host captcha, RCO blocked, partial/corrupt download; what stays browsable offline + cache expiry.
+
+**Legal / compliance (pre-ship, not prototype-blocking):** GCD CC BY-SA attribution + license display + source links + share-alike clarity on transformed local metadata; Open Library attribution; a scraping/source disclaimer; no redistribution of metadata dumps unless cleared. Flag for legal review.
+
+**First-slice acceptance test (Saga):** search Saga → select correct series → show Vol 1 row → fetch cover or title-card → download CBZ from GetComics with no manual steps → validate archive → import into library → open in the existing reader → persist read progress.
