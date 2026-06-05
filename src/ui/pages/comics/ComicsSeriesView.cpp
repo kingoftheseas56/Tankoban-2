@@ -70,6 +70,17 @@ const QSize kHeroCoverSize(90, 135);
 // prominent hero cover (the manga shelf keeps its tuned 90x135). Same 2:3 ratio.
 const QSize kWesternHeroCoverSize(150, 225);
 
+// A "western" (collected-edition) catalogue source — drives the GetComics
+// download path + western hero/about UI, vs the manga AniList/Nyaa path.
+// "rco" = original Western harvest; "gcd" = GCD+Open-Library brain
+// (COMICS_WESTERN_GCD 2026-06-05). Gating on a bare =="rco" silently treated a
+// gcd-source series as manga and ran the Nyaa torrent search (Saga showed manga
+// torrents) — this helper fixes all the western gates at once.
+inline bool isWesternSource(const QString& s)
+{
+    return s == QLatin1String("rco") || s == QLatin1String("gcd");
+}
+
 // Tag names that AniList classifies as "Theme-Other-Demographic" — these
 // land in the meta strip in a future v1.x extension, not the hero chip
 // row. v1 just filters them OUT of the chip row so the chips show only
@@ -1376,7 +1387,7 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // below so the async applyHeroCoverPixmap scales to this size; clearView
     // resets it to the manga size for the next series.
     if (m_heroCoverLabel) {
-        m_heroCoverLabel->setFixedSize(catalog.source == QLatin1String("rco")
+        m_heroCoverLabel->setFixedSize(isWesternSource(catalog.source)
                                            ? kWesternHeroCoverSize
                                            : kHeroCoverSize);
     }
@@ -1636,7 +1647,7 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // shown only for an rco series with zero edition tiles, hidden otherwise. It
     // is NOT in m_volumeTiles, so the qDeleteAll teardown above never frees it.
     const bool westernNoEditions =
-        (catalog.source == QLatin1String("rco")) && m_volumeTiles.isEmpty();
+        isWesternSource(catalog.source) && m_volumeTiles.isEmpty();
     if (westernNoEditions && !m_westernNoEditionsLabel && m_volumesLayout && m_volumesHost) {
         m_westernNoEditionsLabel =
             new QLabel(tr("No collected editions found yet."), m_volumesHost);
@@ -1800,7 +1811,7 @@ void ComicsSeriesView::refreshLibraryButton()
     // ComicsPage), not by AniListCache bookmarks. "On shelf" is inert;
     // "Add to Library" is enabled. This branch fires whenever the currently
     // loaded catalog is a Western one, regardless of AniList state.
-    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+    if (isWesternSource(m_currentMangaCatalog.source)) {
         m_libraryButton->setText(m_westernOnShelf ? tr("On shelf") : tr("Add to Library"));
         m_libraryButton->setEnabled(!m_westernOnShelf);
         return;
@@ -1831,7 +1842,7 @@ void ComicsSeriesView::onLibraryButtonClicked()
     // series that have no AniList backing. The button is already disabled
     // when m_westernOnShelf is true (see refreshLibraryButton), so this
     // branch only runs for the "Add to Library" case.
-    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+    if (isWesternSource(m_currentMangaCatalog.source)) {
         if (!m_westernOnShelf) {
             emit addWesternToLibraryRequested();
             m_westernOnShelf = true;
@@ -2540,7 +2551,7 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
     // Volumes already downloaded / in progress are handled by the existing
     // Complete-state path at the top of onVolumeRowActivated (cbzPath non-empty
     // => openVolume emitted, never reaching here).
-    if (m_currentMangaCatalog.source == QLatin1String("rco")) {
+    if (isWesternSource(m_currentMangaCatalog.source)) {
         // Look up the matching catalog volume for its edition metadata.
         // Fall back to empty strings when the volume has no record (graceful).
         QString editionTitle;
@@ -2905,7 +2916,7 @@ void ComicsSeriesView::updateAboutBlock(const tankoban::manga::MangaCatalog& cat
     // manga catalog-tile flow, and manga already renders its synopsis in the hero
     // block (m_synopsis) — showing the about-block for manga would duplicate it.
     // Western catalogue records carry source=="rco" (COMICS_WESTERN_RICHNESS).
-    if (catalog.source != QStringLiteral("rco")) {
+    if (!isWesternSource(catalog.source)) {
         if (m_aboutBlock) m_aboutBlock->setVisible(false);
         return;
     }
