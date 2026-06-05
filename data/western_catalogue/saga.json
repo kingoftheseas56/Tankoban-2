@@ -1,0 +1,125 @@
+{
+  "seriesId": "saga",
+  "seriesTitle": "Saga",
+  "source": "gcd",
+  "schemaVersion": 3,
+  "gcdSeriesId": 69146,
+  "seriesCover": "https://covers.openlibrary.org/b/isbn/9781607066019-L.jpg",
+  "synopsis": "",
+  "author": "",
+  "publisher": "",
+  "genres": [],
+  "yearStart": 0,
+  "yearEnd": 0,
+  "status": "",
+  "editions": [
+    {
+      "volumeNumber": 1,
+      "title": "",
+      "isbn": "9781607066019",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781607066019-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 2,
+      "title": "",
+      "isbn": "9781607066927",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781607066927-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 3,
+      "title": "",
+      "isbn": "9781607069317",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781607069317-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 4,
+      "title": "",
+      "isbn": "9781632150776",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781632150776-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 5,
+      "title": "",
+      "isbn": "9781632154385",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781632154385-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 6,
+      "title": "",
+      "isbn": "9781632157119",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781632157119-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 7,
+      "title": "",
+      "isbn": "9781534300606",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534300606-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 8,
+      "title": "",
+      "isbn": "9781534303492",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534303492-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 9,
+      "title": "",
+      "isbn": "9781534308374",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534308374-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 10,
+      "title": "",
+      "isbn": "9781534323346",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534323346-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 11,
+      "title": "",
+      "isbn": "9781534399136",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534399136-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    },
+    {
+      "volumeNumber": 12,
+      "title": "",
+      "isbn": "9781534355330",
+      "coverUrl": "https://covers.openlibrary.org/b/isbn/9781534355330-L.jpg",
+      "year": 0,
+      "formatTier": 2,
+      "tierLabel": "TPB"
+    }
+  ]
+}
