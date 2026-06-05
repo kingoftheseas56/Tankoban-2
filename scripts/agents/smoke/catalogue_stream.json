@@ -1,0 +1,176 @@
+{
+  "_note": "Stream/Theatre check catalogue. Verbs are dash-form; reconfirm against live `tankoctl ping` at run time. REPLACE_* tokens are resolved against live state in Task 11 Step 1. J1+J2 are the proof journeys; J3-J8 are scale-up and may need path tuning on first run.",
+  "journeys": [
+    {
+      "id": "J1", "name": "One Piece (anime full chain)",
+      "steps": [
+        {"id": "op.search", "action": ["search", "One Piece"], "asserts": [
+          {"id": "op.search.returns", "lane": "SELF", "probe": ["search", "One Piece"],
+           "path": "results[*].imdb", "expect": {"contains": "tt0388629"}, "timeoutSec": 15}
+        ]},
+        {"id": "op.dispatch", "action": ["dispatch-episode", "tt0388629", "1", "1133"], "asserts": [
+          {"id": "op.dispatch.accepted", "lane": "SELF",
+           "probe": ["dispatch-episode", "tt0388629", "1", "1133"],
+           "path": "status", "expect": {"equals": "dispatched"}, "timeoutSec": 60,
+           "on_fail": "continue"},
+          {"id": "op.dispatch.amatsu_source", "lane": "SELF", "probe": ["get-downloads"],
+           "path": "entries[*].canonicalPath",
+           "expect": {"regex": "(?i)\\[(SubsPlease|Erai-raws|Judas|MA0MA0|ASW|Yameii|EMBER|Anime Time)\\]|MultiSub|Nyaa"},
+           "timeoutSec": 30, "needs": ["op.dispatch.accepted"]}
+        ]},
+        {"id": "op.dl", "action": ["get-downloads"], "asserts": [
+          {"id": "op.dl.starts", "lane": "SELF", "probe": ["get-downloads"],
+           "path": "entries", "expect": {"nonempty": true}, "timeoutSec": 30}
+        ]},
+        {"id": "op.play", "action": ["play-file", "REPLACE_WITH_KNOWN_ONEPIECE_MKV"], "asserts": [
+          {"id": "op.play.starts", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.playing", "expect": {"equals": true}, "timeoutSec": 25},
+          {"id": "op.play.sidecar_ok", "lane": "SELF", "probe": ["sidecar-get-process-state"],
+           "path": "snapshot.running", "expect": {"equals": true}, "timeoutSec": 10,
+           "needs": ["op.play.starts"]},
+          {"id": "op.play.subs_present", "lane": "SELF", "probe": ["player-get-subtitle-tracks"],
+           "path": "tracks", "expect": {"nonempty": true}, "timeoutSec": 10,
+           "needs": ["op.play.starts"]},
+          {"id": "op.play.video_paints", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check at playback start: is the FIRST video frame painted with real picture, or is it a black/blank/frozen screen? One sentence.",
+           "needs": ["op.play.starts"]},
+          {"id": "op.play.subs_on_screen", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check: is there readable English subtitle text overlaid on the video? One sentence.",
+           "needs": ["op.play.starts"]},
+          {"id": "op.play.audio_present", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check the recording's audio track: is there audible sound during this window, or silence? One sentence.",
+           "needs": ["op.play.starts"]}
+        ]},
+        {"id": "op.seek", "action": ["player-seek", "600"], "asserts": [
+          {"id": "op.play.seek_lands", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.positionSec", "expect": {"approx": 600, "tolerance": 8},
+           "timeoutSec": 12, "needs": ["op.play.starts"]},
+          {"id": "op.play.seek_repaints", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check: right after the seek, does the frame RE-PAINT to a new image, or stay frozen on the old frame? One sentence.",
+           "needs": ["op.play.starts"]}
+        ]},
+        {"id": "op.resume", "action": null, "asserts": [
+          {"id": "op.resume.position", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.positionSec", "expect": {"gt": 0}, "timeoutSec": 10,
+           "needs": ["op.play.seek_lands"]}
+        ]}
+      ]
+    },
+    {
+      "id": "J2", "name": "Western series (Torrentio full chain)",
+      "steps": [
+        {"id": "w.search", "action": ["search", "REPLACE_WITH_WESTERN_SHOW"], "asserts": [
+          {"id": "w.search.returns", "lane": "SELF", "probe": ["search", "REPLACE_WITH_WESTERN_SHOW"],
+           "path": "results", "expect": {"nonempty": true}, "timeoutSec": 15}
+        ]},
+        {"id": "w.dispatch", "action": ["dispatch-episode", "REPLACE_WITH_IMDB", "1", "1"], "asserts": [
+          {"id": "w.dispatch.accepted", "lane": "SELF",
+           "probe": ["dispatch-episode", "REPLACE_WITH_IMDB", "1", "1"],
+           "path": "status", "expect": {"equals": "dispatched"}, "timeoutSec": 60}
+        ]},
+        {"id": "w.dl", "action": ["get-downloads"], "asserts": [
+          {"id": "w.dl.starts", "lane": "SELF", "probe": ["get-downloads"],
+           "path": "entries", "expect": {"nonempty": true}, "timeoutSec": 30}
+        ]},
+        {"id": "w.play", "action": ["play-file", "REPLACE_WITH_KNOWN_WESTERN_MKV"], "asserts": [
+          {"id": "w.play.starts", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.playing", "expect": {"equals": true}, "timeoutSec": 25},
+          {"id": "w.play.seek_lands", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.positionSec", "expect": {"gt": 0}, "timeoutSec": 12,
+           "needs": ["w.play.starts"]},
+          {"id": "w.play.video_paints", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check: is real video painted (not black/frozen)? One sentence.",
+           "needs": ["w.play.starts"]},
+          {"id": "w.play.audio_present", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check the audio track: is there audible sound? One sentence.",
+           "needs": ["w.play.starts"]}
+        ]}
+      ]
+    },
+    {
+      "id": "J3", "name": "Addons / sources (introspect)",
+      "steps": [
+        {"id": "ad.registry", "action": null, "asserts": [
+          {"id": "ad.amatsu_enabled", "lane": "SELF",
+           "probe": ["introspect-object", "AddonRegistry"],
+           "path": "REPLACE_WITH_ADDON_STATE_PATH",
+           "expect": {"contains": "amatsu"}, "timeoutSec": 10},
+          {"id": "ad.torrentio_enabled", "lane": "SELF",
+           "probe": ["introspect-object", "AddonRegistry"],
+           "path": "REPLACE_WITH_ADDON_STATE_PATH",
+           "expect": {"contains": "torrentio"}, "timeoutSec": 10}
+        ]}
+      ]
+    },
+    {
+      "id": "J4", "name": "Episode-state tiles (3-state)",
+      "steps": [
+        {"id": "tile.snapshot", "action": null, "asserts": [
+          {"id": "tile.reports_state", "lane": "SELF",
+           "probe": ["introspect-object", "EpisodeTile"],
+           "path": "REPLACE_WITH_TILE_STATE_PATH",
+           "expect": {"exists": true}, "timeoutSec": 10},
+          {"id": "tile.renders", "lane": "VISUAL",
+           "gemini_prompt": "Spot-check: are episode tiles visually distinct by state (not-downloaded vs downloading% vs Play)? One sentence."}
+        ]}
+      ]
+    },
+    {
+      "id": "J5", "name": "Season / pack dispatch",
+      "steps": [
+        {"id": "pack.dispatch", "action": ["dispatch-season", "tt0388629", "1"], "asserts": [
+          {"id": "pack.dispatch_accepted", "lane": "SELF",
+           "probe": ["dispatch-season", "tt0388629", "1"],
+           "path": "status", "expect": {"equals": "dispatched"}, "timeoutSec": 60,
+           "on_fail": "continue"},
+          {"id": "pack.episodes_register", "lane": "SELF", "probe": ["get-downloads"],
+           "path": "entries", "expect": {"nonempty": true}, "timeoutSec": 45,
+           "needs": ["pack.dispatch_accepted"]}
+        ]}
+      ]
+    },
+    {
+      "id": "J6", "name": "Player controls",
+      "steps": [
+        {"id": "pc.pause", "action": ["player-pause"], "asserts": [
+          {"id": "pc.paused", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.playing", "expect": {"equals": false}, "timeoutSec": 8}
+        ]},
+        {"id": "pc.resume", "action": ["player-resume"], "asserts": [
+          {"id": "pc.resumed", "lane": "SELF", "probe": ["get-player"],
+           "path": "snapshot.playing", "expect": {"equals": true}, "timeoutSec": 8}
+        ]},
+        {"id": "pc.audio", "action": null, "asserts": [
+          {"id": "pc.audio_tracks", "lane": "SELF", "probe": ["player-get-audio-tracks"],
+           "path": "tracks", "expect": {"nonempty": true}, "timeoutSec": 8}
+        ]}
+      ]
+    },
+    {
+      "id": "J7", "name": "Sidecar health",
+      "steps": [
+        {"id": "sc.health", "action": null, "asserts": [
+          {"id": "sc.process_running", "lane": "SELF", "probe": ["sidecar-get-process-state"],
+           "path": "snapshot.running", "expect": {"equals": true}, "timeoutSec": 8},
+          {"id": "sc.ipc_sane", "lane": "SELF", "probe": ["sidecar-get-ipc-latency"],
+           "path": "REPLACE_WITH_IPC_LATENCY_PATH", "expect": {"lt": 2000}, "timeoutSec": 8}
+        ]}
+      ]
+    },
+    {
+      "id": "J8", "name": "Tankorent standalone page",
+      "steps": [
+        {"id": "tk.search", "action": ["sources-search-tankorent", "Daredevil"], "asserts": [
+          {"id": "tk.search_returns", "lane": "SELF",
+           "probe": ["sources-get-tankorent-state"],
+           "path": "REPLACE_WITH_TANKORENT_RESULTS_PATH",
+           "expect": {"nonempty": true}, "timeoutSec": 30}
+        ]},
+        {"id": "tk.health", "action": null, "asserts": [
+          {"id": "tk.indexer_health", "lane": "SELF", "probe": ["sources-get-indexer-health"],
+           "path": "REPLACE_WITH_INDEXER_HEALTH_PATH", "expect": {"exists": true}, "timeoutSec": 10}
+        ]}
+      ]
+    }
+  ]
+}
