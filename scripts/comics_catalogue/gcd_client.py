@@ -21,7 +21,7 @@ import urllib.request
 import urllib.parse
 
 _UA = "Tankoban/1.0 (dev catalogue builder; contact dev@tankoban.local)"
-_THROTTLE_S = 2.0
+_THROTTLE_S = 5.0   # GCD throttles hard; offline dev build, so be patient/polite
 
 
 # ── ISBN ─────────────────────────────────────────────────────────────────────
@@ -94,7 +94,15 @@ def build_volumes_from_issues(issues: list) -> list:
     earliest printing per volume number (prefers one carrying an ISBN on ties)."""
     by_num = {}
     for iss in issues:
-        num, title = parse_descriptor(iss.get("descriptor") or iss.get("number") or "")
+        # Primary: descriptor "N - Title" (Invincible shape). Fallback: a bare
+        # numeric `number`/`descriptor` with the subtitle in a separate `title`
+        # field (Saga shape) -> use number as the volume, title as the subtitle.
+        num, title = parse_descriptor(iss.get("descriptor") or "")
+        if num is None:
+            nstr = str(iss.get("number") or iss.get("descriptor") or "").strip()
+            if nstr.isdigit():
+                num = int(nstr)
+                title = (iss.get("title") or "").strip()
         if num is None:
             continue
         year = _year_of(iss.get("publication_date", ""))

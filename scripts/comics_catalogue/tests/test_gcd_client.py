@@ -72,6 +72,19 @@ def test_build_volumes_dedupes_and_forward_sorts():
     assert vols[1]["volumeNumber"] == 2
 
 
+def test_build_volumes_handles_number_title_shape():
+    # Saga shape: bare numeric `number` + separate `title` (no "N - Title" descr).
+    issues = [
+        {"number": "1", "title": "Volume One", "isbn": "978-1-60706-601-9", "publication_date": "2012-10"},
+        {"number": "2", "title": "Volume Two", "isbn": "", "publication_date": "2013"},
+    ]
+    vols = build_volumes_from_issues(issues)
+    assert [v["volumeNumber"] for v in vols] == [1, 2]
+    assert vols[0]["title"] == "Volume One"
+    assert vols[0]["isbn"] == "9781607066019"
+    assert vols[0]["year"] == 2012
+
+
 # ── live fetch pagination (no real network) ──────────────────────────────────
 
 def test_fetch_all_series_paginates(monkeypatch):
