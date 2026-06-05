@@ -74,6 +74,19 @@ for a natural-language description of everything that happened.
 python scripts\agents\drive_journal.py --record --label "open Theatre" -- open-page stream
 ```
 
+## 3c. Recording for long smokes + speedup (the visual lane's foundation)
+
+The recorder (`screen_record.py`) is hardened for long autonomous runs:
+- **In-process is the only reliable path.** Start `ScreenRecorder` as a child of your harness (the long-running, session-attached process) and stop it at the end. A **detached, window-hidden** ffmpeg loses the desktop session and `ddagrab` silently dies — that was the original "no file" bug. **Never launch the recorder window-hidden.** (Cross-process? use `daemon-start`/`daemon-stop`, which keeps ffmpeg in its own session-attached console.)
+- **Crash-resilient.** Output is fragmented mp4, so if the harness *or the player* crashes mid-run, the partial recording is still playable. Essential — the player idle-spin crash WILL hit long runs.
+- **`ddagrab`** captures real video playback (not a black overlay); **`gdigrab`** is the auto-fallback.
+
+**Speed up any video — two levers for the visual lane:**
+1. **Footage speedup** — describe a 2-hour smoke as a 15-min clip:
+   `python scripts\agents\screen_record.py speedup <in.mp4> <out.mp4> 8`
+   Speeds the recording Nx before Gemini sees it (audio pitch-preserved, or `--mute`) → a fraction of the cost/time. Best paired with the state-lane: let it flag the anomaly + its `log-mark` timestamp, clip *that* window, and speed-and-describe only that.
+2. **Player speedup** — smoke faster: `tankoctl player-set-speed <N>` plays the actual video at Nx, so a 24-min episode verifies in 6 min at 4×. (Keep dropping `log-mark`s around it so the sped-up timeline still correlates.)
+
 ## 4. Read the journal
 
 - **`out/agent_drive_journal.md`** — human-readable: every action → the events it caused.
