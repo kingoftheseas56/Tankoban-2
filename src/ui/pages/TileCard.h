@@ -4,9 +4,11 @@
 #include <QLabel>
 #include <QPixmap>
 
+#include "devtools/IDevInspectable.h"
+
 class QLineEdit;
 
-class TileCard : public QFrame {
+class TileCard : public QFrame, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
 public:
     explicit TileCard(const QString& thumbPath,
@@ -48,6 +50,9 @@ public:
     bool isFocused() const  { return m_focused; }
     int cardWidth() const   { return m_cardWidth; }
     int imageHeight() const { return m_imageHeight; }
+
+    // OBS-10 — live state for introspect-object (custom-painted residue).
+    QJsonObject devSnapshot() const override;
 
     static constexpr int DEFAULT_WIDTH  = 200;
     static constexpr int DEFAULT_IMAGE_HEIGHT = 308;

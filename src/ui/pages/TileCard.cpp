@@ -9,6 +9,7 @@
 #include <QPainterPath>
 #include <QFontMetrics>
 #include <QTimer>
+#include <QJsonObject>
 
 static constexpr int CORNER_RADIUS = 8;
 
@@ -548,4 +549,23 @@ bool TileCard::eventFilter(QObject* obj, QEvent* event)
         }
     }
     return QFrame::eventFilter(obj, event);
+}
+
+QJsonObject TileCard::devSnapshot() const
+{
+    return QJsonObject{
+        {"title",            m_title},
+        {"subtitle",         m_subtitle},
+        {"thumbPath",        m_thumbPath},
+        {"progressFraction", m_progressFraction},
+        {"pageBadge",        m_pageBadge},
+        {"countBadge",       m_countBadge},
+        {"status",           m_status},
+        {"provenance",       m_provenance},
+        {"isNew",            m_isNew},
+        {"isFolder",         m_isFolder},
+        {"selected",         m_selected},
+        {"focused",          m_focused},
+        {"downloadingChip",  m_downloadingChip},
+    };
 }

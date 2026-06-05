@@ -7,6 +7,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QSignalBlocker>
+#include <QJsonObject>
 
 namespace tankoban::stream::theatre {
 
@@ -252,6 +253,39 @@ void EpisodeTile::paintEvent(QPaintEvent* event) {
             QRect(0, height() - stripHeight, progressW, stripHeight),
             palette().color(QPalette::Highlight));
     }
+}
+
+QJsonObject EpisodeTile::devSnapshot() const
+{
+    auto stateName = [](StreamDownloadIndex::Entry::State s) -> QString {
+        switch (s) {
+            case StreamDownloadIndex::Entry::Complete:    return QStringLiteral("Complete");
+            case StreamDownloadIndex::Entry::Pending:     return QStringLiteral("Pending");
+            case StreamDownloadIndex::Entry::Downloading: return QStringLiteral("Downloading");
+            case StreamDownloadIndex::Entry::Failed:      return QStringLiteral("Failed");
+        }
+        return QStringLiteral("Unknown");
+    };
+    auto provName = [](EpisodeTileState::Provenance p) -> QString {
+        switch (p) {
+            case EpisodeTileState::AddonBulk: return QStringLiteral("AddonBulk");
+            case EpisodeTileState::Tankorent: return QStringLiteral("Tankorent");
+            case EpisodeTileState::LocalScan: return QStringLiteral("LocalScan");
+        }
+        return QStringLiteral("Unknown");
+    };
+    return QJsonObject{
+        {"season",        m_data.season},
+        {"episode",       m_data.episode},
+        {"title",         m_data.title},
+        {"sizeBytes",     double(m_data.sizeBytes)},
+        {"alreadyHave",   m_data.alreadyHave},
+        {"state",         stateName(m_episodeState.state)},
+        {"progressPct",   m_episodeState.progressPct},
+        {"provenance",    provName(m_episodeState.provenance)},
+        {"hasIndexEntry", m_hasIndexEntry},
+        {"imdbId",        m_imdbId},
+    };
 }
 
 }  // namespace tankoban::stream::theatre

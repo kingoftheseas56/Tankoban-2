@@ -9,6 +9,7 @@
 #include <QIcon>
 #include <QPropertyAnimation>
 #include <QEasingCurve>
+#include <QJsonObject>
 #include <algorithm>
 
 TileStrip::TileStrip(QWidget* parent)
@@ -609,4 +610,18 @@ void TileStrip::animateScrollBy(int direction)
     m_scrollAnim->setStartValue(m_scrollOffsetX);
     m_scrollAnim->setEndValue(clampedTarget);
     m_scrollAnim->start();
+}
+
+QJsonObject TileStrip::devSnapshot() const
+{
+    return QJsonObject{
+        {"mode",             m_mode},
+        {"density",          m_density},
+        {"tileCount",        int(m_tiles.size())},
+        {"visibleCount",     visibleCount()},
+        {"selectedCount",    int(m_selected.size())},
+        {"filteredOutCount", int(m_filteredOut.size())},
+        {"focusedIndex",     m_focusedIndex},
+        {"scrollOffsetX",    scrollOffsetX()},
+    };
 }

@@ -19,6 +19,7 @@
 #include <QFont>
 
 #include "PageCache.h"
+#include "devtools/IDevInspectable.h"
 
 class CoreBridge;
 class SmoothScrollArea;
@@ -313,7 +314,7 @@ public:
     bool isDragging() const { return m_dragging; }
 };
 
-class ComicReader : public QWidget {
+class ComicReader : public QWidget, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
 public:
     explicit ComicReader(CoreBridge* bridge, QWidget* parent = nullptr);
@@ -326,6 +327,11 @@ public:
     // MainWindow on WindowStateChange so the comic reader's chrome reflects
     // the live max/restore state of the underlying window.
     void updateChromeMaxIcon(bool isMaximized);
+
+    // OBS-10 — live reader state for introspect-object (answers the acceptance
+    // test: current volume/file, page, reading mode). ComicReader sets no
+    // objectName, so introspect-object reaches it by className.
+    QJsonObject devSnapshot() const override;
 
 signals:
     void closeRequested();

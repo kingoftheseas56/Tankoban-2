@@ -13,6 +13,8 @@
 #include <QPointer>
 #include <QString>
 
+#include "devtools/IDevInspectable.h"
+
 class QCheckBox;
 class QLabel;
 class QPushButton;
@@ -51,7 +53,7 @@ struct VolumeTileState {
     QString provenance;               // "" / "Fandom" / "Tankoyomi" / "LocalScan"
 };
 
-class VolumeTile : public QFrame {
+class VolumeTile : public QFrame, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
 public:
     explicit VolumeTile(const VolumeTileData& data, QWidget* parent = nullptr);
@@ -63,6 +65,9 @@ public:
 
     void setVolumeState(const VolumeTileState& s);
     VolumeTileState volumeState() const { return m_state; }
+
+    // OBS-10 — live state for introspect-object (custom-painted residue).
+    QJsonObject devSnapshot() const override;
 
     void setCoverFromDisk(const QString& coverPath);
     void setCoverFromUrl(const QString& url);     // for AniList-path covers

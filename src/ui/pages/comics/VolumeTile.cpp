@@ -508,4 +508,35 @@ void VolumeTile::refreshReadProgress()
     m_readProgressFraction = readProgressForPath(m_state.cbzPath);
 }
 
+QJsonObject VolumeTile::devSnapshot() const
+{
+    auto stateName = [](VolumeTileState::State s) -> QString {
+        switch (s) {
+            case VolumeTileState::NotStarted:  return QStringLiteral("NotStarted");
+            case VolumeTileState::Queued:      return QStringLiteral("Queued");
+            case VolumeTileState::Downloading: return QStringLiteral("Downloading");
+            case VolumeTileState::Complete:    return QStringLiteral("Complete");
+            case VolumeTileState::Failed:      return QStringLiteral("Failed");
+        }
+        return QStringLiteral("Unknown");
+    };
+    return QJsonObject{
+        {"sourceId",             m_data.sourceId},
+        {"seriesId",             m_data.seriesId},
+        {"volumeNumber",         m_data.volumeNumber},
+        {"title",                m_data.title},
+        {"chapterRange",         m_data.chapterRange},
+        {"pages",                m_data.pages},
+        {"isRawScan",            m_data.isRawScan},
+        {"upgradeAvailable",     m_data.upgradeAvailable},
+        {"state",                stateName(m_state.state)},
+        {"progressPct",          m_state.progressPct},
+        {"statusText",           m_state.statusText},
+        {"cbzPath",              m_state.cbzPath},
+        {"provenance",           m_state.provenance},
+        {"readProgressFraction", m_readProgressFraction},
+        {"selected",             m_selected},
+    };
+}
+
 } // namespace tankoban::ui::comics

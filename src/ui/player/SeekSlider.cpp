@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QJsonObject>
 
 SeekSlider::SeekSlider(Qt::Orientation o, QWidget* parent)
     : QSlider(o, parent)
@@ -235,4 +236,24 @@ void SeekSlider::leaveEvent(QEvent* e)
 {
     emit hoverLeft();
     QSlider::leaveEvent(e);
+}
+
+QJsonObject SeekSlider::devSnapshot() const
+{
+    qint64 bufferedBytes = 0;
+    for (const auto& range : m_bufferedRanges)
+        bufferedBytes += (range.second - range.first);
+    const double bufferedFraction = m_bufferedTotalBytes > 0
+        ? double(bufferedBytes) / double(m_bufferedTotalBytes)
+        : 0.0;
+    return QJsonObject{
+        {"value",              value()},
+        {"minimum",            minimum()},
+        {"maximum",            maximum()},
+        {"durationSec",        m_durationSec},
+        {"chapterMarkerCount", int(m_chapterMarkersMs.size())},
+        {"bufferedRangeCount", int(m_bufferedRanges.size())},
+        {"bufferedTotalBytes", double(m_bufferedTotalBytes)},
+        {"bufferedFraction",   bufferedFraction},
+    };
 }

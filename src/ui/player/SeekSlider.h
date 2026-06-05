@@ -3,7 +3,9 @@
 #include <QList>
 #include <QPair>
 
-class SeekSlider : public QSlider {
+#include "devtools/IDevInspectable.h"
+
+class SeekSlider : public QSlider, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
 public:
     explicit SeekSlider(Qt::Orientation o, QWidget* parent = nullptr);
@@ -50,6 +52,10 @@ public:
     bool isTimeBuffered(double targetSec) const;
 
     static constexpr int RANGE = 10000;
+
+    // OBS-10 — live seek/buffer state for introspect-object (buffered ranges are
+    // the literal "buffer never filled" diagnostic). No objectName -> by class.
+    QJsonObject devSnapshot() const override;
 
 signals:
     void hoverPositionChanged(double fraction);

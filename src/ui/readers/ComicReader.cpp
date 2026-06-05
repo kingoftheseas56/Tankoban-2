@@ -4219,3 +4219,33 @@ void ComicReader::applySeriesSettings()
     m_cropBorders = s.value(k + "/crop_borders", m_cropBorders).toBool();
     m_splitOnWide = s.value(k + "/split_on_wide", m_splitOnWide).toBool();
 }
+
+QJsonObject ComicReader::devSnapshot() const
+{
+    auto readerModeName = [](ReaderMode m) -> QString {
+        switch (m) {
+            case ReaderMode::DoublePage:  return QStringLiteral("DoublePage");
+            case ReaderMode::ScrollStrip: return QStringLiteral("ScrollStrip");
+        }
+        return QStringLiteral("Unknown");
+    };
+    auto fitModeName = [](FitMode m) -> QString {
+        switch (m) {
+            case FitMode::FitPage:   return QStringLiteral("FitPage");
+            case FitMode::FitWidth:  return QStringLiteral("FitWidth");
+            case FitMode::FitHeight: return QStringLiteral("FitHeight");
+        }
+        return QStringLiteral("Unknown");
+    };
+    return QJsonObject{
+        {"currentFile",       m_cbzPath},
+        {"seriesName",        m_seriesName},
+        {"currentPage",       m_currentPage},
+        {"pageCount",         int(m_pageNames.size())},
+        {"readerMode",        readerModeName(m_readerMode)},
+        {"fitMode",           fitModeName(m_fitMode)},
+        {"rtl",               m_rtl},
+        {"isVolumeX",         m_isVolumeX},
+        {"seriesVolumeCount", int(m_seriesCbzList.size())},
+    };
+}

@@ -11,6 +11,7 @@
 // download-source-aware episode tile. EpisodeTile reads state + progressPct
 // to render the chip; reads provenance to apply (or skip) the warm-amber tint.
 #include "core/stream/StreamDownloadIndex.h"
+#include "devtools/IDevInspectable.h"
 
 class QCheckBox;
 class QLabel;
@@ -38,7 +39,7 @@ struct EpisodeTileState {
     Provenance provenance = AddonBulk;
 };
 
-class EpisodeTile : public QFrame {
+class EpisodeTile : public QFrame, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
 public:
     explicit EpisodeTile(const EpisodeTileData& data, QWidget* parent = nullptr);
@@ -64,6 +65,9 @@ public:
     // m_data.episode) and pulls its initial state from the index.
     void setImdbId(const QString& imdbId);
     void setStreamDownloadIndex(StreamDownloadIndex* idx);
+
+    // OBS-10 — live episode state for introspect-object (custom-painted tile).
+    QJsonObject devSnapshot() const override;
 
 signals:
     void toggled(bool checked);

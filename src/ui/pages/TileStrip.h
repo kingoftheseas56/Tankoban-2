@@ -4,11 +4,13 @@
 #include <QList>
 #include <QSet>
 
+#include "devtools/IDevInspectable.h"
+
 class TileCard;
 class QPushButton;
 class QPropertyAnimation;
 
-class TileStrip : public QWidget {
+class TileStrip : public QWidget, public tankoban::devtools::IDevInspectable {
     Q_OBJECT
     // CONTINUE_SCROLL_ARROWS 2026-05-02 — animated horizontal scroll offset
     // for "continue" mode. QPropertyAnimation drives this on arrow click.
@@ -33,6 +35,10 @@ public:
     // Tankoyomi-origin tiles + drive the DOWNLOADING chip from MangaDownloader
     // subscription. Returns a const reference; callers must not mutate.
     const QList<TileCard*>& tiles() const { return m_tiles; }
+
+    // OBS-10 — strip-level index for introspect-object (individual cards are
+    // reached via `introspect-object TileCard`).
+    QJsonObject devSnapshot() const override;
 
     // Selection
     void clearSelection();
