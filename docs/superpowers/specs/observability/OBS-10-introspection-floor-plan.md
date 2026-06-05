@@ -26,7 +26,7 @@ The implementation MUST follow these existing patterns exactly. All anchors veri
 
 ### 2.1 The verb lifecycle (mirror `diag_timer_census` / OBS-1 end-to-end)
 - **Client (`tools/tankoctl.cpp`):** CLI is kebab-case (`introspect-tree`), converted to snake_case (`introspect_tree`) on the wire. Request JSON: `{"cmd":"<snake>","seq":1,"payload":{...}}` over `QLocalSocket` named pipe `TankobanDevControl` (`tools/tankoctl.cpp:220`, `sendCommand()` at `466-506`). The **no-payload allowlist** is at `tools/tankoctl.cpp:1562-1652` — a verb that sends *no* args is added there; a verb *with* args is parsed into `payload` in its own `else if` branch BEFORE the allowlist (pattern: `dispatch-episode` at `600-615`).
-- **Server (`src/devtools/DevControlServer.cpp:247-306`):** parses the line, hands off at line 299 to `m_window->handleDevCommand(cmd, seq, payload)`. **Synchronous on the GUI thread, 500 ms cap.** Reply contract: `{"type":"reply","seq":<int>,...}` or `{"type":"error","seq":<int>,"code":"<UPPER_SNAKE>","message":"..."}` (`DevControlServer.h:22-25`).
+- **Server (`src/devtools/DevControlServer.cpp:247-306`):** parses the line, hands off at line 299 to `m_window->handleDevCommand(cmd, seq, payload)` — **synchronous on the GUI thread** (a slow handler blocks the UI). NOTE (corrected per Codex spec review 2026-06-05): the 500 ms figure is only the server's per-socket read/write wait, NOT a command-execution cap; the client (`tankoctl`) waits up to 60 s for a reply. The caps in §5 exist to keep the GUI-block short and the payload bounded, not to fit a 500 ms execution budget. Reply contract: `{"type":"reply","seq":<int>,...}` or `{"type":"error","seq":<int>,"code":"<UPPER_SNAKE>","message":"..."}` (`DevControlServer.h:22-25`).
 - **Dispatch (`src/ui/MainWindow.cpp:2649-2701`):** the `isSysCmd` prefix block routes `app_`/`settings_`/.../`diag_` to `m_systemIntrospection->dispatch(...)`. Line ~2676 is where `diag_` was added; `introspect_` is added in the same list. Write-capable commands are gated on `TANKOBAN_DEV_WRITE=1` via `SystemIntrospection::isWriteCapable(cmd)` BEFORE forwarding — **our verbs are read-only, so they are NOT added to `isWriteCapable`.**
 - **Handler (`src/devtools/SystemIntrospection.{h,cpp}`):** `dispatch()` (`.cpp:259-276`) routes by prefix to `handle<Prefix>(cmd, payload, reply)` → returns `bool` (true = recognised). Success merges via `mergeReply(r, {...})` (`.cpp:120-127`); error via `setError(r, code, msg)` (`.cpp:129-133`). `diag_` → `handleDiag` is the reference handler (`.cpp:1094-1136`).
 
@@ -41,12 +41,12 @@ The implementation MUST follow these existing patterns exactly. All anchors veri
 `src/devtools/UiInteractionDispatcher.cpp`: `snapshotObject(QObject*)` (`69-81`) emits `{objectName,className,isWidget,visible,enabled,geometry,text}`; `listVisitor()` (`160-175`) recurses `children()`; `findByName()` (`38-43`). **Confirmed: NO `Q_PROPERTY` enumeration anywhere in the codebase** — that reflection is exactly the multiplier this spec adds.
 
 ### 2.4 The `devSnapshot()` convention (16 existing implementations)
-All are `QJsonObject devSnapshot() const` **member methods**, none declared via a shared interface. Page-level: `MainWindow` (`MainWindow.cpp:1727`), `ComicsPage` (`ComicsPage.cpp:4602`), `StreamPage`, `VideosPage`, `BooksPage`, `TankorentPage`, `TankoLibraryPage`. View/component: `ComicsSeriesView`, `StreamDetailView`, `ShowView`, `ComicsSourcesPanel`, `VideoPlayer` (`VideoPlayer.cpp:4089`), `SidecarProcess`, `SubtitleOverlay`, `BookReader`, `BookDownloader`. **This spec does NOT retrofit these 16** (they stay reachable via `dump_ui`); it formalizes the interface and adopts it on the *residue* widgets below. Retrofitting the 16 to `IDevInspectable` is a documented fast-follow (§8).
+~16 classes have a `devSnapshot()` **member method**, none declared via a shared interface. Most are `QJsonObject devSnapshot() const`; **exception (per Codex review): `VideosPage::devSnapshot(int limit = 50) const`** takes an optional arg — so a future `IDevInspectable` retrofit of the 16 must reconcile that signature (not this commission's problem; residue widgets all use the no-arg form). Page-level: `MainWindow` (`MainWindow.cpp:1727`), `ComicsPage` (`ComicsPage.cpp:4602`), `StreamPage`, `VideosPage` (arg variant), `BooksPage`, `TankorentPage`, `TankoLibraryPage`. View/component: `ComicsSeriesView`, `StreamDetailView`, `ShowView`, `ComicsSourcesPanel`, `VideoPlayer` (`VideoPlayer.cpp:4089`), `SidecarProcess`, `SubtitleOverlay`, `BookReader`, `BookDownloader`. **This spec does NOT retrofit these 16** (they stay reachable via `dump_ui`); it formalizes the interface and adopts it on the *residue* widgets below. Retrofitting the 16 to `IDevInspectable` is a documented fast-follow (§8).
 
 ### 2.5 The residue (verified — meta-object reflection CANNOT reach these)
 | Widget | Header | Base | Namespace | objectName? | State members (no `Q_PROPERTY`) |
 |---|---|---|---|---|---|
-| `VolumeTile` | `src/ui/pages/comics/VolumeTile.h:54` | `QFrame` | `tankoban::ui::comics` | no | `m_data` (`VolumeTileData`: sourceId, seriesId, volumeNumber, title, chapterRange, pages, publishDate, isRawScan, upgradeAvailable), `m_state` (`VolumeTileState`: state enum, progressPct, statusText, cbzPath, provenance), `m_readProgressFraction`, `m_selected` |
+| `VolumeTile` | `src/ui/pages/comics/VolumeTile.h:54` | `QFrame` | `tankoban::ui::comics` | yes `"VolumeTile"` (`.cpp:167`) — non-unique | `m_data` (`VolumeTileData`: sourceId, seriesId, volumeNumber, title, chapterRange, pages, publishDate, isRawScan, upgradeAvailable), `m_state` (`VolumeTileState`: state enum, progressPct, statusText, cbzPath, provenance), `m_readProgressFraction`, `m_selected` |
 | `TileCard` | `src/ui/pages/TileCard.h:9` | `QFrame` | (global) | yes `"TileCard"` (`.cpp:26`) — **non-unique, all cards share it** | `m_title`, `m_subtitle`, `m_thumbPath`, `m_progressFraction`, `m_pageBadge` ("Page N/M"), `m_countBadge`, `m_status`, `m_provenance`, `m_isNew`, `m_isFolder`, `m_selected` + **dynamic props** set by callers (`filePath`, `seriesTitle`, `seriesId`, `imdbId`, `catalogueId`, …) |
 | `TileStrip` | `src/ui/pages/TileStrip.h:11` | `QWidget` | (global) | no | `m_tiles` (`QList<TileCard*>`), `m_filteredOut`, `m_selected`, `m_mode`, `m_density`; has `Q_PROPERTY(int scrollOffsetX)`; cards via `tiles()` (`.h:35`), `tileAt(QPoint)→TileCard*` (`.cpp:183-192`) |
 | `ComicReader` | `src/ui/readers/ComicReader.h:316` | `QWidget` | (global) | no | `m_cbzPath` (481), `m_seriesName` (490), `m_seriesCbzList` (489), `m_currentPage` (484, 0-based), `m_pageNames` (482, count), `m_readerMode` (507, enum `DoublePage`/`ScrollStrip`), `m_fitMode` (508, `FitPage`/`FitWidth`/`FitHeight`), `m_rtl` (528), `m_isVolumeX` (497), `m_isStitchedCompilation` (504) |
@@ -67,7 +67,7 @@ All are `QJsonObject devSnapshot() const` **member methods**, none declared via 
 - `src/devtools/SystemIntrospection.cpp` — `dispatch()` route, `handleIntrospect` impl + helpers, `commandList()` additions.
 - `src/ui/MainWindow.cpp` — add `introspect_` to the `isSysCmd` prefix list (~2676); bump the `ping` schema string to `tankoban.dev.v1.14` (~1944).
 - `tools/tankoctl.cpp` — three verbs (arg parsing + allowlist + usage text).
-- `cmake/TankobanSources.cmake` — add `src/devtools/IDevInspectable.h` to HEADERS (new `.h` only; no new `.cpp`, so no reconfigure hazard — but verify it appears).
+- `cmake/TankobanSources.cmake` — add `src/devtools/IDevInspectable.h` to HEADERS (new `.h` only; no new `.cpp`). NOTE (per Codex review): editing the CMake include list may still trigger a reconfigure on next build — let `build_check.bat` reconfigure naturally and confirm the header is picked up (a header-only addition compiles via the TUs that `#include` it; ensure at least `SystemIntrospection.cpp` and each residue `.cpp` include it).
 
 **MODIFY — residue widgets (cross-domain, additive: `+ public IDevInspectable`, `devSnapshot() const override`)**
 - `src/ui/pages/comics/VolumeTile.{h,cpp}`
@@ -130,7 +130,7 @@ All three are **read-only**, run on the GUI thread, and emit hard caps + a `trun
 
 ### 5.1 `introspect_tree` — the structural floor plan
 **Payload:** `{ "root"?: string, "depth"?: int, "maxNodes"?: int }`
-- `root` — objectName to start from; default = the `MainWindow` (resolve via `m_mainWindow`). If `root` given but not found → `error WIDGET_NOT_FOUND`.
+- `root` — objectName/className to start from; default = the `MainWindow` (resolve via `SystemIntrospection`'s `m_window` member — NOT `m_mainWindow`; corrected per Codex review). If `root` given but not found → `error WIDGET_NOT_FOUND`.
 - `depth` — max recursion depth; default `-1` (unbounded, subject to `maxNodes`). `0` = the root node only.
 - `maxNodes` — hard cap on total emitted nodes; default `2000`. On hitting it, stop and set top-level `"truncated": true`.
 
@@ -153,11 +153,13 @@ All three are **read-only**, run on the GUI thread, and emit hard caps + a `trun
 **Top-level reply:** `{ "root": "<objectName>", "nodeCount": <int>, "truncated": <bool>, "tree": <node> }`.
 Reuse `geometryObject()`; add a file-local `bestEffortText(QObject*)` mirroring `UiInteractionDispatcher::widgetText`. Recurse over `obj->children()` so non-widget QObjects appear too (the agent sees the full object graph, not just the visible widget subtree).
 
-### 5.2 `introspect_object` — the coverage multiplier (handles non-unique objectNames)
-**Payload:** `{ "objectName": string (required), "root"?: string }`
-- Resolve **all** objects whose `objectName()` equals `objectName`, scoped to the `root` subtree if given (else whole app: iterate `QApplication::topLevelWidgets()` + `findChildren<QObject*>(name)` on each; dedupe by pointer). This is mandatory because cards share `objectName("TileCard")` — a single-match design would be useless on the exact widgets that motivated this spec.
-- Cap matches at `maxObjects` (default `200`); set `"truncated": true` if exceeded.
-- Empty/missing `objectName` → `error BAD_REQUEST`. Zero matches → reply with `"objects": []` (NOT an error — absence is information).
+### 5.2 `introspect_object` — the coverage multiplier (selects by objectName OR className)
+**Payload:** `{ "selector": string (required), "root"?: string, "maxObjects"?: int }`
+- **`selector` matches by `objectName()` OR `className()`** — this is mandatory and load-bearing (corrected per Codex spec review 2026-06-05): the acceptance-test widgets `ComicReader`, `SeekSlider`, and `TileStrip` set **no objectName at all**, so an objectName-only resolver would make them unreachable and the §7 test would fail. Resolution order per object: if `obj->objectName() == selector` OR `obj->metaObject()->className() == selector`, it matches. (className match also elegantly handles the inverse problem — cards share `objectName("TileCard")`, so both name and class collapse to the same useful "give me all the cards" query.)
+- Resolve **all** matching objects, scoped to the `root` subtree if given (resolve `root` by objectName/className → use the FIRST match as the search root; else whole app: iterate `QApplication::topLevelWidgets()` + `findChildren<QObject*>()` on each; dedupe by pointer).
+- Cap matches at `maxObjects` (payload override; default `200`); set top-level `"truncated": true` if exceeded.
+- Empty/missing `selector` → `error BAD_REQUEST`. Zero matches → reply with `"objects": []` (NOT an error — absence is information).
+- Back-compat alias: accept `objectName` as a synonym for `selector` if `selector` is absent (so older callers/notes keep working).
 
 **Per-object shape:**
 ```json
@@ -179,7 +181,7 @@ Reuse `geometryObject()`; add a file-local `bestEffortText(QObject*)` mirroring 
   "devSnapshot": { ... }     // present iff dynamic_cast<const IDevInspectable*> succeeded
 }
 ```
-**Top-level reply:** `{ "objectName": "<query>", "matchCount": <int>, "truncated": <bool>, "objects": [ ... ] }`.
+**Top-level reply:** `{ "selector": "<query>", "matchCount": <int>, "truncated": <bool>, "objects": [ ... ] }` (each object's own `objectName` and `className` are inside the per-object shape).
 Property enumeration walks `obj->metaObject()->property(i)` from `0` to `propertyCount()` (includes inherited Qt properties — that is fine and useful; do NOT filter to `propertyOffset()`). Guard `p.isReadable()` before `p.read(obj)`. Serialize with `QJsonValue::fromVariant`; if a variant is not JSON-representable, emit its `typeName()` string as the value.
 
 ### 5.3 `introspect_actions` — the available-actions list
@@ -197,6 +199,13 @@ Property enumeration walks `obj->metaObject()->property(i)` from `0` to `propert
 ```
 Enumerate `QAction` via `findChildren<QAction*>()` across `QApplication::topLevelWidgets()` (dedupe by pointer); `shortcut` via `a->shortcut().toString(QKeySequence::PortableText)`. Reuse the `QShortcut` enumeration from `app_get_shortcut_table` (`SystemIntrospection.cpp:319-344`) for the `shortcuts` array.
 
+### 5.3a tankoctl CLI surface (client arg parsing — corrected per Codex review)
+Define the kebab-case CLI explicitly in `tools/tankoctl.cpp` (these take args, so they parse into `payload` in their own `else if` branches BEFORE the no-payload allowlist — pattern: `dispatch-episode` at `600-615`; only `introspect-actions` goes in the allowlist):
+- `introspect-tree [root] [depth] [maxNodes]` — all positional + optional. `root` (string, default omitted → server uses MainWindow), `depth` (int), `maxNodes` (int). Parse present args into `payload{root,depth,maxNodes}`; integers via `toInt(&ok)` with a `BAD_REQUEST`-style usage error on non-integer depth/maxNodes.
+- `introspect-object <selector> [root] [maxObjects]` — `selector` required (else print usage, return 64); `root` (string) + `maxObjects` (int) optional. Parse into `payload{selector,root,maxObjects}`.
+- `introspect-actions` — no args; add to the no-payload allowlist at `tools/tankoctl.cpp:1562-1652`.
+Add a usage/help line for each (mirror neighboring verbs). Wire names convert kebab→snake (`introspect-tree`→`introspect_tree`) exactly as the existing v1.9 system commands do.
+
 ### 5.4 Schema + catalogue
 - Add the three commands to `SystemIntrospection::commandList()`.
 - Bump the `ping` schema string in `MainWindow.cpp` (~1944) from `tankoban.dev.v1.13` to `tankoban.dev.v1.14`. (Recap note: the ping string lagged at v1.11 before OBS-1 set it to v1.13 — confirm it currently reads v1.13 and advance to v1.14.)
@@ -212,7 +221,7 @@ Each residue widget: add `#include "devtools/IDevInspectable.h"`, change the cla
 - **`TileStrip`** → `{ mode, density, tileCount (m_tiles.size()), selectedCount, filteredOutCount, scrollOffsetX }`. (Cards themselves are reached individually via `introspect_object TileCard`; the strip snapshot is the index.)
 - **`ComicReader`** → `{ currentFile (m_cbzPath), seriesName, currentPage (m_currentPage, 0-based), pageCount (m_pageNames.size()), readerMode (DoublePage/ScrollStrip), fitMode (FitPage/FitWidth/FitHeight), rtl, isVolumeX, isStitchedCompilation, seriesVolumeCount (m_seriesCbzList.size()) }`. This is the object that answers "volume, page, reading mode" in the acceptance test.
 - **`SeekSlider`** → `{ value, minimum, maximum, durationSec, chapterMarkerCount, bufferedRangeCount, bufferedTotalBytes, bufferedFraction (computed) }`.
-- **`EpisodeTile`** → `{ season, episode, title, sizeBytes, alreadyHave, state (enum→string), progressPct, provenance, hasIndexEntry, imdbId }`.
+- **`EpisodeTile`** → `{ season, episode, title, sizeBytes, alreadyHave, state (enum→string), progressPct, provenance, hasIndexEntry, imdbId }`. **State enum (corrected per Codex review):** `EpisodeTileState` maps to the `StreamDownloadIndex::Entry` states (`Complete`/`Pending`/`Downloading`/`Failed` — NOT the comics-style `Queued`); read the actual enum in `EpisodeTile.h` and stringify those exact names.
 
 ---
 
@@ -220,11 +229,11 @@ Each residue widget: add `#include "devtools/IDevInspectable.h"`, change the cla
 
 With the app running under `build_and_run.bat` (`--dev-control` auto-set), a fresh agent reproduces *"open Grand Blue from continue-reading → report volume, page, reading mode"* in **≤ 2 introspection calls** plus the existing open action:
 
-1. **Locate (1 call):** `out\tankoctl.exe introspect-object TileCard` → returns the array of all cards; each carries `devSnapshot` (`title`, `subtitle`, `pageBadge`) + `dynamicProperties` (`filePath`). The agent finds the card whose `title`≈"Grand Blue" and reads its `filePath`. *(Replaces the 7-round crawl.)*
-2. **Open (existing action):** open it via the existing comics open path (e.g. `comics-open-chapter` / `comics-open-series`, or `ui-click` on the located card). Not introduced here.
-3. **Report (1 call):** `out\tankoctl.exe introspect-object ComicReader` → `devSnapshot` returns `{ currentFile, seriesName, currentPage, pageCount, readerMode, ... }` → agent reports **volume** (from `currentFile`/`seriesName`), **page** (`currentPage`/`pageCount`), **reading mode** (`readerMode`).
+1. **Locate (1 call):** `out\tankoctl.exe introspect-object TileCard` → returns the array of all cards; each carries `devSnapshot` (`title`, `subtitle`, `pageBadge`) + `dynamicProperties` (`filePath`, `seriesId`, `seriesTitle`, …). The agent finds the card whose `title`≈"Grand Blue" and reads its identity (`filePath` / `seriesId`). *(This single call replaces the 7-round crawl — it is the core deliverable.)*
+2. **Open (existing action — open-seam note):** open it via whatever existing comics open verb fits the identity read in step 1. **Honesty (per Codex spec review):** the current `comics-open-chapter` takes `seriesId volume chapter` (not a bare `filePath`), and `ui-click` targets an objectName that is non-unique for `TileCard` — so a *single* clean "open this exact CR card" verb may not exist today. That open-by-card seam, if missing, is a **one-line Agent-1 fast-follow (out of scope for this introspection commission)** — it does NOT block the introspection deliverable. The acceptance bar for OBS-10 is the discovery+report introspection calls, not the open mechanism.
+3. **Report (1 call):** `out\tankoctl.exe introspect-object ComicReader` → `devSnapshot` returns `{ currentFile, seriesName, currentPage, pageCount, readerMode, ... }` → agent reports **volume** (from `currentFile`/`seriesName`), **page** (`currentPage`/`pageCount`), **reading mode** (`readerMode`). (Note: `ComicReader` has no objectName — this call works ONLY because §5.2's selector matches by className. That is the load-bearing design fix.)
 
-**Pass bar:** discovery is the two `introspect-object` calls above (or one `introspect-tree comics` + one `introspect-object`), not 7+ rounds of guessing. If it is as fast as Playwright reading a DOM, it is done. Smoke evidence (the two JSON replies + the timing) goes in the RTC.
+**Pass bar (OBS-10 deliverable):** the two `introspect-object` calls above (locate + report), or one `introspect-tree comics` + one `introspect-object`, replace 7+ rounds of guessing. If discovery is as fast as Playwright reading a DOM, OBS-10 is done. The open-by-card action gap (step 2) is tracked separately and is NOT a gate on this commission. Smoke evidence (the JSON replies + timing) goes in the RTC.
 
 Also smoke the generic surface directly:
 - `introspect-tree` (no args) → returns a bounded tree rooted at MainWindow, `truncated` correct at the cap.
@@ -236,7 +245,7 @@ Also smoke the generic surface directly:
 ## 8. Constraints, hazards, fast-follows
 
 - **Read-only:** none of the three verbs is write-capable; do NOT add them to `isWriteCapable`; they run under `--dev-control` like other `diag_`/`app_` reads.
-- **GUI-thread + 500 ms cap:** the bridge dispatches synchronously on the GUI thread. The `maxNodes` (2000) / `maxObjects` (200) / `depth` caps keep a single call well under the cap. `devSnapshot()` impls MUST be cheap and side-effect-free (the existing 16 are).
+- **GUI-thread (no 500 ms execution cap):** the bridge dispatches synchronously on the GUI thread, so a slow handler blocks the UI; the client reply timeout is ~60 s, and the server's 500 ms is only a per-socket read/write wait (corrected per Codex review). The `maxNodes` (2000) / `maxObjects` (200) / `depth` caps keep the GUI-block short and the payload bounded. `devSnapshot()` impls MUST be cheap and side-effect-free (the existing 16 are).
 - **No model dump:** `introspect_model` from the parent design is deliberately **out of scope** here (lazy-model `fetchMore`/thread-safety hazards). Fast-follow.
 - **RTTI:** `dynamic_cast` to the interface requires `/GR` (MSVC default — confirm not disabled in `CMakeLists.txt`).
 - **Non-unique objectNames are expected:** `introspect_object` returns an array by design; do not "fix" cards to unique names in this commission (that is Agent 1's call and a separate change).
