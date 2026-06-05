@@ -45,6 +45,27 @@ namespace tankostream::stream {
 
 namespace {
 
+// Only query a stream addon for the id-prefixes it declares it handles (Stremio
+// addon semantics). An addon that declares no stream idPrefixes handles every id
+// (backward-compat). Without this gate, a type-only match queries the Amatsu
+// anime gateway (kitsu/anilist) for non-anime tt ids, where its slow
+// tt->AniList->Nyaa lookup (~17s) trips the 10s request timeout and stalls the
+// whole "Resolving sources" step — Hemanth-reported 2026-06-05 (Star Wars: Maul).
+bool addonHandlesStreamId(const AddonDescriptor& addon, const QString& id)
+{
+    for (const auto& res : addon.manifest.resources) {
+        if (res.name != QStringLiteral("stream"))
+            continue;
+        if (!res.hasIdPrefixes || res.idPrefixes.isEmpty())
+            return true;  // declares no prefixes -> handles all
+        for (const QString& pfx : res.idPrefixes)
+            if (!pfx.isEmpty() && id.startsWith(pfx))
+                return true;
+        return false;  // declares prefixes, none match this id
+    }
+    return true;  // no detailed stream resource entry -> do not exclude
+}
+
 constexpr int kMaxTrackers = 16;
 
 const QStringList kFallbackTrackers = {
@@ -77,6 +98,11 @@ const QRegularExpression kAudioRe(
     QStringLiteral("\\b(Atmos|DDP?\\s*5\\.1|TrueHD|DTS[-\\s]?HD|AAC|FLAC|AC3)\\b"),
     QRegularExpression::CaseInsensitiveOption);
 const QRegularExpression kSeedersRe(QStringLiteral("\\x{1F464}\\s*(\\d+)"));
+// Text fallback for addons that write "<n> Seeds"/"<n> Seeders" (e.g. Amatsu)
+// rather than Torrentio's 👤-prefixed count.
+const QRegularExpression kSeedersTextRe(
+    QStringLiteral("(\\d+)\\s*[Ss]eed"),
+    QRegularExpression::CaseInsensitiveOption);
 const QRegularExpression kSizeRe(
     QStringLiteral("\\x{1F4BE}\\s*([\\d.,]+\\s*[KMGT]?i?B)"),
     QRegularExpression::CaseInsensitiveOption);
@@ -358,7 +384,20 @@ void enrichTorrentioLikeFields(Stream& stream, const QJsonObject& streamObj)
         return;
     }
 
-    const QString rawTitle = streamObj.value(QStringLiteral("title")).toString();
+    // Torrentio packs everything (filename, 👤 seeders, 💾 size, ⚙ tracker) into a
+    // multi-line `title`. Newer Stremio addons (e.g. Amatsu, the Nyaa anime gateway)
+    // leave `title` empty and split the same data across `name` + `description`.
+    // Fall back to name+description so their magnet streams get enriched too —
+    // without this, seeders/size/quality stay unset and AutoSourcePicker rejects
+    // every Amatsu candidate as "No 1080p source found".
+    QString rawTitle = streamObj.value(QStringLiteral("title")).toString();
+    if (rawTitle.isEmpty()) {
+        const QString nm = streamObj.value(QStringLiteral("name")).toString();
+        const QString desc = streamObj.value(QStringLiteral("description")).toString();
+        rawTitle = nm.isEmpty() ? desc
+                 : desc.isEmpty() ? nm
+                 : nm + QLatin1Char('\n') + desc;
+    }
     if (rawTitle.isEmpty()) {
         return;
     }
@@ -382,6 +421,16 @@ void enrichTorrentioLikeFields(Stream& stream, const QJsonObject& streamObj)
         }
         if (containsBust(line)) {
             const auto m = kSeedersRe.match(line);
+            if (m.hasMatch()) {
+                seeders = m.captured(1).toInt();
+            }
+        }
+        // Amatsu uses 👥 (two-bust, U+1F465) + the literal "Seeds" word instead of
+        // Torrentio's 👤 (single-bust, U+1F464). Fall back to a text match so its
+        // seeder counts are read. Guarded on seeders==0 so Torrentio's emoji path
+        // (no "Seeds" word) keeps priority and never double-parses.
+        if (seeders == 0) {
+            const auto m = kSeedersTextRe.match(line);
             if (m.hasMatch()) {
                 seeders = m.captured(1).toInt();
             }
@@ -519,8 +568,17 @@ quint64 StreamAggregator::load(const StreamLoadRequest& request)
         return m_loadGeneration;
     }
 
-    const QList<AddonDescriptor> addons =
+    QList<AddonDescriptor> addons =
         m_registry->findByResourceType(QStringLiteral("stream"), request.type);
+
+    // Gate by declared id-prefix so e.g. the Amatsu anime gateway is only queried
+    // for kitsu/anilist ids, never for non-anime tt ids (where its slow lookup
+    // tripped the timeout and stalled source resolution).
+    addons.erase(std::remove_if(addons.begin(), addons.end(),
+                     [&](const AddonDescriptor& a) {
+                         return !addonHandlesStreamId(a, request.id);
+                     }),
+                 addons.end());
 
     if (addons.isEmpty()) {
         emitStreamsReadyDeferred(m_loadGeneration, {}, {});  // review fix — never emit synchronously
