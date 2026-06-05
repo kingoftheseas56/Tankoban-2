@@ -42,6 +42,7 @@ constexpr const char* kStateCompleted = "Completed";
 constexpr const char* kStateCancelled = "Cancelled";
 constexpr const char* kStateOrphaned = "Orphaned";
 constexpr const char* kStatePaused = "Paused";
+constexpr qint64 kPieceProgressDebounceMs = 300;
 
 QString streamBulkItemStateToString(StreamBulkItemState state)
 {
@@ -553,6 +554,8 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                     m_repo.updateTorrentState(
                         hash, tankoban::torrent::TorrentState::Active);
                 }
+                if (row.has_value())
+                    cachePieceMeta(hash, *row);
             },
             Qt::QueuedConnection);
     connect(m_engine, &TorrentEngine::torrentAddFailed,
@@ -563,6 +566,7 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                         hash, tankoban::torrent::TorrentState::Error,
                         errorMessage);
                 }
+                clearPieceProgressState(hash);
             },
             Qt::QueuedConnection);
     connect(m_engine, &TorrentEngine::resumeDataAvailable,
@@ -715,6 +719,8 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                 tankoban::torrent::TorrentState::Error,
                 QStringLiteral("Resume data missing — re-add torrent manually"));
             anyChanged = true;
+        } else {
+            cachePieceMeta(hash, row);
         }
     }
     if (anyChanged)
@@ -733,6 +739,7 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
         }
         if (m_engine->hasTorrent(hash)) {
             m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
+            cachePieceMeta(hash, row);
             continue;
         }
         const QString addedHash = m_engine->addMagnet(row.magnetUri, row.savePath);
@@ -745,6 +752,7 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
                 m_engine->removeTorrent(addedHash, /*deleteFiles=*/false);
         } else {
             m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
+            cachePieceMeta(hash, row);
         }
     }
 
@@ -2813,6 +2821,109 @@ QString TorrentClient::extractInfoHash(const QString& magnetUri) const
 }
 
 // ── Dedup check ─────────────────────────────────────────────────────────────
+void TorrentClient::cachePieceMeta(
+    const QString& infoHash,
+    const tankoban::torrent::TorrentRow& row)
+{
+    const QString hash = infoHash.toLower();
+    if (hash.isEmpty())
+        return;
+
+    PieceMeta meta;
+    meta.imdbId = row.imdbId;
+    meta.streamGroupId = row.streamGroupId;
+    meta.season = row.season;
+    m_pieceMetaCache.insert(hash, meta);
+}
+
+bool TorrentClient::ensurePieceMetaCached(const QString& infoHash)
+{
+    const QString hash = infoHash.toLower();
+    if (hash.isEmpty())
+        return false;
+    if (m_pieceMetaCache.contains(hash))
+        return true;
+
+    const auto row = m_repo.getTorrent(hash);
+    if (!row)
+        return false;
+    cachePieceMeta(hash, *row);
+    return true;
+}
+
+void TorrentClient::clearPieceProgressState(const QString& infoHash)
+{
+    const QString hash = infoHash.toLower();
+    if (hash.isEmpty())
+        return;
+    m_pieceMetaCache.remove(hash);
+    m_pieceProgressLastRunMs.remove(hash);
+    m_pieceProgressPending.remove(hash);
+}
+
+void TorrentClient::processPieceFinishedProgress(const QString& infoHash)
+{
+    const QString hash = infoHash.toLower();
+    if (!m_streamDownloadIndex || !m_engine || hash.isEmpty())
+        return;
+    if (!ensurePieceMetaCached(hash))
+        return;
+
+    const PieceMeta meta = m_pieceMetaCache.value(hash);
+    if (meta.imdbId.isEmpty())
+        return;  // not a Tankorent-source torrent
+
+    if (!meta.streamGroupId.isEmpty())
+        return;  // bulk-cohort path handles its own progress tracking
+
+    const QJsonArray files = m_engine->torrentFiles(hash);
+    if (files.isEmpty())
+        return;
+
+    const tankostream::stream::ParsedPack pack =
+        tankostream::stream::StreamPackParser::parsePack(
+            files, meta.imdbId, meta.season);
+
+    const QJsonArray fileProgress = m_engine->torrentFileProgress(hash);
+    if (fileProgress.isEmpty())
+        return;
+
+    if (pack.type == QStringLiteral("series")) {
+        for (const auto& pf : pack.episodes) {
+            if (pf.fileIndex < 0 || pf.fileIndex >= fileProgress.size())
+                continue;
+            const qint64 downloaded =
+                fileProgress.at(pf.fileIndex).toVariant().toLongLong();
+            const int pct = pf.sizeBytes > 0
+                ? static_cast<int>((downloaded * 100LL) / pf.sizeBytes)
+                : 0;
+            m_streamDownloadIndex->updateEpisodeProgress(
+                meta.imdbId, pf.season, pf.episode, pct);
+        }
+    } else if (pack.type == QStringLiteral("movie")) {
+        const int fileIndex = pack.movieFile.fileIndex;
+        if (fileIndex < 0 || fileIndex >= fileProgress.size())
+            return;
+        const qint64 downloaded =
+            fileProgress.at(fileIndex).toVariant().toLongLong();
+        const int pct = pack.movieFile.sizeBytes > 0
+            ? static_cast<int>((downloaded * 100LL) / pack.movieFile.sizeBytes)
+            : 0;
+        m_streamDownloadIndex->updateEpisodeProgress(meta.imdbId, 0, 0, pct);
+    }
+}
+
+void TorrentClient::flushPieceFinishedProgress(const QString& infoHash)
+{
+    const QString hash = infoHash.toLower();
+    if (hash.isEmpty())
+        return;
+    m_pieceProgressPending.remove(hash);
+    processPieceFinishedProgress(hash);
+    m_pieceProgressLastRunMs.insert(
+        hash, QDateTime::currentMSecsSinceEpoch());
+}
+
 bool TorrentClient::isDuplicate(const QString& magnetUri) const
 {
     QString hash = extractInfoHash(magnetUri);
@@ -2940,9 +3051,17 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
             return;
         }
         m_repo.updateTorrentState(hash, tankoban::torrent::TorrentState::Active);
-    } else if (!m_repo.getTorrent(hash).has_value()) {
-        m_repo.upsertTorrent(torrentRowFromStartConfig(
-            hash, config, tankoban::torrent::TorrentState::Active));
+        cachePieceMeta(hash, pendingRow);
+    } else {
+        const auto existingRow = m_repo.getTorrent(hash);
+        if (existingRow) {
+            cachePieceMeta(hash, *existingRow);
+        } else {
+            const auto activeRow = torrentRowFromStartConfig(
+                hash, config, tankoban::torrent::TorrentState::Active);
+            if (m_repo.upsertTorrent(activeRow))
+                cachePieceMeta(hash, activeRow);
+        }
     }
 
     // Apply file priorities
@@ -3403,6 +3522,7 @@ void TorrentClient::resumeTorrent(const QString& infoHash)
 
 void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
 {
+    const QString hash = infoHash.toLower();
     const auto row = m_repo.getTorrent(infoHash);
     const bool hadRecord = row.has_value();
     m_engine->removeTorrent(infoHash, deleteFiles);
@@ -3410,6 +3530,7 @@ void TorrentClient::deleteTorrent(const QString& infoHash, bool deleteFiles)
     // to the repo, so deleted torrent rows persisted in torrents.db across
     // restarts. The SQL row drop is now the only persistence write needed.
     m_repo.removeTorrent(infoHash);
+    clearPieceProgressState(hash);
     if (hadRecord) {
         markStreamBulkItemsForTorrent(
             infoHash,
@@ -3607,61 +3728,51 @@ void TorrentClient::onPieceFinished(const QString& infoHash, int /*pieceIndex*/)
 {
     // TANKORENT_CINEMETA_PACK_MAPPING 2026-05-18 — compute per-file progress for
     // every file in this torrent and push updates into StreamDownloadIndex.
-    // Coarse but correct: query libtorrent's per-file progress array on every
-    // piece event. libtorrent's file_progress is O(files), so this is cheap.
-    if (!m_streamDownloadIndex || !m_engine)
+    // Coarse but correct: coalesce piece bursts so the per-file progress scan
+    // runs at most once per torrent per debounce window.
+    const QString hash = infoHash.toLower();
+    if (!m_streamDownloadIndex || !m_engine || hash.isEmpty())
         return;
-    const auto row = m_repo.getTorrent(infoHash);
-    if (!row)
+    if (!ensurePieceMetaCached(hash))
         return;
 
-    const QString imdbId = row->imdbId;
-    if (imdbId.isEmpty())
+    const PieceMeta meta = m_pieceMetaCache.value(hash);
+    if (meta.imdbId.isEmpty())
         return;  // not a Tankorent-source torrent
 
-    const QString streamGroupId = row->streamGroupId;
-    if (!streamGroupId.isEmpty())
+    if (!meta.streamGroupId.isEmpty())
         return;  // bulk-cohort path handles its own progress tracking
 
-    const int configSeason = row->season;
-    const QJsonArray files = m_engine->torrentFiles(infoHash);
-    if (files.isEmpty())
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 lastRun = m_pieceProgressLastRunMs.value(hash, 0);
+    const qint64 elapsed = lastRun > 0 ? now - lastRun : kPieceProgressDebounceMs;
+    if (elapsed >= kPieceProgressDebounceMs) {
+        m_pieceProgressPending.remove(hash);
+        processPieceFinishedProgress(hash);
+        m_pieceProgressLastRunMs.insert(hash, now);
         return;
-
-    const tankostream::stream::ParsedPack pack =
-        tankostream::stream::StreamPackParser::parsePack(files, imdbId, configSeason);
-
-    const QJsonArray fileProgress = m_engine->torrentFileProgress(infoHash);
-    if (fileProgress.isEmpty())
-        return;
-
-    if (pack.type == QStringLiteral("series")) {
-        for (const auto& pf : pack.episodes) {
-            if (pf.fileIndex < 0 || pf.fileIndex >= fileProgress.size())
-                continue;
-            const qint64 downloaded =
-                fileProgress.at(pf.fileIndex).toVariant().toLongLong();
-            const int pct = pf.sizeBytes > 0
-                ? static_cast<int>((downloaded * 100LL) / pf.sizeBytes)
-                : 0;
-            m_streamDownloadIndex->updateEpisodeProgress(
-                imdbId, pf.season, pf.episode, pct);
-        }
-    } else if (pack.type == QStringLiteral("movie")) {
-        const int fileIndex = pack.movieFile.fileIndex;
-        if (fileIndex < 0 || fileIndex >= fileProgress.size())
-            return;
-        const qint64 downloaded =
-            fileProgress.at(fileIndex).toVariant().toLongLong();
-        const int pct = pack.movieFile.sizeBytes > 0
-            ? static_cast<int>((downloaded * 100LL) / pack.movieFile.sizeBytes)
-            : 0;
-        m_streamDownloadIndex->updateEpisodeProgress(imdbId, 0, 0, pct);
     }
+
+    if (m_pieceProgressPending.contains(hash))
+        return;
+
+    m_pieceProgressPending.insert(hash);
+    const int delayMs =
+        static_cast<int>(qMax<qint64>(1, kPieceProgressDebounceMs - elapsed));
+    QTimer::singleShot(delayMs, this, [this, hash]() {
+        if (!m_pieceProgressPending.contains(hash))
+            return;
+        m_pieceProgressPending.remove(hash);
+        processPieceFinishedProgress(hash);
+        m_pieceProgressLastRunMs.insert(
+            hash, QDateTime::currentMSecsSinceEpoch());
+    });
 }
 
 void TorrentClient::onTorrentFinished(const QString& infoHash)
 {
+    flushPieceFinishedProgress(infoHash);
+
     // libtorrent fires torrent_finished_alert every time a resumed already-
     // completed torrent re-enters the finished state (resume → recheck →
     // finished). Without this guard every app startup would append a dup

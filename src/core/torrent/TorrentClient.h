@@ -438,6 +438,17 @@ private:
     void appendHistory(const TorrentInfo& info);
     void compactHistory();
     QString extractInfoHash(const QString& magnetUri) const;
+    struct PieceMeta {
+        QString imdbId;
+        QString streamGroupId;
+        int season = 0;
+    };
+    void cachePieceMeta(const QString& infoHash,
+                        const tankoban::torrent::TorrentRow& row);
+    bool ensurePieceMetaCached(const QString& infoHash);
+    void clearPieceProgressState(const QString& infoHash);
+    void processPieceFinishedProgress(const QString& infoHash);
+    void flushPieceFinishedProgress(const QString& infoHash);
 
     CoreBridge*          m_bridge;
     TorrentEngine*       m_engine;
@@ -458,6 +469,9 @@ private:
     // AddTorrentConfig at TorrentClient.h:26 viable (no include of
     // ui/dialogs/AddTorrentDialog.h needed here).
     QHash<QString, QSharedPointer<AddTorrentConfig>> m_pendingStartConfigs;
+    QHash<QString, PieceMeta> m_pieceMetaCache;
+    QHash<QString, qint64> m_pieceProgressLastRunMs;
+    QSet<QString> m_pieceProgressPending;
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — SQLite-backed
     // durable store that will replace the legacy m_records / m_streamBulkGroups
