@@ -5,7 +5,9 @@ from datetime import datetime
 
 
 def _iso(ts):
-    return datetime.strptime(ts.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+    # ts may carry fractional seconds + trailing Z (marker line ts) or neither.
+    t = ts.replace("Z", "").split(".")[0]
+    return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S")
 
 
 def _offset(start, ts):

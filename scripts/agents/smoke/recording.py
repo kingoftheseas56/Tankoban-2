@@ -15,7 +15,9 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 
 
 def _iso(ts):
-    return datetime.strptime(ts.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+    # ts may carry fractional seconds + trailing Z (marker line ts) or neither.
+    t = ts.replace("Z", "").split(".")[0]
+    return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S")
 
 
 def wallclock_to_offset(session_start, ts):
@@ -33,7 +35,8 @@ class SessionRecording:
 
     def start(self):
         ok = self.rec.start()
-        self.start_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        # UTC to match the log-mark marker timestamps (the app stamps UTC "Z").
+        self.start_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         return ok
 
     def stop(self):
