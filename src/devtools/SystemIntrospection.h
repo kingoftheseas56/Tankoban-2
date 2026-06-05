@@ -75,6 +75,10 @@ private:
     // runtime state. timer-census enumerates every GUI-thread timer (QTimer
     // objects + raw startTimer/QBasicTimer ids). No state members.
     bool handleDiag(const QString& cmd, const QJsonObject& p, QJsonObject& r);
+    // introspect-* (v1.14 generic floor-plan, OBS-10) — read-only reflection of
+    // the live QObject tree + per-object Q_PROPERTY/dynamic-prop/devSnapshot()
+    // state + QAction/QShortcut catalogue. The in-process equivalent of a DOM.
+    bool handleIntrospect(const QString& cmd, const QJsonObject& p, QJsonObject& r);
 
     QPointer<MainWindow> m_window;
 

@@ -253,6 +253,7 @@ set(HEADERS
     src/devtools/UiInteractionDispatcher.h
     src/devtools/SystemIntrospection.h
     src/devtools/HangWatchdog.h
+    src/devtools/IDevInspectable.h
     src/core/JsonStore.h
     src/core/CoreBridge.h
     src/core/LibraryScanner.h

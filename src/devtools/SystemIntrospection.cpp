@@ -1,13 +1,21 @@
 #include "devtools/SystemIntrospection.h"
 
+#include "devtools/IDevInspectable.h"
+
 #include "core/CoreBridge.h"
 #include "core/JsonStore.h"
 #include "core/PosterCache.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
 
+#include <QAbstractButton>
 #include <QAbstractEventDispatcher>
+#include <QAction>
 #include <QApplication>
+#include <QComboBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMetaProperty>
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
@@ -245,6 +253,10 @@ QStringList SystemIntrospection::commandList()
         QStringLiteral("dev_toggle_feature"),
         // diag-* (1) — v1.13 observability cluster
         QStringLiteral("diag_timer_census"),
+        // introspect-* (3) — v1.14 generic floor-plan (OBS-10)
+        QStringLiteral("introspect_tree"),
+        QStringLiteral("introspect_object"),
+        QStringLiteral("introspect_actions"),
     };
 }
 
@@ -272,6 +284,7 @@ bool SystemIntrospection::dispatch(const QString& cmd,
     if (cmd.startsWith(QLatin1String("perf_")))      return handlePerf(cmd, payload, reply);
     if (cmd.startsWith(QLatin1String("dev_")))       return handleDev(cmd, payload, reply);
     if (cmd.startsWith(QLatin1String("diag_")))      return handleDiag(cmd, payload, reply);
+    if (cmd.startsWith(QLatin1String("introspect_"))) return handleIntrospect(cmd, payload, reply);
     return false;
 }
 
@@ -1133,4 +1146,284 @@ bool SystemIntrospection::handleDiag(const QString& cmd, const QJsonObject&, QJs
         return true;
     }
     setError(r,"UNKNOWN_CMD",QStringLiteral("diag-* command '%1' not handled").arg(cmd)); return true;
+}
+
+// ── introspect-* (v1.14 generic floor-plan, OBS-10) ─────────────────────────
+// Three read-only verbs that let an agent read Tankoban's structure + live
+// state without knowing the 140-key tankoctl surface (the in-process DOM):
+//   introspect-tree   — the QObject tree from a root (objectName/className/
+//                        geometry/visible/enabled/text/inspectable/children).
+//   introspect-object — every Q_PROPERTY + dynamic property + (if the object
+//                        implements IDevInspectable) its merged devSnapshot(),
+//                        selected by objectName OR className.
+//   introspect-actions — every QAction + QShortcut (enabled/checked/shortcut).
+// All run on the GUI thread; caps (maxNodes/maxObjects/depth) keep the
+// GUI-block short and the payload bounded.
+
+namespace {
+
+// Best-effort human label for a node so introspect-tree is readable without a
+// follow-up introspect-object call. Mirrors UiInteractionDispatcher::widgetText.
+QString introspectText(QObject* o)
+{
+    if (auto* b = qobject_cast<QAbstractButton*>(o)) return b->text();
+    if (auto* l = qobject_cast<QLabel*>(o))          return l->text();
+    if (auto* e = qobject_cast<QLineEdit*>(o))       return e->text();
+    if (auto* c = qobject_cast<QComboBox*>(o))       return c->currentText();
+    return QString();
+}
+
+// Serialize a QVariant for JSON; fall back to the type name when the variant is
+// not JSON-representable (enums, custom types) so the field is never silently
+// dropped.
+QJsonValue introspectVariant(const QVariant& v)
+{
+    const QJsonValue jv = QJsonValue::fromVariant(v);
+    if (jv.isNull() && !v.isNull())
+        return QJsonValue(QString::fromLatin1(v.typeName()));
+    return jv;
+}
+
+// Recursive QObject-tree builder. depthCap < 0 = unbounded (bounded by the node
+// budget). truncated is set when the node budget is exhausted with kids left.
+void introspectBuildTree(QObject* obj, int depth, int depthCap,
+                         int& nodeBudget, bool& truncated, QJsonObject& out)
+{
+    if (!obj) return;
+    --nodeBudget;
+    auto* w = qobject_cast<QWidget*>(obj);
+    out["objectName"]  = obj->objectName();
+    out["className"]   = QString::fromLatin1(obj->metaObject()->className());
+    out["isWidget"]    = (w != nullptr);
+    out["visible"]     = w ? w->isVisible() : false;
+    out["enabled"]     = w ? w->isEnabled() : false;
+    if (w) out["geometry"] = geometryObject(w);
+    const QString t = introspectText(obj);
+    if (!t.isEmpty()) out["text"] = t;
+    out["inspectable"] =
+        (dynamic_cast<const tankoban::devtools::IDevInspectable*>(obj) != nullptr);
+
+    const QObjectList kids = obj->children();
+    out["childCount"] = kids.size();
+    if (depthCap >= 0 && depth >= depthCap) return;  // depth cap: no children
+
+    QJsonArray childArr;
+    for (QObject* c : kids) {
+        if (nodeBudget <= 0) { truncated = true; break; }
+        QJsonObject childObj;
+        introspectBuildTree(c, depth + 1, depthCap, nodeBudget, truncated, childObj);
+        childArr.append(childObj);
+    }
+    if (!childArr.isEmpty()) out["children"] = childArr;
+}
+
+// Full per-object snapshot: base widget fields + Q_PROPERTY + dynamic props +
+// IDevInspectable::devSnapshot() when present.
+QJsonObject introspectEnumerate(QObject* obj)
+{
+    QJsonObject o;
+    const QMetaObject* mo = obj->metaObject();
+    auto* w = qobject_cast<QWidget*>(obj);
+    o["objectName"] = obj->objectName();
+    o["className"]  = QString::fromLatin1(mo->className());
+    o["isWidget"]   = (w != nullptr);
+    if (w) {
+        o["visible"]     = w->isVisible();
+        o["enabled"]     = w->isEnabled();
+        o["geometry"]    = geometryObject(w);
+        o["windowTitle"] = w->windowTitle();
+    }
+
+    QJsonObject props;
+    for (int i = 0; i < mo->propertyCount(); ++i) {
+        const QMetaProperty mp = mo->property(i);
+        if (!mp.isReadable()) continue;
+        props[QString::fromLatin1(mp.name())] = introspectVariant(mp.read(obj));
+    }
+    o["properties"] = props;
+
+    QJsonObject dyn;
+    const QList<QByteArray> dynNames = obj->dynamicPropertyNames();
+    for (const QByteArray& n : dynNames)
+        dyn[QString::fromLatin1(n)] = introspectVariant(obj->property(n.constData()));
+    o["dynamicProperties"] = dyn;
+
+    if (auto* insp = dynamic_cast<const tankoban::devtools::IDevInspectable*>(obj)) {
+        o["inspectable"] = true;
+        o["devSnapshot"] = insp->devSnapshot();
+    } else {
+        o["inspectable"] = false;
+    }
+    return o;
+}
+
+// First QObject whose objectName OR className equals `selector`, anywhere under
+// any top-level widget (the tlw itself is checked too). nullptr if none.
+QObject* introspectFirstMatch(const QString& selector)
+{
+    const QString sel = selector;
+    for (QWidget* tlw : QApplication::topLevelWidgets()) {
+        if (!tlw) continue;
+        if (tlw->objectName() == sel
+            || QString::fromLatin1(tlw->metaObject()->className()) == sel)
+            return tlw;
+        const QList<QObject*> kids = tlw->findChildren<QObject*>();
+        for (QObject* c : kids) {
+            if (c->objectName() == sel
+                || QString::fromLatin1(c->metaObject()->className()) == sel)
+                return c;
+        }
+    }
+    return nullptr;
+}
+
+// All QObjects under `node` (inclusive) whose objectName OR className equals
+// `selector`. Dedupes via `seen`; caps at maxObjects (sets truncated).
+void introspectCollect(QObject* node, const QString& selector,
+                       QSet<QObject*>& seen, QList<QObject*>& out,
+                       int maxObjects, bool& truncated)
+{
+    if (!node || seen.contains(node)) return;
+    seen.insert(node);
+    if (node->objectName() == selector
+        || QString::fromLatin1(node->metaObject()->className()) == selector) {
+        if (out.size() >= maxObjects) truncated = true;
+        else out.append(node);
+    }
+    const QObjectList kids = node->children();
+    for (QObject* c : kids)
+        introspectCollect(c, selector, seen, out, maxObjects, truncated);
+}
+
+} // namespace
+
+bool SystemIntrospection::handleIntrospect(const QString& cmd,
+                                           const QJsonObject& p,
+                                           QJsonObject& r)
+{
+    if (cmd == QLatin1String("introspect_tree")) {
+        QObject* root = nullptr;
+        const QString rootSel = p.value("root").toString();
+        if (rootSel.isEmpty()) {
+            root = m_window.data();
+            if (!root) { setError(r, "INTERNAL", "MainWindow gone"); return true; }
+        } else {
+            root = introspectFirstMatch(rootSel);
+            if (!root) {
+                setError(r, "WIDGET_NOT_FOUND",
+                    QStringLiteral("no object matched root '%1'").arg(rootSel));
+                return true;
+            }
+        }
+        const int depthCap = p.contains("depth") ? p.value("depth").toInt(-1) : -1;
+        const int maxNodes = p.contains("maxNodes") ? p.value("maxNodes").toInt(2000) : 2000;
+        int budget = maxNodes > 0 ? maxNodes : 2000;
+        bool truncated = false;
+        QJsonObject tree;
+        introspectBuildTree(root, 0, depthCap, budget, truncated, tree);
+        const QString rootLabel = root->objectName().isEmpty()
+            ? QString::fromLatin1(root->metaObject()->className())
+            : root->objectName();
+        mergeReply(r, QJsonObject{
+            {"root",      rootLabel},
+            {"nodeCount", (maxNodes > 0 ? maxNodes : 2000) - budget},
+            {"truncated", truncated},
+            {"tree",      tree},
+        });
+        return true;
+    }
+
+    if (cmd == QLatin1String("introspect_object")) {
+        QString selector = p.value("selector").toString();
+        if (selector.isEmpty()) selector = p.value("objectName").toString();  // alias
+        if (selector.isEmpty()) {
+            setError(r, "BAD_REQUEST", "payload.selector (or objectName) required");
+            return true;
+        }
+        const int maxObjects = p.contains("maxObjects") ? p.value("maxObjects").toInt(200) : 200;
+
+        QList<QObject*> roots;
+        const QString rootSel = p.value("root").toString();
+        if (!rootSel.isEmpty()) {
+            QObject* rt = introspectFirstMatch(rootSel);
+            if (!rt) {
+                setError(r, "WIDGET_NOT_FOUND",
+                    QStringLiteral("no object matched root '%1'").arg(rootSel));
+                return true;
+            }
+            roots.append(rt);
+        } else {
+            for (QWidget* tlw : QApplication::topLevelWidgets())
+                if (tlw) roots.append(tlw);
+        }
+
+        QSet<QObject*> seen;
+        QList<QObject*> matches;
+        bool truncated = false;
+        for (QObject* rt : roots)
+            introspectCollect(rt, selector, seen, matches, maxObjects, truncated);
+
+        QJsonArray arr;
+        for (QObject* o : matches)
+            arr.append(introspectEnumerate(o));
+        mergeReply(r, QJsonObject{
+            {"selector",   selector},
+            {"matchCount", arr.size()},
+            {"truncated",  truncated},
+            {"objects",    arr},
+        });
+        return true;
+    }
+
+    if (cmd == QLatin1String("introspect_actions")) {
+        QJsonArray actions;
+        QSet<QAction*> seenA;
+        for (QWidget* tlw : QApplication::topLevelWidgets()) {
+            if (!tlw) continue;
+            const QList<QAction*> as = tlw->findChildren<QAction*>();
+            for (QAction* a : as) {
+                if (seenA.contains(a)) continue;
+                seenA.insert(a);
+                QJsonObject o;
+                o["text"]      = a->text();
+                o["objectName"] = a->objectName();
+                o["shortcut"]  = a->shortcut().toString(QKeySequence::PortableText);
+                o["enabled"]   = a->isEnabled();
+                o["visible"]   = a->isVisible();
+                o["checkable"] = a->isCheckable();
+                o["checked"]   = a->isChecked();
+                if (auto* pw = qobject_cast<QWidget*>(a->parent())) {
+                    o["ownerObjectName"] = pw->objectName();
+                    o["ownerClassName"]  = QString::fromLatin1(pw->metaObject()->className());
+                }
+                actions.append(o);
+            }
+        }
+
+        QJsonArray shortcuts;
+        QSet<QShortcut*> seenS;
+        for (QWidget* tlw : QApplication::topLevelWidgets()) {
+            if (!tlw) continue;
+            const QList<QShortcut*> ss = tlw->findChildren<QShortcut*>();
+            for (QShortcut* s : ss) {
+                if (seenS.contains(s)) continue;
+                seenS.insert(s);
+                QJsonObject o;
+                o["key"]     = s->key().toString(QKeySequence::PortableText);
+                o["enabled"] = s->isEnabled();
+                if (auto* pw = qobject_cast<QWidget*>(s->parent())) {
+                    o["ownerObjectName"] = pw->objectName();
+                    o["ownerClassName"]  = QString::fromLatin1(pw->metaObject()->className());
+                }
+                shortcuts.append(o);
+            }
+        }
+
+        mergeReply(r, QJsonObject{{"actions", actions}, {"shortcuts", shortcuts}});
+        return true;
+    }
+
+    setError(r, "UNKNOWN_CMD",
+        QStringLiteral("introspect-* command '%1' not handled").arg(cmd));
+    return true;
 }

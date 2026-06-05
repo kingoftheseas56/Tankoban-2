@@ -459,7 +459,13 @@ void printUsage(QTextStream& err)
         << "                                 toggle / set an in-memory feature flag (WRITE flag)\n"
         << "  (write-capable v1.9 commands require TANKOBAN_DEV_WRITE=1 on server env or return\n"
         << "   DEV_WRITE_DISABLED. This is a SEPARATE flag from D.5's TANKOBAN_DEV_UI_SIM.)\n"
-        << "  Twelve spec-catalogue commands deferred — see DevControlServer.h v1.9 block.\n";
+        << "  Twelve spec-catalogue commands deferred — see DevControlServer.h v1.9 block.\n"
+        << "  -- v1.14 introspection floor-plan (OBS-10) --\n"
+        << "  introspect-tree [root] [depth] [maxNodes]\n"
+        << "                                 live QObject tree (objectName/className/geometry/text)\n"
+        << "  introspect-object <selector> [root] [maxObjects]\n"
+        << "                                 Q_PROPERTY + dynamic props + devSnapshot() by name|class\n"
+        << "  introspect-actions             all QAction + QShortcut (enabled/checked/shortcut)\n";
     tankoctl_scenario::printUsage(err);
 }
 
@@ -1559,6 +1565,35 @@ int main(int argc, char** argv)
             return 64;
         }
         payload["host"] = a[2];
+    } else if (sub == QLatin1String("introspect-tree")) {
+        // v1.14 floor-plan: introspect-tree [root] [depth] [maxNodes] — all optional.
+        if (a.size() >= 3) payload["root"] = a[2];
+        if (a.size() >= 4) {
+            bool okDepth = false;
+            const int depth = a[3].toInt(&okDepth);
+            if (!okDepth) { err << "introspect-tree depth must be an integer\n"; return 64; }
+            payload["depth"] = depth;
+        }
+        if (a.size() >= 5) {
+            bool okMax = false;
+            const int maxNodes = a[4].toInt(&okMax);
+            if (!okMax) { err << "introspect-tree maxNodes must be an integer\n"; return 64; }
+            payload["maxNodes"] = maxNodes;
+        }
+    } else if (sub == QLatin1String("introspect-object")) {
+        // v1.14 floor-plan: introspect-object <selector> [root] [maxObjects].
+        if (a.size() < 3) {
+            err << "introspect-object requires <selector> (objectName or className)\n";
+            return 64;
+        }
+        payload["selector"] = a[2];
+        if (a.size() >= 4) payload["root"] = a[3];
+        if (a.size() >= 5) {
+            bool okMax = false;
+            const int maxObjects = a[4].toInt(&okMax);
+            if (!okMax) { err << "introspect-object maxObjects must be an integer\n"; return 64; }
+            payload["maxObjects"] = maxObjects;
+        }
     } else if (sub == QLatin1String("ping") || sub == QLatin1String("get-state")
                || sub == QLatin1String("scan-videos") || sub == QLatin1String("close-player")
                || sub == QLatin1String("get-player") || sub == QLatin1String("get-library")
@@ -1641,7 +1676,9 @@ int main(int argc, char** argv)
                || sub == QLatin1String("net-list-requests")
                || sub == QLatin1String("net-list-rules")
                // v1.13 observability cluster — diag-* no-payload reads.
-               || sub == QLatin1String("diag-timer-census")) {
+               || sub == QLatin1String("diag-timer-census")
+               // v1.14 introspection floor-plan — no-payload action census.
+               || sub == QLatin1String("introspect-actions")) {
         // No payload args.
     } else {
         err << "unknown subcommand: " << sub << "\n\n";
