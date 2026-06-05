@@ -1029,13 +1029,12 @@ void ComicsPage::wireWesternDownloader()
             &tankoban::manga::comics::ComicsSeriesView::downloadWesternEditionRequested,
             this,
             [this](int volumeNumber, const QString& editionTitle,
-                   const QString& /*tierLabel*/, const QString& sourceHref) {
-        // RCO-as-source (2026-06-03): the Western download now runs through the
-        // existing MangaDownloader page->cbz pipeline (RCO reader pages,
-        // descrambled by ReadComicsPageParse), NOT GetComics. The edition's RCO
-        // item href IS the chapter to fetch.
-        if (!m_mangaDownloader || m_pendingWesternSeriesId.isEmpty() || sourceHref.isEmpty()) {
-            qInfo("ComicsPage: Western download ignored — no downloader/series/href");
+                   const QString& tierLabel, const QString& /*sourceHref*/) {
+        // GetComics-as-source (2026-06-05): the Western download runs through
+        // WesternVolumeDownloader, matching collected editions on series identity
+        // with year/tier as hints. It does not use the RCO page-scrape path.
+        if (!m_westernDownloader || m_pendingWesternSeriesId.isEmpty()) {
+            qInfo("ComicsPage: Western download ignored - no downloader/series");
             if (m_tyVolumeSeriesView)
                 m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
             return;
@@ -1096,18 +1095,14 @@ void ComicsPage::wireWesternDownloader()
         // clicked rco issue is cross-mapped to its readallcomics counterpart for
         // the actual page fetch. Issue number comes from the edition title
         // ("Invincible #144" -> 144), falling back to the volume row number.
-        double issueNumber = volumeNumber;
-        static const QRegularExpression kIssueNum(QStringLiteral(R"(#\s*(\d+(?:\.\d+)?))"));
-        const auto inm = kIssueNum.match(editionTitle);
-        if (inm.hasMatch())
-            issueNumber = inm.captured(1).toDouble();
+        const int year = seriesJson.value(QStringLiteral("yearStart")).toInt();
 
-        qInfo("ComicsPage: Western download — series=%s edition=%s issue=%g vol=%d dest=%s",
+        qInfo("ComicsPage: Western download - series=%s edition=%s volumeNumber=%d year=%d dest=%s",
               qUtf8Printable(seriesId), qUtf8Printable(editionTitle),
-              issueNumber, volumeNumber, qUtf8Printable(destPath));
+              volumeNumber, year, qUtf8Printable(destPath));
 
-        startWesternIssueDownload(seriesTitle, issueNumber, editionTitle,
-                                  volumeNumber, destPath);
+        m_westernDownloader->requestVolume(seriesId, volumeNumber, seriesTitle,
+                                           year, tierLabel, destPath);
     });
 
     // --- volumeResolved: surface the matched collected edition in the panel ---
