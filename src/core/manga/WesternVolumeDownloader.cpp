@@ -125,7 +125,7 @@ void WesternVolumeDownloader::pumpResolveQueue()
         const ReqState& st = m_states[key];
         m_activeResolveKey = rk;
         m_resolveInFlight  = true;
-        m_resolver.resolve(st.seriesTitle, st.year, st.tierLabel);
+        m_resolver.resolve(st.seriesTitle, rk.volumeNumber, st.year, st.tierLabel);
         return;
     }
 }
@@ -234,9 +234,13 @@ void WesternVolumeDownloader::tryNextDdlLink(const QString& key)
 
         if (link.kind == QLatin1String("magnet")) continue;   // DDL path only
 
+        // Per-volume filename (COMICS_WESTERN_GCD 2026-06-05): the unit is the
+        // TPB volume, so each volume lands as its own file (was series-level, which
+        // made every volume overwrite "Series.cbz").
         const QString destFile =
             QDir(destFolder).absoluteFilePath(
-                sanitiseName(seriesTitle) + QStringLiteral(".cbz"));
+                sanitiseName(seriesTitle + QStringLiteral(" Vol ")
+                             + QString::number(rk.volumeNumber)) + QStringLiteral(".cbz"));
 
         // HttpFileDownloader as a child of this (auto-cleaned up if this dies).
         auto* dl = new tankoban::net::HttpFileDownloader(m_nam, this);

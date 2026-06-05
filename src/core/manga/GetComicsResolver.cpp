@@ -54,84 +54,118 @@ static QStringList buildQueries(const QString& series, const QString& tierLabel)
     return q;
 }
 
-void GetComicsResolver::resolve(const QString& seriesTitle, int year, const QString& tierLabel)
+void GetComicsResolver::resolve(const QString& seriesTitle, int volumeNumber,
+                                int /*year*/, const QString& tierLabel)
 {
-    const QStringList queries = buildQueries(seriesTitle, tierLabel);
-    if (queries.isEmpty()) {
+    Q_UNUSED(tierLabel);
+    if (seriesTitle.trimmed().isEmpty()) {
         emit resolveFailed(QStringLiteral("empty series title"));
         return;
     }
-    tryQuery(seriesTitle, year, queries, 0, QString());
+    // Tag page first — the clean per-series listing (no /?s= noise).
+    fetchTagPage(seriesTitle, volumeNumber, getcomics::tagSlug(seriesTitle), 1);
 }
 
-void GetComicsResolver::tryQuery(const QString& seriesTitle, int year,
-                                 const QStringList& queries, int idx,
-                                 const QString& lastError)
+void GetComicsResolver::fetchTagPage(const QString& seriesTitle, int volumeNumber,
+                                     const QString& slug, int page)
 {
-    if (idx >= queries.size()) {
-        emit resolveFailed(lastError.isEmpty()
-                               ? QStringLiteral("no confident match")
-                               : QStringLiteral("GetComics search failed: ") + lastError);
-        return;
-    }
-
-    const QUrl searchUrl(GC_BASE + QStringLiteral("/?s=")
-                         + QString::fromUtf8(QUrl::toPercentEncoding(queries.at(idx))));
-    auto* searchReply = m_nam->get(makeRequest(searchUrl));
-    // lifetime-independent cleanup: reply is deleted even if this object is
-    // destroyed mid-flight before the this-context slot fires.
-    connect(searchReply, &QNetworkReply::finished, searchReply, &QObject::deleteLater);
-    connect(searchReply, &QNetworkReply::finished, this,
-            [this, searchReply, seriesTitle, year, queries, idx, lastError]() {
-        if (searchReply->error() != QNetworkReply::NoError) {
-            // Network error on THIS query — try the next rather than aborting the
-            // whole resolve. Carry the latest error in case every query fails.
-            tryQuery(seriesTitle, year, queries, idx + 1, searchReply->errorString());
+    const QString path = (page <= 1)
+        ? QStringLiteral("/tag/") + slug + QStringLiteral("/")
+        : QStringLiteral("/tag/") + slug + QStringLiteral("/page/")
+              + QString::number(page) + QStringLiteral("/");
+    const QUrl tagUrl(GC_BASE + path);
+    auto* reply = m_nam->get(makeRequest(tagUrl));
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, seriesTitle, volumeNumber, slug, page]() {
+        // Tag page missing / network error -> fall straight to /?s= search.
+        if (reply->error() != QNetworkReply::NoError) {
+            const QStringList queries = buildQueries(seriesTitle, QString());
+            trySearchQueries(seriesTitle, volumeNumber, queries, 0, reply->errorString());
             return;
         }
-
-        const QString html = QString::fromUtf8(searchReply->readAll());
+        const QString html = QString::fromUtf8(reply->readAll());
         const auto results = getcomics::parseSearchResults(html);
-        const auto match   = getcomics::pickBestCollectedEdition(seriesTitle, year, results);
-
-        if (match.postUrl.isEmpty()) {
-            // No strict collected-edition match on this query — try the next.
-            // Preserve any earlier network error so an all-fail run reports it.
-            tryQuery(seriesTitle, year, queries, idx + 1, lastError);
+        const auto match   = getcomics::pickPostForVolume(seriesTitle, volumeNumber, results);
+        if (!match.postUrl.isEmpty()) {
+            fetchPostForVolume(match, seriesTitle, volumeNumber);
             return;
         }
-        fetchPost(match);
+        // No covering post on this page — try the next, up to the cap. An empty
+        // page (no results) means we have run off the end of the tag listing.
+        if (!results.isEmpty() && page < kMaxTagPages) {
+            fetchTagPage(seriesTitle, volumeNumber, slug, page + 1);
+            return;
+        }
+        // Tag listing exhausted — fall back to the noisy /?s= search.
+        const QStringList queries = buildQueries(seriesTitle, QString());
+        trySearchQueries(seriesTitle, volumeNumber, queries, 0, QString());
     });
 }
 
-void GetComicsResolver::fetchPost(const getcomics::SearchResult& match)
+void GetComicsResolver::trySearchQueries(const QString& seriesTitle, int volumeNumber,
+                                         const QStringList& queries, int idx,
+                                         const QString& lastError)
+{
+    if (idx >= queries.size()) {
+        emit resolveFailed(lastError.isEmpty()
+                               ? QStringLiteral("no post carries volume ")
+                                     + QString::number(volumeNumber)
+                               : QStringLiteral("GetComics search failed: ") + lastError);
+        return;
+    }
+    const QUrl searchUrl(GC_BASE + QStringLiteral("/?s=")
+                         + QString::fromUtf8(QUrl::toPercentEncoding(queries.at(idx))));
+    auto* searchReply = m_nam->get(makeRequest(searchUrl));
+    connect(searchReply, &QNetworkReply::finished, searchReply, &QObject::deleteLater);
+    connect(searchReply, &QNetworkReply::finished, this,
+            [this, searchReply, seriesTitle, volumeNumber, queries, idx, lastError]() {
+        if (searchReply->error() != QNetworkReply::NoError) {
+            trySearchQueries(seriesTitle, volumeNumber, queries, idx + 1,
+                             searchReply->errorString());
+            return;
+        }
+        const QString html = QString::fromUtf8(searchReply->readAll());
+        const auto results = getcomics::parseSearchResults(html);
+        const auto match   = getcomics::pickPostForVolume(seriesTitle, volumeNumber, results);
+        if (match.postUrl.isEmpty()) {
+            trySearchQueries(seriesTitle, volumeNumber, queries, idx + 1, lastError);
+            return;
+        }
+        fetchPostForVolume(match, seriesTitle, volumeNumber);
+    });
+}
+
+void GetComicsResolver::fetchPostForVolume(const getcomics::SearchResult& match,
+                                           const QString& seriesTitle, int volumeNumber)
 {
     const QUrl postUrl(match.postUrl);
     auto* postReply = m_nam->get(makeRequest(postUrl));
-    // lifetime-independent cleanup for the nested reply.
     connect(postReply, &QNetworkReply::finished, postReply, &QObject::deleteLater);
-    connect(postReply, &QNetworkReply::finished, this, [this, postReply, match]() {
+    connect(postReply, &QNetworkReply::finished, this,
+            [this, postReply, match, seriesTitle, volumeNumber]() {
         if (postReply->error() != QNetworkReply::NoError) {
-            emit resolveFailed(QStringLiteral("GetComics post fetch failed: ") + postReply->errorString());
+            emit resolveFailed(QStringLiteral("GetComics post fetch failed: ")
+                               + postReply->errorString());
             return;
         }
-
         const QString postHtml = QString::fromUtf8(postReply->readAll());
 
-        // Assemble EditionDownload from the post HTML.
         EditionDownload dl;
         dl.postUrl      = match.postUrl;
         dl.matchedTitle = match.title;
         dl.coverUrl     = getcomics::parsePostCover(postHtml);
-        dl.links    = getcomics::extractDownloads(postHtml);
-        dl.best     = getcomics::pickBest(dl.links);
+        // THIS volume's download (range posts section each volume; standalone
+        // posts fall back to pickBest over the whole post).
+        dl.best  = getcomics::extractVolumeDownload(postHtml, seriesTitle, volumeNumber);
+        dl.links = dl.best.url.isEmpty() ? QList<getcomics::DownloadLink>{}
+                                         : QList<getcomics::DownloadLink>{dl.best};
 
-        // Fail safe — only emit resolved if there is a usable link.
         if (dl.best.url.isEmpty()) {
-            emit resolveFailed(QStringLiteral("no usable download in post"));
+            emit resolveFailed(QStringLiteral("volume ") + QString::number(volumeNumber)
+                               + QStringLiteral(" not found in post"));
             return;
         }
-
         emit resolved(dl);
     });
 }

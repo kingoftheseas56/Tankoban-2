@@ -25,30 +25,38 @@ class GetComicsResolver : public QObject {
 public:
     explicit GetComicsResolver(QNetworkAccessManager* nam, QObject* parent = nullptr);
 
-    // COLLECTED-EDITION resolve (2026-06-02, Agent 1). seriesTitle is the SERIES
-    // name (e.g. "Invincible"), not a per-TPB label — GetComics carries these
-    // series only as collected editions. We fire a small set of series+keyword
-    // queries (Compendium/Omnibus/Collection/...) and take the first that yields
-    // a STRICT collected-edition match (pickBestCollectedEdition). year/tierLabel
-    // are hints (year tie-breaks the match; tierLabel orders the first query).
-    // Emits resolved() on a confident match with a usable download, else
+    // VOLUME-AWARE resolve (COMICS_WESTERN_GCD 2026-06-05, Agent 1). seriesTitle
+    // is the SERIES name (e.g. "Saga"); volumeNumber is the specific TPB volume to
+    // fetch. We browse GetComics' clean per-series tag page
+    // (getcomics.org/tag/<slug>/, paginated), pick the post that CARRIES this
+    // volume (pickPostForVolume — a standalone "<series> Vol. N" post, else a range
+    // post covering N), and extract THAT volume's download (extractVolumeDownload).
+    // If the tag page yields nothing, fall back to the noisy /?s= search (also
+    // volume-aware). year/tierLabel are legacy hints (tierLabel seeds the fallback
+    // queries). Emits resolved() on a usable per-volume download, else
     // resolveFailed() (fail safe).
-    void resolve(const QString& seriesTitle, int year, const QString& tierLabel);
+    void resolve(const QString& seriesTitle, int volumeNumber, int year,
+                 const QString& tierLabel);
 
 signals:
     void resolved(const EditionDownload& dl);
     void resolveFailed(const QString& reason);
 
 private:
-    // Try search query queries[idx]; on a strict match fetch the post, else
-    // recurse to the next query. Exhausting the list (or all-errored) ->
-    // resolveFailed. lastError carries a network error string for the final
-    // message when no query ever returned usable HTML.
-    void tryQuery(const QString& seriesTitle, int year,
-                  const QStringList& queries, int idx, const QString& lastError);
-    // Fetch the matched post page, assemble the EditionDownload, emit.
-    void fetchPost(const getcomics::SearchResult& match);
+    // Fetch tag page `page` for slug; pickPostForVolume over its results. On a
+    // match, fetch the post; else fetch the next page (up to kMaxTagPages); if the
+    // tag page is exhausted/empty, fall back to the /?s= search path.
+    void fetchTagPage(const QString& seriesTitle, int volumeNumber,
+                      const QString& slug, int page);
+    // /?s= fallback: try queries[idx]; pickPostForVolume on results; on a match
+    // fetch the post, else recurse. Exhausting -> resolveFailed.
+    void trySearchQueries(const QString& seriesTitle, int volumeNumber,
+                          const QStringList& queries, int idx, const QString& lastError);
+    // Fetch the matched post, extract THIS volume's download, assemble + emit.
+    void fetchPostForVolume(const getcomics::SearchResult& match,
+                            const QString& seriesTitle, int volumeNumber);
 
+    static constexpr int kMaxTagPages = 5;
     QNetworkAccessManager* m_nam = nullptr;
 };
 

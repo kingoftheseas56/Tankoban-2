@@ -3,6 +3,7 @@
 
 #include <QRegularExpression>
 #include <QSet>
+#include <QPair>
 #include <algorithm>
 
 namespace tankoban::manga::getcomics {
@@ -13,11 +14,21 @@ QString classifyKind(const QString& href, const QString& text) {
     t.remove(QRegularExpression(QStringLiteral("<[^>]+>")));
     t = t.trimmed().toLower();
     if (href.startsWith(QLatin1String("magnet:"))) return QStringLiteral("magnet");
-    if (t.contains(QLatin1String("main server"))) return QStringLiteral("main_server");
-    if (t.contains(QLatin1String("pixeldrain")))  return QStringLiteral("pixeldrain");
-    if (t.contains(QLatin1String("mediafire")))   return QStringLiteral("mediafire");
-    if (t.contains(QLatin1String("mega")))        return QStringLiteral("mega");
-    return QString();
+    // Only getcomics.org/dls/ links are real downloads from here on. Verified live
+    // 2026-06-05: the clean main-server (comicfiles) button is labelled variously
+    // "DOWNLOAD NOW", "Main Server", "Link 1", "Link 2" — ALL of them 302 to the
+    // file server. Third-party mirror hosts (mega/mediafire/pixeldrain/terabox/
+    // ufile) are the only NON-main-server kinds. So: recognise the mirrors by
+    // text, drop the ones we don't use, and treat every other /dls/ link as the
+    // main server. (Previously only "main server" matched, so the real
+    // "DOWNLOAD NOW"/"Link 1" primary was silently dropped — latent bug.)
+    if (!href.contains(QLatin1String("getcomics.org/dls/"))) return QString();
+    if (t.contains(QLatin1String("pixeldrain"))) return QStringLiteral("pixeldrain");
+    if (t.contains(QLatin1String("mediafire")))  return QStringLiteral("mediafire");
+    if (t.contains(QLatin1String("mega")))       return QStringLiteral("mega");
+    if (t.contains(QLatin1String("terabox")) || t.contains(QLatin1String("ufile"))
+        || t.contains(QLatin1String("zippy")))   return QString();   // unused mirrors
+    return QStringLiteral("main_server");   // DOWNLOAD NOW / Main Server / Link 1 / Link 2
 }
 
 const QStringList& priority() {
@@ -236,6 +247,97 @@ SearchResult pickBestCollectedEdition(const QString& seriesTitle, int year,
     }
     if (bestRank == 0 || bestCount > 1) return {};
     return best;
+}
+
+// ── volume-aware matching (COMICS_WESTERN_GCD 2026-06-05) ────────────────────
+
+QString tagSlug(const QString& seriesTitle) {
+    QString s = seriesTitle.toLower();
+    s.replace(QRegularExpression(QStringLiteral("[^a-z0-9]+")), QStringLiteral("-"));
+    s.remove(QRegularExpression(QStringLiteral("^-+|-+$")));
+    return s;
+}
+
+namespace {
+// Volume coverage of a post title: standalone "Vol. 12" -> (12,12); a range
+// "Vol. 1 - 10" -> (1,10); none -> (0,0). Hyphen, en-dash, em-dash all separate.
+QPair<int,int> volumeCoverage(const QString& title) {
+    static const QRegularExpression range(
+        QStringLiteral("vol\\.?\\s*(\\d+)\\s*[-\\x{2013}\\x{2014}]\\s*(\\d+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    auto m = range.match(title);
+    if (m.hasMatch()) return {m.captured(1).toInt(), m.captured(2).toInt()};
+    static const QRegularExpression single(
+        QStringLiteral("vol\\.?\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+    m = single.match(title);
+    if (m.hasMatch()) { const int n = m.captured(1).toInt(); return {n, n}; }
+    return {0, 0};
+}
+
+// Same-series gate: identity token SETS equal (mirrors isCollectedEditionOf gate
+// 1). Set EQUALITY, not subset — "Spider-Man Clone Saga Omnibus" has extra tokens
+// {spider,man,clone} so it is rejected for series "Saga"; a legit "Saga Vol. 1-10
+// + Book 1-3" reduces to {saga} (vol/book/numbers/years are noise) and matches.
+bool sameSeries(const QString& seriesTitle, const QString& candidateTitle) {
+    const QStringList series = identityTokens(seriesTitle);
+    if (series.isEmpty()) return false;
+    const QStringList cand = identityTokens(candidateTitle);
+    const QSet<QString> seriesSet(series.begin(), series.end());
+    const QSet<QString> candSet(cand.begin(), cand.end());
+    return seriesSet == candSet;
+}
+} // namespace
+
+SearchResult pickPostForVolume(const QString& seriesTitle, int volumeNumber,
+                               const QList<SearchResult>& results) {
+    SearchResult standalone, range;
+    for (const auto& r : results) {
+        if (!sameSeries(seriesTitle, r.title)) continue;
+        const auto cov = volumeCoverage(r.title);
+        if (cov.first == 0) continue;
+        if (cov.first == volumeNumber && cov.second == volumeNumber) {
+            if (standalone.postUrl.isEmpty()) standalone = r;     // first-seen standalone wins
+        } else if (cov.first <= volumeNumber && volumeNumber <= cov.second) {
+            if (range.postUrl.isEmpty()) range = r;               // first-seen range fallback
+        }
+    }
+    return !standalone.postUrl.isEmpty() ? standalone : range;
+}
+
+DownloadLink extractVolumeDownload(const QString& postHtml,
+                                   const QString& seriesTitle, int volumeNumber) {
+    Q_UNUSED(seriesTitle);
+    // Verified live 2026-06-05: a multi-volume (range/bundle) post lists each
+    // volume as its own <li>, label-first: "<li>Saga Vol. 3 (2014) (324 MB) :
+    // <a>Link 1</a> | <a>Mega</a> ...</li>". Match the <li> whose LABEL (text
+    // before its first <a>) names this exact volume, then pickBest within it.
+    static const QRegularExpression liRe(
+        QStringLiteral("<li[^>]*>(.*?)</li>"),
+        QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression volInLabel(
+        QStringLiteral("vol\\.?\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+
+    QList<QString> dlItems;   // <li> bodies that actually carry a /dls/ link
+    auto it = liRe.globalMatch(postHtml);
+    while (it.hasNext()) {
+        const QString body = it.next().captured(1);
+        if (body.contains(QLatin1String("getcomics.org/dls/"))) dlItems.append(body);
+    }
+
+    // Multi-volume post: find the <li> whose label says "Vol. N".
+    for (const QString& li : dlItems) {
+        const int aPos = li.indexOf(QLatin1String("<a"));
+        const QString label = aPos > 0 ? li.left(aPos) : li;   // text before first link
+        const auto m = volInLabel.match(label);
+        if (m.hasMatch() && m.captured(1).toInt() == volumeNumber)
+            return pickBest(extractDownloads(li));
+    }
+
+    // Standalone post: a single download item (or none of the labels matched but
+    // there is only one) -> that item IS the volume. Fall back to the whole post.
+    if (dlItems.size() == 1) return pickBest(extractDownloads(dlItems.first()));
+    if (dlItems.isEmpty())   return pickBest(extractDownloads(postHtml));
+    return {};   // multi-volume post but this volume's <li> not found
 }
 
 } // namespace tankoban::manga::getcomics

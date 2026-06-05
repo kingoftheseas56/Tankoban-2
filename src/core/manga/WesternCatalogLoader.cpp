@@ -7,6 +7,7 @@
 #include "WesternCatalogLoader.h"
 
 #include <QCoreApplication>
+#include <QDate>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -65,6 +66,36 @@ MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
         if (!s.isEmpty()) cat.genres.append(s);
     }
     cat.schemaVersion  = kMangaCatalogSchemaVersion;
+
+    // ── schema-v3 GCD branch (COMICS_WESTERN_GCD 2026-06-05, Agent 1) ──────────
+    // The GCD+Open-Library brain emits per-volume FORWARD editions, each with its
+    // own ISBN / OL cover / year (vs the v2/rco shared-cover, position-ordinal,
+    // reverse-ordered shape). Branch by source/schemaVersion; the v2/rco path
+    // below stays intact for not-yet-regenerated series.
+    const int schemaVer = obj.value(QStringLiteral("schemaVersion")).toInt();
+    const bool isGcd = schemaVer >= 3
+        || obj.value(QStringLiteral("source")).toString() == QLatin1String("gcd");
+    if (isGcd) {
+        // seriesCover is already an absolute OL URL (no host-relative rewrite).
+        cat.seriesCover = obj.value(QStringLiteral("seriesCover")).toString().trimmed();
+        cat.volumes.reserve(editionsArr.size());
+        for (const auto& v : editionsArr) {
+            const QJsonObject eo = v.toObject();
+            MangaVolume vol;
+            vol.volumeNumber  = eo.value(QStringLiteral("volumeNumber")).toInt();
+            vol.titleEnglish  = eo.value(QStringLiteral("title")).toString();
+            vol.isbnEn        = eo.value(QStringLiteral("isbn")).toString();
+            vol.groupingLabel = tierLabel(eo.value(QStringLiteral("formatTier")).toInt(2));
+            const int y = eo.value(QStringLiteral("year")).toInt();
+            if (y > 0) vol.releaseDateEn = QDate(y, 1, 1);
+            // Per-volume OL cover (may be empty -> VolumeTile renders a title-card).
+            const QString cov = eo.value(QStringLiteral("coverUrl")).toString().trimmed();
+            vol.coverUrlJapanese = cov;
+            vol.coverUrlEdition  = cov;
+            cat.volumes.append(std::move(vol));
+        }
+        return cat;
+    }
 
     // Cover-tolerant: one shared series hero cover painted on every edition tile
     // (per-edition covers are a follow-on). Absent/empty => VolumeTile renders a

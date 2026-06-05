@@ -127,3 +127,68 @@ TEST(GetComicsParse, PickBestCollectedEditionTieReturnsEmpty) {
         {"Invincible Compendium Vol. 2", "u2"}};   // same tier, no year -> equal rank
     EXPECT_TRUE(pickBestCollectedEdition("Invincible", 0, tie).postUrl.isEmpty());
 }
+
+// ── volume-aware matching (COMICS_WESTERN_GCD 2026-06-05) ────────────────────
+
+TEST(GetComicsParse, TagSlug) {
+    EXPECT_EQ(tagSlug("Saga"), "saga");
+    EXPECT_EQ(tagSlug("The Wicked + The Divine"), "the-wicked-the-divine");
+    EXPECT_EQ(tagSlug("Invincible"), "invincible");
+}
+
+// A standalone "<series> Vol. N" post is preferred over a range that covers N.
+TEST(GetComicsParse, PickPostForVolumePrefersStandalone) {
+    QList<SearchResult> r = {
+        {"Saga Vol. 1 \xE2\x80\x93 10 + Book 1 \xE2\x80\x93 3 (TPB) (2012-2022)", "u-range"},
+        {"Saga Vol. 12 (TPB) (2025)", "u-12"},
+        {"Saga #72 (2025)", "u-iss"},
+        {"Elektra Saga #1 (1984)", "u-noise"}};
+    EXPECT_EQ(pickPostForVolume("Saga", 12, r).postUrl, "u-12");
+}
+
+// A gap volume (no standalone) falls back to the range post that covers it.
+TEST(GetComicsParse, PickPostForVolumeFallsBackToRange) {
+    QList<SearchResult> r = {
+        {"Saga Vol. 1 \xE2\x80\x93 10 + Book 1 \xE2\x80\x93 3 (TPB) (2012-2022)", "u-range"},
+        {"Saga Vol. 12 (TPB) (2025)", "u-12"}};
+    EXPECT_EQ(pickPostForVolume("Saga", 3, r).postUrl, "u-range");
+}
+
+// No post covers the volume -> empty (caller treats as unavailable).
+TEST(GetComicsParse, PickPostForVolumeNoneWhenUncovered) {
+    QList<SearchResult> r = {{"Saga Vol. 12 (TPB) (2025)", "u-12"}};
+    EXPECT_TRUE(pickPostForVolume("Saga", 3, r).postUrl.isEmpty());
+}
+
+// Wrong-series noise sharing the word "Saga" is rejected even if it has a volume.
+TEST(GetComicsParse, PickPostForVolumeRejectsWrongSeries) {
+    QList<SearchResult> r = {
+        {"Spider-Man \xE2\x80\x93 Clone Saga Omnibus Vol. 1 (2016)", "u-clone"}};
+    EXPECT_TRUE(pickPostForVolume("Saga", 1, r).postUrl.isEmpty());
+}
+
+// Standalone post (real shape, verified live 2026-06-05): no per-volume <li>
+// list; the clean primary button is labelled "DOWNLOAD NOW" (not "Main Server").
+// extractVolumeDownload falls back to pickBest over the whole post.
+TEST(GetComicsParse, ExtractVolumeDownloadStandalone) {
+    const QString html =
+        R"HTML(<p><strong>Saga Vol. 12 (TPB) (2025)</strong></p>)HTML"
+        R"HTML(<a href="https://getcomics.org/dls/AAA:sig==">DOWNLOAD NOW</a>)HTML"
+        R"HTML(<a href="https://getcomics.org/dls/MEG:sig==">MEGA</a>)HTML";
+    // DOWNLOAD NOW now classifies as main_server (top priority after magnet).
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 12).url,
+              "https://getcomics.org/dls/AAA:sig==");
+}
+
+// Range/bundle post (real shape): each volume is its own <li>, label-first, with
+// "Link 1"/"Main Server" the clean primary + mirror links. Pick the right <li>.
+TEST(GetComicsParse, ExtractVolumeDownloadRangePicksRightSection) {
+    const QString html =
+        R"HTML(<ul>)HTML"
+        R"HTML(<li>Saga Vol. 1 (2012) (841 MB) : <a href="https://getcomics.org/dls/V1:s=="><span>Link 1</span></a> | <a href="https://getcomics.org/dls/V1M:s=="><span>Mega</span></a></li>)HTML"
+        R"HTML(<li>Saga Vol. 3 (2014) (324 MB) : <a href="https://getcomics.org/dls/V3:s=="><span>Main Server</span></a> | <a href="https://getcomics.org/dls/V3M:s=="><span>Mediafire</span></a></li>)HTML"
+        R"HTML(<li>Saga Vol. 10 (2022) (420 MB) : <a href="https://getcomics.org/dls/V10:s=="><span>Link 1</span></a></li>)HTML"
+        R"HTML(</ul>)HTML";
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 3).url, "https://getcomics.org/dls/V3:s==");
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 10).url, "https://getcomics.org/dls/V10:s==");
+}

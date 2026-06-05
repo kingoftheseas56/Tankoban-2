@@ -68,4 +68,26 @@ bool isCollectedEditionOf(const QString& seriesTitle, const QString& candidateTi
 SearchResult pickBestCollectedEdition(const QString& seriesTitle, int year,
                                       const QList<SearchResult>& results);
 
+// VOLUME-AWARE matching (COMICS_WESTERN_GCD 2026-06-05, Agent 1). The GCD+OL
+// catalogue is per-TPB-volume, so the download targets a SPECIFIC volume. These
+// drive the resolver over GetComics' clean per-series tag page.
+
+// getcomics.org tag slug for a series title: lowercased, non-alnum runs -> "-",
+// trimmed. "The Wicked + The Divine" -> "the-wicked-the-divine"; "Saga" -> "saga".
+QString tagSlug(const QString& seriesTitle);
+
+// The post carrying volumeNumber, among results: a STANDALONE "<series> Vol. N"
+// post (preferred), else a RANGE post "<series> Vol. A - B" with A<=N<=B. Series
+// identity gated (all series tokens present) so "Elektra Saga" / "Saga of the
+// Swamp Thing" are rejected. Empty postUrl if no post covers the volume.
+SearchResult pickPostForVolume(const QString& seriesTitle, int volumeNumber,
+                               const QList<SearchResult>& results);
+
+// The download link for a SPECIFIC volume inside a post. A range post sections
+// each volume under a "<series> Vol. N" heading; we take the first download
+// anchor in that volume's section. A standalone post has no per-volume heading
+// for N -> fall back to pickBest over the whole post. Empty if none.
+DownloadLink extractVolumeDownload(const QString& postHtml,
+                                   const QString& seriesTitle, int volumeNumber);
+
 } // namespace tankoban::manga::getcomics
