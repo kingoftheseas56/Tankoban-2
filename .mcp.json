@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "pywinauto-mcp": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/sandraschi/pywinauto-mcp", "pywinauto-mcp"]
+      "command": "C:\\Users\\Suprabha\\.local\\bin\\pywinauto-mcp.exe",
+      "args": []
     },
     "codex": {
       "command": "C:\\Users\\Suprabha\\AppData\\Roaming\\npm\\codex.cmd",
