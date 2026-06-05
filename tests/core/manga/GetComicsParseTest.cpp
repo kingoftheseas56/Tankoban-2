@@ -192,3 +192,23 @@ TEST(GetComicsParse, ExtractVolumeDownloadRangePicksRightSection) {
     EXPECT_EQ(extractVolumeDownload(html, "Saga", 3).url, "https://getcomics.org/dls/V3:s==");
     EXPECT_EQ(extractVolumeDownload(html, "Saga", 10).url, "https://getcomics.org/dls/V10:s==");
 }
+
+// Codex review fix: full-word "Volume N" (not just "Vol.") must match, in both
+// post selection and per-<li> extraction.
+TEST(GetComicsParse, VolumeFullWordMatches) {
+    QList<SearchResult> r = {{"Saga Volume 3 (TPB) (2014)", "u-3"}};
+    EXPECT_EQ(pickPostForVolume("Saga", 3, r).postUrl, "u-3");
+    const QString html =
+        R"HTML(<ul><li>Saga Volume 3 (2014) : <a href="https://getcomics.org/dls/V3:s=="><span>Main Server</span></a></li></ul>)HTML";
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 3).url, "https://getcomics.org/dls/V3:s==");
+}
+
+// Codex review fix: clean main-server link is preferred over a magnet (DoD is
+// clean HTTP). pickBest alone would return the magnet first.
+TEST(GetComicsParse, ExtractVolumeDownloadPrefersMainServer) {
+    const QString html =
+        R"HTML(<a href="magnet:?xt=urn:btih:ABC">Magnet</a>)HTML"
+        R"HTML(<a href="https://getcomics.org/dls/MS:sig=="><span>Main Server</span></a>)HTML";
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 12).kind, "main_server");
+    EXPECT_EQ(extractVolumeDownload(html, "Saga", 12).url, "https://getcomics.org/dls/MS:sig==");
+}

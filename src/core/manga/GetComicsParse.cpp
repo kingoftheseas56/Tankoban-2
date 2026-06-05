@@ -262,16 +262,28 @@ namespace {
 // Volume coverage of a post title: standalone "Vol. 12" -> (12,12); a range
 // "Vol. 1 - 10" -> (1,10); none -> (0,0). Hyphen, en-dash, em-dash all separate.
 QPair<int,int> volumeCoverage(const QString& title) {
+    // Accept both "Vol. N" and "Volume N" (Codex review 2026-06-05).
     static const QRegularExpression range(
-        QStringLiteral("vol\\.?\\s*(\\d+)\\s*[-\\x{2013}\\x{2014}]\\s*(\\d+)"),
+        QStringLiteral("(?:vol\\.?|volume)\\s*0*(\\d+)\\s*[-\\x{2013}\\x{2014}]\\s*0*(\\d+)"),
         QRegularExpression::CaseInsensitiveOption);
     auto m = range.match(title);
     if (m.hasMatch()) return {m.captured(1).toInt(), m.captured(2).toInt()};
     static const QRegularExpression single(
-        QStringLiteral("vol\\.?\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+        QStringLiteral("(?:vol\\.?|volume)\\s*0*(\\d+)"),
+        QRegularExpression::CaseInsensitiveOption);
     m = single.match(title);
     if (m.hasMatch()) { const int n = m.captured(1).toInt(); return {n, n}; }
     return {0, 0};
+}
+
+// First clean main-server (/dls/ -> comicfiles) link, else any best link. The
+// volume-download DoD is clean HTTP, so a main_server beats magnet/mirror here
+// (Codex review 2026-06-05). pickBest's magnet-first order is for the torrent
+// path, not this one.
+DownloadLink pickCleanHttp(const QList<DownloadLink>& links) {
+    for (const auto& d : links)
+        if (d.kind == QLatin1String("main_server")) return d;
+    return pickBest(links);
 }
 
 // Same-series gate: identity token SETS equal (mirrors isCollectedEditionOf gate
@@ -315,7 +327,8 @@ DownloadLink extractVolumeDownload(const QString& postHtml,
         QStringLiteral("<li[^>]*>(.*?)</li>"),
         QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression volInLabel(
-        QStringLiteral("vol\\.?\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+        QStringLiteral("(?:vol\\.?|volume)\\s*0*(\\d+)"),
+        QRegularExpression::CaseInsensitiveOption);
 
     QList<QString> dlItems;   // <li> bodies that actually carry a /dls/ link
     auto it = liRe.globalMatch(postHtml);
@@ -324,19 +337,19 @@ DownloadLink extractVolumeDownload(const QString& postHtml,
         if (body.contains(QLatin1String("getcomics.org/dls/"))) dlItems.append(body);
     }
 
-    // Multi-volume post: find the <li> whose label says "Vol. N".
+    // Multi-volume post: find the <li> whose label says "Vol. N" / "Volume N".
     for (const QString& li : dlItems) {
         const int aPos = li.indexOf(QLatin1String("<a"));
         const QString label = aPos > 0 ? li.left(aPos) : li;   // text before first link
         const auto m = volInLabel.match(label);
         if (m.hasMatch() && m.captured(1).toInt() == volumeNumber)
-            return pickBest(extractDownloads(li));
+            return pickCleanHttp(extractDownloads(li));
     }
 
     // Standalone post: a single download item (or none of the labels matched but
     // there is only one) -> that item IS the volume. Fall back to the whole post.
-    if (dlItems.size() == 1) return pickBest(extractDownloads(dlItems.first()));
-    if (dlItems.isEmpty())   return pickBest(extractDownloads(postHtml));
+    if (dlItems.size() == 1) return pickCleanHttp(extractDownloads(dlItems.first()));
+    if (dlItems.isEmpty())   return pickCleanHttp(extractDownloads(postHtml));
     return {};   // multi-volume post but this volume's <li> not found
 }
 
