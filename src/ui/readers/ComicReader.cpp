@@ -4244,8 +4244,9 @@ QJsonObject ComicReader::devSnapshot() const
         {"pageCount",         int(m_pageNames.size())},
         {"readerMode",        readerModeName(m_readerMode)},
         {"fitMode",           fitModeName(m_fitMode)},
-        {"rtl",               m_rtl},
-        {"isVolumeX",         m_isVolumeX},
-        {"seriesVolumeCount", int(m_seriesCbzList.size())},
+        {"rtl",                   m_rtl},
+        {"isVolumeX",             m_isVolumeX},
+        {"isStitchedCompilation", m_isStitchedCompilation},
+        {"seriesVolumeCount",     int(m_seriesCbzList.size())},
     };
 }

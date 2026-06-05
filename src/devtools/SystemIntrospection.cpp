@@ -1198,23 +1198,26 @@ void introspectBuildTree(QObject* obj, int depth, int depthCap,
     out["visible"]     = w ? w->isVisible() : false;
     out["enabled"]     = w ? w->isEnabled() : false;
     if (w) out["geometry"] = geometryObject(w);
-    const QString t = introspectText(obj);
-    if (!t.isEmpty()) out["text"] = t;
+    out["text"] = introspectText(obj);   // always present (may be "")
     out["inspectable"] =
         (dynamic_cast<const tankoban::devtools::IDevInspectable*>(obj) != nullptr);
 
     const QObjectList kids = obj->children();
-    out["childCount"] = kids.size();
-    if (depthCap >= 0 && depth >= depthCap) return;  // depth cap: no children
+    out["childCount"] = int(kids.size());
 
+    // Stable shape: "children" is ALWAYS an array. Empty when the node is a
+    // leaf OR when the depth cap stops recursion here (childCount disambiguates
+    // the two: a capped node still reports childCount > 0).
     QJsonArray childArr;
-    for (QObject* c : kids) {
-        if (nodeBudget <= 0) { truncated = true; break; }
-        QJsonObject childObj;
-        introspectBuildTree(c, depth + 1, depthCap, nodeBudget, truncated, childObj);
-        childArr.append(childObj);
+    if (depthCap < 0 || depth < depthCap) {
+        for (QObject* c : kids) {
+            if (nodeBudget <= 0) { truncated = true; break; }
+            QJsonObject childObj;
+            introspectBuildTree(c, depth + 1, depthCap, nodeBudget, truncated, childObj);
+            childArr.append(childObj);
+        }
     }
-    if (!childArr.isEmpty()) out["children"] = childArr;
+    out["children"] = childArr;
 }
 
 // Full per-object snapshot: base widget fields + Q_PROPERTY + dynamic props +
@@ -1409,8 +1412,14 @@ bool SystemIntrospection::handleIntrospect(const QString& cmd,
                 if (seenS.contains(s)) continue;
                 seenS.insert(s);
                 QJsonObject o;
-                o["key"]     = s->key().toString(QKeySequence::PortableText);
-                o["enabled"] = s->isEnabled();
+                o["key"]        = s->key().toString(QKeySequence::PortableText);
+                o["whatsThis"]  = s->whatsThis();
+                o["enabled"]    = s->isEnabled();
+                o["autoRepeat"] = s->autoRepeat();
+                QJsonArray keys;
+                for (const QKeySequence& ks : s->keys())
+                    keys.append(ks.toString(QKeySequence::PortableText));
+                o["keys"] = keys;
                 if (auto* pw = qobject_cast<QWidget*>(s->parent())) {
                     o["ownerObjectName"] = pw->objectName();
                     o["ownerClassName"]  = QString::fromLatin1(pw->metaObject()->className());
