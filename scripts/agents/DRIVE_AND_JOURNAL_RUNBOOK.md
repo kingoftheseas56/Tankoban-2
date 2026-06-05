@@ -2,11 +2,13 @@
 
 **Purpose:** an agent (e.g. Agent 4) drives the live Tankoban app — opens it, navigates,
 clicks, downloads — while a journal automatically records *what the app did in response to
-each action*. Built for: "look at Agent 1's masterpiece, find the parts that don't work,
-and meticulously log everything the app does."
+each action* — and optionally records the whole session to video. Built for: "Agent 4 looks
+at Theatre mode (his masterpiece), finds the parts that don't work, and meticulously logs +
+records everything the app does."
 
-Nothing to install — `tankoctl` (app control) and `pywinauto-mcp` (laptop-wide UI control)
-are already on the machine; `drive_journal.py` is the action→effect journaler.
+Nothing to install — `tankoctl` (app control), `pywinauto-mcp` (laptop-wide UI control), and
+`ffmpeg` (screen recording) are already on the machine. `drive_journal.py` is the action→effect
+journaler; `screen_record.py` records the session to MP4.
 
 ---
 
@@ -60,6 +62,17 @@ d.close()
 ```
 *(Confirm exact args for `dispatch-episode` against the live `tankoctl ping` catalog — the
 show id comes from the `search` / `get-torrents` result.)*
+
+## 3b. Record it on video (optional)
+
+Add `--record` (CLI) or `record=True` (`Driver`) and the whole session is captured to
+`out/agent_drive_<session>.mp4` via ffmpeg **ddagrab** (captures real video playback, not a
+black rectangle; falls back to gdigrab). Pair the MP4 with the journal — or feed it to Gemini
+for a natural-language description of everything that happened.
+
+```
+python scripts\agents\drive_journal.py --record --label "open Theatre" -- open-page stream
+```
 
 ## 4. Read the journal
 

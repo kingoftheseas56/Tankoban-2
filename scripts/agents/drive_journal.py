@@ -45,6 +45,12 @@ EVENTS = os.path.join(REPO, "out", "events.jsonl")
 JOURNAL_MD = os.path.join(REPO, "out", "agent_drive_journal.md")
 JOURNAL_JSONL = os.path.join(REPO, "out", "agent_drive_journal.jsonl")
 
+sys.path.insert(0, HERE)
+try:
+    from screen_record import ScreenRecorder
+except Exception:
+    ScreenRecorder = None
+
 
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -97,11 +103,24 @@ def _events_since(offset):
 
 
 class Driver:
-    def __init__(self, session="drive"):
+    def __init__(self, session="drive", record=False, record_fps=15):
         self.session = session
         self.n = 0
+        self.rec = None
         with open(JOURNAL_MD, "a", encoding="utf-8") as f:
             f.write(f"\n\n## Drive session `{session}` - started {_now()}\n")
+        if record and ScreenRecorder:
+            mp4 = os.path.join(REPO, "out", f"agent_drive_{session}.mp4")
+            self.rec = ScreenRecorder(mp4, fps=record_fps)
+            ok = self.rec.start()
+            with open(JOURNAL_MD, "a", encoding="utf-8") as f:
+                f.write(f"- recording: {self.rec.active_mode + ' -> ' + mp4 if ok else 'FAILED to start'}\n")
+            if ok:
+                print(f"  recording ({self.rec.active_mode}) -> {mp4}")
+            else:
+                self.rec = None
+        elif record and not ScreenRecorder:
+            print("  (screen_record unavailable; journaling without video)")
 
     def do(self, label, action_args, probe=None, settle=1.2):
         """Journal one action: mark -> snapshot -> act -> settle -> capture effect."""
@@ -144,13 +163,18 @@ class Driver:
                 f.write(f"- **state probe:** before -> after recorded in jsonl\n")
 
     def close(self):
+        vid = self.rec.stop() if self.rec else None
         with open(JOURNAL_MD, "a", encoding="utf-8") as f:
+            if vid:
+                f.write(f"\n_video: {vid['path']} ({vid['bytes']} bytes, {vid['mode']})_\n")
             f.write(f"\n_session `{self.session}` ended {_now()} - {self.n} actions._\n")
+        if vid:
+            print(f"video: {vid['path']} ({vid['bytes']} bytes, {vid['mode']})")
         print(f"journal: {JOURNAL_MD}")
 
 
 def _main(argv):
-    label, probe, action = "action", None, None
+    label, probe, action, record = "action", None, None, False
     if "--" not in argv:
         print("usage: drive_journal.py --label \"...\" [--probe <get-cmd>] -- <tankoctl args>")
         return 2
@@ -161,12 +185,14 @@ def _main(argv):
             label = head[i + 1]; i += 2
         elif head[i] == "--probe":
             probe = [head[i + 1]]; i += 2
+        elif head[i] == "--record":
+            record = True; i += 1
         else:
             i += 1
     if not action:
         print("error: no tankoctl action after --")
         return 2
-    d = Driver(session="cli")
+    d = Driver(session="cli", record=record)
     d.do(label, action, probe=probe)
     d.close()
     return 0
