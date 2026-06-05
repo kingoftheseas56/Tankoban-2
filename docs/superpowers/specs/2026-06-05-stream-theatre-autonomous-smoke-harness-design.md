@@ -24,11 +24,22 @@ Every assertion is verified by exactly one lane:
   `expect`, and reads the four log streams (`events.jsonl`,
   `stream_telemetry.log`, `sidecar_debug_live.log`, `ipc_latency.log`) plus
   `out/HANG_DETECTED.json`. The harness decides pass/fail directly.
-- **VISUAL lane** (look-and-feel) — ffmpeg records the whole session; Gemini
-  describes the footage; the harness folds that description into findings. Covers
-  what state-reads can't: black/frozen screen, stutter, subtitle overlap,
-  HDR wrong, a cover that never painted, AV sync, and — since the recording
-  carries audio — whether sound actually came out.
+- **VISUAL lane** (look-and-feel) — ffmpeg records the whole session; the harness
+  emits a timestamped **visual work-order**; **Hemanth couriers the MP4 +
+  work-order to the Gemini LLM** (the chat app's native video understanding — NOT
+  the Gemini API; the harness calls no vision API). Gemini's per-checkpoint
+  descriptions are pasted back as JSON and the harness folds them into findings.
+  Covers what state-reads can't: black/frozen screen, subtitle overlap, a cover
+  that never painted, and — since the recording carries audio — whether sound
+  actually came out.
+
+  **Scope: the harness checks the plumbing, it does not watch.** A video smoke is
+  a handful of **spot-checks** at sampled positions (first frame painted, audio
+  leaving the speakers, subs rendered, a mid-seek re-paints, the end is reached
+  cleanly) — seconds each, never a playthrough. Judging whether the video *looks
+  right / feels good / is enjoyable* is Hemanth's taste call, deliberately OUT of
+  scope. The agent proves the pipe carries water; Hemanth decides if the water's
+  good.
 
 ## 3. Make-or-break: correlation
 
@@ -65,20 +76,31 @@ oracle, a data-driven catalogue, recovery, and the visual-description pass.
   crashes/relaunches, so a crash's frozen/black frame lands on the same timeline
   as the `log-mark`s. Output: `out/smoke_<session>.mp4`. Nothing external starts
   or stops it.
-- **Visual lane (`scripts/agents/smoke/describe_visual.py`, post-session)** —
-  samples frames from the MP4 per `log-mark` window and calls
-  `engine.py call_gemini_visual(frame_paths, prompt)`. Two passes (cost lever,
-  §7): a cheap continuous pass (~0.5 fps) over the whole run, then an excruciating
-  pass (4–8 fps) only over windows a SELF assertion flagged or where the
-  watchdog/recording shows a frozen frame.
+- **Visual lane (`scripts/agents/smoke/visual_workorder.py`, post-session)** — the
+  harness calls NO vision API. After the SELF run it **auto-clips** each
+  to-be-seen window from the full MP4 (`ffmpeg -ss -t` → `out/smoke_<session>_clips/
+  <id>.mp4`) — every VISUAL assertion's window + every SELF-fail window + every
+  watchdog window — and emits a `visual_workorder.md` (clip → question →
+  LOOK-HARD flag). **Hemanth couriers the CLIPS (small, focused — never the
+  2-hour file) to the Gemini LLM** (chat app, native video understanding) and
+  pastes back `{id: description}` JSON; `fold_visual.py` merges them into the
+  findings. Clipping is the cost lever (§7): only the moments state+logs couldn't
+  judge get an eye on them.
 - **Correlator (`scripts/agents/smoke/findings.py`)** — joins SELF results,
   VISUAL descriptions, and log lines on the `log-mark` label into the findings
   report (§6). Drops any finding that cannot be joined.
-- **Recovery** — between steps the runner pings the bridge; on `ping` timeout or
-  `HANG_DETECTED.json` appearing, it records a death/freeze finding, kills any
-  stray `Tankoban.exe` (Rule 1 — a stray instance is known to relaunch; check
-  `tasklist`), relaunches via `run_drive_mode.bat`, waits for `ping`, and resumes
-  at the next journey. The continuous recording is unaffected.
+- **Recovery & the `blocked` verdict** — between steps the runner pings the
+  bridge; on `ping` timeout or `HANG_DETECTED.json` appearing it records a
+  death/freeze finding, marks the remaining checks of that journey **`blocked`**
+  (verdict distinct from `fail` — "blocked-by-crash, needs Agent 3's idle-spin fix
+  / OBS-4," never a false functional fail), kills any stray `Tankoban.exe` (Rule 1
+  — a stray instance is known to relaunch; check `tasklist`), relaunches via
+  `run_drive_mode.bat`, waits for `ping`, and resumes at the next journey. The
+  continuous recording is unaffected. **The player idle-spin crash is a known
+  active blocker** (Agent 4's 2026-06-05 RTC: app dies seconds-to-minutes after
+  open) — a long autonomous run WILL hit it; the harness survives + reports it
+  honestly, and some playback smokes simply cannot complete until Agent 3's fix
+  lands.
 
 ### 4.2 Decided forks (Rule 14 technical calls)
 
@@ -133,11 +155,16 @@ the live `ping` `commands[]` at execution time.
 | op.play.sidecar_ok | SELF | `sidecar-get-process-state` running; `sidecar-get-ipc-latency` sane; no decoder-queue stall |
 | op.play.seek_lands | SELF | `player-seek 600` → `get-player` position ≈600±5s |
 | op.play.subs_present | SELF | `player-get-subtitle-tracks` ≥1 English track |
-| op.play.video_paints | VISUAL | real moving frames, not black/frozen |
-| op.play.subs_on_screen | VISUAL | English subtitle text visible during playback |
-| op.play.audio_present | VISUAL | sound on the recording's audio track |
-| op.play.smooth | VISUAL | no stutter / AV-sync drift |
+| op.play.video_paints | VISUAL | spot @ start: first frame painted, not black/frozen |
+| op.play.subs_on_screen | VISUAL | spot @ a dialogue moment: English subtitle text visible |
+| op.play.audio_present | VISUAL | spot sample: sound on the recording's audio track |
+| op.play.seek_repaints | VISUAL | spot @ after seek: frame re-paints (not frozen on the old frame) |
+| op.play.reaches_end | SELF | seek near end → playback reaches the end cleanly (position→duration, no hang) |
 | op.resume.position | SELF | close+reopen player → resumes near last position |
+
+(Playback rows are discrete spot-checks at sampled positions — not a playthrough.
+"Does it stutter / look right / feel good" over a full episode = soak (§12) +
+Hemanth's taste, not a normal-smoke assertion.)
 
 Playback assertions run against a known-present episode via `play-file` so they do
 not block on a multi-GB download finishing; `op.dl.*` tracks the download
@@ -225,14 +252,27 @@ Every record carries the five-part chain (action → ts → video_offset → gem
 
 ## 7. Cost lever (visual lane)
 
-- **Cheap continuous pass:** sample the whole MP4 at ~0.5 fps; one batched
-  `call_gemini_visual` per N-minute chunk with a terse "describe anomalies only"
-  prompt. Cheap baseline coverage.
-- **Excruciating pass:** only on windows where (a) a SELF assertion failed, (b)
-  the watchdog fired, or (c) the cheap pass flagged something — re-sample that
-  window at 4–8 fps with a detailed prompt. Spend tokens only where it matters.
-- Log every window the cheap pass *skipped* deep description on (no silent
-  truncation).
+The lever is **clip selection**, not API fps tiers (the harness calls no vision
+API — Hemanth couriers clips to the Gemini LLM):
+
+- The 2-hour recording is **never** sent for description. Only **flagged windows**
+  are clipped: every VISUAL assertion's window, plus every SELF-fail window, plus
+  every watchdog hit. Typically ~the dozen moments state+logs couldn't judge.
+- Each clip is short (~window ± a few seconds) and named by assert-id, so Gemini's
+  attention is directed and the courier payload stays small.
+- The work-order marks SELF-failed/watchdog windows **LOOK HARD** so Gemini spends
+  its detail where something already looked wrong on the data side.
+- The full MP4 is retained on disk for the record, and every assertion window NOT
+  clipped is listed in the work-order as "not flagged — passed on data side" (no
+  silent truncation).
+- **Short by construction — the real cost lever.** Normal smokes are journey-driven
+  and fast (~20–30 min of driving for the whole catalogue); playback is spot-checks
+  of *seconds*, never a playthrough. So clips are tiny and a Gemini review of a
+  90-second journey is 90 seconds — the "describe 2 hours" problem does not exist
+  in the default mode.
+- **Speed levers (Agent 0, `c6f59d2` / runbook §3c) — SOAK mode only.** `tankoctl
+  player-set-speed N` and `screen_record.py speedup` exist for the opt-in soak run
+  (§12); the default smoke plays through nothing, so there is nothing to speed up.
 
 ## 8. Honest blind spot (design-around, not hide)
 
@@ -243,13 +283,26 @@ timeout + the recording's frozen frame) and reports it as a finding, but it
 out-of-process crash-dump path (OBS-4, not built). Freeze findings are flagged
 `stack_available: false, note: needs OBS-4`. Never faked.
 
-## 9. First proof run (acceptance for executing-plans step 1)
+## 9. Sequence (explicit) + first proof run
 
-A SHORT real session (~15–20 min) running **J1 (One Piece) + J2 (Western)** that
-produces at least ONE fully-traceable end-to-end finding (the five-part chain),
-shown to Hemanth, before scaling to long multi-journey stretches. Given the known
-idle-spin crash, the first traceable finding may well BE that crash — which is an
-acceptable, valuable proof of the chain.
+Order is load-bearing:
+- **(0) Validate the recorder FIRST.** Agent 0 is hardening `screen_record.py`
+  now (he owns the drive harness). Before any visual-lane code, run a
+  real-duration (~15 min), in-process/visible (never detached-hidden) recording
+  and confirm it yields a complete, playable MP4 + that `ffmpeg -ss -t` can clip
+  it. The whole visual lane is built on this; do not assume it works.
+- **(1) One fully-traceable finding** on a SHORT ~15–20 min session running
+  **J1 (One Piece) + J2 (Western)** — the five-part chain (action → ts → video
+  offset → Gemini clip description → log line) — shown to Hemanth.
+- **(2) Then scale** to long multi-journey runs (all J1–J8).
+
+**Desktop coordination:** a long run holds the desktop — no other brother can
+drive it meanwhile. Claim the MCP/desktop lane lease (Rules 19/22) for the run's
+duration and release on completion.
+
+Given the known idle-spin crash, the first traceable finding may well BE that
+crash (a `blocked`/freeze finding flagged `needs OBS-4`) — an acceptable, valuable
+proof that the chain works.
 
 ## 10. Reusability
 
@@ -260,11 +313,30 @@ the worked reference.
 
 ## 11. Dependencies / open items
 
-- `GEMINI_API_KEY` must be set in the environment for the visual lane (per
-  `engine.py`). If absent, SELF lane still runs fully; VISUAL lane degrades to
-  "recorded but not described" (flagged, not silently skipped).
+- **Recorder (Agent 0-owned, in progress):** the visual lane sits on a hardened
+  `screen_record.py`. Agent 0 is fixing the long/detached-recording + ddagrab
+  flakiness. Agent 4 does NOT edit `screen_record.py` (avoid the shared-file
+  collision) — Task 0 *validates* the hardened recorder before any visual-lane
+  work. No vision API / no `GEMINI_API_KEY` needed: the visual lane is a manual
+  courier of clips to the Gemini LLM (§4.1). If the recorder is unavailable, the
+  SELF lane still runs fully; clips are flagged "recorder unavailable," not faked.
+- **Desktop lane (Rules 19/22):** a long run holds the desktop — claim the
+  MCP/desktop lease for the run and release on completion so no brother collides.
 - Exact `tankoctl` verb names reconfirmed against live `ping` at execution.
 - Stream widgets lacking `devSnapshot()` (blind spots found during J4) → small
   follow-on `IDevInspectable` adds, tracked separately.
 - OBS-4 (out-of-process crash dump) is the upstream unlock for freeze call-stacks
-  — out of scope here; flagged where it bites.
+  — out of scope here; flagged where it bites. The player idle-spin crash
+  (Agent 3) is the active blocker that makes some playback smokes `blocked`.
+
+## 12. Soak mode (opt-in, not default)
+
+The default harness is fast + journey-driven and never runs long. A separate
+**opt-in soak mode** catches *time-dependent* bugs a quick pass can't: the player
+idle-spin crash (fires "minutes after open"), memory/handle growth, stutter that
+only surfaces over time. Soak loops one journey (or holds a playback) for N
+minutes under the same recorder + watchdog + log-mark machinery, periodically
+sampling `sidecar-get-ipc-latency` + process memory, and reports any
+`HANG_DETECTED` / growth / `blocked` event with its timestamp. The speed levers
+(§7) live here. Soak is run occasionally and deliberately — never part of the
+normal smoke, which plays through nothing.
