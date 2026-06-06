@@ -30,7 +30,9 @@ namespace {
 // v5 (THEATRE_ANIME_CATALOG 2026-05-28): seed Anime Kitsu as a protected
 // default so existing installs reseed and the anime reroute can resolve its
 // meta endpoint. Prior seeds had no kitsu-capable meta addon.
-constexpr int kSchemaVersion = 7;
+// v8 (2026-06-06): Amatsu seed removed (Hemanth) — reseed drops it from
+// existing on-disk registries. (v6/v7 were Amatsu id-prefix scoping, now moot.)
+constexpr int kSchemaVersion = 8;
 
 QJsonObject manifestToJson(const AddonManifest& m)
 {
@@ -707,45 +709,11 @@ void AddonRegistry::seedDefaults()
     }
     m_addons.push_back(torrentio);
 
-    // Amatsu — the Nyaa anime gateway. Feeds the auto-pick real anime sources
-    // (absolute episode numbers, dual-audio, fansub groups) that Torrentio's
-    // anime coverage misses. Config is baked into the manifest URL (Amatsu is
-    // stateless: url-safe-base64 JSON under key "Amatsu"). Decoded payload:
-    //   {"enableP2P":true,"userLangs":["ENG"]}
-    //   - enableP2P  -> returns plain infoHash + Nyaa trackers, no debrid / no
-    //                   signup; our libtorrent pipeline downloads it directly.
-    //   - userLangs ENG -> prefer English(-subbed) releases.
-    // Amatsu's stream resource accepts kitsu:/tt ids — exactly what StreamPage
-    // builds for anime (kitsu:<id>:<ep>) — so it joins the existing auto-pick
-    // with zero call-site change. fromEncoded keeps the %7B/%22 path intact.
-    AddonDescriptor amatsu;
-    amatsu.transportUrl = QUrl::fromEncoded(QByteArrayLiteral(
-        "https://amatsu.ruka.pw/"
-        "%7B%22Amatsu%22%3A%22eyJlbmFibGVQMlAiOnRydWUsInVzZXJMYW5ncyI6WyJFTkciXX0%22%7D"
-        "/manifest.json"));
-    amatsu.flags.official = false;
-    amatsu.flags.enabled = true;
-    amatsu.flags.protectedAddon = true;
-    amatsu.manifest.id = QStringLiteral("org.community.amatsu");
-    amatsu.manifest.version = QStringLiteral("9.6.1");
-    amatsu.manifest.name = QStringLiteral("Amatsu");
-    amatsu.manifest.types = {
-        QStringLiteral("movie"), QStringLiteral("series"), QStringLiteral("anime"),
-    };
-    {
-        ManifestResource streamRes;
-        streamRes.name = QStringLiteral("stream");
-        streamRes.hasTypes = true;
-        streamRes.types = {QStringLiteral("movie"), QStringLiteral("series"), QStringLiteral("anime")};
-        streamRes.hasIdPrefixes = true;
-        // Anime ids only (kitsu/anilist) — NOT tt. Amatsu's tt->AniList lookup is
-        // slow (~17s) and useless for non-anime; the StreamAggregator id-prefix
-        // gate uses these so Amatsu is never queried for Western/general tt titles
-        // (which stalled source resolution — Hemanth-reported 2026-06-05).
-        streamRes.idPrefixes = {QStringLiteral("kitsu"), QStringLiteral("anilist")};
-        amatsu.manifest.resources = {streamRes};
-    }
-    m_addons.push_back(amatsu);
+    // Amatsu (Nyaa anime gateway) REMOVED 2026-06-06 per Hemanth: its
+    // tt->AniList->Nyaa lookup routinely tripped the 10s transport timeout
+    // (~17s real), adding a ~10s stall to every anime source-fetch while
+    // returning nothing usable. Schema bumped to drop it from existing installs.
+    // The StreamAggregator id-prefix gate stays (generic); no call-site change.
 
     AddonDescriptor torrentCatalogs;
     torrentCatalogs.transportUrl = QUrl(QStringLiteral("https://torrent-catalogs.strem.fun/manifest.json"));
