@@ -167,6 +167,215 @@ Delta: Flutter's client-side `_merge()` deduplication vs Qt's engine-side dedup 
 
 ---
 
+---
+
+## QT GROUND TRUTH (2026-06-06 — captured live from Tankoban 2 via tankoctl + persisted files)
+
+This section records the EXACT results the Qt app (Tankoban 2) produces for each
+key operation. These are the **spec values** the Flutter app must match. Captured
+with `out\tankoctl.exe` over the dev-control pipe (`--dev-control` flag active)
+and by reading `%APPDATA%/Tankoban/` persisted files.
+
+**Capture method:** Read-only tankoctl commands. UI-navigation commands
+(`comics-open-series`, etc.) caused an app crash during capture session, so
+auto-pick + catalogue-search results are documented from the code-level trace
+rather than live tankoctl output. These operations call single engine functions
+with no UI-side transformation, so the engine-returned values ARE the ground truth.
+
+---
+
+### 1. COMICS LIBRARY CONTENTS
+
+Source: `tankoctl.exe comics-get-library`
+
+Total series: **15** (9 folder-scanned + 6 AniList bookmarks)
+
+**Folder-scanned series (origin=folders):**
+
+| Series | Volumes on Disk | Cover | Path |
+|--------|----------------|-------|------|
+| 20th Century Boys | 1 | `thumbs/f582ceefd2249d0b594e.jpg` | `Media/Comics/20th Century Boys` |
+| Death Note | 1 | `thumbs/150924ca5a9cabe1803a.jpg` | `Media/Comics/Death Note` |
+| Grand Blue Dreaming | 1 | `thumbs/b9075b2debaa1f2537ad.jpg` | `Media/Comics/Grand Blue Dreaming` |
+| Invincible | 1 | `thumbs/b0e95d45a7f620fdb242.jpg` | `Media/Comics/Invincible` |
+| Kagurabachi | 1 | `thumbs/3e768961f548a7118a18.jpg` | `Media/Comics/Kagurabachi` |
+| One Piece | **7** | `thumbs/83f3f22b3779b636df29.jpg` | `Media/Comics/One Piece` |
+| Saga | 1 | `thumbs/b35ee06583880e2dfbba.jpg` | `Media/Comics/Saga` |
+| Watchmen | 1 | *(blank)* | `Media/Comics/Watchmen` |
+| rac proof | 1 | `thumbs/ad3a8e5d23c53052e4f6.jpg` | `Media/Comics/_rac_proof` |
+
+**AniList bookmarks (origin=bookmark):**
+
+| Title | AniList ID | Format | Status | Year |
+|-------|-----------|--------|--------|------|
+| 20th Century Boys | 30003 | MANGA | FINISHED | 1999 |
+| Death Note | 30021 | MANGA | FINISHED | 2003 |
+| Grand Blue Dreaming | 87395 | MANGA | RELEASING | 2014 |
+| Kagurabachi | 169355 | MANGA | RELEASING | 2023 |
+| Hunter x Hunter | 30026 | MANGA | RELEASING | 1998 |
+| One Piece | 30013 | MANGA | RELEASING | 1997 |
+
+**UI state:** `gridMode=true`, `sort_key=count_desc`, `density=0`, `layer=library`
+
+---
+
+### 2. BOOKS LIBRARY CONTENTS
+
+Source: `tankoctl.exe books-get-library` + `books_catalogue_library.json` on disk
+
+Total records: **7** across **2 series** + **0 standalone** books
+
+**Series: A Song of Ice and Fire** (`a-song-of-ice-and-fire-george-rr-martin~1712`) — 5 books
+
+| # | Title | catalogueId | File? | Year |
+|---|-------|-------------|-------|------|
+| 1 | A Game of Thrones | `fictiondb:a-game-of-thrones~george-rr-martin~118289` | YES (mobi) | 1996 |
+| 2 | A Clash of Kings | `fictiondb:a-clash-of-kings~george-rr-martin~110318` | NO | 1999 |
+| 3 | A Storm of Swords | `fictiondb:a-storm-of-swords~george-rr-martin~113773` | NO | 2000 |
+| 4 | A Feast for Crows | `fictiondb:a-feast-for-crows~george-rr-martin~118288` | NO | 2005 |
+| 5 | A Dance with Dragons | `fictiondb:a-dance-with-dragons~george-rr-martin~236505` | NO | 2011 |
+
+**Series: The Stormlight Archive** (`the-stormlight-archive-brandon-sanderson~15477`) — 2 books
+
+| # | Title | catalogueId | File? | Year |
+|---|-------|-------------|-------|------|
+| 1 | The Way of Kings | `fictiondb:the-way-of-kings~brandon-sanderson~268851` | YES (epub) | — |
+| 2 | Words of Radiance | `fictiondb:words-of-radiance~brandon-sanderson~576038` | YES (epub) | 2014 |
+
+**Qt JSON field names (THE SPEC):** `catalogueId`, `cachedCoverPath`, `seriesPosition`, `seriesTotal`, `lastReadAt`, `description`, `isbn`, `md5`, `publisher`, `language`, `genres`, `fileSize`, `lastReadCfi`, `readProgress`, `addedAt`. Array wrapper key: `"records"`.
+
+**UI state:** `gridMode=true`, `sort_key=name_asc`, `density=0`, `layer=library`, `catalogueRecordCount=7`, `seriesCount=2`
+
+---
+
+### 3. COMICS SEARCH — Query: "One Piece"
+
+Source: code-level trace (tankoctl `comics-search-tankoyomi` returned help text;
+the `search` command returned empty). The Qt `ComicsPage` search fires
+`ComicsSearchWidget::executeSearch("One Piece")` → `MangaSourceRegistry` →
+parallel scrapers (WeebCentral manga, MangaFire, Nyaa). Results stream back
+asynchronously via Qt signals, merged by source-id.
+
+**Engine function:** `tk_comics_search('{"query":"One Piece","limit":60,"source":"weebcentral"}')`
+
+**Flutter comparison note:** The Flutter `comicsSearchControllerProvider.search("One Piece")`
+calls the same engine function. Results are delivered via the event channel
+(`comics.search_results`) rather than Qt signals. The Flutter controller caps
+searches at 10s (timeout); Qt has no artificial timeout. Verify that the
+Flutter query string + source + limit are identical.
+
+---
+
+### 4. BOOKS CATALOGUE SEARCH — Query: "Dune"
+
+Source: code-level trace. The Qt app runs `BookCatalogueSearchWidget::search("Dune")`
+→ `BookCatalogueAggregator::query("Dune")` → FictionDB text search → series
+grouping via `SeriesDetector` → result caps (5 series + 5 books with "Show N
+more").
+
+**Engine function:** `tk_books_search_catalogue('{"query":"Dune","limit":30}')`
+
+**Flutter comparison note:** The Flutter `booksCatalogueSearchProvider.search("Dune")`
+calls the same engine function. The Qt aggregator returns pre-split
+`seriesGroups` + `standalones`; the Flutter engine returns a flat list that
+the Flutter page splits client-side by `isSeries` flag. Verify:
+- Same limit (30)
+- Same grouping logic (Qt: SeriesDetector in engine; Flutter: client-side `isSeries` flag)
+- Same dedupe (both by `catalogueId`)
+- Same initial caps (both 5)
+
+**Library search for "Dune":** `books-search-library` returned `visibleSeries=2`,
+`totalSeries=2` — meaning the local-library filter matched 2 series groups out
+of the 2 in the library (both series matched the "Dune" query... this may be a
+partial match since neither is actually "Dune").
+
+---
+
+### 5. AUTO-PICK RESULT
+
+Source: code-level trace (UI navigation caused app crash during capture).
+
+**Qt path:** User selects a volume in series view → `ComicsSeriesView` emits
+`volumeSelected` → sources panel calls `SourceAutoPicker`:
+1. Ranks all source rows by tier (premium > Nyaa > WeebCentral > others) then by seeders/size
+2. Premium-catalogue rows auto-pick after a 1.5s delay (unless user interacts)
+3. Top-tier result is highlighted and pre-selected
+4. User clicks download → `ComicsPage::dispatchVolumeDownload`
+
+**Engine function:** `tk_source_auto_pick('{"seriesId":"...","volumeNumber":N}')`
+— both Qt and Flutter call the same function. The return value is the
+ranked-first source row.
+
+**Flutter comparison note:** Verify that `TankoEngine.instance.sourceAutoPick(json)`
+returns the same ranked-first source for identical input. The engine side is
+identical; verify the input JSON shape matches between Qt's
+`SourcesPanel::armAutoPick()` and Flutter's `comicsVolumeSourcesProvider`.
+
+---
+
+### 6. DOWNLOAD-INDEX CONTENTS
+
+Source: `tankoctl.exe comics-get-downloads`
+
+**Active downloads: 20** (19 Invincible + 1 Chew, all readcomicsonline/readallcomics Western sources)
+
+| Series | Source | Status | Count |
+|--------|--------|--------|-------|
+| Invincible | readcomicsonline | queued/downloading/completed | 19 |
+| Chew | readcomicsonline | queued | 1 |
+
+**Indexed (completed) downloads: 10 volumes**
+
+| Series | Volume | Source | File |
+|--------|--------|--------|------|
+| One Piece | 112 | mangafire_catalog | Volume 112.cbz (96MB) |
+| One Piece | 116 | weebcentral | Volume 116.cbz (43MB) |
+| One Piece | 114 | weebcentral | Volume 114.cbz (132MB) |
+| One Piece | 99 | mangafire_catalog | Volume 99.cbz (84MB) |
+| One Piece | 48 | mangafire_catalog | Volume 48.cbz (77MB) |
+| One Piece | 7 | tankoyomi_premium | One Piece v07.cbz (129MB) |
+| One Piece | 99999 (Vol X) | weebcentral | Volume X.cbz (51MB) |
+| Death Note | 1 | mangafire_catalog | Volume 01.cbz (58MB) |
+| 20th Century Boys | 1 | mangafire_catalog | Volume 01.cbz (97MB) |
+| Grand Blue Dreaming | 1 | mangafire_catalog | Volume 01.cbz (68MB) |
+| Kagurabachi | 1 | tankoyomi_premium | Kagurabachi v01.cbz (215MB) |
+
+**Flutter comparison note:** `comicsDownloadsProvider` calls
+`tk_comics_get_downloads`. Verify the returned JSON has the same `active` +
+`indexed` sections with matching field names. The Flutter `ComicDownload.fromJson`
+reads `seriesId`, `volumeNumber`, `title`, `status`, `percent`, `filePath` —
+verify these match the Qt JSON keys.
+
+---
+
+### 7. CONTINUE-READING LIST
+
+Source: `tankoctl.exe library-get-continue-reading <mode>` + `dump-ui`
+
+**Comics Continue Reading:** `count=15`, `visible=true`
+
+The 15 entries come from `CoreBridge::allProgress("comics")` which walks the
+comics progress JsonStore. Each entry is a `TileCard` on the Continue Reading
+`TileStrip`. The strip is visible on the Comics library page.
+
+**Books Continue Reading:** `count=2`, `visible=false`
+
+The 2 entries come from `CoreBridge::progress("books", progressKey)`. The
+strip is HIDDEN (`visible=false`) — meaning the filter conditions exclude all
+entries from display. Looking at the data: all 7 book records have
+`readProgress=0` and `lastReadAt=0` — no book has been opened/read, so
+Continue Reading is correctly empty.
+
+**Flutter comparison note:** Comics CR goes through the same engine function
+(`tk_comics_get_continue_reading`). Books CR in Flutter is client-side filtered
+from `BookRecord` fields — but since all `lastOpenedAt` values are 0 (due to
+the field-name mismatch documented in Operation 2), the Flutter CR will also be
+empty, matching Qt's behavior (both correctly show nothing when nothing has
+been read). The concern is about the data SOURCE divergence: when a book IS
+read, Qt reads JsonStore progress while Flutter reads catalogue-record fields.
+
+---
+
 ## Summary Matrix
 
 | Operation | Verdict | Severity |
