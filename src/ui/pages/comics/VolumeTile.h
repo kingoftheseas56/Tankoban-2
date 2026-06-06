@@ -28,6 +28,7 @@ struct VolumeTileData {
     QString sourceId;                  // "fandom_catalog" / "tankoyomi" / "weebcentral"
     QString seriesId;                  // slug or anilist_<N>
     int     volumeNumber = 0;          // 1..N
+    QString unit;                      // title unit word: empty => "Volume"; "Issue" for western single-issues
     QString title;                     // English volume title, may be empty
     QString chapterRange;              // "ch 1-8"
     int     pages = 0;                 // 0 if unknown

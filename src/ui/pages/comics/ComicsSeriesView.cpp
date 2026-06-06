@@ -1449,6 +1449,11 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         data.sourceId     = QString::fromLatin1(kWeebCentralSourceId);
         data.seriesId     = catalog.seriesId;
         data.volumeNumber = vol.volumeNumber;
+        // Western single-issue rows label as "Issue N" (COMICS_WESTERN_ISSUE_BASED
+        // 2026-06-06): the loader/fetch tags these with groupingLabel "Issue".
+        // All other catalog volumes keep the default "Volume" unit.
+        data.unit         = (vol.groupingLabel == QLatin1String("Issue"))
+                                ? QStringLiteral("Issue") : QString();
         data.title        = !vol.titleEnglish.isEmpty() ? vol.titleEnglish : vol.titleJapanese;
         data.synopsis     = vol.synopsis;
         if (vol.releaseDateEn.isValid()) {

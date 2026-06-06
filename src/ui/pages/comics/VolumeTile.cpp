@@ -121,11 +121,13 @@ double readProgressForPath(const QString& cbzPath)
 
 QString displayTitleForVolume(const VolumeTileData& data)
 {
+    // Unit word defaults to "Volume"; western single-issues set it to "Issue".
+    const QString unit = data.unit.isEmpty() ? QStringLiteral("Volume") : data.unit;
     if (data.title.compare(QStringLiteral("Volume X"), Qt::CaseInsensitive) == 0)
         return QStringLiteral("Volume X");
     if (!data.title.trimmed().isEmpty())
-        return QStringLiteral("Volume %1 - %2").arg(data.volumeNumber).arg(data.title.trimmed());
-    return QStringLiteral("Volume %1").arg(data.volumeNumber);
+        return QStringLiteral("%1 %2 - %3").arg(unit).arg(data.volumeNumber).arg(data.title.trimmed());
+    return QStringLiteral("%1 %2").arg(unit).arg(data.volumeNumber);
 }
 
 QString subtitleForVolume(const VolumeTileData& data)

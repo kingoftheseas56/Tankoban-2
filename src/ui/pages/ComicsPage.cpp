@@ -1285,7 +1285,16 @@ void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double is
 
                     ChapterInfo ch;
                     ch.id     = match.id;                       // readallcomics issue-slug
-                    ch.name   = editionTitle;
+                    // chapterName drives MangaDownloader's per-chapter dir + cbz
+                    // filename (chapterDir = seriesDir/<name>, cbz = chapterDir.cbz).
+                    // It MUST be non-empty: issue rows carry an empty editionTitle,
+                    // which would collapse chapterDir to the series folder and make
+                    // packCbz delete it with no usable cbz (COMICS_WESTERN_ISSUE_BASED
+                    // 2026-06-06). Synthesize "<Series> #<issue>" when empty.
+                    ch.name   = editionTitle.isEmpty()
+                        ? QStringLiteral("%1 #%2").arg(seriesTitle,
+                              QString::number(issueNumber, 'g', 12))
+                        : editionTitle;
                     ch.source = QStringLiteral("readallcomics");
                     if (m_tyVolumeSeriesView)
                         m_tyVolumeSeriesView->updateWesternDownloadStatus(
@@ -1374,7 +1383,8 @@ void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog
                     for (const auto& ch : sorted) {
                         tankoban::manga::MangaVolume vol;
                         vol.volumeNumber     = qRound(ch.chapterNumber);
-                        vol.coverUrlJapanese = seriesMeta.seriesCover;  // shared hero cover
+                        vol.groupingLabel    = QStringLiteral("Issue");  // tile shows "Issue N"
+                        vol.coverUrlJapanese = seriesMeta.seriesCover;    // shared hero cover
                         issueCat.volumes.append(std::move(vol));
                     }
                     if (m_tyVolumeSeriesView) {
