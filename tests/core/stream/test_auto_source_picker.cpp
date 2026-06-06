@@ -194,3 +194,72 @@ TEST(AutoSourcePicker, EmptyMatchTextFallsBackToTitleGate) {
     };
     EXPECT_FALSE(AutoSourcePicker::pick(w, QStringLiteral("One Piece"), 24).has_value());
 }
+
+// ── Single-episode over batch + dual-audio preference (AMATSU_ANIME_AUTOPICK) ─
+// Watching "the latest episode" must grab the single episode, not a 10-episode
+// or whole-series pack — even when the pack is far better seeded. Among equals,
+// prefer a dual-audio release. Batch detection keys on episode/season RANGES,
+// not the word "batch" (Amatsu tags every Nyaa result "Batch").
+
+TEST(AutoSourcePicker, IsBatchReleaseDetectsRangesNotSingles) {
+    EXPECT_TRUE(AutoSourcePicker::isBatchRelease("[Judas] One Piece 001-574 [1080p]"));
+    EXPECT_TRUE(AutoSourcePicker::isBatchRelease("[Erai-raws] One Piece - 1089 ~ 1104 [1080p]"));
+    EXPECT_TRUE(AutoSourcePicker::isBatchRelease("[MA0MA0] One Piece - S01 E1123~E1133 [BATCH]"));
+    EXPECT_TRUE(AutoSourcePicker::isBatchRelease("Community.S01-S06.COMPLETE.1080p"));
+    EXPECT_TRUE(AutoSourcePicker::isBatchRelease("Show Complete Series 1080p"));
+    EXPECT_FALSE(AutoSourcePicker::isBatchRelease("[SubsPlease] One Piece - 1080 (1080p) [F9D2].mkv"));
+    EXPECT_FALSE(AutoSourcePicker::isBatchRelease("[ASW] One Piece - 1080 [1080p HEVC x265 10Bit]"));
+    EXPECT_FALSE(AutoSourcePicker::isBatchRelease("One Piece S01E01 1080p WEB-DL"));
+}
+
+TEST(AutoSourcePicker, HasDualAudioExcludesMultiSub) {
+    EXPECT_TRUE(AutoSourcePicker::hasDualAudio("[Judas] Show [1080p][Dual-Audio][Eng-Subs]"));
+    EXPECT_TRUE(AutoSourcePicker::hasDualAudio("[Yameii] Show - 05 [1080p][Dual Audio]"));
+    EXPECT_TRUE(AutoSourcePicker::hasDualAudio("Show [Multi-Audio] 1080p"));
+    EXPECT_FALSE(AutoSourcePicker::hasDualAudio("[Erai-raws] Show - 05 [1080p][MultiSub]"));
+    EXPECT_FALSE(AutoSourcePicker::hasDualAudio("[SubsPlease] Show - 05 (1080p)"));
+    EXPECT_FALSE(AutoSourcePicker::hasDualAudio("Show [Multiple Subtitle] 1080p"));
+}
+
+TEST(AutoSourcePicker, PrefersSingleEpisodeOverBetterSeededBatch) {
+    // The exact smoke scenario: SubsPlease single vs the MA0MA0 10-episode batch.
+    QList<SourceCandidate> v {
+        c(QStringLiteral("[MA0MA0] One Piece - S01 E1123~E1133 [1080p AV1][MultiSub] [BATCH]"),
+          900, 50000000000LL, 3),                                            // batch, better seeded
+        c(QStringLiteral("[SubsPlease] One Piece - 1133 (1080p) [F9D2].mkv"),
+          466, 1400000000LL, 3),                                            // single
+    };
+    auto idx = AutoSourcePicker::pick(v, QStringLiteral("One Piece"), 24);
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(*idx, 1) << "single episode must beat the better-seeded batch";
+}
+
+TEST(AutoSourcePicker, PrefersDualAudioAmongSingles) {
+    QList<SourceCandidate> v {
+        c(QStringLiteral("[SubsPlease] Show - 05 (1080p)"),          500, 1400000000LL, 3), // non-dual
+        c(QStringLiteral("[Yameii] Show - 05 [1080p][Dual-Audio]"), 400, 1500000000LL, 3), // dual
+    };
+    auto idx = AutoSourcePicker::pick(v, 24);
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(*idx, 1) << "dual-audio preferred over a better-seeded single-audio single";
+}
+
+TEST(AutoSourcePicker, SinglePreferredOverDualAudioBatch) {
+    QList<SourceCandidate> v {
+        c(QStringLiteral("[SubsPlease] Show - 05 (1080p)"),                 120, 1400000000LL, 3), // single non-dual
+        c(QStringLiteral("[Judas] Show 01-12 [1080p][Dual-Audio][Batch]"), 900, 12000000000LL, 3), // dual batch
+    };
+    auto idx = AutoSourcePicker::pick(v, 24);
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(*idx, 0) << "single-vs-batch outranks dual-audio: a single non-dual beats a dual batch";
+}
+
+TEST(AutoSourcePicker, FallsBackToBatchWhenNoSingleExists) {
+    QList<SourceCandidate> v {
+        c(QStringLiteral("[Erai-raws] Show 089-104 [1080p]"),            150, 8000000000LL, 3),  // batch non-dual
+        c(QStringLiteral("[Judas] Show 001-574 [1080p][Dual-Audio]"),    200, 90000000000LL, 3), // batch dual
+    };
+    auto idx = AutoSourcePicker::pick(v, 24);
+    ASSERT_TRUE(idx.has_value()) << "all-batch pool still yields a pick";
+    EXPECT_EQ(*idx, 1) << "among batches, dual-audio (and seeders) wins";
+}

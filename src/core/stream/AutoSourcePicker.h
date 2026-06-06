@@ -50,6 +50,20 @@ public:
                                    const QString& showTitle);
 
     static bool   isCamRip(const QString& title);
+
+    // True for a multi-episode / season / complete pack as opposed to a single
+    // episode. Detected from episode/season RANGE markers in the title
+    // ("1089~1104", "001-574", "S01-S05", "Complete") — deliberately NOT the
+    // bare word "batch", since some addons (Amatsu) tag every result "Batch".
+    // For a specific-episode request the picker prefers a single over a batch
+    // so it never pulls a 100GB season pack to watch one episode.
+    static bool   isBatchRelease(const QString& title);
+
+    // True when the release carries a dual-audio track (Jpn+Eng in one file):
+    // "Dual", "Dual Audio", "Multi-Audio". Excludes "MultiSub"/"Multiple
+    // Subtitle" (those are subtitles, not audio). Anime tiebreak preference.
+    static bool   hasDualAudio(const QString& title);
+
     static double impliedBitrateMbps(qint64 sizeBytes, int runtimeMinutes);
 
     static constexpr int    kRequiredQualitySort = 3;     // 1080p only

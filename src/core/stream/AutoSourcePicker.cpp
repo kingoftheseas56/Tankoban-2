@@ -17,6 +17,36 @@ bool AutoSourcePicker::isCamRip(const QString& title) {
     return re.match(title).hasMatch();
 }
 
+bool AutoSourcePicker::isBatchRelease(const QString& title) {
+    // Tilde ranges ("1089~1104", "E1123~E1133") — near-exclusively anime batches.
+    static const QRegularExpression tildeRange(QStringLiteral("\\d\\s*~\\s*[eE]?\\d"));
+    // Dash ranges ("001-574", "(0996-1069)"). Guarded so codec / bit-depth tokens
+    // like "x265-10bit" don't read as a range: no alphanumeric immediately before
+    // the first number, no letter immediately after the second.
+    static const QRegularExpression dashRange(
+        QStringLiteral("(?<![A-Za-z0-9])\\d{2,4}\\s*-\\s*\\d{2,4}(?![A-Za-z])"));
+    // Season ranges ("S01-S05").
+    static const QRegularExpression seasonRange(
+        QStringLiteral("\\b[sS]\\d{1,2}\\s*-\\s*[sS]?\\d{1,2}\\b"));
+    // Explicit completeness markers (NOT bare "batch" — Amatsu tags everything).
+    static const QRegularExpression completeRe(
+        QStringLiteral("\\b(complete\\s*series|complete|season\\s*pack|all\\s*episodes)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return tildeRange.match(title).hasMatch()
+        || dashRange.match(title).hasMatch()
+        || seasonRange.match(title).hasMatch()
+        || completeRe.match(title).hasMatch();
+}
+
+bool AutoSourcePicker::hasDualAudio(const QString& title) {
+    // "dual"/"dual audio"/"multi-audio" — but never "multisub"/"multiple
+    // subtitle" (subtitles, not audio).
+    static const QRegularExpression re(
+        QStringLiteral("\\bdual\\b|\\bdual[\\s._-]?audio\\b|\\bmulti[\\s._-]?audio\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(title).hasMatch();
+}
+
 double AutoSourcePicker::impliedBitrateMbps(qint64 sizeBytes, int runtimeMinutes) {
     if (sizeBytes <= 0 || runtimeMinutes <= 0) return 0.0;
     return (static_cast<double>(sizeBytes) * 8.0)
@@ -81,11 +111,23 @@ std::optional<int> AutoSourcePicker::pick(const QList<SourceCandidate>& candidat
     }
     if (survivors.isEmpty()) return std::nullopt;                 // no source found
 
-    // Rank: seeders desc -> release-type (sourceScore) desc -> lower original
-    // index. Deterministic even when seeders tie.
+    // Rank: single-episode before batch -> dual-audio before single-audio ->
+    // seeders desc -> release-type (sourceScore) desc -> lower original index.
+    // The first two tiers serve "watch a specific episode": never pull a season
+    // pack when a single exists, and prefer a dual-audio release among equals.
+    // Batch/dual detection reads the full identity blob (matchText) when present
+    // so it sees the filename wherever the addon stashed it (mirrors the gate).
     auto betterRank = [&](int a, int b) {
         const SourceCandidate& ca = candidates.at(a);
         const SourceCandidate& cb = candidates.at(b);
+        const QString& ida = ca.matchText.isEmpty() ? ca.title : ca.matchText;
+        const QString& idb = cb.matchText.isEmpty() ? cb.title : cb.matchText;
+        const bool batchA = isBatchRelease(ida);
+        const bool batchB = isBatchRelease(idb);
+        if (batchA != batchB) return !batchA;   // non-batch (single) ranks first
+        const bool dualA = hasDualAudio(ida);
+        const bool dualB = hasDualAudio(idb);
+        if (dualA != dualB) return dualA;        // dual-audio ranks first
         if (ca.seeders != cb.seeders) return ca.seeders > cb.seeders;
         const int sa = QualityScorer::sourceScore(ca.title);
         const int sb = QualityScorer::sourceScore(cb.title);
