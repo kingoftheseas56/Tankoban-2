@@ -758,6 +758,7 @@ QString TorrentEngine::addFromResume(const QString& resumePath,
     } else {
         atp.flags &= ~lt::torrent_flags::paused;
         atp.flags |= lt::torrent_flags::auto_managed;
+        atp.flags &= ~lt::torrent_flags::upload_mode;
     }
 
     auto handle = m_session.add_torrent(std::move(atp), ec);
@@ -871,6 +872,7 @@ void TorrentEngine::resumeTorrent(const QString& infoHash)
     QMutexLocker lock(&m_mutex);
     auto it = m_records.find(infoHash);
     if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.unset_flags(lt::torrent_flags::upload_mode);
     it->handle.set_flags(lt::torrent_flags::auto_managed);
     it->handle.resume();
 }
@@ -908,6 +910,7 @@ void TorrentEngine::forceStart(const QString& infoHash)
     QMutexLocker lock(&m_mutex);
     auto it = m_records.find(infoHash);
     if (it == m_records.end() || !it->handle.is_valid()) return;
+    it->handle.unset_flags(lt::torrent_flags::upload_mode);
     it->handle.unset_flags(lt::torrent_flags::auto_managed);
     it->handle.resume();
 }

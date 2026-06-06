@@ -723,8 +723,6 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
             cachePieceMeta(hash, row);
         }
     }
-    if (anyChanged)
-
     for (const auto& row :
          m_repo.listTorrentsByState(tankoban::torrent::TorrentState::PendingEngineAdd)) {
         const QString hash = row.hash.toLower();
@@ -822,8 +820,12 @@ void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
         if (auto cfgIt = m_pendingStartConfigs.find(transferId);
             cfgIt != m_pendingStartConfigs.end()) {
             QSharedPointer<AddTorrentConfig> cfg = cfgIt.value();
-            m_pendingStartConfigs.erase(cfgIt);
+            // Keep the staged entry present during the replay call. startDownload()
+            // uses m_pendingStartConfigs.contains(hash) as its re-entry guard; if
+            // we erase first, the new lane head re-enqueues behind itself instead
+            // of falling through to libtorrent.
             startDownload(transferId, *cfg);
+            m_pendingStartConfigs.remove(transferId);
             return;
         }
 
@@ -1109,6 +1111,14 @@ void TorrentClient::reconcileStreamBulkGroups()
             stagingPathByGroupId.contains(groupIt.key())) {
             group["stagingPath"] = QDir::cleanPath(stagingPathByGroupId.value(groupIt.key()));
             groupChanged = true;
+        } else if (group.value("stagingPath").toString().isEmpty()) {
+            const QString destinationRoot = group.value("destinationRoot").toString();
+            const QString derivedStagingPath =
+                streamBulkStagingPath(destinationRoot, groupIt.key());
+            if (!derivedStagingPath.isEmpty() && QDir(derivedStagingPath).exists()) {
+                group["stagingPath"] = QDir::cleanPath(derivedStagingPath);
+                groupChanged = true;
+            }
         }
 
         for (int i = 0; i < items.size(); ++i) {
@@ -1194,8 +1204,16 @@ void TorrentClient::reconcileStreamBulkGroups()
          groupIt != m_streamBulkGroups.constEnd(); ++groupIt) {
         const QJsonObject group = groupIt.value().toObject();
         const QString stagingPath = group.value("stagingPath").toString();
-        if (stagingPath.isEmpty()) continue;
         const QJsonArray groupItems = group.value("items").toArray();
+        QSet<QString> downloadingHashes;
+        for (const auto& v : groupItems) {
+            const QJsonObject item = v.toObject();
+            if (item.value("itemState").toString() == QLatin1String(kStateDownloading)) {
+                const QString infoHash = item.value("infoHash").toString().toLower();
+                if (!infoHash.isEmpty())
+                    downloadingHashes.insert(infoHash);
+            }
+        }
         for (const auto& v : groupItems) {
             const QJsonObject item = v.toObject();
             const QString infoHash = item.value("infoHash").toString();
@@ -1215,10 +1233,11 @@ void TorrentClient::reconcileStreamBulkGroups()
             // subsequent boots routed back into addFromResume's
             // `shouldPause = (state == "paused")` gate as false, causing
             // every cohort item to re-add unpaused.
-            if (state == QLatin1String(kStatePending))
+            if (state == QLatin1String(kStatePending)
+                && !downloadingHashes.contains(infoHash.toLower()))
                 pauseTorrent(infoHash);
             else if (state == QLatin1String(kStateDownloading))
-                resumeTorrent(infoHash);
+                forceStart(infoHash);
         }
     }
 
@@ -2690,7 +2709,7 @@ void TorrentClient::cohortMaybeAdvance(const QString& groupId)
         // against races with the user manually un-pausing via the
         // Tankorent UI mid-cohort — per brief §7.g, scheduler does not
         // re-pause user-driven changes).
-        resumeTorrent(infoHash);
+        forceStart(infoHash);
         item["itemState"] = QString::fromLatin1(kStateDownloading);
         items.replace(i, item);
         group["items"] = items;
@@ -3132,6 +3151,8 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
     m_engine->startTorrent(hash, config.destinationPath);
     if (config.startPaused)
         m_engine->pauseTorrent(hash);
+    else if (!config.imdbId.isEmpty() || !config.streamGroupId.isEmpty())
+        forceStart(hash);
 
     emit torrentAdded(hash);
 }

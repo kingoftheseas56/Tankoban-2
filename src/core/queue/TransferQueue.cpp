@@ -7,8 +7,13 @@ TransferQueue::TransferQueue(QObject* parent) : QObject(parent) {}
 int TransferQueue::enqueue(const TransferItem& item) {
     auto& lane = m_lanes[item.showId];
     lane.showId = item.showId;
-    lane.items.push_back(item);
+    TransferItem queued = item;
+    if (lane.items.empty())
+        queued.state = TransferState::Running;
+    lane.items.push_back(queued);
     const int pos = static_cast<int>(lane.items.size()) - 1;
+    if (pos == 0)
+        emit itemStateChanged(queued.transferId, TransferState::Running);
     emit laneChanged(item.showId);
     return pos;
 }
@@ -27,6 +32,8 @@ std::optional<TransferItem> TransferQueue::finishCurrent(const QString& showId, 
         emit laneChanged(showId);
         return std::nullopt;
     }
+    it->items.front().state = TransferState::Running;
+    emit itemStateChanged(it->items.front().transferId, TransferState::Running);
     emit laneChanged(showId);
     return it->items.front();
 }
@@ -60,8 +67,11 @@ bool TransferQueue::cancel(const QString& transferId, std::optional<TransferItem
                 const QString showId = laneIt->showId;
                 items.erase(items.begin() + i);
                 emit itemStateChanged(transferId, TransferState::Cancelled);
-                if (wasCurrent && !items.empty() && nextAfterCancel) {
-                    *nextAfterCancel = items.front();
+                if (wasCurrent && !items.empty()) {
+                    items.front().state = TransferState::Running;
+                    if (nextAfterCancel)
+                        *nextAfterCancel = items.front();
+                    emit itemStateChanged(items.front().transferId, TransferState::Running);
                 }
                 if (items.empty()) {
                     m_lanes.erase(laneIt);

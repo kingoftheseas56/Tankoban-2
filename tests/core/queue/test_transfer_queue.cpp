@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "core/queue/TransferQueue.h"
+#include <QList>
+#include <QPair>
 
 using namespace tankoban::queue;
 
@@ -17,27 +19,48 @@ TransferItem makeItem(const QString& tid, const QString& show, int ep = -1) {
 TEST(TransferQueueTest, EnqueueFirstItemReturnsZero) {
     TransferQueue q;
     EXPECT_EQ(q.enqueue(makeItem("t1", "imdb:tt0001", 1)), 0);
+    auto lane = q.laneFor("imdb:tt0001");
+    ASSERT_TRUE(lane.has_value());
+    EXPECT_EQ(lane->items.front().state, TransferState::Running);
 }
 
 TEST(TransferQueueTest, EnqueueSecondItemSameShowReturnsOne) {
     TransferQueue q;
     q.enqueue(makeItem("t1", "imdb:tt0001", 1));
     EXPECT_EQ(q.enqueue(makeItem("t2", "imdb:tt0001", 2)), 1);
+    auto lane = q.laneFor("imdb:tt0001");
+    ASSERT_TRUE(lane.has_value());
+    ASSERT_EQ(lane->items.size(), 2u);
+    EXPECT_EQ(lane->items[0].state, TransferState::Running);
+    EXPECT_EQ(lane->items[1].state, TransferState::Queued);
 }
 
 TEST(TransferQueueTest, EnqueueDifferentShowsBothReturnZero) {
     TransferQueue q;
     EXPECT_EQ(q.enqueue(makeItem("t1", "imdb:tt0001", 1)), 0);
     EXPECT_EQ(q.enqueue(makeItem("t2", "imdb:tt0002", 1)), 0);
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items.front().state, TransferState::Running);
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
 }
 
 TEST(TransferQueueTest, FinishCurrentReturnsNextQueued) {
     TransferQueue q;
+    QList<QPair<QString, TransferState>> stateChanges;
+    QObject::connect(&q, &TransferQueue::itemStateChanged,
+                     [&stateChanges](const QString& id, TransferState state) {
+                         stateChanges.append({id, state});
+                     });
     q.enqueue(makeItem("t1", "imdb:tt0001", 1));
     q.enqueue(makeItem("t2", "imdb:tt0001", 2));
     auto next = q.finishCurrent("imdb:tt0001", TransferState::Completed);
     ASSERT_TRUE(next.has_value());
     EXPECT_EQ(next->transferId, "t2");
+    EXPECT_EQ(next->state, TransferState::Running);
+    ASSERT_GE(stateChanges.size(), 3);
+    EXPECT_EQ(stateChanges.at(stateChanges.size() - 2).first, "t1");
+    EXPECT_EQ(stateChanges.at(stateChanges.size() - 2).second, TransferState::Completed);
+    EXPECT_EQ(stateChanges.last().first, "t2");
+    EXPECT_EQ(stateChanges.last().second, TransferState::Running);
 }
 
 TEST(TransferQueueTest, FinishCurrentOnEmptyLaneReturnsNullopt) {
@@ -94,6 +117,7 @@ TEST(TransferQueueTest, CancelCurrentItemAdvancesLane) {
     ASSERT_TRUE(q.cancel("t1", &next));
     ASSERT_TRUE(next.has_value());
     EXPECT_EQ(next->transferId, "t2");
+    EXPECT_EQ(next->state, TransferState::Running);
 }
 
 TEST(TransferQueueTest, CancelUnknownIdReturnsFalse) {
