@@ -641,10 +641,29 @@ TankorentPage::TankorentPage(CoreBridge* bridge, TorrentClient* client, QWidget*
         if (col == 11) openPropertiesFor(row);  // Info column
     });
 
-    // Auto-refresh transfers every 1 second
+    // PERF (2026-06-06, Agent 0 heaviness audit #1): the 1Hz transfer poll
+    // (listActive() SQLite scan + full table rebuild) used to run for the app's
+    // whole life even when this page is hidden. Now started in showEvent /
+    // stopped in hideEvent so it only ticks while the page is visible.
     m_transferTimer = new QTimer(this);
     connect(m_transferTimer, &QTimer::timeout, this, &TankorentPage::refreshTransfers);
-    m_transferTimer->start(1000);
+}
+
+void TankorentPage::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    // Paint current state immediately, then resume the poll while visible.
+    refreshTransfers();
+    if (m_transferTimer && !m_transferTimer->isActive())
+        m_transferTimer->start(1000);
+}
+
+void TankorentPage::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    // No off-screen SQLite scan / table rebuild while hidden.
+    if (m_transferTimer)
+        m_transferTimer->stop();
 }
 
 // v1.5 Phase D.3 (2026-05-19) — Tankorent-side dispatch layer.

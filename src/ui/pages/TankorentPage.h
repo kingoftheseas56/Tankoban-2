@@ -120,6 +120,12 @@ protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    // PERF (2026-06-06, Agent 0 heaviness audit #1): gate the 1Hz transfer
+    // poll (listActive() SQLite scan + full table rebuild) on visibility so it
+    // only ticks while the Tankorent page is actually shown. Mirrors
+    // StreamDetailView's showEvent/hideEvent timer gating.
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
     // A1: click-to-sort on results table
     void onResultsHeaderClicked(int col);
