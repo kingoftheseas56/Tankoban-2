@@ -68,6 +68,53 @@ TEST(WesternCatalogLoader, EditionsMapToVolumes)
     EXPECT_EQ(cat.volumes[1].groupingLabel, "TPB");
 }
 
+// Regression (2026-06-06, Hemanth-flagged on the Invincible page): RCO catalogues
+// list editions newest-first (TPB 25 -> TPB 1) and the harvester only tier-sorts
+// them, so the raw `editions` array is reverse-ordered. The loader must normalise
+// to forward reading order so "Volume 1" is the FIRST edition, not the finale.
+// Before this fix Invincible showed "Volume 1 - TPB 25 The End of All Things Part Two".
+TEST(WesternCatalogLoader, RcoEditionsNormalisedToForwardReadingOrder)
+{
+    QJsonObject o = baseObj();
+    o["seriesId"]    = "invincible";
+    o["seriesTitle"] = "Invincible";
+    QJsonArray eds;   // reverse order, exactly as RCO/harvester emit it
+    QJsonObject e0; e0["label"] = "TPB 3 Perfect Strangers"; e0["href"] = "/Comic/Invincible/TPB-3"; e0["formatTier"] = 2;
+    QJsonObject e1; e1["label"] = "TPB 2 Eight is Enough";   e1["href"] = "/Comic/Invincible/TPB-2"; e1["formatTier"] = 2;
+    QJsonObject e2; e2["label"] = "TPB 1 Family Matters";    e2["href"] = "/Comic/Invincible/TPB-1"; e2["formatTier"] = 2;
+    eds.append(e0); eds.append(e1); eds.append(e2);
+    o["editions"] = eds;
+
+    const auto cat = WesternCatalogLoader::loadFromJsonObject(o);
+    ASSERT_EQ(cat.volumes.size(), 3);
+    EXPECT_EQ(cat.volumes[0].volumeNumber, 1);
+    EXPECT_EQ(cat.volumes[0].titleEnglish, "TPB 1 Family Matters");   // Volume 1 = first TPB
+    EXPECT_EQ(cat.volumes[1].titleEnglish, "TPB 2 Eight is Enough");
+    EXPECT_EQ(cat.volumes[2].titleEnglish, "TPB 3 Perfect Strangers");
+}
+
+// Mixed tiers (Deadly Class: TPBs + Deluxe) stay tier-grouped, each group in
+// forward number order. Edition-number extraction is the first integer in the
+// label, covering "TPB Part N" (Watchmen) and "Collection TPB N" (Spawn) too.
+TEST(WesternCatalogLoader, RcoMixedTiersGroupedThenForwardNumbered)
+{
+    QJsonObject o = baseObj();
+    QJsonArray eds;
+    QJsonObject d1; d1["label"] = "Deluxe Edition 2"; d1["formatTier"] = 3;
+    QJsonObject t2; t2["label"] = "TPB 2";            t2["formatTier"] = 2;
+    QJsonObject d0; d0["label"] = "Deluxe Edition 1"; d0["formatTier"] = 3;
+    QJsonObject t1; t1["label"] = "TPB 1";            t1["formatTier"] = 2;
+    eds.append(d1); eds.append(t2); eds.append(d0); eds.append(t1);
+    o["editions"] = eds;
+
+    const auto cat = WesternCatalogLoader::loadFromJsonObject(o);
+    ASSERT_EQ(cat.volumes.size(), 4);
+    EXPECT_EQ(cat.volumes[0].titleEnglish, "TPB 1");            // tier 2 first, forward
+    EXPECT_EQ(cat.volumes[1].titleEnglish, "TPB 2");
+    EXPECT_EQ(cat.volumes[2].titleEnglish, "Deluxe Edition 1"); // tier 3 next, forward
+    EXPECT_EQ(cat.volumes[3].titleEnglish, "Deluxe Edition 2");
+}
+
 // schema-v3 GCD branch (COMICS_WESTERN_GCD 2026-06-05): per-volume FORWARD
 // editions carry their own ISBN / OL cover / year; covers are per-volume (not the
 // shared rco hero) and an empty coverUrl stays empty (title-card fallback).

@@ -14,6 +14,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
+
+#include <algorithm>
+#include <limits>
+#include <vector>
 
 namespace tankoban::manga {
 
@@ -111,14 +116,44 @@ MangaCatalog WesternCatalogLoader::loadFromJsonObject(const QJsonObject& obj)
     // hero band + grid tile read this field directly. (2026-06-02.)
     cat.seriesCover = seriesCover;
 
-    cat.volumes.reserve(editionsArr.size());
+    // ── reading-order normalisation (COMICS_WESTERN_ORDER 2026-06-06, Agent 1) ──
+    // RCO lists editions newest-first and the harvester (WesternSeriesParse::
+    // buildEditions) only tier-sorts them, so the raw `editions` array runs
+    // TPB 25 -> TPB 1. Numbering the "Volume N" ordinal in record order made
+    // Volume 1 = the FINALE (Hemanth flagged the Invincible page showing
+    // "Volume 1 - TPB 25 The End of All Things Part Two"). Re-sort into forward
+    // reading order by (formatTier, edition-number-in-label) before numbering:
+    // the label carries the human edition number across all six RCO label shapes
+    // ("TPB 25", "TPB Part 4", "Collection TPB 29", "Deluxe Edition 1 Part 2",
+    // ...) so the FIRST integer in the label is the sort key. Number-less labels
+    // (bare "TPB", "Compendium One") sort last within their tier and keep their
+    // relative position via stable_sort. This is the single runtime load path for
+    // both baked and live-searched catalogues, so it fixes every on-disk RCO file
+    // at once with no data regen, and stays correct across future re-harvests.
+    static const QRegularExpression kLeadingNum(QStringLiteral(R"(\d+)"));
+    auto editionNumber = [](const QString& label) -> int {
+        const auto m = kLeadingNum.match(label);
+        return m.hasMatch() ? m.captured(0).toInt()
+                            : std::numeric_limits<int>::max();
+    };
+    std::vector<QJsonObject> sortedEds;
+    sortedEds.reserve(editionsArr.size());
+    for (const auto& v : editionsArr) sortedEds.push_back(v.toObject());
+    std::stable_sort(sortedEds.begin(), sortedEds.end(),
+        [&](const QJsonObject& a, const QJsonObject& b) {
+            const int ta = a.value(QStringLiteral("formatTier")).toInt(99);
+            const int tb = b.value(QStringLiteral("formatTier")).toInt(99);
+            if (ta != tb) return ta < tb;
+            return editionNumber(a.value(QStringLiteral("label")).toString())
+                 < editionNumber(b.value(QStringLiteral("label")).toString());
+        });
+
+    cat.volumes.reserve(sortedEds.size());
     int ordinal = 1;
-    for (const auto& v : editionsArr) {
-        const QJsonObject eo = v.toObject();
+    for (const auto& eo : sortedEds) {
         MangaVolume vol;
-        // Stable display ordinal in record order; the harvester is the source of
-        // truth for edition ordering (tier-first). The human edition number lives
-        // in the label ("TPB 25", "Compendium One").
+        // Forward display ordinal in reading order (see normalisation note above).
+        // The human edition number still lives in the label ("TPB 1", "TPB 25").
         vol.volumeNumber     = ordinal++;
         vol.titleEnglish     = eo.value(QStringLiteral("label")).toString();
         vol.groupingLabel    = tierLabel(eo.value(QStringLiteral("formatTier")).toInt(99));
