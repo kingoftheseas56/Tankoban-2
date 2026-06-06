@@ -420,6 +420,15 @@ private:
     void startWesternIssueDownload(const QString& seriesTitle, double issueNumber,
                                    const QString& editionTitle, int volumeNumber,
                                    const QString& destPath);
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 (Agent 1). Western comics are now
+    // issue-based: on opening a series, fetch its issue list LIVE from readallcomics
+    // (search -> best category -> fetchChapters) and render each issue as a row via
+    // populateVolumeRowsFromCatalog. seriesMeta carries the baked series cover/
+    // synopsis/id; only the volume rows are replaced with issues. One-shot signal
+    // connections (disconnect on terminal) + a series-id guard keep a late result
+    // from painting onto a series the user already navigated away from.
+    void fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog& seriesMeta,
+                                     bool onShelf);
     void showMangaMode();
     void showWesternMode();
 

@@ -104,3 +104,41 @@ Plumb a unit word so issue tiles don't say "Volume N":
    flips to Read; opening it shows real pages.
 4. Manga tab unchanged (volume-first). GetComics code still compiles.
 5. Build green; cross-engine review (producer≠reviewer) before "done"; Hemanth visual confirm = gate.
+
+## Smoke result — 2026-06-06 ~20:30 (Agent 1) — PARTIAL
+
+Build green; app relaunched (20:25 exe). Live via dev bridge:
+- ✅ **Issue render WORKS.** `comics-open-western-series invincible` → series view shows **146
+  issue rows (#0..#144)** fetched live from readallcomics, ascending. `fetchAndRenderWesternIssues`
+  confirmed (proves the readallcomics search → best-category → fetchChapters path resolves Invincible
+  correctly to `invincible-image-comics`).
+- ✅ **Download re-point routes to readallcomics.** After triggering a download, `comics-get-downloads`
+  shows `readallcomics` records (completed/downloading/queued) — NOT GetComics. The signal re-point
+  works.
+- ❌ **End-to-end cbz NOT produced.** Despite a `readallcomics`/`completed` record, **no .cbz exists
+  anywhere** (searched Media/Comics, Desktop, AppData/Local — none; no `.tankoban-part` partial). Only
+  13 loose page jpgs (`000.jpg..012.jpg`) in `Media/Comics/Invincible/`, frozen. So the download
+  completes a hollow record with no file.
+
+### Open problems for the next (clean-state) debug session
+1. **Hollow completion / no cbz** — why does the readallcomics path mark a chapter "completed" but
+   produce no cbz? Suspects: `MangaDownloader::startDownload` for source "readallcomics" page-fetch
+   returns 0 usable pages (empty-cbz guard discards → "completed" with nothing), OR packs to an
+   unexpected path, OR the loose jpgs ARE the stalled fetch (stuck at 13/25). Check MangaDownloader's
+   readallcomics Referer branch + the page→cbz pack + the EMPTY_CBZ guard. Reproduce with a SINGLE
+   clean trigger and watch the page count climb to N then zip.
+2. **Polluted download queue** — the running app had **23 active downloads**, most `source:
+   "readcomicsonline"` (the OLD Tankoyomi-era scraper, CF-locked now), `queued`/`downloading` at
+   progress 0. These are stale persisted-queue entries that resume on startup and confound the smoke.
+   Need a clean-state run (clear/cancel the persisted queue) before re-verifying. The loose `000..012.jpg`
+   are most likely from one of these stale readcomicsonline downloads, not the readallcomics path.
+3. **Deferred from v1:** tile label still reads "Volume N" (number is issue-correct & ordered); flip
+   the word to "Issue N" (unit plumb: VolumeTileData.unit → displayTitleForVolume + the VolumeRow
+   intermediate + the :2531 sources-context label).
+4. **devDownloadWesternEdition comment** (`ComicsPage.cpp:5073`) still says it routes to
+   `m_westernDownloader->requestVolume`; the actual flow now goes through the re-pointed signal →
+   `startWesternIssueDownload`. Update the stale comment.
+
+Status of committed code: render + re-point are correct and the render is verified; the download
+**routing** is verified but **cbz output is unverified/failing**. Committed as WIP — strictly better
+than the prior dead-GetComics state (right source + content fetching), not a regression.

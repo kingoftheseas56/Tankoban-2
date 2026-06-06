@@ -50,6 +50,7 @@
 #include <QStandardPaths>
 #include <QPointer>
 #include <memory>
+#include <algorithm>
 #include <QCoreApplication>
 #include <QPushButton>
 #include <QScopedValueRollback>
@@ -1030,11 +1031,12 @@ void ComicsPage::wireWesternDownloader()
             this,
             [this](int volumeNumber, const QString& editionTitle,
                    const QString& tierLabel, const QString& /*sourceHref*/) {
-        // GetComics-as-source (2026-06-05): the Western download runs through
-        // WesternVolumeDownloader, matching collected editions on series identity
-        // with year/tier as hints. It does not use the RCO page-scrape path.
-        if (!m_westernDownloader || m_pendingWesternSeriesId.isEmpty()) {
-            qInfo("ComicsPage: Western download ignored - no downloader/series");
+        // COMICS_WESTERN_ISSUE_BASED 2026-06-06 (Agent 1): western comics are now
+        // issue-based. The clicked row IS a readallcomics issue, so the download
+        // runs through the readallcomics page->cbz path (startWesternIssueDownload),
+        // NOT the parked GetComics resolver (m_westernDownloader, kept compiled).
+        if (!m_readAllComicsScraper || m_pendingWesternSeriesId.isEmpty()) {
+            qInfo("ComicsPage: Western download ignored - no readallcomics scraper/series");
             if (m_tyVolumeSeriesView)
                 m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
             return;
@@ -1091,18 +1093,17 @@ void ComicsPage::wireWesternDownloader()
             }
         }
 
-        // rcostation's reader pages are browser-locked (dead descramble), so the
-        // clicked rco issue is cross-mapped to its readallcomics counterpart for
-        // the actual page fetch. Issue number comes from the edition title
-        // ("Invincible #144" -> 144), falling back to the volume row number.
-        const int year = seriesJson.value(QStringLiteral("yearStart")).toInt();
+        // Rows are readallcomics issues now, so volumeNumber IS the issue number.
+        // Drive the proven readallcomics page->cbz path. (year/tierLabel were
+        // GetComics resolver hints; unused on this path but kept in the signal.)
+        Q_UNUSED(tierLabel);
 
-        qInfo("ComicsPage: Western download - series=%s edition=%s volumeNumber=%d year=%d dest=%s",
+        qInfo("ComicsPage: Western issue download - series=%s edition=%s issue=%d dest=%s",
               qUtf8Printable(seriesId), qUtf8Printable(editionTitle),
-              volumeNumber, year, qUtf8Printable(destPath));
+              volumeNumber, qUtf8Printable(destPath));
 
-        m_westernDownloader->requestVolume(seriesId, volumeNumber, seriesTitle,
-                                           year, tierLabel, destPath);
+        startWesternIssueDownload(seriesTitle, static_cast<double>(volumeNumber),
+                                  editionTitle, volumeNumber, destPath);
     });
 
     // --- volumeResolved: surface the matched collected edition in the panel ---
@@ -1292,6 +1293,94 @@ void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double is
                     m_westernDownloadRecordId = m_mangaDownloader->startDownload(
                         seriesTitle, QStringLiteral("readallcomics"),
                         { ch }, destPath, QStringLiteral("cbz"));
+                });
+            scraper->fetchChapters(slug);
+        });
+
+    scraper->search(seriesTitle, 60);
+}
+
+// COMICS_WESTERN_ISSUE_BASED 2026-06-06 (Agent 1). Live-fetch a western series's
+// issue list from readallcomics and render each issue as a volume row. Mirrors
+// startWesternIssueDownload's resolve (search -> best normalized-title category ->
+// fetchChapters) but renders ALL issues rather than matching one. seriesMeta (the
+// baked western catalogue record) supplies series cover/synopsis/id; only the rows
+// are replaced. One-shot connections (disconnected on the first terminal event)
+// avoid cross-firing with concurrent requests; a series-id guard drops a late
+// result if the user navigated to a different series mid-fetch.
+void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog& seriesMeta,
+                                             bool onShelf)
+{
+    if (!m_readAllComicsScraper || !m_tyVolumeSeriesView) return;
+
+    const QString seriesTitle = seriesMeta.seriesTitle;
+    const QString guardId     = seriesMeta.seriesId;   // ignore late results post nav-away
+    auto* scraper = m_readAllComicsScraper;
+
+    auto searchConn = std::make_shared<QMetaObject::Connection>();
+    auto chapConn   = std::make_shared<QMetaObject::Connection>();
+    auto errConn    = std::make_shared<QMetaObject::Connection>();
+    auto cleanup = [searchConn, chapConn, errConn]() {
+        QObject::disconnect(*searchConn);
+        QObject::disconnect(*chapConn);
+        QObject::disconnect(*errConn);
+    };
+    auto fail = [this, guardId](const QString& why) {
+        qInfo("ComicsPage: western issue-list fetch failed - %s", qUtf8Printable(why));
+        if (m_tyVolumeSeriesView && m_pendingWesternSeriesId == guardId)
+            m_tyVolumeSeriesView->updateWesternDownloadStatus(
+                QString(), tr("No issues found on readallcomics"));
+    };
+
+    *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
+        [cleanup, fail](const QString& msg) { cleanup(); fail(msg); });
+
+    *searchConn = connect(scraper, &MangaScraper::searchFinished, this,
+        [this, scraper, chapConn, cleanup, fail, seriesMeta, guardId, onShelf]
+        (const QList<MangaResult>& results) {
+            if (m_pendingWesternSeriesId != guardId) { cleanup(); return; }  // navigated away
+            if (results.isEmpty()) { cleanup(); fail(QStringLiteral("no series match")); return; }
+
+            // Pick the best category: exact normalized-title match beats prefix
+            // overlap beats the first result (publisher-disambiguation tolerant).
+            const QString want = normalizeWesternTitle(seriesMeta.seriesTitle);
+            QString slug = results.first().id;
+            int bestScore = -1;
+            for (const auto& r : results) {
+                const QString got = normalizeWesternTitle(r.title);
+                const int score = (got == want) ? 2
+                                : (got.startsWith(want) || want.startsWith(got)) ? 1 : 0;
+                if (score > bestScore) { bestScore = score; slug = r.id; }
+            }
+
+            *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
+                [this, cleanup, fail, seriesMeta, guardId, onShelf]
+                (const QList<ChapterInfo>& chapters) {
+                    cleanup();
+                    if (m_pendingWesternSeriesId != guardId) return;   // navigated away
+                    if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
+
+                    // Replace the rows with one volume per readallcomics issue,
+                    // ascending by issue number. Series-level meta (cover/synopsis/
+                    // id) is preserved from the baked catalogue record.
+                    QList<ChapterInfo> sorted = chapters;
+                    std::sort(sorted.begin(), sorted.end(),
+                        [](const ChapterInfo& a, const ChapterInfo& b) {
+                            return a.chapterNumber < b.chapterNumber;
+                        });
+                    tankoban::manga::MangaCatalog issueCat = seriesMeta;
+                    issueCat.volumes.clear();
+                    issueCat.volumes.reserve(sorted.size());
+                    for (const auto& ch : sorted) {
+                        tankoban::manga::MangaVolume vol;
+                        vol.volumeNumber     = qRound(ch.chapterNumber);
+                        vol.coverUrlJapanese = seriesMeta.seriesCover;  // shared hero cover
+                        issueCat.volumes.append(std::move(vol));
+                    }
+                    if (m_tyVolumeSeriesView) {
+                        m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(issueCat);
+                        m_tyVolumeSeriesView->setWesternOnShelf(onShelf);
+                    }
                 });
             scraper->fetchChapters(slug);
         });
@@ -2850,12 +2939,20 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // enrichment onto a Western comic. populateVolumeRowsFromCatalog is
     // pure-render/no-network (its own header comment confirms it), so the
     // direct call is clean.
-    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(catalog);
-    // CORRECTION (continuation note): populateVolumeRowsFromCatalog RESETS the
-    // Western shelf flag, so setWesternOnShelf MUST be called AFTER it — not
-    // before — or the "On shelf"/"Add to Library" state gets clobbered.
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 (Agent 1): western comics are now
+    // issue-based. Render the series header immediately (cover/synopsis/title from
+    // the baked catalogue) via a header-only catalogue (volumes cleared), then
+    // live-fetch the readallcomics issue list and replace the rows with issues.
+    // The baked TPB editions are no longer the downloadable unit.
+    tankoban::manga::MangaCatalog headerOnly = catalog;
+    headerOnly.volumes.clear();
+    m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(headerOnly);
+    // populateVolumeRowsFromCatalog RESETS the Western shelf flag, so
+    // setWesternOnShelf MUST be called AFTER it (re-applied when the issue rows
+    // land in fetchAndRenderWesternIssues).
     m_tyVolumeSeriesView->setWesternOnShelf(onShelf);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+    fetchAndRenderWesternIssues(catalog, onShelf);
 }
 
 void ComicsPage::showMangaMode()
