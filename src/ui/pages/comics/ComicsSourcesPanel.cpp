@@ -514,17 +514,18 @@ void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
 void ComicsSourcesPanel::setWesternDownloadStatus(const QString& editionFound,
                                                   const QString& statusLine)
 {
-    // COMICS_WESTERN_DOWNLOAD 2026-06-02 — live GetComics download status. The
-    // main label names the GetComics source / the matched collected edition; the
-    // sub label carries the live state. Reuses the existing status labels (no new
-    // card type) and keeps the indexer scroll hidden — Western has one source.
+    // COMICS_WESTERN_DOWNLOAD 2026-06-02 — live Western download status. The main
+    // label names the source / the matched edition; the sub label carries the live
+    // state. Reuses the existing status labels (no new card type) and keeps the
+    // indexer scroll hidden — Western has one source. Source is ReadAllComics
+    // (COMICS_WESTERN_ISSUE_BASED 2026-06-06; GetComics parked).
     clearCards();
     if (m_headerLabel) {
         m_headerLabel->setText(tr("Download"));
     }
     if (m_statusLabel) {
         m_statusLabel->setText(editionFound.isEmpty()
-                                   ? tr("GetComics")
+                                   ? tr("ReadAllComics")
                                    : editionFound);
         m_statusLabel->show();
     }
