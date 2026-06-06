@@ -3324,19 +3324,26 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     }
     qInfo().noquote() << "[auto-dl] req.id=" << req.id
                       << "showTitle=" << m_pendingAuto.showTitle;
-    // Surface a fetch error on the auto-download path (mirrors onPlayRequested's
-    // streamError wiring ~line 2388). Clears the pending state so the tile/UI
-    // doesn't hang waiting on a result that will never arrive.
+    // DOWNLOAD BUG 2026-06-06 — a single addon failing must NOT abort the
+    // auto-download or alarm the user. The Amatsu anime gateway's
+    // tt->AniList->Nyaa lookup routinely trips the 10s transport timeout, but
+    // StreamAggregator counts EVERY dispatched addon and still fires a FINAL
+    // streamsReady with the surviving addons' streams (completeOne() emits once
+    // m_pendingResponses hits 0, regardless of per-addon failures). The one-shot
+    // streamsReady handler above then runs finishAutoDownloadPick(), which either
+    // starts the download from Torrentio's result OR surfaces a genuine
+    // "No 1080p source found" when the final result set is empty. Clearing
+    // m_pendingAuto.active here was the bug: a late Amatsu timeout cancelled a
+    // download Torrentio had already sourced, so "nothing about Theatre downloads
+    // works" on every anime title. We now only LOG the per-addon error; the
+    // terminal pick (or its empty-result branch) owns all user-facing outcomes.
     disconnect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError,
                this, nullptr);
     connect(m_streamAggregator, &tankostream::stream::StreamAggregator::streamError, this,
-        [this](const QString& addonId, const QString& message) {
-            m_pendingAuto.active = false;
-            const QString shown = addonId.isEmpty()
-                ? message : QStringLiteral("[%1] %2").arg(addonId, message);
-            if (m_detailView)
-                m_detailView->setStreamSourcesError(
-                    QStringLiteral("Failed to fetch sources: ") + shown);
+        [](const QString& addonId, const QString& message) {
+            qInfo().noquote() << "[auto-dl] addon source error (non-fatal):"
+                              << (addonId.isEmpty() ? QStringLiteral("(unknown)") : addonId)
+                              << message;
         });
 
     // DOWNLOAD BUG 2026-06-02 — capture the generation token load() stamped so
