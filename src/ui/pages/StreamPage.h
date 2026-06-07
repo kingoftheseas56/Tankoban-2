@@ -19,13 +19,9 @@
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/LayerEntry.h"
-// THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — StreamPlayerController.h removed.
-// THEATRE_RQBIT_REVIVAL Phase 1 (2026-06-07) — streaming controller restored
-// (forward-declared below); episode play now streams via rqbit.
+// THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — StreamPlayerController.h removed;
+// Theatre no longer constructs or references the streaming controller.
 #include "ui/pages/stream/StreamSourceChoice.h"
-
-class StreamPlayerController;
-namespace tankostream::rqbit { class RqbitEngine; }
 
 class CoreBridge;
 class QDialog;
@@ -409,15 +405,6 @@ private:
     CoreBridge*      m_bridge;
     TorrentClient*   m_torrentClient = nullptr;
     TorrentEngine*   m_torrentEngine;
-
-    // THEATRE_RQBIT_REVIVAL Phase 1 (2026-06-07) — rqbit streaming engine +
-    // the restored player controller. Episode play streams the auto-picked
-    // source through rqbit (watch-while-download); libtorrent still owns the
-    // explicit "download for offline" action.
-    tankostream::rqbit::RqbitEngine* m_rqbit = nullptr;
-    StreamPlayerController*           m_streamPlayer = nullptr;
-    QString m_pendingStreamTitle;       // player HUD title for the in-flight stream
-    QString m_currentStreamTorrentId;   // rqbit torrent id to stop on player close
 
     // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — m_streamEngine member removed;
     // the stream-server subprocess is no longer created.

@@ -1,4 +1,0 @@
-# rqbit streaming engine binary lives here at build time (resources/rqbit/rqbit.exe).
-# The .exe is gitignored (build-deployed artifact, like the ffmpeg sidecar).
-# Fetch: https://github.com/ikatson/rqbit/releases (Windows: rqbit.exe). Pinned: v8.1.1.
-# API contract captured in docs/superpowers/specs/rqbit-api-contract.md.

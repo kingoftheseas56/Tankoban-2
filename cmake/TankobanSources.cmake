@@ -227,10 +227,6 @@ set(SOURCES
     src/core/stream/PackClassifier.cpp
     src/core/stream/UnifiedPackSearchEngine.cpp
     src/core/stream/TitleMetadataEstimator.cpp
-    # THEATRE_RQBIT_REVIVAL Phase 1 — headless rqbit streaming engine
-    src/core/stream/rqbit/RqbitClient.cpp
-    src/core/stream/rqbit/RqbitProcess.cpp
-    src/core/stream/rqbit/RqbitEngine.cpp
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamDownloadsPage.cpp
@@ -248,7 +244,6 @@ set(SOURCES
     src/ui/pages/stream/AddonDetailPanel.cpp
     src/ui/pages/stream/StreamHomeBoard.cpp
     src/ui/pages/stream/CatalogBrowseScreen.cpp
-    src/ui/pages/stream/StreamPlayerController.cpp
 )
 
 set(HEADERS

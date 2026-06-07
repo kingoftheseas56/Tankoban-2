@@ -36,8 +36,6 @@
 #include "ui/pages/TileCard.h"
 
 #include "ui/player/VideoPlayer.h"
-#include "core/stream/rqbit/RqbitEngine.h"
-#include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
 #include "ui/dialogs/AddTorrentDialog.h"
@@ -802,32 +800,6 @@ void StreamPage::buildUI()
     // Detail layer
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
-
-    // THEATRE_RQBIT_REVIVAL Phase 1 (2026-06-07) — rqbit streaming engine +
-    // restored player controller. Episode play streams the auto-picked source
-    // through rqbit (watch-while-download); the explicit "download for offline"
-    // action stays on libtorrent. The engine stages into the videos dir.
-    m_rqbit = new tankostream::rqbit::RqbitEngine(
-        m_torrentClient ? m_torrentClient->defaultPaths().value(QStringLiteral("videos"))
-                        : QString(),
-        this);
-    m_streamPlayer = new StreamPlayerController(this);
-    connect(m_rqbit, &tankostream::rqbit::RqbitEngine::streamReady, this,
-            [this](const QString& url, const QString& torrentId, int /*fileIndex*/) {
-                m_currentStreamTorrentId = torrentId;
-                m_streamPlayer->playUrl(url, m_pendingStreamTitle);
-            });
-    connect(m_rqbit, &tankostream::rqbit::RqbitEngine::streamError, this,
-            [this](const QString& msg) {
-                if (m_detailView)
-                    m_detailView->setStreamSourcesError(tr("Stream failed: %1").arg(msg));
-            });
-    connect(m_streamPlayer, &StreamPlayerController::closed, this, [this]() {
-        if (!m_currentStreamTorrentId.isEmpty()) {
-            m_rqbit->stop(m_currentStreamTorrentId);   // delete the ephemeral staging files
-            m_currentStreamTorrentId.clear();
-        }
-    });
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) â€” wire TorrentClient
     // through to the detail view so Remove-from-Library can detect active
@@ -3459,23 +3431,33 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
 
     const tankostream::stream::StreamPickerChoice& chosen = choices.at(*picked);
 
-    // THEATRE_RQBIT_REVIVAL Phase 1 — stream the auto-picked source via rqbit
-    // (watch-while-download) instead of auto-downloading via libtorrent. rqbit
-    // takes the magnet directly — no infoHash pre-resolve / AddTorrentConfig.
-    // The explicit "download for offline" action (onDirectDownloadRequested)
-    // still routes to m_torrentClient->startDownload — unchanged.
-    if (chosen.magnetUri.isEmpty()) {
+    QString hash = chosen.infoHash;
+    if (hash.isEmpty() && !chosen.magnetUri.isEmpty())
+        hash = m_torrentClient->resolveMetadata(chosen.magnetUri);
+    if (hash.isEmpty()) {
         if (m_detailView)
-            m_detailView->setStreamSourcesError(tr("Source has no magnet for streaming"));
+            m_detailView->setStreamSourcesError(tr("Could not resolve source"));
         return;
     }
-    m_pendingStreamTitle = ctx.showTitle;
-    if (m_pendingStreamTitle.isEmpty() && m_detailView)
-        m_pendingStreamTitle = m_detailView->currentTitle();
-    qInfo().noquote() << "[auto-dl] streaming via rqbit imdb=" << ctx.imdbId
-                      << "s" << ctx.season << "e" << ctx.episode
-                      << "title=" << m_pendingStreamTitle;
-    m_rqbit->startStream(chosen.magnetUri);
+
+    AddTorrentConfig config;
+    config.category        = QStringLiteral("videos");
+    config.destinationPath = m_torrentClient->defaultPaths().value(QStringLiteral("videos"));
+    config.contentLayout   = QStringLiteral("original");
+    // Empty: lets TorrentClient's onMetadataReady/onPieceFinished/onTorrentFinished
+    // drive per-episode pending→progress→complete into StreamDownloadIndex (that
+    // path is gated on an EMPTY streamGroupId). Tankorent-page separation is done
+    // via the imdbId filter (P2.T5), not via this group id.
+    config.streamGroupId   = QString();
+    config.sequential      = false;
+    config.startPaused     = false;
+    config.imdbId          = ctx.imdbId;
+    config.season          = (ctx.mediaType == QLatin1String("movie")) ? 0 : ctx.season;
+    config.magnetUri       = chosen.magnetUri;
+
+    qInfo().noquote() << "[auto-dl] startDownload hash=" << hash.left(12)
+                      << "imdb=" << ctx.imdbId << "season=" << config.season;
+    m_torrentClient->startDownload(hash, config);
 }
 
 // triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch
