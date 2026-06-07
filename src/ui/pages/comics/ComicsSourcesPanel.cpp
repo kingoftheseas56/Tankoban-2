@@ -410,11 +410,22 @@ void ComicsSourcesPanel::clearCards()
     m_cards.clear();
 }
 
+void ComicsSourcesPanel::setUnitIsIssue(bool isIssue)
+{
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — western is issue-based. Re-apply the
+    // placeholder if it's currently showing so the word flips live.
+    m_unitIsIssue = isIssue;
+    if (m_statusLabel && m_statusLabel->isVisible() && m_cards.isEmpty())
+        setPlaceholder();
+}
+
 void ComicsSourcesPanel::setPlaceholder()
 {
     clearCards();
     if (m_statusLabel) {
-        m_statusLabel->setText(tr("Select a volume to see sources"));
+        m_statusLabel->setText(m_unitIsIssue
+            ? tr("Select an issue to see sources")
+            : tr("Select a volume to see sources"));
         m_statusLabel->show();
     }
     if (m_statusSubLabel) {

@@ -76,6 +76,11 @@ public:
     // Clear panel and show the "Select a volume to see sources" empty state.
     void clear();
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — western comics are issue-based, so
+    // the placeholder/empty-state reads "issue" not "volume". Set by the series
+    // view when it renders a western (rco/gcd) series; default is volume (manga).
+    void setUnitIsIssue(bool isIssue);
+
     // Populate panel with ranked sources for the given series + volume.
     // anilistSeriesId keys the catalog lookup (catalog stores anilistId on
     // PremiumCatalogEntry); seriesTitle keys the nyaa runtime search.
@@ -164,6 +169,7 @@ private:
 
     QList<UnifiedSourceRow>       m_rows;
     QList<ComicsSourceCard*>      m_cards;
+    bool                          m_unitIsIssue = false;  // WESTERN_PARITY 2026-06-07
 };
 
 } // namespace tankoban::manga::comics

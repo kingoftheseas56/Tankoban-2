@@ -1398,6 +1398,11 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     }
     m_currentMangaCatalog = catalog;
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — issue-based unit word for the Sources
+    // panel placeholder ("Select an issue…" vs "Select a volume…"). clearView
+    // already cleared the panel to the volume placeholder; this flips it live.
+    if (m_sourcesPanel) m_sourcesPanel->setUnitIsIssue(isWesternSource(catalog.source));
+
     // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). Western series view uses a larger,
     // more prominent hero cover than the manga shelf. Set BEFORE the hero paint
     // below so the async applyHeroCoverPixmap scales to this size; clearView
@@ -1669,9 +1674,15 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
     // is NOT in m_volumeTiles, so the qDeleteAll teardown above never frees it.
     const bool westernNoEditions =
         isWesternSource(catalog.source) && m_volumeTiles.isEmpty();
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — distinguish "still fetching the issue
+    // list" from "genuinely none". The header renders with zero tiles while the
+    // readallcomics fetch is in flight, so the empty-state must read as loading.
+    const QString westernEmptyText = m_westernIssuesLoading
+        ? tr("Loading issues…")
+        : tr("No issues found yet.");
     if (westernNoEditions && !m_westernNoEditionsLabel && m_volumesLayout && m_volumesHost) {
         m_westernNoEditionsLabel =
-            new QLabel(tr("No collected editions found yet."), m_volumesHost);
+            new QLabel(westernEmptyText, m_volumesHost);
         m_westernNoEditionsLabel->setObjectName(QStringLiteral("WesternNoEditions"));
         m_westernNoEditionsLabel->setWordWrap(true);
         m_westernNoEditionsLabel->setStyleSheet(
@@ -1679,6 +1690,7 @@ void ComicsSeriesView::populateVolumeRowsFromCatalog(
         m_volumesLayout->insertWidget(m_volumesLayout->count() - 1, m_westernNoEditionsLabel);
     }
     if (m_westernNoEditionsLabel) {
+        m_westernNoEditionsLabel->setText(westernEmptyText);
         m_westernNoEditionsLabel->setVisible(westernNoEditions);
     }
     // COMICS_WESTERN_ADD 2026-06-02 (Agent 1). For an editionless Western series
@@ -1821,6 +1833,18 @@ void ComicsSeriesView::setWesternOnShelf(bool onShelf)
     // add to flip the button to "On shelf" immediately.
     m_westernOnShelf = onShelf;
     refreshLibraryButton();
+}
+
+void ComicsSeriesView::setWesternIssuesLoading(bool loading)
+{
+    // WESTERN_PARITY 2026-06-07 (Agent 1). Drives the empty-state label between
+    // "Loading issues…" and "No issues found yet." If the label already exists
+    // and is visible (header rendered, issues not yet in), update it live.
+    m_westernIssuesLoading = loading;
+    if (m_westernNoEditionsLabel && m_westernNoEditionsLabel->isVisible()) {
+        m_westernNoEditionsLabel->setText(
+            loading ? tr("Loading issues…") : tr("No issues found yet."));
+    }
 }
 
 void ComicsSeriesView::refreshLibraryButton()

@@ -1320,9 +1320,13 @@ void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog
     };
     auto fail = [this, guardId](const QString& why) {
         qInfo("ComicsPage: western issue-list fetch failed - %s", qUtf8Printable(why));
-        if (m_tyVolumeSeriesView && m_pendingWesternSeriesId == guardId)
+        if (m_tyVolumeSeriesView && m_pendingWesternSeriesId == guardId) {
+            // WESTERN_PARITY 2026-06-07 (Agent 1) — fetch done (failed): flip the
+            // empty-state out of "Loading issues…" to "No issues found yet."
+            m_tyVolumeSeriesView->setWesternIssuesLoading(false);
             m_tyVolumeSeriesView->updateWesternDownloadStatus(
                 QString(), tr("No issues found on readallcomics"));
+        }
     };
 
     *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
@@ -2990,6 +2994,8 @@ void ComicsPage::openWesternSeriesFromLibrary(const QString& seriesId)
     cat.seriesId    = recOpt->seriesId;
     cat.seriesTitle = recOpt->title;
     cat.seriesCover = recOpt->coverUrl;
+    cat.source      = QStringLiteral("rco");  // mark western so the series view
+                                              // renders the western/issue path
     m_pendingWesternJson     = {};          // no baked json; live issues only
     m_pendingWesternSeriesId = recOpt->seriesId;
     openWesternSeriesFromCatalog(cat, QString(), /*onShelf*/true);
@@ -3173,6 +3179,10 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // The baked TPB editions are no longer the downloadable unit.
     tankoban::manga::MangaCatalog headerOnly = enriched;
     headerOnly.volumes.clear();
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — issues are fetched async right after;
+    // flag loading so the empty volumes column reads "Loading issues…" not
+    // "No issues found yet." (cleared on failure in fetchAndRenderWesternIssues).
+    m_tyVolumeSeriesView->setWesternIssuesLoading(true);
     m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(headerOnly);
     // populateVolumeRowsFromCatalog RESETS the Western shelf flag, so
     // setWesternOnShelf MUST be called AFTER it (re-applied when the issue rows
@@ -3953,6 +3963,7 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
         cat.seriesId    = result.id;
         cat.seriesTitle = result.title;
         cat.seriesCover = result.thumbnailUrl;
+        cat.source      = QStringLiteral("rco");  // western/issue render path
         m_detailEnteredFromWestern = true;
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
         m_tyVolumeSeriesView->showSearchResultLoading();

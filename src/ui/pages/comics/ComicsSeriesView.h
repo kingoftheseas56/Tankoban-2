@@ -115,6 +115,12 @@ public:
     // by ComicsPage after westernSeriesReady arrives.
     void setWesternOnShelf(bool onShelf);
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — while the readallcomics issue list
+    // is being fetched, the volumes column is empty; show "Loading issues…"
+    // instead of the "No issues found" empty-state. ComicsPage sets true before
+    // the header render and false on fetch failure.
+    void setWesternIssuesLoading(bool loading);
+
     // PHASE 12: post-download cbz-extracted cover replaces the AniList-loaded
     // thumb in the volume row's Cover cell. seriesId may be a real catalog
     // seriesId or the synthesized "anilist_<N>" slug; we match by parsing the
@@ -445,6 +451,7 @@ private:
     QLabel*   m_aboutSynopsis  = nullptr;
     QLabel*   m_aboutMeta      = nullptr;   // "Author · Publisher · Year · Genre"
     QLabel*   m_westernNoEditionsLabel = nullptr;  // editionless Western empty-state (spec §8)
+    bool      m_westernIssuesLoading = false;      // WESTERN_PARITY 2026-06-07 — loading vs empty
     void buildAboutBlock();                 // lazy-construct the about-block widgets
     void updateAboutBlock(const tankoban::manga::MangaCatalog& catalog);
 
