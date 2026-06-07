@@ -2464,6 +2464,20 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
                                              QFileInfo(cbzPath).size(), chapterIds);
     }
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — download-implies-library (manga
+    // parity reflex). A finished western issue adds its series to My Library;
+    // addOrUpdate fires libraryChanged -> refreshWesternLibrary surfaces the tile.
+    if (kind == PendingVolumeSourceKind::WesternGetComics && m_westernLibrary
+        && !m_pendingWesternSeriesId.isEmpty()) {
+        tankoban::manga::WesternLibraryRecord r;
+        r.seriesId = m_pendingWesternSeriesId;
+        r.title    = m_currentDetailSeriesTitle.isEmpty()
+                       ? m_pendingWesternSeriesId : m_currentDetailSeriesTitle;
+        r.coverUrl = m_currentWesternSeriesCover;
+        r.addedAt  = QDateTime::currentMSecsSinceEpoch();
+        m_westernLibrary->addOrUpdate(r);
+    }
+
     const bool currentMangaFireVolume =
         kind == PendingVolumeSourceKind::WeebCentralPacker &&
         seriesId == m_currentWcResolveKey.seriesId &&
@@ -2992,6 +3006,9 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // shelf (2026-06-02). For the live path jsonPath is empty and the slot's
     // m_pendingWesternJson is preserved.
     m_pendingWesternSeriesId = catalog.seriesId;
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — remember this series' cover so an
+    // auto-add / +Add can store it on the library record (tile art).
+    m_currentWesternSeriesCover = catalog.seriesCover;
     if (!jsonPath.isEmpty()) {
         QFile jf(jsonPath);
         if (jf.open(QIODevice::ReadOnly)) {
