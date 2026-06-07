@@ -3103,6 +3103,26 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
 {
     if (!m_tyVolumeSeriesView) return;
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — curated enrichment: when this series
+    // is one of the shipped 14, merge its richer cover/synopsis over the live
+    // (readallcomics search / library-record) metadata. For a baked-json open
+    // (jsonPath set) the catalog already IS the curated data — skip the reload.
+    tankoban::manga::MangaCatalog enriched = catalog;
+    if (jsonPath.isEmpty()) {
+        const QString curatedPath =
+            QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                .absoluteFilePath(enriched.seriesId + QStringLiteral(".json"));
+        if (QFile::exists(curatedPath)) {
+            if (const auto curated =
+                    tankoban::manga::WesternCatalogLoader::loadFromFile(curatedPath)) {
+                if (!curated->seriesCover.isEmpty())
+                    enriched.seriesCover = curated->seriesCover;
+                if (!curated->seriesSynopsis.isEmpty())
+                    enriched.seriesSynopsis = curated->seriesSynopsis;
+            }
+        }
+    }
+
     // Make THIS the current Western series so an edition Download knows what to
     // fetch — for BOTH the live-search path (the westernSeriesReady slot pre-set
     // these before calling) AND the baked shelf-open path (jsonPath non-empty:
@@ -3110,10 +3130,10 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // on live search, so Download silently no-oped for a series opened from the
     // shelf (2026-06-02). For the live path jsonPath is empty and the slot's
     // m_pendingWesternJson is preserved.
-    m_pendingWesternSeriesId = catalog.seriesId;
+    m_pendingWesternSeriesId = enriched.seriesId;
     // WESTERN_PARITY 2026-06-07 (Agent 1) — remember this series' cover so an
     // auto-add / +Add can store it on the library record (tile art).
-    m_currentWesternSeriesCover = catalog.seriesCover;
+    m_currentWesternSeriesCover = enriched.seriesCover;
     if (!jsonPath.isEmpty()) {
         QFile jf(jsonPath);
         if (jf.open(QIODevice::ReadOnly)) {
@@ -3151,7 +3171,7 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // the baked catalogue) via a header-only catalogue (volumes cleared), then
     // live-fetch the readallcomics issue list and replace the rows with issues.
     // The baked TPB editions are no longer the downloadable unit.
-    tankoban::manga::MangaCatalog headerOnly = catalog;
+    tankoban::manga::MangaCatalog headerOnly = enriched;
     headerOnly.volumes.clear();
     m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(headerOnly);
     // populateVolumeRowsFromCatalog RESETS the Western shelf flag, so
@@ -3159,7 +3179,7 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     // land in fetchAndRenderWesternIssues).
     m_tyVolumeSeriesView->setWesternOnShelf(onShelf);
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
-    fetchAndRenderWesternIssues(catalog, onShelf);
+    fetchAndRenderWesternIssues(enriched, onShelf);
 }
 
 void ComicsPage::showMangaMode()
