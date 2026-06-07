@@ -139,6 +139,19 @@ if(WIN32)
     )
 endif()
 
+# ── rqbit streaming binary (THEATRE_RQBIT_REVIVAL Phase 1, 2026-06-07) ───────
+# Deploy the headless rqbit torrent-streaming server beside Tankoban.exe — a
+# build-deployed artifact (gitignored like the ffmpeg sidecar), fetched into
+# resources/rqbit/rqbit.exe. RqbitProcess discovers it next-to-exe first.
+if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/resources/rqbit/rqbit.exe")
+    add_custom_command(TARGET Tankoban POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/resources/rqbit/rqbit.exe"
+            "$<TARGET_FILE_DIR:Tankoban>/rqbit.exe"
+        COMMENT "Deploying rqbit streaming binary beside Tankoban.exe"
+    )
+endif()
+
 # ── libtorrent-rasterbar + Boost + OpenSSL (vcpkg-managed) ───────────────────
 # REPO_HYGIENE Phase 2 (2026-04-26): migrated from hardcoded
 # C:/tools/libtorrent-2.0-msvc + C:/tools/boost-1.84.0 + C:/tools/openssl-msvc

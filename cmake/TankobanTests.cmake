@@ -33,6 +33,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_unified_progress_store.cpp
         tests/core/stream/test_pack_classifier.cpp
         tests/core/stream/test_title_metadata_estimator.cpp
+        tests/core/stream/test_rqbit_client.cpp
         tests/core/torrent/test_torrent_repository_schema.cpp
         tests/core/torrent/test_torrent_repository_downloads.cpp
         tests/core/torrent/test_torrent_repository_crud.cpp
@@ -114,6 +115,8 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/PackClassifier.cpp
         src/core/stream/StreamPackParser.cpp
         src/core/stream/TitleMetadataEstimator.cpp
+        src/core/stream/rqbit/RqbitClient.cpp
+        src/core/net/NetSeam.cpp   # RqbitClient::ensureNam() -> NetSeam::instance()/createManager()
         src/core/manga/anilist/AniListParser.cpp
         src/core/manga/anilist/AniListVolumeMapper.cpp
         src/core/manga/anilist/AniListCache.cpp
