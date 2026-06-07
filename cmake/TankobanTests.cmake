@@ -136,6 +136,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/WesternCatalogLoader.cpp
         tests/core/manga/WesternCatalogLoaderTest.cpp
         tests/core/manga/WesternIssueKeyTest.cpp
+        tests/core/manga/WesternMangaIsolationTest.cpp
         src/core/manga/WesternLibrary.cpp
         tests/core/manga/WesternLibraryTest.cpp
     )
