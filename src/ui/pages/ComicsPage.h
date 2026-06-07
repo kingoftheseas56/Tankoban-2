@@ -404,6 +404,12 @@ private:
     // per-user WesternLibrary store (added-only series), replacing the
     // catalogue-dir dump. Empty -> "Search to find comics" label.
     void refreshWesternLibrary();
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — back-fill: any readallcomics
+    // download lacking a library record gets one (series downloaded before
+    // this arc existed). Idempotent; called once in the ctor. Kept separate
+    // from refreshWesternLibrary so the render stays a pure, re-entrancy-free
+    // pass (addOrUpdate fires libraryChanged -> refreshWesternLibrary).
+    void reconcileWesternLibraryFromDownloads();
     // Open a western series from a stored library record (no baked json; live
     // issues). Used by My Library tiles that aren't one of the shipped 14.
     void openWesternSeriesFromLibrary(const QString& seriesId);

@@ -391,6 +391,9 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     m_westernLibrary = new tankoban::manga::WesternLibrary(&m_bridge->store(), this);
     connect(m_westernLibrary, &tankoban::manga::WesternLibrary::libraryChanged,
             this, [this]() { refreshWesternLibrary(); });
+    // Back-fill any pre-arc readallcomics downloads (grid not built yet, so the
+    // libraryChanged renders are no-ops; first showWesternMode renders the store).
+    reconcileWesternLibraryFromDownloads();
 
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- DOWNLOADED + BOOKMARKED
     // landing sections refresh when either source mutates. Bookmark mutation
@@ -2893,6 +2896,35 @@ void ComicsPage::refreshWesternLibrary()
     const bool empty = records.isEmpty();
     if (m_westernEmptyLabel) m_westernEmptyLabel->setVisible(empty);
     m_westernGrid->setVisible(!empty);
+}
+
+// WESTERN_PARITY 2026-06-07 (Agent 1) — back-fill My Library from existing
+// readallcomics downloads (series grabbed before this arc). Idempotent (the
+// contains() check skips already-added). Runs once in the ctor; each add fires
+// libraryChanged -> refreshWesternLibrary (a no-op while the grid isn't built).
+void ComicsPage::reconcileWesternLibraryFromDownloads()
+{
+    if (!m_westernLibrary || !m_mangaDownloadIndex) return;
+    for (const auto& e : m_mangaDownloadIndex->entriesForAllSeries()) {
+        if (e.sourceId != QLatin1String("readallcomics")) continue;
+        if (m_westernLibrary->contains(e.seriesId)) continue;
+        tankoban::manga::WesternLibraryRecord r;
+        r.seriesId = e.seriesId;
+        r.title    = resolveDisplayTitle(e.sourceId, e.seriesId);
+        if (r.title.isEmpty()) r.title = humanizeSlug(e.seriesId);
+        if (r.title.isEmpty()) r.title = e.seriesId;
+        // Pull the curated cover if this is one of the shipped 14 (else the
+        // tile shows a text placeholder until the series is next opened).
+        const QString curatedPath =
+            QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                .absoluteFilePath(e.seriesId + QStringLiteral(".json"));
+        if (QFile::exists(curatedPath)) {
+            if (const auto cat = tankoban::manga::WesternCatalogLoader::loadFromFile(curatedPath))
+                r.coverUrl = cat->seriesCover;
+        }
+        r.addedAt = QDateTime::currentMSecsSinceEpoch();
+        m_westernLibrary->addOrUpdate(r);
+    }
 }
 
 // WESTERN_PARITY 2026-06-07 (Agent 1) — open a western series straight from a
