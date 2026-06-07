@@ -34,6 +34,7 @@ namespace tankoban::manga {
     class NyaaRuntimeSource;
     class WeebCentralVolumePacker;
     class WesternVolumeDownloader;
+    class WesternLibrary;
     namespace anilist {
         class AniListClient;
         class AniListCache;
@@ -399,6 +400,13 @@ private:
 
     void buildWesternScreen();
     void refreshWesternGrid();
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — My Library render driven by the
+    // per-user WesternLibrary store (added-only series), replacing the
+    // catalogue-dir dump. Empty -> "Search to find comics" label.
+    void refreshWesternLibrary();
+    // Open a western series from a stored library record (no baked json; live
+    // issues). Used by My Library tiles that aren't one of the shipped 14.
+    void openWesternSeriesFromLibrary(const QString& seriesId);
     void openWesternSeriesFromJson(const QString& jsonPath);
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 2) — shared render-only open used by
     // BOTH the disk path (openWesternSeriesFromJson loads a baked JSON) and the
@@ -641,6 +649,12 @@ private:
     ReadAllComicsScraper* m_readAllComicsScraper = nullptr;
     QJsonObject        m_pendingWesternJson;
     QString            m_pendingWesternSeriesId;
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — per-user "my western series" store
+    // (added-only), the My Library empty-state label, and the cover of the
+    // currently-open western series (carried into the library record on add).
+    tankoban::manga::WesternLibrary* m_westernLibrary = nullptr;
+    QLabel*            m_westernEmptyLabel = nullptr;
+    QString            m_currentWesternSeriesCover;
     // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). GetComics resolve + download
     // provider. Constructed lazily in setTorrentClient() (alongside
     // TorrentVolumeProvider) so the magnet path has a live TorrentClient.

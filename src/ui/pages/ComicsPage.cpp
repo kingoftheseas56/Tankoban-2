@@ -27,6 +27,8 @@
 #include "core/manga/MangaCatalogTypes.h"
 #include "core/manga/LocalMangaCatalogLoader.h"
 #include "core/manga/WesternCatalogLoader.h"
+#include "core/manga/WesternLibrary.h"
+#include "core/manga/WesternIssueKey.h"
 #include "core/manga/WesternVolumeDownloader.h"
 #include "core/manga/ReadComicsScraper.h"
 #include "core/manga/ReadAllComicsScraper.h"
@@ -383,6 +385,13 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // chapter index. Persists at <appDataDir>/manga_downloads_index.json.
     m_mangaDownloadIndex = new MangaDownloadIndex(&m_bridge->store(), this);
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) -- per-user western library store.
+    // libraryChanged -> re-render the My Library grid (Stremio/manga reflex:
+    // download-or-add implies library, surfaced immediately).
+    m_westernLibrary = new tankoban::manga::WesternLibrary(&m_bridge->store(), this);
+    connect(m_westernLibrary, &tankoban::manga::WesternLibrary::libraryChanged,
+            this, [this]() { refreshWesternLibrary(); });
+
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- DOWNLOADED + BOOKMARKED
     // landing sections refresh when either source mutates. Bookmark mutation
     // (add/remove from ComicsSeriesView) fires bookmarksChanged. Download
@@ -562,7 +571,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             return;   // do NOT mark on-shelf on a failed write
         }
         if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
-        refreshWesternGrid();  // surface the new card on the Western grid
+        refreshWesternLibrary();  // surface the new card on the Western grid
     });
     // COMICS_WC_AUTOENRICH 2026-05-24 — fires automatically on series-open
     // from search results so the hero block renders without requiring an
@@ -1089,7 +1098,7 @@ void ComicsPage::wireWesternDownloader()
                 sf.write(bytes) == bytes.size() &&
                 sf.commit()) {
                 if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
-                refreshWesternGrid();
+                refreshWesternLibrary();
             }
         }
 
@@ -2833,6 +2842,15 @@ void ComicsPage::buildWesternScreen()
         v->addWidget(westernSearchRow);
     }
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — bare empty state shown when My
+    // Library is empty (pure manga parity; no curated starter shelf).
+    m_westernEmptyLabel = new QLabel(tr("Search to find comics"), page);
+    m_westernEmptyLabel->setAlignment(Qt::AlignCenter);
+    m_westernEmptyLabel->setStyleSheet(
+        "color: rgba(255,255,255,0.45); font-size: 14px; padding: 40px;");
+    m_westernEmptyLabel->hide();
+    v->addWidget(m_westernEmptyLabel);
+
     m_westernGrid = new TileStrip(page);
     m_westernGrid->setMode(QStringLiteral("fixedGrid"));
     const int westernDensity = QSettings("Tankoban", "Tankoban").value("grid_cover_size", 1).toInt();
@@ -2841,9 +2859,18 @@ void ComicsPage::buildWesternScreen()
     v->addStretch();
 
     // Single-click opens the Western series (collected-edition detail view).
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — My Library tiles carry a curated
+    // json path when the series is one of the shipped 14 (rich enrichment);
+    // otherwise fall back to opening from the stored library record (live issues).
     connect(m_westernGrid, &TileStrip::tileSingleClicked, this, [this](TileCard* card) {
         if (!card) return;
-        openWesternSeriesFromJson(card->property("westernJsonPath").toString());
+        const QString jsonPath = card->property("westernJsonPath").toString();
+        if (!jsonPath.isEmpty() && QFile::exists(jsonPath)) {
+            openWesternSeriesFromJson(jsonPath);
+            return;
+        }
+        const QString seriesId = card->property("westernSeriesId").toString();
+        if (!seriesId.isEmpty()) openWesternSeriesFromLibrary(seriesId);
     });
 
     scroll->setWidget(page);
@@ -2888,6 +2915,54 @@ void ComicsPage::refreshWesternGrid()
         m_westernGrid->addTile(card);
         if (!coverUrl.isEmpty()) fetchPosterForTile(card, 0, coverUrl);
     }
+}
+
+// WESTERN_PARITY 2026-06-07 (Agent 1) — render My Library from the per-user
+// WesternLibrary store (added-only), NOT the shipped catalogue dir. This is the
+// structural fix for "placeholder series I never added": the shipped 14 are no
+// longer treated as in-library. Empty -> "Search to find comics" label.
+void ComicsPage::refreshWesternLibrary()
+{
+    if (!m_westernGrid) return;
+    m_westernGrid->clear();
+
+    const auto records = m_westernLibrary
+        ? m_westernLibrary->all()
+        : QList<tankoban::manga::WesternLibraryRecord>{};
+    for (const auto& r : records) {
+        auto* card = new TileCard(QString(), r.title, tr("Western"));
+        // Curated json path is present only for the shipped 14 (enrichment);
+        // the single-click handler falls back to the stored record otherwise.
+        const QString jsonPath =
+            QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
+                .absoluteFilePath(r.seriesId + QStringLiteral(".json"));
+        card->setProperty("westernJsonPath", jsonPath);
+        card->setProperty("westernSeriesId", r.seriesId);
+        card->setProperty("seriesName", r.title);
+        m_westernGrid->addTile(card);
+        if (!r.coverUrl.isEmpty()) fetchPosterForTile(card, 0, r.coverUrl);
+    }
+
+    const bool empty = records.isEmpty();
+    if (m_westernEmptyLabel) m_westernEmptyLabel->setVisible(empty);
+    m_westernGrid->setVisible(!empty);
+}
+
+// WESTERN_PARITY 2026-06-07 (Agent 1) — open a western series straight from a
+// stored library record (no baked json). Header renders from the record;
+// issues fetch live via openWesternSeriesFromCatalog -> fetchAndRenderWesternIssues.
+void ComicsPage::openWesternSeriesFromLibrary(const QString& seriesId)
+{
+    if (!m_westernLibrary || !m_tyVolumeSeriesView) return;
+    const auto recOpt = m_westernLibrary->get(seriesId);
+    if (!recOpt) return;
+    tankoban::manga::MangaCatalog cat;
+    cat.seriesId    = recOpt->seriesId;
+    cat.seriesTitle = recOpt->title;
+    cat.seriesCover = recOpt->coverUrl;
+    m_pendingWesternJson     = {};          // no baked json; live issues only
+    m_pendingWesternSeriesId = recOpt->seriesId;
+    openWesternSeriesFromCatalog(cat, QString(), /*onShelf*/true);
 }
 
 void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
@@ -2993,7 +3068,7 @@ void ComicsPage::showWesternMode()
                                           tr("Western"), QJsonObject{}));
     }
 
-    refreshWesternGrid();
+    refreshWesternLibrary();
     if (m_stack && m_westernStackIndex >= 0)
         m_stack->setCurrentIndex(m_westernStackIndex);
     // Top search bar searches comics (RCO) while on the Western shelf — this is
