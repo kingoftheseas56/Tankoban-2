@@ -21,6 +21,10 @@ namespace tankoban::queue { class TransferQueue; }
 // than a forward declaration.
 #include "TorrentRepository.h"
 
+// IDLE_PROGRESS_SCAN_FIX P1 (2026-06-07) — m_parsedPackCache holds a ParsedPack
+// by value, so the full type is needed here (not a forward declaration).
+#include "core/stream/StreamPackParser.h"
+
 class CoreBridge;
 class TorrentEngine;
 class StreamDownloadIndex;
@@ -471,6 +475,10 @@ private:
     // ui/dialogs/AddTorrentDialog.h needed here).
     QHash<QString, QSharedPointer<AddTorrentConfig>> m_pendingStartConfigs;
     QHash<QString, PieceMeta> m_pieceMetaCache;
+    // IDLE_PROGRESS_SCAN_FIX P1 (2026-06-07) — parse the immutable pack layout
+    // ONCE per torrent, not on every debounced progress tick. Keyed by infoHash;
+    // invalidated in clearPieceProgressState alongside m_pieceMetaCache.
+    QHash<QString, tankostream::stream::ParsedPack> m_parsedPackCache;
     QHash<QString, qint64> m_pieceProgressLastRunMs;
     QSet<QString> m_pieceProgressPending;
 

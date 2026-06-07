@@ -2901,6 +2901,7 @@ void TorrentClient::clearPieceProgressState(const QString& infoHash)
     if (hash.isEmpty())
         return;
     m_pieceMetaCache.remove(hash);
+    m_parsedPackCache.remove(hash);  // IDLE_PROGRESS_SCAN_FIX P1 — invalidate with the meta cache
     m_pieceProgressLastRunMs.remove(hash);
     m_pieceProgressPending.remove(hash);
 }
@@ -2958,13 +2959,23 @@ void TorrentClient::processPieceFinishedProgress(const QString& infoHash)
     if (!m_streamDownloadIndex)
         return;
 
-    const QJsonArray files = m_engine->torrentFiles(hash);
-    if (files.isEmpty())
-        return;
-
-    const tankostream::stream::ParsedPack pack =
-        tankostream::stream::StreamPackParser::parsePack(
-            files, meta.imdbId, meta.season);
+    // IDLE_PROGRESS_SCAN_FIX P1 (2026-06-07) — the pack layout (file list +
+    // episode mapping) is immutable once metadata resolves, so parse it ONCE
+    // per torrent and cache it. Previously torrentFiles()+parsePack() ran on
+    // the GUI thread on EVERY debounced tick — an O(files) fetch + JSON
+    // re-parse that, for a hundreds-of-files season pack, tied up the GUI thread
+    // and caused idle "Not Responding" while downloading.
+    auto packIt = m_parsedPackCache.find(hash);
+    if (packIt == m_parsedPackCache.end()) {
+        const QJsonArray files = m_engine->torrentFiles(hash);
+        if (files.isEmpty())
+            return;  // metadata not resolved yet — don't cache an empty parse
+        packIt = m_parsedPackCache.insert(
+            hash,
+            tankostream::stream::StreamPackParser::parsePack(
+                files, meta.imdbId, meta.season));
+    }
+    const tankostream::stream::ParsedPack& pack = packIt.value();
 
     const QJsonArray fileProgress = m_engine->torrentFileProgress(hash);
     if (fileProgress.isEmpty())
