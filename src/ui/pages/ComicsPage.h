@@ -413,6 +413,12 @@ private:
     // Open a western series from a stored library record (no baked json; live
     // issues). Used by My Library tiles that aren't one of the shipped 14.
     void openWesternSeriesFromLibrary(const QString& seriesId);
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — Western Continue Reading strip: the
+    // mirror of refreshContinueStrip but INCLUDING only western issues (manga
+    // excludes them). ensureWesternIssueInMap registers an issue's progress key
+    // right before it's read so the strip can resolve it on the next refresh.
+    void refreshWesternContinueStrip();
+    void ensureWesternIssueInMap(const QString& cbzPath);
     void openWesternSeriesFromJson(const QString& jsonPath);
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 2) — shared render-only open used by
     // BOTH the disk path (openWesternSeriesFromJson loads a baked JSON) and the
@@ -562,6 +568,12 @@ private:
     // Progress key → file info for continue strip
     struct FileRef { QString filePath; QString seriesPath; QString coverPath; };
     QMap<QString, FileRef> m_progressKeyMap;
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — Western Continue Reading (own strip,
+    // never the manga one). Separate progress-key map so western issues resolve
+    // independently of the manga path. coverPath holds the series cover URL.
+    QWidget*               m_westernContinueSection = nullptr;
+    TileStrip*             m_westernContinueStrip   = nullptr;
+    QMap<QString, FileRef> m_westernProgressKeyMap;
 
     QThread*         m_scanThread = nullptr;
     LibraryScanner*  m_scanner = nullptr;

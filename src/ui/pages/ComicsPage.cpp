@@ -2551,6 +2551,7 @@ void ComicsPage::onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPa
     }
 
     ensureTankoyomiChapterInMap(cbzPath);
+    ensureWesternIssueInMap(cbzPath);   // western issues only (self-guarded)
     const QString seriesName = !m_currentDetailSeriesTitle.isEmpty()
         ? m_currentDetailSeriesTitle
         : dir.dirName();
@@ -2831,6 +2832,25 @@ void ComicsPage::buildWesternScreen()
         v->addWidget(westernSearchRow);
     }
 
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — Western CONTINUE READING strip
+    // (own; the manga strip excludes western issues). Hidden until there's an
+    // in-progress western issue to show.
+    m_westernContinueSection = new QWidget(page);
+    {
+        auto* wcLayout = new QVBoxLayout(m_westernContinueSection);
+        wcLayout->setContentsMargins(0, 0, 0, 0);
+        wcLayout->setSpacing(8);
+        auto* wcLabel = new QLabel(tr("CONTINUE READING"), m_westernContinueSection);
+        wcLabel->setStyleSheet(
+            "color: rgba(255,255,255,0.6); font-size: 12px; font-weight: 600; letter-spacing: 1px;");
+        wcLayout->addWidget(wcLabel);
+        m_westernContinueStrip = new TileStrip(m_westernContinueSection);
+        m_westernContinueStrip->setMode(QStringLiteral("continue"));
+        wcLayout->addWidget(m_westernContinueStrip);
+    }
+    m_westernContinueSection->hide();
+    v->addWidget(m_westernContinueSection);
+
     // WESTERN_PARITY 2026-06-07 (Agent 1) — bare empty state shown when My
     // Library is empty (pure manga parity; no curated starter shelf).
     m_westernEmptyLabel = new QLabel(tr("Search to find comics"), page);
@@ -2972,6 +2992,95 @@ void ComicsPage::openWesternSeriesFromLibrary(const QString& seriesId)
     openWesternSeriesFromCatalog(cat, QString(), /*onShelf*/true);
 }
 
+// WESTERN_PARITY 2026-06-07 (Agent 1) — register a western issue's progress key
+// right before it's read, so refreshWesternContinueStrip can resolve it. The
+// mirror of ensureTankoyomiChapterInMap, scoped to the western map. coverPath
+// carries the series cover URL (from the open series / library record).
+void ComicsPage::ensureWesternIssueInMap(const QString& cbzPath)
+{
+    if (cbzPath.isEmpty()) return;
+    // Only western issues belong in the western map (manga cbzs are "Volume N").
+    if (!tankoban::manga::isWesternIssueCbz(QFileInfo(cbzPath).completeBaseName())) return;
+    const QString key = comicProgressKeyForPath(cbzPath);
+    if (m_westernProgressKeyMap.contains(key)) return;
+    const QString parentDir = QFileInfo(cbzPath).absolutePath();
+    QString coverUrl = m_currentWesternSeriesCover;
+    if (coverUrl.isEmpty() && m_westernLibrary && !m_pendingWesternSeriesId.isEmpty()) {
+        if (const auto r = m_westernLibrary->get(m_pendingWesternSeriesId))
+            coverUrl = r->coverUrl;
+    }
+    m_westernProgressKeyMap[key] = { cbzPath, parentDir, coverUrl };
+}
+
+// WESTERN_PARITY 2026-06-07 (Agent 1) — Western CONTINUE READING. Mirror of
+// refreshContinueStrip but INCLUDING only western issues (manga excludes them
+// via the same isWesternIssueCbz marker). Dedups per series, caps at 40.
+void ComicsPage::refreshWesternContinueStrip()
+{
+    if (!m_westernContinueStrip) return;
+    m_westernContinueStrip->clear();
+
+    const QJsonObject allProg = m_bridge->allProgress(QStringLiteral("comics"));
+    struct WItem { qint64 updatedAt; QString filePath, seriesPath, title, subtitle, coverUrl; };
+    QList<WItem> items;
+    for (auto it = allProg.begin(); it != allProg.end(); ++it) {
+        const QJsonObject prog = it.value().toObject();
+        if (prog.value("finished").toBool()) continue;
+        const int page = prog.value("page").toInt(0);
+        if (page < 0) continue;
+        const auto ref = m_westernProgressKeyMap.find(it.key());
+        if (ref == m_westernProgressKeyMap.end()) continue;
+        const QString base = QFileInfo(ref->filePath).completeBaseName();
+        if (!tankoban::manga::isWesternIssueCbz(base)) continue;
+        const int issueNo = tankoban::manga::westernIssueNumber(base);
+        const int pageCount = prog.value("pageCount").toInt(0);
+        const QString seriesName = QDir(ref->seriesPath).dirName();
+        const QString pageLabel = pageCount > 0
+            ? QStringLiteral("Page %1/%2").arg(page + 1).arg(pageCount)
+            : QStringLiteral("Page %1").arg(page + 1);
+        items.append({ prog.value("updatedAt").toVariant().toLongLong(),
+                       ref->filePath, ref->seriesPath, seriesName,
+                       QStringLiteral("Issue %1 · %2").arg(issueNo).arg(pageLabel),
+                       ref->coverPath });
+    }
+    if (items.isEmpty()) { m_westernContinueSection->hide(); return; }
+
+    QMap<QString, int> bestPerSeries; // seriesPath -> index (most recent)
+    for (int i = 0; i < items.size(); ++i) {
+        auto it = bestPerSeries.find(items[i].seriesPath);
+        if (it == bestPerSeries.end() || items[i].updatedAt > items[it.value()].updatedAt)
+            bestPerSeries[items[i].seriesPath] = i;
+    }
+    QList<WItem> deduped;
+    for (int idx : bestPerSeries) deduped.append(items[idx]);
+    std::sort(deduped.begin(), deduped.end(),
+              [](const WItem& a, const WItem& b){ return a.updatedAt > b.updatedAt; });
+    if (deduped.size() > 40) deduped = deduped.mid(0, 40);
+
+    for (const auto& w : deduped) {
+        auto* card = new TileCard(QString(), w.title, w.subtitle);
+        card->setProperty("filePath", w.filePath);
+        card->setProperty("seriesPath", w.seriesPath);
+        card->setProperty("seriesName", w.title);
+        connect(card, &TileCard::clicked, this, [this, card]() {
+            const QString path = card->property("filePath").toString();
+            const QString seriesPath = card->property("seriesPath").toString();
+            const QString seriesName = card->property("seriesName").toString();
+            QDir dir(seriesPath);
+            QStringList files = dir.entryList(COMIC_EXTS, QDir::Files);
+            QCollator col; col.setNumericMode(true);
+            std::sort(files.begin(), files.end(),
+                      [&col](const QString& a, const QString& b){ return col.compare(a, b) < 0; });
+            QStringList cbzList;
+            for (const auto& f : files) cbzList.append(dir.absoluteFilePath(f));
+            emit openComic(path, cbzList, seriesName);
+        });
+        m_westernContinueStrip->addTile(card);
+        if (!w.coverUrl.isEmpty()) fetchPosterForTile(card, 0, w.coverUrl);
+    }
+    m_westernContinueSection->show();
+}
+
 void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
 {
     if (jsonPath.isEmpty() || !m_tyVolumeSeriesView) return;
@@ -3079,6 +3188,7 @@ void ComicsPage::showWesternMode()
     }
 
     refreshWesternLibrary();
+    refreshWesternContinueStrip();
     if (m_stack && m_westernStackIndex >= 0)
         m_stack->setCurrentIndex(m_westernStackIndex);
     // Top search bar searches comics (RCO) while on the Western shelf — this is
@@ -4132,6 +4242,10 @@ void ComicsPage::applySearch()
 
 void ComicsPage::refreshContinueStrip()
 {
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — keep the Western CR strip in sync
+    // whenever the manga one refreshes (notably on reader-close from MainWindow).
+    refreshWesternContinueStrip();
+
     m_continueStrip->clear();
 
     QJsonObject allProg = m_bridge->allProgress("comics");
