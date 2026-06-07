@@ -3273,11 +3273,20 @@ void ComicsPage::refreshLibraryStrips()
         QMap<QString, GroupedTile> groups; // groupKey → aggregated tile data
 
         for (const auto& e : entries) {
-            // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — western (readallcomics) issues
-            // belong to the Western lane (its own shelf/grid), NOT the Manga
-            // continue-reading / library strips. Their downloads register in the same
-            // MangaDownloadIndex, so filter them out of the manga strips here.
-            if (e.sourceId == QLatin1String("readallcomics")) continue;
+            // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — western issues belong to the
+            // Western lane (its own shelf/grid), NOT the Manga library strip. They
+            // register in the same MangaDownloadIndex, so filter them out here.
+            // WESTERN_PARITY 2026-06-07 (Agent 1, cross-engine review P0) — western
+            // completed volumes register under "getcomics" (GETCOMICS_SOURCE_ID),
+            // NOT "readallcomics" (that's only the MangaDownloader live-record
+            // source). Exclude both known western sourceIds AND, sourceId-agnostic
+            // + future-proof, any entry whose cbz is a "<Series> #N" western issue
+            // (the same isWesternIssueCbz marker the isolation test guards).
+            if (e.sourceId == QLatin1String("readallcomics")
+                || e.sourceId == QLatin1String("getcomics")) continue;
+            if (!e.canonicalPath.isEmpty()
+                && tankoban::manga::isWesternIssueCbz(
+                       QFileInfo(e.canonicalPath).completeBaseName())) continue;
             const QString groupKey = resolveCanonicalGroupKey(e.sourceId, e.seriesId);
             GroupedTile& gt = groups[groupKey];
 

@@ -36,8 +36,12 @@ ComicsTankoyomiSearchWidget::ComicsTankoyomiSearchWidget(
     buildUI();
 
     if (m_sourceRegistry) {
+        // WESTERN_PARITY 2026-06-07 (Agent 1) — readallcomics added: Western
+        // search now dispatches to it, so its searchFinished MUST be connected
+        // or results never render (cross-engine review P0, 2026-06-07).
         for (const QString& id : { QStringLiteral("weebcentral"),
-                                   QStringLiteral("readcomicsonline") }) {
+                                   QStringLiteral("readcomicsonline"),
+                                   QStringLiteral("readallcomics") }) {
             if (auto* scraper = m_sourceRegistry->find(id)) {
                 connect(scraper, &MangaScraper::searchFinished,
                         this,    &ComicsTankoyomiSearchWidget::onSearchFinished,
