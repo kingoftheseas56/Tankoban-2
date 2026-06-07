@@ -148,7 +148,8 @@ void RqbitProcess::onProcessError(QProcess::ProcessError error)
     if (m_intentionalShutdown)
         return;
     emit failed(QStringLiteral("rqbit process error (%1): %2")
-                    .arg(static_cast<int>(error), m_proc ? m_proc->errorString() : QString()));
+                    .arg(QString::number(static_cast<int>(error)),
+                         m_proc ? m_proc->errorString() : QString()));
 }
 
 void RqbitProcess::onProcessFinished(int exitCode, QProcess::ExitStatus status)
