@@ -128,6 +128,7 @@ set(SOURCES
     src/core/manga/MangaSourceRegistry.cpp
     src/core/manga/ComicsLibraryRecord.cpp
     src/core/manga/ComicsTankoyomiLibrary.cpp
+    src/core/manga/WesternLibrary.cpp
     src/core/manga/MangaPosterCache.cpp
     src/core/manga/MangaDownloader.cpp
     src/core/manga/MangaDownloadIndex.cpp
