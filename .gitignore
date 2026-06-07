@@ -36,6 +36,11 @@ data/mangafire_catalog/
 native_sidecar/build/
 resources/ffmpeg_sidecar/
 
+# rqbit streaming engine (THEATRE_RQBIT_REVIVAL, 2026-06-07). The prebuilt
+# Windows binary is a build-deployed artifact (POST_BUILD copy beside the exe),
+# not tracked — mirroring the ffmpeg sidecar. A .gitkeep keeps the dir present.
+resources/rqbit/*.exe
+
 # libmpv prebuilt (MPV_RENDER_API_INTEGRATION Phase 1, 2026-04-28) — fetched
 # by setup.bat step 6 from shinchiro/mpv-winbuild-cmake. The DLL + import lib
 # are platform binaries and not tracked. Headers under include/mpv/, the
