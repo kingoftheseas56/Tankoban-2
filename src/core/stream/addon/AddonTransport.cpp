@@ -49,6 +49,9 @@ void AddonTransport::fetchManifest(const QUrl& base)
     req.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(kUserAgent));
     req.setRawHeader("Accept", "application/json,*/*");
     req.setTransferTimeout(kTimeoutMs);
+    // HTTP/2 FIX 2026-06-07 — force HTTP/1.1 (see fetchResource): Qt's h2 stack
+    // throws "HTTP/2 protocol error" against the CDN-fronted addon endpoints.
+    req.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
     QNetworkReply* reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, manifestUrl]() {
@@ -90,6 +93,13 @@ void AddonTransport::fetchResource(const QUrl& base, const ResourceRequest& requ
     req.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(kUserAgent));
     req.setRawHeader("Accept", "application/json,*/*");
     req.setTransferTimeout(kTimeoutMs);
+    // HTTP/2 FIX 2026-06-07 — Qt's HTTP/2 stack intermittently throws
+    // "HTTP/2 protocol error" against Torrentio's CDN-fronted endpoint. Since
+    // Amatsu was removed Torrentio is now the SOLE stream source, so a failed
+    // fetch means "no source" -> MissingSource and the download never starts
+    // (Hemanth-reported 2026-06-07). Force HTTP/1.1 — these are tiny JSON
+    // requests that gain nothing from h2.
+    req.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
     QNetworkReply* reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, request]() {
