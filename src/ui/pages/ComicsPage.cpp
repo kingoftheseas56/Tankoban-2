@@ -2828,7 +2828,10 @@ void ComicsPage::buildWesternScreen()
         QWidget* westernSearchRow = buildSearchRow(
             m_westernSearchBar, m_westernSearchBusy, m_westernSearchBtn,
             QStringLiteral("Search Comics"),
-            QStringLiteral("readcomicsonline"));
+            // WESTERN_PARITY 2026-06-07 (Agent 1) — live readallcomics search
+            // (was "readcomicsonline" = rcostation, which is browser-locked and
+            // returned nothing). readallcomics finds any western comic by name.
+            QStringLiteral("readallcomics"));
         v->addWidget(westernSearchRow);
     }
 
@@ -3191,10 +3194,10 @@ void ComicsPage::showWesternMode()
     refreshWesternContinueStrip();
     if (m_stack && m_westernStackIndex >= 0)
         m_stack->setCurrentIndex(m_westernStackIndex);
-    // Top search bar searches comics (RCO) while on the Western shelf — this is
-    // what makes a Western search query hit readcomicsonline and surface comic
-    // results whose source == "readcomicsonline" (routed live in onSearchResultActivated).
-    if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("readcomicsonline"));
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — Western search hits LIVE readallcomics
+    // (find any western comic by name). Results carry source=="readallcomics",
+    // routed into the western series view in onSearchResultActivated.
+    if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("readallcomics"));
 }
 
 void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
@@ -3884,7 +3887,12 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     // on the nav stack — the topbar Back chevron then restored the stale
     // anilistId=0 "search" layer (silent no-render, needing two Back presses).
     // The manga branch below still pushes its layer as before.
-    if (!m_inNavRestore && result.source != QLatin1String("readcomicsonline")) {
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — readallcomics (like readcomicsonline)
+    // pushes its own enteredFrom="western" nav layer inside openWesternSeriesFromCatalog;
+    // don't also push the generic "search" layer (double-entry breaks Back).
+    if (!m_inNavRestore
+        && result.source != QLatin1String("readcomicsonline")
+        && result.source != QLatin1String("readallcomics")) {
         QJsonObject blob;
         blob[QStringLiteral("seriesId")]    = result.id;
         blob[QStringLiteral("seriesTitle")] = result.title;
@@ -3907,6 +3915,25 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
     // connect (ctor) renders the result via openWesternSeriesFromCatalog. We
     // override m_enteredDetailFrom expectations: showSearchResultLoading paints a
     // spinner while the page fetch is in flight; the ready/error slot replaces it.
+    // WESTERN_PARITY 2026-06-07 (Agent 1) — live readallcomics search pick:
+    // open the western series view with live issues. Build a header catalog
+    // from the result; openWesternSeriesFromCatalog renders the header then
+    // fetchAndRenderWesternIssues streams the issues. No AniList enrichment.
+    if (result.source == QLatin1String("readallcomics") && m_tyVolumeSeriesView) {
+        tankoban::manga::MangaCatalog cat;
+        cat.seriesId    = result.id;
+        cat.seriesTitle = result.title;
+        cat.seriesCover = result.thumbnailUrl;
+        m_detailEnteredFromWestern = true;
+        m_stack->setCurrentWidget(m_tyVolumeSeriesView);
+        m_tyVolumeSeriesView->showSearchResultLoading();
+        openWesternSeriesFromCatalog(
+            cat, QString(),
+            m_westernLibrary && m_westernLibrary->contains(result.id));
+        setSearchBusy(false);
+        return;
+    }
+
     if (result.source == QLatin1String("readcomicsonline") && m_readComicsScraper
         && m_tyVolumeSeriesView) {
         m_stack->setCurrentWidget(m_tyVolumeSeriesView);
