@@ -35,7 +35,33 @@ public:
     // array (each element has "name" + "length"), or -1 if none is a video.
     static int pickPrimaryVideoFile(const QJsonArray& files);
 
-    // Network surface lands in Task 3.
+    // --- Network surface (talks to the headless rqbit HTTP API). ---
+    void setBaseUrl(const QString& base);   // e.g. "http://127.0.0.1:3030"
+
+    // POST /torrents (magnet as raw body). Emits torrentAdded(tag, id, files)
+    // or requestFailed(tag, msg). `tag` is an opaque caller correlation token.
+    void addTorrent(const QString& requestTag, const QString& magnet);
+
+    // Pure URL builder once base + id are known: GET-able stream endpoint that
+    // honours open-ended Range requests (206) for seeking — see contract §5.
+    QString streamUrl(const QString& torrentId, int fileIndex) const;
+
+    // GET /torrents/{id}/stats/v1 -> emits statsReady(id, RqbitStats).
+    void fetchStats(const QString& torrentId);
+
+    // POST /torrents/{id}/delete — forget torrent + remove files (best-effort).
+    void deleteTorrent(const QString& torrentId);
+
+signals:
+    void torrentAdded(const QString& requestTag, const QString& torrentId, const QJsonArray& files);
+    void statsReady(const QString& torrentId, const tankostream::rqbit::RqbitStats& stats);
+    void requestFailed(const QString& requestTag, const QString& message);
+
+private:
+    QNetworkAccessManager* ensureNam();
+
+    QString m_base = QStringLiteral("http://127.0.0.1:3030");
+    QNetworkAccessManager* m_nam = nullptr;
 };
 
 } // namespace tankostream::rqbit
