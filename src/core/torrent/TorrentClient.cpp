@@ -412,7 +412,17 @@ tankoban::torrent::StreamGroupRow streamGroupRowFromBulkGroup(
     const QJsonObject& group)
 {
     tankoban::torrent::StreamGroupRow row;
-    row.groupId = group.value(QStringLiteral("groupId")).toString(fallbackGroupId);
+    // FK FIX 2026-06-07 — QJsonValue::toString(default) only returns `default`
+    // for a NON-string value; a present-but-empty "groupId":"" passes through as
+    // "". That left row.groupId empty, so the caller skipped upsertStreamGroup()
+    // (parent) while items were still inserted under the map key — every
+    // upsertStreamGroupItem then failed "FOREIGN KEY constraint failed" (1127x
+    // observed, flooding the DB + log) and bulk-group items never persisted, so
+    // One Piece (and any bulk) downloads couldn't be tracked. Fall back to the
+    // map key whenever the parsed id is empty so parent + items share a real id.
+    row.groupId = group.value(QStringLiteral("groupId")).toString();
+    if (row.groupId.isEmpty())
+        row.groupId = fallbackGroupId;
     const QJsonObject sourceIds = group.value(QStringLiteral("sourceIds")).toObject();
     row.imdbId = group.value(QStringLiteral("imdbId")).toString();
     if (row.imdbId.isEmpty())
