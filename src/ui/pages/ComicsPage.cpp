@@ -3055,6 +3055,11 @@ void ComicsPage::refreshLibraryStrips()
         QMap<QString, GroupedTile> groups; // groupKey → aggregated tile data
 
         for (const auto& e : entries) {
+            // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — western (readallcomics) issues
+            // belong to the Western lane (its own shelf/grid), NOT the Manga
+            // continue-reading / library strips. Their downloads register in the same
+            // MangaDownloadIndex, so filter them out of the manga strips here.
+            if (e.sourceId == QLatin1String("readallcomics")) continue;
             const QString groupKey = resolveCanonicalGroupKey(e.sourceId, e.seriesId);
             GroupedTile& gt = groups[groupKey];
 
@@ -4072,6 +4077,15 @@ void ComicsPage::refreshContinueStrip()
         // Look up file from our scan-built map
         auto ref = m_progressKeyMap.find(it.key());
         if (ref == m_progressKeyMap.end())
+            continue;
+
+        // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — western (readallcomics) issues are
+        // packed as "<Series> #N.cbz" and belong to the Western lane, not the Manga
+        // CONTINUE READING strip (Hemanth: Invincible leaked into Manga CR). Manga
+        // cbzs use "Volume N"/"vNN" naming and never this " #<digit>" form, so the
+        // pattern is a safe western marker. Skip these here.
+        static const QRegularExpression kWesternIssueCbz(QStringLiteral(" #\\d"));
+        if (kWesternIssueCbz.match(QFileInfo(ref->filePath).completeBaseName()).hasMatch())
             continue;
 
         qint64 updatedAt = prog.value("updatedAt").toVariant().toLongLong();

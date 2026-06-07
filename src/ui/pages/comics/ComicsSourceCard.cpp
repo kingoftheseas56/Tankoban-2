@@ -432,13 +432,19 @@ void ComicsSourceCard::rebuildDownloadButtonLabel()
 {
     if (!m_downloadButton) return;
     if (m_volumeNumber == tankoban::manga::anilist::kVolumeXNumber) {
-        m_downloadButton->setText(QStringLiteral("Download Vol X"));
+        m_downloadButton->setText(QStringLiteral("Download %1 X").arg(m_unitWord));
     } else if (m_volumeNumber > 0) {
         m_downloadButton->setText(
-            QStringLiteral("Download Vol %1").arg(m_volumeNumber));
+            QStringLiteral("Download %1 %2").arg(m_unitWord).arg(m_volumeNumber));
     } else {
         m_downloadButton->setText(QStringLiteral("Download"));
     }
+}
+
+void ComicsSourceCard::setUnitWord(const QString& unit)
+{
+    m_unitWord = unit.trimmed().isEmpty() ? QStringLiteral("Vol") : unit.trimmed();
+    rebuildDownloadButtonLabel();
 }
 
 void ComicsSourceCard::reelideTitle()

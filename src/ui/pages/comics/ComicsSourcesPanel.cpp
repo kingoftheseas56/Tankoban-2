@@ -514,28 +514,50 @@ void ComicsSourcesPanel::setSources(const QList<UnifiedSourceRow>& rows,
 void ComicsSourcesPanel::setWesternDownloadStatus(const QString& editionFound,
                                                   const QString& statusLine)
 {
-    // COMICS_WESTERN_DOWNLOAD 2026-06-02 — live Western download status. The main
-    // label names the source / the matched edition; the sub label carries the live
-    // state. Reuses the existing status labels (no new card type) and keeps the
-    // indexer scroll hidden — Western has one source. Source is ReadAllComics
-    // (COMICS_WESTERN_ISSUE_BASED 2026-06-06; GetComics parked).
-    clearCards();
-    if (m_headerLabel) {
-        m_headerLabel->setText(tr("Download"));
-    }
-    if (m_statusLabel) {
-        m_statusLabel->setText(editionFound.isEmpty()
-                                   ? tr("ReadAllComics")
-                                   : editionFound);
-        m_statusLabel->show();
-    }
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — the western source is now a real
+    // ComicsSourceCard (showWesternSource), manga-parity. This call only reflects
+    // LIVE PROGRESS ("Finding..."/"Downloading 42%"/"Downloaded") in the sub-line
+    // beneath the card — it must NOT clear the card or hide the scroll.
+    Q_UNUSED(editionFound);
     if (m_statusSubLabel) {
         m_statusSubLabel->setText(statusLine);
         m_statusSubLabel->setVisible(!statusLine.isEmpty());
     }
-    if (m_scroll) {
-        m_scroll->hide();
+}
+
+void ComicsSourcesPanel::showWesternSource(int volumeNumber, const QString& editionLabel)
+{
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — manga-parity: render the readallcomics
+    // source as a ComicsSourceCard (Stremio-style, Download button) instead of bare
+    // status text + auto-download. The card's Download button fires
+    // westernDownloadRequested; ComicsSeriesView turns that into the real download.
+    clearCards();
+    if (m_headerLabel) m_headerLabel->setText(tr("Sources"));
+    if (m_statusLabel) m_statusLabel->hide();
+    if (m_statusSubLabel) { m_statusSubLabel->clear(); m_statusSubLabel->hide(); }
+
+    UnifiedSourceRow row;
+    row.kind  = UnifiedSourceRow::Kind::WeebCentralPacker;  // single non-torrent source
+    row.tier  = 1;
+    row.title = editionLabel;
+
+    auto* card = new ComicsSourceCard(row, m_cardsContainer);
+    card->setReleaseTitle(editionLabel);
+    card->setHostName(QStringLiteral("ReadAllComics"));
+    card->setHostType(ComicsSourceCard::HostType::Other);
+    card->setSeedCount(-1);
+    card->setVolumeNumber(volumeNumber);
+    card->setUnitWord(QStringLiteral("Issue"));  // button reads "Download Issue N"
+    connect(card, &ComicsSourceCard::downloadClicked, this,
+            [this, volumeNumber](const UnifiedSourceRow&) {
+                emit westernDownloadRequested(volumeNumber);
+            });
+    if (m_cardsLayout) {
+        const int insertPos = qMax(0, m_cardsLayout->count() - 1);
+        m_cardsLayout->insertWidget(insertPos, card);
     }
+    m_cards.append(card);
+    if (m_scroll) m_scroll->show();
 }
 
 void ComicsSourcesPanel::setEmpty()

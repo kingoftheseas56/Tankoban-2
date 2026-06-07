@@ -99,6 +99,13 @@ public:
     // found (honest about the collected-edition unit).
     void setWesternDownloadStatus(const QString& editionFound, const QString& statusLine);
 
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — render the western source as a real
+    // ComicsSourceCard (manga-parity) with a Download button instead of the bare
+    // status text. The card's download button fires westernDownloadRequested
+    // (button-triggered, like manga — no auto-download on select). editionLabel is
+    // the release title shown on the card ("Issue N" / matched edition).
+    void showWesternSource(int volumeNumber, const QString& editionLabel);
+
     QJsonObject devSnapshot() const;
     bool devDispatchSource(const QString& source, QString* errorMessage = nullptr);
 
@@ -113,6 +120,11 @@ signals:
                            int            anilistSeriesId,
                            int            volumeNumber,
                            const QStringList& chapterIds);
+
+    // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — fired when the user clicks Download
+    // on the western (ReadAllComics) source card. ComicsSeriesView re-derives the
+    // edition metadata for this volume and emits downloadWesternEditionRequested.
+    void westernDownloadRequested(int volumeNumber);
 
 private slots:
     void onNyaaResults(int reqId, const QList<NyaaSourceCandidate>& results);

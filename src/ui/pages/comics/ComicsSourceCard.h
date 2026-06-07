@@ -61,7 +61,8 @@ public:
     void setSizeBytes(qint64 size);
     void setSeedCount(int seeds);          // -1 = N/A (e.g. WeebCentral)
     void setIsFallback(bool fallback);
-    void setVolumeNumber(int volumeN);     // drives "Download Vol N" label
+    void setVolumeNumber(int volumeN);     // drives "Download <unit> N" label
+    void setUnitWord(const QString& unit); // unit word for the download button ("Vol" default / "Issue")
 
 signals:
     void clicked(const tankoban::manga::comics::UnifiedSourceRow& row);
@@ -103,6 +104,7 @@ private:
     qint64   m_sizeBytes   = 0;
     int      m_seedCount   = -1;
     int      m_volumeNumber = 0;
+    QString  m_unitWord     = QStringLiteral("Vol");  // download-button unit; "Issue" for western
 
     // Widgets owned by Qt parent chain.
     QLabel*       m_titleLabel     = nullptr;

@@ -402,6 +402,22 @@ ComicsSeriesView::ComicsSeriesView(anilist::AniListClient*  client,
     if (m_sourcesPanel) {
         connect(m_sourcesPanel, &ComicsSourcesPanel::downloadRequested,
                 this,           &ComicsSeriesView::downloadDispatchRequested);
+        // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — the western source card's Download
+        // button (manga-parity) fires westernDownloadRequested(volumeNumber). Re-derive
+        // the edition metadata for that volume and emit the real western request.
+        connect(m_sourcesPanel, &ComicsSourcesPanel::westernDownloadRequested,
+                this, [this](int volumeNumber) {
+            QString editionTitle, tierLabel, sourceHref;
+            for (const tankoban::manga::MangaVolume& vol : m_currentMangaCatalog.volumes) {
+                if (vol.volumeNumber == volumeNumber) {
+                    editionTitle = vol.titleEnglish;
+                    tierLabel    = vol.groupingLabel;
+                    sourceHref   = vol.sourceHref;
+                    break;
+                }
+            }
+            emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel, sourceHref);
+        });
     }
 
     if (m_libraryButton) {
@@ -2557,26 +2573,19 @@ void ComicsSeriesView::populateSourcesForVolume(int volumeNumber)
     // Complete-state path at the top of onVolumeRowActivated (cbzPath non-empty
     // => openVolume emitted, never reaching here).
     if (isWesternSource(m_currentMangaCatalog.source)) {
-        // Look up the matching catalog volume for its edition metadata.
-        // Fall back to empty strings when the volume has no record (graceful).
+        // COMICS_WESTERN_ISSUE_BASED 2026-06-06 — manga-parity: selecting an issue
+        // shows a ReadAllComics source CARD with a Download button (it does NOT
+        // auto-download). The actual download fires when the user clicks the card's
+        // button -> ComicsSourcesPanel::westernDownloadRequested -> the connect in
+        // this view re-derives the edition + emits downloadWesternEditionRequested.
         QString editionTitle;
-        QString tierLabel;
-        QString sourceHref;
         for (const tankoban::manga::MangaVolume& vol : m_currentMangaCatalog.volumes) {
-            if (vol.volumeNumber == volumeNumber) {
-                editionTitle = vol.titleEnglish;
-                tierLabel    = vol.groupingLabel;
-                sourceHref   = vol.sourceHref;   // "/Comic/<slug>/<item>" — the RCO chapter
-                break;
-            }
+            if (vol.volumeNumber == volumeNumber) { editionTitle = vol.titleEnglish; break; }
         }
-        // Show a live download status surface immediately (the panel was dead for
-        // Western before — Hemanth: "no sources for downloading"). ComicsPage
-        // updates this as the MangaDownloader progress/complete signals arrive.
-        if (m_sourcesPanel) {
-            m_sourcesPanel->setWesternDownloadStatus(QString(), tr("Finding..."));
-        }
-        emit downloadWesternEditionRequested(volumeNumber, editionTitle, tierLabel, sourceHref);
+        const QString label = !editionTitle.trimmed().isEmpty()
+            ? editionTitle
+            : tr("Issue %1").arg(volumeNumber);
+        if (m_sourcesPanel) m_sourcesPanel->showWesternSource(volumeNumber, label);
         return;
     }
 
