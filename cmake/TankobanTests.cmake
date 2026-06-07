@@ -135,6 +135,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/manga/ReadComicsPageParseTest.cpp
         src/core/manga/WesternCatalogLoader.cpp
         tests/core/manga/WesternCatalogLoaderTest.cpp
+        tests/core/manga/WesternIssueKeyTest.cpp
     )
     target_include_directories(tankoban_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
