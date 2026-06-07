@@ -314,11 +314,11 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             // persist exactly what was fetched (synopsis + editions + cover).
             m_pendingWesternJson     = seriesJson;
             m_pendingWesternSeriesId = catalog.seriesId;
-            // Already on the shelf if a baked file with this seriesId exists.
-            const QString shelfPath =
-                QDir(tankoban::manga::WesternCatalogLoader::canonicalDataDir())
-                    .absoluteFilePath(catalog.seriesId + QStringLiteral(".json"));
-            const bool onShelf = QFile::exists(shelfPath);
+            // WESTERN_PARITY 2026-06-07 (Agent 1) — on-shelf means "in MY
+            // library" (the per-user store), NOT "exists in the shipped
+            // catalogue dir" (which would mark all 14 curated as added).
+            const bool onShelf = m_westernLibrary
+                                 && m_westernLibrary->contains(catalog.seriesId);
             // jsonPath empty until persisted (the restore path re-fetches).
             openWesternSeriesFromCatalog(catalog, QString(), onShelf);
         });
@@ -525,53 +525,31 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::addWesternToLibraryRequested,
             this, [this]() {
-        if (m_pendingWesternJson.isEmpty() || m_pendingWesternSeriesId.isEmpty()) {
+        // WESTERN_PARITY 2026-06-07 (Agent 1) — explicit +Add writes the
+        // per-user WesternLibrary store (NOT a baked catalogue json). The store
+        // is the source of truth for My Library; issues fetch live on open.
+        if (m_pendingWesternSeriesId.isEmpty() || !m_westernLibrary) {
             qInfo("ComicsPage: addWesternToLibraryRequested with no pending series");
             return;
         }
-        // Validate (NOT strip) the REMOTE-derived seriesId as a safe filename
-        // stem matching the baked-catalogue naming ([a-z0-9-], dash-separated).
-        // Rejecting rather than stripping avoids BOTH path traversal (no '\\',
-        // '/', ':', '.', '..') AND collisions (stripping 'a.b' -> 'ab' could
-        // false-match a different series' file). (Codex review, 2026-06-01.)
-        // Validate the id AS-IS (no toLower/normalisation — that would collapse
-        // distinct ids onto one file). fetchWesternSeries already emits a
-        // lowercased, dash-separated seriesId, so a well-formed series passes
-        // unchanged and the filename is exactly the validated value.
+        // Validate the remote-derived seriesId — it flows into a candidate
+        // curated-json path lookup in refreshWesternLibrary. fetchWesternSeries
+        // emits lowercased, dash-separated ids, so a well-formed series passes.
         const QString& id = m_pendingWesternSeriesId;
         static const QRegularExpression safeIdRe(QStringLiteral("^[a-z0-9][a-z0-9-]*$"));
         if (!safeIdRe.match(id).hasMatch()) {
-            qInfo("ComicsPage: unsafe Western seriesId '%s', refusing to write",
+            qInfo("ComicsPage: unsafe Western seriesId '%s', refusing to add",
                   qUtf8Printable(id));
             return;
         }
-        const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
-        if (!QDir().mkpath(dir)) {
-            qInfo("ComicsPage: failed to create Western catalogue dir %s",
-                  qUtf8Printable(dir));
-            return;
-        }
-        const QString path = QDir(dir).absoluteFilePath(id + QStringLiteral(".json"));
-        // Skip-if-present (spec §8 locked default): never clobber an existing
-        // shelf entry (incl. the baked 13). The button is already gated on
-        // !onShelf, so this is belt-and-suspenders against any re-entry path.
-        if (QFile::exists(path)) {
-            if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
-            return;
-        }
-        // Atomic write (QSaveFile temp + commit): a failed/partial write can never
-        // leave a corrupt shelf JSON, and commit() is the single success point —
-        // we only mark on-shelf / refresh the grid AFTER it succeeds.
-        const QByteArray bytes =
-            QJsonDocument(m_pendingWesternJson).toJson(QJsonDocument::Indented);
-        QSaveFile f(path);
-        if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) {
-            qInfo("ComicsPage: failed to write Western shelf file %s",
-                  qUtf8Printable(path));
-            return;   // do NOT mark on-shelf on a failed write
-        }
+        tankoban::manga::WesternLibraryRecord r;
+        r.seriesId = id;
+        r.title    = m_currentDetailSeriesTitle.isEmpty()
+                       ? id : m_currentDetailSeriesTitle;
+        r.coverUrl = m_currentWesternSeriesCover;
+        r.addedAt  = QDateTime::currentMSecsSinceEpoch();
+        m_westernLibrary->addOrUpdate(r); // fires libraryChanged -> refreshWesternLibrary
         if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
-        refreshWesternLibrary();  // surface the new card on the Western grid
     });
     // COMICS_WC_AUTOENRICH 2026-05-24 — fires automatically on series-open
     // from search results so the hero block renders without requiring an
@@ -1051,11 +1029,10 @@ void ComicsPage::wireWesternDownloader()
             return;
         }
 
-        // Snapshot the live page state ONCE up front (the shelf write + dispatch
+        // Snapshot the live page state ONCE up front (the library add + dispatch
         // must agree on the same series even if a synchronous UI mutation touches
         // a member mid-lambda). Use these copies, not the members, from here on.
         const QString     seriesId    = m_pendingWesternSeriesId;
-        const QJsonObject seriesJson  = m_pendingWesternJson;
         const QString     seriesTitle = m_currentDetailSeriesTitle;
 
         // Compute destination path: comics-root from TorrentClient if available,
@@ -1083,23 +1060,18 @@ void ComicsPage::wireWesternDownloader()
             return;
         }
 
-        // Auto-add the series to the Western shelf before downloading — mirrors
-        // addWesternToLibraryRequested so the shelf card appears without an
-        // explicit "Add to Library" click. Idempotent (QSaveFile overwrites).
-        const QString dir = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
-        const QString shelfPath =
-            QDir(dir).absoluteFilePath(seriesId + QStringLiteral(".json"));
-        if (!seriesJson.isEmpty() && !QFile::exists(shelfPath)) {
-            QDir().mkpath(dir);
-            const QByteArray bytes =
-                QJsonDocument(seriesJson).toJson(QJsonDocument::Indented);
-            QSaveFile sf(shelfPath);
-            if (sf.open(QIODevice::WriteOnly) &&
-                sf.write(bytes) == bytes.size() &&
-                sf.commit()) {
-                if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
-                refreshWesternLibrary();
-            }
+        // WESTERN_PARITY 2026-06-07 (Agent 1) — auto-add to My Library on
+        // download START (immediate feedback; the completion handler is a
+        // belt-and-suspenders re-add). Writes the per-user store, not a baked
+        // catalogue json. Idempotent by seriesId.
+        if (m_westernLibrary && !seriesId.isEmpty()) {
+            tankoban::manga::WesternLibraryRecord r;
+            r.seriesId = seriesId;
+            r.title    = seriesTitle.isEmpty() ? seriesId : seriesTitle;
+            r.coverUrl = m_currentWesternSeriesCover;
+            r.addedAt  = QDateTime::currentMSecsSinceEpoch();
+            m_westernLibrary->addOrUpdate(r);
+            if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->setWesternOnShelf(true);
         }
 
         // Rows are readallcomics issues now, so volumeNumber IS the issue number.
@@ -2890,45 +2862,6 @@ void ComicsPage::buildWesternScreen()
     scroll->setWidget(page);
     m_westernScroll = scroll;
     m_westernStackIndex = m_stack->addWidget(scroll);
-}
-
-void ComicsPage::refreshWesternGrid()
-{
-    if (!m_westernGrid) return;
-    m_westernGrid->clear();
-
-    const QString dirPath = tankoban::manga::WesternCatalogLoader::canonicalDataDir();
-    QDir dir(dirPath);
-    const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.json"),
-                                            QDir::Files, QDir::Name);
-    for (const QString& f : files) {
-        const QString path = dir.absoluteFilePath(f);
-        const auto cat = tankoban::manga::WesternCatalogLoader::loadFromFile(path);
-        if (!cat.has_value()) continue;
-
-        // Shared series hero cover. The cover is a REMOTE url (rcostation
-        // /Uploads absolutised by the loader, or an absolute blogspot url),
-        // not a local file -- so it can't go through TileCard's ctor thumbPath
-        // (QPixmap(path) only loads local files; a url fails silently -> blank
-        // box). Mirror the manga grid: construct with an empty placeholder,
-        // then async-fetch + cache the url via fetchPosterForTile, which calls
-        // setThumbPath when the download lands. Empty cover -> text-tile
-        // placeholder stays (cover-tolerant by design).
-        // Prefer the series-level cover (set by WesternCatalogLoader, survives an
-        // empty editions list); fall back to volume 1's cover for legacy baked
-        // files that predate the seriesCover field. (2026-06-02 — editionless
-        // series like The Walking Dead otherwise show a blank grid tile.)
-        const QString coverUrl = !cat->seriesCover.isEmpty()
-                                     ? cat->seriesCover
-                                     : (cat->volumes.isEmpty()
-                                            ? QString()
-                                            : cat->volumes.first().coverUrlJapanese);
-        auto* card = new TileCard(QString(), cat->seriesTitle, tr("Western"));
-        card->setProperty("westernJsonPath", path);
-        card->setProperty("seriesName", cat->seriesTitle);
-        m_westernGrid->addTile(card);
-        if (!coverUrl.isEmpty()) fetchPosterForTile(card, 0, coverUrl);
-    }
 }
 
 // WESTERN_PARITY 2026-06-07 (Agent 1) — render My Library from the per-user

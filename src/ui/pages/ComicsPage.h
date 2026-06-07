@@ -383,8 +383,9 @@ private:
     void openSeriesByRecord(const ComicsLibraryRecord& record);
 
     // COMICS_WESTERN_CATALOGUE Task 7 (2026-05-31, Agent 2) — Western shelf.
-    // buildWesternScreen() adds the browse grid as a new m_stack screen;
-    // refreshWesternGrid() (re)scans data/western_catalogue/*.json into tiles;
+    // buildWesternScreen() adds the My Library grid as a new m_stack screen;
+    // refreshWesternLibrary() (WESTERN_PARITY 2026-06-07) renders added-only
+    // series from the per-user WesternLibrary store (not the catalogue dir);
     // openWesternSeriesFromJson() does the GUARDED render-only open (direct
     // populateVolumeRowsFromCatalog, never showSeries — no AniList/mangafire
     // enrichment bleed onto a Western comic); show*Mode() drive the toggle.
@@ -399,7 +400,6 @@ private:
                             const QString& sourceId);
 
     void buildWesternScreen();
-    void refreshWesternGrid();
     // WESTERN_PARITY 2026-06-07 (Agent 1) — My Library render driven by the
     // per-user WesternLibrary store (added-only series), replacing the
     // catalogue-dir dump. Empty -> "Search to find comics" label.
