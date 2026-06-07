@@ -3,6 +3,7 @@
 #include "core/CoreBridge.h"
 #include "core/net/NetSeam.h"
 #include "core/stream/MetaAggregator.h"
+#include "core/stream/StreamBulkPlan.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
@@ -1418,8 +1419,33 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
     int pct = 0;
     if (state == S::Downloading || state == S::Paused) {
         const auto it = snap.constFind(episode);
-        if (it != snap.constEnd())
+        if (it != snap.constEnd()) {
             pct = qMax(0, it.value().second);
+        } else if (m_downloadIndex && !m_currentImdb.isEmpty()) {
+            const auto best =
+                m_downloadIndex->bestEntryForEpisode(m_currentImdb, season, episode);
+            if (best.has_value())
+                pct = qMax(0, best->progressPct);
+        }
+    }
+
+    // --- Progress % cell (kColProgress) ---
+    if (auto* progressItem = m_episodeTable->item(row, kColProgress)) {
+        QString text = QStringLiteral("-");
+        switch (state) {
+        case S::Downloading:
+        case S::Paused:
+            text = QStringLiteral("%1%").arg(pct);
+            break;
+        case S::Downloaded:
+            text = QStringLiteral("100%");
+            break;
+        case S::Failed:
+        case S::NotDownloaded:
+            break;
+        }
+        progressItem->setText(text);
+        progressItem->setTextAlignment(Qt::AlignCenter);
     }
 
     // --- Status text cell (kColStatus) ---
@@ -1895,9 +1921,7 @@ QString StreamDetailView::findInfoHashForEpisode(int season, int episode) const
         for (const auto& v : g.value(QStringLiteral("items")).toArray()) {
             const QJsonObject item = v.toObject();
             const QString itemKey = item.value(QStringLiteral("itemKey")).toString();
-            const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
-            if (eIdx <= 0) continue;
-            if (itemKey.mid(eIdx + 1).toInt() != episode) continue;
+            if (tankostream::stream::episodeFromItemKey(itemKey) != episode) continue;
             return item.value(QStringLiteral("infoHash")).toString();
         }
     }

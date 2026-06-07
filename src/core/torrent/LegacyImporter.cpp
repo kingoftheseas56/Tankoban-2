@@ -17,6 +17,7 @@
 #include "LegacyImporter.h"
 
 #include "TorrentRepository.h"
+#include "core/stream/StreamBulkPlan.h"
 
 #include <QDir>
 #include <QFile>
@@ -388,6 +389,10 @@ std::vector<StreamGroupItemRow> LegacyImporter::parseStreamGroupItems(
                 ir.itemId = item.value(QStringLiteral("itemKey")).toString();
 
             ir.episode = item.value(QStringLiteral("episode")).toInt(0);
+            if (ir.episode <= 0)
+                ir.episode = item.value(QStringLiteral("episodeNum")).toInt(0);
+            if (ir.episode <= 0)
+                ir.episode = tankostream::stream::episodeFromItemKey(ir.itemId);
             ir.infoHash = item.value(QStringLiteral("infoHash")).toString();
 
             ir.state = item.value(QStringLiteral("state")).toString();

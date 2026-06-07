@@ -81,7 +81,7 @@ public:
             return false;
 
         static const QRegularExpression kEpisodePattern(
-            QStringLiteral("[._\\s]?[Ss](\\d{1,2})[._\\s]?[Ee](\\d{1,3})"),
+            QStringLiteral("[._\\s]?[Ss](\\d{1,2})[._\\s]?[Ee](\\d+)"),
             QRegularExpression::CaseInsensitiveOption);
 
         const QRegularExpressionMatch match = kEpisodePattern.match(info.completeBaseName());

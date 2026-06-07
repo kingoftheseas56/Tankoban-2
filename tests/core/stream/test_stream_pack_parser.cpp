@@ -45,6 +45,21 @@ TEST(StreamPackParserTest, SingleSeasonCleanSENaming)
     EXPECT_EQ(pack.episodes[2].episode, 3);
 }
 
+TEST(StreamPackParserTest, LongRunningAnimeEpisodeNumber)
+{
+    QJsonArray files;
+    files.append(makeFile(QStringLiteral("One.Piece.S01E1164.1080p.WEB-DL.mkv"),
+                          1500000000LL,
+                          0));
+
+    ParsedPack pack = StreamPackParser::parsePack(files, QStringLiteral("tt0388629"), 1);
+
+    EXPECT_EQ(pack.type, QStringLiteral("series"));
+    ASSERT_EQ(pack.episodes.size(), 1);
+    EXPECT_EQ(pack.episodes[0].season, 1);
+    EXPECT_EQ(pack.episodes[0].episode, 1164);
+}
+
 TEST(StreamPackParserTest, MultiSeasonProbe)
 {
     QJsonArray files;

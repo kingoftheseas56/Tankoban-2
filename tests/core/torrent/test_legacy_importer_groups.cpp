@@ -146,6 +146,35 @@ TEST_F(LegacyImporterGroupsTest, ParsesNestedItemsWithGroupIdAttribution) {
     EXPECT_TRUE(warnings.isEmpty());
 }
 
+TEST_F(LegacyImporterGroupsTest, ParsesFourDigitEpisodeFromItemKeyWhenEpisodeFieldMissing) {
+    const QByteArray fixture = R"({
+      "groups": [
+        {
+          "groupId": "stream:tt0388629:s01:long",
+          "imdbId": "tt0388629",
+          "season": 1,
+          "items": [
+            { "itemKey": "tt0388629:S01E1164",
+              "itemState": "Downloading",
+              "infoHash": "",
+              "fileIndex": 42 }
+          ]
+        }
+      ]
+    })";
+
+    LegacyImporter imp;
+    QStringList warnings;
+    const auto items =
+        imp.parseStreamGroupItems(writeFixture(fixture), &warnings);
+
+    ASSERT_EQ(items.size(), 1u);
+    EXPECT_EQ(items[0].itemId, QStringLiteral("tt0388629:S01E1164"));
+    EXPECT_EQ(items[0].episode, 1164);
+    EXPECT_EQ(items[0].state, QStringLiteral("Downloading"));
+    EXPECT_TRUE(warnings.isEmpty());
+}
+
 TEST_F(LegacyImporterGroupsTest, MultipleGroupsItemsFlattenedAcrossGroups) {
     const QByteArray fixture = R"({
       "groups": [

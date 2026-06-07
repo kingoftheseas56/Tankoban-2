@@ -449,6 +449,7 @@ private:
     void clearPieceProgressState(const QString& infoHash);
     void processPieceFinishedProgress(const QString& infoHash);
     void flushPieceFinishedProgress(const QString& infoHash);
+    void emitStreamBulkProgressChangedForTorrent(const QString& infoHash);
 
     CoreBridge*          m_bridge;
     TorrentEngine*       m_engine;

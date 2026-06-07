@@ -186,6 +186,27 @@ QString makeTorrentKey(const QString& infoHash);
 // per-episode mode. Invalid info hashes return an empty key.
 QString makeFileKey(const QString& infoHash, int fileIndex);
 
+// Extract the episode suffix from makeItemKey-style IDs. Supports long-running
+// shows whose episode numbers exceed three digits (for example S01E1164).
+inline int episodeFromItemKey(const QString& itemKey)
+{
+    int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
+    if (eIdx <= 0)
+        eIdx = itemKey.lastIndexOf(QLatin1Char('e'));
+    if (eIdx <= 0 || eIdx + 1 >= itemKey.size())
+        return 0;
+
+    const QString suffix = itemKey.mid(eIdx + 1);
+    for (QChar ch : suffix) {
+        if (!ch.isDigit())
+            return 0;
+    }
+
+    bool ok = false;
+    const int episode = suffix.toInt(&ok);
+    return ok ? episode : 0;
+}
+
 // ── Forward sanitizer (audit A7) ──────────────────────────────────────────
 
 // Single source of truth for converting raw text into a Windows-safe path

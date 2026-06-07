@@ -401,12 +401,9 @@ int streamBulkEpisodeFromItem(const QJsonObject& item)
     int episode = item.value(QStringLiteral("episode")).toInt(0);
     if (episode <= 0)
         episode = item.value(QStringLiteral("episodeNum")).toInt(0);
-    if (episode <= 0) {
-        const QString itemKey = item.value(QStringLiteral("itemKey")).toString();
-        const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
-        if (eIdx > 0)
-            episode = itemKey.mid(eIdx + 1).toInt();
-    }
+    if (episode <= 0)
+        episode = tankostream::stream::episodeFromItemKey(
+            item.value(QStringLiteral("itemKey")).toString());
     return episode;
 }
 
@@ -1124,8 +1121,6 @@ void TorrentClient::reconcileStreamBulkGroups()
         for (int i = 0; i < items.size(); ++i) {
             QJsonObject item = items.at(i).toObject();
             const QString state = item.value("itemState").toString();
-            if (isTerminalStreamBulkState(state))
-                continue;
 
             const QString infoHash = item.value("infoHash").toString();
             const QString torrentKey = infoHash.toLower();
@@ -1133,6 +1128,37 @@ void TorrentClient::reconcileStreamBulkGroups()
             const QString canonicalPath = canonicalPathForStreamBulkItem(group, item);
             const bool destinationExists =
                 !canonicalPath.isEmpty() && QFileInfo::exists(canonicalPath);
+
+            if (state == QLatin1String(kStatePublished)
+                || state == QLatin1String(kStateCompleted)) {
+                if (destinationExists)
+                    continue;
+
+                if (hasRecord) {
+                    const QString activeState = activeStates.value(torrentKey);
+                    if (activeState == QLatin1String("downloading")
+                        || activeState == QLatin1String("checking")
+                        || activeState == QLatin1String("metadata")
+                        || activeState == QLatin1String("allocating")) {
+                        item["itemState"] = QString::fromLatin1(kStateDownloading);
+                    } else {
+                        item["itemState"] = QString::fromLatin1(kStatePending);
+                    }
+                    item["lastError"] = QString();
+                    items.replace(i, item);
+                    groupChanged = true;
+                } else {
+                    item["itemState"] = QString::fromLatin1(kStateOrphaned);
+                    item["lastError"] =
+                        QStringLiteral("Marked published but canonical destination is missing");
+                    items.replace(i, item);
+                    groupChanged = true;
+                }
+                continue;
+            }
+
+            if (isTerminalStreamBulkState(state))
+                continue;
 
             if (isPublishingStreamBulkState(state)) {
                 if (!hasRecord) {
@@ -1551,13 +1577,7 @@ TorrentClient::streamBulkSnapshotForImdbSeason(const QString& imdbId, int season
         for (const auto& it : items) {
             int episodeNum = it.episode;
             if (episodeNum <= 0) {
-                const int eIdx = it.itemId.lastIndexOf(QLatin1Char('E'));
-                if (eIdx > 0) {
-                    bool ok = false;
-                    const int parsed = it.itemId.mid(eIdx + 1).toInt(&ok);
-                    if (ok)
-                        episodeNum = parsed;
-                }
+                episodeNum = tankostream::stream::episodeFromItemKey(it.itemId);
             }
             if (episodeNum <= 0)
                 continue;
@@ -1752,10 +1772,7 @@ void TorrentClient::cancelStreamBulkItem(const QString& groupId,
                               .value(QStringLiteral("season")).toInt(0);
         }
         if (episodeNum == 0) {
-            const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
-            if (eIdx > 0) {
-                episodeNum = itemKey.mid(eIdx + 1).toInt();
-            }
+            episodeNum = tankostream::stream::episodeFromItemKey(itemKey);
         }
 
         item[QStringLiteral("itemState")] = QString::fromLatin1(kStateCancelled);
@@ -2228,9 +2245,7 @@ void TorrentClient::backfillStreamDownloadIndex()
             if (episodeNum <= 0) {
                 const QString itemKey =
                     item.value(QStringLiteral("itemKey")).toString();
-                const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
-                if (eIdx > 0)
-                    episodeNum = itemKey.mid(eIdx + 1).toInt();
+                episodeNum = tankostream::stream::episodeFromItemKey(itemKey);
             }
 
             if (imdbId.isEmpty() || seasonNum <= 0 || episodeNum <= 0) {
@@ -2376,7 +2391,7 @@ void TorrentClient::reconcileUnregisteredSingleEpisodes()
                 const QString relName = firstFile.value("name").toString();
                 // Try parsing SxxExx from the filename.
                 static const QRegularExpression sxeRe(
-                    QStringLiteral(R"([Ss](\d{1,2})[Ee](\d{1,3}))"));
+                    QStringLiteral(R"([Ss](\d{1,2})[Ee](\d+))"));
                 if (auto m = sxeRe.match(relName); m.hasMatch()) {
                     const int epSeason = m.captured(1).toInt();
                     const int epNum = m.captured(2).toInt();
@@ -2880,20 +2895,58 @@ void TorrentClient::clearPieceProgressState(const QString& infoHash)
     m_pieceProgressPending.remove(hash);
 }
 
+void TorrentClient::emitStreamBulkProgressChangedForTorrent(const QString& infoHash)
+{
+    const QString hash = infoHash.toLower();
+    if (hash.isEmpty() || m_streamBulkGroups.isEmpty())
+        return;
+
+    QSet<QString> affectedGroups;
+    for (auto groupIt = m_streamBulkGroups.constBegin();
+         groupIt != m_streamBulkGroups.constEnd(); ++groupIt) {
+        const QJsonArray items = groupIt.value().toObject()
+            .value(QStringLiteral("items")).toArray();
+        for (const QJsonValue& value : items) {
+            const QJsonObject item = value.toObject();
+            if (item.value(QStringLiteral("infoHash")).toString()
+                    .compare(hash, Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+
+            const QString state = item.value(QStringLiteral("itemState")).toString();
+            if (state == QLatin1String(kStateDownloading)
+                || state == QLatin1String(kStatePending)
+                || state == QLatin1String(kStatePaused)
+                || state == QLatin1String(kStatePublishing)) {
+                affectedGroups.insert(groupIt.key());
+                break;
+            }
+        }
+    }
+
+    for (const QString& groupId : affectedGroups)
+        emit streamBulkGroupsChanged(groupId);
+}
+
 void TorrentClient::processPieceFinishedProgress(const QString& infoHash)
 {
     const QString hash = infoHash.toLower();
-    if (!m_streamDownloadIndex || !m_engine || hash.isEmpty())
+    if (!m_engine || hash.isEmpty())
         return;
     if (!ensurePieceMetaCached(hash))
         return;
 
     const PieceMeta meta = m_pieceMetaCache.value(hash);
+    if (!meta.streamGroupId.isEmpty()) {
+        emitStreamBulkProgressChangedForTorrent(hash);
+        return;
+    }
+
     if (meta.imdbId.isEmpty())
         return;  // not a Tankorent-source torrent
 
-    if (!meta.streamGroupId.isEmpty())
-        return;  // bulk-cohort path handles its own progress tracking
+    if (!m_streamDownloadIndex)
+        return;
 
     const QJsonArray files = m_engine->torrentFiles(hash);
     if (files.isEmpty())
@@ -3466,8 +3519,6 @@ QJsonArray TorrentClient::devTorrentsSnapshot(bool activeOnly) const
 
 QJsonArray TorrentClient::devBulkGroupsSnapshot() const
 {
-    static const QRegularExpression episodeRe(QStringLiteral("[Ee](\\d{1,3})"));
-
     QJsonArray groups;
     for (auto it = m_streamBulkGroups.constBegin();
          it != m_streamBulkGroups.constEnd(); ++it) {
@@ -3490,8 +3541,8 @@ QJsonArray TorrentClient::devBulkGroupsSnapshot() const
             const QString itemKey = srcItem.value(QStringLiteral("itemKey")).toString();
             QJsonObject item;
             item[QStringLiteral("itemKey")] = itemKey;
-            const QRegularExpressionMatch m = episodeRe.match(itemKey);
-            item[QStringLiteral("episode")] = m.hasMatch() ? m.captured(1).toInt() : 0;
+            item[QStringLiteral("episode")] =
+                tankostream::stream::episodeFromItemKey(itemKey);
             item[QStringLiteral("state")] =
                 srcItem.value(QStringLiteral("itemState")).toString();
             item[QStringLiteral("infoHash")] =
@@ -3752,17 +3803,14 @@ void TorrentClient::onPieceFinished(const QString& infoHash, int /*pieceIndex*/)
     // Coarse but correct: coalesce piece bursts so the per-file progress scan
     // runs at most once per torrent per debounce window.
     const QString hash = infoHash.toLower();
-    if (!m_streamDownloadIndex || !m_engine || hash.isEmpty())
+    if (!m_engine || hash.isEmpty())
         return;
     if (!ensurePieceMetaCached(hash))
         return;
 
     const PieceMeta meta = m_pieceMetaCache.value(hash);
-    if (meta.imdbId.isEmpty())
+    if (meta.imdbId.isEmpty() && meta.streamGroupId.isEmpty())
         return;  // not a Tankorent-source torrent
-
-    if (!meta.streamGroupId.isEmpty())
-        return;  // bulk-cohort path handles its own progress tracking
 
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const qint64 lastRun = m_pieceProgressLastRunMs.value(hash, 0);
@@ -3888,7 +3936,7 @@ void TorrentClient::onTorrentFinished(const QString& infoHash)
                 QStringLiteral(R"(\.(mkv|mp4|avi|mov|wmv|webm)$)"),
                 QRegularExpression::CaseInsensitiveOption);
             static const QRegularExpression sxeRe(
-                QStringLiteral(R"([Ss](\d{1,2})[Ee](\d{1,3}))"));
+                QStringLiteral(R"([Ss](\d{1,2})[Ee](\d+))"));
 
             QDirIterator it(tRow->savePath,
                             QDir::Files | QDir::NoDotAndDotDot,
@@ -4068,9 +4116,7 @@ void TorrentClient::onFileRenamed(const QString& infoHash, int fileIndex, const 
                         seasonNum = sourceIds.value(QStringLiteral("season")).toInt(0);
                     if (episodeNum <= 0) {
                         const QString itemKey = item.value(QStringLiteral("itemKey")).toString();
-                        const int eIdx = itemKey.lastIndexOf(QLatin1Char('E'));
-                        if (eIdx > 0)
-                            episodeNum = itemKey.mid(eIdx + 1).toInt();
+                        episodeNum = tankostream::stream::episodeFromItemKey(itemKey);
                     }
                 }
 
