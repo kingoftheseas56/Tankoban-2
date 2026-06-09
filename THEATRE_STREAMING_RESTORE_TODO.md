@@ -43,9 +43,16 @@ button), `e8d19c4` P4.1 (season-pack UI right-pane).
   - **StreamTypes.h:** merge the stremio types back into the CURRENT file (it was further touched by `b453e84`); do NOT blind-restore.
   - **CMake:** add the restored sources to `cmake/TankobanSources.cmake` and the `resources/stream_server/*` deploy step to `cmake/TankobanRuntimeAssets.cmake` (the old 70-line CMakeLists.txt block was refactored away — hand-wire, don't revert).
   - Gate: clean-from-scratch `build_check.bat` BUILD OK + `tankoban_tests` green.
-- **P1 — Re-wire `StreamPlayerController` into current StreamDetailView/StreamPage → "Play" streams via Stremio.**
+- **P1 — Re-wire `StreamPlayerController` into current StreamPage → "Play" streams via Stremio.**
   - Add a Play action distinct from Download. Smoke: click episode → instant play (no full download).
   - Threading/process-lifecycle touch → **mandatory cross-engine review** before merge.
+  - **Implementation map (built from git archaeology 2026-06-09):**
+    - **Integration surface = `src/ui/pages/StreamPage.{cpp,h}`** (the controller was always owned/wired here, not StreamDetailView).
+    - **Reference A — original Stremio wiring:** `git show 85ad939^:src/ui/pages/StreamPage.cpp`. `85ad939` is the THEATRE_DOWNLOAD_ONLY P1 cutover that STOPPED constructing StreamServerEngine + StreamPlayerController; its parent has the live construction + all signal connects.
+    - **Reference B — current-tree play→stream routing:** `git show 38a26c9` (reverted rqbit T8, StreamPage.cpp 66 / StreamPage.h 17). Same shape as what we want (episode click → auto-pick source → start stream → on-ready open VideoPlayer), written against the CURRENT drifted StreamPage — the most directly reusable scaffold; just swap the rqbit engine for StreamServerEngine.
+    - **Controller API:** ctor `(CoreBridge*, StreamServerEngine*, parent)`; `startStream(imdbId, mediaType, season, episode, const tankostream::addon::Stream& selected)`; `stopStream(StopReason)`. Signals: `readyToPlay(httpUrl)` → open VideoPlayer on the URL; `bufferUpdate(text, pct)` → loading overlay; `streamFailed(msg)` → toast; `streamStopped(reason)` → return to browse.
+    - **Steps:** (1) construct StreamServerEngine + StreamPlayerController in StreamPage ctor (CoreBridge is already a ctor arg); (2) connect the 4 signals to the existing VideoPlayer-open / overlay / toast / back paths (mirror 38a26c9); (3) add a Play action alongside Download (do NOT replace the disk-first episode painter / download flow — hybrid); (4) auto-pick a Stream for Play (reuse AutoSourcePicker, same as download auto-pick); (5) NetSeam-migrate StreamServerClient.cpp:36 raw QNAM → `NetSeam::instance()->createManager(this, "stream-server-client")`; (6) add StreamPlayerController.{cpp,h} to TankobanSources.cmake; commit + build + cross-engine review + Hemanth smoke.
+    - **Lifecycle caution:** StreamPlayerController.h is dense with STREAM_LIFECYCLE_FIX invariants (StopReason routing, clearSessionState, do-not-mutate-lifecycle). Wire to its public surface; do NOT alter its internal lifecycle. [[feedback_session_lifecycle_pattern]].
 - **P2 — Restore the Sources picker side-pane in StreamDetailView (manual source choice), alongside auto-download.**
   - Re-introduce against the drifted StreamDetailView; keep the disk-first episode-state painter intact.
 - **P3 — Un-hide the Tankorent tab** (`SidebarDrawer.cpp` revert) + decide P4.1/P4.2 pack-button restore (§5).
