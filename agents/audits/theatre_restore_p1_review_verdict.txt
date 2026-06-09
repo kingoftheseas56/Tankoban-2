@@ -1,0 +1,13 @@
+**Findings**
+
+1. **P0: streaming opens the player while it remains hidden.**  
+   [StreamPage.cpp](/C:/Users/Suprabha/Desktop/Tankoban%202/src/ui/pages/StreamPage.cpp:3563) calls `player->openFile(...)` directly. But `VideoPlayer::openFile()` only starts playback state; the show/raise/focus work lives in [MainWindow.cpp](/C:/Users/Suprabha/Desktop/Tankoban%202/src/ui/MainWindow.cpp:1451). Result: Watch can start the sidecar/audio without presenting the player overlay.
+
+2. **P1: in-flight dedupe ignores watch-vs-download intent.**  
+   [StreamPage.cpp](/C:/Users/Suprabha/Desktop/Tankoban%202/src/ui/pages/StreamPage.cpp:3303) dedupes only by imdb/season/episode. With the new `forStream` flag, a quick Download after Watch, or Watch after Download, is treated as the same pending request and ignored. That violates the “watch streams, explicit download still downloads” intent under realistic double-action timing.
+
+**Notes**
+
+The `forStream` branch itself is otherwise shaped correctly: only the watch path passes `true`, and `onSingleEpisodeDownloadRequested()` keeps the default `false`. The broad `disconnect(player, closeRequested, this, nullptr)` does not currently remove any other `StreamPage` receiver.
+
+I did not rerun the build. The provided build log is contradictory: it says `BUILD OK`, but also contains `build_check.bat : The system cannot find the drive specified.`

@@ -237,6 +237,8 @@ set(SOURCES
     src/ui/pages/stream/StreamDownloadsPage.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
+    # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.
+    src/ui/pages/stream/StreamPlayerController.cpp
     src/ui/pages/stream/TorrentPackPicker.cpp
     src/ui/pages/stream/TheatreDownloadPanel.cpp
     src/ui/pages/stream/PackListItem.cpp
@@ -451,6 +453,8 @@ set(HEADERS
     src/ui/pages/stream/StreamDownloadsPage.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
+    # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.
+    src/ui/pages/stream/StreamPlayerController.h
     src/ui/pages/stream/TorrentPackPicker.h
     src/ui/pages/stream/TheatreDownloadPanel.h
     src/ui/pages/stream/PackListItem.h

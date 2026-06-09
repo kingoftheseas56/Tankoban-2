@@ -19,10 +19,14 @@
 #include "core/stream/StreamBulkPlan.h"
 #include "core/stream/addon/MetaItem.h"
 #include "ui/LayerEntry.h"
-// THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — StreamPlayerController.h removed;
-// Theatre no longer constructs or references the streaming controller.
+// THEATRE_STREAMING_RESTORE P1 (2026-06-09) — streaming controller restored
+// (forward-declared below). The episode "watch" click streams the auto-picked
+// source via the Stremio stream-server; explicit download actions stay on
+// libtorrent (hybrid, Hemanth 2026-06-09).
 #include "ui/pages/stream/StreamSourceChoice.h"
 
+class StreamServerEngine;
+class StreamPlayerController;
 class CoreBridge;
 class QDialog;
 class QProgressBar;
@@ -335,11 +339,15 @@ private:
         // currentLoadToken()==token so a late emit from a SUPERSEDED load()
         // (rapid Download re-clicks) can't deliver the wrong show's streams.
         quint64 token = 0;
+        // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — true = "watch" intent
+        // (stream the auto-picked source); false = explicit download. Branches
+        // finishAutoDownloadPick between startStream() and startDownload().
+        bool forStream = false;
     };
     PendingAutoDownload m_pendingAuto;
 
     void startAutoDownload(const QString& imdbId, const QString& mediaType,
-                           int season, int episode);
+                           int season, int episode, bool forStream = false);
     void finishAutoDownloadPick(const QList<tankostream::addon::Stream>& streams,
                                 const QHash<QString, QString>& addonsById);
 
@@ -398,16 +406,22 @@ private:
     // playback or when the series has no next unwatched episode.
     void onStreamNextEpisodeShortcut();
 
-    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — the four StreamPlayerController
-    // signal handler slots (onBufferUpdate / onReadyToPlay / onStreamFailed /
-    // onStreamStopped) are removed along with the controller they served.
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored StreamPlayerController
+    // signal handlers (core-first subset; session-lifecycle polish in P1.x).
+    // onStreamStopped is zero-arg: the StopReason is dropped via Qt's
+    // signal-has-more-args-than-slot rule (core path doesn't branch on reason).
+    void onBufferUpdate(const QString& statusText, double percent);
+    void onReadyToPlay(const QString& httpUrl);
+    void onStreamFailed(const QString& message);
+    void onStreamStopped();
 
     CoreBridge*      m_bridge;
     TorrentClient*   m_torrentClient = nullptr;
     TorrentEngine*   m_torrentEngine;
 
-    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — m_streamEngine member removed;
-    // the stream-server subprocess is no longer created.
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — Stremio stream-server engine
+    // restored; constructed in buildUI(), drives StreamPlayerController.
+    StreamServerEngine* m_streamEngine = nullptr;
     StreamLibrary*   m_library   = nullptr;
 
     // UI layers
@@ -518,8 +532,9 @@ private:
     QStringList m_bulkRetryItemKeys;
     bool m_bulkRetryMode = false;
 
-    // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) — m_playerController member
-    // removed; the streaming controller is no longer constructed.
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — streaming controller restored.
+    StreamPlayerController* m_playerController = nullptr;
+    QString m_pendingStreamTitle;  // HUD title for the in-flight stream
 
     // Buffer overlay — retained widget (no longer shown during playback); the
     // unreachable next-episode overlay path still references it (dead code).

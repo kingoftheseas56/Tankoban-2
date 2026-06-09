@@ -8,6 +8,8 @@
 #include <QUrl>
 #include <QUrlQuery>
 
+#include "core/net/NetSeam.h"  // THEATRE_STREAMING_RESTORE P1 — Congress 9 observability
+
 StreamServerClient::StreamServerClient(QObject* parent)
     : QObject(parent)
 {
@@ -33,7 +35,11 @@ bool StreamServerClient::isReady() const
 QNetworkAccessManager* StreamServerClient::ensureNam()
 {
     if (!m_nam) {
-        m_nam = new QNetworkAccessManager(this);
+        // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — route through NetSeam so
+        // the stream-server's local HTTP calls are observable (Congress 9). Was
+        // a raw `new QNetworkAccessManager(this)` pre-deletion.
+        m_nam = tankoban::net::NetSeam::instance()->createManager(
+            this, QStringLiteral("stream-server-client"));
     }
     return m_nam;
 }

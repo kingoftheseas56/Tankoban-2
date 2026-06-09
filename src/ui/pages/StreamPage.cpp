@@ -36,6 +36,11 @@
 #include "ui/pages/TileCard.h"
 
 #include "ui/player/VideoPlayer.h"
+// THEATRE_STREAMING_RESTORE P1 (2026-06-09) — Stremio stream-server engine +
+// restored player controller. Episode "watch" click streams the auto-picked
+// source; explicit download actions stay on libtorrent.
+#include "core/stream/stremio/StreamServerEngine.h"
+#include "ui/pages/stream/StreamPlayerController.h"
 #include "ui/player/IPlayerBackend.h"
 #include "ui/dialogs/AddAddonDialog.h"
 #include "ui/dialogs/AddTorrentDialog.h"
@@ -800,6 +805,31 @@ void StreamPage::buildUI()
     // Detail layer
     m_detailView = new StreamDetailView(m_bridge, m_metaAggregator, m_library, this);
     m_mainStack->addWidget(m_detailView); // index 1: detail
+
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — construct the Stremio
+    // stream-server engine + restored player controller. The "watch" click
+    // (finishAutoDownloadPick with forStream=true) streams the auto-picked
+    // source; explicit download actions stay on libtorrent. Cache dir mirrors
+    // the pre-deletion path (dataDir/stream_server_cache). Core-first: the 4
+    // signals wire to open-player / overlay / error / cleanup; session-lifecycle
+    // polish (stall, buffered-range, playback-window) is deferred to P1.x.
+    if (m_bridge && !m_streamEngine) {
+        const QString cacheDir = m_bridge->dataDir() + "/stream_server_cache";
+        m_streamEngine = new StreamServerEngine(cacheDir, this);
+        m_streamEngine->start();
+        m_streamEngine->cleanupOrphans();
+        m_streamEngine->startPeriodicCleanup();
+
+        m_playerController = new StreamPlayerController(m_bridge, m_streamEngine, this);
+        connect(m_playerController, &StreamPlayerController::bufferUpdate,
+                this, &StreamPage::onBufferUpdate);
+        connect(m_playerController, &StreamPlayerController::readyToPlay,
+                this, &StreamPage::onReadyToPlay);
+        connect(m_playerController, &StreamPlayerController::streamFailed,
+                this, &StreamPage::onStreamFailed);
+        connect(m_playerController, &StreamPlayerController::streamStopped,
+                this, &StreamPage::onStreamStopped);
+    }
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) â€” wire TorrentClient
     // through to the detail view so Remove-from-Library can detect active
@@ -3260,7 +3290,7 @@ void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPick
 // lambda, build the Torrentio request id, then load(). The handler runs the
 // auto-pick + startDownload in finishAutoDownloadPick().
 void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaType,
-                                   int season, int episode)
+                                   int season, int episode, bool forStream)
 {
     if (!m_streamAggregator || !m_torrentClient || imdbId.isEmpty())
         return;
@@ -3273,9 +3303,15 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     if (m_pendingAuto.active
         && m_pendingAuto.imdbId == imdbId
         && m_pendingAuto.season == season
-        && m_pendingAuto.episode == episode) {
+        && m_pendingAuto.episode == episode
+        && m_pendingAuto.forStream == forStream) {
+        // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — dedup must also match the
+        // watch-vs-download intent: a Download right after a Watch (or vice
+        // versa) on the same episode is a DIFFERENT request, not a re-click
+        // (Codex review finding). Only an identical-intent re-click is dropped.
         qInfo().noquote() << "[auto-dl] dedup: ignoring re-click for in-flight imdb="
-                          << imdbId << "s" << season << "e" << episode;
+                          << imdbId << "s" << season << "e" << episode
+                          << "stream=" << (forStream ? "y" : "n");
         return;
     }
 
@@ -3290,6 +3326,7 @@ void StreamPage::startAutoDownload(const QString& imdbId, const QString& mediaTy
     // click time) so the picker's show-identity gate survives any later
     // navigation while the async source fetch is in flight.
     m_pendingAuto.showTitle      = m_detailView ? m_detailView->currentTitle() : QString();
+    m_pendingAuto.forStream      = forStream;  // THEATRE_STREAMING_RESTORE P1 — watch vs download intent
     qInfo().noquote() << "[auto-dl] startAutoDownload imdb=" << imdbId
                       << "type=" << mediaType << "s" << season << "e" << episode;
 
@@ -3431,6 +3468,31 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
 
     const tankostream::stream::StreamPickerChoice& chosen = choices.at(*picked);
 
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — "watch" intent streams the
+    // auto-picked source via the Stremio stream-server (instant play, no full
+    // download). The explicit download actions (single/season/selected/direct)
+    // route here with forStream=false and fall through to the libtorrent
+    // startDownload path below — download is kept (Hemanth 2026-06-09 hybrid).
+    if (ctx.forStream) {
+        if (!m_playerController) {
+            if (m_detailView)
+                m_detailView->setStreamSourcesError(tr("Streaming engine not ready"));
+            return;
+        }
+        m_pendingStreamTitle = ctx.showTitle;
+        if (m_pendingStreamTitle.isEmpty() && m_detailView)
+            m_pendingStreamTitle = m_detailView->currentTitle();
+        if (m_bufferOverlay)
+            m_bufferOverlay->show();
+        qInfo().noquote() << "[stream] startStream imdb=" << ctx.imdbId
+                          << "type=" << ctx.mediaType
+                          << "s" << ctx.season << "e" << ctx.episode
+                          << "title=" << m_pendingStreamTitle;
+        m_playerController->startStream(ctx.imdbId, ctx.mediaType,
+                                        ctx.season, ctx.episode, chosen.stream);
+        return;
+    }
+
     QString hash = chosen.infoHash;
     if (hash.isEmpty() && !chosen.magnetUri.isEmpty())
         hash = m_torrentClient->resolveMetadata(chosen.magnetUri);
@@ -3458,6 +3520,79 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     qInfo().noquote() << "[auto-dl] startDownload hash=" << hash.left(12)
                       << "imdb=" << ctx.imdbId << "season=" << config.season;
     m_torrentClient->startDownload(hash, config);
+}
+
+// ── THEATRE_STREAMING_RESTORE P1 (2026-06-09) — StreamPlayerController handlers ──
+// Core-first subset: open-player / overlay / error / cleanup. The full
+// session-lifecycle machinery from the original (stall detect/recover, buffered-
+// range overlay on the seek slider, playback-window deadline retargeting,
+// next-episode prefetch) is deferred to P1.x polish.
+
+void StreamPage::onBufferUpdate(const QString& statusText, double /*percent*/)
+{
+    // Surface buffering status in the sources panel for now (no dedicated
+    // overlay-text wiring yet). m_bufferOverlay is shown on stream start and
+    // hidden in onReadyToPlay / onStreamFailed / onStreamStopped.
+    if (m_detailView && !statusText.isEmpty())
+        m_detailView->setStreamSourcesError(statusText);
+}
+
+void StreamPage::onReadyToPlay(const QString& httpUrl)
+{
+    if (m_bufferOverlay)
+        m_bufferOverlay->hide();
+    if (httpUrl.isEmpty())
+        return;
+
+    auto* mainWin = window();
+    if (!mainWin) return;
+    auto* player = mainWin->findChild<VideoPlayer*>();
+    if (!player) return;
+
+    // The Stremio stream-server serves the torrent's video file over local
+    // HTTP; the sidecar opens that URL through the same openFile path as a
+    // local file. setStreamMode(true) before openFile marks this a stream
+    // session; PersistenceMode::None keeps a stream open out of the Videos
+    // store. On player close → stopStream (engine tears down the session) and
+    // restore the Videos-mode persistence defaults.
+    player->setPersistenceMode(VideoPlayer::PersistenceMode::None);
+    player->setStreamMode(true);
+
+    disconnect(player, &VideoPlayer::closeRequested, this, nullptr);
+    connect(player, &VideoPlayer::closeRequested, this, [this, player]() {
+        if (m_playerController)
+            m_playerController->stopStream();
+        player->setStreamMode(false);
+        player->setPersistenceMode(VideoPlayer::PersistenceMode::LibraryVideos);
+    });
+
+    player->openFile(httpUrl, {}, 0, 0.0, m_pendingStreamTitle);
+
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — present the floating player
+    // overlay. openFile() only starts playback state; the show/raise/focus +
+    // geometry that PRESENT the overlay live in MainWindow::openVideoPlayer-
+    // WithOptions for the local-file path (Codex review P0). Mirror that
+    // presentation here for the stream-URL path so Watch actually shows the
+    // player. (Back-button nav-enable + stream-domain progress save are P1.x.)
+    if (auto* parent = player->parentWidget())
+        player->setGeometry(parent->rect());
+    player->show();
+    player->raise();
+    player->setFocus();
+}
+
+void StreamPage::onStreamFailed(const QString& message)
+{
+    if (m_bufferOverlay)
+        m_bufferOverlay->hide();
+    if (m_detailView)
+        m_detailView->setStreamSourcesError(tr("Stream failed: %1").arg(message));
+}
+
+void StreamPage::onStreamStopped()
+{
+    if (m_bufferOverlay)
+        m_bufferOverlay->hide();
 }
 
 // triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch
@@ -4298,6 +4433,10 @@ void StreamPage::beginPlayOrDownload(const QString& imdbId,
         return;
     }
 
-    // THEATRE_DOWNLOAD_SIMPLIFY P1.T2 — silent auto-download (episode or movie).
-    startAutoDownload(imdbId, mediaType, season, episode);
+    // THEATRE_STREAMING_RESTORE P1 (2026-06-09) — the "watch" click streams the
+    // auto-picked source (forStream=true) instead of silently downloading.
+    // Explicit download actions call startAutoDownload with the default
+    // forStream=false (onSingleEpisodeDownloadRequested) or route through the
+    // bulk/direct download paths — download is kept (Hemanth hybrid).
+    startAutoDownload(imdbId, mediaType, season, episode, /*forStream=*/true);
 }
