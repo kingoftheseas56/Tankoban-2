@@ -38,7 +38,7 @@ button), `e8d19c4` P4.1 (season-pack UI right-pane).
 
 ## §3 — Phase breakdown
 
-- **P0 — Restore Stremio files + CMake re-wire → clean BUILD OK (engine present, not yet UI-wired).**
+- **P0 — Restore Stremio files + CMake re-wire → clean BUILD OK (engine present, not yet UI-wired).** ✅ **DONE 2026-06-09.** Restored stremio/{Process,Client,Engine}.{cpp,h} + StreamTypes.h + StreamTelemetryWriter.h + resources/stream_server (88M) from 64213b5^; wired into TankobanSources.cmake + TankobanRuntimeAssets.cmake (copy_directory deploy). Faithful restore, ZERO code edits. BUILD OK (agent4 lane, full reconfigure), 3 stremio .obj confirmed compiled, 88M bundle confirmed deployed next to exe. StreamPlayerController.{cpp,h} restored on disk but held for P1 (where it gets UI-wired). NetSeam migration of StreamServerClient's raw QNAM deferred to P1 (no CI gate today; cheap, do it while editing for wiring).
   - `git checkout 64213b5^ -- src/core/stream/stremio/ src/ui/pages/stream/StreamPlayerController.{cpp,h} src/core/stream/StreamTelemetryWriter.h resources/stream_server/`
   - **StreamTypes.h:** merge the stremio types back into the CURRENT file (it was further touched by `b453e84`); do NOT blind-restore.
   - **CMake:** add the restored sources to `cmake/TankobanSources.cmake` and the `resources/stream_server/*` deploy step to `cmake/TankobanRuntimeAssets.cmake` (the old 70-line CMakeLists.txt block was refactored away — hand-wire, don't revert).

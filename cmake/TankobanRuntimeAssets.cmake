@@ -34,3 +34,19 @@ add_custom_command(TARGET Tankoban POST_BUILD
         "$<TARGET_FILE_DIR:Tankoban>/imageformats/qwebp.dll"
     COMMENT "Deploying qwebp.dll Qt image-format plugin for Fandom CDN WebP covers"
 )
+
+# ── THEATRE_STREAMING_RESTORE P0 (2026-06-09): deploy the Stremio stream-server bundle ──
+# Restored from 64213b5^ (deleted in THEATRE_DOWNLOAD_ONLY P2.2, 2026-05-29). The
+# stream-server is Stremio's open-source Node.js SEA (MIT-licensed, see
+# LICENSE.stream-server.txt) bundled with its own ffmpeg 4.x shared libs. The C++
+# StreamServerProcess spawns stremio-runtime.exe + server.js from <exedir>/stream_server/.
+# DO NOT rcedit stremio-runtime.exe — it is a Node SEA; editing breaks the SEA offset
+# and segfaults (feedback_nodejs_sea_rcedit_trap). DO NOT reuse Tankoban's own
+# ffmpeg_sidecar 6.x DLLs — the bundle needs its matching 4.x set.
+add_custom_command(TARGET Tankoban POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/resources/stream_server"
+        "$<TARGET_FILE_DIR:Tankoban>/stream_server"
+    COMMENT "Deploying Stremio stream-server bundle (MIT upstream) to build output"
+    VERBATIM
+)

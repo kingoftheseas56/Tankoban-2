@@ -204,9 +204,13 @@ set(SOURCES
     # STREAM_SERVER_PIVOT Phase 3 (2026-04-25) — legacy libtorrent stream
     # engine deleted (StreamEngine, StreamHttpServer, StreamPieceWaiter,
     # StreamPrioritizer, StreamSeekClassifier, StreamSession).
-    # THEATRE_DOWNLOAD_ONLY P2.2 (2026-05-29) — the Stremio stream-server
-    # subprocess layer (StreamServerProcess/Client/Engine) deleted too;
-    # Theatre is download-only with local-file playback.
+    # THEATRE_STREAMING_RESTORE P0 (2026-06-09) — the Stremio stream-server
+    # subprocess layer (StreamServerProcess/Client/Engine), deleted in
+    # THEATRE_DOWNLOAD_ONLY P2.2 (64213b5, 2026-05-29), is restored to bring
+    # back instant-play streaming alongside download-only (Hemanth 2026-06-09).
+    src/core/stream/stremio/StreamServerProcess.cpp
+    src/core/stream/stremio/StreamServerClient.cpp
+    src/core/stream/stremio/StreamServerEngine.cpp
     src/core/stream/StreamLibrary.cpp
     src/core/stream/addon/AddonTransport.cpp
     src/core/stream/addon/AddonRegistry.cpp
@@ -409,6 +413,13 @@ set(HEADERS
     src/ui/pages/tankolibrary/BookResultsGrid.h
     src/ui/pages/tankolibrary/TransfersView.h
     src/core/stream/MetaAggregator.h
+    # THEATRE_STREAMING_RESTORE P0 (2026-06-09) — Stremio stream-server headers
+    # restored from 64213b5^ (see SOURCES note above).
+    src/core/stream/stremio/StreamServerProcess.h
+    src/core/stream/stremio/StreamServerClient.h
+    src/core/stream/stremio/StreamServerEngine.h
+    src/core/stream/StreamTypes.h
+    src/core/stream/StreamTelemetryWriter.h
     src/core/stream/StreamLibrary.h
     src/core/stream/StreamProgress.h
     src/core/stream/addon/Manifest.h
