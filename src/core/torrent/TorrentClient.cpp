@@ -26,6 +26,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QDebug>
+#include <QtConcurrent/QtConcurrent>
 
 namespace {
 
@@ -43,6 +44,12 @@ constexpr const char* kStateCancelled = "Cancelled";
 constexpr const char* kStateOrphaned = "Orphaned";
 constexpr const char* kStatePaused = "Paused";
 constexpr qint64 kPieceProgressDebounceMs = 300;
+
+struct PieceProgressUpdate {
+    int season = 0;
+    int episode = 0;
+    int pct = 0;
+};
 
 QString streamBulkItemStateToString(StreamBulkItemState state)
 {
@@ -905,6 +912,13 @@ QString TorrentClient::addMagnetForShow(const QString& magnetUri,
 
 TorrentClient::~TorrentClient()
 {
+    const QList<QFuture<void>> pieceProgressWorkers =
+        m_pieceProgressWorkers.values();
+    for (QFuture<void> future : pieceProgressWorkers)
+        future.waitForFinished();
+    m_pieceProgressWorkers.clear();
+    m_pieceProgressWorkerPending.clear();
+
     m_engine->stop();
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.5 — stamp legacy_first_clean_boot_at
     // on the first clean shutdown post-migration. Next boot's ctor sees this
@@ -2904,6 +2918,7 @@ void TorrentClient::clearPieceProgressState(const QString& infoHash)
     m_parsedPackCache.remove(hash);  // IDLE_PROGRESS_SCAN_FIX P1 — invalidate with the meta cache
     m_pieceProgressLastRunMs.remove(hash);
     m_pieceProgressPending.remove(hash);
+    m_pieceProgressWorkerPending.remove(hash);
 }
 
 void TorrentClient::emitStreamBulkProgressChangedForTorrent(const QString& infoHash)
@@ -2975,35 +2990,95 @@ void TorrentClient::processPieceFinishedProgress(const QString& infoHash)
             tankostream::stream::StreamPackParser::parsePack(
                 files, meta.imdbId, meta.season));
     }
-    const tankostream::stream::ParsedPack& pack = packIt.value();
-
-    const QJsonArray fileProgress = m_engine->torrentFileProgress(hash);
-    if (fileProgress.isEmpty())
+    const tankostream::stream::ParsedPack pack = packIt.value();
+    if (m_pieceProgressWorkers.contains(hash)) {
+        m_pieceProgressWorkerPending.insert(hash);
         return;
-
-    if (pack.type == QStringLiteral("series")) {
-        for (const auto& pf : pack.episodes) {
-            if (pf.fileIndex < 0 || pf.fileIndex >= fileProgress.size())
-                continue;
-            const qint64 downloaded =
-                fileProgress.at(pf.fileIndex).toVariant().toLongLong();
-            const int pct = pf.sizeBytes > 0
-                ? static_cast<int>((downloaded * 100LL) / pf.sizeBytes)
-                : 0;
-            m_streamDownloadIndex->updateEpisodeProgress(
-                meta.imdbId, pf.season, pf.episode, pct);
-        }
-    } else if (pack.type == QStringLiteral("movie")) {
-        const int fileIndex = pack.movieFile.fileIndex;
-        if (fileIndex < 0 || fileIndex >= fileProgress.size())
-            return;
-        const qint64 downloaded =
-            fileProgress.at(fileIndex).toVariant().toLongLong();
-        const int pct = pack.movieFile.sizeBytes > 0
-            ? static_cast<int>((downloaded * 100LL) / pack.movieFile.sizeBytes)
-            : 0;
-        m_streamDownloadIndex->updateEpisodeProgress(meta.imdbId, 0, 0, pct);
     }
+
+    TorrentEngine* engine = m_engine;
+    const QString imdbId = meta.imdbId;
+    const int season = meta.season;
+    m_pieceProgressWorkers.insert(hash, QFuture<void>{});
+    m_pieceProgressWorkers[hash] = QtConcurrent::run(
+        [this, engine, hash, imdbId, season, pack]() {
+            QList<PieceProgressUpdate> updates;
+            if (engine) {
+                const QJsonArray fileProgress =
+                    engine->torrentFileProgress(hash);
+                if (!fileProgress.isEmpty()) {
+                    if (pack.type == QStringLiteral("series")) {
+                        for (const auto& pf : pack.episodes) {
+                            if (pf.fileIndex < 0
+                                || pf.fileIndex >= fileProgress.size()) {
+                                continue;
+                            }
+                            const qint64 downloaded =
+                                fileProgress.at(pf.fileIndex)
+                                    .toVariant()
+                                    .toLongLong();
+                            const int pct = pf.sizeBytes > 0
+                                ? static_cast<int>((downloaded * 100LL)
+                                                   / pf.sizeBytes)
+                                : 0;
+                            updates.append({pf.season, pf.episode, pct});
+                        }
+                    } else if (pack.type == QStringLiteral("movie")) {
+                        const int fileIndex = pack.movieFile.fileIndex;
+                        if (fileIndex >= 0 && fileIndex < fileProgress.size()) {
+                            const qint64 downloaded =
+                                fileProgress.at(fileIndex)
+                                    .toVariant()
+                                    .toLongLong();
+                            const int pct = pack.movieFile.sizeBytes > 0
+                                ? static_cast<int>(
+                                      (downloaded * 100LL)
+                                      / pack.movieFile.sizeBytes)
+                                : 0;
+                            updates.append({0, 0, pct});
+                        }
+                    }
+                }
+            }
+
+            QMetaObject::invokeMethod(
+                this,
+                [this, hash, imdbId, season, updates = std::move(updates)]() mutable {
+                    m_pieceProgressWorkers.remove(hash);
+                    const bool rerun =
+                        m_pieceProgressWorkerPending.remove(hash) > 0;
+
+                    // Stale-result guard: the worker's results are keyed to the
+                    // (imdbId, season) the pack was parsed against. If this hash
+                    // was deleted/re-added under a different identity while the
+                    // worker was in flight, drop the stale results. (Codex review
+                    // 2026-06-09 — compare season too, not just imdbId.)
+                    const PieceMeta currentMeta =
+                        m_pieceMetaCache.value(hash);
+                    const bool stillSameTankorentTorrent =
+                        !currentMeta.imdbId.isEmpty()
+                        && currentMeta.imdbId == imdbId
+                        && currentMeta.season == season
+                        && currentMeta.streamGroupId.isEmpty();
+
+                    if (m_streamDownloadIndex && stillSameTankorentTorrent) {
+                        for (const PieceProgressUpdate& update : updates) {
+                            m_streamDownloadIndex->updateEpisodeProgress(
+                                imdbId,
+                                update.season,
+                                update.episode,
+                                update.pct);
+                        }
+                    }
+
+                    if (rerun && m_engine && stillSameTankorentTorrent) {
+                        processPieceFinishedProgress(hash);
+                        m_pieceProgressLastRunMs.insert(
+                            hash, QDateTime::currentMSecsSinceEpoch());
+                    }
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void TorrentClient::flushPieceFinishedProgress(const QString& infoHash)

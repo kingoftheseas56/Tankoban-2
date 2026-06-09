@@ -4,6 +4,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QFuture>
 #include <QList>
 #include <QMap>
 #include <QPair>
@@ -481,6 +482,8 @@ private:
     QHash<QString, tankostream::stream::ParsedPack> m_parsedPackCache;
     QHash<QString, qint64> m_pieceProgressLastRunMs;
     QSet<QString> m_pieceProgressPending;
+    QHash<QString, QFuture<void>> m_pieceProgressWorkers;
+    QSet<QString> m_pieceProgressWorkerPending;
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 1 (2026-05-20) — SQLite-backed
     // durable store that will replace the legacy m_records / m_streamBulkGroups

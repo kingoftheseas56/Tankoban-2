@@ -1,0 +1,15 @@
+**Review Result**
+
+No blocking findings. I would approve the P2 threading change.
+
+Answers to A-E:
+
+- A: Looks safe. `torrentFileProgress()` takes `m_mutex` before touching `m_records` or the handle, and AlertWorker `m_records` mutations I checked are also mutex-guarded.
+- B: Looks safe. The worker captures `this`, but only uses it to post a queued callback. `~TorrentClient()` waits for all tracked futures before stopping/destroying `m_engine`, and pending events for the QObject will be dropped during destruction.
+- C: Coalescing is bounded. While a worker is active, more ticks collapse into one pending rerun. Continuous piece bursts can keep work active, but not as an unbounded spawn loop.
+- D: Confirmed. The worker body only uses captured values and `engine->torrentFileProgress(hash)`; `m_*` access happens in the queued GUI-thread lambda.
+- E: No race seen. `m_pieceProgressWorkers.insert()` and reassignment are GUI-thread only.
+
+One low-priority hardening note: the stale-result guard compares `imdbId` but not `season` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:3050>). Since `PieceMeta` includes `season`, comparing captured season too would make the identity check fully match the parsed-pack input. I do not see this as a blocker unless same hash can be deleted/re-added under the same IMDb with a different season while a worker is in flight.
+
+Verification: `build_check.bat` returned `BUILD OK` with exit code 0. It also printed two `The system cannot find the drive specified.` lines after the build result, but did not fail.
