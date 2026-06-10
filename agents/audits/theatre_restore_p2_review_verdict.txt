@@ -1,0 +1,11 @@
+Reviewed `agents/audits/theatre_restore_p2_review_full.md` against the current working tree.
+
+**Findings**
+
+P1: New source-card Play styling violates the repo’s gray/black/white UI rule. [StreamSourceCard.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamSourceCard.cpp:54>) adds blue `rgba(96,165,250,...)` and `#dbeafe`. The button labels at [StreamSourceCard.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamSourceCard.cpp:231>) also use text glyphs instead of the repo’s SVG-icon convention. This should be changed before merge.
+
+P2: Source retry after stream failure looks broken. `onSourceActivated()` consumes the pending context at [StreamPage.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/StreamPage.cpp:4309>), then `onBufferUpdate()` / `onStreamFailed()` route status through `setStreamSourcesError()` at [StreamPage.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/StreamPage.cpp:3534>) and [StreamPage.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/StreamPage.cpp:3586>). That clears source cards via [StreamDetailView.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamDetailView.cpp:832>) and [StreamSourceList.cpp](</C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamSourceList.cpp:182>). After a failed source, the user likely cannot pick another source without re-clicking the episode and refetching.
+
+No static blocker found for P3 Tankorent tab restoration; the drawer item, active-state styling, page creation, and `tankorent` nav id are already wired.
+
+I did not run a build or smoke test; this was a static review of the packet and referenced files.

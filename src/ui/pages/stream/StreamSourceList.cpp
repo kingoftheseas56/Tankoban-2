@@ -156,6 +156,25 @@ void StreamSourceList::showStatus(const QString& message, bool emphasizeError)
     m_scroll->setVisible(message.isEmpty());
 }
 
+void StreamSourceList::showPlaybackStatus(const QString& message, bool isError)
+{
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — like showStatus but it does
+    // NOT hide the cards scroll, so a buffering/stream-failed notice appears
+    // below the source cards and the user can still pick another source. setError
+    // (clearCards + showStatus→hide scroll) was wrong for the playback path.
+    if (message.isEmpty()) {
+        if (m_scroll && m_scroll->isVisible())
+            m_statusLabel->setVisible(false);
+        return;
+    }
+    m_statusLabel->setStyleSheet(isError
+        ? QStringLiteral("color: #f3a6a6; font-size: 12px;")
+        : QStringLiteral("color: #9ca3af; font-size: 12px;"));
+    m_statusLabel->setText(message);
+    m_statusLabel->setVisible(true);
+    // Intentionally leave m_scroll visibility untouched — cards stay.
+}
+
 void StreamSourceList::setPlaceholder(const QString& message)
 {
     clearCards();

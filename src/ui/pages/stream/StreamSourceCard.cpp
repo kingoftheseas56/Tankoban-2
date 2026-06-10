@@ -5,12 +5,14 @@
 #include <QEnterEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QResizeEvent>
 #include <QSizePolicy>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace tankostream::stream {
@@ -48,7 +50,18 @@ QString buildCardStyleSheet(bool hovered, bool selected)
         "#StreamSourceCardBadgeLabel { background: rgba(255,255,255,0.08);"
         " border-radius: 3px; color: #d1d5db;"
         " font-size: 10px; font-weight: 600; padding: 1px 5px; }"
-        "#StreamSourceCardAddonFooter { color: #6b7280; font-size: 11px; }");
+        "#StreamSourceCardAddonFooter { color: #6b7280; font-size: 11px; }"
+        // THEATRE_STREAMING_RESTORE P2 — per-source Play / Download buttons.
+        // Gray/black/white palette only (repo UI rule, Codex review 2026-06-10):
+        // Play is the brighter (primary) white-alpha; Download is the muted one.
+        "#StreamSourceCardPlayBtn { background: rgba(255,255,255,0.14);"
+        " border: 1px solid rgba(255,255,255,0.22); border-radius: 6px;"
+        " color: #f3f4f6; font-size: 11px; font-weight: 600; padding: 4px 12px; }"
+        "#StreamSourceCardPlayBtn:hover { background: rgba(255,255,255,0.22); }"
+        "#StreamSourceCardDownloadBtn { background: rgba(255,255,255,0.05);"
+        " border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;"
+        " color: #cbd1d9; font-size: 11px; font-weight: 600; padding: 4px 12px; }"
+        "#StreamSourceCardDownloadBtn:hover { background: rgba(255,255,255,0.11); }");
 
     if (selected) {
         return base + QStringLiteral(
@@ -205,6 +218,41 @@ void StreamSourceCard::buildUI()
     }
 
     root->addLayout(textCol, 1);
+
+    // ── Action column: explicit Play (stream) + Download buttons ──────────────
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — Hemanth chose pick-first with
+    // "both a Play (stream) and a Download action" visible per source. Play emits
+    // the existing `clicked` signal (StreamPage routes it to the Stremio stream
+    // engine); Download emits the existing `directDownloadRequested` (libtorrent).
+    // Whole-card left-click also still emits `clicked` (Play) as a convenience.
+    auto* actionCol = new QVBoxLayout();
+    actionCol->setContentsMargins(0, 0, 0, 0);
+    actionCol->setSpacing(6);
+
+    auto* playBtn = new QToolButton(this);
+    playBtn->setObjectName(QStringLiteral("StreamSourceCardPlayBtn"));
+    playBtn->setText(tr("Play"));
+    playBtn->setIcon(QIcon(QStringLiteral(":/icons/play-circle.svg")));
+    playBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    playBtn->setCursor(Qt::PointingHandCursor);
+    playBtn->setToolTip(tr("Stream this source"));
+    connect(playBtn, &QToolButton::clicked, this,
+            [this]() { emit clicked(m_choice); });
+
+    auto* downloadBtn = new QToolButton(this);
+    downloadBtn->setObjectName(QStringLiteral("StreamSourceCardDownloadBtn"));
+    downloadBtn->setText(tr("Download"));
+    downloadBtn->setIcon(QIcon(QStringLiteral(":/icons/download.svg")));
+    downloadBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    downloadBtn->setCursor(Qt::PointingHandCursor);
+    downloadBtn->setToolTip(tr("Download this source for offline"));
+    connect(downloadBtn, &QToolButton::clicked, this,
+            [this]() { emit directDownloadRequested(m_choice); });
+
+    actionCol->addWidget(playBtn);
+    actionCol->addWidget(downloadBtn);
+    actionCol->addStretch();
+    root->addLayout(actionCol, 0);
 }
 
 void StreamSourceCard::reelideTitle()

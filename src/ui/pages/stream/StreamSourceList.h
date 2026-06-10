@@ -35,6 +35,11 @@ public:
                     const QString&                   savedChoiceKey = {});
     void setEmpty();
     void setError(const QString& message);
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — non-destructive status for
+    // playback (buffering / stream-failed) shown BELOW the cards without clearing
+    // them, so a pick-first user can choose another source after a failure.
+    // (setError clears the cards + hides the scroll; this does neither.)
+    void showPlaybackStatus(const QString& message, bool isError);
 
     // Phase 2 Batch 2.4 — auto-launch toast. StreamPage arms it when a saved
     // source matches the incoming stream list AND the timestamp gate passes;

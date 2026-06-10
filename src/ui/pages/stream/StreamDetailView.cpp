@@ -746,19 +746,27 @@ void StreamDetailView::buildUI()
     // null-guarded panel wiring cleanly no-ops. The Tankorent SEARCH engine
     // (m_unifiedPackSearchEngine / TankorentSearchService / TheatreDownloadPanel)
     // is untouched.
-    contentRow->addLayout(leftCol, 1);
+    contentRow->addLayout(leftCol, 3);
 
-    // m_sourcesHeader is retained (constructed off-layout, never shown) so the
-    // member stays non-null for devSnapshot() and the header decl is harmless.
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — restore the visible Sources
+    // pane (removed in THEATRE_DOWNLOAD_SIMPLIFY P4.1). Hemanth chose pick-first:
+    // clicking an episode loads + SHOWS this list (no auto-play), and each source
+    // card carries a Play (stream) + Download button. The list's four signals are
+    // wired exactly as before. (The old m_rightPaneStack QStackedLayout host for
+    // the season-pack TheatreDownloadPanel slide-in stays null — rightPaneStack()
+    // returns null and StreamPage's panel wiring null-guards cleanly; restoring
+    // that slide-in is a separate THEATRE_DOWNLOAD_OVERHAUL concern, out of scope.)
+    auto* rightCol = new QVBoxLayout();
+    rightCol->setContentsMargins(0, 0, 0, 0);
+    rightCol->setSpacing(6);
+
     m_sourcesHeader = new QLabel(tr("Sources"), this);
-    m_sourcesHeader->hide();
+    m_sourcesHeader->setObjectName(QStringLiteral("DetailSourcesHeader"));
+    m_sourcesHeader->setStyleSheet(
+        "color: #e5e7eb; font-size: 13px; font-weight: 600; padding: 0 2px;");
+    rightCol->addWidget(m_sourcesHeader);
 
-    // m_sourcesList is retained (constructed off-layout, never shown) so the
-    // setStreamSources*/placeholder/toast passthroughs and the four source
-    // signal re-emits stay wired without a visible pane. Parented to this (not
-    // m_sourcesPanel, which is now null) so it is owned + destroyed with the view.
     m_sourcesList = new tankostream::stream::StreamSourceList(this);
-    m_sourcesList->hide();
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::sourceActivated,
             this, &StreamDetailView::sourceActivated);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::addToTankorentRequested,
@@ -767,6 +775,9 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::directDownloadRequested);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::autoLaunchCancelRequested,
             this, &StreamDetailView::autoLaunchCancelRequested);
+    rightCol->addWidget(m_sourcesList, 1);
+
+    contentRow->addLayout(rightCol, 2);
 
     root->addLayout(contentRow, 1);
 }
@@ -821,6 +832,16 @@ void StreamDetailView::setStreamSourcesError(const QString& message)
     if (m_sourcesList) m_sourcesList->setError(message);
     if (m_movieDownloadBtn) m_movieDownloadBtn->setEnabled(false);
     refreshMovieDownloadState();
+}
+
+void StreamDetailView::setStreamSourcesPlaybackStatus(const QString& message,
+                                                      bool isError)
+{
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — playback (buffering / stream-
+    // failed) status that does NOT clear the source cards, so a pick-first user
+    // can choose another source after a failure. Unlike setStreamSourcesError,
+    // this never calls setError (which clears the list + hides the scroll).
+    if (m_sourcesList) m_sourcesList->showPlaybackStatus(message, isError);
 }
 
 void StreamDetailView::setStreamSourcesPlaceholder(const QString& message)

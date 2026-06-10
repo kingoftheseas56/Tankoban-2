@@ -74,6 +74,9 @@ public:
     void setStreamSources(const QList<tankostream::stream::StreamPickerChoice>& choices,
                           const QString&                                        savedChoiceKey = {});
     void setStreamSourcesError(const QString& message);
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — non-destructive playback status
+    // (buffering / stream-failed) that keeps the source cards visible for re-pick.
+    void setStreamSourcesPlaybackStatus(const QString& message, bool isError);
     void setStreamSourcesPlaceholder(const QString& message);
 
     // Phase 2 Batch 2.4 — passthroughs to the embedded StreamSourceList's

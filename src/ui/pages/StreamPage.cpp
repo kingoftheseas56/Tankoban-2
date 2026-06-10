@@ -2266,19 +2266,16 @@ void StreamPage::showDetail(const tankostream::addon::MetaItemPreview& preview,
 void StreamPage::onPlayRequested(const QString& imdbId, const QString& mediaType,
                                   int season, int episode)
 {
-    // THEATRE_DOWNLOAD_SIMPLIFY (2026-05-29): a SERIES episode click is a
-    // download/play intent → funnel to download-or-play-local (owned → play
-    // from disk; otherwise silent auto-pick best 1080p + download). No source
-    // picker. MOVIES fall through to the existing source-load below: movie
-    // detail-open auto-fires playRequested(movie,0,0), so auto-downloading
-    // here would wrongly download on mere open — the movie's own Download
-    // button handles movie downloads.
-    if (mediaType != QLatin1String("movie")) {
-        qInfo().noquote() << "[auto-dl] series click -> beginPlayOrDownload imdb="
-                          << imdbId << "s" << season << "e" << episode;
-        beginPlayOrDownload(imdbId, mediaType, season, episode, nullptr);
-        return;
-    }
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — pick-first sources (Hemanth's
+    // call). A series episode click (and the movie detail-open auto-fire of
+    // playRequested(movie,0,0)) BOTH fall through to the source-load path below:
+    // fetch sources, populate the now-visible Sources pane, and wait. Nothing
+    // auto-plays or auto-downloads. The user then picks a source's Play (→ stream
+    // via onSourceActivated) or Download (→ onDirectDownloadRequested). This
+    // replaces the download-only "series click = silent auto-pick + download".
+    // Already-downloaded episodes never reach here: StreamDetailView fires
+    // playLocalFileFromStreamRequested AHEAD of playRequested for on-disk files,
+    // so owned episodes still play locally.
 
     // Build episode key for choice persistence
     QString epKey = (mediaType == "movie")
@@ -3530,11 +3527,12 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
 
 void StreamPage::onBufferUpdate(const QString& statusText, double /*percent*/)
 {
-    // Surface buffering status in the sources panel for now (no dedicated
-    // overlay-text wiring yet). m_bufferOverlay is shown on stream start and
-    // hidden in onReadyToPlay / onStreamFailed / onStreamStopped.
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — buffering status shown BELOW the
+    // source cards (non-destructive) so the list stays intact for re-pick. Was
+    // setStreamSourcesError, which CLEARED the cards (Codex review). m_bufferOverlay
+    // is shown on stream start and hidden in onReadyToPlay / onStreamFailed / Stopped.
     if (m_detailView && !statusText.isEmpty())
-        m_detailView->setStreamSourcesError(statusText);
+        m_detailView->setStreamSourcesPlaybackStatus(statusText, /*isError=*/false);
 }
 
 void StreamPage::onReadyToPlay(const QString& httpUrl)
@@ -3585,14 +3583,22 @@ void StreamPage::onStreamFailed(const QString& message)
 {
     if (m_bufferOverlay)
         m_bufferOverlay->hide();
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — show the failure BELOW the source
+    // cards (non-destructive) so the user can pick another source (pick-first
+    // retry). Was setStreamSourcesError, which cleared the cards (Codex review).
     if (m_detailView)
-        m_detailView->setStreamSourcesError(tr("Stream failed: %1").arg(message));
+        m_detailView->setStreamSourcesPlaybackStatus(
+            tr("Stream failed: %1 — pick another source.").arg(message),
+            /*isError=*/true);
 }
 
 void StreamPage::onStreamStopped()
 {
     if (m_bufferOverlay)
         m_bufferOverlay->hide();
+    // Clear any lingering buffering/failure notice; the cards remain for re-pick.
+    if (m_detailView)
+        m_detailView->setStreamSourcesPlaybackStatus(QString(), /*isError=*/false);
 }
 
 // triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch
@@ -4309,7 +4315,12 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     }
 
     const PendingPlay ctx = m_session.pending;
-    m_session.pending.valid = false;
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — pick-first retry: do NOT consume
+    // m_session.pending here. The same episode context is valid for EVERY source
+    // in the list, so if a streamed source fails the user must be able to click
+    // another card. Pending stays valid until the user navigates away (beginSession
+    // / resetSession on the next episode or detail re-entry clears it). The
+    // currentLoadToken gate still discards stale streamsReady from a superseded load.
 
     // STREAM_NAV_BACK_STACK 2026-05-07 â€” Hemanth follow-up: closing the
     // player from a Season 2 episode was restoring the Detail view back
@@ -4389,8 +4400,24 @@ void StreamPage::onSourceActivated(const tankostream::stream::StreamPickerChoice
     // prior code streamed choice.stream through StreamPlayerController + showed
     // the buffer overlay; both are gone. Funnel through beginPlayOrDownload,
     // passing the picked choice so the not-owned path honors the user's pick.
-    beginPlayOrDownload(ctx.imdbId, ctx.mediaType, ctx.season, ctx.episode,
-                        &choice);
+    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) supersedes the P1.1 note above:
+    // picking a source's Play button STREAMS it via the restored Stremio engine
+    // (the per-source Download button routes to onDirectDownloadRequested). This
+    // restores the pre-download-only stream-the-picked-source behavior. Owned
+    // episodes don't reach here (they play locally via the detail view's
+    // playLocalFileFromStreamRequested fired ahead of playRequested).
+    if (!m_playerController) {
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("Streaming engine not ready"));
+        return;
+    }
+    m_pendingStreamTitle = m_detailView ? m_detailView->currentTitle() : QString();
+    if (m_bufferOverlay) m_bufferOverlay->show();
+    qInfo().noquote() << "[stream] onSourceActivated startStream imdb=" << ctx.imdbId
+                      << "s" << ctx.season << "e" << ctx.episode
+                      << "kind=" << choice.sourceKind;
+    m_playerController->startStream(ctx.imdbId, ctx.mediaType, ctx.season,
+                                    ctx.episode, choice.stream);
 }
 
 // THEATRE_DOWNLOAD_ONLY P1.1 (2026-05-29) â€” single reroute funnel for the
