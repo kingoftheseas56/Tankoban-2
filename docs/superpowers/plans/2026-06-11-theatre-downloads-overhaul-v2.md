@@ -736,7 +736,7 @@ connect(m_detailPane, &DownloadDetailPane::retryRequested, this, [this](const au
 });
 ```
 
-Add `void retryEpisodeRequested(const QString& imdbId, int season, int episode);` to the page's signals. **Note:** when the queue's Running-promotion fires for a previously-gated item, the staged-config replay in TorrentClient starts the actual torrent — resume/bump need no extra engine calls for queued items.
+Add `void retryEpisodeRequested(const QString& imdbId, int season, int episode);` to the page's signals. **Note (corrected by T6 review C1):** when the queue's Running-promotion fires for a previously-gated item, the staged-config replay in TorrentClient starts the actual torrent — true for never-started staged items only. A torrent paused IN THE ENGINE whose head was demoted to Queued by a cap-gated resume (`TransferQueue::resumeCurrent` nullopt path) misses both staged maps on promotion; the Running-replay lambda needs a fall-through that calls `resumeTorrent(transferId)` when the engine already has the torrent, or the engine stays paused forever.
 
 - [ ] **Step 2: Retry routing.** MainWindow (next to the existing `playLocalFileRequested` connect for the downloads page, ~line 894): `connect(m_streamDownloadsPage, &StreamDownloadsPage::retryEpisodeRequested, this, [this](const QString& imdb, int s, int e) { if (m_streamPage) m_streamPage->retryEpisodeDownload(imdb, s, e); });` — find the actual member name via `grep -n "StreamDownloadsPage" src/ui/MainWindow.cpp`. StreamPage gets the public method:
 

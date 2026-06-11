@@ -925,7 +925,8 @@ void MainWindow::buildPageStack()
     connect(m_streamDownloadsPage, &StreamDownloadsPage::playLocalFileRequested,
             this, &MainWindow::onPlayLocalFileFromStreamRequested);
     // DOWNLOADS_OVERHAUL_V2 T6 — retry a failed download: the Downloads page
-    // already cleaned up the failed transfer; route the re-pick into StreamPage.
+    // cleans up the failed transfer (engine + index) before emitting; route
+    // the re-pick into StreamPage.
     connect(m_streamDownloadsPage, &StreamDownloadsPage::retryEpisodeRequested,
             this, [this](const QString& imdbId, int season, int episode) {
                 if (m_streamPage)

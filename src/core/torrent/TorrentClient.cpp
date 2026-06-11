@@ -854,6 +854,19 @@ void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
                 qWarning() << "TransferQueue: .torrent path defer not supported in P1"
                            << "(transferId=" << transferId.left(16) << ")";
             }
+            return;
+        }
+
+        // Cap-gated resume: the head was demoted to Queued with the engine left
+        // paused; promotion must resume the engine (T6 review C1). Both staged
+        // maps miss because this torrent already started once — only the engine
+        // still holds it (paused). transferId == infoHash by queue convention.
+        // resumeTorrent is idempotent for a non-paused running torrent:
+        // TorrentEngine::resumeTorrent no-ops on a missing/invalid handle, and
+        // handle.resume() on an already-running libtorrent torrent is a no-op
+        // (the flag churn is harmless).
+        if (m_engine->hasTorrent(transferId)) {
+            resumeTorrent(transferId);
         }
     });
 }

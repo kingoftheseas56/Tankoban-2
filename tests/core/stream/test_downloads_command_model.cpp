@@ -162,6 +162,24 @@ TEST(DownloadsCommandModelTest, PendingWithNoLaneIsQueued) {
     EXPECT_EQ(rows[0].section, DownloadSection::Queued);
 }
 
+// Review C2/I1 — rows carry the index entry's sourceGroupId so the page can
+// evict ghost rows and derive an engine hash when the lane item is gone.
+// infoHashFromGroup honors the "tankorent:<lowercase-infohash>" convention
+// stamped at the TorrentClient registration sites.
+TEST(DownloadsCommandModelTest, RowCarriesSourceGroupIdAndHashRoundTrips) {
+    DownloadsSnapshot snap;
+    auto e = entry("tt1", 1, 12, StreamDownloadIndex::Entry::Failed, 30);
+    e.sourceGroupId = "tankorent:abcdef0123456789abcdef0123456789abcdef01";
+    snap.indexEntries = { e };
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].sourceGroupId, e.sourceGroupId);
+    EXPECT_EQ(infoHashFromGroup(rows[0].sourceGroupId),
+              "abcdef0123456789abcdef0123456789abcdef01");
+    EXPECT_TRUE(infoHashFromGroup(QString()).isEmpty());
+    EXPECT_TRUE(infoHashFromGroup(QStringLiteral("getcomics:xyz")).isEmpty());
+}
+
 TEST(DownloadsCommandModelTest, SectionOrderThenShowSeasonEpisode) {
     DownloadsSnapshot snap;
     snap.indexEntries = {

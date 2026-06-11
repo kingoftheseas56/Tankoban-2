@@ -219,10 +219,22 @@ void StreamDownloadsPage::buildUi()
                     qInfo() << "[downloads] pause intent dropped (stale row)";
                     return;
                 }
-                if (!fresh->infoHash.isEmpty())
-                    m_client->pauseTorrent(fresh->infoHash);
-                if (auto* q = m_client->transferQueue())
-                    q->pauseCurrent(QStringLiteral("imdb:") + fresh->imdbId);
+                // T6 review I3: orphan-Active rows (no lane item, so empty
+                // infoHash) must not pause an unrelated lane head of the same
+                // show — skip pauseCurrent entirely, and when we DO have a
+                // hash, only pause the lane when its head IS this transfer.
+                if (fresh->infoHash.isEmpty()) {
+                    qInfo() << "[downloads] pause intent dropped (orphan row, no lane transfer)";
+                    return;
+                }
+                m_client->pauseTorrent(fresh->infoHash);
+                if (auto* q = m_client->transferQueue()) {
+                    const QString showId = QStringLiteral("imdb:") + fresh->imdbId;
+                    const auto lane = q->laneFor(showId);
+                    if (lane && !lane->items.empty()
+                        && lane->items.front().transferId == fresh->infoHash)
+                        q->pauseCurrent(showId);
+                }
             });
 
     connect(m_detailPane, &DownloadDetailPane::resumeRequested, this,
@@ -255,13 +267,25 @@ void StreamDownloadsPage::buildUi()
                     qInfo() << "[downloads] cancel intent dropped (stale/completed row)";
                     return;
                 }
-                if (auto* q = m_client->transferQueue(); q && !fresh->infoHash.isEmpty())
-                    q->cancel(fresh->infoHash);
+                // T6 review C2: rows with no lane item (orphan resume, index
+                // Failed, etc.) carry an empty infoHash — derive the engine
+                // hash from the index group ("tankorent:<infohash>") so cancel
+                // still reaches queue + engine.
+                const QString hash = !fresh->infoHash.isEmpty()
+                    ? fresh->infoHash
+                    : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
+                if (auto* q = m_client->transferQueue(); q && !hash.isEmpty())
+                    q->cancel(hash);
                 // deleteFiles=true: cancel removes partial staging files.
                 // Completed rows never reach here (guard above), so finished
                 // media is safe.
-                if (!fresh->infoHash.isEmpty())
-                    m_client->deleteTorrent(fresh->infoHash, /*deleteFiles=*/true);
+                if (!hash.isEmpty())
+                    m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                // ALWAYS evict the index entries, even when no engine transfer
+                // could be resolved — otherwise the cancelled episode lingers
+                // as a ghost row forever (T6 review C2). Files are untouched.
+                if (m_index && !fresh->sourceGroupId.isEmpty())
+                    m_index->evictBySourceGroup(fresh->sourceGroupId);
             });
 
     connect(m_detailPane, &DownloadDetailPane::bumpRequested, this,
@@ -300,12 +324,23 @@ void StreamDownloadsPage::buildUi()
                     return;
                 }
                 // Clean up the failed transfer first: remove from queue + engine
-                // (delete partial files), THEN re-run the source pick via signal.
-                if (m_client && !fresh->infoHash.isEmpty()) {
-                    if (auto* q = m_client->transferQueue())
-                        q->cancel(fresh->infoHash);
-                    m_client->deleteTorrent(fresh->infoHash, /*deleteFiles=*/true);
+                // (delete partial files) and evict the old Failed index entries
+                // — a retried episode's stale Failed row must vanish; the new
+                // dispatch re-registers Pending (T6 review I1). Failed rows
+                // usually have no lane item (queues erase on terminal states),
+                // so derive the engine hash from the index group when needed.
+                if (m_client) {
+                    const QString hash = !fresh->infoHash.isEmpty()
+                        ? fresh->infoHash
+                        : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
+                    if (!hash.isEmpty()) {
+                        if (auto* q = m_client->transferQueue())
+                            q->cancel(hash);
+                        m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                    }
                 }
+                if (m_index && !fresh->sourceGroupId.isEmpty())
+                    m_index->evictBySourceGroup(fresh->sourceGroupId);
                 emit retryEpisodeRequested(fresh->imdbId, fresh->season, fresh->episode);
             });
 
@@ -616,6 +651,18 @@ StreamDownloadsPage::freshRowFor(const tankostream::stream::DownloadRow& stale) 
         snap.lanes = m_client->transferQueue()->lanesSnapshot();
     const auto rows = tankostream::stream::buildDownloadRows(
         snap, QDateTime::currentMSecsSinceEpoch(), /*maxCompletedAgeMs=*/0);
+    // Two-pass match (T6 review I2): duplicate index entries for one episode
+    // are documented reality (e.g. an old Failed entry alongside a freshly
+    // re-registered Pending one). Prefer the row in the section the user acted
+    // on; only if none exists fall back to the first (imdbId,season,episode)
+    // match.
+    for (const auto& r : rows) {
+        if (r.imdbId == stale.imdbId
+            && r.season  == stale.season
+            && r.episode == stale.episode
+            && r.section == stale.section)
+            return r;
+    }
     for (const auto& r : rows) {
         if (r.imdbId == stale.imdbId
             && r.season  == stale.season

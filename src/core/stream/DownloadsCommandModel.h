@@ -20,12 +20,26 @@ struct DownloadRow {
     int     season = 0;
     int     episode = 0;
     QString infoHash;         // carrying transfer (empty when none, e.g. old history)
+    QString sourceGroupId;    // index entry's group ("tankorent:<infohash>"; may be empty)
     QString canonicalPath;    // for Play on Completed rows
     DownloadSection section = DownloadSection::Completed;
     int     pct = 0;
     bool    paused = false;
     qint64  addedAt = 0;      // Completed auto-trim key
 };
+
+// Group convention is "tankorent:<lowercase-infohash>", stamped at the
+// TorrentClient registration sites (registerEpisode / registerPendingEpisode /
+// registerPendingMovie / markFailedByGroup callers). Returns the infohash for
+// tankorent groups; empty for anything else (e.g. migration-rescued entries).
+// Lets the Downloads page derive an engine hash for orphan rows whose lane
+// item is gone (T6 review C2/I1).
+inline QString infoHashFromGroup(const QString& sourceGroupId)
+{
+    return sourceGroupId.startsWith(QStringLiteral("tankorent:"))
+        ? sourceGroupId.mid(10)
+        : QString();
+}
 
 struct DownloadsSnapshot {
     QList<StreamDownloadIndex::Entry>                 indexEntries;  // StreamDownloadIndex::all()

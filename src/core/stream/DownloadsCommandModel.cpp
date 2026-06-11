@@ -33,6 +33,7 @@ QList<DownloadRow> buildDownloadRows(const DownloadsSnapshot& snap,
         r.season = e.season; r.episode = e.episode;
         r.canonicalPath = e.canonicalPath; r.pct = e.progressPct;
         r.addedAt = e.addedAt;
+        r.sourceGroupId = e.sourceGroupId;
 
         const auto* li = laneItemFor(snap.lanes, e.imdbId, e.season, e.episode);
         if (li) r.infoHash = li->transferId;

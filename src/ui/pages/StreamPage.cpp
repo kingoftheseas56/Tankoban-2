@@ -3139,9 +3139,9 @@ void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
 }
 
 // DOWNLOADS_OVERHAUL_V2 T6 — re-run the auto source pick for a failed episode.
-// The failed transfer was already cancelled and its partial files deleted by
-// StreamDownloadsPage before emitting retryEpisodeRequested. We just need to
-// restart the source-pick pipeline for the correct media type.
+// The Downloads page cleans up the failed transfer (engine + index) before
+// emitting retryEpisodeRequested. We just need to restart the source-pick
+// pipeline for the correct media type.
 void StreamPage::retryEpisodeDownload(const QString& imdbId, int season, int episode)
 {
     // season==0 && episode==0 means a movie; anything else is a series episode.
