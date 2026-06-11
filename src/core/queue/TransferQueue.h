@@ -18,12 +18,16 @@ public:
     explicit TransferQueue(QObject* parent = nullptr);
 
     // Adds an item to its show's lane. Returns the position in the lane
-    // (0 = will run immediately if lane was empty).
+    // (0 = lane head). Under a max-active cap the head may still be Queued —
+    // consumers must check the item state (or react to itemStateChanged(Running)),
+    // never assume position 0 means Running.
     int enqueue(const TransferItem& item);
 
     // Marks the currently-running item in showId's lane as finished
-    // (Completed or Failed). Returns the next item to start (lane index 0
-    // after advance), or std::nullopt if the lane is now empty.
+    // (Completed or Failed). Returns the lane's new head if it was promoted to
+    // Running by the freed slot; the freed slot may instead promote an older
+    // waiter in ANOTHER lane (global FIFO), in which case nullopt-or-still-Queued
+    // semantics apply. Returns std::nullopt if the lane is now empty.
     std::optional<TransferItem> finishCurrent(const QString& showId, TransferState finalState);
 
     // Pauses the currently-running item in showId's lane. Lane does NOT
@@ -52,7 +56,9 @@ public:
 
     // Global cap on simultaneously-Running items across ALL lanes.
     // 0 = unlimited (default; preserves pre-cap behavior). Raising the cap
-    // immediately promotes eligible waiters, oldest enqueue first.
+    // immediately promotes eligible waiters, oldest enqueue first. Lowering
+    // the cap below the current running count never demotes in-flight items —
+    // it only gates future promotions.
     void setMaxActive(int n);
     int  maxActive() const { return m_maxActive; }
     int  runningCount() const;

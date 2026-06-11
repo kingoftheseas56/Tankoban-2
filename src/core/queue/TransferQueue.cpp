@@ -60,6 +60,7 @@ std::optional<TransferItem> TransferQueue::resumeCurrent(const QString& showId) 
     if (!canPromote()) {
         // No slot available — leave as Queued head; will be promoted when a slot frees.
         it->items.front().state = TransferState::Queued;
+        emit itemStateChanged(it->items.front().transferId, TransferState::Queued);
         emit laneChanged(showId);
         return std::nullopt;
     }
@@ -163,8 +164,10 @@ void TransferQueue::promoteOldestEligible()
         }
         if (!best) return;
         best->items.front().state = TransferState::Running;
-        emit itemStateChanged(best->items.front().transferId, TransferState::Running);
-        emit laneChanged(best->showId);
+        const QString promotedId = best->items.front().transferId;
+        const QString promotedShow = best->showId;
+        emit itemStateChanged(promotedId, TransferState::Running);
+        emit laneChanged(promotedShow);
     }
 }
 

@@ -243,3 +243,18 @@ TEST(TransferQueueCapTest, CancelRunningFreesSlot) {
     q.cancel("t1");
     EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
 }
+
+TEST(TransferQueueCapTest, GatedResumeEmitsQueuedItemState) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.pauseCurrent("imdb:tt0001");
+    QList<QPair<QString, TransferState>> seen;
+    QObject::connect(&q, &TransferQueue::itemStateChanged,
+                     [&seen](const QString& id, TransferState s) { seen.append({id, s}); });
+    q.resumeCurrent("imdb:tt0001");   // gated: t2 holds the slot
+    ASSERT_EQ(seen.size(), 1);
+    EXPECT_EQ(seen.first().first, QString("t1"));
+    EXPECT_EQ(seen.first().second, TransferState::Queued);
+}
