@@ -889,14 +889,20 @@ QString TorrentClient::addMagnetForShow(const QString& magnetUri,
     item.displayTitle = hash;  // Phase 5 will resolve via show-metadata cache
     if (season > 0) item.seasonNumber = season;
 
-    const int pos = m_transferQueue->enqueue(item);
-    if (pos == 0) {
-        // Lane was empty — we are the new current. Start immediately.
+    m_transferQueue->enqueue(item);
+    // Under the global cap (DOWNLOADS_OVERHAUL_V2), lane-head no longer implies
+    // Running — ask the queue whether we were actually promoted. If not, stage
+    // the args; the setTransferQueue Running handler replays when a slot frees.
+    const auto lane = m_transferQueue->laneFor(showId);
+    const bool running = lane && !lane->items.empty()
+        && lane->items.front().transferId == hash
+        && lane->items.front().state == tankoban::queue::TransferState::Running;
+    if (running) {
         return addMagnetHeadless(magnetUri, category, destinationPath);
     }
 
-    // Queued behind current. Stage the args; queue-advance handler from
-    // setTransferQueue will fire addMagnetHeadless when our turn comes.
+    // Not running (gated by cap or behind lane current). Stage the args; queue-advance
+    // handler from setTransferQueue will fire addMagnetHeadless when our turn comes.
     TransferStartArgs args;
     args.magnetOrPath = magnetUri;
     args.category = category;
@@ -3160,14 +3166,19 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
         item.displayTitle = hash;
         if (config.season > 0) item.seasonNumber = config.season;
 
-        const int pos = m_transferQueue->enqueue(item);
-        if (pos > 0) {
-            // Behind the current item — stage the config for replay.
+        m_transferQueue->enqueue(item);
+        const auto lane = m_transferQueue->laneFor(item.showId);
+        const bool running = lane && !lane->items.empty()
+            && lane->items.front().transferId == hash
+            && lane->items.front().state == tankoban::queue::TransferState::Running;
+        if (!running) {
+            // Not promoted (behind lane current OR gated by the global cap) —
+            // stage the config; the Running handler replays it.
             m_pendingStartConfigs.insert(
                 hash, QSharedPointer<AddTorrentConfig>::create(config));
             return;
         }
-        // pos == 0: we are the new lane head, fall through and run.
+        // Promoted: we are running, fall through and start.
     }
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 4.4 (2026-05-20) — the F9 fix

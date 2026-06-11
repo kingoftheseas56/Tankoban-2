@@ -172,3 +172,74 @@ TEST(TransferQueueTest, BumpCurrentIsNoop) {
     q.enqueue(makeItem("t1", "S", 1));
     EXPECT_FALSE(q.bumpToFront("t1"));
 }
+
+// ---------------------------------------------------------------------------
+// TransferQueueCapTest — global max-active cap (DOWNLOADS_OVERHAUL_V2 T1)
+// ---------------------------------------------------------------------------
+
+TEST(TransferQueueCapTest, CapGatesThirdLane) {
+    TransferQueue q;
+    q.setMaxActive(2);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.enqueue(makeItem("t3", "imdb:tt0003", 1));   // lane head, but no slot
+    EXPECT_EQ(q.runningCount(), 2);
+    EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Queued);
+}
+
+TEST(TransferQueueCapTest, SlotFreePromotesOldestWaitingHead) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));   // waits (older)
+    q.enqueue(makeItem("t3", "imdb:tt0003", 1));   // waits (newer)
+    q.finishCurrent("imdb:tt0001", TransferState::Completed);
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
+    EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Queued);
+}
+
+TEST(TransferQueueCapTest, PauseFreesSlotForWaiter) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.pauseCurrent("imdb:tt0001");                 // paused != running
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
+}
+
+TEST(TransferQueueCapTest, ResumeWithNoSlotBecomesQueuedHead) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.pauseCurrent("imdb:tt0001");                 // t2 takes the slot
+    EXPECT_FALSE(q.resumeCurrent("imdb:tt0001").has_value());
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items.front().state, TransferState::Queued);
+    q.finishCurrent("imdb:tt0002", TransferState::Completed);   // slot frees
+    EXPECT_EQ(q.laneFor("imdb:tt0001")->items.front().state, TransferState::Running);
+}
+
+TEST(TransferQueueCapTest, RaisingCapPromotesWaiters) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.setMaxActive(3);
+    EXPECT_EQ(q.runningCount(), 2);
+}
+
+TEST(TransferQueueCapTest, ZeroMeansUnlimited) {
+    TransferQueue q;   // default 0
+    for (int i = 0; i < 5; ++i)
+        q.enqueue(makeItem(QStringLiteral("t%1").arg(i), QStringLiteral("imdb:tt%1").arg(i), 1));
+    EXPECT_EQ(q.runningCount(), 5);
+}
+
+TEST(TransferQueueCapTest, CancelRunningFreesSlot) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.cancel("t1");
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
+}

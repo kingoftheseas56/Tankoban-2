@@ -50,12 +50,23 @@ public:
     QHash<QString, TransferLane> lanesSnapshot() const;
     std::optional<TransferLane> laneFor(const QString& showId) const;
 
+    // Global cap on simultaneously-Running items across ALL lanes.
+    // 0 = unlimited (default; preserves pre-cap behavior). Raising the cap
+    // immediately promotes eligible waiters, oldest enqueue first.
+    void setMaxActive(int n);
+    int  maxActive() const { return m_maxActive; }
+    int  runningCount() const;
+
 signals:
     void laneChanged(const QString& showId);
     void itemStateChanged(const QString& transferId, TransferState newState);
 
 private:
+    bool canPromote() const;        // running < cap (or unlimited)
+    void promoteOldestEligible();   // promote Queued lane-heads while slots free
     QHash<QString, TransferLane> m_lanes;
+    int m_maxActive = 0;
+    quint64 m_seqCounter = 0;
 };
 
 }  // namespace tankoban::queue

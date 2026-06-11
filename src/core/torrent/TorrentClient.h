@@ -138,6 +138,7 @@ public:
     // transfer lane queue. Non-owning; pointer must outlive TorrentClient
     // (MainWindow owns both).
     void setTransferQueue(tankoban::queue::TransferQueue* q);
+    tankoban::queue::TransferQueue* transferQueue() const { return m_transferQueue; }
 
     // TANKORENT_QUALITY_AND_QUEUE P1 T1.9 (2026-05-27) — queue-aware magnet
     // add. Routes through TransferQueue: if imdbId is non-empty and the

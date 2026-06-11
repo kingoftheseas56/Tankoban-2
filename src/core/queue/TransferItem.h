@@ -1,5 +1,6 @@
 #pragma once
 #include <QString>
+#include <QtGlobal>
 #include <optional>
 
 namespace tankoban::queue {
@@ -23,6 +24,7 @@ struct TransferItem {
     std::optional<int> episodeNumber;
     std::optional<int> seasonNumber;
     TransferState state = TransferState::Queued;
+    quint64 enqueueSeq = 0;   // stamped by TransferQueue::enqueue; global FIFO fairness
 };
 
 }  // namespace tankoban::queue

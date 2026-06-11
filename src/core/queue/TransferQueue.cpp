@@ -8,11 +8,13 @@ int TransferQueue::enqueue(const TransferItem& item) {
     auto& lane = m_lanes[item.showId];
     lane.showId = item.showId;
     TransferItem queued = item;
-    if (lane.items.empty())
+    queued.enqueueSeq = ++m_seqCounter;
+    const bool wasEmpty = lane.items.empty();
+    if (wasEmpty && canPromote())
         queued.state = TransferState::Running;
     lane.items.push_back(queued);
     const int pos = static_cast<int>(lane.items.size()) - 1;
-    if (pos == 0)
+    if (pos == 0 && queued.state == TransferState::Running)
         emit itemStateChanged(queued.transferId, TransferState::Running);
     emit laneChanged(item.showId);
     return pos;
@@ -30,12 +32,15 @@ std::optional<TransferItem> TransferQueue::finishCurrent(const QString& showId, 
     if (it->items.empty()) {
         m_lanes.erase(it);
         emit laneChanged(showId);
+        promoteOldestEligible();
         return std::nullopt;
     }
-    it->items.front().state = TransferState::Running;
-    emit itemStateChanged(it->items.front().transferId, TransferState::Running);
     emit laneChanged(showId);
-    return it->items.front();
+    promoteOldestEligible();
+    // Return the lane's new front (may or may not be Running depending on cap).
+    auto afterIt = m_lanes.find(showId);
+    if (afterIt == m_lanes.end() || afterIt->items.empty()) return std::nullopt;
+    return afterIt->items.front();
 }
 
 bool TransferQueue::pauseCurrent(const QString& showId) {
@@ -44,6 +49,7 @@ bool TransferQueue::pauseCurrent(const QString& showId) {
     it->items.front().state = TransferState::Paused;
     emit itemStateChanged(it->items.front().transferId, TransferState::Paused);
     emit laneChanged(showId);
+    promoteOldestEligible();
     return true;
 }
 
@@ -51,6 +57,12 @@ std::optional<TransferItem> TransferQueue::resumeCurrent(const QString& showId) 
     auto it = m_lanes.find(showId);
     if (it == m_lanes.end() || it->items.empty()) return std::nullopt;
     if (it->items.front().state != TransferState::Paused) return std::nullopt;
+    if (!canPromote()) {
+        // No slot available — leave as Queued head; will be promoted when a slot frees.
+        it->items.front().state = TransferState::Queued;
+        emit laneChanged(showId);
+        return std::nullopt;
+    }
     it->items.front().state = TransferState::Running;
     emit itemStateChanged(it->items.front().transferId, TransferState::Running);
     emit laneChanged(showId);
@@ -67,16 +79,18 @@ bool TransferQueue::cancel(const QString& transferId, std::optional<TransferItem
                 const QString showId = laneIt->showId;
                 items.erase(items.begin() + i);
                 emit itemStateChanged(transferId, TransferState::Cancelled);
-                if (wasCurrent && !items.empty()) {
-                    items.front().state = TransferState::Running;
-                    if (nextAfterCancel)
-                        *nextAfterCancel = items.front();
-                    emit itemStateChanged(items.front().transferId, TransferState::Running);
-                }
                 if (items.empty()) {
                     m_lanes.erase(laneIt);
                 }
                 emit laneChanged(showId);
+                promoteOldestEligible();
+                // Populate nextAfterCancel if caller asked and this lane still exists.
+                if (wasCurrent && nextAfterCancel) {
+                    auto afterIt = m_lanes.find(showId);
+                    if (afterIt != m_lanes.end() && !afterIt->items.empty()
+                        && afterIt->items.front().state == TransferState::Running)
+                        *nextAfterCancel = afterIt->items.front();
+                }
                 return true;
             }
         }
@@ -119,6 +133,45 @@ std::optional<TransferLane> TransferQueue::laneFor(const QString& showId) const 
     auto it = m_lanes.find(showId);
     if (it == m_lanes.end()) return std::nullopt;
     return *it;
+}
+
+int TransferQueue::runningCount() const
+{
+    int n = 0;
+    for (const auto& lane : m_lanes)
+        if (!lane.items.empty() && lane.items.front().state == TransferState::Running)
+            ++n;
+    return n;
+}
+
+bool TransferQueue::canPromote() const
+{
+    return m_maxActive == 0 || runningCount() < m_maxActive;
+}
+
+void TransferQueue::promoteOldestEligible()
+{
+    while (canPromote()) {
+        TransferLane* best = nullptr;
+        for (auto it = m_lanes.begin(); it != m_lanes.end(); ++it) {
+            TransferLane& lane = it.value();
+            if (lane.items.empty()) continue;
+            TransferItem& head = lane.items.front();
+            if (head.state != TransferState::Queued) continue;
+            if (!best || head.enqueueSeq < best->items.front().enqueueSeq)
+                best = &lane;
+        }
+        if (!best) return;
+        best->items.front().state = TransferState::Running;
+        emit itemStateChanged(best->items.front().transferId, TransferState::Running);
+        emit laneChanged(best->showId);
+    }
+}
+
+void TransferQueue::setMaxActive(int n)
+{
+    m_maxActive = qMax(0, n);
+    promoteOldestEligible();
 }
 
 }  // namespace tankoban::queue
