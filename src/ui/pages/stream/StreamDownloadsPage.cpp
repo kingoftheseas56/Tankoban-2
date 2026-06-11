@@ -256,10 +256,15 @@ void StreamDownloadsPage::buildUi()
         const auto r = v.value<tankostream::stream::DownloadRow>();
         if (r.section != tankostream::stream::DownloadSection::Completed) return;
         if (r.canonicalPath.isEmpty()) return;
+        // Prefer enriched catalog title; fall back to filename (preserves pre-T4
+        // derivation — never shows a raw imdbId in the player HUD).
+        QString title = m_titleCache.value(r.imdbId);
+        if (title.isEmpty())
+            title = QFileInfo(r.canonicalPath).completeBaseName();
         emit playLocalFileRequested(
             r.canonicalPath,
             r.imdbId,
-            displayShowTitle(r.imdbId),
+            title,
             r.season,
             r.episode);
     });
@@ -276,6 +281,13 @@ void StreamDownloadsPage::setTorrentClient(TorrentClient* client)
     if (m_client)
         disconnect(m_client, nullptr, this, nullptr);
     m_client = client;
+    // Disconnect the old TransferQueue's signals before wiring the new client.
+    // The queue is a separate QObject from TorrentClient so the client disconnect
+    // above does not cover it; m_connectedQueue tracks it explicitly.
+    if (m_connectedQueue)
+        disconnect(m_connectedQueue, nullptr, this, nullptr);
+    m_connectedQueue = nullptr;
+
     if (m_client) {
         // Legacy signal still in TorrentClient — keep it for coverage.
         connect(m_client, &TorrentClient::streamBulkGroupsChanged,
@@ -292,6 +304,7 @@ void StreamDownloadsPage::setTorrentClient(TorrentClient* client)
                         m_rebuildDebounce->start();
                     },
                     Qt::QueuedConnection);
+            m_connectedQueue = tq;
         }
     }
     m_rebuildDebounce->start();

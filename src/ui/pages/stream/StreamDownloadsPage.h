@@ -12,6 +12,7 @@
 #include <QFrame>
 #include <QHash>
 #include <QPixmap>
+#include <QPointer>
 #include <QString>
 #include <optional>
 
@@ -29,6 +30,7 @@ class StreamDownloadIndex;
 
 namespace tankostream::stream { class MetaAggregator; }
 namespace tankostream::addon  { struct MetaItem; }
+namespace tankoban::queue     { class TransferQueue; }
 
 class StreamDownloadsPage : public QFrame
 {
@@ -79,6 +81,9 @@ private:
     StreamDownloadIndex*                 m_index   = nullptr;
     tankostream::stream::MetaAggregator* m_meta    = nullptr;
     QNetworkAccessManager*               m_posterNam = nullptr;
+    // Tracks the currently connected TransferQueue so we can disconnect it on
+    // client re-set (the queue is a separate QObject from TorrentClient).
+    QPointer<tankoban::queue::TransferQueue> m_connectedQueue;
 
     // Enrichment caches (title + poster) — keyed by imdbId
     QHash<QString, QString>  m_titleCache;
