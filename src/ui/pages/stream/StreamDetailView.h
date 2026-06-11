@@ -131,6 +131,9 @@ public:
     // row renders Queued immediately, before real queue state propagates.
     // StreamPage calls this at all 3 download-click dispatch sites.
     void markEpisodeClickPending(int season, int episode);
+    // Removes the click-pending marker and repaints that row. Call on any
+    // failed pick to prevent a zombie Queued row outliving the error.
+    void clearEpisodeClickPending(int season, int episode);
 
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — wires the torrent
     // client so the Remove-from-Library path can detect active bulk
@@ -437,7 +440,7 @@ private:
     // strings. Cleared on showEntry (new show) and whenever episodeDisplayState
     // derives a non-NotDownloaded state for that episode (real state supersedes).
     // Contract: only drives Queued display when derived state == NotDownloaded.
-    QSet<QString> m_clickPendingEpisodes;
+    mutable QSet<QString> m_clickPendingEpisodes;
 
     // Season-header primary fast-path Download button. THEATRE_DOWNLOAD_OVERHAUL
     // E1 UX refinement 2026-05-17 — click auto-dispatches the per-episode

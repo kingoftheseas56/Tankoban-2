@@ -1446,7 +1446,7 @@ StreamDetailView::episodeDisplayState(int season, int episode,
                 in.queued = true;
             } else {
                 // Real state arrived — discard the pending marker.
-                const_cast<StreamDetailView*>(this)->m_clickPendingEpisodes.remove(key);
+                m_clickPendingEpisodes.remove(key);
             }
         }
     }
@@ -1723,6 +1723,20 @@ void StreamDetailView::markEpisodeClickPending(int season, int episode)
     // Repaint the affected row immediately so feedback is instant.
     // queuedEps is empty here (enqueue hasn't fired yet); the click-pending
     // set drives the Queued display until the 1Hz timer picks up real state.
+    const int row = rowForEpisode(episode);
+    if (row >= 0 && currentSeason() == season && m_torrentClient) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(
+            m_currentImdb, season);
+        refreshEpisodeRow(row, season, episode, snap, {});
+    }
+}
+
+void StreamDetailView::clearEpisodeClickPending(int season, int episode)
+{
+    const QString key = QString::number(season) + QLatin1Char('|') + QString::number(episode);
+    if (!m_clickPendingEpisodes.remove(key))
+        return;  // was not pending — nothing to repaint
+    // Repaint so the row reverts from the zombie Queued state immediately.
     const int row = rowForEpisode(episode);
     if (row >= 0 && currentSeason() == season && m_torrentClient) {
         const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(

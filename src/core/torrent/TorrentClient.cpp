@@ -3196,6 +3196,7 @@ void TorrentClient::startDownload(const QString& infoHash, const AddTorrentConfi
         item.showId = QStringLiteral("imdb:") + config.imdbId;
         item.displayTitle = hash;
         if (config.season > 0) item.seasonNumber = config.season;
+        if (config.episode > 0) item.episodeNumber = config.episode;
 
         m_transferQueue->enqueue(item);
         const auto lane = m_transferQueue->laneFor(item.showId);

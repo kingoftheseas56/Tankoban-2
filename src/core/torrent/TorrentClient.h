@@ -141,10 +141,10 @@ public:
     tankoban::queue::TransferQueue* transferQueue() const { return m_transferQueue; }
 
     // T10: returns episode numbers that are in the Queued state in the
-    // TransferQueue lane for (imdbId, season). Season packs (no episodeNumber)
-    // are not reported here — they route through the existing cohort-snapshot
-    // path (state "Pending"/"Downloading"). Implemented in .cpp so callers
-    // don't need TransferQueue.h (the fwd-decl in this header is sufficient).
+    // TransferQueue lane for (imdbId, season). Per-episode items only; packs
+    // surface via the cohort snapshot path (state "Pending"/"Downloading").
+    // Implemented in .cpp so callers don't need TransferQueue.h (the fwd-decl
+    // in this header is sufficient).
     QSet<int> transferQueuedEpisodesForSeason(const QString& imdbId, int season) const;
 
     // TANKORENT_QUALITY_AND_QUEUE P1 T1.9 (2026-05-27) — queue-aware magnet

@@ -3427,6 +3427,9 @@ void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPick
     config.startPaused     = false;
     config.imdbId          = imdbId;
     config.season          = season;
+    config.episode         = (type == QLatin1String("series") && m_pendingAuto.imdbId == imdbId
+                               && m_pendingAuto.season == season)
+                              ? m_pendingAuto.episode : 0;
     // F9 fix 2026-05-19: pass magnet URI so startDownload can self-defend.
     config.magnetUri       = choice.magnetUri;
 
@@ -3610,6 +3613,10 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     if (!picked.has_value()) {
         // No acceptable 1080p source. (P1.T4 refines this into a tile state;
         // for now surface it in the sources panel.)
+        // T10.1: clears the instant-feedback marker so a failed pick doesn't
+        // leave a zombie Queued row.
+        if (m_detailView && !ctx.forStream)
+            m_detailView->clearEpisodeClickPending(ctx.season, ctx.episode);
         if (m_detailView)
             m_detailView->setStreamSourcesError(tr("No 1080p source found"));
         return;
@@ -3646,6 +3653,10 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     if (hash.isEmpty() && !chosen.magnetUri.isEmpty())
         hash = m_torrentClient->resolveMetadata(chosen.magnetUri);
     if (hash.isEmpty()) {
+        // T10.1: clears the instant-feedback marker so a failed pick doesn't
+        // leave a zombie Queued row.
+        if (m_detailView && !ctx.forStream)
+            m_detailView->clearEpisodeClickPending(ctx.season, ctx.episode);
         if (m_detailView)
             m_detailView->setStreamSourcesError(tr("Could not resolve source"));
         return;
@@ -3664,6 +3675,7 @@ void StreamPage::finishAutoDownloadPick(const QList<tankostream::addon::Stream>&
     config.startPaused     = false;
     config.imdbId          = ctx.imdbId;
     config.season          = (ctx.mediaType == QLatin1String("movie")) ? 0 : ctx.season;
+    config.episode         = (ctx.mediaType == QLatin1String("movie")) ? 0 : ctx.episode;
     config.magnetUri       = chosen.magnetUri;
 
     qInfo().noquote() << "[auto-dl] startDownload hash=" << hash.left(12)
