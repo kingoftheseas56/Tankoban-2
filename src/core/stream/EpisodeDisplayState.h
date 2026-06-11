@@ -11,6 +11,7 @@ namespace tankostream::stream {
 // beats a pre-allocated partial file.
 enum class EpisodeDisplayState {
     NotDownloaded,  // no completed file, no active transfer -> Download affordance
+    Queued,         // registered in TransferQueue, transfer not started -> "Queued" chip
     Downloading,    // active transfer (file may be pre-allocated) -> Pause + N%
     Paused,         // active transfer paused                 -> Resume + N%
     Failed,         // transfer errored                        -> Retry affordance
@@ -26,9 +27,10 @@ struct EpisodeStateInputs {
     bool paused      = false;  // that transfer is paused
     bool failed      = false;  // that transfer is errored
     int  progressPct = 0;      // 0..100 (only meaningful when hasTransfer)
+    bool queued      = false;  // in TransferQueue, not yet Running
 };
 
-// Priority: (onDisk && complete) > failed > paused > downloading > bare-onDisk > none.
+// Priority: (onDisk && complete) > failed > paused > downloading > queued > bare-onDisk > none.
 // A pre-allocated partial file (onDisk but NOT complete) yields Downloading while a
 // transfer is live, never Downloaded.
 EpisodeDisplayState deriveEpisodeDisplayState(const EpisodeStateInputs& in);

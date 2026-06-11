@@ -14,6 +14,7 @@ EpisodeDisplayState deriveEpisodeDisplayState(const EpisodeStateInputs& in)
     if (in.hasTransfer && in.failed) return EpisodeDisplayState::Failed;
     if (in.hasTransfer && in.paused) return EpisodeDisplayState::Paused;
     if (in.hasTransfer)              return EpisodeDisplayState::Downloading;
+    if (in.queued)                   return EpisodeDisplayState::Queued;
     // No live transfer: a bare file on disk (local-scan import, or a completed
     // file whose snapshot has drained without a Complete flag) is Downloaded.
     if (in.onDisk)                   return EpisodeDisplayState::Downloaded;

@@ -1462,6 +1462,7 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
             text = QStringLiteral("100%");
             break;
         case S::Failed:
+        case S::Queued:
         case S::NotDownloaded:
             break;
         }
@@ -1478,6 +1479,7 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
         case S::Downloading:   text = QStringLiteral("%1%").arg(pct); break;
         case S::Paused:        text = QStringLiteral("%1%").arg(pct); break;
         case S::Failed:        text = tr("Failed");                   break;
+        case S::Queued:        text = tr("Queued");                   break;
         case S::Downloaded:    text = QString();                      break;  // Play button carries it
         case S::NotDownloaded: text = QString();                      break;
         }
@@ -1516,6 +1518,7 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
         case S::Downloading:   icon = QStringLiteral(":/icons/pause-circle.svg");   tip = tr("Pause download");   break;
         case S::Paused:        icon = QStringLiteral(":/icons/play-circle.svg");    tip = tr("Resume download");  break;
         case S::Failed:        icon = QStringLiteral(":/icons/retry-arrow.svg");    tip = tr("Retry download");   break;
+        case S::Queued:        break;  // queued: no action, chip text carries it
         case S::Downloaded:    break;  // handled above
         }
         btn->setIcon(QIcon(icon));
@@ -2023,6 +2026,9 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& /*globalAn
         // Retry = fresh re-dispatch (the simplified disk-first model drops the
         // cohort-internal retry machinery; Phase 2 handles source-tiering).
         emit singleEpisodeDownloadRequested(season, episode);
+        break;
+    case S::Queued:
+        // Queued: transfer not started yet — no action to take from the row button.
         break;
     }
     // Re-fetch a fresh snapshot — pause/resume/setStreamBulkItemPaused above

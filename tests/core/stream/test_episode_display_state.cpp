@@ -63,3 +63,36 @@ TEST(EpisodeDisplayState, BareFileNoTransferIsDownloaded) {
     EXPECT_EQ(deriveEpisodeDisplayState(in(true, false, false, false, false, 0)),
               EpisodeDisplayState::Downloaded);
 }
+
+TEST(EpisodeDisplayStateTest, QueuedWhenRegisteredButNoTransfer) {
+    tankostream::stream::EpisodeStateInputs in;
+    in.queued = true;
+    EXPECT_EQ(deriveEpisodeDisplayState(in),
+              tankostream::stream::EpisodeDisplayState::Queued);
+}
+
+TEST(EpisodeDisplayStateTest, LiveTransferBeatsQueuedFlag) {
+    tankostream::stream::EpisodeStateInputs in;
+    in.queued = true;
+    in.hasTransfer = true;
+    in.progressPct = 12;
+    EXPECT_EQ(deriveEpisodeDisplayState(in),
+              tankostream::stream::EpisodeDisplayState::Downloading);
+}
+
+TEST(EpisodeDisplayStateTest, CompletedOnDiskBeatsQueued) {
+    tankostream::stream::EpisodeStateInputs in;
+    in.queued = true;
+    in.onDisk = true;
+    in.complete = true;
+    EXPECT_EQ(deriveEpisodeDisplayState(in),
+              tankostream::stream::EpisodeDisplayState::Downloaded);
+}
+
+TEST(EpisodeDisplayStateTest, QueuedBeatsBarePartialOnDisk) {
+    tankostream::stream::EpisodeStateInputs in;
+    in.queued = true;
+    in.onDisk = true;       // pre-allocated partial, NOT complete
+    EXPECT_EQ(deriveEpisodeDisplayState(in),
+              tankostream::stream::EpisodeDisplayState::Queued);
+}
