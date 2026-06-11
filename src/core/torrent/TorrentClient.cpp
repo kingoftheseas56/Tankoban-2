@@ -4140,6 +4140,17 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
         }
     }
 
+    // DOWNLOADS_OVERHAUL_V2 T3.2 (2026-06-11) — mark every Pending/Downloading
+    // index entry for this torrent as Failed so the Downloads page Failed section
+    // surfaces them.  sourceGroupId is "tankorent:<infoHash>" (the same format
+    // stamped at registerPendingEpisode / registerPendingMovie call sites in
+    // onMetadataReady).  Complete entries are never downgraded by markFailedByGroup.
+    if (m_streamDownloadIndex) {
+        const QString groupId =
+            QStringLiteral("tankorent:") + infoHash.toLower();
+        m_streamDownloadIndex->markFailedByGroup(groupId);
+    }
+
     emit torrentUpdated(infoHash);
 }
 

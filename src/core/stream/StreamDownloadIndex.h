@@ -56,7 +56,7 @@ public:
     // ── Thread safety contract ──────────────────────────────────────────────
     // All mutating methods (registerEpisode/registerMovie/registerPendingEpisode/
     // registerPendingMovie/updateEpisodeProgress/evictByImdb/evictByPath/
-    // evictBySourceGroup/validateAll)
+    // evictBySourceGroup/markFailedByGroup/validateAll)
     // execute synchronously on the calling thread. They acquire m_mutex around
     // the in-memory map mutations, then call save() and emit entriesChanged()
     // OFF the lock. JsonStore::write is internally thread-safe (its writer
@@ -103,6 +103,14 @@ public:
     // Drop all entries for a given sourceGroupId (cancel semantics, Decision 7).
     // Files on disk are NOT touched.
     void evictBySourceGroup(const QString& sourceGroupId);
+
+    /// DOWNLOADS_OVERHAUL_V2 T3.2 (2026-06-11) — mark every NON-Complete entry
+    /// whose sourceGroupId matches \a sourceGroupId as Failed.  Complete entries
+    /// are never downgraded.  Each changed entry is persisted via the repository
+    /// and fires entryStateChanged(); a single entriesChanged() is emitted at the
+    /// end (same pattern as updateEpisodeProgress / evictBySourceGroup).
+    /// Safe to call from any thread; mirrors the mutex contract of other mutators.
+    void markFailedByGroup(const QString& sourceGroupId);
 
     void evictByImdb(const QString& imdbId);
     void evictByPath(const QString& canonicalKey);

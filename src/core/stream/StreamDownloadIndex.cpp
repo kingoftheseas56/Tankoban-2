@@ -408,6 +408,49 @@ void StreamDownloadIndex::evictBySourceGroup(const QString& sourceGroupId)
     emit entriesChanged();
 }
 
+// DOWNLOADS_OVERHAUL_V2 T3.2 (2026-06-11) — mark every NON-Complete entry for
+// the given sourceGroupId as Failed.  Complete entries are never downgraded.
+// Mirrors the lock-then-persist-then-signal pattern of updateEpisodeProgress:
+// mutate under m_mutex, persist each changed entry via upsertStreamDownload,
+// emit entryStateChanged per entry off the lock, emit entriesChanged once.
+void StreamDownloadIndex::markFailedByGroup(const QString& sourceGroupId)
+{
+    if (sourceGroupId.isEmpty())
+        return;
+
+    // Collect changed entries under the lock; persist + signal outside it.
+    struct ChangedEntry {
+        Entry       e;
+        QString     imdbId;
+        int         season;
+        int         episode;
+    };
+    QList<ChangedEntry> changed;
+    {
+        QMutexLocker locker(&m_mutex);
+        for (auto it = m_byPath.begin(); it != m_byPath.end(); ++it) {
+            Entry& e = it.value();
+            if (e.sourceGroupId != sourceGroupId)
+                continue;
+            if (e.state == Entry::Complete)
+                continue;  // never downgrade Complete
+            e.state = Entry::Failed;
+            changed.append({e, e.imdbId, e.season, e.episode});
+        }
+    }
+
+    if (changed.isEmpty())
+        return;
+
+    if (m_repo) {
+        for (const ChangedEntry& c : changed)
+            m_repo->upsertStreamDownload(rowFromEntry(c.e));
+    }
+    for (const ChangedEntry& c : changed)
+        emit entryStateChanged(c.imdbId, c.season, c.episode);
+    emit entriesChanged();
+}
+
 void StreamDownloadIndex::evictByImdb(const QString& imdbId)
 {
     if (imdbId.isEmpty())

@@ -180,3 +180,73 @@ TEST(StreamDownloadIndexPickBest, EmptyCandidatesReturnsNullopt)
 {
     EXPECT_FALSE(StreamDownloadIndex::pickBestEntry({}).has_value());
 }
+
+// ── DOWNLOADS_OVERHAUL_V2 T3.2 — markFailedByGroup ──────────────────────────
+
+TEST_F(StreamDownloadIndexStateTest, MarkFailedByGroup_FlipsPendingAndDownloading)
+{
+    // Register one Pending + one Downloading (simulated via progress update).
+    m_index->registerPendingEpisode(
+        QStringLiteral("tt1"), 1, 1,
+        QStringLiteral("C:/dl/S01E01.mkv"),
+        QStringLiteral("tankorent:aabbcc"), 1500000000LL);
+    m_index->registerPendingEpisode(
+        QStringLiteral("tt1"), 1, 2,
+        QStringLiteral("C:/dl/S01E02.mkv"),
+        QStringLiteral("tankorent:aabbcc"), 1500000000LL);
+    m_index->updateEpisodeProgress(QStringLiteral("tt1"), 1, 2, 45);  // → Downloading
+
+    QSignalSpy stateSpy(m_index.get(), &StreamDownloadIndex::entryStateChanged);
+    QSignalSpy entriesSpy(m_index.get(), &StreamDownloadIndex::entriesChanged);
+
+    m_index->markFailedByGroup(QStringLiteral("tankorent:aabbcc"));
+
+    const auto entries = m_index->entriesForImdb(QStringLiteral("tt1"));
+    ASSERT_EQ(entries.size(), 2);
+    for (const auto& e : entries)
+        EXPECT_EQ(e.state, StreamDownloadIndex::Entry::Failed);
+
+    // entryStateChanged fires once per changed entry; entriesChanged fires once.
+    EXPECT_EQ(stateSpy.count(), 2);
+    EXPECT_GE(entriesSpy.count(), 1);
+}
+
+TEST_F(StreamDownloadIndexStateTest, MarkFailedByGroup_DoesNotDowngradeComplete)
+{
+    // Register an episode as Pending then flip it to Complete via progress=100.
+    m_index->registerPendingEpisode(
+        QStringLiteral("tt2"), 1, 1,
+        QStringLiteral("C:/dl/tt2/S01E01.mkv"),
+        QStringLiteral("tankorent:ddeeff"), 1500000000LL);
+    m_index->updateEpisodeProgress(QStringLiteral("tt2"), 1, 1, 100);  // → Complete
+
+    m_index->markFailedByGroup(QStringLiteral("tankorent:ddeeff"));
+
+    const auto entries = m_index->entriesForImdb(QStringLiteral("tt2"));
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries[0].state, StreamDownloadIndex::Entry::Complete);
+}
+
+TEST_F(StreamDownloadIndexStateTest, MarkFailedByGroup_LeavesOtherGroupsUntouched)
+{
+    m_index->registerPendingEpisode(
+        QStringLiteral("tt3"), 1, 1,
+        QStringLiteral("C:/dl/tt3/S01E01.mkv"),
+        QStringLiteral("tankorent:group1"), 1500000000LL);
+    m_index->registerPendingEpisode(
+        QStringLiteral("tt4"), 2, 3,
+        QStringLiteral("C:/dl/tt4/S02E03.mkv"),
+        QStringLiteral("tankorent:group2"), 1500000000LL);
+
+    m_index->markFailedByGroup(QStringLiteral("tankorent:group1"));
+
+    // Only group1's entry is Failed.
+    const auto e3 = m_index->entriesForImdb(QStringLiteral("tt3"));
+    ASSERT_EQ(e3.size(), 1);
+    EXPECT_EQ(e3[0].state, StreamDownloadIndex::Entry::Failed);
+
+    // group2's entry is untouched (still Pending).
+    const auto e4 = m_index->entriesForImdb(QStringLiteral("tt4"));
+    ASSERT_EQ(e4.size(), 1);
+    EXPECT_EQ(e4[0].state, StreamDownloadIndex::Entry::Pending);
+}
