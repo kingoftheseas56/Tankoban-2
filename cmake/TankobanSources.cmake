@@ -236,6 +236,8 @@ set(SOURCES
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamDownloadsPage.cpp
+    # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
+    src/ui/pages/stream/DownloadDetailPane.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
     # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.
@@ -453,6 +455,8 @@ set(HEADERS
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamDownloadsPage.h
+    # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
+    src/ui/pages/stream/DownloadDetailPane.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
     # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.

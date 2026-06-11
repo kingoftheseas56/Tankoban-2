@@ -1,12 +1,14 @@
 // DOWNLOADS_OVERHAUL_V2 Task 4 (2026-06-11) — Master-Detail shell.
+// Task 5 (2026-06-11) — DownloadDetailPane replaces the right pane stub.
 // Replaces the old two-section scrollable card list with a QSplitter:
 //   left  — QTreeWidget: Failed / Active / Queued / Completed sections,
 //            shows grouped, episodes as leaves.
-//   right — detail pane stub (Task 5 builds the real pane).
+//   right — DownloadDetailPane: header + stats + controls + Tankorent tabs.
 // All signal-triggered refreshes debounce through a 250ms single-shot timer
 // so rapid lane-state updates don't hammer the tree.
 
 #include "StreamDownloadsPage.h"
+#include "DownloadDetailPane.h"
 
 #include "core/torrent/TorrentClient.h"
 #include "core/net/NetSeam.h"
@@ -199,19 +201,13 @@ void StreamDownloadsPage::buildUi()
             "  background: rgba(255,255,255,0.06);"
             "}"));
 
-    // Right pane — detail stub (Task 5 replaces)
-    m_detailPlaceholder = new QLabel(tr("Select a download"), m_splitter);
-    m_detailPlaceholder->setObjectName(QStringLiteral("StreamDownloadsDetailPlaceholder"));
-    m_detailPlaceholder->setAlignment(Qt::AlignCenter);
-    m_detailPlaceholder->setStyleSheet(
-        QStringLiteral("QLabel#StreamDownloadsDetailPlaceholder {"
-                       "  color: rgba(255,255,255,0.35);"
-                       "  font-size: 14px;"
-                       "  background: transparent;"
-                       "}"));
+    // Right pane — DownloadDetailPane (Task 5)
+    m_detailPane = new DownloadDetailPane(m_splitter);
+    m_detailPane->setObjectName(QStringLiteral("StreamDownloadsDetailPane"));
+    // Intent signals wired in T6.
 
     m_splitter->addWidget(m_tree);
-    m_splitter->addWidget(m_detailPlaceholder);
+    m_splitter->addWidget(m_detailPane);
     m_splitter->setStretchFactor(0, 2);
     m_splitter->setStretchFactor(1, 3);
 
@@ -222,30 +218,18 @@ void StreamDownloadsPage::buildUi()
             this, [this](QTreeWidgetItem* current, QTreeWidgetItem* /*previous*/) {
         if (!current) {
             m_selectedRow.reset();
-            m_detailPlaceholder->setText(tr("Select a download"));
+            m_detailPane->clearRow();
             return;
         }
         const QVariant v = current->data(0, Qt::UserRole);
         if (!v.isValid() || !v.canConvert<tankostream::stream::DownloadRow>()) {
             m_selectedRow.reset();
-            m_detailPlaceholder->setText(tr("Select a download"));
+            m_detailPane->clearRow();
             return;
         }
         const auto r = v.value<tankostream::stream::DownloadRow>();
         m_selectedRow = r;
-
-        // Minimal detail: show title + SxxExx + section — Task 5 replaces.
-        const QString episodeStr = (r.type == QLatin1String("movie"))
-            ? tr("Movie")
-            : QStringLiteral("S%1E%2")
-                  .arg(r.season, 2, 10, QLatin1Char('0'))
-                  .arg(r.episode, 2, 10, QLatin1Char('0'));
-        const QString sectionStr = QString::fromLatin1(
-            kSectionNames[int(r.section)]);
-        m_detailPlaceholder->setText(
-            displayShowTitle(r.imdbId)
-            + QLatin1Char('\n') + episodeStr
-            + QLatin1Char('\n') + sectionStr);
+        m_detailPane->setRow(r, displayShowTitle(r.imdbId));
     });
 
     // ── Double-click: play Completed episodes ───────────────────────────────
@@ -320,6 +304,11 @@ void StreamDownloadsPage::setTorrentClient(TorrentClient* client)
             m_connectedQueue = tq;
         }
     }
+
+    // Forward client to the detail pane so it can construct tabs lazily.
+    if (m_detailPane)
+        m_detailPane->setClient(m_client);
+
     m_rebuildDebounce->start();
 }
 
@@ -477,7 +466,7 @@ void StreamDownloadsPage::restoreSelection(const QString& key)
     }
     // Key gone (item removed) — clear selection state
     m_selectedRow.reset();
-    m_detailPlaceholder->setText(tr("Select a download"));
+    m_detailPane->clearRow();
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

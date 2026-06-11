@@ -1,9 +1,10 @@
 #pragma once
 
 // DOWNLOADS_OVERHAUL_V2 Task 4 (2026-06-11) — Master-Detail shell rebuild.
+// Task 5 (2026-06-11) — m_detailPlaceholder replaced by DownloadDetailPane.
 // The page is now driven by tankostream::stream::buildDownloadRows so the
 // Active / History split is replaced by a single four-section (Failed /
-// Active / Queued / Completed) grouped tree with a detail pane stub on the
+// Active / Queued / Completed) grouped tree with a real detail pane on the
 // right. Public API (class name, constructor signature, injection setters,
 // signals) is identical to the pre-T4 page so MainWindow wiring is unchanged.
 
@@ -28,6 +29,7 @@ class QNetworkAccessManager;
 class QUrl;
 class TorrentClient;
 class StreamDownloadIndex;
+class DownloadDetailPane;
 
 namespace tankostream::stream { class MetaAggregator; }
 namespace tankostream::addon  { struct MetaItem; }
@@ -114,8 +116,8 @@ private:
     // Master tree
     QTreeWidget* m_tree = nullptr;
 
-    // Detail pane stub (Task 5 replaces)
-    QLabel* m_detailPlaceholder = nullptr;
+    // Detail pane (Task 5 — replaces stub)
+    DownloadDetailPane* m_detailPane = nullptr;
 
     // Splitter
     QSplitter* m_splitter = nullptr;
