@@ -55,6 +55,9 @@ signals:
                                 const QString& showTitle,
                                 int season,
                                 int episode);
+    // DOWNLOADS_OVERHAUL_V2 T6 — emitted by the retry intent handler after
+    // cleaning up the failed transfer. StreamPage re-runs the auto source pick.
+    void retryEpisodeRequested(const QString& imdbId, int season, int episode);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -77,6 +80,12 @@ private:
     // Row helpers
     QString displayShowTitle(const QString& imdbId) const;
     QString statusText(const tankostream::stream::DownloadRow& r) const;
+
+    // DOWNLOADS_OVERHAUL_V2 T6 — re-resolve the row's CURRENT state by key
+    // before acting on an intent — the pane's snapshot can be a debounce stale
+    // (T5 review I4). Returns nullopt when the episode no longer exists.
+    std::optional<tankostream::stream::DownloadRow>
+    freshRowFor(const tankostream::stream::DownloadRow& stale) const;
 
     // Poster / meta enrichment (kept from pre-T4 — rewired to serve the tree)
     void savePosterFrom(const QString& imdbId, const QUrl& posterUrl);

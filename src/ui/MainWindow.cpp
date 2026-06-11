@@ -924,6 +924,13 @@ void MainWindow::buildPageStack()
     });
     connect(m_streamDownloadsPage, &StreamDownloadsPage::playLocalFileRequested,
             this, &MainWindow::onPlayLocalFileFromStreamRequested);
+    // DOWNLOADS_OVERHAUL_V2 T6 — retry a failed download: the Downloads page
+    // already cleaned up the failed transfer; route the re-pick into StreamPage.
+    connect(m_streamDownloadsPage, &StreamDownloadsPage::retryEpisodeRequested,
+            this, [this](const QString& imdbId, int season, int episode) {
+                if (m_streamPage)
+                    m_streamPage->retryEpisodeDownload(imdbId, season, episode);
+            });
     dbg("4g4-streamdownloadspage-created");
 
     // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) - Comics-mode

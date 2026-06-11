@@ -3138,6 +3138,19 @@ void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
     startAutoDownload(m_detailView->currentImdb(), QStringLiteral("series"), season, episode);
 }
 
+// DOWNLOADS_OVERHAUL_V2 T6 — re-run the auto source pick for a failed episode.
+// The failed transfer was already cancelled and its partial files deleted by
+// StreamDownloadsPage before emitting retryEpisodeRequested. We just need to
+// restart the source-pick pipeline for the correct media type.
+void StreamPage::retryEpisodeDownload(const QString& imdbId, int season, int episode)
+{
+    // season==0 && episode==0 means a movie; anything else is a series episode.
+    const QString mediaType = (season == 0 && episode == 0)
+        ? QStringLiteral("movie")
+        : QStringLiteral("series");
+    startAutoDownload(imdbId, mediaType, season, episode, /*forStream=*/false);
+}
+
 // THEATRE_DOWNLOAD_OVERHAUL UI refinement 2026-05-17 - movie auto-dispatch fast
 // path. Picking already done emitter-side in StreamDetailView (top-seeded
 // magnet selected from m_lastChoices, which is pre-sorted by buildPickerChoices

@@ -204,7 +204,110 @@ void StreamDownloadsPage::buildUi()
     // Right pane — DownloadDetailPane (Task 5)
     m_detailPane = new DownloadDetailPane(m_splitter);
     m_detailPane->setObjectName(QStringLiteral("StreamDownloadsDetailPane"));
-    // Intent signals wired in T6.
+
+    // ── Intent signals wired in T6 ───────────────────────────────────────────
+    // Each handler re-resolves the current row state before acting (T5 review I4:
+    // the pane's snapshot can be up to ~250ms stale). Guards log + no-op when
+    // the row has moved to a section that makes the intent invalid.
+    connect(m_detailPane, &DownloadDetailPane::pauseRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                if (!fresh
+                    || fresh->section != tankostream::stream::DownloadSection::Active
+                    || fresh->paused
+                    || !m_client) {
+                    qInfo() << "[downloads] pause intent dropped (stale row)";
+                    return;
+                }
+                if (!fresh->infoHash.isEmpty())
+                    m_client->pauseTorrent(fresh->infoHash);
+                if (auto* q = m_client->transferQueue())
+                    q->pauseCurrent(QStringLiteral("imdb:") + fresh->imdbId);
+            });
+
+    connect(m_detailPane, &DownloadDetailPane::resumeRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                if (!fresh || !fresh->paused || !m_client) {
+                    qInfo() << "[downloads] resume intent dropped (stale row)";
+                    return;
+                }
+                // Queue decides if a slot is free; engine-resume only when
+                // promoted. When gated, the head goes Queued and auto-promotes
+                // later — engine-resume happens here or not at all this click.
+                auto* q = m_client->transferQueue();
+                if (q) {
+                    if (q->resumeCurrent(QStringLiteral("imdb:") + fresh->imdbId).has_value()
+                        && !fresh->infoHash.isEmpty())
+                        m_client->resumeTorrent(fresh->infoHash);
+                } else if (!fresh->infoHash.isEmpty()) {
+                    m_client->resumeTorrent(fresh->infoHash);
+                }
+            });
+
+    connect(m_detailPane, &DownloadDetailPane::cancelRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                // Guard: never delete a Completed torrent (I4 critical case).
+                if (!fresh
+                    || fresh->section == tankostream::stream::DownloadSection::Completed
+                    || !m_client) {
+                    qInfo() << "[downloads] cancel intent dropped (stale/completed row)";
+                    return;
+                }
+                if (auto* q = m_client->transferQueue(); q && !fresh->infoHash.isEmpty())
+                    q->cancel(fresh->infoHash);
+                // deleteFiles=true: cancel removes partial staging files.
+                // Completed rows never reach here (guard above), so finished
+                // media is safe.
+                if (!fresh->infoHash.isEmpty())
+                    m_client->deleteTorrent(fresh->infoHash, /*deleteFiles=*/true);
+            });
+
+    connect(m_detailPane, &DownloadDetailPane::bumpRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                if (!fresh
+                    || fresh->section != tankostream::stream::DownloadSection::Queued
+                    || !m_client
+                    || fresh->infoHash.isEmpty())
+                    return;
+                if (auto* q = m_client->transferQueue())
+                    q->bumpToFront(fresh->infoHash);
+            });
+
+    connect(m_detailPane, &DownloadDetailPane::playRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                if (!fresh || fresh->canonicalPath.isEmpty()) return;
+                QString title = m_titleCache.value(fresh->imdbId);
+                if (title.isEmpty())
+                    title = QFileInfo(fresh->canonicalPath).completeBaseName();
+                emit playLocalFileRequested(
+                    fresh->canonicalPath,
+                    fresh->imdbId,
+                    title,
+                    fresh->season,
+                    fresh->episode);
+            });
+
+    connect(m_detailPane, &DownloadDetailPane::retryRequested, this,
+            [this](const tankostream::stream::DownloadRow& row) {
+                const auto fresh = freshRowFor(row);
+                if (!fresh
+                    || fresh->section != tankostream::stream::DownloadSection::Failed) {
+                    qInfo() << "[downloads] retry intent dropped (stale row)";
+                    return;
+                }
+                // Clean up the failed transfer first: remove from queue + engine
+                // (delete partial files), THEN re-run the source pick via signal.
+                if (m_client && !fresh->infoHash.isEmpty()) {
+                    if (auto* q = m_client->transferQueue())
+                        q->cancel(fresh->infoHash);
+                    m_client->deleteTorrent(fresh->infoHash, /*deleteFiles=*/true);
+                }
+                emit retryEpisodeRequested(fresh->imdbId, fresh->season, fresh->episode);
+            });
 
     m_splitter->addWidget(m_tree);
     m_splitter->addWidget(m_detailPane);
@@ -491,6 +594,35 @@ QString StreamDownloadsPage::displayShowTitle(const QString& imdbId) const
     if (it != m_titleCache.constEnd() && !it->isEmpty())
         return *it;
     return imdbId;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Intent helper — DOWNLOADS_OVERHAUL_V2 T6
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Re-resolve the row's CURRENT state by key before acting on an intent —
+// the pane's snapshot can be a debounce stale (~250ms+, T5 review I4).
+// Returns nullopt when the episode no longer exists in the model (e.g. was
+// removed between the button press and the signal delivery).
+// trim=0 deliberately: an intent against a just-trimmed Completed row should
+// still resolve so the guard can fire; trimming only happens in the UI tree.
+std::optional<tankostream::stream::DownloadRow>
+StreamDownloadsPage::freshRowFor(const tankostream::stream::DownloadRow& stale) const
+{
+    if (!m_index) return std::nullopt;
+    tankostream::stream::DownloadsSnapshot snap;
+    snap.indexEntries = m_index->all();
+    if (m_client && m_client->transferQueue())
+        snap.lanes = m_client->transferQueue()->lanesSnapshot();
+    const auto rows = tankostream::stream::buildDownloadRows(
+        snap, QDateTime::currentMSecsSinceEpoch(), /*maxCompletedAgeMs=*/0);
+    for (const auto& r : rows) {
+        if (r.imdbId == stale.imdbId
+            && r.season  == stale.season
+            && r.episode == stale.episode)
+            return r;
+    }
+    return std::nullopt;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
