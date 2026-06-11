@@ -878,7 +878,10 @@ QSet<int> TorrentClient::transferQueuedEpisodesForSeason(const QString& imdbId, 
     QSet<int> result;
     if (!m_transferQueue || imdbId.isEmpty()) return result;
     const auto lanes = m_transferQueue->lanesSnapshot();
-    const auto it = lanes.constFind(imdbId);
+    // T11.1 review C1: every lane is keyed by the queue convention
+    // "imdb:"+id (see addMagnetForShow / DownloadsCommandModel::laneItemFor),
+    // never the bare imdbId — a bare-id lookup always misses.
+    const auto it = lanes.constFind(QStringLiteral("imdb:") + imdbId);
     if (it == lanes.constEnd()) return result;
     for (const auto& item : it->items) {
         if (item.state != tankoban::queue::TransferState::Queued) continue;

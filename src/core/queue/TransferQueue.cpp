@@ -144,7 +144,20 @@ bool TransferQueue::bumpToFront(const QString& transferId) {
         auto& items = laneIt->items;
         for (size_t i = 0; i < items.size(); ++i) {
             if (items[i].transferId == transferId) {
-                if (i == 0 || i == 1) return false;  // already current or already at pos 1
+                if (i == 0) {
+                    // T11.1 review I2: a cap-gated Queued lane head is the most
+                    // prominent "Queued" row — jump it to the front of the
+                    // GLOBAL promotion FIFO by re-stamping its enqueueSeq from
+                    // the descending bump counter (always below every normal
+                    // enqueue seq; see header comment on m_bumpCounter). Later
+                    // bumps get smaller seqs — latest user intent wins.
+                    if (items[i].state != TransferState::Queued)
+                        return false;  // Running/Paused current — nothing to bump
+                    items[i].enqueueSeq = --m_bumpCounter;
+                    emit laneChanged(laneIt->showId);
+                    return true;
+                }
+                if (i == 1) return false;  // already at pos 1
                 TransferItem moved = items[i];
                 items.erase(items.begin() + i);
                 items.insert(items.begin() + 1, moved);

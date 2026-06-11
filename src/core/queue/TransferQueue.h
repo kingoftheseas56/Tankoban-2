@@ -53,8 +53,14 @@ public:
     // (index 0) cannot be reordered. Returns true on success.
     bool reorder(const QString& showId, int oldIdx, int newIdx);
 
-    // Promotes a queued item to lane position 1 (right after current).
-    // Returns true if the item was queued and moved.
+    // "Bump to top" (T11.1 review I2) — two cases, both return true on effect:
+    //  1) Item is queued BEHIND a current (lane index >= 2): moves it within
+    //     its lane to position 1 (right after current).
+    //  2) Item IS a Queued lane head gated by the max-active cap: re-stamps
+    //     its enqueueSeq from the descending bump counter so it jumps the
+    //     GLOBAL promotion FIFO (promoteOldestEligible picks min-seq first).
+    //     Later bumps precede earlier bumps — latest user intent wins.
+    // Returns false for a Running/Paused current or an item already at pos 1.
     bool bumpToFront(const QString& transferId);
 
     // Read-only access to lanes for UI rendering.
@@ -79,7 +85,12 @@ private:
     void promoteOldestEligible();   // promote Queued lane-heads while slots free
     QHash<QString, TransferLane> m_lanes;
     int m_maxActive = 0;
-    quint64 m_seqCounter = 0;
+    // Seq-space split (T11.1 review I2): enqueue stamps ++m_seqCounter
+    // (ascending ABOVE 2^32), bumpToFront stamps --m_bumpCounter (descending
+    // BELOW 2^32). Bumped items therefore always sort before normal items in
+    // promoteOldestEligible's min-seq scan; 2^32 of headroom each direction.
+    quint64 m_seqCounter  = 1ull << 32;
+    quint64 m_bumpCounter = 1ull << 32;
 };
 
 }  // namespace tankoban::queue

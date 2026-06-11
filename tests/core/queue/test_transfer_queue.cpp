@@ -284,6 +284,30 @@ TEST(TransferQueueCapTest, PauseAllSkipsPausedAndQueuedHeads) {
     EXPECT_EQ(paused, QStringList{"t2"});
 }
 
+// T11.1 review I2 — bumping a cap-gated Queued lane HEAD must jump the GLOBAL
+// promotion FIFO (re-stamped enqueueSeq below all normal enqueues), not no-op.
+TEST(TransferQueueCapTest, BumpGatedHeadJumpsGlobalFifo) {
+    TransferQueue q; q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));   // older waiter
+    q.enqueue(makeItem("t3", "imdb:tt0003", 1));   // newer waiter
+    EXPECT_TRUE(q.bumpToFront("t3"));
+    q.finishCurrent("imdb:tt0001", TransferState::Completed);
+    EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Running);
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Queued);
+}
+
+TEST(TransferQueueCapTest, LatestBumpWins) {
+    TransferQueue q; q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.enqueue(makeItem("t3", "imdb:tt0003", 1));
+    q.bumpToFront("t2");
+    q.bumpToFront("t3");   // latest intent wins
+    q.finishCurrent("imdb:tt0001", TransferState::Completed);
+    EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Running);
+}
+
 TEST(TransferQueueCapTest, GatedResumeEmitsQueuedItemState) {
     TransferQueue q;
     q.setMaxActive(1);

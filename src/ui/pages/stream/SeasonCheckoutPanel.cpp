@@ -169,6 +169,10 @@ SeasonCheckoutPanel::SeasonCheckoutPanel(const QString& imdbId,
             plan.packMagnet = pack->raw.magnetUri;
             plan.packTitle  = pack->raw.title;
             // A covering pack covers all wanted episodes by definition; gapEpisodes left empty.
+            // T11.1 review I5: carry the covered episodes (m_wanted minus the —
+            // here empty — gaps) so executeCheckoutPlan can mark them
+            // click-pending; the pack emits no per-episode dispatch.
+            plan.coveredEpisodes = m_wanted;
         } else {
             // No covering pack: all wanted episodes need individual sources.
             plan.gapEpisodes = m_wanted;

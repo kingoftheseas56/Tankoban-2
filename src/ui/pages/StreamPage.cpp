@@ -3246,6 +3246,14 @@ void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
                                           roots.first(), imdbId, season);
     }
 
+    // T11.1 review I5: pack-covered rows must flip to Queued at confirm-time
+    // too — the pack transfer carries them but emits no per-episode dispatch,
+    // so without this they'd sit on "Download" until cohort progress lands.
+    if (m_detailView && plan.usePack) {
+        for (int ep : plan.coveredEpisodes)
+            m_detailView->markEpisodeClickPending(season, ep);
+    }
+
     // Stagger per-episode gap downloads 1500ms apart (see rationale above).
     // T10: mark each gap episode click-pending immediately (before the stagger
     // delay fires) so all gap rows flip to Queued at the instant the user

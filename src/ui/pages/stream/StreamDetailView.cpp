@@ -8,6 +8,7 @@
 #include "core/stream/StreamLibrary.h"
 #include "core/stream/StreamProgress.h"
 #include "core/torrent/TorrentClient.h"
+#include "core/queue/TransferQueue.h"
 #include "ui/dialogs/AddTorrentDialog.h"
 #include "StreamSourceList.h"
 
@@ -2078,6 +2079,19 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& /*globalAn
         const QString hash = findInfoHashForEpisode(season, episode);
         if (!hash.isEmpty() && m_torrentClient) {
             m_torrentClient->pauseTorrent(hash);
+            // T11.1 review I1: mirror the Downloads-page pause semantics — a
+            // row pause must also release the transfer's queue slot, or under
+            // the max-active cap a row-paused download holds its slot forever.
+            // Only queue-pause when the engine target IS the lane head (same
+            // guard as the page): a pack/sibling could hold the head and must
+            // not be flipped by this row's intent.
+            if (auto* q = m_torrentClient->transferQueue()) {
+                const QString showId = QStringLiteral("imdb:") + m_currentImdb;
+                const auto lane = q->laneFor(showId);
+                if (lane && !lane->items.empty()
+                    && lane->items.front().transferId == hash)
+                    q->pauseCurrent(showId);
+            }
             // Keep the cohort snapshot's Paused flag in sync — episodeDisplayState
             // reads it to derive the Paused state.
             m_torrentClient->setStreamBulkItemPaused(hash, /*paused=*/true);
@@ -2087,7 +2101,17 @@ void StreamDetailView::onActionIconClicked(int episode, const QPoint& /*globalAn
     case S::Paused: {
         const QString hash = findInfoHashForEpisode(season, episode);
         if (!hash.isEmpty() && m_torrentClient) {
-            m_torrentClient->resumeTorrent(hash);
+            // T11.1 review I1: route resume through the queue so the max-active
+            // cap holds — engine-resume only when the queue promoted the head
+            // (slot free). When gated, the head goes Queued and TorrentClient's
+            // Running-replay resumes the engine on later promotion (T6 review
+            // C1 fall-through), so skipping the engine call here is correct.
+            if (auto* q = m_torrentClient->transferQueue()) {
+                if (q->resumeCurrent(QStringLiteral("imdb:") + m_currentImdb).has_value())
+                    m_torrentClient->resumeTorrent(hash);
+            } else {
+                m_torrentClient->resumeTorrent(hash);
+            }
             m_torrentClient->setStreamBulkItemPaused(hash, /*paused=*/false);
         }
         break;

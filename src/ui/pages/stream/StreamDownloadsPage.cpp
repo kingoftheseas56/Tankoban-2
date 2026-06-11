@@ -416,6 +416,32 @@ void StreamDownloadsPage::buildUi()
                     qInfo() << "[downloads] cancel intent dropped (stale/completed row)";
                     return;
                 }
+                // T11.1 review I3: when the row's carrying lane item is a
+                // season PACK (per-episode row, lane item with no episode
+                // number), this row is ONE episode of a shared transfer —
+                // queue-cancel/deleteTorrent here would silently kill every
+                // sibling episode. Pack-level control belongs to a future
+                // batch affordance; per-episode intents must never destroy
+                // the shared transfer. Cancel = evict only THIS episode's
+                // index entry (episode-level evict: evictByPath on the
+                // entry's canonical key). The episode>0 guard excludes movie
+                // rows, whose lane items also lack an episodeNumber.
+                {
+                    QHash<QString, tankoban::queue::TransferLane> lanes;
+                    if (auto* q = m_client->transferQueue())
+                        lanes = q->lanesSnapshot();
+                    const auto* li = tankostream::stream::laneItemFor(
+                        lanes, fresh->imdbId, fresh->season, fresh->episode);
+                    if (li && !li->episodeNumber.has_value() && fresh->episode > 0) {
+                        if (m_index && !fresh->canonicalPath.isEmpty())
+                            m_index->evictByPath(
+                                StreamDownloadIndex::computeCanonicalKey(fresh->canonicalPath));
+                        else
+                            qInfo() << "[downloads] pack-child cancel: no"
+                                       " canonical path to evict — no-op";
+                        return;
+                    }
+                }
                 // T6 review C2: rows with no lane item (orphan resume, index
                 // Failed, etc.) carry an empty infoHash — derive the engine
                 // hash from the index group ("tankorent:<infohash>") so cancel
@@ -473,23 +499,42 @@ void StreamDownloadsPage::buildUi()
                     return;
                 }
                 // Clean up the failed transfer first: remove from queue + engine
-                // (delete partial files) and evict the old Failed index entries
-                // — a retried episode's stale Failed row must vanish; the new
-                // dispatch re-registers Pending (T6 review I1). Failed rows
-                // usually have no lane item (queues erase on terminal states),
-                // so derive the engine hash from the index group when needed.
+                // (delete partial files). Failed rows usually have no lane item
+                // (queues erase on terminal states), so derive the engine hash
+                // from the index group when needed.
+                // T11.1 review I3: when the row's carrying lane item is a season
+                // PACK (lane item with no episodeNumber; episode>0 excludes
+                // movies), skip engine/queue cleanup entirely — the pack may be
+                // healthy and shared with sibling episodes. Pack-level control
+                // belongs to a future batch affordance; per-episode intents must
+                // never destroy the shared transfer.
                 if (m_client) {
-                    const QString hash = !fresh->infoHash.isEmpty()
-                        ? fresh->infoHash
-                        : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
-                    if (!hash.isEmpty()) {
-                        if (auto* q = m_client->transferQueue())
-                            q->cancel(hash);
-                        m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                    QHash<QString, tankoban::queue::TransferLane> lanes;
+                    if (auto* q = m_client->transferQueue())
+                        lanes = q->lanesSnapshot();
+                    const auto* li = tankostream::stream::laneItemFor(
+                        lanes, fresh->imdbId, fresh->season, fresh->episode);
+                    const bool packChild =
+                        li && !li->episodeNumber.has_value() && fresh->episode > 0;
+                    if (!packChild) {
+                        const QString hash = !fresh->infoHash.isEmpty()
+                            ? fresh->infoHash
+                            : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
+                        if (!hash.isEmpty()) {
+                            if (auto* q = m_client->transferQueue())
+                                q->cancel(hash);
+                            m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                        }
                     }
                 }
-                if (m_index && !fresh->sourceGroupId.isEmpty())
-                    m_index->evictBySourceGroup(fresh->sourceGroupId);
+                // T11.1 review I4 (spec §6): do NOT evict the Failed index
+                // entries on retry — if the re-pick finds no sources, the entry
+                // stays Failed and the row stays in the Failed section instead
+                // of vanishing. On success the re-dispatch overwrites the entry
+                // via the same canonical path (registerPendingEpisode). Trade-
+                // off: a different-source re-pick may create a second entry at
+                // a new path; bestEntryForEpisode + duplicate handling exist;
+                // accepted v1.
                 emit retryEpisodeRequested(fresh->imdbId, fresh->season, fresh->episode);
             });
 

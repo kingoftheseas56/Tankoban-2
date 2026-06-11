@@ -20,6 +20,10 @@ struct CheckoutPlan {
     QString    packMagnet;
     QString    packTitle;
     QList<int> gapEpisodes;   // per-episode auto-pick downloads (T9 dispatches)
+    // T11.1 review I5: wanted episodes the pack carries (m_wanted minus
+    // gapEpisodes when usePack; empty otherwise). executeCheckoutPlan marks
+    // these click-pending so pack-covered rows flip to Queued instantly too.
+    QList<int> coveredEpisodes;
 };
 
 class SeasonCheckoutPanel : public QDialog {
