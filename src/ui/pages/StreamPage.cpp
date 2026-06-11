@@ -3257,6 +3257,12 @@ void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
         // TransferQueue lane + persists imdbId, preserving lane discipline.
         const QString hash = m_torrentClient->resolveMetadata(plan.packMagnet);
         if (hash.isEmpty()) {
+            // T11.4 (2026-06-11): pack magnet failed to resolve → DO NOT mark the
+            // covered episodes Queued. Surface the error but DON'T return: the gap
+            // episodes below are independent per-episode auto-picks and must still
+            // dispatch. Only the pack's covered eps are skipped on this failure (no
+            // transfer starts for them, so flipping them to Queued would strand them
+            // as zombie-Queued rows that never progress).
             if (m_detailView)
                 m_detailView->setStreamSourcesError(tr("Could not resolve season pack source"));
         } else {
@@ -3271,15 +3277,17 @@ void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
             config.season          = season;
             config.magnetUri       = plan.packMagnet;
             m_torrentClient->startDownload(hash, config);
-        }
-    }
 
-    // T11.1 review I5: pack-covered rows must flip to Queued at confirm-time
-    // too — the pack transfer carries them but emits no per-episode dispatch,
-    // so without this they'd sit on "Download" until cohort progress lands.
-    if (m_detailView && plan.usePack) {
-        for (int ep : plan.coveredEpisodes)
-            m_detailView->markEpisodeClickPending(season, ep);
+            // T11.1 review I5 / T11.4: pack-covered rows flip to Queued at confirm-time
+            // too — the pack transfer carries them but emits no per-episode dispatch,
+            // so without this they'd sit on "Download" until cohort progress lands.
+            // Marked ONLY on the success path (after startDownload is issued) so a
+            // resolve failure above leaves them on "Download" instead of zombie-Queued.
+            if (m_detailView) {
+                for (int ep : plan.coveredEpisodes)
+                    m_detailView->markEpisodeClickPending(season, ep);
+            }
+        }
     }
 
     // Stagger per-episode gap downloads 1500ms apart (see rationale above).

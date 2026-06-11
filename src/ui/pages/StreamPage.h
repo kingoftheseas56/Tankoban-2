@@ -374,7 +374,7 @@ private:
     // search to populate pack candidates as they resolve.
     void openSeasonCheckout(int season, const QList<int>& preselected);
     // executeCheckoutPlan dispatches the plan emitted by SeasonCheckoutPanel:
-    //   - usePack=true  → addMagnetForShow for the season pack
+    //   - usePack=true  → startDownload (imdbId-carrying path) for the season pack
     //   - gapEpisodes   → per-episode startAutoDownload staggered 1500ms apart
     //     (startAutoDownload uses a single shared m_pendingAuto + streamsReady
     //     one-shot; calling it in a tight loop clobbers each prior call — staggering
