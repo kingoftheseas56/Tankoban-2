@@ -258,6 +258,32 @@ TEST(TransferQueueCapTest, CancelRunningFreesSlot) {
     EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
 }
 
+// T7 review C1 — "Pause All" must not start new downloads: per-lane
+// pauseCurrent() promotes a Queued waiter into every freed slot (which the
+// TorrentClient Running-replay then starts). pauseAll() flips every Running
+// head in one pass with NO promotion.
+TEST(TransferQueueCapTest, PauseAllDoesNotPromoteWaiters) {
+    TransferQueue q;
+    q.setMaxActive(2);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.enqueue(makeItem("t3", "imdb:tt0003", 1));   // gated waiter
+    const QStringList paused = q.pauseAll();
+    EXPECT_EQ(paused.size(), 2);
+    EXPECT_EQ(q.runningCount(), 0);
+    EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Queued);  // NOT promoted
+}
+
+TEST(TransferQueueCapTest, PauseAllSkipsPausedAndQueuedHeads) {
+    TransferQueue q;
+    q.setMaxActive(0);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.pauseCurrent("imdb:tt0001");
+    const QStringList paused = q.pauseAll();
+    EXPECT_EQ(paused, QStringList{"t2"});
+}
+
 TEST(TransferQueueCapTest, GatedResumeEmitsQueuedItemState) {
     TransferQueue q;
     q.setMaxActive(1);

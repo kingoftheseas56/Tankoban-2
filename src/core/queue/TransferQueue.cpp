@@ -70,6 +70,32 @@ std::optional<TransferItem> TransferQueue::resumeCurrent(const QString& showId) 
     return it->items.front();
 }
 
+QStringList TransferQueue::pauseAll() {
+    // T7 review C1 — deliberately NO promoteOldestEligible() anywhere in here:
+    // per-lane pauseCurrent() promotes a Queued waiter into each freed slot,
+    // which TorrentClient's Running-replay then STARTS — so a loop of
+    // pauseCurrent calls during "Pause All" leaves new downloads running.
+    // Flip every Running head in one pass, collect first, emit after — the
+    // emit pass runs only once m_lanes iteration is complete, so a direct-
+    // connected slot that re-enters the queue can't invalidate the iterator.
+    QStringList paused;
+    QStringList shows;
+    for (auto it = m_lanes.begin(); it != m_lanes.end(); ++it) {
+        TransferLane& lane = it.value();
+        if (lane.items.empty()) continue;
+        TransferItem& head = lane.items.front();
+        if (head.state != TransferState::Running) continue;
+        head.state = TransferState::Paused;
+        paused.append(head.transferId);
+        shows.append(lane.showId);
+    }
+    for (int i = 0; i < paused.size(); ++i) {
+        emit itemStateChanged(paused.at(i), TransferState::Paused);
+        emit laneChanged(shows.at(i));
+    }
+    return paused;
+}
+
 bool TransferQueue::cancel(const QString& transferId, std::optional<TransferItem>* nextAfterCancel) {
     if (nextAfterCancel) *nextAfterCancel = std::nullopt;
     for (auto laneIt = m_lanes.begin(); laneIt != m_lanes.end(); ++laneIt) {

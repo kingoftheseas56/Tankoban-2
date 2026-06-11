@@ -119,10 +119,15 @@ private:
     // tree rebuilds; updateTotals() is cheap (no tree churn).
     QTimer* m_totalsTimer = nullptr;
 
-    // "Clear Done" display cutoff (epoch ms) — loaded from QSettings; rows in
-    // the Completed section with addedAt < this value are hidden. Display-only:
-    // the StreamDownloadIndex is untouched.
-    qint64 m_clearDoneBeforeMs = 0;
+    // "Clear Done" hidden-row keys — loaded from QSettings ("downloads/
+    // clearedDoneKeys", stored as QStringList). Key shape:
+    // "imdbId|season|episode|addedAt" (addedAt disambiguates re-downloads of
+    // the same episode). A click captures the keys of rows that are Completed
+    // RIGHT NOW; rows still in flight at click time keep their key out of the
+    // set and stay visible when they finish (T7 review I1 — the old addedAt
+    // watermark hid in-flight completions). Display-only: the
+    // StreamDownloadIndex is untouched.
+    QSet<QString> m_clearedDoneKeys;
 
     // Topbar
     QPushButton* m_backBtn    = nullptr;

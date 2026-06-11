@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QHash>
 #include <QString>
+#include <QStringList>
 #include <optional>
 
 namespace tankoban::queue {
@@ -36,6 +37,12 @@ public:
 
     // Resumes a paused current item. Returns the item to resume, or nullopt.
     std::optional<TransferItem> resumeCurrent(const QString& showId);
+
+    // Pause every Running lane head in one pass WITHOUT promoting waiters —
+    // "Pause All" must not start new downloads (T7 review C1). Returns the
+    // transferIds that were flipped so the caller can engine-pause them.
+    // Emits itemStateChanged(Paused) per flip + laneChanged per affected lane.
+    QStringList pauseAll();
 
     // Removes a queued item by transferId. If the removed item was current,
     // the lane advances to the next queued item (returned via nextAfterCancel

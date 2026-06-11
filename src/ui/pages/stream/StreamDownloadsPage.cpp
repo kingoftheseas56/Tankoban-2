@@ -2,6 +2,10 @@
 // Task 5 (2026-06-11) — DownloadDetailPane replaces the right pane stub.
 // Task 7 (2026-06-11) — Top strip wired: live totals, Pause/Resume All,
 //   Clear Done, max-active knob.
+// T7.1 (2026-06-11) — review fixes: promotion-free queue pauseAll() drives
+//   Pause All (C1), Clear Done switched from an addedAt watermark to a
+//   hidden-keys set (I1), Resume All is FIFO + single-mechanism, totals read
+//   the engine snapshot directly.
 // Replaces the old two-section scrollable card list with a QSplitter:
 //   left  — QTreeWidget: Failed / Active / Queued / Completed sections,
 //            shows grouped, episodes as leaves.
@@ -13,6 +17,7 @@
 #include "DownloadDetailPane.h"
 
 #include "core/torrent/TorrentClient.h"
+#include "core/torrent/TorrentEngine.h"   // allStatuses() for updateTotals
 #include "core/TorrentResult.h"   // humanSize()
 #include "core/net/NetSeam.h"
 #include "core/stream/StreamDownloadIndex.h"
@@ -73,6 +78,16 @@ QString makeSelectionKey(const tankostream::stream::DownloadRow& r)
            + QLatin1Char('|') + QString::number(r.episode);
 }
 
+// "Clear Done" hidden-row key: "imdbId|season|episode|addedAt" (T7.1, review
+// I1). addedAt disambiguates a re-download of the same episode — a fresh
+// registration stamps a new addedAt, so clearing an old completed run can
+// never hide the new one.
+QString clearedDoneKey(const tankostream::stream::DownloadRow& r)
+{
+    return makeSelectionKey(r)
+           + QLatin1Char('|') + QString::number(r.addedAt);
+}
+
 } // namespace
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -98,10 +113,15 @@ StreamDownloadsPage::StreamDownloadsPage(QWidget* parent)
 {
     setObjectName(QStringLiteral("StreamDownloadsPage"));
 
-    // Load persistent "Clear Done" cutoff.
-    m_clearDoneBeforeMs = QSettings()
-        .value(QStringLiteral("downloads/clearDoneBeforeMs"), qint64(0))
-        .toLongLong();
+    // Load persistent "Clear Done" hidden-row keys (semantics in the header).
+    // The pre-T7.1 "downloads/clearDoneBeforeMs" watermark settings key is
+    // left orphaned — harmless, display-only state needs no migration.
+    {
+        const QStringList stored = QSettings()
+            .value(QStringLiteral("downloads/clearedDoneKeys"))
+            .toStringList();
+        m_clearedDoneKeys = QSet<QString>(stored.cbegin(), stored.cend());
+    }
 
     // 250ms debounce timer — all signal triggers start() this; rebuild() fires
     // once per burst.
@@ -174,20 +194,15 @@ void StreamDownloadsPage::buildUi()
         if (!m_client) return;
         auto* q = m_client->transferQueue();
         if (!q) return;
-        // Take a snapshot ONCE so promotions during the loop can't cause
-        // re-pausing churn: a newly-promoted head that was Queued at snapshot
-        // time will not appear in this Running-filtered set.
-        const auto lanes = q->lanesSnapshot();
-        for (auto it = lanes.cbegin(); it != lanes.cend(); ++it) {
-            const auto& lane = it.value();
-            if (lane.items.empty()) continue;
-            const auto& head = lane.items.front();
-            if (head.state != tankoban::queue::TransferState::Running) continue;
-            // Engine first, queue second — same ordering as the single-pause handler.
-            if (!head.transferId.isEmpty())
-                m_client->pauseTorrent(head.transferId);
-            q->pauseCurrent(lane.showId);
-        }
+        // T7 review C1 — pauseAll() flips every Running head in one pass with
+        // NO promotion (per-lane pauseCurrent promotes a waiter into each
+        // freed slot, which the Running-replay then STARTS — "Pause All" must
+        // not start new downloads). Queue-first ordering is SAFE here
+        // precisely because pauseAll cannot promote/start anything; we then
+        // engine-pause the flipped transfers.
+        const QStringList paused = q->pauseAll();
+        for (const QString& id : paused)
+            m_client->pauseTorrent(id);
     });
     strip->addWidget(m_pauseAllBtn, 0);
 
@@ -200,25 +215,66 @@ void StreamDownloadsPage::buildUi()
         // Snapshot once — promotions during the loop are fine here: cap gates
         // how many actually flip to Running; gated ones stay Queued and
         // auto-promote later via the C1 fall-through in TorrentClient.
+        // T7.1: resume in head-enqueueSeq order (QHash iteration order is
+        // arbitrary) so the cap's slots go to the oldest-enqueued paused heads
+        // first — deterministic FIFO. No page-side engine-resume: single
+        // mechanism — TorrentClient's Running-replay fall-through (T6.1 C1
+        // fix) already engine-resumes every promoted head synchronously on
+        // itemStateChanged(Running).
         const auto lanes = q->lanesSnapshot();
+        QList<tankoban::queue::TransferLane> pausedLanes;
         for (auto it = lanes.cbegin(); it != lanes.cend(); ++it) {
             const auto& lane = it.value();
             if (lane.items.empty()) continue;
-            if (lane.items.front().state != tankoban::queue::TransferState::Paused)
-                continue;
-            auto item = q->resumeCurrent(lane.showId);
-            if (item && !item->transferId.isEmpty())
-                m_client->resumeTorrent(item->transferId);
+            if (lane.items.front().state == tankoban::queue::TransferState::Paused)
+                pausedLanes.append(lane);
         }
+        std::sort(pausedLanes.begin(), pausedLanes.end(),
+                  [](const tankoban::queue::TransferLane& a,
+                     const tankoban::queue::TransferLane& b) {
+                      return a.items.front().enqueueSeq < b.items.front().enqueueSeq;
+                  });
+        for (const auto& lane : pausedLanes)
+            q->resumeCurrent(lane.showId);
     });
     strip->addWidget(m_resumeAllBtn, 0);
 
     m_clearDoneBtn = new QPushButton(tr("Clear Done"), stripWidget);
     m_clearDoneBtn->setEnabled(false);
     connect(m_clearDoneBtn, &QPushButton::clicked, this, [this]() {
-        m_clearDoneBeforeMs = QDateTime::currentMSecsSinceEpoch();
-        QSettings().setValue(QStringLiteral("downloads/clearDoneBeforeMs"),
-                             m_clearDoneBeforeMs);
+        if (!m_index) return;
+        // T7 review I1 — "clear what I see now": key every row that is
+        // Completed RIGHT NOW. A download still in flight at click time is
+        // not keyed, so it stays visible when it completes (the old addedAt
+        // watermark hid it — addedAt is the registration time, which predates
+        // the click for in-flight transfers).
+        //
+        // Fresh buildDownloadRows snapshot, not the last rendered rows: the
+        // tree can be up to ~250ms debounce-stale and clearing should act on
+        // current model truth. maxCompletedAgeMs=0 so >30d age-trimmed
+        // Completed rows are keyed too (they're hidden by the age trim
+        // anyway; keying them is harmless) and so liveKeys spans every key
+        // the index can still produce.
+        tankostream::stream::DownloadsSnapshot snap;
+        snap.indexEntries = m_index->all();
+        if (m_client && m_client->transferQueue())
+            snap.lanes = m_client->transferQueue()->lanesSnapshot();
+        const auto rows = tankostream::stream::buildDownloadRows(
+            snap, QDateTime::currentMSecsSinceEpoch(), /*maxCompletedAgeMs=*/0);
+        QSet<QString> liveKeys;
+        for (const auto& r : rows) {
+            const QString key = clearedDoneKey(r);
+            liveKeys.insert(key);
+            if (r.section == tankostream::stream::DownloadSection::Completed)
+                m_clearedDoneKeys.insert(key);
+        }
+        // Prune keys whose rows left the index entirely (cancel / evict /
+        // re-download) so the persisted set can't grow unbounded.
+        m_clearedDoneKeys.intersect(liveKeys);
+        QSettings().setValue(
+            QStringLiteral("downloads/clearedDoneKeys"),
+            QVariant(QStringList(m_clearedDoneKeys.cbegin(),
+                                 m_clearedDoneKeys.cend())));
         rebuild();
     });
     strip->addWidget(m_clearDoneBtn, 0);
@@ -612,14 +668,17 @@ void StreamDownloadsPage::rebuild()
     auto rows = tankostream::stream::buildDownloadRows(
         snap, QDateTime::currentMSecsSinceEpoch(), kCompletedTrimMs);
 
-    // DOWNLOADS_OVERHAUL_V2 T7 — Clear Done filter: hide Completed rows added
-    // before the "Clear Done" timestamp. Display-only; index is untouched.
-    if (m_clearDoneBeforeMs > 0) {
+    // DOWNLOADS_OVERHAUL_V2 T7.1 — Clear Done filter: hide Completed rows the
+    // user explicitly cleared (keys captured at click time). A download that
+    // was still in flight at click time was never keyed — same addedAt, but
+    // not Completed then — so it surfaces normally when it finishes (review
+    // I1). Display-only; index is untouched.
+    if (!m_clearedDoneKeys.isEmpty()) {
         rows.erase(
             std::remove_if(rows.begin(), rows.end(),
                 [this](const tankostream::stream::DownloadRow& r) {
                     return r.section == tankostream::stream::DownloadSection::Completed
-                           && r.addedAt < m_clearDoneBeforeMs;
+                           && m_clearedDoneKeys.contains(clearedDoneKey(r));
                 }),
             rows.end());
     }
@@ -809,11 +868,17 @@ void StreamDownloadsPage::updateTotals()
     if (auto* q = m_client->transferQueue())
         n = q->runningCount();
 
-    // Aggregate download speed across all active engine transfers.
+    // Aggregate download speed straight from the engine's thread-safe status
+    // snapshot (T7.1). listActive() would work too but runs a SQLite SELECT
+    // (repo.listTorrents) per call just to overlay the same live engine
+    // fields — pointless at 1 Hz when speed is the only thing we need.
+    // Paused / seeding handles report downloadRate 0, so a plain sum is fine.
     qint64 totalBps = 0;
-    const auto active = m_client->listActive();
-    for (const auto& info : active)
-        totalBps += info.dlSpeed;
+    if (auto* engine = m_client->engine()) {
+        const auto statuses = engine->allStatuses();
+        for (const auto& s : statuses)
+            totalBps += s.downloadRate;
+    }
 
     // Format: "N active · 1.2 MB/s"
     if (n == 0 && totalBps == 0) {
