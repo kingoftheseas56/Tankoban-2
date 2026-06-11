@@ -3242,8 +3242,36 @@ void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
     if (plan.usePack && !plan.packMagnet.isEmpty() && m_torrentClient) {
         qInfo().noquote() << "[checkout] queue pack imdb=" << imdbId
                           << "s" << season << "title=" << plan.packTitle.left(60);
-        m_torrentClient->addMagnetForShow(plan.packMagnet, QStringLiteral("videos"),
-                                          roots.first(), imdbId, season);
+        // DOWNLOADS_OVERHAUL_V2 review P1-A (2026-06-11) — route the season pack
+        // through startDownload (the imdbId-carrying path), NOT addMagnetForShow.
+        // addMagnetForShow starts the lane head via addMagnetHeadless(), which builds
+        // an AddTorrentConfig WITHOUT imdbId/season — so the persisted torrent row had
+        // an empty imdbId. onTorrentFinished/onTorrentError only call the queue's
+        // finishCurrent/cancel when imdbId is non-empty, so the pack NEVER freed its
+        // lane slot (leak under the global cap), and onMetadataReady's per-episode
+        // Pending registration (also imdbId-gated) never fired (no episode state).
+        // Mirror finishAutoDownloadPick: resolve the infohash, then build a full
+        // config (imdbId + season + magnetUri, EMPTY streamGroupId so onMetadataReady/
+        // onPieceFinished/onTorrentFinished drive per-episode pending→progress→complete
+        // into StreamDownloadIndex). startDownload enqueues into the same imdb:<id>
+        // TransferQueue lane + persists imdbId, preserving lane discipline.
+        const QString hash = m_torrentClient->resolveMetadata(plan.packMagnet);
+        if (hash.isEmpty()) {
+            if (m_detailView)
+                m_detailView->setStreamSourcesError(tr("Could not resolve season pack source"));
+        } else {
+            AddTorrentConfig config;
+            config.category        = QStringLiteral("videos");
+            config.destinationPath = roots.first();
+            config.contentLayout   = QStringLiteral("original");
+            config.streamGroupId   = QString();   // empty → per-episode drive path
+            config.sequential      = false;
+            config.startPaused     = false;
+            config.imdbId          = imdbId;
+            config.season          = season;
+            config.magnetUri       = plan.packMagnet;
+            m_torrentClient->startDownload(hash, config);
+        }
     }
 
     // T11.1 review I5: pack-covered rows must flip to Queued at confirm-time

@@ -3,16 +3,18 @@
 // button row, and the three reused Tankorent property tabs (Files / Peers /
 // Trackers) pointed at the row's carrying torrent.
 //
-// Stats accessor: TorrentClient::listActive() scanned for the matching infoHash
-// to obtain dlSpeed / ulSpeed / peers / seeds / totalDone / totalWanted.
-// This matches how TorrentGeneralTab sources size (engine()->torrentDetails),
-// but speed+peers are only in TorrentInfo (listActive), not TorrentDetails —
-// so we use listActive() and fall back gracefully when the row has no live
-// torrent (Completed/history rows with empty infoHash).
+// Stats accessor: engine()->allStatuses() scanned for the matching infoHash to
+// obtain downloadRate / uploadRate / numPeers / totalWanted (DOWNLOADS_OVERHAUL_V2
+// review P1-B, 2026-06-11). Was TorrentClient::listActive(), which runs a SQLite
+// SELECT (repo.listTorrents) on the GUI thread every second — the bc179a1 hang
+// class. updateTotals (StreamDownloadsPage) was already moved off listActive to
+// allStatuses for the same reason (T7.1); this mirrors it. Falls back gracefully
+// when the row has no live handle (Completed/history rows with empty infoHash).
 
 #include "DownloadDetailPane.h"
 
 #include "core/torrent/TorrentClient.h"
+#include "core/torrent/TorrentEngine.h"   // allStatuses() / TorrentStatus (P1-B)
 #include "core/TorrentResult.h"   // humanSize()
 #include "ui/pages/tankorent/TorrentFilesTab.h"
 #include "ui/pages/tankorent/TorrentPeersTab.h"
@@ -394,14 +396,16 @@ void DownloadDetailPane::rebuildUiForRow()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// refreshStats — 1 Hz tick: pull TorrentInfo from listActive()
+// refreshStats — 1 Hz tick: pull live status from engine()->allStatuses()
 // ─────────────────────────────────────────────────────────────────────────────
-// The accessor used here is TorrentClient::listActive(), scanning for the
-// matching infoHash. This is the same data source that TorrentGeneralTab uses
-// for the "live" fields (via engine()->torrentDetails), but speed+peers are
-// stored on TorrentInfo (dlSpeed / ulSpeed / peers / seeds / totalDone /
-// totalWanted), which is only emitted by the alert-worker tick and exposed by
-// listActive() — TorrentDetails does not carry them.
+// DOWNLOADS_OVERHAUL_V2 review P1-B (2026-06-11) — the accessor is now
+// engine()->allStatuses(), an in-memory snapshot of the live libtorrent handles
+// (no SQL). The previous accessor, TorrentClient::listActive(), ran a SQLite
+// SELECT (repo.listTorrents) on the GUI thread once per second — the bc179a1
+// hang class. updateTotals (StreamDownloadsPage::updateTotals, T7.1) was already
+// migrated to allStatuses for the same reason; this mirrors it. The field names
+// differ from TorrentInfo: TorrentStatus exposes downloadRate / uploadRate /
+// numPeers / totalWanted (cf. TorrentInfo's dlSpeed / ulSpeed / peers).
 
 void DownloadDetailPane::refreshStats()
 {
@@ -410,20 +414,27 @@ void DownloadDetailPane::refreshStats()
         return;
     }
 
-    // Scan active list for matching infoHash
-    const auto actives = m_client->listActive();
-    TorrentInfo info;
+    // Scan the live engine status snapshot for the matching infoHash (no SQL).
+    auto* engine = m_client->engine();
+    if (!engine) {
+        m_statsTimer->stop();
+        m_statsLabel->setText(QString());
+        return;
+    }
+
+    const auto statuses = engine->allStatuses();
+    TorrentStatus info;
     bool found = false;
-    for (const auto& t : actives) {
-        if (t.infoHash == m_row.infoHash) {
-            info = t;
+    for (const auto& s : statuses) {
+        if (s.infoHash == m_row.infoHash) {
+            info = s;
             found = true;
             break;
         }
     }
 
     if (!found) {
-        // Torrent no longer active (just completed or removed) — stop
+        // Torrent no longer has a live handle (just completed or removed) — stop
         m_statsTimer->stop();
         m_statsLabel->setText(QString());
         return;
@@ -432,11 +443,11 @@ void DownloadDetailPane::refreshStats()
     // Format: "<dl_speed> down · <ul_speed> up · <peers> peers · <size>"
     QStringList parts;
 
-    parts << tr("%1 down").arg(formatSpeed(info.dlSpeed));
-    parts << tr("%1 up").arg(formatSpeed(info.ulSpeed));
+    parts << tr("%1 down").arg(formatSpeed(info.downloadRate));
+    parts << tr("%1 up").arg(formatSpeed(info.uploadRate));
 
-    if (info.peers > 0)
-        parts << tr("%1 peers").arg(info.peers);
+    if (info.numPeers > 0)
+        parts << tr("%1 peers").arg(info.numPeers);
 
     if (info.totalWanted > 0)
         parts << humanSize(info.totalWanted);
