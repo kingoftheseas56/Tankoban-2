@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QPixmap>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <optional>
 
@@ -53,6 +54,9 @@ signals:
                                 int season,
                                 int episode);
 
+protected:
+    void showEvent(QShowEvent* event) override;
+
 private slots:
     void rebuild();
     void onMetaItemReady(const tankostream::addon::MetaItem& item);
@@ -88,6 +92,10 @@ private:
     // Enrichment caches (title + poster) — keyed by imdbId
     QHash<QString, QString>  m_titleCache;
     QHash<QString, QPixmap>  m_posterCache;
+    // Guards against per-rebuild refetch of dead ids: negative results are not
+    // cached by MetaAggregator, so without this set every rebuild would re-fire
+    // fetchMetaItem for any id that never resolves.
+    QSet<QString>            m_metaRequested;
 
     // Debounce timer — all signal triggers funnel through here
     QTimer* m_rebuildDebounce = nullptr;

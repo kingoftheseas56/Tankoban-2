@@ -46,12 +46,13 @@ namespace {
 // Section indices match DownloadSection enum order
 static const char* kSectionNames[] = {"Failed", "Active", "Queued", "Completed"};
 
-// Unique selection key for an episode leaf item: "<section>|<imdbId>|<season>|<episode>"
-// For a movie (season==0, episode==0) we still use 0|0.
+// Unique selection key for an episode leaf item: "<imdbId>|<season>|<episode>"
+// Section is intentionally excluded so selection survives an item moving between
+// sections (e.g. Queued→Active→Completed). For a movie (season==0, episode==0)
+// we still use 0|0.
 QString makeSelectionKey(const tankostream::stream::DownloadRow& r)
 {
-    return QString::number(int(r.section))
-           + QLatin1Char('|') + r.imdbId
+    return r.imdbId
            + QLatin1Char('|') + QString::number(r.season)
            + QLatin1Char('|') + QString::number(r.episode);
 }
@@ -271,6 +272,18 @@ void StreamDownloadsPage::buildUi()
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// showEvent — refresh on navigation
+// ──────────────────────────────────────────────────────────────────────────────
+
+void StreamDownloadsPage::showEvent(QShowEvent* event)
+{
+    QFrame::showEvent(event);
+    // Cheap insurance: navigating to this page always shows current state, never
+    // a stale tree left over from when the page was last visible.
+    m_rebuildDebounce->start();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Injection setters
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -321,6 +334,12 @@ void StreamDownloadsPage::setStreamDownloadIndex(StreamDownloadIndex* index)
         connect(m_index, &StreamDownloadIndex::entriesChanged,
                 this, [this]() { m_rebuildDebounce->start(); },
                 Qt::QueuedConnection);
+        // entryStateChanged carries per-piece progress; updateEpisodeProgress
+        // deliberately does NOT emit entriesChanged, so without this connect
+        // the Active section's pct column freezes mid-download.
+        connect(m_index, &StreamDownloadIndex::entryStateChanged,
+                this, [this](const QString&) { m_rebuildDebounce->start(); },
+                Qt::QueuedConnection);
     }
     m_rebuildDebounce->start();
 }
@@ -369,7 +388,7 @@ void StreamDownloadsPage::rebuild()
         // Section header node
         if (!sectionItems[s]) {
             sectionItems[s] = new QTreeWidgetItem(m_tree,
-                {tr(kSectionNames[s]), QString(), QString()});
+                {QString::fromLatin1(kSectionNames[s]), QString(), QString()});
             sectionItems[s]->setExpanded(true);
             sectionItems[s]->setFlags(Qt::ItemIsEnabled);
             QFont f = sectionItems[s]->font(0);
@@ -413,7 +432,12 @@ void StreamDownloadsPage::rebuild()
             item->setForeground(0, QBrush(QColor(0xf3, 0xa6, 0xa6)));
 
         // Kick off enrichment fetch for any new imdbId we haven't seen yet.
-        if (!m_titleCache.contains(r.imdbId) && m_meta) {
+        // m_metaRequested guards against a per-rebuild storm: negative results
+        // aren't cached by MetaAggregator, so a failing id would be refetched
+        // on every rebuild without this session-scoped set.
+        if (!m_titleCache.contains(r.imdbId) && m_meta
+                && !m_metaRequested.contains(r.imdbId)) {
+            m_metaRequested.insert(r.imdbId);
             const QString type = (r.type == QLatin1String("movie"))
                 ? QStringLiteral("movie")
                 : QStringLiteral("series");
