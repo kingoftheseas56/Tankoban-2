@@ -452,6 +452,11 @@ private:
     // TheatreDownloadPanel class remain intact for future streaming revival.
     QPushButton*  m_downloadBtn = nullptr;
 
+    // THEATRE_PACK_TAB_RESTORE (2026-06-12) — Layers-3 icon button next to
+    // primary Download; emits theatreDownloadRequested to slide the Tankorent
+    // pack picker (TheatreDownloadPanel) in over the Sources pane. Series-only.
+    QPushButton*  m_packOptionsBtn = nullptr;
+
     // Season-header secondary button: visible only when m_selectedEpisodes
     // is non-empty. Label "Download Selected (N)".
     QPushButton*  m_downloadSelectedBtn = nullptr;

@@ -648,14 +648,37 @@ void StreamDetailView::buildUI()
     seasonLayout->addWidget(m_downloadSelectedBtn);
     seasonLayout->addWidget(m_downloadBtn);
 
-    // THEATRE_DOWNLOAD_SIMPLIFY P4.2 (2026-05-30) — the "Pack downloads"
-    // (layers-3) button that opened the Tankorent pack picker (TheatreDownloadPanel)
-    // is removed from the series view per the download-simplify direction. The
-    // Tankorent SEARCH engine (UnifiedPackSearchEngine / TankorentSearchService /
-    // TheatreDownloadPanel class) is left fully intact for the future streaming
-    // revival — only this UI trigger is gone. The theatreDownloadRequested signal
-    // is retained (declared in the header; StreamPage still connects it) so the
-    // panel can be re-surfaced later without re-plumbing.
+    // THEATRE_PACK_TAB_RESTORE (2026-06-12) — re-add the Layers-3 secondary
+    // button next to primary Download (restored verbatim from f7bf977, removed
+    // by THEATRE_DOWNLOAD_SIMPLIFY P4.2 2026-05-30). Opens TheatreDownloadPanel
+    // for the pack-based selection flow (Season Packs / Multi-Season / Complete
+    // Series). Tooltip "Pack downloads" — icon-only, no text label. Series-only
+    // (gated on m_currentType in the click lambda, mirroring the season row).
+    m_packOptionsBtn = new QPushButton(m_seasonRow);
+    m_packOptionsBtn->setObjectName(QStringLiteral("DetailPackOptionsBtn"));
+    m_packOptionsBtn->setFixedHeight(30);
+    m_packOptionsBtn->setFixedWidth(36);
+    m_packOptionsBtn->setCursor(Qt::PointingHandCursor);
+    m_packOptionsBtn->setIcon(QIcon(QStringLiteral(":/icons/layers-3.svg")));
+    m_packOptionsBtn->setIconSize(QSize(18, 18));
+    m_packOptionsBtn->setToolTip(tr("Pack downloads"));
+    m_packOptionsBtn->setStyleSheet(
+        "#DetailPackOptionsBtn { background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;"
+        "  color: #ddd; padding: 0; }"
+        "#DetailPackOptionsBtn:hover { background: rgba(255,255,255,0.12);"
+        "  border-color: rgba(255,255,255,0.22); }");
+    connect(m_packOptionsBtn, &QPushButton::clicked, this, [this]() {
+        if (m_currentImdb.isEmpty() || m_currentType != QLatin1String("series"))
+            return;
+        const int season = m_seasonCombo ? m_seasonCombo->currentData().toInt() : 0;
+        emit theatreDownloadRequested(m_currentImdb,
+                                       currentTitle(),
+                                       season,
+                                       m_currentType,
+                                       episodeCountsBySeason());
+    });
+    seasonLayout->addWidget(m_packOptionsBtn);
 
     m_seasonRow->hide();
     leftCol->addWidget(m_seasonRow);
@@ -750,25 +773,34 @@ void StreamDetailView::buildUI()
     // is untouched.
     contentRow->addLayout(leftCol, 3);
 
-    // THEATRE_STREAMING_RESTORE P2 (2026-06-10) — restore the visible Sources
-    // pane (removed in THEATRE_DOWNLOAD_SIMPLIFY P4.1). Hemanth chose pick-first:
-    // clicking an episode loads + SHOWS this list (no auto-play), and each source
-    // card carries a Play (stream) + Download button. The list's four signals are
-    // wired exactly as before. (The old m_rightPaneStack QStackedLayout host for
-    // the season-pack TheatreDownloadPanel slide-in stays null — rightPaneStack()
-    // returns null and StreamPage's panel wiring null-guards cleanly; restoring
-    // that slide-in is a separate THEATRE_DOWNLOAD_OVERHAUL concern, out of scope.)
-    auto* rightCol = new QVBoxLayout();
+    // THEATRE_PACK_TAB_RESTORE (2026-06-12) — the right pane is a QStackedLayout
+    // (StackAll) host again so the Tankorent pack panel (TheatreDownloadPanel)
+    // can slide in OVER the Sources pane, as it did before download-only. The
+    // Sources column (restored in THEATRE_STREAMING_RESTORE P2, pick-first:
+    // clicking an episode loads + SHOWS this list, each source card carrying a
+    // Play + Download button, the four signals wired exactly as before) becomes
+    // the base page. rightPaneStack()/sourcesPanel() now return non-null, which
+    // re-activates StreamPage's TheatreDownloadPanel construction + slide-in
+    // (gated on m_detailRightPaneStack at StreamPage.cpp ~846).
+    m_rightPaneStack = new QWidget(this);
+    m_rightPaneStack->setObjectName(QStringLiteral("DetailRightPaneStack"));
+    auto* rightStackLayout = new QStackedLayout(m_rightPaneStack);
+    rightStackLayout->setContentsMargins(0, 0, 0, 0);
+    rightStackLayout->setStackingMode(QStackedLayout::StackAll);
+
+    m_sourcesPanel = new QWidget(m_rightPaneStack);
+    m_sourcesPanel->setObjectName(QStringLiteral("DetailSourcesPanel"));
+    auto* rightCol = new QVBoxLayout(m_sourcesPanel);
     rightCol->setContentsMargins(0, 0, 0, 0);
     rightCol->setSpacing(6);
 
-    m_sourcesHeader = new QLabel(tr("Sources"), this);
+    m_sourcesHeader = new QLabel(tr("Sources"), m_sourcesPanel);
     m_sourcesHeader->setObjectName(QStringLiteral("DetailSourcesHeader"));
     m_sourcesHeader->setStyleSheet(
         "color: #e5e7eb; font-size: 13px; font-weight: 600; padding: 0 2px;");
     rightCol->addWidget(m_sourcesHeader);
 
-    m_sourcesList = new tankostream::stream::StreamSourceList(this);
+    m_sourcesList = new tankostream::stream::StreamSourceList(m_sourcesPanel);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::sourceActivated,
             this, &StreamDetailView::sourceActivated);
     connect(m_sourcesList, &tankostream::stream::StreamSourceList::addToTankorentRequested,
@@ -779,7 +811,8 @@ void StreamDetailView::buildUI()
             this, &StreamDetailView::autoLaunchCancelRequested);
     rightCol->addWidget(m_sourcesList, 1);
 
-    contentRow->addLayout(rightCol, 2);
+    rightStackLayout->addWidget(m_sourcesPanel);
+    contentRow->addWidget(m_rightPaneStack, 2);
 
     root->addLayout(contentRow, 1);
 }
