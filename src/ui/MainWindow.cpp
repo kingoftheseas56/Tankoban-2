@@ -51,6 +51,7 @@
 #include <QEvent>
 #include <QMouseEvent>
 #include <QMetaObject>
+#include <QSettings>
 #include <QWindowStateChangeEvent>
 
 #ifdef Q_OS_WIN
@@ -789,6 +790,9 @@ void MainWindow::buildPageStack()
     // TANKORENT_QUALITY_AND_QUEUE P1 T1.8 (2026-05-27) — hand TransferQueue to
     // TorrentClient. Subsequent T1.9 makes addTorrent/addMagnet consult it.
     torrentClient->setTransferQueue(m_transferQueue);
+    // DOWNLOADS_OVERHAUL_V2 T7 — global concurrent-download cap (spec: 3 default).
+    m_transferQueue->setMaxActive(
+        QSettings().value(QStringLiteral("downloads/maxActive"), 3).toInt());
     dbg("4e-torrentclient-created");
 
     // TORRENT_PERSISTENCE_COLLAPSE Phase 3.4 (2026-05-20) — inject the SQLite

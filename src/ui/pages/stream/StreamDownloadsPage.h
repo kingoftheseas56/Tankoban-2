@@ -2,6 +2,8 @@
 
 // DOWNLOADS_OVERHAUL_V2 Task 4 (2026-06-11) — Master-Detail shell rebuild.
 // Task 5 (2026-06-11) — m_detailPlaceholder replaced by DownloadDetailPane.
+// Task 7 (2026-06-11) — Top strip wired: live totals, Pause All / Resume All /
+//   Clear Done, max-active knob.
 // The page is now driven by tankostream::stream::buildDownloadRows so the
 // Active / History split is replaced by a single four-section (Failed /
 // Active / Queued / Completed) grouped tree with a real detail pane on the
@@ -61,6 +63,7 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void rebuild();
@@ -110,6 +113,16 @@ private:
 
     // Debounce timer — all signal triggers funnel through here
     QTimer* m_rebuildDebounce = nullptr;
+
+    // Top-strip live-speed timer — runs only while page is visible (1 Hz).
+    // Kept separate from the rebuild debounce so speed updates don't cause full
+    // tree rebuilds; updateTotals() is cheap (no tree churn).
+    QTimer* m_totalsTimer = nullptr;
+
+    // "Clear Done" display cutoff (epoch ms) — loaded from QSettings; rows in
+    // the Completed section with addedAt < this value are hidden. Display-only:
+    // the StreamDownloadIndex is untouched.
+    qint64 m_clearDoneBeforeMs = 0;
 
     // Topbar
     QPushButton* m_backBtn    = nullptr;

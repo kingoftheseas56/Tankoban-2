@@ -1,5 +1,7 @@
 // DOWNLOADS_OVERHAUL_V2 Task 4 (2026-06-11) — Master-Detail shell.
 // Task 5 (2026-06-11) — DownloadDetailPane replaces the right pane stub.
+// Task 7 (2026-06-11) — Top strip wired: live totals, Pause/Resume All,
+//   Clear Done, max-active knob.
 // Replaces the old two-section scrollable card list with a QSplitter:
 //   left  — QTreeWidget: Failed / Active / Queued / Completed sections,
 //            shows grouped, episodes as leaves.
@@ -11,6 +13,7 @@
 #include "DownloadDetailPane.h"
 
 #include "core/torrent/TorrentClient.h"
+#include "core/TorrentResult.h"   // humanSize()
 #include "core/net/NetSeam.h"
 #include "core/stream/StreamDownloadIndex.h"
 #include "core/stream/MetaAggregator.h"
@@ -38,7 +41,10 @@
 #include <QTreeWidgetItem>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
+#include <QSettings>
 #include <QVariant>
+
+#include <algorithm>
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -47,6 +53,14 @@ namespace {
 
 // Section indices match DownloadSection enum order
 static const char* kSectionNames[] = {"Failed", "Active", "Queued", "Completed"};
+
+// Mirrors DownloadDetailPane::formatSpeed (local copy — not exported).
+// Formats bytes/s as "1.2 MB/s", "348.0 KB/s", "0 B/s".
+QString formatDownloadSpeed(qint64 bps)
+{
+    if (bps <= 0) return QStringLiteral("0 B/s");
+    return humanSize(bps) + QStringLiteral("/s");
+}
 
 // Unique selection key for an episode leaf item: "<imdbId>|<season>|<episode>"
 // Section is intentionally excluded so selection survives an item moving between
@@ -84,12 +98,25 @@ StreamDownloadsPage::StreamDownloadsPage(QWidget* parent)
 {
     setObjectName(QStringLiteral("StreamDownloadsPage"));
 
+    // Load persistent "Clear Done" cutoff.
+    m_clearDoneBeforeMs = QSettings()
+        .value(QStringLiteral("downloads/clearDoneBeforeMs"), qint64(0))
+        .toLongLong();
+
     // 250ms debounce timer — all signal triggers start() this; rebuild() fires
     // once per burst.
     m_rebuildDebounce = new QTimer(this);
     m_rebuildDebounce->setSingleShot(true);
     m_rebuildDebounce->setInterval(250);
     connect(m_rebuildDebounce, &QTimer::timeout, this, &StreamDownloadsPage::rebuild);
+
+    // 1 Hz live-speed timer — started/stopped in showEvent/hideEvent so it
+    // only runs while the page is actually visible. Updates totals label only
+    // (no tree rebuild).
+    m_totalsTimer = new QTimer(this);
+    m_totalsTimer->setInterval(1000);
+    connect(m_totalsTimer, &QTimer::timeout,
+            this, &StreamDownloadsPage::updateTotals);
 
     buildUi();
 }
@@ -140,25 +167,91 @@ void StreamDownloadsPage::buildUi()
         QStringLiteral("color: rgba(255,255,255,0.55); font-size: 12px;"));
     strip->addWidget(m_totalsLabel, 1);
 
-    // Buttons and combo — created but NOT wired (Task 7). Disabled now.
+    // Buttons — disabled until setTorrentClient() injects a live client.
     m_pauseAllBtn = new QPushButton(tr("Pause All"), stripWidget);
     m_pauseAllBtn->setEnabled(false);
+    connect(m_pauseAllBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_client) return;
+        auto* q = m_client->transferQueue();
+        if (!q) return;
+        // Take a snapshot ONCE so promotions during the loop can't cause
+        // re-pausing churn: a newly-promoted head that was Queued at snapshot
+        // time will not appear in this Running-filtered set.
+        const auto lanes = q->lanesSnapshot();
+        for (auto it = lanes.cbegin(); it != lanes.cend(); ++it) {
+            const auto& lane = it.value();
+            if (lane.items.empty()) continue;
+            const auto& head = lane.items.front();
+            if (head.state != tankoban::queue::TransferState::Running) continue;
+            // Engine first, queue second — same ordering as the single-pause handler.
+            if (!head.transferId.isEmpty())
+                m_client->pauseTorrent(head.transferId);
+            q->pauseCurrent(lane.showId);
+        }
+    });
     strip->addWidget(m_pauseAllBtn, 0);
 
     m_resumeAllBtn = new QPushButton(tr("Resume All"), stripWidget);
     m_resumeAllBtn->setEnabled(false);
+    connect(m_resumeAllBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_client) return;
+        auto* q = m_client->transferQueue();
+        if (!q) return;
+        // Snapshot once — promotions during the loop are fine here: cap gates
+        // how many actually flip to Running; gated ones stay Queued and
+        // auto-promote later via the C1 fall-through in TorrentClient.
+        const auto lanes = q->lanesSnapshot();
+        for (auto it = lanes.cbegin(); it != lanes.cend(); ++it) {
+            const auto& lane = it.value();
+            if (lane.items.empty()) continue;
+            if (lane.items.front().state != tankoban::queue::TransferState::Paused)
+                continue;
+            auto item = q->resumeCurrent(lane.showId);
+            if (item && !item->transferId.isEmpty())
+                m_client->resumeTorrent(item->transferId);
+        }
+    });
     strip->addWidget(m_resumeAllBtn, 0);
 
     m_clearDoneBtn = new QPushButton(tr("Clear Done"), stripWidget);
     m_clearDoneBtn->setEnabled(false);
+    connect(m_clearDoneBtn, &QPushButton::clicked, this, [this]() {
+        m_clearDoneBeforeMs = QDateTime::currentMSecsSinceEpoch();
+        QSettings().setValue(QStringLiteral("downloads/clearDoneBeforeMs"),
+                             m_clearDoneBeforeMs);
+        rebuild();
+    });
     strip->addWidget(m_clearDoneBtn, 0);
 
+    // Max-active label + combo
+    auto* maxActiveLabel = new QLabel(tr("Max active:"), stripWidget);
+    maxActiveLabel->setStyleSheet(
+        QStringLiteral("color: rgba(255,255,255,0.55); font-size: 12px;"));
+    strip->addWidget(maxActiveLabel, 0);
+
     m_maxActiveCombo = new QComboBox(stripWidget);
-    m_maxActiveCombo->addItem(tr("Max: unlimited"));
-    m_maxActiveCombo->addItem(tr("Max: 1"));
-    m_maxActiveCombo->addItem(tr("Max: 2"));
-    m_maxActiveCombo->addItem(tr("Max: 3"));
+    // Items: display text with integral data (0 = unlimited).
+    m_maxActiveCombo->addItem(tr("1"),         QVariant(1));
+    m_maxActiveCombo->addItem(tr("2"),         QVariant(2));
+    m_maxActiveCombo->addItem(tr("3"),         QVariant(3));
+    m_maxActiveCombo->addItem(tr("5"),         QVariant(5));
+    m_maxActiveCombo->addItem(tr("Unlimited"), QVariant(0));
+    // Restore from settings (default 3).
+    {
+        const int saved = QSettings()
+            .value(QStringLiteral("downloads/maxActive"), 3).toInt();
+        const int idx = m_maxActiveCombo->findData(QVariant(saved));
+        m_maxActiveCombo->setCurrentIndex(idx >= 0 ? idx : 2);  // fallback: "3"
+    }
     m_maxActiveCombo->setEnabled(false);
+    connect(m_maxActiveCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        const int v = m_maxActiveCombo->itemData(idx).toInt();
+        QSettings().setValue(QStringLiteral("downloads/maxActive"), v);
+        if (m_client && m_client->transferQueue())
+            m_client->transferQueue()->setMaxActive(v);
+    });
     strip->addWidget(m_maxActiveCombo, 0);
 
     root->addWidget(stripWidget, 0);
@@ -403,6 +496,14 @@ void StreamDownloadsPage::showEvent(QShowEvent* event)
     // Cheap insurance: navigating to this page always shows current state, never
     // a stale tree left over from when the page was last visible.
     m_rebuildDebounce->start();
+    // Start live-speed ticker only while visible to avoid unnecessary work.
+    m_totalsTimer->start();
+}
+
+void StreamDownloadsPage::hideEvent(QHideEvent* event)
+{
+    QFrame::hideEvent(event);
+    m_totalsTimer->stop();
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -446,6 +547,14 @@ void StreamDownloadsPage::setTorrentClient(TorrentClient* client)
     // Forward client to the detail pane so it can construct tabs lazily.
     if (m_detailPane)
         m_detailPane->setClient(m_client);
+
+    // Enable strip controls only once we have a live client — buttons are
+    // created disabled and stay that way until injection (T7).
+    const bool hasClient = (m_client != nullptr);
+    m_pauseAllBtn->setEnabled(hasClient);
+    m_resumeAllBtn->setEnabled(hasClient);
+    m_clearDoneBtn->setEnabled(hasClient);
+    m_maxActiveCombo->setEnabled(hasClient);
 
     m_rebuildDebounce->start();
 }
@@ -500,8 +609,20 @@ void StreamDownloadsPage::rebuild()
     if (m_client && m_client->transferQueue())
         snap.lanes = m_client->transferQueue()->lanesSnapshot();
 
-    const auto rows = tankostream::stream::buildDownloadRows(
+    auto rows = tankostream::stream::buildDownloadRows(
         snap, QDateTime::currentMSecsSinceEpoch(), kCompletedTrimMs);
+
+    // DOWNLOADS_OVERHAUL_V2 T7 — Clear Done filter: hide Completed rows added
+    // before the "Clear Done" timestamp. Display-only; index is untouched.
+    if (m_clearDoneBeforeMs > 0) {
+        rows.erase(
+            std::remove_if(rows.begin(), rows.end(),
+                [this](const tankostream::stream::DownloadRow& r) {
+                    return r.section == tankostream::stream::DownloadSection::Completed
+                           && r.addedAt < m_clearDoneBeforeMs;
+                }),
+            rows.end());
+    }
 
     const QString selectedKey = currentSelectionKey();
     m_tree->clear();
@@ -673,14 +794,36 @@ StreamDownloadsPage::freshRowFor(const tankostream::stream::DownloadRow& stale) 
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Totals (stub — Task 7 fills)
+// Totals — DOWNLOADS_OVERHAUL_V2 T7
 // ──────────────────────────────────────────────────────────────────────────────
 
 void StreamDownloadsPage::updateTotals()
 {
-    // Task 7 fills in real counts. Leave blank for now so the strip doesn't
-    // show stale/wrong numbers.
-    m_totalsLabel->setText(QString());
+    if (!m_client) {
+        m_totalsLabel->setText(QString());
+        return;
+    }
+
+    // Running count from the queue (queue-aware, cap-correct).
+    int n = 0;
+    if (auto* q = m_client->transferQueue())
+        n = q->runningCount();
+
+    // Aggregate download speed across all active engine transfers.
+    qint64 totalBps = 0;
+    const auto active = m_client->listActive();
+    for (const auto& info : active)
+        totalBps += info.dlSpeed;
+
+    // Format: "N active · 1.2 MB/s"
+    if (n == 0 && totalBps == 0) {
+        m_totalsLabel->setText(tr("0 active"));
+    } else {
+        m_totalsLabel->setText(
+            tr("%1 active  ·  %2")
+                .arg(n)
+                .arg(formatDownloadSpeed(totalBps)));
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
