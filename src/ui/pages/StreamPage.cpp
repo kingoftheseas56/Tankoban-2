@@ -28,6 +28,7 @@
 #include "stream/StreamHomeBoard.h"
 #include "stream/CatalogBrowseScreen.h"
 #include "stream/TheatreDownloadPanel.h"
+#include "stream/SeasonCheckoutPanel.h"
 #include "core/stream/StreamProgress.h"
 #include "core/torrent/TorrentClient.h"
 
@@ -3117,25 +3118,139 @@ void StreamPage::triggerBulkSeasonDownload(int season)
 
 // STREAM_DOWNLOADS_NETFLIX_OVERHAUL — three new slots wired from StreamDetailView's
 // seasonDownloadRequested / selectedEpisodesDownloadRequested / singleEpisodeDownloadRequested
-// signals. All three funnel into triggerBulkSelectedEpisodes which builds the episode
-// list then runs the normal BulkSourceCollector path.
+// signals.
+// DOWNLOADS_OVERHAUL_V2 T9 — seasonDownloadRequested + selectedEpisodesDownloadRequested
+// now route through the SeasonCheckoutPanel (pack-first path). singleEpisodeDownloadRequested
+// continues to use startAutoDownload directly (per-episode, no panel needed).
 
 void StreamPage::onSeasonDownloadRequested(int season)
 {
     if (!m_detailView) return;
-    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, QList<int>{});
+    openSeasonCheckout(season, {});
 }
 
 void StreamPage::onSelectedEpisodesDownloadRequested(int season, const QList<int>& episodes)
 {
     if (!m_detailView) return;
-    triggerBulkSelectedEpisodes(m_detailView->currentImdb(), season, episodes);
+    openSeasonCheckout(season, episodes);
 }
 
 void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
 {
     if (!m_detailView) return;
     startAutoDownload(m_detailView->currentImdb(), QStringLiteral("series"), season, episode);
+}
+
+// DOWNLOADS_OVERHAUL_V2 T9 — pack-first season checkout panel.
+// Opens SeasonCheckoutPanel, seeds owned-episode detection from StreamDownloadIndex,
+// kicks off a UnifiedPackSearchEngine search, and wires queueAllRequested →
+// executeCheckoutPlan. Dialog is WA_DeleteOnClose; the signal lambda captures imdbId
+// + season by value so it's safe after dialog close.
+void StreamPage::openSeasonCheckout(int season, const QList<int>& preselected)
+{
+    using namespace tankostream::stream;
+    if (!m_detailView) return;
+    const QString imdbId = m_detailView->currentImdb();
+    if (imdbId.isEmpty() || m_detailView->currentType() != QLatin1String("series")) return;
+
+    QList<int> allEps;
+    for (const auto& ep : m_detailView->episodesForSeason(season))
+        allEps.append(ep.episode);
+    if (allEps.isEmpty()) {
+        m_detailView->setStreamSourcesError(tr("No episodes available for season download"));
+        return;
+    }
+
+    QSet<int> owned;
+    if (m_streamDownloadIndex) {
+        for (int e : allEps) {
+            const auto entry = m_streamDownloadIndex->bestEntryForEpisode(imdbId, season, e);
+            if (entry && entry->state == StreamDownloadIndex::Entry::Complete)
+                owned.insert(e);
+        }
+    }
+
+    auto* panel = new SeasonCheckoutPanel(imdbId, m_detailView->currentTitle(), season,
+                                          allEps, owned, preselected, this);
+    panel->setAttribute(Qt::WA_DeleteOnClose);
+    connect(panel, &SeasonCheckoutPanel::queueAllRequested, this,
+            [this, imdbId, season](const CheckoutPlan& plan) {
+                executeCheckoutPlan(imdbId, season, plan);
+            });
+
+    // Wire the pack search engine: stream pack candidates into the panel as they
+    // arrive, and signal search failure when the search settles with zero packs.
+    // Connections are made on the panel object so they auto-disconnect when the
+    // panel is destroyed (WA_DeleteOnClose). Qt connection lifetime: the panel
+    // is a child of `this`, so the connection is safe for the dialog's lifetime.
+    if (m_unifiedPackSearchEngine) {
+        connect(m_unifiedPackSearchEngine,
+                &tankoban::stream::theatre::UnifiedPackSearchEngine::packResults,
+                panel,
+                [panel, imdbId, season](const QString& id, int s,
+                                        const QList<tankoban::stream::theatre::EnrichedPack>& packs) {
+                    if (id == imdbId && s == season)
+                        panel->setPackCandidates(packs);
+                });
+        connect(m_unifiedPackSearchEngine,
+                &tankoban::stream::theatre::UnifiedPackSearchEngine::searchComplete,
+                panel,
+                [panel, imdbId, season](const QString& id, int s, int total) {
+                    if (id == imdbId && s == season && total == 0)
+                        panel->setSearchFailed(tr("No season packs found"));
+                });
+        m_unifiedPackSearchEngine->search(imdbId, m_detailView->currentTitle(), season);
+    } else {
+        panel->setSearchFailed(tr("Pack search unavailable"));
+    }
+
+    panel->show();
+}
+
+// DOWNLOADS_OVERHAUL_V2 T9 — execute the CheckoutPlan emitted by SeasonCheckoutPanel.
+//
+// Gap-episode dispatch staggering rationale:
+//   startAutoDownload uses a single shared m_pendingAuto slot + a one-shot
+//   streamsReady connection (disconnect(streamAggregator, streamsReady, this, nullptr)
+//   then reconnect). Calling it in a tight loop clobbers: call N+1 disconnects the
+//   handler installed by call N before N's streamsReady ever fires, so only the last
+//   call's episode would ever complete. The simplest correct fix is QTimer::singleShot
+//   staggering at 1500ms per gap episode — enough time for a Torrentio round-trip
+//   (~300–800ms observed) so each episode is fully in-flight before the next arms.
+//   A member-queue drain was considered but adds more state for the same outcome on
+//   a path that rarely has more than 3–5 gap episodes.
+void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
+                                     const tankostream::stream::CheckoutPlan& plan)
+{
+    if (m_detailView)
+        m_detailView->autoAddToLibrary();
+
+    const QStringList roots = m_bridge ? m_bridge->rootFolders(QStringLiteral("videos"))
+                                       : QStringList();
+    if (roots.isEmpty() || roots.first().isEmpty()) {
+        if (m_detailView)
+            m_detailView->setStreamSourcesError(tr("Videos library root is not configured"));
+        return;
+    }
+
+    if (plan.usePack && !plan.packMagnet.isEmpty() && m_torrentClient) {
+        qInfo().noquote() << "[checkout] queue pack imdb=" << imdbId
+                          << "s" << season << "title=" << plan.packTitle.left(60);
+        m_torrentClient->addMagnetForShow(plan.packMagnet, QStringLiteral("videos"),
+                                          roots.first(), imdbId, season);
+    }
+
+    // Stagger per-episode gap downloads 1500ms apart (see rationale above).
+    const QList<int> gaps = plan.gapEpisodes;
+    for (int i = 0; i < gaps.size(); ++i) {
+        const int ep = gaps.at(i);
+        QTimer::singleShot(i * 1500, this, [this, imdbId, season, ep]() {
+            qInfo().noquote() << "[checkout] queue gap episode" << ep
+                              << "imdb=" << imdbId << "s" << season;
+            startAutoDownload(imdbId, QStringLiteral("series"), season, ep,
+                              /*forStream=*/false);
+        });
+    }
 }
 
 // DOWNLOADS_OVERHAUL_V2 T6 — re-run the auto source pick for a failed episode.
@@ -3614,10 +3729,11 @@ void StreamPage::onStreamStopped()
         m_detailView->setStreamSourcesPlaybackStatus(QString(), /*isError=*/false);
 }
 
-// triggerBulkSelectedEpisodes — shared entry point for the three direct-dispatch
-// slots. When episodeFilter is non-empty only those episode numbers are included
-// in the m_bulkInput; empty filter = whole season (identical to the legacy
-// triggerBulkSeasonDownload path). Uses the same BulkSourceCollector orchestration.
+// triggerBulkSelectedEpisodes — original bulk-source-collector path.
+// DOWNLOADS_OVERHAUL_V2 T9 — the two user-facing entry points (onSeasonDownloadRequested
+// + onSelectedEpisodesDownloadRequested) now route through openSeasonCheckout instead.
+// Remaining callers: devDispatchEpisodes (dev-bridge). Dead-code-candidate for the
+// user-facing paths; T11 decides final removal.
 void StreamPage::triggerBulkSelectedEpisodes(const QString& imdbId, int season,
                                               const QList<int>& episodeFilter)
 {

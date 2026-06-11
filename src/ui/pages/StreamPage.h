@@ -62,6 +62,10 @@ class StreamAggregator;
 class MetaAggregator;
 class SubtitlesAggregator;
 struct StreamPickerChoice;
+// DOWNLOADS_OVERHAUL_V2 T9 — forward-declared so executeCheckoutPlan's
+// const-ref parameter compiles without pulling SeasonCheckoutPanel.h
+// into the header. The full definition is included in StreamPage.cpp.
+struct CheckoutPlan;
 }
 
 namespace tankoban::stream::theatre {
@@ -358,8 +362,26 @@ private:
 
     // Internal helper used by the three slots above. episodeFilter non-empty
     // restricts the dispatch to those episode numbers only (whole-season when empty).
+    // DOWNLOADS_OVERHAUL_V2 T9 — checkout supersedes the direct bulk path for the
+    // season/selected-episodes entry points; kept for devDispatchEpisodes and
+    // triggerBulkSeasonDownload (dead-code-candidate for the former two, T11 decides).
     void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
                                      const QList<int>& episodeFilter);
+
+    // DOWNLOADS_OVERHAUL_V2 T9 — pack-first season checkout.
+    // openSeasonCheckout opens the SeasonCheckoutPanel for the given season,
+    // seeds it with owned-episode detection, and kicks off a UnifiedPackSearchEngine
+    // search to populate pack candidates as they resolve.
+    void openSeasonCheckout(int season, const QList<int>& preselected);
+    // executeCheckoutPlan dispatches the plan emitted by SeasonCheckoutPanel:
+    //   - usePack=true  → addMagnetForShow for the season pack
+    //   - gapEpisodes   → per-episode startAutoDownload staggered 1500ms apart
+    //     (startAutoDownload uses a single shared m_pendingAuto + streamsReady
+    //     one-shot; calling it in a tight loop clobbers each prior call — staggering
+    //     lets each one complete before the next fires, chosen over a member queue
+    //     for minimal blast radius on this path).
+    void executeCheckoutPlan(const QString& imdbId, int season,
+                             const tankostream::stream::CheckoutPlan& plan);
     QJsonObject devDispatchEpisodes(const QString& imdbId, int season,
                                     const QList<int>& episodeFilter);
 
