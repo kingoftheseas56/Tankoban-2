@@ -35,12 +35,17 @@ public:
     void setSearchFailed(const QString& message);   // degrade to all-gap mode
 
 signals:
+    // Emitted BEFORE accept(); the receiver must not delete the dialog synchronously
+    // — use deleteLater() or WA_DeleteOnClose instead.
     void queueAllRequested(const tankostream::stream::CheckoutPlan& plan);
 
 private:
     void rebuildPlanRows();
     void updateFooter();
     bool packCoversSeason(const tankoban::stream::theatre::EnrichedPack& p) const;
+    // Returns the selected pack iff selRow ∈ [0, m_packs.size()) AND packCoversSeason;
+    // returns nullptr otherwise (no-pack sentinel or non-covering selection).
+    const tankoban::stream::theatre::EnrichedPack* selectedCoveringPack() const;
 
     QString  m_imdbId;
     QString  m_showTitle;

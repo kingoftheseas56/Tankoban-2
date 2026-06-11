@@ -160,28 +160,15 @@ SeasonCheckoutPanel::SeasonCheckoutPanel(const QString& imdbId,
 
     // Wire Queue all
     connect(m_queueBtn, &QPushButton::clicked, this, [this]() {
-        // Determine which pack (if any) is selected and covers the season
-        const int selRow = m_packList->currentRow();
-        bool usingCoveringPack = false;
-        tankoban::stream::theatre::EnrichedPack selectedPack;
-
-        if (selRow >= 0 && selRow < m_packs.size()) {
-            const auto& p = m_packs.at(selRow);
-            if (packCoversSeason(p)) {
-                usingCoveringPack = true;
-                selectedPack = p;
-            }
-        }
+        const tankoban::stream::theatre::EnrichedPack* pack = selectedCoveringPack();
 
         CheckoutPlan plan;
-        plan.usePack = usingCoveringPack;
+        plan.usePack = (pack != nullptr);
 
-        if (usingCoveringPack) {
-            plan.packMagnet = selectedPack.raw.magnetUri;
-            plan.packTitle  = selectedPack.raw.title;
-            // Gaps = episodes in m_wanted NOT covered by the pack (conservative:
-            // a covering pack by definition covers all wanted episodes, so gaps=0).
-            // gapEpisodes left empty.
+        if (pack) {
+            plan.packMagnet = pack->raw.magnetUri;
+            plan.packTitle  = pack->raw.title;
+            // A covering pack covers all wanted episodes by definition; gapEpisodes left empty.
         } else {
             // No covering pack: all wanted episodes need individual sources.
             plan.gapEpisodes = m_wanted;
@@ -206,17 +193,21 @@ void SeasonCheckoutPanel::setPackCandidates(
             m_packs.append(p);
     }
 
-    // Sort best-first by combinedScore descending.
-    std::sort(m_packs.begin(), m_packs.end(),
-              [](const tankoban::stream::theatre::EnrichedPack& a,
-                 const tankoban::stream::theatre::EnrichedPack& b) {
-                  return a.combinedScore > b.combinedScore;
-              });
+    // Sort best-first by combinedScore descending (stable: equal-score order preserved).
+    std::stable_sort(m_packs.begin(), m_packs.end(),
+                     [](const tankoban::stream::theatre::EnrichedPack& a,
+                        const tankoban::stream::theatre::EnrichedPack& b) {
+                         return a.combinedScore > b.combinedScore;
+                     });
+
+    // Truncate to 5 so row index == pack index always (sentinel sits at row m_packs.size()).
+    if (m_packs.size() > 5)
+        m_packs = m_packs.mid(0, 5);
 
     m_packList->clear();
 
-    // Render top-5 candidates.
-    const int limit = qMin(m_packs.size(), 5);
+    // Render candidates (at most 5 after truncation above).
+    const int limit = m_packs.size();
     for (int i = 0; i < limit; ++i) {
         const auto& p = m_packs.at(i);
         const bool covers = packCoversSeason(p);
@@ -234,14 +225,15 @@ void SeasonCheckoutPanel::setPackCandidates(
         item->setForeground(covers ? QCLR_GAP : QColor(CLR_MUTED));
     }
 
-    // "No pack" sentinel row — always appended last.
+    // "No pack" sentinel row — sits at row index m_packs.size() (always valid after truncation).
     auto* noPack = new QListWidgetItem(QStringLiteral("No pack -- per-episode only"), m_packList);
     noPack->setForeground(QColor(CLR_MUTED));
-    Q_UNUSED(noPack)
 
-    // Default selection: first covering pack, or the no-pack row.
-    int defaultRow = limit;  // no-pack sentinel index
-    for (int i = 0; i < limit; ++i) {
+    // Default selection: first COVERING pack, or the no-pack sentinel.
+    // Deviation from plan's "first candidate": preselecting a non-covering pack would render
+    // a confusing all-gaps plan — best COVERING pack or no-pack sentinel.
+    int defaultRow = m_packs.size();  // no-pack sentinel index
+    for (int i = 0; i < m_packs.size(); ++i) {
         if (packCoversSeason(m_packs.at(i))) {
             defaultRow = i;
             break;
@@ -283,6 +275,18 @@ bool SeasonCheckoutPanel::packCoversSeason(
            || p.classification.detectedSeasons.contains(m_season);
 }
 
+// ── selectedCoveringPack ──────────────────────────────────────────────────────
+
+const tankoban::stream::theatre::EnrichedPack*
+SeasonCheckoutPanel::selectedCoveringPack() const
+{
+    const int selRow = m_packList->currentRow();
+    if (selRow < 0 || selRow >= m_packs.size())
+        return nullptr;
+    const auto& p = m_packs.at(selRow);
+    return packCoversSeason(p) ? &p : nullptr;
+}
+
 // ── rebuildPlanRows ───────────────────────────────────────────────────────────
 
 void SeasonCheckoutPanel::rebuildPlanRows()
@@ -290,10 +294,7 @@ void SeasonCheckoutPanel::rebuildPlanRows()
     m_planList->clear();
 
     // Determine if a covering pack is currently selected.
-    const int selRow = m_packList->currentRow();
-    bool hasCoveringPack = false;
-    if (selRow >= 0 && selRow < m_packs.size())
-        hasCoveringPack = packCoversSeason(m_packs.at(selRow));
+    const bool hasCoveringPack = (selectedCoveringPack() != nullptr);
 
     // Wanted episodes (not owned).
     for (int ep : m_wanted) {
@@ -337,16 +338,9 @@ void SeasonCheckoutPanel::updateFooter()
     }
 
     // Determine if a covering pack is selected.
-    const int selRow = m_packList->currentRow();
-    bool hasCoveringPack = false;
-    qint64 packSizeBytes  = 0;
-    if (selRow >= 0 && selRow < m_packs.size()) {
-        const auto& p = m_packs.at(selRow);
-        if (packCoversSeason(p)) {
-            hasCoveringPack = true;
-            packSizeBytes   = p.raw.sizeBytes;
-        }
-    }
+    const tankoban::stream::theatre::EnrichedPack* coveringPack = selectedCoveringPack();
+    const bool hasCoveringPack = (coveringPack != nullptr);
+    const qint64 packSizeBytes = hasCoveringPack ? coveringPack->raw.sizeBytes : 0;
 
     const int totalEps  = m_wanted.size();
     const int gapCount  = hasCoveringPack ? 0 : totalEps;
