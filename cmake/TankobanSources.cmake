@@ -238,6 +238,8 @@ set(SOURCES
     src/ui/pages/stream/StreamDownloadsPage.cpp
     # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
     src/ui/pages/stream/DownloadDetailPane.cpp
+    # DOWNLOADS_OVERHAUL_V2 T8 (2026-06-11) — pack-first Season Checkout dialog.
+    src/ui/pages/stream/SeasonCheckoutPanel.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
     src/ui/pages/stream/StreamDetailView.cpp
     # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.
@@ -457,6 +459,8 @@ set(HEADERS
     src/ui/pages/stream/StreamDownloadsPage.h
     # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
     src/ui/pages/stream/DownloadDetailPane.h
+    # DOWNLOADS_OVERHAUL_V2 T8 (2026-06-11) — pack-first Season Checkout dialog.
+    src/ui/pages/stream/SeasonCheckoutPanel.h
     src/ui/pages/stream/StreamSearchWidget.h
     src/ui/pages/stream/StreamDetailView.h
     # THEATRE_STREAMING_RESTORE P1 (2026-06-09) — restored streaming controller.
