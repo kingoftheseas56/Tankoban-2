@@ -517,13 +517,41 @@ void StreamDownloadsPage::buildUi()
                     const bool packChild =
                         li && !li->episodeNumber.has_value() && fresh->episode > 0;
                     if (!packChild) {
-                        const QString hash = !fresh->infoHash.isEmpty()
-                            ? fresh->infoHash
-                            : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
-                        if (!hash.isEmpty()) {
-                            if (auto* q = m_client->transferQueue())
-                                q->cancel(hash);
-                            m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                        // Index-based multi-episode pack guard: a failed pack's
+                        // lane item is already erased (finishCurrent(Failed)
+                        // removes terminal lane items), so the lane-based guard
+                        // above can't fire. The index is the durable truth —
+                        // count sibling entries sharing the same sourceGroupId.
+                        // If MORE THAN ONE entry shares the group the transfer
+                        // was carrying multiple episodes; deleting the pack hash
+                        // would destroy finished-but-unmoved siblings. Skip
+                        // engine/queue cleanup entirely and let the retry
+                        // re-dispatch handle it. Single-entry groups (normal
+                        // per-episode transfers) proceed as before.
+                        // (integration + security review convergence, T11.2)
+                        bool sharedPackTransfer = false;
+                        if (m_index && !fresh->sourceGroupId.isEmpty()) {
+                            const auto allEntries = m_index->all();
+                            int groupCount = 0;
+                            for (const auto& e : allEntries) {
+                                if (e.sourceGroupId == fresh->sourceGroupId)
+                                    ++groupCount;
+                            }
+                            sharedPackTransfer = groupCount > 1;
+                        }
+                        if (sharedPackTransfer) {
+                            qInfo() << "[downloads] retry: shared pack transfer,"
+                                       " skipping engine cleanup"
+                                    << "group=" << fresh->sourceGroupId;
+                        } else {
+                            const QString hash = !fresh->infoHash.isEmpty()
+                                ? fresh->infoHash
+                                : tankostream::stream::infoHashFromGroup(fresh->sourceGroupId);
+                            if (!hash.isEmpty()) {
+                                if (auto* q = m_client->transferQueue())
+                                    q->cancel(hash);
+                                m_client->deleteTorrent(hash, /*deleteFiles=*/true);
+                            }
                         }
                     }
                 }
