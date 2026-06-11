@@ -22,7 +22,11 @@ class DownloadDetailPane : public QWidget {
 public:
     explicit DownloadDetailPane(QWidget* parent = nullptr);
 
-    // Lazy: tabs are constructed on the first non-null client call.
+    // Single-injection: tabs bind the first non-null client passed here.
+    // Re-injection with a DIFFERENT client after tabs are built is unsupported
+    // (tabs hold a raw pointer to the original client; rebinding would require
+    // reconstructing all three tabs). Pass the permanent TorrentClient* once at
+    // setup and never call again with a different pointer.
     void setClient(TorrentClient* client);
 
     // Display the given row. displayTitle is the enriched show name (or imdbId
@@ -44,12 +48,14 @@ signals:
 protected:
     void hideEvent(QHideEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void buildUi();
     void ensureTabsBuilt();   // construct tabs once m_client is non-null
     void rebuildUiForRow();   // update visible controls / button row for current row
     void refreshStats();      // 1s timer tick: pull TorrentInfo from listActive()
+    void reelideTitle();      // re-elide m_fullTitle into m_titleLabel at current width
 
     // ── Injection state ──────────────────────────────────────────────────────
     TorrentClient* m_client  = nullptr;
@@ -58,7 +64,12 @@ private:
     // ── Row state ────────────────────────────────────────────────────────────
     tankostream::stream::DownloadRow m_row;
     QString                          m_displayTitle;
-    bool                             m_hasRow = false;
+    QString                          m_fullTitle;          // unelided; reelideTitle() elides into m_titleLabel
+    bool                             m_hasRow            = false;
+    // Set by setRow() before calling rebuildUiForRow(): true when the incoming
+    // infoHash equals the previous one and tabs are already built. Lets
+    // rebuildUiForRow() skip the 4 Hz GUI-thread-SQL tab teardown (C1).
+    bool                             m_sameHashReselect  = false;
 
     // ── Empty-state widget ───────────────────────────────────────────────────
     QLabel* m_emptyLabel = nullptr;

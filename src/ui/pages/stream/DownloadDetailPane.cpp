@@ -18,11 +18,13 @@
 #include "ui/pages/tankorent/TorrentPeersTab.h"
 #include "ui/pages/tankorent/TorrentTrackersTab.h"
 
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QTabWidget>
@@ -53,16 +55,13 @@ static const char* kBtnStyle =
     "  background: rgba(255,255,255,0.08);"
     "}";
 
-// Format bytes/s into a human-friendly string: "1.2 MB/s", "348 KB/s", etc.
-QString formatSpeed(int bps)
+// Format bytes/s into a human-friendly string: "1.2 MB/s", "348.0 KB/s", etc.
+// Mirrors TorrentPeersTab::formatSpeed — delegates to humanSize() for consistent
+// one-decimal KB/MB formatting across all Tankorent surfaces, then appends "/s".
+QString formatSpeed(qint64 bps)
 {
     if (bps <= 0) return QStringLiteral("0 B/s");
-    if (bps < 1024)
-        return QStringLiteral("%1 B/s").arg(bps);
-    if (bps < 1024 * 1024)
-        return QStringLiteral("%1 KB/s").arg(bps / 1024);
-    return QStringLiteral("%1 MB/s")
-        .arg(double(bps) / (1024.0 * 1024.0), 0, 'f', 1);
+    return humanSize(bps) + QStringLiteral("/s");
 }
 
 } // namespace
@@ -98,15 +97,20 @@ void DownloadDetailPane::buildUi()
     cv->setContentsMargins(16, 14, 16, 14);
     cv->setSpacing(8);
 
-    // Title
+    // Title — manual eliding via reelideTitle() / resizeEvent().
+    // QLabel has no native elide mode: with wordWrap off a long text sets a hard
+    // minimum width that locks the splitter. We store the full title in m_fullTitle
+    // + tooltip, and call QFontMetrics::elidedText in resizeEvent (mirrors
+    // StreamSourceCard::reelideTitle). SizePolicy::Ignored lets the label shrink
+    // below its natural text width so the splitter can move freely.
     m_titleLabel = new QLabel(m_content);
     m_titleLabel->setObjectName(QStringLiteral("DownloadDetailPaneTitle"));
     m_titleLabel->setStyleSheet(
         QStringLiteral("font-size: 15px; font-weight: 600; color: #eeeeee;"));
     m_titleLabel->setTextInteractionFlags(Qt::NoTextInteraction);
-    m_titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    // Ellipsize long titles
     m_titleLabel->setWordWrap(false);
+    m_titleLabel->setMinimumWidth(0);
+    m_titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     cv->addWidget(m_titleLabel, 0);
 
     // Progress bar
@@ -217,6 +221,15 @@ void DownloadDetailPane::buildUi()
 
 void DownloadDetailPane::setClient(TorrentClient* client)
 {
+    // Single-injection guard: tabs are wired to the first non-null client.
+    // Re-injection with a DIFFERENT client after tabs are built is unsupported —
+    // all three tab widgets hold a raw pointer to the original client and would
+    // need to be torn down and reconstructed to rebind. Warn and bail out.
+    if (m_tabsBuilt && m_client && client != m_client) {
+        qWarning("DownloadDetailPane::setClient: re-injection with a different "
+                 "client after tabs are built is unsupported — ignoring.");
+        return;
+    }
     m_client = client;
     // If we already have a row with a live infoHash, rebuild now that we have
     // a client to point the tabs at.
@@ -246,9 +259,17 @@ void DownloadDetailPane::ensureTabsBuilt()
 void DownloadDetailPane::setRow(const tankostream::stream::DownloadRow& row,
                                 const QString& displayTitle)
 {
+    // Capture old hash BEFORE mutating m_row so rebuildUiForRow() can
+    // detect a same-hash re-selection (C1 short-circuit).
+    const QString oldHash = m_row.infoHash;
+
     m_row          = row;
     m_displayTitle = displayTitle;
     m_hasRow       = true;
+
+    // C1: propagate whether this is a same-hash re-selection.
+    // rebuildUiForRow() uses this to skip the tab teardown on 4 Hz re-fires.
+    m_sameHashReselect = (row.infoHash == oldHash) && m_tabsBuilt;
 
     m_emptyLabel->hide();
     m_content->show();
@@ -259,6 +280,9 @@ void DownloadDetailPane::setRow(const tankostream::stream::DownloadRow& row,
 void DownloadDetailPane::clearRow()
 {
     m_hasRow = false;
+    m_row    = {};
+    m_displayTitle.clear();
+    m_fullTitle.clear();
     m_statsTimer->stop();
     m_content->hide();
     m_emptyLabel->show();
@@ -277,6 +301,13 @@ void DownloadDetailPane::rebuildUiForRow()
         return;
     }
 
+    // C1 short-circuit flag set by setRow() before this call.
+    // m_sameHashReselect == true means: the infoHash did not change AND tabs
+    // are already populated. rebuildUiForRow() will update title/progress/buttons
+    // but must NOT call setInfoHash() on any tab — that triggers full tree clear
+    // + per-file QComboBox allocation + a listActive() GUI-thread SQL scan, and
+    // the rebuild() → restoreSelection() → setRow() chain fires up to 4×/s.
+
     // ── Title ──────────────────────────────────────────────────────────────
     const QString episodePart =
         (m_row.type == QLatin1String("movie"))
@@ -285,13 +316,12 @@ void DownloadDetailPane::rebuildUiForRow()
               .arg(m_row.season,  2, 10, QLatin1Char('0'))
               .arg(m_row.episode, 2, 10, QLatin1Char('0'));
 
-    const QString fullTitle = m_displayTitle.isEmpty()
+    m_fullTitle = m_displayTitle.isEmpty()
         ? episodePart
         : m_displayTitle + QStringLiteral(" \xB7 ") + episodePart;
 
-    // Truncate with ellipsis if too long — QLabel handles this via elide mode
-    // when wordWrap is off and the geometry is constrained.
-    m_titleLabel->setText(fullTitle);
+    m_titleLabel->setToolTip(m_fullTitle);
+    reelideTitle();   // paints elided text at current width
 
     // ── Progress ──────────────────────────────────────────────────────────
     m_progressBar->setValue(m_row.pct);
@@ -330,12 +360,22 @@ void DownloadDetailPane::rebuildUiForRow()
     const bool hasLiveTorrent = !m_row.infoHash.isEmpty() && m_client;
     if (hasLiveTorrent) {
         ensureTabsBuilt();
-        m_filesTab->setInfoHash(m_row.infoHash);
-        m_filesTab->refresh();
-        m_peersTab->setInfoHash(m_row.infoHash);
-        m_peersTab->refresh();
-        m_trackersTab->setInfoHash(m_row.infoHash);
-        m_trackersTab->refresh();
+        // C1 short-circuit: when the infoHash has not changed and tabs are
+        // already populated (m_sameHashReselect == true), skip the full
+        // setInfoHash() teardown (tree clear + QComboBox reallocation +
+        // GUI-thread SQL listActive()). In-place progress updates are driven
+        // by the 1 Hz stats timer via refreshStats() → m_filesTab->refresh().
+        // setInfoHash() runs only when the hash actually changes (new selection)
+        // or on the very first population (m_tabsBuilt == false → ensureTabsBuilt
+        // sets it, m_sameHashReselect is false for first call).
+        if (!m_sameHashReselect) {
+            m_filesTab->setInfoHash(m_row.infoHash);
+            m_filesTab->refresh();
+            m_peersTab->setInfoHash(m_row.infoHash);
+            m_peersTab->refresh();
+            m_trackersTab->setInfoHash(m_row.infoHash);
+            m_trackersTab->refresh();
+        }
         m_tabWidget->show();
     } else {
         m_tabWidget->hide();
@@ -347,8 +387,8 @@ void DownloadDetailPane::rebuildUiForRow()
         m_statsTimer->start();
     } else {
         m_statsTimer->stop();
-        // For rows with no live torrent, show size only (from the row pct
-        // we can't derive size here; leave stats blank for Completed rows).
+        // No live torrent (Completed/history rows with empty infoHash):
+        // stats line is not meaningful — clear it.
         m_statsLabel->setText(QString());
     }
 }
@@ -392,18 +432,45 @@ void DownloadDetailPane::refreshStats()
     // Format: "<dl_speed> down · <ul_speed> up · <peers> peers · <size>"
     QStringList parts;
 
-    const QString dlStr = formatSpeed(info.dlSpeed);
-    const QString ulStr = formatSpeed(info.ulSpeed);
-    parts << dlStr + tr(" down");
-    parts << ulStr + tr(" up");
+    parts << tr("%1 down").arg(formatSpeed(info.dlSpeed));
+    parts << tr("%1 up").arg(formatSpeed(info.ulSpeed));
 
     if (info.peers > 0)
-        parts << QString::number(info.peers) + tr(" peers");
+        parts << tr("%1 peers").arg(info.peers);
 
     if (info.totalWanted > 0)
         parts << humanSize(info.totalWanted);
 
+    // Ride the 1 Hz timer to push in-place file-progress updates to the Files
+    // tab without a full setInfoHash() teardown (C1 short-circuit complement).
+    if (m_tabsBuilt && m_filesTab)
+        m_filesTab->refresh();
+
     m_statsLabel->setText(parts.join(QStringLiteral(" \xB7 ")));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Title eliding — mirrors StreamSourceCard::reelideTitle()
+// ─────────────────────────────────────────────────────────────────────────────
+
+void DownloadDetailPane::reelideTitle()
+{
+    if (!m_titleLabel || m_fullTitle.isEmpty()) return;
+    const int avail = m_titleLabel->width();
+    if (avail <= 0) {
+        // Widget not yet laid out — set the full text so the layout can measure
+        // it; resizeEvent will correct it once we have a real width.
+        m_titleLabel->setText(m_fullTitle);
+        return;
+    }
+    const QFontMetrics fm(m_titleLabel->font());
+    m_titleLabel->setText(fm.elidedText(m_fullTitle, Qt::ElideRight, avail));
+}
+
+void DownloadDetailPane::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    reelideTitle();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
