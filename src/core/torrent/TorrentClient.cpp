@@ -4115,6 +4115,31 @@ void TorrentClient::onTorrentError(const QString& infoHash, const QString& messa
         infoHash,
         StreamBulkItemState::Failed,
         QStringLiteral("Torrent error: %1").arg(message));
+
+    // DOWNLOADS_OVERHAUL_V2 review C1 (2026-06-11) — free the show's queue
+    // slot on torrent error, mirroring the onTorrentFinished lane-advance site
+    // above. Without this an errored transfer keeps its lane head Running and
+    // permanently leaks a slot under the global max-active cap (T1). If the
+    // errored torrent IS the lane head, finishCurrent(Failed) frees the slot
+    // and advances globally; otherwise it was still queued (errored pre-start,
+    // e.g. addMagnet/metadata failure) and cancel() removes it from the lane.
+    if (m_transferQueue) {
+        QString imdbId;  // lane key derivation — show-bound torrents only
+        if (const auto row = m_repo.getTorrent(infoHash)) imdbId = row->imdbId;
+        if (!imdbId.isEmpty()) {
+            const QString hash = infoHash.toLower();   // transferIds are lowercased (startDownload)
+            const QString showId = QStringLiteral("imdb:") + imdbId;
+            const auto lane = m_transferQueue->laneFor(showId);
+            if (lane && !lane->items.empty()
+                && lane->items.front().transferId == hash) {
+                m_transferQueue->finishCurrent(
+                    showId, tankoban::queue::TransferState::Failed);
+            } else {
+                m_transferQueue->cancel(hash);
+            }
+        }
+    }
+
     emit torrentUpdated(infoHash);
 }
 

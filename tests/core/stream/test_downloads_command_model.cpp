@@ -98,6 +98,70 @@ TEST(DownloadsCommandModelTest, SeasonPackLaneItemMatchesAnyEpisode) {
     EXPECT_EQ(rows[0].section, DownloadSection::Active);
 }
 
+// Review C1 — failure normally arrives via the INDEX: TransferQueue erases
+// items on terminal states, so lanes never carry Failed in production.
+TEST(DownloadsCommandModelTest, IndexFailedWithNoLaneIsFailedSection) {
+    DownloadsSnapshot snap;
+    snap.indexEntries = { entry("tt1", 1, 12, StreamDownloadIndex::Entry::Failed, 30) };
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].section, DownloadSection::Failed);
+    EXPECT_TRUE(rows[0].infoHash.isEmpty());
+}
+
+// Review C1 ordering — a retry re-queues a lane item while the index still
+// says Failed; the lane state must win so the row shows Queued, not Failed.
+TEST(DownloadsCommandModelTest, IndexFailedWithQueuedLaneIsQueued) {
+    DownloadsSnapshot snap;
+    snap.indexEntries = { entry("tt1", 1, 12, StreamDownloadIndex::Entry::Failed, 30) };
+    snap.lanes.insert("imdb:tt1", lane("tt1", TransferState::Queued, 1, 12, "h9"));
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].section, DownloadSection::Queued);
+    EXPECT_EQ(rows[0].infoHash, "h9");
+}
+
+// Review I1 (plan-owner decision, pinned): index Downloading with NO lane item
+// is the app-restart shape — resumed torrents download with an empty queue.
+// The transfer genuinely runs in the engine (progress keeps flowing via
+// updateEpisodeProgress), so the row stays Active despite the empty infoHash.
+TEST(DownloadsCommandModelTest, DownloadingWithNoLaneIsActiveOrphan) {
+    DownloadsSnapshot snap;
+    snap.indexEntries = { entry("tt1", 1, 12, StreamDownloadIndex::Entry::Downloading, 40) };
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].section, DownloadSection::Active);
+    EXPECT_TRUE(rows[0].infoHash.isEmpty());
+}
+
+// Movie rows (season 0, episode 0) match a lane item with nullopt season/
+// episode through the same no-episodeNumber path season packs use.
+TEST(DownloadsCommandModelTest, MovieRowMatchesLaneItemWithoutSeasonEpisode) {
+    DownloadsSnapshot snap;
+    StreamDownloadIndex::Entry m = entry("tt1", 0, 0, StreamDownloadIndex::Entry::Downloading, 55);
+    m.type = "movie";
+    snap.indexEntries = { m };
+    TransferLane l; l.showId = "imdb:tt1";
+    TransferItem it; it.transferId = "mh1"; it.showId = l.showId;
+    it.state = TransferState::Running;   // no seasonNumber, no episodeNumber
+    l.items.push_back(it);
+    snap.lanes.insert("imdb:tt1", l);
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].infoHash, "mh1");
+    EXPECT_EQ(rows[0].section, DownloadSection::Active);
+}
+
+// Fallback pinned: Pending with no lane item at all (lane not visible yet,
+// e.g. enqueue raced the snapshot) -> Queued.
+TEST(DownloadsCommandModelTest, PendingWithNoLaneIsQueued) {
+    DownloadsSnapshot snap;
+    snap.indexEntries = { entry("tt1", 1, 13, StreamDownloadIndex::Entry::Pending, 0) };
+    const auto rows = buildDownloadRows(snap, 0, 0);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows[0].section, DownloadSection::Queued);
+}
+
 TEST(DownloadsCommandModelTest, SectionOrderThenShowSeasonEpisode) {
     DownloadsSnapshot snap;
     snap.indexEntries = {

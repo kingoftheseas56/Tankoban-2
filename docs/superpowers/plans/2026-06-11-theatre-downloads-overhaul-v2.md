@@ -379,6 +379,9 @@ struct DownloadsSnapshot {
 // lane item yet) -> Queued; index Complete -> Completed, trimmed when older
 // than maxCompletedAgeMs (0 = no trim). Rows sort: section order
 // Failed→Active→Queued→Completed, then showTitle/imdbId, then season, episode.
+// (Review C1 correction, 2026-06-11: the Failed section is driven by the INDEX
+// state `Entry::Failed` — lane items are erased on terminal states, so lanes
+// never carry Failed; the lane-Failed branch is defensive only.)
 QList<DownloadRow> buildDownloadRows(const DownloadsSnapshot& snap,
                                      qint64 nowMs,
                                      qint64 maxCompletedAgeMs);

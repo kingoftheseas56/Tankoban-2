@@ -106,6 +106,7 @@ The instant any Download affordance is clicked: the button **morphs to `Queued �
 - Retry failure (no sources found) → row stays Failed with "no sources found" subtitle — no loops, no popups.
 - Pack search empty in checkout → checkout degrades to all-gap (per-episode) rows with a "no season packs found" note; still one `Queue all`.
 - Engine/queue signal gaps (app restart mid-download) → model rebuilds from StreamDownloadIndex + TorrentClient snapshots on page open (same reconcile the read-only page does today).
+- Mechanics (review C1, 2026-06-11): failure surfacing is driven by the INDEX state (`Entry::Failed`) plus the torrent-error path freeing the queue slot (`finishCurrent(Failed)` for the lane head, `cancel` for pre-start items) — lane items are erased on terminal states, so lanes never carry Failed.
 
 ## 7. Testing
 

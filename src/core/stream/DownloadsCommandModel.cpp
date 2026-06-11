@@ -50,7 +50,19 @@ QList<DownloadRow> buildDownloadRows(const DownloadsSnapshot& snap,
             r.section = DownloadSection::Queued;
         } else if (e.state == StreamDownloadIndex::Entry::Downloading
                    || (li && li->state == TransferState::Running)) {
+            // Index Downloading with NO lane item is deliberate Active: after an
+            // app restart resumed torrents download with an empty queue — the
+            // transfer genuinely runs in the engine and progress keeps flowing
+            // via updateEpisodeProgress (review I1, plan-owner decision).
             r.section = DownloadSection::Active;
+        } else if (e.state == StreamDownloadIndex::Entry::Failed) {
+            // Failure normally arrives via the INDEX, not the lane: TransferQueue
+            // erases items on terminal states (finishCurrent/cancel), so lanes
+            // snapshots never carry Failed in production — the lane-Failed branch
+            // above is defensive only. Lane branches stay ABOVE this one so a
+            // retry-re-queued episode (index still Failed, lane Queued/Running)
+            // shows Queued/Active, not Failed. (Review C1.)
+            r.section = DownloadSection::Failed;
         } else {
             r.section = DownloadSection::Queued;   // Pending, lane not visible yet
         }

@@ -198,6 +198,20 @@ TEST(TransferQueueCapTest, SlotFreePromotesOldestWaitingHead) {
     EXPECT_EQ(q.laneFor("imdb:tt0003")->items.front().state, TransferState::Queued);
 }
 
+// DOWNLOADS_OVERHAUL_V2 review C1 — the torrent-error path calls
+// finishCurrent(Failed); pin that a Failed terminal state frees the slot and
+// promotes a waiter exactly like Completed does (no leaked slot on error).
+TEST(TransferQueueCapTest, FailedFinishFreesSlotForWaiter) {
+    TransferQueue q;
+    q.setMaxActive(1);
+    q.enqueue(makeItem("t1", "imdb:tt0001", 1));
+    q.enqueue(makeItem("t2", "imdb:tt0002", 1));
+    q.finishCurrent("imdb:tt0001", TransferState::Failed);
+    EXPECT_FALSE(q.laneFor("imdb:tt0001").has_value());   // erased, not retained
+    EXPECT_EQ(q.laneFor("imdb:tt0002")->items.front().state, TransferState::Running);
+    EXPECT_EQ(q.runningCount(), 1);
+}
+
 TEST(TransferQueueCapTest, PauseFreesSlotForWaiter) {
     TransferQueue q;
     q.setMaxActive(1);
