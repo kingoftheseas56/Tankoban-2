@@ -871,6 +871,24 @@ void TorrentClient::setTransferQueue(tankoban::queue::TransferQueue* q)
     });
 }
 
+// T10: returns episode numbers queued (not yet Running) for a given show+season.
+// Season packs (no episodeNumber) are excluded — they route via cohort snapshot.
+QSet<int> TorrentClient::transferQueuedEpisodesForSeason(const QString& imdbId, int season) const
+{
+    QSet<int> result;
+    if (!m_transferQueue || imdbId.isEmpty()) return result;
+    const auto lanes = m_transferQueue->lanesSnapshot();
+    const auto it = lanes.constFind(imdbId);
+    if (it == lanes.constEnd()) return result;
+    for (const auto& item : it->items) {
+        if (item.state != tankoban::queue::TransferState::Queued) continue;
+        if (!item.episodeNumber.has_value()) continue;  // season pack — skip
+        if (item.seasonNumber.has_value() && item.seasonNumber.value() != season) continue;
+        result.insert(item.episodeNumber.value());
+    }
+    return result;
+}
+
 QString TorrentClient::addMagnetForShow(const QString& magnetUri,
                                         const QString& category,
                                         const QString& destinationPath,

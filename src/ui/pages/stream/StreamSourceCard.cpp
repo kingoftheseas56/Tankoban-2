@@ -246,8 +246,14 @@ void StreamSourceCard::buildUI()
     downloadBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     downloadBtn->setCursor(Qt::PointingHandCursor);
     downloadBtn->setToolTip(tr("Download this source for offline"));
+    // T10: morph instantly to "Queued" so the user sees feedback at click time,
+    // before the magnet-resolution round-trip completes.
     connect(downloadBtn, &QToolButton::clicked, this,
-            [this]() { emit directDownloadRequested(m_choice); });
+            [this, downloadBtn]() {
+                downloadBtn->setText(tr("Queued"));
+                downloadBtn->setEnabled(false);
+                emit directDownloadRequested(m_choice);
+            });
 
     actionCol->addWidget(playBtn);
     actionCol->addWidget(downloadBtn);

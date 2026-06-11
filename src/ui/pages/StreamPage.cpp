@@ -3138,6 +3138,9 @@ void StreamPage::onSelectedEpisodesDownloadRequested(int season, const QList<int
 void StreamPage::onSingleEpisodeDownloadRequested(int season, int episode)
 {
     if (!m_detailView) return;
+    // T10: mark the row Queued immediately — before the magnet-resolution
+    // round-trip (~300-800ms) so the user sees feedback at the instant of click.
+    m_detailView->markEpisodeClickPending(season, episode);
     startAutoDownload(m_detailView->currentImdb(), QStringLiteral("series"), season, episode);
 }
 
@@ -3219,6 +3222,9 @@ void StreamPage::openSeasonCheckout(int season, const QList<int>& preselected)
 //   (~300–800ms observed) so each episode is fully in-flight before the next arms.
 //   A member-queue drain was considered but adds more state for the same outcome on
 //   a path that rarely has more than 3–5 gap episodes.
+//   Note: a second executeCheckoutPlan during the stagger window re-arms m_pendingAuto
+//   and the batches interleave (same clobber class); acceptable given rarity, a member
+//   drain-queue is the proper fix if it ever bites.
 void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
                                      const tankostream::stream::CheckoutPlan& plan)
 {
@@ -3241,7 +3247,14 @@ void StreamPage::executeCheckoutPlan(const QString& imdbId, int season,
     }
 
     // Stagger per-episode gap downloads 1500ms apart (see rationale above).
+    // T10: mark each gap episode click-pending immediately (before the stagger
+    // delay fires) so all gap rows flip to Queued at the instant the user
+    // confirms the checkout, not staggered 1500ms apart.
     const QList<int> gaps = plan.gapEpisodes;
+    if (m_detailView) {
+        for (int ep : gaps)
+            m_detailView->markEpisodeClickPending(season, ep);
+    }
     for (int i = 0; i < gaps.size(); ++i) {
         const int ep = gaps.at(i);
         QTimer::singleShot(i * 1500, this, [this, imdbId, season, ep]() {
@@ -3393,6 +3406,17 @@ void StreamPage::onDirectDownloadRequested(const tankostream::stream::StreamPick
     const int season = (type == QLatin1String("series"))
         ? m_detailView->currentSeason()
         : 0;
+
+    // T10: flip the episode row to Queued instantly. For series, the episode
+    // is recovered from m_pendingAuto (which holds the last-loaded episode
+    // context for the sources pane). The source card's own button already
+    // morphs to "Queued" (Task 1); this additionally flips the episode row.
+    if (type == QLatin1String("series") && season > 0
+        && m_pendingAuto.imdbId == imdbId
+        && m_pendingAuto.season == season
+        && m_pendingAuto.episode > 0) {
+        m_detailView->markEpisodeClickPending(season, m_pendingAuto.episode);
+    }
 
     AddTorrentConfig config;
     config.category        = QStringLiteral("videos");

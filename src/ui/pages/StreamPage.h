@@ -363,8 +363,8 @@ private:
     // Internal helper used by the three slots above. episodeFilter non-empty
     // restricts the dispatch to those episode numbers only (whole-season when empty).
     // DOWNLOADS_OVERHAUL_V2 T9 — checkout supersedes the direct bulk path for the
-    // season/selected-episodes entry points; kept for devDispatchEpisodes and
-    // triggerBulkSeasonDownload (dead-code-candidate for the former two, T11 decides).
+    // season/selected-episodes entry points; kept for devDispatchEpisodes only
+    // (dead-code-candidate for season/selected-episodes entry points, T11 decides).
     void triggerBulkSelectedEpisodes(const QString& imdbId, int season,
                                      const QList<int>& episodeFilter);
 

@@ -1,4 +1,4 @@
-#include "StreamDetailView.h"
+﻿#include "StreamDetailView.h"
 
 #include "core/CoreBridge.h"
 #include "core/net/NetSeam.h"
@@ -172,6 +172,7 @@ void StreamDetailView::showEntry(const QString& imdbId,
     m_statusLabel->show();
 
     m_selectedEpisodes.clear();
+    m_clickPendingEpisodes.clear();  // T10: new show — discard stale click-pending markers
     updateDownloadSelectedButton();
 
     // Resolve the display source for the header paint. Preview hint wins
@@ -1336,7 +1337,9 @@ void StreamDetailView::onEpisodeActivated(int row, int /*col*/)
 // cohort RowState cluster (deleted in P1.T5).
 
 tankostream::stream::EpisodeDisplayState
-StreamDetailView::episodeDisplayState(int season, int episode, const QHash<int, QPair<QString,int>>& snap) const
+StreamDetailView::episodeDisplayState(int season, int episode,
+    const QHash<int, QPair<QString,int>>& snap,
+    const QSet<int>& queuedEps) const
 {
     using tankostream::stream::EpisodeStateInputs;
     EpisodeStateInputs in;
@@ -1424,15 +1427,41 @@ StreamDetailView::episodeDisplayState(int season, int episode, const QHash<int, 
             // (falls through to the on-disk check).
         }
     }
+
+    // T10: populate in.queued from two sources:
+    //   1. queuedEps — TransferQueue Queued items fetched ONCE per refresh pass
+    //      by the caller (sub-second coverage after enqueue()).
+    //   2. m_clickPendingEpisodes — in-memory click-pending set that covers the
+    //      ~300-800ms magnet-resolution gap before enqueue() fires. Only applies
+    //      when the real derived state is NotDownloaded; erased once a real state
+    //      arrives (queue/transfer/disk entry supersedes the pending marker).
+    if (!in.queued && queuedEps.contains(episode))
+        in.queued = true;
+
+    if (!in.queued && !m_currentImdb.isEmpty()) {
+        const QString key = QString::number(season) + QLatin1Char('|') + QString::number(episode);
+        if (m_clickPendingEpisodes.contains(key)) {
+            const auto derived = tankostream::stream::deriveEpisodeDisplayState(in);
+            if (derived == tankostream::stream::EpisodeDisplayState::NotDownloaded) {
+                in.queued = true;
+            } else {
+                // Real state arrived — discard the pending marker.
+                const_cast<StreamDetailView*>(this)->m_clickPendingEpisodes.remove(key);
+            }
+        }
+    }
+
     return tankostream::stream::deriveEpisodeDisplayState(in);
 }
 
-void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const QHash<int, QPair<QString,int>>& snap)
+void StreamDetailView::refreshEpisodeRow(int row, int season, int episode,
+    const QHash<int, QPair<QString,int>>& snap,
+    const QSet<int>& queuedEps)
 {
     if (!m_episodeTable || row < 0 || row >= m_episodeTable->rowCount())
         return;
     using S = tankostream::stream::EpisodeDisplayState;
-    const S state = episodeDisplayState(season, episode, snap);
+    const S state = episodeDisplayState(season, episode, snap, queuedEps);
 
     // Progress % for in-progress states — O(1) lookup into the cohort snapshot
     // threaded in by the caller (clamped so a terminal -1 never leaks into the
@@ -1494,6 +1523,10 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
     if (!btn) return;
 
     btn->setProperty("episodeNum", episode);
+    // T10: Queued rows have no action — disable the button so there's no
+    // invisible hotspot (T5 review: an icon-less but enabled button is a
+    // ghost click target that confuses onActionIconClicked).
+    btn->setEnabled(state != S::Queued);
     if (state == S::Downloaded) {
         // Play affordance: a text button. Relax the construction-time
         // setFixedSize(24,24) so the label fits (kColAction is widened to hold it).
@@ -1518,7 +1551,7 @@ void StreamDetailView::refreshEpisodeRow(int row, int season, int episode, const
         case S::Downloading:   icon = QStringLiteral(":/icons/pause-circle.svg");   tip = tr("Pause download");   break;
         case S::Paused:        icon = QStringLiteral(":/icons/play-circle.svg");    tip = tr("Resume download");  break;
         case S::Failed:        icon = QStringLiteral(":/icons/retry-arrow.svg");    tip = tr("Retry download");   break;
-        case S::Queued:        break;  // queued: no action, chip text carries it
+        case S::Queued:        break;  // queued: no action, chip text carries it; button disabled above
         case S::Downloaded:    break;  // handled above
         }
         btn->setIcon(QIcon(icon));
@@ -1538,6 +1571,10 @@ void StreamDetailView::refreshAllEpisodeRows()
     const auto snap = (m_torrentClient && !m_currentImdb.isEmpty())
         ? m_torrentClient->streamBulkSnapshotForImdbSeason(m_currentImdb, season)
         : QHash<int, QPair<QString,int>>();
+    // T10: fetch queued episodes once per refresh pass (like snap).
+    const auto queuedEps = (m_torrentClient && !m_currentImdb.isEmpty())
+        ? m_torrentClient->transferQueuedEpisodesForSeason(m_currentImdb, season)
+        : QSet<int>();
     int first = 0, last = m_episodeTable->rowCount() - 1;
     visibleRowRange(&first, &last);
     if (first < 0 || last < first) return;
@@ -1545,7 +1582,7 @@ void StreamDetailView::refreshAllEpisodeRows()
         auto* numItem = m_episodeTable->item(row, kColEpisode);
         if (!numItem) continue;
         const int episode = numItem->data(Qt::UserRole).toInt();
-        if (episode > 0) refreshEpisodeRow(row, season, episode, snap);
+        if (episode > 0) refreshEpisodeRow(row, season, episode, snap, queuedEps);
     }
 }
 
@@ -1672,6 +1709,25 @@ void StreamDetailView::setStreamDownloadIndex(StreamDownloadIndex* idx)
     if (!m_downloadIndex) {
         refreshMovieLocalChip();
         refreshMovieDownloadState();
+    }
+}
+
+// T10 — mark (season, episode) as click-pending so the row renders Queued
+// immediately, before the magnet-resolution round-trip completes. The pending
+// marker is only honoured when the real derived state is NotDownloaded; any
+// real queue/transfer state supersedes it and erases the marker.
+void StreamDetailView::markEpisodeClickPending(int season, int episode)
+{
+    m_clickPendingEpisodes.insert(
+        QString::number(season) + QLatin1Char('|') + QString::number(episode));
+    // Repaint the affected row immediately so feedback is instant.
+    // queuedEps is empty here (enqueue hasn't fired yet); the click-pending
+    // set drives the Queued display until the 1Hz timer picks up real state.
+    const int row = rowForEpisode(episode);
+    if (row >= 0 && currentSeason() == season && m_torrentClient) {
+        const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(
+            m_currentImdb, season);
+        refreshEpisodeRow(row, season, episode, snap, {});
     }
 }
 

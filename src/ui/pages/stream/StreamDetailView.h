@@ -127,6 +127,11 @@ public:
     // for every episode click).
     void setStreamDownloadIndex(StreamDownloadIndex* idx);
 
+    // T10 instant feedback — marks (season, episode) as click-pending so the
+    // row renders Queued immediately, before real queue state propagates.
+    // StreamPage calls this at all 3 download-click dispatch sites.
+    void markEpisodeClickPending(int season, int episode);
+
     // STREAM_DOWNLOADED_LIBRARY Phase 7 (2026-05-10) — wires the torrent
     // client so the Remove-from-Library path can detect active bulk
     // groups for this show and require explicit user confirmation before
@@ -290,9 +295,15 @@ private:
     // the legacy cohort RowState cluster (resolveRowState / refreshEpisodeMarkers
     // / refreshSubstrateStatesForActiveSeason / repaintActionIconForRow / the
     // m_bulkPollTimer poll), all removed in P1.T5.
-    tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode, const QHash<int, QPair<QString,int>>& snap) const;
+    // T10: queuedEps — episode numbers that are Queued in the TransferQueue lane
+    // for the current show+season, fetched ONCE per refresh pass by the caller.
+    tankostream::stream::EpisodeDisplayState episodeDisplayState(int season, int episode,
+        const QHash<int, QPair<QString,int>>& snap,
+        const QSet<int>& queuedEps = {}) const;
     // Repaints ONE row's status cell + action control from episodeDisplayState.
-    void refreshEpisodeRow(int row, int season, int episode, const QHash<int, QPair<QString,int>>& snap);
+    void refreshEpisodeRow(int row, int season, int episode,
+        const QHash<int, QPair<QString,int>>& snap,
+        const QSet<int>& queuedEps = {});
     // Repaints every visible row of the active season via refreshEpisodeRow.
     void refreshAllEpisodeRows();
     // PERF (2026-06-02): on-screen-only refresh + self-stopping 1Hz timer.
@@ -420,6 +431,13 @@ private:
     // Per-(show, season) selection state. Reset whenever the season-combo
     // changes (showEntry / setSeason path). NOT persisted; per-launch only.
     QSet<int> m_selectedEpisodes;
+
+    // T10 click-pending set — episodes whose Download affordance was clicked but
+    // whose real queue/transfer state hasn't arrived yet. Encoded as "season|ep"
+    // strings. Cleared on showEntry (new show) and whenever episodeDisplayState
+    // derives a non-NotDownloaded state for that episode (real state supersedes).
+    // Contract: only drives Queued display when derived state == NotDownloaded.
+    QSet<QString> m_clickPendingEpisodes;
 
     // Season-header primary fast-path Download button. THEATRE_DOWNLOAD_OVERHAUL
     // E1 UX refinement 2026-05-17 — click auto-dispatches the per-episode
