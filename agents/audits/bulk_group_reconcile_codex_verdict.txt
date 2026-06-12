@@ -1,0 +1,83 @@
+﻿836:        }
+837:    }
+838:
+839:    reconcileStreamBulkGroups();
+840:
+841:    retryStreamBulkPublishing();
+842:
+
+codex
+**Findings**
+
+P2 - SQLite item state can stay stale if the item JSON has both `state` and `itemState`.
+`saveStreamBulkGroups()` does upsert item rows, and `upsertStreamGroupItem()` updates `state`, so the repository layer 
+is not the problem. The likely mismatch is the mapper: [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:495>) reads `item["state"]` first and only falls back to `itemState` if empty. 
+Reconcile updates `itemState` only at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:1307>). If a legacy/current item still has `"state": "Downloading"`, SQL will 
+keep writing `Downloading` while JSON says `Published`. Prefer `itemState` over `state` in 
+`streamGroupItemRowFromBulkItem()`, or normalize/remove stale item-level `state`.
+
+P2 - Partial prune can leave SQLite item ghosts for `itemId`-only rows.
+The prune cleanup deletes by `item["itemKey"]` only at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:1402>), but the mirror mapper supports `itemId` first, then `itemKey` at 
+[TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:490>). If a 
+partially-pruned group has an item with `itemId` but no `itemKey`, JSON drops it and SQL keeps it. Use the same 
+fallback as the mapper.
+
+P2 - `destinationExists` is a weak proof of “done.”
+Change B is reasonable for this recovery case because normal bulk downloads publish from staging to the canonical 
+destination, so a canonical file usually means publish already happened. But `QFileInfo::exists()` also accepts 
+directories and cannot distinguish a partial or unrelated same-named file. At minimum use `QFileInfo 
+fi(canonicalPath); fi.exists() && fi.isFile()` in both the publish flip and prune keep test. Size/content verification 
+would be stronger, but may not be available once the torrent record is gone.
+
+**Answers**
+
+1. Marking `Paused`/`Pending`/`Downloading` as `Published` when the canonical file exists is correct for the app’s 
+current publish model, with the false-positive caveat above. It is a recovery heuristic, not a cryptographic proof.
+
+2. `m_engine->hasTorrent()` is the right liveness signal here. Reconcile runs after both restore loops: normal rows 
+are replayed at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:744>) and 
+`PendingEngineAdd` rows at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:808>), then reconcile runs at 
+[TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:839>). Also, 
+`listActive()` includes repo fallback rows, so using active state strings would preserve stale DB lies. Note: 
+`hasTorrent()` means engine record present, not necessarily valid handle, per 
+[TorrentEngine.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.cpp:1101>), which is 
+conservative.
+
+3. The bottom `if (destinationExists) continue;` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:1345>) is now dead for non-terminal states. Harmless, but I would remove it to 
+avoid future confusion.
+
+4. The SQL upsert itself updates state correctly at [TorrentRepository.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentRepository.cpp:861>). The stale survivor row points back to the mapper preferring `state` 
+over `itemState`.
+
+5. The prune behavior is broadly sound, but fix the mirror mapper and `itemId` cleanup fallback before any SQLite 
+read-side cutover.
+tokens used
+91,748
+**Findings**
+
+P2 - SQLite item state can stay stale if the item JSON has both `state` and `itemState`.
+`saveStreamBulkGroups()` does upsert item rows, and `upsertStreamGroupItem()` updates `state`, so the repository layer is not the problem. The likely mismatch is the mapper: [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:495>) reads `item["state"]` first and only falls back to `itemState` if empty. Reconcile updates `itemState` only at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:1307>). If a legacy/current item still has `"state": "Downloading"`, SQL will keep writing `Downloading` while JSON says `Published`. Prefer `itemState` over `state` in `streamGroupItemRowFromBulkItem()`, or normalize/remove stale item-level `state`.
+
+P2 - Partial prune can leave SQLite item ghosts for `itemId`-only rows.
+The prune cleanup deletes by `item["itemKey"]` only at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:1402>), but the mirror mapper supports `itemId` first, then `itemKey` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:490>). If a partially-pruned group has an item with `itemId` but no `itemKey`, JSON drops it and SQL keeps it. Use the same fallback as the mapper.
+
+P2 - `destinationExists` is a weak proof of “done.”
+Change B is reasonable for this recovery case because normal bulk downloads publish from staging to the canonical destination, so a canonical file usually means publish already happened. But `QFileInfo::exists()` also accepts directories and cannot distinguish a partial or unrelated same-named file. At minimum use `QFileInfo fi(canonicalPath); fi.exists() && fi.isFile()` in both the publish flip and prune keep test. Size/content verification would be stronger, but may not be available once the torrent record is gone.
+
+**Answers**
+
+1. Marking `Paused`/`Pending`/`Downloading` as `Published` when the canonical file exists is correct for the app’s current publish model, with the false-positive caveat above. It is a recovery heuristic, not a cryptographic proof.
+
+2. `m_engine->hasTorrent()` is the right liveness signal here. Reconcile runs after both restore loops: normal rows are replayed at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:744>) and `PendingEngineAdd` rows at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:808>), then reconcile runs at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:839>). Also, `listActive()` includes repo fallback rows, so using active state strings would preserve stale DB lies. Note: `hasTorrent()` means engine record present, not necessarily valid handle, per [TorrentEngine.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.cpp:1101>), which is conservative.
+
+3. The bottom `if (destinationExists) continue;` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:1345>) is now dead for non-terminal states. Harmless, but I would remove it to avoid future confusion.
+
+4. The SQL upsert itself updates state correctly at [TorrentRepository.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentRepository.cpp:861>). The stale survivor row points back to the mapper preferring `state` over `itemState`.
+
+5. The prune behavior is broadly sound, but fix the mirror mapper and `itemId` cleanup fallback before any SQLite read-side cutover.
