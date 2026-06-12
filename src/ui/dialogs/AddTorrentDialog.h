@@ -36,6 +36,7 @@ struct AddTorrentConfig {
     // (repurposed "Direct torrent search" or external callers).
     QString imdbId;       // "tt0141842" or empty
     int     season = 0;   // 1-based season; 0 = unbound (multi-season pack or non-show)
+    int     episode = 0;  // 0 = none/movie/pack; drives TransferItem::episodeNumber for per-episode queue display
 };
 
 // ── AddTorrentDialog ────────────────────────────────────────────────────────
