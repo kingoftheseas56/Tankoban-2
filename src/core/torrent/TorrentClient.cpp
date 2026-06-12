@@ -23,6 +23,7 @@
 #include <QHash>
 #include <QJsonValue>
 #include <QSet>
+#include <QStorageInfo>  // EXTERNAL_DELETE_RECONCILE — restore-loop volume probe
 #include <QStringList>
 #include <QTimer>
 #include <QDebug>
@@ -708,6 +709,40 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
     // what actually fixes the cohort sequential semantic on boot when
     // m_records states drifted (e.g. from a late-firing
     // metadata_received_alert in onMetadataReady).
+    // EXTERNAL_DELETE_RECONCILE — distinguishes "user deleted the folder"
+    // (an ancestor exists on a ready volume -> purge is correct) from
+    // "drive not mounted" (no ancestor exists -> keep the record paused).
+    // Walks up to the nearest existing ancestor and asks its storage.
+    // "E:" after truncation is re-probed as the drive root "E:/" (bare
+    // "E:" is drive-relative notation, not the root); UNC walks that
+    // exhaust "//server/share" stop without falling through to the local
+    // filesystem root (server-offline must read as unavailable). (Codex
+    // review P2.)
+    const auto storageReady = [](const QString& path) {
+        QString probe = QDir::fromNativeSeparators(path);
+        while (!probe.isEmpty()) {
+            if (QFileInfo::exists(probe)) {
+                const QStorageInfo si(probe);
+                return si.isValid() && si.isReady();
+            }
+            const int slash = probe.lastIndexOf(QLatin1Char('/'));
+            if (slash < 0) break;
+            probe.truncate(slash);
+            if (probe.endsWith(QLatin1Char(':'))) {
+                // Reached the drive letter — final probe of the root form.
+                const QString root = probe + QLatin1Char('/');
+                if (QFileInfo::exists(root)) {
+                    const QStorageInfo si(root);
+                    return si.isValid() && si.isReady();
+                }
+                break;  // drive absent
+            }
+            if (probe == QLatin1String("/") || probe == QLatin1String("//"))
+                break;  // UNC exhausted / never report the local root for one
+        }
+        return false;
+    };
+
     bool anyChanged = false;
     for (const auto& row : m_repo.listTorrents()) {
         // PendingEngineAdd is handled by the dedicated replay loop below.
@@ -725,7 +760,43 @@ TorrentClient::TorrentClient(CoreBridge* bridge, QObject* parent)
         // Paused stays paused; everything else (Active, Completed, Error) resumes
         const bool shouldPause = (row.state == tankoban::torrent::TorrentState::Paused);
 
-        const QString restored = m_engine->addFromResume(resumePath, savePath, shouldPause);
+        // EXTERNAL_DELETE_RECONCILE (2026-06-12): if this torrent HAD
+        // progress but none of its files exist anymore, the user deleted
+        // them outside the app. Re-adding would make libtorrent recheck,
+        // find nothing, and silently re-download the whole thing (the
+        // 2026-06-12 incident: 23 torrents, ~10 GB re-pulled before being
+        // caught). Deleted stays deleted: drop the row + resume data.
+        const auto disk = m_engine->resumeDataDiskState(resumePath, savePath);
+        bool forcePauseUnavailable = false;
+        if (disk.parsed && disk.hasFileList && disk.hadProgress
+            && !disk.anyFilePresent) {
+            if (storageReady(savePath)) {
+                qInfo() << "[TorrentClient] files deleted outside the app,"
+                        << "purging torrent record:" << hash << row.name;
+                // Delete resume data only once the row is actually gone — a
+                // failed DB delete must not orphan the row (Codex review).
+                if (m_repo.removeTorrent(hash))
+                    QFile::remove(resumePath);
+                else
+                    qWarning() << "[TorrentClient] purge: repo removeTorrent"
+                               << "failed, keeping resume data:" << hash;
+                anyChanged = true;
+                continue;
+            }
+            // Volume not mounted — the files may still exist on it. Add
+            // PAUSED (not auto-managed) instead of skipping entirely: a
+            // paused add never rechecks or writes, so nothing re-downloads
+            // and no folder tree is re-created — but the engine record
+            // exists, so reconcileStreamBulkGroups below does not demote
+            // the group's Published state to Pending (Codex review P1).
+            // Drive back on a later boot -> files found -> normal restore.
+            qWarning() << "[TorrentClient] save volume unavailable, adding"
+                       << "paused (no recheck) this boot:" << hash;
+            forcePauseUnavailable = true;
+        }
+
+        const QString restored = m_engine->addFromResume(
+            resumePath, savePath, shouldPause || forcePauseUnavailable);
         if (restored.isEmpty()) {
             qWarning() << "Orphaned torrent record (no resume data):" << hash;
             m_repo.updateTorrentState(

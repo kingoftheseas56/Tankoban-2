@@ -532,11 +532,21 @@ void StreamDownloadIndex::validateAll()
 {
     // Snapshot the keys+paths under lock; stat off-lock; collect missing;
     // re-acquire lock to evict.
+    //
+    // Complete entries ONLY: Pending/Downloading entries legitimately point
+    // at files that do not exist yet (the in-flight destination), and their
+    // lifecycle is owned by validateInFlightEntries() below. Sweeping them
+    // here evicted valid in-progress rows when this started running at
+    // startup (EXTERNAL_DELETE_RECONCILE, Codex review P1). Failed entries
+    // also stay: they intentionally describe an absent file.
     QList<QPair<QString, QString>> snapshot;  // canonicalKey -> displayPath
     {
         QMutexLocker lock(&m_mutex);
-        for (auto it = m_byPath.constBegin(); it != m_byPath.constEnd(); ++it)
+        for (auto it = m_byPath.constBegin(); it != m_byPath.constEnd(); ++it) {
+            if (it.value().state != Entry::Complete)
+                continue;
             snapshot.append({it.key(), it.value().canonicalPath});
+        }
     }
 
     QStringList missing;

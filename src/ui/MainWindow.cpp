@@ -52,6 +52,7 @@
 #include <QMouseEvent>
 #include <QMetaObject>
 #include <QSettings>
+#include <QtConcurrent/QtConcurrent>  // EXTERNAL_DELETE_RECONCILE — startup index sweep
 #include <QWindowStateChangeEvent>
 
 #ifdef Q_OS_WIN
@@ -821,6 +822,18 @@ void MainWindow::buildPageStack()
     // registerEpisode calls both persist and survive any later load().
     if (m_streamDownloadIndex)
         torrentClient->setStreamDownloadIndex(m_streamDownloadIndex);
+
+    // EXTERNAL_DELETE_RECONCILE (2026-06-12): sweep download-index entries
+    // whose files were deleted outside the app, at every boot — not just
+    // when the user happens to open the Theatre library home (the
+    // StreamLibraryLayout::showEvent path). Off the GUI thread; ~one stat
+    // per entry. Episodes whose files vanished revert to not-downloaded.
+    // Runs after setStreamDownloadIndex so the backfill/reconcile passes
+    // above have already registered their (existing-file) entries.
+    if (m_streamDownloadIndex) {
+        StreamDownloadIndex* idx = m_streamDownloadIndex;
+        (void) QtConcurrent::run([idx]() { idx->validateAll(); });
+    }
 
     // Stream page — m_streamPage cache (STREAM_ADD_TO_TANKORENT 2026-05-06)
     // so we can wire the magnet-handoff signal without a qobject_cast walk.

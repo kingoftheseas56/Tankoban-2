@@ -110,6 +110,19 @@ public:
     // Torrent operations (all thread-safe)
     QString addMagnet(const QString& magnetUri, const QString& savePath, bool paused = true);
     QString addFromResume(const QString& resumePath, const QString& savePath, bool paused);
+    // EXTERNAL_DELETE_RECONCILE (2026-06-12) — pre-add disk probe for the
+    // startup restore loop. Parses a .fastresume WITHOUT touching the session
+    // and reports whether the torrent had prior progress and whether any of
+    // its files still exist under savePath. TorrentClient uses this to detect
+    // "files deleted outside the app" and purge instead of re-download.
+    struct ResumeDiskState {
+        bool parsed = false;          // resume file existed + read_resume_data ok
+        bool hasFileList = false;     // metadata known (file list available)
+        bool hadProgress = false;     // any piece downloaded per resume data
+        bool anyFilePresent = false;  // >=1 of the torrent's files exists on disk
+    };
+    ResumeDiskState resumeDataDiskState(const QString& resumePath,
+                                        const QString& savePath) const;
     void    setFilePriorities(const QString& infoHash, const QVector<int>& priorities);
     void    renameFile(const QString& infoHash, int fileIndex, const QString& newName);
     void    setSequentialDownload(const QString& infoHash, bool sequential);

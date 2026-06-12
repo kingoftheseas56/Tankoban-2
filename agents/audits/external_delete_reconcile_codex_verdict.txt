@@ -1,0 +1,80 @@
+﻿
+codex
+**Findings**
+
+P1: `TorrentEngine::resumeDataDiskState()` has no `!HAS_LIBTORRENT` stub. The method is declared unconditionally in 
+[TorrentEngine.h](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.h:124>), implemented only in 
+the libtorrent branch, while the stub block defines every other public method in 
+[TorrentEngine.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.cpp:1850>). The no-libtorrent 
+fallback build will fail to link. Add `TorrentEngine::ResumeDiskState TorrentEngine::resumeDataDiskState(...) const { 
+return {}; }`.
+
+P1: the “volume unavailable, skip add” path still flows into bulk reconcile and can persist wrong state. After the 
+`continue` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:755>), 
+`reconcileStreamBulkGroups()` runs. For a `Published`/`Completed` item on an unplugged drive, `destinationExists == 
+false`, `hasRecord == true`, and no active engine state, so it is demoted to `Pending` and saved at 
+[TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:1239>). On the later boot 
+with the drive back, `Pending` does not auto-promote to `Published`, so the group can stay stale. This conflicts with 
+the “drive-unplugged is not deletion” side of the DoD.
+
+P1: startup `validateAll()` treats unavailable volumes and in-flight expected paths as missing files. `validateAll()` 
+evicts every path where `QFileInfo::exists()` is false at 
+[StreamDownloadIndex.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/stream/StreamDownloadIndex.cpp:531>), 
+including `Pending`/`Downloading` entries whose header comment says the file may not exist yet. Running this 
+unconditionally at startup from [MainWindow.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/MainWindow.cpp:833>) can 
+drop valid in-progress entries, and can also drop complete entries on an unplugged drive. Consider filtering to 
+`Complete` entries, or adding a storage-ready check per entry before eviction.
+
+P2: `storageReady()` misses available drive roots and has risky UNC fallback behavior. For `E:/Shows` with `Shows` 
+deleted, the walk truncates to `E:` and never probes `E:/`, so a mounted drive can be classified unavailable. For 
+unavailable UNC paths, the `//server` walk can eventually probe `/`, which may report the local root as ready. Qt 
+documents that `QStorageInfo(path)` refers to the volume containing a file/dir path and should be checked with 
+`isValid() && isReady()`; the walk should preserve drive/share roots explicitly. Source: 
+https://doc.qt.io/qt-6/qstorageinfo.html.
+
+**Direct Answers**
+
+1. `have_pieces.count() > 0 || total_downloaded > 0` is right for normal partials and completed downloads. Libtorrent 
+writes full `have_pieces` for checked seeds and serializes `total_downloaded`. One edge: libtorrent’s own 
+`contains_resume_data()` also treats `seed_mode` as resume evidence, so a seed-mode/local-import style torrent could 
+have files with neither field. If this app never sets seed mode, not a practical blocker.
+
+2. Purged deletion paths are mostly okay for avoiding re-add/redownload. The risky path is the non-purge `storageReady 
+== false` continue: later bulk reconcile still mutates group state, as noted above.
+
+3. The current storage walk is not robust for drive-root-only ancestors or UNC unavailable paths. I would fix before 
+relying on the negative control.
+
+4. I do not see deferred registrations after `setStreamDownloadIndex()`: `backfillStreamDownloadIndex()` and 
+`reconcileUnregisteredSingleEpisodes()` are synchronous. The problem is not a snapshot race; it is that 
+`validateAll()` is too broad for startup.
+
+5. One smaller robustness point: only remove `.fastresume` after confirming `m_repo.removeTorrent(hash)` succeeded, 
+otherwise a DB failure leaves a row without resume data.
+
+I did not run the suite/build; this was a source review against the supplied diff and the current tree.
+tokens used
+151,040
+**Findings**
+
+P1: `TorrentEngine::resumeDataDiskState()` has no `!HAS_LIBTORRENT` stub. The method is declared unconditionally in [TorrentEngine.h](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.h:124>), implemented only in the libtorrent branch, while the stub block defines every other public method in [TorrentEngine.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentEngine.cpp:1850>). The no-libtorrent fallback build will fail to link. Add `TorrentEngine::ResumeDiskState TorrentEngine::resumeDataDiskState(...) const { return {}; }`.
+
+P1: the “volume unavailable, skip add” path still flows into bulk reconcile and can persist wrong state. After the `continue` at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:755>), `reconcileStreamBulkGroups()` runs. For a `Published`/`Completed` item on an unplugged drive, `destinationExists == false`, `hasRecord == true`, and no active engine state, so it is demoted to `Pending` and saved at [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:1239>). On the later boot with the drive back, `Pending` does not auto-promote to `Published`, so the group can stay stale. This conflicts with the “drive-unplugged is not deletion” side of the DoD.
+
+P1: startup `validateAll()` treats unavailable volumes and in-flight expected paths as missing files. `validateAll()` evicts every path where `QFileInfo::exists()` is false at [StreamDownloadIndex.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/stream/StreamDownloadIndex.cpp:531>), including `Pending`/`Downloading` entries whose header comment says the file may not exist yet. Running this unconditionally at startup from [MainWindow.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/MainWindow.cpp:833>) can drop valid in-progress entries, and can also drop complete entries on an unplugged drive. Consider filtering to `Complete` entries, or adding a storage-ready check per entry before eviction.
+
+P2: `storageReady()` misses available drive roots and has risky UNC fallback behavior. For `E:/Shows` with `Shows` deleted, the walk truncates to `E:` and never probes `E:/`, so a mounted drive can be classified unavailable. For unavailable UNC paths, the `//server` walk can eventually probe `/`, which may report the local root as ready. Qt documents that `QStorageInfo(path)` refers to the volume containing a file/dir path and should be checked with `isValid() && isReady()`; the walk should preserve drive/share roots explicitly. Source: https://doc.qt.io/qt-6/qstorageinfo.html.
+
+**Direct Answers**
+
+1. `have_pieces.count() > 0 || total_downloaded > 0` is right for normal partials and completed downloads. Libtorrent writes full `have_pieces` for checked seeds and serializes `total_downloaded`. One edge: libtorrent’s own `contains_resume_data()` also treats `seed_mode` as resume evidence, so a seed-mode/local-import style torrent could have files with neither field. If this app never sets seed mode, not a practical blocker.
+
+2. Purged deletion paths are mostly okay for avoiding re-add/redownload. The risky path is the non-purge `storageReady == false` continue: later bulk reconcile still mutates group state, as noted above.
+
+3. The current storage walk is not robust for drive-root-only ancestors or UNC unavailable paths. I would fix before relying on the negative control.
+
+4. I do not see deferred registrations after `setStreamDownloadIndex()`: `backfillStreamDownloadIndex()` and `reconcileUnregisteredSingleEpisodes()` are synchronous. The problem is not a snapshot race; it is that `validateAll()` is too broad for startup.
+
+5. One smaller robustness point: only remove `.fastresume` after confirming `m_repo.removeTorrent(hash)` succeeded, otherwise a DB failure leaves a row without resume data.
+
+I did not run the suite/build; this was a source review against the supplied diff and the current tree.

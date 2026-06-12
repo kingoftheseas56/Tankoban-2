@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonObject>
 #include <QDebug>
 #include <QTimer>
@@ -779,6 +780,47 @@ QString TorrentEngine::addFromResume(const QString& resumePath,
     m_records.insert(hash, rec);
 
     return hash;
+}
+
+// EXTERNAL_DELETE_RECONCILE (2026-06-12) — see header. Pure file-IO probe:
+// parses the .fastresume off-session, so it is safe to call before start()
+// adds any handles and needs no mutex (touches no m_records / m_session).
+TorrentEngine::ResumeDiskState TorrentEngine::resumeDataDiskState(
+    const QString& resumePath, const QString& savePath) const
+{
+    ResumeDiskState st;
+    QFile file(resumePath);
+    if (!file.open(QIODevice::ReadOnly)) return st;
+    const QByteArray data = file.readAll();
+    file.close();
+    if (data.isEmpty()) return st;
+
+    lt::error_code ec;
+    lt::add_torrent_params atp = lt::read_resume_data(
+        lt::span<const char>(data.data(), static_cast<int>(data.size())), ec);
+    if (ec) return st;
+    st.parsed = true;
+
+    // Progress evidence: any verified piece, or recorded download volume.
+    st.hadProgress = atp.have_pieces.count() > 0 || atp.total_downloaded > 0;
+
+    if (!atp.ti) return st;  // magnet without metadata — files unknown
+    st.hasFileList = true;
+
+    // libtorrent file_path() uses '\' on Windows — normalize before joining.
+    // Early-exit on the first file found: a pack with some episodes deleted
+    // but others alive must NOT be treated as externally deleted.
+    const lt::file_storage& fs = atp.ti->files();
+    const QDir base(savePath);
+    for (const lt::file_index_t i : fs.file_range()) {
+        QString rel = QString::fromStdString(fs.file_path(i));
+        rel.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (QFileInfo::exists(base.filePath(rel))) {
+            st.anyFilePresent = true;
+            break;
+        }
+    }
+    return st;
 }
 
 void TorrentEngine::setFilePriorities(const QString& infoHash, const QVector<int>& priorities)
@@ -1814,6 +1856,7 @@ void TorrentEngine::start() { qWarning("TorrentEngine: built without libtorrent"
 void TorrentEngine::stop() {}
 QString TorrentEngine::addMagnet(const QString&, const QString&, bool) { return {}; }
 QString TorrentEngine::addFromResume(const QString&, const QString&, bool) { return {}; }
+TorrentEngine::ResumeDiskState TorrentEngine::resumeDataDiskState(const QString&, const QString&) const { return {}; }
 void TorrentEngine::startTorrent(const QString&, const QString&) {}
 void TorrentEngine::moveStorage(const QString&, const QString&) {}
 void TorrentEngine::setFilePriorities(const QString&, const QVector<int>&) {}
