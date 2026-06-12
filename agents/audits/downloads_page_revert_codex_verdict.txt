@@ -1,0 +1,77 @@
+﻿ 1757:     // Repaint the affected row immediately so feedback is instant.
+ 1758:     // queuedEps is empty here (enqueue hasn't fired yet); the click-pending
+ 1759:     // set drives the Queued display until the 1Hz timer picks up real state.
+ 1760:     const int row = rowForEpisode(episode);
+ 1761:     if (row >= 0 && currentSeason() == season && m_torrentClient) {
+ 1762:         const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(
+ 1763:             m_currentImdb, season);
+ 1764:         refreshEpisodeRow(row, season, episode, snap, {});
+ 1765:     }
+ 1766: }
+ 1767: 
+ 1768: void StreamDetailView::clearEpisodeClickPending(int season, int episode)
+ 1769: {
+ 1770:     const QString key = QString::number(season) + QLatin1Char('|') + QString::number(episode);
+ 1771:     if (!m_clickPendingEpisodes.remove(key))
+ 1772:         return;  // was not pending — nothing to repaint
+ 1773:     // Repaint so the row reverts from the zombie Queued state immediately.
+ 1774:     const int row = rowForEpisode(episode);
+ 1775:     if (row >= 0 && currentSeason() == season && m_torrentClient) {
+ 1776:         const auto snap = m_torrentClient->streamBulkSnapshotForImdbSeason(
+ 1777:             m_currentImdb, season);
+ 1778:         refreshEpisodeRow(row, season, episode, snap, {});
+
+codex
+**Findings**
+
+P1: The restored old Downloads page will not show many kept T8/T9-era in-flight downloads. `refreshActive()` only 
+reads `TorrentClient::streamBulkGroups()`; `refreshHistory()` filters `StreamDownloadIndex::all()` down to `Complete` 
+only. But the kept checkout/direct download paths intentionally set `config.streamGroupId = QString()` and drive 
+`Pending/Downloading/Failed` through `StreamDownloadIndex`, not `streamBulkGroups`. Result: queued/downloading/failed 
+season checkout and auto-download items can be invisible on the Downloads page until they complete.  
+Refs: [StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/ui/pages/stream/StreamDownloadsPage.cpp:393>), [StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/ui/pages/stream/StreamDownloadsPage.cpp:553>), [StreamPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/ui/pages/StreamPage.cpp:3273>), [StreamPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/ui/pages/StreamPage.cpp:3456>), [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 
+2/src/core/torrent/TorrentClient.cpp:3927>).
+
+P2: `markFailedByGroup` survives engine-side, but the restored page has no Failed surface. Failed entries are 
+persisted and signaled, but the page drops them because it only renders `Complete` history rows. This is probably an 
+accepted consequence of reverting the command-center UI, but it means a failed direct/pack download may leave no row 
+to retry or inspect from Downloads.  
+Refs: [StreamDownloadIndex.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/stream/StreamDownloadIndex.cpp:416>), 
+[StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamDownloadsPage.cpp:555>).
+
+**Checked**
+
+No remaining live source references to `DownloadsCommandModel`, `DownloadDetailPane`, `retryEpisodeRequested`, 
+`retryEpisodeDownload`, `buildDownloadRows`, `DownloadRow`, or deleted object names that should fail compile/runtime. 
+I found only stale comments/docs, including one source comment mentioning `DownloadsCommandModel::laneItemFor`.
+
+`StreamDownloadsPage.cpp/.h` are byte-identical to `415f4fa` by `git diff --exit-code 415f4fa -- ...`.
+
+CMake removals look correct: deleted source/header/test entries are absent from `TankobanSources.cmake` and 
+`TankobanTests.cmake`.
+
+I did not run a full build. Static review says the revert is compile-clean with the caveat above: the old read-only 
+page no longer represents the kept direct/index-driven download engine very well during non-complete states.
+tokens used
+167,210
+**Findings**
+
+P1: The restored old Downloads page will not show many kept T8/T9-era in-flight downloads. `refreshActive()` only reads `TorrentClient::streamBulkGroups()`; `refreshHistory()` filters `StreamDownloadIndex::all()` down to `Complete` only. But the kept checkout/direct download paths intentionally set `config.streamGroupId = QString()` and drive `Pending/Downloading/Failed` through `StreamDownloadIndex`, not `streamBulkGroups`. Result: queued/downloading/failed season checkout and auto-download items can be invisible on the Downloads page until they complete.  
+Refs: [StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamDownloadsPage.cpp:393>), [StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamDownloadsPage.cpp:553>), [StreamPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/StreamPage.cpp:3273>), [StreamPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/StreamPage.cpp:3456>), [TorrentClient.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/torrent/TorrentClient.cpp:3927>).
+
+P2: `markFailedByGroup` survives engine-side, but the restored page has no Failed surface. Failed entries are persisted and signaled, but the page drops them because it only renders `Complete` history rows. This is probably an accepted consequence of reverting the command-center UI, but it means a failed direct/pack download may leave no row to retry or inspect from Downloads.  
+Refs: [StreamDownloadIndex.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/core/stream/StreamDownloadIndex.cpp:416>), [StreamDownloadsPage.cpp](<C:/Users/Suprabha/Desktop/Tankoban 2/src/ui/pages/stream/StreamDownloadsPage.cpp:555>).
+
+**Checked**
+
+No remaining live source references to `DownloadsCommandModel`, `DownloadDetailPane`, `retryEpisodeRequested`, `retryEpisodeDownload`, `buildDownloadRows`, `DownloadRow`, or deleted object names that should fail compile/runtime. I found only stale comments/docs, including one source comment mentioning `DownloadsCommandModel::laneItemFor`.
+
+`StreamDownloadsPage.cpp/.h` are byte-identical to `415f4fa` by `git diff --exit-code 415f4fa -- ...`.
+
+CMake removals look correct: deleted source/header/test entries are absent from `TankobanSources.cmake` and `TankobanTests.cmake`.
+
+I did not run a full build. Static review says the revert is compile-clean with the caveat above: the old read-only page no longer represents the kept direct/index-driven download engine very well during non-complete states.

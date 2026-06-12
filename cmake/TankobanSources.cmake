@@ -223,7 +223,6 @@ set(SOURCES
     src/core/stream/StreamPackParser.cpp
     src/core/stream/SubtitlesAggregator.cpp
     src/core/stream/StreamDownloadIndex.cpp
-    src/core/stream/DownloadsCommandModel.cpp
     src/core/stream/QualityScorer.cpp
     src/core/stream/AutoSourcePicker.cpp
     src/core/stream/EpisodeDisplayState.cpp
@@ -236,8 +235,6 @@ set(SOURCES
     src/ui/pages/StreamPage.cpp
     src/ui/pages/stream/StreamLibraryLayout.cpp
     src/ui/pages/stream/StreamDownloadsPage.cpp
-    # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
-    src/ui/pages/stream/DownloadDetailPane.cpp
     # DOWNLOADS_OVERHAUL_V2 T8 (2026-06-11) — pack-first Season Checkout dialog.
     src/ui/pages/stream/SeasonCheckoutPanel.cpp
     src/ui/pages/stream/StreamSearchWidget.cpp
@@ -445,7 +442,6 @@ set(HEADERS
     src/core/stream/StreamPackParser.h
     src/core/stream/SubtitlesAggregator.h
     src/core/stream/StreamDownloadIndex.h
-    src/core/stream/DownloadsCommandModel.h
     src/core/stream/QualityScorer.h
     src/core/stream/AutoSourcePicker.h
     src/core/stream/UnifiedProgressStore.h
@@ -457,8 +453,6 @@ set(HEADERS
     src/ui/pages/StreamPage.h
     src/ui/pages/stream/StreamLibraryLayout.h
     src/ui/pages/stream/StreamDownloadsPage.h
-    # DOWNLOADS_OVERHAUL_V2 T5 (2026-06-11) — right pane detail view.
-    src/ui/pages/stream/DownloadDetailPane.h
     # DOWNLOADS_OVERHAUL_V2 T8 (2026-06-11) — pack-first Season Checkout dialog.
     src/ui/pages/stream/SeasonCheckoutPanel.h
     src/ui/pages/stream/StreamSearchWidget.h

@@ -106,11 +106,6 @@ public:
     // app session.
     StreamLibrary* streamLibrary() const { return m_library; }
 
-    // DOWNLOADS_OVERHAUL_V2 T6 — re-run the auto source pick for a failed
-    // episode. The failed transfer was already cancelled/cleaned by the
-    // Downloads page before this is called.
-    void retryEpisodeDownload(const QString& imdbId, int season, int episode);
-
     QJsonObject devSnapshot() const;
     // v1.6 Phase D.4 (2026-05-19) — cross-mode library-section snapshot used
     // by library_get_* commands + embedded in devSnapshot under "library".

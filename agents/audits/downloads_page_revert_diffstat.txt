@@ -1,0 +1,17 @@
+﻿ cmake/TankobanSources.cmake                        |    6 -
+ cmake/TankobanTests.cmake                          |    2 -
+ src/core/stream/DownloadsCommandModel.cpp          |   83 --
+ src/core/stream/DownloadsCommandModel.h            |   79 --
+ src/devtools/HangWatchdog.cpp                      |    8 +-
+ src/devtools/HangWatchdog.h                        |    2 +-
+ src/ui/GlassBackground.cpp                         |   28 +-
+ src/ui/GlassBackground.h                           |    1 +
+ src/ui/MainWindow.cpp                              |    8 -
+ src/ui/pages/StreamPage.cpp                        |   13 -
+ src/ui/pages/StreamPage.h                          |    5 -
+ src/ui/pages/stream/DownloadDetailPane.cpp         |  504 -------
+ src/ui/pages/stream/DownloadDetailPane.h           |  101 --
+ src/ui/pages/stream/StreamDownloadsPage.cpp        | 1463 +++++++-------------
+ src/ui/pages/stream/StreamDownloadsPage.h          |  178 +--
+ tests/core/stream/test_downloads_command_model.cpp |  197 ---
+ 16 files changed, 632 insertions(+), 2046 deletions(-)
