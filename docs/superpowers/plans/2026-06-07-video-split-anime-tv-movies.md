@@ -1,76 +1,81 @@
 # Video Split (Anime + TV + Movies) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> This is **Arc 2** of the six-mode restructure (spec: `docs/superpowers/specs/2026-06-07-six-mode-restructure-design.md`, §5). Arc 1 (Comics → Manga + Western) is a separate, already-written plan: `docs/superpowers/plans/2026-06-07-comics-split-manga-western.md`. The two arcs share **one file** (`src/ui/MainWindow.cpp`) — see Phase 7 coordination.
-> **This is v2** — revised after a cross-model (Codex) plan review. See the **v2 Revision Log** below for what changed and why.
+> This is **Arc 2** of the six-mode restructure (spec: `docs/superpowers/specs/2026-06-07-six-mode-restructure-design.md`, §5). Arc 1 (Comics → Manga + Western) is a separate plan: `docs/superpowers/plans/2026-06-07-comics-split-manga-western.md`. The two arcs share **one file** (`src/ui/MainWindow.cpp`) — see Phase 7.
+> **This is v3** — revised after two cross-model (Codex) plan reviews. See the **Revision Logs** for what changed and why.
 
-**Goal:** Split the single "Theatre" video mode into three top-level modes — **Anime** (all Japanese animation: series *and* films), **TV** (non-anime series), **Movies** (non-anime films) — each with its own page, library, Continue strip, and tailored catalog, over the **shared** video engine (libtorrent + addons + player + `StreamDownloadIndex` + `MetaAggregator`).
+**Goal:** Split the single "Theatre" video mode into three top-level modes — **Anime** (all Japanese animation: series *and* films), **TV** (non-anime series), **Movies** (non-anime films) — each with its own page, library, Continue strip, and tailored catalog, over the **shared** video engine.
 
-**Architecture:** "Split the faces, share the engine." The engine already computes the classification inputs (`type` = movie/series; anime detection via `AnimeCatalogResolver::isAnimeSeries(genres,country)`). The work is: (1) make the anime discriminator **persistent** (currently transient) + classify at the **moment full meta resolves** (genres/country are not on catalog previews), (2) **decouple mode classification from the 5-season Kitsu-reroute gate** so short anime series + anime films classify correctly, (3) **hoist the shared engine** (`MetaAggregator`/`StreamAggregator`/`AddonRegistry`) out of `StreamPage` into an injected `VideoModeServices` so three pages share one engine (not 3×), (4) instantiate the now-mode-parameterized `StreamPage` **three times**, and (5) wire three top-level pills. **Start fresh** on video content (new libraries begin empty; old `stream_library.json` left untouched).
+**Architecture:** "Split the faces, share the engine." The engine already computes the classification inputs (`type` = movie/series; anime detection via genre+country). The work is: (1) make the anime discriminator **persistent** (currently transient) + classify at the **moment full meta resolves** (genres/country are not on catalog previews), (2) **decouple mode classification from the 5-season Kitsu-reroute gate** so short anime series + anime films classify correctly, (3) **hoist the shared engine** — `AddonRegistry`/`MetaAggregator`/`StreamAggregator` **and** the `StreamServerEngine` (Stremio subprocess) + `StreamPlayerController` — out of `StreamPage` into an injected `VideoModeServices` so three pages share **one** engine + **one** subprocess (not 3×), (4) instantiate the now-mode-parameterized `StreamPage` **three times**, (5) wire three top-level pills. **Start fresh** on video content.
 
-**Tech Stack:** C++17, Qt 6 (Widgets), CMake + ninja, GoogleTest. Build: `build_check.bat` (compile-verify) / `build_and_run.bat` (Hemanth smoke). Dev-control bridge (`out\tankoctl.exe`) for headless state checks.
+**Tech Stack:** C++17, Qt 6 (Widgets), CMake + ninja, GoogleTest. Build: `build_check.bat` / `build_and_run.bat`. Dev-control: `out\tankoctl.exe`. **Source list:** `cmake/TankobanSources.cmake`. **Test list:** `cmake/TankobanTests.cmake`. **Tests live under** `tests/core/stream/`.
 
-**Migration:** Video side = **start fresh** (spec §6). The three new pages use **new filenames** (`anime_library.json` / `tv_library.json` / `movies_library.json`), so they start empty automatically; the old `stream_library.json` is never read by the new pages and is **left in place, not rebucketed**. Downloaded files on disk are untouched; legacy `StreamDownloadIndex` rows still resolve for playback (disk-first).
+**Migration:** Video side = **start fresh** (spec §6). The three pages use **new filenames** (`anime_library.json`/`tv_library.json`/`movies_library.json`) → empty on first run; old `stream_library.json` is never read by the new pages and left in place. **The boot `StreamRescueScanner` materialization (MainWindow.cpp:299-336) is disabled for the split** so existing on-disk downloads do NOT auto-populate any new library (Task 14). Downloaded files untouched; legacy `StreamDownloadIndex` rows still resolve for playback (disk-first).
 
 ---
 
-## v2 Revision Log (response to Codex plan review, all 9 findings)
+## Revision Log — Round 1 (Codex review of v1, all 9 findings RESOLVED in v2/v3)
 
-The cross-model review returned **CHANGES-NEEDED**. Every finding was verified against the real code and is addressed here (no pushback — all were valid). Verified facts that drove the changes:
+1. **Compile sequencing** — Task 10 keeps a **legacy `StreamPage` ctor** so every checkpoint compiles; Task 13 switches to the 3-instance wiring.
+2. **Add-time classification data** — `MetaItemPreview` *has* `genres`/`country` (`MetaItem.h:67-68`) but catalog/search parsing does **not** populate them; only full meta (`onMetaItemReady`) does. → Task 6 classifies at meta-resolve + **defers** the add if unresolved.
+3. **Detail-view add routing** — `StreamDetailView` calls `m_library->add/remove` directly (`:2342/:2392/:2406`). → routed through `VideoModeServices` (Tasks 9/10/12).
+4. **Progress generalization** — covers `parseStreamProgressKey`, `clearProgress`, and all `StreamContinueStrip` `startsWith("stream:")` sites (Tasks 5/11).
+5. **Single-`m_streamPage` + engine ownership** — `StreamPage` owns the engine (`StreamPage.cpp:306-307`); 37 refs. → hoist into `VideoModeServices` (Task 9) + `pageForVideoMode()` + enumerated refs + dev-control modes (Task 13).
+6. **Cinemeta returns anime** — classification (add/open-time) is the authoritative landing guarantee; cache + redirect-on-open backstop (Task 8/D9).
+7. **Country matching** — `isAnimeTitle` normalizes `Japan`/`JP`/lists (Task 1).
+8. **Anime-film play path** — D10: anime films classify to Anime, play via the movie path (Task 7).
+9. **Shared-file preflight** — Task 13 verifies the *actual* post-Agent-1 contract.
 
-1. **[BLOCKER → fixed] Compile sequencing.** `MainWindow.cpp:840` constructs `new StreamPage(m_bridge, torrentClient)`. → **Task 10 keeps a legacy ctor overload** (defaults to Movies mode + self-owned services) so every checkpoint compiles; **Task 13** switches to the 3-instance injected wiring and removes the legacy ctor.
-2. **[BLOCKER → fixed] Add-time classification data.** Verified: `MetaItemPreview` *has* `genres`/`country` fields (`MetaItem.h:67-68`) but **catalog/search parsing does not populate them** — they arrive only with full meta (`onMetaItemReady`). → **Task 6** classifies from the **resolved full meta**, and if Add is clicked before meta resolves, **defers the add** until `onMetaItemReady`. Test added for "Add before meta ready."
-3. **[BLOCKER → fixed] Detail-view add routing.** Verified: `StreamDetailView` calls `m_library->add/remove` directly (`:2342/:2392/:2406`). → The detail view takes `VideoModeServices*` and routes add/remove through it (`addClassified`/`removeEverywhere`) — **Tasks 9, 10, 12**.
-4. **[BLOCKER → fixed] Progress not fully generalized.** Verified more sites than v1 listed: `parseStreamProgressKey()`, `clearProgress()` stream-only branch, and `StreamContinueStrip` `startsWith("stream:")` at multiple lines. → **Task 5 + Task 11** enumerate all of them.
-5. **[BLOCKER → fixed] Single-`m_streamPage` assumption (37 refs) + engine ownership.** Verified: `StreamPage` *owns* `m_metaAggregator`/`m_streamAggregator`/`m_addonRegistry` (`StreamPage.cpp:306-307`); `VideosPage` borrows the meta via `m_streamPage->metaAggregator()` (`:870`); 37 `m_streamPage` refs across dev-control routing/snapshots/command-forwarding. → New **Task 9 `VideoModeServices`** owns the hoisted shared engine + 3 libraries + classification cache; **Task 13** adds `pageForVideoMode()`, enumerates all 37 refs, points VideosPage at `services->metaAggregator()`, and extends dev-control to `anime/tv/movies`.
-6. **[BLOCKER → fixed] Cinemeta can return anime.** → **Task 8**: mode-scoped catalogs are best-effort; **classification (add/open-time) is the authoritative landing guarantee**, plus a classification cache that filters known-anime from TV/Movies grids, plus a **redirect-on-open** backstop with a visible note. The DoD's "anime lands in Anime" is met by routing, not by perfect grid filtering.
-7. **[SHOULD → fixed] Country matching.** `isAnimeSeries` does exact `country == "Japan"`. → **Task 6** normalizes country tokens (`Japan`/`JP`/comma-or-slash lists); film + multi-country tests added.
-8. **[SHOULD → fixed] Anime-film play path.** Verified: kitsu route is series-only (`StreamPage.cpp:2428` skips it for `movie`). → **Task 7 + D10**: anime films classify to **Anime** (home/library) but **play via the standard movie path** (IMDb→Torrentio). Task 15 smokes an anime film.
-9. **[SHOULD → fixed] Shared-file preflight.** Agent 1 uses objectName `"western_comics"` vs mode page-id `"comics"`; `activatePage` matches by objectName. → **Task 13** opens with a preflight checklist verifying the *actual* post-Agent-1 page-ids/objectNames/dispatch branches, not just "MangaPage present."
+## Revision Log — Round 2 (Codex re-review of v2: 3 NEW blockers + 1 SHOULD, all verified + fixed in v3)
+
+- **B1 [BLOCKER] — `TorrentClient` dropped.** The new injected ctor omitted `TorrentClient*`, but `StreamPage` uses `m_torrentClient` for retry wiring, detail remove-safeguards, the download panel, library layout, and most download/play actions. → **D1/Task 10:** the injected ctor **keeps `TorrentClient*`**; wired exactly like the legacy path.
+- **B2 [BLOCKER] — 3× Stremio subprocess.** Verified `StreamPage::buildUI()` constructs `m_streamEngine = new StreamServerEngine(cacheDir, this); m_streamEngine->start()` + `StreamPlayerController` (`StreamPage.cpp:817-833`); the cache dir is shared (`dataDir/stream_server_cache`). Three pages = three subprocesses over one cache. → **D12/Task 9:** hoist `StreamServerEngine` + `StreamPlayerController` into `VideoModeServices` (single each); the controller's 4 UI signals route to the active video page.
+- **B3 [BLOCKER] — start-fresh misses the boot rescue scanner.** Verified `MainWindow.cpp:299-336`: a deferred first-launch migration walks Videos roots and **materializes `StreamLibrary` entries** via `StreamRescueScanner` into `m_streamPage->streamLibrary()`. → **Task 14:** disable the library-materialization for the split (index-only at most); smoke asserts the three libraries stay empty on first boot **with existing downloads on disk**.
+- **S1 [SHOULD] — CMake/test reality.** Sources are in `cmake/TankobanSources.cmake`, tests in `cmake/TankobanTests.cmake`, tests under `tests/core/stream/`; the test target does **not** link `StreamLibrary.cpp` (it pulls `TorrentClient`→libtorrent). → all CMake/test refs corrected; the `StreamLibraryEntry` JSON codec is **extracted to a dep-free `StreamLibraryCodec.{h,cpp}`** so codec tests link cleanly; library/hub integration is verified by the Task 15 smoke (matching the existing pure-logic-unit + integration-by-smoke pattern).
 
 ---
 
 ## Phase 0 — Locked Decisions (design gate, no code)
 
-Technical decisions (Rule 14, producer's call); product decisions were locked in the spec brainstorm.
-
-- **D1 — Page-shell model: ONE `StreamPage` class, parameterized by `StreamMode`, instantiated 3×** (objectName `"anime"`/`"tv"`/`"movies"`). The shared engine is **hoisted** out of `StreamPage` into `VideoModeServices` (D7) and injected, so 3 pages share **one** `MetaAggregator`/`StreamAggregator`/`AddonRegistry`/`StreamDownloadIndex`. **Heaviness caveat:** each instance defers heavy work (catalog fetch + detail-view construction/population) to `activate()` / first-show, never the ctor — the app already has open idle/startup-cost tickets in this domain.
-- **D2 — Detail view: parameterize the existing `StreamDetailView`** (already branches on `m_currentType` + `m_isAnime`); each page owns its own instance (lazily built), fed by the shared engine via services. No fork.
-- **D3 — Theatre pill retired.** `PAGE_STREAM = "stream"` removed as a pill. The shared read-only downloads page (`PAGE_STREAM_DOWNLOADS`) is kept once, shared by all three modes; its back-target becomes the launching video mode (default Movies).
+- **D1 — Page-shell: ONE `StreamPage` class, parameterized by `StreamMode`, instantiated 3×** (objectName `"anime"`/`"tv"`/`"movies"`). The shared engine is hoisted into `VideoModeServices` (D7/D12) and injected. The injected ctor **keeps `CoreBridge*` + `TorrentClient*`** (B1). Heaviness caveat: each instance defers heavy work (catalog fetch + detail-view build) to `activate()`/first-show.
+- **D2 — Detail view: parameterize the existing `StreamDetailView`**; each page owns its own (lazily built), fed by the shared engine via services. No fork.
+- **D3 — Theatre pill retired.** `PAGE_STREAM` removed as a pill; the shared read-only downloads page (`PAGE_STREAM_DOWNLOADS`) kept once, shared; its back-target = launching video mode (default Movies).
 - **D4 — Vestigial `VideosPage` (`PAGE_VIDEOS`, Ctrl+3): DEFERRED, untouched** (spec §7), but its `MetaAggregator` source moves from `m_streamPage->metaAggregator()` to `services->metaAggregator()` (Task 13).
-- **D5 — Keybinds (SHARED with Agent 1): order `Manga · Comics · Books · Anime · TV · Movies`** → `Ctrl+1..6`; sidebar toggle moves off `Ctrl+5` to **`Ctrl+0`**. One table, edited once, jointly agreed.
-- **D6 — Classification is data-driven, decoupled from the reroute gate, and evaluated when full meta resolves.** Mode = `classifyStreamMode(isAnime, type)`, `isAnime = isAnimeTitle(genres, country)` (Animation genre AND normalized-Japan country; works for films). The `seasons.size() >= 5` gate (`MetaAggregator.cpp:483`) stays *only* on the Kitsu episode-list reroute, never on mode assignment.
-- **D7 — `VideoModeServices`** (new) owns the **shared engine** (`AddonRegistry`, `MetaAggregator`, `StreamAggregator`) + the **three `StreamLibrary` instances** + an **anime-classification cache** (`imdb → {isAnime, kitsuId}`). It exposes the engine to all 3 pages and `VideosPage`, routes adds by classification, and scopes cross-mode removal. Constructed once in `MainWindow::buildPageStack`.
-- **D8 — Sub/dub (v1): a SUB/DUB preference on the Anime detail** that prioritizes release results by filename tag (`[SUB]`/`[DUB]`/`Dual`/`Dual-Audio`, case-insensitive). No new fetch, no metadata dependency. Play-time mpv track-switching (Agent 3) is out of scope.
-- **D9 — Catalog cleanliness is best-effort; landing is guaranteed.** TV/Movies catalog/search may transiently surface an anime title (Cinemeta returns some, and previews lack genres/country). The **authoritative** guarantee is at add/open-time classification → routing to the right library/Continue. A classification cache filters *known* anime from TV/Movies grids; opening an anime title from a TV/Movies grid **redirects** it (adds land in Anime) with a visible one-line note.
-- **D10 — Anime films play via the movie path.** Anime films classify to **Anime** for home/library/Continue, but their source/play path is the standard IMDb-movie → Torrentio route (the `kitsu:<id>:<ep>` route is episode-based and already skipped for `type == "movie"`). No episode UI for anime films.
-- **D11 — Dev-control gains `anime`/`tv`/`movies` modes.** The legacy `stream` / `stream_*` tankoctl commands map to a default video page (Movies) for back-compat; new commands accept the mode page-id. (Agent 4 owns the `stream-*` prefix; extend it.)
+- **D5 — Keybinds (SHARED with Agent 1): order `Manga · Comics · Books · Anime · TV · Movies`** → `Ctrl+1..6`; sidebar toggle moves off `Ctrl+5` to `Ctrl+0`. One table, edited once, jointly agreed.
+- **D6 — Classification is data-driven, decoupled from the reroute gate, evaluated when full meta resolves.** Mode = `classifyStreamMode(isAnime, type)`, `isAnime = isAnimeTitle(genres, country)`. The `seasons.size() >= 5` gate (`MetaAggregator.cpp:483`) stays *only* on the Kitsu episode-list reroute.
+- **D7 — `VideoModeServices`** owns the shared **engine** (`AddonRegistry`, `MetaAggregator`, `StreamAggregator`, **`StreamServerEngine`, `StreamPlayerController`** — see D12), the **three `StreamLibrary` instances**, and an **anime-classification cache** (`imdb → {isAnime, kitsuId}`). Routes adds by classification; scopes cross-mode removal. Constructed once in `MainWindow::buildPageStack`; receives the MainWindow-owned `StreamDownloadIndex` + `TorrentClient` via setters.
+- **D8 — Sub/dub (v1):** a SUB/DUB preference on the Anime detail that sorts already-fetched sources by filename tag (`[SUB]`/`[DUB]`/`Dual`/`Dual-Audio`, case-insensitive). No new fetch. Play-time mpv track-switching (Agent 3) is out of scope.
+- **D9 — Catalog cleanliness best-effort; landing guaranteed.** Add/open-time classification → routing is authoritative; a classification cache filters known anime from TV/Movies grids; opening an anime title from a TV/Movies grid redirects (adds land in Anime) with a one-line note.
+- **D10 — Anime films play via the movie path** (the `kitsu:<id>:<ep>` route is episode-based and already skipped for `type == "movie"` at `StreamPage.cpp:2428`). Anime films are Anime-mode library items; no episode UI.
+- **D11 — Dev-control gains `anime`/`tv`/`movies` modes.** Legacy `stream`/`stream_*` tankoctl commands alias to a default video page (Movies) for back-compat.
+- **D12 — Hoist the streaming engine + player controller (B2).** `StreamServerEngine` (the Stremio subprocess; one cache dir) and `StreamPlayerController` move into `VideoModeServices` as **single instances**, created lazily on first use (also helps startup cost, D1). The controller's 4 signals (`bufferUpdate`/`readyToPlay`/`streamFailed`/`streamStopped`) connect to the **active** video page; `MainWindow` (re)connects them on page activation, or each page guards its slot by active-state. Only the active page initiates a stream, so the single engine/controller is never driven concurrently.
 
 ---
 
 ## File Structure
 
 **Create:**
-- `src/core/stream/StreamMode.h` (+ `.cpp`) — `enum class StreamMode { Anime, TV, Movies }`; pure `classifyStreamMode(bool isAnime, const QString& type)`; `isAnimeTitle(const QStringList& genres, const QString& country)` (normalized); `streamModeKey()` / `streamModeFromKey()` / `streamLibraryFilename()`.
-- `src/core/stream/VideoModeServices.{h,cpp}` — owns the hoisted shared engine (`AddonRegistry`, `MetaAggregator`, `StreamAggregator`) + 3 `StreamLibrary` + classification cache; `metaAggregator()/streamAggregator()/addonRegistry()/downloadIndex()`, `libraryForMode()`, `addClassified()`, `removeEverywhere()`, `cacheIsAnime()/cachedIsAnime()`.
-- `tests/stream/test_stream_mode.cpp`, `tests/stream/test_stream_library_anime_flag.cpp`, `tests/stream/test_video_mode_services.cpp`, `tests/stream/test_progress_domains.cpp`.
+- `src/core/stream/StreamMode.h` (+ `.cpp`) — `enum class StreamMode`; `classifyStreamMode`; `isAnimeTitle` (normalized); `streamModeKey`/`streamModeFromKey`/`streamLibraryFilename`.
+- `src/core/stream/StreamLibraryCodec.{h,cpp}` — **dep-free** `StreamLibraryEntry ↔ QJsonObject` (only Qt JSON + the POD struct; no `TorrentClient`). Used by `StreamLibrary.cpp`; unit-testable.
+- `src/core/stream/VideoModeServices.{h,cpp}` — shared engine (incl. `StreamServerEngine` + `StreamPlayerController`, lazy) + 3 `StreamLibrary` + classification cache + add routing.
+- `tests/core/stream/test_stream_mode.cpp`, `tests/core/stream/test_stream_library_codec.cpp`, `tests/core/stream/test_progress_domains.cpp`.
 
 **Modify:**
-- `src/core/stream/StreamLibrary.{h,cpp}` — `animeFlag` + `kitsuId` on the entry + (de)serialize; ctor filename param.
+- `src/core/stream/StreamLibrary.{h,cpp}` — `animeFlag`+`kitsuId` on the entry (via the codec); ctor filename param.
 - `src/core/stream/StreamDownloadIndex.{h,cpp}` — `animeFlag` on `Entry` + codec (back-compat default).
-- `src/core/CoreBridge.{h,cpp}` — `anime`/`tv`/`movies` progress domains across `PROGRESS_FILES`, `allProgress`, `progress`, `saveProgress`, `clearProgress`, and `parseStreamProgressKey`.
+- `src/core/CoreBridge.{h,cpp}` — `anime`/`tv`/`movies` domains across `PROGRESS_FILES`/`allProgress`/`progress`/`saveProgress`/`clearProgress`/`parseStreamProgressKey`.
 - `src/core/stream/UnifiedProgressStore.{h,cpp}` — domain-prefix-parameterized key build/parse + payload accessor.
-- `src/core/stream/MetaAggregator.{h,cpp}` — `entryResolved(imdbId, kitsuId, isAnime)` signal; mode-scoped catalog requests; classification cache feed; decouple classification from the reroute gate.
-- `src/core/stream/CatalogAggregator.{h,cpp}`, `src/core/stream/StreamAggregator.{h,cpp}`, `src/ui/pages/stream/CatalogBrowseScreen.cpp` — thread a `StreamMode` filter + best-effort anime exclusion.
-- `src/core/stream/AnimeCatalogResolver.{h,cpp}` — expose/normalize the anime-title test.
-- `src/ui/pages/StreamPage.{h,cpp}` — mode + injected `VideoModeServices`; legacy ctor kept until Task 13; defer heavy work.
-- `src/ui/pages/stream/StreamContinueStrip.{h,cpp}` — domain string via ctor/setter (replaces hardcoded `"stream"` at `:79`, `:116`, `:275`).
+- `src/core/stream/MetaAggregator.{h,cpp}` — `entryResolved` signal; mode-scoped catalog requests; classification-cache feed; classification decoupled from the reroute gate.
+- `src/core/stream/CatalogAggregator.{h,cpp}`, `src/core/stream/StreamAggregator.{h,cpp}`, `src/ui/pages/stream/CatalogBrowseScreen.cpp` — `StreamMode` filter + best-effort anime exclusion.
+- `src/core/stream/AnimeCatalogResolver.{h,cpp}` — point anime detection at `isAnimeTitle`.
+- `src/ui/pages/StreamPage.{h,cpp}` — mode + injected services (+ `TorrentClient`); legacy ctor kept until Task 13; defer heavy work; engine/controller borrowed from services.
+- `src/ui/pages/stream/StreamContinueStrip.{h,cpp}` — domain via ctor/setter (`:79`, `:116`, `:275`).
 - `src/ui/pages/stream/StreamSearchWidget.{h,cpp}` — mode-filtered sections + anime section.
-- `src/ui/pages/stream/StreamDetailView.{h,cpp}` — take `VideoModeServices*` + mode; route add/remove through services; per-mode formatting + sub/dub.
-- `src/ui/MainWindow.{cpp,h}` — **SHARED FILE** — constants, navDefs, `buildPageStack`, `activatePage`, `resetActivePageToRoot`, `onLayerRestoreRequested`, `bindShortcuts`, all 37 `m_streamPage` refs, dev-control modes.
-- `CMakeLists.txt` — register new files.
+- `src/ui/pages/stream/StreamDetailView.{h,cpp}` — services + mode; routed add/remove; per-mode formatting + sub/dub.
+- `src/ui/MainWindow.{cpp,h}` — **SHARED** — constants, navDefs, `buildPageStack`, `activatePage`, `resetActivePageToRoot`, `onLayerRestoreRequested`, `bindShortcuts`, all 37 `m_streamPage` refs, the boot rescue scanner, dev-control modes.
+- `cmake/TankobanSources.cmake` — register new source `.cpp`s. `cmake/TankobanTests.cmake` — register new test `.cpp`s.
 
-**Pre-task read (executor):** before Phase 3/5/6, read `src/ui/pages/StreamPage.cpp` and `src/ui/pages/stream/StreamDetailView.cpp` **in full** (StreamDetailView ≈ 4666 lines). Tasks below say *what to change and where (anchors)*; reproduce the surrounding code from the real file. Do not invent unread line bodies.
+**Pre-task read (executor):** before Phase 3/5/6, read `src/ui/pages/StreamPage.cpp` and `src/ui/pages/stream/StreamDetailView.cpp` **in full** (StreamDetailView ≈ 4666 lines). Tasks cite anchors; reproduce surrounding code from the real file.
 
 ---
 
@@ -78,7 +83,7 @@ Technical decisions (Rule 14, producer's call); product decisions were locked in
 
 ### Task 1: `StreamMode` enum + pure classifier + normalized anime-title test
 
-**Files:** Create `src/core/stream/StreamMode.{h,cpp}`; Test `tests/stream/test_stream_mode.cpp`; Modify `CMakeLists.txt`.
+**Files:** Create `src/core/stream/StreamMode.{h,cpp}`; Test `tests/core/stream/test_stream_mode.cpp`; register in `cmake/TankobanSources.cmake` + `cmake/TankobanTests.cmake`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -90,147 +95,78 @@ TEST(StreamMode, AnimeFlagWinsForBothTypes) {
     EXPECT_EQ(classifyStreamMode(true,  "series"), StreamMode::Anime);
     EXPECT_EQ(classifyStreamMode(true,  "movie"),  StreamMode::Anime);  // anime film
 }
-TEST(StreamMode, NonAnimeSeriesIsTv) {
-    EXPECT_EQ(classifyStreamMode(false, "series"), StreamMode::TV);
-}
-TEST(StreamMode, NonAnimeMovieIsMovies) {
-    EXPECT_EQ(classifyStreamMode(false, "movie"), StreamMode::Movies);
-    EXPECT_EQ(classifyStreamMode(false, ""),      StreamMode::Movies);
+TEST(StreamMode, NonAnimeSeriesIsTv)     { EXPECT_EQ(classifyStreamMode(false,"series"), StreamMode::TV); }
+TEST(StreamMode, NonAnimeMovieIsMovies)  {
+    EXPECT_EQ(classifyStreamMode(false,"movie"), StreamMode::Movies);
+    EXPECT_EQ(classifyStreamMode(false,""),      StreamMode::Movies);
 }
 TEST(StreamMode, AnimeTitleNormalizesCountryAndGenre) {
     EXPECT_TRUE (isAnimeTitle({"Animation","Action"}, "Japan"));
-    EXPECT_TRUE (isAnimeTitle({"Animation"},          "JP"));            // alt token
-    EXPECT_TRUE (isAnimeTitle({"Animation"},          "Japan, China")); // multi-country list
-    EXPECT_TRUE (isAnimeTitle({"Animation"},          "Japan / USA"));  // slash list
-    EXPECT_FALSE(isAnimeTitle({"Animation"},          "United States"));// Western cartoon
-    EXPECT_FALSE(isAnimeTitle({"Drama"},              "Japan"));        // live-action JP
-    EXPECT_FALSE(isAnimeTitle({},                      "Japan"));        // no genre
+    EXPECT_TRUE (isAnimeTitle({"Animation"},          "JP"));
+    EXPECT_TRUE (isAnimeTitle({"Animation"},          "Japan, China"));
+    EXPECT_TRUE (isAnimeTitle({"Animation"},          "Japan / USA"));
+    EXPECT_FALSE(isAnimeTitle({"Animation"},          "United States"));
+    EXPECT_FALSE(isAnimeTitle({"Drama"},              "Japan"));
+    EXPECT_FALSE(isAnimeTitle({},                      "Japan"));
 }
 TEST(StreamMode, KeyAndFilenameRoundTrip) {
     EXPECT_EQ(streamModeKey(StreamMode::Anime),  QStringLiteral("anime"));
     EXPECT_EQ(streamModeFromKey("tv"),           StreamMode::TV);
-    EXPECT_EQ(streamModeFromKey("bogus"),        StreamMode::Movies);  // safe default
+    EXPECT_EQ(streamModeFromKey("bogus"),        StreamMode::Movies);
     EXPECT_EQ(streamLibraryFilename(StreamMode::Movies), QStringLiteral("movies_library.json"));
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails** — `ctest -R StreamMode -V` → FAIL (header not found).
-
-- [ ] **Step 3: Implement `StreamMode.h`**
-
-```cpp
-#pragma once
-#include <QString>
-#include <QStringList>
-
-// Six-mode restructure (2026-06-07), Arc 2. anime-flag wins for films AND series;
-// otherwise series -> TV, movie/unknown -> Movies.
-enum class StreamMode { Anime, TV, Movies };
-
-inline StreamMode classifyStreamMode(bool isAnime, const QString& type) {
-    if (isAnime) return StreamMode::Anime;
-    if (type.compare(QStringLiteral("series"), Qt::CaseInsensitive) == 0)
-        return StreamMode::TV;
-    return StreamMode::Movies;
-}
-
-// Animation genre AND a Japan-origin country token. country is normalized so
-// "Japan", "JP", and lists like "Japan, China" / "Japan / USA" all match.
-bool       isAnimeTitle(const QStringList& genres, const QString& country);
-QString    streamModeKey(StreamMode mode);
-StreamMode streamModeFromKey(const QString& key);
-QString    streamLibraryFilename(StreamMode mode);
-```
-
-- [ ] **Step 4: Implement `StreamMode.cpp`**
-
-```cpp
-#include "core/stream/StreamMode.h"
-
-bool isAnimeTitle(const QStringList& genres, const QString& country) {
-    bool hasAnimation = false;
-    for (const QString& g : genres)
-        if (g.compare(QStringLiteral("Animation"), Qt::CaseInsensitive) == 0) { hasAnimation = true; break; }
-    if (!hasAnimation) return false;
-    // Split on comma/slash, trim, match Japan tokens.
-    const QStringList toks = country.split(QRegularExpression(QStringLiteral("[,/]")),
-                                           Qt::SkipEmptyParts);
-    for (QString t : toks) {
-        t = t.trimmed();
-        if (t.compare(QStringLiteral("Japan"), Qt::CaseInsensitive) == 0 ||
-            t.compare(QStringLiteral("JP"),    Qt::CaseInsensitive) == 0 ||
-            t.compare(QStringLiteral("JPN"),   Qt::CaseInsensitive) == 0)
-            return true;
-    }
-    return false;
-}
-
-QString streamModeKey(StreamMode mode) {
-    switch (mode) {
-        case StreamMode::Anime:  return QStringLiteral("anime");
-        case StreamMode::TV:     return QStringLiteral("tv");
-        case StreamMode::Movies: return QStringLiteral("movies");
-    }
-    return QStringLiteral("movies");
-}
-StreamMode streamModeFromKey(const QString& key) {
-    const QString k = key.toLower();
-    if (k == QStringLiteral("anime")) return StreamMode::Anime;
-    if (k == QStringLiteral("tv"))    return StreamMode::TV;
-    return StreamMode::Movies;
-}
-QString streamLibraryFilename(StreamMode mode) {
-    return streamModeKey(mode) + QStringLiteral("_library.json");
-}
-```
-
-(Add `#include <QRegularExpression>` to the .cpp.)
-
-- [ ] **Step 5:** Add `StreamMode.cpp` to CMake sources + `test_stream_mode.cpp` to test sources.
+- [ ] **Step 2: Run, verify it fails** — `ctest -R StreamMode -V` → FAIL (header not found).
+- [ ] **Step 3: Implement `StreamMode.h`** — `enum class StreamMode { Anime, TV, Movies };` + inline `classifyStreamMode(bool isAnime, const QString& type)` (anime→Anime; "series"→TV; else Movies) + free decls `isAnimeTitle`, `streamModeKey`, `streamModeFromKey`, `streamLibraryFilename`.
+- [ ] **Step 4: Implement `StreamMode.cpp`** — `isAnimeTitle`: require an "Animation" genre (case-insensitive) AND a Japan-origin token after splitting `country` on `[,/]` and trimming (match `Japan`/`JP`/`JPN`, case-insensitive). Key/filename helpers per the test. `#include <QRegularExpression>`.
+- [ ] **Step 5:** Register `StreamMode.cpp` in `cmake/TankobanSources.cmake` (near the other `src/core/stream/*.cpp`) and `tests/core/stream/test_stream_mode.cpp` in `cmake/TankobanTests.cmake`.
 - [ ] **Step 6: Run, verify PASS** — `ctest -R StreamMode -V` → PASS. Confirm `StreamMode.cpp.obj` built.
 - [ ] **Step 7: Commit** — `git commit -m "feat(video-split): StreamMode enum + classifier + normalized isAnimeTitle"`
 
-### Task 2: Persist `animeFlag` + `kitsuId` on `StreamLibraryEntry`
+### Task 2: Extract dep-free entry codec + add `animeFlag`/`kitsuId`
 
-**Files:** Modify `src/core/stream/StreamLibrary.{h,cpp}`; Test `tests/stream/test_stream_library_anime_flag.cpp`.
+**Files:** Create `src/core/stream/StreamLibraryCodec.{h,cpp}`; Modify `src/core/stream/StreamLibrary.{h,cpp}` (struct + use the codec); Test `tests/core/stream/test_stream_library_codec.cpp`; register in both cmake files.
 
-- [ ] **Step 1: Write the failing test** (round-trip + legacy default)
+> **S1:** the codec must NOT depend on `TorrentClient` (so the test links without libtorrent). `StreamLibrary.cpp` keeps its `TorrentClient` cascade in `remove()`; only the pure JSON↔struct mapping moves out.
+
+- [ ] **Step 1: Write the failing test** (codec round-trip + legacy default)
 
 ```cpp
 #include <gtest/gtest.h>
 #include <QJsonObject>
-#include "core/stream/StreamLibrary.h"
+#include "core/stream/StreamLibraryCodec.h"
 
-TEST(StreamLibraryAnimeFlag, RoundTripsNewFields) {
-    StreamLibraryEntry e;
-    e.imdb = "tt9335498"; e.type = "series"; e.name = "Demon Slayer";
-    e.animeFlag = true;   e.kitsuId = 41370;
-    const QJsonObject j = StreamLibrary::entryToJson(e);
-    const StreamLibraryEntry back = StreamLibrary::entryFromJson(j);
+TEST(StreamLibraryCodec, RoundTripsNewFields) {
+    StreamLibraryEntry e; e.imdb="tt9335498"; e.type="series"; e.name="Demon Slayer";
+    e.animeFlag=true; e.kitsuId=41370;
+    const StreamLibraryEntry back = streamLibraryEntryFromJson(streamLibraryEntryToJson(e));
     EXPECT_TRUE(back.animeFlag);
     EXPECT_EQ(back.kitsuId, 41370);
+    EXPECT_EQ(back.type, QStringLiteral("series"));
 }
-TEST(StreamLibraryAnimeFlag, LegacyRowsDefaultNonAnime) {
-    QJsonObject legacy;
-    legacy["imdb"] = "tt0111161"; legacy["type"] = "movie"; legacy["name"] = "X";
-    const StreamLibraryEntry back = StreamLibrary::entryFromJson(legacy);
+TEST(StreamLibraryCodec, LegacyRowsDefaultNonAnime) {
+    QJsonObject legacy; legacy["imdb"]="tt0111161"; legacy["type"]="movie"; legacy["name"]="X";
+    const StreamLibraryEntry back = streamLibraryEntryFromJson(legacy);
     EXPECT_FALSE(back.animeFlag);
     EXPECT_EQ(back.kitsuId, -1);
 }
 ```
 
-- [ ] **Step 2:** Run, verify FAIL.
-- [ ] **Step 3:** Extend the struct (`StreamLibrary.h:13-22`) with `bool animeFlag = false; int kitsuId = -1;`. Add public seam wrappers `static StreamLibraryEntry entryFromJson(const QJsonObject&)` / `static QJsonObject entryToJson(const StreamLibraryEntry&)` delegating to the private `fromJson`/`toJson`. In `StreamLibrary.cpp`, write both fields in `toJson` and read them with struct defaults in `fromJson` (`obj.value("animeFlag").toBool(false)`, `obj.value("kitsuId").toInt(-1)`).
-- [ ] **Step 4:** Run, verify PASS.
-- [ ] **Step 5: Commit** — `git commit -m "feat(video-split): persist animeFlag + kitsuId on StreamLibraryEntry"`
+- [ ] **Step 2: Run, verify FAIL.**
+- [ ] **Step 3:** Add `bool animeFlag = false; int kitsuId = -1;` to `StreamLibraryEntry` (`StreamLibrary.h:13-22`). Create `StreamLibraryCodec.h` declaring `QJsonObject streamLibraryEntryToJson(const StreamLibraryEntry&)` + `StreamLibraryEntry streamLibraryEntryFromJson(const QJsonObject&)`; `.cpp` implements them (all 10 fields; new fields default `false`/`-1` when absent). **`StreamLibraryEntry` must be visible to the codec** — keep the struct in `StreamLibrary.h` and have `StreamLibraryCodec.h` include it (it pulls no `TorrentClient`).
+- [ ] **Step 4:** In `StreamLibrary.cpp`, replace the bodies of the private `fromJson`/`toJson` with calls to the free codec functions (or delete them and call the codec at the load/save sites).
+- [ ] **Step 5:** Register `StreamLibraryCodec.cpp` in `cmake/TankobanSources.cmake`; register the codec `.cpp` **and** the test in `cmake/TankobanTests.cmake` (the test links only `StreamLibraryCodec.cpp` + Qt — no `TorrentClient`).
+- [ ] **Step 6: Run, verify PASS;** `build_check.bat` → BUILD OK (the app still builds with the codec extracted).
+- [ ] **Step 7: Commit** — `git commit -m "feat(video-split): dep-free StreamLibraryCodec + animeFlag/kitsuId"`
 
 ### Task 3: `animeFlag` on `StreamDownloadIndex::Entry`
 
-**Files:** Modify `src/core/stream/StreamDownloadIndex.{h,cpp}`; extend the same test file.
+**Files:** Modify `src/core/stream/StreamDownloadIndex.{h,cpp}`; extend `tests/core/stream/test_stream_download_index_state.cpp` (already linked) or add a sibling registered in `cmake/TankobanTests.cmake`.
 
-- [ ] **Step 1:** Read `StreamDownloadIndex.h` for the `Entry` struct + codec. Write a failing round-trip test (`animeFlag = true` survives; legacy row → `false`).
+- [ ] **Step 1:** Read the `Entry` struct + codec. Write a failing round-trip test (`animeFlag=true` survives; legacy row → `false`).
 - [ ] **Step 2:** Run, verify FAIL.
-- [ ] **Step 3:** Add `bool animeFlag = false;` to `Entry`; serialize in the codec; default `false` on read. Match existing field/codec naming (read first).
+- [ ] **Step 3:** Add `bool animeFlag = false;` to `Entry`; serialize; default `false` on read. Match existing naming.
 - [ ] **Step 4:** Run, verify PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(video-split): animeFlag on StreamDownloadIndex::Entry (back-compat)"`
 
@@ -240,68 +176,55 @@ TEST(StreamLibraryAnimeFlag, LegacyRowsDefaultNonAnime) {
 
 ### Task 4: Parameterize `StreamLibrary` filename
 
-**Files:** Modify `src/core/stream/StreamLibrary.{h,cpp}` (ctor; `FILENAME` :77 → member; `load()` :150; `save()` :173); `src/ui/pages/StreamPage.cpp` (the existing call site — note: `m_library` is created inside StreamPage; find it, ≈ where `new StreamLibrary` appears). Extend `tests/stream/test_stream_library_anime_flag.cpp`.
+**Files:** Modify `src/core/stream/StreamLibrary.{h,cpp}` (ctor; `FILENAME` :77 → member; `load()` :150; `save()` :173); `src/ui/pages/StreamPage.cpp` (the `new StreamLibrary(...)` call site — find it).
 
-- [ ] **Step 1: Write the failing test** — two libraries with different filenames stay isolated:
+> Isolation is structural (distinct `m_filename` → distinct `JsonStore` key). Verified at the Task 15 integration smoke (a `StreamLibrary`-instantiating unit test would pull `TorrentClient`→libtorrent into the test link — avoided per S1).
 
-```cpp
-TEST(StreamLibraryFilename, TwoInstancesAreIsolated) {
-    JsonStore store(/* temp dir per JsonStore test pattern — read JsonStore.h */);
-    StreamLibrary a(&store, QStringLiteral("anime_library.json"));
-    StreamLibrary t(&store, QStringLiteral("tv_library.json"));
-    StreamLibraryEntry e; e.imdb = "tt9335498"; e.type = "series"; e.animeFlag = true;
-    a.add(e);
-    EXPECT_TRUE (a.has("tt9335498"));
-    EXPECT_FALSE(t.has("tt9335498"));
-}
-```
-
-- [ ] **Step 2:** Run, verify FAIL (ctor signature).
-- [ ] **Step 3:** Change ctor to `StreamLibrary(JsonStore* store, const QString& filename, QObject* parent = nullptr)`; replace `static constexpr const char* FILENAME` with `const QString m_filename;` set in the init list; use `m_filename` in `load()`/`save()`.
-- [ ] **Step 4:** Update the existing call site in `StreamPage.cpp` to pass `QStringLiteral("stream_library.json")` (no behavior change; replaced in Phase 5).
-- [ ] **Step 5: Build-verify** — `build_check.bat` → BUILD OK (verify exe mtime). `ctest -R StreamLibraryFilename -V` → PASS.
-- [ ] **Step 6: Commit** — `git commit -m "refactor(video-split): StreamLibrary takes a filename"`
+- [ ] **Step 1:** Change ctor to `StreamLibrary(JsonStore* store, const QString& filename, QObject* parent = nullptr)`; replace `static constexpr const char* FILENAME` with `const QString m_filename;` set in the init list; use `m_filename` in `load()`/`save()`.
+- [ ] **Step 2:** Update the existing call site in `StreamPage.cpp` to pass `QStringLiteral("stream_library.json")` (no behavior change; replaced in Phase 5).
+- [ ] **Step 3: Build-verify** — `build_check.bat` → BUILD OK (verify exe mtime advanced).
+- [ ] **Step 4: Commit** — `git commit -m "refactor(video-split): StreamLibrary takes a filename"`
 
 ### Task 5: `anime`/`tv`/`movies` progress domains (FULL generalization)
 
-**Files:** Modify `src/core/CoreBridge.{h,cpp}` — `PROGRESS_FILES` (≈ :27-31), `allProgress` (≈ :188), `progress` (≈ :263-274), `saveProgress` (≈ :227), `clearProgress` (the `stream`-only unified branch), and **`parseStreamProgressKey()`** (≈ :44, currently accepts only `stream:`). Modify `src/core/stream/UnifiedProgressStore.{h,cpp}` — `allEpisodePayloadsForStreamDomain()` (≈ :84) + `streamDomainKeyForEntry()` (≈ :256). Test `tests/stream/test_progress_domains.cpp`.
+**Files:** Modify `src/core/CoreBridge.{h,cpp}` — `PROGRESS_FILES` (≈:27-31), `allProgress` (≈:188), `progress` (≈:263-274), `saveProgress` (≈:227), `clearProgress` (stream-only branch), `parseStreamProgressKey` (≈:44). Modify `src/core/stream/UnifiedProgressStore.{h,cpp}` — `allEpisodePayloadsForStreamDomain` (≈:84) + `streamDomainKeyForEntry` (≈:256). Test: extend `tests/core/stream/test_unified_progress_store.cpp` (UnifiedProgressStore is already in the test link).
 
-> **Codex finding #4:** changing only `allProgress(m_domain)` leaves Continue strips broken because the **key parser** and **clearProgress** are `stream:`-only. This task makes the key prefix a parameter everywhere.
+> **R1#4:** changing only `allProgress(m_domain)` leaves Continue strips broken because the key parser + `clearProgress` are `stream:`-only. Generalize the prefix everywhere. Unit-test the **UnifiedProgressStore** key build/parse (already linked); CoreBridge domain routing is covered by the Task 15 smoke.
 
-- [ ] **Step 1: Read all the sites above** to capture the exact `domain == "stream"` branch pattern + the `"stream:"` key prefix usage in `parseStreamProgressKey` + `clearProgress`.
-- [ ] **Step 2: Write the failing test** — for each of `anime`/`tv`: `saveProgress(domain, payload)` → `allProgress(domain)` round-trips; the stored key is prefixed `anime:`/`tv:` (not `stream:`); `clearProgress(domain, id)` removes only that domain's entry; `parseStreamProgressKey("anime:tt123:1:2")` parses correctly.
+- [ ] **Step 1: Read** all the sites to capture the `domain == "stream"` branch pattern + the `"stream:"` prefix usage.
+- [ ] **Step 2: Write the failing test** (in `test_unified_progress_store.cpp`) — building/parsing a key under prefix `"anime"` yields `anime:<imdb>:...` and parses back correctly; `"tv"` likewise; the legacy `"stream"` default still works.
 - [ ] **Step 3:** Run, verify FAIL.
-- [ ] **Step 4: Generalize.** Add `anime`/`tv`/`movies` rows to `PROGRESS_FILES`. Extend `allProgress`/`progress`/`saveProgress`/`clearProgress` branches to route the new domains to `UnifiedProgressStore`. Make `parseStreamProgressKey()` accept any of the four prefixes (or take the domain). Parameterize `streamDomainKeyForEntry()`/`allEpisodePayloadsForStreamDomain()` by domain prefix (default `"stream"` for legacy callers). **Touch every site** — a miss = silent progress loss for that mode.
-- [ ] **Step 5:** Run, verify PASS; `build_check.bat` → BUILD OK.
-- [ ] **Step 6: Commit** — `git commit -m "feat(video-split): full anime/tv/movies progress generalization (keys + clear + parse)"`
+- [ ] **Step 4:** Parameterize `streamDomainKeyForEntry()`/`allEpisodePayloadsForStreamDomain()` (and `parseStreamProgressKey`) by a domain prefix (default `"stream"`). In `CoreBridge.cpp`, add `anime`/`tv`/`movies` rows to `PROGRESS_FILES` and extend `allProgress`/`progress`/`saveProgress`/`clearProgress` to route the new domains to `UnifiedProgressStore`. Touch **every** site.
+- [ ] **Step 5:** Run UnifiedProgressStore test → PASS; `build_check.bat` → BUILD OK.
+- [ ] **Step 6: Commit** — `git commit -m "feat(video-split): full anime/tv/movies progress generalization (keys+clear+parse)"`
 
 ---
 
 ## Phase 3 — Classification wiring (resolve-time, race-safe) + play-path persistence
 
-### Task 6: Classify at meta-resolve time, feed the cache, emit `entryResolved`
+### Task 6: Classify at meta-resolve, feed the cache, emit `entryResolved`
 
-**Files:** Modify `src/core/stream/MetaAggregator.{h,cpp}` (signal near `animeCatalogActive` ≈ :100; emit in `emitSeriesResult` ≈ :609 + the movie path; decouple classification from the `:481-491` reroute gate); `src/ui/pages/stream/StreamDetailView.{cpp}` (add path ≈ :2342); `src/core/stream/AnimeCatalogResolver.{h,cpp}` (reuse `isAnimeTitle`). Test `tests/stream/test_stream_mode.cpp` (extend) / a new `test_classification.cpp`.
+**Files:** Modify `src/core/stream/MetaAggregator.{h,cpp}` (signal ≈:100; emit in `emitSeriesResult` ≈:609 + the movie path; decouple from the `:481-491` gate); `src/ui/pages/stream/StreamDetailView.cpp` (add path ≈:2342); `src/core/stream/AnimeCatalogResolver.{h,cpp}` (use `isAnimeTitle`). Test: extend `tests/core/stream/test_anime_catalog_resolver.cpp` (already linked).
 
-> **Codex finding #2 + #7:** previews lack populated genres/country; classify from the **resolved full meta** (delivered via `onMetaItemReady` to the detail view). If Add is clicked before resolution, **defer** the add.
+> **R1#2/#7:** classify from the **resolved full meta** (delivered via `onMetaItemReady`); previews lack populated genres/country. If Add fires before resolution, **defer**.
 
-- [ ] **Step 1: Reuse the normalized test.** Point `AnimeCatalogResolver`'s anime detection at `isAnimeTitle()` (Task 1) — one source of truth. If `isAnimeSeries` is referenced elsewhere, keep it as a thin wrapper calling `isAnimeTitle` (no behavior regression for the existing reroute path beyond country normalization, which is a strict superset).
-- [ ] **Step 2: Write the failing test** — drive classification on resolved-meta shapes (Demon Slayer series → Anime; an anime film → Anime; Breaking Bad → TV; Inception → Movies), asserting `classifyStreamMode(isAnimeTitle(g,c), type)`.
-- [ ] **Step 3:** Run, verify FAIL (if any wiring missing) / confirm assertions.
-- [ ] **Step 4: Add `entryResolved(imdbId, kitsuId, isAnime)`** to `MetaAggregator`. Emit it from the series-result path (both the rerouted-anime and plain-series branches) and the movie-resolution path, carrying the resolved `kitsuId` (or -1) and `isAnime` from `isAnimeTitle(meta.genres, meta.country)`. **Not** gated on `seasons.size() >= 5` (the gate stays only on the Kitsu episode reroute).
-- [ ] **Step 5: Race-safe add (detail view ≈ :2342).** When the user adds: build the entry, set `animeFlag`/`kitsuId` from the **resolved** meta if present; if meta is not yet resolved, **defer** the add — hook `onMetaItemReady` (or `entryResolved`) once, then build + route. Never read genres/country off the unresolved preview.
-- [ ] **Step 6:** Run the classification test → PASS; `build_check.bat` → BUILD OK.
+- [ ] **Step 1:** Point `AnimeCatalogResolver`'s detection at `isAnimeTitle()` (Task 1) — one source of truth. If `isAnimeSeries` is referenced elsewhere, keep it as a thin wrapper calling `isAnimeTitle` (country normalization is a strict superset — no regression).
+- [ ] **Step 2: Write the failing test** (in `test_anime_catalog_resolver.cpp`) — Demon Slayer (Animation+Japan) → `isAnimeTitle` true → `classifyStreamMode(..., "series")` == Anime; an anime film (Animation+Japan, "movie") → Anime; Breaking Bad → TV; Inception → Movies.
+- [ ] **Step 3:** Run, verify FAIL/confirm.
+- [ ] **Step 4:** Add `entryResolved(imdbId, kitsuId, isAnime)` to `MetaAggregator`; emit from the series-result path (both rerouted-anime and plain-series branches) and the movie path, carrying resolved `kitsuId` (or -1) + `isAnime` from `isAnimeTitle(meta.genres, meta.country)`. **Not** gated on `seasons.size() >= 5`.
+- [ ] **Step 5: Race-safe add (`StreamDetailView` ≈:2342).** Build the entry; set `animeFlag`/`kitsuId` from the **resolved** meta if present; else hook `onMetaItemReady`/`entryResolved` once, then build + route. Never read genres/country off an unresolved preview.
+- [ ] **Step 6:** Run test → PASS; `build_check.bat` → BUILD OK.
 - [ ] **Step 7: Commit** — `git commit -m "feat(video-split): resolve-time anime classification + entryResolved (race-safe add)"`
 
-### Task 7: Persist + reuse resolved `kitsuId`; anime-film play path; verify pre-warm
+### Task 7: Persist + reuse resolved `kitsuId`; anime-film path; verify pre-warm
 
-**Files:** Modify `src/ui/pages/StreamPage.cpp` (play-path ≈ :2428), `src/core/stream/MetaAggregator.cpp` (pre-warm ≈ :259 — log marker), library subscribes to `entryResolved`.
+**Files:** Modify `src/ui/pages/StreamPage.cpp` (play-path ≈:2428), `src/core/stream/MetaAggregator.cpp` (pre-warm ≈:259 — log marker); library subscribes to `entryResolved` (via `VideoModeServices`, Task 9).
 
-> **Scope note:** `AnimeIdMapCache` already persists the IMDb→Kitsu map (`AnimeIdMapCache.cpp:17`) and pre-warms at startup (`MetaAggregator.cpp:259`). Real work = persist the per-series **resolved** `kitsuId` onto the entry so a restart needs no live re-fetch. **D10:** anime *films* (`type == "movie"`) keep the **movie** play path (`:2428` already skips kitsu for movies) — they are in Anime mode but play like a movie.
+> **Scope:** `AnimeIdMapCache` already persists the map (`AnimeIdMapCache.cpp:17`) + pre-warms (`MetaAggregator.cpp:259`). Real work = persist the per-series **resolved** `kitsuId` onto the entry. **D10:** anime films (`type == "movie"`) keep the movie play path (`:2428` already skips kitsu for movies).
 
-- [ ] **Step 1:** Subscribe the owning library (via `VideoModeServices`, Task 9) to `MetaAggregator::entryResolved`; when the imdb is in-library, write the resolved `kitsuId` onto the stored entry (idempotent) and persist.
-- [ ] **Step 2:** In the series play-path build (`StreamPage.cpp:2428`), read `entry.kitsuId` first; fall back to `m_metaAggregator->kitsuIdForSeries(imdbId)` only when stored id is `-1`. Leave the `type == "movie"` branch unchanged (anime films use the movie path, D10).
-- [ ] **Step 3:** Add a one-line startup log marker in the pre-warm path (`MetaAggregator.cpp:259`) so the smoke can confirm pre-warm fired.
+- [ ] **Step 1:** Have `VideoModeServices` (Task 9) subscribe to `MetaAggregator::entryResolved` → write the resolved `kitsuId` onto the stored entry (idempotent) + persist; also feed the classification cache.
+- [ ] **Step 2:** Series play-path (`StreamPage.cpp:2428`): read `entry.kitsuId` first; fall back to `kitsuIdForSeries(imdbId)` only when stored id is `-1`. Leave the `movie` branch unchanged (anime films use it).
+- [ ] **Step 3:** Add a one-line startup log marker in the pre-warm path (`MetaAggregator.cpp:259`).
 - [ ] **Step 4: Build-verify** — `build_check.bat` → BUILD OK.
 - [ ] **Step 5: Commit** — `git commit -m "feat(video-split): reuse persisted kitsuId (series); anime films use movie path; mark prewarm"`
 
@@ -311,65 +234,30 @@ TEST(StreamLibraryFilename, TwoInstancesAreIsolated) {
 
 ### Task 8: Mode-scoped catalog brains + classification-cache exclusion + redirect-on-open
 
-**Files:** Modify `src/core/stream/CatalogAggregator.{h,cpp}` (`planRequests` ≈ :134, addon select ≈ :71-88), `src/core/stream/StreamAggregator.{h,cpp}` (id-prefix gate ≈ :571), `src/core/stream/MetaAggregator.cpp` (candidate-sort ≈ :326-343; seriesCache ≈ where imdb-keyed), `src/ui/pages/stream/CatalogBrowseScreen.cpp` (`rebuildSelectors` ≈ :308), `src/ui/pages/stream/StreamSearchWidget.cpp` (≈ :220-229).
+**Files:** Modify `src/core/stream/CatalogAggregator.{h,cpp}` (`planRequests` ≈:134; addon select ≈:71-88), `src/core/stream/StreamAggregator.{h,cpp}` (id-prefix gate ≈:571), `src/core/stream/MetaAggregator.cpp` (candidate-sort ≈:326-343; seriesCache), `src/ui/pages/stream/CatalogBrowseScreen.cpp` (≈:308), `src/ui/pages/stream/StreamSearchWidget.cpp` (≈:220-229).
 
-> **Codex finding #6 + D9:** Cinemeta can return anime; previews lack genres/country, so grid exclusion can't be per-tile-synchronous. Landing is guaranteed by classification (Task 6); this task makes grids *best-effort* clean + adds the redirect backstop.
+> **R1#6/D9:** Cinemeta returns anime; previews lack genres/country. Landing is guaranteed by classification (Task 6); grids are best-effort.
 
-- [ ] **Step 1: Read the catalog request path** end-to-end (`planRequests` → `dispatchRequests` id-prefix gate → addon selection) to see how addons are chosen + where `type` threads.
-- [ ] **Step 2: Thread a `StreamMode` filter** into the catalog request entry point (default = today's behavior). **Anime:** select only `kitsu`/`anilist`-prefixed addons. **TV/Movies:** select Cinemeta-family addons with `type` = `series`/`movie`, excluding anime-prefixed addons.
-- [ ] **Step 3: Best-effort grid exclusion via the classification cache.** When rendering TV/Movies catalog/search results, drop any imdb that `VideoModeServices::cachedIsAnime(imdb)` returns true for (the cache is fed by Task 6 as full metas resolve). First-ever sightings (not yet cached) may pass through — acceptable per D9.
-- [ ] **Step 4: Redirect-on-open backstop.** Opening a title whose resolved meta classifies as anime, from a TV/Movies page: the detail still shows, but Add routes to **Anime** (via `addClassified`, Task 9) and a one-line note appears ("Added to Anime"). Feed the cache so subsequent grids exclude it.
-- [ ] **Step 5: seriesCache contamination (#6/Risk).** `m_seriesCache` is imdb-keyed (24h TTL). Ensure `entryResolved`/`animeCatalogActive` is re-emitted on a cache hit (or key by `(imdb, mode)`) so a second open still drives correct layout + cache. Pick re-emit-on-hit unless reading shows keying is cleaner.
+- [ ] **Step 1: Read** the catalog request path end-to-end.
+- [ ] **Step 2: Thread a `StreamMode` filter** into the catalog request entry point (default = today). Anime → only `kitsu`/`anilist` addons; TV/Movies → Cinemeta-family with `type` = `series`/`movie`, excluding anime-prefixed addons.
+- [ ] **Step 3: Best-effort grid exclusion** — when rendering TV/Movies grids, drop imdbs where `services->cachedIsAnime(imdb)` is true (cache fed by Task 6). First-ever sightings may pass (acceptable, D9).
+- [ ] **Step 4: Redirect-on-open** — opening a title that resolves to anime from a TV/Movies page: detail shows, Add routes to Anime (`addClassified`), one-line note; feed the cache.
+- [ ] **Step 5: seriesCache** (imdb-keyed, 24h TTL) — re-emit `entryResolved`/`animeCatalogActive` on a cache hit (or key by `(imdb,mode)`) so a second open drives correct layout + cache. Prefer re-emit-on-hit.
 - [ ] **Step 6: Build-verify** — `build_check.bat` → BUILD OK.
-- [ ] **Step 7: Commit** — `git commit -m "feat(video-split): mode-scoped catalog brains + classification-cache exclusion + redirect-on-open"`
+- [ ] **Step 7: Commit** — `git commit -m "feat(video-split): mode-scoped catalog brains + cache exclusion + redirect-on-open"`
 
 ---
 
 ## Phase 5 — Shared services + the three pages
 
-### Task 9: `VideoModeServices` (hoisted shared engine + 3 libraries + classification cache + add routing)
+### Task 9: `VideoModeServices` (hoisted engine incl. subprocess + 3 libraries + cache + routing)
 
-**Files:** Create `src/core/stream/VideoModeServices.{h,cpp}`; Test `tests/stream/test_video_mode_services.cpp`; Modify `CMakeLists.txt`.
+**Files:** Create `src/core/stream/VideoModeServices.{h,cpp}`; register in `cmake/TankobanSources.cmake`.
 
-> **Codex finding #5 + #3:** `StreamPage` currently *owns* `m_addonRegistry`/`m_metaAggregator`/`m_streamAggregator` (`StreamPage.cpp:306-307`); three pages would mean three engines + a broken `VideosPage` meta-borrow. Hoist the engine here; route adds here (the detail view must not call `m_library` directly).
+> **R1#5 + R2#B2/#B3:** `StreamPage` owns `m_addonRegistry`/`m_metaAggregator`/`m_streamAggregator` (`StreamPage.cpp:306-307`) **and** constructs `StreamServerEngine` + `StreamPlayerController` (`:817-833`). Hoist all of it here as **single** instances (engine + subprocess lazy, D12). No heavy unit test (would pull libtorrent + the subprocess); routing = `classifyStreamMode` (tested in Task 1); integration verified at Task 15 smoke.
 
-- [ ] **Step 1: Write the failing test** — add-routing by classification + isolation + cache:
-
-```cpp
-#include <gtest/gtest.h>
-#include "core/stream/VideoModeServices.h"
-
-TEST(VideoModeServices, RoutesByClassification) {
-    JsonStore store(/* temp dir */);
-    VideoModeServices svc(&store, /*addonRegistry deps per ctor*/);
-    StreamLibraryEntry anime; anime.imdb="tt9335498"; anime.type="series"; anime.animeFlag=true;
-    StreamLibraryEntry tv;    tv.imdb="tt0903747";    tv.type="series";    tv.animeFlag=false;
-    StreamLibraryEntry film;  film.imdb="tt1375666";  film.type="movie";   film.animeFlag=false;
-    svc.addClassified(anime); svc.addClassified(tv); svc.addClassified(film);
-    EXPECT_TRUE(svc.libraryForMode(StreamMode::Anime )->has("tt9335498"));
-    EXPECT_TRUE(svc.libraryForMode(StreamMode::TV    )->has("tt0903747"));
-    EXPECT_TRUE(svc.libraryForMode(StreamMode::Movies)->has("tt1375666"));
-    EXPECT_FALSE(svc.libraryForMode(StreamMode::TV)->has("tt9335498"));
-}
-TEST(VideoModeServices, ClassificationCacheRoundTrips) {
-    JsonStore store(/* temp dir */);
-    VideoModeServices svc(&store);
-    svc.cacheIsAnime("tt9335498", true, 41370);
-    EXPECT_TRUE(svc.cachedIsAnime("tt9335498"));
-    EXPECT_FALSE(svc.cachedIsAnime("tt0000000"));   // unknown
-}
-TEST(VideoModeServices, RemoveEverywhereScopes) {
-    JsonStore store(/* temp dir */);
-    VideoModeServices svc(&store);
-    StreamLibraryEntry tv; tv.imdb="tt0903747"; tv.type="series"; tv.animeFlag=false;
-    svc.addClassified(tv);
-    svc.removeEverywhere("tt0903747");
-    EXPECT_FALSE(svc.libraryForMode(StreamMode::TV)->has("tt0903747"));
-}
-```
-
-- [ ] **Step 2:** Run, verify FAIL.
-- [ ] **Step 3: Implement.** `VideoModeServices.h` (sketch — match real `AddonRegistry`/`MetaAggregator`/`StreamAggregator` ctor signatures read from the headers):
+- [ ] **Step 1: Read** `StreamPage.cpp:300-320` + `:807-833` to capture the exact construction of `AddonRegistry`/`MetaAggregator`/`StreamAggregator`/`StreamServerEngine`/`StreamPlayerController` (ctor args, cache dir, signal wiring).
+- [ ] **Step 2: Implement `VideoModeServices.h`** (match real ctor signatures from the headers):
 
 ```cpp
 #pragma once
@@ -378,68 +266,69 @@ TEST(VideoModeServices, RemoveEverywhereScopes) {
 #include "core/stream/StreamMode.h"
 #include "core/stream/StreamLibrary.h"
 
-class JsonStore; class StreamDownloadIndex; class TorrentClient;
+class JsonStore; class StreamDownloadIndex; class TorrentClient; class CoreBridge;
 namespace tankostream::stream { class AddonRegistry; class MetaAggregator; class StreamAggregator; }
+class StreamServerEngine; class StreamPlayerController;
 
 // Six-mode (2026-06-07): the shared video engine + per-mode libraries, hoisted out
-// of StreamPage so the three pages share ONE engine. Constructed once in MainWindow.
+// of StreamPage so the three pages share ONE engine and ONE Stremio subprocess.
 class VideoModeServices : public QObject {
     Q_OBJECT
 public:
-    explicit VideoModeServices(JsonStore* store, QObject* parent = nullptr);
-    // engine (shared, one instance each)
-    tankostream::stream::AddonRegistry*   addonRegistry()  const { return m_addons; }
-    tankostream::stream::MetaAggregator*  metaAggregator() const { return m_meta; }
-    tankostream::stream::StreamAggregator* streamAggregator() const { return m_streams; }
-    void setStreamDownloadIndex(StreamDownloadIndex* idx);   // injected from MainWindow
-    StreamDownloadIndex* downloadIndex() const { return m_downloadIndex; }
+    explicit VideoModeServices(CoreBridge* bridge, JsonStore* store, QObject* parent = nullptr);
+    // shared engine (one instance each; meta/streams created in ctor, subprocess lazy)
+    tankostream::stream::AddonRegistry*    addonRegistry()  const;
+    tankostream::stream::MetaAggregator*   metaAggregator() const;
+    tankostream::stream::StreamAggregator* streamAggregator() const;
+    StreamServerEngine*     streamEngine();          // lazily start()s the subprocess on first call
+    StreamPlayerController*  playerController();      // lazily created over streamEngine()
+    void setStreamDownloadIndex(StreamDownloadIndex* idx);
+    StreamDownloadIndex* downloadIndex() const;
     void setTorrentClient(TorrentClient* tc);
+    TorrentClient* torrentClient() const;
     // per-mode libraries + routing
     StreamLibrary* libraryForMode(StreamMode mode) const;
-    void addClassified(const StreamLibraryEntry& entry);     // routes via classifyStreamMode(animeFlag,type)
+    void addClassified(const StreamLibraryEntry& entry);   // classifyStreamMode(animeFlag,type) -> library
     void removeEverywhere(const QString& imdbId);
     // classification cache (fed by MetaAggregator::entryResolved)
     void cacheIsAnime(const QString& imdb, bool isAnime, int kitsuId);
-    bool cachedIsAnime(const QString& imdb) const;           // false if unknown
+    bool cachedIsAnime(const QString& imdb) const;
 signals:
     void libraryChanged(StreamMode mode);
 private:
-    tankostream::stream::AddonRegistry*    m_addons;
-    tankostream::stream::MetaAggregator*   m_meta;
-    tankostream::stream::StreamAggregator* m_streams;
-    StreamDownloadIndex* m_downloadIndex = nullptr;
-    StreamLibrary* m_anime;  StreamLibrary* m_tv;  StreamLibrary* m_movies;
-    QHash<QString, QPair<bool,int>> m_classCache;            // imdb -> {isAnime, kitsuId}
+    /* m_bridge, m_addons, m_meta, m_streams, m_engine(lazy), m_controller(lazy),
+       m_downloadIndex, m_torrentClient, m_anime/m_tv/m_movies, m_classCache */
 };
 ```
 
-`.cpp`: construct `m_addons`/`m_meta`/`m_streams` (the code lifted from `StreamPage.cpp:306-307`); construct the 3 libraries with `streamLibraryFilename(mode)`; subscribe to `m_meta->entryResolved` to feed the cache + backfill kitsuId; `addClassified` routes via `classifyStreamMode`; `removeEverywhere` removes from whichever library `has()` it.
+`.cpp`: construct `m_addons`/`m_meta`/`m_streams` (code lifted from `StreamPage.cpp:306-307`); construct the 3 libraries via `streamLibraryFilename(mode)`; `streamEngine()` lazily `new StreamServerEngine(bridge->dataDir()+"/stream_server_cache", this)` + `start()`+`cleanupOrphans()`+`startPeriodicCleanup()` once; `playerController()` lazily over the engine; subscribe `m_meta->entryResolved` → `cacheIsAnime` + backfill the in-library entry's `kitsuId`; `addClassified` routes via `classifyStreamMode`; `removeEverywhere` removes from whichever library `has()` it.
 
-- [ ] **Step 4:** Add to CMake; run test → PASS; confirm `.obj`.
-- [ ] **Step 5: Commit** — `git commit -m "feat(video-split): VideoModeServices (shared engine + 3 libraries + classification cache + routing)"`
+- [ ] **Step 3:** Register `VideoModeServices.cpp` in `cmake/TankobanSources.cmake`.
+- [ ] **Step 4: Build-verify** — `build_check.bat` → BUILD OK; confirm `VideoModeServices.cpp.obj` built.
+- [ ] **Step 5: Commit** — `git commit -m "feat(video-split): VideoModeServices (shared engine incl. subprocess + 3 libraries + cache + routing)"`
 
-### Task 10: Mode-parameterize `StreamPage` over injected services (legacy ctor kept)
+### Task 10: Mode-parameterize `StreamPage` over injected services (legacy ctor kept; keeps TorrentClient)
 
 **Files:** Modify `src/ui/pages/StreamPage.{h,cpp}`.
 
-> **Pre-task read:** read `StreamPage.cpp` in full. **Codex finding #1:** keep the old ctor working so the Task-10 checkpoint compiles (MainWindow still uses it until Task 13).
+> **Pre-task read:** read `StreamPage.cpp` in full. **R2#B1:** the injected ctor MUST keep `TorrentClient*`. **R1#1:** keep the legacy ctor compiling until Task 13.
 
-- [ ] **Step 1: Add a new ctor + a mode member.** Keep `StreamPage(CoreBridge*, TorrentClient*, ...)` (legacy) building its own services internally (today's behavior, mode = Movies). Add `StreamPage(CoreBridge*, StreamMode mode, VideoModeServices* services, QWidget* parent)`. Store `m_mode`; in **both** ctors `setObjectName(streamModeKey(m_mode))` (**critical** — Risk: silent non-activation).
-- [ ] **Step 2: New ctor uses injected services** — `m_addonRegistry = services->addonRegistry()`, `m_metaAggregator = services->metaAggregator()`, `m_streamAggregator = services->streamAggregator()`, library = `services->libraryForMode(mode)`, download index = `services->downloadIndex()`. Do **not** `new` these in the injected path. (Lifetime: services owns them; the page borrows — mirror the existing `metaAggregator()` "owned elsewhere, stable" contract.)
-- [ ] **Step 3: Route adds via services.** Where the page (or its detail view) adds/removes to the library, call `services->addClassified(...)` / `services->removeEverywhere(...)` (the detail-view wiring lands in Task 12).
-- [ ] **Step 4: Pass `mode` + `services`** to the page's `StreamContinueStrip` (domain), `StreamSearchWidget` (filter), `StreamDetailView` (Task 12), and catalog requests (Task 8 filter).
-- [ ] **Step 5: Defer heavy work (D1).** Construct/populate the detail view + fire the first catalog fetch on `activate()` / first show, not in the ctor. Verify the library grid iterates only this mode's library.
-- [ ] **Step 6: Build-verify** — `build_check.bat` → BUILD OK (legacy ctor keeps MainWindow compiling; behavior unchanged).
-- [ ] **Step 7: Commit** — `git commit -m "refactor(video-split): StreamPage mode + injected services (legacy ctor retained)"`
+- [ ] **Step 1: New ctor + mode member.** Keep `StreamPage(CoreBridge*, TorrentClient*, ...)` (legacy; self-owns its engine; mode = Movies). Add `StreamPage(CoreBridge* bridge, TorrentClient* torrentClient, StreamMode mode, VideoModeServices* services, QWidget* parent)`. Store `m_mode`; in **both** ctors `setObjectName(streamModeKey(m_mode))` (**critical** — silent non-activation risk).
+- [ ] **Step 2: Injected path borrows from services** — `m_addonRegistry = services->addonRegistry()`, `m_metaAggregator = services->metaAggregator()`, `m_streamAggregator = services->streamAggregator()`, `m_streamEngine = services->streamEngine()`, `m_playerController = services->playerController()`, library = `services->libraryForMode(mode)`, download index = `services->downloadIndex()`. **Do not `new` these** in the injected path. Set `m_torrentClient = torrentClient` and wire it to the detail view / library layout / download panel exactly as the legacy `buildUI()` does (B1). For the shared `m_playerController`, connect its 4 signals only while this page is active (D12) — or expose a small `onActivated()/onDeactivated()` that (dis)connects.
+- [ ] **Step 3: Route adds via services** — the detail-view add/remove (Task 12) calls `services->addClassified`/`removeEverywhere`.
+- [ ] **Step 4: Pass `mode` + `services`** to `StreamContinueStrip` (domain), `StreamSearchWidget` (filter), `StreamDetailView` (Task 12), catalog requests (Task 8).
+- [ ] **Step 5: Defer heavy work (D1)** — build/populate the detail view + first catalog fetch on `activate()`/first show, not the ctor. Grid iterates only this mode's library.
+- [ ] **Step 6: Build-verify** — `build_check.bat` → BUILD OK (legacy ctor keeps MainWindow compiling).
+- [ ] **Step 7: Commit** — `git commit -m "refactor(video-split): StreamPage mode + injected services (keeps TorrentClient; legacy ctor retained)"`
 
 ### Task 11: Mode-scope `StreamContinueStrip` + `StreamSearchWidget`
 
-**Files:** Modify `src/ui/pages/stream/StreamContinueStrip.{h,cpp}` (`allProgress("stream")` ≈ :79; `startsWith("stream:")` ≈ :116, :275), `src/ui/pages/stream/StreamSearchWidget.{h,cpp}` (results split ≈ :69-77, :220-229).
+**Files:** Modify `src/ui/pages/stream/StreamContinueStrip.{h,cpp}` (`allProgress("stream")` :79; `startsWith("stream:")` :116, :275), `src/ui/pages/stream/StreamSearchWidget.{h,cpp}` (:69-77, :220-229).
 
-- [ ] **Step 1:** Add a domain string to `StreamContinueStrip` (ctor/setter, default `"stream"`). Replace **all** `"stream"` / `"stream:"` literals (`:79`, `:116`, `:275`) with `m_domain` / `m_domain + ":"`. The owning page passes `streamModeKey(mode)`.
-- [ ] **Step 2:** `StreamSearchWidget`: add a `setMode(StreamMode)`; render only the relevant section(s) — Anime → anime section; TV → series; Movies → movies. Add the anime section (extends the existing movies/series split).
+- [ ] **Step 1:** Add a domain string (ctor/setter, default `"stream"`); replace **all** `"stream"`/`"stream:"` literals (`:79`, `:116`, `:275`) with `m_domain`/`m_domain + ":"`. Owning page passes `streamModeKey(mode)`.
+- [ ] **Step 2:** `StreamSearchWidget::setMode(StreamMode)` — render only relevant sections; add the anime section.
 - [ ] **Step 3: Build-verify** — `build_check.bat` → BUILD OK.
-- [ ] **Step 4: Commit** — `git commit -m "feat(video-split): per-mode Continue domain (all key sites) + search sections"`
+- [ ] **Step 4: Commit** — `git commit -m "feat(video-split): per-mode Continue domain (all sites) + search sections"`
 
 ---
 
@@ -449,13 +338,13 @@ private:
 
 **Files:** Modify `src/ui/pages/stream/StreamDetailView.{h,cpp}`.
 
-> **Pre-task read:** read `StreamDetailView.cpp` in full (≈ 4666 lines). It branches on `m_currentType` + `m_isAnime` (season combo ≈ :1019-1020; episode label ≈ :1216) and calls `m_library->add/remove` at `:2342/:2392/:2406`. Contain new code in private helpers (Risk: blast radius).
+> **Pre-task read:** read in full (≈4666 lines). Branches on `m_currentType`+`m_isAnime` (season combo ≈:1019-1020; ep label ≈:1216); direct `m_library->add/remove` at `:2342/:2392/:2406`. Contain new code in private helpers.
 
-- [ ] **Step 1: Constructor.** Change `StreamDetailView(bridge, metaAggregator, library, parent)` → `StreamDetailView(bridge, VideoModeServices* services, StreamMode mode, parent)`. Use `services->metaAggregator()` for fetches and `services->libraryForMode(mode)` for read/`has()`.
-- [ ] **Step 2: Routed add/remove (#3).** Replace the direct `m_library->add(entry)` (`:2342`, `:2406`) with `services->addClassified(entry)` and `m_library->remove(...)` (`:2392`) with `services->removeEverywhere(...)`. (Add routes by classification, so an anime title opened from a TV grid lands in Anime; show the D9 one-line note when the routed mode ≠ the page's mode.)
-- [ ] **Step 3: Episode label** — `"Ep N"` (anime absolute) vs `"S{n}E{m}"` (TV) at `:1216`, driven by `m_mode == StreamMode::Anime`. Season combo hidden for Anime (already) **and** Movies; shown for TV.
-- [ ] **Step 4: Movies** — single-file play affordance, no episode list (reuse the movie branch). Anime films (movie type in Anime mode) also use the single-file affordance (D10).
-- [ ] **Step 5: Sub/dub (D8)** — a SUB/DUB toggle visible only in Anime mode; sorts the already-fetched sources by filename tag (`[SUB]`/`[DUB]`/`Dual`/`Dual-Audio`, case-insensitive). No new fetch; unchanged order if no tags.
+- [ ] **Step 1: Ctor** — `StreamDetailView(bridge, VideoModeServices* services, StreamMode mode, parent)` (was `(bridge, metaAggregator, library, parent)`). Use `services->metaAggregator()` for fetches; `services->libraryForMode(mode)` for read/`has()`. (Only `StreamPage` constructs the detail view — verified — so no other caller to update.)
+- [ ] **Step 2: Routed add/remove (R1#3)** — `m_library->add` (`:2342`,`:2406`) → `services->addClassified(entry)`; `m_library->remove` (`:2392`) → `services->removeEverywhere(...)`. When the routed mode ≠ this page's mode (anime opened from TV), show the D9 one-line note.
+- [ ] **Step 3: Episode label** — `"Ep N"` (anime) vs `"S{n}E{m}"` (TV) at `:1216`, by `m_mode == StreamMode::Anime`. Season combo hidden for Anime (already) **and** Movies; shown for TV.
+- [ ] **Step 4: Movies** (and anime films, D10) — single-file affordance, no episode list.
+- [ ] **Step 5: Sub/dub (D8)** — Anime-only SUB/DUB toggle that sorts already-fetched sources by filename tag; no new fetch.
 - [ ] **Step 6: Build-verify** — `build_check.bat` → BUILD OK.
 - [ ] **Step 7: Commit** — `git commit -m "feat(video-split): detail view services+mode, routed add, anime extras, movie/TV gating"`
 
@@ -463,76 +352,75 @@ private:
 
 ## Phase 7 — MainWindow nav wiring (SHARED FILE — append-only, AFTER Agent 1)
 
-> **SHARED-FILE COORDINATION:** `src/ui/MainWindow.cpp` is edited by both arcs.
-> 1. **Land Agent 1's Phase 4 first**, then `git pull`/sync.
-> 2. **Preflight (Codex #9) — verify the *actual* post-Agent-1 contract, not just "MangaPage present":** confirm `PAGE_MANGA`/`PAGE_COMICS` constants + values; each comics page's `setObjectName` (`"manga"`, `"western_comics"` vs mode page-id `"comics"`); the `activatePage`/`resetActivePageToRoot`/`onLayerRestoreRequested` branches; and the `bindShortcuts` table. Reconcile our additions against what actually landed.
-> 3. **navDefs is line-disjoint IF order holds:** Agent 1 leaves `{ PAGE_STREAM, "Theatre" }` last; we replace *only that line* with three entries → final `Manga, Comics, Books, Anime, TV, Movies`. Agree this + the Ctrl+1..6 map with Agent 1 up front (D5).
-> 4. **Append, don't reformat.** Post a BUILD-LANE claim in chat.md before touching the file.
+> **COORDINATION:** `src/ui/MainWindow.cpp` is edited by both arcs.
+> 1. **Land Agent 1's Phase 4 first**, then sync.
+> 2. **Preflight (R1#9):** confirm the *actual* landed contract — `PAGE_MANGA`/`PAGE_COMICS` values; each comics page's `setObjectName` (`"manga"`, `"western_comics"` vs mode page-id `"comics"`); the `activatePage`/`resetActivePageToRoot`/`onLayerRestoreRequested` branches; the `bindShortcuts` table.
+> 3. **navDefs line-disjoint:** replace only the trailing `{ PAGE_STREAM, "Theatre" }` → three entries → `Manga, Comics, Books, Anime, TV, Movies`. Agree order + Ctrl-map with Agent 1 first.
+> 4. **Append, don't reformat.** Post a BUILD-LANE claim in chat.md first.
 
-### Task 13: Constants, pills, page stack (3× over shared services), dispatch, dev-control, keybinds
+### Task 13: Constants, pills, page stack (3× over shared services), dispatch, boot-scanner, dev-control, keybinds
 
 **Files:** Modify `src/ui/MainWindow.{cpp,h}`.
 
-- [ ] **Step 1: Constants (≈ :63-75).** Add `PAGE_ANIME="anime"`, `PAGE_TV="tv"`, `PAGE_MOVIES="movies"` as a contiguous block after `PAGE_BOOKS`. Note `PAGE_STREAM` retires as a pill (kept as a string only if still referenced by the shared downloads page).
-- [ ] **Step 2: navDefs (≈ :531-542).** Replace the trailing `{ PAGE_STREAM, "Theatre" }` with `{PAGE_ANIME,"Anime"},{PAGE_TV,"TV"},{PAGE_MOVIES,"Movies"}`.
-- [ ] **Step 3: buildPageStack (≈ :838-921).** Construct ONE `VideoModeServices` (with the shared `JsonStore`); `services->setStreamDownloadIndex(m_streamDownloadIndex)` (the existing MainWindow-owned index) + `setTorrentClient(torrentClient)`. Construct three `StreamPage(m_bridge, mode, services, ...)`; add each to `m_pageStack`; wire each page's `enteredLayer`/`exitedLayer` to `pushLayer/popLayer` with its own pageId. Replace the `m_streamPage` member with `m_animePage`/`m_tvPage`/`m_moviesPage` (MainWindow.h) **and** add a helper `StreamPage* pageForVideoMode(const QString& pageId) const`.
-- [ ] **Step 4: VideosPage meta source (≈ :870).** Change `m_videosPage->setMetaAggregator(m_streamPage->metaAggregator())` → `services->metaAggregator()`.
-- [ ] **Step 5: PerModeNav roots.** `setRootLayer("anime"|"tv"|"movies", { pageId, "library", "Library" })`. No controller code change.
-- [ ] **Step 6: activatePage (≈ :1039-1098).** ObjectName loop already finds the pages. Extend the post-switch `qobject_cast<StreamPage*>` + `activate()` to all three via `pageForVideoMode(pageId)`. Extend the Organise-button (≈ :1062) + sidebar-downloads (≈ :1087-1093) conditionals to treat `anime/tv/movies` like the old `stream`.
-- [ ] **Step 7: resetActivePageToRoot (≈ :1111-1125) + onLayerRestoreRequested (≈ :1183-1208).** Replace the single `pageId == "stream"` branch (`:1189`) with `pageForVideoMode(pageId)` handling all three; add reset branches. Append after Agent 1's comics branches.
-- [ ] **Step 8: Enumerate + update ALL `m_streamPage` refs (Codex #5).** The remaining sites: dev-control library snapshot (≈ :318-324, :2124-2127), dev search/dispatch (≈ :2177-2206), dev snapshot (≈ :2340-2342, composite :2387-2388), mode→page maps (≈ :2457, :2550), `stream_`-command forwarding (≈ :2592). Route each through `pageForVideoMode(pageId)`; **extend dev-control accepted modes to `anime`/`tv`/`movies`** (D11), keeping `stream`/`stream_*` as a back-compat alias → `m_moviesPage` (default). Verify no dangling `m_streamPage`.
-- [ ] **Step 9: StreamDownloadsPage back-target (D3, ≈ :928-944).** Record the launching video mode when the downloads page opens; `backRequested` → `activatePage(<launching mode>)` (default `PAGE_MOVIES`).
-- [ ] **Step 10: bindShortcuts (≈ :985-1004) — jointly agreed.** `Ctrl+4`=Anime, `Ctrl+5`=TV, `Ctrl+6`=Movies; sidebar toggle → `Ctrl+0`. (No-op verify if Agent 1 already added these per the agreement.)
-- [ ] **Step 11: Build-verify** — `build_check.bat` → BUILD OK; verify each new page `.obj` + exe mtime advanced. Grep confirms zero stale `m_streamPage`.
-- [ ] **Step 12: Commit (small) + push** — `git commit -m "feat(video-split): Anime+TV+Movies top-level modes over shared services; retire Theatre pill; dev-control modes"` then push so Agent 1 can rebase.
+- [ ] **Step 1: Constants (≈:63-75)** — add `PAGE_ANIME="anime"`, `PAGE_TV="tv"`, `PAGE_MOVIES="movies"` as a contiguous block after `PAGE_BOOKS`. `PAGE_STREAM` retires as a pill (keep the string if the downloads page still references it).
+- [ ] **Step 2: navDefs (≈:531-542)** — replace trailing `{ PAGE_STREAM, "Theatre" }` with `{PAGE_ANIME,"Anime"},{PAGE_TV,"TV"},{PAGE_MOVIES,"Movies"}`.
+- [ ] **Step 3: buildPageStack (≈:838-921)** — construct ONE `VideoModeServices(m_bridge, store)`; `services->setStreamDownloadIndex(m_streamDownloadIndex)` + `setTorrentClient(torrentClient)`. Construct three `StreamPage(m_bridge, torrentClient, mode, services, ...)` (B1 — TorrentClient passed); add each to `m_pageStack`; wire each `enteredLayer`/`exitedLayer` with its own pageId. Replace `m_streamPage` with `m_animePage`/`m_tvPage`/`m_moviesPage` (MainWindow.h) + add `StreamPage* pageForVideoMode(const QString& pageId) const`. Hold `m_videoServices` for the shared accessors.
+- [ ] **Step 4: VideosPage meta source (≈:870)** — `m_videosPage->setMetaAggregator(services->metaAggregator())`.
+- [ ] **Step 5: PerModeNav roots** — `setRootLayer("anime"|"tv"|"movies", { pageId, "library", "Library" })`.
+- [ ] **Step 6: activatePage (≈:1039-1098)** — objectName loop finds the pages; extend the `qobject_cast<StreamPage*>`+`activate()` via `pageForVideoMode(pageId)`; **connect the shared `playerController` signals to the now-active page** (D12) and disconnect the previous; extend the Organise-button (≈:1062) + sidebar-downloads (≈:1087-1093) conditionals for `anime/tv/movies`.
+- [ ] **Step 7: resetActivePageToRoot (≈:1111-1125) + onLayerRestoreRequested (≈:1183-1208)** — replace the single `pageId == "stream"` branch (`:1189`) with `pageForVideoMode(pageId)` for all three; append after Agent 1's branches.
+- [ ] **Step 8: Boot rescue scanner (≈:299-336) — R2#B3.** This block references `m_streamPage->streamLibrary()/metaAggregator()`. For the split, **do not materialize into any mode library**: gate the `StreamRescueScanner` to **index-only** (register `StreamDownloadIndex` rows for playback resolution) OR disable it, and pin `migrationVersion` so it doesn't re-run. The three libraries must stay empty even with existing downloads (asserted in Task 14).
+- [ ] **Step 9: Enumerate + update ALL remaining `m_streamPage` refs (R1#5)** — dev-control library snapshot (≈:318-324, :2124-2127), dev search/dispatch (≈:2177-2206), dev snapshot (≈:2340-2342, :2387-2388), mode→page maps (≈:2457, :2550), `stream_`-command forwarding (≈:2592). Route each via `pageForVideoMode(pageId)`; **add dev-control modes `anime`/`tv`/`movies`** (D11); keep `stream`/`stream_*` aliased → `m_moviesPage`. Grep confirms zero dangling `m_streamPage`.
+- [ ] **Step 10: StreamDownloadsPage back-target (D3, ≈:928-944)** — record the launching video mode on open; `backRequested` → `activatePage(<launching mode>)` (default `PAGE_MOVIES`).
+- [ ] **Step 11: bindShortcuts (≈:985-1004) — jointly agreed** — `Ctrl+4`=Anime, `Ctrl+5`=TV, `Ctrl+6`=Movies; sidebar → `Ctrl+0`. (No-op verify if Agent 1 already added these.)
+- [ ] **Step 12: Build-verify** — `build_check.bat` → BUILD OK; each new page `.obj` built; exe mtime advanced; grep → zero stale `m_streamPage`.
+- [ ] **Step 13: Commit (small) + push** — `git commit -m "feat(video-split): Anime+TV+Movies top-level modes over shared services; retire Theatre pill; dev-control modes; index-only boot scanner"` then push.
 
 ---
 
 ## Phase 8 — Migration guard + verification
 
-### Task 14: Start-fresh guard (video side)
+### Task 14: Start-fresh guard (video side) — R2#B3
 
-- [ ] **Step 1:** Confirm the three pages read only `anime_library.json`/`tv_library.json`/`movies_library.json` (empty on first run); nothing reads `stream_library.json` into a new page; leave `stream_library.json` on disk (no rename — preserves rollback).
-- [ ] **Step 2:** Confirm `StreamDownloadIndex` legacy rows still resolve for playback (disk-first); downloaded files untouched.
-- [ ] **Step 3:** Add a one-time first-run note (Hemanth-language): "Your Anime / TV / Movies libraries start fresh — your downloaded files are safe on disk."
-- [ ] **Step 4: Commit** — `git commit -m "feat(video-split): start-fresh guard + first-run note"`
+- [ ] **Step 1:** Confirm the three pages read only `anime_library.json`/`tv_library.json`/`movies_library.json` (empty on first run); nothing reads `stream_library.json` into a new page; leave `stream_library.json` on disk.
+- [ ] **Step 2:** Confirm the boot `StreamRescueScanner` (Task 13 step 8) **does not materialize** into any mode library; `StreamDownloadIndex` legacy rows still resolve for playback (disk-first); downloaded files untouched.
+- [ ] **Step 3: Empty-library smoke (with existing downloads).** With real downloaded video files on disk + a pre-split `stream_library.json` present, first boot of the split → `anime_library.json`/`tv_library.json`/`movies_library.json` are **absent or empty**. (Headless: check the three files via `tankoctl`/filesystem.)
+- [ ] **Step 4:** Add a one-time first-run note (Hemanth-language): "Your Anime / TV / Movies libraries start fresh — your downloaded files are safe on disk."
+- [ ] **Step 5: Commit** — `git commit -m "feat(video-split): start-fresh guard (no boot materialization) + first-run note"`
 
 ### Task 15: Build + classification smoke + cross-model review
 
-- [ ] **Step 1: Build-verify (false-green guard)** — `build_check.bat` → BUILD OK; confirm `.obj` for `StreamMode.cpp`, `VideoModeServices.cpp`, new TUs.
+- [ ] **Step 1: Build-verify (false-green guard)** — `build_check.bat` → BUILD OK; confirm `.obj` for `StreamMode.cpp`, `StreamLibraryCodec.cpp`, `VideoModeServices.cpp`, new TUs.
 - [ ] **Step 2: Headless** — `build_and_run.bat`; `out\tankoctl.exe ping` + `introspect-tree`/`get-modes`: six pills; dev-control responds for `anime`/`tv`/`movies`; per-mode library snapshots return.
-- [ ] **Step 3: Classification smoke (DoD)** —
-  - **Demon Slayer** (anime series) → **Anime**.
-  - An **anime film** (*A Silent Voice* / *Your Name*) → **Anime**, and it **produces playable sources** via the movie path (D10).
-  - **Breaking Bad** (non-anime series) → **TV**.
-  - **Inception** (film) → **Movies**.
-  - No cross-mode bleed in libraries/Continue; pill-from-deep-view resets to mode root; anime detail shows `Ep N` + sub/dub; TV shows seasons; Movies single-file. Open an anime title from the TV grid → it routes to Anime with the note (D9).
-- [ ] **Step 4: Pre-warm smoke** — cold start, re-open a previously-added anime; the Task-7 log marker shows the kitsu route built from the stored id, no live re-fetch.
-- [ ] **Step 5: Regression** — Books unchanged; comic reader unchanged; play a movie + a TV episode end-to-end; torrent engine unchanged.
-- [ ] **Step 6: Cross-model review (producer ≠ reviewer)** — `/codex-review` (or `codex exec`) the full diff against this DoD. Address every NOT-MET.
-- [ ] **Step 7: RTC + close** — contracts-v3 RTC to `agents/chat.md` (`Done-when:` = DoD) with `Skills invoked:` provenance. Hemanth's smoke on the running app is the final gate.
+- [ ] **Step 3: One subprocess (R2#B2)** — with all three video pages visited, confirm exactly **one** `stremio-runtime.exe` (or the stream-server) process is running (Task Manager / `tasklist`), not three.
+- [ ] **Step 4: Classification smoke (DoD)** — Demon Slayer (anime series) → Anime; an anime film (*A Silent Voice*/*Your Name*) → Anime **and produces playable sources via the movie path** (D10); Breaking Bad → TV; Inception → Movies. No cross-mode bleed in libraries/Continue; pill-from-deep-view resets to mode root; anime detail shows `Ep N` + sub/dub; TV shows seasons; Movies single-file; opening an anime title from the TV grid routes to Anime with the note (D9).
+- [ ] **Step 5: Pre-warm smoke** — cold start, re-open a previously-added anime; the Task-7 log marker shows the kitsu route built from the stored id, no live re-fetch.
+- [ ] **Step 6: Start-fresh smoke** — Task 14 step 3 (three libraries empty on first boot with existing downloads on disk).
+- [ ] **Step 7: Regression** — Books unchanged; comic reader unchanged; play a movie + a TV episode end-to-end; torrent engine unchanged.
+- [ ] **Step 8: Cross-model review (producer ≠ reviewer)** — `/codex-review` (or `codex exec`) the full diff against this DoD. Address every NOT-MET.
+- [ ] **Step 9: RTC + close** — contracts-v3 RTC to `agents/chat.md` (`Done-when:` = DoD) with `Skills invoked:` provenance. Hemanth's smoke is the final gate.
 
 ---
 
 ## Definition of Done
 
 - **Six mode pills** (`Manga · Comics · Books · Anime · TV · Movies`); each its own page + per-mode back-stack.
-- **Correct classification:** every anime title (series **or** film) lands in Anime; non-anime series → TV; non-anime films → Movies — verified on Demon Slayer + an anime film + Breaking Bad + Inception. An anime title opened from a TV/Movies grid routes to Anime (note shown).
+- **Correct classification:** every anime title (series **or** film) → Anime; non-anime series → TV; non-anime films → Movies — verified on Demon Slayer + an anime film + Breaking Bad + Inception. Anime opened from a TV/Movies grid routes to Anime (note shown).
 - **Anime extras:** sub/dub preference + `Ep N` absolute numbering + flat episode list; TV seasons/episodes; Movies (and anime films) single-file.
-- **One shared engine** (`MetaAggregator`/`StreamAggregator`/`AddonRegistry`/`StreamDownloadIndex`) behind all three pages — not 3×; `VideosPage` meta sourced from the same.
+- **One shared engine + one Stremio subprocess** behind all three pages (not 3×); `VideosPage` meta sourced from the same `VideoModeServices`.
 - Each mode: **own catalog brain** (Anime: Kitsu/AniList + Amatsu/Nyaa; TV/Movies: Cinemeta) + **own library + Continue strip**; no cross-mode bleed; best-effort anime exclusion from TV/Movies grids.
 - **Persisted discriminator:** `animeFlag` + resolved `kitsuId` survive restart; re-opening an anime series builds the kitsu route with no live re-fetch.
-- **Start fresh:** three new libraries begin empty; old `stream_library.json` left in place; downloaded files untouched; legacy downloads still play.
+- **Start fresh:** three new libraries begin empty even with existing downloads on disk; old `stream_library.json` left in place; downloaded files untouched; legacy downloads still play; the boot rescue scanner does not materialize into a mode library.
 - **No regression:** Books, comic reader, video player, torrent engine behave as before.
-- `build_check.bat` green; unit tests pass (StreamMode, library serialization, VideoModeServices routing+cache, progress domains); `/codex-review` APPROVE; **Hemanth smoke passes** (the only done-gate).
+- `build_check.bat` green; unit tests pass (StreamMode, StreamLibraryCodec, UnifiedProgressStore progress prefixes, StreamDownloadIndex animeFlag); `/codex-review` APPROVE; **Hemanth smoke passes** (the only done-gate).
 
 ---
 
-## Self-Review (author pass, v2)
+## Self-Review (author pass, v3)
 
-- **Spec coverage (§5/§6/§9/§10):** classification rule → Tasks 1, 6 (decoupled from the 5-season gate); Anime catalog + extras → Tasks 8, 11, 12; TV/Movies Cinemeta → Task 8; per-mode storage → Tasks 4, 5, 9, 11; pre-warm → Task 7 (scope-corrected); nav → Task 13; migration → Task 14; §10 DoD → Tasks 13 + 15.
-- **All 9 Codex findings mapped** (see v2 Revision Log): #1→Task 10/13 (legacy ctor), #2→Task 6 (resolve-time + deferred add), #3→Tasks 9/10/12 (routed add), #4→Tasks 5/11 (all key sites), #5→Tasks 9/13 (hoist + 37 refs + dev-control), #6→Task 8 (cache + redirect), #7→Task 1/6 (country normalization), #8→Task 7/15 (anime-film movie path), #9→Task 13 preflight.
-- **Placeholder scan:** pure-logic/mechanical tasks (1, 2, 4, 5, 9) carry complete code; large-page tasks (10, 12, 13) cite exact anchors + a full-file pre-task read (honest shape for 4666-line refactors — mirrors Arc 1). Not placeholder gaps.
-- **Type consistency:** `classifyStreamMode(bool,QString)`, `isAnimeTitle(QStringList,QString)`, `streamModeKey/FromKey/streamLibraryFilename`, `StreamMode{Anime,TV,Movies}`, `VideoModeServices::{addonRegistry,metaAggregator,streamAggregator,downloadIndex,libraryForMode,addClassified,removeEverywhere,cacheIsAnime,cachedIsAnime}`, `StreamLibraryEntry::{animeFlag,kitsuId}`, `MetaAggregator::entryResolved(imdb,kitsuId,isAnime)`, `pageForVideoMode(pageId)` — used identically across tasks.
-- **Compile-at-every-checkpoint:** the legacy `StreamPage` ctor (Task 10) keeps MainWindow building until Task 13 swaps it; each task's build-verify is independently green.
-- **Shared-file safety:** Phase 7 gated behind Agent 1 + a preflight against the *actual* landed contract + append-only edits + agreed pill order + a chat.md BUILD-LANE claim.
+- **All 9 round-1 findings RESOLVED; all 3 round-2 blockers + 1 SHOULD fixed** (see Revision Logs): B1→D1/Task 10 (ctor keeps TorrentClient); B2→D12/Task 9 (engine+subprocess+controller hoisted, single, lazy; signals to active page); B3→Task 13 step 8 + Task 14 (boot scanner index-only, empty-library smoke); S1→corrected CMake files (`cmake/TankobanSources.cmake`/`cmake/TankobanTests.cmake`), test paths (`tests/core/stream/`), dep-free `StreamLibraryCodec` so codec tests link without `TorrentClient`.
+- **Spec coverage (§5/§6/§9/§10):** classification → Tasks 1, 6; Anime catalog + extras → 8, 11, 12; TV/Movies Cinemeta → 8; per-mode storage → 4, 5, 9, 11; pre-warm → 7; nav → 13; migration → 13/14; §10 DoD → 13 + 15.
+- **Compile-at-every-checkpoint:** legacy `StreamPage` ctor holds MainWindow building until Task 13; each task's build-verify is independently green; tests link only dep-free units (`StreamMode`, `StreamLibraryCodec`, `UnifiedProgressStore`) — no libtorrent in the test graph.
+- **Test honesty:** pure logic is unit-tested (classifier, codec, progress prefixes, download-index flag); integration (hub routing, 3 pages, single subprocess, start-fresh, nav) is smoke-tested (Task 15) — matching the repo's existing stream-test pattern.
+- **Type consistency:** `classifyStreamMode`, `isAnimeTitle`, `streamModeKey/FromKey/streamLibraryFilename`, `StreamMode{Anime,TV,Movies}`, `streamLibraryEntryToJson/FromJson`, `VideoModeServices::{addonRegistry,metaAggregator,streamAggregator,streamEngine,playerController,downloadIndex,torrentClient,libraryForMode,addClassified,removeEverywhere,cacheIsAnime,cachedIsAnime}`, `StreamLibraryEntry::{animeFlag,kitsuId}`, `MetaAggregator::entryResolved(imdb,kitsuId,isAnime)`, `pageForVideoMode(pageId)` — consistent across tasks.
+- **Shared-file safety:** Phase 7 gated behind Agent 1 + a preflight against the actual landed contract + append-only edits + agreed pill order + a chat.md BUILD-LANE claim.
