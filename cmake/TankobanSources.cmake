@@ -216,6 +216,7 @@ set(SOURCES
     src/core/stream/addon/AddonRegistry.cpp
     src/core/stream/CatalogAggregator.cpp
     src/core/stream/StreamAggregator.cpp
+    src/core/stream/StreamMode.cpp
     src/core/stream/AnimeCatalogResolver.cpp
     src/core/stream/AnimeIdMapCache.cpp
     src/core/stream/BulkSourceCollector.cpp
