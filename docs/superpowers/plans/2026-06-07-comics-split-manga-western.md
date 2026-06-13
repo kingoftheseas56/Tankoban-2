@@ -234,3 +234,45 @@ A read-only 5-agent coupling map of `ComicsPage.{h,cpp}` (5745 lines) refined **
 4. **Dev-bridge (Task 6).** One `comicsPage()` resolver (`MainWindow.cpp:1802-1804`) gates all 15 dev handlers; the 3 western handlers move to a new `westernPage()` resolver. The catch-all forwarder (`:2587-2589`) prefix-routes `comics_*` — western dev-cmds need a distinct prefix or co-handling.
 
 5. **17 pure-Western methods** (exact `ComicsPage.cpp` line ranges) cut to `WesternComicsPage`; **~14 branching methods** keep a manga path and lose their Western arm. Line-range inventory captured in coupling-map workflow `wf_ca12835e-cf0` (transient, not committed).
+
+---
+
+## Execution order revision (2026-06-14, Agent 1 — expand-contract, post-rename)
+
+**Why the plan's Task 4-before-5 order can't stay:** MangaPage's 3 Western dev
+methods (`devOpenWesternSeries`/`devDownloadWesternEdition`/`devWesternDownloadState`)
+are called from MainWindow's dev-bridge (`comics_open_western_series` etc.,
+MainWindow.cpp:2301-2329 via the `comicsPage()` resolver). Deleting them from
+MangaPage *first* breaks the MainWindow link. The Western UI methods are
+internal, but the dev methods + their transitive Western deps are externally
+referenced. So the split uses the **expand-contract refactor pattern** (add new,
+migrate callers, remove old) — every commit stays build-green:
+
+1. **Create `WesternComicsPage.{h,cpp}` (ADDITIVE).** Self-contained `QWidget`
+   page: the 17 Western methods (own `ComicsSeriesView` + `m_stack` + Western
+   search bar + `WesternLibrary` + `WesternVolumeDownloader`); the shared engine
+   (`MangaDownloader`/`MangaDownloadIndex`/`MangaSourceRegistry`/NAM/`TorrentClient`)
+   received via **injection setters** (NOT constructed — single shared store);
+   the shared chrome (`buildSearchRow`, search-history dropdown, `fetchPosterForTile`,
+   `setSearchBusy`) copied for now (de-dup in step 4). objectName `"western_comics"`.
+   Register in `cmake/TankobanSources.cmake`. NOT wired in MainWindow yet → builds
+   green as dead code. Commit.
+2. **Wire MainWindow (Phase 4, re-claim + announce navDefs to Agent 4).** Add
+   `WesternComicsPage` to the page stack; navDefs labels → **Manga** + **Comics**
+   (Western pill, pageId `"western_comics"`); enteredLayer/exitedLayer + setRootLayer;
+   activate/resetToRoot/restoreLayer dispatch (the polymorphic trio); inject the
+   shared engine + `setTorrentClient`; add a `westernPage()` dev resolver and
+   **repoint the 3 Western dev handlers** at it (+ `western_*` prefix or co-handle).
+   Build green. **Hemanth smoke: both pills, Western works.** Commit.
+3. **Strip Western from MangaPage (was Task 4).** Now that MainWindow drives Western
+   via `WesternComicsPage`, remove the 17 Western methods + branches + members +
+   includes from MangaPage → manga-only. Build green. **Hemanth smoke: manga still
+   works.** Commit. (No more `western_extract.txt` scratch needed — step 1 already
+   moved the code.)
+4. **Extract `ComicsPageBase`.** De-dup the shared chrome between the two pages into
+   a base both derive from. Build green. Commit.
+5. **Task 7** (per-mode keybinds + Continue domains) + **Task 8** (full smoke +
+   Codex review vs DoD + RTC).
+
+This reorders the plan's Tasks 4↔5 but is the only sequence that keeps the build
+green given the MainWindow→Western-dev coupling. Target/DoD unchanged.
