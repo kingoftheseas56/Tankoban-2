@@ -218,3 +218,19 @@ const NavDef navDefs[] = {
 - **Spec coverage:** spec §4 (Comics arc) + §2 Manga/Comics line + §6 comics-maps-over + §9 file refs + §10 DoD comics rows → covered by Phases 1-5. Video arc (spec §5) intentionally deferred to Arc 2 plan.
 - **Placeholder scan:** the page-split tasks (4, 5) intentionally say "cut/paste the Western flows" rather than reproduce thousands of lines of unread `ComicsPage.cpp` — the executor reads the real file per the Phase-2 pre-task note. The mechanical wiring (Tasks 1, 6) has complete code. This is the honest shape for a large-page refactor; not a placeholder gap.
 - **Type consistency:** `originForSource`/`entriesForOrigin` names used consistently (Tasks 1, 2, 6, DoD). objectNames: `"manga"`, `"comics"` (Western), `"western_comics"` (page objectName) — note the page objectName vs the mode page-id `"comics"`; Task 6 Step 3 uses the mode page-id `"comics"` for nav domain.
+
+---
+
+## Execution notes (2026-06-14, Agent 1 — ground-truth corrections from the coupling map)
+
+A read-only 5-agent coupling map of `ComicsPage.{h,cpp}` (5745 lines) refined **how** to execute. Target shape unchanged (two top-level pills, no cross-bleed, spec §4 DoD).
+
+1. **PageId mapping (refines Tasks 3 + 6).** The manga page **inherits the legacy `"comics"` pageId / nav-domain / `comics_*` dev-prefix** — class renamed `ComicsPage`→`MangaPage` but **objectName/pageId stays `"comics"`**; the Western page gets a **new pageId `"western_comics"`**. Rationale: ~10 hardcoded `"comics"` literals (nav `setRootLayer`/`pushLayer`/`restoreLayer` + `activatePage` in dev handlers) and the user's existing manga library + progress data are keyed `"comics"`; inheriting avoids a fragile literal-sweep + a data migration. User-facing labels are still **Manga** + **Comics** (label ≠ pageId). Explicitly within spec §6 latitude. (This reverses Task 6 Step 1's `PAGE_MANGA="manga"` / Western-keeps-"comics" assignment.)
+
+2. **Shared engine is INJECTED, not duplicated (refines Tasks 4/5).** `MangaDownloader`, `MangaDownloadIndex`, `MangaSourceRegistry`, the NAM, and `TorrentClient` are the shared comics engine — **Western downloads run through `MangaDownloader`** (source `readallcomics`). MangaPage owns them; `WesternComicsPage` receives them via setters (mirroring `setTorrentClient`). Each page constructs its **own `ComicsSeriesView` + `m_stack`** (the single shared `m_tyVolumeSeriesView` is the deepest coupling). Shared chrome (`buildSearchRow`, search-history dropdown, `fetchPosterForTile`) + pure utils (`humanizeSlug`, `resolveSourceLabel`, `normalizeWesternTitle`) get promoted to a shared helper.
+
+3. **CMake correction (Tasks 3/5).** Source registration is **`cmake/TankobanSources.cmake:38,287`** — NOT root `CMakeLists.txt` (zero refs) and NOT `cmake/TankobanTests.cmake` (its `ReadComicsPage` hits are the unrelated `ReadComicsPageParse` scraper).
+
+4. **Dev-bridge (Task 6).** One `comicsPage()` resolver (`MainWindow.cpp:1802-1804`) gates all 15 dev handlers; the 3 western handlers move to a new `westernPage()` resolver. The catch-all forwarder (`:2587-2589`) prefix-routes `comics_*` — western dev-cmds need a distinct prefix or co-handling.
+
+5. **17 pure-Western methods** (exact `ComicsPage.cpp` line ranges) cut to `WesternComicsPage`; **~14 branching methods** keep a manga path and lose their Western arm. Line-range inventory captured in coupling-map workflow `wf_ca12835e-cf0` (transient, not committed).
